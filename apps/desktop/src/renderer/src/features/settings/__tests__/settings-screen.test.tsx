@@ -481,6 +481,7 @@ function createSnapshot(
       preferredEditorId: { value: "", source: "default" },
       preferredTerminalId: { value: "", source: "default" },
       gh: {
+        enabled: { value: false, source: "default" },
         path: { value: "", source: "default" },
         discovery: { candidates: [] },
       },
@@ -3404,6 +3405,7 @@ describe("SettingsScreen", () => {
   it("shows resolved gh discovery details and saves an alternate candidate", async () => {
     const snapshot = createSnapshot();
     snapshot.applications.gh = {
+      enabled: { value: true, source: "default" },
       path: { value: "", source: "default" },
       discovery: {
         selectedCommand: "/opt/homebrew/bin/gh",
@@ -3474,6 +3476,7 @@ describe("SettingsScreen", () => {
   it("shows resolved glab discovery details and saves an alternate candidate", async () => {
     const snapshot = createSnapshot();
     snapshot.applications.glab = {
+      enabled: { value: true, source: "default" },
       path: { value: "", source: "default" },
       host: { value: "", source: "default" },
       discovery: {
@@ -3546,12 +3549,134 @@ describe("SettingsScreen", () => {
     expect(within(ghPanel).getByText("Insufficient permissions")).toBeInTheDocument();
   });
 
+  it("stops probing a disabled forge and retracts its findings", async () => {
+    // A "Disabled" pill above "Run glab auth login" would tell the operator
+    // to repair a connection they just switched off.
+    const snapshot = createSnapshot();
+    snapshot.applications.glab = {
+      enabled: { value: false, source: "config" },
+      host: { value: "", source: "default" },
+      path: { value: "", source: "default" },
+      discovery: {
+        selectedCommand: "/opt/homebrew/bin/glab",
+        selectedSource: "homebrew",
+        candidates: [
+          {
+            command: "/opt/homebrew/bin/glab",
+            executable: true,
+            selected: true,
+            source: "homebrew",
+            version: "2.88.1",
+          },
+        ],
+      },
+    };
+    const settings = createSettingsState(snapshot);
+    const getGlabStatus = vi.fn();
+
+    render(
+      <SettingsScreen
+        desktopApi={{ getGlabStatus }}
+        initialSection="git"
+        settings={settings}
+        onClose={() => undefined}
+      />,
+    );
+
+    const glabPanel = screen.getByRole("heading", { name: "GitLab CLI (glab)" })
+      .closest("section")!;
+    expect(await within(glabPanel).findByText("Disabled")).toBeInTheDocument();
+    expect(getGlabStatus).not.toHaveBeenCalled();
+    expect(
+      within(glabPanel).queryByRole("button", { name: "Re-check" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("writes the forge enable toggle to config", async () => {
+    const snapshot = createSnapshot();
+    snapshot.applications.glab = {
+      enabled: { value: true, source: "default" },
+      host: { value: "", source: "default" },
+      path: { value: "", source: "default" },
+      discovery: { candidates: [] },
+    };
+    const settings = createSettingsState(snapshot);
+
+    render(
+      <SettingsScreen
+        desktopApi={{}}
+        initialSection="git"
+        settings={settings}
+        onClose={() => undefined}
+      />,
+    );
+
+    const glabPanel = screen.getByRole("heading", { name: "GitLab CLI (glab)" })
+      .closest("section")!;
+    fireEvent.click(
+      within(glabPanel).getByRole("switch", {
+        name: /Read merge request status from GitLab/,
+      }),
+    );
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        applications: { glab: { enabled: false } },
+      });
+    });
+  });
+
+  it("shows Git, GitHub and GitLab as Git nav children with their state", async () => {
+    const snapshot = createSnapshot();
+    snapshot.applications.gh.enabled = { value: false, source: "config" };
+    snapshot.applications.glab = {
+      enabled: { value: true, source: "default" },
+      host: { value: "", source: "default" },
+      path: { value: "", source: "default" },
+      discovery: { candidates: [] },
+    };
+    const settings = createSettingsState(snapshot);
+    const getGlabStatus = vi.fn(async () => ({
+      host: "gitlab.com",
+      installed: true,
+      loggedIn: false,
+      scopes: [],
+      hasRepoScope: false,
+      discovery: { candidates: [] },
+    }));
+
+    render(
+      <SettingsScreen
+        desktopApi={{ getGlabStatus }}
+        initialSection="git"
+        settings={settings}
+        onClose={() => undefined}
+      />,
+    );
+
+    const nav = screen.getByRole("navigation", { name: "Settings sections" });
+    const sublist = nav.querySelector("#settings-nav-sublist-git") as HTMLElement;
+    expect(sublist).not.toBeNull();
+    expect(
+      within(sublist).getByRole("button", { name: /^Git$/ }),
+    ).toBeInTheDocument();
+    // Disabled by config reads "off"; enabled-but-unauthenticated reads
+    // "sign in". The dot is aria-hidden, so these words are the whole
+    // accessible signal and the distinction the children exist to make.
+    expect(
+      await within(sublist).findByRole("button", { name: /GitHub\s*off/i }),
+    ).toBeInTheDocument();
+    expect(
+      await within(sublist).findByRole("button", { name: /GitLab\s*sign in/i }),
+    ).toBeInTheDocument();
+  });
+
   it("persists the GitLab host and probes the configured one, not gitlab.com", async () => {
     // The host started as component state, so a self-managed operator got
     // sent back to gitlab.com on every remount and the pane then reported a
     // red "Not signed in" for a server they have no account on.
     const snapshot = createSnapshot();
     snapshot.applications.glab = {
+      enabled: { value: true, source: "default" },
       path: { value: "", source: "default" },
       host: { value: "gitlab.example.com", source: "config" },
       discovery: {
@@ -6202,8 +6327,9 @@ describe("SettingsScreen", () => {
       "Troubleshooting",
       "About",
     ]);
-    // The three group sections expand; every other row keeps the caret
-    // gutter so labels stay aligned.
+    // The four group sections expand; every other row keeps the caret
+    // gutter so labels stay aligned. Git joined them when its Git /
+    // GitHub / GitLab children landed.
     const caretLabels = Array.from(
       nav.querySelectorAll(".settings-nav__caret"),
     ).map((button) => button.getAttribute("aria-label"));
@@ -6211,6 +6337,7 @@ describe("SettingsScreen", () => {
       "Expand Plugins",
       "Expand AI Providers",
       "Expand Messaging",
+      "Expand Git",
     ]);
     // Collapsed sublists keep their children out of the accessibility
     // tree — MCPs only appears once Plugins expands.

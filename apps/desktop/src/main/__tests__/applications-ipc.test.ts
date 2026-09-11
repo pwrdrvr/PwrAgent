@@ -19,6 +19,7 @@ const remoteApplications: DesktopApplicationsSnapshot = {
   preferredEditorId: { value: "", source: "default" },
   preferredTerminalId: { value: "", source: "default" },
   gh: {
+    enabled: { value: false, source: "default" },
     path: { value: "", source: "default" },
     discovery: { candidates: [] },
   },

@@ -15,10 +15,19 @@ export function parseForgePrRefFromUrl(url: string): ForgePrRef | undefined {
 /** Provider routing precedes CLI or API access, including mixed-remote checkouts. */
 export class ForgePrFetcher extends GithubPrFetcher {
   readonly gitlab: GitLabPrFetcher;
+  /** Operator's per-forge switch; defaults to on so tests and callers
+   *  that never wire it keep the pre-gate behavior. */
+  private readonly isProviderEnabled: (provider: "github" | "gitlab") => boolean;
 
-  constructor(options: GithubPrFetcherOptions = {}, gitlab = new GitLabPrFetcher()) {
+  constructor(
+    options: GithubPrFetcherOptions & {
+      isProviderEnabled?: (provider: "github" | "gitlab") => boolean;
+    } = {},
+    gitlab = new GitLabPrFetcher(),
+  ) {
     super(options);
     this.gitlab = gitlab;
+    this.isProviderEnabled = options.isProviderEnabled ?? (() => true);
   }
 
   async getProviderAvailability(directories: string[], urls: string[] = []): Promise<PullRequestProviderAvailability[]> {
@@ -32,8 +41,13 @@ export class ForgePrFetcher extends GithubPrFetcher {
       for (const repo of await resolveGitLabReposForDirectory(cwd)) gitlabHosts.add(repo.host);
     }
     const statuses: PullRequestProviderAvailability[] = [];
-    if (github) statuses.push({ provider: "github.com", cli: "gh", available: await this.isGhAvailable() });
-    if (gitlabHosts.size > 0) {
+    // A disabled forge reports nothing rather than reporting unavailable:
+    // "you turned this off" is not a failure the operator needs told about
+    // on every refresh.
+    if (github && this.isProviderEnabled("github")) {
+      statuses.push({ provider: "github.com", cli: "gh", available: await this.isGhAvailable() });
+    }
+    if (gitlabHosts.size > 0 && this.isProviderEnabled("gitlab")) {
       const available = await this.gitlab.isAvailable();
       for (const provider of gitlabHosts) {
         statuses.push({ provider, cli: "glab", available, error: available
@@ -47,7 +61,10 @@ export class ForgePrFetcher extends GithubPrFetcher {
   override async fetchAllPullRequestsForBranch(params: {
     cwd: string; branch: string; allowPrimed?: boolean; onProviderFailure?: () => void;
   }): Promise<PrSummary[]> {
-    const github = await super.fetchAllPullRequestsForBranch(params);
+    const github = this.isProviderEnabled("github")
+      ? await super.fetchAllPullRequestsForBranch(params)
+      : [];
+    if (!this.isProviderEnabled("gitlab")) return github;
     try {
       const gitlab = await this.gitlab.fetchForBranch(params.cwd, params.branch);
       return [...github, ...gitlab];
@@ -59,6 +76,11 @@ export class ForgePrFetcher extends GithubPrFetcher {
 
   override async fetchPullRequestByUrl(params: { cwd: string; url: string }): Promise<PrSummary | undefined> {
     const ref = parseGitLabMrUrl(params.url);
-    return ref ? await this.gitlab.fetchByRef(ref) : await super.fetchPullRequestByUrl(params);
+    if (ref) {
+      return this.isProviderEnabled("gitlab") ? await this.gitlab.fetchByRef(ref) : undefined;
+    }
+    return this.isProviderEnabled("github")
+      ? await super.fetchPullRequestByUrl(params)
+      : undefined;
   }
 }

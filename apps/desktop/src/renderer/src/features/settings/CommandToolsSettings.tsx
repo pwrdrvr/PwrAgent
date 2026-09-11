@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   DesktopCodeSignature,
   DesktopGitDiscoveryCandidate,
@@ -14,6 +14,8 @@ import { SettingsCopyValue } from "./SettingsCopyValue";
 import {
   SettingsField,
   SettingsSection,
+  type SettingsChipTone,
+  ToggleField,
 } from "./SettingsLayout";
 import {
   SettingsPathRow,
@@ -122,6 +124,7 @@ export function GitToolSection(props: {
   return (
     <SettingsSection
       eyebrow="Git"
+      sectionId="git"
       title="Git"
       description={
         <>
@@ -287,7 +290,11 @@ export function GhToolSection(props: {
   snapshot: DesktopSettingsSnapshot;
   /** GitLab only: persist the host the connection check probes. */
   onSaveHost?: (host: string) => Promise<void>;
+  onSaveEnabled: (enabled: boolean) => Promise<void>;
   onSaveGhPath: (path: string) => Promise<void>;
+  /** Publishes this section's status so the settings nav can show the same
+   *  state without probing a second time. */
+  onStatusChange?: (status: GhStatus | undefined) => void;
 }) {
   const isGitLab = props.provider === "gitlab";
   const cli = isGitLab ? "glab" : "gh";
@@ -304,14 +311,23 @@ export function GhToolSection(props: {
   useEffect(() => {
     setHost(configuredHost);
   }, [configuredHost]);
+  const onStatusChangeRef = useRef(props.onStatusChange);
+  useEffect(() => {
+    onStatusChangeRef.current = props.onStatusChange;
+  });
   const getStatus = isGitLab ? desktopApi?.getGlabStatus : desktopApi?.getGhStatus;
   const pickCommand = isGitLab ? desktopApi?.pickGlabCommand : desktopApi?.pickGhCommand;
   const [status, setStatus] = useState<GhStatus | undefined>(undefined);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | undefined>(undefined);
   const gh = (isGitLab ? props.snapshot.applications.glab : props.snapshot.applications.gh)
-    ?? { path: { value: "", source: "default" }, discovery: { candidates: [] } };
+    ?? {
+      enabled: { value: false, source: "default" as const },
+      path: { value: "", source: "default" as const },
+      discovery: { candidates: [] },
+    };
   const envForced = gh.path.source === "env";
+  const enabled = gh.enabled.value;
   const discovery = status?.discovery ?? gh.discovery;
   const candidates = discovery.candidates;
   const installCommand = desktopApi?.platform === "darwin"
@@ -322,29 +338,36 @@ export function GhToolSection(props: {
 
   const load = useCallback(
     async (recheck: boolean) => {
+      if (!enabled) {
+        setStatus(undefined);
+        onStatusChangeRef.current?.(undefined);
+        return;
+      }
       if (!getStatus) return;
       setLoading(true);
       setError(undefined);
       // Drop the previous host's verdict before probing a new one. Holding
       // it would show "Connected" under a host that has not been checked.
       setStatus(undefined);
+      onStatusChangeRef.current?.(undefined);
       try {
         const next = await getStatus({ recheck, ...(isGitLab ? { host } : {}) });
         setStatus(next);
+        onStatusChangeRef.current?.(next);
       } catch (caught) {
         setError(caught instanceof Error ? caught.message : String(caught));
       } finally {
         setLoading(false);
       }
     },
-    [getStatus, host, isGitLab],
+    [enabled, getStatus, host, isGitLab],
   );
 
   useEffect(() => {
     void load(false);
   }, [load]);
 
-  const pill = describeGhStatusPill(status);
+  const pill = describeGhStatusPill(status, enabled);
   const signatures = useCodeSignatures(
     desktopApi,
     candidates.map((candidate) => candidate.command),
@@ -366,6 +389,9 @@ export function GhToolSection(props: {
   return (
     <SettingsSection
       eyebrow="Git"
+      sectionId={isGitLab ? "gitlab" : "github"}
+      chip={enabled ? "On" : "Off"}
+      chipKind={enabled ? settingsChipToneForPill(pill.tone) : "default"}
       title={`${label} CLI (${cli})`}
       description={
         <>
@@ -375,6 +401,18 @@ export function GhToolSection(props: {
       }
     >
       <div className="settings-fields">
+        <ToggleField
+          checked={enabled}
+          disabled={props.saving}
+          label={`Read ${request} status from ${label}`}
+          sub={
+            gh.enabled.source === "default"
+              ? `On by default because ${cli} was found on this machine. Turn it off to stop every ${label} check, including the one below.`
+              : `Turn this off to stop every ${label} check, including the one below.`
+          }
+          source={gh.enabled.source === "default" ? "auto" : gh.enabled.source}
+          onChange={(next) => props.onSaveEnabled(next)}
+        />
         {isGitLab ? (
           <SettingsField
             label="GitLab host"
@@ -445,16 +483,18 @@ export function GhToolSection(props: {
               {error ? (
                 <span className="settings-pathrow__path settings-error">{error}</span>
               ) : null}
-              <div className="settings-inline-actions">
-                <button
-                  className="button button--secondary"
-                  disabled={loading || !getStatus}
-                  type="button"
-                  onClick={() => void load(true)}
-                >
-                  {loading ? "Checking…" : "Re-check"}
-                </button>
-              </div>
+              {enabled ? (
+                <div className="settings-inline-actions">
+                  <button
+                    className="button button--secondary"
+                    disabled={loading || !getStatus}
+                    type="button"
+                    onClick={() => void load(true)}
+                  >
+                    {loading ? "Checking…" : "Re-check"}
+                  </button>
+                </div>
+              ) : null}
             </div>
           }
         />
@@ -742,10 +782,25 @@ function isXcodeLicenseFailure(reason?: string): boolean {
   );
 }
 
-function describeGhStatusPill(status: GhStatus | undefined): {
+/** The pill vocabulary is wider than the section chip's; map, don't cast. */
+function settingsChipToneForPill(
+  tone: "ok" | "warn" | "bad" | "neutral",
+): SettingsChipTone {
+  if (tone === "bad") return "err";
+  if (tone === "neutral") return "muted";
+  return tone;
+}
+
+export function describeGhStatusPill(
+  status: GhStatus | undefined,
+  enabled: boolean,
+): {
   tone: "ok" | "warn" | "bad" | "neutral";
   label: string;
 } {
+  // Off is a resting state the operator chose, not a fault: it must never
+  // borrow the tone that means "this is broken".
+  if (!enabled) return { tone: "neutral", label: "Disabled" };
   if (!status) return { tone: "neutral", label: "Checking…" };
   if (!status.installed) return { tone: "bad", label: "Not installed" };
   if (!status.loggedIn) return { tone: "bad", label: "Not signed in" };

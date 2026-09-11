@@ -1,4 +1,5 @@
 import type {
+  GhStatus,
   AppServerBackendKind,
   BackendSummary,
   DesktopHotCpuProfileStartDelayMs,
@@ -114,7 +115,12 @@ const SETTINGS_NAV_GROUPS = new Set<SettingsSection>([
   "plugins",
   "models",
   "messaging",
+  "git",
 ]);
+
+/** Git pane sub-routes. These are `SettingsSection` `sectionId` slugs, so
+ *  the nav child and the card it scrolls to share one identifier. */
+const GIT_NAV_CHILDREN = ["git", "github", "gitlab"] as const;
 
 function messagingPlatformFromSub(
   sub: string | undefined,
@@ -129,10 +135,59 @@ type SettingsNavChild = {
    *  (Plugins → MCPs, which IS the plugins pane). */
   sub?: string;
   /** Status dot tone; omitted when the snapshot can't say. */
-  dot?: "ok" | "off";
+  dot?: "ok" | "off" | "warn" | "bad";
   /** Tiny trailing chip, e.g. "off" on a disabled provider. */
   chip?: string;
 };
+
+type ForgeNavStatuses = {
+  github?: GhStatus;
+  gitlab?: GhStatus;
+};
+
+/**
+ * One Git nav child: label, the section slug it scrolls to, and the state
+ * an operator wants to read without opening the pane.
+ *
+ * The dot is `aria-hidden`, so every state that is not "fine" also carries
+ * a word in `chip` — colour alone would leave the nav mute to a screen
+ * reader, and "off" versus "not signed in" is exactly the distinction this
+ * row exists to make.
+ */
+function describeGitNavChild(
+  child: (typeof GIT_NAV_CHILDREN)[number],
+  snapshot: DesktopSettingsSnapshot | undefined,
+  statuses: ForgeNavStatuses,
+): SettingsNavChild {
+  if (child === "git") {
+    const discovery = snapshot?.applications.git.discovery;
+    const base = { key: "git", label: "Git", sub: "git" };
+    if (!discovery) return base;
+    if (discovery.selectedCommand) return { ...base, dot: "ok" };
+    return { ...base, dot: "bad", chip: "missing" };
+  }
+
+  const isGitLab = child === "gitlab";
+  const base = {
+    key: child,
+    label: isGitLab ? "GitLab" : "GitHub",
+    sub: child,
+  };
+  const application = isGitLab
+    ? snapshot?.applications.glab
+    : snapshot?.applications.gh;
+  if (!snapshot || !application) return base;
+  if (!application.enabled.value) return { ...base, dot: "off", chip: "off" };
+
+  const status = isGitLab ? statuses.gitlab : statuses.github;
+  // No probe has landed yet. An absent dot reads as "we do not know",
+  // which is honest; a green one would be a guess.
+  if (!status) return base;
+  if (!status.installed) return { ...base, dot: "bad", chip: "missing" };
+  if (!status.loggedIn) return { ...base, dot: "bad", chip: "sign in" };
+  if (!status.hasRepoScope) return { ...base, dot: "warn", chip: "limited" };
+  return { ...base, dot: "ok" };
+}
 
 const SECTION_LABELS = new Map(
   SECTIONS.map((section) => [section.id, section.label] as const),
@@ -289,6 +344,49 @@ export function SettingsScreen(props: {
   // The AI Providers screens own refreshing; this re-reads on their
   // BACKEND_SUMMARIES_REFRESH_EVENT announcements.
   const acpCatalog = useAcpAgentCatalog(props.desktopApi);
+  // Forge connection state for the nav dots. Seeded from main's cached
+  // probe so the dots are right before the Git pane is ever opened, then
+  // kept fresh by the sections themselves (`onStatusChange`), which is
+  // what makes a Re-check move the nav dot without a second probe.
+  const [forgeStatuses, setForgeStatuses] = useState<ForgeNavStatuses>({});
+  const reportForgeStatus = useCallback(
+    (provider: "github" | "gitlab", status: GhStatus | undefined) => {
+      setForgeStatuses((current) => ({ ...current, [provider]: status }));
+    },
+    [],
+  );
+  const desktopApi = props.desktopApi;
+  const ghEnabled = snapshot?.applications.gh.enabled.value === true;
+  const glabEnabled = snapshot?.applications.glab?.enabled.value === true;
+  const seededForgesRef = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    const seedKey = `${ghEnabled}:${glabEnabled}`;
+    if (seededForgesRef.current === seedKey) return;
+    seededForgesRef.current = seedKey;
+    let cancelled = false;
+    const seed = async (
+      provider: "github" | "gitlab",
+      read: (() => Promise<GhStatus>) | undefined,
+    ): Promise<void> => {
+      if (!read) return;
+      try {
+        const status = await read();
+        if (!cancelled) reportForgeStatus(provider, status);
+      } catch {
+        // The pane's own section surfaces probe failures with a message.
+        // A nav dot has nowhere to put one, so it stays absent.
+      }
+    };
+    if (ghEnabled && desktopApi?.getGhStatus) {
+      void seed("github", () => desktopApi.getGhStatus!({ recheck: false }));
+    }
+    if (glabEnabled && desktopApi?.getGlabStatus) {
+      void seed("gitlab", () => desktopApi.getGlabStatus!({ recheck: false }));
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [desktopApi, ghEnabled, glabEnabled, reportForgeStatus]);
   const navChildren = (target: SettingsSection): SettingsNavChild[] => {
     if (target === "plugins") {
       return [{ key: "mcps", label: "MCPs" }];
@@ -315,6 +413,11 @@ export function SettingsScreen(props: {
           };
         }),
       ];
+    }
+    if (target === "git") {
+      return GIT_NAV_CHILDREN.map((child) =>
+        describeGitNavChild(child, snapshot, forgeStatuses),
+      );
     }
     if (target === "messaging") {
       return MESSAGING_SETTINGS_PLATFORMS.map((platform) => ({
@@ -579,6 +682,7 @@ export function SettingsScreen(props: {
               appearanceController={props.appearanceController}
               cachedBackends={props.cachedBackends}
               desktopApi={props.desktopApi}
+              onForgeStatusChange={reportForgeStatus}
               onOpenRoute={openRoute}
               onOpenThread={props.onOpenThread}
               onShowNotice={props.onShowNotice}
@@ -604,6 +708,12 @@ function SettingsSectionBody(props: {
   appearanceController?: AppearanceController;
   cachedBackends?: BackendSummary[];
   desktopApi?: DesktopApi;
+  /** Lifted so the settings nav's Git children can show the same
+   *  connection state the pane shows, without probing a second time. */
+  onForgeStatusChange: (
+    provider: "github" | "gitlab",
+    status: GhStatus | undefined,
+  ) => void;
   onOpenRoute: (section: SettingsSection, sub?: string) => void;
   onOpenThread?: (target: {
     backend: AppServerBackendKind;
@@ -1012,6 +1122,14 @@ function SettingsSectionBody(props: {
           });
         }}
         onRefresh={props.settings.refresh}
+        onGhStatusChange={(status) => props.onForgeStatusChange("github", status)}
+        onGlabStatusChange={(status) => props.onForgeStatusChange("gitlab", status)}
+        onSaveGhEnabled={async (enabled) => {
+          await props.settings.writeConfig({ applications: { gh: { enabled } } });
+        }}
+        onSaveGlabEnabled={async (enabled) => {
+          await props.settings.writeConfig({ applications: { glab: { enabled } } });
+        }}
         onSaveGlabHost={async (host) => {
           await props.settings.writeConfig({ applications: { glab: { host } } });
         }}
@@ -1049,6 +1167,7 @@ function SettingsSectionBody(props: {
     return (
       <GitSettings
         desktopApi={props.desktopApi}
+        focusSectionId={props.sub}
         saving={props.settings.saving}
         snapshot={props.snapshot}
         onBackgroundPrPollingChange={async (enabled: boolean) => {
@@ -1086,6 +1205,14 @@ function SettingsSectionBody(props: {
           });
         }}
         onRefresh={props.settings.refresh}
+        onGhStatusChange={(status) => props.onForgeStatusChange("github", status)}
+        onGlabStatusChange={(status) => props.onForgeStatusChange("gitlab", status)}
+        onSaveGhEnabled={async (enabled) => {
+          await props.settings.writeConfig({ applications: { gh: { enabled } } });
+        }}
+        onSaveGlabEnabled={async (enabled) => {
+          await props.settings.writeConfig({ applications: { glab: { enabled } } });
+        }}
         onSaveGlabHost={async (host) => {
           await props.settings.writeConfig({ applications: { glab: { host } } });
         }}

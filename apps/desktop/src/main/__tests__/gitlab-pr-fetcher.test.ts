@@ -57,6 +57,61 @@ describe("GitLab MR routing and status", () => {
     expect(run).not.toHaveBeenCalled();
   });
 
+  it("touches neither transport for a forge the operator disabled", async () => {
+    // The switch has to bite at the fetcher, not just in Settings: an "off"
+    // that still shells out to glab or mints a GitHub token is a setting
+    // that lies. Each forge is gated independently, so disabling one must
+    // leave the other working.
+    const graphqlClient = {
+      fetchPullRequests: vi.fn(async () => []),
+      fetchPullRequestsForBranches: vi.fn(async () => new Map()),
+    };
+    const probeGhAvailable = vi.fn(async () => true);
+    const { fetcher: gitlab, run } = fixture((endpoint) =>
+      endpoint.includes("source_branch") ? [mr] : mr,
+    );
+    const fetcher = new ForgePrFetcher({
+      graphqlClient,
+      probeGhAvailable,
+      resolveGitHubRepos: async () => [{ host: "github.com", owner: "team", repo: "project" }],
+      isProviderEnabled: () => false,
+    }, gitlab);
+
+    expect(
+      await fetcher.fetchAllPullRequestsForBranch({ cwd: "/mixed", branch: "feature" }),
+    ).toEqual([]);
+    expect(
+      await fetcher.fetchPullRequestByUrl({ cwd: "/mixed", url: mr.web_url }),
+    ).toBeUndefined();
+    expect(
+      await fetcher.getProviderAvailability(["/mixed"], [mr.web_url]),
+    ).toEqual([]);
+    expect(run).not.toHaveBeenCalled();
+    expect(probeGhAvailable).not.toHaveBeenCalled();
+    expect(graphqlClient.fetchPullRequests).not.toHaveBeenCalled();
+    expect(graphqlClient.fetchPullRequestsForBranches).not.toHaveBeenCalled();
+  });
+
+  it("keeps GitHub working when only GitLab is disabled", async () => {
+    const graphqlClient = {
+      fetchPullRequests: vi.fn(async () => []),
+      fetchPullRequestsForBranches: vi.fn(async () => new Map()),
+    };
+    const { fetcher: gitlab, run } = fixture((endpoint) =>
+      endpoint.includes("source_branch") ? [mr] : mr,
+    );
+    const fetcher = new ForgePrFetcher({
+      graphqlClient,
+      probeGhAvailable: async () => true,
+      resolveGitHubRepos: async () => [{ host: "github.com", owner: "team", repo: "project" }],
+      isProviderEnabled: (provider) => provider === "github",
+    }, gitlab);
+
+    await fetcher.fetchAllPullRequestsForBranch({ cwd: "/mixed", branch: "feature" });
+    expect(graphqlClient.fetchPullRequestsForBranches).toHaveBeenCalled();
+    expect(run).not.toHaveBeenCalled();
+  });
+
   it("never sends GitLab branches or retained MR URLs to the GitHub transport", async () => {
     const graphqlClient = { fetchPullRequests: vi.fn(async () => []), fetchPullRequestsForBranches: vi.fn(async () => new Map()) };
     const probeGhAvailable = vi.fn(async () => true);

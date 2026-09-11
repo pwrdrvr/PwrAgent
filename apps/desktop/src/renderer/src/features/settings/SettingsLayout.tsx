@@ -89,6 +89,11 @@ export function SettingsSectionStack(props: {
   "aria-label": string;
   children: ReactNode;
   paneId: string;
+  /** Section slug the nav wants brought into view (see `SettingsSection`'s
+   *  `sectionId`). Scrolls, expands if collapsed, and focuses its header.
+   *  Re-honored whenever the value changes, so clicking the same nav child
+   *  twice scrolls back to it. */
+  focusSectionId?: string;
 }) {
   const [registeredSections, setRegisteredSections] = useState<
     SettingsSectionRegistration[]
@@ -224,6 +229,28 @@ export function SettingsSectionStack(props: {
       stackRef.current?.focus();
     }
   }, [props.paneId, registeredSections]);
+
+  // Runs after the restore effect above, which only fires once per pane.
+  // A nav-driven focus is an explicit request and must win over the
+  // remembered section, so it re-runs on every change of the request.
+  const requestedFocusRef = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    const requested = props.focusSectionId;
+    if (!requested || registeredSections.length === 0) return;
+    if (requestedFocusRef.current === requested) return;
+    const target = registeredSections.find(
+      (entry) => entry.id === `${props.paneId}-${requested}`,
+    );
+    if (!target) return;
+    requestedFocusRef.current = requested;
+    didRestoreFocusRef.current = true;
+    rememberSectionVisit(target.id);
+    setCollapsedSections((current) =>
+      current[target.id] === true ? { ...current, [target.id]: false } : current,
+    );
+    target.element.scrollIntoView({ block: "start", behavior: "smooth" });
+    target.element.focus({ preventScroll: true });
+  }, [props.focusSectionId, props.paneId, registeredSections, rememberSectionVisit]);
 
   const value = useMemo<SettingsSectionPaneContextValue>(
     () => ({

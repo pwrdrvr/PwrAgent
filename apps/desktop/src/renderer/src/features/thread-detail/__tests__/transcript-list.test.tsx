@@ -1682,6 +1682,7 @@ Implementation notes remain in a readable bubble.`;
           preferredEditorId: { value: "zed", source: "config" },
           preferredTerminalId: { value: "", source: "default" },
           gh: {
+            enabled: { value: false, source: "default" },
             path: { value: "", source: "default" },
             discovery: { candidates: [] },
           },

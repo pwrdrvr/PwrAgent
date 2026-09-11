@@ -893,10 +893,16 @@ export type DesktopApplicationsSnapshot = {
   preferredEditorId: DesktopSettingsValue<string>;
   preferredTerminalId: DesktopSettingsValue<string>;
   gh: {
+    /** Whether PwrAgent reads GitHub pull request status at all. Defaults
+     *  to whether `gh` was discovered, so a machine without it reports a
+     *  resting "off" rather than a failure for a forge it cannot use. */
+    enabled: DesktopSettingsValue<boolean>;
     path: DesktopSettingsValue<string>;
     discovery: DesktopGhDiscoverySnapshot;
   };
   glab?: {
+    /** See `gh.enabled`; defaults to whether `glab` was discovered. */
+    enabled: DesktopSettingsValue<boolean>;
     path: DesktopSettingsValue<string>;
     /** Host the Settings connection check probes. Merge request reads
      *  themselves always follow the host in the thread's own remote. */
@@ -1510,9 +1516,11 @@ export type DesktopSettingsConfigPatch = {
       preferredId?: string;
     };
     gh?: {
+      enabled?: boolean;
       path?: string;
     };
     glab?: {
+      enabled?: boolean;
       path?: string;
       host?: string;
     };

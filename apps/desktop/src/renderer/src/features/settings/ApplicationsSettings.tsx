@@ -1,4 +1,5 @@
 import type {
+  GhStatus,
   DesktopApplicationDiscoveryCandidate,
   DesktopApplicationKind,
   DesktopCodeSignature,
@@ -39,6 +40,10 @@ export function ApplicationsSettings(props: {
     preferredId: string,
   ) => Promise<void>;
   onRefresh: () => Promise<void>;
+  onGhStatusChange?: (status: GhStatus | undefined) => void;
+  onGlabStatusChange?: (status: GhStatus | undefined) => void;
+  onSaveGhEnabled: (enabled: boolean) => Promise<void>;
+  onSaveGlabEnabled: (enabled: boolean) => Promise<void>;
   onSaveGlabHost: (host: string) => Promise<void>;
   onSaveGlabPath: (path: string) => Promise<void>;
   onSaveGhPath: (path: string) => Promise<void>;
@@ -85,7 +90,9 @@ export function ApplicationsSettings(props: {
         desktopApi={props.desktopApi}
         saving={props.saving}
         snapshot={props.snapshot}
+        onSaveEnabled={props.onSaveGhEnabled}
         onSaveGhPath={props.onSaveGhPath}
+        onStatusChange={props.onGhStatusChange}
       />
       <GhToolSection
         provider="gitlab"
@@ -93,7 +100,9 @@ export function ApplicationsSettings(props: {
         saving={props.saving}
         snapshot={props.snapshot}
         onSaveHost={props.onSaveGlabHost}
+        onSaveEnabled={props.onSaveGlabEnabled}
         onSaveGhPath={props.onSaveGlabPath}
+        onStatusChange={props.onGlabStatusChange}
       />
     </SettingsSectionStack>
   );

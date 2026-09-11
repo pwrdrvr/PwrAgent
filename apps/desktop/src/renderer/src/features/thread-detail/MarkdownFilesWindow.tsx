@@ -323,6 +323,7 @@ function applicationsSnapshotForEditor(
       source: "default",
     },
     gh: {
+      enabled: { value: false, source: "default" },
       path: { value: "", source: "default" },
       discovery: { candidates: [] },
     },

@@ -11,6 +11,7 @@ import {
   MIN_PR_AUTO_DISPATCH_BUDGET_CAPACITY,
   MIN_PR_AUTO_DISPATCH_BUDGET_REFILL_PER_MINUTE,
   type DesktopSettingsSnapshot,
+  type GhStatus,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { useNavigationSettingsPreview, isNavigationPreviewCancelled } from "../../lib/navigation-settings-preview";
@@ -69,6 +70,12 @@ export function GitSettings(props: {
     enabled: boolean,
   ) => Promise<void>;
   onRefresh: () => Promise<void>;
+  /** Nav sub-route: the section slug to scroll to on arrival. */
+  focusSectionId?: string;
+  onGhStatusChange?: (status: GhStatus | undefined) => void;
+  onGlabStatusChange?: (status: GhStatus | undefined) => void;
+  onSaveGhEnabled: (enabled: boolean) => Promise<void>;
+  onSaveGlabEnabled: (enabled: boolean) => Promise<void>;
   onSaveGlabHost: (host: string) => Promise<void>;
   onSaveGlabPath: (path: string) => Promise<void>;
   onSaveGhPath: (path: string) => Promise<void>;
@@ -218,11 +225,15 @@ export function GitSettings(props: {
   };
 
   return (
-    <SettingsSectionStack paneId="git" aria-label="Git settings">
+    <SettingsSectionStack
+      paneId="git"
+      aria-label="Git settings"
+      focusSectionId={props.focusSectionId}
+    >
       <SettingsPanelHead
         eyebrow="Git"
         title="Repository & pull requests"
-        help="Configure the Git and GitHub tools PwrAgent uses for repository, worktree, and pull request status."
+        help="Configure the Git, GitHub, and GitLab tools PwrAgent uses for repository, worktree, and pull or merge request status."
       />
 
       {/*
@@ -242,7 +253,9 @@ export function GitSettings(props: {
         desktopApi={props.desktopApi}
         saving={props.saving}
         snapshot={props.snapshot}
+        onSaveEnabled={props.onSaveGhEnabled}
         onSaveGhPath={props.onSaveGhPath}
+        onStatusChange={props.onGhStatusChange}
       />
       <GhToolSection
         provider="gitlab"
@@ -250,7 +263,9 @@ export function GitSettings(props: {
         saving={props.saving}
         snapshot={props.snapshot}
         onSaveHost={props.onSaveGlabHost}
+        onSaveEnabled={props.onSaveGlabEnabled}
         onSaveGhPath={props.onSaveGlabPath}
+        onStatusChange={props.onGlabStatusChange}
       />
       <SettingsSection
         eyebrow="Git"

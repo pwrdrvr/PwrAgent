@@ -7640,6 +7640,10 @@ class DesktopAppServerService {
     if (!this.prFetcher) {
       this.prFetcher = new ForgePrFetcher({
         graphqlClient: this.getPrGraphqlClient(),
+        // Read per call, not captured: the operator can toggle a forge
+        // while the app runs and the very next poll must respect it.
+        isProviderEnabled: (provider) =>
+          getDesktopSettingsService().isForgeEnabled(provider),
       }, new GitLabPrFetcher({ tryTakeRequestToken: () => this.prStatusTokenBucket.tryTake() }));
     }
     return this.prFetcher;

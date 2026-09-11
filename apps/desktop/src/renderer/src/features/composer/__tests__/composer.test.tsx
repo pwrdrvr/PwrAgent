@@ -1751,6 +1751,7 @@ describe("Composer", () => {
           preferredEditorId: { value: "", source: "default" },
           preferredTerminalId: { value: "ghostty", source: "config" },
           gh: {
+            enabled: { value: false, source: "default" },
             path: { value: "", source: "default" },
             discovery: { candidates: [] },
           },
@@ -1840,6 +1841,7 @@ describe("Composer", () => {
           preferredEditorId: { value: "", source: "default" },
           preferredTerminalId: { value: "", source: "default" },
           gh: {
+            enabled: { value: false, source: "default" },
             path: { value: "", source: "default" },
             discovery: { candidates: [] },
           },
@@ -1938,6 +1940,7 @@ describe("Composer", () => {
           preferredEditorId: { value: "", source: "default" },
           preferredTerminalId: { value: "ghostty", source: "config" },
           gh: {
+            enabled: { value: false, source: "default" },
             path: { value: "", source: "default" },
             discovery: { candidates: [] },
           },
@@ -13835,6 +13838,7 @@ describe("Composer", () => {
           preferredEditorId: { value: "", source: "default" },
           preferredTerminalId: { value: "", source: "default" },
           gh: {
+            enabled: { value: false, source: "default" },
             path: { value: "", source: "default" },
             discovery: { candidates: [] },
           },
@@ -14920,6 +14924,7 @@ describe("Composer", () => {
           preferredEditorId: { value: "", source: "default" },
           preferredTerminalId: { value: "", source: "default" },
           gh: {
+            enabled: { value: false, source: "default" },
             path: { value: "", source: "default" },
             discovery: { candidates: [] },
           },
@@ -15006,6 +15011,7 @@ describe("Composer", () => {
           preferredEditorId: { value: "", source: "default" },
           preferredTerminalId: { value: "", source: "default" },
           gh: {
+            enabled: { value: false, source: "default" },
             path: { value: "", source: "default" },
             discovery: { candidates: [] },
           },
