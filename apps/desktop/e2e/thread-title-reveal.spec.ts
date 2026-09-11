@@ -313,6 +313,9 @@ test("thread title reveals a linked child hidden by collapsed directory sections
       .filter({ hasText: "Hidden linked child thread" });
     await expect(selectedChild).toBeVisible();
 
+    // Disclosure visibility precedes ThreadRow's animation-frame scroll.
+    // Wait for the reveal outcome before measuring the clipped sidebar bounds.
+    await expect(selectedChild).toBeInViewport({ ratio: 1 });
     const scrollRegion = threadBrowser.locator(".sidebar__scroll-region");
     const [childBox, scrollBox] = await Promise.all([
       selectedChild.boundingBox(),

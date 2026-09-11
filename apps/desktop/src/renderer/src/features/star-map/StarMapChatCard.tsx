@@ -1583,6 +1583,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
             onOpenImage={setExpandedImage}
             pagination={transcriptWindow.visiblePagination}
             parentThreadId={thread.id}
+            parentThreadBackend={thread.source}
             pendingAssistantMessage={session.pendingAssistantMessage}
             pendingMcpInteraction={session.pendingMcpInteraction}
             pendingRequest={session.pendingRequest}

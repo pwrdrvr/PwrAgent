@@ -324,7 +324,7 @@ import { getDesktopFederationRuntime } from "../federation/federation-runtime";
 import { getDesktopNavigationQueryStore } from "../app-server/navigation-query-store";
 import { getDesktopNavigationQueryPool } from "../app-server/navigation-query-pool";
 import { searchNavigationOwners } from "../app-server/navigation-jump-search";
-import { appendViewerNavigationPins, attachRemoteThreadsToLocalDirectories, findRemoteHomeDirectoryIndex } from "../app-server/navigation-viewer-pins";
+import { appendViewerNavigationPins, attachRemoteThreadsToLocalDirectories, findRemoteHomeDirectoryIndex, loadViewerNavigationPins } from "../app-server/navigation-viewer-pins";
 import { loadLocalNavigationQueryIndex } from "../app-server/navigation-query-source";
 import { getDesktopNavigationDetailService } from "../app-server/navigation-detail-service";
 import {
@@ -1660,6 +1660,7 @@ class DesktopAppServerService {
         .remoteBackend(request.federationTarget)
         .readThread({
           backend: request.backend,
+          display: request.display,
           threadId: request.threadId,
           before: request.before,
           includeAllToolInvocations: request.includeAllToolInvocations,
@@ -1674,6 +1675,7 @@ class DesktopAppServerService {
     const registry = getDesktopBackendRegistry();
     const response = await registry.readThread({
       backend,
+      display: request.display,
       threadId: request.threadId,
       includeAllToolInvocations: request.includeAllToolInvocations,
       includeTurns: request.includeTurns,
@@ -1684,6 +1686,7 @@ class DesktopAppServerService {
 
     logDebug("readThread", {
       backend,
+      displayResource: request.display?.resource,
       threadId: request.threadId,
       messageCount: response.replay.messages.length,
       hasLastUserMessage: Boolean(response.replay.lastUserMessage),
@@ -2020,9 +2023,10 @@ class DesktopAppServerService {
         });
         rpcOptions?.signal.throwIfAborted();
         if (request.inventory === "viewer") {
-          const pins = await getDesktopOverlayStore().readRemoteThreadPinNavigationRows();
+          const pins = await loadViewerNavigationPins(getDesktopOverlayStore(),
+            getDesktopFederationRuntime().remoteThreadSummaries());
           rpcOptions?.signal.throwIfAborted();
-          return pins.length ? appendViewerNavigationPins(index, getDesktopFederationRuntime().stampViewerNavigationPins(pins)) : index;
+          return pins.length ? appendViewerNavigationPins(index, pins) : index;
         }
         return index;
       },
@@ -2498,6 +2502,8 @@ class DesktopAppServerService {
         source: thread.source,
         title: thread.title,
         updatedAt: thread.updatedAt,
+        threadStatus: thread.threadStatus,
+        inbox: thread.inbox,
         prs: thread.prs,
         federation: thread.federation,
         reactions: thread.reactions,

@@ -55,7 +55,19 @@ export function useFederationActivity(
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally { toggleGeneration.current += 1; setPending(false); }
   }, [desktopApi, pending]);
-  return { snapshot, error, pending, toggle, reset };
+  const capture = useCallback(async (enabled: boolean) => {
+    if (pending || !desktopApi?.setFederationTrafficCapture) return;
+    setPending(true);
+    toggleGeneration.current += 1;
+    try {
+      const next = await desktopApi.setFederationTrafficCapture(enabled);
+      setSnapshot((previous) => ({ ...next, activity: previous?.activity ?? next.activity }));
+      setError(undefined);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally { toggleGeneration.current += 1; setPending(false); }
+  }, [desktopApi, pending]);
+  return { snapshot, error, pending, toggle, reset, capture };
 }
 
 export function federationRuntimeLabel(snapshot: ReadFederationActivityResponse): string {

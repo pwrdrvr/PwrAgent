@@ -1,3 +1,4 @@
+import { createHash, webcrypto } from "node:crypto";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { expect, it, vi } from "vitest";
 import type { AgentEvent, NavigationSelectedDetailResponse } from "@pwragent/shared";
@@ -53,7 +54,7 @@ it("revalidates exact workspace configuration after an owner handoff event", asy
   expect(result.current.state?.readiness).toBe("loading");
   await waitFor(() => expect(result.current.state?.detail?.revision).toBe("worktree"));
   expect(result.current.state?.detail?.workspaceDirectories?.[0]?.path).toBe("/repo/worktree");
-  expect(read.mock.calls[1]?.[0].knownRevision).toBeUndefined();
+  expect(read.mock.calls[1]?.[0].knownRevision).toBe("local");
   unmount();
 });
 
@@ -75,7 +76,7 @@ it("fences a late selected-detail response at canonical event admission", async 
   await act(async () => { old.resolve(detail("late-idle")); await pending; });
   expect(result.current.state?.detail?.thread?.threadStatus).toBe("active");
   await waitFor(() => expect(read).toHaveBeenCalledTimes(3));
-  expect(read.mock.calls[2]?.[0].knownRevision).toBeUndefined();
+  expect(read.mock.calls[2]?.[0].knownRevision).toBe("initial");
   await act(async () => { fresh.resolve(detail("canonical", true)); });
   await waitFor(() => expect(result.current.state?.readiness).toBe("ready"));
   expect(result.current.state?.detail?.revision).toBe("canonical");
@@ -136,7 +137,7 @@ it("does not read hidden detail and revalidates when the window becomes visible"
   expect(read).toHaveBeenCalledTimes(1);
   rerender({ enabled: true });
   await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
-  expect(read.mock.calls[1]?.[0].knownRevision).toBeUndefined();
+  expect(read.mock.calls[1]?.[0].knownRevision).toBe("visible");
   unmount();
 });
 
@@ -189,7 +190,7 @@ it("invalidates exact configuration at binding-change admission without requirin
   expect(result.current.state?.detail?.revision).toBe("initial");
   await waitFor(() => expect(result.current.state?.detail?.revision).toBe("bindings-current"));
   expect(read).toHaveBeenCalledTimes(3);
-  expect(read.mock.calls[2]?.[0].knownRevision).toBeUndefined();
+  expect(read.mock.calls[2]?.[0].knownRevision).toBe("initial");
   unmount();
   expect(unsubscribe).toHaveBeenCalledOnce();
 });
@@ -244,5 +245,91 @@ it("retains live Token Miser subagents while the authoritative collection refres
   } }));
   await waitFor(() => expect(result.current.state?.collectionReadiness).toBe("ready"));
   expect(result.current.state?.detail?.thread?.subAgents).toEqual([gate]);
+  unmount();
+});
+
+
+it("revalidates a canonical baseline without trusting event-patched configuration", async () => {
+  let listener!: (event: AgentEvent) => void;
+  const confirmation = deferred<NavigationSelectedDetailResponse>();
+  const read = vi.fn<NonNullable<DesktopApi["getNavigationSelectedDetail"]>>()
+    .mockResolvedValueOnce(detail("canonical-idle")).mockReturnValueOnce(confirmation.promise);
+  const api: DesktopApi = { getNavigationSelectedDetail: read, onAgentEvent: (callback) => { listener = callback; return () => {}; } };
+  const { result, unmount } = renderHook(() => useNavigationSelectedDetail({ desktopApi: api, ref }));
+  await waitFor(() => expect(result.current.state?.readiness).toBe("ready"));
+  act(() => listener({ backend: "codex", notification: { method: "thread/status/changed", params: { threadId: ref.threadId, status: { type: "active" } } } }));
+  expect(result.current.state?.readiness).toBe("loading");
+  expect(result.current.state?.detail?.thread?.threadStatus).toBe("active");
+  await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+  expect(read.mock.calls[1]?.[0].knownRevision).toBe("canonical-idle");
+  await act(async () => confirmation.resolve({ protocol: 2, ref, revision: "canonical-idle", unchanged: true, identity: "present", readiness: "ready" }));
+  await waitFor(() => expect(result.current.state?.readiness).toBe("ready"));
+  expect(result.current.state?.detail?.thread?.threadStatus).toBe("idle");
+  unmount();
+});
+
+it("uses a streamed remote collection when it matches the owner's content revision", async () => {
+  vi.stubGlobal("crypto", webcrypto);
+  let listener!: (event: AgentEvent) => void;
+  const target = { scope: "remote" as const, instanceId: "owner" };
+  const remoteRef = { ...ref, ownerInstanceId: "owner" };
+  const subAgents = [{ monitorId: "monitor", task: "Historical task ".repeat(2000), status: "success" as const, createdAt: 1, updatedAt: 1 }];
+  const revision = createHash("sha256").update(JSON.stringify({ ref, name: "subAgents", values: subAgents })).digest("base64url");
+  const read = vi.fn<NonNullable<DesktopApi["getNavigationSelectedDetail"]>>()
+    .mockResolvedValueOnce({ ...detail("initial"), ref: remoteRef })
+    .mockResolvedValue({ ...detail("next"), ref: remoteRef, collections: [{ name: "subAgents", count: 1, revision }] });
+  const api: DesktopApi = { getNavigationSelectedDetail: read, onAgentEvent: (callback) => { listener = callback; return () => {}; } };
+  const { result, unmount } = renderHook(() => useNavigationSelectedDetail({ desktopApi: api, ref: remoteRef, federationTarget: target }));
+  try {
+    await waitFor(() => expect(result.current.state?.readiness).toBe("ready"));
+    act(() => listener({ backend: "codex", federationTarget: target, notification: {
+      method: "thread/subAgents/updated", params: { threadId: ref.threadId, subAgents },
+    } }));
+    await waitFor(() => expect(result.current.state?.collectionReadiness).toBe("ready"));
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(read.mock.calls.every(([request]) => !request.collection)).toBe(true);
+    expect(result.current.state?.detail?.thread?.subAgents).toEqual(subAgents);
+  } finally { unmount(); vi.unstubAllGlobals(); }
+});
+
+it("retains a completed history page across a configuration invalidation", async () => {
+  let listener!: (event: AgentEvent) => void;
+  const page = deferred<NavigationSelectedDetailResponse>();
+  const configured = { ...detail("config"), collections: [{ name: "subAgents" as const, count: 2, revision: "history" }] };
+  const subAgents = [0, 1].map((index) => ({ monitorId: `m-${index}`, task: "Old task", status: "success" as const, createdAt: index, updatedAt: index }));
+  const read = vi.fn<NonNullable<DesktopApi["getNavigationSelectedDetail"]>>().mockImplementation(async (request) => {
+    if (!request.collection) return configured;
+    if (!request.collection.cursor) return page.promise;
+    return { ...detail("history"), collectionPage: { name: "subAgents", revision: "history", complete: true, values: { subAgents: subAgents.slice(1) } } };
+  });
+  const api: DesktopApi = { getNavigationSelectedDetail: read, onAgentEvent: (callback) => { listener = callback; return () => {}; } };
+  const { result, unmount } = renderHook(() => useNavigationSelectedDetail({ desktopApi: api, ref }));
+  await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+  act(() => listener({ backend: "codex", notification: { method: "navigation/invalidated", params: { sourceMethod: "provider/threads/updated" } } }));
+  await act(async () => page.resolve({ ...detail("history"), collectionPage: { name: "subAgents", revision: "history", complete: false, nextCursor: "page-2", values: { subAgents: subAgents.slice(0, 1) } } }));
+  await waitFor(() => expect(result.current.state?.collectionReadiness).toBe("ready"));
+  expect(read.mock.calls.filter(([request]) => request.collection)).toHaveLength(2);
+  expect(result.current.state?.detail?.thread?.subAgents).toEqual(subAgents);
+  unmount();
+});
+
+it("does not fetch sub-agent history when the transcript requests only its required collections", async () => {
+  let listener!: (event: AgentEvent) => void;
+  const activeSubAgents = [{ monitorId: "live", task: "Watch build", status: "running" as const, createdAt: 1, updatedAt: 1 }];
+  const configured = { ...detail("config"), thread: { ...detail("config").thread!, activeSubAgents },
+    collections: [{ name: "subAgents" as const, count: 10000, revision: "history" }] };
+  const read = vi.fn<NonNullable<DesktopApi["getNavigationSelectedDetail"]>>().mockResolvedValue(configured);
+  const api: DesktopApi = { getNavigationSelectedDetail: read,
+    onAgentEvent: (callback) => { listener = callback; return () => {}; } };
+  const { result, unmount } = renderHook(() => useNavigationSelectedDetail({ desktopApi: api, ref, collections: ["turnFailureLog"] }));
+  await waitFor(() => expect(result.current.state?.readiness).toBe("ready"));
+  expect(read).toHaveBeenCalledTimes(1);
+  expect(result.current.state?.detail?.thread?.subAgents).toBeUndefined();
+  expect(result.current.state?.detail?.thread?.activeSubAgents).toEqual(activeSubAgents);
+  read.mockResolvedValue({ ...configured, revision: "completed", thread: { ...configured.thread, activeSubAgents: [] } });
+  act(() => listener({ backend: "codex", notification: { method: "thread/subAgents/updated", params: { threadId: ref.threadId } } }));
+  await waitFor(() => expect(result.current.state?.detail?.thread?.activeSubAgents).toEqual([]));
+  expect(read).toHaveBeenCalledTimes(2);
+  expect(read.mock.calls.every(([request]) => !request.collection)).toBe(true);
   unmount();
 });

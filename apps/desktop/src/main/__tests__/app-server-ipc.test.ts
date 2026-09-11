@@ -14,6 +14,7 @@ import type {
   GetNavigationSnapshotRequest,
   HandoffThreadWorkspaceRequest,
   MarkThreadSeenRequest,
+  NavigationThreadSummary,
   PrSummary,
   RefreshThreadPullRequestsRequest,
   RenameThreadRequest,
@@ -379,6 +380,7 @@ const readNavigationQueryIndex = vi.fn((params: { backend: string; threads: Arra
 }));
 const rememberCompleteNavigationSnapshot = vi.fn();
 const listRemoteThreadPins = vi.fn(async (): Promise<unknown[]> => []);
+const readRemoteThreadPinNavigationRows = vi.fn(async (): Promise<NavigationThreadSummary[]> => []);
 const updateRemoteThreadPinSnapshots = vi.fn(async () => {});
 const removeRemoteThreadPinStore = vi.fn(async () => true);
 const addRemoteThreadPinStore = vi.fn(
@@ -1070,6 +1072,7 @@ vi.mock("../app-server/desktop-overlay-store", () => ({
     readThreadGitWorkingStateCache,
     writeThreadGitWorkingStateCacheEntry,
     listRemoteThreadPins,
+    readRemoteThreadPinNavigationRows,
     updateRemoteThreadPinSnapshots,
     removeRemoteThreadPin: removeRemoteThreadPinStore,
     addRemoteThreadPin: addRemoteThreadPinStore,
@@ -2324,6 +2327,33 @@ describe("app server ipc", () => {
     await expect(
       handler?.({}, { federationTarget, forceRefresh: true, refreshMode: "full" }),
     ).resolves.toBe(snapshot);
+  });
+
+  it("reconciles compact saved pins through the owner cache before projecting viewer Attention", async () => {
+    const { buildFederatedThreadRef } = await import("@pwragent/shared");
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_QUERY_PAGE_CHANNEL } = await import("../../shared/ipc");
+    const ref = buildFederatedThreadRef({ backend: "codex", threadId: "saved-active", instanceId: "peer-idle" });
+    const saved: NavigationThreadSummary = { id: ref.threadId, source: "codex", title: "Saved active", titleSource: "explicit",
+      threadStatus: "active", updatedAt: 1, linkedDirectories: [], inbox: { inInbox: false },
+      federation: { ref, instanceLabel: "Peer" } };
+    const idle = { ...saved, threadStatus: "idle" as const, updatedAt: 2 };
+    listThreads.mockResolvedValueOnce([]);
+    readNavigationQueryIndex.mockReturnValueOnce({ threads: [], directories: [] });
+    readRemoteThreadPinNavigationRows.mockResolvedValueOnce([saved]);
+    federationMock.remoteThreadSummaries.resolvePinnedThreads.mockResolvedValueOnce({
+      threads: [idle], refreshed: [{ ref, summary: idle, instanceLabel: "Peer" }], archived: [],
+    });
+    registerAppServerIpcHandlers();
+    const page = await handlers.get(NAVIGATION_QUERY_PAGE_CHANNEL)!({ sender: { id: 90201, once: vi.fn() } }, {
+      protocol: 2, consumer: "main-sidebar", inventory: "viewer", query: { kind: "lens", lens: "attention" },
+    }) as { counts: { active: number }; entries: unknown[] };
+    expect(page.counts.active).toBe(0);
+    expect(page.entries).toEqual([]);
+    expect(federationMock.remoteThreadSummaries.resolvePinnedThreads).toHaveBeenLastCalledWith([
+      expect.objectContaining({ ref, summary: saved }),
+    ]);
+    expect(updateRemoteThreadPinSnapshots).toHaveBeenLastCalledWith([{ ref, summary: idle, instanceLabel: "Peer" }]);
   });
 
   it.each(["FEDERATION_PEER_UNAVAILABLE", "navigation_busy"])("returns expected %s state without rejecting the Electron handler, but still rejects unexpected failures", async (code) => {

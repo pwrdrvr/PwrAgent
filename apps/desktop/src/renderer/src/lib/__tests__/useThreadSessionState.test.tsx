@@ -1,6 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import type {
+  AgentEvent,
   AppServerBackendKind,
   AppServerReadThreadResponse,
   AppServerToolRequestUserInputNotification,
@@ -13,6 +14,7 @@ import type {
   ThreadUsageLineRecord,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../desktop-api";
+import { useFederationThreadEventSubscriptions } from "../useFederationThreadEventSubscriptions";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   getContextWindowMoonPhase,
@@ -373,6 +375,7 @@ describe("useThreadSessionState", () => {
 
     await waitForThreadHydration(result);
     expect(readThread).toHaveBeenCalledWith({
+      display: { resource: "transcript" },
       backend: "codex",
       limit: DEFAULT_INITIAL_THREAD_HISTORY_TURN_LIMIT,
       threadId: "thread-1",
@@ -467,6 +470,7 @@ describe("useThreadSessionState", () => {
     });
 
     expect(readThread).toHaveBeenNthCalledWith(2, {
+      display: { resource: "transcript" },
       backend: "codex",
       before: "older-page",
       limit: THREAD_HISTORY_PAGE_LIMIT,
@@ -491,6 +495,7 @@ describe("useThreadSessionState", () => {
     });
 
     expect(readThread).toHaveBeenLastCalledWith({
+      display: { resource: "transcript" },
       backend: "codex",
       limit: DEFAULT_INITIAL_THREAD_HISTORY_TURN_LIMIT,
       threadId: "thread-1",
@@ -2782,6 +2787,7 @@ describe("useThreadSessionState", () => {
     await waitForThreadHydration(result);
     expect(readThread).toHaveBeenCalledTimes(1);
     expect(readThread).toHaveBeenLastCalledWith({
+      display: { resource: "transcript" },
       backend: "codex",
       threadId: "thread-1",
     });
@@ -2792,6 +2798,7 @@ describe("useThreadSessionState", () => {
       expect(readThread).toHaveBeenCalledTimes(2);
     });
     expect(readThread).toHaveBeenLastCalledWith({
+      display: { resource: "transcript" },
       backend: "codex",
       limit: DEFAULT_INITIAL_THREAD_HISTORY_TURN_LIMIT,
       threadId: "thread-1",
@@ -8052,6 +8059,7 @@ describe("useThreadSessionState", () => {
 
     await waitFor(() => {
       expect(readThread).toHaveBeenCalledWith({
+      display: { resource: "transcript" },
         backend: "codex",
         threadId: "thread-1",
       });
@@ -8459,6 +8467,7 @@ describe("useThreadSessionState", () => {
 
     expect(readThread).toHaveBeenCalledTimes(1);
     expect(readThread).toHaveBeenNthCalledWith(1, {
+      display: { resource: "transcript" },
       backend: "codex",
       threadId: "thread-1",
     });
@@ -8475,6 +8484,7 @@ describe("useThreadSessionState", () => {
     });
 
     expect(readThread).toHaveBeenNthCalledWith(2, {
+      display: { resource: "transcript" },
       backend: "codex",
       threadId: "thread-2",
     });
@@ -8486,6 +8496,7 @@ describe("useThreadSessionState", () => {
     });
 
     expect(readThread).toHaveBeenNthCalledWith(3, {
+      display: { resource: "transcript" },
       backend: "codex",
       threadId: "thread-1",
     });
@@ -14812,7 +14823,85 @@ describe("useThreadSessionState", () => {
     });
   });
 
-  it("rehydrates an active remote thread when its navigation summary advances", async () => {
+  it("keeps remote idle, start and completed updates on the live stream without snapshot reads", async () => {
+    const readThread = vi.fn().mockResolvedValue(readThreadResponse({
+      entries: [], hasPreviousPage: false, threadStatus: "idle",
+    }));
+    let emit: (event: AgentEvent) => void = () => undefined;
+    const desktopApi: DesktopApi = {
+      readThread,
+      onAgentEvent: (listener) => { emit = listener; return () => undefined; },
+    };
+    const target = { scope: "remote" as const, instanceId: "owner-m5" };
+    const { result, rerender } = renderHook(
+      ({ updatedAt, status }: { updatedAt: number; status: "active" | "idle" }) => useThreadSessionState({
+        desktopApi,
+        thread: {
+          ...buildThread({ id: "thread-1", updatedAt }),
+          threadStatus: status,
+          federation: {
+            ref: { backend: "codex", target, threadId: "thread-1" },
+            instanceLabel: "Remote M5",
+            capabilities: ["thread_detail", "event_subscriptions"],
+          },
+        },
+      }),
+      { initialProps: { updatedAt: 1_000, status: "idle" as "active" | "idle" } },
+    );
+    await waitForThreadHydration(result);
+    expect(readThread).toHaveBeenCalledTimes(1);
+    // Admission can update navigation before the turn/started event arrives.
+    rerender({ updatedAt: 2_000, status: "idle" });
+    await act(async () => undefined);
+    expect(readThread).toHaveBeenCalledTimes(1);
+    act(() => emit({
+      backend: "codex", federationTarget: target,
+      notification: { method: "turn/started", params: {
+        threadId: "thread-1", turn: { id: "turn-1", status: "in_progress" },
+      } },
+    }));
+    // Provider startup briefly reports idle after the optimistic turn starts.
+    act(() => emit({ backend: "codex", federationTarget: target, notification: {
+      method: "thread/status/changed", params: { threadId: "thread-1", status: { type: "idle" } },
+    } }));
+    rerender({ updatedAt: 2_500, status: "idle" });
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 2_100)); });
+    expect(readThread).toHaveBeenCalledTimes(1);
+    rerender({ updatedAt: 3_000, status: "active" });
+    act(() => emit({
+      backend: "codex", federationTarget: target,
+      notification: { method: "item/completed", params: {
+        threadId: "thread-1", turnId: "turn-1",
+        item: { id: "final-1", type: "agentMessage", phase: "final_answer", text: "Finished through the live stream." },
+      } },
+    }));
+    // Idle precedes the terminal notification and must not leave a timer armed.
+    act(() => emit({ backend: "codex", federationTarget: target, notification: {
+      method: "thread/status/changed", params: { threadId: "thread-1", status: { type: "idle" } },
+    } }));
+    // Codex can send an empty terminal turn after delivering its final item.
+    act(() => emit({
+      backend: "codex", federationTarget: target,
+      notification: { method: "turn/completed", params: {
+        threadId: "thread-1", turnId: "turn-1", turn: { id: "turn-1", status: "completed", output: [] },
+      } },
+    }));
+    rerender({ updatedAt: 4_000, status: "idle" });
+    await act(async () => undefined);
+    expect(result.current.activeTurnId).toBeUndefined();
+    expect(result.current.entries).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "message", id: "final-1", text: "Finished through the live stream." }),
+    ]));
+    expect(readThread).toHaveBeenCalledTimes(1);
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 2_100)); });
+    expect(readThread).toHaveBeenCalledTimes(1);
+    // Pricing/metadata changes after completion are not transcript invalidations.
+    rerender({ updatedAt: 5_000, status: "idle" });
+    await act(async () => undefined);
+    expect(readThread).toHaveBeenCalledTimes(1);
+  });
+
+  it("streams an active remote thread without rereading on timestamps, then recovers after stream acknowledgement", async () => {
     const activeTurn = {
       id: "turn-1",
       status: "in_progress" as const,
@@ -14872,8 +14961,9 @@ describe("useThreadSessionState", () => {
         }),
         pendingRequest,
       });
+    let emit: (event: AgentEvent) => void = () => undefined;
     const desktopApi: DesktopApi = {
-      onAgentEvent: () => () => undefined,
+      onAgentEvent: (listener) => { emit = listener; return () => undefined; },
       readThread,
     };
     const remoteThread = (updatedAt: number): NavigationThreadSummary => ({
@@ -14912,6 +15002,26 @@ describe("useThreadSessionState", () => {
     expect(result.current.pendingUserInput).toBeUndefined();
 
     rerender({ updatedAt: 2_000 });
+    await act(async () => undefined);
+    expect(readThread).toHaveBeenCalledTimes(1);
+    act(() => emit({
+      backend: "codex",
+      federationTarget: { scope: "remote", instanceId: "owner-m5" },
+      notification: {
+        method: "item/agentMessage/delta",
+        params: { threadId: "thread-1", turnId: "turn-1", itemId: "live-message", delta: "Live streamed commentary", phase: "commentary" },
+      },
+    }));
+    expect(result.current.pendingAssistantMessage?.text).toBe("Live streamed commentary");
+    expect(readThread).toHaveBeenCalledTimes(1);
+    act(() => emit({
+      backend: "codex",
+      federationTarget: { scope: "remote", instanceId: "owner-m5" },
+      notification: {
+        method: "federation/eventStream/changed",
+        params: { instanceId: "owner-m5", epoch: "reconnected-stream" },
+      },
+    }));
 
     await waitFor(() => {
       expect(readThread).toHaveBeenCalledTimes(2);
@@ -14940,6 +15050,130 @@ describe("useThreadSessionState", () => {
     }));
   });
 
+  it.each([1_000, 2_000])("catches up renewed window-local interest while another window preserves the subscription (updatedAt=%s)", async (updatedAt) => {
+    const remoteThread: NavigationThreadSummary = {
+      ...buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      threadStatus: "active",
+      federation: {
+        ref: { backend: "codex", threadId: "thread-1", target: { scope: "remote", instanceId: "owner-m5" } },
+        instanceLabel: "Remote M5", capabilities: ["event_subscriptions", "thread_detail", "pending_request_control"],
+      },
+    };
+    const activeTurn = { id: "turn-1", status: "in_progress" as const, startedAt: 5_000 };
+    const initialEntry: AppServerThreadMessageEntry = {
+      type: "message", id: "user-1", role: "user", text: "Continue remotely.", turn: activeTurn,
+    };
+    let ownerResponse = readThreadResponse({ entries: [initialEntry], hasPreviousPage: false, threadStatus: "active" });
+    const demands = new Map<number, string[]>();
+    const listeners = new Map<number, (event: AgentEvent) => void>();
+    let aggregate = "[]";
+    let ownerSubscriptionChanges = 0;
+    const createWindow = (id: number) => {
+      const readThread = vi.fn(async (request: { threadId: string }) => request.threadId === "thread-1" ? ownerResponse
+        : readThreadResponse({ threadId: request.threadId, entries: [], hasPreviousPage: false }));
+      const api: DesktopApi = {
+        readThread,
+        onAgentEvent: (listener) => { listeners.set(id, listener); return () => { listeners.delete(id); }; },
+        setFederationEventSubscriptions: async ({ subscriptions }) => {
+          const selected = subscriptions.flatMap((subscription) => subscription.threadSelection?.kind === "threads"
+            ? subscription.threadSelection.threads.map((thread) => thread.threadId) : []);
+          demands.set(id, selected);
+          const next = JSON.stringify([...new Set([...demands.values()].flat())].sort());
+          if (next !== aggregate) { aggregate = next; ownerSubscriptionChanges += 1; }
+          return { subscriptions };
+        },
+      };
+      return { api, readThread };
+    };
+    const first = createWindow(1);
+    const second = createWindow(2);
+    const useWindow = (api: DesktopApi, thread: NavigationThreadSummary) => {
+      useFederationThreadEventSubscriptions({ desktopApi: api, enabled: true, selectedThread: thread, threads: [remoteThread] });
+      return useThreadSessionState({ desktopApi: api, thread, liveTranscriptEventFiltering: true });
+    };
+    const retained = renderHook(() => useWindow(second.api, remoteThread));
+    const switched = renderHook(({ thread }) => useWindow(first.api, thread), { initialProps: { thread: remoteThread } });
+    await waitForThreadHydration(retained.result);
+    await waitForThreadHydration(switched.result);
+    expect(ownerSubscriptionChanges).toBe(1);
+    switched.rerender({ thread: buildThread({ id: "thread-2", updatedAt: 1_000 }) });
+    await waitFor(() => expect(switched.result.current.response?.threadId).toBe("thread-2"));
+
+    const pendingRequest: AppServerToolRequestUserInputNotification = {
+      method: "item/tool/requestUserInput",
+      params: { threadId: "thread-1", turnId: "turn-1", requestId: "prompt-1", questions: [{
+        id: "scope", header: "Scope", question: "Continue?", isOther: false, isSecret: false,
+        options: [{ label: "Yes", description: "Continue the work." }],
+      }] },
+    };
+    const commentary: AppServerThreadMessageEntry = {
+      type: "message", id: "commentary-1", role: "assistant", phase: "commentary", text: "Need your decision.", turn: activeTurn,
+    };
+    ownerResponse = {
+      ...readThreadResponse({ entries: [initialEntry, commentary], hasPreviousPage: false, threadStatus: "active" }),
+      pendingRequest,
+    };
+    act(() => {
+      for (const [id, demand] of demands) {
+        if (demand.includes("thread-1")) listeners.get(id)?.({
+          backend: "codex", federationTarget: { scope: "remote", instanceId: "owner-m5" }, notification: pendingRequest,
+        });
+      }
+    });
+    expect(retained.result.current.pendingUserInput?.requestId).toBe("prompt-1");
+    expect(switched.result.current.pendingUserInput).toBeUndefined();
+    switched.rerender({ thread: { ...remoteThread, updatedAt } });
+    await waitFor(() => expect(switched.result.current.pendingUserInput?.requestId).toBe("prompt-1"));
+    expect(switched.result.current.entries).toEqual(expect.arrayContaining([expect.objectContaining({ text: "Need your decision." })]));
+    expect(first.readThread.mock.calls.filter(([request]) => request.threadId === "thread-1")).toHaveLength(2);
+    expect(second.readThread).toHaveBeenCalledTimes(1);
+    // No new process-wide subscription and no acknowledgement was emitted.
+    expect(ownerSubscriptionChanges).toBe(1);
+    switched.rerender({ thread: { ...remoteThread, updatedAt: 3_000 } });
+    await act(async () => undefined);
+    expect(first.readThread.mock.calls.filter(([request]) => request.threadId === "thread-1")).toHaveLength(2);
+  });
+
+  it("catches up when stream acknowledgement arrives during an older in-flight read", async () => {
+    let resolveInitial!: (response: AppServerReadThreadResponse) => void;
+    const initial = new Promise<AppServerReadThreadResponse>((resolve) => { resolveInitial = resolve; });
+    const response = readThreadResponse({ entries: [], hasPreviousPage: false, threadStatus: "active" });
+    const readThread = vi.fn().mockReturnValueOnce(initial).mockResolvedValue(response);
+    let emit: (event: AgentEvent) => void = () => undefined;
+    const desktopApi: DesktopApi = {
+      readThread,
+      onAgentEvent: (listener) => { emit = listener; return () => undefined; },
+    };
+    const remoteThread: NavigationThreadSummary = {
+      ...buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      threadStatus: "active",
+      federation: {
+        ref: { backend: "codex", threadId: "thread-1", target: { scope: "remote", instanceId: "owner-m5" } },
+        instanceLabel: "Remote M5", capabilities: ["event_subscriptions", "thread_detail"],
+      },
+    };
+    const { result, rerender } = renderHook(({ updatedAt }) => useThreadSessionState({
+      desktopApi, thread: { ...remoteThread, updatedAt },
+    }), { initialProps: { updatedAt: 1_000 } });
+    await waitFor(() => expect(readThread).toHaveBeenCalledTimes(1));
+    act(() => emit({
+      backend: "codex", federationTarget: { scope: "remote", instanceId: "other-owner" },
+      notification: { method: "federation/eventStream/changed", params: { instanceId: "other-owner", epoch: "other" } },
+    }));
+    act(() => emit({
+      backend: "codex", federationTarget: { scope: "remote", instanceId: "owner-m5" },
+      notification: { method: "federation/eventStream/changed", params: { instanceId: "owner-m5", epoch: "new-stream" } },
+    }));
+    expect(readThread).toHaveBeenCalledTimes(1);
+    await act(async () => resolveInitial(response));
+    await waitForThreadHydration(result);
+    await waitFor(() => expect(readThread).toHaveBeenCalledTimes(2));
+    // Some backends report active status before they expose a turn id.
+    rerender({ updatedAt: 2_000 });
+    await act(async () => undefined);
+    expect(readThread).toHaveBeenCalledTimes(2);
+  });
+
   it("does not immediately retry a failed active remote rehydration", async () => {
     const activeTurn = {
       id: "turn-1",
@@ -14962,8 +15196,9 @@ describe("useThreadSessionState", () => {
         threadStatus: "active",
       }))
       .mockRejectedValue(new Error("Remote federation unavailable"));
+    let emit: (event: AgentEvent) => void = () => undefined;
     const desktopApi: DesktopApi = {
-      onAgentEvent: () => () => undefined,
+      onAgentEvent: (listener) => { emit = listener; return () => undefined; },
       readThread,
     };
     const remoteThread = (updatedAt: number): NavigationThreadSummary => ({
@@ -14999,6 +15234,16 @@ describe("useThreadSessionState", () => {
     expect(readThread).toHaveBeenCalledTimes(1);
 
     rerender({ updatedAt: 2_000 });
+    await act(async () => undefined);
+    expect(readThread).toHaveBeenCalledTimes(1);
+    act(() => emit({
+      backend: "codex",
+      federationTarget: { scope: "remote", instanceId: "owner-m5" },
+      notification: {
+        method: "federation/eventStream/changed",
+        params: { instanceId: "owner-m5", epoch: "reconnected-stream" },
+      },
+    }));
 
     await waitFor(() => {
       expect(result.current.error).toBe("Remote federation unavailable");
@@ -15546,4 +15791,24 @@ describe("useThreadSessionState", () => {
       "activity:pnpm test",
     ]);
   });
+});
+
+it("refreshes a mounted remote transcript without event subscriptions, including an idle-only completion", async () => {
+  const target = { scope: "remote" as const, instanceId: "snapshot-only" };
+  const initial: AppServerThreadMessageEntry = { type: "message", role: "assistant", id: "initial", text: "Working", turn: { id: "turn-1", status: "in_progress", startedAt: 1_000 } };
+  const final: AppServerThreadMessageEntry = { type: "message", role: "assistant", id: "final", text: "Finished", turn: { id: "turn-1", status: "completed", completedAt: 2_000 } };
+  const readThread = vi.fn().mockResolvedValueOnce(readThreadResponse({ entries: [initial], hasPreviousPage: false, threadStatus: "active" }))
+    .mockResolvedValue(readThreadResponse({ entries: [initial, final], hasPreviousPage: false, threadStatus: "idle" }));
+  const api: DesktopApi = { readThread, onAgentEvent: () => () => undefined };
+  const { result, rerender, unmount } = renderHook(({ status }: { status: "active" | "idle" }) => useThreadSessionState({ desktopApi: api, thread: {
+    ...buildThread({ id: "thread-1", updatedAt: 1_000 }), threadStatus: status,
+    federation: { ref: { backend: "codex", threadId: "thread-1", target }, instanceLabel: "Snapshot peer", capabilities: ["thread_detail"] },
+  } }), { initialProps: { status: "active" as "active" | "idle" } });
+  await waitForThreadHydration(result);
+  expect(result.current.activeTurnId).toBe("turn-1");
+  rerender({ status: "idle" });
+  await waitFor(() => expect(result.current.entries.some((entry) => entry.id === "final")).toBe(true), { timeout: 3_000 });
+  expect(result.current.activeTurnId).toBeUndefined();
+  expect(readThread).toHaveBeenCalledTimes(2);
+  unmount();
 });

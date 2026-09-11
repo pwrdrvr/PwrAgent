@@ -1,6 +1,8 @@
 import {
   memo,
   useMemo,
+  useRef,
+  useEffect,
   useState,
   type FocusEvent,
   type MouseEvent,
@@ -8,6 +10,7 @@ import {
 } from "react";
 import { stripCodexGitActionDirectives } from "@pwragent/shared";
 import type {
+  AppServerBackendKind,
   DesktopApplicationsSnapshot,
   AppServerSkillSummary,
   AppServerThreadFilePart,
@@ -50,10 +53,12 @@ type TranscriptMessageProps = {
     | "openApplication"
     | "openMarkdownFileViewer"
     | "readMarkdownFile"
+    | "readThread"
   >;
   fileViewerContext?: MarkdownFileViewerContext;
   message: AppServerThreadMessageEntry;
   parentThreadId: string;
+  parentThreadBackend?: AppServerBackendKind;
   skills: AppServerSkillSummary[];
   subAgents?: ThreadSubAgentSummary[];
   threadLinkSource?: ThreadLinkSource;
@@ -101,11 +106,21 @@ export const TranscriptMessage = memo(function TranscriptMessage(props: Transcri
   const [monitorDetailsOpen, setMonitorDetailsOpen] = useState(false);
   const monitorOrigin = props.message.origin?.subAgent;
   const prAutomationOrigin = props.message.origin?.prAutomation;
+  const [loadedMonitor, setLoadedMonitor] = useState<ThreadSubAgentSummary>();
+  const [monitorError, setMonitorError] = useState<string>();
+  const monitorRequestVersion = useRef(0);
+  useEffect(() => {
+    monitorRequestVersion.current += 1;
+    setLoadedMonitor(undefined);
+    setMonitorDetailsOpen(false);
+    setMonitorError(undefined);
+    return () => { monitorRequestVersion.current += 1; };
+  }, [props.parentThreadId, props.parentThreadBackend, props.message.id, props.threadLinkSource?.instanceId]);
   const monitorSubAgent = useMemo(
-    () => props.subAgents?.find(
+    () => loadedMonitor?.monitorId === monitorOrigin?.monitorId ? loadedMonitor : props.subAgents?.find(
       (subAgent) => subAgent.monitorId === monitorOrigin?.monitorId,
     ),
-    [monitorOrigin?.monitorId, props.subAgents],
+    [monitorOrigin?.monitorId, props.subAgents, loadedMonitor],
   );
 
   if (
@@ -221,11 +236,27 @@ export const TranscriptMessage = memo(function TranscriptMessage(props: Transcri
           >
             {monitorOutcomeLabel(monitorOrigin.outcome)}
           </RailStatusChip>
-          {monitorSubAgent ? (
+          {monitorSubAgent || (props.desktopApi?.readThread && monitorOrigin.monitorId) ? (
             <button
               type="button"
               className="button button--ghost transcript-monitor-result__details"
-              onClick={() => setMonitorDetailsOpen(true)}
+              onClick={async () => {
+                if (monitorSubAgent) { setMonitorDetailsOpen(true); return; }
+                const requestVersion = ++monitorRequestVersion.current;
+                try {
+                  const backend = props.parentThreadBackend ?? props.threadLinkSource?.backend;
+                  if (!backend) throw new Error("The parent thread backend is unavailable.");
+                  const response = await props.desktopApi!.readThread!({
+                    backend,
+                    threadId: props.parentThreadId,
+                    federationTarget: props.threadLinkSource ? { scope: "remote", instanceId: props.threadLinkSource.instanceId } : readRendererFederationTarget(),
+                    display: { resource: "subagent", monitorId: monitorOrigin.monitorId }, includeTurns: false, viewOnly: true,
+                  });
+                  if (requestVersion !== monitorRequestVersion.current) return;
+                  if (!response.display?.subAgent) throw new Error("Sub-agent details are unavailable.");
+                  setLoadedMonitor(response.display.subAgent); setMonitorError(undefined); setMonitorDetailsOpen(true);
+                } catch (error) { if (requestVersion === monitorRequestVersion.current) setMonitorError(error instanceof Error ? error.message : String(error)); }
+              }}
             >
               Details
             </button>
@@ -250,6 +281,7 @@ export const TranscriptMessage = memo(function TranscriptMessage(props: Transcri
             </div>
           </div>
         ) : null}
+        {monitorError ? <p className="context-empty" role="alert">{monitorError}</p> : null}
         {monitorDetailsOpen && monitorSubAgent ? (
           <SubAgentDetailsModal
             defaultBackend={

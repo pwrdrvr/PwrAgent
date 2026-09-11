@@ -1,3 +1,4 @@
+import { FederationTrafficCapture } from "./FederationTrafficCapture";
 import { useEffect, useId, useRef, useState } from "react";
 import { FederationConnections } from "./FederationConnections";
 import type { DesktopApi } from "../../lib/desktop-api";
@@ -12,7 +13,7 @@ export function FederationStatusControl(props: { desktopApi?: DesktopApi; onOpen
   const trigger = useRef<HTMLButtonElement>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const id = useId();
-  const { snapshot, error, pending, toggle } = useFederationActivity(props.desktopApi, open, { includeHistory: false });
+  const { snapshot, error, pending, toggle, capture } = useFederationActivity(props.desktopApi, open, { includeHistory: false });
   const cancelDismiss = () => clearTimeout(timer.current);
   useEffect(() => () => clearTimeout(timer.current), []);
   useEffect(() => {
@@ -82,6 +83,9 @@ export function FederationStatusControl(props: { desktopApi?: DesktopApi; onOpen
                 <p className="federation-activity__muted">Encoded envelope bytes on physical connections</p>
               </div>
             ) : null}
+            <FederationTrafficCapture until={snapshot?.detailedLoggingUntil}
+              disabled={!snapshot || pending || !props.desktopApi?.setFederationTrafficCapture}
+              onChange={(enabled) => { void capture(enabled); }} />
             {error || actionError ? <p role="alert">{error || actionError}</p> : null}
             <button type="button" className="messaging-status-popover__activity"
               disabled={!props.desktopApi?.openFederationActivity}

@@ -1,13 +1,17 @@
+import { aggregateToolAccounting, type ToolAccountingTotals } from "@pwragent/shared";
 import { memo, useMemo, useState } from "react";
 import type {
   AppServerThreadActivityDetail,
+  AppServerThreadActivityEntry,
   AppServerThreadEntry,
   ThreadToolAccounting,
   ThreadToolInvocationRecord,
   ThreadToolInvocationSummary,
 } from "@pwragent/shared";
 import { PopoutIcon } from "../../../icons";
+import type { DesktopApi } from "../../../lib/desktop-api";
 import type { ThreadLinkSource } from "../../../lib/thread-links";
+import { useTranscriptActivityDetails } from "../../../lib/useTranscriptActivityDetails";
 import { TranscriptCommandOutput } from "../TranscriptCommandOutput";
 import { detailMatchesInvocationItem } from "../tool-call-details";
 import { formatTokenCount } from "./subagent-format";
@@ -18,6 +22,10 @@ import {
 } from "./context-rail-shared";
 
 type ToolCallsPanelProps = {
+  desktopApi?: Pick<DesktopApi, "readThread">;
+  totals?: ToolAccountingTotals;
+  onLoadMore?: () => void;
+  loading?: boolean;
   entries?: AppServerThreadEntry[];
   loadingDetailItemId?: string;
   onAnalyzeHistory?: () => void;
@@ -28,21 +36,11 @@ type ToolCallsPanelProps = {
   toolAccounting?: ThreadToolAccounting;
 };
 
-type ToolAccountingTotals = {
-  errorLines: number;
-  estimatedOutputTokens: number;
-  invocationCount: number;
-  noisyInvocationCount: number;
-  outputChars: number;
-  outputLines: number;
-  warningLines: number;
-};
-
 export const ToolCallsPanel = memo(function ToolCallsPanel(props: ToolCallsPanelProps) {
   const [expandedSummary, setExpandedSummary] = useState<string>();
   const [expandedInvocation, setExpandedInvocation] = useState<string>();
   const accounting = props.toolAccounting;
-  const totals = aggregateToolAccounting(accounting);
+  const totals = props.totals ?? aggregateToolAccounting(accounting);
   const detailsByItemId = useMemo(
     () => collectCommandDetails(
       props.entries ?? [],
@@ -180,6 +178,7 @@ export const ToolCallsPanel = memo(function ToolCallsPanel(props: ToolCallsPanel
                   </p>
                   {expanded ? (
                     <ToolInvocationList
+                      desktopApi={props.desktopApi}
                       detailsByItemId={detailsByItemId}
                       expandedInvocation={expandedInvocation}
                       invocations={invocations}
@@ -197,12 +196,16 @@ export const ToolCallsPanel = memo(function ToolCallsPanel(props: ToolCallsPanel
           </ul>
         </div>
       ) : null}
+      {props.onLoadMore ? <button className="button button--ghost" disabled={props.loading} onClick={props.onLoadMore} type="button">Load more tool calls</button> : null}
     </section>
   );
 });
 
+type CommandDetailSource = { entry: AppServerThreadActivityEntry; detail: AppServerThreadActivityDetail };
+
 function ToolInvocationList(props: {
-  detailsByItemId: Map<string, AppServerThreadActivityDetail>;
+  desktopApi?: Pick<DesktopApi, "readThread">;
+  detailsByItemId: Map<string, CommandDetailSource>;
   expandedInvocation?: string;
   invocations: ThreadToolInvocationRecord[];
   loadingDetailItemId?: string;
@@ -281,8 +284,9 @@ function ToolInvocationList(props: {
               {expanded ? (
                 <div className="tool-call-instance__detail">
                   {transcriptDetail ? (
-                    <TranscriptCommandOutput
-                      detail={transcriptDetail}
+                    <ToolInvocationOutput
+                      desktopApi={props.desktopApi}
+                      source={transcriptDetail}
                       threadLinkSource={props.threadLinkSource}
                     />
                   ) : (
@@ -305,11 +309,40 @@ function ToolInvocationList(props: {
   );
 }
 
+function ToolInvocationOutput(props: {
+  desktopApi?: Pick<DesktopApi, "readThread">;
+  source: CommandDetailSource;
+  threadLinkSource?: ThreadLinkSource;
+}) {
+  const details = useTranscriptActivityDetails({
+    entry: props.source.entry,
+    expanded: true,
+    desktopApi: props.desktopApi,
+    instanceId: props.threadLinkSource?.instanceId,
+  });
+  if (details.entry.detailsRef) {
+    return (
+      <div className="tool-call-instance__detail-status" aria-live="polite">
+        {details.error ? (
+          <>
+            <p role="alert">{details.error}</p>
+            <button className="button button--ghost" type="button" onClick={() => void details.load().catch(() => undefined)}>Retry</button>
+          </>
+        ) : "Loading captured output…"}
+      </div>
+    );
+  }
+  const detail = details.entry.details.find((candidate) => candidate.id === props.source.detail.id && candidate.command);
+  return detail ? (
+    <TranscriptCommandOutput detail={detail} threadLinkSource={props.threadLinkSource} />
+  ) : <p className="tool-call-instance__detail-status">Captured output is unavailable in transcript history.</p>;
+}
+
 function collectCommandDetails(
   entries: AppServerThreadEntry[],
   invocations: ThreadToolInvocationRecord[],
-): Map<string, AppServerThreadActivityDetail> {
-  const detailsByItemId = new Map<string, AppServerThreadActivityDetail>();
+): Map<string, CommandDetailSource> {
+  const detailsByItemId = new Map<string, CommandDetailSource>();
   const itemIds = [...new Set(invocations.map((invocation) => invocation.itemId))]
     .sort((left, right) => right.length - left.length);
   for (const entry of entries) {
@@ -329,44 +362,15 @@ function collectCommandDetails(
       const current = detailsByItemId.get(itemId);
       if (
         !current
-        || (current.command?.output === undefined
+        || (current.entry.detailsRef && !entry.detailsRef)
+        || (current.detail.command?.output === undefined
           && detail.command.output !== undefined)
       ) {
-        detailsByItemId.set(itemId, detail);
+        detailsByItemId.set(itemId, { entry, detail });
       }
     }
   }
   return detailsByItemId;
-}
-
-function aggregateToolAccounting(
-  toolAccounting: ThreadToolAccounting | undefined,
-): ToolAccountingTotals | undefined {
-  if (!toolAccounting || toolAccounting.summaries.length === 0) {
-    return undefined;
-  }
-  return toolAccounting.summaries.reduce<ToolAccountingTotals>(
-    (totals, summary) => ({
-      errorLines: totals.errorLines + summary.errorLines,
-      estimatedOutputTokens:
-        totals.estimatedOutputTokens + summary.estimatedOutputTokens,
-      invocationCount: totals.invocationCount + summary.invocationCount,
-      noisyInvocationCount:
-        totals.noisyInvocationCount + summary.noisyInvocationCount,
-      outputChars: totals.outputChars + summary.outputChars,
-      outputLines: totals.outputLines + summary.outputLines,
-      warningLines: totals.warningLines + summary.warningLines,
-    }),
-    {
-      errorLines: 0,
-      estimatedOutputTokens: 0,
-      invocationCount: 0,
-      noisyInvocationCount: 0,
-      outputChars: 0,
-      outputLines: 0,
-      warningLines: 0,
-    },
-  );
 }
 
 function formatToolSummaryTitle(summary: ThreadToolInvocationSummary): string {

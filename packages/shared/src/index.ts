@@ -57,3 +57,12 @@ export * from "./thread-pricing-projection";
 export * from "./worktree-paths";
 
 export * from "./composer-scope";
+
+export * from "./thread-usage-display";
+export * from "./thread-pricing-display";
+export * from "./pricing-spend-by-model";
+export * from "./token-miser-savings-summary";
+export * from "./thread-incident-summary";
+
+export * from "./thread-tool-display";
+export * from "./subagent-kind";

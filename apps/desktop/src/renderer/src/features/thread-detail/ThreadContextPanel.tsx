@@ -1,3 +1,5 @@
+import type { SubAgentLens } from "@pwragent/shared";
+import { useThreadDisplayResource } from "../../lib/useThreadDisplayResource";
 import {
   useCallback,
   useEffect,
@@ -249,6 +251,13 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
       : props.activeTab === "tool-calls" && !threadToolAccountingEnabled
         ? "info"
       : props.activeTab;
+  const [subAgentLens, setSubAgentLens] = useState<SubAgentLens>();
+  const displayResource = useThreadDisplayResource({
+    subAgentLens,
+    desktopApi: props.desktopApi,
+    thread: props.thread,
+    resource: open && activeTab === "pricing" ? "pricing" : open && activeTab === "tool-calls" ? "tools" : open && activeTab === "subagents" ? "subagents" : undefined,
+  });
   const visibleTabs = CONTEXT_TABS.filter((tab) =>
     props.thread
       ? (tab.id !== "pricing" || threadPricingSummaryEnabled)
@@ -617,7 +626,8 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
               role="tabpanel"
               aria-labelledby={`context-rail-tab-${activeTab}`}
             >
-              {renderActivePanel()}
+              {displayResource.error ? <p className="context-empty" role="alert">{displayResource.error} <button className="button button--ghost" onClick={displayResource.refresh} type="button">Retry</button></p> : null}
+              {displayResource.loading && !displayResource.data ? <p className="context-empty">Loading…</p> : renderActivePanel()}
             </div>
           </div>
         </div>
@@ -745,8 +755,13 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
         if (!props.thread) return null;
         return (
           <PricingPanel
+            desktopApi={props.desktopApi}
+            thread={{ id: props.thread.id, source: props.thread.source, federation: props.thread.federation, updatedAt: props.thread.updatedAt }}
             activeTurnId={props.activeTurnId}
             pricing={props.pricing}
+            display={displayResource.data?.pricingPage}
+            loading={displayResource.loading}
+            onLoadMore={displayResource.data?.nextCursor ? displayResource.loadMore : undefined}
             displayOptions={props.pricingDisplayOptions}
             onOpenTokenMiserSavings={
               props.onOpenToolOutputIncidentExplorer
@@ -764,6 +779,8 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
         if (!props.thread) return null;
         return (
           <ToolCallsPanel
+            desktopApi={props.desktopApi}
+            totals={displayResource.data?.toolTotals}
             entries={props.toolCallEntries}
             loadingDetailItemId={props.loadingToolCallDetailItemId}
             onAnalyzeHistory={props.onAnalyzeToolHistory}
@@ -779,7 +796,9 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
             onRequestInvocationDetails={props.onRequestToolCallDetails}
             onScrollToTurn={props.onScrollToTurn}
             threadLinkSource={threadLinkSource}
-            toolAccounting={props.toolAccounting}
+            toolAccounting={displayResource.data?.toolsPage ?? props.toolAccounting}
+            onLoadMore={displayResource.data?.nextCursor ? displayResource.loadMore : undefined}
+            loading={displayResource.loading}
           />
         );
       }
@@ -799,10 +818,15 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
         if (!props.thread) return null;
         return (
           <SubAgentsPanel
+            lens={displayResource.data?.subAgentLens}
+            lensCounts={displayResource.data?.subAgentCounts}
+            onSelectLens={setSubAgentLens}
+            onLoadMore={displayResource.data?.nextCursor ? displayResource.loadMore : undefined}
+            loading={displayResource.loading}
             desktopApi={props.desktopApi}
             onRefreshNavigation={props.onRefreshNavigation}
             pricingDisplayOptions={props.pricingDisplayOptions}
-            thread={props.thread}
+            thread={{ ...props.thread, subAgents: displayResource.data?.subAgents ?? props.thread.subAgents }}
             onDetailsModalOpenChange={handlePortaledInteractionChange}
           />
         );

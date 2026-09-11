@@ -49,6 +49,7 @@ import {
   threadSupportsFederationCapability,
 } from "../../lib/federated-thread-events";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
+import { isFederationViewerWindow } from "../../lib/federation-window";
 import {
   beginNativeDragInteraction,
   endNativeDragInteraction,
@@ -72,6 +73,8 @@ import {
 } from "./thread-row-drag-preview";
 import {
   formatActiveThreadCount,
+  formatLocalActiveThreadCount,
+  formatRemoteActiveThreadCount,
   formatReviewThreadCount,
 } from "./ThreadRowStatus";
 
@@ -457,6 +460,7 @@ function getDirectoryRowLinkedDirectoryMode(
  */
 function DirectoryCount(props: {
   activeCount?: number;
+  remoteActiveCount?: number;
   className: string;
   count: number;
   indicator: ReactElement;
@@ -473,6 +477,7 @@ function DirectoryCount(props: {
         count={props.count}
         data={{
           "data-active-thread-count": props.activeCount,
+          "data-remote-active-thread-count": props.remoteActiveCount,
           "data-review-thread-count": props.reviewCount,
         }}
         indicator={props.indicator}
@@ -1092,7 +1097,10 @@ export function DirectoriesList(props: DirectoriesListProps) {
     const expanded =
       expandedByKey[directory.key] ??
       (selectedLaunchpad || selectedThreadInDirectory);
-    const activeThreadCount = directory.counts?.active ?? 0;
+    const remoteActiveThreadCount = isFederationViewerWindow() ? 0 : directory.counts?.activeRemote ?? 0;
+    const activeThreadCount = Math.max(0, (directory.counts?.active ?? 0) - remoteActiveThreadCount);
+    const activeThreadLabel = remoteActiveThreadCount > 0
+      ? formatLocalActiveThreadCount(activeThreadCount) : formatActiveThreadCount(activeThreadCount);
     const reviewThreadCount = directory.counts?.review ?? 0;
     const visibleThreadCount = directory.counts?.total ?? 0;
     const pinResourceId = `directory-pins:${directory.key}`;
@@ -1102,7 +1110,8 @@ export function DirectoriesList(props: DirectoriesListProps) {
     const directorySummaryLabel = [
       directory.label,
       directoryUnconfigured ? "not configured on this instance" : undefined,
-      activeThreadCount > 0 ? formatActiveThreadCount(activeThreadCount) : undefined,
+      activeThreadCount > 0 ? activeThreadLabel : undefined,
+      remoteActiveThreadCount > 0 ? formatRemoteActiveThreadCount(remoteActiveThreadCount) : undefined,
       reviewThreadCount > 0 ? formatReviewThreadCount(reviewThreadCount) : undefined,
     ]
       .filter((label): label is string => Boolean(label))
@@ -1651,7 +1660,17 @@ export function DirectoriesList(props: DirectoriesListProps) {
                   count={activeThreadCount}
                   indicator={<ThinkingScanner compact />}
                   tone="active"
-                  tooltipText={formatActiveThreadCount(activeThreadCount)}
+                  tooltipText={activeThreadLabel}
+                />
+              ) : null}
+              {remoteActiveThreadCount > 0 ? (
+                <DirectoryCount
+                  remoteActiveCount={remoteActiveThreadCount}
+                  className="directory-row__remote-active-count"
+                  count={remoteActiveThreadCount}
+                  indicator={<ThinkingScanner compact />}
+                  tone="remote-active"
+                  tooltipText={formatRemoteActiveThreadCount(remoteActiveThreadCount)}
                 />
               ) : null}
               {reviewThreadCount > 0 ? (

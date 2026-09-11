@@ -64,6 +64,37 @@ threads without duplicating full provider transcripts in sqlite.
 - Thread history archival and worktree snapshot archival use distinct APIs and
   provider-specific restore paths.
 
+### Display reads and federation
+
+- Desktop transcripts use `readThread` with `display.resource = "transcript"`.
+  The owning main process prepares completed-turn usage activities and compact
+  pricing totals. It sends each transcript message once in `replay.entries`;
+  the renderer derives its message list from those entries. Historical pricing
+  lines, tool invocations, Code Mode observations, and duplicate last-message
+  fields are absent from this response.
+- Pricing, tool-call, and sub-agent panels request their own display resource
+  when opened. Pages contain up to 50 top-level rows (20 by default), with
+  totals computed over the complete owner history. Sub-agent categories have
+  independent pages and counts over their full history. Cursors are tied to a
+  resource revision. A stale cursor requires a refresh; an open panel refreshes
+  the number of pages the operator has already requested.
+- A pricing row includes its displayed gate children and decision details.
+  Transcript text and expanded panel details retain their content; a row-count
+  limit is not a hard byte limit on an individual message or row.
+- Pricing, tool-accounting, and sub-agent events invalidate display resources
+  instead of pushing their complete histories. Spend and tool alerts retain
+  their notification data. Loaded transcript turns request owner-prepared
+  usage corrections through the `accounting` resource, without replaying the
+  transcript. Inspection tools and the Tool Output Incident Explorer explicitly
+  request accounting data through ordinary reads.
+- Remote transcripts with event-subscription permission use the sequenced
+  stream and catch up after stream acknowledgement or reconnection. Peers
+  granting only thread-detail reads retain navigation-timestamp and idle-status
+  snapshot recovery.
+- These projections apply before both local renderer IPC and federation event
+  delivery. Federation payload reduction comes from resource selection and
+  projection; the transport does not compress the payload.
+
 ### Configuration and identity
 
 - New chats remain launchpad state until first send, so provider selection

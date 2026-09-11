@@ -38,6 +38,7 @@ import {
 import {
   FEDERATION_READ_ACTIVITY_CHANNEL,
   FEDERATION_RESET_ACTIVITY_CHANNEL,
+  FEDERATION_SET_TRAFFIC_CAPTURE_CHANNEL,
   FEDERATION_SET_ENABLED_CHANNEL,
   FEDERATION_OPEN_ACTIVITY_CHANNEL,
   FEDERATION_ACTIVITY_TOPMOST_CHANNEL,
@@ -94,6 +95,7 @@ export function registerFederationIpcHandlers(): void {
   for (const channel of [
     FEDERATION_READ_ACTIVITY_CHANNEL,
     FEDERATION_RESET_ACTIVITY_CHANNEL,
+    FEDERATION_SET_TRAFFIC_CAPTURE_CHANNEL,
     FEDERATION_SET_ENABLED_CHANNEL,
     FEDERATION_OPEN_ACTIVITY_CHANNEL,
     FEDERATION_ACTIVITY_TOPMOST_CHANNEL,
@@ -108,6 +110,10 @@ export function registerFederationIpcHandlers(): void {
         : undefined,
       historyView: request?.historyView === "logical" ? "logical" : "physical",
     }));
+  ipcMain.handle(FEDERATION_SET_TRAFFIC_CAPTURE_CHANNEL, (_event, enabled: unknown) => {
+    if (typeof enabled !== "boolean") throw new Error("Expected a boolean.");
+    return getDesktopFederationRuntime().setDetailedTrafficCapture(enabled);
+  });
   ipcMain.handle(FEDERATION_RESET_ACTIVITY_CHANNEL, () => getDesktopFederationRuntime().resetActivity());
   ipcMain.handle(FEDERATION_OPEN_ACTIVITY_CHANNEL, (event) => {
     showFederationActivityWindow({
@@ -440,6 +446,7 @@ function readPinDisposition(value: unknown): FederationPinDisposition {
 
 export function disposeFederationIpcHandlers(): void {
   ipcMain.removeHandler(FEDERATION_RESET_ACTIVITY_CHANNEL);
+  ipcMain.removeHandler(FEDERATION_SET_TRAFFIC_CAPTURE_CHANNEL);
   ipcMain.removeHandler(FEDERATION_OPEN_WINDOW_CHANNEL);
   ipcMain.removeHandler(FEDERATION_GET_HEALTH_CHANNEL);
   ipcMain.removeHandler(FEDERATION_READ_INSTANCE_LOAD_CHANNEL);

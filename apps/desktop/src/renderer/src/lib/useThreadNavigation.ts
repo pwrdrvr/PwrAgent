@@ -898,6 +898,7 @@ function threadSummariesEqual(
     prSummariesEqual(left.prs, right.prs) &&
     reactionsEqual(left.reactions, right.reactions) &&
     subAgentsEqual(left.subAgents, right.subAgents) &&
+    subAgentsEqual(left.activeSubAgents, right.activeSubAgents) &&
     permissionTransitionLogsEqual(
       left.permissionTransitionLog,
       right.permissionTransitionLog
@@ -3093,6 +3094,7 @@ export function useThreadNavigation(
     ? navigationIdentityFromThreadKey(selectedItemKey, rendererFederationTarget)
     : undefined;
   const selectedDetail = useNavigationSelectedDetail({
+    collections: ["codexNativeSubAgents", "permissionTransitionLog", "messagingBindingTransitionLog", "turnFailureLog", "questionnaireActivityLog", "worktreeSnapshots", "retainedBranchDriftPairs", "subthreadOrder"],
     desktopApi, enabled: enabled && viewVisible,
     ref: selectedIdentity,
     federationTarget: selectedIdentity?.ownerInstanceId

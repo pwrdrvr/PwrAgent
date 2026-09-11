@@ -1,6 +1,7 @@
 import type {
   AgentEvent,
   FederationCapability,
+  FederationPeerSummary,
   FederationTarget,
   NavigationThreadSummary,
   ThreadIdentifier,
@@ -10,6 +11,16 @@ import {
   federatedThreadIdentityKey,
 } from "@pwragent/shared";
 
+export function threadOwnerPlatform(params: {
+  target?: FederationTarget;
+  peers?: FederationPeerSummary[];
+  localPlatform?: string;
+}): string | undefined {
+  const target = params.target;
+  return target?.scope === "remote"
+    ? params.peers?.find((peer) => peer.id === target.instanceId)?.host?.platform
+    : params.localPlatform;
+}
 export function federationTargetsEqual(
   left: FederationTarget | undefined,
   right: FederationTarget | undefined,

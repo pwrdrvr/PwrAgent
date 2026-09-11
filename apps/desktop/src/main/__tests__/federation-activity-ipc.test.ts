@@ -1,12 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   FEDERATION_ACTIVITY_TOPMOST_CHANNEL, FEDERATION_OPEN_ACTIVITY_CHANNEL,
+  FEDERATION_SET_TRAFFIC_CAPTURE_CHANNEL,
   FEDERATION_READ_ACTIVITY_CHANNEL, FEDERATION_SET_ENABLED_CHANNEL, FEDERATION_RESET_ACTIVITY_CHANNEL,
 } from "../../shared/ipc";
 
 const mocks = vi.hoisted(() => ({
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
-  runtime: { activity: vi.fn(), resetActivity: vi.fn(), restart: vi.fn(), setEnabledForSession: vi.fn() },
+  runtime: { setDetailedTrafficCapture: vi.fn(), activity: vi.fn(), resetActivity: vi.fn(), restart: vi.fn(), setEnabledForSession: vi.fn() },
   service: { readFederationConfig: vi.fn(), writeConfigPatchTargeted: vi.fn() },
   show: vi.fn(), topmost: vi.fn(), fromWebContents: vi.fn(),
 }));
@@ -38,6 +39,17 @@ beforeEach(async () => {
 const invoke = (channel: string, request?: unknown) => mocks.handlers.get(channel)!({ sender: { id: 42 } }, request);
 
 describe("Federation Activity IPC", () => {
+  it("starts and stops local capture without restarting or writing configuration", async () => {
+    mocks.runtime.setDetailedTrafficCapture.mockResolvedValue({ detailedLoggingUntil: 61_000 });
+    expect(await invoke(FEDERATION_SET_TRAFFIC_CAPTURE_CHANNEL, true)).toEqual({ detailedLoggingUntil: 61_000 });
+    expect(mocks.runtime.setDetailedTrafficCapture).toHaveBeenLastCalledWith(true);
+    await invoke(FEDERATION_SET_TRAFFIC_CAPTURE_CHANNEL, false);
+    expect(mocks.runtime.setDetailedTrafficCapture).toHaveBeenLastCalledWith(false);
+    expect(() => invoke(FEDERATION_SET_TRAFFIC_CAPTURE_CHANNEL, { enabled: true })).toThrow("boolean");
+    expect(mocks.runtime.restart).not.toHaveBeenCalled();
+    expect(mocks.service.writeConfigPatchTargeted).not.toHaveBeenCalled();
+  });
+
   it("resets only local activity without restarting or changing configuration", async () => {
     mocks.runtime.resetActivity.mockResolvedValue({ activity: { since: 123 } });
     expect(await invoke(FEDERATION_RESET_ACTIVITY_CHANNEL)).toEqual({ activity: { since: 123 } });

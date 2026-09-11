@@ -1,3 +1,5 @@
+import { projectThreadDisplayEvent } from "../app-server/thread-display-events";
+import { federationTrafficCaptureUntil, setFederationTrafficCapture } from "./federation-traffic-capture";
 import type { NavigationAttentionViewReleaseRequest } from "@pwragent/shared";
 import type { MarkNavigationDirectorySeenRequest, MarkNavigationDirectorySeenResponse } from "@pwragent/shared";
 import type { RemoveNavigationDirectoryRequest, RemoveNavigationDirectoryResponse } from "@pwragent/shared";
@@ -260,6 +262,7 @@ import {
   validateArchivedThreadLookup,
 } from "./federation-collection-reads";
 import { RemoteThreadSummaryCache } from "./remote-thread-summary-cache";
+import { FederationAccountingStream, FEDERATION_EVENT_STREAM_METHOD } from "./federation-event-stream";
 import { hydrateFederatedThreadMessageOrigins } from "./federated-thread-origin-hydrator";
 import {
   FEDERATION_BACKEND_EVENT_METHOD,
@@ -521,10 +524,12 @@ type FederationEventSubscriptionNotification = {
     threadSelection?: FederationThreadSelection;
     eventClassSelections?: FederationEventSubscription["eventClassSelections"];
     starMapBootstrap?: FederationBootstrapCursor;
+    eventStream?: { protocol: 1; subscriptionId: string };
   };
 };
 
 type IncomingEventSubscription = {
+  stream?: { epoch: string; sequence: number; accounting: FederationAccountingStream };
   /** Lifetime of this Star Map interest, independent of other event classes. */
   starMapBootstrapToken?: object;
   eventClasses: Set<FederationEventClass>;
@@ -540,6 +545,7 @@ type DesiredEventSubscription = {
 };
 
 type RelayedEventSubscription = IncomingEventSubscription & {
+  eventStream?: { protocol: 1; subscriptionId: string };
   starMapBootstrap?: FederationBootstrapCursor;
   sourceInstanceId: FederationInstanceId;
   subscriberInstanceId: FederationInstanceId;
@@ -826,7 +832,7 @@ function eventMatchesThreadSelection(
   // a shared resource rather than one thread. Sparse consumers still need the
   // tiny invalidation so they can refresh their selected rows; the expensive
   // snapshot response remains filtered.
-  if (!threadId) return eventClass === "navigation";
+  if (!threadId) return eventClass === "navigation" || event.notification.method === "federation/eventStream/changed";
   const actionBackend =
     typeof scheduledAction?.backend === "string"
     && isAppServerBackendKind(scheduledAction.backend)
@@ -915,6 +921,12 @@ export class DesktopFederationRuntime {
     FederationInstanceId,
     IncomingEventSubscription
   >();
+  private readonly desiredEventStreamIds = new Map<FederationInstanceId, string>();
+  private readonly receivedEventStreams = new Map<FederationInstanceId, {
+    epoch: string;
+    sequence: number;
+    accounting: FederationAccountingStream;
+  }>();
   private readonly relayedEventSubscriptions = new Map<
     string,
     RelayedEventSubscription
@@ -1217,11 +1229,18 @@ export class DesktopFederationRuntime {
     this.remotePeerDirectory.clear();
     this.publishedPeerStatuses.clear();
     this.incomingEventSubscriptions.clear();
+    this.desiredEventStreamIds.clear();
+    this.receivedEventStreams.clear();
     this.relayedEventSubscriptions.clear();
     this.reconnectAttempt = 0;
     this.lastConnectionError = undefined;
     this.lastConnectionFailureKind = undefined;
     this.gatewayListenerError = undefined;
+  }
+
+  async setDetailedTrafficCapture(enabled: boolean): Promise<ReadFederationActivityResponse> {
+    setFederationTrafficCapture(enabled);
+    return this.activity();
   }
 
   async resetActivity(): Promise<ReadFederationActivityResponse> {
@@ -1232,6 +1251,7 @@ export class DesktopFederationRuntime {
   async activity(request?: ReadFederationActivityRequest): Promise<ReadFederationActivityResponse> {
     return {
       activity: this.activityLedger.snapshot(Date.now(), request),
+      detailedLoggingUntil: federationTrafficCaptureUntil(),
       health: await this.health(),
       configuredMode: resolveFederationRuntimeConfig(
         getDesktopSettingsService().readFederationConfig(),
@@ -2996,6 +3016,7 @@ export class DesktopFederationRuntime {
     // real cause (auth, host key, timeout) and report that instead.
     const sshFailure: { error?: Error } = {};
     const client = await connectFederationClient({
+      deferReceiving: true,
       url: sshEndpoint
         ? `ws://${sshEndpoint.forwardHost}:${sshEndpoint.forwardPort}`
         : gatewayUrl,
@@ -3186,6 +3207,9 @@ export class DesktopFederationRuntime {
     this.lastConnectedAt = Date.now();
     this.lastConnectionError = undefined;
     this.lastConnectionFailureKind = undefined;
+    // Replayed subscriptions require the authenticated router connection and
+    // restored local subscription state before any queued envelope is handled.
+    client.startReceiving();
     log.info("federation client connected", { gatewayUrl });
   }
 
@@ -4571,6 +4595,13 @@ export class DesktopFederationRuntime {
     if (sourceInstanceId === this.ensureLocalInstanceId()) return;
     const supportsSelection = this.remotePeerSupportsThreadSelection(sourceInstanceId);
     const eventClassSelections = eventClassSelectionsForWire(subscription, supportsSelection);
+    const subscriptionId = randomUUID();
+    if (subscription.eventClasses.has("transcript")) {
+      this.desiredEventStreamIds.set(sourceInstanceId, subscriptionId);
+    } else {
+      this.desiredEventStreamIds.delete(sourceInstanceId);
+      this.receivedEventStreams.delete(sourceInstanceId);
+    }
     try {
       this.sendEnvelopeToTarget(sourceInstanceId, {
         id: `federation-subscription:${randomUUID()}`,
@@ -4578,6 +4609,8 @@ export class DesktopFederationRuntime {
         method: FEDERATION_EVENT_SUBSCRIPTION_METHOD,
         params: {
           eventClasses: [...subscription.eventClasses],
+          ...(subscription.eventClasses.has("transcript")
+            ? { eventStream: { protocol: 1, subscriptionId } } : {}),
           ...(eventClassSelections ? { eventClassSelections } : {}),
           ...(subscription.eventClasses.has("star_map") ? {
             starMapBootstrap: this.arrangementBootstrapCursors.get(sourceInstanceId) ?? { protocol: 1 },
@@ -4650,6 +4683,10 @@ export class DesktopFederationRuntime {
     );
     const starMapBootstrap = notification.params?.starMapBootstrap?.protocol === 1
       ? notification.params.starMapBootstrap : undefined;
+    const eventStream = notification.params?.eventStream?.protocol === 1
+      && typeof notification.params.eventStream.subscriptionId === "string"
+      && notification.params.eventStream.subscriptionId.length <= 128
+      ? notification.params.eventStream : undefined;
 
     if (sourceInstanceId !== this.ensureLocalInstanceId()) {
       const allowedClasses = requestedClasses.filter((eventClass) =>
@@ -4663,6 +4700,7 @@ export class DesktopFederationRuntime {
         subscriberInstanceId,
       });
       const relayedSubscription: RelayedEventSubscription = {
+        eventStream,
         eventClassSelections,
         starMapBootstrap,
         eventClasses: new Set(allowedClasses),
@@ -4695,8 +4733,23 @@ export class DesktopFederationRuntime {
     const retainsStarMap = allowedClasses.includes("star_map")
       && previous?.eventClasses.has("star_map")
       && previous.viaPeerId === sourcePeerId;
+    const nextSelection = { eventClasses: new Set(allowedClasses), eventClassSelections, threadSelection: requestedThreadSelection };
+    const sameDetailInterests = previous && (["transcript", "pending_requests"] as const).every((eventClass) =>
+      previous.eventClasses.has(eventClass) === allowedClasses.includes(eventClass)
+      && equalFederationThreadSelections(selectionForEventClass(previous, eventClass), selectionForEventClass(nextSelection, eventClass)));
+    // A sidebar/navigation-only change must not invalidate continuously
+    // subscribed transcripts. An identical subscription replay still starts a
+    // fresh epoch: that is the recovery handshake after a gap or reconnect.
+    const sidebarInterestsChanged = previous && (!equalEventClassSets(previous.eventClasses, nextSelection.eventClasses)
+      || allowedClasses.some((eventClass) => !equalFederationThreadSelections(
+        selectionForEventClass(previous, eventClass), selectionForEventClass(nextSelection, eventClass))));
+    const retainedStream = previous?.viaPeerId === sourcePeerId && sameDetailInterests && sidebarInterestsChanged
+      ? previous.stream : undefined;
     if (allowedClasses.length > 0) {
       this.incomingEventSubscriptions.set(subscriberInstanceId, {
+        ...(eventStream && allowedClasses.includes("transcript") ? {
+          stream: retainedStream ?? { epoch: randomUUID(), sequence: 0, accounting: new FederationAccountingStream() },
+        } : {}),
         ...(allowedClasses.includes("star_map") ? {
           starMapBootstrapToken: retainsStarMap ? previous?.starMapBootstrapToken : {},
         } : {}),
@@ -4707,6 +4760,19 @@ export class DesktopFederationRuntime {
       });
     } else {
       this.incomingEventSubscriptions.delete(subscriberInstanceId);
+    }
+    const stream = this.incomingEventSubscriptions.get(subscriberInstanceId)?.stream;
+    if (stream && eventStream) {
+      this.sendEnvelopeToEventSubscriber(subscriberInstanceId, {
+        id: `federation-stream:${randomUUID()}`,
+        kind: "notification",
+        method: FEDERATION_EVENT_STREAM_METHOD,
+        params: { subscriptionId: eventStream.subscriptionId, epoch: stream.epoch },
+        protocolVersion: FEDERATION_PROTOCOL_VERSION,
+        sourceInstanceId: this.ensureLocalInstanceId(),
+        targetInstanceId: subscriberInstanceId,
+        createdAt: Date.now(),
+      });
     }
     if (
       allowedClasses.includes("star_map")
@@ -4799,6 +4865,8 @@ export class DesktopFederationRuntime {
         method: FEDERATION_EVENT_SUBSCRIPTION_METHOD,
         params: {
           eventClasses: [...desired.eventClasses],
+          ...(desired.eventClasses.has("transcript") && subscription.eventStream
+            ? { eventStream: subscription.eventStream } : {}),
           ...(eventClassSelections ? { eventClassSelections } : {}),
           ...(desired.eventClasses.has("star_map") && subscription.starMapBootstrap
             ? { starMapBootstrap: subscription.starMapBootstrap } : {}),
@@ -4934,16 +5002,19 @@ export class DesktopFederationRuntime {
       ) {
         continue;
       }
-      federatedEvent ??= rewriteLiveTranscriptImagesForFederation(event, ownerInstanceId);
+      federatedEvent ??= rewriteLiveTranscriptImagesForFederation(projectThreadDisplayEvent(event), ownerInstanceId);
       try {
+        const payload = subscription.stream
+          ? subscription.stream.accounting.encode(federatedEvent, {
+              epoch: subscription.stream.epoch,
+              sequence: ++subscription.stream.sequence,
+            })
+          : { backend: federatedEvent.backend, notification: federatedEvent.notification };
         this.sendEnvelopeToEventSubscriber(subscriberInstanceId, {
           id: `federation-event:${randomUUID()}`,
           kind: "notification",
           method: FEDERATION_BACKEND_EVENT_METHOD,
-          params: {
-            backend: federatedEvent.backend,
-            notification: federatedEvent.notification,
-          },
+          params: payload,
           protocolVersion: FEDERATION_PROTOCOL_VERSION,
           sourceInstanceId: ownerInstanceId,
           targetInstanceId: subscriberInstanceId,
@@ -4960,6 +5031,33 @@ export class DesktopFederationRuntime {
     envelope: FederationProtocolEnvelope,
     sourcePeerId: FederationInstanceId,
   ): boolean {
+    if (envelope.kind === "notification" && envelope.method === FEDERATION_EVENT_STREAM_METHOD) {
+      if (envelope.targetInstanceId && envelope.targetInstanceId !== this.ensureLocalInstanceId()) {
+        this.relaySubscribedBackendEvent(envelope, sourcePeerId, "transcript");
+        return true;
+      }
+      if (envelope.targetInstanceId !== this.ensureLocalInstanceId()
+        || (envelope.sourceInstanceId !== sourcePeerId && sourcePeerId !== this.gatewayInstanceId)) return true;
+      const params = envelope.params as { subscriptionId?: string; epoch?: string };
+      if (!params || typeof params.epoch !== "string" || params.epoch.length > 128
+        || !params.subscriptionId || this.desiredEventStreamIds.get(envelope.sourceInstanceId) !== params.subscriptionId) return true;
+      if (this.receivedEventStreams.get(envelope.sourceInstanceId)?.epoch === params.epoch) return true;
+      this.receivedEventStreams.set(envelope.sourceInstanceId, {
+        epoch: params.epoch, sequence: 0, accounting: new FederationAccountingStream(),
+      });
+      // The acknowledgement is ordered before subsequent live events. A read
+      // started now covers the subscription/reconnection gap, even if the
+      // owner is idle waiting for a prompt and never emits another event.
+      this.publishAgentEvent?.({
+        backend: "codex",
+        federationTarget: { scope: "remote", instanceId: envelope.sourceInstanceId },
+        notification: {
+          method: "federation/eventStream/changed",
+          params: { instanceId: envelope.sourceInstanceId, epoch: params.epoch },
+        },
+      });
+      return true;
+    }
     if (
       envelope.kind !== "notification" ||
       envelope.method !== FEDERATION_BACKEND_EVENT_METHOD
@@ -4992,13 +5090,32 @@ export class DesktopFederationRuntime {
     ) {
       return true;
     }
+    let decoded: AgentEvent = notification.params;
+    if (notification.params.stream) {
+      const stream = this.receivedEventStreams.get(sourceInstanceId);
+      const cursor = notification.params.stream;
+      if (!stream || stream.epoch !== cursor.epoch) return true;
+      if (cursor.sequence <= stream.sequence) return true;
+      const next = cursor.sequence === stream.sequence + 1
+        ? stream.accounting.decode(notification.params) : undefined;
+      if (!next) {
+        // Drop dependent deltas until a fresh baseline is acknowledged. Do
+        // not mistake a navigation timestamp for evidence of a stream gap.
+        this.receivedEventStreams.delete(sourceInstanceId);
+        const desired = this.aggregateDesiredEventSubscriptions().get(sourceInstanceId);
+        if (desired) this.sendDesiredEventSubscription(sourceInstanceId, desired);
+        return true;
+      }
+      stream.sequence = cursor.sequence;
+      decoded = next;
+    }
     const event: AgentEvent = {
-      backend: notification.params.backend,
+      backend: decoded.backend,
       federationTarget: {
         scope: "remote",
         instanceId: sourceInstanceId,
       },
-      notification: notification.params.notification,
+      notification: decoded.notification,
     };
     // Match retained demand directly; do not rebuild/sort the entire fleet's
     // aggregate selectors for every streamed item.
@@ -5358,6 +5475,7 @@ function localBackendOperations(): FederationBackendOperations {
       const backend = request.backend ?? "codex";
       const response = await getDesktopBackendRegistry().readThread({
         backend,
+        display: request.display,
         threadId: request.threadId,
         ...(request.includeTurns !== undefined
           ? { includeTurns: request.includeTurns }

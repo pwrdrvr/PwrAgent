@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { generateFederationNoiseStaticKeyPair } from "../federation/federation-noise";
 import { DesktopFederationRuntime } from "../federation/federation-runtime";
+import type { FederationClientWebSocketClient } from "../federation/federation-transport";
 
 const metaStore = vi.hoisted(() => new Map<string, string>());
 const connectCalls = vi.hoisted(
@@ -24,11 +25,12 @@ vi.mock("../state/app-state", () => ({
 
 vi.mock("../federation/federation-transport", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
-  connectFederationClient: async (params: (typeof connectCalls)[number]) => {
+  connectFederationClient: async (params: (typeof connectCalls)[number]): Promise<FederationClientWebSocketClient> => {
     connectCalls.push(params);
     return {
       sessionId: "federation-session:test",
       capabilities: [],
+      startReceiving: () => undefined,
       sendEnvelope: () => undefined,
       close: () => undefined,
     };

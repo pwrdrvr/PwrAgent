@@ -1,5 +1,6 @@
 import { memo, useEffect, useId, useState } from "react";
 import type {
+  AppServerBackendKind,
   AppServerSkillSummary,
   AppServerThreadEntry,
   AppServerThreadImagePart,
@@ -22,7 +23,7 @@ type TranscriptWorkPhaseGroupProps = {
   directoryPaths?: string[];
   desktopApi?: Pick<
     DesktopApi,
-    "copyText" | "openApplication" | "openMarkdownFileViewer" | "readMarkdownFile"
+    "copyText" | "openApplication" | "openMarkdownFileViewer" | "readMarkdownFile" | "readThread"
   >;
   entries: AppServerThreadEntry[];
   expanded: boolean;
@@ -30,6 +31,7 @@ type TranscriptWorkPhaseGroupProps = {
   fileViewerContext?: MarkdownFileViewerContext;
   label: string;
   parentThreadId?: string;
+  parentThreadBackend?: AppServerBackendKind;
   skills: AppServerSkillSummary[];
   subAgents?: ThreadSubAgentSummary[];
   threadLinkSource?: ThreadLinkSource;
@@ -84,6 +86,7 @@ export const TranscriptWorkPhaseGroup = memo(function TranscriptWorkPhaseGroup(
               onActivityExpandedChange: props.onActivityExpandedChange,
               onOpenImage: props.onOpenImage,
               parentThreadId: props.parentThreadId ?? "",
+              parentThreadBackend: props.parentThreadBackend,
               skills: props.skills,
               subAgents: props.subAgents,
               threadLinkSource: props.threadLinkSource,
@@ -136,13 +139,14 @@ function renderEntry(params: {
   directoryPaths?: string[];
   desktopApi?: Pick<
     DesktopApi,
-    "copyText" | "openApplication" | "openMarkdownFileViewer" | "readMarkdownFile"
+    "copyText" | "openApplication" | "openMarkdownFileViewer" | "readMarkdownFile" | "readThread"
   >;
   entry: AppServerThreadEntry;
   expandedActivityIds?: ReadonlySet<string>;
   fileViewerContext?: MarkdownFileViewerContext;
   onActivityExpandedChange?: (activityId: string, expanded: boolean) => void;
   parentThreadId: string;
+  parentThreadBackend?: AppServerBackendKind;
   skills: AppServerSkillSummary[];
   subAgents?: ThreadSubAgentSummary[];
   threadLinkSource?: ThreadLinkSource;
@@ -192,6 +196,7 @@ function renderEntry(params: {
       fileViewerContext={params.fileViewerContext}
       message={entry}
       parentThreadId={params.parentThreadId}
+      parentThreadBackend={params.parentThreadBackend}
       skills={params.skills}
       subAgents={params.subAgents}
       threadLinkSource={params.threadLinkSource}

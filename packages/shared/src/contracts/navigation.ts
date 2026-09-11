@@ -259,6 +259,8 @@ export type NavigationThreadSummary = AppServerThreadSummary & {
    * survive app restart exactly as reported by the monitor lifecycle.
    */
   subAgents?: ThreadSubAgentSummary[];
+  /** Owner-projected composer rows, independent of lazily loaded sub-agent history. */
+  activeSubAgents?: ThreadActiveSubAgent[];
   /** Durable origin metadata for threads created by an Agent handoff tool. */
   handoffOrigin?: ThreadHandoffOrigin;
   /**
@@ -331,6 +333,10 @@ export type TokenMiserSubAgentAccounting = {
   cachedRevealedCostMicros?: number;
   savingsMicros: number;
 };
+
+export type ThreadActiveSubAgent = Pick<ThreadSubAgentSummary,
+  "monitorId" | "task" | "status" | "createdAt" | "updatedAt" | "monitorThreadId" | "monitorTurnId"
+>;
 
 export type ThreadSubAgentSummary = {
   monitorId: string;

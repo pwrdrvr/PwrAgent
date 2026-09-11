@@ -3746,35 +3746,35 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
        SET payload = ?
        WHERE instance_id = ? AND backend = ? AND thread_id = ?`,
     );
+    const changedPayload = (entry: typeof entries[number]): string | undefined => {
+      // Patch, never replace: the payload also carries viewer-owned state
+      // (localPinnedRank, pinnedVia) that a snapshot refresh must not wipe.
+      const row = select.get(remotePinInstanceId(entry.ref), entry.ref.backend, entry.ref.threadId) as
+        | { payload: string }
+        | undefined;
+      if (!row) return undefined;
+      let parsed: Record<string, unknown>;
+      try {
+        parsed = JSON.parse(row.payload) as Record<string, unknown>;
+      } catch {
+        parsed = {};
+      }
+      const nextPayload = JSON.stringify({ ...parsed, instanceLabel: entry.instanceLabel,
+        summary: stripFederationStamp(entry.summary) });
+      return row.payload === nextPayload ? undefined : nextPayload;
+    };
+    // Navigation re-serves cached rows frequently. Skip even the transaction
+    // when unchanged; re-read inside it to preserve concurrent viewer edits.
+    if (!entries.some((entry) => changedPayload(entry) !== undefined)) return;
     this.stateDb.raw.transaction(() => {
       for (const entry of entries) {
-        const instanceId = remotePinInstanceId(entry.ref);
-        // Patch, never replace: the payload also carries viewer-owned state
-        // (localPinnedRank, pinnedVia) that a snapshot refresh must not wipe.
-        const row = select.get(instanceId, entry.ref.backend, entry.ref.threadId) as
-          | { payload: string }
-          | undefined;
-        let parsed: Record<string, unknown> = {};
-        if (row) {
-          try {
-            parsed = JSON.parse(row.payload) as Record<string, unknown>;
-          } catch {
-            parsed = {};
-          }
-        }
-        const nextPayload = JSON.stringify({
-          ...parsed,
-          instanceLabel: entry.instanceLabel,
-          summary: stripFederationStamp(entry.summary),
-        });
-        // The merge re-serves cached rows on every navigation refresh;
-        // skip the write when nothing actually changed.
-        if (row && row.payload === nextPayload) {
+        const nextPayload = changedPayload(entry);
+        if (nextPayload === undefined) {
           continue;
         }
         update.run(
           nextPayload,
-          instanceId,
+          remotePinInstanceId(entry.ref),
           entry.ref.backend,
           entry.ref.threadId,
         );

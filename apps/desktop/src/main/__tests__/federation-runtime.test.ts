@@ -60,6 +60,7 @@ import {
 import { FederationRouter } from "../federation/federation-router";
 import type { FederationGatewayConnection } from "../federation/federation-transport";
 import { replacementPages } from "../federation/federation-replacement-pages";
+import { FEDERATION_EVENT_STREAM_METHOD } from "../federation/federation-event-stream";
 import * as appState from "../state/app-state";
 import * as navigationQuerySource from "../app-server/navigation-query-source";
 import { getDesktopNavigationQueryPool } from "../app-server/navigation-query-pool";
@@ -297,6 +298,135 @@ function applyEventSubscription(params: {
 }
 
 describe("DesktopFederationRuntime", () => {
+  it.each([false, true])("acknowledges and sequences live updates, recovering gaps through the same route (gateway=%s)", (viaGateway) => {
+    const capabilities: FederationCapability[] = ["gateway_relay", "thread_navigation", "navigation_snapshot_deltas", "thread_detail", "pending_request_control", "event_subscriptions"];
+    const viewer = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    const owner = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    const gateway = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    for (const [runtime, id] of [[viewer, "viewer_one"], [owner, "owner_one"], [gateway, "gateway_one"]] as const) {
+      runtime.localInstanceId = id;
+      runtime.router = new FederationRouter({ localInstanceId: id });
+    }
+    viewer.gatewayInstanceId = viaGateway ? "gateway_one" : undefined;
+    owner.gatewayInstanceId = viaGateway ? "gateway_one" : undefined;
+    const published: AgentEvent[] = [];
+    const frames: FederationProtocolEnvelope[] = [];
+    let dropNext = false;
+    viewer.setAgentEventPublisher((event) => published.push(event));
+    const viewerConnection = createConnection({
+      peerId: viaGateway ? "gateway_one" : "owner_one", capabilities,
+      sendEnvelope: (envelope) => viaGateway
+        ? gateway.applyEventSubscription(envelope, "viewer_one") : owner.applyEventSubscription(envelope, "viewer_one"),
+    });
+    viewer.router!.registerConnection(viewerConnection);
+    owner.router!.registerConnection(createConnection({
+      peerId: viaGateway ? "gateway_one" : "viewer_one", capabilities,
+      sendEnvelope: (envelope) => {
+        frames.push(envelope);
+        if (dropNext) { dropNext = false; return; }
+        if (viaGateway) gateway.publishRemoteBackendEvent(envelope, "owner_one");
+        else viewer.publishRemoteBackendEvent(envelope, "owner_one");
+      },
+    }));
+    gateway.router!.registerConnection(createConnection({
+      peerId: "owner_one", capabilities,
+      sendEnvelope: (envelope) => owner.applyEventSubscription(envelope, "gateway_one"),
+    }));
+    gateway.router!.registerConnection(createConnection({
+      peerId: "viewer_one", capabilities,
+      sendEnvelope: (envelope) => viewer.publishRemoteBackendEvent(envelope, "gateway_one"),
+    }));
+    viewer.setRendererEventSubscriptions(7, "thread-view", [{
+      sourceInstanceId: "owner_one", eventClasses: ["transcript", "pending_requests"],
+      threadSelection: { kind: "threads", threads: [{ backend: "codex", threadId: "thread-1" }] },
+    }]);
+    const resets = () => published.filter((event) => event.notification.method === "federation/eventStream/changed");
+    expect(resets()).toHaveLength(1);
+    expect(viewer.rendererWantsRemoteEvent(7, "owner_one", "transcript", resets()[0])).toBe(true);
+    expect(viewer.rendererWantsRemoteEvent(8, "owner_one", "transcript", resets()[0])).toBe(false);
+    expect(frames[0]).toMatchObject({ method: FEDERATION_EVENT_STREAM_METHOD });
+    const delta = (text: string): AgentEvent => ({
+      backend: "codex", notification: {
+        method: "item/agentMessage/delta", params: { threadId: "thread-1", turnId: "turn-1", itemId: "item-1", delta: text },
+      },
+    });
+    owner.forwardLocalBackendEvent(delta("one"));
+    owner.forwardLocalBackendEvent(delta("two"));
+    expect(resets()).toHaveLength(1);
+    expect(published.at(-1)?.notification).toEqual(delta("two").notification);
+    const detailSelection = { kind: "threads" as const, threads: [{ backend: "codex" as const, threadId: "thread-1" }] };
+    // Selecting a different sidebar target keeps the transcript interests and
+    // sequence intact, through direct and relayed connections alike.
+    for (const threadId of ["thread-2", "thread-3"]) {
+      viewer.setRendererEventSubscriptions(7, "thread-view", [{
+        sourceInstanceId: "owner_one", eventClasses: ["transcript", "pending_requests", "navigation"],
+        threadSelection: { kind: "all" },
+        eventClassSelections: {
+          transcript: detailSelection, pending_requests: detailSelection,
+          navigation: { kind: "threads", threads: [{ backend: "codex", threadId }] },
+        },
+      }]);
+      expect(resets()).toHaveLength(1);
+    }
+    owner.forwardLocalBackendEvent(delta("still-continuous"));
+    expect(published.at(-1)?.notification).toEqual(delta("still-continuous").notification);
+    expect(frames.at(-1)).toMatchObject({ params: { stream: { sequence: 3 } } });
+    const duplicate = frames.at(-1)!;
+    const beforeDuplicate = published.length;
+    viewer.publishRemoteBackendEvent(duplicate, viaGateway ? "gateway_one" : "owner_one");
+    expect(published).toHaveLength(beforeDuplicate);
+    dropNext = true;
+    owner.forwardLocalBackendEvent(delta("lost"));
+    owner.forwardLocalBackendEvent(delta("after-gap"));
+    expect(resets()).toHaveLength(2);
+    expect(published.some((event) => "delta" in event.notification.params && event.notification.params.delta === "after-gap")).toBe(false);
+    owner.forwardLocalBackendEvent(delta("recovered"));
+    expect(published.at(-1)?.notification).toEqual(delta("recovered").notification);
+    expect(frames.at(-1)).toMatchObject({ params: { stream: { sequence: 1 } } });
+    const pricing: AgentEvent = {
+      backend: "codex", notification: {
+        method: "thread/pricing/updated", params: {
+          threadId: "thread-1", pricing: {
+            lines: [], summaries: [], compactions: Array.from({ length: 100 }, (_, index) => ({
+              backend: "codex", threadId: "thread-1", compactionId: `compaction-${index}`, observedAt: index, updatedAt: index,
+            })),
+          },
+        },
+      },
+    };
+    owner.forwardLocalBackendEvent(pricing);
+    owner.forwardLocalBackendEvent(pricing);
+    expect(frames.at(-1)).toMatchObject({ params: { accountingPatch: { changes: [] } } });
+    expect(published.at(-1)?.notification).toMatchObject({ method: "thread/pricing/updated", params: {
+      threadId: "thread-1", displayInvalidated: true, pricing: { lines: [], summaries: [] },
+    } });
+    expect(JSON.stringify(frames.at(-1))).not.toContain("compaction-99");
+    const subAgents: AgentEvent = { backend: "codex", notification: { method: "thread/subAgents/updated", params: {
+      threadId: "thread-1", subAgents: [{ monitorId: "monitor", task: "History ".repeat(1000), status: "success", createdAt: 1, updatedAt: 1 }],
+    } } };
+    owner.forwardLocalBackendEvent(subAgents);
+    owner.forwardLocalBackendEvent(subAgents);
+    expect(published.at(-1)?.notification).toEqual({ method: "thread/subAgents/updated", params: { threadId: "thread-1" } });
+    expect(Buffer.byteLength(JSON.stringify(frames.at(-1)))).toBeLessThan(1000);
+    expect(JSON.stringify(frames.at(-1))).not.toContain("History");
+    // A reconnect needs catch-up even when no later event arrives to reveal
+    // a missed request-user-input. Replaying the subscription supplies it.
+    if (viaGateway) gateway.replayRelayedEventSubscriptions("owner_one");
+    else viewer.registerGatewayConnection(viewerConnection);
+    expect(resets()).toHaveLength(3);
+    const pending: AgentEvent = {
+      backend: "codex", notification: {
+        method: "item/tool/requestUserInput", params: { threadId: "thread-1", requestId: "prompt-1", questions: [] },
+      },
+    };
+    owner.forwardLocalBackendEvent(pending);
+    expect(published.at(-1)?.notification).toEqual(pending.notification);
+    // An acknowledgement from an older subscription must not reset a newer
+    // baseline or trigger another expensive read.
+    viewer.publishRemoteBackendEvent(frames[0]!, viaGateway ? "gateway_one" : "owner_one");
+    expect(resets()).toHaveLength(3);
+  });
+
   it("rejects the retired snapshot path without contacting a peer", async () => {
     const runtime = new DesktopFederationRuntime();
     const backend = vi.spyOn(runtime, "remoteBackend");
@@ -1422,7 +1552,7 @@ describe("DesktopFederationRuntime", () => {
     expect(sentToTwo.map((envelope) =>
       envelope.kind === "notification" ? envelope.params : undefined
     )).toEqual([
-      { eventClasses: ["transcript"] },
+      { eventClasses: ["transcript"], eventStream: { protocol: 1, subscriptionId: expect.any(String) } },
       { eventClasses: [] },
     ]);
   });
@@ -1503,7 +1633,9 @@ describe("DesktopFederationRuntime", () => {
     const published: AgentEvent[] = [];
     const ownerFrames: FederationProtocolEnvelope[] = [];
     const subscriptions: FederationProtocolEnvelope[] = [];
-    viewer.setAgentEventPublisher((event) => published.push(event));
+    viewer.setAgentEventPublisher((event) => {
+      if (event.notification.method !== "federation/eventStream/changed") published.push(event);
+    });
     const viewerPeer = viaGateway ? "gateway_one" : "owner_one";
     viewer.gatewayInstanceId = viaGateway ? "gateway_one" : undefined;
     owner.gatewayInstanceId = viaGateway ? "gateway_one" : undefined;
@@ -1519,7 +1651,7 @@ describe("DesktopFederationRuntime", () => {
     owner.router!.registerConnection(createConnection({
       peerId: viaGateway ? "gateway_one" : "viewer_one", capabilities,
       sendEnvelope: (envelope) => {
-        ownerFrames.push(envelope);
+        if (envelope.kind === "notification" && envelope.method === FEDERATION_BACKEND_EVENT_METHOD) ownerFrames.push(envelope);
         if (viaGateway) gateway.publishRemoteBackendEvent(envelope, "owner_one");
         else viewer.publishRemoteBackendEvent(envelope, "owner_one");
       },

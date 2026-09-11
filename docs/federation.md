@@ -159,6 +159,43 @@ enrolling a peer does not opt it into transcript, approval, scheduler, PR, or
 error event traffic. Environment setup output remains a targeted response to
 the operation that started it rather than a broadcast stream.
 
+Transcript subscriptions can request `eventStream: { protocol: 1,
+subscriptionId }`. The owner acknowledges with `backend.eventStream` and a
+new epoch before sending numbered `backend.event` notifications. Gateways
+preserve the negotiation, acknowledgement, and sequence. The viewer catches
+up after acknowledgement, including when an idle owner has a pending prompt,
+and resubscribes on a sequence gap. Normal navigation timestamp
+changes do not trigger transcript reads for mounted remote threads, whether
+idle or active. A final item already delivered before an empty turn-completed
+event satisfies completion without another snapshot. A recovery that arrives during an
+older read remains pending until a read started after recovery completes.
+Reselecting a cached remote thread also triggers window-local catch-up: another
+window can keep the aggregate subscription alive while this window misses events.
+
+On reconnect, authentication refreshes connection capabilities and the gateway
+broadcasts a fresh peer directory and replays retained viewer subscriptions.
+Stream negotiation lives in those subscriptions, not cached discovery metadata.
+Remote idle status does not arm a delayed transcript read: it may precede the
+terminal event or briefly lag turn admission. Epoch and sequence recovery own
+remote catch-up.
+The client keeps post-authentication frames queued until its runtime installs
+the authenticated connection and restores subscription state, so an immediate
+gateway replay cannot be discarded as coming from an unknown connection.
+
+Within a negotiated stream, pricing, tool-accounting, and subagent notifications
+send a full baseline followed by smaller patches. Stable record identities keep
+array reordering from resending the intervening history. The receiver reconstructs the
+existing backend notification before publishing it to the renderer. Baselines
+are volatile, limited to 32 records and 4 MiB per stream, and never persisted.
+A missing baseline triggers resubscription. Peers and gateways that do not
+forward the negotiation retain the original full-notification format;
+connection status changes still trigger viewer catch-up.
+
+Selected configuration reads revalidate a separate canonical baseline; streamed
+presentation changes cannot authorize actions. History pages survive configuration
+invalidations when their collection revision is unchanged. A streamed collection
+that matches the owner’s content hash does not need to be downloaded again.
+
 Global thread search fans out metadata queries to connected peers. Remote
 results carry their instance label and open directly in a window scoped to that
 instance.
@@ -274,3 +311,15 @@ Once a messaging surface is attached to a remote thread, its status card and
 subsequent backend-driven refreshes read navigation state from that owning
 instance. The gateway must not render a remote binding from its local thread
 snapshot or silently fall back to a same-shaped local thread.
+
+### Temporary frame diagnostics
+
+Federation Activity and the Federation status popup expose a 60-second detailed
+traffic capture. The deadline belongs to the local main process, so closing
+the surface does not cancel it and an inactive renderer cannot prolong it.
+Capture logs every envelope at info level with physical peer, logical endpoints,
+method, request/thread identifiers, and encoded/uncompressed byte counts.
+Response methods are correlated with their requests. Thread-read and accounting
+sizes are included without payload contents. The setting is not persisted or
+relayed to peers. Outside the capture window, the 200,000-byte large-frame
+threshold remains in effect.

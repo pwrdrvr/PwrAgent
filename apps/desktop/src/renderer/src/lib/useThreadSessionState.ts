@@ -1,3 +1,9 @@
+import { useThreadUsageDisplay } from "./useThreadUsageDisplay";
+import {
+  reconcileCompletedTurnUsageEntries,
+  tokenUsageActivityScope,
+  isTerminalTurnMetadata,
+} from "@pwragent/shared";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   AppServerNotification,
@@ -21,7 +27,6 @@ import type {
   MessagingChannelKind,
   MessagingConversationKind,
   NavigationThreadSummary,
-  ThreadUsageLineRecord,
 } from "@pwragent/shared";
 import { isAppServerBackendKind, isCelestialIconId } from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
@@ -50,7 +55,6 @@ import {
   buildMcpProgressDetail,
   buildTaskMonitorUsageActivityEntry,
   buildTokenUsageActivityEntry,
-  buildTurnUsageActivityEntryFromLine,
   formatChangedFileSummary,
   getNotificationItem,
   mergeActivityDetails,
@@ -168,6 +172,7 @@ type ThreadSessionEntry = {
   hydratedEnvironmentSetupVersion?: string;
   hydratedInitialHistoryLimit?: number;
   hydratedUpdatedAt?: number;
+  hydratedStreamRecoveryVersion?: number;
   initialLoadDurationMs?: number;
   interacted: boolean;
   lastTouchedAt: number;
@@ -361,56 +366,11 @@ function isDurableMonitorUsageActivity(
   return entry.type === "activity" && entry.summary.startsWith("Monitor usage:");
 }
 
-function tokenUsageActivityScope(
-  entry: AppServerThreadActivityEntry
-): "latest-request" | "total" | "turn" | undefined {
-  if (entry.id.startsWith("live-turn-usage-") || entry.summary.startsWith("Turn usage:")) {
-    return "turn";
-  }
-  if (entry.summary.startsWith("Latest request usage:")) {
-    return "latest-request";
-  }
-  if (entry.summary.startsWith("Usage:")) {
-    return "total";
-  }
-  if (entry.id.startsWith("live-token-usage-")) {
-    return "latest-request";
-  }
-  return undefined;
-}
 
-function isTerminalTurnMetadata(
-  turn: AppServerThreadTurnMetadata | undefined,
-): boolean {
-  return Boolean(
-    turn
-    && (
-      turn.status === "completed"
-      || turn.status === "failed"
-      || turn.status === "cancelled"
-      || turn.status === "interrupted"
-      || typeof turn.completedAt === "number"
-    )
-  );
-}
 
-function preferTurnUsageLine(
-  current: ThreadUsageLineRecord | undefined,
-  candidate: ThreadUsageLineRecord,
-): ThreadUsageLineRecord {
-  if (!current) {
-    return candidate;
-  }
-  if (candidate.source === "live" && current.source !== "live") {
-    return candidate;
-  }
-  if (candidate.turnUsageAttributed === true && current.turnUsageAttributed !== true) {
-    return candidate;
-  }
-  const currentAt = current.completedAt ?? current.createdAt;
-  const candidateAt = candidate.completedAt ?? candidate.createdAt;
-  return candidateAt >= currentAt ? candidate : current;
-}
+
+
+
 
 /**
  * Treat completed turn usage as one terminal transcript projection.
@@ -422,166 +382,7 @@ function preferTurnUsageLine(
  * anchor the result after every loaded entry from that turn. This stays
  * linear in the loaded transcript and does not disturb incremental collection.
  */
-function reconcileCompletedTurnUsageEntries(params: {
-  activeTurnId?: string;
-  entries: AppServerThreadEntry[];
-  lines?: ThreadUsageLineRecord[];
-  requireExistingTurnUsage?: boolean;
-}): AppServerThreadEntry[] {
-  const contentTurnById = new Map<string, AppServerThreadTurnMetadata>();
-  const existingTurnUsageByTurnId = new Map<
-    string,
-    AppServerThreadActivityEntry
-  >();
 
-  for (const entry of params.entries) {
-    const turnId =
-      entry.turn?.id
-      ?? (entry.type === "activity" ? entry.usageLine?.turnId : undefined);
-    if (!turnId || turnId === params.activeTurnId) {
-      continue;
-    }
-    if (
-      entry.type === "activity"
-      && tokenUsageActivityScope(entry) === "turn"
-    ) {
-      existingTurnUsageByTurnId.set(turnId, entry);
-      continue;
-    }
-    if (
-      entry.type === "activity"
-      && tokenUsageActivityScope(entry) !== undefined
-    ) {
-      continue;
-    }
-    if (entry.turn) {
-      contentTurnById.set(turnId, entry.turn);
-    }
-  }
-
-  const authoritativeLineByTurnId = new Map<string, ThreadUsageLineRecord>();
-  for (const line of params.lines ?? []) {
-    if (
-      !line.turnId
-      || line.turnId === params.activeTurnId
-      || line.scope !== "turn"
-      || line.status === "superseded"
-      || line.turnUsageAttributed === false
-      || !contentTurnById.has(line.turnId)
-    ) {
-      continue;
-    }
-    authoritativeLineByTurnId.set(
-      line.turnId,
-      preferTurnUsageLine(authoritativeLineByTurnId.get(line.turnId), line),
-    );
-  }
-
-  const replacementByTurnId = new Map<string, AppServerThreadActivityEntry>();
-  for (const [turnId, contentTurn] of contentTurnById) {
-    const existingUsage = existingTurnUsageByTurnId.get(turnId);
-    if (params.requireExistingTurnUsage && !existingUsage) {
-      continue;
-    }
-    const line = authoritativeLineByTurnId.get(turnId);
-    const completedAt =
-      line?.completedAt
-      ?? contentTurn.completedAt
-      ?? existingUsage?.turn?.completedAt;
-    const terminal = typeof completedAt === "number"
-      || isTerminalTurnMetadata(contentTurn)
-      || isTerminalTurnMetadata(existingUsage?.turn);
-    if (!terminal) {
-      continue;
-    }
-
-    const startedAt =
-      contentTurn.startedAt
-      ?? line?.startedAt
-      ?? existingUsage?.turn?.startedAt;
-    const interruptedStatus =
-      contentTurn.status === "failed"
-      || contentTurn.status === "cancelled"
-      || contentTurn.status === "interrupted"
-        ? contentTurn.status
-        : existingUsage?.turn?.status === "failed"
-          || existingUsage?.turn?.status === "cancelled"
-          || existingUsage?.turn?.status === "interrupted"
-          ? existingUsage.turn.status
-          : undefined;
-    const turn: AppServerThreadTurnMetadata = {
-      ...contentTurn,
-      id: turnId,
-      status: interruptedStatus ?? "completed",
-      ...(typeof startedAt === "number" ? { startedAt } : {}),
-      ...(typeof completedAt === "number" ? { completedAt } : {}),
-      ...(typeof (contentTurn.durationMs ?? existingUsage?.turn?.durationMs) === "number"
-        ? {
-            durationMs:
-              contentTurn.durationMs ?? existingUsage?.turn?.durationMs,
-          }
-        : typeof startedAt === "number" && typeof completedAt === "number"
-          ? { durationMs: Math.max(0, completedAt - startedAt) }
-          : {}),
-    };
-    const authoritativeEntry = line
-      ? buildTurnUsageActivityEntryFromLine({ line, turn })
-      : undefined;
-    if (authoritativeEntry) {
-      replacementByTurnId.set(turnId, authoritativeEntry);
-      continue;
-    }
-    if (existingUsage) {
-      replacementByTurnId.set(
-        turnId,
-        typeof completedAt === "number"
-          ? { ...existingUsage, createdAt: completedAt, turn }
-          : { ...existingUsage, turn },
-      );
-    }
-  }
-
-  if (replacementByTurnId.size === 0) {
-    return params.entries;
-  }
-
-  const filteredEntries: AppServerThreadEntry[] = [];
-  const lastEntryIndexByTurnId = new Map<string, number>();
-  for (const entry of params.entries) {
-    const usageTurnId = entry.type === "activity"
-      ? entry.turn?.id ?? entry.usageLine?.turnId
-      : undefined;
-    const scope = entry.type === "activity"
-      ? tokenUsageActivityScope(entry)
-      : undefined;
-    if (
-      usageTurnId
-      && replacementByTurnId.has(usageTurnId)
-      && (scope === "latest-request" || scope === "total" || scope === "turn")
-    ) {
-      continue;
-    }
-
-    const index = filteredEntries.length;
-    filteredEntries.push(entry);
-    if (entry.turn?.id && replacementByTurnId.has(entry.turn.id)) {
-      lastEntryIndexByTurnId.set(entry.turn.id, index);
-    }
-  }
-
-  const replacementAfterIndex = new Map<number, AppServerThreadActivityEntry>();
-  for (const [turnId, replacement] of replacementByTurnId) {
-    const anchorIndex = lastEntryIndexByTurnId.get(turnId);
-    if (anchorIndex !== undefined) {
-      replacementAfterIndex.set(anchorIndex, replacement);
-    }
-  }
-
-  return filteredEntries.flatMap((entry, index) => {
-    const replacement = replacementAfterIndex.get(index);
-    return replacement ? [entry, replacement] : [entry];
-  });
-}
 
 function hasTurnUsageForEntry(
   entries: AppServerThreadEntry[],
@@ -1360,7 +1161,7 @@ function normalizeMessageImageBoundaryText<
 function normalizeResponseImageBoundaryText(
   response: AppServerReadThreadResponse
 ): AppServerReadThreadResponse {
-  let changed = false;
+  let changed = Boolean(response.display);
   const entries = response.replay.entries.map((entry) => {
     if (entry.type !== "message") {
       return entry;
@@ -1370,7 +1171,7 @@ function normalizeResponseImageBoundaryText(
     changed = changed || normalizedEntry !== entry;
     return normalizedEntry;
   });
-  const messages = response.replay.messages.map((message) => {
+  const messages = (response.display ? entries.filter((entry) => entry.type === "message") : response.replay.messages).map((message) => {
     const normalizedMessage = normalizeMessageImageBoundaryText(message);
     changed = changed || normalizedMessage !== message;
     return normalizedMessage;
@@ -4651,6 +4452,7 @@ export function useThreadSessionState(params: {
   desktopApi?: DesktopApi;
   initialHistoryLimit?: number;
   readReason?: "thread-view" | "star-map-card";
+  retainedRemoteThreads?: NavigationThreadSummary[];
   liveTranscriptEventFiltering?: boolean;
   suspended?: boolean;
   thread?: NavigationThreadSummary;
@@ -4749,20 +4551,22 @@ export function useThreadSessionState(params: {
   // Track the owning read synchronously so automatic hydration cannot send
   // the same initial request twice. Explicit reloads may still supersede it.
   const inFlightHydrationsRef = useRef(new Map<string, number>());
+  const streamRecoveryVersionsRef = useRef(new Map<string, number>());
+  const remoteDetailInterestRef = useRef<string | undefined>(undefined);
+  const continuousRemoteInterestsRef = useRef(new Set<string>());
+  const retainedRemoteThreadsRef = useRef(params.retainedRemoteThreads ?? []);
+  retainedRemoteThreadsRef.current = params.retainedRemoteThreads ?? [];
+  const managesRemoteRetentionRef = useRef(false);
+  managesRemoteRetentionRef.current = params.retainedRemoteThreads !== undefined;
+  const retainedRemoteKeys = new Set(retainedRemoteThreadsRef.current.map(threadSummaryIdentityKey));
+  const retainedRemoteKeysJson = JSON.stringify([...retainedRemoteKeys].sort());
+  const previousRetainedRemoteKeysRef = useRef(new Set<string>());
   const staleThinkingLogKeysRef = useRef<Set<string>>(new Set());
   const threadStatusSummarySeedRef = useRef<Record<string, string>>({});
   const [sessions, setSessions] = useState<ThreadSessionState>({});
-  // Keep the last owner page, not the live/optimistically patched session.
-  // Reusing a locally cleared approval would otherwise hide an owner request
-  // that is still pending. Only the selected thread retains this baseline;
-  // its entries are shared with the session rather than cloned.
-  const conditionalReadRef = useRef<{
-    threadKey: string;
-    response: AppServerReadThreadResponse;
-  } | undefined>(undefined);
-  if (conditionalReadRef.current?.threadKey !== threadKey) {
-    conditionalReadRef.current = undefined;
-  }
+  // Keep owner baselines separate from optimistic/live state so an unchanged
+  // recovery read cannot reuse a locally cleared approval. Share entry objects.
+  const conditionalReadsRef = useRef(new Map<string, AppServerReadThreadResponse>());
 
   selectedThreadKeyRef.current = threadKey;
   if (launchpadMessageCandidateRef.current?.threadKey !== threadKey) {
@@ -4781,6 +4585,12 @@ export function useThreadSessionState(params: {
 
   useEffect(() => {
     const retainedThreadKeys = new Set(Object.keys(sessions));
+    for (const key of conditionalReadsRef.current.keys()) {
+      if (!retainedThreadKeys.has(key)) conditionalReadsRef.current.delete(key);
+    }
+    for (const key of streamRecoveryVersionsRef.current.keys()) {
+      if (!retainedThreadKeys.has(key)) streamRecoveryVersionsRef.current.delete(key);
+    }
     for (const indexedThreadKey of Object.keys(loadedHistoryIndexesRef.current)) {
       if (!retainedThreadKeys.has(indexedThreadKey)) {
         delete loadedHistoryIndexesRef.current[indexedThreadKey];
@@ -4801,6 +4611,22 @@ export function useThreadSessionState(params: {
       }
     }
   }, [sessions]);
+
+  useEffect(() => {
+    const keys = new Set<string>(JSON.parse(retainedRemoteKeysJson));
+    const evicted = [...previousRetainedRemoteKeysRef.current].filter((key) => !keys.has(key));
+    previousRetainedRemoteKeysRef.current = keys;
+    if (!evicted.length) return;
+    for (const key of evicted) {
+      // Invalidate late reads as well as completed sessions, even if the
+      // background stream marked them interacted while they were retained.
+      requestVersionsRef.current[key] = (requestVersionsRef.current[key] ?? 0) + 1;
+      inFlightHydrationsRef.current.delete(key);
+      conditionalReadsRef.current.delete(key);
+    }
+    setSessions((current) => Object.fromEntries(Object.entries(current)
+      .filter(([key]) => !evicted.includes(key) || key === selectedThreadKeyRef.current)));
+  }, [retainedRemoteKeysJson]);
 
   const updateSession = useCallback(
     (
@@ -4902,7 +4728,8 @@ export function useThreadSessionState(params: {
       }
       const readThread = desktopApi?.readThread;
       const targetThreadKey = threadSummaryIdentityKey(targetThread);
-      const hydrationVersion = getThreadHydrationVersion(targetThread);
+      const streamRecoveryVersion = streamRecoveryVersionsRef.current.get(targetThreadKey) ?? 0;
+      const hydrationVersion = `${getThreadHydrationVersion(targetThread)}:${streamRecoveryVersion}`;
 
       if (!readThread) {
         updateSession(targetThreadKey, (current) => ({
@@ -4938,11 +4765,10 @@ export function useThreadSessionState(params: {
           backend: targetThread.source,
           threadId: targetThread.id,
         });
-        const previousResponse = conditionalReadRef.current?.threadKey === targetThreadKey
-          ? conditionalReadRef.current.response
-          : undefined;
+        const previousResponse = conditionalReadsRef.current.get(targetThreadKey);
         const federationTarget = targetThread.federation?.ref.target ?? readRendererFederationTarget();
         const fetchedResponse = await readThread({
+          display: { resource: "transcript", ...(federationTarget?.scope === "remote" ? { deferActivityDetails: true } : {}) },
           backend: targetThread.source,
           ...(initialHistoryLimit !== undefined
             ? { limit: initialHistoryLimit }
@@ -4978,8 +4804,8 @@ export function useThreadSessionState(params: {
         if (requestVersionsRef.current[targetThreadKey] !== requestVersion) {
           return;
         }
-        if (selectedThreadKeyRef.current === targetThreadKey && response.replayRevision) {
-          conditionalReadRef.current = { threadKey: targetThreadKey, response };
+        if (response.replayRevision) {
+          conditionalReadsRef.current.set(targetThreadKey, response);
         }
         if (
           !response.replay.pagination.supportsPagination
@@ -5157,6 +4983,7 @@ export function useThreadSessionState(params: {
             hydratedEnvironmentSetupVersion:
               getEnvironmentSetupHydrationVersion(targetThread),
             hydratedInitialHistoryLimit: initialHistoryLimit,
+            hydratedStreamRecoveryVersion: streamRecoveryVersion,
             hydratedUpdatedAt:
               needsHydrationAfterCompletion && completionHydrationRetries < 2
                 ? undefined
@@ -5207,7 +5034,7 @@ export function useThreadSessionState(params: {
               : current.pendingUserInput,
             response: responseWithRetainedTail,
             staleThinkingRecheckAt:
-              ownUpdateStillSettling || reviewUpdateStillSettling
+              federationTarget?.scope !== "remote" && (ownUpdateStillSettling || reviewUpdateStillSettling)
               ? ownUpdateSettlesAt
               : undefined,
             transientMessage: shouldClearStaleThinking
@@ -5272,6 +5099,28 @@ export function useThreadSessionState(params: {
   }, [threadKey, updateSession]);
 
   useEffect(() => {
+    const remoteDetailInterest = !suspended
+      && (thread?.federation?.ref.target ?? readRendererFederationTarget())?.scope === "remote"
+      ? threadKey : undefined;
+    if (remoteDetailInterestRef.current !== remoteDetailInterest) {
+      remoteDetailInterestRef.current = remoteDetailInterest;
+      if (remoteDetailInterest
+        && !continuousRemoteInterestsRef.current.has(remoteDetailInterest)
+        && (sessions[remoteDetailInterest] || inFlightHydrationsRef.current.has(remoteDetailInterest))) {
+        // Another window can preserve the process-wide subscription while
+        // this window misses events. Renewed local interest must catch up
+        // independently of owner acknowledgements or navigation timestamps.
+        // Initial interest already gets an initial read. Giving it a recovery
+        // version before its session exists lets Strict Mode's mount replay
+        // prune that version and incorrectly invalidate the in-flight read.
+        streamRecoveryVersionsRef.current.set(remoteDetailInterest,
+          (streamRecoveryVersionsRef.current.get(remoteDetailInterest) ?? 0) + 1);
+      }
+    }
+    // Read suspension also covers the health probe on every owner switch. It
+    // does not stop our retained subscriptions or the global event listener.
+    // Real disconnects/gaps invalidate these baselines through stream recovery.
+    continuousRemoteInterestsRef.current = new Set(JSON.parse(retainedRemoteKeysJson));
     if (!thread || !threadKey) {
       return;
     }
@@ -5296,13 +5145,11 @@ export function useThreadSessionState(params: {
             ...current,
             backendReportedActive,
             lastTouchedAt: now,
-            // Federation backend events are live-only. If a remote viewer
-            // misses the terminal notifications during a transport gap, its
-            // next navigation snapshot still carries the authoritative idle
-            // status. Re-read after the normal completion grace so that the
-            // transcript snapshot can clear the stale active turn without
-            // racing an idle-before-turn/completed notification pair.
-            staleThinkingRecheckAt: backendReportedActive
+            // Remote recovery is driven by subscription epochs and sequence
+            // gaps. An idle projection can lag an admitted turn or precede its
+            // terminal event; it must not schedule a full transcript read.
+            staleThinkingRecheckAt: thread.federation?.capabilities?.includes("event_subscriptions")
+              || backendReportedActive
               ? undefined
               : shouldRecheckStaleThinking
                 ? now + OWN_UPDATE_IDLE_GRACE_MS
@@ -5445,7 +5292,8 @@ export function useThreadSessionState(params: {
     }
 
     const session = sessions[threadKey];
-    const hydrationVersion = getThreadHydrationVersion(thread);
+    const streamRecoveryVersion = streamRecoveryVersionsRef.current.get(threadKey) ?? 0;
+    const hydrationVersion = `${getThreadHydrationVersion(thread)}:${streamRecoveryVersion}`;
     if (inFlightHydrationsRef.current.has(threadKey)) {
       return;
     }
@@ -5473,29 +5321,37 @@ export function useThreadSessionState(params: {
       return;
     }
 
-    if (session.activeTurnId) {
-      const remoteSummaryAdvanced =
-        thread.federation?.ref.target.scope === "remote"
-        && thread.updatedAt != null
-        && session.hydratedUpdatedAt !== thread.updatedAt
-        && session.failedHydrationVersion !== hydrationVersion;
-      if (remoteSummaryAdvanced) {
-        // Federation events are live-only. A selected mounted thread can miss
-        // commentary or a request-user-input notification during a transport
-        // gap, then remain active indefinitely because the missing prompt is
-        // the only way to finish its turn. The owner's navigation snapshot is
-        // the durable catch-up signal: when its updatedAt advances beyond the
-        // detail snapshot we hydrated, re-read even while the turn is active.
+    if ((session.hydratedStreamRecoveryVersion ?? 0) !== streamRecoveryVersion) {
+      if (session.failedHydrationVersion !== hydrationVersion) {
         void loadLatest(thread);
       }
       return;
     }
+
+    // Live events own active-turn updates, including for mounted remote
+    // threads. Renewed local interest or an acknowledged subscription/gap
+    // requests catch-up; ordinary navigation timestamps do not imply missing
+    // transcript data.
+    if ((session.activeTurnId && ((thread.federation?.ref.target ?? readRendererFederationTarget())?.scope !== "remote" || thread.federation?.capabilities?.includes("event_subscriptions")))
+      || (session.backendReportedActive
+        && thread.federation?.capabilities?.includes("event_subscriptions"))) return;
 
     if (
       session.needsHydrationAfterCompletion &&
       session.completionHydrationRetries < 2
     ) {
       void loadLatest(thread);
+      return;
+    }
+
+    // Mounted remote transcripts already receive idle metadata and terminal
+    // items through their subscription. Only explicit recovery above or a
+    // requested history-size change needs another snapshot.
+    if (thread.federation?.capabilities?.includes("event_subscriptions")
+      && !session.needsHydrationAfterCompletion) {
+      if (session.hydratedInitialHistoryLimit !== initialHistoryLimit) {
+        void loadLatest(thread);
+      }
       return;
     }
 
@@ -5541,7 +5397,9 @@ export function useThreadSessionState(params: {
     initialHistoryLimit,
     launchpadMessageCandidate,
     loadLatest,
+    retainedRemoteKeysJson,
     sessions,
+    suspended,
     thread,
     threadKey,
     updateSession,
@@ -5551,6 +5409,7 @@ export function useThreadSessionState(params: {
     if (!thread || !threadKey) {
       return;
     }
+    if (thread.federation?.capabilities?.includes("event_subscriptions")) return;
     const recheckAt = sessions[threadKey]?.staleThinkingRecheckAt;
     if (typeof recheckAt !== "number") {
       return;
@@ -5632,6 +5491,19 @@ export function useThreadSessionState(params: {
     }
 
     return desktopApi.onAgentEvent((event) => {
+      if (event.notification.method === "federation/eventStream/changed"
+        || (event.notification.method === "federation/peerStatus/changed"
+          && event.notification.params.status === "connected")) {
+        const targets = new Map(retainedRemoteThreadsRef.current.map((item) => [threadSummaryIdentityKey(item), item.federation?.ref.target]));
+        if (threadKey) targets.set(threadKey, thread?.federation?.ref.target ?? readRendererFederationTarget());
+        for (const [key, target] of targets) {
+          if (target?.scope !== "remote" || target.instanceId !== event.notification.params.instanceId) continue;
+          // Mark inactive cached sessions too; recover them lazily on selection.
+          streamRecoveryVersionsRef.current.set(key, (streamRecoveryVersionsRef.current.get(key) ?? 0) + 1);
+          updateSession(key, (current) => ({ ...current, lastTouchedAt: Date.now() }));
+        }
+        return;
+      }
       const notificationThreadId =
         "threadId" in event.notification.params &&
         typeof event.notification.params.threadId === "string"
@@ -5644,9 +5516,15 @@ export function useThreadSessionState(params: {
 
       const targetThreadKey = agentEventThreadIdentityKey(event, notificationThreadId);
       const isUnfocusedThread = targetThreadKey !== selectedThreadKeyRef.current;
+      const isRetainedRemoteThread = retainedRemoteThreadsRef.current.some((item) => threadSummaryIdentityKey(item) === targetThreadKey);
+      // Another window can still subscribe to an evicted thread. Its events
+      // must not recreate this window's discarded transcript cache.
+      if (managesRemoteRetentionRef.current && event.federationTarget?.scope === "remote"
+        && isUnfocusedThread && !isRetainedRemoteThread) return;
       if (
         liveTranscriptEventFiltering &&
         isUnfocusedThread &&
+        !isRetainedRemoteThread &&
         isThreadLocalTranscriptNotification(event.notification)
       ) {
         return;
@@ -6337,10 +6215,18 @@ export function useThreadSessionState(params: {
             completedTurn?.id
           );
           const completedTurnText = readCompletedTurnText(event.notification.params);
+          // item/completed stores the final message and clears its pending
+          // delta before turn/completed, whose items can legitimately be empty.
+          const storedFinalText = current.response?.replay.entries.findLast(
+            (entry): entry is AppServerThreadMessageEntry =>
+              entry.type === "message" && entry.role === "assistant"
+              && entry.phase === "final"
+              && Boolean(completedTurn?.id) && entry.turn?.id === completedTurn?.id,
+          )?.text;
           const completedText =
             completedTurnHasReview
               ? undefined
-              : completedTurnText ?? current.pendingAssistantMessage?.text;
+              : completedTurnText ?? storedFinalText ?? current.pendingAssistantMessage?.text;
           const shouldAppendFinalMessage = Boolean(
             completedText &&
               current.pendingAssistantMessage?.text !== completedText &&
@@ -6504,6 +6390,7 @@ export function useThreadSessionState(params: {
             backendReportedActive: completedTurnMatchesActive
               ? false
               : current.backendReportedActive,
+            staleThinkingRecheckAt: completedTurnMatchesActive ? undefined : current.staleThinkingRecheckAt,
             completionHydrationRetries: completedTurnMatchesActive
               ? 0
               : current.completionHydrationRetries,
@@ -6674,8 +6561,8 @@ export function useThreadSessionState(params: {
                 ...current,
                 backendReportedActive: false,
                 lastTouchedAt: nextLastTouchedAt,
-                staleThinkingRecheckAt:
-                  nextLastTouchedAt + OWN_UPDATE_IDLE_GRACE_MS,
+                staleThinkingRecheckAt: (event.federationTarget ?? readRendererFederationTarget())?.scope === "remote"
+                  ? undefined : nextLastTouchedAt + OWN_UPDATE_IDLE_GRACE_MS,
               };
             }
 
@@ -6713,6 +6600,7 @@ export function useThreadSessionState(params: {
         }
 
         if (event.notification.method === "thread/pricing/updated") {
+          if (event.notification.params.displayInvalidated) return current;
           return {
             ...current,
             lastTouchedAt: nextLastTouchedAt,
@@ -6726,6 +6614,7 @@ export function useThreadSessionState(params: {
         }
 
         if (event.notification.method === "thread/toolAccounting/updated") {
+          if (event.notification.params.displayInvalidated) return current;
           return {
             ...current,
             lastTouchedAt: nextLastTouchedAt,
@@ -6952,14 +6841,16 @@ export function useThreadSessionState(params: {
     }));
 
     try {
-      const olderResponse = await desktopApi.readThread({
+      const federationTarget = thread.federation?.ref.target ?? readRendererFederationTarget();
+      const fetchedOlderResponse = await desktopApi.readThread({
+        display: { resource: "transcript", ...(federationTarget?.scope === "remote" ? { deferActivityDetails: true } : {}) },
         backend: thread.source,
-        federationTarget: thread.federation?.ref.target ??
-          readRendererFederationTarget(),
+        federationTarget,
         threadId: thread.id,
         before: selectedPagination.previousCursor,
         limit: THREAD_HISTORY_PAGE_LIMIT,
       });
+      const olderResponse = fetchedOlderResponse.display ? normalizeResponseImageBoundaryText(fetchedOlderResponse) : fetchedOlderResponse;
       const hasAuthoritativeTurnUsage = olderResponse.pricing?.lines.some(
         (line) =>
           Boolean(line.turnId)
@@ -7558,6 +7449,8 @@ export function useThreadSessionState(params: {
     ]
   );
 
+  const displayEntries = useThreadUsageDisplay({ desktopApi, thread, entries, response: selectedSession?.response, suspended });
+
   const messages = useMemo(
     () =>
       combineTranscriptMessages(
@@ -7630,7 +7523,7 @@ export function useThreadSessionState(params: {
     addOptimisticUserMessage,
     addOptimisticReviewEntry,
     clearPendingRequest,
-    entries,
+    entries: displayEntries,
     error: selectedSession?.error,
     initialLoadDurationMs: selectedSession?.initialLoadDurationMs,
     loading: selectedSession?.loading ?? false,

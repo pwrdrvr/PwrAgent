@@ -1,4 +1,5 @@
 import { useId, useState } from "react";
+import { useTranscriptActivityDetails } from "../../lib/useTranscriptActivityDetails";
 import type {
   AppServerSkillSummary,
   AppServerThreadActivityEntry,
@@ -23,7 +24,7 @@ type TranscriptActivityProps = {
   applications?: DesktopApplicationsSnapshot;
   desktopApi?: Pick<
     DesktopApi,
-    "copyText" | "openApplication" | "openMarkdownFileViewer" | "readMarkdownFile"
+    "copyText" | "openApplication" | "openMarkdownFileViewer" | "readMarkdownFile" | "readThread"
   >;
   directoryPaths?: string[];
   entry: AppServerThreadActivityEntry;
@@ -39,26 +40,28 @@ export function TranscriptActivity(props: TranscriptActivityProps) {
   const detailsId = useId();
   const [uncontrolledExpanded, setUncontrolledExpanded] = useState(false);
   const isExpanded = props.expanded ?? uncontrolledExpanded;
+  const details = useTranscriptActivityDetails({ entry: props.entry, expanded: isExpanded, desktopApi: props.desktopApi, instanceId: props.threadLinkSource?.instanceId });
+  const entry = details.entry;
   const [expandedDetailIds, setExpandedDetailIds] = useState(() => new Set<string>());
-  const hasDetails = props.entry.details.length > 0;
-  const directDetail = singleDirectDetail(props.entry);
-  const images = props.entry.details.flatMap((detail) => detail.images ?? []);
-  const activityCopyText = buildActivityCopyText(props.entry);
+  const hasDetails = entry.details.length > 0;
+  const directDetail = singleDirectDetail(entry);
+  const images = entry.details.flatMap((detail) => detail.images ?? []);
+  const activityCopyText = buildActivityCopyText(entry);
   const displaySummary = formatActivityText(
-    props.entry.summary,
-    props.entry.details,
+    entry.summary,
+    entry.details,
     props.directoryPaths,
   );
   const className =
-    props.entry.tone === "warning"
+    entry.tone === "warning"
       ? "transcript-activity transcript-activity--warning"
       : "transcript-activity";
 
-  if (directDetail && isThreadReferenceToolDetail(directDetail)) {
+  if (directDetail && !entry.detailsRef && isThreadReferenceToolDetail(directDetail)) {
     return (
       <TranscriptThreadToolActivity
         applications={props.applications}
-        createdAt={props.entry.createdAt}
+        createdAt={entry.createdAt}
         desktopApi={props.desktopApi}
         detail={directDetail}
         expanded={isExpanded}
@@ -106,14 +109,14 @@ export function TranscriptActivity(props: TranscriptActivityProps) {
                 label="Copy activity"
                 text={activityCopyText}
               />
-              {props.entry.createdAt ? (
+              {entry.createdAt ? (
                 <time className="transcript-activity__time">
                   {new Intl.DateTimeFormat(undefined, {
                     month: "short",
                     day: "numeric",
                     hour: "numeric",
                     minute: "2-digit"
-                  }).format(props.entry.createdAt)}
+                  }).format(entry.createdAt)}
                 </time>
               ) : null}
             </span>
@@ -129,14 +132,14 @@ export function TranscriptActivity(props: TranscriptActivityProps) {
                 label="Copy activity"
                 text={activityCopyText}
               />
-              {props.entry.createdAt ? (
+              {entry.createdAt ? (
                 <time className="transcript-activity__time">
                   {new Intl.DateTimeFormat(undefined, {
                     month: "short",
                     day: "numeric",
                     hour: "numeric",
                     minute: "2-digit"
-                  }).format(props.entry.createdAt)}
+                  }).format(entry.createdAt)}
                 </time>
               ) : null}
             </span>
@@ -167,7 +170,13 @@ export function TranscriptActivity(props: TranscriptActivityProps) {
         </div>
       ) : null}
 
-      {directDetail && isExpanded ? (
+      {isExpanded && details.error ? (
+        <div id={detailsId} className="transcript-activity__detail-body" role="alert">
+          {details.error} <button type="button" className="transcript-activity__detail-toggle" onClick={() => { void details.load().catch(() => undefined); }}>Retry</button>
+        </div>
+      ) : isExpanded && entry.detailsRef ? (
+        <div id={detailsId} className="transcript-activity__detail-body" role="status">Loading activity details…</div>
+      ) : directDetail && isExpanded ? (
         <div id={detailsId} className="transcript-activity__detail-body">
           <TranscriptCommandOutput
             applications={props.applications}
@@ -181,7 +190,7 @@ export function TranscriptActivity(props: TranscriptActivityProps) {
         </div>
       ) : hasDetails && isExpanded ? (
         <ul id={detailsId} className="transcript-activity__details">
-          {props.entry.details.map((detail) => {
+          {entry.details.map((detail) => {
             const nestedId = `${detailsId}-${detail.id}`;
             const hasNestedDetails = Boolean(detail.fileDiff || detail.command);
             const isDetailExpanded = expandedDetailIds.has(detail.id);

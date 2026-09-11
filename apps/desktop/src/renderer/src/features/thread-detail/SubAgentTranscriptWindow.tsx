@@ -218,6 +218,7 @@ export function SubAgentTranscriptWindow() {
             loadingMore={state.loadingMore}
             pagination={state.response?.replay.pagination}
             parentThreadId={target?.threadId}
+            parentThreadBackend={target?.backend}
             threadId={targetKey}
             threadLinkSource={
               target?.federationTarget?.scope === "remote"

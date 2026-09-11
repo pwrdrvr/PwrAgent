@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { FederationTarget, FederationPeerSummary, NavigationIdentity, NavigationDetailCollections, NavigationDetailCollectionName } from "@pwragent/shared";
+import type { FederationTarget, FederationPeerSummary, NavigationIdentity, NavigationDetailCollections, NavigationDetailCollectionName, NavigationSelectedDetailResponse } from "@pwragent/shared";
 import { buildPullRequestStatusKey, NAVIGATION_DETAIL_COLLECTION_NAMES } from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
 import { applyNavigationThreadEvent } from "./navigation-thread-event";
@@ -13,12 +13,22 @@ import {
 
 let nextDetailConsumer = 0;
 
+// Compare a canonical streamed collection with the owner's manifest before
+// downloading the same historical records again.
+async function collectionRevision(ref: NavigationIdentity, name: NavigationDetailCollectionName, values: unknown[]): Promise<string | undefined> {
+  if (!globalThis.crypto?.subtle) return undefined;
+  const bytes = new TextEncoder().encode(JSON.stringify({ ref: { backend: ref.backend, threadId: ref.threadId }, name, values }));
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", bytes);
+  return btoa(String.fromCharCode(...new Uint8Array(digest))).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
+}
+
 /** A row can select a thread; only this exact read can authorize its composer. */
 export function useNavigationSelectedDetail(params: {
   desktopApi?: DesktopApi;
   ref?: NavigationIdentity;
   federationTarget?: FederationTarget;
   enabled?: boolean;
+  collections?: readonly NavigationDetailCollectionName[];
 }): {
   state?: NavigationSelectionState;
   refresh: () => Promise<void>;
@@ -29,6 +39,9 @@ export function useNavigationSelectedDetail(params: {
   const paramsRef = useRef(params);
   paramsRef.current = params;
   const currentRef = useRef<NavigationSelectionState | undefined>(undefined);
+  // Keep the owner response separate from event-patched presentation state.
+  // An unchanged response may revalidate only this exact canonical baseline.
+  const canonicalRef = useRef<{ identity: string; detail: NavigationSelectedDetailResponse } | undefined>(undefined);
   const pullRequestKeysRef = useRef(new Set<string>());
   const sequenceRef = useRef(0);
   const consumerRef = useRef<string | undefined>(undefined);
@@ -36,6 +49,9 @@ export function useNavigationSelectedDetail(params: {
   const connectionRef = useRef<{ owner: string; status: string } | undefined>(undefined);
   const collectionsRef = useRef<{ identity?: string; values: NavigationDetailCollections; revisions: Map<NavigationDetailCollectionName, string> }>({ values: {}, revisions: new Map() });
   const collectionConsumersRef = useRef(new Set<string>());
+  const collectionPagesRef = useRef(new Map<NavigationDetailCollectionName, {
+    revision: string; values: unknown[]; cursor?: string; complete: boolean; pending?: Promise<void>;
+  }>());
   const [state, setState] = useState<NavigationSelectionState>();
   const refresh = useCallback(async () => {
     const currentParams = paramsRef.current;
@@ -54,17 +70,27 @@ export function useNavigationSelectedDetail(params: {
       if (!desktopApi?.getNavigationSelectedDetail) {
         throw new Error("Desktop bridge is missing selected-thread detail support. Upgrade this instance.");
       }
+      const canonicalIdentity = JSON.stringify([selectedRef, currentParams.federationTarget]);
+      const canonical = canonicalRef.current?.identity === canonicalIdentity ? canonicalRef.current.detail : undefined;
       const detail = await desktopApi.getNavigationSelectedDetail({
         protocol: 2,
         ref: selectedRef,
         federationTarget: currentParams.federationTarget,
         includeWorkspaceConfiguration: true,
-        knownRevision: started.stale ? undefined : started.detail?.revision,
+        knownRevision: canonical?.revision,
       }, consumerRef.current);
       if (sequenceRef.current !== sequence) return;
-      const next = applyNavigationSelectedDetail({ state: started, sequence, detail });
+      const next = applyNavigationSelectedDetail({
+        state: detail.unchanged && canonical ? { ...started, detail: canonical, stale: false } : started,
+        sequence,
+        detail,
+      });
+      if (next.detail) canonicalRef.current = { identity: canonicalIdentity, detail: next.detail };
       const collectionIdentity = JSON.stringify([selectedRef, currentParams.federationTarget]);
-      if (collectionsRef.current.identity !== collectionIdentity) collectionsRef.current = { identity: collectionIdentity, values: {}, revisions: new Map() };
+      if (collectionsRef.current.identity !== collectionIdentity) {
+        collectionsRef.current = { identity: collectionIdentity, values: {}, revisions: new Map() };
+        collectionPagesRef.current.clear();
+      }
       if (next.detail?.thread) next.detail = { ...next.detail, thread: { ...next.detail.thread, ...collectionsRef.current.values } };
       pullRequestKeysRef.current = new Set(next.detail?.thread?.prs?.map(buildPullRequestStatusKey));
       currentRef.current = next;
@@ -82,27 +108,49 @@ export function useNavigationSelectedDetail(params: {
         publish({ collectionReadiness: "loading", collectionError: undefined });
         try {
           for (const manifest of detail.collections) {
+            if (currentParams.collections && !currentParams.collections.includes(manifest.name)) continue;
             if (collectionsRef.current.revisions.get(manifest.name) === manifest.revision) continue;
-            let cursor: string | undefined;
-            let values: unknown[] = [];
-            if (manifest.count) do {
-              const response = await desktopApi.getNavigationSelectedDetail({ protocol: 2, ref: selectedRef,
-                federationTarget: currentParams.federationTarget, collection: { name: manifest.name, cursor } }, token);
+            const cached = collectionsRef.current.values[manifest.name];
+            if (cached && await collectionRevision(detail.ref, manifest.name, cached) === manifest.revision) {
               if (sequenceRef.current !== sequence) return;
-              const page = response.collectionPage;
-              if (!page || page.name !== manifest.name || page.revision !== manifest.revision
-                || page.complete === Boolean(page.nextCursor) || (cursor && cursor === page.nextCursor)) {
-                throw new Error("Selected history collection changed while loading. Refresh this thread to reload its history metadata.");
-              }
-              values = [...values, ...(page.values[manifest.name] ?? [])];
-              if (new TextEncoder().encode(JSON.stringify({ ...collectionsRef.current.values, [manifest.name]: values })).byteLength > 8 * 1024 * 1024) {
-                throw new Error("Selected history metadata exceeds its retained budget.");
-              }
-              cursor = page.nextCursor;
-            } while (cursor);
+              collectionsRef.current.revisions.set(manifest.name, manifest.revision);
+              continue;
+            }
             if (sequenceRef.current !== sequence) return;
-            collectionsRef.current.values = { ...collectionsRef.current.values, [manifest.name]: values };
+            let pages = collectionPagesRef.current.get(manifest.name);
+            if (!pages || pages.revision !== manifest.revision) {
+              pages = { revision: manifest.revision, values: [], complete: !manifest.count };
+              collectionPagesRef.current.set(manifest.name, pages);
+            }
+            const retainedPages = pages;
+            while (!retainedPages.complete) {
+              // Collection revisions, not configuration invalidations, own
+              // these pages. Share in-flight work and retain completed pages.
+              if (!retainedPages.pending) {
+                const cursor = retainedPages.cursor;
+                retainedPages.pending = desktopApi.getNavigationSelectedDetail({ protocol: 2, ref: selectedRef,
+                  federationTarget: currentParams.federationTarget, collection: { name: manifest.name, cursor } }, token).then((response) => {
+                  const page = response.collectionPage;
+                  if (!page || page.name !== manifest.name || page.revision !== manifest.revision
+                    || page.complete === Boolean(page.nextCursor) || (cursor && cursor === page.nextCursor)) {
+                    throw new Error("Selected history collection changed while loading. Refresh this thread to reload its history metadata.");
+                  }
+                  const values = [...retainedPages.values, ...(page.values[manifest.name] ?? [])];
+                  if (new TextEncoder().encode(JSON.stringify({ ...collectionsRef.current.values, [manifest.name]: values })).byteLength > 8 * 1024 * 1024) {
+                    throw new Error("Selected history metadata exceeds its retained budget.");
+                  }
+                  retainedPages.values = values;
+                  retainedPages.cursor = page.nextCursor;
+                  retainedPages.complete = page.complete;
+                }).finally(() => { retainedPages.pending = undefined; });
+              }
+              await retainedPages.pending;
+              if (sequenceRef.current !== sequence) return;
+            }
+            if (sequenceRef.current !== sequence) return;
+            collectionsRef.current.values = { ...collectionsRef.current.values, [manifest.name]: retainedPages.values };
             collectionsRef.current.revisions.set(manifest.name, manifest.revision);
+            collectionPagesRef.current.delete(manifest.name);
             const current = currentRef.current!;
             publish({ detail: { ...current.detail!, thread: { ...current.detail!.thread!, ...collectionsRef.current.values } } });
           }
@@ -147,6 +195,7 @@ export function useNavigationSelectedDetail(params: {
       void desktopApi?.releaseNavigationQuery?.(consumerRef.current!).catch(() => {});
       for (const token of collectionConsumersRef.current) void desktopApi?.releaseNavigationQuery?.(token).catch(() => undefined);
       collectionConsumersRef.current.clear();
+      collectionPagesRef.current.clear();
       consumerRef.current = `selected-detail:${++nextDetailConsumer}`;
     };
   }, [identityKey, refresh, targetKey, params.enabled]);
@@ -164,6 +213,7 @@ export function useNavigationSelectedDetail(params: {
         if (!selectedOwner || peer.instanceId !== selectedOwner) return;
         if (connectionRef.current?.owner === selectedOwner && connectionRef.current.status === peer.status) return;
         connectionRef.current = { owner: selectedOwner, status: peer.status };
+        canonicalRef.current = undefined;
         const sequence = ++sequenceRef.current;
         const current = currentRef.current;
         if (current) {
@@ -211,6 +261,7 @@ export function useNavigationSelectedDetail(params: {
           if (patchedThread[name] === currentThread[name]) continue;
           collectionsRef.current.values = { ...collectionsRef.current.values, [name]: patchedThread[name] };
           collectionsRef.current.revisions.delete(name);
+          collectionPagesRef.current.delete(name);
         }
       }
       // Fence an already-running read at event admission, not when the coalesced

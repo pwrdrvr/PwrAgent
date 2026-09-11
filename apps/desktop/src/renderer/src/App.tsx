@@ -85,9 +85,11 @@ import {
 import { useFederationPeerConnectivity } from "./lib/useFederationPeerConnectivity";
 import { useFederationHealth } from "./lib/useFederationHealth";
 import { useFederationThreadEventSubscriptions } from "./lib/useFederationThreadEventSubscriptions";
+import { useRecentRemoteThreads } from "./lib/useRecentRemoteThreads";
 import { scopeDesktopApiToFederationTarget } from "./lib/federation-desktop-api";
 import {
   federationTargetsEqual,
+  threadOwnerPlatform,
 } from "./lib/federated-thread-events";
 import { useRuntimeIdentity } from "./lib/runtime-identity";
 import {
@@ -843,7 +845,7 @@ function DesktopAppShell(props: {
         ? "Codex thread"
         : `${backend} thread`;
     };
-    return desktopApi?.onAgentEvent?.((event) => {
+    return desktopApi?.onAgentEvent?.(async (event) => {
       if (
         !federationTargetsEqual(
           event.federationTarget,
@@ -921,6 +923,8 @@ function DesktopAppShell(props: {
           threadId: string;
           incidentNotice?: ThreadToolIncidentNoticeState;
           toolAccounting?: ThreadToolAccounting;
+          displayInvalidated?: true;
+          incidentSummary?: import("@pwragent/shared").ThreadIncidentSummary;
           triggeredAlerts?: ThreadToolInvocationAlert[];
         };
         /* One card per thread, folded from the whole accounting snapshot,
@@ -953,8 +957,8 @@ function DesktopAppShell(props: {
             ...params.incidentNotice,
           });
         }
-        const incidentState = toolIncidentStateRef.current.get(noticeId);
-        const summary = buildThreadIncidentSummary({
+        let incidentState = toolIncidentStateRef.current.get(noticeId);
+        let summary = params.displayInvalidated ? params.incidentSummary : buildThreadIncidentSummary({
           accounting: params.toolAccounting,
           backend: event.backend,
           ...(incidentState?.firstWarningAt !== undefined
@@ -966,7 +970,20 @@ function DesktopAppShell(props: {
             buildThreadIdentityKey(event.backend, params.threadId),
           ),
         });
+        if (params.displayInvalidated && desktopApi?.readThread) {
+          try {
+            const detail = await desktopApi.readThread({
+              backend: event.backend, threadId: params.threadId, federationTarget: event.federationTarget,
+              display: { resource: "incident", firstWarningAt: incidentState?.firstWarningAt, largeOutputThresholdChars: largeOutputThresholdCharsRef.current },
+              includeTurns: false, viewOnly: true,
+            });
+            summary = detail.display?.incident ?? summary;
+          } catch {
+            // The event's owner-computed counts still warn when detail cannot be read.
+          }
+        }
         if (!summary) return;
+        incidentState = toolIncidentStateRef.current.get(noticeId);
         if (
           resolveToolIncidentVisibility({
             severity: summary.severity,
@@ -1405,11 +1422,16 @@ function DesktopAppShell(props: {
       });
     });
   }, [desktopApi, liveFederationHealth, navigation.selectedThread]);
+  const recentRemoteThreads = useRecentRemoteThreads({
+    selectedThread: navigation.selectedThread,
+    threads: navigation.threads,
+  });
   const scheduledActionFederationTargets = useFederationThreadEventSubscriptions({
     desktopApi,
     enabled: true,
     selectedThread: navigation.selectedThread,
     threads: navigation.threads,
+    retainedRemoteThreads: recentRemoteThreads,
   });
   const selectedThreadFederationTarget =
     navigation.selectedThread?.federation?.ref.target;
@@ -2080,6 +2102,7 @@ function DesktopAppShell(props: {
   const loadThreadDetail = threadViewReady && mainView === "thread";
   const session = useThreadSessionState({
     desktopApi,
+    retainedRemoteThreads: recentRemoteThreads,
     initialHistoryLimit: DEFAULT_INITIAL_THREAD_HISTORY_TURN_LIMIT,
     liveTranscriptEventFiltering:
       settings.snapshot?.experimental.liveTranscriptEventFiltering?.value ?? false,
@@ -2273,7 +2296,11 @@ function DesktopAppShell(props: {
     tokenMiserEnabled: settings.snapshot?.experimental.tokenMiserEnabled?.value,
     tokenMiserDefaultEnabled:
       settings.snapshot?.experimental.tokenMiserDefaultEnabled?.value,
-    platform: desktopApi?.platform,
+    platform: threadOwnerPlatform({
+      target: selectedThreadFederationTarget ?? readRendererFederationTarget(),
+      peers: liveFederationHealth?.peers,
+      localPlatform: desktopApi?.platform,
+    }),
     ...(navigation.creatingThread?.pendingForkEnvironmentSetup
       ? {
           pendingForkEnvironmentSetup:

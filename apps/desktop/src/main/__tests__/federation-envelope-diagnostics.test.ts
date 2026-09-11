@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { FederationProtocolEnvelope } from "@pwragent/shared";
-import { describeLargeThreadReadResult, FederationEnvelopeDiagnostics } from "../federation/federation-envelope-diagnostics";
+import { describeLargeBackendEvent, describeLargeThreadReadResult, FederationEnvelopeDiagnostics } from "../federation/federation-envelope-diagnostics";
 
 const request = {
   kind: "request", id: "req", sourceInstanceId: "viewer", targetInstanceId: "owner",
@@ -14,6 +14,28 @@ const response = {
 } satisfies FederationProtocolEnvelope;
 
 describe("federation envelope diagnostics", () => {
+  it("distinguishes full accounting notifications from stream patches using sizes only", () => {
+    const toolAccounting = { invocations: [{ command: "private command", output: "private output" }] };
+    const envelope = { ...request, kind: "notification", method: "backend.event", params: {
+      backend: "codex", stream: { epoch: "epoch", sequence: 3 },
+      notification: { method: "thread/toolAccounting/updated", params: { threadId: "thread-1", toolAccounting } },
+    } } satisfies FederationProtocolEnvelope;
+    const fields = describeLargeBackendEvent(envelope);
+    expect(fields).toMatchObject({
+      toolAccountingBytes: Buffer.byteLength(JSON.stringify(toolAccounting)), pricingBytes: 0, accountingPatchBytes: 0, streamSequence: 3,
+    });
+    expect(new FederationEnvelopeDiagnostics().describe(envelope)).toMatchObject({
+      threadId: "thread-1", notificationMethod: "thread/toolAccounting/updated",
+    });
+    const accountingPatch = { baseSequence: 3, changes: [{ value: "private replacement" }] };
+    const patched = describeLargeBackendEvent({ ...envelope, params: {
+      ...envelope.params, accountingPatch,
+      notification: { method: "thread/toolAccounting/updated", params: { threadId: "thread-1" } },
+    } });
+    expect(patched).toMatchObject({ toolAccountingBytes: 0, accountingPatchBytes: Buffer.byteLength(JSON.stringify(accountingPatch)) });
+    expect(JSON.stringify([fields, patched])).not.toContain("private");
+    expect(describeLargeBackendEvent(response)).toEqual({});
+  });
   it("accounts for replay duplication and inline images without logging content", () => {
     const image = "data:image/png;base64," + "eA==".repeat(100);
     const message = { id: "message", text: "private transcript 🦀", parts: [{ type: "image", url: image }] };
@@ -50,6 +72,19 @@ describe("federation envelope diagnostics", () => {
       threadId: undefined, readReason: undefined,
     });
   });
+  it("identifies deferred history and conditional recovery without logging revision or payload text", () => {
+    const diagnostics = new FederationEnvelopeDiagnostics();
+    const read = { ...request, method: "backend.readThread", params: {
+      threadId: "thread", knownRevision: "private revision", display: { resource: "transcript", deferActivityDetails: true },
+    } };
+    diagnostics.observe(read);
+    expect(diagnostics.describe(response)).toMatchObject({ displayResource: "transcript", deferredActivityDetails: "true", conditionalRead: "revalidate" });
+    expect(JSON.stringify(diagnostics.describe(response))).not.toContain("private");
+    const fields = describeLargeThreadReadResult({ ...response, result: { replay: {
+      messages: [], entries: [{ type: "message", text: "private text" }, { type: "activity", details: [], detailsRef: {} }],
+    } } });
+    expect(fields).toMatchObject({ deferredActivityCount: 1, messageTextBytes: 14, activityDetailsBytes: 2 });
+  });
   it("correlates search query fingerprints without logging query text", () => {
     const diagnostics = new FederationEnvelopeDiagnostics();
     const search = { ...request, method: "backend.searchNavigationThreads", params: { query: "private search phrase" } };
@@ -59,6 +94,20 @@ describe("federation envelope diagnostics", () => {
     expect(diagnostics.describe(response).queryFingerprint).toBe(fields.queryFingerprint);
     expect(diagnostics.describe({ ...search, params: { query: "other phrase" } }).queryFingerprint).not.toBe(fields.queryFingerprint);
     expect(JSON.stringify(fields)).not.toContain("private search phrase");
+  });
+
+  it("breaks out Pricing display bytes and distinguishes expanded gate reads", () => {
+    const diagnostics = new FederationEnvelopeDiagnostics();
+    diagnostics.observe({ ...request, method: "backend.readThread", params: {
+      display: { resource: "pricing", deferPricingGates: true, pricingGateGroup: { usageLineId: "private-id", filter: "small" } },
+    } });
+    expect(diagnostics.describe(response)).toMatchObject({ displayResource: "pricing", deferredPricingGates: "true", pricingGateFilter: "small" });
+    const display = { pricingPage: { rows: [{ gates: [], gatesDeferred: true, private: "hidden text" }, { gates: [{ private: "nested" }] }] } };
+    const fields = describeLargeThreadReadResult({ ...response, result: { replay: { entries: [], messages: [] }, display } });
+    expect(fields).toMatchObject({ displayBytes: Buffer.byteLength(JSON.stringify(display)),
+      pricingDisplayBytes: Buffer.byteLength(JSON.stringify(display.pricingPage)), pricingRowCount: 2,
+      pricingNestedRowCount: 1, deferredPricingGroupCount: 1 });
+    expect(JSON.stringify([fields, diagnostics.describe(response)])).not.toContain("private");
   });
 
   it("correlates both relay legs without retaining or logging payloads", () => {

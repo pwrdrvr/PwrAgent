@@ -3682,6 +3682,7 @@ export function ThreadView(props: ThreadViewProps) {
               linkedMessageRequestKey={props.linkedMessageRequestKey}
               pagination={visibleTranscriptPagination}
               parentThreadId={selectedThread!.id}
+              parentThreadBackend={selectedThread!.source}
               threadLinkSource={transcriptThreadLinkSource}
               // File-diff activity renders in the LiveWorkRail above
               // the composer (issue #495). Generic tool activity has no

@@ -1,3 +1,7 @@
+import type { SubAgentLens } from "../subagent-kind";
+import type { ToolAccountingTotals } from "../thread-tool-display";
+import type { ThreadIncidentSummary } from "../thread-incident-summary";
+import type { ThreadPricingDisplay } from "../thread-pricing-display";
 import type { AutomationRunOutputDecision } from "./automations";
 import type { ScheduledThreadAction } from "./scheduled-thread-actions";
 import type {
@@ -737,6 +741,14 @@ export type AppServerThreadActivityEntry = {
   tone?: "warning";
   status?: AppServerThreadActivityStatus;
   details: AppServerThreadActivityDetail[];
+  /** Owner-prepared collapsed history; resolve before expanding its details. */
+  detailsRef?: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    turnId: string;
+    entryId: string;
+    revision: string;
+  };
   turn?: AppServerThreadTurnMetadata;
   usageLine?: ThreadUsageLineRecord;
 };
@@ -1009,7 +1021,41 @@ export type RenameThreadResponse = {
   renamedAt: number;
 };
 
+/** Display resources have independent pages. Transcript loads never carry accounting ledgers. */
+export type ThreadDisplayRead = {
+  subAgentLens?: SubAgentLens;
+  resource: "transcript" | "activity" | "accounting" | "pricing" | "tools" | "incident" | "subagents" | "subagent";
+  /** Opt in only when the viewer supports resolving collapsed activity details. */
+  deferActivityDetails?: boolean;
+  /** New viewers load folded Pricing gate cards only on expansion. */
+  deferPricingGates?: boolean;
+  pricingGateGroup?: { usageLineId: string; filter: "primary" | "small" };
+  activity?: { turnId: string; entryId: string };
+  firstWarningAt?: number;
+  largeOutputThresholdChars?: number;
+  monitorId?: string;
+  cursor?: string;
+  limit?: number;
+  /** Loaded transcript turns whose finalized usage activities need refreshing. */
+  turns?: AppServerThreadTurnMetadata[];
+};
+
+export type ThreadDisplayData = {
+  subAgentLens?: SubAgentLens;
+  subAgentCounts?: Record<SubAgentLens, number>;
+  subAgents?: ThreadSubAgentSummary[];
+  subAgent?: ThreadSubAgentSummary;
+  incident?: ThreadIncidentSummary;
+  pricing: Omit<ThreadPricingDisplay, "rows" | "spendByModel">;
+  pricingPage?: ThreadPricingDisplay;
+  toolsPage?: ThreadToolAccounting;
+  toolTotals?: ToolAccountingTotals;
+  nextCursor?: string;
+  revision: string;
+};
+
 export type AppServerReadThreadRequest = {
+  display?: ThreadDisplayRead;
   /** Bounded diagnostic attribution; never transcript content. */
   readReason?: "thread-view" | "star-map-card";
   /** Opt into conditional page revalidation. Empty string requests a first revision. */
@@ -1035,6 +1081,7 @@ export type AppServerReadThreadRequest = {
 };
 
 export type AppServerReadThreadResponse = {
+  display?: ThreadDisplayData;
   /** Opaque hash of the complete owner response, excluding observation timings. */
   replayRevision?: string;
   /** Only in response to knownRevision. Reuse that exact cached response, not this empty replay. */
@@ -1441,6 +1488,11 @@ export type FederationPeerStatusChangedNotification = {
   };
 };
 
+export type FederationEventStreamChangedNotification = {
+  method: "federation/eventStream/changed";
+  params: { instanceId: string; epoch: string };
+};
+
 export type FederationCelestialIconsChangedNotification = {
   method: "federation/celestialIcons/changed";
   params: {
@@ -1742,6 +1794,7 @@ export type AppServerNotification =
   | {
       method: "thread/pricing/updated";
       params: {
+        displayInvalidated?: true;
         threadId: string;
         pricing: {
           /** Observed context compactions, oldest first. */
@@ -1755,6 +1808,8 @@ export type AppServerNotification =
   | {
       method: "thread/toolAccounting/updated";
       params: {
+        incidentSummary?: ThreadIncidentSummary;
+        displayInvalidated?: true;
         threadId: string;
         toolAccounting: ThreadToolAccounting;
         /**
@@ -2247,6 +2302,7 @@ export type AppServerNotification =
       };
     }
   | FederationPeerStatusChangedNotification
+  | FederationEventStreamChangedNotification
   | FederationCelestialIconsChangedNotification
   | StarMapArrangementChangedNotification
   | StarMapIntakeStatusNotification

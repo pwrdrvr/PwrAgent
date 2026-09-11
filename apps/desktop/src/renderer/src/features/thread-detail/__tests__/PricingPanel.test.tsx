@@ -1,11 +1,12 @@
 import "@testing-library/jest-dom/vitest";
-import { act, cleanup, render } from "@testing-library/react";
+import { act, cleanup, render, waitFor } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
-import type { ThreadUsageLineRecord } from "@pwragent/shared";
+import type { AgentEvent, ThreadUsageLineRecord, NavigationThreadSummary, ThreadSubAgentSummary } from "@pwragent/shared";
 import { ThreadContextPanel } from "../ThreadContextPanel";
 import type { ComponentProps } from "react";
+import type { DesktopApi } from "../../../lib/desktop-api";
 import { PricingPanel } from "../context-panels/PricingPanel";
-import * as spend from "../pricing-spend-by-model";
+import * as spend from "@pwragent/shared";
 import * as formatting from "../context-panels/subagent-format";
 import * as rail from "../context-panels/context-rail-shared";
 
@@ -49,7 +50,7 @@ it("ticks only live timestamps and keeps completed cards and pricing calculation
   vi.useFakeTimers();
   const startedAt = 1_800_000_000_000;
   vi.setSystemTime(startedAt + 10_000);
-  const calculate = vi.spyOn(spend, "buildPricingSpendByModel");
+  const calculate = vi.spyOn(spend, "buildThreadPricingDisplay");
   const formatTokens = vi.spyOn(formatting, "formatTokenCount");
   const formatTimestamp = vi.spyOn(rail, "formatTimestamp");
   const active = buildMonitorLine({
@@ -125,7 +126,7 @@ function wireCopy<T>(value: T): T {
 
 it("preserves historical DOM and formatting across remote snapshots, active updates and insertion", () => {
   const formatTokens = vi.spyOn(formatting, "formatTokenCount");
-  const calculate = vi.spyOn(spend, "buildPricingSpendByModel");
+  const calculate = vi.spyOn(spend, "buildThreadPricingDisplay");
   const historical = buildMonitorLine({
     usageLineId: "historical", scope: "turn", source: "live", turnId: "old-turn",
     uncachedInputTokens: 123456, createdAt: 1_800_000_000_000,
@@ -268,12 +269,15 @@ it("keeps card formatting static when the transcript scroll callback changes, bu
 
 it("formats one changed card out of a full page of twenty remote usage rows", () => {
   const formatTokens = vi.spyOn(formatting, "formatTokenCount");
+  const thread: NonNullable<ComponentProps<typeof PricingPanel>["thread"]> = { source: "codex", id: "thread-1", updatedAt: 0,
+    federation: { ref: { backend: "codex", threadId: "thread-1", target: { scope: "remote", instanceId: "owner" } },
+      instanceLabel: "Owner", capabilities: ["thread_detail", "event_subscriptions"] } };
   const lines = Array.from({ length: 20 }, (_, index) => buildMonitorLine({
     usageLineId: `row-${index}`, createdAt: 1_800_000_000_000 + index * 1000,
     scope: "turn", source: "live", turnId: `turn-${index}`,
     uncachedInputTokens: 1000 + index,
   }));
-  const view = render(<PricingPanel activeTurnId="turn-19" pricing={{ lines, summaries: [] }} />);
+  const view = render(<PricingPanel thread={thread} activeTurnId="turn-19" pricing={{ lines, summaries: [] }} />);
   const before = Array.from(view.container.querySelectorAll("li.pricing-usage-row"));
   expect(before).toHaveLength(20);
   for (let update = 1; update <= 5; update += 1) {
@@ -281,11 +285,85 @@ it("formats one changed card out of a full page of twenty remote usage rows", ()
     const next = wireCopy(lines);
     next[19]!.uncachedInputTokens += update;
     next[19]!.totalCostMicros += update * 1000;
-    view.rerender(<PricingPanel activeTurnId="turn-19" pricing={{ lines: next, summaries: [] }} />);
+    view.rerender(<PricingPanel thread={{ ...wireCopy(thread), updatedAt: update }} activeTurnId="turn-19" pricing={{ lines: next, summaries: [] }} />);
     // Three token fields in the changed card; none of the 19 historical cards.
     expect(formatTokens).toHaveBeenCalledTimes(3);
     expect(formatTokens).toHaveBeenCalledWith(1019 + update);
     const after = Array.from(view.container.querySelectorAll("li.pricing-usage-row"));
     after.forEach((card, index) => { expect(card).toBe(before[index]); });
   }
+});
+
+it("renders owner-prepared pricing with the same visible values and no viewer ledger calculation", () => {
+  const pricing = { lines: [buildMonitorLine({ scope: "turn", turnId: "turn-1", source: "live", completedAt: 1_800_000_000_999 })], summaries: [] };
+  const display = spend.buildThreadPricingDisplay({ pricing });
+  const legacy = render(<PricingPanel pricing={pricing} />);
+  const text = legacy.container.textContent;
+  legacy.unmount();
+  const calculate = vi.spyOn(spend, "buildThreadPricingDisplay");
+  const view = render(<PricingPanel display={display} />);
+  expect(view.container.textContent).toBe(text);
+  expect(calculate).not.toHaveBeenCalled();
+});
+
+
+it("loads and refreshes only expanded Pricing gate pages while preserving folded totals", async () => {
+  const parent = buildMonitorLine({ scope: "turn", source: "live", usageLineId: "parent", turnId: "parent-turn" });
+  const gates = Array.from({ length: 23 }, (_, index) => buildMonitorLine({
+    usageLineId: `gate-${index}`, sourceItemId: `system:token-miser:${index}`, turnId: `helper-${index}`,
+    createdAt: parent.createdAt + index + 1,
+  }));
+  const subAgents: ThreadSubAgentSummary[] = gates.map((gate, index) => ({
+    monitorId: gate.sourceItemId!, parentTurnId: parent.turnId, createdAt: gate.createdAt, updatedAt: gate.createdAt + 500,
+    task: "Hidden gate task", status: "success", preferredModel: "gpt-5.6-luna",
+    tokenMiserAccounting: {
+      currency: "USD", originalModel: "gpt-5.5", gateModel: "gpt-5.6-luna", baselineParentTokens: 1000, baselineParentCostMicros: 201_100,
+      gateTotalTokens: 110, gateCostMicros: 1000, revealedParentTokens: 100, revealedParentCostMicros: 100,
+      savingsMicros: index < 21 ? 200_000 : 1000,
+    },
+  }));
+  const input = { pricing: { lines: [parent, ...gates], summaries: [] }, subAgents };
+  const display = spend.buildThreadPricingDisplay({ ...input, deferGates: true });
+  const legacy = render(<PricingPanel {...input} />);
+  const visibleText = legacy.container.textContent;
+  legacy.unmount();
+  const listeners = new Set<(event: AgentEvent) => void>();
+  const readThread = vi.fn<NonNullable<DesktopApi["readThread"]>>(async (request) => {
+    const offset = Number(request.display?.cursor ?? 0);
+    const pricingPage = spend.buildThreadPricingDisplay({ ...input, deferGates: true,
+      gateSelection: request.display?.pricingGateGroup, offset, limit: 20 });
+    return { backend: "codex", threadId: "thread-1", fetchedAt: 1, replay: { entries: [], messages: [], pagination: { supportsPagination: true, hasPreviousPage: false } },
+      display: { pricing: pricingPage, pricingPage, revision: "r", nextCursor: offset + 20 < pricingPage.totalRows ? String(offset + 20) : undefined } };
+  });
+  const desktopApi: DesktopApi = { readThread, onAgentEvent: (listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; } };
+  const thread: NavigationThreadSummary = { source: "codex", id: "thread-1", title: "Fixture", titleSource: "explicit", linkedDirectories: [], inbox: { inInbox: false },
+    federation: { ref: { backend: "codex", threadId: "thread-1", target: { scope: "remote", instanceId: "owner" } }, instanceLabel: "Owner", capabilities: ["thread_detail", "event_subscriptions"] } };
+  const view = render(<PricingPanel display={display} thread={thread} desktopApi={desktopApi} />);
+  expect(view.container.textContent).toBe(visibleText);
+  expect(readThread).not.toHaveBeenCalled();
+  const fold = view.getByRole("button", { name: /Token Miser.*saved/ });
+  act(() => fold.click());
+  await waitFor(() => expect(view.container.querySelectorAll(".pricing-token-miser li.pricing-usage-row")).toHaveLength(20));
+  expect(readThread.mock.calls[0]![0]).toMatchObject({ federationTarget: { scope: "remote", instanceId: "owner" },
+    display: { resource: "pricing", deferPricingGates: true, limit: 20, pricingGateGroup: { usageLineId: "parent", filter: "primary" } } });
+  act(() => view.getByRole("button", { name: "Show more gates" }).click());
+  await waitFor(() => expect(view.container.querySelectorAll(".pricing-token-miser li.pricing-usage-row")).toHaveLength(21));
+  expect(fold).toHaveTextContent("$4.21 saved");
+  expect(fold).toHaveTextContent("23 gates");
+  act(() => view.getByRole("button", { name: /Show 2 smaller gates/ }).click());
+  await waitFor(() => expect(view.container.querySelectorAll(".pricing-token-miser li.pricing-usage-row")).toHaveLength(23));
+  expect(readThread.mock.calls[2]![0].display?.pricingGateGroup?.filter).toBe("small");
+  vi.useFakeTimers();
+  const invalidate = () => {
+    for (const listener of listeners) listener({ backend: "codex", federationTarget: { scope: "remote", instanceId: "owner" },
+      notification: { method: "thread/pricing/updated", params: { threadId: "thread-1", displayInvalidated: true, pricing: { lines: [], summaries: [] } } } });
+  };
+  await act(async () => { invalidate(); invalidate(); await vi.advanceTimersByTimeAsync(250); });
+  // The two opened primary pages and one smaller-gate page are revalidated once.
+  expect(readThread).toHaveBeenCalledTimes(6);
+  expect(fold).toHaveAttribute("aria-expanded", "true");
+  act(() => fold.click());
+  expect(listeners.size).toBe(0);
+  await act(async () => { invalidate(); await vi.advanceTimersByTimeAsync(250); });
+  expect(readThread).toHaveBeenCalledTimes(6);
 });

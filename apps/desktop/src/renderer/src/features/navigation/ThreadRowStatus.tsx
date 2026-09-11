@@ -51,10 +51,8 @@ export function isThreadRemoteWork(thread: NavigationThreadSummary): boolean {
  *
  * Read by every surface that colours ONE thread's turn — the sidebar row and
  * the Star Map card's marks, the transcript's pending line, and the Attention
- * tab's split counts — so those cannot disagree. The aggregate directory
- * header count (`DirectoriesList`) is deliberately NOT on it yet: it draws
- * one scanner for N threads, so "some of these are a peer's" has no single
- * colour, and splitting that readout is a design change rather than a gate.
+ * tab's split counts — so those cannot disagree. Directory headers use the
+ * same window scope to split owner-projected local and remote counts.
  *
  * The main window can hold both kinds, and only its own turns hold shutdown
  * open, so it colours them apart: accent here, neutral elsewhere. A window
