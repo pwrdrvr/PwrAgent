@@ -27,31 +27,65 @@ describe("assertReviewWorkspaceMatchesAttachedPullRequest", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("rejects a base review from an unrelated checkout", async () => {
-    const runGit = vi.fn(async (_cwd: string, args: string[]) => {
-      if (args[0] === "rev-parse" && args[1] === "--verify") {
-        return { stdout: PR_HEAD };
-      }
-      if (args[0] === "merge-base") {
-        throw new Error("not an ancestor");
-      }
-      if (args[0] === "rev-parse" && args[1] === "HEAD") {
-        return { stdout: CURRENT_HEAD };
-      }
-      throw new Error(`Unexpected git command: ${args.join(" ")}`);
-    });
+  it.each(["missing PR object", "rewritten PR history"])(
+    "allows the checked-out PR branch with %s",
+    async (reason) => {
+      const runGit = vi.fn(async (_cwd: string, args: string[]) => {
+        if (args[0] === "symbolic-ref") {
+          return { stdout: "refs/heads/agent/pwragent-build-version\n" };
+        }
+        if (args[0] === "merge-base") {
+          throw new Error(reason);
+        }
+        if (args[0] === "rev-parse" && args[1] === "HEAD") {
+          return { stdout: CURRENT_HEAD };
+        }
+        throw new Error(`Unexpected git command: ${args.join(" ")}`);
+      });
 
-    await expect(
-      assertReviewWorkspaceMatchesAttachedPullRequest({
+      await expect(assertReviewWorkspaceMatchesAttachedPullRequest({
         cwd: "/worktree",
         prs: [pullRequest()],
+        resolveGitHubRepos: async () => [{
+          host: "github.com", owner: "pwrdrvr", repo: "codex",
+        }],
         runGit,
         target: { type: "baseBranch", branch: "pwragent" },
-      }),
-    ).rejects.toThrow(
-      "current checkout 970b7f2ff4 does not contain attached #9 head e82f8783f9",
-    );
-  });
+      })).resolves.toBeUndefined();
+    },
+  );
+
+  it.each(["refs/heads/unrelated", "refs/heads/agent/pwragent-build-version-copy", ""])(
+    "rejects a base review from an unrelated checkout (%s)",
+    async (branch) => {
+      const runGit = vi.fn(async (_cwd: string, args: string[]) => {
+        if (args[0] === "symbolic-ref") {
+          if (!branch) {
+            throw new Error("detached HEAD");
+          }
+          return { stdout: branch };
+        }
+        if (args[0] === "merge-base") {
+          throw new Error("not an ancestor");
+        }
+        if (args[0] === "rev-parse" && args[1] === "HEAD") {
+          return { stdout: CURRENT_HEAD };
+        }
+        throw new Error(`Unexpected git command: ${args.join(" ")}`);
+      });
+
+      await expect(
+        assertReviewWorkspaceMatchesAttachedPullRequest({
+          cwd: "/worktree",
+          prs: [pullRequest()],
+          runGit,
+          target: { type: "baseBranch", branch: "pwragent" },
+        }),
+      ).rejects.toThrow(
+        "current checkout 970b7f2ff4 does not contain attached #9 head e82f8783f9",
+      );
+    },
+  );
 
   it("matches the origin-qualified spelling of an attached PR base", async () => {
     const runGit = vi.fn(async (_cwd: string, args: string[]) => {

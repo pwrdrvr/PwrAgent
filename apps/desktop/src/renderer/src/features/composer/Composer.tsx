@@ -5770,7 +5770,13 @@ export function Composer(props: ComposerProps) {
       }
       inFlightReviewSubmissionKeyRef.current = undefined;
       if (!options?.queued) {
-        recoverSubmittedComposerDraft(submittedSnapshot);
+        if (recoverSubmittedComposerDraft(submittedSnapshot)) {
+          setReviewConfig(reviewConfig ?? createReviewConfig({
+            directory: props.directory,
+            reviewCommand,
+            thread: props.thread,
+          }));
+        }
       }
       props.onPendingStatusChange?.(undefined);
       updateSending(false);
@@ -5779,7 +5785,13 @@ export function Composer(props: ComposerProps) {
       props.onActiveTurnIdChange?.(undefined);
       restoreQueuedTurnIfClaimed(options?.queued, options?.queueClaimed);
       releaseQueuedTurnScopeLockIfClaimed(options?.queued, options?.queueClaimed);
-      setSendError(error instanceof Error ? error.message : String(error));
+      const message = error instanceof Error ? error.message : String(error);
+      setSendError(message);
+      showComposerNotice({
+        title: "Review failed to start",
+        message,
+        tone: "error",
+      });
     }
   };
 
@@ -11118,6 +11130,11 @@ export function Composer(props: ComposerProps) {
               </div>
             ) : null}
 
+            {sendError ? (
+              <p className="composer__meta composer__meta--error" role="alert">
+                {sendError}
+              </p>
+            ) : null}
             <div className="composer__review-actions">
               <button
                 type="button"
@@ -12183,7 +12200,7 @@ export function Composer(props: ComposerProps) {
           text={props.launchpadError}
         />
       ) : null}
-      {sendError ? <p className="composer__meta composer__meta--error">{sendError}</p> : null}
+      {sendError && !isReviewComposerOpen ? <p className="composer__meta composer__meta--error" role="alert">{sendError}</p> : null}
       {agentThreadError ? (
         <p className="composer__meta composer__meta--error" role="alert">
           {agentThreadError}

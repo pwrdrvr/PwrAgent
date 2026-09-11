@@ -12599,6 +12599,58 @@ describe("Composer", () => {
     expect(screen.queryByRole("group", { name: "Review target" })).not.toBeInTheDocument();
   });
 
+  it("shows a review startup failure as an error toast and permits retry", async () => {
+    const onShowNotice = vi.fn();
+    const startReview = vi.fn().mockRejectedValue(new Error("Review not started: checkout verification failed."));
+
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startReview,
+        }}
+        onShowNotice={onShowNotice}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Review thread",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "/review" },
+    });
+    await clickButton("Send");
+    fireEvent.click(screen.getByRole("button", { name: /Review one commit by SHA/i }));
+    const commitInput = await screen.findByRole("combobox", {
+      name: "Commit SHA",
+    });
+    fireEvent.change(commitInput, {
+      target: { value: "abc123def456" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Start review" }));
+
+    await waitFor(() => {
+      expect(onShowNotice).toHaveBeenCalledWith(expect.objectContaining({
+        title: "Review failed to start",
+        message: "Review not started: checkout verification failed.",
+        tone: "error",
+      }));
+    });
+    expect(screen.getByRole("alert")).toHaveTextContent("checkout verification failed");
+    expect(screen.getByRole("combobox", { name: "Commit SHA" })).toHaveValue("abc123def456");
+    expect(screen.getByRole("button", { name: "Start review" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Start review" }));
+    await waitFor(() => expect(startReview).toHaveBeenCalledTimes(2));
+  });
+
   it("still accepts a pasted raw commit SHA", async () => {
     const startReview = vi.fn(async (request: StartReviewRequest) => ({
       backend: request.backend,
