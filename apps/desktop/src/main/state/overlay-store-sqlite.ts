@@ -1,3 +1,4 @@
+import { sqliteThreadChangeVersion } from "./sqlite-thread-change-version";
 import { buildAppendPinRank, insertSubthreadIdAfter, sortSubthreadSummaries } from "@pwragent/shared";
 import path from "node:path";
 import { relativePinRanks } from "./relative-pin-order";
@@ -631,7 +632,38 @@ function stripFederationStamp(
 const NAVIGATION_UNREAD_BASELINE_KEY = "navigation-unread-baseline-v2";
 type NavigationUnreadBaseline = { seenUpdatedAt: Record<string, number>; knownThreadKeys: string[] };
 
+/** The identities navigation consumes, independent of worker status or history.
+ * Preserve the legacy per-overlay malformed-entry boundary: keep the valid
+ * prefix, then stop that parent's traversal if an entry cannot be read.
+ */
+function managedSubAgentChildKeys(overlay: Pick<ThreadOverlayState, "backend" | "threadId" | "subAgents">): Set<string> {
+  const keys = new Set<string>();
+  try {
+    for (const subAgent of overlay.subAgents ?? []) {
+      const threadId = subAgent.monitorThreadId?.trim();
+      const backend = subAgent.backend ?? overlay.backend;
+      if (!threadId || (backend === overlay.backend && threadId === overlay.threadId)) continue;
+      keys.add(buildThreadIdentityKey(backend, threadId));
+    }
+  } catch {
+    // A malformed unrelated overlay must not block navigation.
+  }
+  return keys;
+}
+
+function managedSubAgentSignature(keys: Set<string>): string {
+  return JSON.stringify([...keys].sort());
+}
+
 export class SqliteOverlayStore implements RemoteThreadTargetStore {
+  private managedSubAgentCache?: {
+    dataVersion: number;
+    threadChanges: number;
+    threadKeys: Set<string>;
+    parentSignatures: Map<string, string>;
+    referencedStorageKeys: Set<string>;
+    groupedStorageKeys: Set<string>;
+  };
   private remotePinNavigationCache?: { version: string; expires: number; rows: NavigationThreadSummary[] };
   private backendReadCache?: {
     payload: string;
@@ -7002,14 +7034,38 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
   }
 
   private listManagedSubAgentThreadKeys(): Set<string> {
-    // One statement reads both sides from the same SQLite snapshot. No cache
-    // generation is needed: persistent triggers keep this sparse adjacency
-    // table current for local writes, older instances and external connections.
-    const rows = this.stateDb.raw.prepare(
-      "SELECT thread_id, managed_children AS projection, grouped_subthread FROM thread_navigation_relationships",
-    ).all() as Array<{ thread_id: string; projection: string | null; grouped_subthread: number }>;
-    const groupedKeys = new Set(rows.filter((row) => row.grouped_subthread === 1).map((row) => row.thread_id));
+    // External connections remain conservatively invalidated by data_version.
+    // Local unrelated-table writes do not require scanning every thread payload.
+    // Capture before reading; never cache a transaction/savepoint result.
+    const threadChanges = sqliteThreadChangeVersion(this.stateDb.raw);
+    const generation = this.stateDb.raw.inTransaction ? undefined : {
+      dataVersion: this.stateDb.raw.pragma("data_version", { simple: true }) as number,
+      threadChanges,
+    };
+    if (
+      generation
+      && this.managedSubAgentCache?.dataVersion === generation.dataVersion
+      && this.managedSubAgentCache.threadChanges === generation.threadChanges
+    ) {
+      return this.managedSubAgentCache.threadKeys;
+    }
+
+    const rows = this.stateDb.raw
+      .prepare(
+        `SELECT thread_id, CASE WHEN json_valid(payload) THEN json_array(
+           json_extract(payload, '$.backend'), json_extract(payload, '$.threadId'),
+           json(CASE WHEN json_type(payload, '$.subAgents') = 'array' THEN
+             (SELECT json_group_array(CASE WHEN type = 'object' THEN json_object(
+               'backend', json_extract(value, '$.backend'),
+               'monitorThreadId', json_extract(value, '$.monitorThreadId')
+             ) ELSE value END) FROM json_each(payload, '$.subAgents'))
+           ELSE 'null' END)
+         ) END AS projection FROM threads
+         WHERE payload LIKE '%"monitorThreadId"%'`,
+      )
+      .all() as Array<{ thread_id: string; projection: string | null }>;
     const threadKeys = new Set<string>();
+    const parentSignatures = new Map<string, string>();
     for (const row of rows) {
       try {
         if (!row.projection) continue;
@@ -7024,29 +7080,56 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
           string,
           ThreadOverlayState["subAgents"],
         ];
-        for (const subAgent of subAgents ?? []) {
-          const threadId = subAgent.monitorThreadId?.trim();
-          const backend = subAgent.backend ?? parentBackend;
-          if (
-            !threadId
-            || (backend === parentBackend && threadId === parentThreadId)
-          ) {
-            continue;
-          }
-          threadKeys.add(buildThreadIdentityKey(backend, threadId));
-        }
+        const childKeys = managedSubAgentChildKeys({ backend: parentBackend, threadId: parentThreadId, subAgents });
+        if (childKeys.size > 0) parentSignatures.set(row.thread_id, managedSubAgentSignature(childKeys));
+        for (const childKey of childKeys) threadKeys.add(childKey);
       } catch {
         // A malformed unrelated overlay must not block navigation.
       }
     }
 
-    // Older instances can recreate native-worker cards for ordinary grouped
-    // handoffs after the one-time repair. The child-side fact takes precedence
-    // without editing the stale parent card or requiring a child overlay to exist.
-    for (const threadKey of threadKeys) {
-      if (groupedKeys.has(encodeThreadIdentityKeyForStorage(threadKey))) {
-        threadKeys.delete(threadKey);
+    // A supported older PwrAgent instance can still recreate a native-worker
+    // card for an ordinary grouped handoff after the v56 repair has run. Keep
+    // navigation correct without repeating that repair: resolve only the
+    // already-discovered child keys through the threads primary key and leave
+    // the stale parent card untouched.
+    const canonicalKeyByStorageKey = new Map(
+      Array.from(threadKeys, (threadKey) => [
+        encodeThreadIdentityKeyForStorage(threadKey),
+        threadKey,
+      ]),
+    );
+    const storageKeys = Array.from(canonicalKeyByStorageKey.keys());
+    const groupedStorageKeys = new Set<string>();
+    if (storageKeys.length > 0) {
+      const candidateRows = this.stateDb.raw
+        .prepare(
+          `SELECT thread_id, CASE WHEN json_valid(payload) THEN
+             json_extract(payload, '$.handoffOrigin.groupingMode')
+           END AS grouping_mode FROM threads
+           WHERE thread_id IN (SELECT value FROM json_each(?))`,
+        )
+        .all(JSON.stringify(storageKeys)) as Array<{
+          grouping_mode: unknown;
+          thread_id: string;
+        }>;
+      for (const candidate of candidateRows) {
+        if (candidate.grouping_mode === "subthread") {
+          groupedStorageKeys.add(candidate.thread_id);
+          const canonicalKey = canonicalKeyByStorageKey.get(
+            candidate.thread_id,
+          );
+          if (canonicalKey) {
+            threadKeys.delete(canonicalKey);
+          }
+        }
       }
+    }
+    if (generation) {
+      this.managedSubAgentCache = {
+        ...generation, threadKeys, parentSignatures,
+        referencedStorageKeys: new Set(storageKeys), groupedStorageKeys,
+      };
     }
     return threadKeys;
   }
@@ -7080,6 +7163,31 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     return results;
   }
 
+  /** Only advance the local stamp for a write whose navigation dependencies
+   * are unchanged. Unknown writes still invalidate through the existing thread
+   * counter; external commits still invalidate through data_version. Neither
+   * stamp may be adopted from a scan made inside a transaction.
+   */
+  private preservesManagedSubAgentRelationships(storageKey: string, state: ThreadOverlayState): boolean {
+    const cache = this.managedSubAgentCache;
+    if (!cache) return false;
+    // Invalid runtime values can serialize differently (e.g. NaN becomes null).
+    // Leave malformed writes to the durable reader rather than certify them
+    // using the pre-serialization object.
+    if (typeof state.backend !== "string" || typeof state.threadId !== "string") return false;
+    if (state.subAgents != null) {
+      if (!Array.isArray(state.subAgents)) return false;
+      for (const child of state.subAgents) {
+        if (!child || typeof child !== "object" || Array.isArray(child)
+          || (child.backend != null && typeof child.backend !== "string")
+          || (child.monitorThreadId != null && typeof child.monitorThreadId !== "string")) return false;
+      }
+    }
+    return (cache.parentSignatures.get(storageKey) ?? "[]") === managedSubAgentSignature(managedSubAgentChildKeys(state))
+      && (!cache.referencedStorageKeys.has(storageKey)
+        || cache.groupedStorageKeys.has(storageKey) === (state.handoffOrigin?.groupingMode === "subthread"));
+  }
+
   private putThread(threadKey: string, state: ThreadOverlayState): void {
     // Execution-mode queue fields are registry-memory state. PR auto-dispatch
     // pending state is durable too, but its transactional claim table is the
@@ -7090,19 +7198,31 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       prAutoDispatchPending: _prAutoDispatchPending,
       ...persistable
     } = state;
+    const storageKey = encodeThreadIdentityKeyForStorage(threadKey);
+    const cache = this.managedSubAgentCache;
+    const previousThreadChanges = cache ? sqliteThreadChangeVersion(this.stateDb.raw) : undefined;
     this.stateDb.raw
       .prepare(
         `INSERT OR REPLACE INTO threads(thread_id, directory_path, last_seen_at, dismissed_at, snoozed_until, payload)
          VALUES (?, ?, ?, ?, ?, ?)`,
       )
       .run(
-        encodeThreadIdentityKeyForStorage(threadKey),
+        storageKey,
         (persistable as Record<string, unknown>).directoryPath as string ?? null,
         persistable.lastSeenAt ?? null,
         persistable.dismissedAt ?? null,
         persistable.snoozedUntil ?? null,
         JSON.stringify(persistable),
       );
+    // The write already has these fields in memory. A status/title/usage write
+    // must not discard the complete relationship set and cause another scan.
+    // Never mask an earlier untracked write, a failed write, or extra writes
+    // made by another local trigger during this statement.
+    if (cache && cache.threadChanges === previousThreadChanges
+      && this.preservesManagedSubAgentRelationships(storageKey, persistable)) {
+      const threadChanges = sqliteThreadChangeVersion(this.stateDb.raw);
+      if (threadChanges === previousThreadChanges + 1) cache.threadChanges = threadChanges;
+    }
   }
 
   private getBackend(
