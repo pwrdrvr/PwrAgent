@@ -146,4 +146,28 @@ describe("PwrSnapConnectionPrompt", () => {
     expect(screen.getByText(detail)).toBeTruthy();
     expect(screen.queryByRole("switch")).toBeNull();
   });
+
+  // The mirror of PwrGit's inset-plate assertion: this asset is full-bleed, so
+  // scaling it would overshoot the box the card reserves.
+  it("leaves its icon unscaled", async () => {
+    const { container } = render(
+      <PwrSnapConnectionPrompt
+        backend="codex"
+        desktopApi={{
+          readPwrSnapConnectionStatus: async () => ({
+            connectionId: "pwrsnap" as const,
+            displayName: "PwrSnap" as const,
+            availability: "running" as const,
+            configured: true,
+          }),
+        }}
+        enabled={false}
+        onEnabledChange={vi.fn()}
+      />,
+    );
+
+    await screen.findByRole("switch");
+    const icon = container.querySelector(".mcp-connection__icon");
+    expect(icon?.classList.contains("mcp-connection__icon--inset-plate")).toBe(false);
+  });
 });

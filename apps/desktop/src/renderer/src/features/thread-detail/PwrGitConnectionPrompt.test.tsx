@@ -252,4 +252,25 @@ describe("PwrGitConnectionPrompt", () => {
       screen.queryByRole("button", { name: /Connect to PwrGit/i }),
     ).toBeNull();
   });
+
+  // PwrGit's brand asset sits on Apple's legacy 824-in-1024 template while
+  // PwrSnap's is full-bleed, so this card's icon carries the compensating
+  // modifier and PwrSnap's must not. The ratio itself is measured against
+  // both assets in scripts/pwrsuite-brand-icons.test.mjs.
+  it("marks its icon as the inset-plate asset", async () => {
+    const { container } = render(
+      <PwrGitConnectionPrompt
+        backend="codex"
+        desktopApi={{
+          readPwrGitConnectionStatus: async () => status({ configured: true }),
+        }}
+        enabled={false}
+        onEnabledChange={vi.fn()}
+      />,
+    );
+
+    await screen.findByRole("switch");
+    const icon = container.querySelector(".mcp-connection__icon");
+    expect(icon?.classList.contains("mcp-connection__icon--inset-plate")).toBe(true);
+  });
 });

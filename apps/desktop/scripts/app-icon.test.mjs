@@ -2,7 +2,6 @@
 // authored build/icon.png and, on a Mac with Xcode 26, compiles the Icon
 // Composer package through electron-builder's own helper so a package that
 // passes here is what packages at release time. See AGENTS.md "macOS app icon".
-import { createCanvas, loadImage } from "@napi-rs/canvas";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -10,6 +9,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { opaqueBounds, pixelAt, readPixels } from "./lib/icon-pixels.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const buildDir = resolve(here, "../build");
@@ -26,42 +26,6 @@ const ACCENT = [232, 116, 58];
  */
 function readManifest() {
   return JSON.parse(readFileSync(join(iconPackage, "icon.json"), "utf8"));
-}
-
-async function readPixels(source) {
-  const image = await loadImage(source);
-  const canvas = createCanvas(image.width, image.height);
-  const context = canvas.getContext("2d");
-  context.drawImage(image, 0, 0);
-  return {
-    width: image.width,
-    height: image.height,
-    data: context.getImageData(0, 0, image.width, image.height).data,
-  };
-}
-
-function pixelAt(pixels, x, y) {
-  const offset = (y * pixels.width + x) * 4;
-  return Array.from(pixels.data.subarray(offset, offset + 4));
-}
-
-/** Bounding box of pixels at or above the alpha threshold, or null when none is. */
-function opaqueBounds(pixels, threshold = 128) {
-  let left = pixels.width;
-  let top = pixels.height;
-  let right = -1;
-  let bottom = -1;
-  for (let y = 0; y < pixels.height; y += 1) {
-    for (let x = 0; x < pixels.width; x += 1) {
-      if (pixels.data[(y * pixels.width + x) * 4 + 3] < threshold) continue;
-      left = Math.min(left, x);
-      top = Math.min(top, y);
-      right = Math.max(right, x);
-      bottom = Math.max(bottom, y);
-    }
-  }
-  if (right < 0) return null;
-  return { x: left, y: top, width: right - left + 1, height: bottom - top + 1 };
 }
 
 /**
