@@ -88,7 +88,7 @@ export function registerCloudflareSetupIpc(): void {
           const confirm = await dialog.showMessageBox({ type: "question", title: "Connect this client", message: `Connect this profile to ${new URL(bundle.endpoint).hostname}?`, detail: "This installs the client certificate and enrolls this profile with the gateway in the encrypted setup file.", buttons: ["Cancel", "Connect"], defaultId: 0, cancelId: 0 });
           if (confirm.response !== 1) break;
           const settings = getDesktopSettingsService();
-          const storage = (await settings.readSettingsProjection()).secretStorage;
+          const storage = settings.readSecretStorageState();
           if (!storage.available || !storage.encrypted) throw new Error("Encrypted OS credential storage is required to import a client certificate.");
           const previous = await settings.resolveFederationCloudflareCredentials();
           try {
