@@ -1,3 +1,5 @@
+import { homedir } from "node:os";
+import { isAbsolute, parse, resolve } from "node:path";
 import type {
   AcpBackendId,
   BackendAcpSessionRuntimeState,
@@ -63,25 +65,38 @@ export class AcpThreadTitleGenerator implements ThreadTitleGenerator {
       };
     }
 
-    const client = await this.getClient(this.backend);
-    if (!client.sendControlPrompt) {
-      return {
-        status: "unavailable",
-        reason: `${this.backend}_title_generator_unavailable`,
-      };
-    }
-
     try {
       const parentSession = this.getSession(this.backend, threadId);
+      const cwd = parentSession?.cwd;
+      if (
+        !cwd
+        || !isAbsolute(cwd)
+        || resolve(cwd) === resolve(homedir())
+        || resolve(cwd) === parse(cwd).root
+      ) {
+        return {
+          status: "unavailable",
+          reason: `${this.backend}_title_generator_workspace_missing`,
+        };
+      }
+      const client = await this.getClient(this.backend);
+      if (!client.sendControlPrompt) {
+        return {
+          status: "unavailable",
+          reason: `${this.backend}_title_generator_unavailable`,
+        };
+      }
+      // Carry model selection, never the parent's permission mode or other
+      // runtime options (which can include auto-approval settings).
+      const model = resolveAcpTitleModel(parentSession?.acpRuntime);
       const helperSession = await client.startSession({
-        cwd: parentSession?.cwd,
-        executionMode: parentSession?.executionMode ?? "default",
+        cwd,
+        executionMode: "default",
+        approvalPolicy: "deny-all",
         title: "Name this thread",
-        acpRuntime: parentSession?.acpRuntime,
+        ...(model ? { acpRuntime: { currentModelId: model } } : {}),
         hidden: true,
-        ...(this.helperSession?.mcpServers
-          ? { mcpServers: this.helperSession.mcpServers }
-          : {}),
+        mcpServers: this.helperSession?.mcpServers ?? "none",
         ...(this.helperSession?.sessionMeta
           ? { sessionMeta: this.helperSession.sessionMeta }
           : {}),
@@ -96,10 +111,10 @@ export class AcpThreadTitleGenerator implements ThreadTitleGenerator {
         sessionId: helperSession.sessionId,
         prompt: params.prompt,
       });
-      const model = resolveAcpTitleModel(
+      const helperModel = resolveAcpTitleModel(
         helperSession.acpRuntime ?? parentSession?.acpRuntime,
       );
-      const usageModel = response.model ?? model;
+      const usageModel = response.model ?? helperModel;
       return {
         status: "ok",
         object: parseAcpTitleObject(response.text),
@@ -135,7 +150,9 @@ function parseAcpTitleObject(text: string): unknown {
     return parsed;
   }
 
-  return { title: trimmed };
+  // A prose answer means the helper performed the source task instead of
+  // naming it. Let validation reject it and use the prompt-derived fallback.
+  return {};
 }
 
 function stripMarkdownFence(text: string): string {
