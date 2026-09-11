@@ -8,13 +8,14 @@ import {
   resolveTokenUsagePriceUnavailableReason,
   type ThreadUsageLineRecord,
 } from "@pwragent/shared";
+import { THREAD_NAVIGATION_RELATIONSHIPS_SCHEMA } from "./thread-navigation-relationships";
 import { getNativeBinding } from "./native-binding.js";
 import {
   attachSqliteWriteMetrics,
   isSqliteWriteMetricsEnabled,
 } from "./sqlite-write-metrics.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 61;
+export const CURRENT_STATE_DB_USER_VERSION = 62;
 export const STATE_DB_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const STATE_DB_JOURNAL_SIZE_LIMIT_BYTES = 16 * 1024 * 1024;
 
@@ -1781,8 +1782,20 @@ export class StateDb {
           // row's existing cost. Token and boundary guards remain unchanged.
           db.exec("DROP TRIGGER IF EXISTS protect_finalized_thread_usage_update");
           db.exec(THREAD_USAGE_FINALIZATION_SCHEMA);
-          db.pragma(`user_version = ${CURRENT_STATE_DB_USER_VERSION}`);
+          db.pragma("user_version = 61");
         })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 62) {
+        db.transaction(() => {
+          // Recheck under the writer lock: another profile process may have
+          // migrated while this connection waited. Backfill and triggers must
+          // become visible atomically, with no untracked writer window.
+          if ((db.pragma("user_version", { simple: true }) as number) >= 62) return;
+          if (tableExists(db, "threads") && !tableExists(db, "thread_navigation_relationships")) {
+            db.exec(THREAD_NAVIGATION_RELATIONSHIPS_SCHEMA);
+          }
+          db.pragma(`user_version = ${CURRENT_STATE_DB_USER_VERSION}`);
+        }).immediate();
       }
       // Keep current-version databases converged without asking pre-v36 profiles
       // to install the unique index before the migration above removes duplicates.

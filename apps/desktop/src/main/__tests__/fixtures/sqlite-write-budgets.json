@@ -195,6 +195,20 @@
     "rowsChanged": 30,
     "statements": 30
   },
+  "managed-relationships-lifecycle": {
+    "commits": 5,
+    "note": "5 overlay writes: add/replace parent child, group/ungroup child, clear parent; no separate relationship commits",
+    "observedWalBytes": 119480,
+    "rowsChanged": 5,
+    "statements": 5
+  },
+  "managed-relationships-unrelated-writes": {
+    "commits": 60,
+    "note": "20 parent metadata, 20 ordinary overlay, 20 backend updates; zero relationship mutations or additional commits",
+    "observedWalBytes": 824000,
+    "rowsChanged": 60,
+    "statements": 60
+  },
   "managed-subagent-navigation-reads": {
     "commits": 0,
     "note": "10 cold and 10 warm managed-child/backend reads, with large parent and child overlays",

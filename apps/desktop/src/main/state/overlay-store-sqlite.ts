@@ -1,4 +1,3 @@
-import { sqliteThreadChangeVersion } from "./sqlite-thread-change-version";
 import { buildAppendPinRank, insertSubthreadIdAfter, sortSubthreadSummaries } from "@pwragent/shared";
 import path from "node:path";
 import { relativePinRanks } from "./relative-pin-order";
@@ -633,11 +632,6 @@ const NAVIGATION_UNREAD_BASELINE_KEY = "navigation-unread-baseline-v2";
 type NavigationUnreadBaseline = { seenUpdatedAt: Record<string, number>; knownThreadKeys: string[] };
 
 export class SqliteOverlayStore implements RemoteThreadTargetStore {
-  private managedSubAgentCache?: {
-    dataVersion: number;
-    threadChanges: number;
-    threadKeys: Set<string>;
-  };
   private remotePinNavigationCache?: { version: string; expires: number; rows: NavigationThreadSummary[] };
   private backendReadCache?: {
     payload: string;
@@ -7008,36 +7002,13 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
   }
 
   private listManagedSubAgentThreadKeys(): Set<string> {
-    // External connections remain conservatively invalidated by data_version.
-    // Local unrelated-table writes do not require scanning every thread payload.
-    // Capture before reading; never cache a transaction/savepoint result.
-    const threadChanges = sqliteThreadChangeVersion(this.stateDb.raw);
-    const generation = this.stateDb.raw.inTransaction ? undefined : {
-      dataVersion: this.stateDb.raw.pragma("data_version", { simple: true }) as number,
-      threadChanges,
-    };
-    if (
-      generation
-      && this.managedSubAgentCache?.dataVersion === generation.dataVersion
-      && this.managedSubAgentCache.threadChanges === generation.threadChanges
-    ) {
-      return this.managedSubAgentCache.threadKeys;
-    }
-
-    const rows = this.stateDb.raw
-      .prepare(
-        `SELECT CASE WHEN json_valid(payload) THEN json_array(
-           json_extract(payload, '$.backend'), json_extract(payload, '$.threadId'),
-           json(CASE WHEN json_type(payload, '$.subAgents') = 'array' THEN
-             (SELECT json_group_array(CASE WHEN type = 'object' THEN json_object(
-               'backend', json_extract(value, '$.backend'),
-               'monitorThreadId', json_extract(value, '$.monitorThreadId')
-             ) ELSE value END) FROM json_each(payload, '$.subAgents'))
-           ELSE 'null' END)
-         ) END AS projection FROM threads
-         WHERE payload LIKE '%"monitorThreadId"%'`,
-      )
-      .all() as Array<{ projection: string | null }>;
+    // One statement reads both sides from the same SQLite snapshot. No cache
+    // generation is needed: persistent triggers keep this sparse adjacency
+    // table current for local writes, older instances and external connections.
+    const rows = this.stateDb.raw.prepare(
+      "SELECT thread_id, managed_children AS projection, grouped_subthread FROM thread_navigation_relationships",
+    ).all() as Array<{ thread_id: string; projection: string | null; grouped_subthread: number }>;
+    const groupedKeys = new Set(rows.filter((row) => row.grouped_subthread === 1).map((row) => row.thread_id));
     const threadKeys = new Set<string>();
     for (const row of rows) {
       try {
@@ -7069,43 +7040,13 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       }
     }
 
-    // A supported older PwrAgent instance can still recreate a native-worker
-    // card for an ordinary grouped handoff after the v56 repair has run. Keep
-    // navigation correct without repeating that repair: resolve only the
-    // already-discovered child keys through the threads primary key and leave
-    // the stale parent card untouched.
-    const canonicalKeyByStorageKey = new Map(
-      Array.from(threadKeys, (threadKey) => [
-        encodeThreadIdentityKeyForStorage(threadKey),
-        threadKey,
-      ]),
-    );
-    const storageKeys = Array.from(canonicalKeyByStorageKey.keys());
-    if (storageKeys.length > 0) {
-      const candidateRows = this.stateDb.raw
-        .prepare(
-          `SELECT thread_id, CASE WHEN json_valid(payload) THEN
-             json_extract(payload, '$.handoffOrigin.groupingMode')
-           END AS grouping_mode FROM threads
-           WHERE thread_id IN (SELECT value FROM json_each(?))`,
-        )
-        .all(JSON.stringify(storageKeys)) as Array<{
-          grouping_mode: unknown;
-          thread_id: string;
-        }>;
-      for (const candidate of candidateRows) {
-        if (candidate.grouping_mode === "subthread") {
-          const canonicalKey = canonicalKeyByStorageKey.get(
-            candidate.thread_id,
-          );
-          if (canonicalKey) {
-            threadKeys.delete(canonicalKey);
-          }
-        }
+    // Older instances can recreate native-worker cards for ordinary grouped
+    // handoffs after the one-time repair. The child-side fact takes precedence
+    // without editing the stale parent card or requiring a child overlay to exist.
+    for (const threadKey of threadKeys) {
+      if (groupedKeys.has(encodeThreadIdentityKeyForStorage(threadKey))) {
+        threadKeys.delete(threadKey);
       }
-    }
-    if (generation) {
-      this.managedSubAgentCache = { ...generation, threadKeys };
     }
     return threadKeys;
   }
