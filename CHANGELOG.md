@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.1.0-beta.1 - 2026-09-11
+
+This promotes the 1.1 train to the Beta Latest track after the alpha releases.
+
+- Remote Threads - Restored remote project and thread displays, preserved mounted pull requests while selecting threads, and nested newly created threads beneath the thread that created them.
+- Navigation - Loaded visible navigation even when the window lacks focus, clarified selected unpinned directory threads, and kept thread breadcrumbs anchored to the primary project.
+- Composer and Launchpad - Kept send controls visible beneath PwrSuite cards, prevented attachment-tooltip clipping, and retained tooltips through mount animations.
+- Agent Reliability - Serialized Codex history recovery and suppressed Grok update notices when that runtime is disabled.
+- Performance - Retained transcript resize subscriptions and indexed pending-spend-alert recovery to reduce repeated background work.
+- Security - Patched Hono and js-yaml vulnerabilities.
+- Minor - Unified PwrGit/PwrSnap connection icon sizing, improved sidebar paging controls, removed a startup warning from work summaries, and normalized network-stat precision.
+
 ## v1.1.0-alpha.5 - 2026-09-08
 
 - PwrGit - Added PwrGit as a connection option when starting a new MCP-backed thread.
