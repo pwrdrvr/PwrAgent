@@ -244,7 +244,7 @@ describe("PwrSnapConnectionService", () => {
 
     expect(settings.clearPwrSnapMcpCredential).not.toHaveBeenCalled();
     await expect(service.readStatus()).resolves.toMatchObject({
-      availability: "running",
+      availability: "not_installed",
       configured: true,
     });
   });

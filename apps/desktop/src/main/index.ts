@@ -92,6 +92,7 @@ import {
   disposeMcpConnectionIpcHandlers,
   registerMcpConnectionIpcHandlers,
 } from "./ipc/mcp-connections";
+import { getPwrGitConnectionService } from "./mcp-connections/pwrgit-connection-service";
 import { getPwrSnapConnectionService } from "./mcp-connections/pwrsnap-connection-service";
 import {
   disposePreloadLogIpcHandlers,
@@ -745,7 +746,9 @@ const runMainProcessShutdownBarrier = createShutdownBarrier({
     {
       name: "mcp-connections",
       timeoutMs: MCP_CONNECTION_SHUTDOWN_TIMEOUT_MS,
-      run: async () => await getPwrSnapConnectionService().close(),
+      run: async () => {
+        await Promise.all([getPwrSnapConnectionService().close(), getPwrGitConnectionService().close()]);
+      },
     },
   ],
 });

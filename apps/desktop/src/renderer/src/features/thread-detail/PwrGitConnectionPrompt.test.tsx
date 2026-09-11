@@ -159,25 +159,15 @@ describe("PwrGitConnectionPrompt", () => {
     await waitFor(() => expect(onEnabledChange).toHaveBeenCalledWith(true));
   });
 
-  it("offers the per-thread switch once connected even while PwrGit is closed", async () => {
-    // The server runs under PwrAgent's runtime from a policy file; the PwrGit
-    // window is only needed to pair, so "installed" is enough once paired.
+  it("offers to open a paired PwrGit when its HTTP endpoint is unavailable", async () => {
     render(
-      <PwrGitConnectionPrompt
-        backend="codex"
-        desktopApi={{
-          readPwrGitConnectionStatus: async () =>
-            status({ availability: "installed", configured: true }),
-        }}
-        enabled={false}
-        onEnabledChange={vi.fn()}
-      />,
+      <PwrGitConnectionPrompt backend="codex"
+        desktopApi={{ readPwrGitConnectionStatus: async () => status({ availability: "installed", configured: true }) }}
+        enabled={false} onEnabledChange={vi.fn()} />,
     );
-
-    expect(
-      await screen.findByRole("switch", { name: /Use PwrGit in this thread/i }),
-    ).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Open PwrGit" })).toBeNull();
+    expect(await screen.findByRole("button", { name: "Open PwrGit" })).toBeTruthy();
+    expect(screen.queryByRole("switch")).toBeNull();
+    expect(screen.getByText(/PwrAgent authorization saved/)).toBeTruthy();
   });
 
   it("does not repeat the status instruction as an error after a failed connect", async () => {

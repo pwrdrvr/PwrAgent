@@ -82,6 +82,8 @@ extraResources:
     to: pwragent-app-icon.png
   - from: src/renderer/src/assets/pwrsnap/pwrsnap-app-icon.png
     to: pwrsnap-app-icon.png
+  - from: src/renderer/src/assets/pwrgit/pwrgit-app-icon.png
+    to: pwrgit-app-icon.png
   - from: build/bundled-agents
     to: agents
   - from: build/bundled-tools/ripgrep

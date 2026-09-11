@@ -26,6 +26,7 @@ export function PwrSnapConnectionPrompt(props: {
     if (!props.desktopApi?.readPwrSnapConnectionStatus) return;
     try {
       setStatus(await props.desktopApi.readPwrSnapConnectionStatus());
+      setError(undefined);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     }
@@ -149,6 +150,12 @@ export function PwrSnapConnectionPrompt(props: {
           PwrSnap captures and organizes screenshots, then lets your agents find,
           edit, and export the right image without digging through folders.
         </p>
+        {status ? (
+          <p className="mcp-connection__detail">
+            {configured ? "PwrAgent authorization saved" : "Not connected through PwrAgent"}
+            {configured ? ". Enable it for each thread that needs access." : ". Codex and other agents’ own connections are separate."}
+          </p>
+        ) : null}
         {status?.detail ? (
           <p className="mcp-connection__detail">{status.detail}</p>
         ) : null}

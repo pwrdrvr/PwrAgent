@@ -21,6 +21,8 @@ import {
   readMcpServerHealth,
 } from "./mcp-server-health";
 
+import { PwrSuiteConnectionsSettings } from "./PwrSuiteConnectionsSettings";
+
 type ActionNotice = {
   kind: "error" | "info" | "success" | "working";
   text: string;
@@ -524,8 +526,8 @@ export function PluginsSettings(props: {
     <SettingsSectionStack paneId="plugins" aria-label="Plugin settings">
       <SettingsPanelHead
         eyebrow="Plugins"
-        title="Codex MCP servers"
-        help="MCP servers give Codex threads extra tools. They are configured per Codex profile — PwrAgent inspects and repairs the profile it is running."
+        title="MCP connections"
+        help="Manage PwrAgent connections shared with Codex and ACP agents, and the separate MCP servers configured in your Codex profile."
         action={
           <button
             className="button button--secondary"
@@ -542,9 +544,11 @@ export function PluginsSettings(props: {
         }
       />
 
+      <PwrSuiteConnectionsSettings desktopApi={props.desktopApi} />
+
       <SettingsSection
-        eyebrow="Plugins"
-        title="MCP servers"
+        eyebrow="Codex only"
+        title="Codex MCP servers"
         sectionId="mcp-servers"
         description="Sign-in replaces expired OAuth credentials. Remove deletes only this server's configuration from the selected Codex profile."
         chip={

@@ -13849,10 +13849,12 @@ script = "echo setup"
   });
 
   it("starts a thread that enabled PwrGit before it was connected", async () => {
-    // PwrGit registers nothing without a credential, the way PwrSnap keeps
-    // starting turns after a revoked session; the thread must not fail.
+    // Authorization is enforced when the agent calls the bridge.
     const codexClient = new MockBackendClient({ threads: [] });
-    const registerBridge = vi.fn(async () => undefined);
+    const registerBridge = vi.fn(async () => ({
+      server: { name: "pwrgit", command: process.execPath, args: ["bridge.js"], env: {} },
+      bindThread: vi.fn(), revoke: vi.fn(),
+    }));
     const registry = new DesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
@@ -13866,10 +13868,9 @@ script = "echo setup"
     });
 
     expect(registerBridge).toHaveBeenCalledWith("pwrgit", undefined);
-    expect(
-      (codexClient.lastStartThreadParams?.config as { mcp_servers?: unknown })
-        ?.mcp_servers,
-    ).toBeUndefined();
+    const servers = (codexClient.lastStartThreadParams?.config as { mcp_servers: Record<string, unknown> }).mcp_servers;
+    expect(Object.keys(servers)[0]).toMatch(/^pwragent_pwrgit_/u);
+    expect(Object.values(servers)).toMatchObject([{ command: process.execPath }]);
     await registry.close();
   });
 
