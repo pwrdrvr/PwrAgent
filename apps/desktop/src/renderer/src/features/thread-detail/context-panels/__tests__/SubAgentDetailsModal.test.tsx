@@ -136,6 +136,22 @@ describe("SubAgentDetailsModal", () => {
     expect(screen.getByText("gpt-5.6-luna · medium")).toBeInTheDocument();
   });
 
+  it.each(["monitor-1", "review:turn-1"])(
+    "keeps managed Codex worker %s details without offering a transcript",
+    (monitorId) => {
+      const openSubAgentTranscriptWindow = vi.fn();
+      (window as Window & { pwragent?: unknown }).pwragent = {
+        openSubAgentTranscriptWindow,
+      };
+      renderModal({ monitorId, status: "success", lastMessage: "Validation passed." });
+
+      expect(screen.queryByRole("button", { name: "Open transcript" })).not.toBeInTheDocument();
+      expect(screen.getByText(LONG_TASK)).toBeInTheDocument();
+      expect(screen.getByText("Validation passed.")).toBeInTheDocument();
+      expect(openSubAgentTranscriptWindow).not.toHaveBeenCalled();
+    },
+  );
+
   it("opens a native child transcript on the instance that owns it", () => {
     const openSubAgentTranscriptWindow = vi.fn(async () => ({ opened: true as const }));
     (window as Window & { pwragent?: unknown }).pwragent = {

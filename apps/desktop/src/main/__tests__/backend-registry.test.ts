@@ -26364,7 +26364,7 @@ command = "pnpm dev"
     expect(codexClient.lastStartThreadParams).toMatchObject({
       approvalPolicy: "never",
       cwd: "/repo/worktree",
-      ephemeral: false,
+      ephemeral: true,
       fastMode: true,
       model: "gpt-5.5",
       reasoningEffort: "high",
@@ -26792,7 +26792,7 @@ command = "pnpm dev"
     expect(codexClient.lastStartReviewParams).toBeUndefined();
     expect(codexClient.lastStartThreadParams).toMatchObject({
       cwd: "/repo/selected",
-      ephemeral: false,
+      ephemeral: true,
     });
     expect(
       codexClient.lastStartThreadParams?.codexEnvironmentRuntime,
@@ -26865,7 +26865,7 @@ command = "pnpm dev"
     expect(codexClient.lastStartThreadParams).toMatchObject({
       cwd: "/remote/selected",
       codexEnvironmentRuntime: remoteRuntime,
-      ephemeral: false,
+      ephemeral: true,
     });
     expect(codexClient.lastStartTurnParams).toMatchObject({
       threadId: "remote-project-review",
@@ -36419,7 +36419,7 @@ script = "printf setup"
     expect(codexClient.lastStartReviewParams).toBeUndefined();
     expect(codexClient.lastStartThreadParams).toMatchObject({
       cwd: "/repo/pwragent",
-      ephemeral: false,
+      ephemeral: true,
     });
     expect(codexClient.lastStartTurnParams).toMatchObject({
       threadId: "thread-1",
@@ -42745,7 +42745,7 @@ script = "printf setup"
     expect(String(payload.parentAgentGuidance)).toContain("Do not sleep");
     expect(String(payload.parentAgentGuidance)).not.toContain("make at most one startup observation");
     expect(codexClient.lastStartThreadParams).toMatchObject({
-      ephemeral: false,
+      ephemeral: true,
       model: "gpt-5.6-luna",
       reasoningEffort: "medium",
       approvalPolicy: "on-request",
@@ -42988,7 +42988,7 @@ script = "printf setup"
 
     expect(response).toMatchObject({ success: true });
     expect(codexClient.lastStartThreadParams).toMatchObject({
-      ephemeral: false,
+      ephemeral: true,
       model: "gpt-5.6-luna",
     });
     expect(codexClient.lastStartThreadParams?.threadSource).toBe("subagent");
@@ -43065,7 +43065,7 @@ script = "printf setup"
       approvalPolicy: "never",
       codexEnvironmentRuntime,
       cwd: "/repo/app",
-      ephemeral: false,
+      ephemeral: true,
       sandbox: "danger-full-access",
     });
     expect(codexClient.lastStartThreadParams?.threadSource).toBe("subagent");
