@@ -67,6 +67,24 @@ describe("DesktopSettingsService", () => {
     expect(service.readCodexProfiles().profiles[0]?.authenticationRequired).toBeUndefined();
   });
 
+  it("reads secret storage availability without loading the full Settings projection or secrets", () => {
+    const secretStore = new MemoryDesktopSecretStore();
+    const service = new DesktopSettingsService({
+      configPath: path.join(createTempRoot(), "config.toml"),
+      env: {},
+      secretStore,
+    });
+    const projection = vi.spyOn(service, "readSettingsProjection");
+    const getSecret = vi.spyOn(secretStore, "getSecret");
+    const hasSecret = vi.spyOn(secretStore, "hasSecret");
+    const state = service.readSecretStorageState();
+    expect(state).toEqual({ available: true, backend: "memory", encrypted: false });
+    expect(state).not.toBe(secretStore.describe());
+    expect(projection).not.toHaveBeenCalled();
+    expect(getSecret).not.toHaveBeenCalled();
+    expect(hasSecret).not.toHaveBeenCalled();
+  });
+
   it("persists an explicit federation compression opt-out in the settings snapshot", async () => {
     const service = new DesktopSettingsService({
       configPath: path.join(createTempRoot(), "config.toml"),
