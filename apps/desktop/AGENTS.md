@@ -91,6 +91,13 @@ summary.
 
 - Interactive Star Map children must guard canvas pan, wheel, and keyboard
   handlers before shipping.
+- The map publishes its on-screen state to the main process for the
+  `read_star_map_view` Agent tool. Keep that snapshot in memory only and keep
+  it built inside the publisher's throttle — it sits on the drag path, so the
+  input it is given must not build collections either. Read
+  [../../docs/star-map-manager.md](../../docs/star-map-manager.md) before
+  changing the snapshot shape, the manager thread's identity, or how its
+  instructions are delivered.
 
 ### Full Access Escalation
 

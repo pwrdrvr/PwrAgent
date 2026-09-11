@@ -522,3 +522,65 @@ export type StarMapIntakePhase =
   | "needs_disambiguation"
   | "done"
   | "failed";
+
+/**
+ * The Star Map manager thread: one long-lived thread per instance that the
+ * operator talks to about the map itself.
+ *
+ * It is an ordinary thread — it gets the same PwrAgent tool catalog every
+ * thread gets, including `mutate_thread` and the orchestration tools, plus
+ * `read_star_map_view`, which lets it see what is on screen. What makes it
+ * the manager is where it is remembered and the persona it starts with, not
+ * a privileged execution path.
+ */
+export type OpenStarMapManagerRequest = {
+  /** Start fresh rather than reopening the remembered thread. */
+  reset?: boolean;
+};
+
+export type OpenStarMapManagerResponse =
+  | {
+      status: "ready";
+      backend: string;
+      threadId: string;
+      /** False when the remembered thread was reopened. */
+      created: boolean;
+    }
+  | {
+      status: "failed";
+      error: string;
+    };
+
+/** Title given to a freshly created manager thread. */
+export const STAR_MAP_MANAGER_THREAD_TITLE = "Star Map manager";
+
+export const STAR_MAP_MANAGER_AGENT_NAME = "Star Map manager";
+
+/**
+ * The manager's persona. Deliberately narrow: it exists to act on what the
+ * operator can see, and the failure mode that matters is acting on the
+ * wrong thread — so it is told to look before it acts, and to say what it
+ * is about to touch when a request covers more than one card.
+ */
+export const STAR_MAP_MANAGER_AGENT_INSTRUCTIONS = [
+  "You are the PwrAgent Star Map manager. The operator talks to you from a",
+  "chat card floating over the Star Map — a view of every thread across",
+  "their federated PwrAgent instances, drawn as cards grouped into labelled",
+  "clouds around each instance.",
+  "",
+  "Call read_star_map_view before acting on anything the operator points at.",
+  "References like \"that thread\", \"this cloud\", \"the selected cards\" or",
+  "\"the ones like it\" can only be resolved against the live view: it reports",
+  "the clouds and their membership, which cards are drawn versus folded",
+  "behind a `+N more` chip, what the operator has selected, and the backend,",
+  "threadId and instanceId each tool call needs.",
+  "",
+  "Act with the PwrAgent tools you already have — mutate_thread to retitle,",
+  "the orchestration tools to steer, move or review.",
+  "",
+  "When a request covers several threads, say which ones you are about to",
+  "change and what the change is before you make it. Renaming twelve threads",
+  "the operator did not mean is far worse than asking once. Threads on other",
+  "instances are real threads on someone's machine: name the instance when",
+  "you are about to touch one.",
+].join("\n");

@@ -368,6 +368,12 @@ describe("action → permission lookup tables", () => {
     expect(
       permissionForDynamicTool("messaging_context", "attach_thread_here"),
     ).toBe("thread.resume");
+    // star_map: reading the view is a read across other threads; a
+    // screenshot of the operator's screen is more than that, and a
+    // messaging-originated turn can relay whatever it sees to its channel.
+    expect(
+      permissionForDynamicTool("star_map", "read_star_map_view"),
+    ).toBe("tools.thread_inspection");
   });
 
   it("gates mutate_thread per field, at parity with the status buttons", () => {

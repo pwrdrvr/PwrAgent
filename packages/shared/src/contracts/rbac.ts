@@ -697,7 +697,8 @@ export type MessagingDynamicToolCategory =
   | "thread_inspection"
   | "app_management"
   | "thread_orchestration"
-  | "messaging_context";
+  | "messaging_context"
+  | "star_map";
 
 /**
  * Map a dynamic-tool call to the permission a messaging-originated turn must
@@ -752,6 +753,8 @@ export function permissionForDynamicTool(
         return "message.reply";
       }
       return undefined;
+    case "star_map":
+      return "tools.thread_inspection";
     default:
       return undefined;
   }
