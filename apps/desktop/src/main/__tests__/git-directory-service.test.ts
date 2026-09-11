@@ -1479,4 +1479,41 @@ describe("GitDirectoryService", () => {
       workMode: "local",
     });
   });
+
+  /**
+   * The status is the per-directory Git read that is already cached,
+   * persisted and federated, so the one cross-machine fact about a
+   * checkout rides along with it. See
+   * `NavigationDirectoryGitStatus.originRepository`.
+   */
+  it("reports the origin remote as a normalized repository identity", async () => {
+    const repoDir = await createFixtureRepo();
+    cleanupPaths.push(repoDir);
+    runGit(repoDir, [
+      "remote",
+      "add",
+      "origin",
+      "git@github.com:PwrDrvr/PwrAgent.git",
+    ]);
+    const service = new GitDirectoryService({ runGit: runGitAsync });
+
+    // Host, owner and repo, without the transport, the `.git`, or the
+    // casing — so an SSH clone here and an HTTPS clone on another machine
+    // resolve to the same string.
+    await expect(service.readDirectoryStatus({ path: repoDir })).resolves.toMatchObject({
+      originRepository: "github.com/pwrdrvr/pwragent",
+    });
+  });
+
+  it("omits the repository identity for a checkout with no origin", async () => {
+    const repoDir = await createFixtureRepo();
+    cleanupPaths.push(repoDir);
+    const service = new GitDirectoryService({ runGit: runGitAsync });
+
+    // Absent rather than empty: a row with no origin falls back to its
+    // folder name for pooling, and "" is not a folder name.
+    const status = await service.readDirectoryStatus({ path: repoDir });
+    expect(status).toBeDefined();
+    expect(status?.originRepository).toBeUndefined();
+  });
 });

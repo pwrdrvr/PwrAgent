@@ -463,5 +463,130 @@ it("keeps project mass and off-page bodies stable while another row page arrives
     { descriptorsByInstance: descriptors, now: 100 });
   expect(first.map((project) => [project.key, project.mass, project.totalThreadCount]))
     .toEqual(next.map((project) => [project.key, project.mass, project.totalThreadCount]));
-  expect(first.find((project) => project.key === "off-page")?.threads).toEqual([]);
+  expect(first.find((project) => project.label === "off-page")?.threads).toEqual([]);
+});
+
+/**
+ * A project's key used to be one machine's absolute path, so the lens
+ * drew the same repository once per machine that held it — and twice on a
+ * machine holding two clones. See `starMapProjectIdentity`.
+ */
+describe("pooling one repository across instances", () => {
+  const descriptor = (params: {
+    key: string;
+    label: string;
+    repositoryKey?: string;
+    total: number;
+  }): NavigationDirectoryRow => ({
+    key: params.key,
+    label: params.label,
+    kind: "directory",
+    ...(params.repositoryKey ? { repositoryKey: params.repositoryKey } : {}),
+    counts: { total: params.total, active: 0, unread: 0, review: 0 },
+    pinnedRootCount: 0,
+    unpinnedRootCount: params.total,
+    launchpadPresent: false,
+    latestUpdatedAt: 100,
+  });
+
+  it("pools two checkouts of one repository into one body", () => {
+    const here = thread({ id: "here", repoPath: "/Users/h/pwrdrvr/PwrAgnt" });
+    const there = thread({ id: "there", repoPath: "/Users/h/src/PwrAgent" });
+    const projects = groupThreadsByProject(
+      new Map([["mini", [here]], ["laptop", [there]]]),
+      {
+        now: 100,
+        descriptorsByInstance: new Map([
+          ["mini", [descriptor({
+            key: threadProjectKey(here), label: "PwrAgnt", total: 38,
+            repositoryKey: "github.com/pwrdrvr/pwragent",
+          })]],
+          ["laptop", [descriptor({
+            key: threadProjectKey(there), label: "PwrAgent", total: 3,
+            repositoryKey: "github.com/pwrdrvr/pwragent",
+          })]],
+        ]),
+      },
+    );
+
+    expect(projects).toHaveLength(1);
+    expect(projects[0].totalThreadCount).toBe(41);
+    expect(projects[0].threads.map((entry) => entry.id).sort()).toEqual([
+      "here",
+      "there",
+    ]);
+    // Folder names disagree, so the body wears the one the most work sits
+    // under rather than whichever instance answered first.
+    expect(projects[0].label).toBe("PwrAgnt");
+    // Each member keeps its OWN directory key: that is what its instance
+    // pages against, and the two machines have different paths.
+    expect(projects[0].members).toEqual([
+      { instanceId: "laptop", directoryKey: threadProjectKey(there) },
+      { instanceId: "mini", directoryKey: threadProjectKey(here) },
+    ]);
+  });
+
+  it("keeps two different repositories apart when they share a folder name", () => {
+    const mine = thread({ id: "mine", repoPath: "/Users/h/work/machine-configs" });
+    const theirs = thread({ id: "theirs", repoPath: "/Users/h/side/machine-configs" });
+    const projects = groupThreadsByProject(
+      new Map([["mini", [mine]], ["laptop", [theirs]]]),
+      {
+        now: 100,
+        descriptorsByInstance: new Map([
+          ["mini", [descriptor({
+            key: threadProjectKey(mine), label: "machine-configs", total: 3,
+            repositoryKey: "github.com/pwrdrvr/machine-configs",
+          })]],
+          ["laptop", [descriptor({
+            key: threadProjectKey(theirs), label: "machine-configs", total: 2,
+            repositoryKey: "gitlab.com/someone/machine-configs",
+          })]],
+        ]),
+      },
+    );
+
+    // Both know their remote and the remotes disagree. Merging on the
+    // folder name here would pool two unrelated repositories under one
+    // body — the folder-name fallback is only for rows that have no
+    // origin to be believed about.
+    expect(projects).toHaveLength(2);
+  });
+
+  it("falls back to the folder name when neither side knows its origin", () => {
+    const here = thread({ id: "here", repoPath: "/Users/h/.pwragent/projects/aaa" });
+    const there = thread({ id: "there", repoPath: "/Users/h/.pwragent/projects/bbb" });
+    const projects = groupThreadsByProject(
+      new Map([["mini", [here]], ["laptop", [there]]]),
+      {
+        now: 100,
+        descriptorsByInstance: new Map([
+          ["mini", [descriptor({ key: threadProjectKey(here), label: "Workspaces", total: 2 })]],
+          ["laptop", [descriptor({ key: threadProjectKey(there), label: "Workspaces", total: 28 })]],
+        ]),
+      },
+    );
+
+    expect(projects).toHaveLength(1);
+    expect(projects[0].label).toBe("Workspaces");
+    expect(projects[0].totalThreadCount).toBe(30);
+  });
+
+  it("keys on the owner's own path when no instance sent geometry", () => {
+    // The degraded path: a peer too old to send `repositoryKey`, or a
+    // window with no compact geometry yet. Pooling must not invent a
+    // merge it cannot justify, so a thread stays under its own path.
+    const here = thread({ id: "here", repoPath: "/Users/h/pwrdrvr/PwrAgnt" });
+    const there = thread({ id: "there", repoPath: "/Users/h/src/PwrAgent" });
+    const projects = groupThreadsByProject(
+      new Map([["mini", [here]], ["laptop", [there]]]),
+      { now: 100 },
+    );
+
+    expect(projects).toHaveLength(2);
+    expect(projects.map((project) => project.key).sort()).toEqual([
+      threadProjectKey(here),
+      threadProjectKey(there),
+    ]);
+  });
 });

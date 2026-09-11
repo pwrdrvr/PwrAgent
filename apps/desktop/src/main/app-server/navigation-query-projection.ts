@@ -358,6 +358,9 @@ function buildDirectoryRows(params: {
       kind: directory.kind,
       label: directory.label,
       ...(directory.path ? { path: directory.path } : {}),
+      ...(directory.gitStatus?.originRepository
+        ? { repositoryKey: directory.gitStatus.originRepository }
+        : {}),
       ...(directory.localAvailability
         ? { localAvailability: directory.localAvailability }
         : {}),
@@ -378,10 +381,32 @@ function buildDirectoryRows(params: {
   });
 }
 
+/**
+ * Repository identity per directory path, from the cached Git status.
+ *
+ * A row's `key` is an absolute path, so it names a checkout on ONE
+ * machine. The Star Map's Projects lens pools a whole federation, and
+ * keying its bodies on the path drew the same repository once per machine
+ * (and twice on a machine holding two clones of it). The origin is the
+ * only part of a checkout that reads the same everywhere.
+ */
+function repositoryKeysByPath(
+  index: NavigationQueryIndex,
+): Map<string, string> {
+  const keys = new Map<string, string>();
+  for (const directory of index.directories) {
+    const path = directory.path?.trim();
+    const repository = directory.gitStatus?.originRepository;
+    if (path && repository) keys.set(path, repository);
+  }
+  return keys;
+}
+
 /** Project geometry counts primary membership once, independent of loaded cards. */
 function buildProjectGeometry(index: NavigationQueryIndex): NavigationDirectoryRow[] {
   const projects = new Map<string, NavigationDirectoryRow>();
   const launchpads = new Set(index.directories.filter((directory) => directory.launchpad).map((directory) => directory.key));
+  const repositoryKeys = repositoryKeysByPath(index);
   const seen = new Set<string>();
   for (const thread of index.threads) {
     if (!isStarMapOwnerThread(thread) || seen.has(threadKey(thread))) continue;
@@ -392,11 +417,18 @@ function buildProjectGeometry(index: NavigationQueryIndex): NavigationDirectoryR
     let project = projects.get(key);
     if (!project) {
       const segments = (descriptor?.path ?? primary?.path)?.split(/[\\/]/).filter(Boolean);
+      // The collapsed path first, then the thread's own: a worktree shares
+      // its repository's remote, so either answers the same question and
+      // only one of them may have a cached status.
+      const repositoryKey =
+        (descriptor?.path ? repositoryKeys.get(descriptor.path) : undefined)
+        ?? (primary?.path ? repositoryKeys.get(primary.path) : undefined);
       project = {
         key,
         kind: descriptor?.kind ?? "unlinked",
         label: descriptor ? (descriptor.label !== primary?.label ? descriptor.label : segments?.at(-1) ?? descriptor.label) : "No project",
         path: descriptor?.path,
+        ...(repositoryKey ? { repositoryKey } : {}),
         counts: { total: 0, active: 0, unread: 0, review: 0 },
         pinnedRootCount: 0,
         unpinnedRootCount: 0,

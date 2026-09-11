@@ -92,8 +92,10 @@ import {
 import { buildFederationTopology } from "./star-map-topology";
 import {
   groupThreadsByProject,
+  starMapProjectIdentity,
   threadProjectKey,
   projectThreadOwner,
+  type StarMapProjectMember,
 } from "./star-map-projects";
 import {
   computeProjectLayout,
@@ -1564,29 +1566,43 @@ export function StarMapScreen(props: StarMapScreenProps) {
     [toggleClusterExpandedIn],
   );
 
-  const projectPageOwners = useMemo(() => {
-    const owners = new Map<string, string[]>();
+  /**
+   * Which of a project's members still have cards to hand over, and which
+   * need a rebaseline — keyed by the project's fleet-wide identity.
+   *
+   * A body pools the same repository from every instance that has it, so
+   * "load more" is a fan-out: each member is paged on the instance that
+   * owns it, addressed by THAT instance's own directory key. Keying these
+   * by the project key alone worked only while the two were the same
+   * string.
+   */
+  const projectPageMembers = useMemo(() => {
+    const members = new Map<string, StarMapProjectMember[]>();
     for (const [instanceId, descriptors] of projectDescriptorsByInstance) {
       if (remote.unreachableInstanceIds.has(instanceId)) continue;
       for (const descriptor of descriptors) {
         if (!projectPages.state.resources.get(starMapProjectResource(instanceId, descriptor.key))?.state.page?.nextCursor) continue;
-        const instances = owners.get(descriptor.key) ?? [];
-        if (!instances.includes(instanceId)) instances.push(instanceId);
-        owners.set(descriptor.key, instances);
+        const identity = starMapProjectIdentity(descriptor);
+        const pooled = members.get(identity) ?? [];
+        if (!pooled.some((member) => member.instanceId === instanceId && member.directoryKey === descriptor.key)) {
+          pooled.push({ instanceId, directoryKey: descriptor.key });
+        }
+        members.set(identity, pooled);
       }
     }
-    return owners;
+    return members;
   }, [projectDescriptorsByInstance, projectPages.state, remote.unreachableInstanceIds]);
-  const projectRecoveryOwners = useMemo(() => {
-    const owners = new Map<string, string[]>();
+  const projectRecoveryMembers = useMemo(() => {
+    const members = new Map<string, StarMapProjectMember[]>();
     for (const [instanceId, descriptors] of projectDescriptorsByInstance) {
       if (remote.unreachableInstanceIds.has(instanceId)) continue;
       for (const descriptor of descriptors) {
         if (!projectPages.state.resources.get(starMapProjectResource(instanceId, descriptor.key))?.state.rebaselineRequired) continue;
-        owners.set(descriptor.key, [...owners.get(descriptor.key) ?? [], instanceId]);
+        const identity = starMapProjectIdentity(descriptor);
+        members.set(identity, [...members.get(identity) ?? [], { instanceId, directoryKey: descriptor.key }]);
       }
     }
-    return owners;
+    return members;
   }, [projectDescriptorsByInstance, projectPages.state, remote.unreachableInstanceIds]);
   const [projectGeometryTime] = useState(Date.now);
   const projects = useMemo(
@@ -5050,20 +5066,20 @@ export function StarMapScreen(props: StarMapScreenProps) {
                     label={project.label}
                     projectKey={project.key}
                     threadCount={project.totalThreadCount ?? project.threads.length}
-                    onRestartThreads={projectRecoveryOwners.has(project.key)
-                      ? () => { for (const owner of projectRecoveryOwners.get(project.key)!) {
-                        void projectPages.controller.restart(starMapProjectResource(owner, project.key));
+                    onRestartThreads={projectRecoveryMembers.has(project.key)
+                      ? () => { for (const member of projectRecoveryMembers.get(project.key)!) {
+                        void projectPages.controller.restart(starMapProjectResource(member.instanceId, member.directoryKey));
                       } } : undefined}
-                    onLoadMoreThreads={projectPageOwners.has(project.key)
-                      ? () => { for (const owner of projectPageOwners.get(project.key)!) {
-                        const id = starMapProjectResource(owner, project.key);
+                    onLoadMoreThreads={projectPageMembers.has(project.key)
+                      ? () => { for (const member of projectPageMembers.get(project.key)!) {
+                        const id = starMapProjectResource(member.instanceId, member.directoryKey);
                         const first = projectPages.state.resources.get(id)?.state.page?.entries[0]?.row.ref;
                         if (first) projectPages.controller.setVisibleAnchor(id, { kind: "thread", ref: first });
                         void projectPages.controller.loadMore(id);
                       } }
                       : undefined}
-                    loadingThreads={(projectRecoveryOwners.get(project.key) ?? projectPageOwners.get(project.key))?.some((owner) =>
-                      projectPages.state.resources.get(starMapProjectResource(owner, project.key))?.loading)}
+                    loadingThreads={(projectRecoveryMembers.get(project.key) ?? projectPageMembers.get(project.key))?.some((member) =>
+                      projectPages.state.resources.get(starMapProjectResource(member.instanceId, member.directoryKey))?.loading)}
                     // In overview the body is the only thing naming the
                     // project, so it counter-scales to stay readable —
                     // the same treatment instance bodies get.
