@@ -893,6 +893,7 @@ export type DesktopFederationSettingsSnapshot = {
   instanceNotes: DesktopSettingsValue<string>;
   listenHost: DesktopSettingsValue<string>;
   listenPort: DesktopSettingsValue<number>;
+  compressionEnabled: DesktopSettingsValue<boolean>;
   publicUrl: DesktopSettingsValue<string>;
   gatewayUrl: DesktopSettingsValue<string>;
   /**
@@ -1337,6 +1338,7 @@ export type DesktopSettingsConfigPatch = {
     instanceNotes?: string;
     listenHost?: string;
     listenPort?: number;
+    compressionEnabled?: boolean;
     publicUrl?: string;
     gatewayUrl?: string;
     gatewayEndpoints?: string[];

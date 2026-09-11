@@ -93,6 +93,7 @@ const fakeSettings = {
   instanceNotes: "",
   listenHost: "127.0.0.1",
   listenPort: 4321,
+  compressionEnabled: true,
   mode: "gateway",
   publicUrl: "",
 } as const satisfies FederationRuntimeConfig;

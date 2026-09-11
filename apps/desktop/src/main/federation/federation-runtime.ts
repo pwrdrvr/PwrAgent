@@ -487,6 +487,8 @@ const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "remote_pty",
   "event_subscriptions",
   "turn_input_blobs",
+  // Signed transport negotiation; not a user-authorized remote action.
+  "transport_brotli",
 ];
 
 const REMOTE_THREAD_SUMMARY_EVENT_CONSUMER_ID =
@@ -2787,6 +2789,7 @@ export class DesktopFederationRuntime {
         gatewayPublicKeyPem: gatewayIdentity.publicKeyPem,
         host: config.listenHost,
         port: config.listenPort,
+        compressionEnabled: config.compressionEnabled,
         store: this.store(),
         noiseStatic,
         onConnection: (connection) => this.registerGatewayConnection(connection),
@@ -3034,7 +3037,9 @@ export class DesktopFederationRuntime {
       peerInstanceId: this.ensureLocalInstanceId(),
       privateKeyPem: keyPair.privateKeyPem,
       publicKeyPem: keyPair.publicKeyPem,
-      capabilities: DEFAULT_CAPABILITIES,
+      capabilities: DEFAULT_CAPABILITIES.filter(
+        (capability) => config.compressionEnabled || capability !== "transport_brotli",
+      ),
       inviteToken: pendingInviteToken || undefined,
       label:
         this.instanceLabel ||
@@ -3755,13 +3760,16 @@ export class DesktopFederationRuntime {
   ): FederationPeerSummary[] {
     const localInstanceId = this.ensureLocalInstanceId();
     const localProfileName = getAppStateDb().getMeta("profile_name") || undefined;
+    const compressionEnabled = this.readRuntimeConfig().compressionEnabled;
     const peers: FederationPeerSummary[] = [
       {
         id: localInstanceId,
         label: this.instanceLabel || localProfileName || "Gateway",
         role: "gateway",
         status: "connected",
-        capabilities: DEFAULT_CAPABILITIES,
+        capabilities: DEFAULT_CAPABILITIES.filter(
+          (capability) => compressionEnabled || capability !== "transport_brotli",
+        ),
         protocolVersion: FEDERATION_PROTOCOL_VERSION,
         navigationQueryProtocol: 2,
         profileName: localProfileName,

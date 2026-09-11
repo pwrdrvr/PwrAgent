@@ -24,6 +24,29 @@ afterEach(() => {
 });
 
 describe("FederationSettings", () => {
+  it("saves the compression toggle with federation settings", async () => {
+    const onWriteConfig = vi.fn(async () => true);
+    render(
+      <FederationSettings
+        desktopApi={{ readFederationHealth: vi.fn(async () => ({
+          health: { enabled: false, role: "client", status: "disabled", peers: [] } satisfies FederationHealthStatus,
+        })) }}
+        onClearSecret={vi.fn(async () => true)}
+        onReplaceSecret={vi.fn(async () => true)}
+        saving={false}
+        snapshot={settingsSnapshot()}
+        onSettingsChanged={vi.fn()}
+        onWriteConfig={onWriteConfig}
+      />,
+    );
+    const toggle = screen.getByRole("checkbox", { name: "Protocol compression" });
+    expect(toggle).toBeChecked();
+    fireEvent.click(toggle);
+    fireEvent.click(screen.getByRole("button", { name: "Save federation settings" }));
+    await waitFor(() => expect(onWriteConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ federation: expect.objectContaining({ compressionEnabled: false }) }),
+    ));
+  });
   it("renders configured endpoints and sanitized peer health", async () => {
     const health: FederationHealthStatus = {
       enabled: true,
@@ -1148,6 +1171,7 @@ function settingsSnapshot(): DesktopSettingsSnapshot {
       instanceNotes: { value: "", source: "default" },
       listenHost: { value: "127.0.0.1", source: "config" },
       listenPort: { value: 8765, source: "config" },
+      compressionEnabled: { value: true, source: "default" },
       publicUrl: {
         value: "wss://pwragent.example.com/federation",
         source: "config",

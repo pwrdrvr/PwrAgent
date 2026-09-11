@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest";
 import { resolveFederationRuntimeConfig } from "../federation/federation-runtime-config";
 
 describe("resolveFederationRuntimeConfig", () => {
+  it("preserves an explicit compression opt-out", () => {
+    expect(resolveFederationRuntimeConfig({ compressionEnabled: false }).compressionEnabled).toBe(false);
+  });
   it("normalizes the credential-free runtime projection", () => {
     const config = resolveFederationRuntimeConfig({
       advertisedEndpoints: [" ", " wss://public.example/federation "],
@@ -22,6 +25,7 @@ describe("resolveFederationRuntimeConfig", () => {
       cloudflareAccessServiceAuthEnabled: true,
       cloudflareEndpoint: "wss://edge.example/federation",
       cloudflareMtlsEnabled: false,
+      compressionEnabled: true,
       gatewayEndpoints: ["wss://gateway.example/federation"],
       instanceLabel: "Studio",
       instanceNotes: "Primary",
@@ -40,6 +44,7 @@ describe("resolveFederationRuntimeConfig", () => {
       cloudflareAccessServiceAuthEnabled: false,
       cloudflareEndpoint: "",
       cloudflareMtlsEnabled: false,
+      compressionEnabled: true,
       gatewayEndpoints: [],
       instanceLabel: "",
       instanceNotes: "",

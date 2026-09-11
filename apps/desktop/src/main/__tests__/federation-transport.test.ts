@@ -704,6 +704,122 @@ describe("federation transport", () => {
     });
   });
 
+  it.each([
+    { gatewayCompression: true, clientCompression: true },
+    { gatewayCompression: false, clientCompression: true },
+    { gatewayCompression: true, clientCompression: false },
+  ])("negotiates compression through Noise: %j", async ({ gatewayCompression, clientCompression }) => {
+    const compressionEnabled = gatewayCompression && clientCompression;
+    const maxFrameBytes = compressionEnabled ? 16 * 1024 : 1024 * 1024;
+    const transcript = "repetitive tool output line\n".repeat(12_000);
+    expect(Buffer.byteLength(transcript)).toBeGreaterThan(16 * 1024);
+    const gatewayTransfers: Array<{
+      peerId: string;
+      direction: "sent" | "received";
+      byteCount: number;
+    }> = [];
+    const clientTransfers: Array<{
+      direction: "sent" | "received";
+      byteCount: number;
+    }> = [];
+
+    const gatewayNoise = generateNoiseStaticKeyPair();
+    const clientNoise = generateNoiseStaticKeyPair();
+    const clientKeyPair = generateFederationIdentityKeyPair();
+    let resolveReceived: ((envelope: FederationProtocolEnvelope) => void) | undefined;
+    const received = new Promise<FederationProtocolEnvelope>((resolve) => {
+      resolveReceived = resolve;
+    });
+    const invite = createFederationEnrollmentInvite({
+      store,
+      token: "invite-token-compressed",
+      gatewayInstanceId: "gateway_one",
+      generatedAt: Date.now() - 1_000,
+      expiresAt: Date.now() + 60_000,
+    });
+    server = new FederationGatewayWebSocketServer({
+      gatewayInstanceId: "gateway_one",
+      gatewayPrivateKeyPem: gatewayKeyPair.privateKeyPem,
+      gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem,
+      host: "127.0.0.1",
+      port: 0,
+      store,
+      noiseStatic: gatewayNoise,
+      maxFrameBytes,
+      compressionEnabled: gatewayCompression,
+      onEnvelopeTransfer: (info) => gatewayTransfers.push(info),
+      onEnvelope: (envelope, connection) => {
+        resolveReceived?.(envelope);
+        connection.sendEnvelope({
+          id: "large-response",
+          kind: "response",
+          requestId: envelope.id,
+          protocolVersion: FEDERATION_PROTOCOL_VERSION,
+          sourceInstanceId: "gateway_one",
+          targetInstanceId: connection.peerId,
+          createdAt: 2_000,
+          result: { transcript },
+        });
+      },
+    });
+    const { url } = await server.start();
+
+    const reply = new Promise<FederationProtocolEnvelope>((resolve) => {
+      void connectFederationClient({
+        url,
+        mode: "enroll",
+        gatewayInstanceId: "gateway_one",
+        gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem,
+        peerInstanceId: "client_one",
+        privateKeyPem: clientKeyPair.privateKeyPem,
+        publicKeyPem: clientKeyPair.publicKeyPem,
+        capabilities: clientCompression
+          ? ["remote_window", "transport_brotli"]
+          : ["remote_window"],
+        inviteToken: invite.token,
+        label: "Client",
+        role: "client",
+        noiseStatic: clientNoise,
+        gatewayNoisePublicKey: gatewayNoise.publicKeyRaw,
+        maxFrameBytes,
+        onEnvelope: resolve,
+        onEnvelopeTransfer: (info) => clientTransfers.push(info),
+      }).then((client) => {
+        expect(client.capabilities.includes("transport_brotli")).toBe(compressionEnabled);
+        client.sendEnvelope({
+          id: "large-request",
+          kind: "request",
+          method: "thread.read",
+          params: { transcript },
+          protocolVersion: FEDERATION_PROTOCOL_VERSION,
+          sourceInstanceId: "client_one",
+          targetInstanceId: "gateway_one",
+          createdAt: 1_000,
+        });
+      });
+    });
+
+    await expect(received).resolves.toMatchObject({
+      kind: "request",
+      params: { transcript },
+    });
+    await expect(reply).resolves.toMatchObject({
+      kind: "response",
+      requestId: "large-request",
+      result: { transcript },
+    });
+    const [gatewayReceived, gatewaySent] = gatewayTransfers;
+    const [clientSent, clientReceived] = clientTransfers;
+    expect(gatewayReceived.byteCount).toBe(clientSent.byteCount);
+    expect(clientReceived.byteCount).toBe(gatewaySent.byteCount);
+    expect(clientSent.byteCount).toBeLessThan(maxFrameBytes);
+    expect(gatewaySent.byteCount).toBeLessThan(maxFrameBytes);
+    if (!compressionEnabled) {
+      expect(clientSent.byteCount).toBeGreaterThan(Buffer.byteLength(transcript));
+      expect(gatewaySent.byteCount).toBeGreaterThan(Buffer.byteLength(transcript));
+    }
+  });
+
   it("carries the encrypted channel over an externally created outer socket", async () => {
     const gatewayNoise = generateNoiseStaticKeyPair();
     const clientNoise = generateNoiseStaticKeyPair();
@@ -1417,7 +1533,7 @@ describe("federation transport liveness", () => {
     expect(received).toHaveLength(1);
   });
 
-  it("rejects an oversized client envelope before sending it", async () => {
+  it.each([false, true])("rejects oversized client envelopes locally (compression: %s)", async (compressionEnabled) => {
     const gatewayNoise = generateNoiseStaticKeyPair();
     const clientNoise = generateNoiseStaticKeyPair();
     const clientKeyPair = generateFederationIdentityKeyPair();
@@ -1448,11 +1564,12 @@ describe("federation transport liveness", () => {
       peerInstanceId: "client_one",
       privateKeyPem: clientKeyPair.privateKeyPem,
       publicKeyPem: clientKeyPair.publicKeyPem,
-      capabilities: ["remote_window"],
+      capabilities: compressionEnabled ? ["remote_window", "transport_brotli"] : ["remote_window"],
       inviteToken: invite.token,
       label: "Client",
       role: "client",
       maxFrameBytes: 64 * 1024,
+      maxDecodedFrameBytes: compressionEnabled ? 64 * 1024 : undefined,
       noiseStatic: clientNoise,
       gatewayNoisePublicKey: gatewayNoise.publicKeyRaw,
     });
@@ -1470,12 +1587,15 @@ describe("federation transport liveness", () => {
     expect(() => client.sendEnvelope(
       envelope("request-too-large", { blob: "x".repeat(128 * 1024) }),
     )).toThrow(/exceeds.*frame.*limit/i);
+    await expect(client.sendEnvelopeWithBackpressure!(
+      envelope("request-too-large-async", { blob: "x".repeat(128 * 1024) }),
+    )).rejects.toThrow(/exceeds.*frame.*limit/i);
     client.sendEnvelope(envelope("request-small", { note: "small" }));
     await expect.poll(() => received.length, { timeout: 5_000 }).toBe(1);
     expect(received[0]?.id).toBe("request-small");
   });
 
-  it("rejects an oversized gateway envelope before sending it", async () => {
+  it.each([false, true])("rejects oversized gateway envelopes locally (compression: %s)", async (compressionEnabled) => {
     const gatewayNoise = generateNoiseStaticKeyPair();
     const clientNoise = generateNoiseStaticKeyPair();
     const clientKeyPair = generateFederationIdentityKeyPair();
@@ -1496,6 +1616,7 @@ describe("federation transport liveness", () => {
       port: 0,
       store,
       maxFrameBytes: 64 * 1024,
+      maxDecodedFrameBytes: compressionEnabled ? 64 * 1024 : undefined,
       noiseStatic: gatewayNoise,
       onConnection: (connection) => {
         gatewayConnection = connection;
@@ -1510,7 +1631,7 @@ describe("federation transport liveness", () => {
       peerInstanceId: "client_one",
       privateKeyPem: clientKeyPair.privateKeyPem,
       publicKeyPem: clientKeyPair.publicKeyPem,
-      capabilities: ["remote_window"],
+      capabilities: compressionEnabled ? ["remote_window", "transport_brotli"] : ["remote_window"],
       inviteToken: invite.token,
       label: "Client",
       role: "client",
@@ -1533,6 +1654,9 @@ describe("federation transport liveness", () => {
     expect(() => gatewayConnection?.sendEnvelope(
       envelope("request-too-large", { blob: "x".repeat(128 * 1024) }),
     )).toThrow(/exceeds.*frame.*limit/i);
+    await expect(gatewayConnection!.sendEnvelopeWithBackpressure!(
+      envelope("request-too-large-async", { blob: "x".repeat(128 * 1024) }),
+    )).rejects.toThrow(/exceeds.*frame.*limit/i);
     gatewayConnection?.sendEnvelope(
       envelope("request-small", { note: "small" }),
     );

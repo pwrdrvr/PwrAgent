@@ -1033,6 +1033,10 @@ export class DesktopSettingsService {
           "127.0.0.1",
         ),
         listenPort: this.resolveConfigNumber(config.federation?.listenPort, 47830),
+        compressionEnabled: this.resolveConfigBoolean(
+          config.federation?.compressionEnabled,
+          true,
+        ),
         publicUrl: this.resolveConfigString(config.federation?.publicUrl),
         gatewayUrl: this.resolveConfigString(config.federation?.gatewayUrl),
         gatewayEndpoints: this.resolveFederationEndpointList(
