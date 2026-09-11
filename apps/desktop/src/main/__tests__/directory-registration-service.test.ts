@@ -2,7 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { classifyDirectory } from "@pwragent/shared";
+import { buildDirectorySummaries, classifyDirectory } from "@pwragent/shared";
 import type {
   AppServerBackendKind,
   EnsureDirectoryLaunchpadResponse,
@@ -173,6 +173,7 @@ describe("registerDirectoryFromDisk", () => {
     "C:\\Users\\fixture-user\\notes",
     "/Users/fixture-user/Documents/Codex",
     "/tmp/plain/.worktrees/abc123/notes",
+    "C:\\plain\\.worktrees\\abc123\\notes",
   ])("registers the selected non-git folder %s without repo normalization", async (candidate) => {
     const directoryPath = candidate.replace(/\\/g, "/");
     const ensure = buildEnsureSpy();
@@ -189,6 +190,30 @@ describe("registerDirectoryFromDisk", () => {
     expect(result.directoryPath).toBe(directoryPath);
     expect(result.directoryKey).toBe(`directory:${directoryPath}`);
     expect(result.currentBranch).toBeUndefined();
+    const directory = {
+      id: directoryPath,
+      kind: "local" as const,
+      path: directoryPath,
+      label: result.directoryLabel,
+    };
+    expect(classifyDirectory(directory).key).toBe(result.directoryKey);
+    const summaries = buildDirectorySummaries({
+      threads: [{
+        id: "plain-folder-thread",
+        source: "codex",
+        title: "Plain folder",
+        titleSource: "explicit",
+        linkedDirectories: [directory],
+        inbox: { inInbox: false },
+      }],
+      launchpadsByKey: { [result.directoryKey]: result.launchpad },
+    });
+    expect(summaries).toHaveLength(1);
+    expect(summaries[0]).toMatchObject({
+      key: result.directoryKey,
+      path: directoryPath,
+      threadKeys: ["codex:plain-folder-thread"],
+    });
     expect(ensure).toHaveBeenCalledExactlyOnceWith({
       directoryKey: `directory:${directoryPath}`,
       directoryKind: "directory",
@@ -349,6 +374,12 @@ describe("registerDirectoryFromDisk", () => {
     expect(result.directoryPath).toBe("/Users/me/code/PwrAgent");
     expect(result.directoryKey).toBe("directory:/Users/me/code/PwrAgent");
     expect(result.directoryLabel).toBe("PwrAgent");
+    expect(classifyDirectory({
+      id: "/Users/me/code/PwrAgent/.worktrees/abc123/PwrAgent",
+      kind: "worktree",
+      path: "/Users/me/code/PwrAgent/.worktrees/abc123/PwrAgent",
+      label: "PwrAgent",
+    }).key).toBe(result.directoryKey);
   });
 
   it("propagates preferredBackend through to ensureDirectoryLaunchpad", async () => {

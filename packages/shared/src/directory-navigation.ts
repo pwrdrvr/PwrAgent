@@ -158,7 +158,10 @@ export function classifyDirectory(
   const repoWorktreeMatch = path.match(
     /^(.*)[\\/]\.worktrees[\\/][^\\/]+(?:[\\/].*)?$/,
   );
-  if (repoWorktreeMatch) {
+  // A local folder can use this naming convention without being a Git
+  // worktree. Only fold entries identified as worktrees onto their repo;
+  // plain folders must keep the same key as their registered launchpad.
+  if (directory.kind === "worktree" && repoWorktreeMatch) {
     const canonicalPath = repoWorktreeMatch[1];
     return {
       key: `directory:${canonicalPath}`,
