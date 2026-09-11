@@ -38316,10 +38316,18 @@ export class DesktopBackendRegistry {
       event.notification.method === "turn/started"
       || event.notification.method === "turn/completed"
     )) {
-      void this.repairCodexThreadDirectoryRelationship({
-        reason: "selected-thread",
-        threadId: event.notification.params.threadId,
+      // Lifecycle notifications must not discover a workspace by listing the
+      // provider. Notification-context reconciliation already owns that read
+      // for unseen threads; refresh only a workspace we have observed.
+      const known = this.getCachedThreadSummary({
+        backend: "codex", threadId: event.notification.params.threadId,
       });
+      if (known?.projectKey?.trim()) {
+        void this.repairCodexThreadDirectoryRelationship({
+          reason: "selected-thread",
+          threadId: event.notification.params.threadId,
+        });
+      }
     }
 
     this.rememberThreadTitleFromEvent(event);
