@@ -1,6 +1,7 @@
 import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { app } from "electron";
+import { PerKeyAsyncLock } from "../util/per-key-async-lock";
 import {
   type AcpBackendId,
   type AcpThreadRewindPoint,
@@ -1104,8 +1105,10 @@ export class AcpBackendAdapter {
   private readonly environmentClients = new Map<string, {
     backend: AcpBackendId;
     environmentKey: string;
+    shellEnvironment?: Record<string, string>;
     entry: AcpClientEntry;
   }>();
+  private readonly environmentClientLocks = new PerKeyAsyncLock();
   // A non-loadable ACP session belongs to the process that created it. Launch
   // selection may replace the current client, but these owners must remain
   // addressable until adapter shutdown so later turns keep using that process.
@@ -1687,26 +1690,33 @@ export class AcpBackendAdapter {
     sessionId: string,
     shellEnvironment?: Record<string, string>,
   ): Promise<void> {
+    await this.environmentClientLocks.run(
+      JSON.stringify([backend, sessionId]),
+      () => this.prepareSessionEnvironmentLocked(backend, sessionId, shellEnvironment),
+    );
+  }
+
+  private async prepareSessionEnvironmentLocked(
+    backend: AcpBackendId,
+    sessionId: string,
+    shellEnvironment?: Record<string, string>,
+  ): Promise<void> {
+    if (this.closed) {
+      throw new Error("ACP backend adapter is closed");
+    }
     const key = JSON.stringify([backend, sessionId]);
     const previous = this.environmentClients.get(key);
     const environmentKey = JSON.stringify(
       Object.entries(shellEnvironment ?? {}).sort(([a], [b]) => a.localeCompare(b)),
     );
-    if ((!previous && !shellEnvironment) || previous?.environmentKey === environmentKey) {
+    if (!previous && !shellEnvironment) {
       return;
     }
     const session = this.getSession(backend, sessionId);
     if (!session) {
       throw new Error(`ACP session not found: ${sessionId}`);
     }
-    const owner = await this.getClientForSession(backend, sessionId);
-    if (session.status === "active") {
-      throw new Error("Wait for the ACP operation to finish before changing its environment.");
-    }
     const agent = await this.resolveInstalledAgent(backend);
-    if (!(owner.supportsSessionLoad?.() ?? acpRuntimeSupportsSessionLoad(agent.runtimeCapabilities))) {
-      throw new Error("This ACP provider cannot reload an existing session with a new environment. Clear the environment selection to continue.");
-    }
     if (!agent.launchDescriptor) {
       throw new Error(`ACP backend ${backend} has no launch descriptor`);
     }
@@ -1717,10 +1727,33 @@ export class AcpBackendAdapter {
         env: { ...agent.launchDescriptor.env, ...shellEnvironment },
       },
     };
+    const launchIdentity = acpAgentLaunchIdentity(configuredAgent);
+    const environmentUnchanged = previous?.environmentKey === environmentKey;
+    if (environmentUnchanged && previous.entry.launchIdentity === launchIdentity) {
+      return;
+    }
+    const owner = previous
+      ? await previous.entry.promise
+      : await this.getClientForSession(backend, sessionId);
+    if (
+      session.status === "active"
+      || owner.hasActiveTurns?.() === true
+      || owner.hasActiveOperations?.() === true
+    ) {
+      // Settings changes take effect once the owning process is idle. Keep
+      // cancellation and other live-session RPCs on that process meanwhile.
+      if (environmentUnchanged) {
+        return;
+      }
+      throw new Error("Wait for the ACP operation to finish before changing its environment.");
+    }
+    if (!(owner.supportsSessionLoad?.() ?? acpRuntimeSupportsSessionLoad(agent.runtimeCapabilities))) {
+      throw new Error("This ACP provider cannot reload an existing session with a new environment. Clear the environment selection to continue.");
+    }
     const client = this.createAcpClient(configuredAgent);
     const entry: AcpClientEntry = {
       client,
-      launchIdentity: acpAgentLaunchIdentity(configuredAgent),
+      launchIdentity,
       promise: Promise.resolve(client),
       supportsSessionLoad: true,
     };
@@ -1737,7 +1770,12 @@ export class AcpBackendAdapter {
       await this.disposeAcpClient(entry);
       throw error;
     }
-    this.environmentClients.set(key, { backend, environmentKey, entry });
+    this.environmentClients.set(key, {
+      backend,
+      environmentKey,
+      shellEnvironment: shellEnvironment ? { ...shellEnvironment } : undefined,
+      entry,
+    });
     if (previous) {
       await this.disposeAcpClient(previous.entry);
     }
@@ -1747,9 +1785,25 @@ export class AcpBackendAdapter {
     backend: AcpBackendId,
     sessionId: string,
   ): Promise<AcpRuntimeClient> {
-    const environmentClient = this.environmentClients.get(JSON.stringify([backend, sessionId]));
-    if (environmentClient) {
-      return await environmentClient.entry.promise;
+    const key = JSON.stringify([backend, sessionId]);
+    if (this.environmentClients.has(key)) {
+      return await this.environmentClientLocks.run(key, async () => {
+        if (this.closed) {
+          throw new Error("ACP backend adapter is closed");
+        }
+        const previous = this.environmentClients.get(key)!;
+        try {
+          await this.prepareSessionEnvironmentLocked(backend, sessionId, previous.shellEnvironment);
+        } catch (error) {
+          // As with shared clients, a broken replacement must not strand the
+          // original session. Turn preparation still reports the launch error.
+          if (this.closed) {
+            throw error;
+          }
+          return await previous.entry.promise;
+        }
+        return await this.environmentClients.get(key)!.entry.promise;
+      });
     }
     let current: AcpRuntimeClient;
     try {
