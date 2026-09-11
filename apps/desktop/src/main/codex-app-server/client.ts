@@ -7423,6 +7423,7 @@ export class CodexAppServerClient {
     ) => Promise<unknown> | unknown
   >();
   private readonly pendingFirstTurnThreadResults = new Map<string, unknown>();
+  private readonly pendingFirstTurnShellEnvironments = new Map<string, string | undefined>();
   private readonly helperThreadIds = new Set<string>();
   private readonly helperTurnWaiters = new Map<
     string,
@@ -7602,6 +7603,7 @@ export class CodexAppServerClient {
     this.rejectHelperTurnWaiters(new Error("codex app server client closed"));
     this.pendingThreadListings.clear();
     this.pendingFirstTurnThreadResults.clear();
+    this.pendingFirstTurnShellEnvironments.clear();
     this.recordedThreadNames.clear();
     this.helperThreadIds.clear();
     this.completedHelperTurnResults.clear();
@@ -8836,6 +8838,10 @@ export class CodexAppServerClient {
     }
 
     this.pendingFirstTurnThreadResults.set(threadId, result);
+    this.pendingFirstTurnShellEnvironments.set(
+      threadId,
+      JSON.stringify(params.codexEnvironmentRuntime?.shellEnvironment),
+    );
     await this.recordThreadNameWithCodex(result);
 
     return {
@@ -8878,6 +8884,10 @@ export class CodexAppServerClient {
     }
 
     this.pendingFirstTurnThreadResults.set(threadId, result);
+    this.pendingFirstTurnShellEnvironments.set(
+      threadId,
+      JSON.stringify(params.codexEnvironmentRuntime?.shellEnvironment),
+    );
     await this.recordThreadNameWithCodex(result);
 
     return {
@@ -8915,9 +8925,12 @@ export class CodexAppServerClient {
     // PwrAgent fork explicitly advertises a dynamic-tools resume extension
     // that supports this no-rollout refresh. The registry passes a complete
     // replacement catalog only after negotiating that exact capability.
+    const shellEnvironmentChanged = pendingFirstTurnResult !== undefined
+      && this.pendingFirstTurnShellEnvironments.get(params.threadId)
+        !== JSON.stringify(params.codexEnvironmentRuntime?.shellEnvironment);
     const refreshPendingFirstTurn =
       pendingFirstTurnResult !== undefined
-      && params.dynamicTools !== undefined;
+      && (params.dynamicTools !== undefined || shellEnvironmentChanged);
     let resumeResult = pendingFirstTurnResult;
     if (!pendingFirstTurnResult || refreshPendingFirstTurn) {
       const resume = requestWithFallbacks({
@@ -8944,7 +8957,11 @@ export class CodexAppServerClient {
         ),
         timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
       });
+      // Environment overrides are applied by resume; continuing after a
+      // failure would silently run the turn with the previous toolchain.
       resumeResult = params.dynamicTools !== undefined
+        || params.codexEnvironmentRuntime?.shellEnvironment !== undefined
+        || shellEnvironmentChanged
         ? await resume
         : await resume.catch((error: unknown) => {
             // A shared Codex profile can be readable here while another
@@ -9000,6 +9017,7 @@ export class CodexAppServerClient {
     const threadId = extractThreadIdFromValue(result) ?? params.threadId;
     const turnId = extractTurnIdFromValue(result) ?? `pending:${threadId}`;
     this.pendingFirstTurnThreadResults.delete(params.threadId);
+    this.pendingFirstTurnShellEnvironments.delete(params.threadId);
     await this.recordDerivedThreadNameWithCodex({
       threadId: params.threadId,
       input: params.input,
@@ -9394,6 +9412,7 @@ export class CodexAppServerClient {
       throw new Error("codex app server review/start did not return turnId");
     }
     this.pendingFirstTurnThreadResults.delete(params.threadId);
+    this.pendingFirstTurnShellEnvironments.delete(params.threadId);
 
     return {
       threadId: params.threadId,

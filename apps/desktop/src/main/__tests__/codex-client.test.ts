@@ -11758,6 +11758,50 @@ describe("CodexAppServerClient", () => {
     }
   });
 
+  it("refreshes an environment selected after creation but before the first turn", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+    try {
+      const { threadId } = await client.startThread({ cwd: "/fixture" });
+      await client.startTurn({
+        threadId,
+        input: [{ type: "text", text: "Use selected environment" }],
+        codexEnvironmentRuntime: {
+          environmentId: "env", environmentName: "Env", executionTarget: "local",
+          shellEnvironment: { PATH: "/fixture/node/bin" },
+        },
+      });
+      const requests = MockTransport.instances.flatMap((transport) => transport.sentMessages)
+        .map((message) => JSON.parse(message));
+      expect(requests.find((request) => request.method === "thread/resume")?.params.config)
+        .toMatchObject({ "shell_environment_policy.set.PATH": "/fixture/node/bin" });
+    } finally {
+      await client.close();
+    }
+  });
+
+  it("does not start a turn when resuming its shell environment fails", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.threadResumeError = { message: "resume failed" };
+    const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+    try {
+      await expect(client.startTurn({
+        threadId: "thread-2",
+        input: [{ type: "text", text: "Use selected environment" }],
+        codexEnvironmentRuntime: {
+          environmentId: "env",
+          environmentName: "Env",
+          executionTarget: "local",
+          shellEnvironment: { PATH: "/fixture/node/bin" },
+        },
+      })).rejects.toThrow("resume failed");
+      expect(MockTransport.instances.flatMap((transport) => transport.sentMessages)
+        .map((message) => JSON.parse(message).method)).not.toContain("turn/start");
+    } finally {
+      await client.close();
+    }
+  });
+
   it("still emits the per-turn permission overrides on turn/start when thread/resume fails", async () => {
     // The defense-in-depth behavior: thread/resume primes codex's
     // per-thread profile, but if it fails (rare race or transient

@@ -1101,6 +1101,11 @@ export class AcpBackendAdapter {
     request: AppServerPendingRequestNotification,
   ) => Promise<unknown>;
   private readonly acpClients = new Map<AcpBackendId, AcpClientEntry>();
+  private readonly environmentClients = new Map<string, {
+    backend: AcpBackendId;
+    environmentKey: string;
+    entry: AcpClientEntry;
+  }>();
   // A non-loadable ACP session belongs to the process that created it. Launch
   // selection may replace the current client, but these owners must remain
   // addressable until adapter shutdown so later turns keep using that process.
@@ -1676,10 +1681,76 @@ export class AcpBackendAdapter {
     }
   }
 
+  /** Called under the registry's session prompt lock, before starting a turn. */
+  async prepareSessionEnvironment(
+    backend: AcpBackendId,
+    sessionId: string,
+    shellEnvironment?: Record<string, string>,
+  ): Promise<void> {
+    const key = JSON.stringify([backend, sessionId]);
+    const previous = this.environmentClients.get(key);
+    const environmentKey = JSON.stringify(
+      Object.entries(shellEnvironment ?? {}).sort(([a], [b]) => a.localeCompare(b)),
+    );
+    if ((!previous && !shellEnvironment) || previous?.environmentKey === environmentKey) {
+      return;
+    }
+    const session = this.getSession(backend, sessionId);
+    if (!session) {
+      throw new Error(`ACP session not found: ${sessionId}`);
+    }
+    const owner = await this.getClientForSession(backend, sessionId);
+    if (session.status === "active") {
+      throw new Error("Wait for the ACP operation to finish before changing its environment.");
+    }
+    const agent = await this.resolveInstalledAgent(backend);
+    if (!(owner.supportsSessionLoad?.() ?? acpRuntimeSupportsSessionLoad(agent.runtimeCapabilities))) {
+      throw new Error("This ACP provider cannot reload an existing session with a new environment. Clear the environment selection to continue.");
+    }
+    if (!agent.launchDescriptor) {
+      throw new Error(`ACP backend ${backend} has no launch descriptor`);
+    }
+    const configuredAgent = {
+      ...agent,
+      launchDescriptor: {
+        ...agent.launchDescriptor,
+        env: { ...agent.launchDescriptor.env, ...shellEnvironment },
+      },
+    };
+    const client = this.createAcpClient(configuredAgent);
+    const entry: AcpClientEntry = {
+      client,
+      launchIdentity: acpAgentLaunchIdentity(configuredAgent),
+      promise: Promise.resolve(client),
+      supportsSessionLoad: true,
+    };
+    try {
+      await client.initialize();
+      if (client.supportsSessionLoad?.() === false) {
+        throw new Error("This ACP provider cannot reload an existing session with a new environment.");
+      }
+      await client.ensureSession(session);
+      if (this.closed) {
+        throw new Error("ACP backend adapter is closed");
+      }
+    } catch (error) {
+      await this.disposeAcpClient(entry);
+      throw error;
+    }
+    this.environmentClients.set(key, { backend, environmentKey, entry });
+    if (previous) {
+      await this.disposeAcpClient(previous.entry);
+    }
+  }
+
   async getClientForSession(
     backend: AcpBackendId,
     sessionId: string,
   ): Promise<AcpRuntimeClient> {
+    const environmentClient = this.environmentClients.get(JSON.stringify([backend, sessionId]));
+    if (environmentClient) {
+      return await environmentClient.entry.promise;
+    }
     let current: AcpRuntimeClient;
     try {
       current = await this.getClient(backend);
@@ -2138,6 +2209,9 @@ export class AcpBackendAdapter {
     }
     this.closed = true;
     const acpClients = [
+      ...[...this.environmentClients.values()].map(
+        ({ backend, entry }): [AcpBackendId, AcpClientEntry] => [backend, entry],
+      ),
       ...this.acpClients.entries(),
       ...[...this.retainedAcpClients.entries()].flatMap(([backend, entries]) =>
         [...entries].map(
@@ -2146,6 +2220,7 @@ export class AcpBackendAdapter {
       ),
     ];
     this.acpClients.clear();
+    this.environmentClients.clear();
     this.retainedAcpClients.clear();
     this.acpClientResolutions.clear();
     this.liveToolUpdateResolver.clear();
@@ -2229,6 +2304,10 @@ export class AcpBackendAdapter {
     backend: AcpBackendId,
     sessionId: string,
   ): AcpClientEntry | undefined {
+    const environmentClient = this.environmentClients.get(JSON.stringify([backend, sessionId]));
+    if (environmentClient) {
+      return environmentClient.entry;
+    }
     const current = this.acpClients.get(backend);
     if (current?.client.ownsSession?.(sessionId) === true) {
       return current;
