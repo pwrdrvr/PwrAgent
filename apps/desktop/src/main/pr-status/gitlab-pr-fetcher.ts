@@ -39,16 +39,17 @@ export type GitLabMrPayload = {
   created_at?: string;
   merged_at?: string;
   closed_at?: string;
-  head_pipeline?: { status?: string; web_url?: string; sha?: string } | null;
+  head_pipeline?: { status?: string; web_url?: string; sha?: string; ref?: string; project_id?: number } | null;
 };
 
-export function parseGitLabMr(payload: GitLabMrPayload): PrSummary {
+export function parseGitLabMr(payload: GitLabMrPayload, pipelineSourceHeadSha?: string): PrSummary {
   const ref = parseGitLabMrUrl(payload.web_url);
   if (!ref || ref.number !== payload.iid) throw new Error("GitLab returned an invalid merge request identity.");
   const pipeline = payload.head_pipeline;
-  // A prior head's passing pipeline must never complete a watch for the new head.
+  // Synthetic merge/train commits differ from the source head. Their verified
+  // source parent is supplied by fetchByRef; an unrelated old head stays unknown.
   const status = pipeline?.sha && payload.sha && pipeline.sha !== payload.sha
-    ? undefined : pipeline?.status;
+    && pipelineSourceHeadSha !== payload.sha ? undefined : pipeline?.status;
   const running = ["created", "waiting_for_resource", "preparing", "pending", "running", "scheduled"].includes(status ?? "");
   const checkState = status === "success" ? "passing"
     : status === "failed" || status === "canceled" ? "failing"
@@ -88,6 +89,7 @@ export type GitLabPrFetcherOptions = {
   discover?: () => Promise<DesktopGlabDiscoverySnapshot>;
   run?: (command: string, args: string[]) => Promise<string>;
   resolveRepos?: typeof resolveGitLabReposForDirectory;
+  tryTakeRequestToken?: () => boolean;
 };
 
 /** Credentials remain owned by glab. Never include raw subprocess output in errors. */
@@ -126,7 +128,7 @@ export class GitLabPrFetcher {
     return Boolean((await this.discover()).selectedCommand);
   }
 
-  private async api<T>(host: string, endpoint: string, reportFailure = false): Promise<T> {
+  private async api<T>(host: string, endpoint: string, reportFailure = false, requestTokenTaken = false): Promise<T> {
     if (!/^[a-z0-9][a-z0-9.-]*(?::[0-9]+)?$/i.test(host) || host === "github.com") {
       throw new Error("Invalid GitLab hostname.");
     }
@@ -135,6 +137,12 @@ export class GitLabPrFetcher {
     const key = `${command}\0${host}\0${endpoint}`;
     const existing = this.requests.get(key);
     if (existing) return await existing as T;
+    // Reject excess work instead of queueing unbounded subprocesses. Duplicate
+    // callers above share the request and do not consume another slot or token.
+    if (this.requests.size >= 3) throw new Error("GitLab request concurrency limit reached.");
+    if (reportFailure && !requestTokenTaken && this.options.tryTakeRequestToken && !this.options.tryTakeRequestToken()) {
+      throw new Error("PR status refresh budget is temporarily exhausted.");
+    }
     const pending = (async () => {
       try {
         const args = ["api", "--hostname", host, "--method", "GET", endpoint];
@@ -214,10 +222,24 @@ export class GitLabPrFetcher {
     return status;
   }
 
-  async fetchByRef(ref: GitLabRef): Promise<PrSummary> {
+  async fetchByRef(ref: GitLabRef, requestTokenTaken = false): Promise<PrSummary> {
     const payload = await this.api<GitLabMrPayload>(ref.host,
-      `projects/${encodeURIComponent(`${ref.owner}/${ref.repo}`)}/merge_requests/${ref.number}`, true);
-    const pr = parseGitLabMr(payload);
+      `projects/${encodeURIComponent(`${ref.owner}/${ref.repo}`)}/merge_requests/${ref.number}`, true, requestTokenTaken);
+    const pipeline = payload.head_pipeline;
+    let pipelineSourceHeadSha: string | undefined;
+    if (payload.sha && pipeline?.sha && pipeline.sha !== payload.sha
+      && (pipeline.ref === `refs/merge-requests/${ref.number}/merge`
+        || pipeline.ref === `refs/merge-requests/${ref.number}/train`)) {
+      // GitLab's merged-results/train commit joins the source head to the
+      // target (or preceding train entry). Verify that parent, not SHA equality.
+      const project = pipeline.project_id ?? `${ref.owner}/${ref.repo}`;
+      const commit = await this.api<{ id?: string; parent_ids?: string[] }>(ref.host,
+        `projects/${encodeURIComponent(String(project))}/repository/commits/${encodeURIComponent(pipeline.sha)}`, true);
+      if (commit.id === pipeline.sha && commit.parent_ids?.includes(payload.sha)) {
+        pipelineSourceHeadSha = payload.sha;
+      }
+    }
+    const pr = parseGitLabMr(payload, pipelineSourceHeadSha);
     if (pr.provider !== ref.host || pr.org !== ref.owner || pr.repo !== ref.repo || pr.number !== ref.number) {
       throw new Error("GitLab returned a different merge request identity.");
     }

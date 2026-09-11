@@ -42,6 +42,7 @@ export async function detectPullRequestsForThread(params: {
   branch: string;
   directoryPaths: string[];
   allowPrimedBranchLookup?: boolean;
+  onProviderFailure?: () => void;
 }): Promise<PrSummary[]> {
   const branch = params.branch.trim();
   if (!branch || params.directoryPaths.length === 0) {
@@ -65,6 +66,7 @@ export async function detectPullRequestsForThread(params: {
             .fetchAllPullRequestsForBranch({
               cwd,
               branch: lookupBranch,
+              ...(params.onProviderFailure ? { onProviderFailure: params.onProviderFailure } : {}),
               ...(params.allowPrimedBranchLookup === undefined
                 ? {}
                 : { allowPrimed: params.allowPrimedBranchLookup }),

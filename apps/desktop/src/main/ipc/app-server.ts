@@ -338,6 +338,7 @@ import { renderComposerPdfPreview } from "../pdf/composer-pdf-preview";
 import { getMainLogger } from "../log";
 import { buildMessagingBindingsByThreadKey } from "../messaging/messaging-bindings-snapshot";
 import { getDesktopAutomationService } from "../automations/desktop-automation-service";
+import { GitLabPrFetcher } from "../pr-status/gitlab-pr-fetcher";
 import { ForgePrFetcher, parseForgePrRefFromUrl as parsePrRefFromUrl, type ForgePrRef } from "../pr-status/forge-pr-fetcher";
 import { detectPullRequestsForThread } from "../pr-status/pr-detection";
 import {
@@ -4365,13 +4366,16 @@ class DesktopAppServerService {
     lookupKey: string;
     lookupDirectoryPaths: string[];
     previousPrs: PrSummary[];
-  }): Promise<{ prs: PrSummary[]; fetchedAt: number }> {
+  }): Promise<{ prs: PrSummary[]; fetchedAt: number; incomplete: boolean }> {
     // This timestamp is an observation-order token. Capture it before the
     // network request so an older slow response cannot outrank a newer one.
     const fetchedAt = this.nextPrObservationTimestamp();
+    let incomplete = false;
+    const onProviderFailure = () => { incomplete = true; };
     const trigger = params.request.trigger ?? "scheduled";
     const prs = (await detectPullRequestsForThread({
       fetcher: this.getPrFetcher(),
+      onProviderFailure,
       branch: params.request.branch.trim(),
       directoryPaths: params.request.directoryPaths,
       ...(trigger === "user" || trigger === "post-turn"
@@ -4384,6 +4388,7 @@ class DesktopAppServerService {
         fallbackPrs: params.previousPrs,
       }),
       discoveredPrs: prs,
+      onProviderFailure,
       cwd: params.lookupDirectoryPaths[0] ?? params.request.directoryPaths[0],
     });
     const statusPrs = dedupePrsByStatusKey([...prs, ...retainedPrs]);
@@ -4397,24 +4402,27 @@ class DesktopAppServerService {
       backend: params.backend,
       prs: changedStatusPrs,
     });
-    this.rememberPrLookup({
-      lookupKey: params.lookupKey,
-      provider: normalizePullRequestProvider(params.request.provider),
-      branch: params.request.branch.trim(),
-      directoryPaths: params.lookupDirectoryPaths,
-      prs,
-      fetchedAt,
-    });
-    await this.writePrLookupToCache({
-      lookupKey: params.lookupKey,
-      provider: normalizePullRequestProvider(params.request.provider),
-      branch: params.request.branch.trim(),
-      directoryPaths: params.lookupDirectoryPaths,
-      prs,
-      fetchedAt,
-    });
+    // A partial lookup is not an authoritative (possibly empty) branch result.
+    if (!incomplete) {
+      this.rememberPrLookup({
+        lookupKey: params.lookupKey,
+        provider: normalizePullRequestProvider(params.request.provider),
+        branch: params.request.branch.trim(),
+        directoryPaths: params.lookupDirectoryPaths,
+        prs,
+        fetchedAt,
+      });
+      await this.writePrLookupToCache({
+        lookupKey: params.lookupKey,
+        provider: normalizePullRequestProvider(params.request.provider),
+        branch: params.request.branch.trim(),
+        directoryPaths: params.lookupDirectoryPaths,
+        prs,
+        fetchedAt,
+      });
+    }
 
-    return { prs, fetchedAt };
+    return { prs, fetchedAt, incomplete };
   }
 
   private getPullRequestLookupSubscriberPreviousPrs(params: {
@@ -4432,6 +4440,7 @@ class DesktopAppServerService {
     prs: PrSummary[];
     discoveredPrs: PrSummary[];
     cwd?: string;
+    onProviderFailure?: () => void;
   }): Promise<PrSummary[]> {
     const cwd = params.cwd;
     if (!cwd) {
@@ -4462,7 +4471,12 @@ class DesktopAppServerService {
     const fetcher = this.getPrFetcher();
     const refreshed = await Promise.all(
       retainedPrs.map((pr) =>
-        fetcher.fetchPullRequestByUrl({ cwd, url: pr.url }),
+        fetcher.fetchPullRequestByUrl({ cwd, url: pr.url })
+          .catch(() => undefined)
+          .then((refreshed) => {
+            if (!refreshed) params.onProviderFailure?.();
+            return refreshed;
+          }),
       ),
     );
     return refreshed.filter((pr): pr is PrSummary => Boolean(pr))
@@ -4555,11 +4569,12 @@ class DesktopAppServerService {
       }));
     }
     const promise = this.fetchPullRequestLookup(params)
-      .then(async ({ prs, fetchedAt }) => {
+      .then(async ({ prs, fetchedAt, incomplete }) => {
         const publishResult = await this.persistPullRequestLookupSubscribers({
           lookupKey: params.lookupKey,
           prs,
           fetchedAt,
+          incomplete,
         });
         if (trigger === "user") {
           const completedAt = Date.now();
@@ -4690,6 +4705,7 @@ class DesktopAppServerService {
     lookupKey: string;
     prs: PrSummary[];
     fetchedAt: number;
+    incomplete?: boolean;
   }): Promise<{ changedThreadCount: number; subscriberCount: number }> {
     const subscribers = this.prLookupSubscribers.get(params.lookupKey);
     if (!subscribers?.size) {
@@ -4729,7 +4745,9 @@ class DesktopAppServerService {
               backend: subscriber.backend,
               threadId: subscriber.threadId,
               prs: nextPrs,
-              fetchedAt: params.fetchedAt,
+              // Successful status rows were published separately. Retained
+              // failed-provider observations must keep their old freshness.
+              fetchedAt: params.incomplete ? latest?.prsFetchedAt ?? 0 : params.fetchedAt,
               refreshKey: subscriber.requestKey,
             });
             const persistedPrs = updated.prs ?? [];
@@ -5526,14 +5544,13 @@ class DesktopAppServerService {
           (window) =>
             !window.isDestroyed() && window.isVisible() && !window.isMinimized(),
         ),
-      // One token per admitted GraphQL batch (which covers up to a batch of
-      // PRs), not per PR. Any paginated status-context reads stay within that
-      // admitted batch.
+      // Admission pays for one GitHub batch or one GitLab MR read.
+      // Additional GitLab REST reads consume their own shared token.
       tryTakeToken: () => this.prStatusTokenBucket.tryTake(),
       fetchPullRequests: async (refs) =>
-        await this.fetchForgePullRequests(refs),
+        await this.fetchForgePullRequests(refs, false, true),
       fetchPullRequestsAfterReconnect: async (refs) =>
-        await this.fetchForgePullRequests(refs, true),
+        await this.fetchForgePullRequests(refs, true, true),
       getObservationTimestamp: () => this.nextPrObservationTimestamp(),
       applyResults: async (prs, fetchedAt) =>
         await this.applyPolledPrStatuses(prs, fetchedAt),
@@ -6056,7 +6073,7 @@ class DesktopAppServerService {
     return new Set(refreshed.map((pr) => getPrStatusKey(pr)));
   }
 
-  private async fetchForgePullRequests(refs: ForgePrRef[], reconnect = false): Promise<PrSummary[]> {
+  private async fetchForgePullRequests(refs: ForgePrRef[], reconnect = false, gitlabTokensTaken = false): Promise<PrSummary[]> {
     const github = refs.filter((ref) => !ref.gitlabHost);
     const results = github.length === 0 ? [] : reconnect
       ? await this.getPrGraphqlClient().fetchPullRequestsAfterReconnect(github)
@@ -6065,7 +6082,7 @@ class DesktopAppServerService {
     for (const ref of refs) {
       if (!ref.gitlabHost) continue;
       try {
-        results.push(await this.getPrFetcher().gitlab.fetchByRef({ ...ref, host: ref.gitlabHost }));
+        results.push(await this.getPrFetcher().gitlab.fetchByRef({ ...ref, host: ref.gitlabHost }, gitlabTokensTaken));
       } catch {
         // Preserve the previous observation and timestamp on provider failure.
       }
@@ -7623,7 +7640,7 @@ class DesktopAppServerService {
     if (!this.prFetcher) {
       this.prFetcher = new ForgePrFetcher({
         graphqlClient: this.getPrGraphqlClient(),
-      });
+      }, new GitLabPrFetcher({ tryTakeRequestToken: () => this.prStatusTokenBucket.tryTake() }));
     }
     return this.prFetcher;
   }

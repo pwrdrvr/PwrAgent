@@ -908,7 +908,7 @@ const fetchPullRequestByUrl = vi.fn(
   async (_request: { cwd: string; url: string }): Promise<PrSummary | undefined> =>
     undefined,
 );
-const detectPullRequestsForThread = vi.fn(async (): Promise<PrSummary[]> => []);
+const detectPullRequestsForThread = vi.fn(async (_params?: { onProviderFailure?: () => void }): Promise<PrSummary[]> => []);
 
 function githubPr(
   pr: Omit<PrSummary, "provider" | "checkState" | "lifecycleState" | "reviewState" | "mergeState">
@@ -4821,11 +4821,41 @@ describe("app server ipc", () => {
     await vi.waitFor(() => {
       expect(detectPullRequestsForThread).toHaveBeenCalledWith({
         fetcher: expect.any(Object),
+        onProviderFailure: expect.any(Function),
         branch: "owner/authoritative-branch",
         directoryPaths: ["/owner/repo"],
         allowPrimedBranchLookup: false,
       });
     });
+  });
+
+  it("publishes a successful provider while retaining failed-provider status and freshness", async () => {
+    const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
+    const oldObservedAt = Date.now() - 120_000;
+    const github = githubPr({ number: 433, org: "pwrdrvr", repo: "PwrAgent", state: "pending",
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/433" });
+    const gitlab = { ...github, provider: "gitlab.com", number: 17,
+      url: "https://gitlab.com/pwrdrvr/PwrAgent/-/merge_requests/17" };
+    const updatedGithub = { ...github, state: "passing" as const, checkState: "passing" as const };
+    getThreadOverlayState.mockResolvedValue({ backend: "codex", threadId: "thread-1", executionMode: "default",
+      extraLinkedDirectories: [], prs: [github, gitlab], prsFetchedAt: oldObservedAt });
+    detectPullRequestsForThread.mockImplementationOnce(async (params) => {
+      params?.onProviderFailure?.();
+      return [updatedGithub];
+    });
+    fetchPullRequestByUrl.mockRejectedValueOnce(new Error("GitLab unavailable"));
+    registerAppServerIpcHandlers();
+    await handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)?.({}, {
+      backend: "codex", threadId: "thread-1", trigger: "user", branch: "feature", directoryPaths: ["/repo"],
+    });
+    await vi.waitFor(() => expect(setThreadPullRequests).toHaveBeenCalledWith(expect.objectContaining({
+      fetchedAt: oldObservedAt,
+      prs: expect.arrayContaining([expect.objectContaining(updatedGithub), expect.objectContaining(gitlab)]),
+    })));
+    expect(writePrStatusCacheEntries).toHaveBeenCalledWith([expect.objectContaining({
+      pr: expect.objectContaining(updatedGithub), fetchedAt: expect.any(Number),
+    })]);
+    expect(writePrLookupCacheEntry).not.toHaveBeenCalled();
   });
 
   it("returns known PR chips immediately and refreshes mixed terminal/non-terminal state in the background", async () => {
@@ -4896,6 +4926,7 @@ describe("app server ipc", () => {
     await vi.waitFor(() => {
       expect(detectPullRequestsForThread).toHaveBeenCalledWith({
         fetcher: expect.any(Object),
+        onProviderFailure: expect.any(Function),
         branch: "fix/desktop-source-link-goto",
         directoryPaths: ["/repo"],
         allowPrimedBranchLookup: false,
@@ -5088,6 +5119,7 @@ describe("app server ipc", () => {
     await vi.waitFor(() => {
       expect(detectPullRequestsForThread).toHaveBeenCalledWith({
         fetcher: expect.any(Object),
+        onProviderFailure: expect.any(Function),
         branch: "fix/live-diff-activity-normalization",
         directoryPaths: ["/repo"],
         allowPrimedBranchLookup: false,
@@ -5722,6 +5754,7 @@ describe("app server ipc", () => {
     });
     expect(detectPullRequestsForThread).toHaveBeenLastCalledWith({
       fetcher: expect.any(Object),
+        onProviderFailure: expect.any(Function),
       branch: "feat/pr-chip",
       directoryPaths: ["/repo"],
       allowPrimedBranchLookup: false,
@@ -6469,6 +6502,7 @@ describe("app server ipc", () => {
     await vi.waitFor(() => {
       expect(detectPullRequestsForThread).toHaveBeenCalledWith({
         fetcher: expect.any(Object),
+        onProviderFailure: expect.any(Function),
         branch: "fix/new-branch",
         directoryPaths: ["/repo"],
       });
@@ -6546,6 +6580,7 @@ describe("app server ipc", () => {
     await vi.waitFor(() => {
       expect(detectPullRequestsForThread).toHaveBeenCalledWith({
         fetcher: expect.any(Object),
+        onProviderFailure: expect.any(Function),
         branch: "codex/fix-reel-upload-button-swift",
         directoryPaths: ["/repo"],
       });
@@ -8284,6 +8319,7 @@ describe("app server ipc", () => {
     await vi.waitFor(() => {
       expect(detectPullRequestsForThread).toHaveBeenCalledWith({
         fetcher: expect.any(Object),
+        onProviderFailure: expect.any(Function),
         branch: "fix/merged-pr-commits-pushed",
         directoryPaths: ["/repo/wt"],
         allowPrimedBranchLookup: false,
@@ -8370,6 +8406,7 @@ describe("app server ipc", () => {
     await vi.waitFor(() => {
       expect(detectPullRequestsForThread).toHaveBeenCalledWith({
         fetcher: expect.any(Object),
+        onProviderFailure: expect.any(Function),
         branch: "fix/adopted-branch",
         directoryPaths: ["/repo/wt"],
         allowPrimedBranchLookup: false,
@@ -8377,6 +8414,7 @@ describe("app server ipc", () => {
     });
     expect(detectPullRequestsForThread).not.toHaveBeenCalledWith({
       fetcher: expect.any(Object),
+        onProviderFailure: expect.any(Function),
       branch: "fix/old-branch",
       directoryPaths: ["/repo/wt"],
     });
@@ -8438,6 +8476,7 @@ describe("app server ipc", () => {
     await vi.waitFor(() => {
       expect(detectPullRequestsForThread).toHaveBeenCalledWith({
         fetcher: expect.any(Object),
+        onProviderFailure: expect.any(Function),
         branch: "HEAD",
         directoryPaths: ["/repo/wt"],
         allowPrimedBranchLookup: false,
@@ -8633,12 +8672,14 @@ describe("app server ipc", () => {
     await vi.waitFor(() => {
       expect(detectPullRequestsForThread).toHaveBeenCalledWith({
         fetcher: expect.any(Object),
+        onProviderFailure: expect.any(Function),
         branch: "main",
         directoryPaths: ["/repo/primary"],
         allowPrimedBranchLookup: false,
       });
       expect(detectPullRequestsForThread).toHaveBeenCalledWith({
         fetcher: expect.any(Object),
+        onProviderFailure: expect.any(Function),
         branch: "fix/channelsv2-live-pods",
         directoryPaths: ["/worktrees/kube-manifests"],
         allowPrimedBranchLookup: false,
@@ -8730,6 +8771,7 @@ describe("app server ipc", () => {
     await vi.waitFor(() => {
       expect(detectPullRequestsForThread).toHaveBeenCalledWith({
         fetcher: expect.any(Object),
+        onProviderFailure: expect.any(Function),
         branch: "HEAD",
         directoryPaths: ["/worktrees/PwrAgnt"],
         allowPrimedBranchLookup: false,

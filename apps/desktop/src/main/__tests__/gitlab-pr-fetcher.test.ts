@@ -144,3 +144,79 @@ describe("GitLab MR routing and status", () => {
     expect(parseDesktopSettingsToml(written, "fixture.toml").applications).toMatchObject({ gh: { path: "/fixture/gh" }, glab: { path: "/fixture/glab" } });
   });
 });
+
+describe("review regressions", () => {
+  it.each(["missing", "expired", "outage"])("keeps successful GitHub discovery when GitLab is %s", async (failure) => {
+    const github = { ...parseGitLabMr(mr), provider: "github.com", org: "team", repo: "project",
+      url: "https://github.com/team/project/pull/17" };
+    const gitlab = new GitLabPrFetcher({
+      discover: async () => failure === "missing" ? { candidates: [] } : discovery,
+      resolveRepos: async () => [ref],
+      run: async () => { throw new Error(failure); },
+    });
+    const fetcher = new ForgePrFetcher({
+      probeGhAvailable: async () => true,
+      resolveGitHubRepos: async () => [{ host: "github.com", owner: "team", repo: "project" }],
+      graphqlClient: { fetchPullRequests: async () => [], fetchPullRequestsForBranches: async () => new Map([["team/project#feature", [github]]]) },
+    }, gitlab);
+    const onProviderFailure = vi.fn();
+    expect(await fetcher.fetchAllPullRequestsForBranch({ cwd: "/mixed", branch: "feature", onProviderFailure })).toEqual([github]);
+    expect(onProviderFailure).toHaveBeenCalledOnce();
+  });
+
+  it.each(["merge", "train"])("verifies the source parent of a synthetic %s pipeline", async (kind) => {
+    for (const [status, expected] of [["running", "pending"], ["success", "passing"], ["failed", "failing"]]) {
+      const { fetcher, run } = fixture((endpoint) => endpoint.includes("/repository/commits/")
+        ? { id: "synthetic", parent_ids: ["target-or-previous-train", "new-head"] }
+        : { ...mr, head_pipeline: { status, sha: "synthetic", ref: `refs/merge-requests/17/${kind}`, project_id: 123 } });
+      expect(await fetcher.fetchByRef(ref)).toMatchObject({ headSha: "new-head", checkState: expected });
+      expect(run).toHaveBeenLastCalledWith("/fixture/glab", ["api", "--hostname", "gitlab.com", "--method", "GET", "projects/123/repository/commits/synthetic"]);
+    }
+  });
+
+  it("does not apply a synthetic pipeline for an older source head", async () => {
+    const { fetcher } = fixture((endpoint) => endpoint.includes("/repository/commits/")
+      ? { id: "synthetic", parent_ids: ["target", "old-head"] }
+      : { ...mr, head_pipeline: { status: "success", sha: "synthetic", ref: "refs/merge-requests/17/train" } });
+    expect(await fetcher.fetchByRef(ref)).toMatchObject({ headSha: "new-head", checkState: "unknown" });
+  });
+
+  it("charges every REST request, including synthetic commit verification", async () => {
+    let remaining = 1;
+    const tryTakeRequestToken = vi.fn(() => remaining-- > 0);
+    const run = vi.fn(async () => JSON.stringify({ ...mr, head_pipeline: {
+      status: "success", sha: "synthetic", ref: "refs/merge-requests/17/merge",
+    } }));
+    const fetcher = new GitLabPrFetcher({ discover: async () => discovery, run, tryTakeRequestToken });
+    await expect(fetcher.fetchByRef(ref)).rejects.toThrow("budget");
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(tryTakeRequestToken).toHaveBeenCalledTimes(2);
+  });
+
+  it("uses the scheduler's admission for exactly the initial MR request", async () => {
+    const tryTakeRequestToken = vi.fn(() => true);
+    const run = vi.fn(async (_command: string, args: string[]) => JSON.stringify(args.at(-1)?.includes("/repository/commits/")
+      ? { id: "synthetic", parent_ids: ["target", "new-head"] }
+      : { ...mr, head_pipeline: { status: "success", sha: "synthetic", ref: "refs/merge-requests/17/merge" } }));
+    const fetcher = new GitLabPrFetcher({ discover: async () => discovery, run, tryTakeRequestToken });
+    expect(await fetcher.fetchByRef(ref, true)).toMatchObject({ checkState: "passing" });
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(tryTakeRequestToken).toHaveBeenCalledTimes(1);
+  });
+
+  it("bounds concurrent subprocesses without an unbounded wait queue", async () => {
+    const releases: Array<() => void> = [];
+    const run = vi.fn((_command: string, args: string[]) => new Promise<string>((resolve) => {
+      const number = Number(args.at(-1)?.split("/").pop());
+      releases.push(() => resolve(JSON.stringify({ ...mr, iid: number, web_url: mr.web_url.replace(/17$/, String(number)) })));
+    }));
+    const tryTakeRequestToken = vi.fn(() => true);
+    const fetcher = new GitLabPrFetcher({ discover: async () => discovery, run, tryTakeRequestToken });
+    const pending = Promise.allSettled(Array.from({ length: 40 }, (_, index) => fetcher.fetchByRef({ ...ref, number: index + 1 })));
+    await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(3));
+    releases.forEach((release) => release());
+    const results = await pending;
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(3);
+    expect(tryTakeRequestToken).toHaveBeenCalledTimes(3);
+  });
+});

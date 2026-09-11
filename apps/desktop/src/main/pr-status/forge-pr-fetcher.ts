@@ -45,11 +45,16 @@ export class ForgePrFetcher extends GithubPrFetcher {
   }
 
   override async fetchAllPullRequestsForBranch(params: {
-    cwd: string; branch: string; allowPrimed?: boolean;
+    cwd: string; branch: string; allowPrimed?: boolean; onProviderFailure?: () => void;
   }): Promise<PrSummary[]> {
     const github = await super.fetchAllPullRequestsForBranch(params);
-    const gitlab = await this.gitlab.fetchForBranch(params.cwd, params.branch);
-    return [...github, ...gitlab];
+    try {
+      const gitlab = await this.gitlab.fetchForBranch(params.cwd, params.branch);
+      return [...github, ...gitlab];
+    } catch {
+      params.onProviderFailure?.();
+      return github;
+    }
   }
 
   override async fetchPullRequestByUrl(params: { cwd: string; url: string }): Promise<PrSummary | undefined> {

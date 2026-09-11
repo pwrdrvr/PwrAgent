@@ -243,6 +243,7 @@ export class GithubPrFetcher {
      * fresh result into a later scheduled refresh.
      */
     allowPrimed?: boolean;
+    onProviderFailure?: () => void;
   }): Promise<PrSummary[]> {
     // A batched in-process lookup may already have answered this exact
     // (cwd, branch). Consuming it here is what lets the background discovery
@@ -253,7 +254,9 @@ export class GithubPrFetcher {
       return primed;
     }
     const repos = await this.resolveGitHubRepos(params.cwd);
-    if (repos.length === 0 || !(await this.isGhAvailable())) {
+    if (repos.length === 0) return [];
+    if (!(await this.isGhAvailable())) {
+      params.onProviderFailure?.();
       return [];
     }
     try {
@@ -271,6 +274,7 @@ export class GithubPrFetcher {
       }
       return [...byUrl.values()];
     } catch (error) {
+      params.onProviderFailure?.();
       fetcherLog.debug("in-process branch PR lookup failed", {
         cwd: params.cwd,
         branch: params.branch,
