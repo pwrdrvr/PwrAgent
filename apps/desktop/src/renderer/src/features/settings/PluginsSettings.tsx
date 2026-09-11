@@ -875,7 +875,7 @@ export function PluginsSettings(props: {
         eyebrow="PwrAgent gateway"
         title="PwrAgent connections"
         sectionId="managed-mcp-connections"
-        description="PwrAgent keeps OAuth credentials encrypted in this profile, refreshes them centrally, and gives selected threads a local proxy instead of copying tokens into each agent process. Choose which of these a thread may use under MCP access in its composer."
+        description="PwrAgent keeps OAuth credentials encrypted in this profile, refreshes them centrally, and gives selected threads a local proxy instead of copying tokens into each agent process."
         chip={readinessChip}
         chipKind={readiness.ready === 0 && readiness.total > 0 ? "warn" : "default"}
       >
@@ -911,9 +911,8 @@ export function PluginsSettings(props: {
           * cheaper than a discovery failure after the record is written.
           */}
         <p className="settings-mcp-create__constraint">
-          Add a <strong>remote MCP server that signs in with OAuth</strong>.
-          Command-line (stdio) servers are configured in the agent itself and
-          appear under the agent&rsquo;s own servers below.
+          <strong>Remote MCP servers that sign in with OAuth.</strong>{" "}
+          Command-line (stdio) servers belong in the agent&rsquo;s own config.
         </p>
         <form
           className="settings-mcp-create"
@@ -1395,14 +1394,23 @@ function ManagedMcpConnectionRow(props: {
   return (
     <article className="settings-mcp-row settings-mcp-row--managed">
       <div className="settings-mcp-row__body">
-        <strong>{connection.displayName}</strong>
-        <span title={connection.serverUrl}>{connection.serverUrl}</span>
-        <p className="settings-mcp-row__state" data-tone={setup.tone}>
-          <span aria-hidden="true" className="settings-mcp-row__state-dot" />
-          <span>
-            <b>{setup.headline}</b> {setup.detail}
+        <div className="settings-mcp-row__title">
+          <strong>{connection.displayName}</strong>
+          {/*
+            * One chip, toned by the resolved state. The pair this replaced
+            * could contradict itself — `Not connected` beside an `On` switch —
+            * and a row carries its state better in color than in a sentence.
+            */}
+          <span
+            className={`settings-pathrow__chip${
+              setup.tone === "idle" ? "" : ` settings-pathrow__chip--${setup.tone}`
+            }`}
+          >
+            {setup.headline}
           </span>
-        </p>
+        </div>
+        <span title={connection.serverUrl}>{connection.serverUrl}</span>
+        <p className="settings-mcp-row__state">{setup.detail}</p>
       </div>
       <div className="settings-mcp-row__actions">
         {app ? (
