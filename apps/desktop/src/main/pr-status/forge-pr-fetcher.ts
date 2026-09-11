@@ -17,7 +17,15 @@ export class ForgePrFetcher extends GithubPrFetcher {
   readonly gitlab: GitLabPrFetcher;
   /** Operator's per-forge switch; defaults to on so tests and callers
    *  that never wire it keep the pre-gate behavior. */
-  private readonly isProviderEnabled: (provider: "github" | "gitlab") => boolean;
+  private readonly providerEnabled: (provider: "github" | "gitlab") => boolean;
+
+  /** The operator's per-forge switch. Public because the poll path reaches
+   *  the transports directly and must apply the same gate. */
+  isProviderEnabled(provider: "github" | "gitlab"): boolean {
+    return this.providerEnabled(provider);
+  }
+
+  private readonly options: GithubPrFetcherOptions;
 
   constructor(
     options: GithubPrFetcherOptions & {
@@ -26,28 +34,38 @@ export class ForgePrFetcher extends GithubPrFetcher {
     gitlab = new GitLabPrFetcher(),
   ) {
     super(options);
+    this.options = options;
     this.gitlab = gitlab;
-    this.isProviderEnabled = options.isProviderEnabled ?? (() => true);
+    this.providerEnabled = options.isProviderEnabled ?? (() => true);
   }
 
   async getProviderAvailability(directories: string[], urls: string[] = []): Promise<PullRequestProviderAvailability[]> {
-    let github = urls.some((url) => Boolean(parsePrRefFromUrl(url)));
-    const gitlabHosts = new Set(urls.flatMap((url) => {
-      const ref = parseGitLabMrUrl(url);
-      return ref ? [ref.host] : [];
-    }));
-    for (const cwd of directories) {
-      github ||= (await resolveGitHubReposForDirectory(cwd)).length > 0;
-      for (const repo of await resolveGitLabReposForDirectory(cwd)) gitlabHosts.add(repo.host);
-    }
-    const statuses: PullRequestProviderAvailability[] = [];
     // A disabled forge reports nothing rather than reporting unavailable:
     // "you turned this off" is not a failure the operator needs told about
-    // on every refresh.
-    if (github && this.isProviderEnabled("github")) {
+    // on every refresh. Decided first so a disabled forge costs no remote
+    // resolution at all.
+    const wantGithub = this.isProviderEnabled("github");
+    const wantGitLab = this.isProviderEnabled("gitlab");
+    let github = wantGithub && urls.some((url) => Boolean(parsePrRefFromUrl(url)));
+    const gitlabHosts = new Set(wantGitLab ? urls.flatMap((url) => {
+      const ref = parseGitLabMrUrl(url);
+      return ref ? [ref.host] : [];
+    }) : []);
+    // Both resolvers read the same TTL-cached remote list, so the two passes
+    // over one directory cost one `git remote` at most.
+    const resolveGitHub = this.options.resolveGitHubRepos ?? resolveGitHubReposForDirectory;
+    const resolveGitLab = this.gitlab.resolveRepos;
+    await Promise.all(directories.map(async (cwd) => {
+      if (wantGithub && !github && (await resolveGitHub(cwd)).length > 0) github = true;
+      if (wantGitLab) {
+        for (const repo of await resolveGitLab(cwd)) gitlabHosts.add(repo.host);
+      }
+    }));
+    const statuses: PullRequestProviderAvailability[] = [];
+    if (github) {
       statuses.push({ provider: "github.com", cli: "gh", available: await this.isGhAvailable() });
     }
-    if (gitlabHosts.size > 0 && this.isProviderEnabled("gitlab")) {
+    if (gitlabHosts.size > 0) {
       const available = await this.gitlab.isAvailable();
       for (const provider of gitlabHosts) {
         statuses.push({ provider, cli: "glab", available, error: available
@@ -74,10 +92,19 @@ export class ForgePrFetcher extends GithubPrFetcher {
     }
   }
 
-  override async fetchPullRequestByUrl(params: { cwd: string; url: string }): Promise<PrSummary | undefined> {
+  override async fetchPullRequestByUrl(params: {
+    cwd: string; url: string; onProviderFailure?: () => void;
+  }): Promise<PrSummary | undefined> {
     const ref = parseGitLabMrUrl(params.url);
     if (ref) {
-      return this.isProviderEnabled("gitlab") ? await this.gitlab.fetchByRef(ref) : undefined;
+      // A disabled forge is not a failure, so it reports none.
+      if (!this.isProviderEnabled("gitlab")) return undefined;
+      try {
+        return await this.gitlab.fetchByRef(ref);
+      } catch {
+        params.onProviderFailure?.();
+        return undefined;
+      }
     }
     return this.isProviderEnabled("github")
       ? await super.fetchPullRequestByUrl(params)

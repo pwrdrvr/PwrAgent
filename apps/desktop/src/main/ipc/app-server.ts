@@ -4471,11 +4471,17 @@ class DesktopAppServerService {
     const fetcher = this.getPrFetcher();
     const refreshed = await Promise.all(
       retainedPrs.map((pr) =>
-        fetcher.fetchPullRequestByUrl({ cwd, url: pr.url })
-          .catch(() => undefined)
-          .then((refreshed) => {
-            if (!refreshed) params.onProviderFailure?.();
-            return refreshed;
+        fetcher
+          .fetchPullRequestByUrl({
+            cwd,
+            url: pr.url,
+            ...(params.onProviderFailure
+              ? { onProviderFailure: params.onProviderFailure }
+              : {}),
+          })
+          .catch(() => {
+            params.onProviderFailure?.();
+            return undefined;
           }),
       ),
     );
@@ -6074,15 +6080,25 @@ class DesktopAppServerService {
   }
 
   private async fetchForgePullRequests(refs: ForgePrRef[], reconnect = false, gitlabTokensTaken = false): Promise<PrSummary[]> {
-    const github = refs.filter((ref) => !ref.gitlabHost);
-    const results = github.length === 0 ? [] : reconnect
+    // This path reaches the transports directly rather than through
+    // ForgePrFetcher's own methods, so it has to apply the operator's
+    // per-forge switch itself. Without this the background poller keeps
+    // spawning `glab` and minting GitHub tokens for a forge that Settings
+    // reports as disabled.
+    const fetcher = this.getPrFetcher();
+    const github = fetcher.isProviderEnabled("github")
+      ? refs.filter((ref) => !ref.gitlabHost)
+      : [];
+    // Copy: the client owns the array it returned and may retain it.
+    const results = github.length === 0 ? [] : [...(reconnect
       ? await this.getPrGraphqlClient().fetchPullRequestsAfterReconnect(github)
-      : await this.getPrGraphqlClient().fetchPullRequests(github);
+      : await this.getPrGraphqlClient().fetchPullRequests(github))];
+    if (!fetcher.isProviderEnabled("gitlab")) return results;
     // Keep GitLab REST calls sequential within each admitted poll batch.
     for (const ref of refs) {
       if (!ref.gitlabHost) continue;
       try {
-        results.push(await this.getPrFetcher().gitlab.fetchByRef({ ...ref, host: ref.gitlabHost }, gitlabTokensTaken));
+        results.push(await fetcher.gitlab.fetchByRef({ ...ref, host: ref.gitlabHost }, gitlabTokensTaken));
       } catch {
         // Preserve the previous observation and timestamp on provider failure.
       }

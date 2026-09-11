@@ -13,6 +13,7 @@ import type {
 } from "@pwragent/shared";
 import type { AppearanceController } from "../../lib/useAppearance";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { isXcodeLicenseCandidate } from "./CommandToolsSettings";
 import type { PwrAgentProfilesState } from "../../lib/usePwrAgentProfiles";
 import type { DesktopSettingsState } from "./useDesktopSettings";
 import { AboutSettings } from "./AboutSettings";
@@ -163,8 +164,18 @@ function describeGitNavChild(
     const discovery = snapshot?.applications.git.discovery;
     const base = { key: "git", label: "Git", sub: "git" };
     if (!discovery) return base;
-    if (discovery.selectedCommand) return { ...base, dot: "ok" };
-    return { ...base, dot: "bad", chip: "missing" };
+    // Same three states the Git card's own pill reports. A selected git that
+    // the Xcode license check blocks is not "fine" — reading only
+    // selectedCommand showed a green dot over a card saying it was broken.
+    const xcodeLicenseBlocked = discovery.candidates.some(isXcodeLicenseCandidate);
+    if (discovery.selectedCommand) {
+      return xcodeLicenseBlocked
+        ? { ...base, dot: "warn", chip: "license" }
+        : { ...base, dot: "ok" };
+    }
+    return xcodeLicenseBlocked
+      ? { ...base, dot: "bad", chip: "license" }
+      : { ...base, dot: "bad", chip: "missing" };
   }
 
   const isGitLab = child === "gitlab";
@@ -360,7 +371,10 @@ export function SettingsScreen(props: {
   const glabEnabled = snapshot?.applications.glab?.enabled.value === true;
   const seededForgesRef = useRef<string | undefined>(undefined);
   useEffect(() => {
-    const seedKey = `${ghEnabled}:${glabEnabled}`;
+    // Keyed on API availability too: desktopApi is optional and can arrive
+    // after the first render, and without it in the key the seed would be
+    // marked done having probed nothing.
+    const seedKey = `${Boolean(desktopApi)}:${ghEnabled}:${glabEnabled}`;
     if (seededForgesRef.current === seedKey) return;
     seededForgesRef.current = seedKey;
     let cancelled = false;

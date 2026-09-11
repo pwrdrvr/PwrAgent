@@ -342,7 +342,10 @@ export async function resolveGitLabReposForDirectory(
   const repos = new Map<string, GitHubRepoRef>();
   for (const { repo } of await readParsedGitRemotes(cwd, options)) {
     if (repo && isGitLabHost(repo.host)) {
-      repos.set(`${repo.host}/${repo.owner}/${repo.repo}`, repo);
+      repos.set(
+        `${repo.host.toLowerCase()}/${repo.owner.toLowerCase()}/${repo.repo.toLowerCase()}`,
+        repo,
+      );
     }
   }
   return [...repos.values()];

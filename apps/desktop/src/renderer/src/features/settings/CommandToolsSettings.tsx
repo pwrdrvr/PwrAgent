@@ -305,8 +305,12 @@ export function GhToolSection(props: {
   // touched by self-managed operators, and an unpersisted field sent them
   // back to gitlab.com — a host they may have no account on — on every
   // remount, which then reported a red "Not signed in" for the wrong server.
-  const configuredHost =
-    props.snapshot.applications.glab?.host?.value.trim() || DEFAULT_GITLAB_HOST;
+  // GitLab only. Reading this for the GitHub instance too put glab's host in
+  // `load`'s dependency list for both, so editing the GitLab host re-probed
+  // GitHub and flashed its pill back to "Checking…".
+  const configuredHost = isGitLab
+    ? props.snapshot.applications.glab?.host?.value.trim() || DEFAULT_GITLAB_HOST
+    : DEFAULT_GITLAB_HOST;
   const [host, setHost] = useState(configuredHost);
   useEffect(() => {
     setHost(configuredHost);
@@ -767,7 +771,7 @@ function commandDiscoveryFailureDetail(reason?: string): string | undefined {
   return sharedCommandDiscoveryFailureDetail(reason, describeXcodeLicenseFailure);
 }
 
-function isXcodeLicenseCandidate(
+export function isXcodeLicenseCandidate(
   candidate: DesktopGitDiscoveryCandidate,
 ): boolean {
   return candidate.command === "/usr/bin/git"

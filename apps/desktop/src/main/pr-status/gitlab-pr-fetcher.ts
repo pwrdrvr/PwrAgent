@@ -7,6 +7,8 @@ import { getDesktopSettingsService } from "../settings/desktop-settings-singleto
 import { resolveGitLabReposForDirectory } from "./git-remote";
 
 const execFileAsync = promisify(execFile);
+/** Concurrent `glab` subprocesses admitted at once. */
+const API_CONCURRENCY = 3;
 export type GitLabRef = { host: string; owner: string; repo: string; number: number };
 
 export function parseGitLabMrUrl(value: string): GitLabRef | undefined {
@@ -109,6 +111,11 @@ export class GitLabPrFetcher {
     this.options = options;
   }
 
+  /** The injected resolver, so callers outside this class share the seam. */
+  get resolveRepos(): typeof resolveGitLabReposForDirectory {
+    return this.options.resolveRepos ?? resolveGitLabReposForDirectory;
+  }
+
   invalidate(): void {
     this.discovery = undefined;
     this.statuses.clear();
@@ -139,7 +146,7 @@ export class GitLabPrFetcher {
     if (existing) return await existing as T;
     // Reject excess work instead of queueing unbounded subprocesses. Duplicate
     // callers above share the request and do not consume another slot or token.
-    if (this.requests.size >= 3) throw new Error("GitLab request concurrency limit reached.");
+    if (this.requests.size >= API_CONCURRENCY) throw new Error("GitLab request concurrency limit reached.");
     if (reportFailure && !requestTokenTaken && this.options.tryTakeRequestToken && !this.options.tryTakeRequestToken()) {
       throw new Error("PR status refresh budget is temporarily exhausted.");
     }
@@ -251,7 +258,7 @@ export class GitLabPrFetcher {
   }
 
   async fetchForBranch(cwd: string, branch: string): Promise<PrSummary[]> {
-    const repos = await (this.options.resolveRepos ?? resolveGitLabReposForDirectory)(cwd);
+    const repos = await this.resolveRepos(cwd);
     const prs: PrSummary[] = [];
     for (const repo of repos) {
       const prefix = `projects/${encodeURIComponent(`${repo.owner}/${repo.repo}`)}/merge_requests`;
@@ -260,11 +267,18 @@ export class GitLabPrFetcher {
         const rows = await this.api<GitLabMrPayload[]>(repo.host,
           `${prefix}?scope=all&state=all&source_branch=${encodeURIComponent(branch)}&per_page=100&page=${page}`, true);
         if (!Array.isArray(rows)) throw new Error("GitLab returned an invalid merge request list.");
-        for (const row of rows) {
-          prs.push(await this.fetchByRef({ ...repo, number: row.iid }));
+        // The list endpoint omits head_pipeline, so each MR still needs its
+        // own read. Run them at the transport's own concurrency bound rather
+        // than one at a time — a fourth in flight would be rejected.
+        for (let index = 0; index < rows.length; index += API_CONCURRENCY) {
+          prs.push(...await Promise.all(
+            rows.slice(index, index + API_CONCURRENCY)
+              .map((row) => this.fetchByRef({ ...repo, number: row.iid })),
+          ));
         }
+        // Stop at the cap, but keep the pages already paid for: throwing here
+        // discarded 1000 fetched MRs and made the whole provider look failed.
         if (rows.length < 100) break;
-        if (page === 10) throw new Error("GitLab merge request lookup exceeded its page limit.");
       }
     }
     for (const repo of repos) this.failures.delete(repo.host);

@@ -245,7 +245,10 @@ export function SettingsSectionStack(props: {
     requestedFocusRef.current = requested;
     didRestoreFocusRef.current = true;
     rememberSectionVisit(target.id);
-    setCollapsedSections((current) =>
+    // Through the helper, not setCollapsedSections: the helper is what keeps
+    // `savedCollapsedSectionsByPane` in step, and without it a nav-driven
+    // expand is forgotten the next time the pane re-seeds.
+    updateCollapsedSections((current) =>
       current[target.id] === true ? { ...current, [target.id]: false } : current,
     );
     target.element.scrollIntoView({ block: "start", behavior: "smooth" });

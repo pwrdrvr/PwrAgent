@@ -473,8 +473,10 @@ export function buildPrPollBatches(targets: PrPollTarget[]): PrPollTarget[][] {
   let github: PrPollTarget[] = [];
   for (const target of targets) {
     const ref = parsePrRefFromUrl(target.pr.url);
-    if (!ref) continue;
-    if (ref.gitlabHost) {
+    // A URL this scheduler cannot parse still rides the general batch, as it
+    // did before batching became provider-aware. Dropping it here would leave
+    // it unpolled AND unmarked, so it stays due and is reselected every tick.
+    if (ref?.gitlabHost) {
       if (github.length) batches.push(github);
       github = [];
       batches.push([target]);

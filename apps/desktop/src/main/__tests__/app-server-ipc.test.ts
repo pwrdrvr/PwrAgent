@@ -5903,14 +5903,18 @@ describe("app server ipc", () => {
     resolveFetch?.([]);
 
     await vi.waitFor(() => {
-      expect(fetchPullRequestByUrl).toHaveBeenCalledWith({
-        cwd: "/repo",
-        url: "https://github.com/ExampleOrg/ExampleApp/pull/255",
-      });
-      expect(fetchPullRequestByUrl).toHaveBeenCalledWith({
-        cwd: "/repo",
-        url: "https://github.com/ExampleOrg/ExampleApp/pull/256",
-      });
+      expect(fetchPullRequestByUrl).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cwd: "/repo",
+          url: "https://github.com/ExampleOrg/ExampleApp/pull/255",
+        }),
+      );
+      expect(fetchPullRequestByUrl).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cwd: "/repo",
+          url: "https://github.com/ExampleOrg/ExampleApp/pull/256",
+        }),
+      );
     });
     await vi.waitFor(() => {
       expect(setThreadPullRequests).toHaveBeenCalledWith({
@@ -6586,10 +6590,12 @@ describe("app server ipc", () => {
       });
     });
     await vi.waitFor(() => {
-      expect(fetchPullRequestByUrl).toHaveBeenCalledWith({
-        cwd: "/repo",
-        url: "https://github.com/ExampleOrg/ExampleApp/pull/255",
-      });
+      expect(fetchPullRequestByUrl).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cwd: "/repo",
+          url: "https://github.com/ExampleOrg/ExampleApp/pull/255",
+        }),
+      );
     });
     await vi.waitFor(() => {
       expect(setThreadPullRequests).toHaveBeenCalledWith({
@@ -6695,10 +6701,12 @@ describe("app server ipc", () => {
       prs: [],
     });
     await vi.waitFor(() => {
-      expect(fetchPullRequestByUrl).toHaveBeenCalledWith({
-        cwd: "/repo",
-        url: "https://github.com/ExampleOrg/ExampleApp/pull/255",
-      });
+      expect(fetchPullRequestByUrl).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cwd: "/repo",
+          url: "https://github.com/ExampleOrg/ExampleApp/pull/255",
+        }),
+      );
     });
     await vi.waitFor(() => {
       expect(setThreadPullRequests).toHaveBeenCalledWith({
@@ -6750,10 +6758,12 @@ describe("app server ipc", () => {
     await handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)?.({}, request);
 
     await vi.waitFor(() => {
-      expect(fetchPullRequestByUrl).toHaveBeenCalledWith({
-        cwd: "/repo",
-        url: "https://github.com/ExampleOrg/ExampleApp/pull/255",
-      });
+      expect(fetchPullRequestByUrl).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cwd: "/repo",
+          url: "https://github.com/ExampleOrg/ExampleApp/pull/255",
+        }),
+      );
     });
     expect(writePrStatusCacheEntries).toHaveBeenCalledWith([
       {
@@ -8778,10 +8788,12 @@ describe("app server ipc", () => {
       });
     });
     await vi.waitFor(() => {
-      expect(fetchPullRequestByUrl).toHaveBeenCalledWith({
-        cwd: "/worktrees/PwrAgnt",
-        url: "https://github.com/pwrdrvr/PwrAgent/pull/981",
-      });
+      expect(fetchPullRequestByUrl).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cwd: "/worktrees/PwrAgnt",
+          url: "https://github.com/pwrdrvr/PwrAgent/pull/981",
+        }),
+      );
     });
     await vi.waitFor(() => {
       expect(setThreadPullRequests).toHaveBeenCalledWith({

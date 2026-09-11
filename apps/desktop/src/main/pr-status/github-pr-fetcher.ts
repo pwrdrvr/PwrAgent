@@ -292,8 +292,16 @@ export class GithubPrFetcher {
   async fetchPullRequestByUrl(params: {
     cwd: string;
     url: string;
+    /**
+     * Called only when the provider could not answer. `undefined` alone
+     * cannot carry that: it is also how a PR that no longer exists, and a
+     * URL this provider does not own, come back. Callers that suppress
+     * caching on a partial lookup must key on this, not on the result.
+     */
+    onProviderFailure?: () => void;
   }): Promise<PrSummary | undefined> {
     if (!(await this.isGhAvailable())) {
+      params.onProviderFailure?.();
       return undefined;
     }
     const ref = parsePrRefFromUrl(params.url);
@@ -303,6 +311,7 @@ export class GithubPrFetcher {
     try {
       return (await this.graphqlClient.fetchPullRequests([ref]))[0];
     } catch (error) {
+      params.onProviderFailure?.();
       fetcherLog.debug("in-process retained PR lookup failed", {
         url: params.url,
         error: error instanceof Error ? error.message : String(error),
