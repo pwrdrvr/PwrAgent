@@ -4,15 +4,11 @@
 
 An open-source desktop coding agent. Pair it once with Telegram, Discord, Slack, Mattermost, Feishu / Lark, or LINE — then start, resume, steer, and approve from wherever you happen to be reading.
 
-<p>
-  <a href="https://github.com/pwrdrvr/PwrAgent/releases/latest/download/PwrAgent.dmg">
-    <img src="docs/assets/buttons/download-macos.png" alt="Download for macOS" width="440">
-  </a>
-  &nbsp;
-  <a href="https://docs.pwragent.ai">
-    <img src="docs/assets/buttons/read-the-docs.png" alt="Read the docs" width="440">
-  </a>
-</p>
+**[Download for Mac — Apple Silicon](https://github.com/pwrdrvr/PwrAgent/releases/latest)**
+
+Choose the `arm64.dmg` asset when available. Not sure which Mac? Choose Universal.
+
+[macOS Universal (Apple Silicon + Intel)](https://github.com/pwrdrvr/PwrAgent/releases/latest/download/PwrAgent.dmg) · [Windows (x64)](https://github.com/pwrdrvr/PwrAgent/releases/latest/download/PwrAgent-windows-x64-setup.exe) · [Debian/Ubuntu installation](https://docs.pwragent.ai/linux/) · [Read the docs](https://docs.pwragent.ai)
 
 ![PwrAgent desktop in use — Directories lens grouping threads across two repos, a thread mid-conversation, four messenger status icons in the title bar, per-thread model / access / fast-mode / worktree controls above the composer.](https://docs.pwragent.ai/assets/screenshots/desktop-hero.png)
 
@@ -40,7 +36,7 @@ Screenshots are produced by a Playwright spec that drives the real UI surfaces a
 
 ### Just want to use it
 
-1. **Download** [PwrAgent.dmg](https://github.com/pwrdrvr/PwrAgent/releases/latest/download/PwrAgent.dmg). Universal binary — runs natively on Apple Silicon (M1+) and Intel Macs. Developer ID-signed and Apple-notarized, so first launch is a single Gatekeeper prompt (no right-click-open dance).
+1. **Download** the Apple Silicon (`arm64.dmg`) build from the [latest release](https://github.com/pwrdrvr/PwrAgent/releases/latest) when available, or [PwrAgent.dmg](https://github.com/pwrdrvr/PwrAgent/releases/latest/download/PwrAgent.dmg), the Universal build that runs natively on both Apple Silicon (M1+) and Intel Macs. Developer ID-signed and Apple-notarized, so first launch is a single Gatekeeper prompt (no right-click-open dance).
 2. **Install** by opening the DMG and dragging PwrAgent into Applications.
 3. **(Optional) Pair a messenger** from **Settings → Messaging → \<your platform\>**. End-to-end walkthroughs at **[docs.pwragent.ai/providers/](https://docs.pwragent.ai/providers/)**; the usage guide (bound threads, slash commands, queue/steer, monitor cards, detach) lives at **[docs.pwragent.ai/using-codex/](https://docs.pwragent.ai/using-codex/)**.
 

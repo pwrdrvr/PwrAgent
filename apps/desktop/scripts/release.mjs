@@ -18,6 +18,7 @@
  *                       package/sign an already prepared release-stage without
  *                       reinstalling dependencies or rerunning tests. Defaults
  *                       to macOS; combine with --win for Windows NSIS.
+ *       --mac-arch=arm64: use an isolated Apple Silicon stage (default: universal)
  *       --linux       : build/package a Linux .deb for the current native
  *                       architecture (or PWRAGENT_LINUX_ARCH=x64|arm64)
  *       --win         : build/package a Windows x64 NSIS installer (unsigned
@@ -60,7 +61,6 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const desktopRoot = resolve(__dirname, "..");
 const repoRoot = resolve(desktopRoot, "..", "..");
-const stageDir = join(desktopRoot, "release-stage");
 let codesignKeychainCleanup = null;
 const MAC_CANVAS_BINDINGS = [
   {
@@ -82,6 +82,25 @@ const prepareOnly = args.includes("--prepare-only");
 const signStageOnly = args.includes("--sign-stage-only");
 const linux = args.includes("--linux");
 const win = args.includes("--win");
+const macArch = args.find((arg) => arg.startsWith("--mac-arch="))?.split("=")[1] ?? "universal";
+if (!["universal", "arm64"].includes(macArch) || ((linux || win) && macArch !== "universal")) {
+  throw new Error("--mac-arch must be universal or arm64 and is only valid for macOS");
+}
+const stageDir = join(desktopRoot, macArch === "arm64" ? "release-stage-arm64" : "release-stage");
+const macCanvasBindings = MAC_CANVAS_BINDINGS.filter(
+  ({ lipoArch }) => macArch === "universal" || lipoArch === "arm64",
+);
+const macSlices = macArch === "universal" ? ["x86_64", "arm64"] : ["arm64"];
+
+function verifyMacSlices(file, allowUniversal = false) {
+  const actual = runQuiet("lipo", ["-archs", file]).trim().split(/\s+/).sort();
+  const expected = [...macSlices].sort();
+  const universalFallback = allowUniversal && actual.join(",") === "arm64,x86_64";
+  if (actual.join(",") !== expected.join(",") && !universalFallback) {
+    throw new Error(`Unexpected architectures in ${file}: ${actual.join(", ")}; expected ${expected.join(", ")}`);
+  }
+}
+
 // Release builds pass this so an unsigned Windows installer can never ship
 // unnoticed; local/sandbox/PR builds omit it and stay unsigned. See the `win`
 // branch below and docs/desktop-windows-signing.md.
@@ -464,7 +483,7 @@ function verifyWindowsCanvasBindingInStage() {
 }
 
 function verifyMacCanvasBindingsInStage() {
-  for (const { binding, packageName } of MAC_CANVAS_BINDINGS) {
+  for (const { binding, packageName } of macCanvasBindings) {
     const bindingPath = join(
       stageDir,
       "node_modules",
@@ -479,7 +498,13 @@ function verifyMacCanvasBindingsInStage() {
       );
     }
   }
-  console.log("  verified arm64 and x64 canvas native bindings in release-stage");
+  if (macArch === "arm64") {
+    const unwanted = join(stageDir, "node_modules", "@napi-rs", "canvas-darwin-x64");
+    if (existsSync(unwanted)) {
+      throw new Error("arm64 release stage unexpectedly contains Intel canvas");
+    }
+  }
+  console.log(`  verified ${macArch} canvas native bindings in release-stage`);
 }
 
 function stageDesktopVersion() {
@@ -540,7 +565,7 @@ function ripgrepBundlePlatform() {
       ? "linux-aarch64"
       : "linux-x86_64";
   }
-  return "macos-universal";
+  return macArch === "arm64" ? "macos-arm64" : "macos-universal";
 }
 
 function assertRequiredRipgrepBundle() {
@@ -844,7 +869,7 @@ if (!signStageOnly) {
     runChecked(
       "pnpm",
       ["--filter", "@pwragent/desktop", "build:native:dock"],
-      { cwd: repoRoot },
+      { cwd: repoRoot, env: { PWRAGENT_MAC_ARCH: macArch } },
     );
   }
 
@@ -856,7 +881,7 @@ if (!signStageOnly) {
   // boundary.
   const deployArgs = [
     ...(!linux && !win
-      ? ["--cpu=x64", "--cpu=arm64", "--os=darwin"]
+      ? [...(macArch === "universal" ? ["--cpu=x64"] : []), "--cpu=arm64", "--os=darwin"]
       : []),
     "deploy",
     "--filter",
@@ -953,7 +978,7 @@ if (win) {
   step(`electron-builder --linux deb --${linuxArch} (no builder publish)`);
   builderArgs.push("--linux", "deb", `--${linuxArch}`, "--publish=never");
 } else {
-  step(`electron-builder --mac --universal (${publish ? "publish" : "no publish"}, ${dryrun ? "ad-hoc signed" : "signed"})`);
+  step(`electron-builder --mac --${macArch} (${publish ? "publish" : "no publish"}, ${dryrun ? "ad-hoc signed" : "signed"})`);
   maybeDecodeAppleApiKey();
   if (!dryrun) {
     maybeDecodeCscLink();
@@ -962,7 +987,7 @@ if (win) {
       console.log("  using preloaded Developer ID keychain for electron-builder signing");
     }
   }
-  builderArgs.push("--mac", "--universal");
+  builderArgs.push("--mac", "dmg", "zip", `--${macArch}`);
   if (dryrun) {
     // Use ad-hoc signing (identity=-) instead of no signing (identity=null).
     // electron-builder modifies the Electron binary to set fuses, which
@@ -1059,7 +1084,7 @@ if (linux) {
   process.exit(0);
 }
 
-const builtApp = join(dist, "mac-universal", "PwrAgent.app");
+const builtApp = join(dist, `mac-${macArch}`, "PwrAgent.app");
 const dockTilePlugin = join(
   builtApp,
   "Contents",
@@ -1073,19 +1098,9 @@ const dockTilePluginExecutable = join(
   "PwrAgentDockTilePlugin",
 );
 
-step("verify universal binary slices");
-runChecked("lipo", [
-  join(builtApp, "Contents", "MacOS", "PwrAgent"),
-  "-verify_arch",
-  "x86_64",
-  "arm64",
-]);
-runChecked("lipo", [
-  dockTilePluginExecutable,
-  "-verify_arch",
-  "x86_64",
-  "arm64",
-]);
+step(`verify ${macArch} binary slices`);
+verifyMacSlices(join(builtApp, "Contents", "MacOS", "PwrAgent"));
+verifyMacSlices(dockTilePluginExecutable);
 runChecked("plutil", [
   "-lint",
   join(dockTilePlugin, "Contents", "Info.plist"),
@@ -1096,23 +1111,11 @@ runChecked("codesign", [
   "--verbose=2",
   dockTilePlugin,
 ]);
-runChecked("lipo", [
-  join(
-    builtApp,
-    "Contents",
-    "Resources",
-    "app.asar.unpacked",
-    "node_modules",
-    "better-sqlite3",
-    "build",
-    "Release",
-    "better_sqlite3.node",
-  ),
-  "-verify_arch",
-  "x86_64",
-  "arm64",
-]);
-for (const { binding, lipoArch, packageName } of MAC_CANVAS_BINDINGS) {
+verifyMacSlices(join(
+  builtApp, "Contents", "Resources", "app.asar.unpacked", "node_modules",
+  "better-sqlite3", "build", "Release", "better_sqlite3.node",
+));
+for (const { binding, lipoArch, packageName } of macCanvasBindings) {
   runChecked("lipo", [
     join(
       builtApp,
@@ -1133,23 +1136,21 @@ const bundledGrokExecutable = verifyPackagedGrok(
   join(builtApp, "Contents", "Resources"),
 );
 if (bundledGrokExecutable) {
-  runChecked("lipo", [
-    bundledGrokExecutable,
-    "-verify_arch",
-    "x86_64",
-    "arm64",
-  ]);
+  // Until the pinned Grok release supplies arm64, its verified universal
+  // runtime remains a compatible fallback inside the Apple Silicon app.
+  verifyMacSlices(bundledGrokExecutable, macArch === "arm64");
 }
 
 const bundledRipgrepExecutable = verifyPackagedRipgrep(
   join(builtApp, "Contents", "Resources"),
 );
-runChecked("lipo", [
-  bundledRipgrepExecutable,
-  "-verify_arch",
-  "x86_64",
-  "arm64",
-]);
+verifyMacSlices(bundledRipgrepExecutable);
+if (macArch === "arm64" && existsSync(join(
+  builtApp, "Contents", "Resources", "app.asar.unpacked", "node_modules",
+  "@napi-rs", "canvas-darwin-x64",
+))) {
+  throw new Error("Apple Silicon app contains Intel canvas");
+}
 
 step("verify packaged asar contents");
 runChecked("node", [join(desktopRoot, "scripts", "verify-asar-contents.mjs"), builtApp]);

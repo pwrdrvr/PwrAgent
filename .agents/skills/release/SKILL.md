@@ -6,7 +6,7 @@ description: Prepare, validate, tag, publish, and monitor guarded PwrAgent deskt
 # Release
 
 Use this skill for PwrAgent desktop releases published by the
-`.github/workflows/release.yml` Universal macOS workflow.
+`.github/workflows/release.yml` Universal + Apple Silicon macOS workflow.
 
 ## Read First
 
@@ -263,7 +263,7 @@ Push the tag after the release metadata is already on `RELEASE_BRANCH`:
 git push origin v<version>
 ```
 
-The tag push triggers `Release Desktop (macOS universal)`. The workflow must
+The tag push triggers `Release Desktop (macOS universal + arm64 + Windows + Linux DEB)`. The workflow must
 pass `Check release metadata` in the no-secret `Test and prepare signing input`
 job before the environment-gated `Sign, notarize, publish` job can request
 approval and access Apple signing secrets.
@@ -314,8 +314,10 @@ Expect signed/notarized Universal macOS assets:
 - A versioned Universal DMG, such as `PwrAgent-<version>-universal.dmg`.
 - A stable `PwrAgent.dmg` alias uploaded by the workflow for
   `https://github.com/pwrdrvr/PwrAgent/releases/latest/download/PwrAgent.dmg`.
-- A Universal updater ZIP and `.blockmap`.
-- `latest-mac.yml`.
+- Universal and arm64 updater ZIPs, each with its own `.blockmap`.
+- An Apple Silicon DMG and stable `PwrAgent-arm64.dmg` alias.
+- `PwrAgent-macos-SHA256SUMS` covering both targets and aliases.
+- One merged `latest-mac.yml`, universal legacy path/hash and both ZIP entries.
 
 The stable `PwrAgent.dmg` alias is intentionally unversioned so the website can
 link to the latest release without knowing the current version. Do not remove

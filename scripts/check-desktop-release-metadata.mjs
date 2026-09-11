@@ -452,6 +452,9 @@ assertWorkflowJobOrdersText(
 );
 for (const expected of [
   "--sign-stage-only --no-publish",
+  "--sign-stage-only --no-publish --mac-arch=arm64",
+  "node apps/desktop/scripts/assemble-mac-release.mjs",
+  "apps/desktop/release-stage/dist/PwrAgent-macos-SHA256SUMS",
   "Upload macOS release assets",
 ]) {
   assertWorkflowJobContainsText(
@@ -461,6 +464,28 @@ for (const expected of [
     expected,
   );
 }
+for (const expected of [
+  "stage-grok-bundle.mjs --platform macos-aarch64",
+  "--prepare-only --mac-arch=arm64",
+  "apps/desktop/release-stage-arm64 \\",
+  "apps/desktop/scripts/assemble-mac-release.mjs \\",
+]) {
+  assertWorkflowJobContainsText(releaseWorkflow, ".github/workflows/release.yml", "prepare", expected);
+}
+assertWorkflowJobOrdersText(
+  releaseWorkflow,
+  ".github/workflows/release.yml",
+  "sign",
+  "--sign-stage-only --no-publish --mac-arch=arm64",
+  "node apps/desktop/scripts/assemble-mac-release.mjs",
+);
+assertWorkflowJobOrdersText(
+  releaseWorkflow,
+  ".github/workflows/release.yml",
+  "sign",
+  "node apps/desktop/scripts/assemble-mac-release.mjs",
+  "Upload macOS release assets",
+);
 for (const unexpected of [
   "gh release upload",
   "continue-on-error: true",

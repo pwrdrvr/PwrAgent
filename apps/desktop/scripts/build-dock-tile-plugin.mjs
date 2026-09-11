@@ -32,6 +32,10 @@ rmSync(outputBundle, { force: true, recursive: true });
 mkdirSync(executableDir, { recursive: true });
 copyFileSync(join(sourceRoot, "Info.plist"), join(contentsDir, "Info.plist"));
 
+const macArch = process.env.PWRAGENT_MAC_ARCH ?? "universal";
+if (!["universal", "arm64"].includes(macArch)) {
+  throw new Error("PWRAGENT_MAC_ARCH must be universal or arm64");
+}
 const compile = spawnSync(
   "xcrun",
   [
@@ -41,8 +45,7 @@ const compile = spawnSync(
     "-bundle",
     "-arch",
     "arm64",
-    "-arch",
-    "x86_64",
+    ...(macArch === "universal" ? ["-arch", "x86_64"] : []),
     "-mmacosx-version-min=12.0",
     "-framework",
     "AppKit",
@@ -72,5 +75,5 @@ if (sign.status !== 0) {
 }
 
 console.log(
-  `[build-dock-tile-plugin] universal bundle → ${outputBundle}`,
+  `[build-dock-tile-plugin] ${macArch} bundle → ${outputBundle}`,
 );
