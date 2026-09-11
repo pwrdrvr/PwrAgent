@@ -7,8 +7,14 @@ export type NavigationReadFailure = {
 };
 
 export function expectedNavigationReadFailure(error: unknown): NavigationReadFailure | undefined {
-  if (!(error instanceof Error) || !("code" in error) || (error.code !== "FEDERATION_PEER_UNAVAILABLE" && error.code !== "navigation_busy")) return undefined;
-  return { navigationReadFailure: true, code: error.code, message: error.message,
+  if (!(error instanceof Error) || !("code" in error)) return undefined;
+  // Federation wraps owner exceptions as handler_failed. NavigationQueryError
+  // preserves its code in the message; recognize only its exact busy prefix so
+  // expected owner contention takes the same quiet IPC path as local contention.
+  const code = error.code === "handler_failed" && error.message.startsWith("handler_failed: [navigation_busy] ")
+    ? "navigation_busy" : error.code;
+  if (code !== "FEDERATION_PEER_UNAVAILABLE" && code !== "navigation_busy") return undefined;
+  return { navigationReadFailure: true, code, message: error.message,
     ...("instanceId" in error && typeof error.instanceId === "string" ? { instanceId: error.instanceId } : {}) };
 }
 
