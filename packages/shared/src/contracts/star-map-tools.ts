@@ -100,17 +100,23 @@ export type StarMapViewCloud = {
   /** This cloud is one parent thread and its descendants. */
   isParentGroup: boolean;
   expanded: boolean;
+  /**
+   * Complete membership, including members the map has not loaded yet. This
+   * is the number on the cloud's own chip, so it is the number the operator
+   * is reading when they say "that cloud with forty in it".
+   */
   threadCount: number;
   visibleCount: number;
-  /** Folded behind the cloud's `+N more` chip. */
+  /** In the cloud and not drawn: folded, paged away, or off screen. */
   hiddenCount: number;
   /**
-   * Members in the cloud's own order, drawn and folded alike. Capped by the
-   * call's `maxThreads` so the result stays bounded; `threadCount` is always
-   * whole, and `omittedThreadKeyCount` says how many keys the cap withheld.
+   * Members in the cloud's own order, drawn and folded alike. Shorter than
+   * `threadCount` when the map has not loaded the rest or the call's
+   * `maxThreads` capped it; `threadCount` is always whole, and
+   * `omittedThreadKeyCount` says how many keys are missing.
    */
   threadKeys: string[];
-  /** Set when `maxThreads` shortened `threadKeys`. */
+  /** Set when `threadKeys` lists fewer members than `threadCount`. */
   omittedThreadKeyCount?: number;
 };
 

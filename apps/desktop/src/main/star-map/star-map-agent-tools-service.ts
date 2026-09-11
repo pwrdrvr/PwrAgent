@@ -92,12 +92,15 @@ function readViewResponse(
       // acts on the wrong set. `threadCount` stays whole and the omission
       // is stated outright.
       const listed = threadKeys.slice(0, maxThreads);
+      // The snapshot may already withhold keys the map has not loaded, so
+      // the cap adds to that count instead of replacing it.
+      const omitted =
+        (cloud.omittedThreadKeyCount ?? 0)
+        + (threadKeys.length - listed.length);
       return {
         ...cloud,
         threadKeys: listed,
-        ...(threadKeys.length > listed.length
-          ? { omittedThreadKeyCount: threadKeys.length - listed.length }
-          : {}),
+        ...(omitted > 0 ? { omittedThreadKeyCount: omitted } : {}),
       };
     });
 

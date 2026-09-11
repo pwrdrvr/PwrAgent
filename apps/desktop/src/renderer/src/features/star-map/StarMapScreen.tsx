@@ -2747,7 +2747,10 @@ export function StarMapScreen(props: StarMapScreenProps) {
    */
   const manager = useStarMapManager({
     desktopApi: props.desktopApi,
-    threads: props.localThreads,
+    // The resolved list, not the prop: a window that leaves `localThreads`
+    // unset feeds itself, and the manager that read the empty prop would
+    // never find the thread it just created.
+    threads: localThreads,
     openThread,
     onRefreshLocalThreads: props.onRefreshLocalThreads,
     // Reported through the map's one error banner rather than a second one:
