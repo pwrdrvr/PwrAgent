@@ -12,6 +12,7 @@ import {
   buildInstanceClusters,
   computeClusterCloud,
 } from "../star-map-clusters";
+import type { StarMapProjectThread } from "../star-map-projects";
 import { buildStarMapViewSnapshot } from "../star-map-view-snapshot";
 
 const NOW = 1_000_000;
@@ -40,12 +41,38 @@ function thread(
   } as unknown as NavigationThreadSummary;
 }
 
+/**
+ * Stamp the owner a pooled project thread carries. The projects lens pools
+ * threads from every instance, so a project member names the instance that
+ * draws it rather than relying on where it was found.
+ */
+function owned(
+  entry: NavigationThreadSummary,
+  instanceId: string,
+): StarMapProjectThread {
+  return { ...entry, starMapOwnerInstanceId: instanceId };
+}
+
 function cloudFor(threads: NavigationThreadSummary[]) {
   return computeClusterCloud({
     clusters: buildInstanceClusters({ threads, expandedKeys: new Set() }),
     cardWidth: 220,
     heightForThread: () => 112,
   });
+}
+
+/**
+ * Say a cloud holds more than the map has hydrated, the way a paged project
+ * cloud does once the directory reports its real size.
+ */
+function withTotalCount(
+  cloud: ReturnType<typeof cloudFor>,
+  totalCount: number,
+): ReturnType<typeof cloudFor> {
+  return {
+    ...cloud,
+    clusters: cloud.clusters.map((cluster) => ({ ...cluster, totalCount })),
+  };
 }
 
 function baseInput(overrides: Partial<Parameters<typeof buildStarMapViewSnapshot>[0]> = {}) {
@@ -246,7 +273,7 @@ describe("buildStarMapViewSnapshot", () => {
     const project = {
       key: "work",
       label: "work",
-      threads: [alpha, beta],
+      threads: [owned(alpha, "local"), owned(beta, "local")],
       mass: 2,
       lastActivityAt: NOW,
     };
@@ -342,6 +369,30 @@ describe("buildStarMapViewSnapshot", () => {
     expect(folded?.onScreen).toBeUndefined();
   });
 
+  it("counts a paged cloud by what it holds, not by what is loaded", () => {
+    // The map pages project members in, so `threads` is only what has been
+    // hydrated while the cloud's own chip already shows the real total. An
+    // Agent told the smaller number answers "the forty in that cloud" with
+    // whatever happened to be loaded, and says the rest do not exist.
+    const threads = [thread("a1"), thread("a2")];
+    const snapshot = buildStarMapViewSnapshot(
+      baseInput({
+        threadsByInstance: new Map([["local", threads]]),
+        clouds: new Map([["local", withTotalCount(cloudFor(threads), 40)]]),
+        cardRects: drawn("local::codex:a1"),
+      }),
+    );
+    const cloud = snapshot.clouds[0];
+    expect(cloud.threadCount).toBe(40);
+    // Only one of the two hydrated cards is drawn, so the other 39 are as
+    // hidden as the folded one.
+    expect(cloud.visibleCount).toBe(1);
+    expect(cloud.hiddenCount).toBe(39);
+    // The keys it can actually name, and an honest count of the rest.
+    expect(cloud.threadKeys).toHaveLength(2);
+    expect(cloud.omittedThreadKeyCount).toBe(38);
+  });
+
   it("pools the projects lens into clouds that belong to no one instance", () => {
     const local = [thread("a1", { path: "/repo/alpha" })];
     const peer = [thread("a2", { path: "/repo/alpha" })];
@@ -360,7 +411,10 @@ describe("buildStarMapViewSnapshot", () => {
           {
             key: "alpha",
             label: "alpha",
-            threads: [...local, ...peer],
+            threads: [
+              ...local.map((entry) => owned(entry, "local")),
+              ...peer.map((entry) => owned(entry, "peer-7")),
+            ],
             mass: 2,
             lastActivityAt: NOW,
           },

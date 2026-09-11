@@ -157,6 +157,10 @@ export function buildStarMapViewSnapshot(
         cloudKeyByCard.set(cardKey, cluster.key);
         if (drawnRects?.has(cardKey)) visibleCount += 1;
       }
+      // `threads` holds only what the map has hydrated. A paged cloud knows
+      // its true size from the directory's own count, and that is the number
+      // painted on its chip - so it is the number the operator is reading.
+      const threadCount = cluster.totalCount ?? threadKeys.length;
       clouds.push({
         key: cluster.key,
         label: cluster.label,
@@ -165,10 +169,13 @@ export function buildStarMapViewSnapshot(
         isProject: cluster.isProject,
         isParentGroup: cluster.isParentGroup,
         expanded: cluster.expanded,
-        threadCount: threadKeys.length,
+        threadCount,
         visibleCount,
-        hiddenCount: threadKeys.length - visibleCount,
+        hiddenCount: threadCount - visibleCount,
         threadKeys,
+        ...(threadCount > threadKeys.length
+          ? { omittedThreadKeyCount: threadCount - threadKeys.length }
+          : {}),
       });
     }
   }
@@ -199,6 +206,8 @@ export function buildStarMapViewSnapshot(
     isParentGroup: boolean;
     expanded: boolean;
     threadKeys: readonly string[];
+    /** Whole membership when the lens knows it past what it hydrated. */
+    totalCount?: number;
   }): void => {
     let visibleCount = 0;
     for (const threadKey of params.threadKeys) {
@@ -210,16 +219,20 @@ export function buildStarMapViewSnapshot(
       }
       if (drawn) visibleCount += 1;
     }
+    const threadCount = params.totalCount ?? params.threadKeys.length;
     clouds.push({
       key: params.key,
       label: params.label,
       isProject: params.isProject,
       isParentGroup: params.isParentGroup,
       expanded: params.expanded,
-      threadCount: params.threadKeys.length,
+      threadCount,
       visibleCount,
-      hiddenCount: params.threadKeys.length - visibleCount,
+      hiddenCount: threadCount - visibleCount,
       threadKeys: [...params.threadKeys],
+      ...(threadCount > params.threadKeys.length
+        ? { omittedThreadKeyCount: threadCount - params.threadKeys.length }
+        : {}),
     });
   };
 
@@ -240,6 +253,7 @@ export function buildStarMapViewSnapshot(
           threadKeys: cluster.threads.map((thread) =>
             buildThreadIdentityKey(thread.source, thread.id),
           ),
+          totalCount: cluster.totalCount,
         });
       }
       continue;
