@@ -525,13 +525,11 @@ type FederationEventSubscriptionNotification = {
     eventClassSelections?: FederationEventSubscription["eventClassSelections"];
     starMapBootstrap?: FederationBootstrapCursor;
     eventStream?: { protocol: 1; subscriptionId: string };
-    displayResources?: 1;
   };
 };
 
 type IncomingEventSubscription = {
   stream?: { epoch: string; sequence: number; accounting: FederationAccountingStream };
-  displayResources?: 1;
   /** Lifetime of this Star Map interest, independent of other event classes. */
   starMapBootstrapToken?: object;
   eventClasses: Set<FederationEventClass>;
@@ -4612,7 +4610,7 @@ export class DesktopFederationRuntime {
         params: {
           eventClasses: [...subscription.eventClasses],
           ...(subscription.eventClasses.has("transcript")
-            ? { eventStream: { protocol: 1, subscriptionId }, displayResources: 1 } : {}),
+            ? { eventStream: { protocol: 1, subscriptionId } } : {}),
           ...(eventClassSelections ? { eventClassSelections } : {}),
           ...(subscription.eventClasses.has("star_map") ? {
             starMapBootstrap: this.arrangementBootstrapCursors.get(sourceInstanceId) ?? { protocol: 1 },
@@ -4689,7 +4687,6 @@ export class DesktopFederationRuntime {
       && typeof notification.params.eventStream.subscriptionId === "string"
       && notification.params.eventStream.subscriptionId.length <= 128
       ? notification.params.eventStream : undefined;
-    const displayResources = notification.params?.displayResources === 1 ? 1 : undefined;
 
     if (sourceInstanceId !== this.ensureLocalInstanceId()) {
       const allowedClasses = requestedClasses.filter((eventClass) =>
@@ -4704,7 +4701,6 @@ export class DesktopFederationRuntime {
       });
       const relayedSubscription: RelayedEventSubscription = {
         eventStream,
-        displayResources,
         eventClassSelections,
         starMapBootstrap,
         eventClasses: new Set(allowedClasses),
@@ -4747,12 +4743,10 @@ export class DesktopFederationRuntime {
     const sidebarInterestsChanged = previous && (!equalEventClassSets(previous.eventClasses, nextSelection.eventClasses)
       || allowedClasses.some((eventClass) => !equalFederationThreadSelections(
         selectionForEventClass(previous, eventClass), selectionForEventClass(nextSelection, eventClass))));
-    const retainedStream = previous?.viaPeerId === sourcePeerId && previous.displayResources === displayResources
-      && sameDetailInterests && sidebarInterestsChanged
+    const retainedStream = previous?.viaPeerId === sourcePeerId && sameDetailInterests && sidebarInterestsChanged
       ? previous.stream : undefined;
     if (allowedClasses.length > 0) {
       this.incomingEventSubscriptions.set(subscriberInstanceId, {
-        displayResources,
         ...(eventStream && allowedClasses.includes("transcript") ? {
           stream: retainedStream ?? { epoch: randomUUID(), sequence: 0, accounting: new FederationAccountingStream() },
         } : {}),
@@ -4873,8 +4867,6 @@ export class DesktopFederationRuntime {
           eventClasses: [...desired.eventClasses],
           ...(desired.eventClasses.has("transcript") && subscription.eventStream
             ? { eventStream: subscription.eventStream } : {}),
-          ...(desired.eventClasses.has("transcript") && subscription.displayResources === 1
-            ? { displayResources: 1 } : {}),
           ...(eventClassSelections ? { eventClassSelections } : {}),
           ...(desired.eventClasses.has("star_map") && subscription.starMapBootstrap
             ? { starMapBootstrap: subscription.starMapBootstrap } : {}),
@@ -4995,8 +4987,7 @@ export class DesktopFederationRuntime {
     }
     const ownerInstanceId = this.ensureLocalInstanceId();
     const eventClass = federationEventClassForMethod(event.notification.method);
-    let legacyEvent: AgentEvent | undefined;
-    let displayEvent: AgentEvent | undefined;
+    let federatedEvent: AgentEvent | undefined;
 
     for (const [subscriberInstanceId, subscription] of
       this.incomingEventSubscriptions) {
@@ -5011,11 +5002,7 @@ export class DesktopFederationRuntime {
       ) {
         continue;
       }
-      // Stream accounting predates display resources. Only viewers explicitly
-      // supporting lazy displays can replace full histories with invalidation.
-      const federatedEvent = subscription.displayResources === 1
-        ? (displayEvent ??= rewriteLiveTranscriptImagesForFederation(projectThreadDisplayEvent(event), ownerInstanceId))
-        : (legacyEvent ??= rewriteLiveTranscriptImagesForFederation(event, ownerInstanceId));
+      federatedEvent ??= rewriteLiveTranscriptImagesForFederation(projectThreadDisplayEvent(event), ownerInstanceId);
       try {
         const payload = subscription.stream
           ? subscription.stream.accounting.encode(federatedEvent, {

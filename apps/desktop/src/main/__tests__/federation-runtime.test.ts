@@ -60,7 +60,7 @@ import {
 import { FederationRouter } from "../federation/federation-router";
 import type { FederationGatewayConnection } from "../federation/federation-transport";
 import { replacementPages } from "../federation/federation-replacement-pages";
-import { FederationAccountingStream, FEDERATION_EVENT_STREAM_METHOD, type FederationStreamPayload } from "../federation/federation-event-stream";
+import { FEDERATION_EVENT_STREAM_METHOD } from "../federation/federation-event-stream";
 import * as appState from "../state/app-state";
 import * as navigationQuerySource from "../app-server/navigation-query-source";
 import { getDesktopNavigationQueryPool } from "../app-server/navigation-query-pool";
@@ -298,60 +298,6 @@ function applyEventSubscription(params: {
 }
 
 describe("DesktopFederationRuntime", () => {
-  it.each([false, true])("preserves legacy accounting beside display subscribers (stream=%s)", (stream) => {
-    const owner = new DesktopFederationRuntime() as unknown as RuntimeHarness;
-    owner.localInstanceId = "owner_one";
-    owner.router = new FederationRouter({ localInstanceId: "owner_one" });
-    const received = new Map<string, AgentEvent[]>();
-    // Register modern first to catch accidentally reusing its projection for legacy peers.
-    for (const peerId of ["modern_one", "legacy_one"]) {
-      const decoder = new FederationAccountingStream();
-      received.set(peerId, []);
-      owner.router.registerConnection(createConnection({
-        peerId, capabilities: ["event_subscriptions", "thread_detail"],
-        sendEnvelope: (envelope) => {
-          if (envelope.kind !== "notification" || envelope.method !== FEDERATION_BACKEND_EVENT_METHOD) return;
-          const payload = envelope.params as FederationStreamPayload;
-          const event = stream ? decoder.decode(payload) : payload;
-          expect(event).toBeDefined();
-          received.get(peerId)!.push(event!);
-        },
-      }));
-      owner.applyEventSubscription({
-        id: `subscribe-${peerId}`, kind: "notification", method: "federation.eventSubscription",
-        params: {
-          eventClasses: ["transcript"],
-          ...(stream ? { eventStream: { protocol: 1, subscriptionId: peerId } } : {}),
-          ...(peerId === "modern_one" ? { displayResources: 1 } : {}),
-        },
-        protocolVersion: 1, sourceInstanceId: peerId, targetInstanceId: "owner_one", createdAt: 1,
-      }, peerId);
-    }
-    const events: AgentEvent[] = [
-      { backend: "codex", notification: { method: "thread/pricing/updated", params: {
-        threadId: "thread-1", pricing: { lines: [], summaries: [], compactions: [{
-          backend: "codex", threadId: "thread-1", compactionId: "kept-compaction", observedAt: 1, updatedAt: 1,
-        }] },
-      } } },
-      { backend: "codex", notification: { method: "thread/toolAccounting/updated", params: {
-        threadId: "thread-1", toolAccounting: { alerts: [], invocations: [], summaries: [{
-          category: "build-test", toolName: "kept-tool", invocationCount: 1, outputChars: 100, outputLines: 1,
-          estimatedOutputTokens: 25, warningLines: 0, errorLines: 0, infoLines: 1, debugLines: 0,
-          noisyInvocationCount: 0, lastObservedAt: 1,
-        }] },
-      } } },
-      { backend: "codex", notification: { method: "thread/subAgents/updated", params: {
-        threadId: "thread-1", subAgents: [{ monitorId: "kept-monitor", task: "Task history", status: "success", createdAt: 1, updatedAt: 1 }],
-      } } },
-    ];
-    // A second update also exercises stream patches against separate baselines.
-    for (let repeat = 0; repeat < 2; repeat++) for (const event of events) owner.forwardLocalBackendEvent(event);
-    expect(received.get("legacy_one")!.map((event) => event.notification)).toEqual([...events, ...events].map((event) => event.notification));
-    expect(received.get("modern_one")![0].notification.params).toMatchObject({ displayInvalidated: true });
-    expect(received.get("modern_one")![1].notification.params).toMatchObject({ displayInvalidated: true });
-    expect(JSON.stringify(received.get("modern_one"))).not.toContain("kept-");
-  });
-
   it.each([false, true])("acknowledges and sequences live updates, recovering gaps through the same route (gateway=%s)", (viaGateway) => {
     const capabilities: FederationCapability[] = ["gateway_relay", "thread_navigation", "navigation_snapshot_deltas", "thread_detail", "pending_request_control", "event_subscriptions"];
     const viewer = new DesktopFederationRuntime() as unknown as RuntimeHarness;
@@ -1606,7 +1552,7 @@ describe("DesktopFederationRuntime", () => {
     expect(sentToTwo.map((envelope) =>
       envelope.kind === "notification" ? envelope.params : undefined
     )).toEqual([
-      { eventClasses: ["transcript"], eventStream: { protocol: 1, subscriptionId: expect.any(String) }, displayResources: 1 },
+      { eventClasses: ["transcript"], eventStream: { protocol: 1, subscriptionId: expect.any(String) } },
       { eventClasses: [] },
     ]);
   });

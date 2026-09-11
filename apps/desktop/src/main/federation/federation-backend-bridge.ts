@@ -1,4 +1,4 @@
-import { projectFederationThreadRead, materializeFederationThreadRead, type FederationThreadReadRequest, type FederationThreadReadResponse } from "./federation-thread-read";
+import { projectFederationThreadRead, materializeFederationThreadRead, type FederationThreadReadResponse } from "./federation-thread-read";
 import type { NavigationAttentionViewReleaseRequest } from "@pwragent/shared";
 import type { MarkNavigationDirectorySeenRequest, MarkNavigationDirectorySeenResponse } from "@pwragent/shared";
 import type { RemoveNavigationDirectoryRequest, RemoveNavigationDirectoryResponse } from "@pwragent/shared";
@@ -1044,7 +1044,7 @@ export function registerFederationBackendHandlers(params: {
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.readThread,
     async (envelope) => {
-      const { replayReferences, ...request } = envelope.params as FederationThreadReadRequest;
+      const request = envelope.params as AppServerReadThreadRequest;
       let response = await params.backend.readThread(request);
 
       // Federation needs the complete replay to mint reliable cursors for a
@@ -1103,8 +1103,7 @@ export function registerFederationBackendHandlers(params: {
             "utf8",
           ),
       });
-      const result = conditionalThreadRead({ ...response, replay }, request.knownRevision);
-      return replayReferences === 1 ? projectFederationThreadRead(result) : result;
+      return projectFederationThreadRead(conditionalThreadRead({ ...response, replay }, request.knownRevision));
     },
   );
   params.router.registerHandler(
@@ -1906,7 +1905,7 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
     if (pending) return await pending;
     const read = this.rpc.request<FederationThreadReadResponse>({
       method: FEDERATION_BACKEND_METHODS.readThread,
-      params: { ...request, replayReferences: 1 } satisfies FederationThreadReadRequest,
+      params: request,
     }).then((response) => this.transformReadThreadResponse(materializeFederationThreadRead(response)));
     // Share concurrent card/window hydration, without caching a settled replay.
     // The RPC layer still owns admission; cap only this deduplication metadata.
