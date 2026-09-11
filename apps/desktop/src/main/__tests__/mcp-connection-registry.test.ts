@@ -35,6 +35,59 @@ describe("McpConnectionRegistry", () => {
     expect(registry.get(created.id)?.serverUrl).toBe("https://mcp.example.com/mcp");
   });
 
+  it("re-points a connection in place instead of forcing remove-and-retype", () => {
+    // `create` persists before authorization is attempted, so a single
+    // mistyped character used to leave a dead row whose only exit was Remove
+    // and retype.
+    const registry = new McpConnectionRegistry({
+      configPath: configPath(),
+      randomId: () => "custom",
+    });
+    const created = registry.create({
+      displayName: "Datadog",
+      serverUrl: "https://mcp.exmaple.com/mcp",
+    });
+    const { connection, serverUrlChanged } = registry.update({
+      connectionId: created.id,
+      serverUrl: "https://mcp.example.com/mcp",
+    });
+    expect(serverUrlChanged).toBe(true);
+    expect(connection.serverUrl).toBe("https://mcp.example.com/mcp");
+    expect(registry.get(created.id)?.serverUrl).toBe(
+      "https://mcp.example.com/mcp",
+    );
+  });
+
+  it("reports a rename as no change of target, so credentials survive it", () => {
+    const registry = new McpConnectionRegistry({
+      configPath: configPath(),
+      randomId: () => "custom",
+    });
+    const created = registry.create({
+      displayName: "Datadog",
+      serverUrl: "https://mcp.example.com/mcp",
+    });
+    const { connection, serverUrlChanged } = registry.update({
+      connectionId: created.id,
+      displayName: "Datadog (prod)",
+    });
+    expect(serverUrlChanged).toBe(false);
+    expect(connection.displayName).toBe("Datadog (prod)");
+  });
+
+  it("refuses to edit a built-in connection", () => {
+    // PwrSnap and PwrGit are synthesized from fixed local endpoints; an
+    // operator-supplied URL for them would point the bridge at something the
+    // app does not serve.
+    const registry = new McpConnectionRegistry({ configPath: configPath() });
+    expect(() =>
+      registry.update({
+        connectionId: "pwrsnap",
+        serverUrl: "https://elsewhere.example.com/mcp",
+      }),
+    ).toThrow(/cannot be edited/i);
+  });
+
   it("preserves unrelated TOML while adding and removing a connection", () => {
     const target = configPath();
     fs.writeFileSync(target, [

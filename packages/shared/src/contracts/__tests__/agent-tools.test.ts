@@ -20,6 +20,7 @@ describe("agent tool contracts", () => {
       "messaging_context",
       "thread_orchestration",
       "federation",
+      "mcp_connections",
       "token_miser",
     ]);
     expect(isAgentToolCatalogId("automation_inspection")).toBe(true);

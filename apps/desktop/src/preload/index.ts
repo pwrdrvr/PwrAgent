@@ -33,6 +33,11 @@ import type {
   CreateScheduledThreadActionRequest,
   CreateMcpConnectionRequest,
   CreateMcpConnectionResponse,
+  UpdateMcpConnectionRequest,
+  ProbeMcpConnectionRequest,
+  ProbeMcpConnectionResponse,
+  DescribeThreadMcpConnectionsRequest,
+  DescribeThreadMcpConnectionsResponse,
   DesktopAppearanceDensity,
   DesktopAppearanceTheme,
   DesktopTextSize,
@@ -680,6 +685,9 @@ import {
   MCP_CONNECTION_SET_ENABLED_CHANNEL,
   MCP_CONNECTION_SET_THREAD_CHANNEL,
   MCP_CONNECTION_READ_THREAD_CHANNEL,
+  MCP_CONNECTION_DESCRIBE_THREAD_CHANNEL,
+  MCP_CONNECTION_UPDATE_CHANNEL,
+  MCP_CONNECTION_PROBE_CHANNEL,
   MESSAGING_APPROVE_PAIRING_CHANNEL,
   MESSAGING_CLEAR_DEFAULT_AGENT_CHANNEL,
   MESSAGING_GENERATE_PAIRING_TOKEN_CHANNEL,
@@ -972,6 +980,14 @@ const desktopApi = Object.freeze({
     request: RemoveMcpConnectionRequest,
   ): Promise<MutateMcpConnectionResponse> =>
     await ipcRenderer.invoke(MCP_CONNECTION_REMOVE_CHANNEL, request),
+  updateMcpConnection: async (
+    request: UpdateMcpConnectionRequest,
+  ): Promise<MutateMcpConnectionResponse> =>
+    await ipcRenderer.invoke(MCP_CONNECTION_UPDATE_CHANNEL, request),
+  probeMcpConnection: async (
+    request: ProbeMcpConnectionRequest,
+  ): Promise<ProbeMcpConnectionResponse> =>
+    await ipcRenderer.invoke(MCP_CONNECTION_PROBE_CHANNEL, request),
   setMcpConnectionEnabled: async (
     request: SetMcpConnectionEnabledRequest,
   ): Promise<MutateMcpConnectionResponse> =>
@@ -984,6 +1000,10 @@ const desktopApi = Object.freeze({
     request: ReadThreadMcpConnectionsRequest,
   ): Promise<SetThreadMcpConnectionsResponse> =>
     await ipcRenderer.invoke(MCP_CONNECTION_READ_THREAD_CHANNEL, request),
+  describeThreadMcpConnections: async (
+    request: DescribeThreadMcpConnectionsRequest,
+  ): Promise<DescribeThreadMcpConnectionsResponse> =>
+    await ipcRenderer.invoke(MCP_CONNECTION_DESCRIBE_THREAD_CHANNEL, request),
   readPwrSnapConnectionStatus: async (
     request: ReadPwrSnapConnectionStatusRequest = {},
   ): Promise<PwrSnapConnectionStatus> =>

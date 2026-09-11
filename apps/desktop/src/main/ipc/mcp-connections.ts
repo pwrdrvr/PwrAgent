@@ -4,6 +4,11 @@ import {
   type AuthorizeMcpConnectionResponse,
   type CreateMcpConnectionRequest,
   type CreateMcpConnectionResponse,
+  type DescribeThreadMcpConnectionsRequest,
+  type DescribeThreadMcpConnectionsResponse,
+  type ProbeMcpConnectionRequest,
+  type ProbeMcpConnectionResponse,
+  type UpdateMcpConnectionRequest,
   type DisconnectMcpConnectionRequest,
   isRemoteFederationTarget,
   type ConnectPwrGitResponse,
@@ -39,6 +44,9 @@ import {
   MCP_CONNECTION_SET_ENABLED_CHANNEL,
   MCP_CONNECTION_SET_THREAD_CHANNEL,
   MCP_CONNECTION_READ_THREAD_CHANNEL,
+  MCP_CONNECTION_DESCRIBE_THREAD_CHANNEL,
+  MCP_CONNECTION_UPDATE_CHANNEL,
+  MCP_CONNECTION_PROBE_CHANNEL,
 } from "../../shared/ipc";
 import {
   getMcpConnectionGatewayService,
@@ -160,6 +168,41 @@ export function registerMcpConnectionIpcHandlers(
     ): Promise<SetThreadMcpConnectionsResponse> => {
       requireLocalOwner(event);
       return await getDesktopBackendRegistry().readThreadMcpConnections(request);
+    },
+  );
+  ipcMain.removeHandler(MCP_CONNECTION_DESCRIBE_THREAD_CHANNEL);
+  ipcMain.handle(
+    MCP_CONNECTION_DESCRIBE_THREAD_CHANNEL,
+    async (
+      event,
+      request: DescribeThreadMcpConnectionsRequest,
+    ): Promise<DescribeThreadMcpConnectionsResponse> => {
+      requireLocalOwner(event);
+      return await getDesktopBackendRegistry()
+        .describeThreadMcpConnections(request);
+    },
+  );
+  ipcMain.removeHandler(MCP_CONNECTION_UPDATE_CHANNEL);
+  ipcMain.handle(
+    MCP_CONNECTION_UPDATE_CHANNEL,
+    async (
+      event,
+      request: UpdateMcpConnectionRequest,
+    ): Promise<MutateMcpConnectionResponse> => {
+      requireLocalOwner(event);
+      const connection = await service.updateConnection(request);
+      return { connectionId: connection.id, connection };
+    },
+  );
+  ipcMain.removeHandler(MCP_CONNECTION_PROBE_CHANNEL);
+  ipcMain.handle(
+    MCP_CONNECTION_PROBE_CHANNEL,
+    async (
+      event,
+      request: ProbeMcpConnectionRequest,
+    ): Promise<ProbeMcpConnectionResponse> => {
+      requireLocalOwner(event);
+      return await service.probeConnection(request);
     },
   );
   ipcMain.removeHandler(MCP_CONNECTION_PWRSNAP_STATUS_CHANNEL);

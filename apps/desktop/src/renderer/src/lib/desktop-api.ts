@@ -61,6 +61,11 @@ import type {
   CreateScheduledThreadActionRequest,
   CreateMcpConnectionRequest,
   CreateMcpConnectionResponse,
+  UpdateMcpConnectionRequest,
+  ProbeMcpConnectionRequest,
+  ProbeMcpConnectionResponse,
+  DescribeThreadMcpConnectionsRequest,
+  DescribeThreadMcpConnectionsResponse,
   AppServerListSkillsRequest,
   AppServerListSkillsResponse,
   CheckThreadBranchDriftRequest,
@@ -512,6 +517,12 @@ export type DesktopApi = {
   removeMcpConnection?: (
     request: RemoveMcpConnectionRequest,
   ) => Promise<MutateMcpConnectionResponse>;
+  updateMcpConnection?: (
+    request: UpdateMcpConnectionRequest,
+  ) => Promise<MutateMcpConnectionResponse>;
+  probeMcpConnection?: (
+    request: ProbeMcpConnectionRequest,
+  ) => Promise<ProbeMcpConnectionResponse>;
   setMcpConnectionEnabled?: (
     request: SetMcpConnectionEnabledRequest,
   ) => Promise<MutateMcpConnectionResponse>;
@@ -521,6 +532,9 @@ export type DesktopApi = {
   readThreadMcpConnections?: (
     request: ReadThreadMcpConnectionsRequest,
   ) => Promise<SetThreadMcpConnectionsResponse>;
+  describeThreadMcpConnections?: (
+    request: DescribeThreadMcpConnectionsRequest,
+  ) => Promise<DescribeThreadMcpConnectionsResponse>;
   readPwrSnapConnectionStatus?: (
     request?: ReadPwrSnapConnectionStatusRequest,
   ) => Promise<PwrSnapConnectionStatus>;

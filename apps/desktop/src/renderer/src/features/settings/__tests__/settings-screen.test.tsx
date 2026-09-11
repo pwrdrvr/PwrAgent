@@ -6718,12 +6718,20 @@ describe("SettingsScreen", () => {
       return { connection };
     });
 
+    const probeMcpConnection = vi.fn(async () => ({
+      ok: true as const,
+      serverUrl: "https://mcp.example.com/mcp",
+      serverName: "Datadog",
+      authMode: "oauth" as const,
+    }));
+
     render(
       <SettingsScreen
         desktopApi={{
           authorizeMcpConnection,
           createMcpConnection,
           listMcpConnections,
+          probeMcpConnection,
           listCodexMcpServers: vi.fn(async () => ({
             codexHome: "/home/example/.codex",
             detail: "toolsAndAuthOnly" as const,
@@ -6742,7 +6750,20 @@ describe("SettingsScreen", () => {
     fireEvent.change(screen.getByLabelText("Remote MCP URL"), {
       target: { value: "https://mcp.example.com/mcp" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Add and authorize" }));
+    // Nothing is written until the endpoint has been checked: the button is a
+    // check first and a commit second, so a typo or a stdio command line
+    // cannot leave a saved row behind.
+    fireEvent.click(screen.getByRole("button", { name: "Check" }));
+    await waitFor(() => {
+      expect(probeMcpConnection).toHaveBeenCalledWith({
+        serverUrl: "https://mcp.example.com/mcp",
+      });
+    });
+    expect(createMcpConnection).not.toHaveBeenCalled();
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Add and authorize" }),
+    );
 
     await waitFor(() => {
       expect(createMcpConnection).toHaveBeenCalledWith({
@@ -6759,6 +6780,49 @@ describe("SettingsScreen", () => {
       .closest<HTMLElement>(".settings-mcp-row");
     expect(row).not.toBeNull();
     expect(within(row!).getByText("Ready")).toBeInTheDocument();
+  });
+
+  it("refuses to save a URL the gateway cannot hold, and says where it belongs", async () => {
+    const probeMcpConnection = vi.fn(async () => ({
+      ok: false as const,
+      problem: "looks_like_stdio" as const,
+      message:
+        "That looks like a command line, not a URL. Command-line (stdio) MCP servers are configured in the agent itself — PwrAgent's gateway holds credentials for remote servers.",
+    }));
+    const createMcpConnection = vi.fn();
+
+    render(
+      <SettingsScreen
+        desktopApi={{
+          createMcpConnection,
+          probeMcpConnection,
+          listMcpConnections: vi.fn(async () => ({ connections: [] })),
+          listCodexMcpServers: vi.fn(async () => ({
+            codexHome: "/home/example/.codex",
+            detail: "toolsAndAuthOnly" as const,
+            servers: [],
+          })),
+        }}
+        initialSection="plugins"
+        settings={createSettingsState()}
+        onClose={() => undefined}
+      />,
+    );
+
+    fireEvent.change(await screen.findByLabelText("Remote MCP URL"), {
+      target: { value: "npx -y @modelcontextprotocol/server-filesystem" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Check" }));
+
+    expect(
+      await screen.findByText(/Command-line \(stdio\) MCP servers/),
+    ).toBeInTheDocument();
+    // The whole point: the record was never written, so there is no dead row
+    // to remove and no credentials to clean up.
+    expect(createMcpConnection).not.toHaveBeenCalled();
+    expect(
+      screen.queryByRole("button", { name: "Add and authorize" }),
+    ).not.toBeInTheDocument();
   });
 
   it("disables MCP mutations when the selected Codex profile changed after startup", async () => {

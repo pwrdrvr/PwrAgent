@@ -149,6 +149,58 @@ export class McpConnectionRegistry {
     return connection;
   }
 
+  /**
+   * Rename or re-point a stored connection.
+   *
+   * `create` persists before authorization is attempted, so a mistyped URL
+   * left a dead row whose only exit was Remove and retype. A changed URL
+   * invalidates the stored credentials — they were issued by the old server
+   * — so the caller drops them; the returned record reports the new target.
+   */
+  update(input: {
+    connectionId: string;
+    displayName?: string;
+    serverUrl?: string;
+  }): { connection: McpConnectionRecord; serverUrlChanged: boolean } {
+    if (
+      input.connectionId === PWRSNAP_MCP_CONNECTION_ID
+      || input.connectionId === PWRGIT_MCP_CONNECTION_ID
+    ) {
+      throw new Error("Built-in MCP connections cannot be edited.");
+    }
+    const current = this.readStoredConnections();
+    const target = current.find(
+      (connection) => connection.id === input.connectionId,
+    );
+    if (!target) {
+      throw new Error("That MCP connection no longer exists.");
+    }
+    const displayName =
+      input.displayName === undefined
+        ? target.displayName
+        : normalizeDisplayName(input.displayName);
+    const serverUrl =
+      input.serverUrl === undefined
+        ? target.serverUrl
+        : normalizeMcpServerUrl(input.serverUrl);
+    const serverUrlChanged = serverUrl !== target.serverUrl;
+    if (displayName === target.displayName && !serverUrlChanged) {
+      return { connection: target, serverUrlChanged: false };
+    }
+    const updated: McpConnectionRecord = {
+      ...target,
+      displayName,
+      serverUrl,
+      updatedAt: this.now(),
+    };
+    this.writeStoredConnections(
+      current.map((connection) =>
+        connection.id === input.connectionId ? updated : connection,
+      ),
+    );
+    return { connection: updated, serverUrlChanged };
+  }
+
   remove(connectionId: string): boolean {
     if (connectionId === PWRSNAP_MCP_CONNECTION_ID || connectionId === PWRGIT_MCP_CONNECTION_ID) {
       throw new Error("Built-in MCP connections cannot be removed.");

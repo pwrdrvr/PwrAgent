@@ -371,6 +371,8 @@ type ComposerProps = {
   onClearPickDirectoryError?: () => void;
   onShowMcpInventory?: (detail: CodexMcpInventoryDetail) => void;
   onShowMcpAccess?: () => void;
+  /** Managed connections this thread has selected, for the composer badge. */
+  mcpConnectionCount?: number;
   pickDirectoryError?: string;
   pickingDirectory?: boolean;
   setExecutionModeError?: string;
@@ -1571,6 +1573,11 @@ function ComposerThreadOptionsMenu(props: {
   agentThread: boolean;
   disabled?: boolean;
   existingCodexThread?: boolean;
+  /**
+   * Managed connections this thread has selected. Undefined hides the badge;
+   * zero is worth showing only inside the menu, where the label states it.
+   */
+  mcpConnectionCount?: number;
   onAgentThreadChange?: (agentThread: boolean) => void;
   onShowMcpInventory?: () => void;
   onShowMcpAccess?: () => void;
@@ -1697,6 +1704,12 @@ function ComposerThreadOptionsMenu(props: {
     return () => window.removeEventListener("resize", clamp);
   }, [open]);
 
+  const threadOptionsTooltip = props.mcpConnectionCount
+    ? `Thread options — ${props.mcpConnectionCount} PwrAgent ${
+        props.mcpConnectionCount === 1 ? "connection" : "connections"
+      }`
+    : "Thread options";
+
   return (
     <div className="composer-thread-options" ref={ref}>
       <button
@@ -1717,17 +1730,22 @@ function ComposerThreadOptionsMenu(props: {
         }}
         onFocus={(event) => {
           if (!open) {
-            showTooltip(event.currentTarget, "Thread options");
+            showTooltip(event.currentTarget, threadOptionsTooltip);
           }
         }}
         onMouseEnter={(event) => {
           if (!open) {
-            showTooltip(event.currentTarget, "Thread options");
+            showTooltip(event.currentTarget, threadOptionsTooltip);
           }
         }}
         onMouseLeave={hideTooltip}
       >
         <MoreVerticalIcon size={15} aria-hidden="true" />
+        {props.mcpConnectionCount ? (
+          <span aria-hidden="true" className="composer__toggle-count">
+            {props.mcpConnectionCount}
+          </span>
+        ) : null}
       </button>
       {open ? (
         <div
@@ -1862,6 +1880,13 @@ function ComposerThreadOptionsMenu(props: {
             >
               <span className="composer-thread-options__label">
                 MCP access&hellip;
+                <span className="composer-thread-options__note">
+                  {props.mcpConnectionCount === undefined
+                    ? ""
+                    : props.mcpConnectionCount === 0
+                      ? " · none selected"
+                      : ` · ${props.mcpConnectionCount} selected`}
+                </span>
               </span>
             </button>
           ) : null}
@@ -12198,6 +12223,7 @@ export function Composer(props: ComposerProps) {
                   },
                 }
               : {})}
+            mcpConnectionCount={props.mcpConnectionCount}
             onShowMcpAccess={props.onShowMcpAccess}
           />
         </div>

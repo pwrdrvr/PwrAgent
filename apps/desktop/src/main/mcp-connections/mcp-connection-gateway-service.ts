@@ -18,6 +18,9 @@ import {
   PWRGIT_MCP_CONNECTION_ID,
   PWRSNAP_SESSION_REVOKED_DETAIL,
   type CreateMcpConnectionRequest,
+  type ProbeMcpConnectionRequest,
+  type ProbeMcpConnectionResponse,
+  type UpdateMcpConnectionRequest,
   type McpConnectionRecord,
   type McpConnectionStatus,
   type ConnectPwrSnapResponse,
@@ -48,6 +51,7 @@ import {
   McpReauthorizationRequiredError,
 } from "./mcp-oauth-session-coordinator";
 import { createMcpSafeFetch } from "./mcp-safe-fetch";
+import { probeMcpConnectionUrl } from "./mcp-connection-probe";
 import { MCP_CONNECTION_TOOL_TIMEOUT_MS } from "./mcp-connection-timeouts";
 
 const connectionLog = getMainLogger("pwragent:mcp-connections");
@@ -335,6 +339,15 @@ export class McpConnectionGatewayService {
     string,
     { server: McpConnectionBridgeServer; token: string }
   >();
+  /**
+   * When each thread's managed selection was last handed to its agent.
+   *
+   * An ACP agent cannot be asked what it loaded, so this is the whole of the
+   * honest answer for those backends: what PwrAgent passed over, and when.
+   * In-memory on purpose — it describes this process's handovers, and a
+   * restart has not handed anything over yet.
+   */
+  private readonly threadHandovers = new Map<string, number>();
   private readonly coordinators = new Map<string, McpOAuthSessionCoordinator>();
   private readonly upstreamSessions = new Map<string, UpstreamSession>();
   /**
@@ -531,6 +544,84 @@ export class McpConnectionGatewayService {
     } finally {
       await callback.close();
     }
+  }
+
+  /**
+   * Rename or re-point a connection.
+   *
+   * A changed URL drops the stored credentials before the record moves: they
+   * were issued by the old server, and leaving them in place would let a
+   * connection report `Ready` against an endpoint that never authorized it.
+   */
+  async updateConnection(
+    request: UpdateMcpConnectionRequest,
+  ): Promise<McpConnectionStatus> {
+    const ownership = await this.ensureOwnerBroker();
+    if (!ownership.owned) {
+      return await this.requestOwnerBroker<McpConnectionStatus>(
+        ownership.holder,
+        "broker/update",
+        request,
+      );
+    }
+    const existing = this.requireConnection(request.connectionId);
+    const { connection, serverUrlChanged } = this.registry.update({
+      connectionId: request.connectionId,
+      displayName: request.displayName,
+      serverUrl: request.serverUrl,
+    });
+    if (serverUrlChanged) {
+      await this.closeConnectionSessions(request.connectionId);
+      await this.coordinatorFor(existing).disconnect();
+      this.coordinators.delete(request.connectionId);
+    }
+    return await this.connectionStatus(connection);
+  }
+
+  /**
+   * Check a URL before a record exists for it.
+   *
+   * `createConnection` persists first and authorizes second, so every failure
+   * — a typo, a stdio command line, a bearer-token server — produced a saved
+   * row and a raw error string with no way to edit it. Probing first lets the
+   * screen say what it found, in the operator's terms, while nothing is
+   * written.
+   */
+  async probeConnection(
+    request: ProbeMcpConnectionRequest,
+  ): Promise<ProbeMcpConnectionResponse> {
+    const ownership = await this.ensureOwnerBroker();
+    if (!ownership.owned) {
+      return await this.requestOwnerBroker<ProbeMcpConnectionResponse>(
+        ownership.holder,
+        "broker/probe",
+        request,
+      );
+    }
+    return await probeMcpConnectionUrl(request.serverUrl, this.fetchFn);
+  }
+
+  /**
+   * The bridge a thread is actually running for a connection, if any.
+   *
+   * Only the caller that builds the agent's config knows how a bridge is
+   * aliased there, so this hands back the registration rather than a name.
+   */
+  peekThreadBridge(
+    connectionId: string,
+    threadId: string,
+  ): McpConnectionBridgeServer | undefined {
+    return this.threadRegistrations.get(`${connectionId}:${threadId}`)?.server;
+  }
+
+  /** When this thread's selection was last handed to the agent, in epoch ms. */
+  threadHandoverAt(threadId: string): number | undefined {
+    return this.threadHandovers.get(threadId);
+  }
+
+  /** Records that a thread's selection reached the agent. */
+  noteThreadHandover(threadId: string, at: number): void {
+    this.threadHandovers.set(threadId, at);
   }
 
   async disconnectConnection(connectionId: string): Promise<McpConnectionStatus> {
@@ -1479,6 +1570,26 @@ export class McpConnectionGatewayService {
         displayName: values.displayName,
         serverUrl: values.serverUrl,
       });
+    }
+    if (operation === "broker/update") {
+      if (typeof values.connectionId !== "string") {
+        throw new Error("Invalid MCP connection update request.");
+      }
+      return await this.updateConnection({
+        connectionId: values.connectionId,
+        ...(typeof values.displayName === "string"
+          ? { displayName: values.displayName }
+          : {}),
+        ...(typeof values.serverUrl === "string"
+          ? { serverUrl: values.serverUrl }
+          : {}),
+      });
+    }
+    if (operation === "broker/probe") {
+      if (typeof values.serverUrl !== "string") {
+        throw new Error("Invalid MCP connection probe request.");
+      }
+      return await this.probeConnection({ serverUrl: values.serverUrl });
     }
     if (operation === "broker/set-enabled") {
       if (

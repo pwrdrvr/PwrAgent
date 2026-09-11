@@ -4,6 +4,7 @@ import {
   isAcpBackendId,
   mcpSelectionApplyTiming,
   type AppServerBackendKind,
+  type DescribeThreadMcpConnectionsResponse,
   type McpConnectionStatus,
 } from "@pwragent/shared";
 import { CloseIcon } from "../../icons";
@@ -22,6 +23,13 @@ type McpAccessPanelProps = {
   selection: McpAccessSelection;
   /** A failure the caller hit while loading the selection, shown inline. */
   readError?: string;
+  /**
+   * Present only for an existing thread. Enables the verification strip: a
+   * launchpad has nothing to have handed over yet.
+   */
+  threadId?: string;
+  /** Bumped by the caller after a write, so verification re-reads. */
+  verifyToken?: number;
   onDismiss: () => void;
   onOpenSettings?: () => void;
   onSelectionChange: (selection: McpAccessSelection) => Promise<void>;
@@ -299,6 +307,14 @@ export function McpAccessPanel(props: McpAccessPanelProps) {
               : `${parkedOnly.length} connections are turned off for every thread.`}
           </p>
         ) : null}
+        {props.threadId ? (
+          <ThreadMcpVerification
+            backend={props.backend}
+            desktopApi={props.desktopApi}
+            threadId={props.threadId}
+            token={props.verifyToken ?? 0}
+          />
+        ) : null}
         <footer className="mcp-access-panel__footer">
           <span className="mcp-access-panel__detail">
             {applyTimingCopy(props.backend)}
@@ -315,6 +331,141 @@ export function McpAccessPanel(props: McpAccessPanelProps) {
         </footer>
       </div>
     </aside>
+  );
+}
+
+/**
+ * How many managed connections this thread has selected.
+ *
+ * The selection had no resting-state presence at all: a thread either
+ * reached PwrAgent's connections or it did not, and the only way to find out
+ * was to open a dropdown. Which tools an agent can reach is worth knowing
+ * before a message is sent, so the composer carries the count.
+ *
+ * Read per focused thread rather than widened into the navigation summary,
+ * which would put it on every row of every lens.
+ */
+export function useThreadMcpConnectionCount(params: {
+  backend: AppServerBackendKind;
+  desktopApi?: DesktopApi;
+  threadId?: string;
+  /** Bumped by the caller after a write, so the chip re-reads. */
+  token?: number;
+}): number | undefined {
+  const { backend, desktopApi, threadId, token } = params;
+  const [count, setCount] = useState<number>();
+
+  useEffect(() => {
+    let cancelled = false;
+    const read = desktopApi?.readThreadMcpConnections;
+    if (!read || !threadId) {
+      setCount(undefined);
+      return;
+    }
+    void (async () => {
+      try {
+        const response = await read({ backend, threadId });
+        if (!cancelled) setCount(response.connectionIds.length);
+      } catch {
+        // A federated window refuses this read. A missing chip is the right
+        // answer there; an error badge would be noise.
+        if (!cancelled) setCount(undefined);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [backend, desktopApi, threadId, token]);
+
+  return count;
+}
+
+/**
+ * What this thread actually got.
+ *
+ * Settings can say a connection is authorized; until now nothing said a
+ * given thread loaded its tools, and the one surface that could — the
+ * agent's own MCP inventory — names a managed connection by the hashed alias
+ * PwrAgent injected it under. This shows the operator's own name against
+ * that alias's tool count.
+ *
+ * An ACP agent cannot be interrogated at all, so there the honest answer is
+ * what PwrAgent handed over and when. That is strictly more than silence.
+ */
+function ThreadMcpVerification(props: {
+  backend: AppServerBackendKind;
+  desktopApi?: DesktopApi;
+  threadId: string;
+  token: number;
+}) {
+  const [report, setReport] = useState<DescribeThreadMcpConnectionsResponse>();
+  const [failed, setFailed] = useState(false);
+  const { backend, desktopApi, threadId, token } = props;
+
+  useEffect(() => {
+    let cancelled = false;
+    const describe = desktopApi?.describeThreadMcpConnections;
+    if (!describe) return;
+    void (async () => {
+      try {
+        const response = await describe({ backend, threadId });
+        if (!cancelled) {
+          setReport(response);
+          setFailed(false);
+        }
+      } catch {
+        if (!cancelled) setFailed(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [backend, desktopApi, threadId, token]);
+
+  if (failed || !report || report.connections.length === 0) return null;
+
+  const handedOver = report.handedOverAt
+    ? new Date(report.handedOverAt).toLocaleTimeString([], {
+        hour: "numeric",
+        minute: "2-digit",
+      })
+    : undefined;
+
+  return (
+    <section className="mcp-access-panel__verify">
+      <h3 className="mcp-access-panel__verify-head">
+        {report.agentInventoryAvailable
+          ? "In this thread"
+          : "Handed to this session"}
+      </h3>
+      <ul className="mcp-access-panel__verify-list">
+        {report.connections.map((entry) => (
+          <li key={entry.connectionId}>
+            <span className="mcp-access-panel__verify-name">
+              {entry.displayName}
+            </span>
+            <span className="mcp-access-panel__verify-meta">
+              {entry.toolCount === undefined
+                ? entry.serverNameInAgent
+                  ? "passed to the agent"
+                  : "not passed yet"
+                : `${entry.toolCount} ${
+                    entry.toolCount === 1 ? "tool" : "tools"
+                  }`}
+            </span>
+          </li>
+        ))}
+      </ul>
+      <p className="mcp-access-panel__detail">
+        {report.agentInventoryAvailable
+          ? handedOver
+            ? `Read from the agent. Last passed over at ${handedOver}.`
+            : "Read from the agent."
+          : handedOver
+            ? `PwrAgent passed these over at ${handedOver}. This agent cannot be asked what it loaded.`
+            : "Not passed over yet — this applies when the thread's session next loads."}
+      </p>
+    </section>
   );
 }
 
@@ -335,6 +486,7 @@ type ThreadMcpAccessPanelProps = {
 export function ThreadMcpAccessPanel(props: ThreadMcpAccessPanelProps) {
   const [selection, setSelection] = useState<McpAccessSelection>();
   const [error, setError] = useState<string>();
+  const [verifyToken, setVerifyToken] = useState(0);
   const { backend, desktopApi, threadId } = props;
 
   useEffect(() => {
@@ -384,6 +536,8 @@ export function ThreadMcpAccessPanel(props: ThreadMcpAccessPanelProps) {
       desktopApi={desktopApi}
       readError={error}
       selection={selection}
+      threadId={threadId}
+      verifyToken={verifyToken}
       onDismiss={props.onDismiss}
       onOpenSettings={props.onOpenSettings}
       onSelectionChange={async (next) => {
@@ -401,6 +555,7 @@ export function ThreadMcpAccessPanel(props: ThreadMcpAccessPanelProps) {
           connectionIds: response.connectionIds,
           providerServersEnabled: response.providerServersEnabled,
         });
+        setVerifyToken((current) => current + 1);
       }}
     />
   );

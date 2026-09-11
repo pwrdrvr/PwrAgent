@@ -347,3 +347,114 @@ describe("ThreadMcpAccessPanel", () => {
     ).toBeTruthy();
   });
 });
+
+describe("thread verification", () => {
+  it("shows a managed connection by the operator's own name, not its hashed alias", async () => {
+    // The only surface that could confirm a thread loaded the tools was the
+    // agent's own inventory, which names a managed connection
+    // `pwragent_<name>_<32 hex>` — a string that appears nowhere in Settings.
+    render(
+      <ThreadMcpAccessPanel
+        backend="codex"
+        desktopApi={{
+          listMcpConnections: async () => ({ connections: [READY] }),
+          readThreadMcpConnections: async () => ({
+            connectionIds: ["datadog"],
+            providerServersEnabled: true,
+          }),
+          describeThreadMcpConnections: async () => ({
+            backend: "codex" as const,
+            threadId: "thread-1",
+            connections: [
+              {
+                connectionId: "datadog",
+                displayName: "Datadog",
+                serverNameInAgent:
+                  "pwragent_datadog_a3f9c2e1b8d47f60a1c2e3d4b5a6f708",
+                state: "ready" as const,
+                configured: true,
+                enabled: true,
+                toolCount: 18,
+              },
+            ],
+            providerServersEnabled: true,
+            appliesAt: "next_turn" as const,
+            handedOverAt: Date.UTC(2026, 0, 1, 14, 2),
+            agentInventoryAvailable: true,
+          }),
+        }}
+        threadId="thread-1"
+        onDismiss={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByText("In this thread")).toBeTruthy();
+    expect(screen.getByText("18 tools")).toBeTruthy();
+    expect(screen.queryByText(/pwragent_datadog_/)).toBeNull();
+  });
+
+  it("states what was handed over for a backend that cannot be asked", async () => {
+    // An ACP agent resolves its own servers and takes no inventory question,
+    // so silence was the shipped answer on exactly the backends this gateway
+    // exists to serve.
+    render(
+      <ThreadMcpAccessPanel
+        backend="acp:grok"
+        desktopApi={{
+          listMcpConnections: async () => ({ connections: [READY] }),
+          readThreadMcpConnections: async () => ({
+            connectionIds: ["datadog"],
+            providerServersEnabled: true,
+          }),
+          describeThreadMcpConnections: async () => ({
+            backend: "acp:grok" as const,
+            threadId: "thread-1",
+            connections: [
+              {
+                connectionId: "datadog",
+                displayName: "Datadog",
+                serverNameInAgent: "pwragent_datadog_abc",
+                state: "ready" as const,
+                configured: true,
+                enabled: true,
+              },
+            ],
+            providerServersEnabled: true,
+            appliesAt: "next_session_load" as const,
+            handedOverAt: Date.UTC(2026, 0, 1, 14, 2),
+            agentInventoryAvailable: false,
+          }),
+        }}
+        threadId="thread-1"
+        onDismiss={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByText("Handed to this session")).toBeTruthy();
+    expect(screen.getByText("passed to the agent")).toBeTruthy();
+    expect(screen.getByText(/cannot be asked what it loaded/)).toBeTruthy();
+  });
+
+  it("stays silent rather than guessing when the read fails", async () => {
+    render(
+      <ThreadMcpAccessPanel
+        backend="codex"
+        desktopApi={{
+          listMcpConnections: async () => ({ connections: [READY] }),
+          readThreadMcpConnections: async () => ({
+            connectionIds: ["datadog"],
+            providerServersEnabled: true,
+          }),
+          describeThreadMcpConnections: async () => {
+            throw new Error("federated window");
+          },
+        }}
+        threadId="thread-1"
+        onDismiss={vi.fn()}
+      />,
+    );
+
+    await screen.findByText("Datadog");
+    expect(screen.queryByText("In this thread")).toBeNull();
+  });
+});

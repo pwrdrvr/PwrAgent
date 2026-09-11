@@ -237,3 +237,283 @@ export function canIsolateMcpProviderServers(
 ): boolean {
   return backend === "codex";
 }
+
+/** A connection PwrAgent reaches by launching a local PwrSuite application. */
+export function isLocalMcpConnectionKind(kind: McpConnectionKind): boolean {
+  return kind === "pwrsnap" || kind === "pwrgit";
+}
+
+/**
+ * The one thing a connection row is allowed to claim about itself.
+ *
+ * Four independent switches decide whether a thread can reach a connection:
+ * the profile-wide gateway, the connection's own availability (`enabled`),
+ * whether PwrAgent holds credentials, and — for a local PwrSuite app —
+ * whether that app is installed and running. Rendering them as peers
+ * produced rows that read as defects: a never-authorized PwrSnap showed
+ * `Not connected` beside an `On` switch, both true and together nonsense.
+ *
+ * These states resolve that stack in precedence order, so a row makes one
+ * claim and offers the action that advances it.
+ */
+export type McpConnectionSetupState =
+  | "gateway_off"
+  | "app_not_installed"
+  | "app_not_running"
+  | "not_authorized"
+  | "login_required"
+  | "unavailable"
+  | "connecting"
+  | "parked"
+  | "ready";
+
+export type McpConnectionSetupTone = "ok" | "warn" | "err" | "idle";
+
+export type McpConnectionSetupSummary = {
+  state: McpConnectionSetupState;
+  /** Two or three words. The row's single claim. */
+  headline: string;
+  /** One sentence naming the remedy, or what "ready" actually means. */
+  detail: string;
+  tone: McpConnectionSetupTone;
+  /**
+   * Whether to offer the profile-wide availability switch at all.
+   *
+   * A connection PwrAgent holds no credentials for cannot be offered to a
+   * thread, so a switch claiming it is on would be a promise nothing keeps.
+   */
+  offersAvailabilitySwitch: boolean;
+  /** True only when a thread selecting this can actually reach it. */
+  threadSelectable: boolean;
+};
+
+export type ResolveMcpConnectionSetupInput = {
+  connection: McpConnectionStatus;
+  gatewayEnabled: boolean;
+  /**
+   * Local PwrSuite apps only. Omitted while the probe is still in flight, in
+   * which case the credential state is reported on its own rather than
+   * guessing that the app is missing.
+   */
+  localAvailability?: McpConnectionAvailability;
+};
+
+export function resolveMcpConnectionSetup(
+  input: ResolveMcpConnectionSetupInput,
+): McpConnectionSetupSummary {
+  const { connection, gatewayEnabled, localAvailability } = input;
+  const name = connection.displayName;
+  const configured = connection.configured;
+  const build = (
+    state: McpConnectionSetupState,
+    headline: string,
+    detail: string,
+    tone: McpConnectionSetupTone,
+  ): McpConnectionSetupSummary => ({
+    state,
+    headline,
+    detail,
+    tone,
+    offersAvailabilitySwitch: configured,
+    threadSelectable: state === "ready",
+  });
+
+  // The gateway outranks everything: while it is off, authorizing a
+  // connection or turning its own switch on changes nothing, so naming any
+  // other remedy would send the operator to a control that cannot help.
+  if (!gatewayEnabled) {
+    return build(
+      "gateway_off",
+      "Gateway off",
+      "No thread can reach this while the managed gateway is off. Credentials stay stored.",
+      "idle",
+    );
+  }
+
+  if (localAvailability === "not_installed") {
+    return build(
+      "app_not_installed",
+      "Not installed",
+      `Install ${name} on this machine, then connect it here.`,
+      "idle",
+    );
+  }
+  if (localAvailability === "installed") {
+    return build(
+      "app_not_running",
+      "Not running",
+      `Open ${name} and turn on Local Agent Access, then connect it here.`,
+      "idle",
+    );
+  }
+
+  if (!configured || connection.state === "disconnected") {
+    return build(
+      "not_authorized",
+      "Not set up",
+      `PwrAgent holds no credentials for ${name} yet. Authorize it to offer it to threads.`,
+      "idle",
+    );
+  }
+  if (connection.state === "reauthorization_required") {
+    return build(
+      "login_required",
+      "Login required",
+      connection.detail
+        ?? "The stored credentials stopped working. Authorize this connection again.",
+      "err",
+    );
+  }
+  if (connection.state === "temporarily_unavailable") {
+    return build(
+      "unavailable",
+      "Unavailable",
+      connection.detail
+        ?? "PwrAgent could not reach this server. Threads that select it lose it until it answers.",
+      "err",
+    );
+  }
+  if (connection.state === "connecting" || connection.state === "refreshing") {
+    return build(
+      "connecting",
+      "Connecting",
+      "PwrAgent is establishing this connection.",
+      "warn",
+    );
+  }
+  if (!connection.enabled) {
+    return build(
+      "parked",
+      "Parked",
+      "Credentials kept. No thread can reach it until you offer it to threads again.",
+      "warn",
+    );
+  }
+  return build(
+    "ready",
+    "Ready",
+    "Offered to threads. Choose it per thread under MCP access.",
+    "ok",
+  );
+}
+
+/**
+ * Counts for the section chip.
+ *
+ * The shipped chip read `${enabled} of ${total} on`, which counted the
+ * availability switch — so it said "2 of 2 on" while one of the two held no
+ * credentials and could not serve a single tool. Readiness is the number the
+ * operator is actually asking for.
+ */
+export function summarizeMcpConnectionReadiness(
+  summaries: readonly McpConnectionSetupSummary[],
+): { ready: number; parked: number; needsSetup: number; total: number } {
+  let ready = 0;
+  let parked = 0;
+  let needsSetup = 0;
+  for (const summary of summaries) {
+    if (summary.state === "ready") ready += 1;
+    else if (summary.state === "parked") parked += 1;
+    else needsSetup += 1;
+  }
+  return { ready, parked, needsSetup, total: summaries.length };
+}
+
+/**
+ * Rename or re-point a connection.
+ *
+ * Without this a mistyped URL was unfixable from inside the app: the record
+ * is persisted before authorization is attempted, so a typo left a dead row
+ * whose only exit was Remove and retype. Changing the URL drops stored
+ * credentials, because they were issued by the old server.
+ */
+export type UpdateMcpConnectionRequest = {
+  connectionId: McpConnectionId;
+  displayName?: string;
+  serverUrl?: string;
+};
+
+export type McpConnectionProbeProblem =
+  /** The text is not a URL PwrAgent can fetch. */
+  | "not_a_url"
+  /** Looks like a command line for a stdio server, which the gateway cannot host. */
+  | "looks_like_stdio"
+  /** Reachable, but it is not an MCP endpoint. */
+  | "not_mcp"
+  /** An MCP endpoint that does not offer OAuth, which is all the gateway holds. */
+  | "unsupported_auth"
+  /** The host did not answer. */
+  | "unreachable";
+
+/**
+ * Check a URL before a record is written for it.
+ *
+ * `create` persisted first and authorized second, so every failure mode —
+ * a typo, a stdio command, a bearer-token server — produced a saved row and
+ * a raw error string.
+ */
+export type ProbeMcpConnectionRequest = {
+  serverUrl: string;
+};
+
+export type ProbeMcpConnectionResponse =
+  | {
+      ok: true;
+      /** The endpoint PwrAgent will store, after discovery redirects. */
+      serverUrl: string;
+      /** The server's own name, when it reports one. */
+      serverName?: string;
+      authMode: McpConnectionAuthMode;
+      /** Absent when the server will not list tools before authorization. */
+      toolCount?: number;
+    }
+  | {
+      ok: false;
+      problem: McpConnectionProbeProblem;
+      /** One sentence, in the operator's terms, naming what to do instead. */
+      message: string;
+    };
+
+/** What a thread's managed selection actually became inside the agent. */
+export type ThreadMcpConnectionReport = {
+  connectionId: McpConnectionId;
+  displayName: string;
+  /**
+   * The name the agent's own inventory shows for this bridge.
+   *
+   * PwrAgent injects a managed connection under a hashed alias so it cannot
+   * collide with a server the agent inherited, which means the only
+   * verification surface named it `pwragent_<name>_<32 hex>` — a string that
+   * appears nowhere in Settings. Carrying the alias lets a surface show the
+   * operator's own name and still match what the agent reports.
+   */
+  serverNameInAgent?: string;
+  state: McpConnectionRuntimeState;
+  configured: boolean;
+  enabled: boolean;
+  /** Absent until the agent reports its inventory. */
+  toolCount?: number;
+};
+
+export type DescribeThreadMcpConnectionsRequest = {
+  backend: AppServerBackendKind;
+  threadId: string;
+};
+
+export type DescribeThreadMcpConnectionsResponse = {
+  backend: AppServerBackendKind;
+  threadId: string;
+  connections: ThreadMcpConnectionReport[];
+  providerServersEnabled: boolean;
+  appliesAt: McpSelectionApplyTiming;
+  /**
+   * When PwrAgent last handed this selection to the agent, in epoch ms.
+   *
+   * For a backend PwrAgent cannot interrogate this is the whole of the
+   * honest answer: it states what was handed over and when, rather than
+   * leaving the operator with silence.
+   */
+  handedOverAt?: number;
+  /** Whether the backend can be asked what it actually loaded. */
+  agentInventoryAvailable: boolean;
+};

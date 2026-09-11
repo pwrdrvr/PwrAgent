@@ -4,3 +4,11 @@
 export const MCP_CONNECTION_TOOL_TIMEOUT_MS = 12 * 60_000;
 export const MCP_CONNECTION_TOOL_TIMEOUT_SECONDS =
   MCP_CONNECTION_TOOL_TIMEOUT_MS / 1_000;
+
+/**
+ * How long the Add-a-connection probe waits for an endpoint to answer.
+ *
+ * This one runs while an operator watches a button, so it is bounded by
+ * patience rather than by what a tool call might legitimately need.
+ */
+export const MCP_CONNECTION_PROBE_TIMEOUT_MS = 8_000;

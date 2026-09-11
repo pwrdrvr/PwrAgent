@@ -35,7 +35,8 @@ describe("PwrAgent task monitor agent tools", () => {
       "render_messaging_pdf_pages",
       "search_messaging_pdf_text",
     ]);
-    expect(dynamicTools).toHaveLength(35);
+    // 36 since manage_mcp_connections joined the namespace.
+    expect(dynamicTools).toHaveLength(36);
     expect(mcpTools).toEqual(expect.arrayContaining(
       dynamicTools.filter((tool) => !dynamicOnlyToolNames.has(tool.name)),
     ));

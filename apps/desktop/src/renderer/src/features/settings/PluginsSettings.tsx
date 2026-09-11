@@ -5,16 +5,20 @@ import {
   useMemo,
   useRef,
   useState,
-  type ReactNode,
 } from "react";
 import type {
   CodexMcpServerSummary,
   DesktopSettingsSnapshot,
   McpConnectionStatus,
+  ProbeMcpConnectionResponse,
   PwrSnapConnectionStatus,
   PwrGitConnectionStatus,
 } from "@pwragent/shared";
-import { describeMcpAuthStatus } from "@pwragent/shared";
+import {
+  describeMcpAuthStatus,
+  resolveMcpConnectionSetup,
+  summarizeMcpConnectionReadiness,
+} from "@pwragent/shared";
 import { McpInventoryLine } from "../../components/McpInventoryLine";
 import {
   ChipContextMenu,
@@ -35,7 +39,6 @@ import {
 import { SettingsSwitch } from "./SettingsSwitch";
 import { sourceBadge } from "./settings-fields";
 
-import { PwrSuiteConnectionsSettings } from "./PwrSuiteConnectionsSettings";
 
 type ActionNotice = {
   kind: "error" | "info" | "success" | "working";
@@ -48,8 +51,24 @@ type PendingAction = {
 };
 
 type ConnectionPendingAction = {
-  kind: "authorize" | "availability" | "create" | "disconnect" | "remove";
+  kind:
+    | "authorize"
+    | "availability"
+    | "create"
+    | "disconnect"
+    | "probe"
+    | "remove"
+    | "update";
   connectionId?: string;
+};
+
+/** An in-place edit of a stored connection's name and endpoint. */
+type ConnectionEditDraft = {
+  connectionId: string;
+  displayName: string;
+  serverUrl: string;
+  /** Re-pointing discards credentials, so the save says so. */
+  serverUrlChanged: boolean;
 };
 
 type StartupResult = {
@@ -115,6 +134,8 @@ export function PluginsSettings(props: {
   const [connectionNotice, setConnectionNotice] = useState<ActionNotice>();
   const [connectionName, setConnectionName] = useState("");
   const [connectionUrl, setConnectionUrl] = useState("");
+  const [probe, setProbe] = useState<ProbeMcpConnectionResponse>();
+  const [connectionEdit, setConnectionEdit] = useState<ConnectionEditDraft>();
   const [connectionRemoveCandidate, setConnectionRemoveCandidate] =
     useState<McpConnectionStatus>();
   const [activeCodexHome, setActiveCodexHome] = useState<string>();
@@ -267,9 +288,28 @@ export function PluginsSettings(props: {
 
   const gatewaySetting = props.snapshot.general.mcpGatewayEnabled;
   const gatewayEnabled = gatewaySetting.value;
-  const availableToThreads = connections.filter(
-    (connection) => connection.enabled,
-  ).length;
+  // Counts readiness, not the availability switch. The shipped chip read
+  // "2 of 2 on" while one of the two held no credentials and could not serve
+  // a single tool, because `enabled` defaults to true for a connection that
+  // has never been authorized.
+  const readiness = useMemo(
+    () =>
+      summarizeMcpConnectionReadiness(
+        connections.map((connection) =>
+          resolveMcpConnectionSetup({ connection, gatewayEnabled }),
+        ),
+      ),
+    [connections, gatewayEnabled],
+  );
+  const readinessChip = connectionsLoading
+    ? "Loading..."
+    : readiness.total === 0
+      ? "None yet"
+      : [
+          `${readiness.ready} ready`,
+          ...(readiness.parked ? [`${readiness.parked} parked`] : []),
+          ...(readiness.needsSetup ? [`${readiness.needsSetup} to set up`] : []),
+        ].join(" · ");
 
   const loadConnections = useCallback(async () => {
     if (!props.desktopApi?.listMcpConnections) {
@@ -618,8 +658,42 @@ export function PluginsSettings(props: {
     }
   };
 
+  /**
+   * Check the endpoint before a record exists for it.
+   *
+   * `create` persists first and authorizes second, so a typo, a stdio
+   * command line, or a bearer-token server each produced a saved row and a
+   * raw OAuth error. Probing first means nothing is written until the screen
+   * can say what it found.
+   */
+  const checkConnection = async () => {
+    if (connectionPending || !props.desktopApi?.probeMcpConnection) return;
+    setConnectionPending({ kind: "probe" });
+    setConnectionNotice(undefined);
+    try {
+      const result = await props.desktopApi.probeMcpConnection({
+        serverUrl: connectionUrl,
+      });
+      setProbe(result);
+      if (result.ok && !connectionName.trim() && result.serverName) {
+        setConnectionName(result.serverName);
+      }
+    } catch (error) {
+      setConnectionNotice({
+        kind: "error",
+        text: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      setConnectionPending(undefined);
+    }
+  };
+
   const createConnection = async () => {
     if (connectionPending || !props.desktopApi?.createMcpConnection) return;
+    if (!probe?.ok) {
+      await checkConnection();
+      return;
+    }
     setConnectionPending({ kind: "create" });
     setConnectionNotice({
       kind: "working",
@@ -628,10 +702,13 @@ export function PluginsSettings(props: {
     try {
       const response = await props.desktopApi.createMcpConnection({
         displayName: connectionName,
-        serverUrl: connectionUrl,
+        // The probe resolves discovery redirects, so store what it reached
+        // rather than what was typed.
+        serverUrl: probe.serverUrl,
       });
       setConnectionName("");
       setConnectionUrl("");
+      setProbe(undefined);
       await loadConnections();
       setConnectionPending(undefined);
       await authorizeConnection(response.connection, true);
@@ -640,6 +717,38 @@ export function PluginsSettings(props: {
         kind: "error",
         text: error instanceof Error ? error.message : String(error),
       });
+      setConnectionPending(undefined);
+    }
+  };
+
+  const saveConnectionEdit = async () => {
+    const draft = connectionEdit;
+    if (!draft || connectionPending || !props.desktopApi?.updateMcpConnection) {
+      return;
+    }
+    setConnectionPending({ kind: "update", connectionId: draft.connectionId });
+    try {
+      await props.desktopApi.updateMcpConnection({
+        connectionId: draft.connectionId,
+        displayName: draft.displayName,
+        serverUrl: draft.serverUrl,
+      });
+      setConnectionEdit(undefined);
+      await loadConnections();
+      setConnectionNotice({
+        kind: "success",
+        // Re-pointing drops the credentials the old server issued, so say so
+        // rather than letting the row look merely renamed.
+        text: draft.serverUrlChanged
+          ? `${draft.displayName} now points at a different server. Authorize it again.`
+          : `${draft.displayName} was updated.`,
+      });
+    } catch (error) {
+      setConnectionNotice({
+        kind: "error",
+        text: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
       setConnectionPending(undefined);
     }
   };
@@ -745,7 +854,7 @@ export function PluginsSettings(props: {
       <SettingsPanelHead
         eyebrow="Plugins"
         title="MCP connections"
-        help="Manage PwrAgent connections shared with Codex and ACP agents, and the separate MCP servers configured in your Codex profile."
+        help="PwrAgent connections are held here and shared with every Codex and ACP thread you choose. The agent's own servers are configured inside Codex; PwrAgent only reports those."
         action={
           <button
             className="button button--secondary"
@@ -762,14 +871,13 @@ export function PluginsSettings(props: {
         }
       />
 
-      <PwrSuiteConnectionsSettings desktopApi={props.desktopApi} />
-
       <SettingsSection
         eyebrow="PwrAgent gateway"
-        title="Managed MCP connections"
+        title="PwrAgent connections"
         sectionId="managed-mcp-connections"
-        description="PwrAgent keeps OAuth credentials encrypted in this profile, refreshes them centrally, and gives selected threads a local proxy instead of copying tokens into each agent process."
-        chip={`${availableToThreads} of ${connections.length} on`}
+        description="PwrAgent keeps OAuth credentials encrypted in this profile, refreshes them centrally, and gives selected threads a local proxy instead of copying tokens into each agent process. Choose which of these a thread may use under MCP access in its composer."
+        chip={readinessChip}
+        chipKind={readiness.ready === 0 && readiness.total > 0 ? "warn" : "default"}
       >
         <div className="settings-fields">
           <SettingsField
@@ -796,6 +904,17 @@ export function PluginsSettings(props: {
             <span>{connectionNotice.text}</span>
           </div>
         ) : null}
+        {/*
+          * The constraint belongs above the fields. `authMode` is the literal
+          * "oauth", so a command-line server — which is what most people mean
+          * by "an MCP server" — can never be added here. Saying so first is
+          * cheaper than a discovery failure after the record is written.
+          */}
+        <p className="settings-mcp-create__constraint">
+          Add a <strong>remote MCP server that signs in with OAuth</strong>.
+          Command-line (stdio) servers are configured in the agent itself and
+          appear under the agent&rsquo;s own servers below.
+        </p>
         <form
           className="settings-mcp-create"
           onSubmit={(event) => {
@@ -821,23 +940,51 @@ export function PluginsSettings(props: {
               inputMode="url"
               placeholder="https://mcp.example.com/mcp"
               value={connectionUrl}
-              onChange={(event) => setConnectionUrl(event.target.value)}
+              onChange={(event) => {
+                setConnectionUrl(event.target.value);
+                // A probe describes one URL. Keeping a stale verdict beside
+                // an edited field would offer to save something that was
+                // never checked.
+                setProbe(undefined);
+              }}
             />
           </label>
           <button
             className="button button--secondary"
             disabled={
               Boolean(connectionPending)
-              || !connectionName.trim()
               || !connectionUrl.trim()
+              || (probe?.ok === true && !connectionName.trim())
             }
             type="submit"
           >
-            {connectionPending?.kind === "create" ? "Adding..." : "Add and authorize"}
+            {connectionPending?.kind === "probe"
+              ? "Checking..."
+              : connectionPending?.kind === "create"
+                ? "Adding..."
+                : probe?.ok
+                  ? "Add and authorize"
+                  : "Check"}
           </button>
         </form>
+        {probe ? (
+          <p
+            className={`settings-mcp-probe settings-mcp-probe--${
+              probe.ok ? "ok" : "err"
+            }`}
+            role={probe.ok ? "status" : "alert"}
+          >
+            {probe.ok
+              ? `Found ${probe.serverName ?? "an MCP server"} at ${probe.serverUrl}. It signs in with OAuth${
+                  probe.toolCount === undefined
+                    ? ""
+                    : ` and offers ${probe.toolCount} tools`
+                }. Nothing is saved yet.`
+              : probe.message}
+          </p>
+        ) : null}
         {connectionsLoading ? (
-          <p className="settings-empty">Loading managed connections...</p>
+          <p className="settings-empty">Loading connections...</p>
         ) : connections.length ? (
           <div className="settings-mcp-list">
             {connections.map((connection) => (
@@ -845,21 +992,9 @@ export function PluginsSettings(props: {
                 key={connection.id}
                 busy={connectionPending?.connectionId === connection.id}
                 connection={connection}
+                desktopApi={props.desktopApi}
                 disabled={Boolean(connectionPending)}
                 gatewayEnabled={gatewayEnabled}
-                localActions={
-                  connection.kind !== "remote" ? (
-                    <LocalConnectionActions
-                      app={connection.kind === "pwrgit" ? "PwrGit" : "PwrSnap"}
-                      busy={connectionPending?.connectionId === connection.id}
-                      desktopApi={props.desktopApi}
-                      disabled={Boolean(connectionPending)}
-                      onAuthorize={() => void authorizeConnection(connection)}
-                      onChanged={() => void loadConnections()}
-                      onNotice={setConnectionNotice}
-                    />
-                  ) : undefined
-                }
                 onAuthorize={() => void authorizeConnection(connection)}
                 onAvailabilityChange={
                   props.desktopApi?.setMcpConnectionEnabled
@@ -867,21 +1002,31 @@ export function PluginsSettings(props: {
                         void setConnectionAvailability(connection, enabled)
                     : undefined
                 }
+                onChanged={() => void loadConnections()}
                 onDisconnect={() => void disconnectConnection(connection)}
+                onEdit={() =>
+                  setConnectionEdit({
+                    connectionId: connection.id,
+                    displayName: connection.displayName,
+                    serverUrl: connection.serverUrl,
+                    serverUrlChanged: false,
+                  })
+                }
+                onNotice={setConnectionNotice}
                 onRemove={() => setConnectionRemoveCandidate(connection)}
               />
             ))}
           </div>
         ) : (
-          <p className="settings-empty">No managed MCP connections are available.</p>
+          <p className="settings-empty">No PwrAgent connections yet.</p>
         )}
       </SettingsSection>
 
       <SettingsSection
         eyebrow="Codex only"
-        title="Codex MCP servers"
+        title="The agent's own servers"
         sectionId="mcp-servers"
-        description="Sign-in replaces expired OAuth credentials. Remove deletes only this server's configuration from the selected Codex profile."
+        description="Servers configured inside Codex itself, which PwrAgent reports but does not hold credentials for. Sign-in replaces expired OAuth credentials. Remove deletes only this server's configuration from the selected Codex profile."
         chip={
           loading
             ? "Loading..."
@@ -1051,6 +1196,82 @@ export function PluginsSettings(props: {
         </div>
       ) : null}
 
+      {connectionEdit ? (
+        <div className="settings-confirm-modal" role="presentation">
+          <form
+            aria-labelledby="edit-managed-mcp-heading"
+            aria-modal="true"
+            className="settings-confirm-dialog"
+            role="dialog"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void saveConnectionEdit();
+            }}
+          >
+            <h2 id="edit-managed-mcp-heading">Edit connection</h2>
+            <div className="settings-mcp-edit">
+              <label>
+                <span>Name</span>
+                <input
+                  className="settings-input"
+                  disabled={Boolean(connectionPending)}
+                  value={connectionEdit.displayName}
+                  onChange={(event) =>
+                    setConnectionEdit({
+                      ...connectionEdit,
+                      displayName: event.target.value,
+                    })
+                  }
+                />
+              </label>
+              <label>
+                <span>Remote MCP URL</span>
+                <input
+                  className="settings-input"
+                  disabled={Boolean(connectionPending)}
+                  inputMode="url"
+                  value={connectionEdit.serverUrl}
+                  onChange={(event) =>
+                    setConnectionEdit({
+                      ...connectionEdit,
+                      serverUrl: event.target.value,
+                      serverUrlChanged: true,
+                    })
+                  }
+                />
+              </label>
+            </div>
+            {connectionEdit.serverUrlChanged ? (
+              <p>
+                Changing the address discards the credentials the old server
+                issued. You will need to authorize this connection again.
+              </p>
+            ) : null}
+            <div className="settings-confirm-dialog__actions">
+              <button
+                className="button button--secondary"
+                disabled={Boolean(connectionPending)}
+                type="button"
+                onClick={() => setConnectionEdit(undefined)}
+              >
+                Cancel
+              </button>
+              <button
+                className="button button--primary"
+                disabled={
+                  Boolean(connectionPending)
+                  || !connectionEdit.displayName.trim()
+                  || !connectionEdit.serverUrl.trim()
+                }
+                type="submit"
+              >
+                {connectionPending?.kind === "update" ? "Saving..." : "Save"}
+              </button>
+            </div>
+          </form>
+        </div>
+      ) : null}
+
       {connectionRemoveCandidate ? (
         <div className="settings-confirm-modal" role="presentation">
           <div
@@ -1059,7 +1280,7 @@ export function PluginsSettings(props: {
             className="settings-confirm-dialog settings-confirm-dialog--danger"
             role="dialog"
           >
-            <h2 id="remove-managed-mcp-heading">Remove managed connection?</h2>
+            <h2 id="remove-managed-mcp-heading">Remove connection?</h2>
             <p>
               Remove <strong>{connectionRemoveCandidate.displayName}</strong> and
               its encrypted OAuth credentials from this PwrAgent profile.
@@ -1090,73 +1311,116 @@ export function PluginsSettings(props: {
   );
 }
 
+/**
+ * Probe a local PwrSuite application.
+ *
+ * Both the row's state line and its actions need this: the line has to say
+ * "Not running" rather than "Not connected" when the app simply is not up,
+ * and the actions have to offer Open rather than Authorize. Installing the
+ * app or turning on Local Agent Access happens outside this window, so the
+ * probe re-runs whenever the operator comes back to it.
+ */
+function useLocalConnectionStatus(
+  app: "PwrSnap" | "PwrGit" | undefined,
+  desktopApi?: DesktopApi,
+): {
+  status: PwrSnapConnectionStatus | PwrGitConnectionStatus | undefined;
+  refresh: () => Promise<void>;
+} {
+  const [status, setStatus] = useState<
+    PwrSnapConnectionStatus | PwrGitConnectionStatus
+  >();
+  const read = app === "PwrGit"
+    ? desktopApi?.readPwrGitConnectionStatus
+    : app === "PwrSnap" ? desktopApi?.readPwrSnapConnectionStatus : undefined;
+
+  const refresh = useCallback(async (): Promise<void> => {
+    if (!read) return;
+    try {
+      setStatus(await read());
+    } catch {
+      // The row still resolves a state from the connection record, so a
+      // failed probe degrades to the credential-only reading rather than
+      // asserting the app is missing.
+      setStatus(undefined);
+    }
+  }, [read]);
+
+  useEffect(() => {
+    void refresh();
+    const onFocus = (): void => {
+      void refresh();
+    };
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [refresh]);
+
+  return { status, refresh };
+}
+
+/**
+ * One connection, one claim.
+ *
+ * The shipped row rendered the credential state and the availability switch
+ * as peers, so a never-authorized PwrSnap read `Not connected` beside an
+ * `On` switch. `resolveMcpConnectionSetup` collapses that stack into a
+ * single state, and the switch is withheld entirely until there is something
+ * for it to be about.
+ */
 function ManagedMcpConnectionRow(props: {
   busy: boolean;
   connection: McpConnectionStatus;
+  desktopApi?: DesktopApi;
   disabled: boolean;
   gatewayEnabled: boolean;
-  /** Replaces the generic Authorize action for the PwrSnap row. */
-  localActions?: ReactNode;
   onAuthorize: () => void;
   onAvailabilityChange?: (enabled: boolean) => void;
+  onChanged: () => void;
   onDisconnect: () => void;
+  onEdit: () => void;
+  onNotice: (notice: ActionNotice) => void;
   onRemove: () => void;
 }) {
   const connection = props.connection;
-  const needsAuthorization = !connection.configured
-    || connection.state === "reauthorization_required";
+  const app = connection.kind === "pwrgit"
+    ? "PwrGit"
+    : connection.kind === "pwrsnap" ? "PwrSnap" : undefined;
+  const { status: localStatus, refresh: refreshLocal } =
+    useLocalConnectionStatus(app, props.desktopApi);
+  const setup = resolveMcpConnectionSetup({
+    connection,
+    gatewayEnabled: props.gatewayEnabled,
+    ...(localStatus ? { localAvailability: localStatus.availability } : {}),
+  });
   return (
-    <article
-      className={`settings-mcp-row${
-        props.onAvailabilityChange ? " settings-mcp-row--managed" : ""
-      }`}
-    >
+    <article className="settings-mcp-row settings-mcp-row--managed">
       <div className="settings-mcp-row__body">
         <strong>{connection.displayName}</strong>
         <span title={connection.serverUrl}>{connection.serverUrl}</span>
-        {connection.detail ? (
-          <p className="settings-mcp-row__error">{connection.detail}</p>
-        ) : null}
-      </div>
-      <div className="settings-mcp-row__chips">
-        <span className="settings-pathrow__chip">OAuth</span>
-        <span
-          className={`settings-pathrow__chip${
-            connection.state === "ready"
-              ? " settings-pathrow__chip--ok"
-              : connection.state === "reauthorization_required"
-                || connection.state === "temporarily_unavailable"
-                ? " settings-pathrow__chip--err"
-                : ""
-          }`}
-        >
-          {formatConnectionState(connection)}
-        </span>
-      </div>
-      {props.onAvailabilityChange ? (
-        <div className="settings-mcp-row__availability">
-          <SettingsSwitch
-            checked={connection.enabled}
-            // The gateway switch above already states the reason every
-            // connection is off, so this one reads as a consequence rather
-            // than as an unexplained dead control.
-            disabled={props.disabled || !props.gatewayEnabled}
-            label={`Offer ${connection.displayName} to threads`}
-            onChange={props.onAvailabilityChange}
-          />
-          <span className="settings-mcp-row__availability-label">
-            Offer to threads
+        <p className="settings-mcp-row__state" data-tone={setup.tone}>
+          <span aria-hidden="true" className="settings-mcp-row__state-dot" />
+          <span>
+            <b>{setup.headline}</b> {setup.detail}
           </span>
-        </div>
-      ) : null}
+        </p>
+      </div>
       <div className="settings-mcp-row__actions">
-        {/*
-          * Local applications must be installed and running, so
-          * the OAuth handshake only works once it is installed and running
-          * with Local Agent Access. Offering a bare Authorize button before
-          * that would fail with a connection error and name no cause.
-          */}
-        {props.localActions ? <>{props.localActions}</> : (
+        {app ? (
+          <LocalConnectionActions
+            app={app}
+            busy={props.busy}
+            configured={connection.configured}
+            desktopApi={props.desktopApi}
+            disabled={props.disabled}
+            status={localStatus}
+            onAuthorize={props.onAuthorize}
+            onChanged={() => {
+              void refreshLocal();
+              props.onChanged();
+            }}
+            onNotice={props.onNotice}
+          />
+        ) : (
           <button
             className="button button--secondary"
             disabled={props.disabled}
@@ -1165,9 +1429,7 @@ function ManagedMcpConnectionRow(props: {
           >
             {props.busy
               ? "Working..."
-              : needsAuthorization
-                ? "Authorize"
-                : "Reauthorize"}
+              : connection.configured ? "Reauthorize" : "Authorize"}
           </button>
         )}
         {connection.configured ? (
@@ -1181,63 +1443,87 @@ function ManagedMcpConnectionRow(props: {
           </button>
         ) : null}
         {connection.kind === "remote" ? (
-          <button
-            className="button button--ghost settings-mcp-row__remove"
-            disabled={props.disabled}
-            type="button"
-            onClick={props.onRemove}
-          >
-            Remove
-          </button>
+          <>
+            {/*
+              * A connection's URL is not a write-once field. `create`
+              * persists before authorization is attempted, so without Edit a
+              * single mistyped character left a dead row whose only exit was
+              * Remove and retype.
+              */}
+            <button
+              className="button button--ghost"
+              disabled={props.disabled}
+              type="button"
+              onClick={props.onEdit}
+            >
+              Edit
+            </button>
+            <button
+              className="button button--ghost settings-mcp-row__remove"
+              disabled={props.disabled}
+              type="button"
+              onClick={props.onRemove}
+            >
+              Remove
+            </button>
+          </>
         ) : null}
       </div>
+      {/*
+        * The cell is always emitted, even when the switch is withheld. Each
+        * row is its own grid, so an omitted child would let the remaining
+        * columns resolve against that row's own content and leave the
+        * switches at a different x on every row.
+        */}
+      <div className="settings-mcp-row__availability">
+        {props.onAvailabilityChange && setup.offersAvailabilitySwitch ? (
+          <>
+            <SettingsSwitch
+              checked={connection.enabled}
+              // The gateway switch above already states the reason every
+              // connection is off, and the row's own state line repeats it, so
+              // this reads as a consequence rather than a dead control.
+              disabled={props.disabled || !props.gatewayEnabled}
+              label={`Offer ${connection.displayName} to threads`}
+              onChange={props.onAvailabilityChange}
+            />
+            <span className="settings-mcp-row__availability-label">
+              Offer to threads
+            </span>
+          </>
+        ) : null}
+      </div>
+
     </article>
   );
 }
 
 /**
- * PwrSnap's setup ladder, in Settings so the operator can finish it from the
- * one screen the MCP access panel routes them to. Each rung offers exactly
- * the action that advances it.
+ * A local application's setup ladder, one rung at a time.
+ *
+ * Each state offers exactly the action that advances it: a bare Authorize
+ * before the app is installed and running with Local Agent Access would fail
+ * with a connection error and name no cause. The probe itself lives in the
+ * row, because the state line needs the same answer.
  */
 function LocalConnectionActions(props: {
   app: "PwrSnap" | "PwrGit";
   busy: boolean;
+  configured: boolean;
   desktopApi?: DesktopApi;
   disabled: boolean;
+  status: PwrSnapConnectionStatus | PwrGitConnectionStatus | undefined;
   onAuthorize: () => void;
   onChanged: () => void;
   onNotice: (notice: ActionNotice) => void;
 }) {
-  const [status, setStatus] = useState<PwrSnapConnectionStatus | PwrGitConnectionStatus>();
   const [pending, setPending] = useState(false);
   const desktopApi = props.desktopApi;
-  const read = props.app === "PwrGit" ? desktopApi?.readPwrGitConnectionStatus : desktopApi?.readPwrSnapConnectionStatus;
   const open = props.app === "PwrGit" ? desktopApi?.openPwrGit : desktopApi?.openPwrSnap;
-  const download = props.app === "PwrGit" ? desktopApi?.openPwrGitDownload : desktopApi?.openPwrSnapDownload;
+  const download = props.app === "PwrGit"
+    ? desktopApi?.openPwrGitDownload
+    : desktopApi?.openPwrSnapDownload;
   const connect = props.app === "PwrGit" ? desktopApi?.connectPwrGit : desktopApi?.connectPwrSnap;
-
-  const refresh = useCallback(async (): Promise<void> => {
-    if (!read) return;
-    try {
-      setStatus(await read());
-    } catch {
-      // The row still renders its state chip from the connection record, so
-      // a failed probe degrades to the generic Authorize action.
-      setStatus(undefined);
-    }
-  }, [read]);
-
-  useEffect(() => {
-    void refresh();
-    // Installing the app or enabling Local Agent Access happens outside this
-    // window, so re-probe when the operator comes back to it.
-    const onFocus = (): void => {
-      void refresh();
-    };
-    window.addEventListener("focus", onFocus);
-    return () => window.removeEventListener("focus", onFocus);
-  }, [refresh]);
 
   // Every action here is invoked as `void run(...)`, so a rejection would
   // escape as an unhandled rejection and the button would simply revert —
@@ -1249,7 +1535,6 @@ function LocalConnectionActions(props: {
     setPending(true);
     try {
       const notice = await action();
-      await refresh();
       props.onChanged();
       if (notice) props.onNotice(notice);
     } catch (cause) {
@@ -1263,6 +1548,7 @@ function LocalConnectionActions(props: {
   };
 
   const busy = props.busy || pending;
+  const status = props.status;
   const running = status?.availability === "running";
   const installed = status?.availability === "installed" || running;
 
@@ -1274,7 +1560,7 @@ function LocalConnectionActions(props: {
         type="button"
         onClick={props.onAuthorize}
       >
-        {busy ? "Working..." : "Authorize"}
+        {busy ? "Working..." : props.configured ? "Reauthorize" : "Authorize"}
       </button>
     );
   }
@@ -1325,7 +1611,7 @@ function LocalConnectionActions(props: {
     );
   }
 
-  if (!status.configured) {
+  if (!props.configured) {
     return (
       <button
         className="button button--secondary"
@@ -1488,17 +1774,3 @@ function McpServerRow(props: {
   );
 }
 
-function formatConnectionState(connection: McpConnectionStatus): string {
-  if (!connection.configured || connection.state === "disconnected") {
-    return "Not connected";
-  }
-  if (connection.state === "reauthorization_required") {
-    return "Login required";
-  }
-  if (connection.state === "temporarily_unavailable") {
-    return "Unavailable";
-  }
-  if (connection.state === "connecting") return "Connecting";
-  if (connection.state === "refreshing") return "Refreshing";
-  return "Ready";
-}

@@ -111,7 +111,11 @@ import {
   PwrSnapConnectionPrompt,
   pwrSnapConnectionIds,
 } from "./PwrSnapConnectionPrompt";
-import { McpAccessPanel, ThreadMcpAccessPanel } from "./McpAccessPanel";
+import {
+  McpAccessPanel,
+  ThreadMcpAccessPanel,
+  useThreadMcpConnectionCount,
+} from "./McpAccessPanel";
 import {
   PwrGitConnectionPrompt,
   pwrGitConnectionIds,
@@ -1623,6 +1627,17 @@ export function ThreadView(props: ThreadViewProps) {
   // closes when the operator moves to another thread.
   const [launchpadMcpAccessOpen, setLaunchpadMcpAccessOpen] = useState(false);
   const [threadMcpAccessOpen, setThreadMcpAccessOpen] = useState(false);
+  // Closing the panel is the cheap, reliable signal that the selection may
+  // have changed; re-reading then keeps the composer badge honest without
+  // subscribing to every write.
+  const threadMcpConnectionCount = useThreadMcpConnectionCount({
+    backend: selectedThread?.source ?? "codex",
+    desktopApi: props.desktopApi,
+    ...(selectedThread && !props.activeFederationTarget
+      ? { threadId: selectedThread.id }
+      : {}),
+    token: threadMcpAccessOpen ? 1 : 0,
+  });
   useEffect(() => {
     setLaunchpadMcpAccessOpen(false);
     setThreadMcpAccessOpen(false);
@@ -3849,6 +3864,7 @@ export function ThreadView(props: ThreadViewProps) {
                 ? undefined
                 : () => setThreadMcpAccessOpen(true)
             }
+            mcpConnectionCount={threadMcpConnectionCount}
             composerImplementation={props.composerImplementation}
             draftStore={props.composerDraftStore}
             directory={props.selectedDirectory}

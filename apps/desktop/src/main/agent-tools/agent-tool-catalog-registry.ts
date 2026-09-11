@@ -32,6 +32,10 @@ import {
   buildPwrAgentFederationToolRouter,
   type PwrAgentFederationHandler,
 } from "./pwragent-federation-agent-tools.js";
+import {
+  buildPwrAgentMcpConnectionToolRouter,
+  type PwrAgentMcpConnectionHandler,
+} from "./pwragent-mcp-connection-agent-tools.js";
 import { AgentToolRouter } from "./agent-tool-router.js";
 import { buildTokenMiserToolDefinitions } from "./token-miser-agent-tools.js";
 import type { TokenMiserStore } from "../token-miser/token-miser-store.js";
@@ -47,6 +51,7 @@ export function resolveAgentToolCatalogs(params: {
   appManagementHandler?: PwrAgentAppManagementHandler;
   automationInspectionHandler?: AutomationInspectionHandler;
   federationHandler?: PwrAgentFederationHandler;
+  mcpConnectionHandler?: PwrAgentMcpConnectionHandler;
   messagingHandler?: PwrAgentMessagingHandler;
   taskMonitorHandler?: PwrAgentTaskMonitorHandler;
   threadInspectionHandler?: PwrAgentThreadInspectionHandler;
@@ -82,6 +87,10 @@ export function resolveAgentToolCatalogs(params: {
     params.federationHandler,
   );
   const federationDynamicTools = federationRouter.buildDynamicToolSpecs();
+  const mcpConnectionRouter = buildPwrAgentMcpConnectionToolRouter(
+    params.mcpConnectionHandler,
+  );
+  const mcpConnectionDynamicTools = mcpConnectionRouter.buildDynamicToolSpecs();
   const tokenMiserRouter = new AgentToolRouter(
     buildTokenMiserToolDefinitions(params.tokenMiserStore),
   );
@@ -180,6 +189,25 @@ export function resolveAgentToolCatalogs(params: {
           id: "federation",
           namespace: PWRAGENT_TOOL_NAMESPACE,
           tools: federationDynamicTools,
+        }),
+      },
+    },
+    {
+      id: "mcp_connections",
+      dynamicTools: mcpConnectionDynamicTools,
+      router: mcpConnectionRouter,
+      summary: {
+        id: "mcp_connections",
+        namespace: PWRAGENT_TOOL_NAMESPACE,
+        enabled: Boolean(params.mcpConnectionHandler),
+        toolCount: countDynamicTools(mcpConnectionDynamicTools),
+        ...(!params.mcpConnectionHandler
+          ? { unavailableReason: "MCP connections are unavailable in this PwrAgent runtime." }
+          : {}),
+        fingerprint: buildCatalogFingerprint({
+          id: "mcp_connections",
+          namespace: PWRAGENT_TOOL_NAMESPACE,
+          tools: mcpConnectionDynamicTools,
         }),
       },
     },
