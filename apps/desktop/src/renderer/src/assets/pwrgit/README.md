@@ -14,3 +14,11 @@ To refresh it, take `Contents/Resources/icon.icns` from a packaged PwrGit.app
 (or compile PwrGit's `build/icon.icon` the way its `branding-assets.test.ts`
 does), run `iconutil -c iconset` on it, and copy `icon_128x128@2x.png` here
 unchanged. Do not resample, redraw, recolor, or inline the mark in PwrAgent.
+
+The plate in this copy covers 206 of its 256px — Apple's legacy 824-in-1024
+template — where the PwrSnap icon beside it on the same card is full-bleed.
+The card compensates in CSS rather than in the file, so the two marks paint at
+the same size: see `.mcp-connection__icon--inset-plate` in `styles/app.css`.
+A refreshed copy with a different margin fails
+`apps/desktop/scripts/pwrsuite-brand-icons.test.mjs`; correct the ratio there
+rather than editing the asset.

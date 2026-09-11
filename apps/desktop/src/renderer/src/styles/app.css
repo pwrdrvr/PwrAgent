@@ -16179,6 +16179,21 @@ a.button {
   border-radius: 8px;
 }
 
+/* Each mark is the sister app's own 256px icon, copied verbatim, but the two
+   were authored on different canvases: PwrSnap's rounded plate fills its
+   256px, while PwrGit's sits on Apple's legacy 824-in-1024 template, so a
+   fifth of that canvas is transparent margin. Drawn into the same box, the
+   inset plate paints at 80% of the full-bleed one beside it — 35.4px against
+   44px. Scale it back by the canvas over the plate it holds. The grid column
+   is a fixed 44px and the only thing this paints outside the box is the
+   asset's own transparent margin, so neither the layout nor the smaller
+   widths below need to know. `scripts/pwrsuite-brand-icons.test.mjs` measures
+   both assets against this ratio, so refreshing either one from its sister
+   repo fails there rather than silently painting at the wrong size. */
+.mcp-connection__icon--inset-plate {
+  transform: scale(calc(256 / 206));
+}
+
 .mcp-connection__copy {
   min-width: 0;
 }
