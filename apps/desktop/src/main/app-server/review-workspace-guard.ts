@@ -151,6 +151,20 @@ export async function assertReviewWorkspaceMatchesAttachedPullRequest(params: {
     return;
   }
 
+  // A base-branch review targets local changes, including unpushed or rebased
+  // work. The published PR SHA need not exist in this checkout. Use the actual
+  // symbolic branch (not a cached thread label) before falling back to ancestry
+  // for detached HEADs or differently named local branches.
+  const currentBranch = await runGit(cwd, ["symbolic-ref", "--quiet", "HEAD"])
+    .then((result) => result.stdout.trim())
+    .catch(() => "");
+  if (matchingPullRequests.some((pr) =>
+    Boolean(pr.headRefName?.trim())
+    && currentBranch === `refs/heads/${pr.headRefName?.trim()}`
+  )) {
+    return;
+  }
+
   const ancestry = await Promise.all(
     matchingPullRequests.map(async (pr) =>
       await commitIsAncestorOfHead(runGit, cwd, pr.headSha ?? "")
