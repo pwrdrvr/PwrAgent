@@ -803,6 +803,7 @@ describe("AcpAgentClient", () => {
           name: "pwragent_automations",
           command: "pwragent-automation-tools",
           args: ["acp:gemini", "/repo", "app-session-1"],
+          env: [],
         },
       ],
     });
@@ -813,6 +814,7 @@ describe("AcpAgentClient", () => {
           name: "pwragent_automations",
           command: "pwragent-automation-tools",
           args: ["acp:gemini", "/repo", "loaded-session-1"],
+          env: [],
         },
       ],
       sessionId: "loaded-session-1",
@@ -949,15 +951,15 @@ describe("AcpAgentClient", () => {
     expect(transport.requests[1]?.params).toEqual({
       cwd: "/repo",
       mcpServers: [
-        { name: "pwragent", command: "pwragent-mcp" },
+        { name: "pwragent", command: "pwragent-mcp", args: [], env: [] },
         {
           name: "pwrsnap",
           command: process.execPath,
           args: ["/app/mcp-connection-bridge.js"],
-          env: {
-            ELECTRON_RUN_AS_NODE: "1",
-            PWRAGENT_MCP_CONNECTION_TOKEN: "local-grant",
-          },
+          env: [
+            { name: "ELECTRON_RUN_AS_NODE", value: "1" },
+            { name: "PWRAGENT_MCP_CONNECTION_TOKEN", value: "local-grant" },
+          ],
         },
       ],
     });
