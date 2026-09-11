@@ -8,7 +8,8 @@ verbatim from the sister PwrSuite repository:
   electron-builder's `actool` derives from PwrSnap's `apps/desktop/build/icon.icon`
   at package time. It was originally the same member of PwrSnap's hand-built
   `icon.iconset/`, which pwrdrvr/PwrSnap#563 removed.
-- Usage: the New Thread PwrSnap connection prompt
+- Usage: the New Thread PwrSnap connection prompt, and the OAuth callback page
+  the browser lands on after PwrSnap's authorization screen
 
 To refresh it, take `Contents/Resources/icon.icns` from a packaged PwrSnap.app
 (or compile PwrSnap's `build/icon.icon` the way its `app-icon.test.mjs` does),

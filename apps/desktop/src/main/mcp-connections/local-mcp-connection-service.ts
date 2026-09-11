@@ -219,7 +219,12 @@ function delay(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
-function htmlResponse(
+/**
+ * The page the browser lands on after the sister app's authorization screen.
+ * Exported for `oauth-callback-page.test.ts`: it is the only part of this
+ * service a person ever looks at, and nothing else here renders markup.
+ */
+export function htmlResponse(
   title: string,
   detail: string,
   options: { liveStatus?: boolean } = {},
@@ -228,6 +233,9 @@ function htmlResponse(
   const displayName = connectionId === "pwrgit" ? "PwrGit" : "PwrSnap";
   const safeTitle = escapeHtml(title);
   const liveStatus = options.liveStatus === true;
+  // PwrGit's brand asset is the only one of the three that carries Apple's
+  // legacy margin; see `.app-mark--inset-plate` below.
+  const insetPlate = connectionId === "pwrgit";
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -235,6 +243,11 @@ function htmlResponse(
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="referrer" content="no-referrer">
   <title>${safeTitle}</title>
+  <!-- PwrAgent's own mark, not the sister app's: this window belongs to
+       PwrAgent, and the tab is where someone looks to ask what opened it.
+       Same route the diagram below draws from, so it needs no second asset
+       and nothing new from this page's own img-src 'self' policy. -->
+  <link rel="icon" type="image/png" href="/assets/pwragent.png">
   <style>
     :root { color-scheme: dark; font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
     * { box-sizing: border-box; }
@@ -246,7 +259,19 @@ function htmlResponse(
     .detail { max-width: 610px; margin: 20px auto 0; color: #aaa49d; font-size: 17px; line-height: 1.55; }
     .connection { display: grid; grid-template-columns: 138px minmax(140px, 1fr) 138px; align-items: center; gap: 22px; max-width: 650px; margin: 58px auto 50px; }
     .app { display: grid; justify-items: center; gap: 13px; color: #d9d4cd; font-size: 13px; font-weight: 680; }
-    .app-icon { width: 104px; height: 104px; padding: 4px; border: 1px solid #2b2926; border-radius: 27px; object-fit: contain; background: #141312; box-shadow: 0 20px 55px rgba(0, 0, 0, .45); }
+    .app-icon { display: grid; place-items: center; width: 104px; height: 104px; padding: 4px; border: 1px solid #2b2926; border-radius: 27px; background: #141312; box-shadow: 0 20px 55px rgba(0, 0, 0, .45); }
+    .app-mark { width: 100%; height: 100%; object-fit: contain; }
+    /* Each mark is its own app's icon, copied verbatim, and they were authored
+       on different canvases: most plates fill theirs, while the one flagged
+       here sits on Apple's legacy 824-in-1024 template, so a fifth of that
+       canvas is transparent margin. Drawn into the same tile it paints at 80%
+       of the mark beside it, which reads as a small icon lost inside an empty
+       frame. Scale it back by the canvas over the plate it holds — the same
+       ratio, and the same reason, as \`.mcp-connection__icon--inset-plate\` in
+       the renderer's app.css. The tile is the parent, so only the artwork
+       grows, and the only thing this paints outside the tile is the asset's
+       own transparent margin. */
+    .app-mark--inset-plate { transform: scale(calc(256 / 206)); }
     .line { position: relative; height: 38px; }
     .line::before { content: ""; position: absolute; top: 18px; left: 0; right: 0; height: 2px; background: linear-gradient(90deg, #8a3c17, #ff8a1f 45%, #ffc174 55%, #8a3c17); box-shadow: 0 0 14px rgba(255, 138, 31, .7); }
     .signal { position: absolute; top: 12px; left: -4px; width: 14px; height: 14px; border: 3px solid #090909; border-radius: 50%; background: #ff9c43; box-shadow: 0 0 0 3px rgba(255, 138, 31, .18), 0 0 18px #ff8a1f; animation: call 1.8s cubic-bezier(.45, 0, .25, 1) infinite; }
@@ -268,30 +293,37 @@ function htmlResponse(
     <h1 id="title">${safeTitle}</h1>
     <p class="detail" id="detail">${escapeHtml(detail)}</p>
     <div class="connection" aria-label="PwrAgent connection to ${displayName}">
-      <div class="app"><img class="app-icon" src="/assets/pwragent.png" alt="PwrAgent"><span>PwrAgent</span></div>
+      <div class="app"><span class="app-icon"><img class="app-mark" src="/assets/pwragent.png" alt=""></span><span>PwrAgent</span></div>
       <div class="line" aria-hidden="true"><span class="signal"></span></div>
-      <div class="app"><img class="app-icon" src="/assets/${connectionId}.png" alt="${displayName}"><span>${displayName}</span></div>
+      <div class="app"><span class="app-icon"><img class="app-mark${insetPlate ? " app-mark--inset-plate" : ""}" src="/assets/${connectionId}.png" alt=""></span><span>${displayName}</span></div>
     </div>
     <div class="status"><span class="status-dot"></span><span id="status">${liveStatus ? "Finishing secure connection…" : "Connection stopped"}</span></div>
-    <p class="close">You can close this window at any time.</p>
+    <!-- Names the app that opened this window. The heading names PwrAgent
+         only while the connection is going well; "Connection could not be
+         completed" on a stranger's tab names nobody at all. -->
+    <p class="close">PwrAgent opened this window — you can close it at any time.</p>
   </main>
   ${liveStatus ? `<script>
+    // The heading and the tab move together: the tab is the only part of this
+    // page a backgrounded window still shows, and left alone it kept saying
+    // "Connecting…" long after the connection was up or had failed.
+    const settle = (state, heading, detail, status) => {
+      document.body.className = state;
+      document.title = heading;
+      document.getElementById("title").textContent = heading;
+      document.getElementById("detail").textContent = detail;
+      document.getElementById("status").textContent = status;
+    };
     const check = async () => {
       try {
         const response = await fetch("/oauth/status", { cache: "no-store" });
         const result = await response.json();
         if (result.state === "connected") {
-          document.body.className = "is-connected";
-          document.getElementById("title").textContent = "PwrAgent is connected to ${displayName}";
-          document.getElementById("detail").textContent = result.detail;
-          document.getElementById("status").textContent = "Secure connection ready";
+          settle("is-connected", "PwrAgent is connected to ${displayName}", result.detail, "Secure connection ready");
           return;
         }
         if (result.state === "failed") {
-          document.body.className = "is-failed";
-          document.getElementById("title").textContent = "Connection could not be completed";
-          document.getElementById("detail").textContent = result.detail;
-          document.getElementById("status").textContent = "Connection stopped";
+          settle("is-failed", "Connection could not be completed", result.detail, "Connection stopped");
           return;
         }
       } catch {}
