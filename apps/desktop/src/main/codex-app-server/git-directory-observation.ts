@@ -5,6 +5,8 @@ export type GitDirectoryObservation = {
   repository: boolean;
   relationship: string;
   head: string;
+  commonDirectory?: string;
+  commonVersion?: string;
 };
 
 type FileState = Awaited<ReturnType<typeof fileState>>;
@@ -105,6 +107,8 @@ export function createGitDirectoryObserver(): (
     if (refs?.directory || commonRefs?.directory) return undefined;
     return {
       repository: true,
+      commonDirectory: commonDir,
+      commonVersion: JSON.stringify([commonDir, commonInfo.signature, config?.signature]),
       relationship: JSON.stringify([
         resolved, directory.signature, dotGitPath, dotGit.signature, link,
         gitdir, admin.signature, common, commonInfo.signature,

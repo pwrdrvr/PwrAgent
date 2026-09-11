@@ -213,24 +213,10 @@ function parseGitWorktrees(output: string): string[] {
     .filter(Boolean);
 }
 
-function findContainingWorktree(
-  currentPath: string,
-  worktreePaths: string[],
-): string | undefined {
-  const matches = worktreePaths
-    .map((worktreePath) => path.resolve(worktreePath))
-    .filter(
-      (worktreePath) =>
-        currentPath === worktreePath || currentPath.startsWith(`${worktreePath}${path.sep}`),
-    )
-    .sort((left, right) => right.length - left.length);
-
-  return matches[0];
-}
-
 async function loadThreadDirectoryEnrichment(
   projectKey: string,
   context: DirectoryEnrichmentContext,
+  readWorktrees: (repoRoot: string) => Promise<string[]>,
 ): Promise<ThreadDirectoryEnrichment> {
   if (!projectKey?.trim()) {
     return { linkedDirectories: [] };
@@ -242,17 +228,23 @@ async function loadThreadDirectoryEnrichment(
   }
 
   try {
-    const [repoRoot, worktreeList, observedGitBranch, gitMetadata] =
-      await Promise.all([
-        runGit(currentPath, ["rev-parse", "--show-toplevel"], context),
-        runGit(currentPath, ["worktree", "list", "--porcelain"], context),
-        runGit(currentPath, ["rev-parse", "--abbrev-ref", "HEAD"], context).catch(() => undefined),
-        readGitMetadataEvidence(currentPath),
-      ]);
-    const worktreePaths = parseGitWorktrees(worktreeList);
+    // One Git invocation discovers the top-level path and current branch.
+    // Keep the separate branch fallback for unborn HEAD or partial results.
+    let discovery: string[];
+    try {
+      discovery = (await runGit(currentPath,
+        ["rev-parse", "--show-toplevel", "--abbrev-ref", "HEAD"], context)).split("\n");
+    } catch {
+      discovery = [await runGit(currentPath, ["rev-parse", "--show-toplevel"], context)];
+    }
+    const repoRoot = discovery[0];
+    const [worktreePaths, observedGitBranch, gitMetadata] = await Promise.all([
+      readWorktrees(repoRoot),
+      discovery[1] || runGit(currentPath, ["rev-parse", "--abbrev-ref", "HEAD"], context).catch(() => undefined),
+      readGitMetadataEvidence(currentPath),
+    ]);
     const primaryPath = path.resolve(worktreePaths[0] || repoRoot);
-    const currentWorktreePath =
-      findContainingWorktree(currentPath, worktreePaths) ?? path.resolve(repoRoot);
+    const currentWorktreePath = path.resolve(repoRoot);
     const gitFileRepositoryPath = gitMetadata.inferredRepositoryPath
       ? path.resolve(gitMetadata.inferredRepositoryPath)
       : undefined;
@@ -331,6 +323,43 @@ export function createThreadDirectoryEnricher(): (
   const cache = new Map<string, CachedEnrichment>();
   const pending = new Map<string, Promise<ThreadDirectoryEnrichment>>();
   const observe = createGitDirectoryObserver();
+  const repositoryWorktrees = new Map<string, { version: string; paths: string[]; roots: Set<string> }>();
+  const pendingWorktrees = new Map<string, Promise<string[]>>();
+
+  async function readWorktrees(
+    key: string,
+    repoRoot: string,
+    before: GitDirectoryObservation | undefined,
+    context: DirectoryEnrichmentContext,
+  ): Promise<string[]> {
+    if (!before?.commonDirectory || !before.commonVersion) {
+      return parseGitWorktrees(await runGit(key, ["worktree", "list", "--porcelain"], context));
+    }
+    const common = before.commonDirectory;
+    const cached = repositoryWorktrees.get(common);
+    if (cached?.version === before.commonVersion) {
+      const paths = cached.paths;
+      // A newly added/moved checkout must refresh the inventory. Deleted
+      // siblings do not affect this lookup; a moved primary must refresh too.
+      if (cached.roots.has(path.resolve(repoRoot)) && paths[0] && await pathExists(paths[0])) {
+        return cached.paths;
+      }
+    }
+    const pendingKey = JSON.stringify([common, before.commonVersion]);
+    const existing = pendingWorktrees.get(pendingKey);
+    if (existing) return existing;
+    const pending = runGit(key, ["worktree", "list", "--porcelain"], context).then((output) => {
+      const paths = parseGitWorktrees(output);
+      repositoryWorktrees.set(common, { version: before.commonVersion!, paths, roots: new Set(paths) });
+      return paths;
+    });
+    pendingWorktrees.set(pendingKey, pending);
+    try {
+      return await pending;
+    } finally {
+      if (pendingWorktrees.get(pendingKey) === pending) pendingWorktrees.delete(pendingKey);
+    }
+  }
 
   async function refresh(key: string, caller: DirectoryEnrichmentCaller): Promise<ThreadDirectoryEnrichment> {
     let observationErrors = 0;
@@ -364,7 +393,7 @@ export function createThreadDirectoryEnricher(): (
         .catch(() => undefined);
       value = { ...cached.value, observedGitBranch: branch || undefined };
     } else {
-      value = await loadThreadDirectoryEnrichment(key, context);
+      value = await loadThreadDirectoryEnrichment(key, context, (repoRoot) => readWorktrees(key, repoRoot, before, context));
     }
     // The branch is present only when the complete probe succeeded. Retaining
     // a fallback would hide recovery after a failed executable/filesystem read.

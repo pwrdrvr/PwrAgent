@@ -97,6 +97,20 @@
     "rowsChanged": 1,
     "statements": 1
   },
+  "directory-demand-first-repair": {
+    "commits": 1,
+    "note": "one previously unknown directory relationship repaired on demand",
+    "observedWalBytes": 16480,
+    "rowsChanged": 1,
+    "statements": 1
+  },
+  "directory-demand-unchanged-refreshes": {
+    "commits": 0,
+    "note": "100 unchanged directory demand refreshes add no SQLite commits",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 0
+  },
   "existing-thread-environment-setup": {
     "commits": 2,
     "note": "one existing-thread environment selection, including setup hydration and runtime persistence; no per-event writes",

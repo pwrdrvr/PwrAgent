@@ -6008,19 +6008,9 @@ let threadListCacheSequence = 0;
 function shouldEnrichThreadDirectories(
   callerReason?: ThreadListCallerReason,
 ): boolean {
-  switch (callerReason) {
-    case "active-turn-branch-adoption":
-    case "branch-drift":
-    case "messaging-navigation-snapshot":
-    case "navigation-snapshot":
-    case "navigation-snapshot:active-recent":
-    case "startup-prewarm":
-    case "title-generation":
-    case "turn-cwd":
-      return false;
-    default:
-      return true;
-  }
+  // Lists serve cached/provider metadata. Only explicit reconciliation may
+  // enrich a collection; interaction and lifecycle refreshes target one thread.
+  return callerReason === "directory-relationship-reconcile";
 }
 
 /**
@@ -6078,17 +6068,7 @@ function isCodexMissingRolloutArchiveError(
 function shouldBackfillCodexDirectoryRelationships(
   callerReason?: ThreadListCallerReason,
 ): boolean {
-  switch (callerReason) {
-    case "directory-relationship-reconcile":
-    case "messaging-navigation-snapshot":
-    case "navigation-snapshot":
-    case "navigation-snapshot:active-recent":
-    case "startup-prewarm":
-    case "startup-provider-refresh":
-      return true;
-    default:
-      return false;
-  }
+  return callerReason === "directory-relationship-reconcile";
 }
 
 type MessagingArchiveCleanupStore = Pick<
@@ -8717,7 +8697,7 @@ export class DesktopBackendRegistry {
   private readonly attemptedTitleGenerations = new Set<string>();
   /** Launch placeholders stay helper-eligible until renamed or attempted. */
   private readonly systemPlaceholderTitleThreadKeys = new Set<string>();
-  private readonly repairedDirectoryThreadKeys = new Set<string>();
+  private readonly pendingDirectoryRepairs = new Map<string, Promise<void>>();
   private readonly failedDirectoryRelationshipLogKeys = new Set<string>();
   private readonly pendingCodexWorkspaceCwdSyncs = new Map<
     string,
@@ -8726,7 +8706,6 @@ export class DesktopBackendRegistry {
       promise: Promise<void>;
     }
   >();
-  private fullDirectoryReconcileDispatched = false;
   private titleGenerationSequence = 0;
   /**
    * Gate for the Codex `listThreads` probe. Returns `true` while the
@@ -13424,10 +13403,13 @@ export class DesktopBackendRegistry {
     //
     // Exclude in-flight worktrees before the cap, not after: a round whose
     // whole batch is already in flight must still reach the paths behind it.
-    const worktreePaths = this.selectStaleThreadWorkingStatePaths(threads, {
-      exclude: new Set(this.pendingThreadGitWorkingStateByPath.keys()),
-      limit: options.limit ?? BACKGROUND_WORKTREE_WORKING_STATE_BATCH_SIZE,
-    });
+    const worktreePaths = this.selectStaleThreadWorkingStatePaths(
+      threads.filter((thread) => thread.threadStatus === "active"),
+      {
+        exclude: new Set(this.pendingThreadGitWorkingStateByPath.keys()),
+        limit: options.limit ?? BACKGROUND_WORKTREE_WORKING_STATE_BATCH_SIZE,
+      },
+    );
     if (worktreePaths.length === 0) {
       return { scheduledCount: 0 };
     }
@@ -23877,22 +23859,10 @@ export class DesktopBackendRegistry {
     }
   }
 
-  private findCachedCodexThread(threadId: string): AppServerThreadSummary | undefined {
-    for (const state of this.threadListCache.values()) {
-      const thread = state.threads?.find(
-        (candidate) => candidate.source === "codex" && candidate.id === threadId,
-      );
-      if (thread) {
-        return thread;
-      }
-    }
-    return undefined;
-  }
-
   private async readCheapCodexThreadForRepair(
     threadId: string,
   ): Promise<AppServerThreadSummary | undefined> {
-    const cached = this.findCachedCodexThread(threadId);
+    const cached = this.getCachedThreadSummary({ backend: "codex", threadId });
     if (cached) {
       return cached;
     }
@@ -23911,7 +23881,35 @@ export class DesktopBackendRegistry {
     return threads.find((thread) => thread.id === threadId);
   }
 
+  async refreshThreadDirectoryRelationship(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): Promise<void> {
+    if (this.closed || params.backend !== "codex") return;
+    await this.repairCodexThreadDirectoryRelationship({
+      reason: "selected-thread", threadId: params.threadId,
+    });
+  }
+
   private async repairCodexThreadDirectoryRelationship(params: {
+    reason: "selected-thread";
+    threadId: string;
+  }): Promise<void> {
+    if (this.closed) return;
+    const existing = this.pendingDirectoryRepairs.get(params.threadId);
+    if (existing) return existing;
+    const pending = this.loadCodexThreadDirectoryRelationship(params);
+    this.pendingDirectoryRepairs.set(params.threadId, pending);
+    try {
+      await pending;
+    } finally {
+      if (this.pendingDirectoryRepairs.get(params.threadId) === pending) {
+        this.pendingDirectoryRepairs.delete(params.threadId);
+      }
+    }
+  }
+
+  private async loadCodexThreadDirectoryRelationship(params: {
     reason: "selected-thread";
     threadId: string;
   }): Promise<void> {
@@ -23930,14 +23928,14 @@ export class DesktopBackendRegistry {
 
     try {
       const cheapThread = await this.readCheapCodexThreadForRepair(params.threadId);
-      if (!cheapThread) {
+      if (!cheapThread?.projectKey?.trim()) {
         return;
       }
 
       const [enrichedThread] = await this.codexClient.enrichThreadDirectories([
         cheapThread,
       ], "selected-thread");
-      if (!enrichedThread) {
+      if (!enrichedThread || this.closed) {
         return;
       }
 
@@ -23950,6 +23948,7 @@ export class DesktopBackendRegistry {
         backend: "codex",
         threadId: params.threadId,
       });
+      if (this.closed) return;
       this.schedulePendingCodexWorkspaceCwdSyncs({
         overlaysByThreadId: { [params.threadId]: overlay },
         threads: [enrichedThread],
@@ -23968,70 +23967,12 @@ export class DesktopBackendRegistry {
         reason: params.reason,
         threadIds: [params.threadId],
       });
-      this.recordCodexDirectoryRelationshipRepair(params.threadId);
     } catch (error) {
       backendRegistryLog.warn("Codex selected thread directory repair failed", {
         error: error instanceof Error ? error.message : String(error),
         threadId: params.threadId,
       });
     }
-  }
-
-  private recordCodexDirectoryRelationshipRepair(threadId: string): void {
-    this.repairedDirectoryThreadKeys.add(`codex:${threadId}`);
-    if (
-      this.repairedDirectoryThreadKeys.size < 3 ||
-      this.fullDirectoryReconcileDispatched
-    ) {
-      return;
-    }
-
-    this.fullDirectoryReconcileDispatched = true;
-    void this.reconcileAllCodexDirectoryRelationships().catch((error) => {
-      backendRegistryLog.warn("Codex full directory relationship reconcile failed", {
-        error: error instanceof Error ? error.message : String(error),
-      });
-    });
-  }
-
-  private async reconcileAllCodexDirectoryRelationships(): Promise<void> {
-    const threads = await this.codexClient.listThreads(
-      {
-        archived: false,
-        enrichDirectories: false,
-      },
-      {
-        callerReason: "directory-relationship-reconcile",
-        ownerId: this.threadListCacheOwnerId,
-      },
-    );
-    const overlaysByThreadId = await this.overlayStore.getThreadOverlayStates({
-      backend: "codex",
-      threadIds: threads.map((thread) => thread.id),
-    });
-    this.schedulePendingCodexWorkspaceCwdSyncs({
-      overlaysByThreadId,
-      threads,
-    });
-    const updatedOverlaysByThreadId =
-      await this.backfillMissingCodexDirectoryRelationships({
-        diagnostics: {
-          callerReason: "directory-relationship-reconcile",
-          ownerId: this.threadListCacheOwnerId,
-        },
-        overlaysByThreadId,
-        threads,
-      });
-    const threadIds = Object.keys(updatedOverlaysByThreadId);
-    if (threadIds.length === 0) {
-      return;
-    }
-
-    this.invalidateThreadListCache("codex");
-    await this.emitCodexDirectoryRelationshipsUpdated({
-      reason: "full-reconcile",
-      threadIds,
-    });
   }
 
   private async emitCodexDirectoryRelationshipsUpdated(params: {
@@ -37310,7 +37251,7 @@ export class DesktopBackendRegistry {
           backend,
           archived,
           callerReason: "agent-thread-inspection-search",
-          enrichDirectories: true,
+          enrichDirectories: false,
         }),
       new ProviderTranscriptThreadSearchAdapter(
         async ({ backend, threadId, limit }) =>
@@ -38370,6 +38311,16 @@ export class DesktopBackendRegistry {
     this.rememberManagedReviewOutput(event);
 
     this.recordTaskMonitorActivity(event);
+
+    if (event.backend === "codex" && (
+      event.notification.method === "turn/started"
+      || event.notification.method === "turn/completed"
+    )) {
+      void this.repairCodexThreadDirectoryRelationship({
+        reason: "selected-thread",
+        threadId: event.notification.params.threadId,
+      });
+    }
 
     this.rememberThreadTitleFromEvent(event);
     if (this.shouldInvalidateThreadListCacheForNotification(event.notification.method)) {

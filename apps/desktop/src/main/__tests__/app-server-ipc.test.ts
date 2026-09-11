@@ -1112,6 +1112,7 @@ vi.mock("../app-server/backend-registry", () => {
     canonicalizeNavigationThreadPullRequests: async (threads: unknown[]) => threads,
     getNavigationInputRequestThreadKeys: () => new Set<string>(),
     refreshThreadGitWorkingStates,
+    refreshThreadDirectoryRelationship: vi.fn(async () => undefined),
     scheduleWorktreeGitWorkingStateRefresh,
     getThreadGitWorkingStateCache,
     loadThreadGitWorkingStateCache,

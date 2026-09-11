@@ -451,6 +451,10 @@ const sampleGitWorkingState = {
   baseAheadCommitCount: 16,
 };
 
+function activeWorkingStateThread(params: Parameters<typeof multiProjectThread>[0]): AppServerThreadSummary {
+  return { ...multiProjectThread(params), threadStatus: "active" };
+}
+
 function multiProjectThread(params: {
   worktreePath: string;
 }): AppServerThreadSummary {
@@ -3475,6 +3479,20 @@ describe("DesktopBackendRegistry", () => {
     }
   });
 
+  it("does not start an automatic Git fleet for inactive history", async () => {
+    const readWorkingStateEntries = vi.fn();
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock(),
+      gitWorkingStateService: { readWorkingStateEntries } as unknown as GitWorkingStateService,
+    });
+    const threads = Array.from({ length: 500 }, (_, index) =>
+      multiProjectThread({ worktreePath: `/worktrees/inactive-${index}` }));
+    expect(await registry.refreshThreadGitWorkingStates(threads)).toEqual({ scheduledCount: 0 });
+    expect(readWorkingStateEntries).not.toHaveBeenCalled();
+    await registry.close();
+  });
+
   it("schedules a stale working-state probe without awaiting the Git fleet", async () => {
     // A navigation serving path must answer from cache. Holding the snapshot
     // until the fleet returns is what put a Git probe on every messaging
@@ -3506,7 +3524,7 @@ describe("DesktopBackendRegistry", () => {
     try {
       await expect(
         registry.refreshThreadGitWorkingStates([
-          multiProjectThread({ worktreePath }),
+          activeWorkingStateThread({ worktreePath }),
         ]),
       ).resolves.toEqual({ scheduledCount: 1 });
       expect(overlayStore.writeThreadGitWorkingStateCacheEntry)
@@ -3570,7 +3588,7 @@ describe("DesktopBackendRegistry", () => {
     try {
       await expect(
         registry.refreshThreadGitWorkingStates([
-          multiProjectThread({ worktreePath }),
+          activeWorkingStateThread({ worktreePath }),
         ]),
       ).resolves.toEqual({ scheduledCount: 1 });
       await expectEventually(
@@ -3658,7 +3676,7 @@ describe("DesktopBackendRegistry", () => {
           // Reversed, so a naive prefix would take the freshest eight and
           // only rotation can produce the ascending expectation below.
           worktreePaths
-            .map((worktreePath) => multiProjectThread({ worktreePath }))
+            .map((worktreePath) => activeWorkingStateThread({ worktreePath }))
             .reverse(),
         ),
       ).resolves.toEqual({
@@ -3713,7 +3731,7 @@ describe("DesktopBackendRegistry", () => {
     try {
       await expect(
         registry.refreshThreadGitWorkingStates([
-          multiProjectThread({ worktreePath }),
+          activeWorkingStateThread({ worktreePath }),
         ]),
       ).resolves.toEqual({ scheduledCount: 0 });
       expect(readWorkingStateEntries).not.toHaveBeenCalled();
@@ -3753,7 +3771,7 @@ describe("DesktopBackendRegistry", () => {
       (_unused, index) => `${worktreePath}-${index}`,
     );
     const threads = worktreePaths.map((path) =>
-      multiProjectThread({ worktreePath: path }),
+      activeWorkingStateThread({ worktreePath: path }),
     );
     expect(Math.ceil(
       worktreePaths.length / BACKGROUND_WORKTREE_WORKING_STATE_BATCH_SIZE,
@@ -3821,7 +3839,7 @@ describe("DesktopBackendRegistry", () => {
       overlayStore,
     });
     const hydrated = await registry.hydrateThreadGitWorkingStates([
-      multiProjectThread({ worktreePath }),
+      activeWorkingStateThread({ worktreePath }),
     ]);
 
     try {
@@ -3860,7 +3878,7 @@ describe("DesktopBackendRegistry", () => {
       overlayStore,
     });
     const singleDirectoryThread = (path: string): AppServerThreadSummary => {
-      const thread = multiProjectThread({ worktreePath: path });
+      const thread = activeWorkingStateThread({ worktreePath: path });
       return {
         ...thread,
         linkedDirectories: thread.linkedDirectories.slice(0, 1),
@@ -3923,7 +3941,7 @@ describe("DesktopBackendRegistry", () => {
 
     try {
       await registry.refreshThreadGitWorkingStates([
-        multiProjectThread({ worktreePath }),
+        activeWorkingStateThread({ worktreePath }),
       ]);
       await expectEventually(async () => workingStateEvents.length, 1);
       expect(workingStateEvents[0]?.notification.params).toEqual(
@@ -14925,6 +14943,7 @@ script = "echo setup"
     await registry.listThreads({
       backend: "codex",
       callerReason: "workspace-handoff",
+      enrichDirectories: true,
     });
 
     expect(codexClient.listThreadsCallCount).toBe(2);
@@ -15037,6 +15056,32 @@ script = "echo setup"
     await registry.close();
   });
 
+  it("does not enrich inactive directory history for startup or navigation listings", async () => {
+    const threads = Array.from({ length: 500 }, (_, index): AppServerThreadSummary => ({
+      id: `cold-${index}`, source: "codex", title: `Cold ${index}`, titleSource: "explicit",
+      projectKey: `/fixture/.codex/worktrees/${index}/repo`, linkedDirectories: [],
+    }));
+    const codexClient = new MockBackendClient({ threads });
+    const enrichThreadDirectories = vi.fn(async (rows: AppServerThreadSummary[]) => rows);
+    Object.assign(codexClient, { enrichThreadDirectories });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    for (const callerReason of ["startup-provider-refresh", "startup-prewarm", "navigation-snapshot", "thread-list"] as const) {
+      await registry.listThreads({ backend: "codex", callerReason, forceRefresh: true });
+      expect(codexClient.lastListThreadsParams?.enrichDirectories).toBe(false);
+    }
+    expect(enrichThreadDirectories).not.toHaveBeenCalled();
+    await registry.readThread({ backend: "codex", threadId: "cold-10" });
+    expect(enrichThreadDirectories).toHaveBeenCalledExactlyOnceWith([expect.objectContaining({ id: "cold-10" })], "selected-thread");
+    await registry.publishLocalEvent({ backend: "codex", notification: {
+      method: "turn/started", params: { threadId: "cold-20", turn: { id: "demand-turn", status: "inProgress", items: [] } },
+    } } as AgentEvent);
+    await flushAsync();
+    expect(enrichThreadDirectories).toHaveBeenCalledTimes(2);
+    expect(enrichThreadDirectories).toHaveBeenLastCalledWith([expect.objectContaining({ id: "cold-20" })], "selected-thread");
+
+    await registry.close();
+  });
+
   it("backfills Codex worktree parent directories so directory view shows one project", async () => {
     const projectA = "/Users/fixture-user/projects/ProjectA";
     const worktree1 = "/Users/fixture-user/.codex/worktrees/wt1/ProjectA";
@@ -15143,7 +15188,8 @@ script = "echo setup"
     let listResolved = false;
     const listPromise = registry.listThreads({
       backend: "codex",
-      callerReason: "startup-prewarm",
+      callerReason: "directory-relationship-reconcile",
+      enrichDirectories: false,
     });
     void listPromise.then(() => {
       listResolved = true;
@@ -15200,7 +15246,8 @@ script = "echo setup"
 
     await registry.listThreads({
       backend: "codex",
-      callerReason: "startup-prewarm",
+      callerReason: "directory-relationship-reconcile",
+      enrichDirectories: false,
       filter: "force-new-cache-key",
     });
 
@@ -15262,7 +15309,8 @@ script = "echo setup"
 
     await registry.listThreads({
       backend: "codex",
-      callerReason: "startup-prewarm",
+      callerReason: "directory-relationship-reconcile",
+      enrichDirectories: false,
     });
 
     expect(codexClient.listThreadsCallCount).toBe(2);
@@ -15397,7 +15445,7 @@ script = "echo setup"
     expect(enrichThreadDirectories).not.toHaveBeenCalled();
 
     await registry.listThreads({
-      callerReason: "navigation-snapshot",
+      callerReason: "directory-relationship-reconcile",
       enrichDirectories: false,
     });
 
@@ -15953,7 +16001,7 @@ script = "echo setup"
     await registry.close();
   });
 
-  it("runs the full Codex directory reconcile once after three distinct selected-thread repairs", async () => {
+  it("does not expand selected-thread repairs into a full-history reconcile", async () => {
     const projectA = "/Users/example/ProjectA";
     const makeCheapThread = (index: number): AppServerThreadSummary => {
       const projectKey = `/Users/example/.codex/worktrees/worktree-${index}/ProjectA`;
@@ -16012,34 +16060,16 @@ script = "echo setup"
     expect(fullReconcileCalls()).toHaveLength(0);
     await registry.readThread({ backend: "codex", threadId: "thread-3" });
 
-    await waitForCondition(() =>
-      enrichThreadDirectories.mock.calls.some(
-        ([threads]) =>
-          threads.length === 2 &&
-          threads.map((thread) => thread.id).join(",") === "thread-4,thread-5",
-      ),
-    );
-    expect(fullReconcileCalls()).toHaveLength(1);
-    const hasFullReconcileEvent = () =>
-      events.some(
-        (event) =>
-          event.backend === "codex" &&
-          event.notification.method === "navigation/threadDirectories/updated" &&
-          (event.notification.params as { reason?: string; threadIds?: string[] })
-            .reason === "full-reconcile" &&
-          (event.notification.params as { threadIds?: string[] }).threadIds?.join(
-            ",",
-          ) === "thread-4,thread-5",
-      );
-    await waitForCondition(hasFullReconcileEvent);
-    expect(hasFullReconcileEvent()).toBe(true);
+    await flushAsync();
+    expect(fullReconcileCalls()).toHaveLength(0);
+    expect(enrichThreadDirectories).toHaveBeenCalledTimes(3);
 
     const lateThread = makeCheapThread(6);
     codexClient.setThreads([...cheapThreads, lateThread]);
     await registry.readThread({ backend: "codex", threadId: "thread-6" });
     await flushAsync();
 
-    expect(fullReconcileCalls()).toHaveLength(1);
+    expect(fullReconcileCalls()).toHaveLength(0);
 
     unsubscribe();
     await registry.close();
@@ -45058,7 +45088,7 @@ script = "printf setup"
     ]);
     expect(codexClient.listThreadsCallCount).toBe(1);
     expect(codexClient.lastListThreadsParams).toEqual({
-      enrichDirectories: true,
+      enrichDirectories: false,
       filter: "thread",
     });
 
@@ -46910,7 +46940,7 @@ script = "printf setup"
     ).resolves.toEqual([expect.objectContaining({ id: "thread-archived" })]);
 
     expect(codexClient.listThreadsCalls.map((call) => call.params)).toEqual([
-      { archived: true, enrichDirectories: true },
+      { archived: true, enrichDirectories: false },
       { archived: false, enrichDirectories: false },
     ]);
 

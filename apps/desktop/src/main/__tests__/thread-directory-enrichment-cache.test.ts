@@ -119,7 +119,7 @@ describe("directory enrichment invalidation", () => {
     const enrich = createThreadDirectoryEnricher();
     fail = true;
     await enrich(repo);
-    expect(record.mock.calls.filter(([, delta]) => delta.gitFailed)).toHaveLength(3);
+    expect(record.mock.calls.filter(([, delta]) => delta.gitFailed)).toHaveLength(2);
     expect(record).toHaveBeenCalledWith(expect.objectContaining({ reason: "cold" }), { resultNotCached: 1 });
     record.mockClear();
     await enrich(path.join(root, "missing"));
@@ -230,7 +230,7 @@ describe("directory enrichment invalidation", () => {
     await fs.writeFile(path.join(worktree, ".git"), `gitdir: ${nextAdmin}\n`);
     branch = "second";
     expect((await enrich(worktree)).observedGitBranch).toBe("second");
-    expect(git).toHaveBeenCalledTimes(3);
+    expect(git).toHaveBeenCalledTimes(2);
   });
 
   it("does not rediscover topology for ordinary edits, commits or sibling worktrees", async () => {
@@ -268,7 +268,7 @@ describe("directory enrichment invalidation", () => {
     git.mockClear();
     await fs.writeFile(path.join(repo, ".git", "config.worktree"), "[core]\n bare = false\n");
     await enrich(repo);
-    expect(git).toHaveBeenCalledTimes(3);
+    expect(git).toHaveBeenCalledTimes(2);
   });
 
   it("invalidates a directory symlink when its target changes", async () => {
@@ -331,7 +331,53 @@ describe("directory enrichment invalidation", () => {
     branch = "new-head";
     git.mockClear();
     expect((await enrich(repo)).observedGitBranch).toBe(branch);
-    expect(git).toHaveBeenCalledTimes(3);
+    expect(git).toHaveBeenCalledTimes(2);
+  });
+
+  it("shares one Git worktree inventory across 216 cold sibling checkouts", async () => {
+    const worktrees = Array.from({ length: 216 }, (_, index) => path.join(root, `linked-${index}`));
+    for (const [index, cwd] of worktrees.entries()) {
+      const admin = path.join(repo, ".git", "worktrees", `${index}`);
+      await fs.mkdir(admin, { recursive: true });
+      await fs.mkdir(cwd);
+      await fs.writeFile(path.join(cwd, ".git"), `gitdir: ${admin}\n`);
+      await fs.writeFile(path.join(admin, "commondir"), "../..\n");
+      await fs.writeFile(path.join(admin, "HEAD"), "ref: refs/heads/main\n");
+    }
+    git.mockImplementation((_command: string, args: string[], _options: unknown,
+      callback: (error: Error | null, result: { stdout: string; stderr: string }) => void) => {
+      callback(null, { stdout: args.includes("--show-toplevel")
+        ? args.includes("--abbrev-ref") ? `${args[1]}\nmain` : args[1]
+        : args.includes("--abbrev-ref") ? "main" : [repo, ...worktrees].map((cwd) => `worktree ${cwd}`).join("\n"), stderr: "" });
+    });
+    const enrich = createThreadDirectoryEnricher();
+    // Separate batches exercise both pending coalescing and settled reuse.
+    for (let offset = 0; offset < worktrees.length; offset += 8) {
+      const batch = worktrees.slice(offset, offset + 8);
+      const values = await Promise.all(batch.map((cwd) => enrich(cwd, "selected-thread")));
+      values.forEach((value, index) => expect(value).toMatchObject({
+        observedGitBranch: "main", linkedDirectories: [{
+          path: repo.replace(/\\/g, "/"), worktreePath: batch[index].replace(/\\/g, "/"), kind: "worktree",
+        }],
+      }));
+    }
+    expect(git).toHaveBeenCalledTimes(217);
+    expect(git.mock.calls.filter(([, args]) => args.includes("--porcelain"))).toHaveLength(1);
+  });
+
+  it("lets Git reject discovery across an inherited ceiling", async () => {
+    await initializeRealGit();
+    const cwd = path.join(repo, "sub");
+    await fs.mkdir(cwd);
+    vi.stubEnv("GIT_CEILING_DIRECTORIES", repo);
+    try {
+      expect(await createThreadDirectoryEnricher()(cwd)).toMatchObject({
+        linkedDirectories: [{ path: cwd.replace(/\\/g, "/"), kind: "local" }],
+      });
+      expect(git.mock.calls.every(([, args]) => args.includes("--show-toplevel"))).toBe(true);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("preserves real Git worktree mappings, branch switches and detached HEAD", async () => {

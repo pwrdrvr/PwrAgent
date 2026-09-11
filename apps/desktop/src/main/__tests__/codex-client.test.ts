@@ -1864,6 +1864,16 @@ describe("CodexAppServerClient", () => {
       source: "codex",
     });
 
+    threadDirectoryEnricher.mockResolvedValueOnce({ linkedDirectories: [{
+      id: primaryThread!.projectKey!, path: primaryThread!.projectKey!, label: "Refreshed", kind: "local",
+    }] });
+    await client.enrichThreadDirectories([primaryThread!], "selected-thread");
+    threadDirectoryEnricher.mockClear();
+    const later = await client.listThreads({ enrichDirectories: false });
+    expect(later.find((thread) => thread.id === "thread-2")?.linkedDirectories)
+      .toEqual([expect.objectContaining({ label: "Refreshed" })]);
+    expect(threadDirectoryEnricher).not.toHaveBeenCalled();
+
     await client.close();
   });
 
