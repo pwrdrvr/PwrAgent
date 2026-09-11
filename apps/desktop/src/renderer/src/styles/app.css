@@ -22084,7 +22084,9 @@ a.transcript-message__messaging-origin:focus-visible {
   width: 24px;
   height: 24px;
   align-self: start;
-  background: color-mix(in srgb, var(--bg-app) 82%, transparent);
+  /* Same scrim `.transcript-copy-button--section` already uses to lift a copy
+     control off transcript content. */
+  background: color-mix(in srgb, var(--bg-app) 92%, transparent);
 }
 
 .transcript-copy-button--review-finding::before {

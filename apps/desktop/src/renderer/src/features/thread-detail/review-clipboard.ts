@@ -5,6 +5,7 @@ import type {
   AppServerThreadReviewEntry,
 } from "@pwragent/shared";
 import { formatPathRelativeToDirectories } from "@pwragent/shared";
+import { shortReviewSha } from "../../../../shared/review-command";
 import { formatBackendLabel } from "../../lib/backend-label";
 
 /**
@@ -26,14 +27,14 @@ export type ReviewClipboardModel = {
 };
 
 /**
- * Long enough to stay unambiguous in any repository this app is pointed at,
- * short enough to read inline. Matches the abbreviation the review workspace
- * guard already prints.
+ * Markdown that has to stay on one line: a heading, or a run of italics. The
+ * reviewer authors finding titles, nothing validates them (`normalizeReviewOutputRecord`
+ * casts `findings` through without inspecting them), and an embedded newline
+ * ends the heading early — leaving the rest of the title as a stray paragraph
+ * in whatever the operator pasted into.
  */
-const SHORT_SHA_LENGTH = 10;
-
-export function shortReviewSha(sha: string): string {
-  return sha.trim().slice(0, SHORT_SHA_LENGTH);
+function collapseToOneLine(value: string): string {
+  return value.trim().replace(/\s+/gu, " ");
 }
 
 /**
@@ -46,7 +47,9 @@ export function shortReviewSha(sha: string): string {
  * the ones that do not still read as an ordinary plain-text outline.
  */
 export function formatReviewForClipboard(model: ReviewClipboardModel): string {
-  const sections: string[] = [`# ${model.summary.trim() || "Code review"}`];
+  const sections: string[] = [
+    `# ${collapseToOneLine(model.summary) || "Code review"}`,
+  ];
 
   const verdict = formatVerdictLine(model);
   if (verdict) {
@@ -87,9 +90,13 @@ export function formatReviewForClipboard(model: ReviewClipboardModel): string {
 export function formatReviewFindingForClipboard(
   model: ReviewClipboardModel,
   finding: AppServerReviewFinding,
+  /**
+   * The footer depends only on `model`, so a caller formatting every finding
+   * of one review builds it once and hands the same string to each.
+   */
+  provenance = formatFindingProvenance(model),
 ): string {
   const sections = [formatFindingSection(finding, model.context, "")];
-  const provenance = formatFindingProvenance(model);
   if (provenance) {
     sections.push("---", provenance);
   }
@@ -103,7 +110,9 @@ function formatFindingSection(
 ): string {
   const priority =
     typeof finding.priority === "number" ? `[P${finding.priority}] ` : "";
-  const parts = [`### ${numbering}${priority}${finding.title.trim()}`];
+  const parts = [
+    `### ${numbering}${priority}${collapseToOneLine(finding.title)}`,
+  ];
   const location = formatFindingLocation(finding, context);
   if (location) {
     parts.push(`\`${location}\``);
@@ -204,13 +213,25 @@ function formatReviewMetadata(model: ReviewClipboardModel): string[] {
   push("Reviewer", formatReviewerLabel(model.reviewer));
   // ISO rather than a locale format: a pasted timestamp is read by someone
   // else, in another time zone, possibly months later.
-  push(
-    "Reviewed at",
-    model.createdAt === undefined
-      ? undefined
-      : new Date(model.createdAt).toISOString(),
-  );
+  push("Reviewed at", formatReviewedAt(model.createdAt));
   return rows;
+}
+
+/**
+ * `Date.prototype.toISOString` throws a `RangeError` on a timestamp it cannot
+ * represent — `NaN`, or anything past ±8.64e15 such as a nanosecond epoch from
+ * a producer that did not normalize. This runs inside a render-phase `useMemo`,
+ * so an unguarded throw would take the whole transcript down rather than one
+ * copy button. An unprintable timestamp is an absent row.
+ */
+function formatReviewedAt(createdAt: number | undefined): string | undefined {
+  if (createdAt === undefined || !Number.isFinite(createdAt)) {
+    return undefined;
+  }
+  const reviewedAt = new Date(createdAt);
+  return Number.isNaN(reviewedAt.getTime())
+    ? undefined
+    : reviewedAt.toISOString();
 }
 
 function formatReviewerLabel(
@@ -228,19 +249,30 @@ function formatReviewerLabel(
     .join(" · ");
 }
 
-function formatFindingProvenance(model: ReviewClipboardModel): string {
+export function formatFindingProvenance(model: ReviewClipboardModel): string {
   const context = model.context;
-  const branch = context?.gitBranch?.trim();
-  const headCommit = context?.headCommit?.trim();
   const parts = [
-    model.summary.trim() || "Code review",
+    collapseToOneLine(model.summary) || "Code review",
     context?.projectLabel?.trim(),
-    branch && headCommit
-      ? `${branch} @ ${shortReviewSha(headCommit)}`
-      : branch ?? (headCommit ? shortReviewSha(headCommit) : undefined),
+    formatReviewedState(context),
     context?.pullRequest
       ? `${context.pullRequest.org}/${context.pullRequest.repo}#${context.pullRequest.number}`
       : undefined,
   ].filter(Boolean);
   return parts.length > 0 ? `_${parts.join(" · ")}_` : "";
+}
+
+/** The branch and the commit on it, whichever of the two were recorded. */
+function formatReviewedState(
+  context: AppServerReviewContext | undefined,
+): string | undefined {
+  const branch = context?.gitBranch?.trim();
+  const headCommit = context?.headCommit?.trim();
+  if (branch && headCommit) {
+    return `${branch} @ ${shortReviewSha(headCommit)}`;
+  }
+  if (branch) {
+    return branch;
+  }
+  return headCommit ? shortReviewSha(headCommit) : undefined;
 }

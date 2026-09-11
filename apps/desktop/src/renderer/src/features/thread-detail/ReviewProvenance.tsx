@@ -4,7 +4,10 @@ import type {
   PrSummary,
 } from "@pwragent/shared";
 import { useMemo } from "react";
-import { reviewComparedPastPullRequestBase } from "../../../../shared/review-command";
+import {
+  reviewComparedPastPullRequestBase,
+  shortReviewSha,
+} from "../../../../shared/review-command";
 import { BranchIcon } from "../../icons/BranchIcon";
 import { CommitIcon } from "../../icons/CommitIcon";
 import { FolderIcon } from "../../icons/FolderIcon";
@@ -12,7 +15,6 @@ import { WorktreeIcon } from "../../icons/WorktreeIcon";
 import { useLivePullRequest } from "../../lib/pull-request-links";
 import { CopyableThreadChip } from "../navigation/ThreadMetaChips";
 import { PrChip } from "../pr-status/PrChip";
-import { shortReviewSha } from "./review-clipboard";
 
 type ReviewProvenanceProps = {
   context: AppServerReviewContext;
@@ -77,7 +79,7 @@ export function ReviewProvenance(props: ReviewProvenanceProps) {
         <CopyableThreadChip
           aria-label={`Copy reviewed commit ${headCommit}`}
           className="review-chip path-copy-target"
-          tooltipText={formatCommitTooltip(context, headCommit)}
+          tooltipText={formatCommitTooltip(context)}
           value={headCommit}
         >
           <span aria-hidden="true" className="review-chip__icon">
@@ -159,10 +161,8 @@ function formatBranchLabel(
  * one, and a second hash on the row would read as a range on every card that
  * does not have one.
  */
-function formatCommitTooltip(
-  context: AppServerReviewContext,
-  headCommit: string,
-): string {
+function formatCommitTooltip(context: AppServerReviewContext): string {
+  const headCommit = context.headCommit?.trim() ?? "";
   const baseCommit = context.baseCommit?.trim();
   return baseCommit
     ? `Reviewed tip ${headCommit}\nDiff base ${baseCommit}`

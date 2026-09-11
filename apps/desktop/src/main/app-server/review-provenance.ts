@@ -80,6 +80,10 @@ async function resolveCheckedOutBranch(
  * by exiting non-zero — an unfetched base branch, a repository with no commits
  * yet. Freezing that text onto the card as a commit would be worse than the
  * absent field the reader already knows how to read, so only a hash is kept.
+ *
+ * The upper bound is 64, not 40: a repository created with
+ * `--object-format=sha256` prints 64-character hashes, and capping at SHA-1's
+ * width would leave every review there with no commit at all.
  */
 async function resolveCommitSha(
   runGit: ReviewGitRunner,
@@ -89,7 +93,7 @@ async function resolveCommitSha(
   try {
     const result = await runGit(cwd, args);
     const sha = result.stdout.trim();
-    return /^[0-9a-f]{7,40}$/i.test(sha) ? sha : undefined;
+    return /^[0-9a-f]{7,64}$/i.test(sha) ? sha : undefined;
   } catch {
     return undefined;
   }

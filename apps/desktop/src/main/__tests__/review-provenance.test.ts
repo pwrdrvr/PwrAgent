@@ -395,6 +395,21 @@ describe("resolveReviewProvenance", () => {
     expect(context?.gitBranch).toBe("fix/macos-dock-icon-safe-area");
   });
 
+  it("records the 64-character hash a SHA-256 repository prints", async () => {
+    const sha256Head = "a".repeat(64);
+    const context = await resolveReviewProvenance({
+      cwd: WORKSPACE,
+      linkedDirectories: [directory()],
+      resolveGitHubRepos: noRepos,
+      runGit: gitRunner("fix/macos-dock-icon-safe-area", { head: sha256Head }),
+      target: { type: "baseBranch", branch: "origin/main" },
+    });
+
+    // Capping the hash at SHA-1's width would leave every review in such a
+    // repository with no commit at all.
+    expect(context?.headCommit).toBe(sha256Head);
+  });
+
   it("makes no commit claim for a commit target", async () => {
     const context = await resolveReviewProvenance({
       cwd: WORKSPACE,

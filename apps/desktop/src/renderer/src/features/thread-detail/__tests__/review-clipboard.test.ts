@@ -154,6 +154,30 @@ describe("formatReviewForClipboard", () => {
     expect(copied).not.toContain(":4-4");
   });
 
+  it("keeps a heading on one line when the reviewer wrapped its title", () => {
+    // Nothing validates a structured finding's title, and the card hides the
+    // problem: HTML collapses the newline, Markdown ends the heading at it.
+    const copied = formatReviewForClipboard(
+      model({
+        summary: "Review changes\nagainst origin/main",
+        findings: [finding({ title: "Pad the icon\n  to Apple's template" })],
+      }),
+    );
+
+    expect(copied).toContain("# Review changes against origin/main");
+    expect(copied).toContain("### 1. [P1] Pad the icon to Apple's template");
+  });
+
+  it("leaves out a timestamp it cannot render rather than throwing", () => {
+    // This runs inside a render-phase memo, so a `RangeError` here would take
+    // the transcript down rather than one copy button.
+    for (const createdAt of [Number.NaN, 1.78e18, Number.POSITIVE_INFINITY]) {
+      const copied = formatReviewForClipboard(model({ createdAt }));
+      expect(copied).not.toContain("Reviewed at");
+      expect(copied).toContain("# Review changes against origin/main");
+    }
+  });
+
   it("falls back to a usable title when the card had no summary of its own", () => {
     expect(formatReviewForClipboard(model({ summary: "  " }))).toMatch(
       /^# Code review\n/,
@@ -197,6 +221,17 @@ describe("formatReviewFindingForClipboard", () => {
       "_Review changes against origin/main · PwrAgent ·"
         + " fix/macos-dock-icon-safe-area · pwrdrvr/PwrAgent#1918_",
     );
+  });
+
+  it("takes a footer the caller already built for the whole review", () => {
+    const built = formatReviewFindingForClipboard(
+      model(),
+      finding(),
+      "_already built_",
+    );
+
+    expect(built).toContain("_already built_");
+    expect(built).not.toContain("PwrAgent");
   });
 
   it("copies a finding from a review that recorded no provenance at all", () => {

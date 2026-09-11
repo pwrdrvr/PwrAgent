@@ -15,6 +15,7 @@ import type { ThreadLinkSource } from "../../lib/thread-links";
 import { renderMarkdownToClipboardHtml } from "./markdown-clipboard-html";
 import { ReviewProvenance } from "./ReviewProvenance";
 import {
+  formatFindingProvenance,
   formatReviewFindingForClipboard,
   formatReviewForClipboard,
   type ReviewClipboardModel,
@@ -94,6 +95,16 @@ function priorityClassName(priority: number | undefined): string {
       : "unknown";
 
   return `transcript-review__priority transcript-review__priority--${normalizedPriority}`;
+}
+
+/**
+ * Enough of a reviewer-authored title to tell two controls on one card apart,
+ * without making the button's accessible name — and its native tooltip — a
+ * recital of a title the reader has already just read beside it.
+ */
+function findingLabel(title: string): string {
+  const normalized = title.trim().replace(/\s+/gu, " ");
+  return normalized.length > 60 ? `${normalized.slice(0, 59)}…` : normalized;
 }
 
 function shouldHideReviewBody(summary: string, review: string): boolean {
@@ -288,13 +299,19 @@ export function TranscriptReview(props: TranscriptReviewProps) {
     () => formatReviewForClipboard(clipboardModel),
     [clipboardModel],
   );
-  const findingClipboardTexts = useMemo(
-    () =>
-      findings.map((finding) =>
-        formatReviewFindingForClipboard(clipboardModel, finding),
-      ),
-    [clipboardModel, findings],
-  );
+  // Keyed by the finding itself rather than by position: a later change to
+  // which findings render would silently mis-pair a parallel array, and the
+  // paste is the first place anyone would notice.
+  const findingClipboardTexts = useMemo(() => {
+    // The footer is per-review, so it is built once for the whole list.
+    const provenance = formatFindingProvenance(clipboardModel);
+    return new Map(
+      findings.map((finding) => [
+        finding,
+        formatReviewFindingForClipboard(clipboardModel, finding, provenance),
+      ]),
+    );
+  }, [clipboardModel, findings]);
 
   return (
     <aside className="transcript-review" role="group" aria-label="Code review">
@@ -394,11 +411,11 @@ export function TranscriptReview(props: TranscriptReviewProps) {
                     desktopApi={props.desktopApi}
                     html={() =>
                       renderMarkdownToClipboardHtml(
-                        findingClipboardTexts[index] ?? "",
+                        findingClipboardTexts.get(finding) ?? "",
                       )
                     }
-                    label={`Copy finding: ${finding.title}`}
-                    text={findingClipboardTexts[index] ?? ""}
+                    label={`Copy finding: ${findingLabel(finding.title)}`}
+                    text={findingClipboardTexts.get(finding) ?? ""}
                   />
                 </div>
                 <ThreadMarkdown
