@@ -59,6 +59,7 @@ import {
 } from "./star-map-orbit";
 import {
   buildInstanceClusters,
+  buildProjectCluster,
   computeClusterCloud,
   emptyCloudMemory,
   refitCluster,
@@ -1462,8 +1463,9 @@ export function StarMapScreen(props: StarMapScreenProps) {
       const cloud = computeClusterCloud({
         clusters: buildInstanceClusters({ threads, expandedKeys, descriptors: projectDescriptorsByInstance.get(instanceId) }),
         cardWidth: ORBIT_CARD_WIDTH,
-        heightForThread: (threadKey) =>
-          cardHeights.get(threadKey) ?? STAR_MAP_ESTIMATED_CARD_HEIGHT,
+        heightForThread: (thread) =>
+          cardHeights.get(buildThreadIdentityKey(thread.source, thread.id))
+          ?? STAR_MAP_ESTIMATED_CARD_HEIGHT,
         memory: cloudMemory.current.get(instanceId),
       });
       // Carrying the layout forward is what keeps an archived thread from
@@ -1611,17 +1613,16 @@ export function StarMapScreen(props: StarMapScreenProps) {
   );
 
   /**
-   * Projects-lens clouds: a project's pooled threads grouped the same way
-   * an instance's are, so a parent thread and its children read as one
-   * body of work inside the project's solar system instead of scattering
-   * around a flat ring.
+   * Projects-lens clouds: one system per project, the body in the middle
+   * of its own ring of cards.
    *
-   * `buildInstanceClusters` buckets by project key, so handing it a single
-   * project's threads yields exactly that project's parent/child clouds
-   * plus one catch-all — the same grouping, the same per-cloud caps, and
-   * the same working "+N more" chip the Instances lens already has. The
-   * flat ring this replaces capped the whole body at sixteen cards and
-   * said nothing about the seventeenth.
+   * This used to hand `buildInstanceClusters` a single project's threads
+   * and take that project's parent/child clouds plus a catch-all. The
+   * grouping read well; the seating did not. See `buildProjectCluster`
+   * for the measurements — the short version is that cloud seating is
+   * built to clear an instance's chrome, and a project body is a label,
+   * so every project ended up with an empty middle and its cards 400px
+   * out. Parent/child adjacency now rides the ring order instead.
    *
    * Undefined outside the lens so the others pay nothing for it.
    */
@@ -1630,21 +1631,21 @@ export function StarMapScreen(props: StarMapScreenProps) {
     const clouds = new Map<string, ReturnType<typeof computeClusterCloud>>();
     for (const project of projects) {
       const scopeId = projectClusterScope(project.key);
-      const prefix = `${scopeId}::`;
-      const expandedKeys = new Set<string>();
-      for (const entry of expandedClusters) {
-        if (entry.startsWith(prefix)) {
-          expandedKeys.add(entry.slice(prefix.length));
-        }
-      }
       const cloud = computeClusterCloud({
-        clusters: buildInstanceClusters({
-          threads: project.threads,
-          expandedKeys,
-        }),
+        clusters: [
+          buildProjectCluster({
+            key: project.key,
+            label: project.label,
+            threads: project.threads,
+            totalCount: project.totalThreadCount,
+            expanded: expandedClusters.has(`${scopeId}::${project.key}`),
+          }),
+        ],
         cardWidth: ORBIT_CARD_WIDTH,
-        heightForThread: (threadKey) =>
-          cardHeights.get(threadKey) ?? STAR_MAP_ESTIMATED_CARD_HEIGHT,
+        core: project.key,
+        heightForThread: (thread) =>
+          cardHeights.get(buildThreadIdentityKey(thread.source, thread.id))
+          ?? STAR_MAP_ESTIMATED_CARD_HEIGHT,
         memory: projectCloudMemory.current.get(scopeId),
       });
       // See `clusterClouds`: carrying the layout forward is what keeps an

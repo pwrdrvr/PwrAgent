@@ -427,14 +427,35 @@ describe("star map edge arrows", () => {
     });
     // Every project sits near the galactic core the map opens on; drag
     // the whole galaxy off to the right so the suns leave through the
-    // right side of the window. The clamp bounds the pan, but it only ever
-    // has to clear the window.
-    pan(1500, 0);
+    // right side of the window. The clamp bounds the pan, and a two-project
+    // galaxy is narrower than the window, so the y drag is doing real work
+    // too: the suns stack vertically, and one left through the TOP until
+    // the view was moved down to hold both inside the window's height.
+    pan(1500, 350);
+
+    // Assert that, rather than trusting it. An arrow's edge is where a ray
+    // from the middle of the window to the body leaves the rail, so "off
+    // to the right" is only the right answer while every sun is right of
+    // the window and inside its height. Derive nothing about the arrows
+    // from the layout — check the precondition the arrows are read against,
+    // so a layout change fails here and says what actually moved.
+    const view = canvasView();
+    const suns = [
+      ...document.querySelectorAll<HTMLElement>(".star-map__project-cloud"),
+    ];
+    expect(suns).toHaveLength(2);
+    for (const sun of suns) {
+      const x = Number.parseFloat(sun.style.left) * view.scale + view.x;
+      const y = Number.parseFloat(sun.style.top) * view.scale + view.y;
+      expect(x).toBeGreaterThan(VIEWPORT.width);
+      expect(y).toBeGreaterThan(0);
+      expect(y).toBeLessThan(VIEWPORT.height);
+    }
 
     const projectArrows = arrowButtons().filter((button) =>
       /^Fly to (PwrSnap|PwrAgent)$/.test(button.getAttribute("aria-label") ?? ""),
     );
-    expect(projectArrows.length).toBeGreaterThan(0);
+    expect(projectArrows).toHaveLength(2);
     for (const button of projectArrows) {
       expect(button.className).toContain("star-map__edge-arrow--right");
       expect(button.querySelector(".star-map__edge-arrow-core")).not.toBeNull();

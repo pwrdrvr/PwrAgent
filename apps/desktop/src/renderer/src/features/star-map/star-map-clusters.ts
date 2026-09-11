@@ -330,6 +330,56 @@ export function buildInstanceClusters(params: {
 }
 
 /**
+ * The one cloud a project draws: its body in the middle, its cards around
+ * it.
+ *
+ * The projects lens used to hand `buildInstanceClusters` a single
+ * project's threads, taking that project's parent/child clouds plus a
+ * catch-all. The grouping was right; the seating was not. Every cloud but
+ * the first is thrown clear of the instance chrome and seated from
+ * `SEAT_BASE_RADIUS` outward, so a project with two parent groups put its
+ * three clouds at (-477, +224), (+16, -378) and (+314, +417) from its own
+ * body — the label had no cards within 400px of it, and the footprint the
+ * project reserved was nearly twice what it drew. That is fine for three
+ * instance bodies and ruinous for thirty project bodies.
+ *
+ * So a project is ONE system. Parent/child adjacency survives as ring
+ * order through `orderParentAdjacent` — a parent and its replies sit next
+ * to each other on the ring rather than in a cloud of their own. The
+ * per-parent selection pill is the price, and it stays in the Instances
+ * lens where bodies are few and the clouds have room.
+ */
+export function buildProjectCluster(params: {
+  /** The project key, which is also the cloud's identity. */
+  key: string;
+  label: string;
+  threads: readonly NavigationThreadSummary[];
+  /** Complete membership from compact owner geometry, when known. */
+  totalCount?: number;
+  expanded?: boolean;
+}): StarMapClusterSpec {
+  const threads = orderParentAdjacent(params.threads);
+  const visibleCount = params.expanded
+    ? threads.length
+    : Math.min(threads.length, ORBIT_MAX_CARDS_PER_GROUP);
+  return {
+    key: params.key,
+    label: params.label,
+    // The project body names and counts this cloud, so the cluster
+    // chrome stays off: `isParentGroup` is what the screen draws a
+    // caption for.
+    isProject: true,
+    isParentGroup: false,
+    threads,
+    visibleCount,
+    totalCount: Math.max(threads.length, params.totalCount ?? threads.length),
+    overflow: threads.length - visibleCount,
+    expanded: params.expanded ?? false,
+    expandable: threads.length > ORBIT_MAX_CARDS_PER_GROUP,
+  };
+}
+
+/**
  * Where a cloud's cards and bodies were put last time.
  *
  * The layout is incremental, not a pure function of the current set, and
@@ -495,13 +545,20 @@ function extentForRings(
 /**
  * Seat assignment for one cloud: everyone who was here keeps their seat,
  * and arrivals take the lowest free one.
+ *
+ * `reserveCenter` holds seat 0 empty. A cloud seated ON its body (see the
+ * `core` option of `computeClusterCloud`) has the body's own label and
+ * buttons sitting at its centre, and seat 0 is the centre — a card there
+ * paints over the one piece of chrome that names the thing.
  */
 function assignSeats(params: {
   visible: readonly NavigationThreadSummary[];
   previous?: Map<string, number>;
+  reserveCenter?: boolean;
 }): Map<string, number> {
   const seats = new Map<string, number>();
   const taken = new Set<number>();
+  if (params.reserveCenter) taken.add(0);
   for (const thread of params.visible) {
     const key = threadKeyOf(thread);
     const prior = params.previous?.get(key);
@@ -651,7 +708,30 @@ const EMPTY_CLOUD_EXTENT = 70;
 export function computeClusterCloud(params: {
   clusters: readonly StarMapClusterSpec[];
   cardWidth: number;
-  heightForThread: (threadKey: string) => number;
+  /**
+   * Measured height of one card. Takes the thread rather than a key
+   * because the two lenses key their measurements differently — the
+   * projects lens pools threads from every instance and scopes their
+   * cloud identity by owner, while the DOM the heights are measured from
+   * is keyed by thread identity alone. Passing `threadKeyOf` here meant
+   * every projects-lens lookup missed and every card in that lens laid
+   * out at the nominal height.
+   */
+  heightForThread: (thread: NavigationThreadSummary) => number;
+  /**
+   * Cluster seated ON the body rather than beside it, with its centre
+   * seat held free for the body's own chrome.
+   *
+   * Every other cloud is thrown clear of `STAR_MAP_INSTANCE_KEEPOUT` and
+   * seated from `SEAT_BASE_RADIUS` outward, which is right for an
+   * instance — a sun with a name pill and an intake button, and only a
+   * handful of them on the map. A project body is a label, and there are
+   * thirty of them: seated that way a project's nearest card landed 400px
+   * from its own name, and the space it reserved was twice the space it
+   * drew. The projects lens passes its project key here so the body sits
+   * in the middle of its own cards.
+   */
+  core?: string;
   memory?: StarMapCloudMemory;
 }): StarMapClusterCloud {
   const previous = params.memory ?? emptyCloudMemory();
@@ -660,17 +740,25 @@ export function computeClusterCloud(params: {
   const nextCenters = new Map<string, { x: number; y: number }>();
 
   const sized = params.clusters.map((spec) => {
+    const isCore = spec.key === params.core;
     const visible = spec.threads.slice(0, spec.visibleCount);
     const seats = assignSeats({
       visible,
       previous: previous.seats.get(spec.key),
+      reserveCenter: isCore,
     });
     nextSeats.set(spec.key, seats);
     const highestSeat = [...seats.values()].reduce(
       (top, seat) => Math.max(top, seat),
       -1,
     );
-    const geometrySeat = Math.max(highestSeat, Math.min(spec.totalCount ?? 0, ORBIT_MAX_CARDS_PER_GROUP) - 1);
+    // The compact count names how many seats the cloud will eventually
+    // want, so its rings are allocated before the cards arrive. A core
+    // cloud's seats all sit one higher, the centre being spoken for.
+    const compactSeat =
+      Math.min(spec.totalCount ?? 0, ORBIT_MAX_CARDS_PER_GROUP)
+      - (isCore ? 0 : 1);
+    const geometrySeat = Math.max(highestSeat, compactSeat);
     const needed =
       geometrySeat < 0 ? 0 : seatAddress(geometrySeat, params.cardWidth).ring;
     // Grow-only: an outermost card leaving must not pull the cloud in and
@@ -680,12 +768,13 @@ export function computeClusterCloud(params: {
     nextRings.set(spec.key, rings);
     return {
       spec,
+      isCore,
       seats,
       slots: visible.map((thread) =>
         seatSlot({
           cardWidth: params.cardWidth,
           clusterKey: spec.key,
-          height: params.heightForThread(threadKeyOf(thread)),
+          height: params.heightForThread(thread),
           seat: seats.get(threadKeyOf(thread)) ?? 0,
           threadKey: threadKeyOf(thread),
         }),
@@ -699,10 +788,19 @@ export function computeClusterCloud(params: {
   // grew into a neighbour — are seated. Deterministic order so a fresh map
   // lays out the same way twice.
   const placed: Box[] = [];
-  const retained = sized.filter((cluster) =>
+  // The core cloud is seated before anything else and never moves: it IS
+  // the body's position, so there is nothing for it to be re-fitted
+  // against. Everything else then packs around the box it claims.
+  const core = sized.find((cluster) => cluster.isCore);
+  if (core) {
+    nextCenters.set(core.spec.key, { x: 0, y: 0 });
+    placed.push(boxFor({ x: 0, y: 0 }, core.extent));
+  }
+  const seatable = sized.filter((cluster) => !cluster.isCore);
+  const retained = seatable.filter((cluster) =>
     previous.centers.has(cluster.spec.key),
   );
-  const arrivals = sized.filter(
+  const arrivals = seatable.filter(
     (cluster) => !previous.centers.has(cluster.spec.key),
   );
   const reseat: typeof sized = [];
@@ -717,8 +815,12 @@ export function computeClusterCloud(params: {
       reseat.push(cluster);
     }
   }
+  // A body with a core cloud has no lone cloud to hang: the core already
+  // occupies the space below it, and this branch clears nothing.
   const lonely =
-    sized.length === 1 && previous.centers.size === 0 ? sized[0] : undefined;
+    !core && seatable.length === 1 && previous.centers.size === 0
+      ? seatable[0]
+      : undefined;
   for (const cluster of [...reseat, ...arrivals]) {
     // A cloud that was already somewhere is re-fitted near where it
     // stands; a new one is seated on its own bearing.
@@ -767,7 +869,7 @@ export function computeClusterCloud(params: {
     cluster.visible.forEach((thread, cardIndex) => {
       threads.push(thread);
       slots.push(bodySlots[cardIndex]);
-      heights.push(params.heightForThread(threadKeyOf(thread)));
+      heights.push(params.heightForThread(thread));
       clusterIndexByCard.push(index);
     });
     const chromeless =

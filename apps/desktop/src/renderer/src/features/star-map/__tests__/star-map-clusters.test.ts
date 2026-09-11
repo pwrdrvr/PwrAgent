@@ -806,7 +806,7 @@ describe("layout stability", () => {
         threads: [...threads, thread("tall", { path: "/repo/alpha" })],
       }),
       cardWidth,
-      heightForThread: (key) => (key === "codex:tall" ? 260 : 112),
+      heightForThread: (member) => (member.id === "tall" ? 260 : 112),
       memory: before.memory,
     });
     const was = slotByThread(before);

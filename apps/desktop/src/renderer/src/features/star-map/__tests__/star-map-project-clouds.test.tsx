@@ -8,13 +8,22 @@ import { StarMapScreen } from "../StarMapScreen";
 /**
  * Projects-lens clouds.
  *
- * The lens used to seat a project's threads on one flat ring capped at
- * sixteen cards, with a single dead "+N more" caption for the whole body:
- * a parent thread and its children scattered around the ring like any
- * other cards, and the seventeenth thread was unreachable. It now groups
- * the same way the Instances lens does — parent/child clouds plus a
- * catch-all, each with its own working chip.
+ * A project draws ONE system: its body in the middle of its own ring of
+ * cards. Two earlier shapes failed differently and both are guarded here.
+ * A flat ring capped the whole body at sixteen cards with a single dead
+ * "+N more" caption. Reusing the Instances lens's per-parent clouds fixed
+ * the caption and broke the seating: cloud seating throws every cloud
+ * clear of an INSTANCE's chrome, and a project body is a label, so a
+ * project with two parent groups seated its three clouds at (-477, +224),
+ * (+16, -378) and (+314, +417) from its own body — nothing within 400px
+ * of the name, and a reserved footprint nearly twice what it drew.
+ *
+ * So the assertions below are about *distance*: a project's cards belong
+ * to the body that names them, and to no other body.
  */
+
+/** Half-extent a one-ring project cloud claims; see `extentForRings`. */
+const CLOUD_RADIUS = 362;
 
 function buildDesktopApi(): DesktopApi {
   return {
@@ -74,14 +83,42 @@ function renderProjects(threads: NavigationThreadSummary[]) {
   );
 }
 
+/**
+ * Where each project's body sits, and where its cards sit relative to it.
+ *
+ * Both come from the inline styles the layout writes, because jsdom
+ * measures every box as zero: `.star-map__project-cloud` is positioned at
+ * the body, and a card's `left`/`top` are its slot within that body's
+ * space (the card's own `margin-left` re-centres it on `left`).
+ */
+function projectSystems(container: HTMLElement) {
+  return [...container.querySelectorAll<HTMLElement>(".star-map__project-cloud")].map(
+    (cloud) => ({
+      label:
+        cloud.querySelector(".star-map-project__name")?.textContent ?? "",
+      body: {
+        x: Number.parseFloat(cloud.style.left),
+        y: Number.parseFloat(cloud.style.top),
+      },
+      cards: [...cloud.querySelectorAll<HTMLElement>(".star-map-card-shell")].map(
+        (card) => ({
+          key: card.dataset.cardKey ?? "",
+          dx: Number.parseFloat(card.style.left),
+          dy: Number.parseFloat(card.style.top),
+        }),
+      ),
+    }),
+  );
+}
+
 describe("star map projects lens clouds", () => {
   afterEach(() => {
     window.localStorage.removeItem("pwragent.starMap.viewPreferences");
     window.localStorage.removeItem("pwragent.starMap.filterSelection");
   });
 
-  it("gives a parent thread and its children their own cloud", async () => {
-    renderProjects([
+  it("rings a project's body with its own cards", async () => {
+    const { container } = renderProjects([
       thread({ id: "p1", path: "/repo/alpha", label: "AlphaDir", title: "Root work" }),
       thread({
         id: "c1",
@@ -100,20 +137,56 @@ describe("star map projects lens clouds", () => {
       thread({ id: "loose", path: "/repo/alpha", label: "AlphaDir" }),
     ]);
 
-    // The parent group is captioned by its parent's title, and says so:
-    // "N threads" would read exactly like a project cloud, which is the
-    // ambiguity that made an operator count thread groups as projects.
-    const label = await screen.findByRole("button", {
-      name: "Select the Root work thread and its 2 replies",
+    await waitFor(() => {
+      expect(projectSystems(container)[0]?.cards).toHaveLength(4);
     });
-    expect(label.className).toContain("star-map__cluster-label--parent");
-    expect(label.textContent).toContain("Root work");
+    const [alpha] = projectSystems(container);
 
-    // The catch-all is NOT labelled: the project body already names and
-    // counts the project, so a second pill would print it twice.
+    // The whole complaint, as an assertion: every card is inside the
+    // cloud its body draws. The per-parent seating put the nearest one
+    // 400px outside it.
+    for (const card of alpha.cards) {
+      expect(Math.hypot(card.dx, card.dy)).toBeLessThan(CLOUD_RADIUS);
+    }
+    // ...and off the body's own label, which sits at the centre. Seat 0
+    // is held empty for exactly this.
+    for (const card of alpha.cards) {
+      expect(Math.hypot(card.dx, card.dy)).toBeGreaterThan(100);
+    }
+
+    // No parent pill in this lens. A project IS the grouping here, and a
+    // cloud per parent thread is what threw the cards off the body;
+    // parent/child adjacency rides the ring order instead. The pill stays
+    // in the Instances lens, where bodies are few and clouds have room.
     expect(
-      screen.queryByRole("button", { name: /Select the alpha cards/ }),
+      container.querySelector(".star-map__cluster-label--parent"),
     ).toBeNull();
+  });
+
+  it("keeps a parent and its replies adjacent on the ring", async () => {
+    const { container } = renderProjects([
+      thread({ id: "before", path: "/repo/alpha", label: "AlphaDir" }),
+      thread({ id: "p1", path: "/repo/alpha", label: "AlphaDir", title: "Root work" }),
+      thread({
+        id: "c1",
+        parentThreadId: "p1",
+        path: "/repo/alpha",
+        label: "AlphaDir",
+        title: "Child one",
+      }),
+      thread({ id: "after", path: "/repo/alpha", label: "AlphaDir" }),
+    ]);
+
+    await waitFor(() => {
+      expect(projectSystems(container)[0]?.cards).toHaveLength(4);
+    });
+    // Seats are handed out in list order, and `orderParentAdjacent` is
+    // what puts a child straight after its parent in that list — so the
+    // ring keeps the relationship the dropped parent cloud used to show.
+    const keys = projectSystems(container)[0].cards.map((card) => card.key);
+    expect(keys.indexOf("pwr_local::codex:c1")).toBe(
+      keys.indexOf("pwr_local::codex:p1") + 1,
+    );
   });
 
   it("expands past the per-cloud cap from the chip", async () => {
@@ -142,8 +215,8 @@ describe("star map projects lens clouds", () => {
     });
   });
 
-  it("keeps two projects' clouds independent", async () => {
-    renderProjects([
+  it("keeps every card nearer its own project than any other", async () => {
+    const { container } = renderProjects([
       thread({ id: "a1", path: "/repo/alpha", label: "AlphaDir", title: "Alpha root" }),
       thread({
         id: "a2",
@@ -162,12 +235,34 @@ describe("star map projects lens clouds", () => {
       }),
     ]);
 
-    await screen.findByRole("button", {
-      name: "Select the Alpha root thread and its 1 reply",
+    await waitFor(() => {
+      expect(projectSystems(container)).toHaveLength(2);
     });
-    await screen.findByRole("button", {
-      name: "Select the Beta root thread and its 1 reply",
-    });
+    const systems = projectSystems(container);
+    expect(systems.map((system) => system.label).sort()).toEqual([
+      "alpha",
+      "beta",
+    ]);
+
+    // Two bodies close enough to confuse: a card has to be nearer the
+    // project that owns it than the one next door, or the operator reads
+    // it as belonging to the wrong project. Clouds seated off their own
+    // body failed this outright — a project's cards could land closer to
+    // its neighbour's name than to its own.
+    for (const system of systems) {
+      expect(system.cards.length).toBeGreaterThan(0);
+      for (const card of system.cards) {
+        const own = Math.hypot(card.dx, card.dy);
+        for (const other of systems) {
+          if (other === system) continue;
+          const toOther = Math.hypot(
+            system.body.x + card.dx - other.body.x,
+            system.body.y + card.dy - other.body.y,
+          );
+          expect(own).toBeLessThan(toOther);
+        }
+      }
+    }
   });
 
   /**
@@ -209,41 +304,5 @@ describe("star map projects lens clouds", () => {
         container.querySelectorAll(".star-map-card-shell--selected"),
       ).toHaveLength(3);
     });
-  });
-
-  it("selects a parent cloud's cards from its pill", async () => {
-    const { container } = renderProjects([
-      thread({ id: "p1", path: "/repo/alpha", label: "AlphaDir", title: "Root work" }),
-      thread({
-        id: "c1",
-        parentThreadId: "p1",
-        path: "/repo/alpha",
-        label: "AlphaDir",
-        title: "Child one",
-      }),
-      thread({ id: "loose", path: "/repo/alpha", label: "AlphaDir" }),
-    ]);
-    // Card keys name their owning instance, and the map drops a selection
-    // swept against the placeholder id the moment the durable one lands.
-    // This lens draws no instance body to wait on, so wait on the keys.
-    await waitFor(() => {
-      expect(
-        container.querySelector('[data-card-key="pwr_local::codex:p1"]'),
-      ).not.toBeNull();
-    });
-    const name = "Select the Root work thread and its 1 reply";
-    await screen.findByRole("button", { name });
-
-    fireEvent.click(screen.getByRole("button", { name }));
-    await waitFor(() => {
-      expect(
-        screen.getByRole("button", { name }).getAttribute("aria-pressed"),
-      ).toBe("true");
-    });
-    // The parent and its child only — the loose thread is a cloudmate of
-    // neither, and pooling by project would have swept it in too.
-    expect(
-      container.querySelectorAll(".star-map-card-shell--selected"),
-    ).toHaveLength(2);
   });
 });
