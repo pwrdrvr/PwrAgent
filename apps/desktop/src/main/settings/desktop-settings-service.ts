@@ -2018,6 +2018,10 @@ export class DesktopSettingsService {
     };
   }
 
+  readSecretStorageState() {
+    return { ...this.options.secretStore.describe() };
+  }
+
   async replaceSecret(
     secret: DesktopSettingsSecretName,
     value: string,
