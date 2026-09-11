@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type {
@@ -12,6 +12,7 @@ import type {
 import { buildFederatedThreadRef } from "@pwragent/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
+import { CodexEnvironmentHydrationStore } from "../app-server/codex-environment-hydration-store";
 import { ensureStarMapIntakeLaunchpad } from "../app-server/star-map-intake";
 import { AutomationStore } from "../automations/automation-store";
 import { DesktopAutomationService } from "../automations/desktop-automation-service";
@@ -667,6 +668,40 @@ describe("sqlite write metrics", () => {
     const metrics = readSqliteWriteMetrics();
     expect(metrics?.statements).toBe(2);
     expect(metrics?.commits).toBe(2);
+  });
+
+  it("budgets setup when an existing thread selects an environment", async () => {
+    const environmentDir = path.join(tempDir, ".codex", "environments");
+    mkdirSync(environmentDir, { recursive: true });
+    writeFileSync(path.join(environmentDir, "environment.toml"),
+      'version = 1\nname = "Fixture"\n[setup]\nscript = "fixture-setup"\n');
+    const registry = new DesktopBackendRegistry({
+      codexClient: createStubBackendClient({ threads: [{
+        id: "environment-thread", source: "codex", title: "Fixture",
+        titleSource: "explicit", updatedAt: 1,
+        linkedDirectories: [{ id: tempDir, kind: "local", label: "Fixture", path: tempDir }],
+      }] }),
+      overlayStore: store as never,
+      codexEnvironmentHydrationStore: new CodexEnvironmentHydrationStore(stateDb),
+      codexEnvironmentCommandRunner: async () => ({
+        output: "ready", exitCode: 0, durationMs: 1,
+        shellEnvironment: { PATH: "/fixture/node/bin:/usr/bin" },
+      }),
+    });
+    try {
+      const { writes } = await measureSqliteWrites(async () => {
+        await registry.setCodexThreadEnvironment({
+          backend: "codex", threadId: "environment-thread", environmentId: "environment",
+        });
+      });
+      expectSqliteWriteBudget({
+        note: "one existing-thread environment selection, including setup hydration and runtime persistence; no per-event writes",
+        scenario: "existing-thread-environment-setup",
+        writes,
+      });
+    } finally {
+      await registry.close();
+    }
   });
 
   it("budgets first-use Star Map intake launchpad initialization", async () => {

@@ -18524,30 +18524,46 @@ command = "pnpm dev:messaging"
       "utf8",
     );
 
+    let finishSetup!: () => void;
+    let markSetupStarted!: () => void;
+    const setupGate = new Promise<void>((resolve) => { finishSetup = resolve; });
+    const setupStarted = new Promise<void>((resolve) => { markSetupStarted = resolve; });
+    const commandRunner = vi.fn(async () => {
+      markSetupStarted();
+      await setupGate;
+      return {
+        output: "installed",
+        exitCode: 0,
+        durationMs: 10,
+        shellEnvironment: { PATH: "/fixture/node/bin:/usr/bin", NVM_BIN: "/fixture/node/bin" },
+      };
+    });
     const overlayStore = createOverlayStoreMock();
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list"] },
+      threads: [
+        {
+          id: "thread-1",
+          title: "Thread",
+          titleSource: "explicit",
+          source: "codex",
+          updatedAt: 1,
+          projectKey: root,
+          linkedDirectories: [
+            {
+              id: root,
+              kind: "local",
+              label: "repo",
+              path: root,
+            },
+          ],
+        },
+      ],
+    });
     const registry = new DesktopBackendRegistry({
-      codexClient: new MockBackendClient({
-        initializeResult: { methods: ["thread/list"] },
-        threads: [
-          {
-            id: "thread-1",
-            title: "Thread",
-            titleSource: "explicit",
-            source: "codex",
-            updatedAt: 1,
-            projectKey: root,
-            linkedDirectories: [
-              {
-                id: root,
-                kind: "local",
-                label: "repo",
-                path: root,
-              },
-            ],
-          },
-        ],
-      }),
+      codexClient,
       overlayStore,
+      codexEnvironmentCommandRunner: commandRunner,
     });
     const events: AgentEvent[] = [];
     registry.onEvent((event) => {
@@ -18555,13 +18571,16 @@ command = "pnpm dev:messaging"
     });
 
     try {
-      await expect(
-        registry.setCodexThreadEnvironment({
-          backend: "codex",
-          threadId: "thread-1",
-          environmentId: "environment",
-        }),
-      ).resolves.toMatchObject({
+      const selection = registry.setCodexThreadEnvironment({
+        backend: "codex", threadId: "thread-1", environmentId: "environment",
+      });
+      await setupStarted;
+      const turn = registry.startTurn({
+        backend: "codex", threadId: "thread-1", input: [{ type: "text", text: "Use node" }],
+      });
+      expect(codexClient.startTurnCalls).toHaveLength(0);
+      finishSetup();
+      await expect(selection).resolves.toMatchObject({
         backend: "codex",
         threadId: "thread-1",
         codexEnvironmentRuntime: {
@@ -18570,6 +18589,8 @@ command = "pnpm dev:messaging"
           executionTarget: "local",
           cwd: root,
           setupCommand: "pnpm install",
+          setupStatus: "completed",
+          shellEnvironment: { PATH: "/fixture/node/bin:/usr/bin" },
           actions: [
             {
               id: "dev-messaging",
@@ -18579,6 +18600,20 @@ command = "pnpm dev:messaging"
           ],
         },
       });
+
+      expect(commandRunner).toHaveBeenCalledWith(expect.objectContaining({
+        cwd: root,
+        command: "pnpm install",
+        captureShellEnvironment: true,
+        mode: "wait",
+      }));
+      await registry.setCodexThreadEnvironment({
+        backend: "codex",
+        threadId: "thread-1",
+        environmentId: "environment",
+        actionId: "dev-messaging",
+      });
+      expect(commandRunner).toHaveBeenCalledOnce();
 
       await expect(
         overlayStore.getThreadOverlayState({
@@ -18614,6 +18649,21 @@ command = "pnpm dev:messaging"
           },
         },
       });
+      await turn;
+      expect(codexClient.lastStartTurnParams?.codexEnvironmentRuntime?.shellEnvironment)
+        .toEqual({ PATH: "/fixture/node/bin:/usr/bin", NVM_BIN: "/fixture/node/bin" });
+
+      await registry.setCodexThreadEnvironment({ backend: "codex", threadId: "thread-1" });
+      commandRunner.mockRejectedValueOnce(new Error("setup failed"));
+      await expect(registry.setCodexThreadEnvironment({
+        backend: "codex", threadId: "thread-1", environmentId: "environment",
+      })).rejects.toThrow("setup failed");
+      expect((await overlayStore.getThreadOverlayState({ backend: "codex", threadId: "thread-1" }))
+        ?.codexEnvironmentRuntime).toMatchObject({ setupStatus: "failed", setupOutput: "setup failed" });
+      await registry.setCodexThreadEnvironment({
+        backend: "codex", threadId: "thread-1", environmentId: "environment",
+      });
+      expect(commandRunner).toHaveBeenCalledTimes(3);
     } finally {
       await registry.close();
       await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });

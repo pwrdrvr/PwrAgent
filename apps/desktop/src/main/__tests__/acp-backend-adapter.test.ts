@@ -3648,6 +3648,170 @@ describe("AcpBackendAdapter", () => {
     await adapter.close();
   });
 
+  it("isolates changed session environments and restores defaults when cleared", async () => {
+    const backendId = "acp:gemini" as AcpBackendId;
+    const agent = {
+      ...buildInstalledAgent(),
+      launchDescriptor: {
+        backendId,
+        registryId: "gemini",
+        distributionKind: "local" as const,
+        command: "/fixture/gemini",
+        args: [],
+        env: { ORIGINAL: "yes" },
+      },
+    };
+    const session = { backendId, sessionId: "session-1", status: "idle", cwd: "/fixture" } as AcpSessionMetadata;
+    const makeClient = () => ({
+      initialize: vi.fn(async () => undefined),
+      ensureSession: vi.fn(async () => undefined),
+      dispose: vi.fn(async () => undefined),
+      ownsSession: () => true,
+      supportsSessionLoad: vi.fn(() => true),
+    });
+    const original = makeClient();
+    const failed = makeClient();
+    failed.ensureSession.mockRejectedValueOnce(new Error("load failed"));
+    const changed = makeClient();
+    const cleared = makeClient();
+    const createAcpClient = vi.fn()
+      .mockReturnValueOnce(original)
+      .mockReturnValueOnce(failed)
+      .mockReturnValueOnce(changed)
+      .mockReturnValueOnce(cleared);
+    const adapter = createTestAcpBackendAdapter({
+      acpAgentStore: null,
+      acpSessionStore: {
+        listSessions: () => [session],
+        getSession: () => session,
+        upsertSession: vi.fn(),
+      },
+      captureStores: [],
+      createAcpClient: createAcpClient as never,
+      discoverLocalAcpAgents: async () => [agent],
+      emit: vi.fn(async () => undefined),
+      handleServerRequest: vi.fn(async () => ({ decision: "accept" })),
+    });
+    try {
+      await adapter.discoverAvailableAgents(issueProviderDiscoveryPermit("startup"));
+      original.supportsSessionLoad.mockReturnValue(false);
+      await expect(adapter.prepareSessionEnvironment(backendId, session.sessionId, { PATH: "/fixture/node/bin" }))
+        .rejects.toThrow("cannot reload");
+      expect(createAcpClient).toHaveBeenCalledOnce();
+      original.supportsSessionLoad.mockReturnValue(true);
+      await expect(adapter.prepareSessionEnvironment(backendId, session.sessionId, { PATH: "/fixture/node/bin" }))
+        .rejects.toThrow("load failed");
+      expect(failed.dispose).toHaveBeenCalledOnce();
+      await expect(adapter.getClientForSession(backendId, session.sessionId)).resolves.toBe(original);
+      await adapter.prepareSessionEnvironment(backendId, session.sessionId, { PATH: "/fixture/node/bin" });
+      expect(createAcpClient.mock.calls[2][0].launchDescriptor.env).toEqual({
+        ORIGINAL: "yes", PATH: "/fixture/node/bin",
+      });
+      expect(changed.ensureSession).toHaveBeenCalledWith(session);
+      await expect(adapter.getClientForSession(backendId, session.sessionId)).resolves.toBe(changed);
+      await expect(adapter.getClientForSession(backendId, "other-session")).resolves.toBe(original);
+      await adapter.prepareSessionEnvironment(backendId, session.sessionId, { PATH: "/fixture/node/bin" });
+      expect(createAcpClient).toHaveBeenCalledTimes(3);
+      await adapter.prepareSessionEnvironment(backendId, session.sessionId);
+      expect(createAcpClient.mock.calls[3][0].launchDescriptor.env).toEqual({ ORIGINAL: "yes" });
+      expect(changed.dispose).toHaveBeenCalledOnce();
+      expect(original.dispose).not.toHaveBeenCalled();
+      await expect(adapter.getClientForSession(backendId, session.sessionId)).resolves.toBe(cleared);
+    } finally {
+      await adapter.close();
+    }
+    expect(original.dispose).toHaveBeenCalledOnce();
+    expect(cleared.dispose).toHaveBeenCalledOnce();
+  });
+
+  it.each([false, true])("reconciles provider changes for idle environment clients (selection cleared: %s)", async (cleared) => {
+    const backendId = "acp:gemini" as AcpBackendId;
+    let agent: AcpInstalledAgentRecord = {
+      ...buildInstalledAgent(),
+      launchDescriptor: {
+        backendId, registryId: "gemini", distributionKind: "local",
+        command: "/fixture/gemini", args: [], env: { PROVIDER: "original" },
+      },
+    };
+    const session = { backendId, sessionId: "session-1", status: "idle", cwd: "/fixture" } as AcpSessionMetadata;
+    const makeClient = () => ({
+      initialize: vi.fn(async () => undefined),
+      ensureSession: vi.fn(async () => undefined),
+      dispose: vi.fn(async () => undefined),
+      ownsSession: () => true,
+      hasActiveTurns: vi.fn(() => false),
+      hasActiveOperations: vi.fn(() => false),
+      supportsSessionLoad: () => true,
+    });
+    const clients: ReturnType<typeof makeClient>[] = [];
+    const createAcpClient = vi.fn(() => {
+      const client = makeClient();
+      clients.push(client);
+      return client;
+    });
+    const adapter = createTestAcpBackendAdapter({
+      acpAgentStore: null,
+      acpSessionStore: { listSessions: () => [session], getSession: () => session, upsertSession: vi.fn() },
+      captureStores: [],
+      createAcpClient: createAcpClient as never,
+      discoverLocalAcpAgents: async () => [agent],
+      emit: vi.fn(async () => undefined),
+      handleServerRequest: vi.fn(async () => ({ decision: "accept" })),
+    });
+    try {
+      await adapter.discoverAvailableAgents(issueProviderDiscoveryPermit("startup"));
+      await adapter.prepareSessionEnvironment(backendId, session.sessionId, { PATH: "/fixture/node/bin" });
+      if (cleared) await adapter.prepareSessionEnvironment(backendId, session.sessionId);
+      const previous = clients.at(-1)!;
+      const previousCount = clients.length;
+      previous.hasActiveTurns.mockReturnValue(true);
+      agent = {
+        ...agent,
+        activeCommand: "/replacement/gemini",
+        launchDescriptor: {
+          ...agent.launchDescriptor!, command: "/replacement/gemini", args: ["--new-option"], env: { PROVIDER: "updated" },
+        },
+      };
+      adapter.invalidateLocalAgentDiscovery();
+      await adapter.discoverAvailableAgents(issueProviderDiscoveryPermit("settings-user-action"));
+      await expect(adapter.getClientForSession(backendId, session.sessionId)).resolves.toBe(previous);
+      previous.hasActiveTurns.mockReturnValue(false);
+      previous.hasActiveOperations.mockReturnValue(true);
+      await expect(adapter.getClientForSession(backendId, session.sessionId)).resolves.toBe(previous);
+      expect(previous.dispose).not.toHaveBeenCalled();
+      expect(clients).toHaveLength(previousCount);
+      previous.hasActiveOperations.mockReturnValue(false);
+      const failed = makeClient();
+      failed.ensureSession.mockRejectedValueOnce(new Error("replacement could not load session"));
+      createAcpClient.mockImplementationOnce(() => {
+        clients.push(failed);
+        return failed;
+      });
+      await expect(adapter.getClientForSession(backendId, session.sessionId)).resolves.toBe(previous);
+      expect(failed.dispose).toHaveBeenCalledOnce();
+      expect(previous.dispose).not.toHaveBeenCalled();
+      // Concurrent lookups and turn preparation must load exactly one replacement.
+      const [first, second] = await Promise.all([
+        adapter.getClientForSession(backendId, session.sessionId),
+        adapter.getClientForSession(backendId, session.sessionId),
+        adapter.prepareSessionEnvironment(backendId, session.sessionId, cleared ? undefined : { PATH: "/fixture/node/bin" }),
+      ]);
+      expect(clients).toHaveLength(previousCount + 2);
+      expect(first).toBe(clients.at(-1));
+      expect(second).toBe(first);
+      expect(clients.at(-1)!.ensureSession).toHaveBeenCalledWith(session);
+      expect(previous.dispose).toHaveBeenCalledOnce();
+      expect(createAcpClient).toHaveBeenLastCalledWith(expect.objectContaining({
+        launchDescriptor: expect.objectContaining({
+          command: "/replacement/gemini", args: ["--new-option"],
+          env: cleared ? { PROVIDER: "updated" } : { PROVIDER: "updated", PATH: "/fixture/node/bin" },
+        }),
+      }));
+    } finally {
+      await adapter.close();
+    }
+  });
+
   it("replaces the owner of a loadable session after launch identity changes", async () => {
     const backendId = "acp:gemini" as AcpBackendId;
     const firstAgent: AcpInstalledAgentRecord = {

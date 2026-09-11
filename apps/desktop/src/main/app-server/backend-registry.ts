@@ -11969,6 +11969,17 @@ export class DesktopBackendRegistry {
       throw new Error("ACP turns require text or image input");
     }
 
+    const overlay = await this.overlayStore.getThreadOverlayState({
+      backend: params.backend,
+      threadId: params.threadId,
+    });
+    await this.acpBackend.prepareSessionEnvironment(
+      params.backend,
+      params.threadId,
+      overlay?.codexEnvironmentRuntime?.executionTarget === "local"
+        ? overlay.codexEnvironmentRuntime.shellEnvironment
+        : undefined,
+    );
     const client = await this.acpBackend.getClientForSession(
       params.backend,
       params.threadId,
@@ -16288,6 +16299,12 @@ export class DesktopBackendRegistry {
         throw new Error("Desktop backend registry closed before turn start");
       }
     }
+    // A selection already in flight must finish before this turn reads its runtime.
+    await this.withCodexEnvironmentRuntimeLock(
+      params.backend,
+      params.threadId,
+      async () => {},
+    );
     const migrationResult = await this.applyThreadModelMigration({
       backend: params.backend,
       threadId: params.threadId,
@@ -21452,6 +21469,16 @@ export class DesktopBackendRegistry {
   async setCodexThreadEnvironment(
     request: SetCodexThreadEnvironmentRequest,
   ): Promise<SetCodexThreadEnvironmentResponse> {
+    return this.withCodexEnvironmentRuntimeLock(
+      request.backend,
+      request.threadId,
+      () => this.setCodexThreadEnvironmentLocked(request),
+    );
+  }
+
+  private async setCodexThreadEnvironmentLocked(
+    request: SetCodexThreadEnvironmentRequest,
+  ): Promise<SetCodexThreadEnvironmentResponse> {
     if (!request.environmentId) {
       await this.overlayStore.setThreadCodexEnvironmentRuntime?.({
         backend: request.backend,
@@ -21505,8 +21532,35 @@ export class DesktopBackendRegistry {
       overlay?.codexEnvironmentRuntime?.environmentId === environment.id
         ? overlay.codexEnvironmentRuntime
         : undefined;
+    let setupRuntime = existingRuntime;
+    let setupError: CodexEnvironmentStartupError | undefined;
+    if (
+      !existingRuntime
+      || existingRuntime.setupStatus === "failed"
+      || (environment.setupScript && !existingRuntime.setupStatus)
+    ) {
+      try {
+        setupRuntime = await applyLocalCodexEnvironmentSelection({
+          commandRunner: this.codexEnvironmentCommandRunner,
+          cwd,
+          env: this.codexEnvironmentCommandEnv,
+          hydrationStore: this.codexEnvironmentHydrationStore,
+          selection: {
+            environment,
+            executionTarget: existingRuntime?.executionTarget ?? "local",
+            runSetup: true,
+          },
+        });
+      } catch (error) {
+        if (!(error instanceof CodexEnvironmentStartupError)) {
+          throw error;
+        }
+        setupRuntime = error.runtime;
+        setupError = error;
+      }
+    }
     const codexEnvironmentRuntime: CodexThreadEnvironmentRuntime = {
-      ...(existingRuntime ?? {}),
+      ...(setupRuntime ?? {}),
       environmentId: environment.id,
       environmentName: environment.name,
       executionTarget: existingRuntime?.executionTarget ?? "local",
@@ -21530,6 +21584,10 @@ export class DesktopBackendRegistry {
       threadId: request.threadId,
       codexEnvironmentRuntime,
     });
+
+    if (setupError) {
+      throw setupError;
+    }
 
     return {
       backend: request.backend,

@@ -97,6 +97,13 @@
     "rowsChanged": 1,
     "statements": 1
   },
+  "existing-thread-environment-setup": {
+    "commits": 2,
+    "note": "one existing-thread environment selection, including setup hydration and runtime persistence; no per-event writes",
+    "observedWalBytes": 24720,
+    "rowsChanged": 2,
+    "statements": 2
+  },
   "federated-child-archive-ungroup": {
     "commits": 2,
     "note": "clear one child-owner parent overlay and refresh its root-owner pin",
