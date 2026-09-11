@@ -32844,7 +32844,7 @@ script = "printf setup"
     } as AppServerPendingRequestNotification);
 
     try {
-      await setupStarted;
+      await setupStarted.promise;
       expect(codexClient.lastStartThreadParams).toBeUndefined();
 
       const searchResponse = await codexClient.emitRequest({
