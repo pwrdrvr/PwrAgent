@@ -1065,11 +1065,11 @@ export class McpConnectionGatewayService {
 
   private async isEndpointAvailable(): Promise<boolean> {
     try {
-      await this.fetchFn(PWRSNAP_MCP_URL, {
+      const response = await this.fetchFn(PWRSNAP_MCP_URL, {
         method: "GET",
         signal: AbortSignal.timeout(1_000),
       });
-      return true;
+      return response.ok || response.status === 401 || response.status === 405;
     } catch {
       return false;
     }

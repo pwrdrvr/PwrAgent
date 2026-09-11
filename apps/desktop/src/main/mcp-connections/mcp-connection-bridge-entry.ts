@@ -108,8 +108,8 @@ async function main(): Promise<void> {
   const socketPath = process.env.PWRAGENT_MCP_CONNECTION_SOCKET;
   const token = process.env.PWRAGENT_MCP_CONNECTION_TOKEN;
   const connectionName = process.env.PWRAGENT_MCP_CONNECTION_NAME;
-  if (!socketPath || !token || !connectionName) {
-    logStderr("missing bridge connection name, socket, or token; refusing to start");
+  if (!socketPath || !token) {
+    logStderr("missing bridge socket or token; refusing to start");
     process.exit(1);
   }
   const rpc = new ConnectionRpcClient(socketPath, token);
