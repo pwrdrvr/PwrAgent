@@ -779,6 +779,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
         if (!props.thread) return null;
         return (
           <ToolCallsPanel
+            desktopApi={props.desktopApi}
             totals={displayResource.data?.toolTotals}
             entries={props.toolCallEntries}
             loadingDetailItemId={props.loadingToolCallDetailItemId}

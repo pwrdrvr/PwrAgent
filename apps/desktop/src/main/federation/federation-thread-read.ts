@@ -1,5 +1,10 @@
 import { isDeepStrictEqual } from "node:util";
-import type { AppServerReadThreadResponse, AppServerThreadMessage } from "@pwragent/shared";
+import type { AppServerReadThreadRequest, AppServerReadThreadResponse, AppServerThreadMessage } from "@pwragent/shared";
+
+/** Opt in per request so version-1 viewers continue to receive inline text. */
+export type FederationThreadReadRequest = AppServerReadThreadRequest & {
+  replayReferences?: 1;
+};
 
 type MessageReference = { entryIndex: number; fields: string[] };
 type TextReference = { messageIndex: number };

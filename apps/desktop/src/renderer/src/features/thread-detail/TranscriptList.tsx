@@ -118,6 +118,7 @@ type TranscriptListProps = {
   runningTurnUsageText?: string;
   pagination?: AppServerThreadReplayPagination;
   parentThreadId?: string;
+  parentThreadBackend?: AppServerBackendKind;
   permissionTransitions?: ThreadPermissionTransition[];
   messagingBindingTransitions?: ThreadMessagingBindingTransition[];
   questionnaireActivities?: ThreadQuestionnaireActivity[];
@@ -1519,6 +1520,7 @@ export function TranscriptList(props: TranscriptListProps) {
                   fileViewerContext={props.fileViewerContext}
                   label={item.label}
                   parentThreadId={props.parentThreadId ?? ""}
+                  parentThreadBackend={props.parentThreadBackend}
                   skills={skills}
                   subAgents={props.subAgents}
                   threadLinkSource={props.threadLinkSource}
@@ -1566,6 +1568,7 @@ export function TranscriptList(props: TranscriptListProps) {
                   desktopApi={props.desktopApi}
                   message={item.entry}
                   parentThreadId={props.parentThreadId ?? ""}
+                  parentThreadBackend={props.parentThreadBackend}
                   fileViewerContext={props.fileViewerContext}
                   skills={skills}
                   subAgents={props.subAgents}

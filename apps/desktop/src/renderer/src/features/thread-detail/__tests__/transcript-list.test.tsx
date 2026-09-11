@@ -1,5 +1,6 @@
 import "@testing-library/jest-dom/vitest";
-import type { NavigationThreadSummary } from "@pwragent/shared";
+import { buildThreadPricingDisplay } from "@pwragent/shared";
+import type { AppServerReadThreadResponse, NavigationThreadSummary } from "@pwragent/shared";
 import {
   act,
   cleanup,
@@ -471,6 +472,33 @@ describe("TranscriptList", () => {
     expect(
       within(dialog).getByText("All required checks passed."),
     ).toBeInTheDocument();
+  });
+
+  it.each(["codex", "acp:grok"] as const)("reads lazy monitor details using the parent backend (%s)", async (backend) => {
+    const readThread = vi.fn(async (request): Promise<AppServerReadThreadResponse> => ({
+      backend: request.backend, threadId: request.threadId, fetchedAt: 1,
+      replay: { entries: [], messages: [], pagination: { supportsPagination: true, hasPreviousPage: false } },
+      display: { revision: "monitor-details", pricing: buildThreadPricingDisplay({}), subAgent: {
+        monitorId: "monitor-1", task: "Check CI", status: "success", createdAt: 1, updatedAt: 2,
+        backend: "codex", monitorThreadId: "codex-child", lastMessage: "Checks passed",
+      } },
+    }));
+    render(<TranscriptList
+      desktopApi={{ readThread }}
+      entries={[{
+        type: "message", id: "handoff", role: "user", text: "Monitor completed",
+        origin: { kind: "sub-agent", sourceThread: { backend: "codex", threadId: "codex-child" },
+          subAgent: { kind: "monitor", monitorId: "monitor-1", task: "Check CI", outcome: "success", summary: "Checks passed" } },
+      }]}
+      loading={false} loadingMore={false} parentThreadId="parent-thread" parentThreadBackend={backend}
+      onLoadOlder={async () => undefined}
+    />);
+    fireEvent.click(screen.getByRole("button", { name: "Details" }));
+    expect(await screen.findByRole("dialog", { name: "Sub-agent details: PwrAgent task monitor" })).toBeVisible();
+    expect(readThread).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      backend, threadId: "parent-thread", display: { resource: "subagent", monitorId: "monitor-1" },
+      includeTurns: false, viewOnly: true,
+    }));
   });
 
   it("renders PR automation prompts as compact expandable PwrAgent cards", () => {

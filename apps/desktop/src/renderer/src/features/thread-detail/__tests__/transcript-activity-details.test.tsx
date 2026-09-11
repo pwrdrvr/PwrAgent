@@ -1,8 +1,9 @@
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
-import type { AppServerReadThreadResponse, AppServerThreadActivityEntry } from "@pwragent/shared";
+import type { AppServerReadThreadResponse, AppServerThreadActivityEntry, ThreadToolAccounting } from "@pwragent/shared";
 import { TranscriptActivity } from "../TranscriptActivity";
+import { ToolCallsPanel } from "../context-panels/ToolCallsPanel";
 
 afterEach(cleanup);
 
@@ -22,6 +23,49 @@ function full(): AppServerReadThreadResponse {
     }] }], messages: [], pagination: { supportsPagination: true, hasPreviousPage: false } },
   };
 }
+
+it.each([false, true])("loads deferred command bodies from Tool Calls only on expansion (retry=%s)", async (retry) => {
+  const response = full();
+  const entry = response.replay.entries[0] as AppServerThreadActivityEntry;
+  entry.details[0].command!.output = "Complete build output\n".repeat(200);
+  const readThread = vi.fn(async () => response);
+  if (retry) readThread.mockRejectedValueOnce(new Error("Owner is unavailable"));
+  const onRequestInvocationDetails = vi.fn();
+  const accounting: ThreadToolAccounting = {
+    alerts: [],
+    invocations: [{
+      backend: "codex", threadId: "thread", turnId: "turn", itemId: "command", invocationId: "invocation",
+      toolName: "exec", category: "build-test", status: "completed", normalizedCommand: "pnpm build",
+      observedAt: 1, updatedAt: 1, outputChars: 4000, outputLines: 200, estimatedOutputTokens: 1000,
+      debugLines: 0, infoLines: 200, warningLines: 0, errorLines: 0, noisy: false, outputTruncated: false,
+    }],
+    summaries: [{
+      toolName: "exec", category: "build-test", invocationCount: 1, noisyInvocationCount: 0, lastObservedAt: 1,
+      outputChars: 4000, outputLines: 200, estimatedOutputTokens: 1000,
+      debugLines: 0, infoLines: 200, warningLines: 0, errorLines: 0,
+    }],
+  };
+  render(<ToolCallsPanel entries={[activity()]} toolAccounting={accounting} desktopApi={{ readThread }}
+    onRequestInvocationDetails={onRequestInvocationDetails} threadLinkSource={{ backend: "codex", instanceId: "remote-owner" }} />);
+  expect(readThread).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "Details" }));
+  expect(readThread).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "Details" }));
+  expect(screen.getByText("Loading captured output…")).toBeVisible();
+  if (retry) {
+    expect(await screen.findByRole("alert")).toHaveTextContent("Owner is unavailable");
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+  }
+  expect(await screen.findByText(/Complete build output/)).toBeVisible();
+  expect(screen.getByText("$ pnpm build")).toBeVisible();
+  expect(readThread).toHaveBeenCalledTimes(retry ? 2 : 1);
+  expect(readThread).toHaveBeenLastCalledWith({
+    backend: "codex", threadId: "thread", federationTarget: { scope: "remote", instanceId: "remote-owner" },
+    display: { resource: "activity", activity: { turnId: "turn", entryId: "activity-command" } }, viewOnly: true,
+  });
+  // The skeleton is already in history; expanding it must not page older turns.
+  expect(onRequestInvocationDetails).not.toHaveBeenCalled();
+});
 
 it("fetches nothing while collapsed, shares repeated expansion reads and keeps loaded details when collapsed again", async () => {
   let finish: ((value: AppServerReadThreadResponse) => void) | undefined;

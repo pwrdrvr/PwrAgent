@@ -10,6 +10,7 @@ import {
 } from "react";
 import { stripCodexGitActionDirectives } from "@pwragent/shared";
 import type {
+  AppServerBackendKind,
   DesktopApplicationsSnapshot,
   AppServerSkillSummary,
   AppServerThreadFilePart,
@@ -57,6 +58,7 @@ type TranscriptMessageProps = {
   fileViewerContext?: MarkdownFileViewerContext;
   message: AppServerThreadMessageEntry;
   parentThreadId: string;
+  parentThreadBackend?: AppServerBackendKind;
   skills: AppServerSkillSummary[];
   subAgents?: ThreadSubAgentSummary[];
   threadLinkSource?: ThreadLinkSource;
@@ -113,7 +115,7 @@ export const TranscriptMessage = memo(function TranscriptMessage(props: Transcri
     setMonitorDetailsOpen(false);
     setMonitorError(undefined);
     return () => { monitorRequestVersion.current += 1; };
-  }, [props.parentThreadId, props.message.id, props.threadLinkSource?.instanceId]);
+  }, [props.parentThreadId, props.parentThreadBackend, props.message.id, props.threadLinkSource?.instanceId]);
   const monitorSubAgent = useMemo(
     () => loadedMonitor?.monitorId === monitorOrigin?.monitorId ? loadedMonitor : props.subAgents?.find(
       (subAgent) => subAgent.monitorId === monitorOrigin?.monitorId,
@@ -242,8 +244,10 @@ export const TranscriptMessage = memo(function TranscriptMessage(props: Transcri
                 if (monitorSubAgent) { setMonitorDetailsOpen(true); return; }
                 const requestVersion = ++monitorRequestVersion.current;
                 try {
+                  const backend = props.parentThreadBackend ?? props.threadLinkSource?.backend;
+                  if (!backend) throw new Error("The parent thread backend is unavailable.");
                   const response = await props.desktopApi!.readThread!({
-                    backend: props.threadLinkSource?.backend ?? props.message.origin?.sourceThread?.backend ?? "codex",
+                    backend,
                     threadId: props.parentThreadId,
                     federationTarget: props.threadLinkSource ? { scope: "remote", instanceId: props.threadLinkSource.instanceId } : readRendererFederationTarget(),
                     display: { resource: "subagent", monitorId: monitorOrigin.monitorId }, includeTurns: false, viewOnly: true,

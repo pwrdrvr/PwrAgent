@@ -37,6 +37,10 @@ describe("federation backend bridge", () => {
     const first = client.readThread(params);
     const second = client.readThread(params);
     expect(request).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledWith({
+      method: FEDERATION_BACKEND_METHODS.readThread,
+      params: { ...params, replayReferences: 1 },
+    });
     finish(response);
     expect(await Promise.all([first, second])).toEqual([response, response]);
     const fresh = client.readThread(params);
@@ -1246,6 +1250,40 @@ describe("federation backend bridge", () => {
         },
       },
     ]);
+  });
+
+  it.each([undefined, 1, 2])("only sends replay references with explicit supported negotiation (%s)", async (replayReferences) => {
+    const message = { id: "message-1", role: "assistant" as const, text: "Visible response. ".repeat(100) };
+    const response: AppServerReadThreadResponse = {
+      backend: "codex", threadId: "thread-1", fetchedAt: 1,
+      replay: {
+        entries: [{ type: "message", ...message }], messages: [message], lastAssistantMessage: message.text,
+        pagination: { supportsPagination: true, hasPreviousPage: false },
+      },
+    };
+    const readThread = vi.fn(async () => response);
+    const replies: FederationProtocolEnvelope[] = [];
+    const router = new FederationRouter({ localInstanceId: "owner_one", methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES });
+    router.registerConnection({ peerId: "viewer_one", capabilities: ["thread_detail"], sendEnvelope: (envelope) => replies.push(envelope) });
+    registerFederationBackendHandlers({ router, backend: { readThread } as unknown as FederationBackendOperations });
+    await router.routeEnvelope({ sourcePeerId: "viewer_one", envelope: {
+      id: "read", kind: "request", method: FEDERATION_BACKEND_METHODS.readThread,
+      params: { backend: "codex", threadId: "thread-1", ...(replayReferences === undefined ? {} : { replayReferences }) },
+      protocolVersion: 1, sourceInstanceId: "viewer_one", targetInstanceId: "owner_one", createdAt: 1,
+    } });
+    expect(readThread).toHaveBeenCalledExactlyOnceWith({ backend: "codex", threadId: "thread-1" });
+    expect(replies[0].kind).toBe("response");
+    if (replies[0].kind !== "response") throw new Error("Expected replay response");
+    const wire = replies[0].result as FederationThreadReadResponse;
+    if (replayReferences === 1) {
+      expect(wire.replay.messages[0]).toMatchObject({ entryIndex: 0 });
+      expect(wire.replay.lastAssistantMessage).toEqual({ messageIndex: 0 });
+      expect(materializeFederationThreadRead(wire).replay).toEqual(response.replay);
+    } else {
+      // The legacy renderer consumes these values directly, without a decoder.
+      expect(wire.replay.messages).toEqual([message]);
+      expect(wire.replay.lastAssistantMessage).toBe(message.text);
+    }
   });
 
   it("reads complete thread history before minting federation cursors", async () => {
