@@ -1153,10 +1153,12 @@ vi.mock("../federation/federation-runtime", () => ({
   getDesktopFederationRuntime: () => federationMock.runtime,
 }));
 
-vi.mock("../pr-status/github-pr-fetcher", () => ({
-  GithubPrFetcher: vi.fn(function GithubPrFetcher() {
+vi.mock("../pr-status/forge-pr-fetcher", async () => ({
+  ...await vi.importActual<typeof import("../pr-status/forge-pr-fetcher")>("../pr-status/forge-pr-fetcher"),
+  ForgePrFetcher: vi.fn(function GithubPrFetcher() {
     return {
       isGhAvailable,
+      getProviderAvailability: async () => [{ provider: "github.com", cli: "gh", available: await isGhAvailable() }],
       invalidateGhCaches,
       getAuthStatus,
       fetchPullRequestByUrl,

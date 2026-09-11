@@ -69,6 +69,7 @@ export function GitSettings(props: {
     enabled: boolean,
   ) => Promise<void>;
   onRefresh: () => Promise<void>;
+  onSaveGlabPath: (path: string) => Promise<void>;
   onSaveGhPath: (path: string) => Promise<void>;
   onSaveGitPath: (path: string) => Promise<void>;
 }) {
@@ -241,6 +242,13 @@ export function GitSettings(props: {
         saving={props.saving}
         snapshot={props.snapshot}
         onSaveGhPath={props.onSaveGhPath}
+      />
+      <GhToolSection
+        provider="gitlab"
+        desktopApi={props.desktopApi}
+        saving={props.saving}
+        snapshot={props.snapshot}
+        onSaveGhPath={props.onSaveGlabPath}
       />
       <SettingsSection
         eyebrow="Git"

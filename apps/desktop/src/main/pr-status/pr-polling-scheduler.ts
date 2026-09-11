@@ -1,9 +1,8 @@
 import type { PrSummary } from "@pwragent/shared";
 import { getMainLogger } from "../log";
-import type { PrRef } from "./github-graphql-client";
+import { parseForgePrRefFromUrl as parsePrRefFromUrl, type ForgePrRef as PrRef } from "./forge-pr-fetcher";
 import {
   GITHUB_RECONNECT_DEDUP_MS,
-  parsePrRefFromUrl,
 } from "./github-graphql-client";
 import { isTerminalPullRequest } from "./pr-derivations";
 

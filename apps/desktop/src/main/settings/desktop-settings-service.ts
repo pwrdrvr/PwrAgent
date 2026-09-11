@@ -139,6 +139,7 @@ import {
   FEISHU_TENANT_URL_ENV,
   FEISHU_VERIFICATION_TOKEN_ENV,
   GH_COMMAND_ENV,
+  GLAB_COMMAND_ENV,
   LINE_AUTHORIZED_GROUPS_ENV,
   LINE_AUTHORIZED_ROOMS_ENV,
   LINE_AUTHORIZED_USER_IDS_ENV,
@@ -199,6 +200,7 @@ import {
 } from "@pwrdrvr/codex-discovery";
 import { discoverDesktopApplications } from "./application-discovery";
 import { GIT_COMMAND_ENV, discoverGitCommands } from "./git-discovery";
+import { discoverGlabCommands } from "./glab-discovery";
 import { discoverGhCommands } from "./gh-discovery";
 import { getMainLogger } from "../log";
 import {
@@ -541,6 +543,11 @@ export class DesktopSettingsService {
     promise: ReturnType<typeof discoverGhCommands>;
     result?: Awaited<ReturnType<typeof discoverGhCommands>>;
   };
+  private glabDiscoveryCache?: {
+    key: string;
+    promise: ReturnType<typeof discoverGlabCommands>;
+    result?: Awaited<ReturnType<typeof discoverGlabCommands>>;
+  };
   private codexSpawnEnv?: NodeJS.ProcessEnv;
   private codexSpawnEnvHydratedAt?: number;
   private codexSpawnEnvHydrationSucceeded = false;
@@ -697,6 +704,7 @@ export class DesktopSettingsService {
       codexDiscoveryCommand,
     ) ?? codexDiscoveryFromProvider(this.configStore.read("providers").codex);
     const codexProfiles = this.codexProfiles;
+    const glabDiscovery = this.glabDiscoveryCache?.result ?? { candidates: [] };
     const ghDiscovery = this.ghDiscoveryCache?.result ?? { candidates: [] };
     const gitDiscovery = this.gitDiscoveryCache?.result ?? { candidates: [] };
     const applications = this.applicationsDiscovery
@@ -1406,6 +1414,10 @@ export class DesktopSettingsService {
         ...applications,
         preferredEditorId,
         preferredTerminalId,
+        glab: {
+          path: this.resolveString(config.applications?.glab?.path, GLAB_COMMAND_ENV),
+          discovery: glabDiscovery,
+        },
         gh: {
           path: this.resolveString(config.applications?.gh?.path, GH_COMMAND_ENV),
           discovery: ghDiscovery,
@@ -1665,6 +1677,21 @@ export class DesktopSettingsService {
       this.ghDiscoveryCache = cache;
     }
     return this.ghDiscoveryCache.promise;
+  }
+
+  private discoverGlabCommandsCached(
+    configuredCommand: string | undefined,
+  ): ReturnType<typeof discoverGlabCommands> {
+    const key = configuredCommand ?? "";
+    if (this.glabDiscoveryCache?.key !== key) {
+      const promise = discoverGlabCommands({ configuredCommand, env: this.env });
+      const cache: NonNullable<typeof this.glabDiscoveryCache> = { key, promise };
+      void promise.then((result) => {
+        cache.result = result;
+      });
+      this.glabDiscoveryCache = cache;
+    }
+    return this.glabDiscoveryCache.promise;
   }
 
   resolveWorktreeStorage(): DesktopWorktreeStorageLocation {
@@ -2168,6 +2195,7 @@ export class DesktopSettingsService {
       this.startupDiscoveryPromise = Promise.allSettled([
         this.runCodexDiscovery(permit),
         this.discoverGhCommandsCached(configuredGhCommand),
+        this.discoverGlabCommandsCached(applications.glab?.path),
         this.discoverGitCommandsCached(applications.git?.path),
         this.discoverDesktopApplicationsCached(),
       ]).then(() => undefined).finally(() => {
@@ -2760,6 +2788,15 @@ export class DesktopSettingsService {
     const configured = this.configStore.read("applications").gh?.path;
     return (
       readEnvString(this.env, GH_COMMAND_ENV)
+      || configured
+      || undefined
+    );
+  }
+
+  resolveGlabCommandPreference(): string | undefined {
+    const configured = this.configStore.read("applications").glab?.path;
+    return (
+      readEnvString(this.env, GLAB_COMMAND_ENV)
       || configured
       || undefined
     );

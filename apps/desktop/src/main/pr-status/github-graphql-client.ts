@@ -133,6 +133,9 @@ export function parsePrRefFromUrl(url: string): PrRef | undefined {
   } catch {
     return undefined;
   }
+  if (parsed.hostname.toLowerCase() !== "github.com" || parsed.protocol !== "https:") {
+    return undefined;
+  }
   const match = parsed.pathname.match(/^\/([^/]+)\/([^/]+)\/pull\/(\d+)\/?$/);
   if (!match) {
     return undefined;

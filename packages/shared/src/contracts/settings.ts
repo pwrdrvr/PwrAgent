@@ -821,6 +821,32 @@ export type DesktopGhDiscoverySnapshot = {
   error?: string;
 };
 
+export type DesktopGlabCandidateSource =
+  | "env"
+  | "config"
+  | "path"
+  | "homebrew"
+  | "macports"
+  | "user"
+  | "windows";
+
+export type DesktopGlabDiscoveryCandidate = {
+  command: string;
+  source: DesktopGlabCandidateSource;
+  executable: boolean;
+  selected: boolean;
+  version?: string;
+  versionFailureReason?: string;
+  failureReason?: string;
+};
+
+export type DesktopGlabDiscoverySnapshot = {
+  selectedCommand?: string;
+  selectedSource?: DesktopGlabCandidateSource;
+  candidates: DesktopGlabDiscoveryCandidate[];
+  error?: string;
+};
+
 export type DesktopGitCandidateSource =
   | "env"
   | "config"
@@ -869,6 +895,10 @@ export type DesktopApplicationsSnapshot = {
   gh: {
     path: DesktopSettingsValue<string>;
     discovery: DesktopGhDiscoverySnapshot;
+  };
+  glab?: {
+    path: DesktopSettingsValue<string>;
+    discovery: DesktopGlabDiscoverySnapshot;
   };
   git: {
     path: DesktopSettingsValue<string>;
@@ -1477,6 +1507,9 @@ export type DesktopSettingsConfigPatch = {
       preferredId?: string;
     };
     gh?: {
+      path?: string;
+    };
+    glab?: {
       path?: string;
     };
     git?: {

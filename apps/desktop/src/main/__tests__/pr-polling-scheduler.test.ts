@@ -522,3 +522,22 @@ describe("PrPollingScheduler", () => {
     expect(() => h.scheduler.stop()).not.toThrow();
   });
 });
+
+
+describe("GitLab polling", () => {
+  it("preserves the GitLab host and namespace through scheduled refreshes", async () => {
+    const summary = pr({ provider: "gitlab.example.com", org: "team/sub/group", repo: "project",
+      url: "https://gitlab.example.com/team/sub/group/project/-/merge_requests/17", number: 17 });
+    const fetchPullRequests = vi.fn(async () => [summary]);
+    const applyResults = vi.fn(async () => []);
+    const h = harness({
+      listTargets: () => [{ prKey: "gitlab.example.com/team/sub/group/project#17", pr: summary, threadKeys: ["thread"] }],
+      getFocusedThreadKeys: () => new Set(["thread"]),
+      fetchPullRequests,
+      applyResults,
+    });
+    await h.scheduler.tick();
+    expect(fetchPullRequests).toHaveBeenCalledWith([{ gitlabHost: "gitlab.example.com", owner: "team/sub/group", repo: "project", number: 17 }]);
+    expect(applyResults).toHaveBeenCalledWith([summary], h.now);
+  });
+});

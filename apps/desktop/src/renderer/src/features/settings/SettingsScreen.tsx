@@ -1012,6 +1012,9 @@ function SettingsSectionBody(props: {
           });
         }}
         onRefresh={props.settings.refresh}
+        onSaveGlabPath={async (path) => {
+          await props.settings.writeConfig({ applications: { glab: { path } } });
+        }}
         onSaveGhPath={async (path) => {
           await props.settings.writeConfig({
             applications: {
@@ -1080,6 +1083,9 @@ function SettingsSectionBody(props: {
           });
         }}
         onRefresh={props.settings.refresh}
+        onSaveGlabPath={async (path) => {
+          await props.settings.writeConfig({ applications: { glab: { path } } });
+        }}
         onSaveGhPath={async (path) => {
           await props.settings.writeConfig({
             applications: {

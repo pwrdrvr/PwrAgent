@@ -494,7 +494,7 @@ export function parseGhAuthStatus(input: {
         .filter(Boolean)
     : [];
   const hasRepoScope = scopes.includes("repo") || scopes.includes("public_repo");
-  const loggedIn = Boolean(accountMatch) || /Logged in to github\.com/i.test(text);
+  const loggedIn = input.ok && (Boolean(accountMatch) || /Logged in to github\.com/i.test(text));
 
   return {
     installed: true,
@@ -502,11 +502,18 @@ export function parseGhAuthStatus(input: {
     account: accountMatch?.[1],
     scopes,
     hasRepoScope,
-    rawOutput: text.trim(),
+    permissionState: !loggedIn ? "unknown"
+      : scopes.includes("repo") ? "sufficient"
+      : scopes.includes("public_repo") ? "limited"
+      : scopes.length === 0 ? "unknown" : "insufficient",
     reason: loggedIn
-      ? hasRepoScope
-        ? undefined
-        : "Token is missing the `repo` scope. Run `gh auth refresh -s repo` to grant it."
+      ? scopes.includes("repo")
+        ? "Repository scopes are sufficient. Organization SSO and repository access may still restrict individual PRs."
+        : scopes.includes("public_repo")
+          ? "Public repositories only. Private repositories require the repo scope."
+          : scopes.length === 0
+            ? "Token scopes are not reported. Fine-grained tokens need repository access with Pull requests, Checks, and Commit statuses read permissions."
+            : "Token is missing the `repo` scope. Run `gh auth refresh -s repo` to grant it."
       : "Run `gh auth login` to sign in to github.com.",
   };
 }

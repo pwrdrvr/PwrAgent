@@ -21,13 +21,13 @@ import {
 
 /**
  * Every program PwrAgent runs but does not ship: the editor and terminal it
- * launches, and the two command line tools it shells out to.
+ * launches, and the command line tools it shells out to.
  *
- * The two CLI sections are the same components the Git pane renders, over
+ * The CLI sections are the same components the Git pane renders, over
  * the same config keys — see `CommandToolsSettings`. They live here as
  * well because this is the pane an operator opens to answer "which
  * programs do you run, from where, at what version", and answering that
- * for the editor and the terminal but not for `git` and `gh` left the
+ * for the editor and the terminal but not for `git`, `gh`, and `glab` left the
  * question half-answered.
  */
 export function ApplicationsSettings(props: {
@@ -39,6 +39,7 @@ export function ApplicationsSettings(props: {
     preferredId: string,
   ) => Promise<void>;
   onRefresh: () => Promise<void>;
+  onSaveGlabPath: (path: string) => Promise<void>;
   onSaveGhPath: (path: string) => Promise<void>;
   onSaveGitPath: (path: string) => Promise<void>;
 }) {
@@ -84,6 +85,13 @@ export function ApplicationsSettings(props: {
         saving={props.saving}
         snapshot={props.snapshot}
         onSaveGhPath={props.onSaveGhPath}
+      />
+      <GhToolSection
+        provider="gitlab"
+        desktopApi={props.desktopApi}
+        saving={props.saving}
+        snapshot={props.snapshot}
+        onSaveGhPath={props.onSaveGlabPath}
       />
     </SettingsSectionStack>
   );

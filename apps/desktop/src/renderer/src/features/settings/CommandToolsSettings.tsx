@@ -278,26 +278,34 @@ export function GitToolSection(props: {
 
 export function GhToolSection(props: {
   desktopApi?: DesktopApi;
+  provider?: "github" | "gitlab";
   saving: boolean;
   snapshot: DesktopSettingsSnapshot;
   onSaveGhPath: (path: string) => Promise<void>;
 }) {
+  const isGitLab = props.provider === "gitlab";
+  const cli = isGitLab ? "glab" : "gh";
+  const label = isGitLab ? "GitLab" : "GitHub";
   const desktopApi = props.desktopApi;
+  const [host, setHost] = useState("gitlab.com");
+  const getStatus = isGitLab ? desktopApi?.getGlabStatus : desktopApi?.getGhStatus;
+  const pickCommand = isGitLab ? desktopApi?.pickGlabCommand : desktopApi?.pickGhCommand;
   const [status, setStatus] = useState<GhStatus | undefined>(undefined);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | undefined>(undefined);
-  const gh = props.snapshot.applications.gh;
+  const gh = (isGitLab ? props.snapshot.applications.glab : props.snapshot.applications.gh)
+    ?? { path: { value: "", source: "default" }, discovery: { candidates: [] } };
   const envForced = gh.path.source === "env";
   const discovery = status?.discovery ?? gh.discovery;
   const candidates = discovery.candidates;
 
   const load = useCallback(
     async (recheck: boolean) => {
-      if (!desktopApi?.getGhStatus) return;
+      if (!getStatus) return;
       setLoading(true);
       setError(undefined);
       try {
-        const next = await desktopApi.getGhStatus({ recheck });
+        const next = await getStatus({ recheck, ...(isGitLab ? { host } : {}) });
         setStatus(next);
       } catch (caught) {
         setError(caught instanceof Error ? caught.message : String(caught));
@@ -305,7 +313,7 @@ export function GhToolSection(props: {
         setLoading(false);
       }
     },
-    [desktopApi],
+    [getStatus, host, isGitLab],
   );
 
   useEffect(() => {
@@ -334,18 +342,27 @@ export function GhToolSection(props: {
   return (
     <SettingsSection
       eyebrow="Git"
-      title="GitHub CLI (gh)"
+      title={`${label} CLI (${cli})`}
       description={
         <>
-          PwrAgent uses <code>gh</code> to read pull request status for thread chips.
-          It never opens, comments on, or merges PRs.
+          PwrAgent uses <code>{cli}</code> to read {isGitLab ? "merge" : "pull"} request status for thread chips.
         </>
       }
     >
       <div className="settings-fields">
+        {isGitLab ? (
+          <SettingsField
+            label="GitLab host"
+            sub="Check gitlab.com or your self-managed GitLab host."
+            control={
+              <input className="settings-input" aria-label="GitLab host" defaultValue={host}
+                onBlur={(event) => setHost(event.currentTarget.value.trim())} />
+            }
+          />
+        ) : null}
         <SettingsField
           label="Connection status"
-          sub="Checks the selected gh path and GitHub auth scopes."
+          sub={`Checks the selected ${cli} path, login, and read permissions.`}
           source={sourceLabel}
           control={
             <div className="settings-gh-status">
@@ -384,7 +401,7 @@ export function GhToolSection(props: {
               <div className="settings-inline-actions">
                 <button
                   className="button button--secondary"
-                  disabled={loading || !desktopApi?.getGhStatus}
+                  disabled={loading || !getStatus}
                   type="button"
                   onClick={() => void load(true)}
                 >
@@ -397,7 +414,7 @@ export function GhToolSection(props: {
         {gh.path.value.trim() || envForced ? (
           <SettingsField
             label="Discovery mode"
-            sub="Clear the override and use the first discovered gh candidate."
+            sub={`Clear the override and use the first discovered ${cli} candidate.`}
             source={envForced ? "env override active" : "config"}
             control={
               <SettingsPathRow
@@ -416,19 +433,20 @@ export function GhToolSection(props: {
           sub={
             candidates.some((candidate) => candidate.executable)
               ? "Detected on this machine. The selected path is used."
-              : "No executable gh was found. These are the paths PwrAgent checked."
+              : `No executable ${cli} was found. These are the paths PwrAgent checked.`
           }
           control={
             <div
               className="settings-paths"
-              aria-label="GitHub CLI discovery"
+              aria-label={`${label} CLI discovery`}
               role="group"
             >
               {candidates.length === 0 ? (
-                <p className="settings-empty">No gh candidates found.</p>
+                <p className="settings-empty">No {cli} candidates found.</p>
               ) : (
                 candidates.map((candidate) => (
                   <GhCandidateRow
+                    cli={cli}
                     key={`${candidate.source}:${candidate.command}`}
                     candidate={candidate}
                     disabled={props.saving || envForced}
@@ -442,21 +460,21 @@ export function GhToolSection(props: {
         />
         <SettingsField
           label="Manual path"
-          sub="Pick a gh executable outside the discovered locations."
+          sub={`Pick a ${cli} executable outside the discovered locations.`}
           control={
             <div className="settings-inline-actions">
               <button
                 className="button button--secondary"
-                disabled={props.saving || envForced || !desktopApi?.pickGhCommand}
+                disabled={props.saving || envForced || !pickCommand}
                 type="button"
                 onClick={() => {
                   void (async () => {
-                    if (!desktopApi?.pickGhCommand) return;
+                    if (!pickCommand) return;
                     setError(undefined);
-                    const result = await desktopApi.pickGhCommand();
+                    const result = await pickCommand();
                     if (result.canceled) return;
                     if (result.error || !result.path) {
-                      setError(result.error ?? "No gh path was selected.");
+                      setError(result.error ?? `No ${cli} path was selected.`);
                       return;
                     }
                     await saveGhPath(result.path);
@@ -528,6 +546,7 @@ function GitCandidateRow(props: {
 
 /** One gh candidate. Same grammar as the git row — see `GitCandidateRow`. */
 function GhCandidateRow(props: {
+  cli?: string;
   candidate: DesktopGhDiscoveryCandidate;
   disabled?: boolean;
   signature?: DesktopCodeSignature;
@@ -570,7 +589,7 @@ function GhCandidateRow(props: {
       chips={chips}
       selected={candidate.selected}
       selectedLabel="In use"
-      selectLabel={`Use ${source} gh at ${candidate.command}`}
+      selectLabel={`Use ${source} ${props.cli ?? "gh"} at ${candidate.command}`}
       disabled={props.disabled || !usable}
       onSelect={usable ? () => props.onSelect(candidate.command) : undefined}
     />
@@ -654,7 +673,9 @@ function describeGhStatusPill(status: GhStatus | undefined): {
   if (!status) return { tone: "neutral", label: "Checking…" };
   if (!status.installed) return { tone: "bad", label: "Not installed" };
   if (!status.loggedIn) return { tone: "bad", label: "Not signed in" };
+  if (status.permissionState === "unknown") return { tone: "warn", label: "Permissions unverified" };
+  if (status.permissionState === "limited") return { tone: "warn", label: "Public repositories only" };
   if (!status.hasRepoScope)
-    return { tone: "warn", label: "Missing `repo` scope" };
+    return { tone: "warn", label: "Insufficient permissions" };
   return { tone: "ok", label: "Connected" };
 }

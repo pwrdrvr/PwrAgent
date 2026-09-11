@@ -2327,7 +2327,16 @@ export type DetachDirectoryFromThreadResponse =
       message: string;
     };
 
+export type PullRequestProviderAvailability = {
+  provider: string;
+  cli: "gh" | "glab";
+  available: boolean;
+  error?: string;
+};
+
 export type RefreshThreadPullRequestsResponse = {
+  providerAvailable?: boolean;
+  providerAvailability?: PullRequestProviderAvailability[];
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
   provider: PullRequestProvider;
@@ -2346,7 +2355,7 @@ export type RefreshThreadPullRequestsResponse = {
    * remote instance does not support this federation operation.
    */
   skippedReason?: "remote_refresh_unsupported";
-  /** True when the host doesn't have `gh` installed; degrade silently. */
+  /** GitHub CLI availability; use providerAvailable for provider-neutral callers. */
   ghAvailable: boolean;
   /**
    * True when main short-circuited the gh fetch because the lookup's
@@ -2357,6 +2366,7 @@ export type RefreshThreadPullRequestsResponse = {
 };
 
 export type GhStatus = {
+  permissionState?: "sufficient" | "limited" | "insufficient" | "unknown";
   /** `gh` binary discovered. */
   installed: boolean;
   /** Resolved command path PwrAgent will spawn. */
@@ -2377,6 +2387,13 @@ export type GhStatus = {
   rawOutput?: string;
   /** Why we returned this result, for display in the UI. */
   reason?: string;
+};
+
+export type GlabStatus = GhStatus & { host: string };
+
+export type GetGlabStatusRequest = {
+  recheck?: boolean;
+  host?: string;
 };
 
 export type GetGhStatusRequest = {

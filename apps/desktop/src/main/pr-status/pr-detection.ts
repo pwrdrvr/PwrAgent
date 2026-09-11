@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { LinkedDirectorySummary, PrSummary } from "@pwragent/shared";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
-import { hasGitHubRemoteForDirectory } from "./git-remote";
+import { hasGitHubRemoteForDirectory, resolveGitLabReposForDirectory } from "./git-remote";
 import type { GithubPrFetcher } from "./github-pr-fetcher";
 import { getGitCommand } from "../git-command";
 
@@ -55,7 +55,7 @@ export async function detectPullRequestsForThread(params: {
 
   const results = await Promise.all(
     dirs.map(async (cwd) => {
-      if (!(await hasGitHubRemoteForDirectory(cwd))) {
+      if (!(await hasGitHubRemoteForDirectory(cwd)) && (await resolveGitLabReposForDirectory(cwd)).length === 0) {
         return [];
       }
       const branches = await resolvePrLookupBranches({ branch, cwd });
@@ -68,8 +68,7 @@ export async function detectPullRequestsForThread(params: {
               ...(params.allowPrimedBranchLookup === undefined
                 ? {}
                 : { allowPrimed: params.allowPrimedBranchLookup }),
-            })
-            .catch(() => []),
+            }),
         ),
       );
       return prsByBranch.flat().map((pr) => ({

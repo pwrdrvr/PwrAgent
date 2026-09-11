@@ -3471,6 +3471,80 @@ describe("SettingsScreen", () => {
     expect(getGhStatus).toHaveBeenCalledWith({ recheck: true });
   });
 
+  it("shows resolved glab discovery details and saves an alternate candidate", async () => {
+    const snapshot = createSnapshot();
+    snapshot.applications.glab = {
+      path: { value: "", source: "default" },
+      discovery: {
+        selectedCommand: "/opt/homebrew/bin/glab",
+        selectedSource: "homebrew",
+        candidates: [
+          {
+            command: "/opt/homebrew/bin/glab",
+            executable: true,
+            selected: true,
+            source: "homebrew",
+            version: "2.88.1",
+          },
+          {
+            command: "/usr/local/bin/glab",
+            executable: true,
+            selected: false,
+            source: "homebrew",
+            version: "2.80.0",
+          },
+        ],
+      },
+    };
+    const settings = createSettingsState(snapshot);
+    const getGlabStatus = vi.fn(async () => ({
+      host: "gitlab.com",
+      permissionState: "insufficient" as const,
+      reason: "Merge request status requires read_api or api scope.",
+      installed: true,
+      command: "/opt/homebrew/bin/glab",
+      version: "2.88.1",
+      loggedIn: true,
+      account: "fixtureuser",
+      scopes: ["read_user"],
+      hasRepoScope: false,
+      discovery: snapshot.applications.glab!.discovery,
+    }));
+
+    render(
+      <SettingsScreen
+        desktopApi={{ getGlabStatus }}
+        initialSection="git"
+        settings={settings}
+        onClose={() => undefined}
+      />,
+    );
+
+    const ghPanel = screen.getByRole("heading", { name: "GitLab CLI (glab)" })
+      .closest("section")!;
+    expect(await within(ghPanel).findByText("Path:")).toBeInTheDocument();
+    expect(within(ghPanel).getAllByText("/opt/homebrew/bin/glab").length).toBeGreaterThanOrEqual(1);
+    expect(within(ghPanel).getAllByText("2.88.1").length).toBeGreaterThanOrEqual(1);
+    expect(within(ghPanel).getByText("Signed in as")).toBeInTheDocument();
+
+    fireEvent.click(
+      within(ghPanel).getByRole("button", {
+        name: "Use Homebrew glab at /usr/local/bin/glab",
+      }),
+    );
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        applications: {
+          glab: {
+            path: "/usr/local/bin/glab",
+          },
+        },
+      });
+    });
+    expect(getGlabStatus).toHaveBeenCalledWith({ recheck: true, host: "gitlab.com" });
+    expect(within(ghPanel).getByText("Insufficient permissions")).toBeInTheDocument();
+  });
+
   it("lists a pinned Codex whose version probe failed, and the one in use", async () => {
     // Upstream's most common rejection is executable:true with the reason in
     // versionFailureReason and no failureReason. Keying the list on

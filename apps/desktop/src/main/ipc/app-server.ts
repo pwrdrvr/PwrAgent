@@ -63,6 +63,8 @@ import {
   type HandoffThreadWorkspaceRequest,
   type HandoffThreadWorkspaceResponse,
   type GetGhStatusRequest,
+  type GetGlabStatusRequest,
+  type GlabStatus,
   type GhStatus,
   type LinkedDirectorySummary,
   type ListModelSettingsRecentsRequest,
@@ -257,6 +259,7 @@ import {
   THREAD_MIGRATION_START_CHANNEL,
   FOCUSED_DIFF_ANALYZE_CHANNEL,
   NAVIGATION_GET_GH_STATUS_CHANNEL,
+  NAVIGATION_GET_GLAB_STATUS_CHANNEL,
   NAVIGATION_REFRESH_DIRECTORY_GIT_STATUSES_CHANNEL,
   NAVIGATION_REFRESH_THREAD_GIT_WORKING_STATE_CHANNEL,
   NAVIGATION_RESOLVE_EDIT_COMMIT_STATES_CHANNEL,
@@ -335,16 +338,15 @@ import { renderComposerPdfPreview } from "../pdf/composer-pdf-preview";
 import { getMainLogger } from "../log";
 import { buildMessagingBindingsByThreadKey } from "../messaging/messaging-bindings-snapshot";
 import { getDesktopAutomationService } from "../automations/desktop-automation-service";
-import { GithubPrFetcher } from "../pr-status/github-pr-fetcher";
+import { ForgePrFetcher, parseForgePrRefFromUrl as parsePrRefFromUrl, type ForgePrRef } from "../pr-status/forge-pr-fetcher";
 import { detectPullRequestsForThread } from "../pr-status/pr-detection";
 import {
   GithubGraphqlPrClient,
   branchRefKey,
-  parsePrRefFromUrl,
 } from "../pr-status/github-graphql-client";
 import type { BranchRef } from "../pr-status/github-graphql-client";
 import {
-  parseGitHubRemote,
+  parseForgeRemote,
   resolveGitHubRepoForDirectory,
   resolveGitHubReposForDirectory,
 } from "../pr-status/git-remote";
@@ -1304,7 +1306,7 @@ function pullRequestStatusFreshness(
 
 class DesktopAppServerService {
   private focusedDiffService: FocusedDiffService | null = null;
-  private prFetcher: GithubPrFetcher | undefined;
+  private prFetcher: ForgePrFetcher | undefined;
   private readonly pendingNavigationSnapshots = new Map<
     string,
     Promise<NavigationSnapshot>
@@ -4213,14 +4215,20 @@ class DesktopAppServerService {
     const statusFetchedAt = lookupEntry?.fetchedAt
       ?? (existingPrs.length > 0 ? existing?.prsFetchedAt : undefined);
     const freshness = pullRequestStatusFreshness(statusFetchedAt, now);
+    const fetcher = this.getPrFetcher();
+    const providerAvailability = await fetcher.getProviderAvailability(
+      request.directoryPaths, visibleKnownPrs().map((pr) => pr.url),
+    );
+    const providerAvailable = providerAvailability.some((status) => status.available);
+    const ghAvailable = providerAvailability.some((status) => status.cli === "gh" && status.available);
     const responseFreshness = request.includeStatusFreshness === true
       ? (refreshStarted: boolean) => ({
           ...freshness,
+          providerAvailable,
+          providerAvailability,
           refreshStarted,
         })
       : () => ({});
-    const fetcher = this.getPrFetcher();
-    const ghAvailable = await fetcher.isGhAvailable();
     if (trigger === "user") {
       logDebug("threadPullRequestsRefresh:requested", userPrRefreshLogPayload({
         backend,
@@ -4237,7 +4245,7 @@ class DesktopAppServerService {
         trigger,
       }));
     }
-    if (!ghAvailable) {
+    if (!providerAvailable) {
       if (trigger === "user") {
         logDebug("threadPullRequestsRefresh:skipped", userPrRefreshLogPayload({
           backend,
@@ -4246,7 +4254,7 @@ class DesktopAppServerService {
           ghAvailable,
           previousPrs: visibleKnownPrs(),
           provider,
-          reason: "gh-unavailable",
+          reason: "provider-unavailable",
           requestKey,
           threadId: request.threadId,
           trigger,
@@ -4301,7 +4309,7 @@ class DesktopAppServerService {
         threadId: request.threadId,
         provider,
         prs: visibleKnownPrs(),
-        ghAvailable: true,
+        ghAvailable,
         ...responseFreshness(false),
         shortCircuited: true,
       };
@@ -4313,7 +4321,7 @@ class DesktopAppServerService {
           backend,
           branch,
           directoryPathCount: request.directoryPaths.length,
-          ghAvailable: true,
+          ghAvailable,
           previousPrs: visibleKnownPrs(),
           provider,
           reason: !branch ? "missing-branch" : "missing-directory-paths",
@@ -4328,7 +4336,7 @@ class DesktopAppServerService {
         provider,
         prs: visibleKnownPrs(),
         ...responseFreshness(false),
-        ghAvailable: true,
+        ghAvailable,
       };
     }
 
@@ -4347,7 +4355,7 @@ class DesktopAppServerService {
       provider,
       prs: visibleKnownPrs(),
       ...responseFreshness(refreshStarted),
-      ghAvailable: true,
+      ghAvailable,
     };
   }
 
@@ -5523,9 +5531,9 @@ class DesktopAppServerService {
       // admitted batch.
       tryTakeToken: () => this.prStatusTokenBucket.tryTake(),
       fetchPullRequests: async (refs) =>
-        await this.getPrGraphqlClient().fetchPullRequests(refs),
+        await this.fetchForgePullRequests(refs),
       fetchPullRequestsAfterReconnect: async (refs) =>
-        await this.getPrGraphqlClient().fetchPullRequestsAfterReconnect(refs),
+        await this.fetchForgePullRequests(refs, true),
       getObservationTimestamp: () => this.nextPrObservationTimestamp(),
       applyResults: async (prs, fetchedAt) =>
         await this.applyPolledPrStatuses(prs, fetchedAt),
@@ -5882,14 +5890,14 @@ class DesktopAppServerService {
       ...new Map(
         uniquePrimaryPrs.flatMap((pr) => {
           const ref = parsePrRefFromUrl(pr.url);
-          return ref ? [[`${ref.owner}/${ref.repo}#${ref.number}`, ref] as const] : [];
+          return ref ? [[`${ref.gitlabHost ?? "github.com"}/${ref.owner}/${ref.repo}#${ref.number}`, ref] as const] : [];
         }),
       ).values(),
     ];
     if (refs.length === 0) {
       return;
     }
-    const refreshed = await this.getPrGraphqlClient().fetchPullRequests(refs);
+    const refreshed = await this.fetchForgePullRequests(refs);
     if (refreshed.length === 0) {
       return;
     }
@@ -6036,7 +6044,7 @@ class DesktopAppServerService {
     if (!this.prStatusTokenBucket.tryTake()) {
       throw new Error("PR status refresh budget is temporarily exhausted");
     }
-    const refreshed = await this.getPrGraphqlClient().fetchPullRequests(
+    const refreshed = await this.fetchForgePullRequests(
       [...refsByPrKey.values()],
     );
     if (refreshed.length > 0) {
@@ -6046,6 +6054,27 @@ class DesktopAppServerService {
       );
     }
     return new Set(refreshed.map((pr) => getPrStatusKey(pr)));
+  }
+
+  private async fetchForgePullRequests(refs: ForgePrRef[], reconnect = false): Promise<PrSummary[]> {
+    const github = refs.filter((ref) => !ref.gitlabHost);
+    const results = github.length === 0 ? [] : reconnect
+      ? await this.getPrGraphqlClient().fetchPullRequestsAfterReconnect(github)
+      : await this.getPrGraphqlClient().fetchPullRequests(github);
+    // Keep GitLab REST calls sequential within each admitted poll batch.
+    for (const ref of refs) {
+      if (!ref.gitlabHost) continue;
+      try {
+        results.push(await this.getPrFetcher().gitlab.fetchByRef({ ...ref, host: ref.gitlabHost }));
+      } catch {
+        // Preserve the previous observation and timestamp on provider failure.
+      }
+    }
+    return results;
+  }
+
+  async getGlabStatus(request: GetGlabStatusRequest): Promise<GlabStatus> {
+    return await this.getPrFetcher().gitlab.getAuthStatus(request.host, request.recheck);
   }
 
   async getGhStatus(request: GetGhStatusRequest): Promise<GhStatus> {
@@ -7590,9 +7619,9 @@ class DesktopAppServerService {
     this.threadMigrationService = null;
   }
 
-  private getPrFetcher(): GithubPrFetcher {
+  private getPrFetcher(): ForgePrFetcher {
     if (!this.prFetcher) {
-      this.prFetcher = new GithubPrFetcher({
+      this.prFetcher = new ForgePrFetcher({
         graphqlClient: this.getPrGraphqlClient(),
       });
     }
@@ -7671,7 +7700,7 @@ async function resolvePrimaryThreadRepoKey(
   resolutionByPath = new Map<string, Promise<string | undefined>>(),
 ): Promise<string | undefined> {
   const origin = thread.gitOriginUrl
-    ? parseGitHubRemote(thread.gitOriginUrl)
+    ? parseForgeRemote(thread.gitOriginUrl)
     : undefined;
   if (origin) return buildPrRepositoryKey(origin.host, origin.owner, origin.repo);
 
@@ -8618,6 +8647,16 @@ export function registerAppServerIpcHandlers(): void {
       });
     },
   );
+  ipcMain.removeHandler(NAVIGATION_GET_GLAB_STATUS_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_GET_GLAB_STATUS_CHANNEL,
+    async (_event, request: GetGlabStatusRequest | undefined): Promise<GlabStatus> => {
+      return await timeStartupProfileOperation({
+        type: "ipc-main:getGlabStatus",
+        operation: async () => await appServerService.getGlabStatus(request ?? {}),
+      });
+    },
+  );
   ipcMain.removeHandler(NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL);
   ipcMain.handle(
     NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL,
@@ -8921,6 +8960,7 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(NAVIGATION_GET_WORKTREE_OTHER_CHANGE_DIFF_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_LIST_WORKTREE_UNPUBLISHED_COMMITS_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_GET_WORKTREE_UNPUBLISHED_COMMIT_DIFF_CHANNEL);
+  ipcMain.removeHandler(NAVIGATION_GET_GLAB_STATUS_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_GET_GH_STATUS_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_UPDATE_DIRECTORY_LAUNCHPAD_CHANNEL);

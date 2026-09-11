@@ -1,0 +1,146 @@
+import { describe, expect, it, vi } from "vitest";
+import { GitLabPrFetcher, parseGitLabMr, parseGitLabMrUrl } from "../pr-status/gitlab-pr-fetcher";
+import { ForgePrFetcher, parseForgePrRefFromUrl } from "../pr-status/forge-pr-fetcher";
+import { parsePrRefFromUrl } from "../pr-status/github-graphql-client";
+import { clearGitHubRemoteCache, resolveGitHubReposForDirectory, resolveGitLabReposForDirectory } from "../pr-status/git-remote";
+import { parseGlabVersionOutput } from "../settings/glab-discovery";
+import { desktopSettingsPatchToEdits, parseDesktopSettingsToml } from "../settings/desktop-config";
+import { applyTomlEdits } from "../settings/toml-editor";
+
+const ref = { host: "gitlab.com", owner: "team/sub/group", repo: "project", number: 17 };
+const mr = {
+  iid: 17, web_url: "https://gitlab.com/team/sub/group/project/-/merge_requests/17",
+  state: "opened", source_branch: "feature/a+b", target_branch: "main", sha: "new-head",
+  detailed_merge_status: "mergeable", head_pipeline: { status: "success", sha: "new-head" },
+};
+const discovery = { selectedCommand: "/fixture/glab", candidates: [{ command: "/fixture/glab", source: "config" as const, executable: true, selected: true, version: "1.75.0" }] };
+
+function fixture(respond: (endpoint: string) => unknown) {
+  const run = vi.fn(async (_command: string, args: string[]) => JSON.stringify(respond(args.at(-1)!)));
+  const discover = vi.fn(async () => discovery);
+  const fetcher = new GitLabPrFetcher({ run, discover, resolveRepos: async () => [ref] });
+  return { fetcher, run, discover };
+}
+
+describe("GitLab MR routing and status", () => {
+  it("preserves nested namespaces and keeps GitLab identities out of GitHub", () => {
+    expect(parseGitLabMrUrl(mr.web_url)).toEqual(ref);
+    expect(parseGitLabMrUrl(mr.web_url.replace("/-/", "/"))).toEqual(ref);
+    expect(parsePrRefFromUrl(mr.web_url)).toBeUndefined();
+    expect(parsePrRefFromUrl("https://gitlab.com/team/project/pull/17")).toBeUndefined();
+    expect(parseGitLabMrUrl("https://github.com/team/project/-/merge_requests/17")).toBeUndefined();
+    expect(parseForgePrRefFromUrl(mr.web_url)).toEqual({ owner: ref.owner, repo: ref.repo, number: 17, gitlabHost: "gitlab.com" });
+    expect(parseForgePrRefFromUrl("https://github.com/team/project/pull/17")).toEqual({ owner: "team", repo: "project", number: 17 });
+    expect(parseGitLabMrUrl(mr.web_url.replace("gitlab.com", "code.example.com"))?.host).toBe("code.example.com");
+  });
+
+  it("routes only matching remotes, including nested paths and SSH aliases", async () => {
+    clearGitHubRemoteCache();
+    const options = {
+      readRemotes: async () => [
+        { name: "origin", url: "git@work:team/sub/group/project.git" },
+        { name: "upstream", url: "https://github.com/team/project.git" },
+        { name: "other", url: "https://bitbucket.org/team/project.git" },
+      ],
+      resolveSshHostname: async () => "gitlab.com",
+    };
+    expect(await resolveGitLabReposForDirectory("/fixture/mixed", options)).toEqual([{ host: ref.host, owner: ref.owner, repo: ref.repo }]);
+    expect(await resolveGitHubReposForDirectory("/fixture/mixed", options)).toEqual([{ host: "github.com", owner: "team", repo: "project" }]);
+  });
+
+  it("does not even discover glab for a checkout without GitLab remotes", async () => {
+    const discover = vi.fn(async () => discovery);
+    const run = vi.fn();
+    const fetcher = new GitLabPrFetcher({ discover, run, resolveRepos: async () => [] });
+    expect(await fetcher.fetchForBranch("/github-only", "feature")).toEqual([]);
+    expect(discover).not.toHaveBeenCalled();
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it("never sends GitLab branches or retained MR URLs to the GitHub transport", async () => {
+    const graphqlClient = { fetchPullRequests: vi.fn(async () => []), fetchPullRequestsForBranches: vi.fn(async () => new Map()) };
+    const probeGhAvailable = vi.fn(async () => true);
+    const { fetcher: gitlab } = fixture((endpoint) => endpoint.includes("source_branch") ? [mr] : mr);
+    const fetcher = new ForgePrFetcher({ graphqlClient, probeGhAvailable, resolveGitHubRepos: async () => [] }, gitlab);
+    expect(await fetcher.fetchAllPullRequestsForBranch({ cwd: "/gitlab", branch: "feature" })).toHaveLength(1);
+    expect(await fetcher.fetchPullRequestByUrl({ cwd: "/gitlab", url: mr.web_url })).toMatchObject({ provider: "gitlab.com", number: 17 });
+    expect(probeGhAvailable).not.toHaveBeenCalled();
+    expect(graphqlClient.fetchPullRequests).not.toHaveBeenCalled();
+    expect(graphqlClient.fetchPullRequestsForBranches).not.toHaveBeenCalled();
+  });
+
+  it("queries the exact encoded project and branch and hydrates pipeline details", async () => {
+    const { fetcher, run } = fixture((endpoint) => endpoint.includes("source_branch") ? [mr] : mr);
+    expect(await fetcher.fetchForBranch("/fixture", "feature/a+b")).toEqual([expect.objectContaining({
+      provider: "gitlab.com", org: "team/sub/group", repo: "project", number: 17,
+      checkState: "passing", headSha: "new-head", mergeState: "mergeable",
+    })]);
+    expect(run.mock.calls.map((call) => call[1])).toEqual([
+      ["api", "--hostname", "gitlab.com", "--method", "GET", "projects/team%2Fsub%2Fgroup%2Fproject/merge_requests?scope=all&state=all&source_branch=feature%2Fa%2Bb&per_page=100&page=1"],
+      ["api", "--hostname", "gitlab.com", "--method", "GET", "projects/team%2Fsub%2Fgroup%2Fproject/merge_requests/17"],
+    ]);
+  });
+
+  it.each(["opened", "locked", "merged", "closed"])("maps %s lifecycle without treating locked as terminal", (state) => {
+    expect(parseGitLabMr({ ...mr, state }).lifecycleState).toBe(state === "locked" || state === "opened" ? "open" : state);
+  });
+
+  it("separates draft, conflicts, failed pipelines, running pipelines, and missing checks", () => {
+    expect(parseGitLabMr({ ...mr, draft: true, detailed_merge_status: "conflict", head_pipeline: { status: "failed", web_url: "https://gitlab.com/pipeline/1" } })).toMatchObject({
+      reviewState: "draft", mergeState: "conflicting", checkState: "failing", failedCheckUrl: "https://gitlab.com/pipeline/1",
+    });
+    expect(parseGitLabMr({ ...mr, head_pipeline: { status: "running" } })).toMatchObject({ checkState: "pending", checksStillRunning: true });
+    expect(parseGitLabMr({ ...mr, head_pipeline: null }).checkState).toBe("unknown");
+    expect(parseGitLabMr({ ...mr, head_pipeline: { status: "success", sha: "old-head" } }).checkState).toBe("unknown");
+  });
+
+  it("coalesces concurrent reads and does not leak CLI diagnostics", async () => {
+    const { fetcher, run } = fixture(() => mr);
+    await Promise.all([fetcher.fetchByRef(ref), fetcher.fetchByRef(ref)]);
+    expect(run).toHaveBeenCalledTimes(1);
+    run.mockRejectedValue(new Error("PRIVATE-TOKEN: glpat-secret-do-not-publish"));
+    await expect(fetcher.fetchByRef(ref)).rejects.toThrow("GitLab request failed on gitlab.com");
+    await expect(fetcher.fetchByRef(ref)).rejects.not.toThrow("glpat");
+  });
+
+  it("isolates cached login probes by host and rechecks after explicit invalidation", async () => {
+    const { fetcher, run } = fixture((endpoint) => endpoint === "user" ? { username: "fixture" } : { scopes: ["read_api"] });
+    const statuses = await Promise.all([fetcher.getAuthStatus(), fetcher.getAuthStatus()]);
+    expect(statuses[0]).toMatchObject({ loggedIn: true, permissionState: "sufficient", scopes: ["read_api"] });
+    expect(run).toHaveBeenCalledTimes(2);
+    await fetcher.getAuthStatus("gitlab.example.com");
+    expect(run).toHaveBeenCalledTimes(4);
+    await fetcher.getAuthStatus("gitlab.com", true);
+    expect(run).toHaveBeenCalledTimes(6);
+  });
+
+  it("reports missing CLI, invalid login and insufficient scopes distinctly", async () => {
+    expect(await new GitLabPrFetcher({ discover: async () => ({ candidates: [] }) }).getAuthStatus()).toMatchObject({ installed: false, loggedIn: false });
+    const invalid = fixture(() => { throw new Error("401"); });
+    expect(await invalid.fetcher.getAuthStatus()).toMatchObject({ installed: true, loggedIn: false, permissionState: "unknown" });
+    const restricted = fixture((endpoint) => endpoint === "user" ? { username: "fixture" } : { scopes: ["read_user"] });
+    expect(await restricted.fetcher.getAuthStatus()).toMatchObject({ loggedIn: true, permissionState: "insufficient", hasRepoScope: false });
+  });
+
+  it("verifies actual MR read access when token introspection is unavailable", async () => {
+    const { fetcher } = fixture((endpoint) => {
+      if (endpoint === "user") return { username: "oauth-user" };
+      if (endpoint === "personal_access_tokens/self") throw new Error("404");
+      return [];
+    });
+    expect(await fetcher.getAuthStatus()).toMatchObject({ loggedIn: true, permissionState: "sufficient", scopes: [] });
+  });
+
+  it("verifies glab's own version signature", () => {
+    expect(parseGlabVersionOutput("glab 1.75.0 (abcdef)")).toBe("1.75.0");
+    expect(parseGlabVersionOutput("glab version 1.75.0")).toBe("1.75.0");
+    expect(parseGlabVersionOutput("gh version 2.88.1")).toBeUndefined();
+  });
+
+  it("round-trips a glab override without changing gh or comments", () => {
+    const original = '# keep\n[applications.gh]\npath = "/fixture/gh"\n';
+    const written = applyTomlEdits(original, desktopSettingsPatchToEdits({ applications: { glab: { path: "/fixture/glab" } } }));
+    expect(written).toContain(original.trim());
+    expect(parseDesktopSettingsToml(written, "fixture.toml").applications).toMatchObject({ gh: { path: "/fixture/gh" }, glab: { path: "/fixture/glab" } });
+  });
+});

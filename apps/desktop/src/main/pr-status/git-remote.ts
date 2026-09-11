@@ -36,6 +36,11 @@ export type GitHubRepoRef = {
  *   https://user:token@github.com/owner/repo.git
  */
 export function parseGitHubRemote(remoteUrl: string): GitHubRepoRef | undefined {
+  const repo = parseForgeRemote(remoteUrl);
+  return repo && !repo.owner.includes("/") ? repo : undefined;
+}
+
+export function parseForgeRemote(remoteUrl: string): GitHubRepoRef | undefined {
   const url = remoteUrl.trim();
   if (!url) {
     return undefined;
@@ -59,12 +64,13 @@ export function parseGitHubRemote(remoteUrl: string): GitHubRepoRef | undefined 
     .replace(/\/+$/, "")
     .split("/")
     .filter(Boolean);
-  // Exactly owner/repo — anything deeper is not a repo root.
-  if (segments.length !== 2) {
+  // GitLab namespaces can contain arbitrarily nested subgroups.
+  if (segments.length < 2) {
     return undefined;
   }
 
-  const [owner, repo] = segments;
+  const repo = segments.pop();
+  const owner = segments.join("/");
   if (!owner || !repo) {
     return undefined;
   }
@@ -160,7 +166,7 @@ export async function resolveGitHubReposForDirectory(
   const remotes = await readParsedGitRemotes(cwd, options);
   const repos = new Map<string, GitHubRepoRef>();
   for (const remote of remotes) {
-    if (remote.repo?.host !== "github.com") {
+    if (remote.repo?.host !== "github.com" || remote.repo.owner.includes("/")) {
       continue;
     }
     const key = `${remote.repo.owner.toLowerCase()}/${remote.repo.repo.toLowerCase()}`;
@@ -214,7 +220,7 @@ async function loadParsedGitRemotes(
   try {
     return await Promise.all(
       (await readRemotes(cwd)).map(async (remote) => {
-        const repo = parseGitHubRemote(remote.url);
+        const repo = parseForgeRemote(remote.url);
         const sshHost = readSshHost(remote.url);
         let hostname: Promise<string | undefined> | undefined;
         if (sshHost) {
@@ -322,4 +328,22 @@ async function defaultResolveSshHostname(
   } catch {
     return undefined;
   }
+}
+
+/** Only recognized GitLab hosts are eligible; an arbitrary remote is not evidence. */
+export function isGitLabHost(host: string): boolean {
+  return host === "gitlab.com" || host.startsWith("gitlab.");
+}
+
+export async function resolveGitLabReposForDirectory(
+  cwd: string,
+  options: ResolveGitHubRepoOptions = {},
+): Promise<GitHubRepoRef[]> {
+  const repos = new Map<string, GitHubRepoRef>();
+  for (const { repo } of await readParsedGitRemotes(cwd, options)) {
+    if (repo && isGitLabHost(repo.host)) {
+      repos.set(`${repo.host}/${repo.owner}/${repo.repo}`, repo);
+    }
+  }
+  return [...repos.values()];
 }
