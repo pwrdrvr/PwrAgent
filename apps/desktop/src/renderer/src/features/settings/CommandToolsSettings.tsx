@@ -9,7 +9,8 @@ import type {
 import { isValidatedDiscoveryCandidate } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { copyText } from "../../lib/copy-text";
-import { GitHubIcon, GitIcon } from "../../icons";
+import { GitHubIcon, GitLabIcon, GitIcon } from "../../icons";
+import { SettingsCopyValue } from "./SettingsCopyValue";
 import {
   SettingsField,
   SettingsSection,
@@ -298,6 +299,11 @@ export function GhToolSection(props: {
   const envForced = gh.path.source === "env";
   const discovery = status?.discovery ?? gh.discovery;
   const candidates = discovery.candidates;
+  const installCommand = desktopApi?.platform === "darwin"
+    ? "brew install glab"
+    : desktopApi?.platform === "win32"
+      ? "winget install --exact --id glab.glab"
+      : undefined;
 
   const load = useCallback(
     async (recheck: boolean) => {
@@ -411,6 +417,35 @@ export function GhToolSection(props: {
             </div>
           }
         />
+        {isGitLab && status && !status.installed ? (
+          <SettingsField
+            label="Install GitLab CLI"
+            sub={installCommand
+              ? `Run in ${desktopApi?.platform === "darwin" ? "Terminal with Homebrew installed" : "PowerShell with WinGet installed"}, then click Re-check.`
+              : "Choose the installation method for your system, then click Re-check."}
+            control={
+              <div className="settings-gh-status">
+                {installCommand ? (
+                  <SettingsCopyValue
+                    value={installCommand}
+                    desktopApi={desktopApi}
+                    label="GitLab CLI install command"
+                  />
+                ) : null}
+                <div className="settings-inline-actions">
+                  <a
+                    className="button button--secondary"
+                    href="https://gitlab.com/gitlab-org/cli/-/blob/main/docs/installation_options.md"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Open install guide
+                  </a>
+                </div>
+              </div>
+            }
+          />
+        ) : null}
         {gh.path.value.trim() || envForced ? (
           <SettingsField
             label="Discovery mode"
@@ -581,7 +616,7 @@ function GhCandidateRow(props: {
 
   return (
     <SettingsPathRow
-      icon={<GitHubIcon size={18} />}
+      icon={props.cli === "glab" ? <GitLabIcon size={18} /> : <GitHubIcon size={18} />}
       title={source}
       meta={usable ? candidate.version : undefined}
       path={detail ?? candidate.command}
