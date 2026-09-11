@@ -56,6 +56,7 @@ describe("McpConnectionRegistry", () => {
     expect(created.id).toBe("atlassian-rovo");
     expect(registry.list()).toMatchObject([
       { id: "pwrsnap", kind: "pwrsnap" },
+      { id: "pwrgit", kind: "pwrgit" },
       {
         id: "atlassian-rovo",
         kind: "remote",
@@ -67,6 +68,7 @@ describe("McpConnectionRegistry", () => {
     expect(registry.remove(created.id)).toBe(true);
     expect(registry.list().map((connection) => connection.id)).toEqual([
       "pwrsnap",
+      "pwrgit",
     ]);
     expect(fs.readFileSync(target, "utf8")).toContain("theme = \"dark\"");
   });
@@ -138,7 +140,7 @@ describe("McpConnectionRegistry", () => {
     });
 
     expect(registry.list().map((connection) => connection.id))
-      .toEqual(["pwrsnap", "acme"]);
+      .toEqual(["pwrsnap", "pwrgit", "acme"]);
 
     registry.setEnabled("acme", false);
 
@@ -192,7 +194,7 @@ describe("McpConnectionRegistry", () => {
 
     expect(registry.remove("acme")).toBe(true);
     expect(registry.list().map((connection) => connection.id))
-      .toEqual(["pwrsnap"]);
+      .toEqual(["pwrsnap", "pwrgit"]);
     expect(fs.readFileSync(target, "utf8")).not.toContain("acme");
   });
 

@@ -6,6 +6,8 @@ import {
 function createSettings(initial?: string) {
   let value = initial;
   return {
+    resolvePwrGitMcpCredential: vi.fn(async () => undefined),
+    clearPwrGitMcpCredential: vi.fn(async () => undefined),
     clearMcpConnectionCredentials: vi.fn(async () => {
       value = undefined;
     }),
@@ -20,6 +22,29 @@ function createSettings(initial?: string) {
 }
 
 describe("McpCredentialVault", () => {
+  it("migrates PwrGit only after a durable shared-vault write", async () => {
+    let legacy: string | undefined = JSON.stringify({
+      clientInformation: { client_id: "pwrgit-client" },
+      tokens: { access_token: "git-access", refresh_token: "git-refresh", token_type: "bearer" },
+    });
+    const settings = {
+      ...createSettings(),
+      resolvePwrGitMcpCredential: async () => legacy,
+      clearPwrGitMcpCredential: vi.fn(async () => { legacy = undefined; }),
+    };
+    const vault = new McpCredentialVault({ settings });
+    settings.saveMcpConnectionCredentials.mockImplementationOnce(async () => undefined);
+    await expect(vault.read("pwrgit", "http://127.0.0.1:51731/mcp")).rejects.toThrow("durably save");
+    expect(settings.clearPwrGitMcpCredential).not.toHaveBeenCalled();
+    await expect(vault.read("pwrgit", "http://127.0.0.1:51731/mcp")).resolves.toMatchObject({
+      clientInformation: { client_id: "pwrgit-client" },
+      tokens: { refresh_token: "git-refresh" },
+    });
+    expect(legacy).toBeUndefined();
+    await vault.delete("pwrgit");
+    await expect(vault.read("pwrgit", "http://127.0.0.1:51731/mcp")).resolves.toBeUndefined();
+  });
+
   it("serializes connection updates into one encrypted envelope", async () => {
     const settings = createSettings();
     const vault = new McpCredentialVault({ settings });

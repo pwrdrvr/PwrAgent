@@ -12,6 +12,7 @@ import type {
   DesktopSettingsSnapshot,
   McpConnectionStatus,
   PwrSnapConnectionStatus,
+  PwrGitConnectionStatus,
 } from "@pwragent/shared";
 import { describeMcpAuthStatus } from "@pwragent/shared";
 import { McpInventoryLine } from "../../components/McpInventoryLine";
@@ -583,12 +584,15 @@ export function PluginsSettings(props: {
       text: `Waiting for ${connection.displayName} authorization to complete...`,
     });
     try {
-      if (connection.kind === "pwrsnap" && props.desktopApi?.connectPwrSnap) {
-        const response = await props.desktopApi.connectPwrSnap();
+      const connectLocal = connection.kind === "pwrgit"
+        ? props.desktopApi?.connectPwrGit
+        : connection.kind === "pwrsnap" ? props.desktopApi?.connectPwrSnap : undefined;
+      if (connectLocal) {
+        const response = await connectLocal();
         if (response.outcome !== "connected") {
           throw new Error(
             response.status.detail
-            ?? "Open PwrSnap and enable Local Agent Access, then try again.",
+            ?? `Open ${connection.displayName} and enable Local Agent Access, then try again.`,
           );
         }
       } else {
@@ -843,9 +847,10 @@ export function PluginsSettings(props: {
                 connection={connection}
                 disabled={Boolean(connectionPending)}
                 gatewayEnabled={gatewayEnabled}
-                pwrSnap={
-                  connection.kind === "pwrsnap" ? (
-                    <PwrSnapConnectionActions
+                localActions={
+                  connection.kind !== "remote" ? (
+                    <LocalConnectionActions
+                      app={connection.kind === "pwrgit" ? "PwrGit" : "PwrSnap"}
                       busy={connectionPending?.connectionId === connection.id}
                       desktopApi={props.desktopApi}
                       disabled={Boolean(connectionPending)}
@@ -1091,7 +1096,7 @@ function ManagedMcpConnectionRow(props: {
   disabled: boolean;
   gatewayEnabled: boolean;
   /** Replaces the generic Authorize action for the PwrSnap row. */
-  pwrSnap?: ReactNode;
+  localActions?: ReactNode;
   onAuthorize: () => void;
   onAvailabilityChange?: (enabled: boolean) => void;
   onDisconnect: () => void;
@@ -1146,12 +1151,12 @@ function ManagedMcpConnectionRow(props: {
       ) : null}
       <div className="settings-mcp-row__actions">
         {/*
-          * PwrSnap is a local application, not a remote OAuth endpoint, so
+          * Local applications must be installed and running, so
           * the OAuth handshake only works once it is installed and running
           * with Local Agent Access. Offering a bare Authorize button before
           * that would fail with a connection error and name no cause.
           */}
-        {props.pwrSnap ? <>{props.pwrSnap}</> : (
+        {props.localActions ? <>{props.localActions}</> : (
           <button
             className="button button--secondary"
             disabled={props.disabled}
@@ -1175,7 +1180,7 @@ function ManagedMcpConnectionRow(props: {
             Disconnect
           </button>
         ) : null}
-        {connection.kind !== "pwrsnap" ? (
+        {connection.kind === "remote" ? (
           <button
             className="button button--ghost settings-mcp-row__remove"
             disabled={props.disabled}
@@ -1195,7 +1200,8 @@ function ManagedMcpConnectionRow(props: {
  * one screen the MCP access panel routes them to. Each rung offers exactly
  * the action that advances it.
  */
-function PwrSnapConnectionActions(props: {
+function LocalConnectionActions(props: {
+  app: "PwrSnap" | "PwrGit";
   busy: boolean;
   desktopApi?: DesktopApi;
   disabled: boolean;
@@ -1203,24 +1209,28 @@ function PwrSnapConnectionActions(props: {
   onChanged: () => void;
   onNotice: (notice: ActionNotice) => void;
 }) {
-  const [status, setStatus] = useState<PwrSnapConnectionStatus>();
+  const [status, setStatus] = useState<PwrSnapConnectionStatus | PwrGitConnectionStatus>();
   const [pending, setPending] = useState(false);
   const desktopApi = props.desktopApi;
+  const read = props.app === "PwrGit" ? desktopApi?.readPwrGitConnectionStatus : desktopApi?.readPwrSnapConnectionStatus;
+  const open = props.app === "PwrGit" ? desktopApi?.openPwrGit : desktopApi?.openPwrSnap;
+  const download = props.app === "PwrGit" ? desktopApi?.openPwrGitDownload : desktopApi?.openPwrSnapDownload;
+  const connect = props.app === "PwrGit" ? desktopApi?.connectPwrGit : desktopApi?.connectPwrSnap;
 
   const refresh = useCallback(async (): Promise<void> => {
-    if (!desktopApi?.readPwrSnapConnectionStatus) return;
+    if (!read) return;
     try {
-      setStatus(await desktopApi.readPwrSnapConnectionStatus());
+      setStatus(await read());
     } catch {
       // The row still renders its state chip from the connection record, so
       // a failed probe degrades to the generic Authorize action.
       setStatus(undefined);
     }
-  }, [desktopApi]);
+  }, [read]);
 
   useEffect(() => {
     void refresh();
-    // Installing PwrSnap or enabling Local Agent Access happens outside this
+    // Installing the app or enabling Local Agent Access happens outside this
     // window, so re-probe when the operator comes back to it.
     const onFocus = (): void => {
       void refresh();
@@ -1276,19 +1286,19 @@ function PwrSnapConnectionActions(props: {
         disabled={busy}
         type="button"
         onClick={() => void run(async () => {
-          const response = await desktopApi?.openPwrSnapDownload?.();
+          const response = await download?.();
           if (response && !response.opened) {
             return {
               kind: "error",
               text:
                 response.error
-                ?? "PwrAgent could not open the PwrSnap download page.",
+                ?? `PwrAgent could not open the ${props.app} download page.`,
             };
           }
           return undefined;
         })}
       >
-        Get PwrSnap
+        Get {props.app}
       </button>
     );
   }
@@ -1300,17 +1310,17 @@ function PwrSnapConnectionActions(props: {
         disabled={busy}
         type="button"
         onClick={() => void run(async () => {
-          const response = await desktopApi?.openPwrSnap?.();
+          const response = await open?.();
           if (response && !response.opened) {
             return {
               kind: "error",
-              text: response.error ?? "PwrAgent could not open PwrSnap.",
+              text: response.error ?? `PwrAgent could not open ${props.app}.`,
             };
           }
           return undefined;
         })}
       >
-        Open PwrSnap
+        Open {props.app}
       </button>
     );
   }
@@ -1322,15 +1332,15 @@ function PwrSnapConnectionActions(props: {
         disabled={busy}
         type="button"
         onClick={() => void run(async () => {
-          const response = await desktopApi?.connectPwrSnap?.();
+          const response = await connect?.();
           // A `needs_local_agent_access` result is not a failure and not a
-          // success: PwrSnap is running but has not been told to accept
+          // success: the app is running but has not been told to accept
           // PwrAgent. Reporting it as connected would send the operator
           // looking for a bug instead of a setting.
           if (response?.outcome === "needs_local_agent_access") {
             return {
               kind: "info",
-              text: "Turn on Local Agent Access in PwrSnap, then try Connect again.",
+              text: `Turn on Local Agent Access in ${props.app}, then try Connect again.`,
             };
           }
           return undefined;

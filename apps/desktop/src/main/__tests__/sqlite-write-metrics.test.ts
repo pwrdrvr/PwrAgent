@@ -2107,6 +2107,8 @@ describe("sqlite write metrics", () => {
         resolveMcpConnectionCredentials: async () =>
           await secretStore.getSecret("mcpConnectionCredentials"),
         resolvePwrSnapMcpCredential: async () => undefined,
+        resolvePwrGitMcpCredential: async () => undefined,
+        clearPwrGitMcpCredential: async () => undefined,
         saveMcpConnectionCredentials: async (value) =>
           await secretStore.setSecret("mcpConnectionCredentials", value),
       },
@@ -2143,6 +2145,8 @@ describe("sqlite write metrics", () => {
       clearPwrSnapMcpCredential: vi.fn(async () => undefined),
       resolveMcpConnectionCredentials: vi.fn(async () => undefined),
       resolvePwrSnapMcpCredential: vi.fn(async () => undefined),
+      resolvePwrGitMcpCredential: vi.fn(async () => undefined),
+      clearPwrGitMcpCredential: vi.fn(async () => undefined),
       saveMcpConnectionCredentials: vi.fn(async () => undefined),
       savePwrSnapMcpCredential: vi.fn(async () => undefined),
     };

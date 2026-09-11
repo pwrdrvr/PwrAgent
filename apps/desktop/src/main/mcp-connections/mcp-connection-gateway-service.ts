@@ -15,6 +15,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import {
   PWRSNAP_MCP_CONNECTION_ID,
+  PWRGIT_MCP_CONNECTION_ID,
   PWRSNAP_SESSION_REVOKED_DETAIL,
   type CreateMcpConnectionRequest,
   type McpConnectionRecord,
@@ -108,7 +109,7 @@ export type McpConnectionBridgeRegistration = {
   revoke: () => void;
 };
 
-type PwrSnapSettings = Pick<
+type GatewaySettings = Pick<
   ReturnType<typeof getDesktopSettingsService>,
   | "clearPwrSnapMcpCredential"
   | "clearMcpConnectionCredentials"
@@ -116,6 +117,8 @@ type PwrSnapSettings = Pick<
   | "resolvePwrSnapMcpCredential"
   | "saveMcpConnectionCredentials"
   | "savePwrSnapMcpCredential"
+  | "resolvePwrGitMcpCredential"
+  | "clearPwrGitMcpCredential"
 >;
 
 type FetchLike = (
@@ -131,7 +134,7 @@ export type McpConnectionGatewayServiceOptions = {
   launchPollAttempts?: number;
   launchPollDelayMs?: number;
   resolveInstallPaths?: () => string[];
-  settings?: PwrSnapSettings;
+  settings?: GatewaySettings;
   registry?: McpConnectionRegistry;
   credentialVault?: McpCredentialVault;
   leaseManager?: Pick<
@@ -312,7 +315,7 @@ export class McpConnectionGatewayService {
   private readonly openExternal: (url: string) => Promise<void>;
   private readonly openPath: (path: string) => Promise<string>;
   private readonly resolveInstallPaths: () => string[];
-  private readonly settings: PwrSnapSettings;
+  private readonly settings: GatewaySettings;
   private readonly gatewayEnabled: () => boolean;
   private readonly registry: McpConnectionRegistry;
   private readonly credentialVault: McpCredentialVault;
@@ -584,8 +587,8 @@ export class McpConnectionGatewayService {
         { connectionId },
       );
     }
-    if (connectionId === PWRSNAP_MCP_CONNECTION_ID) {
-      throw new Error("The built-in PwrSnap connection cannot be removed.");
+    if (connectionId === PWRSNAP_MCP_CONNECTION_ID || connectionId === PWRGIT_MCP_CONNECTION_ID) {
+      throw new Error("Built-in MCP connections cannot be removed.");
     }
     this.requireConnection(connectionId);
     await this.closeConnectionSessions(connectionId);
@@ -1150,6 +1153,11 @@ export class McpConnectionGatewayService {
         connectionId: connection.id,
         serverUrl,
         ...(connection.kind === "pwrsnap" ? { scope: PWRSNAP_SCOPES } : {}),
+        ...(connection.kind === "pwrgit" ? {
+          scope: "repository.roots.read repository.checkout.locate repository.metadata.read forge.status.read status.subscribe",
+          discardRejectedCredentials: true,
+          onCredentialRejected: async () => await this.settings.clearPwrGitMcpCredential(),
+        } : {}),
         vault: this.credentialVault,
         fetchFn: createMcpSafeFetch({
           allowLoopback,

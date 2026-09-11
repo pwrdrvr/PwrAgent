@@ -3,7 +3,7 @@ import type {
   OAuthTokens,
 } from "@modelcontextprotocol/sdk/shared/auth.js";
 import type { OAuthDiscoveryState } from "@modelcontextprotocol/sdk/client/auth.js";
-import { PWRSNAP_MCP_CONNECTION_ID } from "@pwragent/shared";
+import { PWRSNAP_MCP_CONNECTION_ID, PWRGIT_MCP_CONNECTION_ID } from "@pwragent/shared";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
 
 export type McpOAuthCredential = {
@@ -26,6 +26,8 @@ type CredentialSettings = Pick<
   | "resolveMcpConnectionCredentials"
   | "resolvePwrSnapMcpCredential"
   | "saveMcpConnectionCredentials"
+  | "resolvePwrGitMcpCredential"
+  | "clearPwrGitMcpCredential"
 >;
 
 export type McpCredentialVaultOptions = {
@@ -47,14 +49,23 @@ export class McpCredentialVault {
     const envelope = await this.readEnvelope();
     const stored = envelope.credentials[connectionId];
     if (stored?.resourceUrl === resourceUrl) return cloneCredential(stored);
-    if (connectionId !== PWRSNAP_MCP_CONNECTION_ID || stored) return undefined;
+    if (stored) return undefined;
+    const rawLegacy = connectionId === PWRSNAP_MCP_CONNECTION_ID
+      ? await this.settings.resolvePwrSnapMcpCredential()
+      : connectionId === PWRGIT_MCP_CONNECTION_ID
+        ? await this.settings.resolvePwrGitMcpCredential()
+        : undefined;
 
     const legacy = parseCredential(
-      await this.settings.resolvePwrSnapMcpCredential(),
+      rawLegacy,
       resourceUrl,
     );
     if (!legacy) return undefined;
     await this.write(connectionId, legacy);
+    // Retire the old PwrGit secret only after the shared vault verifies its write.
+    if (connectionId === PWRGIT_MCP_CONNECTION_ID) {
+      await this.settings.clearPwrGitMcpCredential();
+    }
     return cloneCredential(legacy);
   }
 
@@ -78,6 +89,9 @@ export class McpCredentialVault {
 
   async delete(connectionId: string): Promise<void> {
     await this.enqueueWrite(async () => {
+      if (connectionId === PWRGIT_MCP_CONNECTION_ID) {
+        await this.settings.clearPwrGitMcpCredential();
+      }
       const envelope = await this.readEnvelope();
       if (!(connectionId in envelope.credentials)) return;
       delete envelope.credentials[connectionId];

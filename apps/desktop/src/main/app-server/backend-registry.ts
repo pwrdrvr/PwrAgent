@@ -54,10 +54,6 @@ import {
   type McpConnectionGatewayService,
 } from "../mcp-connections/mcp-connection-gateway-service";
 import {
-  getPwrGitConnectionService,
-  type PwrGitConnectionService,
-} from "../mcp-connections/pwrgit-connection-service";
-import {
   buildManagedReviewContextInput,
   buildManagedReviewPrompt,
   formatManagedReviewOutput,
@@ -333,7 +329,6 @@ import {
   type PendingRequestApprovalContext,
   normalizeFileChangeApprovalDiff,
   PWRSNAP_MCP_CONNECTION_ID,
-  PWRGIT_MCP_CONNECTION_ID,
   MCP_CONNECTION_DISPLAY_NAMES,
   isMcpConnectionId,
   readCodexEnvironmentActionRuns,
@@ -8838,15 +8833,6 @@ export class DesktopBackendRegistry {
     "registerBridge"
   >;
   /**
-   * PwrGit's server is a stdio binary that takes a bearer token in its
-   * environment, so its registration is a direct launch rather than a bridged
-   * proxy. Same shape, so `registerMcpConnections` routes to either one.
-   */
-  private readonly pwrGitConnectionService?: Pick<
-    PwrGitConnectionService,
-    "registerBridge"
-  >;
-  /**
    * Reports whether the registry is running inside the throwaway
    * bootstrap profile (`.bootstrap/`). When `true`, `listThreads`
    * hard-fails to an empty result regardless of any other gate —
@@ -8888,10 +8874,6 @@ export class DesktopBackendRegistry {
     pdfToolMcpServer?: AgentToolMcpServerLike | null;
     mcpConnectionService?: Pick<
       McpConnectionGatewayService,
-      "registerBridge"
-    > | null;
-    pwrGitConnectionService?: Pick<
-      PwrGitConnectionService,
       "registerBridge"
     > | null;
     messagingStore?: MessagingArchiveCleanupStore | null;
@@ -8961,11 +8943,6 @@ export class DesktopBackendRegistry {
         ? undefined
         : options?.mcpConnectionService ??
           (isAppStateInitialized() ? getMcpConnectionGatewayService() : undefined);
-    this.pwrGitConnectionService =
-      options?.pwrGitConnectionService === null
-        ? undefined
-        : options?.pwrGitConnectionService ??
-          (isAppStateInitialized() ? getPwrGitConnectionService() : undefined);
     this.providerThreadSnapshotStore =
       options?.providerThreadSnapshotStore === null
         ? undefined
@@ -16226,10 +16203,7 @@ export class DesktopBackendRegistry {
     if (selected.length === 0) return [];
     const registrations: McpConnectionBridgeRegistration[] = [];
     for (const connectionId of selected) {
-      const service =
-        connectionId === PWRGIT_MCP_CONNECTION_ID
-          ? this.pwrGitConnectionService
-          : this.mcpConnectionService;
+      const service = this.mcpConnectionService;
       if (!service) {
         // A known connection with no service behind it is a runtime that
         // cannot honor the thread's setting. That fails loudly rather than

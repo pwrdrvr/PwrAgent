@@ -16,6 +16,8 @@ import {
 function createSettings() {
   let genericCredential: string | undefined;
   return {
+    resolvePwrGitMcpCredential: vi.fn(async () => undefined),
+    clearPwrGitMcpCredential: vi.fn(async () => undefined),
     setGenericCredential(value: string) {
       genericCredential = value;
     },
@@ -33,7 +35,7 @@ function createSettings() {
 }
 
 describe("MCP connection owner broker", () => {
-  it("lets a non-owner process receive a thread bridge from the profile owner", async () => {
+  it.each(["datadog", "pwrgit"])("lets a non-owner process receive a %s bridge from the profile owner", async (id) => {
     const directory = fs.mkdtempSync(
       path.join(os.tmpdir(), "pwragent-mcp-owner-broker-"),
     );
@@ -81,8 +83,8 @@ describe("MCP connection owner broker", () => {
       settings.setGenericCredential(JSON.stringify({
         version: 1,
         credentials: {
-          datadog: {
-            resourceUrl: "https://mcp.example.com/mcp",
+          [id]: {
+            resourceUrl: id === "pwrgit" ? "http://127.0.0.1:51731/mcp" : "https://mcp.example.com/mcp",
             tokens: {
               access_token: "owner-only-access-token",
               refresh_token: "owner-only-refresh-token",
@@ -91,7 +93,7 @@ describe("MCP connection owner broker", () => {
           },
         },
       }));
-      const connection = await owner.createConnection({
+      const connection = id === "pwrgit" ? { id } : await owner.createConnection({
         displayName: "Datadog",
         serverUrl: "https://mcp.example.com/mcp",
       });

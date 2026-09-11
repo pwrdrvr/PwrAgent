@@ -128,6 +128,36 @@ function createDesktopApi(
 }
 
 describe("PluginsSettings", () => {
+  it.each([
+    ["not_installed", false, "Get PwrGit"],
+    ["installed", false, "Open PwrGit"],
+    ["running", false, "Connect"],
+    ["running", true, "Reauthorize"],
+  ] as const)("offers managed PwrGit actions for %s (configured=%s)", async (availability, configured, action) => {
+    const api = createDesktopApi([]);
+    const status = { connectionId: "pwrgit", displayName: "PwrGit", availability, configured } as const;
+    api.readPwrGitConnectionStatus = vi.fn().mockResolvedValue(status);
+    api.connectPwrGit = vi.fn().mockResolvedValue({ outcome: "connected", status: { ...status, configured: true } });
+    api.openPwrGit = vi.fn().mockResolvedValue({ opened: true });
+    api.openPwrGitDownload = vi.fn().mockResolvedValue({ opened: true });
+    api.setMcpConnectionEnabled = vi.fn();
+    api.listMcpConnections = vi.fn().mockResolvedValue({ connections: [{
+      id: "pwrgit", displayName: "PwrGit", serverUrl: "http://127.0.0.1:51731/mcp",
+      kind: "pwrgit", authMode: "oauth", enabled: true, configured,
+      state: configured ? "ready" : "disconnected", createdAt: 0, updatedAt: 0,
+    }] });
+    render(<PluginsSettings desktopApi={api} snapshot={createSnapshot()} />);
+    const endpoint = await screen.findByText("http://127.0.0.1:51731/mcp");
+    const row = within(endpoint.closest("article")!);
+    const button = await row.findByRole("button", { name: action });
+    expect(row.queryByRole("button", { name: "Remove" })).not.toBeInTheDocument();
+    expect(row.getByRole("switch", { name: "Offer PwrGit to threads" })).toBeChecked();
+    fireEvent.click(button);
+    const invoked = availability === "not_installed" ? api.openPwrGitDownload
+      : availability === "installed" ? api.openPwrGit : api.connectPwrGit;
+    await waitFor(() => expect(invoked).toHaveBeenCalled());
+  });
+
   it("shows each server's tools instead of only counting them", async () => {
     const tools = Array.from({ length: 28 }, (_, index) => `tool_${index + 1}`);
     render(

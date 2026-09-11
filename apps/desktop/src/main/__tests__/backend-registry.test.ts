@@ -13792,7 +13792,7 @@ script = "echo setup"
     const registry = new DesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
-      pwrGitConnectionService: {
+      mcpConnectionService: {
         registerBridge: async () => ({
           server: {
             name: "pwrgit",
@@ -13830,10 +13830,7 @@ script = "echo setup"
     const registry = new DesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
-      mcpConnectionService: {
-        registerBridge: vi.fn(),
-      },
-      pwrGitConnectionService: null,
+      mcpConnectionService: null,
       createScratchProjectDirectory: async () => "/tmp/pwragent-scratch",
     });
 
@@ -13848,8 +13845,7 @@ script = "echo setup"
     await registry.close();
   });
 
-  it("starts a thread that enabled PwrGit before it was connected", async () => {
-    // Authorization is enforced when the agent calls the bridge.
+  it("routes selected PwrGit through the managed gateway", async () => {
     const codexClient = new MockBackendClient({ threads: [] });
     const registerBridge = vi.fn(async () => ({
       server: { name: "pwrgit", command: process.execPath, args: ["bridge.js"], env: {} },
@@ -13858,7 +13854,7 @@ script = "echo setup"
     const registry = new DesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
-      pwrGitConnectionService: { registerBridge },
+      mcpConnectionService: { registerBridge },
       createScratchProjectDirectory: async () => "/tmp/pwragent-scratch",
     });
 

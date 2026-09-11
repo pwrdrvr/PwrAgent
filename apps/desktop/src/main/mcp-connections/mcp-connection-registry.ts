@@ -4,6 +4,7 @@ import { randomBytes } from "node:crypto";
 import {
   MCP_CONNECTION_IDS,
   PWRSNAP_MCP_CONNECTION_ID,
+  PWRGIT_MCP_CONNECTION_ID,
   type McpConnectionRecord,
 } from "@pwragent/shared";
 import { resolveDesktopConfigPath } from "../settings/desktop-config";
@@ -46,7 +47,7 @@ export class McpConnectionRegistry {
   }
 
   list(): McpConnectionRecord[] {
-    return [this.pwrSnapConnection(), ...this.readStoredConnections()];
+    return [this.pwrSnapConnection(), this.pwrGitConnection(), ...this.readStoredConnections()];
   }
 
   get(connectionId: string): McpConnectionRecord | undefined {
@@ -64,6 +65,10 @@ export class McpConnectionRegistry {
    * and `remove`, which discards the connection outright.
    */
   setEnabled(connectionId: string, enabled: boolean): McpConnectionRecord {
+    if (connectionId === PWRGIT_MCP_CONNECTION_ID) {
+      this.writeScalar(["mcp_connections", "pwrgit_enabled"], enabled);
+      return this.pwrGitConnection();
+    }
     if (connectionId === PWRSNAP_MCP_CONNECTION_ID) {
       this.writeScalar(PWRSNAP_ENABLED_PATH, enabled);
       return this.pwrSnapConnection();
@@ -89,6 +94,22 @@ export class McpConnectionRegistry {
 
   private pwrSnapConnection(): McpConnectionRecord {
     return { ...builtInPwrSnapConnection(), enabled: this.readPwrSnapEnabled() };
+  }
+
+  private pwrGitConnection(): McpConnectionRecord {
+    const table = fs.existsSync(this.configPath)
+      ? parseTomlTables(fs.readFileSync(this.configPath, "utf8"), this.configPath).mcp_connections
+      : undefined;
+    return {
+      id: PWRGIT_MCP_CONNECTION_ID,
+      displayName: "PwrGit",
+      serverUrl: "http://127.0.0.1:51731/mcp",
+      authMode: "oauth",
+      kind: "pwrgit",
+      enabled: (table as Record<string, unknown> | undefined)?.pwrgit_enabled !== false,
+      createdAt: 0,
+      updatedAt: 0,
+    };
   }
 
   private readPwrSnapEnabled(): boolean {
@@ -129,8 +150,8 @@ export class McpConnectionRegistry {
   }
 
   remove(connectionId: string): boolean {
-    if (connectionId === PWRSNAP_MCP_CONNECTION_ID) {
-      throw new Error("The built-in PwrSnap connection cannot be removed.");
+    if (connectionId === PWRSNAP_MCP_CONNECTION_ID || connectionId === PWRGIT_MCP_CONNECTION_ID) {
+      throw new Error("Built-in MCP connections cannot be removed.");
     }
     const current = this.readStoredConnections();
     const next = current.filter((connection) => connection.id !== connectionId);

@@ -22,6 +22,8 @@ function createSettings(initial?: string) {
     }),
     resolveMcpConnectionCredentials: vi.fn(async () => connectionCredentials),
     resolvePwrSnapMcpCredential: vi.fn(async () => credential),
+    resolvePwrGitMcpCredential: vi.fn(async () => undefined),
+    clearPwrGitMcpCredential: vi.fn(async () => undefined),
     saveMcpConnectionCredentials: vi.fn(async (value: string) => {
       connectionCredentials = value;
     }),

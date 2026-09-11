@@ -19,7 +19,7 @@ export type McpConnectionId = string;
 
 export type McpConnectionAuthMode = "oauth";
 
-export type McpConnectionKind = "remote" | "pwrsnap";
+export type McpConnectionKind = "remote" | "pwrsnap" | "pwrgit";
 
 export type McpConnectionRecord = {
   id: McpConnectionId;
