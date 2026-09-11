@@ -2374,6 +2374,20 @@ describe("app server ipc", () => {
     await expect(handler(event, request)).rejects.toThrow("Unexpected projection failure");
   });
 
+  it("returns a Federation-wrapped owner read race without rejecting the Electron handler", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_QUERY_PAGE_CHANNEL } = await import("../../shared/ipc");
+    registerAppServerIpcHandlers();
+    const error = Object.assign(new Error("handler_failed: [navigation_busy] Navigation changed during its owner read. Refresh the retained range."), {
+      code: "handler_failed",
+    });
+    federationMock.runtime.remoteNavigationQueryPage.mockRejectedValueOnce(error);
+    await expect(handlers.get(NAVIGATION_QUERY_PAGE_CHANNEL)!({ sender: { id: 90010, once: vi.fn() } }, {
+      protocol: 2, consumer: "main-sidebar", federationTarget: { scope: "remote", instanceId: "busy-peer" },
+      query: { kind: "directory-index" },
+    })).resolves.toEqual({ navigationReadFailure: true, code: "navigation_busy", message: error.message });
+  });
+
   it("overlays only a bounded remote page's viewer directory preferences without accepting owner-only unchanged proof", async () => {
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_QUERY_PAGE_CHANNEL } = await import("../../shared/ipc");
