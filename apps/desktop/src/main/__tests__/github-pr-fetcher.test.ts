@@ -372,7 +372,9 @@ describe("parseGhAuthStatus", () => {
     expect(result.scopes).toEqual(["repo", "read:org", "workflow"]);
     expect(result.hasRepoScope).toBe(true);
     expect(result.permissionState).toBe("sufficient");
-    expect(result.reason).toContain("Repository scopes are sufficient");
+    // A resting success state carries no reason line. The org-SSO and
+    // per-repository caveats are only actionable on the PR that hits them.
+    expect(result.reason).toBeUndefined();
   });
 
   it("flags missing repo scope when scopes are present but `repo` is not", () => {

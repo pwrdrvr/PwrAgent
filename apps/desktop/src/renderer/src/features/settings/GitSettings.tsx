@@ -69,6 +69,7 @@ export function GitSettings(props: {
     enabled: boolean,
   ) => Promise<void>;
   onRefresh: () => Promise<void>;
+  onSaveGlabHost: (host: string) => Promise<void>;
   onSaveGlabPath: (path: string) => Promise<void>;
   onSaveGhPath: (path: string) => Promise<void>;
   onSaveGitPath: (path: string) => Promise<void>;
@@ -248,6 +249,7 @@ export function GitSettings(props: {
         desktopApi={props.desktopApi}
         saving={props.saving}
         snapshot={props.snapshot}
+        onSaveHost={props.onSaveGlabHost}
         onSaveGhPath={props.onSaveGlabPath}
       />
       <SettingsSection

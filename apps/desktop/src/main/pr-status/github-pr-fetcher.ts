@@ -512,7 +512,10 @@ export function parseGhAuthStatus(input: {
       : scopes.length === 0 ? "unknown" : "insufficient",
     reason: loggedIn
       ? scopes.includes("repo")
-        ? "Repository scopes are sufficient. Organization SSO and repository access may still restrict individual PRs."
+        // A resting success state explains nothing. The caveats that used to
+        // be spelled out here — org SSO, per-repository access — surface as a
+        // real failure on the PR that hits them, where they are actionable.
+        ? undefined
         : scopes.includes("public_repo")
           ? "Public repositories only. Private repositories require the repo scope."
           : scopes.length === 0

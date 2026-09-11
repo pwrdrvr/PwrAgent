@@ -214,8 +214,11 @@ export class GitLabPrFetcher {
         status.permissionState = "unknown";
       }
     }
+    // A connected state carries no reason line: the per-project caveats
+    // ("still requires membership or visibility") are only actionable on the
+    // merge request that hits them, not in a resting settings pane.
     status.reason = status.hasRepoScope
-      ? "Merge request read access is available. Individual projects still require membership or visibility."
+      ? undefined
       : status.permissionState === "insufficient"
         ? "Merge request status requires read_api or api scope. Update the glab credential and re-check."
         : "Signed in, but merge request read permission could not be verified. Check read_api scope and project access.";

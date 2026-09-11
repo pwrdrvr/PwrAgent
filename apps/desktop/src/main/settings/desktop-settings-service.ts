@@ -140,6 +140,7 @@ import {
   FEISHU_VERIFICATION_TOKEN_ENV,
   GH_COMMAND_ENV,
   GLAB_COMMAND_ENV,
+  GLAB_HOST_ENV,
   LINE_AUTHORIZED_GROUPS_ENV,
   LINE_AUTHORIZED_ROOMS_ENV,
   LINE_AUTHORIZED_USER_IDS_ENV,
@@ -1416,6 +1417,7 @@ export class DesktopSettingsService {
         preferredTerminalId,
         glab: {
           path: this.resolveString(config.applications?.glab?.path, GLAB_COMMAND_ENV),
+          host: this.resolveString(config.applications?.glab?.host, GLAB_HOST_ENV),
           discovery: glabDiscovery,
         },
         gh: {

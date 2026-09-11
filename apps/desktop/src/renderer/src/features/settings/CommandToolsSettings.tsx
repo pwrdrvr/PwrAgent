@@ -26,6 +26,9 @@ import {
   describeCommandDiscoveryFailure as describeSharedCommandDiscoveryFailure,
 } from "./command-discovery-failure";
 
+/** Probed when the operator has configured no GitLab host of their own. */
+const DEFAULT_GITLAB_HOST = "gitlab.com";
+
 /**
  * The `git` and `gh` sections of Settings.
  *
@@ -282,13 +285,25 @@ export function GhToolSection(props: {
   provider?: "github" | "gitlab";
   saving: boolean;
   snapshot: DesktopSettingsSnapshot;
+  /** GitLab only: persist the host the connection check probes. */
+  onSaveHost?: (host: string) => Promise<void>;
   onSaveGhPath: (path: string) => Promise<void>;
 }) {
   const isGitLab = props.provider === "gitlab";
   const cli = isGitLab ? "glab" : "gh";
   const label = isGitLab ? "GitLab" : "GitHub";
+  const request = isGitLab ? "merge request" : "pull request";
   const desktopApi = props.desktopApi;
-  const [host, setHost] = useState("gitlab.com");
+  // The host has to come from config, not component state. It is only ever
+  // touched by self-managed operators, and an unpersisted field sent them
+  // back to gitlab.com — a host they may have no account on — on every
+  // remount, which then reported a red "Not signed in" for the wrong server.
+  const configuredHost =
+    props.snapshot.applications.glab?.host?.value.trim() || DEFAULT_GITLAB_HOST;
+  const [host, setHost] = useState(configuredHost);
+  useEffect(() => {
+    setHost(configuredHost);
+  }, [configuredHost]);
   const getStatus = isGitLab ? desktopApi?.getGlabStatus : desktopApi?.getGhStatus;
   const pickCommand = isGitLab ? desktopApi?.pickGlabCommand : desktopApi?.pickGhCommand;
   const [status, setStatus] = useState<GhStatus | undefined>(undefined);
@@ -310,6 +325,9 @@ export function GhToolSection(props: {
       if (!getStatus) return;
       setLoading(true);
       setError(undefined);
+      // Drop the previous host's verdict before probing a new one. Holding
+      // it would show "Connected" under a host that has not been checked.
+      setStatus(undefined);
       try {
         const next = await getStatus({ recheck, ...(isGitLab ? { host } : {}) });
         setStatus(next);
@@ -351,7 +369,8 @@ export function GhToolSection(props: {
       title={`${label} CLI (${cli})`}
       description={
         <>
-          PwrAgent uses <code>{cli}</code> to read {isGitLab ? "merge" : "pull"} request status for thread chips.
+          PwrAgent uses <code>{cli}</code> to read {request} status for thread
+          chips. It never opens, comments on, or merges one.
         </>
       }
     >
@@ -359,10 +378,30 @@ export function GhToolSection(props: {
         {isGitLab ? (
           <SettingsField
             label="GitLab host"
-            sub="Check gitlab.com or your self-managed GitLab host."
+            sub="The host this check probes. Merge request status follows each thread's own remote."
+            source={
+              props.snapshot.applications.glab?.host?.source === "env"
+                ? "env override active"
+                : undefined
+            }
             control={
-              <input className="settings-input" aria-label="GitLab host" defaultValue={host}
-                onBlur={(event) => setHost(event.currentTarget.value.trim())} />
+              <input
+                className="settings-input"
+                aria-label="GitLab host"
+                key={configuredHost}
+                defaultValue={configuredHost}
+                placeholder={DEFAULT_GITLAB_HOST}
+                spellCheck={false}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") event.currentTarget.blur();
+                }}
+                onBlur={(event) => {
+                  const next = event.currentTarget.value.trim().toLowerCase();
+                  if (next === configuredHost) return;
+                  setHost(next || DEFAULT_GITLAB_HOST);
+                  void props.onSaveHost?.(next);
+                }}
+              />
             }
           />
         ) : null}
@@ -399,7 +438,9 @@ export function GhToolSection(props: {
                 </span>
               ) : null}
               {status?.reason ? (
-                <span className="settings-pathrow__path">{status.reason}</span>
+                <span className="settings-pathrow__path settings-gh-status__reason">
+                  {status.reason}
+                </span>
               ) : null}
               {error ? (
                 <span className="settings-pathrow__path settings-error">{error}</span>

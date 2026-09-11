@@ -1012,6 +1012,9 @@ function SettingsSectionBody(props: {
           });
         }}
         onRefresh={props.settings.refresh}
+        onSaveGlabHost={async (host) => {
+          await props.settings.writeConfig({ applications: { glab: { host } } });
+        }}
         onSaveGlabPath={async (path) => {
           await props.settings.writeConfig({ applications: { glab: { path } } });
         }}
@@ -1083,6 +1086,9 @@ function SettingsSectionBody(props: {
           });
         }}
         onRefresh={props.settings.refresh}
+        onSaveGlabHost={async (host) => {
+          await props.settings.writeConfig({ applications: { glab: { host } } });
+        }}
         onSaveGlabPath={async (path) => {
           await props.settings.writeConfig({ applications: { glab: { path } } });
         }}

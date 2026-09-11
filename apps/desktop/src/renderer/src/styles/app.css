@@ -16010,6 +16010,19 @@ a.button {
   padding: 0;
 }
 
+/* The status reason is prose, not a path: it carries the remediation
+   command the operator has to run. `.settings-pathrow__path` is
+   `white-space: nowrap` + ellipsis, which cut `glab auth login
+   --hostname <host>` off mid-sentence, and `.app-shell` sets
+   `user-select: none`, so the command could not be copied either. */
+.settings-gh-status__reason {
+  overflow: visible;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
 .settings-pill {
   align-self: flex-start;
   padding: 2px 8px;

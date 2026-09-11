@@ -3475,6 +3475,7 @@ describe("SettingsScreen", () => {
     const snapshot = createSnapshot();
     snapshot.applications.glab = {
       path: { value: "", source: "default" },
+      host: { value: "", source: "default" },
       discovery: {
         selectedCommand: "/opt/homebrew/bin/glab",
         selectedSource: "homebrew",
@@ -3543,6 +3544,70 @@ describe("SettingsScreen", () => {
     });
     expect(getGlabStatus).toHaveBeenCalledWith({ recheck: true, host: "gitlab.com" });
     expect(within(ghPanel).getByText("Insufficient permissions")).toBeInTheDocument();
+  });
+
+  it("persists the GitLab host and probes the configured one, not gitlab.com", async () => {
+    // The host started as component state, so a self-managed operator got
+    // sent back to gitlab.com on every remount and the pane then reported a
+    // red "Not signed in" for a server they have no account on.
+    const snapshot = createSnapshot();
+    snapshot.applications.glab = {
+      path: { value: "", source: "default" },
+      host: { value: "gitlab.example.com", source: "config" },
+      discovery: {
+        selectedCommand: "/opt/homebrew/bin/glab",
+        selectedSource: "homebrew",
+        candidates: [
+          {
+            command: "/opt/homebrew/bin/glab",
+            executable: true,
+            selected: true,
+            source: "homebrew",
+            version: "2.88.1",
+          },
+        ],
+      },
+    };
+    const settings = createSettingsState(snapshot);
+    const getGlabStatus = vi.fn(async () => ({
+      host: "gitlab.example.com",
+      permissionState: "sufficient" as const,
+      installed: true,
+      command: "/opt/homebrew/bin/glab",
+      version: "2.88.1",
+      loggedIn: true,
+      account: "fixtureuser",
+      scopes: ["api"],
+      hasRepoScope: true,
+      discovery: snapshot.applications.glab!.discovery,
+    }));
+
+    render(
+      <SettingsScreen
+        desktopApi={{ getGlabStatus }}
+        initialSection="git"
+        settings={settings}
+        onClose={() => undefined}
+      />,
+    );
+
+    const glabPanel = screen.getByRole("heading", { name: "GitLab CLI (glab)" })
+      .closest("section")!;
+    const hostInput = within(glabPanel).getByLabelText("GitLab host");
+    expect(hostInput).toHaveValue("gitlab.example.com");
+    await waitFor(() => {
+      expect(getGlabStatus).toHaveBeenCalledWith({
+        recheck: false,
+        host: "gitlab.example.com",
+      });
+    });
+
+    fireEvent.blur(hostInput, { target: { value: "  GitLab.Internal.Example  " } });
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        applications: { glab: { host: "gitlab.internal.example" } },
+      });
+    });
   });
 
   it("lists a pinned Codex whose version probe failed, and the one in use", async () => {

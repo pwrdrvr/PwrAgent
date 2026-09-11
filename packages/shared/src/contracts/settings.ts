@@ -898,6 +898,9 @@ export type DesktopApplicationsSnapshot = {
   };
   glab?: {
     path: DesktopSettingsValue<string>;
+    /** Host the Settings connection check probes. Merge request reads
+     *  themselves always follow the host in the thread's own remote. */
+    host: DesktopSettingsValue<string>;
     discovery: DesktopGlabDiscoverySnapshot;
   };
   git: {
@@ -1511,6 +1514,7 @@ export type DesktopSettingsConfigPatch = {
     };
     glab?: {
       path?: string;
+      host?: string;
     };
     git?: {
       path?: string;

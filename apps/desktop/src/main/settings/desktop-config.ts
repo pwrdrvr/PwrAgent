@@ -309,6 +309,7 @@ export type DesktopSettingsConfig = {
     };
     glab?: {
       path?: string;
+      host?: string;
     };
     git?: {
       path?: string;
@@ -1624,6 +1625,9 @@ export function desktopSettingsPatchToEdits(
   if (patch.applications?.glab?.path !== undefined) {
     set(["applications", "glab", "path"], patch.applications.glab.path);
   }
+  if (patch.applications?.glab?.host !== undefined) {
+    set(["applications", "glab", "host"], patch.applications.glab.host);
+  }
   if (patch.applications?.gh?.path !== undefined) {
     set(["applications", "gh", "path"], patch.applications.gh.path);
   }
@@ -2058,6 +2062,7 @@ function normalizeDesktopConfig(
       },
       glab: {
         path: readString(glab?.path),
+        host: readString(glab?.host),
       },
       git: {
         path: readString(gitApplication?.path),
