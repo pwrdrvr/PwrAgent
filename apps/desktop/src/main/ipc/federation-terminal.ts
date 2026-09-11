@@ -1,11 +1,9 @@
 import type { WebContents } from "electron";
-import type {
-  AppServerBackendKind,
-  FederationRemoteTarget,
-} from "@pwragent/shared";
+import type { FederationRemoteTarget } from "@pwragent/shared";
 import {
   isFederationInstanceId,
   isRemoteFederationTarget,
+  parseThreadIdentityKey,
 } from "@pwragent/shared";
 import {
   INTEGRATED_TERMINAL_ERROR_CHANNEL,
@@ -109,12 +107,11 @@ export class FederationTerminalBridge {
     if (inFlight) {
       return await inFlight.promise;
     }
-    const separator = threadKey.indexOf(":");
-    if (separator <= 0 || separator === threadKey.length - 1) {
+    const identity = parseThreadIdentityKey(threadKey);
+    if (!identity?.threadId) {
       throw new Error("Remote terminal thread key is malformed.");
     }
-    const backend = threadKey.slice(0, separator) as AppServerBackendKind;
-    const threadId = threadKey.slice(separator + 1);
+    const { backend, threadId } = identity;
     const pending: PendingRemoteOpen = {
       closeRequested: false,
       promise: Promise.resolve() as unknown as Promise<IntegratedTerminalCreateResponse>,
