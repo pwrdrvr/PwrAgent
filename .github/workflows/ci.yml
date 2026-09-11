@@ -461,8 +461,11 @@ jobs:
 
       - name: Run desktop replay-backed Electron tests
         timeout-minutes: 10
+        # Wide-layout specs request 1440px windows. Keep the virtual desktop
+        # larger so Openbox does not constrain them to Xvfb's default width.
         run: >-
           xvfb-run --auto-servernum
+          --server-args="-screen 0 1920x1080x24"
           bash .github/scripts/run-linux-desktop-e2e.sh
           --shard=${{ matrix.lane }}/2
 
