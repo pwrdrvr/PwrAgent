@@ -256,3 +256,44 @@ it("recovers a legacy handoff's omitted remote group owner from its recorded lau
   expect(project([launcher, child, thread("root")]).entries.map((entry) => entry.row.id)).toEqual(["launcher"]);
   expect(project([launcher, { ...child, parentThreadInstanceId: "other" }]).entries.map((entry) => entry.row.id)).toEqual(["launcher"]);
 });
+
+it.each([undefined, "199680"])("keeps a local handoff reachable when its remote group is not mounted (pin %s)", (pinnedRank) => {
+  const launcher = thread("launcher", { parentThreadId: "remote-root", parentThreadBackend: "codex", parentThreadInstanceId: "peer" });
+  const child = thread("handoff", { pinnedRank, parentThreadId: "remote-root", parentThreadBackend: "codex", handoffOrigin: {
+    sourceBackend: "codex", sourceThreadId: "launcher", seedMode: "clean", groupingMode: "subthread", createdAt: 1,
+    workspace: { mode: "none", git: { kind: "none", worktreeCreationAvailable: false, unavailableReason: "Fixture" } },
+  } });
+  const source = snapshot([launcher, child]);
+  const project = (query: NavigationQueryRequest["query"]) => projectNavigationQuery({ index: source, request: request(query) });
+  const roots = project({ kind: "directory", directoryKey: "directory:/repo", roots: pinnedRank ? "pinned" : "unpinned" });
+  expect(roots.entries.find((entry) => entry.row.id === child.id)).toMatchObject({
+    placement: { kind: "root" },
+    row: { parentThreadId: "remote-root", parentThreadInstanceId: "peer" },
+  });
+  const descriptors = project({ kind: "directory-index" });
+  expect(descriptors.directories?.[0]).toMatchObject({ pinnedRootCount: pinnedRank ? 1 : 0, unpinnedRootCount: pinnedRank ? 1 : 2 });
+  const exact = project({ kind: "exact", identities: [{ backend: "codex", threadId: child.id }], includeAncestry: true });
+  expect(exact.entries).toHaveLength(1);
+  expect(exact.entries[0]?.placement).toEqual({ kind: "root" });
+  expect(exact.selectionDirectory?.key).toBe("directory:/repo");
+  const checking = projectNavigationQuery({ index: { ...source, coverage: { state: "checking" } },
+    request: request({ kind: "exact", identities: [{ backend: "codex", threadId: child.id }], includeAncestry: true }) });
+  expect(checking.entries[0]?.placement.kind).toBe("child");
+  // Placement is a presentation decision; the remote grouping remains intact.
+  expect(project({ kind: "children", parent: { backend: "codex", threadId: "remote-root", ownerInstanceId: "peer" } }).entries
+    .map((entry) => entry.row.id).sort()).toEqual(["handoff", "launcher"]);
+  // A same-ID thread on a different peer cannot supply this group's parent.
+  const remoteRoot = thread("remote-root", { federation: {
+    ref: { backend: "codex", threadId: "remote-root", target: { scope: "remote", instanceId: "other-peer" } }, instanceLabel: "Other peer",
+  } });
+  source.threads.push(remoteRoot);
+  expect(project({ kind: "exact", identities: [{ backend: "codex", threadId: child.id }], includeAncestry: true }).entries[0]?.placement)
+    .toEqual({ kind: "root" });
+  // Restoring the actual mount restores nesting without rewriting the handoff.
+  remoteRoot.federation!.ref.target = { scope: "remote", instanceId: "peer" };
+  const mounted = project({ kind: "exact", identities: [{ backend: "codex", threadId: child.id }], includeAncestry: true });
+  expect(mounted.entries.map((entry) => entry.row.id)).toEqual(["remote-root", "handoff"]);
+  expect(mounted.entries[1]?.placement).toEqual({ kind: "child", parent: { backend: "codex", threadId: "remote-root", ownerInstanceId: "peer" } });
+  expect(project({ kind: "directory", directoryKey: "directory:/repo" }).entries).toEqual([]);
+  expect(child.parentThreadInstanceId).toBeUndefined();
+});
