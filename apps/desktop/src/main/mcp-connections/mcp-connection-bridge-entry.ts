@@ -22,6 +22,7 @@ type RpcResponse =
   | { ok: false; error: string };
 
 type BridgeDescription = {
+  name?: string;
   tools?: boolean;
   resources?: boolean;
   prompts?: boolean;
@@ -105,7 +106,7 @@ async function main(): Promise<void> {
     ...(description.prompts ? { prompts: {} } : {}),
   };
   const server = new Server(
-    { name: "pwrsnap", version: "1.0.0" },
+    { name: description.name ?? "pwrsnap", version: "1.0.0" },
     { capabilities },
   );
 

@@ -16202,8 +16202,8 @@ export class DesktopBackendRegistry {
         });
         continue;
       }
-      // PwrGit registers nothing while it is not connected or not installed,
-      // so a thread that enabled it keeps starting; PwrSnap always registers.
+      // Both local apps use revocable grants; authorization failures are
+      // reported through the bridge without preventing the thread from starting.
       const registration = await service.registerBridge(connectionId, threadId);
       if (registration) registrations.push(registration);
     }

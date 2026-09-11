@@ -1,3 +1,4 @@
+import { normalizeAcpMcpServerConfigs, type AcpMcpServerConfig } from "@pwrdrvr/agent-acp";
 import type {
   AcpBackendId,
   AcpThreadRewindPoint,
@@ -85,22 +86,9 @@ const ACP_TERMINAL_RESPONSE_GRACE_MS = 5_000;
 const ACP_PROVIDER_STATUS_REQUEST_TIMEOUT_MS = 20_000;
 const ACP_REWIND_REQUEST_TIMEOUT_MS = 20_000;
 
-export type AcpMcpServerConfig =
-  | {
-      name: string;
-      command: string;
-      args?: string[];
-      env?: Record<string, string>;
-    }
-  | {
-      name: string;
-      type: "http" | "sse";
-      url: string;
-      headers: Array<{
-        name: string;
-        value: string;
-      }>;
-    };
+// Host configurations keep record environments for process/Codex callers;
+// only ACP session requests use the protocol's array-based wire type.
+export type { AcpMcpServerConfig, AcpMcpServerWireConfig } from "@pwrdrvr/agent-acp";
 
 export type AcpMcpServerRegistration = {
   servers: AcpMcpServerConfig[];
@@ -560,7 +548,7 @@ export class AcpAgentClient {
     );
     const result = await this.options.transport.request("session/new", {
       cwd,
-      mcpServers: mcpRegistration.servers,
+      mcpServers: normalizeAcpMcpServerConfigs(mcpRegistration.servers),
       ...(params.sessionMeta ? { _meta: params.sessionMeta } : {}),
     });
     const now = this.now();
@@ -1513,7 +1501,7 @@ export class AcpAgentClient {
     try {
       result = await this.options.transport.request("session/load", {
         cwd,
-        mcpServers: mcpRegistration.servers,
+        mcpServers: normalizeAcpMcpServerConfigs(mcpRegistration.servers),
         sessionId: protocolSessionId,
       });
     } finally {

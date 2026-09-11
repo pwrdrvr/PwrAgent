@@ -27,6 +27,7 @@ export function PwrGitConnectionPrompt(props: {
     if (!props.desktopApi?.readPwrGitConnectionStatus) return;
     try {
       setStatus(await props.desktopApi.readPwrGitConnectionStatus());
+      setError(undefined);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     }
@@ -156,6 +157,12 @@ export function PwrGitConnectionPrompt(props: {
           worktree state, and follow pull-request and CI status — without
           being told where anything lives.
         </p>
+        {status ? (
+          <p className="mcp-connection__detail">
+            {configured ? "PwrAgent authorization saved" : "Not connected through PwrAgent"}
+            {configured ? ". Enable it for each thread that needs access." : ". Codex and other agents’ own connections are separate."}
+          </p>
+        ) : null}
         {status?.detail ? (
           <p className="mcp-connection__detail">{status.detail}</p>
         ) : null}
@@ -171,9 +178,7 @@ export function PwrGitConnectionPrompt(props: {
       <div className="mcp-connection__action">
         {!status ? (
           <span className="mcp-connection__checking">Checking…</span>
-        ) : configured ? (
-          // Once paired, the server launches under PwrAgent's own runtime
-          // without the PwrGit window, so the switch does not wait for it.
+        ) : configured && running ? (
           <div className="mcp-connection__toggle">
             <span>Use in this thread</span>
             <SettingsSwitch
