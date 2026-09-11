@@ -1,4 +1,4 @@
-name: Release Desktop (macOS universal + Windows + Linux DEB)
+name: Release Desktop (macOS universal + arm64 + Windows + Linux DEB)
 
 on:
   push:
@@ -78,6 +78,16 @@ jobs:
           PWRAGENT_REQUIRE_GROK_BUNDLE: "1"
         run: node apps/desktop/scripts/release.mjs --prepare-only
 
+      - name: Stage pinned Grok ACP runtime for Apple Silicon
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node apps/desktop/scripts/stage-grok-bundle.mjs --platform macos-aarch64
+
+      - name: Prepare Apple Silicon release stage
+        env:
+          PWRAGENT_REQUIRE_GROK_BUNDLE: "1"
+        run: node apps/desktop/scripts/release.mjs --prepare-only --mac-arch=arm64
+
       - name: Archive signing input
         id: archive
         run: |
@@ -88,8 +98,10 @@ jobs:
             pnpm-lock.yaml \
             pnpm-workspace.yaml \
             apps/desktop/release-stage \
+            apps/desktop/release-stage-arm64 \
             .github/actions/select-xcode-for-actool \
             apps/desktop/scripts/release.mjs \
+            apps/desktop/scripts/assemble-mac-release.mjs \
             apps/desktop/scripts/release-signing-environment.mjs \
             apps/desktop/scripts/update-channel-files.mjs \
             apps/desktop/scripts/verify-asar-contents.mjs \
@@ -166,14 +178,15 @@ jobs:
           APPLE_TEAM_ID: T44CNHC4UH
 
           PWRAGENT_REQUIRE_GROK_BUNDLE: "1"
-        run: node apps/desktop/scripts/release.mjs --sign-stage-only --no-publish
-
-      - name: Prepare stable-name DMG alias
         run: |
-          set -euo pipefail
-          cd apps/desktop/release-stage/dist
-          versioned=$(ls PwrAgent-*-universal.dmg | head -n 1)
-          cp "$versioned" PwrAgent.dmg
+          node apps/desktop/scripts/release.mjs --sign-stage-only --no-publish
+          node apps/desktop/scripts/release.mjs --sign-stage-only --no-publish --mac-arch=arm64
+
+      - name: Assemble macOS updater metadata and stable-name DMG aliases
+        run: |
+          node apps/desktop/scripts/assemble-mac-release.mjs \
+            apps/desktop/release-stage/dist \
+            apps/desktop/release-stage-arm64/dist
 
       # This is the macOS release payload consumed by publish-release-assets.
       # It is intentionally not a best-effort debug upload: publishing must
@@ -187,6 +200,7 @@ jobs:
             apps/desktop/release-stage/dist/*.zip
             apps/desktop/release-stage/dist/*.blockmap
             apps/desktop/release-stage/dist/latest-mac.yml
+            apps/desktop/release-stage/dist/PwrAgent-macos-SHA256SUMS
             apps/desktop/release-stage/dist/builder-debug.yml
           retention-days: 30
 

@@ -3,12 +3,104 @@
 > MIT-licensed desktop release pipeline.
 
 This runbook covers cutting v1.x desktop releases. macOS releases ship as
-universal Apple Silicon + Intel binaries; distribution is outside the Mac App
+Apple Silicon (arm64) and universal Apple Silicon + Intel binaries; distribution is outside the Mac App
 Store via signed/notarized DMG with auto-update through `electron-updater`
 against GitHub Releases on `pwrdrvr/PwrAgent`. Linux releases ship as manual
 Debian packages for x64/amd64 and arm64.
 
 ---
+
+## macOS architecture contract
+
+`release.mjs` defaults to universal, preserving local and preview workflows.
+Pass `--mac-arch=arm64` to prepare/package the Apple Silicon build. Its stage
+is `apps/desktop/release-stage-arm64/`; universal remains `release-stage/`.
+CI prepares both before the protected signing job and signs/notarizes each.
+The Dock plug-in, Electron, SQLite, node-pty, canvas and ripgrep use the target
+architecture. Universal keeps both canvas platform packages; arm64 omits Intel.
+
+Stage Grok with `stage-grok-bundle.mjs --platform macos-aarch64` before preparing
+arm64. If the pinned release's asset list includes the corresponding
+`-macos-aarch64.tar.gz`, staging requires its SHA256SUMS entry, downloads and
+verifies it. An absent asset uses that same pinned release's universal asset.
+A present asset with a missing/bad checksum fails. API, download, checksum or
+architecture failures do not trigger fallback. No runtime version floats to latest: a newly
+published Grok release becomes available by updating `grok-bundle.json`'s pin.
+This fallback intentionally leaves universal Grok inside an arm64 app until
+upstream supplies the smaller signed artifact. Managed Grok updates remain
+universal for now; this change only selects the runtime bundled in the app.
+
+After both package commands, run:
+
+```bash
+node apps/desktop/scripts/assemble-mac-release.mjs \
+  apps/desktop/release-stage/dist apps/desktop/release-stage-arm64/dist
+```
+
+Assembly checks each ZIP's SHA-512, size, version and architecture-specific
+name, requires both blockmaps and DMGs, and writes one `latest-mac.yml` into
+the universal dist. Its `files` contains universal then arm64; legacy `path`
+and `sha512` still describe universal. Do not upload the arm64 stage's manifest
+separately. Both ZIPs retain their own `.blockmap`. The macOS checksum manifest
+is `PwrAgent-macos-SHA256SUMS`, including both stable DMG aliases.
+
+Keep existing versioned universal names and the `PwrAgent.dmg` alias forever.
+New names are `PwrAgent-${version}-arm64.dmg`,
+`PwrAgent-${version}-arm64-mac.zip`, and `PwrAgent-arm64.dmg`.
+The pinned electron-updater 6.8.9 chooses arm64 ZIPs on Apple Silicon (including
+Rosetta) and universal ZIPs on Intel from the existing `latest-mac.yml` URL.
+Older universal-only release feeds remain usable. Allow a full ZIP download
+on the first architecture transition because an older arm64 blockmap may not
+exist. Verify signed upgrade/relaunch on Apple Silicon, Rosetta and Intel
+before promoting the first paired release; unit routing checks do not prove
+Squirrel installation or notarization succeeds.
+
+Before promotion, confirm both targets and aliases are attached. The README's
+Apple Silicon link uses the latest release page during rollout so it does not
+point at an absent stable alias. Once the first paired stable release is
+promoted, it can link directly to `releases/latest/download/PwrAgent-arm64.dmg`.
+The website change belongs in `pwrdrvr/pwragent.ai`: add both choices and use
+high-entropy architecture hints only when available, with universal as the
+unknown/no-JavaScript fallback. Do not infer architecture from “Intel Mac OS X”
+in the UA string. Keep separate size badges for each artifact.
+
+### Paired build size baseline
+
+The 2026-09-11 unsigned alpha.5 build rehearsal (same source for both targets,
+including PR #2069's SQLite source exclusion) measured:
+
+| Output | Universal bytes | Apple Silicon bytes | Reduction |
+|---|---:|---:|---:|
+| Installed regular files, excluding symlinks | 1,011,399,701 | 752,966,865 | 25.55% |
+| Updater ZIP | 377,064,050 | 269,880,597 | 28.43% |
+| DMG | 389,834,137 | 279,235,131 | 28.37% |
+
+This build retained universal Grok from the existing pin. The arm64 package
+contained only the arm64 canvas binding. Both dry-run packages, archive
+assembly, and merged updater metadata passed. The new upstream arm64 Grok
+package is tracked in [grok-build PR #13](https://github.com/pwrdrvr/grok-build/pull/13);
+the signed `pwragent-v1.0.24-pwragent.2` release now supplies that asset and
+`grok-bundle.json` pins it for all platforms. Its arm64 archive is 70,436,351
+bytes versus 145,538,128 bytes for universal. The checksum, arm64-only Mach-O
+and PwrDrvr Developer ID signature were verified before packaging. The table
+above records the earlier universal-Grok fallback rehearsal, not this new pin
+or signed-release measurements.
+
+With the new Grok pin, a second paired dry-run build measured:
+
+| Output | Universal bytes | Apple Silicon bytes | Reduction |
+|---|---:|---:|---:|
+| Installed regular files, excluding symlinks | 1,042,140,897 | 588,902,297 | 43.49% |
+| Updater ZIP | 389,852,650 | 210,232,734 | 46.07% |
+| DMG | 402,947,119 | 217,516,484 | 46.02% |
+
+Packaged Grok reports `1.0.24-pwragent.2` in both targets. Its arm64 executable
+is 182,241,968 bytes and arm64-only; the universal executable is 377,047,728
+bytes with both slices. Both embedded provenance manifests reference the new
+pin and expected asset hashes. Upstream Developer ID verification, both
+package commands, merged updater assembly, and all assembled SHA256SUMS
+entries passed. These app builds used ad-hoc dry-run signing; protected app
+signing/notarization and real update/relaunch smoke tests remain required.
 
 ## One-time setup
 
@@ -147,7 +239,7 @@ git tag -s v1.0.0-alpha.7 -m "v1.0.0-alpha.7"
 git push origin v1.0.0-alpha.7
 ```
 
-The `Release Desktop (macOS universal + Windows + Linux DEB)` workflow contains
+The `Release Desktop (macOS universal + arm64 + Windows + Linux DEB)` workflow contains
 seven job definitions (the Linux package job fans out across two architectures):
 
 1. `Test and prepare signing input`, with `contents: read`, explicit
@@ -233,8 +325,9 @@ The macOS environment-gated signing job:
    notarization service via `notarytool`, staples the ticket, builds the DMG
    and universal updater ZIP, and generates `latest-mac.yml` without creating
    a GitHub Release.
-6. Prepares the stable-name `PwrAgent.dmg` alias and transfers the signed
-   macOS assets to the all-platform publishing job.
+6. Repeats packaging for the separately prepared arm64 stage, merges updater
+   metadata, prepares `PwrAgent.dmg` (universal) and `PwrAgent-arm64.dmg`,
+   and transfers both signed targets to the all-platform publishing job.
 
 The all-platform publishing job creates the GitHub Release only after the
 signed macOS, Windows, and Linux payloads are all available. It uploads the

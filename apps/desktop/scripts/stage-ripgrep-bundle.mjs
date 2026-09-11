@@ -158,19 +158,10 @@ function cachedBundleMatches(manifest, requestedPlatform, assetPlatforms) {
   if (!existsSync(metadataPath)) return false;
   try {
     const metadata = JSON.parse(readFileSync(metadataPath, "utf8"));
-    const platformMatches = metadata.platform === requestedPlatform
-      || (
-        requestedPlatform.startsWith("macos-")
-        && requestedPlatform !== "macos-universal"
-        && metadata.platform === "macos-universal"
-      );
+    const platformMatches = metadata.platform === requestedPlatform;
     const expectedAssets = assetPlatforms.map((platform) => manifest.assets[platform]);
     const cachedAssets = metadata.assets?.map(({ asset }) => asset);
-    const assetsMatch = metadata.platform === "macos-universal"
-      && requestedPlatform.startsWith("macos-")
-      && requestedPlatform !== "macos-universal"
-      ? expectedAssets.every((asset) => cachedAssets?.includes(asset))
-      : JSON.stringify(cachedAssets) === JSON.stringify(expectedAssets);
+    const assetsMatch = JSON.stringify(cachedAssets) === JSON.stringify(expectedAssets);
     if (
       metadata.repository !== manifest.repository
       || metadata.tag !== manifest.tag

@@ -110,6 +110,42 @@ function validateExtractedBundle(directory) {
   }
 }
 
+// Asset absence is compatible with old pinned releases. A published asset
+// with missing/bad checksum metadata is an incomplete release, never fallback.
+export function selectGrokBundleAsset(manifest, platform, checksumText, assetNames = []) {
+  const preferred = manifest.assets[platform];
+  let selected = preferred;
+  if (platform === "macos-aarch64") {
+    const candidate = preferred ?? manifest.assets["macos-universal"]?.replace(
+      "-macos-universal.tar.gz", "-macos-aarch64.tar.gz",
+    );
+    selected = assetNames.includes(candidate) ? candidate : manifest.assets["macos-universal"];
+  }
+  if (typeof selected !== "string" || !selected) {
+    throw new Error(`No Grok bundle asset is configured for ${platform}`);
+  }
+  expectedChecksum(checksumText, selected);
+  return selected;
+}
+
+async function publishedAssetNames(manifest) {
+  const token = process.env.GH_TOKEN || process.env.GITHUB_TOKEN;
+  const response = await fetch(
+    `https://api.github.com/repos/${manifest.repository}/releases/tags/${encodeURIComponent(manifest.tag)}`,
+    {
+      headers: {
+        Accept: "application/vnd.github+json",
+        "User-Agent": "PwrAgent-release-packager",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+    },
+  );
+  if (!response.ok) throw new Error(`Cannot inspect pinned Grok release (${response.status})`);
+  const release = await response.json();
+  if (!Array.isArray(release.assets)) throw new Error("Pinned Grok release has no asset list");
+  return release.assets.filter((asset) => asset.state !== "deleted").map((asset) => asset.name);
+}
+
 async function main() {
   const platform = readArgument("--platform");
   if (!platform) {
@@ -117,21 +153,20 @@ async function main() {
   }
 
   const manifest = readManifest();
-  const assetName = manifest.assets[platform];
-  if (typeof assetName !== "string" || !assetName) {
-    throw new Error(`No Grok bundle asset is configured for ${platform}`);
-  }
-
   const releaseBase =
     `https://github.com/${manifest.repository}/releases/download/${manifest.tag}`;
   const tempRoot = mkdtempSync(join(tmpdir(), "pwragent-grok-bundle-"));
   try {
     const checksumPath = join(tempRoot, "SHA256SUMS");
+    await download(`${releaseBase}/SHA256SUMS`, checksumPath);
+    const checksumText = readFileSync(checksumPath, "utf8");
+    const assetNames = platform === "macos-aarch64" ? await publishedAssetNames(manifest) : [];
+    const assetName = selectGrokBundleAsset(manifest, platform, checksumText, assetNames);
+    if (platform === "macos-aarch64" && assetName === manifest.assets["macos-universal"]) {
+      console.log("Pinned Grok release has no arm64 asset; using verified universal runtime");
+    }
     const archivePath = join(tempRoot, assetName);
-    await Promise.all([
-      download(`${releaseBase}/SHA256SUMS`, checksumPath),
-      download(`${releaseBase}/${assetName}`, archivePath),
-    ]);
+    await download(`${releaseBase}/${assetName}`, archivePath);
 
     const expected = expectedChecksum(
       readFileSync(checksumPath, "utf8"),
@@ -147,6 +182,14 @@ async function main() {
     const extractedRoot = join(tempRoot, "extracted");
     extractArchive(archivePath, extractedRoot);
     validateExtractedBundle(extractedRoot);
+    if (platform.startsWith("macos-")) {
+      const expectedArchs = assetName.endsWith("-macos-aarch64.tar.gz")
+        ? "arm64" : "arm64,x86_64";
+      const probe = spawnSync("lipo", ["-archs", join(extractedRoot, "grok")], { encoding: "utf8" });
+      if (probe.status !== 0 || probe.stdout.trim().split(/\s+/).sort().join(",") !== expectedArchs) {
+        throw new Error(`Grok asset ${assetName} must contain ${expectedArchs}`);
+      }
+    }
 
     rmSync(outputRoot, { recursive: true, force: true });
     cpSync(extractedRoot, outputRoot, { recursive: true });
@@ -169,4 +212,6 @@ async function main() {
   }
 }
 
-await main();
+if (process.argv[1] && resolve(process.argv[1]) === scriptPath) {
+  await main();
+}

@@ -323,7 +323,9 @@ jobs:
 
       - name: Test
         timeout-minutes: 20
-        run: pnpm exec vitest run --config vitest.workspace.ts --project desktop-main
+        # The deploy-isolation test launches pnpm's JS entry directly to avoid
+        # Windows .cmd handoffs. pnpm run supplies npm_execpath; exec does not.
+        run: pnpm test --project desktop-main
 
   windows-renderer-packages:
     name: Windows renderer + packages
