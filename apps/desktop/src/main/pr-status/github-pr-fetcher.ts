@@ -530,7 +530,9 @@ export function parseGhAuthStatus(input: {
           : scopes.length === 0
             ? "Token scopes are not reported. Fine-grained tokens need repository access with Pull requests, Checks, and Commit statuses read permissions."
             : "Token is missing the `repo` scope. Run `gh auth refresh -s repo` to grant it."
-      : "Run `gh auth login` to sign in to github.com.",
+      // No reason line: the pill says "Not signed in" and the pane's sign-in
+      // field carries the command, so a third restatement adds nothing.
+      : undefined,
   };
 }
 

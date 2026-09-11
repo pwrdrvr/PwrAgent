@@ -410,7 +410,9 @@ describe("parseGhAuthStatus", () => {
     expect(result.loggedIn).toBe(false);
     expect(result.account).toBeUndefined();
     expect(result.scopes).toEqual([]);
-    expect(result.reason).toMatch(/gh auth login/);
+    // No reason line for a signed-out account: the pill says "Not signed in"
+    // and the pane's sign-in field carries the copyable command.
+    expect(result.reason).toBeUndefined();
   });
 
   it("supports the older 'Logged in to github.com as <name>' format", () => {

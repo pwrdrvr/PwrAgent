@@ -201,7 +201,10 @@ export class GitLabPrFetcher {
       status.loggedIn = true;
       status.account = user.username;
     } catch {
-      return { ...status, reason: `Could not verify login to ${host}. Run glab auth login --hostname ${host}, then re-check. Check connectivity if already signed in.` };
+      // The pane's sign-in field carries the command; this says only what
+      // that field cannot — that being signed in already does not rule out a
+      // connectivity problem reaching this host.
+      return { ...status, reason: `Could not verify login to ${host}. If you are already signed in, check connectivity to that host.` };
     }
     try {
       const token = await this.api<{ scopes?: string[] }>(host, "personal_access_tokens/self");

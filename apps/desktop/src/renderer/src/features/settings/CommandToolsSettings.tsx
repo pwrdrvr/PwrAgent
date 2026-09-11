@@ -378,12 +378,21 @@ export function GhToolSection(props: {
   );
   const selected = discovery.candidates.find((candidate) => candidate.selected);
   const resolvedCommand = selected?.command ?? discovery.selectedCommand;
-  const signInCommand = isGitLab
-    ? `${desktopApi?.platform === "win32" ? "& " : ""}${quoteTerminalArgument(
-      resolvedCommand ?? "glab",
-      desktopApi?.platform,
-    )} auth login --hostname ${quoteTerminalArgument(host, desktopApi?.platform)}`
-    : undefined;
+  const signInExecutable = resolvedCommand ?? cli;
+  const signInCommand = [
+    // PowerShell needs the call operator only for a quoted path.
+    desktopApi?.platform === "win32" && needsTerminalQuoting(signInExecutable)
+      ? "&"
+      : undefined,
+    quoteTerminalArgument(signInExecutable, desktopApi?.platform),
+    "auth",
+    "login",
+    // `gh auth login` defaults to github.com and prompts for anything else;
+    // glab has no default, so its host is always explicit.
+    ...(isGitLab
+      ? ["--hostname", quoteTerminalArgument(host, desktopApi?.platform)]
+      : []),
+  ].filter((part) => part !== undefined).join(" ");
   const resolvedVersion = selected?.version;
   const sourceLabel = gh.path.source === "default" ? "auto" : gh.path.source;
   const saveGhPath = async (path: string): Promise<void> => {
@@ -508,21 +517,23 @@ export function GhToolSection(props: {
             </div>
           }
         />
-        {signInCommand && status?.installed && !status.loggedIn ? (
+        {status?.installed && !status.loggedIn ? (
           <SettingsField
-            label="Sign in to GitLab"
-            sub={`Run in ${desktopApi?.platform === "win32" ? "PowerShell" : "Terminal"}, follow the sign-in prompts, then click Re-check.`}
+            label={`Sign in to ${label}`}
+            sub={`Run in ${terminalName(desktopApi?.platform)}, follow the sign-in prompts, then click Re-check.`}
             control={
               <div className="settings-gh-status">
                 <SettingsCopyValue
                   value={signInCommand}
                   desktopApi={desktopApi}
-                  label="GitLab sign-in command"
+                  label={`${label} sign-in command`}
                 />
                 <div className="settings-inline-actions">
                   <a
                     className="button button--secondary"
-                    href="https://docs.gitlab.com/cli/authentication/"
+                    href={isGitLab
+                      ? "https://docs.gitlab.com/cli/authentication/"
+                      : "https://cli.github.com/manual/gh_auth_login"}
                     target="_blank"
                     rel="noreferrer"
                   >
@@ -747,12 +758,33 @@ function GhCandidateRow(props: {
   );
 }
 
-// Quote even simple values: custom executable paths and hosts are user input.
-// PowerShell uses doubled apostrophes; POSIX shells close and reopen the string.
+/**
+ * Shell-safe rendering of one argument.
+ *
+ * Paths and hosts are operator input, so anything outside this allowlist is
+ * quoted. Everything inside it is left bare on purpose: a displayed command
+ * is only useful if the operator trusts it enough to paste, and
+ * `'glab' auth login --hostname 'gitlab.com'` reads like something already
+ * went wrong. PowerShell escapes an apostrophe by doubling it; POSIX shells
+ * close the string, emit an escaped quote, and reopen.
+ */
 function quoteTerminalArgument(value: string, platform?: string): string {
+  if (/^[A-Za-z0-9_@%+=:,./-]+$/.test(value)) return value;
   return "'" + (platform === "win32"
     ? value.replaceAll("'", "''")
     : value.replaceAll("'", "'\"'\"'")) + "'";
+}
+
+/** What to call the place the operator pastes the command, per platform. */
+function terminalName(platform?: string): string {
+  if (platform === "win32") return "PowerShell";
+  if (platform === "darwin") return "Terminal";
+  return "a terminal";
+}
+
+/** True when `quoteTerminalArgument` would wrap this value. */
+function needsTerminalQuoting(value: string): boolean {
+  return !/^[A-Za-z0-9_@%+=:,./-]+$/.test(value);
 }
 
 function describeGitStatusPill(
