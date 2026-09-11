@@ -1,5 +1,5 @@
 import type { AppServerReviewTarget, PrSummary } from "@pwragent/shared";
-import { normalizeFullRef } from "../../shared/review-command";
+import { normalizeFullRef, shortReviewSha } from "../../shared/review-command";
 import { runGitCommand } from "./git-executable";
 import {
   resolveGitHubReposForDirectory,
@@ -57,10 +57,6 @@ function remoteTargetCouldMatchBase(
   const target = normalizeFullRef(targetBranch);
   const base = normalizeFullRef(baseBranch);
   return target === base || target.endsWith(`/${base}`);
-}
-
-function shortSha(value: string): string {
-  return value.slice(0, 10);
 }
 
 async function commitIsAncestorOfHead(
@@ -178,7 +174,7 @@ export async function assertReviewWorkspaceMatchesAttachedPullRequest(params: {
     .then((result) => result.stdout.trim())
     .catch(() => "HEAD");
   const pullRequestLabels = matchingPullRequests.map((pr) =>
-    `#${pr.number} head ${shortSha(pr.headSha ?? "")}`
+    `#${pr.number} head ${shortReviewSha(pr.headSha ?? "")}`
   );
   const headBranches = matchingPullRequests
     .map((pr) => pr.headRefName?.trim())
@@ -188,7 +184,7 @@ export async function assertReviewWorkspaceMatchesAttachedPullRequest(params: {
     : " Check out the intended PR head in this workspace, then start the review again.";
 
   throw new Error(
-    `Review not started: current checkout ${shortSha(currentHead)} does not contain attached ${pullRequestLabels.join(
+    `Review not started: current checkout ${shortReviewSha(currentHead)} does not contain attached ${pullRequestLabels.join(
       ", ",
     )}. Comparing it with base '${targetBranch}' would review a different diff.${checkoutHint}`,
   );

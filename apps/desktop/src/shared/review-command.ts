@@ -5,6 +5,19 @@ export type ParsedReviewCommand = {
   displayText: string;
 };
 
+/**
+ * Abbreviate a commit for display. Long enough to stay unambiguous in any
+ * repository this app is pointed at, short enough to read inline.
+ *
+ * One definition for the whole review feature: the workspace guard prints an
+ * abbreviated sha in its refusal message and the review card prints one on its
+ * provenance chip, and the two describing the same commit differently would be
+ * a bug a reader could not diagnose.
+ */
+export function shortReviewSha(sha: string): string {
+  return sha.trim().slice(0, 10);
+}
+
 export function formatReviewCommand(target: AppServerReviewTarget): string {
   if (target.type === "uncommittedChanges") {
     return "/review";

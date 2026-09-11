@@ -12,15 +12,27 @@ import { formatBackendLabel } from "../../lib/backend-label";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import type { DesktopApi } from "../../lib/desktop-api";
 import type { ThreadLinkSource } from "../../lib/thread-links";
+import { renderMarkdownToClipboardHtml } from "./markdown-clipboard-html";
 import { ReviewProvenance } from "./ReviewProvenance";
+import {
+  formatFindingProvenance,
+  formatReviewFindingForClipboard,
+  formatReviewForClipboard,
+  type ReviewClipboardModel,
+} from "./review-clipboard";
 import { ThreadMarkdown } from "./ThreadMarkdown";
+import { TranscriptCopyButton } from "./TranscriptCopyButton";
 
 type TranscriptReviewProps = {
   applications?: DesktopApplicationsSnapshot;
   directoryPaths?: string[];
   desktopApi?: Pick<
     DesktopApi,
-    "openApplication" | "openMarkdownFileViewer" | "readMarkdownFile"
+    | "copyRichText"
+    | "copyText"
+    | "openApplication"
+    | "openMarkdownFileViewer"
+    | "readMarkdownFile"
   >;
   entry: AppServerThreadReviewEntry;
   fileViewerContext?: MarkdownFileViewerContext;
@@ -83,6 +95,16 @@ function priorityClassName(priority: number | undefined): string {
       : "unknown";
 
   return `transcript-review__priority transcript-review__priority--${normalizedPriority}`;
+}
+
+/**
+ * Enough of a reviewer-authored title to tell two controls on one card apart,
+ * without making the button's accessible name — and its native tooltip — a
+ * recital of a title the reader has already just read beside it.
+ */
+function findingLabel(title: string): string {
+  const normalized = title.trim().replace(/\s+/gu, " ");
+  return normalized.length > 60 ? `${normalized.slice(0, 59)}…` : normalized;
 }
 
 function shouldHideReviewBody(summary: string, review: string): boolean {
@@ -230,8 +252,14 @@ export function TranscriptReview(props: TranscriptReviewProps) {
     [editorApplication, props.desktopApi]
   );
   const output = props.entry.output;
-  const plainReview = output ? undefined : parsePlainReview(props.entry.review);
-  const findings = output?.findings ?? plainReview?.findings ?? [];
+  const plainReview = useMemo(
+    () => (output ? undefined : parsePlainReview(props.entry.review)),
+    [output, props.entry.review],
+  );
+  const findings = useMemo(
+    () => output?.findings ?? plainReview?.findings ?? [],
+    [output, plainReview],
+  );
   const findingCount = output?.findings.length;
   const summary =
     props.entry.displayText ??
@@ -248,6 +276,42 @@ export function TranscriptReview(props: TranscriptReviewProps) {
     output?.overall_confidence_score,
   );
   const reviewer = props.entry.reviewer;
+  const context = props.entry.context;
+  const createdAt = props.entry.createdAt;
+  const clipboardModel = useMemo<ReviewClipboardModel>(
+    () => ({
+      body,
+      findings,
+      summary,
+      ...(output?.overall_confidence_score === undefined
+        ? {}
+        : { confidence: output.overall_confidence_score }),
+      ...(context ? { context } : {}),
+      ...(output ? { correctness: output.overall_correctness } : {}),
+      ...(createdAt === undefined ? {} : { createdAt }),
+      ...(reviewer ? { reviewer } : {}),
+    }),
+    [body, context, createdAt, findings, output, reviewer, summary],
+  );
+  // The transcript re-renders on every streamed delta, and a review with ten
+  // findings would otherwise rebuild eleven Markdown documents each time.
+  const reviewClipboardText = useMemo(
+    () => formatReviewForClipboard(clipboardModel),
+    [clipboardModel],
+  );
+  // Keyed by the finding itself rather than by position: a later change to
+  // which findings render would silently mis-pair a parallel array, and the
+  // paste is the first place anyone would notice.
+  const findingClipboardTexts = useMemo(() => {
+    // The footer is per-review, so it is built once for the whole list.
+    const provenance = formatFindingProvenance(clipboardModel);
+    return new Map(
+      findings.map((finding) => [
+        finding,
+        formatReviewFindingForClipboard(clipboardModel, finding, provenance),
+      ]),
+    );
+  }, [clipboardModel, findings]);
 
   return (
     <aside className="transcript-review" role="group" aria-label="Code review">
@@ -269,16 +333,26 @@ export function TranscriptReview(props: TranscriptReviewProps) {
             />
           ) : null}
         </div>
-        {props.entry.createdAt ? (
-          <time className="transcript-message__time">
-            {new Intl.DateTimeFormat(undefined, {
-              month: "short",
-              day: "numeric",
-              hour: "numeric",
-              minute: "2-digit",
-            }).format(props.entry.createdAt)}
-          </time>
-        ) : null}
+        <div className="transcript-review__header-actions">
+          {props.entry.createdAt ? (
+            <time className="transcript-message__time">
+              {new Intl.DateTimeFormat(undefined, {
+                month: "short",
+                day: "numeric",
+                hour: "numeric",
+                minute: "2-digit",
+              }).format(props.entry.createdAt)}
+            </time>
+          ) : null}
+          <TranscriptCopyButton
+            className="transcript-copy-button--review"
+            copiedLabel="Copied review"
+            desktopApi={props.desktopApi}
+            html={() => renderMarkdownToClipboardHtml(reviewClipboardText)}
+            label="Copy review with what was reviewed"
+            text={reviewClipboardText}
+          />
+        </div>
       </header>
 
       {output ? (
@@ -331,6 +405,18 @@ export function TranscriptReview(props: TranscriptReviewProps) {
                   <span className="transcript-review__finding-title">
                     {finding.title}
                   </span>
+                  <TranscriptCopyButton
+                    className="transcript-copy-button--review-finding"
+                    copiedLabel="Copied finding"
+                    desktopApi={props.desktopApi}
+                    html={() =>
+                      renderMarkdownToClipboardHtml(
+                        findingClipboardTexts.get(finding) ?? "",
+                      )
+                    }
+                    label={`Copy finding: ${findingLabel(finding.title)}`}
+                    text={findingClipboardTexts.get(finding) ?? ""}
+                  />
                 </div>
                 <ThreadMarkdown
                   applications={props.applications}
