@@ -73,6 +73,28 @@ async function resolveCheckedOutBranch(
   }
 }
 
+/**
+ * A commit hash Git printed, or nothing at all.
+ *
+ * `rev-parse` and `merge-base` both answer some failures on stdout rather than
+ * by exiting non-zero — an unfetched base branch, a repository with no commits
+ * yet. Freezing that text onto the card as a commit would be worse than the
+ * absent field the reader already knows how to read, so only a hash is kept.
+ */
+async function resolveCommitSha(
+  runGit: ReviewGitRunner,
+  cwd: string,
+  args: string[],
+): Promise<string | undefined> {
+  try {
+    const result = await runGit(cwd, args);
+    const sha = result.stdout.trim();
+    return /^[0-9a-f]{7,40}$/i.test(sha) ? sha : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function toReviewPullRequest(pr: PrSummary): AppServerReviewPullRequest {
   return {
     provider: pr.provider,
@@ -198,10 +220,35 @@ export async function resolveReviewProvenance(params: {
   // Local Git is the only workspace inspection available here. A remote
   // workspace keeps whatever branch navigation last observed and stops short of
   // a pull-request claim it cannot verify.
-  const branch = params.executionTarget === "remote"
-    ? directory?.gitBranch?.trim()
-    : await resolveCheckedOutBranch(params.runGit ?? runGitCommand, cwd)
-      ?? directory?.gitBranch?.trim();
+  const runGit = params.runGit ?? runGitCommand;
+  const inspectsLocalGit = params.executionTarget !== "remote";
+  // One round of Git rather than three serial spawns: a review is waiting on
+  // this, and the three questions do not depend on each other's answers.
+  const [headCommit, baseCommit, checkedOutBranch] = inspectsLocalGit
+    ? await Promise.all([
+        resolveCommitSha(runGit, cwd, ["rev-parse", "HEAD"]),
+        context.baseBranch
+          ? resolveCommitSha(runGit, cwd, [
+              "merge-base",
+              context.baseBranch,
+              "HEAD",
+            ])
+          : undefined,
+        resolveCheckedOutBranch(runGit, cwd),
+      ])
+    : [undefined, undefined, undefined];
+  if (headCommit) {
+    context.headCommit = headCommit;
+  }
+  if (baseCommit) {
+    context.baseCommit = baseCommit;
+  }
+
+  // Deliberately after the commits: a detached HEAD has no branch and no pull
+  // request, but it does have the commit that was reviewed.
+  const branch = inspectsLocalGit
+    ? checkedOutBranch ?? directory?.gitBranch?.trim()
+    : directory?.gitBranch?.trim();
   if (!branch) {
     return context;
   }

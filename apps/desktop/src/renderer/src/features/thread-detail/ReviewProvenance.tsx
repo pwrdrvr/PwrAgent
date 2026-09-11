@@ -6,11 +6,13 @@ import type {
 import { useMemo } from "react";
 import { reviewComparedPastPullRequestBase } from "../../../../shared/review-command";
 import { BranchIcon } from "../../icons/BranchIcon";
+import { CommitIcon } from "../../icons/CommitIcon";
 import { FolderIcon } from "../../icons/FolderIcon";
 import { WorktreeIcon } from "../../icons/WorktreeIcon";
 import { useLivePullRequest } from "../../lib/pull-request-links";
 import { CopyableThreadChip } from "../navigation/ThreadMetaChips";
 import { PrChip } from "../pr-status/PrChip";
+import { shortReviewSha } from "./review-clipboard";
 
 type ReviewProvenanceProps = {
   context: AppServerReviewContext;
@@ -32,6 +34,7 @@ export function ReviewProvenance(props: ReviewProvenanceProps) {
   const projectLabel = context.projectLabel ?? "Project";
   const branch = context.gitBranch?.trim();
   const branchLabel = formatBranchLabel(context);
+  const headCommit = context.headCommit?.trim();
   const pullRequest = context.pullRequest;
 
   return (
@@ -67,6 +70,22 @@ export function ReviewProvenance(props: ReviewProvenanceProps) {
             <BranchIcon size={12} />
           </span>
           <span className="review-chip__label">{branchLabel}</span>
+        </CopyableThreadChip>
+      ) : null}
+
+      {headCommit ? (
+        <CopyableThreadChip
+          aria-label={`Copy reviewed commit ${headCommit}`}
+          className="review-chip path-copy-target"
+          tooltipText={formatCommitTooltip(context, headCommit)}
+          value={headCommit}
+        >
+          <span aria-hidden="true" className="review-chip__icon">
+            <CommitIcon size={12} />
+          </span>
+          <span className="review-chip__label">
+            {shortReviewSha(headCommit)}
+          </span>
         </CopyableThreadChip>
       ) : null}
 
@@ -132,6 +151,22 @@ function formatBranchLabel(
   )
     ? `${branch} → ${base}`
     : branch;
+}
+
+/**
+ * The chip shows the tip because that is the state that was reviewed. The base
+ * belongs in the tooltip rather than beside it: only a base-branch review has
+ * one, and a second hash on the row would read as a range on every card that
+ * does not have one.
+ */
+function formatCommitTooltip(
+  context: AppServerReviewContext,
+  headCommit: string,
+): string {
+  const baseCommit = context.baseCommit?.trim();
+  return baseCommit
+    ? `Reviewed tip ${headCommit}\nDiff base ${baseCommit}`
+    : `Reviewed tip ${headCommit}`;
 }
 
 function formatWorkspaceTooltip(context: AppServerReviewContext): string {

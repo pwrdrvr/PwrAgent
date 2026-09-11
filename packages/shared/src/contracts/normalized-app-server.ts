@@ -204,6 +204,21 @@ export type AppServerReviewContext = {
    */
   baseBranch?: string;
   /**
+   * Commit checked out in `workspacePath` at start — the tip of the work the
+   * review looked at. A branch name alone does not identify a diff: the branch
+   * moves, and a reader coming back to the card later has no way to tell which
+   * state was reviewed. Absent when Git could not be read, which includes a
+   * remote workspace and a commit target that already names its own subject.
+   */
+  headCommit?: string;
+  /**
+   * Merge base of `baseBranch` and `headCommit` — the commit the reviewed diff
+   * starts from. Only a base-branch review has one: an uncommitted-changes
+   * review diffs against `headCommit` itself, and naming a second commit there
+   * would invent a range the reviewer never looked at.
+   */
+  baseCommit?: string;
+  /**
    * The pull request open on `gitBranch` in this workspace at start.
    *
    * `null` means the branch was checked and carried none. Absent means no

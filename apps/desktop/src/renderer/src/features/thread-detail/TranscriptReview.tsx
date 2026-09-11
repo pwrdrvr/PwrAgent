@@ -12,15 +12,26 @@ import { formatBackendLabel } from "../../lib/backend-label";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import type { DesktopApi } from "../../lib/desktop-api";
 import type { ThreadLinkSource } from "../../lib/thread-links";
+import { renderMarkdownToClipboardHtml } from "./markdown-clipboard-html";
 import { ReviewProvenance } from "./ReviewProvenance";
+import {
+  formatReviewFindingForClipboard,
+  formatReviewForClipboard,
+  type ReviewClipboardModel,
+} from "./review-clipboard";
 import { ThreadMarkdown } from "./ThreadMarkdown";
+import { TranscriptCopyButton } from "./TranscriptCopyButton";
 
 type TranscriptReviewProps = {
   applications?: DesktopApplicationsSnapshot;
   directoryPaths?: string[];
   desktopApi?: Pick<
     DesktopApi,
-    "openApplication" | "openMarkdownFileViewer" | "readMarkdownFile"
+    | "copyRichText"
+    | "copyText"
+    | "openApplication"
+    | "openMarkdownFileViewer"
+    | "readMarkdownFile"
   >;
   entry: AppServerThreadReviewEntry;
   fileViewerContext?: MarkdownFileViewerContext;
@@ -230,8 +241,14 @@ export function TranscriptReview(props: TranscriptReviewProps) {
     [editorApplication, props.desktopApi]
   );
   const output = props.entry.output;
-  const plainReview = output ? undefined : parsePlainReview(props.entry.review);
-  const findings = output?.findings ?? plainReview?.findings ?? [];
+  const plainReview = useMemo(
+    () => (output ? undefined : parsePlainReview(props.entry.review)),
+    [output, props.entry.review],
+  );
+  const findings = useMemo(
+    () => output?.findings ?? plainReview?.findings ?? [],
+    [output, plainReview],
+  );
   const findingCount = output?.findings.length;
   const summary =
     props.entry.displayText ??
@@ -248,6 +265,36 @@ export function TranscriptReview(props: TranscriptReviewProps) {
     output?.overall_confidence_score,
   );
   const reviewer = props.entry.reviewer;
+  const context = props.entry.context;
+  const createdAt = props.entry.createdAt;
+  const clipboardModel = useMemo<ReviewClipboardModel>(
+    () => ({
+      body,
+      findings,
+      summary,
+      ...(output?.overall_confidence_score === undefined
+        ? {}
+        : { confidence: output.overall_confidence_score }),
+      ...(context ? { context } : {}),
+      ...(output ? { correctness: output.overall_correctness } : {}),
+      ...(createdAt === undefined ? {} : { createdAt }),
+      ...(reviewer ? { reviewer } : {}),
+    }),
+    [body, context, createdAt, findings, output, reviewer, summary],
+  );
+  // The transcript re-renders on every streamed delta, and a review with ten
+  // findings would otherwise rebuild eleven Markdown documents each time.
+  const reviewClipboardText = useMemo(
+    () => formatReviewForClipboard(clipboardModel),
+    [clipboardModel],
+  );
+  const findingClipboardTexts = useMemo(
+    () =>
+      findings.map((finding) =>
+        formatReviewFindingForClipboard(clipboardModel, finding),
+      ),
+    [clipboardModel, findings],
+  );
 
   return (
     <aside className="transcript-review" role="group" aria-label="Code review">
@@ -269,16 +316,26 @@ export function TranscriptReview(props: TranscriptReviewProps) {
             />
           ) : null}
         </div>
-        {props.entry.createdAt ? (
-          <time className="transcript-message__time">
-            {new Intl.DateTimeFormat(undefined, {
-              month: "short",
-              day: "numeric",
-              hour: "numeric",
-              minute: "2-digit",
-            }).format(props.entry.createdAt)}
-          </time>
-        ) : null}
+        <div className="transcript-review__header-actions">
+          {props.entry.createdAt ? (
+            <time className="transcript-message__time">
+              {new Intl.DateTimeFormat(undefined, {
+                month: "short",
+                day: "numeric",
+                hour: "numeric",
+                minute: "2-digit",
+              }).format(props.entry.createdAt)}
+            </time>
+          ) : null}
+          <TranscriptCopyButton
+            className="transcript-copy-button--review"
+            copiedLabel="Copied review"
+            desktopApi={props.desktopApi}
+            html={() => renderMarkdownToClipboardHtml(reviewClipboardText)}
+            label="Copy review with what was reviewed"
+            text={reviewClipboardText}
+          />
+        </div>
       </header>
 
       {output ? (
@@ -331,6 +388,18 @@ export function TranscriptReview(props: TranscriptReviewProps) {
                   <span className="transcript-review__finding-title">
                     {finding.title}
                   </span>
+                  <TranscriptCopyButton
+                    className="transcript-copy-button--review-finding"
+                    copiedLabel="Copied finding"
+                    desktopApi={props.desktopApi}
+                    html={() =>
+                      renderMarkdownToClipboardHtml(
+                        findingClipboardTexts[index] ?? "",
+                      )
+                    }
+                    label={`Copy finding: ${finding.title}`}
+                    text={findingClipboardTexts[index] ?? ""}
+                  />
                 </div>
                 <ThreadMarkdown
                   applications={props.applications}

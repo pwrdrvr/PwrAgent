@@ -33,13 +33,38 @@ function pullRequest(overrides: Partial<PrSummary> = {}): PrSummary {
   };
 }
 
-function gitRunner(branch: string | undefined) {
+const HEAD_COMMIT = "489d16ff09abcdef0123456789abcdef01234567";
+const MERGE_BASE = "0f12ab34cd56ef7890abcdef1234567890abcdef";
+
+/**
+ * Answers only what the caller asked for. Anything left undefined fails the
+ * way Git fails, so a test that expects a field to be absent proves the
+ * resolver survives that failure rather than that the question went unasked.
+ */
+function gitRunner(
+  branch: string | undefined,
+  commits: { head?: string; mergeBase?: string } = {},
+  seen?: string[][],
+) {
   return async (_cwd: string, args: string[]): Promise<{ stdout: string }> => {
+    seen?.push(args);
     if (args[0] === "rev-parse" && args[1] === "--abbrev-ref") {
       if (branch === undefined) {
         throw new Error("not a git repository");
       }
       return { stdout: `${branch}\n` };
+    }
+    if (args[0] === "rev-parse" && args[1] === "HEAD") {
+      if (commits.head === undefined) {
+        throw new Error("not a git repository");
+      }
+      return { stdout: `${commits.head}\n` };
+    }
+    if (args[0] === "merge-base") {
+      if (commits.mergeBase === undefined) {
+        throw new Error(`no merge base with ${args[1]}`);
+      }
+      return { stdout: `${commits.mergeBase}\n` };
     }
     throw new Error(`unexpected git args: ${args.join(" ")}`);
   };
@@ -277,6 +302,111 @@ describe("resolveReviewProvenance", () => {
 
     expect(context?.gitBranch).toBe("fix/macos-dock-icon-safe-area");
     expect(context?.pullRequest?.number).toBe(1918);
+    // Navigation's remembered branch is all there is; there is no local
+    // checkout to read a commit out of.
+    expect(context?.headCommit).toBeUndefined();
+    expect(context?.baseCommit).toBeUndefined();
+  });
+
+  it("records the commit reviewed and the commit the diff started from", async () => {
+    const seen: string[][] = [];
+    const context = await resolveReviewProvenance({
+      cwd: WORKSPACE,
+      linkedDirectories: [directory()],
+      prs: [pullRequest()],
+      resolveGitHubRepos: noRepos,
+      runGit: gitRunner(
+        "fix/macos-dock-icon-safe-area",
+        { head: HEAD_COMMIT, mergeBase: MERGE_BASE },
+        seen,
+      ),
+      target: { type: "baseBranch", branch: "origin/main" },
+    });
+
+    expect(context?.headCommit).toBe(HEAD_COMMIT);
+    expect(context?.baseCommit).toBe(MERGE_BASE);
+    // The managed review prompt asks for the merge base, so the recorded base
+    // has to be that and not the base branch's own tip.
+    expect(seen).toContainEqual(["merge-base", "origin/main", "HEAD"]);
+  });
+
+  it("records the reviewed commit on a detached HEAD, which has no branch to name", async () => {
+    const context = await resolveReviewProvenance({
+      cwd: WORKSPACE,
+      linkedDirectories: [directory()],
+      prs: [pullRequest()],
+      resolveGitHubRepos: noRepos,
+      runGit: gitRunner("HEAD", { head: HEAD_COMMIT }),
+      target: { type: "uncommittedChanges" },
+    });
+
+    expect(context?.headCommit).toBe(HEAD_COMMIT);
+    expect(context?.gitBranch).toBeUndefined();
+  });
+
+  it("names no base commit for a review with no base to diff from", async () => {
+    const seen: string[][] = [];
+    const context = await resolveReviewProvenance({
+      cwd: WORKSPACE,
+      linkedDirectories: [directory()],
+      resolveGitHubRepos: noRepos,
+      runGit: gitRunner(
+        "fix/macos-dock-icon-safe-area",
+        { head: HEAD_COMMIT, mergeBase: MERGE_BASE },
+        seen,
+      ),
+      target: { type: "uncommittedChanges" },
+    });
+
+    // An uncommitted-changes review diffs against HEAD itself. A second commit
+    // here would invent a range the reviewer never looked at.
+    expect(context?.headCommit).toBe(HEAD_COMMIT);
+    expect(context?.baseCommit).toBeUndefined();
+    expect(seen.some((args) => args[0] === "merge-base")).toBe(false);
+  });
+
+  it("keeps the reviewed commit when the base branch was never fetched", async () => {
+    const context = await resolveReviewProvenance({
+      cwd: WORKSPACE,
+      linkedDirectories: [directory()],
+      resolveGitHubRepos: noRepos,
+      runGit: gitRunner("fix/macos-dock-icon-safe-area", { head: HEAD_COMMIT }),
+      target: { type: "baseBranch", branch: "origin/main" },
+    });
+
+    expect(context?.headCommit).toBe(HEAD_COMMIT);
+    expect(context?.baseCommit).toBeUndefined();
+  });
+
+  it("refuses text that is not a commit hash", async () => {
+    const context = await resolveReviewProvenance({
+      cwd: WORKSPACE,
+      linkedDirectories: [directory()],
+      resolveGitHubRepos: noRepos,
+      // Some wrappers answer a failure on stdout with a zero exit. Freezing
+      // that onto the card as a commit is worse than the absent field.
+      runGit: gitRunner("fix/macos-dock-icon-safe-area", {
+        head: "fatal: not a valid object name",
+      }),
+      target: { type: "baseBranch", branch: "origin/main" },
+    });
+
+    expect(context?.headCommit).toBeUndefined();
+    expect(context?.gitBranch).toBe("fix/macos-dock-icon-safe-area");
+  });
+
+  it("makes no commit claim for a commit target", async () => {
+    const context = await resolveReviewProvenance({
+      cwd: WORKSPACE,
+      linkedDirectories: [directory()],
+      resolveGitHubRepos: noRepos,
+      runGit: gitRunner("fix/macos-dock-icon-safe-area", { head: HEAD_COMMIT }),
+      target: { type: "commit", sha: "8117be6f9", title: null },
+    });
+
+    // The target already names its own subject; the workspace's HEAD is beside
+    // the point and would read as the thing that was reviewed.
+    expect(context?.headCommit).toBeUndefined();
   });
 
   it("returns nothing at all when there is no workspace to name", async () => {

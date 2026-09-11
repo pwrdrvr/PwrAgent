@@ -15,6 +15,7 @@ export { ChevronLeftIcon } from "./ChevronLeftIcon";
 export { ChevronRightIcon } from "./ChevronRightIcon";
 export { ChevronUpIcon } from "./ChevronUpIcon";
 export { CloseIcon } from "./CloseIcon";
+export { CommitIcon } from "./CommitIcon";
 export { CopyIcon } from "./CopyIcon";
 export { DiscordIcon } from "./DiscordIcon";
 export { DraftIcon } from "./DraftIcon";

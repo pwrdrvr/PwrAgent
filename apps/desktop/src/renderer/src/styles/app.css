@@ -17603,7 +17603,11 @@ a.transcript-message__messaging-origin:focus-visible {
   white-space: nowrap;
 }
 
-.transcript-message__header-actions {
+/* The row a card hangs its timestamp and copy control off, at the right edge
+   of its header. The review card shares it verbatim so the two cards' headers
+   keep the same geometry. */
+.transcript-message__header-actions,
+.transcript-review__header-actions {
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -17968,7 +17972,9 @@ a.transcript-message__messaging-origin:focus-visible {
   .transcript-copy-button--segment,
   .transcript-copy-button--section,
   .transcript-copy-button--inline,
-  .transcript-copy-button--activity {
+  .transcript-copy-button--activity,
+  .transcript-copy-button--review,
+  .transcript-copy-button--review-finding {
     opacity: 1;
   }
 
@@ -21880,6 +21886,15 @@ a.transcript-message__messaging-origin:focus-visible {
   min-width: 0;
 }
 
+.transcript-review:hover .transcript-copy-button--review,
+.transcript-review:focus-within .transcript-copy-button--review,
+.transcript-copy-button--review[data-copied="true"],
+.transcript-review__finding:hover .transcript-copy-button--review-finding,
+.transcript-review__finding:focus-within .transcript-copy-button--review-finding,
+.transcript-copy-button--review-finding[data-copied="true"] {
+  opacity: 1;
+}
+
 .transcript-review__eyebrow,
 .transcript-review__summary,
 .transcript-review__body,
@@ -22056,9 +22071,25 @@ a.transcript-message__messaging-origin:focus-visible {
 
 .transcript-review__finding-head {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-columns: auto minmax(0, 1fr) auto;
   gap: 8px;
   align-items: baseline;
+}
+
+/* Smaller than the card-level control, and aligned to the title's first line
+   rather than to its baseline, which the box would otherwise sit below.
+   24px is the floor: WCAG 2.2 `target-size` is what `a11y.spec.ts` gates on,
+   and anything under it fails there rather than here. */
+.transcript-copy-button--review-finding {
+  width: 24px;
+  height: 24px;
+  align-self: start;
+  background: color-mix(in srgb, var(--bg-app) 82%, transparent);
+}
+
+.transcript-copy-button--review-finding::before {
+  width: 12px;
+  height: 12px;
 }
 
 .transcript-review__priority {
