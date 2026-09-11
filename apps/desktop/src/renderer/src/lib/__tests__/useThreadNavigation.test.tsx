@@ -9044,16 +9044,16 @@ describe("useThreadNavigation", () => {
   it("publishes a masthead add-directory rejection to the notice stack", async () => {
     // "Add project directory" lives in the sidebar / title-bar menu, and
     // `pickDirectoryError`'s only inline surface is the launchpad composer's
-    // project picker — not mounted behind that menu. Picking a folder that is
-    // not a git repository would otherwise fail silently.
+    // project picker — not mounted behind that menu. A rejected path
+    // would otherwise fail silently.
     const pickDirectoryFromDisk = vi.fn(async () => ({
       canceled: false as const,
-      path: "/Users/test/not-a-repo",
+      path: "/Users/test/file.txt",
     }));
     const registerDirectoryFromDisk = vi.fn(async () => ({
       ok: false as const,
-      reason: "not-a-git-repo" as const,
-      message: "/Users/test/not-a-repo is not a git repository.",
+      reason: "not-a-directory" as const,
+      message: "/Users/test/file.txt is not a folder.",
     }));
     const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
@@ -9089,7 +9089,7 @@ describe("useThreadNavigation", () => {
     });
 
     expect(latestThreadActionError(onThreadActionError, "add-directory")).toBe(
-      "/Users/test/not-a-repo is not a git repository.",
+      "/Users/test/file.txt is not a folder.",
     );
 
     // A later cancel clears the slot, so the notice comes down on its own.
@@ -12653,15 +12653,15 @@ describe("useThreadNavigation", () => {
       expect(result.current.pickDirectoryError).toBeUndefined();
     });
 
-    it("surfaces an inline error when the chosen path is not a git repo", async () => {
+    it("surfaces an inline error when the chosen path is a file", async () => {
       const pickDirectoryFromDisk = vi.fn(async () => ({
         canceled: false as const,
-        path: "/tmp/not-a-repo",
+        path: "/tmp/file.txt",
       }));
       const registerDirectoryFromDisk = vi.fn(async () => ({
         ok: false as const,
-        reason: "not-a-git-repo" as const,
-        message: "/tmp/not-a-repo is not inside a git repository.",
+        reason: "not-a-directory" as const,
+        message: "/tmp/file.txt is not a folder.",
       }));
       const desktopApi = buildBaseDesktopApi({
         pickDirectoryFromDisk,
@@ -12675,7 +12675,7 @@ describe("useThreadNavigation", () => {
         await result.current.pickAndRegisterDirectory();
       });
 
-      expect(result.current.pickDirectoryError).toContain("not inside a git");
+      expect(result.current.pickDirectoryError).toContain("not a folder");
       expect(result.current.selectedItemKey).toBeUndefined();
 
       // clearPickDirectoryError resets the inline error state.
@@ -12775,12 +12775,12 @@ describe("useThreadNavigation", () => {
     it("pickDirectoryForReference surfaces validation failures and resolves undefined", async () => {
       const pickDirectoryFromDisk = vi.fn(async () => ({
         canceled: false as const,
-        path: "/tmp/not-a-repo",
+        path: "/tmp/file.txt",
       }));
       const registerDirectoryFromDisk = vi.fn(async () => ({
         ok: false as const,
-        reason: "not-a-git-repo" as const,
-        message: "/tmp/not-a-repo is not inside a git repository.",
+        reason: "not-a-directory" as const,
+        message: "/tmp/file.txt is not a folder.",
       }));
       const desktopApi = buildBaseDesktopApi({
         pickDirectoryFromDisk,
@@ -12796,7 +12796,7 @@ describe("useThreadNavigation", () => {
       });
 
       expect(picked).toBeUndefined();
-      expect(result.current.pickDirectoryError).toContain("not inside a git");
+      expect(result.current.pickDirectoryError).toContain("not a folder");
       expect(result.current.selectedItemKey).toBeUndefined();
     });
   });

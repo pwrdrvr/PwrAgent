@@ -16381,8 +16381,8 @@ describe("Composer", () => {
       // the send-time attach re-registers.
       const registerDirectoryFromDisk = vi.fn(async () => ({
         ok: false as const,
-        reason: "not-a-git-repo" as const,
-        message: "That folder isn't a git repository.",
+        reason: "inaccessible" as const,
+        message: "That folder is no longer accessible.",
       }));
 
       render(

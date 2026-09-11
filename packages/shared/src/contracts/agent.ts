@@ -1221,16 +1221,14 @@ export type RegisterDirectoryFromDiskRequest = {
 /** Why a registration attempt failed — drives the inline error copy. */
 export type RegisterDirectoryFromDiskFailureReason =
   | "inaccessible"
-  | "not-a-directory"
-  | "not-a-git-repo";
+  | "not-a-directory";
 
 export type RegisterDirectoryFromDiskResponse =
   | {
       ok: true;
       /**
-       * Canonical filesystem path (resolved via `git rev-parse
-       * --show-toplevel` so symlinked roots normalize). The directoryKey
-       * is derived from this path with the `directory:` prefix.
+       * Canonical Git root when detected, otherwise the selected folder
+       * path. The directoryKey uses this path with the `directory:` prefix.
        */
       directoryPath: string;
       directoryKey: string;

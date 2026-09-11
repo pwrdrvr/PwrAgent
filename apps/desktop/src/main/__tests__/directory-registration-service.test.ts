@@ -1,4 +1,8 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { classifyDirectory } from "@pwragent/shared";
 import type {
   AppServerBackendKind,
   EnsureDirectoryLaunchpadResponse,
@@ -164,25 +168,73 @@ describe("registerDirectoryFromDisk", () => {
     );
   });
 
-  it("returns not-a-git-repo when `git rev-parse` fails", async () => {
+  it.each([
+    "/tmp/not-a-repo",
+    "C:\\Users\\fixture-user\\notes",
+    "/Users/fixture-user/Documents/Codex",
+    "/tmp/plain/.worktrees/abc123/notes",
+  ])("registers the selected non-git folder %s without repo normalization", async (candidate) => {
+    const directoryPath = candidate.replace(/\\/g, "/");
     const ensure = buildEnsureSpy();
     const runGit = vi.fn(async () => {
       throw new Error("fatal: not a git repository");
     });
 
     const result = await registerDirectoryFromDisk(
-      { path: "/tmp/not-a-repo" },
-      {
-        ensureDirectoryLaunchpad: ensure,
-        runGit,
-        statPath: statDir,
-      },
+      { path: candidate, preferredBackend: "acp:grok" },
+      { ensureDirectoryLaunchpad: ensure, runGit, statPath: statDir },
     );
 
-    assertFailed(result);
-    expect(result.reason).toBe("not-a-git-repo");
-    expect(result.message).toContain("/tmp/not-a-repo");
-    expect(ensure).not.toHaveBeenCalled();
+    assertOk(result);
+    expect(result.directoryPath).toBe(directoryPath);
+    expect(result.directoryKey).toBe(`directory:${directoryPath}`);
+    expect(result.currentBranch).toBeUndefined();
+    expect(ensure).toHaveBeenCalledExactlyOnceWith({
+      directoryKey: `directory:${directoryPath}`,
+      directoryKind: "directory",
+      directoryLabel: path.basename(directoryPath),
+      directoryPath,
+      currentBranch: undefined,
+      preferredBackend: "acp:grok",
+      registeredAt: expect.any(Number),
+    });
+    expect(runGit).toHaveBeenCalledExactlyOnceWith(candidate, [
+      "rev-parse", "--show-toplevel",
+    ]);
+  });
+
+  it("registers a folder when git reports an empty root", async () => {
+    const ensure = buildEnsureSpy();
+    const runGit = vi.fn(async () => "  ");
+    const result = await registerDirectoryFromDisk(
+      { path: "/tmp/notes" },
+      { ensureDirectoryLaunchpad: ensure, runGit, statPath: statDir },
+    );
+
+    assertOk(result);
+    expect(result.directoryPath).toBe("/tmp/notes");
+    expect(result.currentBranch).toBeUndefined();
+    expect(runGit).toHaveBeenCalledTimes(1);
+  });
+
+  it("registers a real plain folder with the same key as navigation classification", async () => {
+    const candidate = await mkdtemp(path.join(os.tmpdir(), "pwragent-plain-directory-"));
+    try {
+      const result = await registerDirectoryFromDisk(
+        { path: candidate },
+        { ensureDirectoryLaunchpad: buildEnsureSpy() },
+      );
+      assertOk(result);
+      const classified = classifyDirectory({
+        id: candidate, kind: "local", path: candidate, label: path.basename(candidate),
+      });
+      expect(result.directoryKey).toBe(classified.key);
+      expect(result.directoryPath).toBe(candidate.replace(/\\/g, "/"));
+      expect(result.currentBranch).toBeUndefined();
+      expect(result.launchpad.workMode).toBe("local");
+    } finally {
+      await rm(candidate, { recursive: true, force: true });
+    }
   });
 
   it("returns not-a-directory when the chosen path is a file", async () => {

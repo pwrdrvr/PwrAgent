@@ -2279,8 +2279,7 @@ export type AttachDirectoryToThreadRequest = {
 
 export type AttachDirectoryToThreadFailureReason =
   | "inaccessible"
-  | "not-a-directory"
-  | "not-a-git-repo";
+  | "not-a-directory";
 
 export type AttachDirectoryToThreadResponse =
   | {

@@ -23,14 +23,11 @@ import { runGitCommand } from "./git-executable";
  *      bookmark or a permissions-blocked folder).
  *   2. The path resolves to a directory, not a file. Failure →
  *      `not-a-directory`.
- *   3. `git rev-parse --show-toplevel` succeeds inside the path. Per
- *      issue #223 acceptance criteria the picker registers git repos
- *      only — a non-repo errors with `not-a-git-repo`.
  *
  * On success we call `ensureDirectoryLaunchpad` so the directory is
- * known to the launchpad layer immediately. The repo's canonical root
- * (rev-parse output) is what we persist — symlinked roots normalize so
- * the same repo accessed via two paths still maps to one launchpad.
+ * known to the launchpad layer immediately. Git detection is best effort:
+ * repositories persist their canonical root so symlinked roots normalize
+ * to one launchpad; other folders persist the selected path (issue #1750).
  */
 export type DirectoryRegistrationDeps = {
   ensureDirectoryLaunchpad: (request: {
@@ -118,56 +115,49 @@ export async function registerDirectoryFromDisk(
     );
   }
 
-  let repoRoot: string;
+  // Match navigation keys on Windows, where the native picker uses backslashes.
+  let directoryPath = candidate.replace(/\\/g, "/");
+  let repoRoot: string | undefined;
   try {
     const toplevel = (await runGit(candidate, [
       "rev-parse",
       "--show-toplevel",
     ])).trim();
-    if (!toplevel) {
-      return failed(
-        "not-a-git-repo",
-        `${candidate} is not inside a git repository.`,
-      );
+    if (toplevel) {
+      // Only Git roots use repository/worktree normalization. Plain folders
+      // keep their selected path, even when it contains `.worktrees`.
+      repoRoot = canonicalizeRepoWorktreePath(toplevel);
+      directoryPath = repoRoot;
     }
-    // If the toplevel is itself a pwragent-managed worktree, walk back
-    // to the parent repo so the directoryKey dedupes against the
-    // already-tracked directory entry. See `canonicalizeRepoWorktreePath`.
-    repoRoot = canonicalizeRepoWorktreePath(toplevel);
   } catch {
-    // `git rev-parse --show-toplevel` exits non-zero (with a message on
-    // stderr) for any path that isn't tracked. We treat all such
-    // failures as "not a git repo" rather than surfacing the raw stderr,
-    // which is implementation-y and not useful in the picker UI.
-    return failed(
-      "not-a-git-repo",
-      `${candidate} is not inside a git repository.`,
-    );
+    // Git metadata is optional: a plain folder (or unavailable Git) must
+    // not prevent registration after filesystem validation succeeds.
   }
 
-  // Resolve the current branch (best effort — detached HEADs return an
-  // empty string and we just leave `currentBranch` unset).
+  // Resolve the current branch only for detected repos (best effort).
   let currentBranch: string | undefined;
-  try {
-    const head = (await runGit(repoRoot, [
-      "rev-parse",
-      "--abbrev-ref",
-      "HEAD",
-    ])).trim();
-    if (head && head !== "HEAD") {
-      currentBranch = head;
+  if (repoRoot) {
+    try {
+      const head = (await runGit(repoRoot, [
+        "rev-parse",
+        "--abbrev-ref",
+        "HEAD",
+      ])).trim();
+      if (head && head !== "HEAD") {
+        currentBranch = head;
+      }
+    } catch {
+      // Brand-new repo with no commits — leave currentBranch undefined.
     }
-  } catch {
-    // Brand-new repo with no commits — leave currentBranch undefined.
   }
 
-  const directoryKey = `directory:${repoRoot}`;
-  const directoryLabel = path.basename(repoRoot) || repoRoot;
+  const directoryKey = `directory:${directoryPath}`;
+  const directoryLabel = path.basename(directoryPath) || directoryPath;
   const ensured = await deps.ensureDirectoryLaunchpad({
     directoryKey,
     directoryKind: "directory",
     directoryLabel,
-    directoryPath: repoRoot,
+    directoryPath,
     currentBranch,
     preferredBackend: request.preferredBackend,
     registeredAt: Date.now(),
@@ -175,7 +165,7 @@ export async function registerDirectoryFromDisk(
 
   return {
     ok: true,
-    directoryPath: repoRoot,
+    directoryPath,
     directoryKey,
     directoryLabel,
     currentBranch,
