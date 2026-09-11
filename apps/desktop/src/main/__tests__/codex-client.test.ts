@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AppServerThreadSummary } from "@pwragent/shared";
+import type { AppServerNotification, AppServerThreadSummary } from "@pwragent/shared";
 import type { JsonRpcTransport } from "@pwrdrvr/agent-transport";
 import gitBudgets from "./fixtures/git-subprocess-budgets.json";
 import type { InitializeResponse } from "@pwrdrvr/codex-app-server-protocol";
@@ -11760,6 +11760,9 @@ describe("CodexAppServerClient", () => {
 
   it("refreshes an environment selected after creation but before the first turn", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.serverCapabilitiesResult = {
+      codeModeOutputReducer: { protocolVersion: 1, dynamicToolsResumeField: "dynamicTools" },
+    };
     const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
     try {
       const { threadId } = await client.startThread({ cwd: "/fixture" });
@@ -11770,6 +11773,47 @@ describe("CodexAppServerClient", () => {
           environmentId: "env", environmentName: "Env", executionTarget: "local",
           shellEnvironment: { PATH: "/fixture/node/bin" },
         },
+      });
+      const requests = MockTransport.instances.flatMap((transport) => transport.sentMessages)
+        .map((message) => JSON.parse(message));
+      expect(requests.find((request) => request.method === "thread/resume")?.params.config)
+        .toMatchObject({ "shell_environment_policy.set.PATH": "/fixture/node/bin" });
+    } finally {
+      await client.close();
+    }
+  });
+
+  it.each([false, true])("defers first-turn environment changes on stock Codex (capability RPC unavailable: %s)", async (unavailable) => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+    if (unavailable) {
+      vi.spyOn(client, "readServerCapabilities").mockRejectedValue(new Error("Method not found"));
+    }
+    const notifications: AppServerNotification[] = [];
+    client.onNotification((notification) => { notifications.push(notification); });
+    try {
+      const { threadId } = await client.startThread({ cwd: "/fixture" });
+      const runtime = {
+        environmentId: "env", environmentName: "Env", executionTarget: "local" as const,
+        shellEnvironment: { PATH: "/fixture/node/bin" },
+      };
+      MockTransport.threadResumeError = { message: "no rollout before the first turn" };
+      await expect(client.startTurn({
+        threadId, input: [{ type: "text", text: "First turn" }], codexEnvironmentRuntime: runtime,
+      })).resolves.toMatchObject({ turnId: "turn-1" });
+      const firstRequests = MockTransport.instances.flatMap((transport) => transport.sentMessages)
+        .map((message) => JSON.parse(message));
+      expect(firstRequests.some((request) => request.method === "thread/resume")).toBe(false);
+      expect(firstRequests.filter((request) => request.method === "turn/start")).toEqual([
+        expect.objectContaining({ params: expect.objectContaining({ threadId }) }),
+      ]);
+      expect(notifications).toContainEqual({
+        method: "warning",
+        params: { threadId, message: expect.stringContaining("selected environment will apply from the next turn") },
+      });
+      MockTransport.threadResumeError = undefined;
+      await client.startTurn({
+        threadId, input: [{ type: "text", text: "Next turn" }], codexEnvironmentRuntime: runtime,
       });
       const requests = MockTransport.instances.flatMap((transport) => transport.sentMessages)
         .map((message) => JSON.parse(message));

@@ -8928,9 +8928,32 @@ export class CodexAppServerClient {
     const shellEnvironmentChanged = pendingFirstTurnResult !== undefined
       && this.pendingFirstTurnShellEnvironments.get(params.threadId)
         !== JSON.stringify(params.codexEnvironmentRuntime?.shellEnvironment);
+    // The registry negotiates dynamicTools before supplying it. Environment
+    // changes must negotiate the same no-rollout resume extension themselves.
+    let supportsPendingEnvironmentRefresh = params.dynamicTools !== undefined;
+    if (shellEnvironmentChanged && !supportsPendingEnvironmentRefresh) {
+      const capabilities = await this.readServerCapabilities().catch(() => undefined);
+      supportsPendingEnvironmentRefresh =
+        capabilities?.codeModeOutputReducer?.protocolVersion === 1
+        && capabilities.codeModeOutputReducer.dynamicToolsResumeField === "dynamicTools";
+    }
     const refreshPendingFirstTurn =
       pendingFirstTurnResult !== undefined
+      && supportsPendingEnvironmentRefresh
       && (params.dynamicTools !== undefined || shellEnvironmentChanged);
+    if (shellEnvironmentChanged && !supportsPendingEnvironmentRefresh) {
+      // Stock Codex has no shell-environment override on turn/start. Preserve
+      // the existing thread and apply the selection via resume on the next turn.
+      for (const listener of this.notificationListeners) {
+        await listener({
+          method: "warning",
+          params: {
+            threadId: params.threadId,
+            message: "This Codex version cannot change the environment before the first turn. This turn uses the thread's original environment; the selected environment will apply from the next turn.",
+          },
+        });
+      }
+    }
     let resumeResult = pendingFirstTurnResult;
     if (!pendingFirstTurnResult || refreshPendingFirstTurn) {
       const resume = requestWithFallbacks({
