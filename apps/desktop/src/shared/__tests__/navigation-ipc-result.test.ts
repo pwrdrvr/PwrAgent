@@ -26,3 +26,23 @@ it("carries normal navigation cancellation without an Electron handler exception
   expect(result).toEqual({ navigationReadFailure: true, code: "navigation_busy", message: error.message });
   expect(() => unwrapNavigationRead(result)).toThrow(expect.objectContaining({ name: "NavigationQueryError", code: "navigation_busy" }));
 });
+
+it("restores expected busy state wrapped by a remote Federation handler", () => {
+  const error = Object.assign(new Error("handler_failed: [navigation_busy] Navigation changed during its owner read. Refresh the retained range."), {
+    code: "handler_failed",
+  });
+  const result = expectedNavigationReadFailure(error);
+  expect(result).toEqual({ navigationReadFailure: true, code: "navigation_busy", message: error.message });
+  expect(() => unwrapNavigationRead(structuredClone(result))).toThrow(expect.objectContaining({
+    name: "NavigationQueryError", code: "navigation_busy", message: error.message,
+  }));
+});
+
+it.each([
+  ["handler_failed", "handler_failed: Unexpected projection failure"],
+  ["handler_failed", "handler_failed: [navigation_invalid_request] Invalid query"],
+  ["handler_failed", "handler_failed: Unexpected failure mentioning [navigation_busy]"],
+  ["transport_failed", "handler_failed: [navigation_busy] Busy"],
+])("keeps unexpected wrapped failures actionable: %s / %s", (code, message) => {
+  expect(expectedNavigationReadFailure(Object.assign(new Error(message), { code }))).toBeUndefined();
+});
