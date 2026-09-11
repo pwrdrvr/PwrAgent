@@ -96,6 +96,7 @@ if (missingRuntimeFiles.length > 0) {
 }
 // Each rule: [label, regex]. Anything matching → fail.
 const forbidden = [
+  ["SQLite build source", /\/node_modules\/better-sqlite3\/deps\/sqlite3\/[^/]+\.[ch]$/],
   ["TypeScript source", /\.tsx?$/],
   ["TypeScript declaration", /\.d\.ts$/],
   ["Sourcemap", /\.map$/],
