@@ -8288,6 +8288,22 @@ describe("MessagingController", () => {
     );
   });
 
+  it.each([
+    ["codex", "codex"],
+    ["acp:grok", "acp:grok"],
+    ["acp%3Agrok", "acp:grok"],
+  ] as const)("binds a legacy callback identity for %s without a structured value", async (keyBackend, backend) => {
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0] = { ...navigation.threads[0]!, source: backend };
+    const harness = await createHarness({ navigation });
+    await harness.controller.handleInboundEvent(buildCallbackEvent({
+      actionId: `bind:${keyBackend}:thread-1`,
+    }));
+    await expect(
+      harness.store.findActiveBindingForChannel(buildCommandEvent("/resume").channel),
+    ).resolves.toMatchObject({ backend, threadId: "thread-1" });
+  });
+
   it("binds a callback-selected thread to the channel", async () => {
     const harness = await createHarness();
 

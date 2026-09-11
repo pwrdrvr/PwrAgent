@@ -17,6 +17,7 @@ import {
   isMessagingBindingTargetKind,
   normalizeRenamedTitleSource,
   parseCodexTurnErrorMessage,
+  parseThreadIdentityKey,
   permissionForActionId,
   permissionForCommandVerb,
   permissionForDynamicTool,
@@ -22568,19 +22569,11 @@ function readBindingTarget(
   }
 
   const actionId = event.actionId ?? event.interaction.id;
-  const match = /^bind:([^:]+):(.+)$/.exec(actionId);
-  if (!match) {
+  if (!actionId.startsWith("bind:")) {
     return undefined;
   }
-  const backend = match[1]!;
-  if (!isAppServerBackendKind(backend)) {
-    return undefined;
-  }
-
-  return {
-    backend,
-    threadId: match[2]!,
-  };
+  const identity = parseThreadIdentityKey(actionId.slice("bind:".length));
+  return identity?.threadId ? identity : undefined;
 }
 
 function readBindingTargetFromValue(

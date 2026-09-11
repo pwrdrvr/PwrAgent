@@ -1,5 +1,5 @@
 import { hydrateComposerDraft } from "./composer-draft-hydration";
-import { parseOwnedComposerScopeKey } from "@pwragent/shared";
+import { parseOwnedComposerScopeKey, parseThreadIdentityKey } from "@pwragent/shared";
 import {
   useCallback,
   useEffect,
@@ -403,15 +403,11 @@ function parseScope(scopeKey: string): {
   if (owned) return { backend: owned.backend, threadId: owned.threadId, scopeKind: "thread" };
   if (scopeKey.startsWith("thread:")) {
     const remainder = scopeKey.slice("thread:".length);
-    const separatorIndex = remainder.indexOf(":");
-    if (separatorIndex === -1) {
+    if (!remainder.includes(":")) {
       return { scopeKind: "thread", threadId: remainder };
     }
-    return {
-      backend: remainder.slice(0, separatorIndex) as AppServerBackendKind,
-      scopeKind: "thread",
-      threadId: remainder.slice(separatorIndex + 1),
-    };
+    const identity = parseThreadIdentityKey(remainder);
+    return { ...identity, scopeKind: "thread" };
   }
   if (scopeKey.startsWith("launchpad:")) {
     return {

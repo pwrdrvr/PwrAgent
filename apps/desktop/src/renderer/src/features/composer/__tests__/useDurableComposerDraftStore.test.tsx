@@ -174,6 +174,28 @@ describe("useDurableComposerDraftStore", () => {
       return { ...rendered, saveComposerDraft };
     };
 
+    it.each(["acp:grok", "acp%3Agrok"])(
+      "preserves legacy %s draft metadata without adding writes",
+      (keyBackend) => {
+        const { result, saveComposerDraft } = setup();
+        const scopeKey = `thread:${keyBackend}:thread:1`;
+        act(() => {
+          result.current.set(scopeKey, buildSnapshot("Unsent draft"));
+          vi.advanceTimersByTime(5_000);
+        });
+        expect(saveComposerDraft).toHaveBeenCalledOnce();
+        expect(saveComposerDraft).toHaveBeenCalledWith(expect.objectContaining({
+          draft: expect.objectContaining({
+            scopeKey,
+            scopeKind: "thread",
+            backend: "acp:grok",
+            threadId: "thread:1",
+            text: "Unsent draft",
+          }),
+        }));
+      },
+    );
+
     it("coalesces a burst of typing into a single write", () => {
       // The point of the change: this used to be one sqlite commit per 200ms,
       // roughly five a second while typing, for a recovery feature that does
