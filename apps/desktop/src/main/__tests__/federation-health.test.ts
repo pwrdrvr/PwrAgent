@@ -143,19 +143,11 @@ describe("applyFederationLeaseSnapshot", () => {
     });
   });
 
-  it("keeps the lease-held reason after the holder's lease record disappears", () => {
-    // The holder released or expired, so snapshot() no longer carries
-    // leaseHolder — but this instance is still deliberately stopped and
-    // health must keep saying why instead of reverting to "disconnected".
+  it("reports pending recovery after the holder exits", () => {
     const health = stoppedHealth();
-
-    applyFederationLeaseSnapshot(health, leaseHeldElsewhere());
-
-    expect(health).toMatchObject({
-      status: "degraded",
-      unavailableReason:
-        "Federation is already active in another PwrAgent instance for this profile.",
-    });
+    const disabledReason = "Waiting to retry Federation after the previous owner stopped.";
+    applyFederationLeaseSnapshot(health, leaseHeldElsewhere({ disabledReason }));
+    expect(health).toMatchObject({ status: "degraded", unavailableReason: disabledReason });
     expect(health.leaseHolder).toBeUndefined();
   });
 

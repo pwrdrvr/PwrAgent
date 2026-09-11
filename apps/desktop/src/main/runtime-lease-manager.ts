@@ -1,4 +1,5 @@
 import os from "node:os";
+import { RUNTIME_LEASE_DEAD_OWNER_GRACE_MS } from "./state/app-runtime-instance-store";
 import {
   getProcessRuntimeIdentity,
   isProfileRuntimeIdentityLive,
@@ -198,6 +199,7 @@ export class RuntimeLeaseManager {
       lease
       && lease.status === "active"
       && lease.ownerInstanceId !== this.instanceId
+      && this.holderIsAlive(lease)
         ? this.describeLeaseHolder(lease)
         : undefined;
     return {
@@ -209,6 +211,26 @@ export class RuntimeLeaseManager {
 
   getInstance(): AppRuntimeInstanceRecord | undefined {
     return this.store.getInstance(this.instanceId);
+  }
+
+  /** Avoid repeated acquisition writes while an owner is live or in its grace. */
+  shouldRetryAcquisition(kind: RuntimeLeaseKind): boolean {
+    if (this.instanceExited) return false;
+    const lease = this.readLease(kind);
+    if (!lease || lease.status !== "active") return true;
+    const owner = this.store.getInstance(lease.ownerInstanceId);
+    if (!owner) {
+      return lease.expiresAt === Number.MAX_SAFE_INTEGER || this.now() >= lease.expiresAt;
+    }
+    if (this.isOwnerAlive(owner)) return false;
+    return owner.exitedAt === undefined
+      || this.ownerPredatesCurrentBoot(owner)
+      || this.now() >= owner.exitedAt + RUNTIME_LEASE_DEAD_OWNER_GRACE_MS;
+  }
+
+  private holderIsAlive(lease: MessagingRuntimeLeaseRecord): boolean {
+    const owner = this.store.getInstance(lease.ownerInstanceId);
+    return Boolean(owner && this.isOwnerAlive(owner));
   }
 
   markExited(): void {

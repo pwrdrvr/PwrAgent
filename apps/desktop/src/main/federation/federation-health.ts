@@ -36,10 +36,8 @@ export function buildFederationHealthStatus(params: {
 /**
  * Overlay the profile lease state onto a health snapshot. Another live
  * instance holding this profile's federation lease keeps this instance's
- * runtime deliberately stopped, and it stays stopped after the holder
- * exits — the lease record (and with it the holder metadata) disappears
- * while the stop reason does not. Surface the reason either way, with the
- * holder's identity only while it is still live.
+ * runtime stopped until recovery acquires ownership. The coordinator distinguishes
+ * a live holder from a dead owner whose grace period is still running.
  */
 export function applyFederationLeaseSnapshot(
   health: FederationHealthStatus,

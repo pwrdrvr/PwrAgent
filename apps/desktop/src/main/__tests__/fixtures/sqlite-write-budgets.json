@@ -384,6 +384,20 @@
     "rowsChanged": 8,
     "statements": 8
   },
+  "runtime-lease-recovery-live-hour": {
+    "commits": 0,
+    "note": "one hour of blocked messaging and federation recovery checks",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 0
+  },
+  "runtime-lease-recovery-takeover": {
+    "commits": 3,
+    "note": "automatic takeover of both leases after grace, then one idle hour",
+    "observedWalBytes": 41200,
+    "rowsChanged": 4,
+    "statements": 4
+  },
   "scheduled-bounded-projection-reads": {
     "commits": 0,
     "note": "205 payload-backed schedules, complete bounded paging and external version observation: zero commits; 0 MB/day added WAL",
