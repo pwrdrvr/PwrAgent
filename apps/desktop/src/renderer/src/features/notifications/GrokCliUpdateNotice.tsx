@@ -159,6 +159,7 @@ export function buildManagedGrokBuildNotice(params: {
   const activeTag = managed?.activeTag;
   if (
     params.entry?.registryId !== "grok"
+    || params.entry.enabled !== true
     || params.entry.pwrAgentManagedRuntime !== true
     || managed?.pinnedBehind !== true
     || !installedTag
@@ -208,6 +209,7 @@ export function buildXaiGrokCliUpdateNotice(params: {
   const update = params.entry?.update;
   if (
     params.entry?.registryId !== "grok"
+    || params.entry.enabled !== true
     || update?.status !== "available"
     || !update.latestVersion
     || update.dismissedAt !== undefined

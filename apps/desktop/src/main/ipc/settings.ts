@@ -461,10 +461,11 @@ async function listAcpAgentSettingsImpl(
     })
     .map(({ entry }) => entry);
 
-  await decorateManagedGrokBuild(
-    orderedEntries,
-    settingsService.readProvidersConfig(),
-  );
+  const providers = settingsService.readProvidersConfig();
+  for (const entry of orderedEntries) {
+    entry.enabled = acpProviderEnabledFromSnapshot(providers, entry.registryId);
+  }
+  await decorateManagedGrokBuild(orderedEntries, providers);
 
   return {
     fetchedAt: snapshot?.fetchedAt ?? Date.now(),

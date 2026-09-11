@@ -1157,6 +1157,17 @@ describe("settings ipc", () => {
         "grok",
         "qwen",
       ]);
+      for (const enabled of [true, false]) {
+        await service.writeConfigPatchTargeted({ acpAgents: { grok: { enabled } } });
+        const response = (await handlers.get(ACP_AGENTS_LIST_CHANNEL)?.(
+          {},
+          { refresh: false },
+        )) as { entries?: unknown[] } | undefined;
+        expect(response?.entries).toContainEqual(expect.objectContaining({
+          registryId: "grok",
+          enabled,
+        }));
+      }
       expect(
         cached?.entries?.every(
           (entry) =>
