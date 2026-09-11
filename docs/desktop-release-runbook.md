@@ -79,8 +79,28 @@ This build retained universal Grok from the existing pin. The arm64 package
 contained only the arm64 canvas binding. Both dry-run packages, archive
 assembly, and merged updater metadata passed. The new upstream arm64 Grok
 package is tracked in [grok-build PR #13](https://github.com/pwrdrvr/grok-build/pull/13);
-its signed release must exist before updating the pin to realize further
-savings. These are unsigned rehearsal sizes, not signed-release measurements.
+the signed `pwragent-v1.0.24-pwragent.2` release now supplies that asset and
+`grok-bundle.json` pins it for all platforms. Its arm64 archive is 70,436,351
+bytes versus 145,538,128 bytes for universal. The checksum, arm64-only Mach-O
+and PwrDrvr Developer ID signature were verified before packaging. The table
+above records the earlier universal-Grok fallback rehearsal, not this new pin
+or signed-release measurements.
+
+With the new Grok pin, a second paired dry-run build measured:
+
+| Output | Universal bytes | Apple Silicon bytes | Reduction |
+|---|---:|---:|---:|
+| Installed regular files, excluding symlinks | 1,042,140,897 | 588,902,297 | 43.49% |
+| Updater ZIP | 389,852,650 | 210,232,734 | 46.07% |
+| DMG | 402,947,119 | 217,516,484 | 46.02% |
+
+Packaged Grok reports `1.0.24-pwragent.2` in both targets. Its arm64 executable
+is 182,241,968 bytes and arm64-only; the universal executable is 377,047,728
+bytes with both slices. Both embedded provenance manifests reference the new
+pin and expected asset hashes. Upstream Developer ID verification, both
+package commands, merged updater assembly, and all assembled SHA256SUMS
+entries passed. These app builds used ad-hoc dry-run signing; protected app
+signing/notarization and real update/relaunch smoke tests remain required.
 
 ## One-time setup
 
