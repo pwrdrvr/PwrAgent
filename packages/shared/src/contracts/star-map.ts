@@ -484,7 +484,9 @@ export type StarMapIntakeCandidateSource =
   /** The request names these projects literally; the resolver did not rank. */
   | "label"
   /** Nothing matched the request at all; ordered by directory recency. */
-  | "recent";
+  | "recent"
+  /** The resolver could not run; ordered by directory recency. */
+  | "unresolved";
 
 /**
  * A PwrAgent-owned staged attachment supplied with a Star Map intake task.

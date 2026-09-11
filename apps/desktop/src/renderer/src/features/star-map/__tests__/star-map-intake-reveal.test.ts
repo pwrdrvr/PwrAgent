@@ -72,6 +72,32 @@ describe("findStarMapIntakeRevealTarget", () => {
     ).toBe(acp);
   });
 
+  it("reveals a thread captured before federation health named this instance", () => {
+    // `localInstanceId` is `health?.instanceId ?? "local"`, so a [+] clicked
+    // before health lands captures the placeholder.
+    const created = thread("thread-new");
+    expect(
+      findStarMapIntakeRevealTarget({
+        localInstanceId: LOCAL,
+        localThreads: [created],
+        remoteThreadsByInstance: new Map(),
+        reveal: { instanceId: "local", threadKey: "codex:thread-new" },
+      }),
+    ).toBe(created);
+  });
+
+  it("reveals a thread captured while health is momentarily absent", () => {
+    const created = thread("thread-new");
+    expect(
+      findStarMapIntakeRevealTarget({
+        localInstanceId: "local",
+        localThreads: [created],
+        remoteThreadsByInstance: new Map(),
+        reveal: { instanceId: LOCAL, threadKey: "codex:thread-new" },
+      }),
+    ).toBe(created);
+  });
+
   it("resolves nothing without a pending reveal", () => {
     expect(
       findStarMapIntakeRevealTarget({

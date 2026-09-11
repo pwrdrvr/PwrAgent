@@ -254,6 +254,88 @@ describe("dispatchStarMapIntake", () => {
     }
   });
 
+  it("ranks by reported confidence rather than the resolver's array order", async () => {
+    // The prompt asks for most-likely-first and nothing enforces it, so a
+    // strong pick emitted second must still create the thread.
+    generateStructuredObject.mockResolvedValue(
+      ranked([
+        { directoryKey: "dir-snap", confidence: 0.3 },
+        { directoryKey: "dir-agent", confidence: 0.92 },
+      ]),
+    );
+
+    const response = await dispatchStarMapIntake({
+      requestId: "req-unsorted",
+      request: "Fix the thread list",
+    });
+
+    expect(response.status).toBe("created");
+    expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith(
+      expect.objectContaining({ directoryKey: "dir-agent" }),
+      expect.anything(),
+    );
+  });
+
+  it("orders a low-confidence disambiguation list by confidence", async () => {
+    generateStructuredObject.mockResolvedValue(
+      ranked([
+        { directoryKey: "dir-snap", confidence: 0.1 },
+        { directoryKey: "dir-agent", confidence: 0.4 },
+      ]),
+    );
+
+    const response = await dispatchStarMapIntake({
+      requestId: "req-unsorted-low",
+      request: "Do something",
+    });
+
+    expect(response.status).toBe("needs_disambiguation");
+    if (response.status === "needs_disambiguation") {
+      expect(response.candidates.map((entry) => entry.directoryKey)).toEqual([
+        "dir-agent",
+        "dir-snap",
+      ]);
+    }
+  });
+
+  it("separates a resolver that could not run from one that pointed nowhere", async () => {
+    generateStructuredObject.mockResolvedValue({
+      status: "unavailable",
+      reason: "codex_structured_generation_unavailable",
+    });
+
+    const response = await dispatchStarMapIntake({
+      requestId: "req-unresolved",
+      request: "Do a thing somewhere",
+    });
+
+    expect(response.status).toBe("needs_disambiguation");
+    if (response.status === "needs_disambiguation") {
+      // Not "recent": nothing judged that no project matched.
+      expect(response.candidateSource).toBe("unresolved");
+    }
+  });
+
+  it("truncates an overlong reason on a character boundary", async () => {
+    const reason = `${"x".repeat(119)}🛰️ trailing`;
+    generateStructuredObject.mockResolvedValue(
+      ranked([{ directoryKey: "dir-snap", confidence: 0.2, reason }]),
+    );
+
+    const response = await dispatchStarMapIntake({
+      requestId: "req-long-reason",
+      request: "Do a thing somewhere",
+    });
+
+    expect(response.status).toBe("needs_disambiguation");
+    if (response.status === "needs_disambiguation") {
+      const truncated = response.candidates[0]?.reason ?? "";
+      expect([...truncated]).toHaveLength(120);
+      // A code-unit slice would leave the high half of the surrogate pair.
+      expect(truncated).not.toMatch(/[\uD800-\uDBFF]$/u);
+    }
+  });
+
   it("drops resolver candidates that name a directory outside the registry", async () => {
     generateStructuredObject.mockResolvedValue(
       ranked([

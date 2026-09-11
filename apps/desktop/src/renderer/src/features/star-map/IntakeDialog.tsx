@@ -51,7 +51,18 @@ const CANDIDATE_HINT: Record<StarMapIntakeCandidateSource, string> = {
   resolver: "Closest match first — pick the project:",
   label: "Your request names more than one project:",
   recent: "No project matched. Your most recent, newest first:",
+  unresolved: "Could not check the projects. Your most recent, newest first:",
 };
+
+/**
+ * Fall back rather than index blindly. A remote [+] runs the intake on the
+ * peer that owns it, so a peer predating `candidateSource` answers without
+ * one — and a bare lookup would render the list with no heading at all,
+ * which is worse than the bare "Which project?" this replaced.
+ */
+function candidateHint(source: StarMapIntakeCandidateSource | undefined) {
+  return (source && CANDIDATE_HINT[source]) ?? "Which project?";
+}
 
 type IntakeImageAttachment = {
   bytes: Uint8Array;
@@ -379,6 +390,21 @@ export function IntakeDialog(props: {
       });
   };
 
+  /**
+   * One status line, in precedence order. Named branches rather than a
+   * chain of ternaries inside JSX: the ordering between an attachment
+   * error, a failure, and a phase is the whole meaning of this string.
+   */
+  const statusMessage = (() => {
+    if (attachmentError) return attachmentError;
+    if (phase === "failed") return error ?? "";
+    if (preparingImages) return "Preparing image…";
+    if (phase === "creating" && resolvedDirectoryLabel) {
+      return `Creating the thread in ${resolvedDirectoryLabel}…`;
+    }
+    return PHASE_COPY[phase as StarMapIntakePhase] ?? "";
+  })();
+
   return createPortal(
     <div
       className="star-map-intake"
@@ -477,7 +503,7 @@ export function IntakeDialog(props: {
         {candidates ? (
           <div className="star-map-intake__candidates">
             <p className="star-map-intake__hint">
-              {CANDIDATE_HINT[candidates.source]}
+              {candidateHint(candidates.source)}
             </p>
             {candidates.entries.map((candidate) => (
               <button
@@ -510,14 +536,7 @@ export function IntakeDialog(props: {
             }${phase === "failed" || attachmentError ? " is-failed" : ""}`}
             role="status"
           >
-            {attachmentError
-              ?? (phase === "failed"
-                ? error
-                : preparingImages
-                  ? "Preparing image…"
-                  : phase === "creating" && resolvedDirectoryLabel
-                    ? `Creating the thread in ${resolvedDirectoryLabel}…`
-                    : PHASE_COPY[phase as StarMapIntakePhase] ?? "")}
+            {statusMessage}
           </span>
           <button
             type="button"

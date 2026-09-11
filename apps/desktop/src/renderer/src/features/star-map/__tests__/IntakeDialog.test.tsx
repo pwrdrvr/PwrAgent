@@ -219,6 +219,44 @@ describe("IntakeDialog", () => {
     });
   });
 
+  it("keeps a heading when a peer answers without a candidate source", async () => {
+    // A remote [+] runs on the peer that owns it; one predating
+    // `candidateSource` answers without the field.
+    const { dispatchStarMapIntake } = setup(undefined);
+    dispatchStarMapIntake.mockImplementation(
+      async (request: { requestId: string }) =>
+        ({
+          status: "needs_disambiguation",
+          requestId: request.requestId,
+          candidates: [{ directoryKey: "dir-a", label: "PwrSnap" }],
+        }) as never,
+    );
+
+    submitText("Do a thing");
+    await waitFor(() => {
+      expect(screen.getByText("Which project?")).toBeTruthy();
+    });
+    expect(screen.getByRole("button", { name: /PwrSnap/ })).toBeTruthy();
+  });
+
+  it("says the resolver could not run rather than claiming nothing matched", async () => {
+    const { dispatchStarMapIntake } = setup(undefined);
+    dispatchStarMapIntake.mockImplementation(
+      async (request: { requestId: string }) =>
+        ({
+          status: "needs_disambiguation",
+          requestId: request.requestId,
+          candidateSource: "unresolved",
+          candidates: [{ directoryKey: "dir-a", label: "PwrSnap" }],
+        }) as never,
+    );
+
+    submitText("Do a thing");
+    await waitFor(() => {
+      expect(screen.getByText(/Could not check the projects/)).toBeTruthy();
+    });
+  });
+
   it("names the resolved project while the thread is being created", async () => {
     const { dispatchStarMapIntake, emitAgentEvent } = setup(undefined);
     dispatchStarMapIntake.mockImplementation(

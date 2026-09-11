@@ -3520,12 +3520,17 @@ export function StarMapScreen(props: StarMapScreenProps) {
     });
     if (!thread) return;
     setPendingIntakeReveal(undefined);
+    // Mark entering HERE, not when intake answered: the mark is dropped on a
+    // 2s timer and the card cannot render until this refresh lands, so a
+    // slower-than-2s refresh would leave the arrival with no animation.
+    markThreadEntering(pendingIntakeReveal.threadKey);
     flyToThread(thread);
     openThread(thread);
   }, [
     flyToThread,
     localInstanceId,
     localThreads,
+    markThreadEntering,
     openThread,
     pendingIntakeReveal,
     remote.threadsByInstance,
@@ -5373,7 +5378,9 @@ export function StarMapScreen(props: StarMapScreenProps) {
               created.backend as NavigationThreadSummary["source"],
               created.threadId,
             );
-            markThreadEntering(threadKey);
+            // The entering mark is placed by the reveal effect, once the feed
+            // actually carries the thread. Marking now would expire before
+            // the card exists.
             setPendingIntakeReveal({
               instanceId: created.instanceId,
               threadKey,

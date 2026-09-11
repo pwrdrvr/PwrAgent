@@ -28,6 +28,14 @@ const MAX_DISAMBIGUATION_CANDIDATES = 8;
  */
 const AUTO_CREATE_CONFIDENCE = 0.5;
 const MAX_CANDIDATE_REASON_CHARS = 120;
+/**
+ * Cut a reason at a character boundary, so a clause ending in an emoji or
+ * other non-BMP character does not leave a lone surrogate in the row.
+ */
+function truncateReason(reason: string): string {
+  if (reason.length <= MAX_CANDIDATE_REASON_CHARS) return reason;
+  return [...reason].slice(0, MAX_CANDIDATE_REASON_CHARS).join("");
+}
 
 /**
  * The resolver ranks; it does not choose. One pick plus a confidence number
@@ -204,11 +212,16 @@ async function resolveViaConfiguredBackend(params: {
           && Number.isFinite(record.confidence)
             ? record.confidence
             : 0,
-        reason: reason
-          ? reason.slice(0, MAX_CANDIDATE_REASON_CHARS)
-          : undefined,
+        reason: reason ? truncateReason(reason) : undefined,
       });
     }
+    // Order by the confidence the resolver reported rather than by the
+    // order it happened to emit. The prompt asks for most-likely-first, but
+    // nothing enforces that, and `AUTO_CREATE_CONFIDENCE` is checked against
+    // the leading entry — so a model that sorts its own array wrongly would
+    // ask the operator about a project it was sure of. Array#sort is stable,
+    // so equal confidences keep the resolver's order.
+    ranked.sort((left, right) => right.confidence - left.confidence);
     return ranked.slice(0, MAX_DISAMBIGUATION_CANDIDATES);
   } catch (error) {
     log.warn("star map intake structured resolution unavailable", {
@@ -329,7 +342,15 @@ export async function dispatchStarMapIntake(
             candidateSource = "resolver";
             ranked = resolved;
           } else {
-            candidateSource = fuzzy.length > 0 ? "label" : "recent";
+            // `undefined` means the resolver could not run; `[]` means it ran
+            // and pointed nowhere. Collapsing the two would make the dialog
+            // claim "no project matched" about a judgment never made, which
+            // is the class of copy this whole surface exists to remove.
+            candidateSource = fuzzy.length > 0
+              ? "label"
+              : resolved
+                ? "recent"
+                : "unresolved";
             ranked = (
               fuzzy.length > 0 ? fuzzy : [...directories].sort(byRecency)
             ).map((directory) => ({ directory, confidence: 0 }));

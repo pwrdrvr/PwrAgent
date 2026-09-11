@@ -4,6 +4,15 @@ import {
 } from "@pwragent/shared";
 
 /**
+ * The stand-in `StarMapScreen` uses for this instance until federation
+ * health reports its durable id (`health?.instanceId ?? "local"`). A reveal
+ * captured under the placeholder must still resolve as local once the
+ * durable id lands, the same transition `chatCards.remapOwner` handles for
+ * open chat cards.
+ */
+export const STAR_MAP_LOCAL_INSTANCE_PLACEHOLDER = "local";
+
+/**
  * A thread the [+] intake created, waiting to be revealed on the map.
  *
  * Intake answers with a backend and a thread id, not a
@@ -24,7 +33,8 @@ export type StarMapIntakeReveal = {
  * Which feed matters: a thread created through a remote instance's [+] will
  * never appear in `localThreads`, and searching every feed for a matching
  * key would reveal the wrong instance's thread whenever two instances share
- * a backend thread id.
+ * a backend thread id. The one exception is the `"local"` placeholder on
+ * either side, which only ever stands in for this instance.
  */
 export function findStarMapIntakeRevealTarget(params: {
   localInstanceId: string;
@@ -37,10 +47,13 @@ export function findStarMapIntakeRevealTarget(params: {
 }): NavigationThreadSummary | undefined {
   const reveal = params.reveal;
   if (!reveal) return undefined;
-  const threads =
+  const isLocal =
     reveal.instanceId === params.localInstanceId
-      ? params.localThreads
-      : params.remoteThreadsByInstance.get(reveal.instanceId) ?? [];
+    || reveal.instanceId === STAR_MAP_LOCAL_INSTANCE_PLACEHOLDER
+    || params.localInstanceId === STAR_MAP_LOCAL_INSTANCE_PLACEHOLDER;
+  const threads = isLocal
+    ? params.localThreads
+    : params.remoteThreadsByInstance.get(reveal.instanceId) ?? [];
   return threads.find(
     (thread) =>
       buildThreadIdentityKey(thread.source, thread.id) === reveal.threadKey,
