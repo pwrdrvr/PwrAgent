@@ -359,6 +359,18 @@ export function createThreadDirectoryEnricher(): (
     let value: ThreadDirectoryEnrichment;
     if (before && !before.repository) {
       value = { linkedDirectories: [buildFallbackLinkedDirectory(key)] };
+    } else if (before?.checkout) {
+      const { repositoryPath, worktreePath, branch } = before.checkout;
+      value = {
+        linkedDirectories: [{
+          id: toDirectoryId(repositoryPath),
+          path: toDirectoryId(repositoryPath),
+          worktreePath: worktreePath ? toDirectoryId(worktreePath) : undefined,
+          label: path.basename(repositoryPath) || repositoryPath,
+          kind: worktreePath ? "worktree" : "local",
+        }],
+        observedGitBranch: branch,
+      };
     } else if (sameRelationship) {
       const branch = await runGit(key, ["rev-parse", "--abbrev-ref", "HEAD"], context)
         .catch(() => undefined);

@@ -334,12 +334,35 @@ describe("directory enrichment invalidation", () => {
     expect(git).toHaveBeenCalledTimes(3);
   });
 
+  it("uses zero Git subprocesses to enrich 216 cold standard checkouts", async () => {
+    git.mockImplementation((_command: string, args: string[], _options: unknown,
+      callback: (error: Error | null, result: { stdout: string; stderr: string }) => void) => {
+      callback(null, { stdout: args.includes("--show-toplevel") ? args[1]
+        : args.includes("--porcelain") ? `worktree ${args[1]}\n` : "main", stderr: "" });
+    });
+    const enrich = createThreadDirectoryEnricher();
+    for (let index = 0; index < 216; index += 1) {
+      const cwd = path.join(root, `cold-${index}`);
+      const admin = path.join(cwd, ".git");
+      await fs.mkdir(path.join(admin, "refs", "heads"), { recursive: true });
+      await fs.writeFile(path.join(admin, "config"), "[core]\n repositoryformatversion = 0\n bare = false\n");
+      await fs.writeFile(path.join(admin, "HEAD"), "ref: refs/heads/main\n");
+      await fs.writeFile(path.join(admin, "refs", "heads", "main"), `${"a".repeat(40)}\n`);
+      expect(await enrich(cwd, "thread-list")).toMatchObject({
+        observedGitBranch: "main",
+        linkedDirectories: [{ path: cwd.replace(/\\/g, "/"), kind: "local" }],
+      });
+    }
+    expect(git).not.toHaveBeenCalled();
+  });
+
   it("preserves real Git worktree mappings, branch switches and detached HEAD", async () => {
     const run = await initializeRealGit();
     const worktree = path.join(root, "linked");
     await run(["-C", repo, "worktree", "add", "-b", "feature/fixture", worktree]);
     const enrich = createThreadDirectoryEnricher();
     const first = await enrich(worktree);
+    expect(git).not.toHaveBeenCalled();
     const normalized = (value: string) => value.replace(/\\/g, "/");
     expect(first).toMatchObject({
       observedGitBranch: "feature/fixture",
@@ -350,11 +373,24 @@ describe("directory enrichment invalidation", () => {
     expect(git).not.toHaveBeenCalled();
     await run(["-C", worktree, "checkout", "-b", "feature/next"]);
     expect((await enrich(worktree)).observedGitBranch).toBe("feature/next");
-    expect(git).toHaveBeenCalledTimes(1);
+    expect(git).not.toHaveBeenCalled();
     git.mockClear();
     await run(["-C", worktree, "checkout", "--detach"]);
     expect((await enrich(worktree)).observedGitBranch).toBe("HEAD");
-    expect(git).toHaveBeenCalledTimes(1);
+    expect(git).not.toHaveBeenCalled();
+  });
+
+  it("reads packed branch refs without Git and falls back for configuration includes", async () => {
+    const run = await initializeRealGit();
+    await run(["-C", repo, "pack-refs", "--all"]);
+    const enrich = createThreadDirectoryEnricher();
+    expect((await enrich(repo)).observedGitBranch).toBe("main");
+    expect(git).not.toHaveBeenCalled();
+    const included = path.join(root, "included-config");
+    await fs.writeFile(included, "[core]\n bare = false\n");
+    await run(["-C", repo, "config", "include.path", included]);
+    expect((await enrich(repo)).observedGitBranch).toBe("main");
+    expect(git).toHaveBeenCalledTimes(3);
   });
 
   it("discovers the physical repository behind a symlinked subdirectory", async () => {

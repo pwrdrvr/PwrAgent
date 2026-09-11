@@ -5,6 +5,7 @@ export type GitDirectoryObservation = {
   repository: boolean;
   relationship: string;
   head: string;
+  checkout?: { repositoryPath: string; worktreePath?: string; branch: string };
 };
 
 type FileState = Awaited<ReturnType<typeof fileState>>;
@@ -103,8 +104,52 @@ export function createGitDirectoryObserver(): (
       ? refs
       : await fileState(path.join(commonDir, "reftable", "tables.list"));
     if (refs?.directory || commonRefs?.directory) return undefined;
+    // Resolve only conventional files-based repositories here. Unusual layouts,
+    // ref storage and configuration continue through Git's discovery path.
+    let checkout: GitDirectoryObservation["checkout"];
+    const configText = config && !config.directory
+      ? await pointer(path.join(commonDir, "config"), config) : "";
+    const standardConfig = /bare\s*=\s*false/i.test(configText)
+      && !/\[\s*(?:include|extensions)|worktree\s*=|bare\s*=\s*true/i.test(configText);
+    const environmentOverride = Object.keys(process.env).some((key) =>
+      /^(?:GIT_DIR|GIT_WORK_TREE|GIT_COMMON_DIR|GIT_CONFIG.*)$/.test(key) && process.env[key],
+    );
+    if (standardConfig && !worktreeConfig && !refs && !commonRefs && !environmentOverride) {
+      const headText = (await pointer(path.join(gitdir, "HEAD"), head)).trim();
+      const branchRef = headText.match(/^ref: (refs\/heads\/[a-zA-Z0-9_./-]+)$/)?.[1];
+      let branch: string | undefined;
+      if (/^[a-fA-F0-9]{40}(?:[a-fA-F0-9]{24})?$/.test(headText)) {
+        branch = "HEAD";
+      } else if (branchRef && !branchRef.includes("..") && !branchRef.endsWith(".lock")) {
+        // Do not infer a branch for unborn or symbolic-ref chains. Git remains
+        // authoritative for those cases, including its error behavior.
+        const refPath = path.join(commonDir, branchRef);
+        const refState = await fileState(refPath);
+        const refText = refState && !refState.directory ? (await pointer(refPath, refState)).trim() : "";
+        const packedPath = path.join(commonDir, "packed-refs");
+        const packedState = refState ? undefined : await fileState(packedPath);
+        const packed = packedState && !packedState.directory ? await pointer(packedPath, packedState) : "";
+        if (/^[a-fA-F0-9]{40}(?:[a-fA-F0-9]{24})?$/.test(refText)
+          || packed.split("\n").some((line) => {
+            const [oid, ref] = line.trim().split(" ");
+            return ref === branchRef && /^[a-fA-F0-9]{40}(?:[a-fA-F0-9]{24})?$/.test(oid);
+          })) {
+          branch = branchRef.slice("refs/heads/".length);
+        }
+      }
+      if (branch && dotGit.directory && commonDir === dotGitPath) {
+        checkout = { repositoryPath: parent, branch };
+      } else if (branch && !dotGit.directory && path.basename(commonDir) === ".git"
+        && path.dirname(path.dirname(gitdir)) === commonDir && backlink && !backlink.directory) {
+        const target = (await pointer(path.join(gitdir, "gitdir"), backlink)).trim();
+        if (path.resolve(gitdir, target) === dotGitPath) {
+          checkout = { repositoryPath: path.dirname(commonDir), worktreePath: parent, branch };
+        }
+      }
+    }
     return {
       repository: true,
+      checkout,
       relationship: JSON.stringify([
         resolved, directory.signature, dotGitPath, dotGit.signature, link,
         gitdir, admin.signature, common, commonInfo.signature,
