@@ -834,7 +834,13 @@ describe("App", () => {
     await act(async () => {
       await vi.dynamicImportSettled();
     });
-    const gitSettingsButton = screen.getByRole("button", { name: "Git" });
+    // Two buttons are named "Git" once the group expands: the section row
+    // and its own child in the sublist. Routing to the section is what this
+    // asserts, so pick the section row rather than loosening the query.
+    const gitSettingsButton = screen
+      .getAllByRole("button", { name: "Git" })
+      .find((button) => button.classList.contains("settings-nav__button"));
+    expect(gitSettingsButton).toBeDefined();
     expect(gitSettingsButton).toHaveAttribute("aria-current", "page");
   });
 
@@ -1872,6 +1878,7 @@ describe("App", () => {
         preferredEditorId: { value: "", source: "default" },
         preferredTerminalId: { value: "", source: "default" },
         gh: {
+          enabled: { value: false, source: "default" },
           path: { value: "", source: "default" },
           discovery: { candidates: [] },
         },

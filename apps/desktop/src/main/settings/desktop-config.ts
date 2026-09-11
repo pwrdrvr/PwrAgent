@@ -306,7 +306,13 @@ export type DesktopSettingsConfig = {
       preferredId?: string;
     };
     gh?: {
+      enabled?: boolean;
       path?: string;
+    };
+    glab?: {
+      enabled?: boolean;
+      path?: string;
+      host?: string;
     };
     git?: {
       path?: string;
@@ -1622,6 +1628,18 @@ export function desktopSettingsPatchToEdits(
   if (patch.applications?.terminal?.preferredId !== undefined) {
     set(["applications", "terminal", "preferred_id"], patch.applications.terminal.preferredId);
   }
+  if (patch.applications?.glab?.enabled !== undefined) {
+    set(["applications", "glab", "enabled"], patch.applications.glab.enabled);
+  }
+  if (patch.applications?.glab?.path !== undefined) {
+    set(["applications", "glab", "path"], patch.applications.glab.path);
+  }
+  if (patch.applications?.glab?.host !== undefined) {
+    set(["applications", "glab", "host"], patch.applications.glab.host);
+  }
+  if (patch.applications?.gh?.enabled !== undefined) {
+    set(["applications", "gh", "enabled"], patch.applications.gh.enabled);
+  }
   if (patch.applications?.gh?.path !== undefined) {
     set(["applications", "gh", "path"], patch.applications.gh.path);
   }
@@ -1677,6 +1695,7 @@ function normalizeDesktopConfig(
   const editor = tables["applications.editor"];
   const terminal = tables["applications.terminal"];
   const gh = tables["applications.gh"];
+  const glab = tables["applications.glab"];
   const gitApplication = tables["applications.git"];
   const worktrees = tables["worktrees"];
 
@@ -2052,7 +2071,13 @@ function normalizeDesktopConfig(
         preferredId: readString(terminal?.preferred_id),
       },
       gh: {
+        enabled: readBoolean(gh?.enabled),
         path: readString(gh?.path),
+      },
+      glab: {
+        enabled: readBoolean(glab?.enabled),
+        path: readString(glab?.path),
+        host: readString(glab?.host),
       },
       git: {
         path: readString(gitApplication?.path),
@@ -2346,11 +2371,13 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
   const editor = config.applications?.editor;
   const terminal = config.applications?.terminal;
   const gh = config.applications?.gh;
+  const glab = config.applications?.glab;
   const gitApplication = config.applications?.git;
   if (
     (editor && hasDefinedValue(editor))
     || (terminal && hasDefinedValue(terminal))
     || (gh && hasDefinedValue(gh))
+    || (glab && hasDefinedValue(glab))
     || (gitApplication && hasDefinedValue(gitApplication))
   ) {
     pruned.applications = {};
@@ -2359,6 +2386,9 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     }
     if (terminal && hasDefinedValue(terminal)) {
       pruned.applications.terminal = terminal;
+    }
+    if (glab && hasDefinedValue(glab)) {
+      pruned.applications.glab = glab;
     }
     if (gh && hasDefinedValue(gh)) {
       pruned.applications.gh = gh;

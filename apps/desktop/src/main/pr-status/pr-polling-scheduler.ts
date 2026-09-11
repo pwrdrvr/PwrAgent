@@ -1,9 +1,8 @@
 import type { PrSummary } from "@pwragent/shared";
 import { getMainLogger } from "../log";
-import type { PrRef } from "./github-graphql-client";
+import { parseForgePrRefFromUrl as parsePrRefFromUrl, type ForgePrRef as PrRef } from "./forge-pr-fetcher";
 import {
   GITHUB_RECONNECT_DEDUP_MS,
-  parsePrRefFromUrl,
 } from "./github-graphql-client";
 import { isTerminalPullRequest } from "./pr-derivations";
 
@@ -24,7 +23,8 @@ const schedulerLog = getMainLogger("pwragent:pr-poller");
  * Budget shape: one admitted GraphQL batch covers up to `BATCH_SIZE` PRs
  * across arbitrary repos. PRs with more than 100 status contexts can require
  * paginated follow-ups, but those are coalesced per page and stop as soon as a
- * running check is found.
+ * running check is found. GitLab uses singleton batches: each MR is a separate
+ * REST request, and its transport budgets any additional verification reads.
  */
 
 /**
@@ -287,7 +287,7 @@ export class PrPollingScheduler {
       return;
     }
 
-    const batches = chunk(due, BATCH_SIZE).slice(0, MAX_BATCHES_PER_TICK);
+    const batches = buildPrPollBatches(due).slice(0, MAX_BATCHES_PER_TICK);
     const admitted: PrPollTarget[][] = [];
     for (const batch of batches) {
       // One token per request. If the bucket is dry, leave the rest of the
@@ -309,7 +309,7 @@ export class PrPollingScheduler {
     const now = this.now();
     const targets = this.deps.listTargets();
     this.prunePollState(targets);
-    const batch = this.selectDueTargets(targets, now, true).slice(0, BATCH_SIZE);
+    const batch = buildPrPollBatches(this.selectDueTargets(targets, now, true))[0] ?? [];
     if (batch.length === 0) {
       return;
     }
@@ -467,10 +467,27 @@ export class PrPollingScheduler {
   }
 }
 
-function chunk<T>(items: T[], size: number): T[][] {
-  const batches: T[][] = [];
-  for (let index = 0; index < items.length; index += size) {
-    batches.push(items.slice(index, index + size));
+/** Each batch is one paid request: GitHub batches up to 40, GitLab reads one MR. */
+export function buildPrPollBatches(targets: PrPollTarget[]): PrPollTarget[][] {
+  const batches: PrPollTarget[][] = [];
+  let github: PrPollTarget[] = [];
+  for (const target of targets) {
+    const ref = parsePrRefFromUrl(target.pr.url);
+    // A URL this scheduler cannot parse still rides the general batch, as it
+    // did before batching became provider-aware. Dropping it here would leave
+    // it unpolled AND unmarked, so it stays due and is reselected every tick.
+    if (ref?.gitlabHost) {
+      if (github.length) batches.push(github);
+      github = [];
+      batches.push([target]);
+    } else {
+      github.push(target);
+      if (github.length === BATCH_SIZE) {
+        batches.push(github);
+        github = [];
+      }
+    }
   }
+  if (github.length) batches.push(github);
   return batches;
 }

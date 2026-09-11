@@ -8715,6 +8715,18 @@ a.button {
   background: color-mix(in srgb, var(--text-primary) 16%, transparent);
 }
 
+/* A forge that is on but cannot be used. `--off` is deliberately not
+   reused: "you turned this off" and "this is broken" are the two states
+   the Git children exist to tell apart. Every dot is `aria-hidden`, so the
+   row carries a word in its chip too — colour is the redundant channel. */
+.settings-nav__subdot--warn {
+  background: var(--status-warning);
+}
+
+.settings-nav__subdot--bad {
+  background: var(--status-error);
+}
+
 .settings-nav__sublabel {
   min-width: 0;
   overflow: hidden;
@@ -16008,6 +16020,19 @@ a.button {
   flex-direction: column;
   gap: 6px;
   padding: 0;
+}
+
+/* The status reason is prose, not a path: it carries the remediation
+   command the operator has to run. `.settings-pathrow__path` is
+   `white-space: nowrap` + ellipsis, which cut `glab auth login
+   --hostname <host>` off mid-sentence, and `.app-shell` sets
+   `user-select: none`, so the command could not be copied either. */
+.settings-gh-status__reason {
+  overflow: visible;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  -webkit-user-select: text;
+  user-select: text;
 }
 
 .settings-pill {

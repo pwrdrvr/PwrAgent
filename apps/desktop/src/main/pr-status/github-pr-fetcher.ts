@@ -243,6 +243,7 @@ export class GithubPrFetcher {
      * fresh result into a later scheduled refresh.
      */
     allowPrimed?: boolean;
+    onProviderFailure?: () => void;
   }): Promise<PrSummary[]> {
     // A batched in-process lookup may already have answered this exact
     // (cwd, branch). Consuming it here is what lets the background discovery
@@ -253,7 +254,9 @@ export class GithubPrFetcher {
       return primed;
     }
     const repos = await this.resolveGitHubRepos(params.cwd);
-    if (repos.length === 0 || !(await this.isGhAvailable())) {
+    if (repos.length === 0) return [];
+    if (!(await this.isGhAvailable())) {
+      params.onProviderFailure?.();
       return [];
     }
     try {
@@ -271,6 +274,7 @@ export class GithubPrFetcher {
       }
       return [...byUrl.values()];
     } catch (error) {
+      params.onProviderFailure?.();
       fetcherLog.debug("in-process branch PR lookup failed", {
         cwd: params.cwd,
         branch: params.branch,
@@ -288,8 +292,16 @@ export class GithubPrFetcher {
   async fetchPullRequestByUrl(params: {
     cwd: string;
     url: string;
+    /**
+     * Called only when the provider could not answer. `undefined` alone
+     * cannot carry that: it is also how a PR that no longer exists, and a
+     * URL this provider does not own, come back. Callers that suppress
+     * caching on a partial lookup must key on this, not on the result.
+     */
+    onProviderFailure?: () => void;
   }): Promise<PrSummary | undefined> {
     if (!(await this.isGhAvailable())) {
+      params.onProviderFailure?.();
       return undefined;
     }
     const ref = parsePrRefFromUrl(params.url);
@@ -299,6 +311,7 @@ export class GithubPrFetcher {
     try {
       return (await this.graphqlClient.fetchPullRequests([ref]))[0];
     } catch (error) {
+      params.onProviderFailure?.();
       fetcherLog.debug("in-process retained PR lookup failed", {
         url: params.url,
         error: error instanceof Error ? error.message : String(error),
@@ -494,7 +507,7 @@ export function parseGhAuthStatus(input: {
         .filter(Boolean)
     : [];
   const hasRepoScope = scopes.includes("repo") || scopes.includes("public_repo");
-  const loggedIn = Boolean(accountMatch) || /Logged in to github\.com/i.test(text);
+  const loggedIn = input.ok && (Boolean(accountMatch) || /Logged in to github\.com/i.test(text));
 
   return {
     installed: true,
@@ -502,12 +515,24 @@ export function parseGhAuthStatus(input: {
     account: accountMatch?.[1],
     scopes,
     hasRepoScope,
-    rawOutput: text.trim(),
+    permissionState: !loggedIn ? "unknown"
+      : scopes.includes("repo") ? "sufficient"
+      : scopes.includes("public_repo") ? "limited"
+      : scopes.length === 0 ? "unknown" : "insufficient",
     reason: loggedIn
-      ? hasRepoScope
+      ? scopes.includes("repo")
+        // A resting success state explains nothing. The caveats that used to
+        // be spelled out here — org SSO, per-repository access — surface as a
+        // real failure on the PR that hits them, where they are actionable.
         ? undefined
-        : "Token is missing the `repo` scope. Run `gh auth refresh -s repo` to grant it."
-      : "Run `gh auth login` to sign in to github.com.",
+        : scopes.includes("public_repo")
+          ? "Public repositories only. Private repositories require the repo scope."
+          : scopes.length === 0
+            ? "Token scopes are not reported. Fine-grained tokens need repository access with Pull requests, Checks, and Commit statuses read permissions."
+            : "Token is missing the `repo` scope. Run `gh auth refresh -s repo` to grant it."
+      // No reason line: the pill says "Not signed in" and the pane's sign-in
+      // field carries the command, so a third restatement adds nothing.
+      : undefined,
   };
 }
 

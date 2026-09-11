@@ -247,6 +247,8 @@ export const NAVIGATION_DETACH_DIRECTORY_FROM_THREAD_CHANNEL =
   "navigation:detach-directory-from-thread";
 export const NAVIGATION_GET_GH_STATUS_CHANNEL =
   "navigation:get-gh-status";
+export const NAVIGATION_GET_GLAB_STATUS_CHANNEL =
+  "navigation:get-glab-status";
 export const NAVIGATION_REFRESH_DIRECTORY_GIT_STATUSES_CHANNEL =
   "navigation:refresh-directory-git-statuses";
 export const NAVIGATION_RESOLVE_EDIT_COMMIT_STATES_CHANNEL =
@@ -543,6 +545,8 @@ export const SETTINGS_CHECK_CODEX_AUTH_PROFILE_STATUS_CHANNEL =
   "settings:check-codex-auth-profile-status";
 export const SETTINGS_PICK_GH_COMMAND_CHANNEL =
   "settings:pick-gh-command";
+export const SETTINGS_PICK_GLAB_COMMAND_CHANNEL =
+  "settings:pick-glab-command";
 export const SETTINGS_PICK_GIT_COMMAND_CHANNEL =
   "settings:pick-git-command";
 export const SETTINGS_REFRESH_GIT_DISCOVERY_CHANNEL =

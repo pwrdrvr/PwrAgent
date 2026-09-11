@@ -184,6 +184,8 @@ import type {
   AcknowledgeThreadSpendAlertRequest,
   AcknowledgeThreadSpendAlertResponse,
   GetGhStatusRequest,
+  GetGlabStatusRequest,
+  GlabStatus,
   GhStatus,
   ApproveMessagingPairingRequest,
   ApproveMessagingPairingResponse,
@@ -687,6 +689,7 @@ import {
   MESSAGING_STOP_INBOUND_PREVIEW_CHANNEL,
   MESSAGING_UNBIND_THREAD_CHANNEL,
   NAVIGATION_GET_GH_STATUS_CHANNEL,
+  NAVIGATION_GET_GLAB_STATUS_CHANNEL,
   NAVIGATION_ATTACH_DIRECTORY_TO_THREAD_CHANNEL,
   NAVIGATION_DETACH_DIRECTORY_FROM_THREAD_CHANNEL,
   NAVIGATION_DETACH_THREAD_PR_CHANNEL,
@@ -773,6 +776,7 @@ import {
   SETTINGS_OPEN_SLACK_CREATE_APP_CHANNEL,
   SETTINGS_INSPECT_CODE_SIGNATURES_CHANNEL,
   SETTINGS_PICK_GH_COMMAND_CHANNEL,
+  SETTINGS_PICK_GLAB_COMMAND_CHANNEL,
   SETTINGS_PICK_GIT_COMMAND_CHANNEL,
   SETTINGS_REFRESH_GIT_DISCOVERY_CHANNEL,
   SETTINGS_READ_CHANNEL,
@@ -1310,6 +1314,8 @@ const desktopApi = Object.freeze({
     ),
   pickGhCommand: async (): Promise<PickGhCommandResponse> =>
     await ipcRenderer.invoke(SETTINGS_PICK_GH_COMMAND_CHANNEL),
+  pickGlabCommand: async (): Promise<PickGhCommandResponse> =>
+    await ipcRenderer.invoke(SETTINGS_PICK_GLAB_COMMAND_CHANNEL),
   pickGitCommand: async (): Promise<PickGitCommandResponse> =>
     await ipcRenderer.invoke(SETTINGS_PICK_GIT_COMMAND_CHANNEL),
   refreshGitDiscovery: async (): Promise<ReadDesktopSettingsResponse> =>
@@ -2087,6 +2093,12 @@ const desktopApi = Object.freeze({
     await invokeWithStartupProfileTiming(
       "getGhStatus",
       NAVIGATION_GET_GH_STATUS_CHANNEL,
+      request,
+    ),
+  getGlabStatus: async (request?: GetGlabStatusRequest): Promise<GlabStatus> =>
+    await invokeWithStartupProfileTiming(
+      "getGlabStatus",
+      NAVIGATION_GET_GLAB_STATUS_CHANNEL,
       request,
     ),
   ensureDirectoryLaunchpad: async (

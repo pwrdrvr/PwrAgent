@@ -215,6 +215,8 @@ import type {
   SendThreadPrAutoDispatchNowRequest,
   SendThreadPrAutoDispatchNowResponse,
   GetGhStatusRequest,
+  GetGlabStatusRequest,
+  GlabStatus,
   GhStatus,
   ApproveMessagingPairingRequest,
   ApproveMessagingPairingResponse,
@@ -1171,6 +1173,8 @@ export type DesktopApi = {
   getWorktreeUnpublishedCommitDiff?: (
     request: GetWorktreeUnpublishedCommitDiffRequest
   ) => Promise<GetWorktreeUnpublishedCommitDiffResponse>;
+  getGlabStatus?: (request?: GetGlabStatusRequest) => Promise<GlabStatus>;
+  pickGlabCommand?: () => Promise<PickGhCommandResponse>;
   getGhStatus?: (request?: GetGhStatusRequest) => Promise<GhStatus>;
   ensureDirectoryLaunchpad?: (
     request: EnsureDirectoryLaunchpadRequest

@@ -139,6 +139,10 @@ import {
   FEISHU_TENANT_URL_ENV,
   FEISHU_VERIFICATION_TOKEN_ENV,
   GH_COMMAND_ENV,
+  GH_ENABLED_ENV,
+  GLAB_COMMAND_ENV,
+  GLAB_ENABLED_ENV,
+  GLAB_HOST_ENV,
   LINE_AUTHORIZED_GROUPS_ENV,
   LINE_AUTHORIZED_ROOMS_ENV,
   LINE_AUTHORIZED_USER_IDS_ENV,
@@ -199,6 +203,7 @@ import {
 } from "@pwrdrvr/codex-discovery";
 import { discoverDesktopApplications } from "./application-discovery";
 import { GIT_COMMAND_ENV, discoverGitCommands } from "./git-discovery";
+import { discoverGlabCommands } from "./glab-discovery";
 import { discoverGhCommands } from "./gh-discovery";
 import { getMainLogger } from "../log";
 import {
@@ -372,6 +377,7 @@ function emptyApplicationsSnapshot(): DesktopApplicationsSnapshot {
     preferredEditorId: { value: "", source: "default" },
     preferredTerminalId: { value: "", source: "default" },
     gh: {
+      enabled: { value: false, source: "default" },
       path: { value: "", source: "default" },
       discovery: { candidates: [] },
     },
@@ -506,6 +512,19 @@ async function resolveInteractiveLoginShellEnvAsync(
   return undefined;
 }
 
+/**
+ * Whether a forge CLI is actually usable on this machine.
+ *
+ * Discovery lists every path it probed, executable or not, so a bare
+ * `candidates.length > 0` would call a machine "has glab" on the strength
+ * of the paths we looked in. Only an executable candidate counts.
+ */
+function forgeCliPresent(
+  discovery: { candidates: Array<{ executable: boolean }> } | undefined,
+): boolean {
+  return discovery?.candidates.some((candidate) => candidate.executable) === true;
+}
+
 export class DesktopSettingsService {
   private readonly env: NodeJS.ProcessEnv;
   private readonly argv: readonly string[];
@@ -540,6 +559,11 @@ export class DesktopSettingsService {
     key: string;
     promise: ReturnType<typeof discoverGhCommands>;
     result?: Awaited<ReturnType<typeof discoverGhCommands>>;
+  };
+  private glabDiscoveryCache?: {
+    key: string;
+    promise: ReturnType<typeof discoverGlabCommands>;
+    result?: Awaited<ReturnType<typeof discoverGlabCommands>>;
   };
   private codexSpawnEnv?: NodeJS.ProcessEnv;
   private codexSpawnEnvHydratedAt?: number;
@@ -697,6 +721,21 @@ export class DesktopSettingsService {
       codexDiscoveryCommand,
     ) ?? codexDiscoveryFromProvider(this.configStore.read("providers").codex);
     const codexProfiles = this.codexProfiles;
+    // Settle discovery that is ALREADY running before reading its result.
+    // Never start it: this must not turn a projection read into a probe,
+    // and a caller that arrives before startup discovery simply gets the
+    // empty snapshot the `??` below supplies, as it always did.
+    //
+    // The forge `enabled` defaults are derived from these, so without the
+    // await a read that lands mid-probe resolves both forges to "off" —
+    // the Settings nav showed GitHub off on a machine with `gh` installed,
+    // and an operator toggling during that window would have written an
+    // explicit `false` against a default that was merely unsettled.
+    await Promise.allSettled(
+      [this.glabDiscoveryCache?.promise, this.ghDiscoveryCache?.promise]
+        .filter((pending) => pending !== undefined),
+    );
+    const glabDiscovery = this.glabDiscoveryCache?.result ?? { candidates: [] };
     const ghDiscovery = this.ghDiscoveryCache?.result ?? { candidates: [] };
     const gitDiscovery = this.gitDiscoveryCache?.result ?? { candidates: [] };
     const applications = this.applicationsDiscovery
@@ -1410,7 +1449,18 @@ export class DesktopSettingsService {
         ...applications,
         preferredEditorId,
         preferredTerminalId,
+        glab: {
+          // Derived default: an operator who has never heard of glab gets a
+          // resting "off" instead of a red failure for a forge they cannot
+          // use, and one who installed it gets the check they came for.
+          // An explicit config value always wins over the derivation.
+          enabled: this.resolveForgeEnabled("gitlab", glabDiscovery),
+          path: this.resolveString(config.applications?.glab?.path, GLAB_COMMAND_ENV),
+          host: this.resolveString(config.applications?.glab?.host, GLAB_HOST_ENV),
+          discovery: glabDiscovery,
+        },
         gh: {
+          enabled: this.resolveForgeEnabled("github", ghDiscovery),
           path: this.resolveString(config.applications?.gh?.path, GH_COMMAND_ENV),
           discovery: ghDiscovery,
         },
@@ -1669,6 +1719,21 @@ export class DesktopSettingsService {
       this.ghDiscoveryCache = cache;
     }
     return this.ghDiscoveryCache.promise;
+  }
+
+  private discoverGlabCommandsCached(
+    configuredCommand: string | undefined,
+  ): ReturnType<typeof discoverGlabCommands> {
+    const key = configuredCommand ?? "";
+    if (this.glabDiscoveryCache?.key !== key) {
+      const promise = discoverGlabCommands({ configuredCommand, env: this.env });
+      const cache: NonNullable<typeof this.glabDiscoveryCache> = { key, promise };
+      void promise.then((result) => {
+        cache.result = result;
+      });
+      this.glabDiscoveryCache = cache;
+    }
+    return this.glabDiscoveryCache.promise;
   }
 
   resolveWorktreeStorage(): DesktopWorktreeStorageLocation {
@@ -2172,6 +2237,7 @@ export class DesktopSettingsService {
       this.startupDiscoveryPromise = Promise.allSettled([
         this.runCodexDiscovery(permit),
         this.discoverGhCommandsCached(configuredGhCommand),
+        this.discoverGlabCommandsCached(applications.glab?.path),
         this.discoverGitCommandsCached(applications.git?.path),
         this.discoverDesktopApplicationsCached(),
       ]).then(() => undefined).finally(() => {
@@ -2764,6 +2830,53 @@ export class DesktopSettingsService {
     const configured = this.configStore.read("applications").gh?.path;
     return (
       readEnvString(this.env, GH_COMMAND_ENV)
+      || configured
+      || undefined
+    );
+  }
+
+  /**
+   * Whether PwrAgent may read this forge at all.
+   *
+   * Reads the resolved snapshot value rather than raw config so the
+   * derived "on when the CLI is installed" default and any env override
+   * apply here exactly as they do in Settings — the pane and the fetcher
+   * must never disagree about whether a forge is live.
+   */
+  isForgeEnabled(provider: "github" | "gitlab"): boolean {
+    // Sync on purpose: the PR fetcher calls this per lookup, long after
+    // startup discovery has settled, so the memoized result is available.
+    return this.resolveForgeEnabled(
+      provider,
+      provider === "gitlab"
+        ? this.glabDiscoveryCache?.result
+        : this.ghDiscoveryCache?.result,
+    ).value;
+  }
+
+  /**
+   * The one derivation both the Settings snapshot and `isForgeEnabled`
+   * read, so the pane and the PR fetcher cannot disagree about whether a
+   * forge is live. Takes the discovery snapshot rather than reading it, so
+   * the caller decides how settled that evidence is: the projection awaits
+   * the in-flight probe first, the fetcher gate reads the memoized result.
+   */
+  private resolveForgeEnabled(
+    provider: "github" | "gitlab",
+    discovery: { candidates: Array<{ executable: boolean }> } | undefined,
+  ): DesktopSettingsValue<boolean> {
+    const applications = this.configStore.read("applications");
+    return this.resolveBoolean(
+      provider === "gitlab" ? applications.glab?.enabled : applications.gh?.enabled,
+      forgeCliPresent(discovery),
+      provider === "gitlab" ? GLAB_ENABLED_ENV : GH_ENABLED_ENV,
+    );
+  }
+
+  resolveGlabCommandPreference(): string | undefined {
+    const configured = this.configStore.read("applications").glab?.path;
+    return (
+      readEnvString(this.env, GLAB_COMMAND_ENV)
       || configured
       || undefined
     );

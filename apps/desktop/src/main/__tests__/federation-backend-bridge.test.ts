@@ -3840,6 +3840,7 @@ describe("federation backend bridge", () => {
         preferredEditorId: { value: "", source: "default" as const },
         preferredTerminalId: { value: "", source: "default" as const },
         gh: {
+          enabled: { value: false, source: "default" },
           path: { value: "", source: "default" as const },
           discovery: { candidates: [] },
         },

@@ -821,6 +821,32 @@ export type DesktopGhDiscoverySnapshot = {
   error?: string;
 };
 
+export type DesktopGlabCandidateSource =
+  | "env"
+  | "config"
+  | "path"
+  | "homebrew"
+  | "macports"
+  | "user"
+  | "windows";
+
+export type DesktopGlabDiscoveryCandidate = {
+  command: string;
+  source: DesktopGlabCandidateSource;
+  executable: boolean;
+  selected: boolean;
+  version?: string;
+  versionFailureReason?: string;
+  failureReason?: string;
+};
+
+export type DesktopGlabDiscoverySnapshot = {
+  selectedCommand?: string;
+  selectedSource?: DesktopGlabCandidateSource;
+  candidates: DesktopGlabDiscoveryCandidate[];
+  error?: string;
+};
+
 export type DesktopGitCandidateSource =
   | "env"
   | "config"
@@ -867,8 +893,21 @@ export type DesktopApplicationsSnapshot = {
   preferredEditorId: DesktopSettingsValue<string>;
   preferredTerminalId: DesktopSettingsValue<string>;
   gh: {
+    /** Whether PwrAgent reads GitHub pull request status at all. Defaults
+     *  to whether `gh` was discovered, so a machine without it reports a
+     *  resting "off" rather than a failure for a forge it cannot use. */
+    enabled: DesktopSettingsValue<boolean>;
     path: DesktopSettingsValue<string>;
     discovery: DesktopGhDiscoverySnapshot;
+  };
+  glab?: {
+    /** See `gh.enabled`; defaults to whether `glab` was discovered. */
+    enabled: DesktopSettingsValue<boolean>;
+    path: DesktopSettingsValue<string>;
+    /** Host the Settings connection check probes. Merge request reads
+     *  themselves always follow the host in the thread's own remote. */
+    host: DesktopSettingsValue<string>;
+    discovery: DesktopGlabDiscoverySnapshot;
   };
   git: {
     path: DesktopSettingsValue<string>;
@@ -1479,7 +1518,13 @@ export type DesktopSettingsConfigPatch = {
       preferredId?: string;
     };
     gh?: {
+      enabled?: boolean;
       path?: string;
+    };
+    glab?: {
+      enabled?: boolean;
+      path?: string;
+      host?: string;
     };
     git?: {
       path?: string;

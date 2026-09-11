@@ -522,3 +522,59 @@ describe("PrPollingScheduler", () => {
     expect(() => h.scheduler.stop()).not.toThrow();
   });
 });
+
+
+describe("GitLab polling", () => {
+  it("preserves the GitLab host and namespace through scheduled refreshes", async () => {
+    const summary = pr({ provider: "gitlab.example.com", org: "team/sub/group", repo: "project",
+      url: "https://gitlab.example.com/team/sub/group/project/-/merge_requests/17", number: 17 });
+    const fetchPullRequests = vi.fn(async () => [summary]);
+    const applyResults = vi.fn(async () => []);
+    const h = harness({
+      listTargets: () => [{ prKey: "gitlab.example.com/team/sub/group/project#17", pr: summary, threadKeys: ["thread"] }],
+      getFocusedThreadKeys: () => new Set(["thread"]),
+      fetchPullRequests,
+      applyResults,
+    });
+    await h.scheduler.tick();
+    expect(fetchPullRequests).toHaveBeenCalledWith([{ gitlabHost: "gitlab.example.com", owner: "team/sub/group", repo: "project", number: 17 }]);
+    expect(applyResults).toHaveBeenCalledWith([summary], h.now);
+  });
+});
+
+describe("GitLab request admission", () => {
+  function gitlabTargets(count: number): PrPollTarget[] {
+    return Array.from({ length: count }, (_, index) => ({ ...target(index + 1),
+      pr: pr({ provider: "gitlab.com", number: index + 1, url: `https://gitlab.com/team/project/-/merge_requests/${index + 1}` }),
+    }));
+  }
+
+  it("spends one token per MR and defers unadmitted targets", async () => {
+    let tokens = 2;
+    const tryTakeToken = vi.fn(() => tokens-- > 0);
+    const h = harness({ listTargets: () => gitlabTargets(120), tryTakeToken });
+    await h.scheduler.tick();
+    expect(h.fetched.map((refs) => refs.length)).toEqual([1, 1]);
+    expect(polledNumbers(h.fetched)).toEqual([1, 2]);
+    h.advance(15_000);
+    tokens = 2;
+    await h.scheduler.tick();
+    expect(polledNumbers(h.fetched)).toEqual([1, 2, 3, 4]);
+  });
+
+  it("admits at most three GitLab requests per tick, even with abundant tokens", async () => {
+    const tryTakeToken = vi.fn(() => true);
+    const h = harness({ listTargets: () => gitlabTargets(120), tryTakeToken });
+    await h.scheduler.tick();
+    expect(h.fetched.map((refs) => refs.length)).toEqual([1, 1, 1]);
+    expect(tryTakeToken).toHaveBeenCalledTimes(3);
+  });
+
+  it("keeps a reconnect probe to one paid GitLab request", async () => {
+    const tryTakeToken = vi.fn(() => true);
+    const h = harness({ listTargets: () => gitlabTargets(120), tryTakeToken });
+    await h.scheduler.probeAfterNetworkReconnect();
+    expect(h.fetched.map((refs) => refs.length)).toEqual([1]);
+    expect(tryTakeToken).toHaveBeenCalledOnce();
+  });
+});

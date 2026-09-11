@@ -371,6 +371,9 @@ describe("parseGhAuthStatus", () => {
     expect(result.account).toBe("fixtureuser");
     expect(result.scopes).toEqual(["repo", "read:org", "workflow"]);
     expect(result.hasRepoScope).toBe(true);
+    expect(result.permissionState).toBe("sufficient");
+    // A resting success state carries no reason line. The org-SSO and
+    // per-repository caveats are only actionable on the PR that hits them.
     expect(result.reason).toBeUndefined();
   });
 
@@ -407,7 +410,9 @@ describe("parseGhAuthStatus", () => {
     expect(result.loggedIn).toBe(false);
     expect(result.account).toBeUndefined();
     expect(result.scopes).toEqual([]);
-    expect(result.reason).toMatch(/gh auth login/);
+    // No reason line for a signed-out account: the pill says "Not signed in"
+    // and the pane's sign-in field carries the copyable command.
+    expect(result.reason).toBeUndefined();
   });
 
   it("supports the older 'Logged in to github.com as <name>' format", () => {
@@ -418,6 +423,20 @@ describe("parseGhAuthStatus", () => {
     });
     expect(result.account).toBe("legacy-name");
     expect(result.loggedIn).toBe(true);
+  });
+});
+
+describe("GitHub authentication sufficiency", () => {
+  it("does not report a failed login as connected or return token output", () => {
+    const status = parseGhAuthStatus({ stdout: "", stderr: "Logged in to github.com account fixture\nToken: secret", ok: false });
+    expect(status.loggedIn).toBe(false);
+    expect(status.rawOutput).toBeUndefined();
+  });
+
+  it("distinguishes public-only scope from unreported fine-grained permissions", () => {
+    const status = (scopes: string) => parseGhAuthStatus({ stdout: "", stderr: `Logged in to github.com account fixture\n${scopes}`, ok: true });
+    expect(status("Token scopes: 'public_repo'").permissionState).toBe("limited");
+    expect(status("").permissionState).toBe("unknown");
   });
 });
 
