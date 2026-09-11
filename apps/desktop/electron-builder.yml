@@ -64,6 +64,9 @@ files:
   # Keep those out of app.asar.unpacked so macOS universal merging only sees
   # electron-builder's rebuilt current-arch binary under build/Release.
   - "!**/node_modules/node-pty/prebuilds/**"
+  # SQLite's amalgamated C source and header are build inputs only. Keep the
+  # compiled better_sqlite3.node binding; omit roughly 10 MB of unused sources.
+  - "!**/node_modules/better-sqlite3/deps/sqlite3/*.{c,h}"
   # Our own workspace package metadata is unused at runtime — vite inlines.
   - "!**/node_modules/@pwragent/*/AGENTS.md"
   - "!**/node_modules/@pwragent/*/src/**"
