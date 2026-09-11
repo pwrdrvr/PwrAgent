@@ -211,6 +211,48 @@ describe("integrated terminal IPC federation branch", () => {
     expect(mocks.localCreateOrAttach).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["acp:grok:remote-thread", "acp:grok", "remote-thread"],
+    ["acp:claude-code:remote-thread", "acp:claude-code", "remote-thread"],
+    ["acp%3Agrok:remote-thread", "acp:grok", "remote-thread"],
+    ["acp:grok:remote:thread", "acp:grok", "remote:thread"],
+  ])(
+    "routes the thread identity %s intact to the owner",
+    async (threadKey, backend, threadId) => {
+      const sender = fakeWebContents(7);
+      mocks.federationWindowIds.add(7);
+      mocks.federationTargets.set(7, { scope: "remote", instanceId: "peer-a" });
+
+      await invoke(INTEGRATED_TERMINAL_CREATE_CHANNEL, sender, {
+        threadKey,
+        cols: 120,
+        rows: 32,
+      });
+
+      expect(mocks.remotePtyOpen).toHaveBeenCalledWith({
+        backend,
+        threadId,
+        cols: 120,
+        rows: 32,
+      });
+      expect(mocks.localCreateOrAttach).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["acp:grok", "acp:grok:", "codex:", "unknown:thread", "acp%ZZ:thread"])(
+    "rejects malformed remote thread identity %s before opening a shell",
+    async (threadKey) => {
+      await expect(invoke(INTEGRATED_TERMINAL_CREATE_CHANNEL, fakeWebContents(2), {
+        threadKey,
+        cols: 80,
+        rows: 24,
+        federationTarget: { scope: "remote", instanceId: "peer-a" },
+      })).rejects.toThrow("Remote terminal thread key is malformed.");
+      expect(mocks.remotePtyOpen).not.toHaveBeenCalled();
+      expect(mocks.localCreateOrAttach).not.toHaveBeenCalled();
+    },
+  );
+
   it("routes a MAIN window's create remotely when the request names an owning instance", async () => {
     const sender = fakeWebContents(2);
 

@@ -34,7 +34,6 @@ import type {
 import {
   buildPendingRequestActions,
   buildPendingRequestApprovalContext,
-  isAppServerBackendKind,
 } from "@pwragent/shared";
 import { injectMessagingBindingTransitions } from "./messaging-binding-transition-entries";
 import { injectPermissionTransitions } from "./permission-transition-entries";
@@ -169,11 +168,6 @@ const LOAD_OLDER_THRESHOLD_PX = 160;
 // transcript message on an unrelated live-turn render.
 const EMPTY_SKILLS: AppServerSkillSummary[] = [];
 
-type AutomationThreadTarget = {
-  backend: AppServerBackendKind;
-  threadId: string;
-};
-
 function isAssistantFinalMessage(entry: AppServerThreadEntry): boolean {
   return (
     entry.type === "message" &&
@@ -184,16 +178,6 @@ function isAssistantFinalMessage(entry: AppServerThreadEntry): boolean {
 
 function entryCreatedAt(entry: AppServerThreadEntry): number | undefined {
   return typeof entry.createdAt === "number" ? entry.createdAt : undefined;
-}
-
-function parseThreadIdentity(value: string | undefined): AutomationThreadTarget | undefined {
-  const separatorIndex = value?.indexOf(":") ?? -1;
-  if (!value || separatorIndex <= 0) return undefined;
-  const backend = value.slice(0, separatorIndex);
-  if (!isAppServerBackendKind(backend)) return undefined;
-  const threadId = value.slice(separatorIndex + 1);
-  if (!threadId) return undefined;
-  return { backend, threadId };
 }
 
 function pendingEntriesInEventOrder(
