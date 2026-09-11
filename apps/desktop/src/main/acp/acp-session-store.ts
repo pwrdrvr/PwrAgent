@@ -21,6 +21,8 @@ export type AcpSessionMetadata = {
   createdAt: number;
   updatedAt: number;
   executionMode: ThreadExecutionMode;
+  /** Host-enforced policy for helpers that must never request user approval. */
+  approvalPolicy?: "deny-all";
   acpRuntime?: BackendAcpSessionRuntimeState;
   availableCommands?: AppServerAvailableCommandSummary[];
   status: "active" | "idle" | "failed" | "unknown";

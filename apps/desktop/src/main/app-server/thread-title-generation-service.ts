@@ -1,7 +1,7 @@
 import type { AppServerBackendKind } from "@pwragent/shared";
 import { buildThreadTitlePrompt } from "./thread-title-prompt";
 
-export const THREAD_TITLE_PROMPT_VERSION = "thread-title-v2";
+export const THREAD_TITLE_PROMPT_VERSION = "thread-title-v3";
 const THREAD_TITLE_TIMEOUT_MS = 20_000;
 const REQUESTED_MAX_TITLE_CHARACTERS = 50;
 const REQUESTED_MAX_TITLE_WORDS = 6;

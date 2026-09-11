@@ -24147,7 +24147,9 @@ command = "pnpm dev"
         acpRuntime: {
           configValues: {
             model: "kimi-k2-0711-preview",
+            approval_mode: "yolo",
           },
+          currentModeId: "yolo",
           updatedAt: 1000,
         },
         status: "idle",
@@ -24193,6 +24195,7 @@ command = "pnpm dev"
         turnId: "turn-1",
       })),
       sendControlPrompt,
+      setRuntimeOption: vi.fn(async () => ({})),
       readReplay: vi.fn((): AppServerThreadReplay => ({
         entries: [],
         messages: [],
@@ -24226,9 +24229,18 @@ command = "pnpm dev"
       expect.objectContaining({
         cwd: "/repo/project",
         hidden: true,
+        executionMode: "default",
+        approvalPolicy: "deny-all",
         title: "Name this thread",
       }),
     );
+    expect(acpClient.setRuntimeOption.mock.calls).toEqual([[{
+      sessionId: "kimi-title-helper",
+      source: "model",
+      optionId: "model",
+      value: "kimi-k2-0711-preview",
+      reasoningEffort: undefined,
+    }]]);
     expect(sendControlPrompt).toHaveBeenCalledWith({
       sessionId: "kimi-title-helper",
       prompt: expect.stringContaining(prompt),

@@ -7,5 +7,8 @@ export function readThreadTitlePrompt(): string {
 }
 
 export function buildThreadTitlePrompt(userPrompt: string): string {
-  return threadTitlePrompt.replace(USER_PROMPT_PLACEHOLDER, userPrompt.trim());
+  return threadTitlePrompt.replace(
+    USER_PROMPT_PLACEHOLDER,
+    () => JSON.stringify(userPrompt.trim()),
+  );
 }

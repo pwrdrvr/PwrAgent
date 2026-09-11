@@ -60,6 +60,41 @@ function readRawAcpSessionPayload(
 }
 
 describe("AcpAgentClient", () => {
+  it.each(["acp:qwen", "acp:kimi", "acp:grok"] as const)(
+    "denies helper approvals without consulting the operator for %s",
+    async (backendId) => {
+      const transport = new FakeAcpAgentTransport();
+      const onRequest = vi.fn(() => ({ decision: "accept" }));
+      const client = new AcpAgentClient({ backendId, store, transport, onRequest });
+      await client.initialize();
+      const session = await client.startSession({
+        sessionId: "helper-app-id",
+        cwd: tempDir,
+        executionMode: "default",
+        approvalPolicy: "deny-all",
+        hidden: true,
+        mcpServers: "none",
+      });
+      expect(store.getSession(backendId, session.sessionId)?.approvalPolicy).toBe("deny-all");
+      const permission = {
+        toolCall: { toolCallId: "tool-1", kind: "execute", title: "Run command" },
+        options: [{ optionId: "allow", kind: "allow_once", name: "Allow" }],
+      };
+      await expect(transport.emitRequest("session/request_permission", {
+        ...permission,
+        sessionId: "session-1",
+      })).resolves.toEqual({ outcome: { outcome: "cancelled" } });
+      expect(onRequest).not.toHaveBeenCalled();
+
+      // An unrelated session retains the normal approval path.
+      await expect(transport.emitRequest("session/request_permission", {
+        ...permission,
+        sessionId: "parent-session",
+      })).resolves.toEqual({ outcome: { outcome: "selected", optionId: "allow" } });
+      expect(onRequest).toHaveBeenCalledOnce();
+      await client.dispose();
+    },
+  );
   it("sends Grok steering and workflow-budget extension payloads", async () => {
     const transport = new FakeAcpAgentTransport({
       "session/new": { sessionId: "grok-session" },

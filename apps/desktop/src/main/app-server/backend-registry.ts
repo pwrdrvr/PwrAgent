@@ -9548,14 +9548,14 @@ export class DesktopBackendRegistry {
                       reasoningEffort,
                       session,
                     }) => {
-                      const runtime = mergeAcpRuntimeState(
-                        parentSession?.acpRuntime ?? {},
-                        session.acpRuntime ?? {},
-                      );
+                      const model = parentSession?.acpRuntime?.currentModelId
+                        ?? parentSession?.acpRuntime?.configValues?.model
+                        ?? session.acpRuntime?.currentModelId
+                        ?? session.acpRuntime?.configValues?.model;
                       await this.applyAcpRuntimeSelection(
                         client,
                         session.sessionId,
-                        runtime,
+                        model ? { currentModelId: model } : undefined,
                         reasoningEffort,
                       );
                     },

@@ -530,6 +530,7 @@ export class AcpAgentClient {
     sessionId?: string;
     cwd?: string;
     executionMode: ThreadExecutionMode;
+    approvalPolicy?: "deny-all";
     title?: string;
     createdAt?: number;
     acpRuntime?: BackendAcpSessionRuntimeState;
@@ -594,6 +595,7 @@ export class AcpAgentClient {
       createdAt: params.createdAt ?? now,
       updatedAt: now,
       executionMode: params.executionMode,
+      ...(params.approvalPolicy ? { approvalPolicy: params.approvalPolicy } : {}),
       acpRuntime: combinedRuntimeState,
       ...(params.hidden ? { hidden: true } : {}),
       status: "idle",
@@ -1267,6 +1269,14 @@ export class AcpAgentClient {
   ): Promise<unknown> {
     if (method !== "session/request_permission") {
       throw new Error(`Unsupported ACP request: ${method}`);
+    }
+
+    const protocolSessionId = typeof params.sessionId === "string" ? params.sessionId : undefined;
+    const session = protocolSessionId
+      ? this.options.store.getSession(this.options.backendId, this.appSessionIdFor(protocolSessionId))
+      : undefined;
+    if (session?.approvalPolicy === "deny-all") {
+      return cancelledPermissionOutcome();
     }
 
     const request = this.normalizePermissionRequest(params, id);
