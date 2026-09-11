@@ -1,0 +1,4 @@
+# pnpm deploy reads package-local packing rules. Neither the destination nor
+# a previously prepared sibling may become input to another release stage.
+/release-stage/
+/release-stage-arm64/
