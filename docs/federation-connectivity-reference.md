@@ -205,9 +205,12 @@ first, then a Tailscale Serve URL, then a Cloudflare Tunnel hostname. The
 reconnect loop tries the endpoints in order, starts each cycle with the last
 endpoint that carried a fully authenticated session, and applies reconnect
 backoff per full cycle through the list. Settings → Federation shows each
-endpoint's live status and lets the operator edit the ordered list; gateways
-can advertise multiple endpoints in enrollment invites via
-`[federation] advertised_endpoints`.
+endpoint's live status and lets the operator edit the ordered list without
+re-enrolling or changing the pinned gateway identity. Make that change on the
+client instance: **Gateway endpoints** is enabled in client or dual mode.
+Gateways can advertise multiple endpoints in new enrollment invites via
+`[federation] advertised_endpoints`, but changing that advertised list does not
+rewrite the lists already stored by enrolled clients.
 
 Endpoint fallback cannot redirect a client to a different gateway identity:
 
@@ -249,6 +252,20 @@ PwrAgent scopes those credentials to a single host:
 
 PwrAgent can use a Tailscale-provided URL or route without treating Tailscale
 identity as PwrAgent identity.
+
+A direct MagicDNS route is a complete WebSocket URL, including the PwrAgent
+listener port:
+
+```text
+ws://<device>.<tailnet>.ts.net:47830
+```
+
+For this direct route, the gateway listener must bind an address that includes
+the Tailscale interface, normally `0.0.0.0`. Binding only a LAN address does not
+also bind the Tailscale address. A Tailscale Serve route is different: its
+`wss://<device>.<tailnet>.ts.net/pwragent-federation` URL uses HTTPS port 443
+implicitly, so it has no visible port and the PwrAgent listener remains on
+loopback behind Serve.
 
 ### Tailscale Serve
 
