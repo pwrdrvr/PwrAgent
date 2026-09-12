@@ -492,6 +492,23 @@ type StarMapScreenProps = {
  * own lane. The antithesis of the left-bar thread list - pick a machine,
  * see what needs review.
  */
+/**
+ * What a Projects-lens card's position is measured FROM, given whatever
+ * offset it carries.
+ *
+ * A hand-placed card measures from its cloud's CENTRE, so it rides with
+ * the cloud through a re-fit while the seats reflow around it; an
+ * untouched one sits at its seat. The rule has to hold identically for the
+ * card's own `baseSlot`, its rect, and the snap the drag runs against —
+ * three readers that painting and hit-testing require to agree.
+ */
+function projectBaseSlot(
+  seat: { slot: StarMapCardSlot; center: { x: number; y: number } },
+  offset: StarMapCardOffset | undefined,
+): StarMapCardSlot {
+  return offset ? { dx: seat.center.x, dy: seat.center.y } : seat.slot;
+}
+
 export function StarMapScreen(props: StarMapScreenProps) {
   const active = useStarMapForeground();
   const layerRef = useRef<HTMLDivElement>(null);
@@ -1709,11 +1726,15 @@ export function StarMapScreen(props: StarMapScreenProps) {
     const seats = new Map<
       string,
       {
-        projectKey: string;
+        instanceId: string;
+        threadKey: string;
         placement: { x: number; y: number };
+        /** Where the card sits with no offset of its own. */
         slot: StarMapCardSlot;
+        /** What a hand-placed offset is measured from. */
         center: { x: number; y: number };
-        index: number;
+        /** One region per project, so any card can reach any seat. */
+        detentRadius: number;
       }
     >();
     if (!projectClouds) return seats;
@@ -1724,20 +1745,50 @@ export function StarMapScreen(props: StarMapScreenProps) {
       const placement = placementByKey.get(project.key);
       const cloud = projectClouds.get(project.key);
       if (!placement || !cloud) continue;
+      // Once per project, not once per card: the radius is a property of
+      // the cloud, and computing it per card walked every slot N times.
+      const detentRadius = cloudDetentRadius(cloud.slots);
       cloud.threads.forEach((thread, index) => {
         const slot = cloud.slots[index];
         if (!slot) return;
         seats.set(projectCardKey(thread), {
-          projectKey: project.key,
+          instanceId: projectThreadOwner(thread) ?? localInstanceId ?? "project",
+          threadKey: buildThreadIdentityKey(thread.source, thread.id),
           placement: { x: placement.x, y: placement.y },
           slot,
           center: cloud.clusters[cloud.clusterIndexByCard[index]].center,
-          index,
+          detentRadius,
         });
       });
     }
     return seats;
-  }, [projectCardKey, projectClouds, projectLayout, projects]);
+  }, [
+    localInstanceId,
+    projectCardKey,
+    projectClouds,
+    projectLayout,
+    projects,
+  ]);
+
+  /**
+   * Hand-placed offsets for the Projects lens, by card key.
+   *
+   * Its own rows (`starMapProjectArrangementKey`), because the Instances
+   * lens measures the same card's slot from a different body: sharing one
+   * row would fling a card by the distance between its machine and its
+   * project every time the operator switched lens.
+   */
+  const projectOffsets = useMemo(() => {
+    const offsets = new Map<string, StarMapCardOffset>();
+    for (const [cardKey, seat] of projectSeats) {
+      const offset = arrangement.offsetFor(
+        seat.instanceId,
+        starMapProjectArrangementKey(seat.threadKey),
+      );
+      if (offset) offsets.set(cardKey, offset);
+    }
+    return offsets;
+  }, [arrangement, projectSeats]);
 
   /**
    * The anchor a hand-placed card's stored offset is measured from in a
@@ -1774,6 +1825,11 @@ export function StarMapScreen(props: StarMapScreenProps) {
    * screen. See `STAR_MAP_PROJECT_ARRANGEMENT_PREFIX`: the two radial
    * lenses measure a slot from different bodies, so one offset cannot
    * serve both.
+   *
+   * For the readers that serve BOTH lenses — the card menu's reset, the
+   * group-move commit. Code already inside a projects-only path calls
+   * `starMapProjectArrangementKey` outright, because routing it through a
+   * lens test there would suggest the lens could be something else.
    */
   const arrangementThreadKey = useCallback(
     (threadKey: string) =>
@@ -3167,22 +3223,24 @@ export function StarMapScreen(props: StarMapScreenProps) {
       // Cards may be dragged out past the detent on purpose — an island of
       // threads off to one side — and a lane does not pan, so a card pulled
       // beyond the window has no other way back to its cloud.
+      //
+      // Scoped to the lens on screen: each radial lens keeps its own row
+      // (`arrangementThreadKey`), so reading the raw key offered no reset
+      // for a card placed in the Projects lens and, when the thread also
+      // carried an Instances offset, reset THAT one while the card under
+      // the menu stayed where it was.
+      const positionRow = arrangementThreadKey(
+        buildThreadIdentityKey(thread.source, thread.id),
+      );
       if (
         desktopApi?.setStarMapCardPosition
-        && arrangement.offsetFor(
-          instanceId,
-          buildThreadIdentityKey(thread.source, thread.id),
-        )
+        && arrangement.offsetFor(instanceId, positionRow)
       ) {
         actions.push({
           key: "reset-position",
           label: "Reset position",
           onSelect: () =>
-            arrangement.setCardPosition(
-              instanceId,
-              buildThreadIdentityKey(thread.source, thread.id),
-              null,
-            ),
+            arrangement.setCardPosition(instanceId, positionRow, null),
         });
       }
       if (desktopApi?.archiveThread) {
@@ -3271,6 +3329,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
     },
     [
       arrangement,
+      arrangementThreadKey,
       cardMenuTargets,
       chatCards,
       desktopApi,
@@ -3387,22 +3446,19 @@ export function StarMapScreen(props: StarMapScreenProps) {
     const rects = new Map<string, SnapRect>();
     if (!projectsMode) return rects;
     for (const [cardKey, seat] of projectSeats) {
-      const threadKey = cardKey.slice(cardKey.indexOf("::") + 2);
-      const instanceId = cardKey.slice(0, cardKey.indexOf("::"));
-      const offset = arrangement.offsetFor(
-        instanceId,
-        starMapProjectArrangementKey(threadKey),
-      );
-      // Placed cards anchor to their cloud's CENTRE, the same rule the
-      // Instances lens applies — so a hand-placed card rides with its
-      // cloud instead of being dragged around by the seat it left.
-      const anchor = offset
-        ? { dx: seat.center.x + offset.dx, dy: seat.center.y + offset.dy }
-        : seat.slot;
+      const offset = projectOffsets.get(cardKey);
+      const base = projectBaseSlot(seat, offset);
+      // Where it actually paints: the card draws at its base plus the
+      // offset it holds, so the rect readers snap, fly and sweep against
+      // has to be the same sum.
+      const anchor = {
+        dx: base.dx + (offset?.dx ?? 0),
+        dy: base.dy + (offset?.dy ?? 0),
+      };
       // See `cardRects`: an unmeasured card reports 0, and a zero-height
       // rect would centre the camera on the card's top edge.
       const height =
-        cardHeights.get(threadKey) || STAR_MAP_ESTIMATED_CARD_HEIGHT;
+        cardHeights.get(seat.threadKey) || STAR_MAP_ESTIMATED_CARD_HEIGHT;
       rects.set(cardKey, {
         // Cloud slots hang from the card's TOP edge, and the cards are
         // drawn from the same slots, so the rect follows suit — the
@@ -3414,7 +3470,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
       });
     }
     return rects;
-  }, [arrangement, cardHeights, projectSeats, projectsMode]);
+  }, [cardHeights, projectOffsets, projectSeats, projectsMode]);
 
   /** Where every card the current lens draws sits, by card key. */
   const flightRects = projectsMode ? projectCardRects : cardRects;
@@ -4160,28 +4216,6 @@ export function StarMapScreen(props: StarMapScreenProps) {
   );
 
   /**
-   * Hand-placed offsets for the Projects lens, by card key.
-   *
-   * Its own rows (`starMapProjectArrangementKey`), because the Instances
-   * lens measures the same card's slot from a different body: sharing one
-   * row would fling a card by the distance between its machine and its
-   * project every time the operator switched lens.
-   */
-  const projectOffsets = useMemo(() => {
-    const offsets = new Map<string, StarMapCardOffset>();
-    if (!projectsMode) return offsets;
-    for (const cardKey of projectSeats.keys()) {
-      const separator = cardKey.indexOf("::");
-      const offset = arrangement.offsetFor(
-        cardKey.slice(0, separator),
-        starMapProjectArrangementKey(cardKey.slice(separator + 2)),
-      );
-      if (offset) offsets.set(cardKey, offset);
-    }
-    return offsets;
-  }, [arrangement, projectSeats, projectsMode]);
-
-  /**
    * Drag for one card in the Projects lens.
    *
    * Same gesture the Instances lens has — the operator was reading a
@@ -4195,49 +4229,40 @@ export function StarMapScreen(props: StarMapScreenProps) {
    * placeholder id would sync to a machine that does not exist.
    */
   const projectDragFor = useCallback(
-    (
-      thread: NavigationThreadSummary,
-      placement: { x: number; y: number },
-      index: number,
-      cloud: { slots: readonly StarMapCardSlot[]; clusters: readonly StarMapClusterPlacement[]; clusterIndexByCard: readonly number[]; heights?: readonly number[] },
-    ): StarMapCardDrag | undefined => {
-      if (!health?.instanceId) return undefined;
-      const threadKey = buildThreadIdentityKey(thread.source, thread.id);
-      const owner = projectThreadOwner(thread) ?? localInstanceId;
-      if (!owner) return undefined;
-      const cardKey = projectCardKey(thread);
-      const center = cloud.clusters[cloud.clusterIndexByCard[index]].center;
-      const seatSlot = cloud.slots[index];
-      const placed = projectOffsets.get(cardKey) !== undefined;
-      const baseSlot = placed ? { dx: center.x, dy: center.y } : seatSlot;
+    (cardKey: string): StarMapCardDrag | undefined => {
+      const seat = projectSeats.get(cardKey);
+      if (!seat || !health?.instanceId) return undefined;
+      const offset = projectOffsets.get(cardKey);
+      const baseSlot = projectBaseSlot(seat, offset);
       return {
-        detentRadius: cloudDetentRadius(cloud.slots),
+        detentRadius: seat.detentRadius,
         scale: view.scale,
-        snap: (offset) =>
+        snap: (proposed) =>
           snapCardAt({
             selfKey: cardKey,
-            origin: placement,
+            origin: seat.placement,
             baseSlot,
             cardWidth: ORBIT_CARD_WIDTH,
             height:
-              cardHeights.get(threadKey) || STAR_MAP_ESTIMATED_CARD_HEIGHT,
-            offset,
+              cardHeights.get(seat.threadKey)
+              || STAR_MAP_ESTIMATED_CARD_HEIGHT,
+            offset: proposed,
           }),
         onGuidesChange: setActiveGuides,
         onGroupDelta: (delta) => moveSelectionBy(cardKey, delta),
         onGroupCommit: (delta) => commitSelectionMove(cardKey, delta),
-        onCommitOffset: (offset) => {
+        onCommitOffset: (dropped) => {
           arrangement.setCardPosition(
-            owner,
-            starMapProjectArrangementKey(threadKey),
+            seat.instanceId,
+            starMapProjectArrangementKey(seat.threadKey),
             // First placement: the drag ran against the seat, so
             // re-express the result from the cloud centre before it
             // persists — otherwise the next re-fit moves the card.
-            placed
-              ? offset
+            offset
+              ? dropped
               : {
-                  dx: seatSlot.dx + offset.dx - center.x,
-                  dy: seatSlot.dy + offset.dy - center.y,
+                  dx: seat.slot.dx + dropped.dx - seat.center.x,
+                  dy: seat.slot.dy + dropped.dy - seat.center.y,
                 },
           );
         },
@@ -4248,10 +4273,9 @@ export function StarMapScreen(props: StarMapScreenProps) {
       cardHeights,
       commitSelectionMove,
       health?.instanceId,
-      localInstanceId,
       moveSelectionBy,
-      projectCardKey,
       projectOffsets,
+      projectSeats,
       snapCardAt,
       view.scale,
     ],
@@ -4382,9 +4406,10 @@ export function StarMapScreen(props: StarMapScreenProps) {
    * no visible owner is the thing to avoid. Drawn inside the canvas, so
    * it pans and zooms with both of its endpoints for free.
    *
-   * A chat card whose thread has no card on the map (filtered out, or
-   * folded into a cloud's overflow) simply gets no tether: a line to
-   * nowhere is worse than no line.
+   * A chat card whose thread has no card on the map (filtered out,
+   * folded into a cloud's overflow, or below the overview zoom where no
+   * lens draws cards at all) simply gets no tether: a line to nowhere is
+   * worse than no line.
    *
    * Read through `flightRects`, so the line is drawn in whichever lens is
    * showing — the Projects lens places its cards in canvas coordinates
@@ -4399,7 +4424,11 @@ export function StarMapScreen(props: StarMapScreenProps) {
    * `tetherExitPoint`.
    */
   const chatTethers = useMemo(() => {
-    if (chatCards.cards.length === 0) return [];
+    // `flightRects` holds every card's rect whether or not this zoom
+    // paints it, so the overview — which draws no thread cards in either
+    // radial lens — has to be excluded here rather than discovered as a
+    // line into empty sky.
+    if (chatCards.cards.length === 0 || overview) return [];
     return chatCards.cards.flatMap((card) => {
       const source = flightRects.get(card.key);
       if (!source) return [];
@@ -4455,7 +4484,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
         },
       ];
     });
-  }, [chatCards.cards, flightRects]);
+  }, [chatCards.cards, flightRects, overview]);
 
   const chatTetherPaths =
     chatTethers.length > 0 ? (
@@ -5334,9 +5363,16 @@ export function StarMapScreen(props: StarMapScreenProps) {
                     // instance rather than inventing an empty id.
                     const owner =
                       projectThreadOwner(thread) ?? localInstanceId;
+                    // One key per card: it addresses the seat, the
+                    // selection, the offset and the drag, and rebuilding
+                    // it at each of those cost a thread-identity key per
+                    // use on a surface that re-renders per streamed delta.
+                    const cardKey = projectCardKey(thread);
+                    const seat = projectSeats.get(cardKey);
+                    const cardOffset = projectOffsets.get(cardKey);
                     return (
                       <StarMapThreadCard
-                        key={projectCardKey(thread)}
+                        key={cardKey}
                         thread={thread}
                         sessionKeys={
                           owner === localInstanceId
@@ -5351,35 +5387,23 @@ export function StarMapScreen(props: StarMapScreenProps) {
                         instanceIcon={celestialIcons.iconFor(
                           owner === localInstanceId ? undefined : owner,
                         )}
-                        cardKey={projectCardKey(thread)}
+                        cardKey={cardKey}
                         // Selection was never wired here: the lens had no
                         // cloud pill to sweep a group with, so a selected
                         // card had no way to become one. The parent/child
                         // pills give it one, and a pill that reports
                         // `aria-pressed` while nothing highlights is worse
                         // than no pill.
-                        selected={selection.has(projectCardKey(thread))}
-                        onToggleSelect={() =>
-                          toggleSelected(projectCardKey(thread))
-                        }
-                        // A placed card hangs off its cloud's centre, an
-                        // unplaced one off its seat — so a card the
-                        // operator put somewhere rides with its cloud and
-                        // the reflowing seats around it leave it alone.
+                        selected={selection.has(cardKey)}
+                        onToggleSelect={() => toggleSelected(cardKey)}
+                        // See `projectBaseSlot`: a placed card hangs off
+                        // its cloud's centre, an unplaced one off its
+                        // seat, and the rect map reads the same rule.
                         baseSlot={
-                          projectOffsets.get(projectCardKey(thread))
-                            ? {
-                                dx: cloud.clusters[
-                                  cloud.clusterIndexByCard[index]
-                                ].center.x,
-                                dy: cloud.clusters[
-                                  cloud.clusterIndexByCard[index]
-                                ].center.y,
-                              }
-                            : cloud.slots[index]
+                          seat ? projectBaseSlot(seat, cardOffset) : cloud.slots[index]
                         }
-                        offset={projectOffsets.get(projectCardKey(thread))}
-                        drag={projectDragFor(thread, placement, index, cloud)}
+                        offset={cardOffset}
+                        drag={projectDragFor(cardKey)}
                         width={ORBIT_CARD_WIDTH}
                         // Cloud slots hang from the card's top edge, unlike
                         // the ring slots this lens used to seat from.

@@ -532,7 +532,7 @@ describe("star map projects lens clouds", () => {
         by: "pwr_local",
       },
     ];
-    const { container } = renderProjects(
+    const view = renderProjects(
       [
         thread({ id: "a1", path: "/repo/alpha", label: "AlphaDir" }),
         thread({ id: "a2", path: "/repo/alpha", label: "AlphaDir" }),
@@ -544,7 +544,7 @@ describe("star map projects lens clouds", () => {
 
     // The Projects lens honours it...
     await waitFor(() => {
-      const shell = container.querySelector(
+      const shell = view.container.querySelector(
         '.star-map-card-shell[data-card-key="pwr_local::codex:a1"]',
       ) as HTMLElement;
       expect(Number.parseFloat(shell.style.left)).toBeCloseTo(300, 0);
@@ -552,15 +552,212 @@ describe("star map projects lens clouds", () => {
     });
 
     // ...and the Instances lens, reading `codex:a1` rather than
-    // `project:codex:a1`, does not.
-    fireEvent.click(screen.getByRole("button", { name: /^View$/ }));
-    fireEvent.click(screen.getByRole("button", { name: "Instances" }));
+    // `project:codex:a1`, seats it exactly where it would sit with no
+    // arrangement at all. Compared against that second render rather
+    // than asserted as "not 300", which a lens ignoring every offset
+    // would also satisfy.
+    const instancesPosition = async (view: {
+      container: HTMLElement;
+      unmount: () => void;
+    }) => {
+      fireEvent.click(screen.getByRole("button", { name: /^View$/ }));
+      fireEvent.click(screen.getByRole("button", { name: "Instances" }));
+      let seat = { x: 0, y: 0 };
+      await waitFor(() => {
+        const shell = view.container.querySelector(
+          '.star-map-card-shell[data-card-key="pwr_local::codex:a1"]',
+        ) as HTMLElement;
+        expect(shell).not.toBeNull();
+        seat = {
+          x: Number.parseFloat(shell.style.left),
+          y: Number.parseFloat(shell.style.top),
+        };
+      });
+      return seat;
+    };
+    const placed = await instancesPosition(view);
+    view.unmount();
+
+    const bare = renderProjects([
+      thread({ id: "a1", path: "/repo/alpha", label: "AlphaDir" }),
+      thread({ id: "a2", path: "/repo/alpha", label: "AlphaDir" }),
+    ]);
+    await waitFor(() => {
+      expect(projectSystems(bare.container)[0]?.cards).toHaveLength(2);
+    });
+    const unplaced = await instancesPosition(bare);
+
+    expect(placed.x).toBeCloseTo(unplaced.x, 5);
+    expect(placed.y).toBeCloseTo(unplaced.y, 5);
+  });
+
+  /**
+   * The second drag of an already-placed card must NOT re-express the
+   * drop from its seat again: the stored offset is already measured from
+   * the cloud's centre, so folding `seat - centre` in a second time would
+   * fling the card by that distance on every drop after the first.
+   */
+  it("commits a second drag from the offset it already carries", async () => {
+    const writes: {
+      instanceId: string;
+      threadKey: string;
+      dx: number | null;
+      dy: number | null;
+    }[] = [];
+    const { container } = renderProjects(
+      [
+        thread({ id: "a1", path: "/repo/alpha", label: "AlphaDir" }),
+        thread({ id: "a2", path: "/repo/alpha", label: "AlphaDir" }),
+        thread({ id: "a3", path: "/repo/alpha", label: "AlphaDir" }),
+      ],
+      {
+        setStarMapCardPosition: vi.fn(
+          async (entry: (typeof writes)[number]) => {
+            writes.push(entry);
+          },
+        ),
+      } as unknown as Partial<DesktopApi>,
+    );
+    await waitFor(() => {
+      expect(projectSystems(container)[0]?.cards).toHaveLength(3);
+    });
+    const shellFor = () =>
+      container.querySelector(
+        '.star-map-card-shell[data-card-key="pwr_local::codex:a1"]',
+      ) as HTMLElement;
+
+    const drag = async (from: number, to: number) => {
+      fireEvent.pointerDown(shellFor(), {
+        button: 0,
+        clientX: from,
+        clientY: 300,
+      });
+      await act(async () => {
+        fireEvent.pointerMove(window, { clientX: to, clientY: 300 });
+        await new Promise((resolve) =>
+          requestAnimationFrame(() => resolve(null)),
+        );
+      });
+      fireEvent.pointerUp(window, { clientX: to, clientY: 300 });
+    };
+
+    await drag(500, 560);
+    await waitFor(() => expect(writes).toHaveLength(1));
+    const afterFirst = Number.parseFloat(shellFor().style.left);
+
+    await drag(560, 600);
+    await waitFor(() => expect(writes).toHaveLength(2));
+
+    // 40px of pointer travel is 40px of stored offset, on top of the
+    // first drag's. Re-expressing from the seat a second time would add
+    // the seat's whole distance from the cloud centre instead.
+    expect(writes[1].dx! - writes[0].dx!).toBeCloseTo(40, 0);
+    expect(Number.parseFloat(shellFor().style.left) - afterFirst).toBeCloseTo(
+      40,
+      0,
+    );
+  });
+  /**
+   * "Reset position" has to mean the placement in FRONT of the operator.
+   * It read the unscoped row, so in this lens it was missing for a card
+   * dragged here — and, for a thread that also carried an Instances
+   * offset, it appeared and silently reset that other lens instead.
+   */
+  it("resets the placement made in this lens, not the other one's", async () => {
+    const writes: {
+      instanceId: string;
+      threadKey: string;
+      dx: number | null;
+      dy: number | null;
+    }[] = [];
+    const { container } = renderProjects(
+      [
+        thread({ id: "a1", path: "/repo/alpha", label: "AlphaDir" }),
+        thread({ id: "a2", path: "/repo/alpha", label: "AlphaDir" }),
+      ],
+      {
+        readStarMapArrangement: vi.fn(async () => ({
+          entries: [
+            {
+              instanceId: "pwr_local",
+              threadKey: "project:codex:a1",
+              dx: 220,
+              dy: 140,
+              updatedAt: 1,
+              by: "pwr_local",
+            },
+            // The SAME thread, placed in the other lens. Resetting from
+            // here must not touch it.
+            {
+              instanceId: "pwr_local",
+              threadKey: "codex:a1",
+              dx: -900,
+              dy: -700,
+              updatedAt: 1,
+              by: "pwr_local",
+            },
+          ],
+        })),
+        setStarMapCardPosition: vi.fn(
+          async (entry: (typeof writes)[number]) => {
+            writes.push(entry);
+          },
+        ),
+      } as unknown as Partial<DesktopApi>,
+    );
+
+    // Wait for the arrangement read to land: the menu only offers the
+    // reset once the card actually carries an offset.
     await waitFor(() => {
       const shell = container.querySelector(
         '.star-map-card-shell[data-card-key="pwr_local::codex:a1"]',
       ) as HTMLElement;
-      expect(shell).not.toBeNull();
-      expect(Number.parseFloat(shell.style.left)).not.toBeCloseTo(300, 0);
+      expect(Number.parseFloat(shell.style.left)).toBeCloseTo(220, 0);
     });
+    // Re-query at click time: card measurement re-renders the map.
+    await screen.findByRole("button", { name: "Actions for Thread a1" });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Actions for Thread a1" }),
+    );
+    fireEvent.click(screen.getByRole("menuitem", { name: "Reset position" }));
+
+    await waitFor(() => expect(writes).toHaveLength(1));
+    expect(writes[0].threadKey).toBe("project:codex:a1");
+    expect(writes[0].dx).toBeNull();
+  });
+
+  /**
+   * A tether is drawn to a card's rect, and `flightRects` holds every
+   * rect whether or not this zoom paints it — so past the overview
+   * threshold, where neither radial lens draws a thread card, the line
+   * and its anchor dot pointed into empty sky.
+   */
+  it("draws no tether at the zoom that draws no cards", async () => {
+    const { container } = renderProjects([
+      thread({ id: "a1", path: "/repo/alpha", label: "AlphaDir" }),
+      thread({ id: "a2", path: "/repo/alpha", label: "AlphaDir" }),
+    ]);
+    await screen.findByRole("button", { name: /Open thread: Thread a1/ });
+    fireEvent.click(
+      screen.getByRole("button", { name: /Open thread: Thread a1/ }),
+    );
+    await waitFor(() => {
+      expect(container.querySelector(".star-map__tether")).not.toBeNull();
+    });
+
+    // Zoom out past the overview threshold: the cards go, and so does
+    // the line that pointed at one.
+    const viewport = container.querySelector(".star-map__viewport")!;
+    await waitFor(() => {
+      fireEvent.wheel(viewport, {
+        deltaY: 600,
+        ctrlKey: true,
+        clientX: 400,
+        clientY: 300,
+      });
+      expect(container.querySelector(".star-map-card-shell")).toBeNull();
+    });
+    expect(container.querySelector(".star-map__tether")).toBeNull();
+    expect(container.querySelector(".star-map__tether-anchor")).toBeNull();
   });
 });
