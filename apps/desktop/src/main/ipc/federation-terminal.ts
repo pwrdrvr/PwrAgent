@@ -506,6 +506,15 @@ export class FederationTerminalBridge {
     });
   }
 
+  /**
+   * In-flight opens stay THREAD-keyed even though a thread now owns several
+   * terminals: the owner mints the id, so a viewer has nothing else to name a
+   * terminal by until its open resolves. The cost is that two id-less opens on
+   * one thread in one window collapse into a single shell — right for "attach
+   * to this thread's terminal", wrong for "give me another one". No caller can
+   * ask for the second today (a window renders one pane per thread), so a tab
+   * strip that does has to carry its own intent here.
+   */
   private pendingKey(webContents: WebContents, threadKey: string): string {
     return `${webContents.id}:${threadKey}`;
   }
