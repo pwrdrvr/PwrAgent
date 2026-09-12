@@ -124,7 +124,13 @@ export function SubAgentDetailsModal(props: SubAgentDetailsModalProps) {
   const model = subAgent.preferredModel ?? usage?.model ?? usage?.cost?.model;
   const fastMode = subAgent.preferredFastMode ?? usage?.fastMode;
   const running = !isTerminalSubAgent(subAgent);
+  // Managed Codex monitors and reviews are ephemeral; only native Codex
+  // subagents and ACP workers have reloadable child transcripts.
+  const hasDurableTranscript =
+    (subAgent.backend ?? props.defaultBackend) !== "codex"
+    || subAgent.monitorId.startsWith("codex-native:");
   const transcriptThreadId =
+    hasDurableTranscript &&
     subAgent.monitorThreadId &&
     subAgent.monitorThreadId !== props.parentThreadId
       ? subAgent.monitorThreadId

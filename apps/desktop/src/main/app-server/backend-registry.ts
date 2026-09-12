@@ -17559,12 +17559,10 @@ export class DesktopBackendRegistry {
     const thread = await client.startThread({
       ...(params.cwd ? { cwd: params.cwd } : {}),
       approvalPolicy: modeSettings.approvalPolicy,
-      // Keep review children durable so their inspection-only transcript can
-      // use thread/read with includeTurns, and mark them as subagents so
-      // PwrAgent excludes them from ordinary navigation. This classification
-      // does not claim Codex-native ThreadSpawn parentage, which Codex reserves
-      // for workers created by spawn_agent.
-      ephemeral: false,
+      // Do not persist managed workers in the shared Codex history: other
+      // profiles and the Codex app cannot rely on our local navigation filter.
+      // Progress, results, and usage remain on the parent's sub-agent record.
+      ephemeral: true,
       threadSource: "subagent" as CodexThreadSource,
       sandbox: modeSettings.sandbox,
       ...params.modelSettings,
@@ -35617,12 +35615,10 @@ export class DesktopBackendRegistry {
       ...(cwd ? { cwd } : {}),
       approvalPolicy: modeSettings.approvalPolicy,
       dynamicTools,
-      // Keep monitor children durable so their inspection-only transcript can
-      // use thread/read with includeTurns, and mark them as subagents so
-      // PwrAgent excludes them from ordinary navigation. This classification
-      // does not claim Codex-native ThreadSpawn parentage, which Codex reserves
-      // for workers created by spawn_agent.
-      ephemeral: false,
+      // Do not persist managed workers in the shared Codex history: other
+      // profiles and the Codex app cannot rely on our local navigation filter.
+      // Progress, results, and usage remain on the parent's sub-agent record.
+      ephemeral: true,
       model: params.preferredModel,
       reasoningEffort: params.preferredReasoningEffort,
       sandbox: modeSettings.sandbox,
