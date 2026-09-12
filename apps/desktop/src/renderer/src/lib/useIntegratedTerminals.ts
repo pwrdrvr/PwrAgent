@@ -194,30 +194,28 @@ export function useIntegratedTerminals(
       // and main agree on which shell it is. Several panes for one thread is
       // the tab strip's job, and giving them stable React identities across
       // the local-pane hand-off is a design that work has to make.
-      ...[...sessionsByThread.values()].flatMap((group) => {
-        const session = group[0];
-        if (!session) return [];
-        return [
-          {
-            threadKey: session.threadKey,
-            sessionId: session.sessionId,
-            cwd: session.cwd,
-            // A rediscovered remote session (remount, renderer reload) carries
-            // its owning instance in the summary — rebuild the pane's target
-            // from it so re-attaches keep routing to the peer.
-            ...(session.remote
-              ? {
-                  remote: {
-                    ...session.remote,
-                    target: {
-                      scope: "remote" as const,
-                      instanceId: session.remote.instanceId,
-                    },
+      // A group is built around its first element, so it is never empty.
+      ...[...sessionsByThread.values()].map((group) => {
+        const session = group[0]!;
+        return {
+          threadKey: session.threadKey,
+          sessionId: session.sessionId,
+          cwd: session.cwd,
+          // A rediscovered remote session (remount, renderer reload) carries
+          // its owning instance in the summary — rebuild the pane's target
+          // from it so re-attaches keep routing to the peer.
+          ...(session.remote
+            ? {
+                remote: {
+                  ...session.remote,
+                  target: {
+                    scope: "remote" as const,
+                    instanceId: session.remote.instanceId,
                   },
-                }
-              : {}),
-          },
-        ];
+                },
+              }
+            : {}),
+        };
       }),
       ...Object.values(localPanes)
         .filter((pane) => !sessionsByThread.has(pane.threadKey))
@@ -335,10 +333,10 @@ export function useIntegratedTerminals(
     setHeightByThread((current) => ({ ...current, [threadKey]: height }));
   }, []);
 
-  // The quit dialog's terminal links land here: show me the shell, whatever the
-  // remembered panel state was. Only ever for a session main still has — main
-  // already refuses to broadcast otherwise, and `openPanel` on an unknown
-  // thread would create a local pane, which spawns a whole new shell.
+  // The quit dialog's terminal links land here: show me this shell, whatever
+  // the remembered panel state was. Only ever for a session main still has —
+  // acting on an unknown one would reach for a thread this window may not
+  // have, and main already refuses to broadcast for a shell that has exited.
   const liveSessionIds = useMemo(
     () => new Set(sessions.map((session) => session.sessionId)),
     [sessions],
@@ -347,8 +345,16 @@ export function useIntegratedTerminals(
   liveSessionIdsRef.current = liveSessionIds;
   useEffect(() => {
     const unsubscribe = desktopApi?.onIntegratedTerminalReveal?.((event) => {
-      // Keyed on the terminal, not the thread: main un-hid one specific shell
-      // and this converges on that, whatever else the thread is showing.
+      // Terminal-scoped, and ONLY terminal-scoped. This used to fall back to
+      // `openPanel(event.threadKey)`, which un-hides every terminal the
+      // thread owns — and it fired on the ordinary path, not just in a race,
+      // because `isPanelOpenRef` is a render-time ref that still reads
+      // pre-broadcast when the reveal lands. Revealing one shell popped its
+      // siblings open with it.
+      //
+      // Main un-hid this terminal in `revealSession` before sending the
+      // event, so the call below is normally a no-op that just converges a
+      // renderer whose mirror is momentarily behind.
       if (!liveSessionIdsRef.current.has(event.sessionId)) {
         return;
       }
@@ -356,16 +362,11 @@ export function useIntegratedTerminals(
         sessionId: event.sessionId,
         hidden: false,
       });
-      // The pane itself may still be local-only in this window, in which case
-      // main's record is not what is deciding whether it shows.
-      if (!isPanelOpenRef.current(event.threadKey)) {
-        openPanel(event.threadKey);
-      }
     });
     return () => {
       unsubscribe?.();
     };
-  }, [desktopApi, openPanel]);
+  }, [desktopApi]);
 
   return {
     sessions,

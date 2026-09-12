@@ -230,6 +230,26 @@ export type IntegratedTerminalQuitSnapshot = {
   threads: IntegratedTerminalQuitThread[];
 };
 
+/** `[value]`, or `[]` for a lookup that found nothing. */
+function toTargets<T>(value: T | undefined): T[] {
+  return value ? [value] : [];
+}
+
+/**
+ * A thread's terminals, oldest first, from any registry that keys terminals
+ * this way. Both this service and the federation bridge group by thread, and
+ * the ordering is load-bearing in both: it decides which terminal a create
+ * request that names none attaches to. One rule, so the local and remote
+ * paths cannot drift on what "the thread's terminal" means.
+ */
+export function terminalsForThread<
+  T extends { threadKey: string; createdAt: number },
+>(sessions: Iterable<T>, threadKey: string): T[] {
+  return [...sessions]
+    .filter((session) => session.threadKey === threadKey)
+    .sort((left, right) => left.createdAt - right.createdAt);
+}
+
 /**
  * Code-unit order, matching the plain `.sort()` these keys used before they
  * became objects. `localeCompare` would reorder around the `:` and `-` that
@@ -434,9 +454,7 @@ export class IntegratedTerminalService {
 
   /** A thread's live terminals, oldest first. */
   private sessionsForThread(threadKey: string): TerminalSession[] {
-    return [...this.sessionsById.values()]
-      .filter((session) => session.threadKey === threadKey)
-      .sort((left, right) => left.createdAt - right.createdAt);
+    return terminalsForThread(this.sessionsById.values(), threadKey);
   }
 
   write(request: IntegratedTerminalWriteRequest): void {
@@ -453,14 +471,12 @@ export class IntegratedTerminalService {
   }
 
   close(request: IntegratedTerminalCloseRequest): void {
-    const byId = request.sessionId
-      ? this.sessionsById.get(request.sessionId)
-      : undefined;
-    // A thread key closes every terminal the thread owns. The thread view's
-    // close button means "put this thread's terminal away", and a thread can
-    // now be showing more than one.
-    const targets = byId
-      ? [byId]
+    // An explicit id NEVER widens to the thread. A request naming a terminal
+    // that has already exited means "that one is gone", not "take the rest of
+    // the thread with it" — and since a thread can now own several, falling
+    // through would kill shells the caller never named.
+    const targets = request.sessionId
+      ? toTargets(this.sessionsById.get(request.sessionId))
       : request.threadKey
         ? this.sessionsForThread(request.threadKey)
         : [];

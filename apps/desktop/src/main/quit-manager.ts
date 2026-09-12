@@ -319,7 +319,12 @@ export function buildQuitBlockerSnapshot(params: {
   const terminalThreads = [...params.terminalSessions.threads].sort(
     byQuitTerminal,
   );
-  const terminalThreadKeys = terminalThreads.map((thread) => thread.threadKey);
+  // One entry per THREAD, as the name promises. A thread blocking quit with
+  // two shells is two rows in `items`, but repeating its key here would read
+  // as a duplicate-key bug in the log line this feeds.
+  const terminalThreadKeys = [
+    ...new Set(terminalThreads.map((thread) => thread.threadKey)),
+  ];
   const actionRuns = params.actionRuns ?? [];
   const automationRuns = params.inProgressThreads.automationRuns ?? [];
   const subAgentThreadKeys = new Set(

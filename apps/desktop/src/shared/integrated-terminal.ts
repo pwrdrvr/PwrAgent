@@ -107,9 +107,12 @@ export type IntegratedTerminalResizeRequest = {
 };
 
 /**
- * `sessionId` closes exactly that terminal. `threadKey` closes every terminal
- * the thread owns — the only address a pane has before its create resolves,
- * and the one the thread view's close button uses.
+ * `sessionId` closes exactly that terminal, and closes nothing when it names
+ * none — it never widens to the thread. `threadKey` closes every terminal the
+ * thread owns; it is the only address a pane has before its create resolves,
+ * which is the one case the thread view's close button still falls back to.
+ *
+ * Pass one or the other. A request carrying both is read as the id.
  */
 export type IntegratedTerminalCloseRequest = {
   sessionId?: string;

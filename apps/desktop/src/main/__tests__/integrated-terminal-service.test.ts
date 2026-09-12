@@ -1089,6 +1089,42 @@ describe("resolveTerminalShell", () => {
       ).toBe(true);
     });
 
+    // The one operation an operator triggers by hand from the quit dialog,
+    // and the only one whose scoping was not pinned anywhere.
+    it("reveals the terminal it names and leaves its sibling collapsed", async () => {
+      const { first, second, service } = await openTwoOnOneThread();
+      service.setPanelHidden({ sessionId: first.sessionId, hidden: true });
+      service.setPanelHidden({ sessionId: second.sessionId, hidden: true });
+
+      expect(service.revealSession(second.sessionId)).toEqual({
+        threadKey: "codex:thread-a",
+      });
+
+      const hiddenBySession = new Map(
+        service
+          .listSessions()
+          .map((session) => [session.sessionId, session.panelHidden]),
+      );
+      expect(hiddenBySession.get(second.sessionId)).toBe(false);
+      expect(hiddenBySession.get(first.sessionId)).toBe(true);
+    });
+
+    // An id names one shell. A request whose id has already exited means
+    // "that one is gone" — widening to the thread would take the operator's
+    // other terminals down with a close they never issued.
+    it("closes nothing when the named terminal is already gone", async () => {
+      const { ptys, service } = await openTwoOnOneThread();
+
+      service.close({
+        sessionId: "terminal-that-exited",
+        threadKey: "codex:thread-a",
+      });
+
+      expect(ptys[0]?.kill).not.toHaveBeenCalled();
+      expect(ptys[1]?.kill).not.toHaveBeenCalled();
+      expect(service.listSessions()).toHaveLength(2);
+    });
+
     it("refuses to attach a terminal that belongs to a different thread", async () => {
       const { second, service } = await openTwoOnOneThread();
 

@@ -25,6 +25,7 @@ import {
   FEDERATION_PTY_ACK_INTERVAL_BYTES,
   type FederationPtyStreamEvent,
 } from "../federation/federation-pty-service";
+import { terminalsForThread } from "../terminal/integrated-terminal-service";
 import { getDesktopFederationRuntime } from "../federation/federation-runtime";
 import { getMainLogger } from "../log";
 import { federationWindowTargetForWebContents } from "../window";
@@ -213,21 +214,22 @@ export class FederationTerminalBridge {
   }
 
   close(request: IntegratedTerminalCloseRequest, webContents: WebContents): void {
-    const byId = request.sessionId
-      ? this.ownedSession(webContents, request.sessionId)
-      : undefined;
     // Mirrors the local service: a thread key closes every terminal the
-    // thread owns in this window, an id closes exactly one.
-    const sessions = byId
-      ? [byId]
+    // thread owns in this window, an id closes exactly one — and an id that
+    // names nothing live closes nothing, rather than widening to the thread
+    // and dropping shells the caller never named.
+    const sessions = request.sessionId
+      ? toRemoteTargets(this.ownedSession(webContents, request.sessionId))
       : request.threadKey
         ? this.sessionsForThread(webContents, request.threadKey.trim())
         : [];
     if (sessions.length === 0) {
       // Nothing registered yet. If the open is still in flight, mark it so
       // the session is closed the moment it exists instead of the close
-      // being silently lost.
-      if (request.threadKey) {
+      // being silently lost. Only for a close that named no terminal: a
+      // caller holding an id already had its open resolve, so an in-flight
+      // one on the same thread belongs to a different pane.
+      if (request.threadKey && !request.sessionId) {
         const pending = this.pendingOpens.get(
           this.pendingKey(webContents, request.threadKey.trim()),
         );
@@ -521,9 +523,7 @@ export class FederationTerminalBridge {
     webContents: WebContents,
     threadKey: string,
   ): RemoteTerminalSession[] {
-    return this.sessionsForWindow(webContents)
-      .filter((session) => session.threadKey === threadKey)
-      .sort((left, right) => left.createdAt - right.createdAt);
+    return terminalsForThread(this.sessionsForWindow(webContents), threadKey);
   }
 
   private sessionsForWindow(webContents: WebContents): RemoteTerminalSession[] {
@@ -649,6 +649,13 @@ export function sortSessionsByCreatedAt(
   sessions: IntegratedTerminalSessionSummary[],
 ): IntegratedTerminalSessionSummary[] {
   return [...sessions].sort((left, right) => left.createdAt - right.createdAt);
+}
+
+/** `[value]`, or `[]` for a lookup that found nothing. */
+function toRemoteTargets(
+  session: RemoteTerminalSession | undefined,
+): RemoteTerminalSession[] {
+  return session ? [session] : [];
 }
 
 function trimBufferedOutput(value: string): string {

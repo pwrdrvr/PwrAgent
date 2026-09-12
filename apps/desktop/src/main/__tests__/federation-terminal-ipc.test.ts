@@ -469,6 +469,22 @@ describe("integrated terminal IPC federation branch", () => {
       ]);
     });
 
+    it("closes nothing when the named remote terminal is already gone", async () => {
+      const sender = fakeWebContents(7);
+      await openTwo(sender);
+
+      await invoke(INTEGRATED_TERMINAL_CLOSE_CHANNEL, sender, {
+        sessionId: "remote-session-that-exited",
+        threadKey: "codex:remote-pinned",
+      });
+
+      expect(mocks.remotePtyClose).not.toHaveBeenCalled();
+      expect(
+        ((await invoke(INTEGRATED_TERMINAL_LIST_CHANNEL, sender)) as unknown[])
+          .length,
+      ).toBe(2);
+    });
+
     // The thread key still means "every terminal this thread owns", which is
     // what a pane whose create has not resolved can ask for.
     it("closes every one of them when the request names the thread", async () => {
