@@ -46177,6 +46177,92 @@ script = "printf setup"
     await registry.close();
   });
 
+  it.each([false, true])("discovers archive worktrees after a cheap listing (shared checkout: %s)", async (shared) => {
+    const worktreePath = "/repo/checkouts/feature";
+    const directory = {
+      id: "directory:/repo/app",
+      label: "app",
+      path: "/repo/app",
+      kind: "worktree" as const,
+      worktreePath,
+    };
+    const target: AppServerThreadSummary = {
+      id: "archive-target",
+      title: "Archive target",
+      titleSource: "explicit",
+      source: "codex",
+      projectKey: worktreePath,
+      linkedDirectories: [directory],
+      updatedAt: 1,
+    };
+    const sibling: AppServerThreadSummary = {
+      ...target,
+      id: "unvisited-sibling",
+      title: "Unvisited sibling",
+      projectKey: `${worktreePath}/src`,
+    };
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list", "thread/archive"] },
+    });
+    vi.spyOn(codexClient, "listThreads").mockImplementation(async (params) => {
+      if (params?.archived) return [];
+      return (shared ? [target, sibling] : [target]).map((thread) =>
+        params?.enrichDirectories || (shared && thread === target)
+          ? thread
+          : {
+              ...thread,
+              linkedDirectories: [{
+                id: `directory:${thread.projectKey}`,
+                label: "feature",
+                path: thread.projectKey!,
+                kind: "local" as const,
+              }],
+            },
+      );
+    });
+    const archiveWorktree = vi.fn(async () => ({
+      id: "archive-snapshot",
+      backend: "codex" as const,
+      threadId: target.id,
+      worktreePath,
+      repositoryPath: "/repo/app",
+      snapshotRef: "refs/codex/snapshots/archive-snapshot",
+      snapshotCommit: "abc123",
+      sourceHead: "def456",
+      createdAt: 1000,
+      archivedAt: 1000,
+      state: "archived" as const,
+      ignoredFilesExcluded: true,
+    }));
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+      worktreeArchiveService: { archive: archiveWorktree } as unknown as WorktreeArchiveService,
+    });
+    try {
+      await registry.listThreads({ backend: "codex", callerReason: "navigation-snapshot" });
+      const response = await registry.archiveThread({ backend: "codex", threadId: target.id });
+      if (shared) {
+        expect(archiveWorktree).not.toHaveBeenCalled();
+        expect(response.cleanup).toEqual([expect.objectContaining({
+          worktreePath,
+          removedWorktree: false,
+          skippedReason: "Worktree is still used by another active thread: unvisited-sibling.",
+        })]);
+      } else {
+        expect(archiveWorktree).toHaveBeenCalledWith({
+          backend: "codex",
+          threadId: target.id,
+          worktreePath,
+          repositoryPath: "/repo/app",
+        });
+        expect(response.cleanup).toEqual([expect.objectContaining({ removedWorktree: true })]);
+      }
+    } finally {
+      await registry.close();
+    }
+  });
+
   it("retains parent worktree snapshots for archived same-worktree children", async () => {
     const worktreePath = "/Users/test/.codex/worktrees/shared/PwrAgnt";
     const parentThread: AppServerThreadSummary = {

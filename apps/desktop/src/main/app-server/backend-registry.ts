@@ -6008,9 +6008,10 @@ let threadListCacheSequence = 0;
 function shouldEnrichThreadDirectories(
   callerReason?: ThreadListCallerReason,
 ): boolean {
-  // Lists serve cached/provider metadata. Only explicit reconciliation may
-  // enrich a collection; interaction and lifecycle refreshes target one thread.
-  return callerReason === "directory-relationship-reconcile";
+  // Ordinary lists serve cached/provider metadata. Archive safety also needs
+  // canonical worktree roots for unvisited threads sharing a checkout.
+  return callerReason === "directory-relationship-reconcile"
+    || callerReason === "archive-cleanup";
 }
 
 /**
