@@ -1,5 +1,6 @@
 import type { DesktopFederationMode } from "@pwragent/shared";
 import { getMainLogger } from "./log";
+import { RuntimeLeaseRetry } from "./runtime-lease-retry";
 import {
   getRuntimeLeaseManager,
   RuntimeLeaseManager,
@@ -13,6 +14,7 @@ import {
  */
 export type FederationLeaseRuntime = {
   stop(): Promise<void>;
+  restart(): Promise<void>;
 };
 
 const leaseLog = getMainLogger("pwragent:federation-lease");
@@ -59,6 +61,8 @@ type RuntimeFederationLeaseCoordinatorOptions = RuntimeLeaseManagerOptions & {
 export class RuntimeFederationLeaseCoordinator {
   private readonly leaseManager: RuntimeLeaseManager;
   private disabledReasonKind: RuntimeFederationDisabledReasonKind | undefined;
+  private readonly retry = new RuntimeLeaseRetry();
+  private shuttingDown = false;
 
   constructor(options: RuntimeFederationLeaseCoordinatorOptions = {}) {
     this.leaseManager =
@@ -81,10 +85,12 @@ export class RuntimeFederationLeaseCoordinator {
    * session override, without changing the saved profile configuration.
    */
   async applyMode(
-    _runtime: FederationLeaseRuntime,
+    runtime: FederationLeaseRuntime,
     mode: DesktopFederationMode,
     disabledForSession = false,
   ): Promise<RuntimeFederationLeaseApplyResult> {
+    const generation = this.retry.cancel();
+    if (this.shuttingDown) return { enabled: false, disabledReasonKind: "runtime_stopped" };
     if (mode === "disabled") {
       this.leaseManager.release("federation");
       this.disabledReasonKind = disabledForSession ? "runtime_stopped" : "saved_disabled";
@@ -98,6 +104,7 @@ export class RuntimeFederationLeaseCoordinator {
     const acquire = this.leaseManager.acquire("federation");
     if (!acquire.acquired) {
       this.disabledReasonKind = "lease_held";
+      this.retry.schedule(this.leaseManager, "federation", generation, () => runtime.restart());
       return {
         enabled: false,
         disabledReasonKind: "lease_held",
@@ -119,6 +126,7 @@ export class RuntimeFederationLeaseCoordinator {
   async releaseAfterStartupFailure(
     runtime: FederationLeaseRuntime,
   ): Promise<void> {
+    this.retry.cancel();
     try {
       await runtime.stop();
     } catch (error) {
@@ -131,7 +139,13 @@ export class RuntimeFederationLeaseCoordinator {
     }
   }
 
+  stopRecovery(): void {
+    this.shuttingDown = true;
+    this.retry.cancel();
+  }
+
   shutdownSync(): void {
+    this.stopRecovery();
     this.leaseManager.release("federation");
   }
 
@@ -143,9 +157,9 @@ export class RuntimeFederationLeaseCoordinator {
       ...(this.disabledReasonKind
         ? {
             disabledReasonKind: this.disabledReasonKind,
-            disabledReason: federationDisabledReasonMessage(
-              this.disabledReasonKind,
-            ),
+            disabledReason: this.disabledReasonKind === "lease_held" && !lease.leaseHolder
+              ? "Waiting to retry Federation after the previous owner stopped."
+              : federationDisabledReasonMessage(this.disabledReasonKind),
           }
         : {}),
       ...(lease.leaseHolder ? { leaseHolder: lease.leaseHolder } : {}),

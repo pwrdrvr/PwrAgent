@@ -754,6 +754,8 @@ const runMainProcessShutdownBarrier = createShutdownBarrier({
 
 async function disposeMainProcessResources(source: string): Promise<void> {
   mainProcessShutdownPromise ??= (async () => {
+    getExistingRuntimeMessagingLeaseCoordinator()?.stopRecovery();
+    getExistingRuntimeFederationLeaseCoordinator()?.stopRecovery();
     e2eShutdownDiagnostics.beginOverall();
     try {
       // Electron emits before-quit while renderer windows are still live. Close
@@ -879,6 +881,20 @@ function isWindowCreationBlocked(): boolean {
  * app.quit() re-closing this window during teardown, so there's no loop.
  */
 function quitAppOnMainWindowClose(window: BrowserWindow): void {
+  window.webContents.on("render-process-gone", (_event, details) => {
+    if (
+      details.reason === "clean-exit"
+      || mainProcessShutdownPromise
+      || mainProcessResourcesDisposed
+      || isUpdateInstallInProgress()
+    ) return;
+    const source = `main-renderer-${details.reason}`;
+    mainLog.error("main renderer lost; shutting down app", details);
+    // A dead renderer cannot answer the active-turn confirmation dialog.
+    beginQuitInProgress(source);
+    appQuitManager.allowImmediateQuit();
+    quitAfterResourceShutdown(source);
+  });
   window.on("close", (event) => {
     if (appQuitManager.isQuitAllowed()) {
       return;

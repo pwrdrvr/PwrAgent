@@ -6,6 +6,7 @@ const processEventHandlers = new Map<string, (...args: unknown[]) => void>();
 // Captures the listeners createMainWindow's return value registers via
 // `window.on(...)` — lets tests drive the main window's "close" handler
 // (quit-on-main-window-close).
+const mainRendererHandlers = new Map<string, (...args: unknown[]) => void>();
 const mainWindowHandlers = new Map<string, (...args: unknown[]) => void>();
 const createMainWindowMock = vi.fn();
 const registerAppServerIpcHandlersMock = vi.fn();
@@ -540,10 +541,12 @@ vi.mock("../profile", () => ({
 const runtimeMessagingLeaseCoordinatorMock = {
   start: messagingLeaseStartMock,
   shutdownSync: messagingLeaseShutdownSyncMock,
+  stopRecovery: vi.fn(),
 };
 
 const runtimeFederationLeaseCoordinatorMock = {
   shutdownSync: federationLeaseShutdownSyncMock,
+  stopRecovery: vi.fn(),
 };
 
 vi.mock("../app-server/backend-registry", () => ({
@@ -614,11 +617,13 @@ describe("bootstrapApp", () => {
       },
     );
     mainWindowHandlers.clear();
+    mainRendererHandlers.clear();
     createMainWindowMock.mockReset();
     // createMainWindow returns the BrowserWindow; index.ts wraps each call in
     // quitAppOnMainWindowClose(window), which calls window.on("close", …).
     // Return a stub that records its listeners so tests can invoke them.
     createMainWindowMock.mockImplementation(() => ({
+      webContents: { on: (event: string, handler: (...args: unknown[]) => void) => mainRendererHandlers.set(event, handler) },
       on: (event: string, handler: (...args: unknown[]) => void) => {
         mainWindowHandlers.set(event, handler);
       },
@@ -1088,6 +1093,42 @@ describe("bootstrapApp", () => {
       onShown: expect.any(Function),
       startupCpuProfiler: startupProfilerInstance,
     });
+  });
+
+  it.each(["oom", "crashed", "killed", "abnormal-exit", "launch-failed", "integrity-failure", "memory-eviction"])(
+    "shuts down resources without a renderer confirmation after %s", async (reason) => {
+      startupProfilerInstance.start.mockResolvedValue();
+      await import("../index");
+      await flushMicrotasks();
+      requestQuitMock.mockClear();
+      mainRendererHandlers.get("render-process-gone")!({}, { reason, exitCode: 1 });
+      await flushMicrotasks();
+      expect(requestQuitMock).not.toHaveBeenCalled();
+      expect(disposeDesktopMessagingRuntimeMock).toHaveBeenCalled();
+      await vi.waitFor(() => expect(quitMock).toHaveBeenCalledTimes(1));
+      expect(disposeDesktopFederationRuntimeMock).toHaveBeenCalledTimes(1);
+      expect(federationLeaseShutdownSyncMock).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("renderer loss bypasses an unanswered quit confirmation", async () => {
+    startupProfilerInstance.start.mockResolvedValue();
+    await import("../index");
+    await flushMicrotasks();
+    requestQuitMock.mockReturnValue(new Promise(() => {}));
+    mainWindowHandlers.get("close")!({ preventDefault: vi.fn() });
+    mainRendererHandlers.get("render-process-gone")!({}, { reason: "oom", exitCode: 1 });
+    await vi.waitFor(() => expect(quitMock).toHaveBeenCalledTimes(1));
+    expect(disposeDesktopFederationRuntimeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not shut down for a clean renderer exit", async () => {
+    startupProfilerInstance.start.mockResolvedValue();
+    await import("../index");
+    await flushMicrotasks();
+    mainRendererHandlers.get("render-process-gone")!({}, { reason: "clean-exit", exitCode: 0 });
+    await flushMicrotasks();
+    expect(disposeDesktopFederationRuntimeMock).not.toHaveBeenCalled();
   });
 
   it("quits the app when the main window is closed", async () => {

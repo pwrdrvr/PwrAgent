@@ -182,13 +182,12 @@ describe("codex environment runtime", () => {
         }),
       ]);
 
-      await expect(expectEventually(async () => await readFile(outputPath, "utf8"))).resolves.toBe(
-        "hydrated",
-      );
-      // File creation proves the shell ran, not that the detached Windows Job
-      // and its PowerShell launcher have released their cwd handles. Await the
-      // owner lifecycle before deleting that cwd.
+      // A detached start acknowledges the launcher, not completion of the
+      // command. Wait for its lifecycle event before reading the output: a
+      // cold Windows Job launch can exceed the file poll's ten-second window.
+      // Exit also proves the launcher released its cwd handles before cleanup.
       await expect(detachedExit).resolves.toMatchObject({ exitCode: 0 });
+      await expect(readFile(outputPath, "utf8")).resolves.toBe("hydrated");
     } finally {
       await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }

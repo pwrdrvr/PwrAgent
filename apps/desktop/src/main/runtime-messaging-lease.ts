@@ -14,6 +14,7 @@ import type {
 } from "./messaging/messaging-runtime";
 import { resolveRuntimeMessagingOverride } from "./runtime-flags";
 import { getMainLogger } from "./log";
+import { RuntimeLeaseRetry } from "./runtime-lease-retry";
 import {
   getRuntimeLeaseManager,
   PWRAGENT_INSTANCE_ROOT_ENV,
@@ -60,6 +61,8 @@ export class RuntimeMessagingLeaseCoordinator {
   private readonly leaseManager: RuntimeLeaseManager;
   private readonly env?: NodeJS.ProcessEnv;
   private readonly argv?: readonly string[];
+  private readonly retry = new RuntimeLeaseRetry();
+  private shuttingDown = false;
 
   constructor(options: RuntimeMessagingLeaseCoordinatorOptions = {}) {
     this.leaseManager =
@@ -79,6 +82,7 @@ export class RuntimeMessagingLeaseCoordinator {
     runtime: DesktopMessagingRuntime,
     loadConfig: DesktopMessagingConfigLoader,
   ): Promise<RuntimeMessagingLeaseApplyResult> {
+    this.retry.cancel();
     const override = resolveRuntimeMessagingOverride({
       env: this.env,
       argv: this.argv,
@@ -96,10 +100,10 @@ export class RuntimeMessagingLeaseCoordinator {
       };
     }
 
-    const config = await this.loadConfigFailClosed(runtime, loadConfig, {
+    return this.applyLatestConfig(runtime, loadConfig, {
       logStartupEligibility: true,
+      allowStart: true,
     });
-    return this.applyResolvedConfig(runtime, config, { allowStart: true });
   }
 
   async applyLatestConfig(
@@ -107,12 +111,23 @@ export class RuntimeMessagingLeaseCoordinator {
     loadConfig: DesktopMessagingConfigLoader,
     options: DesktopMessagingConfigLoadOptions & { allowStart?: boolean } = {},
   ): Promise<RuntimeMessagingLeaseApplyResult> {
+    const generation = this.retry.cancel();
     const config = await this.loadConfigFailClosed(runtime, loadConfig, {
       logStartupEligibility: options.logStartupEligibility,
       messagingEnabledOverride: options.messagingEnabledOverride,
     });
+    // A stop or newer configuration can supersede an asynchronous secret read.
+    if (!this.retry.isCurrent(generation)) {
+      return { enabled: false, disabledReasonKind: "runtime_stopped" };
+    }
     return this.applyResolvedConfig(runtime, config, {
       allowStart: options.allowStart ?? true,
+      // Shared secrets can change without a TOML notification in this process.
+      // Retain the loader and session override, never the resolved credentials.
+      recover: () => this.applyLatestConfig(runtime, loadConfig, {
+        ...options,
+        logStartupEligibility: false,
+      }),
     });
   }
 
@@ -132,8 +147,13 @@ export class RuntimeMessagingLeaseCoordinator {
   async applyResolvedConfig(
     runtime: DesktopMessagingRuntime,
     config: DesktopMessagingConfig,
-    options: { allowStart?: boolean } = {},
+    options: {
+      allowStart?: boolean;
+      recover?: () => Promise<RuntimeMessagingLeaseApplyResult>;
+    } = {},
   ): Promise<RuntimeMessagingLeaseApplyResult> {
+    const generation = this.retry.cancel();
+    if (this.shuttingDown) return { enabled: false, disabledReasonKind: "runtime_stopped" };
     const desiredMessagingEnabled = config.enabled !== false;
     this.recordStart({
       desiredMessagingEnabled,
@@ -179,6 +199,9 @@ export class RuntimeMessagingLeaseCoordinator {
     const acquire = this.leaseManager.acquire("messaging");
     if (!acquire.acquired) {
       await runtime.stop();
+      if (options.recover) {
+        this.retry.schedule(this.leaseManager, "messaging", generation, options.recover);
+      }
       return {
         enabled: false,
         disabledReasonKind: "lease_held",
@@ -208,10 +231,17 @@ export class RuntimeMessagingLeaseCoordinator {
   }
 
   async shutdown(runtime: DesktopMessagingRuntime): Promise<void> {
+    this.stopRecovery();
     await this.stopRuntimeAndRelease(runtime, "runtime_stopped");
   }
 
+  stopRecovery(): void {
+    this.shuttingDown = true;
+    this.retry.cancel();
+  }
+
   shutdownSync(): void {
+    this.stopRecovery();
     this.leaseManager.release("messaging");
   }
 
@@ -223,7 +253,11 @@ export class RuntimeMessagingLeaseCoordinator {
       effectiveMessagingEnabled: instance?.effectiveMessagingEnabled ?? false,
       disabledReasonKind: instance?.disabledReason,
       ...(instance?.disabledReason
-        ? { disabledReason: runtimeDisabledReasonMessage(instance.disabledReason) }
+        ? {
+            disabledReason: instance.disabledReason === "lease_held" && !lease.leaseHolder
+              ? "Waiting to retry Messaging after the previous owner stopped."
+              : runtimeDisabledReasonMessage(instance.disabledReason),
+          }
         : {}),
       leaseHeld: lease.leaseHeld,
       ...(lease.leaseHolder ? { leaseHolder: lease.leaseHolder } : {}),
@@ -242,6 +276,7 @@ export class RuntimeMessagingLeaseCoordinator {
     runtime: DesktopMessagingRuntime,
     disabledReason: AppRuntimeMessagingDisabledReason,
   ): Promise<void> {
+    this.retry.cancel();
     await runtime.stop();
     this.leaseManager.release("messaging");
     this.leaseManager.recordMessagingState({

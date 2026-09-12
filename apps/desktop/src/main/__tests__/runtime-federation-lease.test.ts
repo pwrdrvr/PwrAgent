@@ -21,6 +21,7 @@ const activeCoordinators: RuntimeFederationLeaseCoordinator[] = [];
 function createRuntime(): FederationLeaseRuntime {
   return {
     stop: vi.fn(async () => {}),
+    restart: vi.fn(async () => {}),
   };
 }
 
@@ -452,6 +453,7 @@ describe("RuntimeFederationLeaseCoordinator", () => {
 
   it("releases the lease even when runtime stop fails during startup cleanup", async () => {
     const runtime: FederationLeaseRuntime = {
+      restart: vi.fn(async () => {}),
       stop: vi.fn(async () => {
         throw new Error("stop failed");
       }),
