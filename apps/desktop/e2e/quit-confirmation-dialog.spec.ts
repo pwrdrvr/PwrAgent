@@ -92,6 +92,11 @@ test("keeps running work reachable after cancelling and following a blocker", as
       )
       .toBe(1);
 
+    // The row link has to name this exact shell, so hold on to its id.
+    const blockingSessionId =
+      (await app.getIntegratedTerminalQuitSnapshot())?.sessionIds[0];
+    expect(blockingSessionId).toBeTruthy();
+
     const dialogPromise = app.electronApp.waitForEvent("window");
     // Not awaited: the modal holds the main process, so this round trip does
     // not resolve until the prompt is answered.
@@ -121,7 +126,15 @@ test("keeps running work reachable after cancelling and following a blocker", as
     expect(rendered.summary).toBe("1 integrated terminal is running.");
     expect(rendered.groups).toEqual(["Integrated terminals"]);
     expect(rendered.rowCount).toBe(1);
-    expect(rendered.firstHref).toMatch(/\/show-thread\/codex%3A.+\/terminal$/);
+    // A terminal row addresses a terminal, not a thread — a thread can own
+    // several shells, and revealing the wrong one is the bug this encodes
+    // against. The segments after the kind are positional: the owning instance
+    // (empty for a local shell) and then the terminal's own id.
+    expect(rendered.firstHref).toMatch(
+      /\/show-thread\/codex%3A[^/]+\/terminal\/\/[^/]+$/,
+    );
+    expect(rendered.firstHref.endsWith(`/terminal//${blockingSessionId}`))
+      .toBe(true);
 
     // The countdown must still be RUNNING here. Things that merely LOOK like
     // engagement must not stop it: the Quit button's `autofocus` fires a

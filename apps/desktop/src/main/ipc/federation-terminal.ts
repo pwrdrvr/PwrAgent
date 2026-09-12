@@ -25,6 +25,7 @@ import {
   FEDERATION_PTY_ACK_INTERVAL_BYTES,
   type FederationPtyStreamEvent,
 } from "../federation/federation-pty-service";
+import { terminalsForThread } from "../terminal/integrated-terminal-service";
 import { getDesktopFederationRuntime } from "../federation/federation-runtime";
 import { getMainLogger } from "../log";
 import { federationWindowTargetForWebContents } from "../window";
@@ -100,9 +101,17 @@ export class FederationTerminalBridge {
       throw new Error("A thread key is required to start a remote terminal.");
     }
     // Reattach before target resolution so a pane remount never needs to
-    // re-supply the target it created with.
-    const existing = this.sessionForThread(webContents, threadKey);
+    // re-supply the target it created with. A pane that already holds an id
+    // names its own shell; without one, "this thread's terminal" is the
+    // oldest the window owns.
+    const requestedId = request.sessionId?.trim();
+    const existing = requestedId
+      ? this.ownedSession(webContents, requestedId)
+      : this.sessionsForThread(webContents, threadKey)[0];
     if (existing) {
+      if (existing.threadKey !== threadKey) {
+        throw new Error("That terminal belongs to a different thread.");
+      }
       return this.toCreateResponse(existing);
     }
     const target = this.requireTarget(webContents, request);
@@ -205,18 +214,22 @@ export class FederationTerminalBridge {
   }
 
   close(request: IntegratedTerminalCloseRequest, webContents: WebContents): void {
-    const session =
-      (request.sessionId
-        ? this.ownedSession(webContents, request.sessionId)
-        : undefined) ??
-      (request.threadKey
-        ? this.sessionForThread(webContents, request.threadKey)
-        : undefined);
-    if (!session) {
+    // Mirrors the local service: a thread key closes every terminal the
+    // thread owns in this window, an id closes exactly one — and an id that
+    // names nothing live closes nothing, rather than widening to the thread
+    // and dropping shells the caller never named.
+    const sessions = request.sessionId
+      ? toRemoteTargets(this.ownedSession(webContents, request.sessionId))
+      : request.threadKey
+        ? this.sessionsForThread(webContents, request.threadKey.trim())
+        : [];
+    if (sessions.length === 0) {
       // Nothing registered yet. If the open is still in flight, mark it so
       // the session is closed the moment it exists instead of the close
-      // being silently lost.
-      if (request.threadKey) {
+      // being silently lost. Only for a close that named no terminal: a
+      // caller holding an id already had its open resolve, so an in-flight
+      // one on the same thread belongs to a different pane.
+      if (request.threadKey && !request.sessionId) {
         const pending = this.pendingOpens.get(
           this.pendingKey(webContents, request.threadKey.trim()),
         );
@@ -226,24 +239,28 @@ export class FederationTerminalBridge {
       }
       return;
     }
-    this.dropSession(session);
+    for (const session of sessions) {
+      this.dropSession(session);
+    }
     this.broadcastSessions(webContents);
-    void getDesktopFederationRuntime()
-      .remotePty(session.target)
-      .close({ sessionId: session.sessionId })
-      .catch((error) => {
-        // The owner's disconnect reap covers an undeliverable close.
-        log.warn("remote terminal close failed", {
-          error: error instanceof Error ? error.message : String(error),
+    for (const session of sessions) {
+      void getDesktopFederationRuntime()
+        .remotePty(session.target)
+        .close({ sessionId: session.sessionId })
+        .catch((error) => {
+          // The owner's disconnect reap covers an undeliverable close.
+          log.warn("remote terminal close failed", {
+            error: error instanceof Error ? error.message : String(error),
+          });
         });
-      });
+    }
   }
 
   setPanelHidden(
     request: IntegratedTerminalSetPanelHiddenRequest,
     webContents: WebContents,
   ): void {
-    const session = this.sessionForThread(webContents, request.threadKey);
+    const session = this.ownedSession(webContents, request.sessionId);
     if (!session || session.panelHidden === request.hidden) return;
     session.panelHidden = request.hidden;
     this.broadcastSessions(webContents);
@@ -300,30 +317,35 @@ export class FederationTerminalBridge {
   }
 
   /**
-   * Un-hide a remote thread's terminal panel and report the windows that host
-   * it. The local PTY registry knows nothing about these sessions, so asking
-   * only it — as the quit dialog's row link once did — reports "no such
-   * session" for every shell running on a peer and reveals nothing.
+   * Un-hide one remote terminal's panel and report the window that hosts it.
+   * The local PTY registry knows nothing about these sessions, so asking only
+   * it — as the quit dialog's row link once did — reports "no such session"
+   * for every shell running on a peer and reveals nothing.
+   *
+   * Remote mounts allocate a PTY per viewer window, so one thread open in two
+   * windows is two terminals with two ids. Addressing the id therefore lands
+   * on the shell whose row the operator actually clicked, where addressing
+   * the thread used to reveal both and then guess which window to navigate.
    */
-  revealSession(threadKey: string, instanceId?: string): WebContents[] {
-    const owners: WebContents[] = [];
-    for (const session of this.sessionsById.values()) {
-      if (session.threadKey !== threadKey || session.webContents.isDestroyed()) {
-        continue;
-      }
-      // Two instances can hold the same `backend:threadId`. When the caller
-      // knows which one it means, honor it rather than revealing a shell on
-      // the wrong machine.
-      if (instanceId && session.target.instanceId !== instanceId) {
-        continue;
-      }
-      if (session.panelHidden) {
-        session.panelHidden = false;
-        this.broadcastSessions(session.webContents);
-      }
-      owners.push(session.webContents);
+  revealSession(
+    sessionId: string,
+    instanceId?: string,
+  ): { threadKey: string; owner: WebContents } | undefined {
+    const session = this.sessionsById.get(sessionId);
+    if (!session || session.webContents.isDestroyed()) {
+      return undefined;
     }
-    return owners;
+    // Two instances can hold the same `backend:threadId`. When the caller
+    // knows which one it means, honor it rather than revealing a shell on
+    // the wrong machine.
+    if (instanceId && session.target.instanceId !== instanceId) {
+      return undefined;
+    }
+    if (session.panelHidden) {
+      session.panelHidden = false;
+      this.broadcastSessions(session.webContents);
+    }
+    return { threadKey: session.threadKey, owner: session.webContents };
   }
 
   dispose(): void {
@@ -392,7 +414,7 @@ export class FederationTerminalBridge {
   hasThreadSession(webContents: WebContents, threadKey: string): boolean {
     const trimmed = threadKey.trim();
     return (
-      this.sessionForThread(webContents, trimmed) !== undefined
+      this.sessionsForThread(webContents, trimmed).length > 0
       || this.pendingOpens.has(this.pendingKey(webContents, trimmed))
     );
   }
@@ -484,6 +506,15 @@ export class FederationTerminalBridge {
     });
   }
 
+  /**
+   * In-flight opens stay THREAD-keyed even though a thread now owns several
+   * terminals: the owner mints the id, so a viewer has nothing else to name a
+   * terminal by until its open resolves. The cost is that two id-less opens on
+   * one thread in one window collapse into a single shell — right for "attach
+   * to this thread's terminal", wrong for "give me another one". No caller can
+   * ask for the second today (a window renders one pane per thread), so a tab
+   * strip that does has to carry its own intent here.
+   */
   private pendingKey(webContents: WebContents, threadKey: string): string {
     return `${webContents.id}:${threadKey}`;
   }
@@ -496,13 +527,12 @@ export class FederationTerminalBridge {
     return session && session.webContents === webContents ? session : undefined;
   }
 
-  private sessionForThread(
+  /** This window's remote terminals for one thread, oldest first. */
+  private sessionsForThread(
     webContents: WebContents,
     threadKey: string,
-  ): RemoteTerminalSession | undefined {
-    return this.sessionsForWindow(webContents).find(
-      (session) => session.threadKey === threadKey,
-    );
+  ): RemoteTerminalSession[] {
+    return terminalsForThread(this.sessionsForWindow(webContents), threadKey);
   }
 
   private sessionsForWindow(webContents: WebContents): RemoteTerminalSession[] {
@@ -628,6 +658,13 @@ export function sortSessionsByCreatedAt(
   sessions: IntegratedTerminalSessionSummary[],
 ): IntegratedTerminalSessionSummary[] {
   return [...sessions].sort((left, right) => left.createdAt - right.createdAt);
+}
+
+/** `[value]`, or `[]` for a lookup that found nothing. */
+function toRemoteTargets(
+  session: RemoteTerminalSession | undefined,
+): RemoteTerminalSession[] {
+  return session ? [session] : [];
 }
 
 function trimBufferedOutput(value: string): string {

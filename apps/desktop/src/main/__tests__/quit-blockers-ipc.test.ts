@@ -61,12 +61,14 @@ describe("quit blocker IPC", () => {
           backend: "codex",
           threadId: "shared",
           threadKey: "codex:shared",
+          sessionId: "term-local",
         },
         {
           kind: "terminal",
           backend: "codex",
           threadId: "shared",
           threadKey: "codex:shared",
+          sessionId: "term-remote",
           target: { scope: "remote", instanceId: "peer-a" },
         },
       ],
@@ -81,12 +83,13 @@ describe("quit blocker IPC", () => {
         {
           kind: "terminal",
           threadKey: "codex:shared",
+          sessionId: "term-remote",
           target: { scope: "remote", instanceId: "peer-a" },
         },
         sender,
       ),
     ).toEqual({ revealed: true });
-    expect(revealIntegratedTerminal).toHaveBeenCalledWith("codex:shared", {
+    expect(revealIntegratedTerminal).toHaveBeenCalledWith("term-remote", {
       instanceId: "peer-a",
     });
     // The owning peer has to ride along: the viewer keys a remote thread by

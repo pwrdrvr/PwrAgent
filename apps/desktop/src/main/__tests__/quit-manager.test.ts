@@ -356,7 +356,7 @@ describe("createQuitManager", () => {
           inProgressThreads: { count: 0, threadIds: [] },
           terminalSessions: {
             count: 1,
-            threads: [{ threadKey: "codex:thread-1" }],
+            threads: [{ sessionId: "term-1", threadKey: "codex:thread-1" }],
           },
         }),
       resolveThreadTitles: async () =>
@@ -395,6 +395,7 @@ describe("createQuitManager", () => {
             count: 1,
             threads: [
               {
+                sessionId: "term-remote",
                 threadKey: "codex:0f9c2b7a-remote",
                 target,
                 instanceLabel: "Studio Mac",
@@ -443,7 +444,7 @@ describe("createQuitManager", () => {
           inProgressThreads: { count: 0, threadIds: [] },
           terminalSessions: {
             count: 1,
-            threads: [{ threadKey: "codex:thread-1" }],
+            threads: [{ sessionId: "term-1", threadKey: "codex:thread-1" }],
           },
         }),
       resolveThreadTitles: async () => {
@@ -464,6 +465,7 @@ describe("createQuitManager", () => {
             backend: "codex",
             threadId: "thread-1",
             threadKey: "codex:thread-1",
+            sessionId: "term-1",
           },
         ],
       }),
@@ -585,7 +587,7 @@ describe("buildQuitBlockerSnapshot", () => {
       inProgressThreads: { count: 1, threadIds: ["codex:thread-turn"] },
       terminalSessions: {
         count: 1,
-        threads: [{ threadKey: "acp:grok:thread-term" }],
+        threads: [{ sessionId: "term-1", threadKey: "acp:grok:thread-term" }],
       },
       actionRuns: [
         {
@@ -615,6 +617,7 @@ describe("buildQuitBlockerSnapshot", () => {
         backend: "acp:grok",
         threadId: "thread-term",
         threadKey: "acp:grok:thread-term",
+        sessionId: "term-1",
       },
       {
         kind: "action",
@@ -665,8 +668,9 @@ describe("buildQuitBlockerSnapshot", () => {
       terminalSessions: {
         count: 2,
         threads: [
-          { threadKey: "codex:local-thread" },
+          { sessionId: "term-local", threadKey: "codex:local-thread" },
           {
+            sessionId: "term-remote",
             threadKey: "codex:remote-thread",
             target: { scope: "remote", instanceId: "peer-a" },
             instanceLabel: "Studio Mac",
@@ -683,12 +687,14 @@ describe("buildQuitBlockerSnapshot", () => {
         backend: "codex",
         threadId: "local-thread",
         threadKey: "codex:local-thread",
+        sessionId: "term-local",
       },
       {
         kind: "terminal",
         backend: "codex",
         threadId: "remote-thread",
         threadKey: "codex:remote-thread",
+        sessionId: "term-remote",
         target: { scope: "remote", instanceId: "peer-a" },
         // The peer's name is the only thing distinguishing this row from a
         // local shell on a thread with the same key.

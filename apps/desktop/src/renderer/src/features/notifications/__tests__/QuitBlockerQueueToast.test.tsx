@@ -91,6 +91,7 @@ describe("QuitBlockerQueueToast", () => {
         backend: "codex",
         threadId: "thread-b",
         threadKey: "codex:thread-b",
+        sessionId: "term-b",
         title: "Terminal B",
         target: { scope: "remote", instanceId: "peer-a" },
         detail: "Build Mac",
@@ -125,6 +126,7 @@ describe("QuitBlockerQueueToast", () => {
     expect(revealQuitBlocker).toHaveBeenCalledWith({
       kind: "terminal",
       threadKey: "codex:thread-b",
+      sessionId: "term-b",
       target: { scope: "remote", instanceId: "peer-a" },
     });
 
@@ -141,6 +143,72 @@ describe("QuitBlockerQueueToast", () => {
       screen.getByText("PwrAgent can quit without interrupting work."),
     ).toBeInTheDocument();
     expect(screen.getByTestId("quit-blocker-queue")).toBeInTheDocument();
+  });
+
+  // A thread can hold up the quit with more than one shell, so the row key
+  // has to carry the terminal id. Without it both rows key the same, and
+  // `retainKnownTitles` — which looks a title up BY that key — hands the
+  // wrong shell's name to whichever row asks first.
+  it("keeps each of a thread's terminals on its own row and title", async () => {
+    vi.useFakeTimers();
+    const revealQuitBlocker = vi.fn(async () => ({ revealed: true }));
+    let showQueue!: (next: QuitBlockerQueueSnapshot) => void;
+    const terminals = [
+      {
+        kind: "terminal" as const,
+        backend: "codex",
+        threadId: "thread-a",
+        threadKey: "codex:thread-a",
+        sessionId: "term-1",
+      },
+      {
+        kind: "terminal" as const,
+        backend: "codex",
+        threadId: "thread-a",
+        threadKey: "codex:thread-a",
+        sessionId: "term-2",
+      },
+    ];
+    const titled = snapshot([
+      { ...terminals[0]!, title: "Build" },
+      { ...terminals[1]!, title: "Tail logs" },
+    ]);
+    // The refresh resolves no titles, which is the case the retention exists
+    // for: both rows have to get their OWN name back.
+    const readQuitBlockerQueue = vi.fn(async () => snapshot(terminals));
+
+    render(
+      <QuitBlockerQueueToast
+        desktopApi={{
+          onShowQuitBlockersRequested: (callback) => {
+            showQueue = callback;
+            return () => undefined;
+          },
+          readQuitBlockerQueue,
+          revealQuitBlocker,
+        }}
+      />,
+    );
+
+    act(() => showQueue(titled));
+    expect(screen.getByText("Build")).toBeInTheDocument();
+    expect(screen.getByText("Tail logs")).toBeInTheDocument();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(readQuitBlockerQueue).toHaveBeenCalled();
+    expect(screen.getByText("Build")).toBeInTheDocument();
+    expect(screen.getByText("Tail logs")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("Tail logs"));
+
+    expect(revealQuitBlocker).toHaveBeenCalledWith({
+      kind: "terminal",
+      threadKey: "codex:thread-a",
+      sessionId: "term-2",
+    });
   });
 
   it("stays hidden until a quit-dialog row hands the queue to this viewer", () => {

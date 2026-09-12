@@ -472,6 +472,7 @@ describe("clicking a quit dialog row", () => {
       backend: "codex",
       threadId: "0f9c2b7a-remote",
       threadKey: "codex:0f9c2b7a-remote",
+      sessionId: "term-remote",
       target: { scope: "remote", instanceId: "peer-a" },
     };
     const pending = showQuitConfirmationDialog({
@@ -485,10 +486,11 @@ describe("clicking a quit dialog row", () => {
 
     clickRow(window, formatQuitItemAction(item));
 
-    expect(revealIntegratedTerminal).toHaveBeenCalledWith(
-      "codex:0f9c2b7a-remote",
-      { instanceId: "peer-a" },
-    );
+    // The terminal, not the thread: the row the operator clicked names one
+    // shell, and the peer can be running several on this thread.
+    expect(revealIntegratedTerminal).toHaveBeenCalledWith("term-remote", {
+      instanceId: "peer-a",
+    });
     // The dialog is what has focus, so requestShowThread would otherwise fall
     // back to whichever window subscribed first — for a peer's terminal that
     // is a window with no such thread.
@@ -517,6 +519,7 @@ describe("clicking a quit dialog row", () => {
       backend: "codex",
       threadId: "local-thread",
       threadKey: "codex:local-thread",
+      sessionId: "term-local",
     };
     const pending = showQuitConfirmationDialog({
       countdownSeconds: 10,
@@ -529,10 +532,9 @@ describe("clicking a quit dialog row", () => {
 
     clickRow(window, formatQuitItemAction(item));
 
-    expect(revealIntegratedTerminal).toHaveBeenCalledWith(
-      "codex:local-thread",
-      {},
-    );
+    // The instance slot is written empty rather than omitted, so this local
+    // terminal's id survives the round trip as an id and not as a peer.
+    expect(revealIntegratedTerminal).toHaveBeenCalledWith("term-local", {});
     expect(requestShowThread).toHaveBeenCalledWith(
       { backend: "codex", threadId: "local-thread" },
       { preferWebContents: undefined },

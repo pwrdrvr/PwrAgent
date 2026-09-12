@@ -26,7 +26,9 @@ const mocks = vi.hoisted(() => {
     localWrite: vi.fn(),
     localClose: vi.fn(),
     localSetPanelHidden: vi.fn(),
-    localRevealSession: vi.fn(() => false),
+    localRevealSession: vi.fn(
+      (): { threadKey: string } | undefined => undefined,
+    ),
     federationWindowIds: new Set<number>(),
     federationTargets: new Map<number, { scope: "remote"; instanceId: string }>(),
     connectedPeers: [
@@ -39,7 +41,7 @@ const mocks = vi.hoisted(() => {
     localQuitSnapshot: {
       count: 0,
       sessionIds: [] as string[],
-      threads: [] as Array<{ threadKey: string }>,
+      threads: [] as Array<{ sessionId: string; threadKey: string }>,
     },
     channelSubscribers: [] as Array<{ id: number; send: (...args: unknown[]) => void }>,
     localSessionsChanged: undefined as
@@ -61,7 +63,11 @@ const mocks = vi.hoisted(() => {
     ),
     remotePtyInput: vi.fn(async () => undefined),
     remotePtyAck: vi.fn(async () => undefined),
-    remotePtyClose: vi.fn(async () => undefined),
+    // Typed params so an assertion can read back WHICH session was closed,
+    // not just that something was.
+    remotePtyClose: vi.fn(
+      async (_params: { sessionId: string }) => undefined,
+    ),
     remotePtyEventListener: undefined as
       | ((event: {
           kind: string;
@@ -180,7 +186,7 @@ describe("integrated terminal IPC federation branch", () => {
       },
     ];
     mocks.localQuitSnapshot = { count: 0, sessionIds: [], threads: [] };
-    mocks.localRevealSession.mockReturnValue(false);
+    mocks.localRevealSession.mockReturnValue(undefined);
     mocks.channelSubscribers = [];
     mocks.localSessionsChanged = undefined;
     disposeIntegratedTerminalIpcHandlers();
@@ -386,7 +392,7 @@ describe("integrated terminal IPC federation branch", () => {
     });
 
     await invoke(INTEGRATED_TERMINAL_SET_PANEL_HIDDEN_CHANNEL, sender, {
-      threadKey: "codex:remote-pinned",
+      sessionId: "remote-session",
       hidden: true,
     });
     expect(mocks.localSetPanelHidden).not.toHaveBeenCalled();
@@ -401,6 +407,105 @@ describe("integrated terminal IPC federation branch", () => {
     });
     expect(mocks.remotePtyClose).toHaveBeenCalledTimes(1);
     expect(mocks.localClose).not.toHaveBeenCalled();
+  });
+
+  // The viewer registry got the same treatment as the local one: a thread
+  // groups its remote terminals and no longer names one.
+  describe("several remote terminals on one thread", () => {
+    /** Two live remote terminals on `codex:remote-pinned` in one window. */
+    async function openTwo(sender: ReturnType<typeof fakeWebContents>) {
+      mocks.remotePtyOpen
+        .mockResolvedValueOnce({
+          sessionId: "remote-session-a",
+          cwd: "/owner/worktree",
+          shell: "/bin/zsh",
+        })
+        .mockResolvedValueOnce({
+          sessionId: "remote-session-b",
+          cwd: "/owner/worktree",
+          shell: "/bin/zsh",
+        });
+      const open = async (sessionId?: string) =>
+        await invoke(INTEGRATED_TERMINAL_CREATE_CHANNEL, sender, {
+          ...(sessionId ? { sessionId } : {}),
+          threadKey: "codex:remote-pinned",
+          cols: 80,
+          rows: 24,
+          federationTarget: { scope: "remote", instanceId: "peer-a" },
+        });
+      await open();
+      // An id the viewer does not hold opens a second shell on the owner. The
+      // owner still mints the id it answers to — the viewer's registry is
+      // keyed by the owner's, which is what `pty.attach` will have to name.
+      await open("not-a-live-terminal");
+      const sessions = (await invoke(
+        INTEGRATED_TERMINAL_LIST_CHANNEL,
+        sender,
+      )) as Array<{ sessionId: string }>;
+      expect(sessions.map((session) => session.sessionId)).toEqual([
+        "remote-session-a",
+        "remote-session-b",
+      ]);
+    }
+
+    it("closes one of them and leaves its sibling running", async () => {
+      const sender = fakeWebContents(7);
+      await openTwo(sender);
+
+      await invoke(INTEGRATED_TERMINAL_CLOSE_CHANNEL, sender, {
+        sessionId: "remote-session-b",
+      });
+
+      expect(mocks.remotePtyClose).toHaveBeenCalledTimes(1);
+      expect(mocks.remotePtyClose).toHaveBeenCalledWith({
+        sessionId: "remote-session-b",
+      });
+      const remaining = (await invoke(
+        INTEGRATED_TERMINAL_LIST_CHANNEL,
+        sender,
+      )) as Array<{ sessionId: string }>;
+      expect(remaining.map((session) => session.sessionId)).toEqual([
+        "remote-session-a",
+      ]);
+    });
+
+    it("closes nothing when the named remote terminal is already gone", async () => {
+      const sender = fakeWebContents(7);
+      await openTwo(sender);
+
+      await invoke(INTEGRATED_TERMINAL_CLOSE_CHANNEL, sender, {
+        sessionId: "remote-session-that-exited",
+        threadKey: "codex:remote-pinned",
+      });
+
+      expect(mocks.remotePtyClose).not.toHaveBeenCalled();
+      expect(
+        ((await invoke(INTEGRATED_TERMINAL_LIST_CHANNEL, sender)) as unknown[])
+          .length,
+      ).toBe(2);
+    });
+
+    // The thread key still means "every terminal this thread owns", which is
+    // what a pane whose create has not resolved can ask for.
+    it("closes every one of them when the request names the thread", async () => {
+      const sender = fakeWebContents(7);
+      await openTwo(sender);
+
+      await invoke(INTEGRATED_TERMINAL_CLOSE_CHANNEL, sender, {
+        threadKey: "codex:remote-pinned",
+      });
+
+      expect(
+        mocks.remotePtyClose.mock.calls.map((call) => call[0]),
+      ).toEqual([
+        { sessionId: "remote-session-a" },
+        { sessionId: "remote-session-b" },
+      ]);
+      expect(
+        ((await invoke(INTEGRATED_TERMINAL_LIST_CHANNEL, sender)) as unknown[])
+          .length,
+      ).toBe(0);
+    });
   });
 
   it("broadcasts local and remote sessions together to a main window", async () => {
@@ -442,7 +547,7 @@ describe("integrated terminal IPC federation branch", () => {
     mocks.localQuitSnapshot = {
       count: 1,
       sessionIds: ["local-session"],
-      threads: [{ threadKey: "codex:local-thread" }],
+      threads: [{ sessionId: "local-session", threadKey: "codex:local-thread" }],
     };
     await invoke(INTEGRATED_TERMINAL_CREATE_CHANNEL, sender, {
       threadKey: "codex:remote-pinned",
@@ -456,8 +561,9 @@ describe("integrated terminal IPC federation branch", () => {
     // The owning peer rides along: the quit dialog cannot name a remote
     // thread by asking the LOCAL thread list about it.
     expect(snapshot.threads).toEqual([
-      { threadKey: "codex:local-thread" },
+      { sessionId: "local-session", threadKey: "codex:local-thread" },
       {
+        sessionId: "remote-session",
         threadKey: "codex:remote-pinned",
         target: { scope: "remote", instanceId: "peer-a" },
         instanceLabel: "Peer Mac",
@@ -542,6 +648,7 @@ describe("integrated terminal IPC federation branch", () => {
     expect(snapshot.count).toBe(1);
     expect(snapshot.threads).toEqual([
       {
+        sessionId: "remote-session",
         threadKey: "codex:remote-pinned",
         target: { scope: "remote", instanceId: "peer-a" },
         instanceLabel: "Peer Mac",
@@ -564,11 +671,11 @@ describe("integrated terminal IPC federation branch", () => {
       rows: 24,
     });
     await invoke(INTEGRATED_TERMINAL_SET_PANEL_HIDDEN_CHANNEL, federationWindow, {
-      threadKey: "codex:remote-thread",
+      sessionId: "remote-session",
       hidden: true,
     });
 
-    const result = revealIntegratedTerminal("codex:remote-thread");
+    const result = revealIntegratedTerminal("remote-session");
 
     // Asking only the LOCAL PTY registry reported "no such session" and the
     // quit dialog's terminal row silently did nothing.
@@ -587,16 +694,17 @@ describe("integrated terminal IPC federation branch", () => {
     ).toHaveLength(0);
   });
 
-  it("reports nothing to reveal when no window owns the thread", async () => {
-    mocks.localRevealSession.mockReturnValue(false);
+  it("reports nothing to reveal when no window owns the terminal", async () => {
+    mocks.localRevealSession.mockReturnValue(undefined);
 
-    expect(revealIntegratedTerminal("codex:vanished").revealed).toBe(false);
+    expect(revealIntegratedTerminal("terminal-vanished").revealed).toBe(false);
   });
 
   // Remote mounts allocate a PTY per viewer window, so the same peer thread
-  // can be open twice. Reporting no owner would drop the caller back to the
-  // focused-or-first window, which is the bug the owner exists to avoid.
-  it("names an owner even when two windows host the same remote thread", async () => {
+  // open twice is two terminals with two ids. Addressing the id is what makes
+  // this answerable at all: by thread, the reveal had to pick one of the two
+  // windows and could only promise that its choice had the thread.
+  it("reveals the exact terminal when two windows host the same remote thread", async () => {
     const first = fakeWebContents(21);
     const second = fakeWebContents(22);
     for (const [id, sender] of [
@@ -617,15 +725,14 @@ describe("integrated terminal IPC federation branch", () => {
       });
     }
 
-    const result = revealIntegratedTerminal("codex:shared-thread");
-    expect(result.revealed).toBe(true);
-    expect([first, second]).toContain(result.owner);
+    expect(revealIntegratedTerminal("remote-session-21").owner).toBe(first);
+    expect(revealIntegratedTerminal("remote-session-22").owner).toBe(second);
   });
 
   // A local shell and a peer's shell can share a thread key. Naming the
   // instance must reach the peer's session, not the local registry.
   it("skips the local registry when the caller names an owning instance", async () => {
-    mocks.localRevealSession.mockReturnValue(true);
+    mocks.localRevealSession.mockReturnValue({ threadKey: "codex:shared-key" });
     const federationWindow = fakeWebContents(31);
     mocks.federationWindowIds.add(31);
     mocks.federationTargets.set(31, { scope: "remote", instanceId: "peer-a" });
@@ -635,7 +742,7 @@ describe("integrated terminal IPC federation branch", () => {
       rows: 24,
     });
 
-    const result = revealIntegratedTerminal("codex:shared-key", {
+    const result = revealIntegratedTerminal("remote-session", {
       instanceId: "peer-a",
     });
 
@@ -644,7 +751,7 @@ describe("integrated terminal IPC federation branch", () => {
 
     // ...and a different instance owns nothing here.
     expect(
-      revealIntegratedTerminal("codex:shared-key", { instanceId: "peer-b" })
+      revealIntegratedTerminal("remote-session", { instanceId: "peer-b" })
         .revealed,
     ).toBe(false);
   });

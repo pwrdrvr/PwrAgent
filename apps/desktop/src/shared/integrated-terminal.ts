@@ -4,6 +4,20 @@ import type {
 } from "@pwragent/shared";
 
 export type IntegratedTerminalCreateRequest = {
+  /**
+   * The terminal to attach to. A pane that already has one passes it back so
+   * a remount reattaches to its own shell rather than to whichever of the
+   * thread's terminals happens to be oldest. When it names no live terminal
+   * the shell is spawned UNDER this id, so a caller minting one gets a
+   * terminal it can address from the first instant.
+   *
+   * Absent means "this thread's terminal": attach to the oldest live one,
+   * spawn when the thread has none. That is what keeps the Star Map window
+   * and the thread view — separate renderers, each mounting its own pane —
+   * looking at one shell instead of two.
+   */
+  sessionId?: string;
+  /** Grouping attribute, not identity: a thread can own several terminals. */
   threadKey: string;
   cwd?: string;
   cols: number;
@@ -37,7 +51,9 @@ export type IntegratedTerminalRemoteInfo = {
  * every remount would either lose the preference or pop the panel back open.
  */
 export type IntegratedTerminalSessionSummary = {
+  /** Identity. Every operation on a live terminal is addressed by this. */
   sessionId: string;
+  /** Which thread the terminal belongs to. Several may share one. */
   threadKey: string;
   cwd: string;
   shell: string;
@@ -53,12 +69,20 @@ export type IntegratedTerminalSessionsEvent = {
 };
 
 export type IntegratedTerminalSetPanelHiddenRequest = {
-  threadKey: string;
+  sessionId: string;
   hidden: boolean;
 };
 
-/** Main → renderer: force a thread's terminal panel open (quit-dialog link). */
+/**
+ * Main → renderer: force one terminal's panel open (quit-dialog link).
+ *
+ * Addressed by terminal, not by thread: the row the operator clicked names a
+ * specific shell, and a thread can own several. `threadKey` rides along so a
+ * renderer can tell which thread's chrome to bring forward without another
+ * lookup.
+ */
 export type IntegratedTerminalRevealEvent = {
+  sessionId: string;
   threadKey: string;
 };
 
@@ -82,6 +106,14 @@ export type IntegratedTerminalResizeRequest = {
   rows: number;
 };
 
+/**
+ * `sessionId` closes exactly that terminal, and closes nothing when it names
+ * none — it never widens to the thread. `threadKey` closes every terminal the
+ * thread owns; it is the only address a pane has before its create resolves,
+ * which is the one case the thread view's close button still falls back to.
+ *
+ * Pass one or the other. A request carrying both is read as the id.
+ */
 export type IntegratedTerminalCloseRequest = {
   sessionId?: string;
   threadKey?: string;

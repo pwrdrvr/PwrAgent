@@ -345,8 +345,8 @@ export async function showQuitConfirmationDialog(
           // through to whichever window subscribed first — which for a
           // peer's thread is a window that never mounted it.
           const revealed =
-            target.kind === "terminal"
-              ? revealIntegratedTerminal(target.threadKey, {
+            target.kind === "terminal" && target.sessionId
+              ? revealIntegratedTerminal(target.sessionId, {
                   ...(target.instanceId
                     ? { instanceId: target.instanceId }
                     : {}),
@@ -500,24 +500,36 @@ const QUIT_ITEM_GROUPS: ReadonlyArray<{
  * the same action and the click cannot tell them apart.
  */
 export function formatQuitItemAction(item: QuitBlockerItem): string {
+  // Positional, so the instance slot is written EMPTY rather than omitted
+  // when a terminal id follows it — otherwise a local terminal's id lands in
+  // the instance slot and the click looks for that shell on a peer.
   const segments = [
     "show-thread",
     encodeURIComponent(item.threadKey),
     encodeURIComponent(item.kind),
+    item.target ? encodeURIComponent(item.target.instanceId) : "",
+    item.sessionId ? encodeURIComponent(item.sessionId) : "",
   ];
-  if (item.target) {
-    segments.push(encodeURIComponent(item.target.instanceId));
+  // Trailing empties carry nothing. Dropping them keeps every row that has no
+  // terminal id encoding exactly as it did before terminals grew one.
+  while (segments.length > 3 && segments[segments.length - 1] === "") {
+    segments.pop();
   }
   return segments.join("/");
 }
 
-export function parseQuitItemAction(
-  action: string,
-): { threadKey: string; kind: string; instanceId?: string } | undefined {
+export function parseQuitItemAction(action: string):
+  | {
+      threadKey: string;
+      kind: string;
+      instanceId?: string;
+      sessionId?: string;
+    }
+  | undefined {
   if (!action.startsWith("show-thread/")) {
     return undefined;
   }
-  const [, encodedThreadKey, encodedKind, encodedInstanceId] =
+  const [, encodedThreadKey, encodedKind, encodedInstanceId, encodedSessionId] =
     action.split("/");
   if (!encodedThreadKey) {
     return undefined;
@@ -526,10 +538,14 @@ export function parseQuitItemAction(
     const instanceId = encodedInstanceId
       ? decodeURIComponent(encodedInstanceId)
       : undefined;
+    const sessionId = encodedSessionId
+      ? decodeURIComponent(encodedSessionId)
+      : undefined;
     return {
       threadKey: decodeURIComponent(encodedThreadKey),
       kind: decodeURIComponent(encodedKind ?? ""),
       ...(instanceId ? { instanceId } : {}),
+      ...(sessionId ? { sessionId } : {}),
     };
   } catch {
     return undefined;

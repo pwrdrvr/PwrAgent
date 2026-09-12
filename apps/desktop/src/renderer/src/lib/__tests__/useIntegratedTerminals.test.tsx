@@ -64,6 +64,87 @@ describe("useIntegratedTerminals", () => {
     expect(result.current.panes[0]?.remote).toBeUndefined();
   });
 
+  // The quit dialog's row link. Main un-hides exactly the shell the operator
+  // clicked, so the renderer must not reach for the thread: `openPanel`, the
+  // fallback this used to run, un-hides every terminal the thread owns.
+  it("converges on the revealed terminal without touching its siblings", async () => {
+    let emitReveal!: (event: {
+      sessionId: string;
+      threadKey: string;
+    }) => void;
+    const setIntegratedTerminalPanelHidden = vi.fn(async () => undefined);
+    const desktopApi: DesktopApi = {
+      listIntegratedTerminals: vi.fn(async () => [
+        remoteSession({
+          sessionId: "term-1",
+          threadKey: "codex:thread-a",
+          remote: undefined,
+          panelHidden: true,
+          createdAt: 1,
+        }),
+        remoteSession({
+          sessionId: "term-2",
+          threadKey: "codex:thread-a",
+          remote: undefined,
+          panelHidden: true,
+          createdAt: 2,
+        }),
+      ]),
+      onIntegratedTerminalReveal: (callback) => {
+        emitReveal = callback;
+        return () => undefined;
+      },
+      setIntegratedTerminalPanelHidden,
+    };
+    const { result } = renderHook(() => useIntegratedTerminals(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.sessions).toHaveLength(2);
+    });
+    setIntegratedTerminalPanelHidden.mockClear();
+
+    act(() => {
+      emitReveal({ sessionId: "term-2", threadKey: "codex:thread-a" });
+    });
+
+    // Exactly one call, for the terminal the event named. The thread-scoped
+    // fallback fired on this very path — both terminals read as collapsed
+    // until React re-renders, so the "already open?" guard was always false.
+    expect(setIntegratedTerminalPanelHidden.mock.calls).toEqual([
+      [{ sessionId: "term-2", hidden: false }],
+    ]);
+  });
+
+  it("ignores a reveal for a terminal this window has no record of", async () => {
+    let emitReveal!: (event: {
+      sessionId: string;
+      threadKey: string;
+    }) => void;
+    const setIntegratedTerminalPanelHidden = vi.fn(async () => undefined);
+    const desktopApi: DesktopApi = {
+      listIntegratedTerminals: vi.fn(async () => []),
+      onIntegratedTerminalReveal: (callback) => {
+        emitReveal = callback;
+        return () => undefined;
+      },
+      setIntegratedTerminalPanelHidden,
+    };
+    const { result } = renderHook(() => useIntegratedTerminals(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.sessions).toHaveLength(0);
+    });
+
+    act(() => {
+      emitReveal({ sessionId: "term-gone", threadKey: "codex:thread-a" });
+    });
+
+    // Acting here would open a panel for a thread with no session, which is
+    // what spawns a brand-new shell out of trying to look at one.
+    expect(setIntegratedTerminalPanelHidden).not.toHaveBeenCalled();
+    expect(result.current.panes).toHaveLength(0);
+  });
+
   it("carries the owning instance on a pane opened before its session lands", () => {
     const desktopApi: DesktopApi = {
       listIntegratedTerminals: vi.fn(async () => []),
