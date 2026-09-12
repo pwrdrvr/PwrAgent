@@ -71,8 +71,18 @@ export function revealCurrentQuitBlocker(
   if (!viewer) {
     return { revealed: false };
   }
-  requestShowThread(parsed, {
-    preferWebContents: viewer,
-  });
+  // A peer's thread is addressed by owner + id, never by id alone: the
+  // viewer builds a federated identity key from the target, and without one
+  // it looks for a LOCAL thread that shares the id and selects nothing. The
+  // quit dialog already forwards this; the in-app queue used not to.
+  requestShowThread(
+    {
+      ...parsed,
+      ...(item.target ? { federationTarget: item.target } : {}),
+    },
+    {
+      preferWebContents: viewer,
+    },
+  );
   return { revealed: true };
 }

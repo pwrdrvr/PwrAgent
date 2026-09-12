@@ -89,8 +89,15 @@ describe("quit blocker IPC", () => {
     expect(revealIntegratedTerminal).toHaveBeenCalledWith("codex:shared", {
       instanceId: "peer-a",
     });
+    // The owning peer has to ride along: the viewer keys a remote thread by
+    // owner + id, and a bare id selects the local thread of the same name --
+    // here a genuinely different thread, since both exist as "codex:shared".
     expect(requestShowThread).toHaveBeenCalledWith(
-      { backend: "codex", threadId: "shared" },
+      {
+        backend: "codex",
+        threadId: "shared",
+        federationTarget: { scope: "remote", instanceId: "peer-a" },
+      },
       { preferWebContents: owner },
     );
   });
