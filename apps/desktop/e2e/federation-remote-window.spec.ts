@@ -898,30 +898,27 @@ test.describe("federation remote window", () => {
         { timeout: 30_000 },
       );
 
-      // Actually leave a command running. An idle prompt is not a quit
-      // blocker: the owner reports this shell's foreground state over
-      // `pty.state` and the viewer filters on it, exactly as it does for a
-      // local shell. Poll the queue instead of sleeping -- the owner detects
-      // the transition off the command's own output.
+      // An idle shell is not a quit blocker. That holds for a remote shell
+      // too: the owner reports this one's foreground state over `pty.state`
+      // and the viewer filters on it exactly as it does for a local shell.
+      // Start a foreground command so the dialog below has a row to route.
       await window.locator(".integrated-terminal__viewport").click();
-      await window.keyboard.type("sleep 120");
+      await window.keyboard.type(
+        "echo PWRAGENT_REMOTE_QUIT_BLOCKER_READY; sleep 120",
+      );
       await window.keyboard.press("Enter");
+      await expect(
+        window.locator(".integrated-terminal .xterm-rows"),
+      ).toContainText("PWRAGENT_REMOTE_QUIT_BLOCKER_READY", {
+        timeout: 30_000,
+      });
+      // The marker only proves `echo` finished. The owner derives the state
+      // from the command's own output and streams it back, so wait on the
+      // exact main-process snapshot QuitManager reads -- quitting before it
+      // arrives correctly sees no blocker and exits without a prompt.
       await expect
         .poll(
-          async () =>
-            await window.evaluate(async () => {
-              const api = (window as typeof window & {
-                pwragent?: {
-                  readQuitBlockerQueue?: () => Promise<{
-                    items: Array<{ kind: string }>;
-                  }>;
-                };
-              }).pwragent;
-              if (!api?.readQuitBlockerQueue) return "missing-api";
-              const snapshot = await api.readQuitBlockerQueue();
-              return snapshot.items.filter((item) => item.kind === "terminal")
-                .length;
-            }),
+          async () => (await app!.getIntegratedTerminalQuitSnapshot())?.count ?? 0,
           { timeout: 30_000 },
         )
         .toBe(1);
