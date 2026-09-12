@@ -215,6 +215,8 @@ type DestroyablePty = IPty & {
  * their own sidebar is already showing.
  */
 export type IntegratedTerminalQuitThread = {
+  /** Which shell. A thread can hold up the quit with more than one. */
+  sessionId: string;
   threadKey: string;
   /** Absent for a shell running on this machine. */
   target?: FederationRemoteTarget;
@@ -233,13 +235,21 @@ export type IntegratedTerminalQuitSnapshot = {
  * became objects. `localeCompare` would reorder around the `:` and `-` that
  * fill thread keys depending on the host locale, which is not something a
  * quit dialog's row order should depend on.
+ *
+ * Ties break on the terminal id. Thread keys stopped being unique when a
+ * thread gained the ability to own several shells, and a comparator that
+ * reports 0 for two distinct rows leaves their order up to whichever sort the
+ * host happens to implement.
  */
-export function byThreadKey(
-  left: { threadKey: string },
-  right: { threadKey: string },
+export function byQuitTerminal(
+  left: IntegratedTerminalQuitThread,
+  right: IntegratedTerminalQuitThread,
 ): number {
-  if (left.threadKey === right.threadKey) return 0;
-  return left.threadKey < right.threadKey ? -1 : 1;
+  if (left.threadKey !== right.threadKey) {
+    return left.threadKey < right.threadKey ? -1 : 1;
+  }
+  if (left.sessionId === right.sessionId) return 0;
+  return left.sessionId < right.sessionId ? -1 : 1;
 }
 
 type IntegratedTerminalServiceOptions = {
@@ -252,7 +262,12 @@ type IntegratedTerminalServiceOptions = {
 
 export class IntegratedTerminalService {
   private readonly logger = getMainLogger("pwragent:integrated-terminal");
-  private readonly sessionsByThread = new Map<string, TerminalSession>();
+  /**
+   * The registry, and the only one. There used to be a parallel
+   * `sessionsByThread` map, which made the thread key the terminal's identity
+   * and capped a thread at one shell as a side effect of how it was stored.
+   * Threads group terminals now; they do not name them.
+   */
   private readonly sessionsById = new Map<string, TerminalSession>();
   private readonly loadNodePty: () => Promise<Pick<NodePtyModule, "spawn">>;
   private readonly now: () => number;
@@ -261,11 +276,12 @@ export class IntegratedTerminalService {
   ) => void;
   private readonly platform: NodeJS.Platform;
   private readonly readLinuxProcessStat?: (pid: number) => string;
-  /** Threads whose PTY is mid-spawn — the window in which a close has nothing
-   *  to act on yet. */
-  private readonly spawningThreadKeys = new Set<string>();
+  /** Terminals mid-spawn, by id, with the thread each belongs to — the window
+   *  in which a close has nothing to act on yet. The thread is kept because a
+   *  close can still only name one when the pane has yet to learn its id. */
+  private readonly spawningThreadKeyBySessionId = new Map<string, string>();
   /** Closes that arrived during that window, to be honored on spawn. */
-  private readonly pendingCloseThreadKeys = new Set<string>();
+  private readonly pendingCloseSessionIds = new Set<string>();
   /** One `destroyed` listener per WebContents, not per session — 10 terminals
    *  in one window used to install 10 and trip Node's max-listeners warning. */
   private readonly subscribedWebContents = new Set<WebContents>();
@@ -289,8 +305,18 @@ export class IntegratedTerminalService {
       throw new Error("A thread key is required to start a terminal.");
     }
 
-    const existing = this.sessionsByThread.get(threadKey);
+    const requestedId = request.sessionId?.trim();
+    const existing = requestedId
+      ? this.sessionsById.get(requestedId)
+      : this.sessionsForThread(threadKey)[0];
     if (existing) {
+      if (existing.threadKey !== threadKey) {
+        // The id outlived the pane that held it and now names some other
+        // thread's shell. Attaching would show one thread's terminal inside
+        // another's pane, and every later write would land in the wrong
+        // shell.
+        throw new Error("That terminal belongs to a different thread.");
+      }
       // Deliberately does NOT touch `panelHidden`. The renderer mounts a pane
       // — and therefore attaches — for every live session, including collapsed
       // ones, so an attach is not evidence that the user wants to see it.
@@ -300,7 +326,11 @@ export class IntegratedTerminalService {
       return this.toCreateResponse(existing);
     }
 
-    this.spawningThreadKeys.add(threadKey);
+    // Settle identity before the spawn, not after it. Everything the spawn
+    // window has to coordinate — a close arriving mid-flight, above all — is
+    // then addressed by the same id the finished terminal answers to.
+    const sessionId = requestedId || randomUUID();
+    this.spawningThreadKeyBySessionId.set(sessionId, threadKey);
     let ptyProcess: IPty;
     let cwd: string;
     let shell: { file: string; args: string[] };
@@ -322,15 +352,15 @@ export class IntegratedTerminalService {
         threadKey,
       });
       // The spawn died, so there is nothing left for a queued close to kill.
-      // Leaving the key behind would shoot down the next terminal on this
-      // thread.
-      this.pendingCloseThreadKeys.delete(threadKey);
+      // Leaving the id behind would shoot down a later terminal that reuses
+      // it.
+      this.pendingCloseSessionIds.delete(sessionId);
       throw new Error(message, { cause: error });
     } finally {
-      this.spawningThreadKeys.delete(threadKey);
+      this.spawningThreadKeyBySessionId.delete(sessionId);
     }
     const session: TerminalSession = {
-      sessionId: randomUUID(),
+      sessionId,
       threadKey,
       pty: ptyProcess,
       cwd,
@@ -341,7 +371,6 @@ export class IntegratedTerminalService {
       subscribers: new Set(),
       disposables: [],
     };
-    this.sessionsByThread.set(threadKey, session);
     this.sessionsById.set(session.sessionId, session);
     this.subscribe(session, webContents);
     session.disposables.push(
@@ -356,12 +385,12 @@ export class IntegratedTerminalService {
     });
 
     // Spawning is slow (login-shell env capture, then the node-pty load), and a
-    // close issued in that window used to find nothing in `sessionsByThread`
-    // and silently no-op — leaving a live shell the user had already dismissed,
+    // close issued in that window used to find nothing in the registry and
+    // silently no-op — leaving a live shell the user had already dismissed,
     // which the renderer then re-adopted from the sessions broadcast. Honor the
     // close now that we finally have something to kill.
-    if (this.pendingCloseThreadKeys.delete(threadKey)) {
-      this.logger.info("closing-on-spawn", { threadKey });
+    if (this.pendingCloseSessionIds.delete(sessionId)) {
+      this.logger.info("closing-on-spawn", { sessionId, threadKey });
       this.killSession(session);
       return this.toCreateResponse(session);
     }
@@ -378,7 +407,7 @@ export class IntegratedTerminalService {
   }
 
   setPanelHidden(request: IntegratedTerminalSetPanelHiddenRequest): void {
-    const session = this.sessionsByThread.get(request.threadKey);
+    const session = this.sessionsById.get(request.sessionId);
     if (!session || session.panelHidden === request.hidden) {
       return;
     }
@@ -386,14 +415,28 @@ export class IntegratedTerminalService {
     this.emitSessionsChanged();
   }
 
-  /** Un-hide a live session's panel. Returns false when there is no session to
-   *  reveal, so callers don't ask the renderer to show a shell that has exited. */
-  revealSession(threadKey: string): boolean {
-    if (!this.sessionsByThread.has(threadKey)) {
-      return false;
+  /**
+   * Un-hide one terminal's panel and report the thread it belongs to, which
+   * the reveal broadcast carries so a renderer knows which thread's chrome to
+   * bring forward.
+   *
+   * Undefined when there is no such terminal, so callers don't ask the
+   * renderer to show a shell that has exited.
+   */
+  revealSession(sessionId: string): { threadKey: string } | undefined {
+    const session = this.sessionsById.get(sessionId);
+    if (!session) {
+      return undefined;
     }
-    this.setPanelHidden({ threadKey, hidden: false });
-    return true;
+    this.setPanelHidden({ sessionId, hidden: false });
+    return { threadKey: session.threadKey };
+  }
+
+  /** A thread's live terminals, oldest first. */
+  private sessionsForThread(threadKey: string): TerminalSession[] {
+    return [...this.sessionsById.values()]
+      .filter((session) => session.threadKey === threadKey)
+      .sort((left, right) => left.createdAt - right.createdAt);
   }
 
   write(request: IntegratedTerminalWriteRequest): void {
@@ -410,21 +453,36 @@ export class IntegratedTerminalService {
   }
 
   close(request: IntegratedTerminalCloseRequest): void {
-    const session =
-      (request.sessionId ? this.sessionsById.get(request.sessionId) : undefined) ??
-      (request.threadKey ? this.sessionsByThread.get(request.threadKey) : undefined);
-    if (session) {
-      this.pendingCloseThreadKeys.delete(session.threadKey);
+    const byId = request.sessionId
+      ? this.sessionsById.get(request.sessionId)
+      : undefined;
+    // A thread key closes every terminal the thread owns. The thread view's
+    // close button means "put this thread's terminal away", and a thread can
+    // now be showing more than one.
+    const targets = byId
+      ? [byId]
+      : request.threadKey
+        ? this.sessionsForThread(request.threadKey)
+        : [];
+    for (const session of targets) {
+      this.pendingCloseSessionIds.delete(session.sessionId);
       this.killSession(session);
+    }
+    if (targets.length > 0) {
       return;
     }
-    // Nothing to kill yet. If a spawn for this thread is still in flight, mark
-    // it so `createOrAttach` kills the session the moment it exists — otherwise
-    // the close is lost and the shell survives the user dismissing it. Gated on
-    // an in-flight spawn so a close for an idle thread can't linger and shoot
-    // down some unrelated terminal the user opens later.
-    if (request.threadKey && this.spawningThreadKeys.has(request.threadKey)) {
-      this.pendingCloseThreadKeys.add(request.threadKey);
+    // Nothing to kill yet. If a spawn this close names is still in flight,
+    // mark it so `createOrAttach` kills the session the moment it exists —
+    // otherwise the close is lost and the shell survives the user dismissing
+    // it. Gated on an in-flight spawn so a close for an idle thread can't
+    // linger and shoot down some unrelated terminal the user opens later.
+    for (const [sessionId, threadKey] of this.spawningThreadKeyBySessionId) {
+      const named = request.sessionId
+        ? sessionId === request.sessionId
+        : threadKey === request.threadKey;
+      if (named) {
+        this.pendingCloseSessionIds.add(sessionId);
+      }
     }
   }
 
@@ -450,8 +508,11 @@ export class IntegratedTerminalService {
       count: sessions.length,
       sessionIds: sessions.map((session) => session.sessionId).sort(),
       threads: sessions
-        .map((session) => ({ threadKey: session.threadKey }))
-        .sort(byThreadKey),
+        .map((session) => ({
+          sessionId: session.sessionId,
+          threadKey: session.threadKey,
+        }))
+        .sort(byQuitTerminal),
     };
   }
 
@@ -576,7 +637,6 @@ export class IntegratedTerminalService {
 
   private deleteSession(session: TerminalSession): void {
     this.disposeSessionListeners(session);
-    this.sessionsByThread.delete(session.threadKey);
     this.sessionsById.delete(session.sessionId);
     session.subscribers.clear();
     this.emitSessionsChanged();

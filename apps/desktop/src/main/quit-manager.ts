@@ -19,7 +19,7 @@ import { getDesktopFederationRuntime } from "./federation/federation-runtime";
 import { getIntegratedTerminalQuitSnapshot } from "./ipc/integrated-terminal";
 import { getMainLogger } from "./log";
 import {
-  byThreadKey,
+  byQuitTerminal,
   type IntegratedTerminalQuitThread,
 } from "./terminal/integrated-terminal-service";
 import { getDesktopSettingsService } from "./settings/desktop-settings-singleton";
@@ -316,7 +316,9 @@ export function buildQuitBlockerSnapshot(params: {
   actionRuns?: DetachedCommandSummary[];
 }): QuitBlockerSnapshot {
   const threadIds = [...params.inProgressThreads.threadIds].sort();
-  const terminalThreads = [...params.terminalSessions.threads].sort(byThreadKey);
+  const terminalThreads = [...params.terminalSessions.threads].sort(
+    byQuitTerminal,
+  );
   const terminalThreadKeys = terminalThreads.map((thread) => thread.threadKey);
   const actionRuns = params.actionRuns ?? [];
   const automationRuns = params.inProgressThreads.automationRuns ?? [];
@@ -348,6 +350,7 @@ export function buildQuitBlockerSnapshot(params: {
       kind: "terminal" as const,
       ...splitQuitThreadKey(thread.threadKey),
       threadKey: thread.threadKey,
+      sessionId: thread.sessionId,
       ...(thread.target ? { target: thread.target } : {}),
       // The peer's name is what separates this row from a local shell; the
       // title alone reads as though the work is on this machine.

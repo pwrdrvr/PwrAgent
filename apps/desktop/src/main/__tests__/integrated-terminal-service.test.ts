@@ -716,7 +716,9 @@ describe("resolveTerminalShell", () => {
     expect(service.getQuitSnapshot()).toEqual({
       count: 1,
       sessionIds: [response.sessionId],
-      threads: [{ threadKey: "codex:thread-a" }],
+      threads: [
+        { sessionId: response.sessionId, threadKey: "codex:thread-a" },
+      ],
     });
   });
 
@@ -770,7 +772,9 @@ describe("resolveTerminalShell", () => {
     expect(service.getQuitSnapshot()).toEqual({
       count: 1,
       sessionIds: [response.sessionId],
-      threads: [{ threadKey: "codex:thread-linux-pipeline" }],
+      threads: [
+        { sessionId: response.sessionId, threadKey: "codex:thread-linux-pipeline" },
+      ],
     });
   });
 
@@ -828,7 +832,9 @@ describe("resolveTerminalShell", () => {
     expect(service.getQuitSnapshot()).toEqual({
       count: 1,
       sessionIds: [response.sessionId],
-      threads: [{ threadKey: "codex:thread-linux-lookup-failed" }],
+      threads: [
+        { sessionId: response.sessionId, threadKey: "codex:thread-linux-lookup-failed" },
+      ],
     });
   });
 
@@ -854,7 +860,9 @@ describe("resolveTerminalShell", () => {
     expect(service.getQuitSnapshot()).toEqual({
       count: 1,
       sessionIds: [response.sessionId],
-      threads: [{ threadKey: "codex:thread-windows" }],
+      threads: [
+        { sessionId: response.sessionId, threadKey: "codex:thread-windows" },
+      ],
     });
   });
 
@@ -885,7 +893,9 @@ describe("resolveTerminalShell", () => {
     expect(service.getQuitSnapshot()).toEqual({
       count: 1,
       sessionIds: [response.sessionId],
-      threads: [{ threadKey: "codex:thread-lookup-failed" }],
+      threads: [
+        { sessionId: response.sessionId, threadKey: "codex:thread-lookup-failed" },
+      ],
     });
   });
 
@@ -933,7 +943,7 @@ describe("resolveTerminalShell", () => {
 
     // Collapsing the panel is a preference, not a teardown: the PTY lives on
     // and the flag is what lets the UI flag it as "running but hidden".
-    service.setPanelHidden({ threadKey: "codex:thread-a", hidden: true });
+    service.setPanelHidden({ sessionId: response.sessionId, hidden: true });
 
     expect(onSessionsChanged).toHaveBeenCalledTimes(2);
     expect(service.listSessions()[0]?.panelHidden).toBe(true);
@@ -952,11 +962,210 @@ describe("resolveTerminalShell", () => {
     expect(onSessionsChanged).toHaveBeenCalledTimes(2);
 
     // Showing a panel is an explicit act.
-    expect(service.revealSession("codex:thread-a")).toBe(true);
+    expect(service.revealSession(response.sessionId)).toEqual({
+      threadKey: "codex:thread-a",
+    });
     expect(service.listSessions()[0]?.panelHidden).toBe(false);
   });
 
-  it("refuses to reveal a thread with no live session", async () => {
+  // The point of the identity refactor. A thread key groups terminals; it no
+  // longer names one, and every operation below has to land on exactly the
+  // shell it addressed.
+  describe("several terminals on one thread", () => {
+    /** Two live terminals on `codex:thread-a`, oldest first. */
+    async function openTwoOnOneThread(
+      options: { ptyProcess?: string } = {},
+    ) {
+      // `sleep` rather than the shell: a shell sitting at its own prompt is
+      // filtered out of the quit snapshot, and one of the tests below needs
+      // both terminals to be work in progress.
+      const ptys = [
+        fakePty({ process: options.ptyProcess ?? "sh" }),
+        fakePty({ process: options.ptyProcess ?? "sh" }),
+      ];
+      let spawned = 0;
+      const service = new IntegratedTerminalService({
+        loadNodePty: async () => ({
+          spawn: vi.fn(() => ptys[spawned++]!) as unknown as typeof import("node-pty").spawn,
+        }),
+        platform: "darwin",
+      });
+      const first = await service.createOrAttach(
+        { threadKey: "codex:thread-a", cwd: os.tmpdir(), cols: 80, rows: 24 },
+        fakeWebContents(),
+      );
+      // A request naming an id main does not know spawns UNDER that id, which
+      // is how a caller gets a second shell on a thread that already has one.
+      const second = await service.createOrAttach(
+        {
+          sessionId: "terminal-2",
+          threadKey: "codex:thread-a",
+          cwd: os.tmpdir(),
+          cols: 80,
+          rows: 24,
+        },
+        fakeWebContents(),
+      );
+      expect(second.sessionId).toBe("terminal-2");
+      expect(service.listSessions()).toHaveLength(2);
+      return { first, ptys, second, service };
+    }
+
+    it("spawns a second shell for a thread that already has one", async () => {
+      const { first, second, service } = await openTwoOnOneThread();
+
+      expect(first.sessionId).not.toBe(second.sessionId);
+      expect(
+        service.listSessions().map((session) => session.threadKey),
+      ).toEqual(["codex:thread-a", "codex:thread-a"]);
+    });
+
+    // A request with no id still means "this thread's terminal", which is what
+    // keeps the Star Map window and the thread view on one shell.
+    it("attaches an id-less request to the thread's oldest terminal", async () => {
+      const { first, service } = await openTwoOnOneThread();
+
+      const reattached = await service.createOrAttach(
+        { threadKey: "codex:thread-a", cwd: os.tmpdir(), cols: 80, rows: 24 },
+        fakeWebContents(),
+      );
+
+      expect(reattached.sessionId).toBe(first.sessionId);
+      expect(service.listSessions()).toHaveLength(2);
+    });
+
+    it("collapses one terminal's panel and leaves its sibling showing", async () => {
+      const { first, second, service } = await openTwoOnOneThread();
+
+      service.setPanelHidden({ sessionId: second.sessionId, hidden: true });
+
+      const hiddenBySession = new Map(
+        service
+          .listSessions()
+          .map((session) => [session.sessionId, session.panelHidden]),
+      );
+      expect(hiddenBySession.get(first.sessionId)).toBe(false);
+      expect(hiddenBySession.get(second.sessionId)).toBe(true);
+    });
+
+    it("closes one terminal and leaves the rest of the thread running", async () => {
+      const { ptys, second, service } = await openTwoOnOneThread();
+
+      service.close({ sessionId: second.sessionId });
+
+      expect(ptys[0]?.kill).not.toHaveBeenCalled();
+      expect(ptys[1]?.kill).toHaveBeenCalledTimes(1);
+    });
+
+    // The thread view's close button says "put this thread's terminal away",
+    // and a pane whose create has not resolved has no id to name.
+    it("closes every terminal the thread owns when the request names the thread", async () => {
+      const { ptys, service } = await openTwoOnOneThread();
+
+      service.close({ threadKey: "codex:thread-a" });
+
+      expect(ptys[0]?.kill).toHaveBeenCalledTimes(1);
+      expect(ptys[1]?.kill).toHaveBeenCalledTimes(1);
+    });
+
+    // Two shells holding up the quit are two rows. Keyed by thread they
+    // collapsed into one, and the dialog under-reported what it was about to
+    // kill.
+    it("reports each of a thread's terminals as its own quit blocker", async () => {
+      const { first, second, service } = await openTwoOnOneThread({
+        ptyProcess: "sleep",
+      });
+
+      const snapshot = service.getQuitSnapshot();
+
+      expect(snapshot.count).toBe(2);
+      expect(
+        [...snapshot.threads].map((thread) => thread.sessionId).sort(),
+      ).toEqual([first.sessionId, second.sessionId].sort());
+      expect(
+        snapshot.threads.every(
+          (thread) => thread.threadKey === "codex:thread-a",
+        ),
+      ).toBe(true);
+    });
+
+    it("refuses to attach a terminal that belongs to a different thread", async () => {
+      const { second, service } = await openTwoOnOneThread();
+
+      // A pane holding a stale id must not be handed another thread's shell:
+      // it would show one thread's output and send its keystrokes there.
+      await expect(
+        service.createOrAttach(
+          {
+            sessionId: second.sessionId,
+            threadKey: "codex:thread-b",
+            cwd: os.tmpdir(),
+            cols: 80,
+            rows: 24,
+          },
+          fakeWebContents(),
+        ),
+      ).rejects.toThrow(/different thread/);
+    });
+  });
+
+  // Two of a thread's terminals spawning at once, and a close for one of
+  // them. Keyed by thread the queued close could not tell them apart and
+  // killed both — a shell the user never dismissed, dying because a sibling
+  // was dismissed while both were still starting.
+  it("honors a close for the terminal still spawning and spares its sibling", async () => {
+    // Distinct pids so the assertion can correlate a pty back to the terminal
+    // it was spawned for, rather than assuming which spawn won the race.
+    const ptys = [fakePty({ pid: 101 }), fakePty({ pid: 102 })];
+    let spawned = 0;
+    let releaseSpawn: () => void = () => undefined;
+    const spawnGate = new Promise<void>((resolve) => {
+      releaseSpawn = resolve;
+    });
+    const service = new IntegratedTerminalService({
+      loadNodePty: async () => {
+        await spawnGate;
+        return {
+          spawn: vi.fn(() => ptys[spawned++]!) as unknown as typeof import("node-pty").spawn,
+        };
+      },
+    });
+
+    const survivor = service.createOrAttach(
+      {
+        sessionId: "terminal-1",
+        threadKey: "codex:thread-a",
+        cwd: os.tmpdir(),
+        cols: 80,
+        rows: 24,
+      },
+      fakeWebContents(),
+    );
+    const dismissed = service.createOrAttach(
+      {
+        sessionId: "terminal-2",
+        threadKey: "codex:thread-a",
+        cwd: os.tmpdir(),
+        cols: 80,
+        rows: 24,
+      },
+      fakeWebContents(),
+    );
+
+    service.close({ sessionId: "terminal-2" });
+    releaseSpawn();
+    await Promise.all([survivor, dismissed]);
+
+    const sessionIdByPid = new Map(
+      service.listSessions().map((session) => [session.pid, session.sessionId]),
+    );
+    const killedIds = ptys
+      .filter((pty) => vi.mocked(pty.kill).mock.calls.length > 0)
+      .map((pty) => sessionIdByPid.get(pty.pid));
+    expect(killedIds).toEqual(["terminal-2"]);
+  });
+
+  it("refuses to reveal a terminal that is no longer live", async () => {
     const service = new IntegratedTerminalService({
       loadNodePty: async () => ({
         spawn: vi.fn(() => fakePty()) as unknown as typeof import("node-pty").spawn,
@@ -966,7 +1175,7 @@ describe("resolveTerminalShell", () => {
     // The quit dialog can sit open long after its snapshot was taken, so a
     // listed shell may already have exited. Revealing anyway made the renderer
     // open a panel for a session-less thread, which spawned a brand-new shell.
-    expect(service.revealSession("codex:thread-gone")).toBe(false);
+    expect(service.revealSession("terminal-gone")).toBeUndefined();
     expect(service.listSessions()).toEqual([]);
   });
 

@@ -51,8 +51,8 @@ export function revealCurrentQuitBlocker(
   if (!parsed) {
     return { revealed: false };
   }
-  const terminal = item.kind === "terminal"
-    ? revealIntegratedTerminal(item.threadKey, {
+  const terminal = item.kind === "terminal" && item.sessionId
+    ? revealIntegratedTerminal(item.sessionId, {
         ...(item.target
           ? { instanceId: item.target.instanceId }
           : {}),

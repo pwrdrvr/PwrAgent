@@ -20,7 +20,7 @@ import type {
 } from "../../shared/integrated-terminal";
 import { isRemoteFederationTarget } from "@pwragent/shared";
 import {
-  byThreadKey,
+  byQuitTerminal,
   IntegratedTerminalService,
 } from "../terminal/integrated-terminal-service";
 import type { IntegratedTerminalQuitSnapshot } from "../terminal/integrated-terminal-service";
@@ -167,7 +167,7 @@ export function registerIntegratedTerminalIpcHandlers(): void {
     (event, request: IntegratedTerminalSetPanelHiddenRequest): void => {
       if (
         isFederationWindowWebContents(event.sender)
-        || federationBridge?.hasThreadSession(event.sender, request.threadKey)
+        || federationBridge?.hasSession(event.sender, request.sessionId)
       ) {
         federationBridge?.setPanelHidden(request, event.sender);
         return;
@@ -219,13 +219,14 @@ export function getIntegratedTerminalQuitSnapshot(): IntegratedTerminalQuitSnaps
     threads: [
       ...local.threads,
       ...remote.map((session) => ({
+        sessionId: session.sessionId,
         threadKey: session.threadKey,
         target: session.target,
         ...(session.instanceLabel
           ? { instanceLabel: session.instanceLabel }
           : {}),
       })),
-    ].sort(byThreadKey),
+    ].sort(byQuitTerminal),
   };
 }
 
@@ -254,19 +255,25 @@ export type IntegratedTerminalRevealResult = {
  * fresh quit blocker, conjured by trying to look at one.
  */
 export function revealIntegratedTerminal(
-  threadKey: string,
+  sessionId: string,
   options: { instanceId?: string } = {},
 ): IntegratedTerminalRevealResult {
   // A caller naming an instance means a peer's shell, and the local registry
   // can only answer for this machine — checking it first would reveal a local
-  // terminal that happens to share the thread key.
-  if (!options.instanceId && service?.revealSession(threadKey)) {
+  // terminal that happens to share the id.
+  const local = options.instanceId
+    ? undefined
+    : service?.revealSession(sessionId);
+  if (local) {
     // A local session is hosted by whichever windows show the thread, so the
     // broadcast is the routing.
     for (const webContents of subscribersForChannel(
       INTEGRATED_TERMINAL_REVEAL_CHANNEL,
     )) {
-      webContents.send(INTEGRATED_TERMINAL_REVEAL_CHANNEL, { threadKey });
+      webContents.send(INTEGRATED_TERMINAL_REVEAL_CHANNEL, {
+        sessionId,
+        threadKey: local.threadKey,
+      });
     }
     return { revealed: true };
   }
@@ -274,16 +281,13 @@ export function revealIntegratedTerminal(
   // window, or a main window showing a pinned remote thread. Telling every
   // window to open a terminal panel for it would ask windows that do not have
   // the thread to do something they cannot.
-  const owners =
-    federationBridge?.revealSession(threadKey, options.instanceId) ?? [];
-  if (owners.length === 0) {
+  const remote = federationBridge?.revealSession(sessionId, options.instanceId);
+  if (!remote) {
     return { revealed: false };
   }
-  for (const webContents of owners) {
-    webContents.send(INTEGRATED_TERMINAL_REVEAL_CHANNEL, { threadKey });
-  }
-  // Remote mounts allocate a PTY per viewer window, so the same thread can be
-  // open in more than one. Any of them demonstrably has the thread, which is
-  // more than the focused-or-first fallback can promise.
-  return { revealed: true, owner: owners[0] };
+  remote.owner.send(INTEGRATED_TERMINAL_REVEAL_CHANNEL, {
+    sessionId,
+    threadKey: remote.threadKey,
+  });
+  return { revealed: true, owner: remote.owner };
 }

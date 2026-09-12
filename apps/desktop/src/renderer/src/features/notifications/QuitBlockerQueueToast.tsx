@@ -157,6 +157,9 @@ export function QuitBlockerQueueToast(props: {
                         void props.desktopApi?.revealQuitBlocker?.({
                           kind: selected.kind,
                           threadKey: selected.threadKey,
+                          ...(selected.sessionId
+                            ? { sessionId: selected.sessionId }
+                            : {}),
                           ...(selected.target
                             ? { target: selected.target }
                             : {}),

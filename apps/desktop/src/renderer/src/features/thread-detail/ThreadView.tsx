@@ -3950,7 +3950,7 @@ export function ThreadView(props: ThreadViewProps) {
                     terminals.setHeight(terminal.threadKey, height);
                   }}
                   onClose={() => {
-                    terminals.closeTerminal(terminal.threadKey);
+                    terminals.closeTerminal(terminal);
                   }}
                   onExit={() => {
                     terminals.handleExit(terminal.threadKey);
