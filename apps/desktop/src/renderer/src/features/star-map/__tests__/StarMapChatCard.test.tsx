@@ -319,6 +319,7 @@ describe("StarMapChatCard gesture persistence", () => {
       pointerId: 1,
     });
     fireEvent.pointerMove(header as Element, {
+      buttons: 1,
       clientX: 125,
       clientY: 120,
       pointerId: 1,
@@ -333,6 +334,118 @@ describe("StarMapChatCard gesture persistence", () => {
     expect(onRaise).toHaveBeenCalledWith("card-1", false);
     expect(onRectChange).toHaveBeenCalledTimes(1);
     expect(onRectCommit).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * The release can go missing: the capturing node reorders out from
+   * under the capture, or the OS takes the pointer. What was left behind
+   * was a card that followed the mouse with no button held — grab it,
+   * let go, move away, and it kept jumping after the cursor.
+   */
+  it("ends a drag whose pointerup never arrived", () => {
+    const onRectChange = vi.fn();
+    const onRectCommit = vi.fn();
+    const { container } = render(
+      <StarMapChatCard
+        cardKey="card-1"
+        desktopApi={buildApi()}
+        onClose={() => undefined}
+        onOpenFull={() => undefined}
+        onRaise={() => false}
+        onRectChange={onRectChange}
+        onRectCommit={onRectCommit}
+        rect={RECT}
+        thread={localThread()}
+        scale={1}
+        bounds={{ width: 4000, height: 3000 }}
+        onToggleContext={() => undefined}
+        onToggleTerminal={() => undefined}
+        zIndex={40}
+      />,
+    );
+    const header = container.querySelector(".star-map-chat-card__bar") as Element;
+
+    fireEvent.pointerDown(header, {
+      button: 0,
+      clientX: 100,
+      clientY: 100,
+      pointerId: 1,
+    });
+    fireEvent.pointerMove(header, {
+      buttons: 1,
+      clientX: 150,
+      clientY: 140,
+      pointerId: 1,
+    });
+    expect(onRectChange).toHaveBeenCalledTimes(1);
+
+    // No pointerup. The next move carries no button, which is the only
+    // evidence the card gets that the gesture is over.
+    fireEvent.pointerMove(header, {
+      buttons: 0,
+      clientX: 900,
+      clientY: 800,
+      pointerId: 1,
+    });
+    expect(onRectCommit).toHaveBeenCalledTimes(1);
+    expect(onRectChange).toHaveBeenCalledTimes(1);
+
+    // ...and the card stays put for every move after it.
+    fireEvent.pointerMove(header, {
+      buttons: 0,
+      clientX: 1200,
+      clientY: 300,
+      pointerId: 1,
+    });
+    expect(onRectChange).toHaveBeenCalledTimes(1);
+    expect(onRectCommit).toHaveBeenCalledTimes(1);
+  });
+
+  it("ends a drag when the pointer capture is taken away", () => {
+    const onRectChange = vi.fn();
+    const onRectCommit = vi.fn();
+    const { container } = render(
+      <StarMapChatCard
+        cardKey="card-1"
+        desktopApi={buildApi()}
+        onClose={() => undefined}
+        onOpenFull={() => undefined}
+        onRaise={() => false}
+        onRectChange={onRectChange}
+        onRectCommit={onRectCommit}
+        rect={RECT}
+        thread={localThread()}
+        scale={1}
+        bounds={{ width: 4000, height: 3000 }}
+        onToggleContext={() => undefined}
+        onToggleTerminal={() => undefined}
+        zIndex={40}
+      />,
+    );
+    const header = container.querySelector(".star-map-chat-card__bar") as Element;
+
+    fireEvent.pointerDown(header, {
+      button: 0,
+      clientX: 100,
+      clientY: 100,
+      pointerId: 1,
+    });
+    fireEvent.pointerMove(header, {
+      buttons: 1,
+      clientX: 150,
+      clientY: 140,
+      pointerId: 1,
+    });
+    fireEvent.lostPointerCapture(header, { pointerId: 1 });
+    expect(onRectCommit).toHaveBeenCalledTimes(1);
+
+    fireEvent.pointerMove(header, {
+      buttons: 1,
+      clientX: 900,
+      clientY: 800,
+      pointerId: 1,
+    });
+    expect(onRectChange).toHaveBeenCalledTimes(1);
   });
 });
 

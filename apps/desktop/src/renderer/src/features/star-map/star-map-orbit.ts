@@ -54,6 +54,25 @@ export const STAR_MAP_INSTANCE_KEEPOUT = {
 } as const;
 
 /**
+ * Chrome a project body draws, as half-extents from its centre.
+ *
+ * A project is a label and a count, not a sun with a name pill and an
+ * intake button, so its clouds pack in far tighter than an instance's.
+ * Measured from `.star-map-project` in app.css: a 26px core over a 24px
+ * label with a 6px gap, centred, so the box runs 28px either side of the
+ * centre; the label caps at 190px plus its border, so 96px either side;
+ * the action row is absolutely positioned at `bottom: calc(100% - 14px)`,
+ * putting its 24px top edge 38px up. A few pixels of air on each figure.
+ * Handing this body the instance's box instead is what threw a project's
+ * clouds hundreds of pixels off their own name.
+ */
+export const STAR_MAP_PROJECT_KEEPOUT = {
+  above: 42,
+  below: 32,
+  halfWidth: 100,
+};
+
+/**
  * Does a card centred here clear the instance's own chrome?
  *
  * Only the handful of slots that actually collide get pushed out (see

@@ -973,6 +973,18 @@ export type NavigationDirectoryGitStatus = {
   /** Most recent commits on the checked-out branch, newest first. */
   recentCommits?: NavigationGitCommitSummary[];
   handoffBranches?: string[];
+  /**
+   * `remote.origin.url`, normalized by `normalizeGitOriginUrl` to
+   * `host/owner/repo`.
+   *
+   * The one thing about a checkout that is the same on every machine. A
+   * directory is identified everywhere else by its absolute path, which
+   * is correct for a per-machine lens and useless for a fleet-wide one —
+   * the Star Map's Projects lens drew the same repo once per machine, and
+   * twice on a machine holding two clones. Absent for a checkout with no
+   * origin, and for a directory that is not a Git repository at all.
+   */
+  originRepository?: string;
   syncState?:
     | "in-sync"
     | "ahead"
@@ -1619,6 +1631,18 @@ export type NavigationDirectoryRow = {
   kind: DirectorySummaryKind;
   label: string;
   path?: string;
+  /**
+   * Cross-machine repository identity for this row: the directory's
+   * `remote.origin.url` as `host/owner/repo`, from
+   * `gitStatus.originRepository`.
+   *
+   * `key` is a path, and a path is local to one machine. This is how a
+   * fleet-wide view knows that `~/pwrdrvr/PwrAgnt` here and
+   * `~/src/PwrAgent` on the Mac Mini are one project. Absent when the
+   * owning instance could not read an origin, or is too old to send one —
+   * consumers must fall back to `key`.
+   */
+  repositoryKey?: string;
   localAvailability?: "unconfigured";
   counts: NavigationCounts;
   pinnedRootCount: number;

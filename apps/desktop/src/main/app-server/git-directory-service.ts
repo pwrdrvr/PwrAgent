@@ -14,7 +14,10 @@ import type {
   NavigationGitCommitSummary,
   NavigationLaunchpadDraft,
 } from "@pwragent/shared";
-import { DESKTOP_WORKTREE_STORAGE_DEFAULT } from "@pwragent/shared";
+import {
+  DESKTOP_WORKTREE_STORAGE_DEFAULT,
+  normalizeGitOriginUrl,
+} from "@pwragent/shared";
 import { userHomeWorktreesRoot } from "../settings/desktop-config";
 import { PerKeyAsyncLock } from "../util/per-key-async-lock";
 import { runGitCommand } from "./git-executable";
@@ -916,6 +919,7 @@ export class GitDirectoryService {
       branchInventory,
       recentCommitsOutput,
       workspaceInspection,
+      rawOriginUrl,
     ] = await Promise.all([
       runGit(repoRoot, ["rev-parse", "--abbrev-ref", "HEAD"], gitEnv).catch(
         () => "",
@@ -931,9 +935,21 @@ export class GitDirectoryService {
         gitEnv,
       ).catch(() => ""),
       inspectGitWorkspace(cwd, { env: gitEnv, runGit }),
+      // Local config read, no network. `config --get` over `remote get-url`
+      // so a checkout with no origin exits non-zero quietly rather than
+      // printing to stderr.
+      runGit(repoRoot, ["config", "--get", "remote.origin.url"], gitEnv).catch(
+        () => "",
+      ),
     ]);
     const currentBranch =
       rawCurrentBranch.trim() === "HEAD" ? "" : rawCurrentBranch.trim();
+    // The only part of a checkout that means the same thing on another
+    // machine; see `NavigationDirectoryGitStatus.originRepository`. Rides
+    // with the status because the status is already the per-directory Git
+    // read that is cached, persisted, and federated.
+    const originUrl = normalizeGitOriginUrl(rawOriginUrl);
+    const origin = originUrl ? { originRepository: originUrl } : {};
     const upstreamBranch = await runGit(
       repoRoot,
       [
@@ -1002,6 +1018,7 @@ export class GitDirectoryService {
       );
     if (!currentBranch) {
       return {
+        ...origin,
         ...unbornWorktreeAvailability,
         defaultBranch,
         branches,
@@ -1023,6 +1040,7 @@ export class GitDirectoryService {
 
     if (!upstreamBranch) {
       return {
+        ...origin,
         ...unbornWorktreeAvailability,
         currentBranch,
         defaultBranch,
@@ -1056,6 +1074,7 @@ export class GitDirectoryService {
             : "in-sync";
 
     return {
+      ...origin,
       ...unbornWorktreeAvailability,
       currentBranch,
       upstreamBranch,

@@ -94,6 +94,14 @@ function threadsIn(project: string, count: number): NavigationThreadSummary[] {
   );
 }
 
+/** How far the canvas re-based a body, on whichever axis it moved. */
+function rebaseDistance(
+  now: { x: number; y: number },
+  before: { x: number; y: number },
+): number {
+  return Math.hypot(now.x - before.x, now.y - before.y);
+}
+
 function seedLayout(layout: "lanes" | "orbit" | "projects") {
   window.localStorage.setItem(
     "pwragent.starMap.viewPreferences",
@@ -337,7 +345,7 @@ describe("star map view stability", () => {
     seedLayout("orbit");
     const kept = threadsIn("PwrSnap", 6);
     const { rerender } = renderMap({
-      threads: [...kept, ...threadsIn("PwrAgent", 3)],
+      threads: [...kept, ...threadsIn("PwrAgent", 8)],
     });
     await waitFor(() => {
       expect(
@@ -368,8 +376,10 @@ describe("star map view stability", () => {
 
     // Precondition: the canvas really did re-base under the surviving
     // cloud. Without this the assertion below holds for a map that cannot
-    // compensate at all.
-    expect(canvasPositionOf("PwrSnap").x).not.toBeCloseTo(laidOut.x, 3);
+    // compensate at all. On either axis — which one moves depends on
+    // where the departing cloud happened to be seated, and pinning `x`
+    // made this silently vacuous once the clouds packed tighter.
+    expect(rebaseDistance(canvasPositionOf("PwrSnap"), laidOut)).toBeGreaterThan(0.5);
     // And the operator is still looking at the same thing.
     const onScreenAfter = screenPositionOf("PwrSnap");
     expect(onScreenAfter.x).toBeCloseTo(onScreenBefore.x, 6);
@@ -388,7 +398,7 @@ describe("star map view stability", () => {
     seedLayout("orbit");
     const kept = threadsIn("PwrSnap", 6);
     const { rerender } = renderMap({
-      threads: [...kept, ...threadsIn("PwrAgent", 3)],
+      threads: [...kept, ...threadsIn("PwrAgent", 8)],
     });
     await waitFor(() => {
       expect(
@@ -425,7 +435,7 @@ describe("star map view stability", () => {
       ).toBeNull();
     });
 
-    expect(canvasPositionOf("PwrSnap").x).not.toBeCloseTo(laidOut.x, 3);
+    expect(rebaseDistance(canvasPositionOf("PwrSnap"), laidOut)).toBeGreaterThan(0.5);
     // Nothing here may re-zoom: the step is a translation only.
     expect(readTransform().scale).toBe(zoomed);
     const onScreenAfter = screenPositionOf("PwrSnap");

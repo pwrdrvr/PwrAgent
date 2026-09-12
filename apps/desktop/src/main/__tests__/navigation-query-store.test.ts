@@ -281,6 +281,50 @@ describe("NavigationQueryStore", () => {
     expect(JSON.stringify(descriptors)).not.toContain("threadKeys");
   });
 
+  /**
+   * A geometry row's `key` is this machine's absolute path. The Star Map
+   * pools a whole federation into one body per project, so it also needs
+   * the one fact about a checkout that reads the same on every machine.
+   */
+  it("stamps project geometry with the directory's repository identity", async () => {
+    const threads = [
+      {
+        ...thread("worktree"),
+        linkedDirectories: [
+          { id: "wt", kind: "worktree" as const, label: "feature", path: "/repos/pwragent/.worktrees/feature" },
+        ],
+      },
+      {
+        ...thread("plain"),
+        linkedDirectories: [
+          { id: "plain", kind: "local" as const, label: "Unversioned", path: "/repos/notes" },
+        ],
+      },
+    ];
+    const directories = [
+      { key: "directory:/repos/pwragent", kind: "directory" as const, label: "PwrAgnt",
+        path: "/repos/pwragent", threadKeys: [], needsAttentionCount: 0,
+        gitStatus: { originRepository: "github.com/pwrdrvr/pwragent" } },
+      { key: "directory:/repos/notes", kind: "directory" as const, label: "Unversioned",
+        path: "/repos/notes", threadKeys: [], needsAttentionCount: 0 },
+    ];
+    const store = new NavigationQueryStore();
+    const page = await store.readPage({
+      scopeKey: "viewer",
+      loadIndex: async () => ({ ...snapshot(threads), directories }),
+      request: request({ query: { kind: "star-map-geometry" }, pageSize: 100 }),
+    });
+
+    const byPath = new Map(page.directories!.map((row) => [row.path, row.repositoryKey]));
+    // The worktree collapsed onto its repo root, and the identity came
+    // from the root's cached status — a worktree shares its repository's
+    // remote, so either path answers the same question.
+    expect(byPath.get("/repos/pwragent")).toBe("github.com/pwrdrvr/pwragent");
+    // No origin, no identity. The lens falls back to the folder name
+    // rather than being handed an empty string to pool on.
+    expect(byPath.get("/repos/notes")).toBeUndefined();
+  });
+
   it("filters Star Map facets on the owner and counts off-page members", async () => {
     const threads = Array.from({ length: 1001 }, (_, index) => ({
       ...thread(String(index)),

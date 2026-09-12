@@ -8,6 +8,8 @@ import {
   orderParentAdjacent,
   resolveCloudDrop,
   ORBIT_MAX_CARDS_PER_GROUP,
+  PROJECT_MAX_CARDS_PER_GROUP,
+  STAR_MAP_PROJECT_KEEPOUT,
 } from "../star-map-clusters";
 
 import { groupThreadsByProject, projectThreadOwner } from "../star-map-projects";
@@ -355,16 +357,30 @@ describe("computeClusterCloud", () => {
     });
   });
 
-  it("separates cloud extents from each other", () => {
-    const cloud = cloudFor([8, 8, 4, 2]);
-    const boxes = cloud.clusters.map((cluster) => ({
-      left: cluster.center.x - cluster.extent.rx,
-      right: cluster.center.x + cluster.extent.rx,
-      top: cluster.center.y - cluster.extent.ry,
-      bottom: cluster.center.y + cluster.extent.ry,
+  /**
+   * Card against card, not box against box.
+   *
+   * Clouds are allowed to interlock: a cloud's box is mostly the empty
+   * middle its cards ring, and demanding that two boxes never touch is
+   * what seated a small cloud hundreds of pixels out into blank sky with
+   * a free quadrant beside it. What must never happen is two clouds'
+   * CARDS sharing a pixel, which is what these two assert.
+   */
+  function cardBoxes(cloud: ReturnType<typeof cloudFor>) {
+    return cloud.slots.map((slot, index) => ({
+      cluster: cloud.clusterIndexByCard[index],
+      left: slot.dx - 100,
+      right: slot.dx + 100,
+      top: slot.dy,
+      bottom: slot.dy + cloud.heights[index],
     }));
+  }
+
+  it("never overlaps a card in one cloud with a card in another", () => {
+    const boxes = cardBoxes(cloudFor([8, 8, 4, 2]));
     for (let i = 0; i < boxes.length; i += 1) {
       for (let j = i + 1; j < boxes.length; j += 1) {
+        if (boxes[i].cluster === boxes[j].cluster) continue;
         const apart =
           boxes[i].right <= boxes[j].left
           || boxes[j].right <= boxes[i].left
@@ -375,17 +391,79 @@ describe("computeClusterCloud", () => {
     }
   });
 
-  it("keeps clouds clear of the instance's own chrome", () => {
+  /**
+   * A project always draws its catch-all so the body keeps its own seat,
+   * which makes an EMPTY cloud reachable: every loaded thread landed in a
+   * parent group. Its declared total still runs ahead of its cards, so it
+   * gets a chip slot — and a reader that can only expand and collapse must
+   * check `overflow`/`expandable` before drawing one. The Projects lens
+   * skipped that check and printed "Show fewer" over blank sky.
+   */
+  it("leaves an empty catch-all nothing to expand or collapse", () => {
+    const clusters = buildInstanceClusters({
+      maxCardsPerGroup: PROJECT_MAX_CARDS_PER_GROUP,
+      project: { key: "one", label: "AlphaDir", totalCount: 23 },
+      threads: [
+        thread("p1", { path: "/repo/alpha" }),
+        thread("c1", { path: "/repo/alpha", parentId: "p1" }),
+      ],
+    });
+    const catchAll = clusters.find((cluster) => cluster.key === "one")!;
+    expect(catchAll.threads).toHaveLength(0);
+    expect(catchAll.overflow).toBe(0);
+    expect(catchAll.expandable).toBe(false);
+    // The slot is still offered: the Instances lens's chip pages the
+    // project's window, and 21 threads have not arrived yet.
+    const cloud = computeClusterCloud({
+      clusters,
+      cardWidth: 200,
+      core: "one",
+      heightForThread: height,
+    });
+    expect(
+      cloud.clusters.find((cluster) => cluster.key === "one")?.overflowSlot,
+    ).toBeDefined();
+  });
+
+  /**
+   * Holding seat 0 empty is not enough for the cloud seated ON a body: a
+   * ring is an ellipse and a body's chrome is a box, so two of ring 1's
+   * eight seats land diagonally across the corner of a project's name
+   * pill. The card the operator can read is the one that tells them which
+   * project they are looking at.
+   */
+  it("keeps the core cloud's cards off the body they sit on", () => {
+    const keepout = STAR_MAP_PROJECT_KEEPOUT;
+    for (const count of [2, 4, 8, 12]) {
+      const cloud = computeClusterCloud({
+        cardWidth: 200,
+        clusters: buildInstanceClusters({
+          maxCardsPerGroup: PROJECT_MAX_CARDS_PER_GROUP,
+          project: { key: "one", label: "AlphaDir" },
+          threads: Array.from({ length: count }, (unused, index) =>
+            thread(`t${index}`, { path: "/repo/alpha" }),
+          ),
+        }),
+        core: "one",
+        heightForThread: height,
+        keepout,
+      });
+      expect(cloud.slots).toHaveLength(count);
+      for (const slot of cloud.slots) {
+        const apart =
+          slot.dx + 100 <= -keepout.halfWidth
+          || slot.dx - 100 >= keepout.halfWidth
+          || slot.dy + height() <= -keepout.above
+          || slot.dy >= keepout.below;
+        expect(apart).toBe(true);
+      }
+    }
+  });
+
+  it("keeps every card clear of the instance's own chrome", () => {
     // Mirrors STAR_MAP_INSTANCE_KEEPOUT in star-map-orbit.
     const keepout = { left: -92, right: 92, top: -58, bottom: 100 };
-    const cloud = cloudFor([8, 8, 4]);
-    for (const cluster of cloud.clusters) {
-      const box = {
-        left: cluster.center.x - cluster.extent.rx,
-        right: cluster.center.x + cluster.extent.rx,
-        top: cluster.center.y - cluster.extent.ry,
-        bottom: cluster.center.y + cluster.extent.ry,
-      };
+    for (const box of cardBoxes(cloudFor([8, 8, 4]))) {
       const apart =
         box.right <= keepout.left
         || box.left >= keepout.right
@@ -623,8 +701,14 @@ describe("layout stability", () => {
    * an arrival again — seated from the base radius outward along its own
    * bearing, which is rarely where it was. The operator asked for two more
    * cards and the cloud they were reading vanished across the map.
+   *
+   * It may still settle: a cloud is bounded by the seats it occupies, so
+   * the ninth card genuinely reaches toward the body and the cloud has to
+   * give way to keep it off the instance's name pill. What it must not do
+   * is leave — it steps aside by less than one card and carries every
+   * card with it, seats unchanged.
    */
-  it("expands a cloud where it stands when it has the room", () => {
+  it("expands a cloud where it stands, carrying its cards with it", () => {
     // One past the cap: the extra card takes a free seat in the rings the
     // cloud already has, so there is nothing to re-fit.
     const threads = [
@@ -641,13 +725,28 @@ describe("layout stability", () => {
       (cluster) => cluster.key === alphaKey,
     )!;
     const alpha = after.clusters.find((cluster) => cluster.key === alphaKey)!;
-    expect(alpha.center).toEqual(previousAlpha.center);
-    // Every card that was on screen is exactly where it was; the one the
-    // operator asked for is the only new geometry.
+    const travelled = Math.hypot(
+      alpha.center.x - previousAlpha.center.x,
+      alpha.center.y - previousAlpha.center.y,
+    );
+    expect(travelled).toBeLessThan(200);
+    // The neighbour is untouched: only the cloud the operator asked about
+    // is allowed to move at all.
+    const beta = after.clusters.find((cluster) => cluster.key !== alphaKey)!;
+    expect(beta.center).toEqual(
+      before.clusters.find((cluster) => cluster.key === beta.key)!.center,
+    );
+    // Every card that was on screen keeps its seat in the cloud; the one
+    // the operator asked for is the only new geometry.
     const was = slotByThread(before);
     const now = slotByThread(after);
     for (const [id, slot] of was) {
-      expect(now.get(id)).toEqual(slot);
+      const moved = now.get(id)!;
+      const drift = id.startsWith("alpha-")
+        ? { x: alpha.center.x - previousAlpha.center.x, y: alpha.center.y - previousAlpha.center.y }
+        : { x: 0, y: 0 };
+      expect(moved.dx - slot.dx).toBeCloseTo(drift.x, 6);
+      expect(moved.dy - slot.dy).toBeCloseTo(drift.y, 6);
     }
     expect(now.size).toBe(was.size + 1);
   });
@@ -806,7 +905,7 @@ describe("layout stability", () => {
         threads: [...threads, thread("tall", { path: "/repo/alpha" })],
       }),
       cardWidth,
-      heightForThread: (key) => (key === "codex:tall" ? 260 : 112),
+      heightForThread: (member) => (member.id === "tall" ? 260 : 112),
       memory: before.memory,
     });
     const was = slotByThread(before);
