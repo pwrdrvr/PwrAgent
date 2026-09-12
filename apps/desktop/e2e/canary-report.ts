@@ -11,10 +11,13 @@ export function describeCanaryFailure(params: {
    *
    * The distinction decides which story gets told, and telling the wrong
    * one is expensive. A hang means a sick guest, and the right response
-   * is to recycle it. A rejection means the harness already knows what
-   * is wrong — a missing onboarding seed, say — and recycling the guest
-   * would be a wasted trip that fixes nothing. Defaults to `true` to
-   * preserve the original behavior for callers that don't distinguish.
+   * is to recycle it. A rejection means the launch failed with something
+   * to read instead of stalling — either a harness diagnosis (a missing
+   * onboarding seed, say) or a failed Playwright/Electron round trip.
+   * Recycling the guest fixes neither, which is all this flag claims:
+   * the two rejection kinds still want different responses from each
+   * other, and the message says so. Defaults to `true` to preserve the
+   * original behavior for callers that don't distinguish.
    */
   timedOut?: boolean;
 }): string {
@@ -51,9 +54,24 @@ export function describeCanaryFailure(params: {
       "Desktop E2E pre-flight failed before any test ran.",
       "",
       "The canary launches one app through the SAME harness every spec uses, so",
-      "this would have failed every spec in turn. The harness rejected with a",
-      "specific diagnosis rather than hanging, so read the error below — it is",
-      "the actual problem, and it is NOT the guest needing to be recycled.",
+      "this would have failed every spec in turn. The harness rejected rather",
+      "than hanging, so start from the error below — whatever it says, it is",
+      "NOT the guest needing to be recycled.",
+      "",
+      "Two unlike things reject here, and they want opposite responses:",
+      "",
+      "  - A harness DIAGNOSIS is deterministic: a missing onboarding seed, the",
+      "    first-run wizard holding the window. It names what to fix and will",
+      "    fail the same way on every lane and every runner.",
+      "  - A failed Playwright <-> Electron ROUND TRIP is not deterministic and",
+      "    diagnoses nothing. \"Resulting promise was garbage collected\" and",
+      "    \"Target closed\" describe the RPC, not the app. Observed here on",
+      "    2026-09-11: one lane died in pre-flight while the other three passed",
+      "    the same commit — one of them on the same runner, seconds later —",
+      "    and the failed lane passed on retry.",
+      "",
+      "So before reading this as a branch defect, check whether the suite's",
+      "other lanes passed on this commit. If they did, retry this one.",
       "",
       params.runnerName
         ? `  Runner: ${params.runnerName}`
