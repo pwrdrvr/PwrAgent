@@ -59,11 +59,12 @@ import {
 } from "./star-map-orbit";
 import {
   buildInstanceClusters,
-  buildProjectCluster,
   computeClusterCloud,
   emptyCloudMemory,
+  PROJECT_MAX_CARDS_PER_GROUP,
   refitCluster,
   resolveCloudDrop,
+  STAR_MAP_PROJECT_KEEPOUT,
   type StarMapClusterPlacement,
   type StarMapCloudMemory,
 } from "./star-map-clusters";
@@ -92,7 +93,7 @@ import {
 import { buildFederationTopology } from "./star-map-topology";
 import {
   groupThreadsByProject,
-  starMapProjectIdentity,
+  starMapProjectIdentities,
   threadProjectKey,
   projectThreadOwner,
   type StarMapProjectMember,
@@ -201,6 +202,19 @@ const PROJECT_CLUSTER_SCOPE = "project:";
 
 function projectClusterScope(projectKey: string): string {
   return `${PROJECT_CLUSTER_SCOPE}${projectKey}`;
+}
+
+/** The expanded cluster keys belonging to one body, unprefixed. */
+function expandedKeysForScope(
+  expanded: ReadonlySet<string>,
+  scopeId: string,
+): Set<string> {
+  const prefix = `${scopeId}::`;
+  const keys = new Set<string>();
+  for (const entry of expanded) {
+    if (entry.startsWith(prefix)) keys.add(entry.slice(prefix.length));
+  }
+  return keys;
 }
 
 /**
@@ -1455,13 +1469,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
       ReturnType<typeof computeClusterCloud>
     >();
     for (const [instanceId, threads] of attentionByInstance) {
-      const prefix = `${instanceId}::`;
-      const expandedKeys = new Set<string>();
-      for (const entry of expandedClusters) {
-        if (entry.startsWith(prefix)) {
-          expandedKeys.add(entry.slice(prefix.length));
-        }
-      }
+      const expandedKeys = expandedKeysForScope(expandedClusters, instanceId);
       const cloud = computeClusterCloud({
         clusters: buildInstanceClusters({ threads, expandedKeys, descriptors: projectDescriptorsByInstance.get(instanceId) }),
         cardWidth: ORBIT_CARD_WIDTH,
@@ -1576,13 +1584,17 @@ export function StarMapScreen(props: StarMapScreenProps) {
    * by the project key alone worked only while the two were the same
    * string.
    */
+  const projectIdentityFor = useMemo(
+    () => starMapProjectIdentities(projectDescriptorsByInstance),
+    [projectDescriptorsByInstance],
+  );
   const projectPageMembers = useMemo(() => {
     const members = new Map<string, StarMapProjectMember[]>();
     for (const [instanceId, descriptors] of projectDescriptorsByInstance) {
       if (remote.unreachableInstanceIds.has(instanceId)) continue;
       for (const descriptor of descriptors) {
         if (!projectPages.state.resources.get(starMapProjectResource(instanceId, descriptor.key))?.state.page?.nextCursor) continue;
-        const identity = starMapProjectIdentity(descriptor);
+        const identity = projectIdentityFor(instanceId, descriptor.key);
         const pooled = members.get(identity) ?? [];
         if (!pooled.some((member) => member.instanceId === instanceId && member.directoryKey === descriptor.key)) {
           pooled.push({ instanceId, directoryKey: descriptor.key });
@@ -1591,19 +1603,19 @@ export function StarMapScreen(props: StarMapScreenProps) {
       }
     }
     return members;
-  }, [projectDescriptorsByInstance, projectPages.state, remote.unreachableInstanceIds]);
+  }, [projectDescriptorsByInstance, projectIdentityFor, projectPages.state, remote.unreachableInstanceIds]);
   const projectRecoveryMembers = useMemo(() => {
     const members = new Map<string, StarMapProjectMember[]>();
     for (const [instanceId, descriptors] of projectDescriptorsByInstance) {
       if (remote.unreachableInstanceIds.has(instanceId)) continue;
       for (const descriptor of descriptors) {
         if (!projectPages.state.resources.get(starMapProjectResource(instanceId, descriptor.key))?.state.rebaselineRequired) continue;
-        const identity = starMapProjectIdentity(descriptor);
+        const identity = projectIdentityFor(instanceId, descriptor.key);
         members.set(identity, [...members.get(identity) ?? [], { instanceId, directoryKey: descriptor.key }]);
       }
     }
     return members;
-  }, [projectDescriptorsByInstance, projectPages.state, remote.unreachableInstanceIds]);
+  }, [projectDescriptorsByInstance, projectIdentityFor, projectPages.state, remote.unreachableInstanceIds]);
   const [projectGeometryTime] = useState(Date.now);
   const projects = useMemo(
     () => groupThreadsByProject(attentionByInstance, { summonedKeys, now: projectGeometryTime,
@@ -1629,16 +1641,18 @@ export function StarMapScreen(props: StarMapScreenProps) {
   );
 
   /**
-   * Projects-lens clouds: one system per project, the body in the middle
-   * of its own ring of cards.
+   * Projects-lens clouds: the project's own cards around its body, and
+   * each parent thread with replies as a sub-cloud beside it.
    *
-   * This used to hand `buildInstanceClusters` a single project's threads
-   * and take that project's parent/child clouds plus a catch-all. The
-   * grouping read well; the seating did not. See `buildProjectCluster`
-   * for the measurements — the short version is that cloud seating is
-   * built to clear an instance's chrome, and a project body is a label,
-   * so every project ended up with an empty middle and its cards 400px
-   * out. Parent/child adjacency now rides the ring order instead.
+   * Three pieces make that work where the first attempt did not. The
+   * project pools into ONE bucket (`project`), so a repository checked
+   * out at a different path on a second machine is one project rather
+   * than one per machine. Its catch-all is the `core` cloud, seated ON
+   * the body with the centre seat left free, so the body sits among its
+   * own cards instead of 400px from the nearest one. And the sub-clouds
+   * are seated against the project's own chrome
+   * (`STAR_MAP_PROJECT_KEEPOUT`) rather than an instance's, so they
+   * pack in tight against a label instead of clearing a sun.
    *
    * Undefined outside the lens so the others pay nothing for it.
    */
@@ -1648,20 +1662,22 @@ export function StarMapScreen(props: StarMapScreenProps) {
     for (const project of projects) {
       const scopeId = projectClusterScope(project.key);
       const cloud = computeClusterCloud({
-        clusters: [
-          buildProjectCluster({
+        clusters: buildInstanceClusters({
+          expandedKeys: expandedKeysForScope(expandedClusters, scopeId),
+          maxCardsPerGroup: PROJECT_MAX_CARDS_PER_GROUP,
+          project: {
             key: project.key,
             label: project.label,
-            threads: project.threads,
             totalCount: project.totalThreadCount,
-            expanded: expandedClusters.has(`${scopeId}::${project.key}`),
-          }),
-        ],
+          },
+          threads: project.threads,
+        }),
         cardWidth: ORBIT_CARD_WIDTH,
         core: project.key,
         heightForThread: (thread) =>
           cardHeights.get(buildThreadIdentityKey(thread.source, thread.id))
           ?? STAR_MAP_ESTIMATED_CARD_HEIGHT,
+        keepout: STAR_MAP_PROJECT_KEEPOUT,
         memory: projectCloudMemory.current.get(scopeId),
       });
       // See `clusterClouds`: carrying the layout forward is what keeps an

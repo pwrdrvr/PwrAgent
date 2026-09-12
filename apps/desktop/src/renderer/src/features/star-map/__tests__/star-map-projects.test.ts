@@ -404,7 +404,7 @@ describe("gravity seating", () => {
 
 describe("groupThreadsByProject summons", () => {
   it("seats a summoned thread first, ahead of recency", () => {
-    // A project body seats only its first PROJECT_MAX_CARDS_PER_BODY
+    // A project body seats only its first PROJECT_MAX_CARDS_PER_GROUP
     // threads, and this lens re-sorts its pools by activity — so a card
     // the operator asked for by name has to be told to come forward here
     // as well as in `selectFilteredThreads`.
@@ -469,7 +469,7 @@ it("keeps project mass and off-page bodies stable while another row page arrives
 /**
  * A project's key used to be one machine's absolute path, so the lens
  * drew the same repository once per machine that held it — and twice on a
- * machine holding two clones. See `starMapProjectIdentity`.
+ * machine holding two clones. See `starMapProjectIdentities`.
  */
 describe("pooling one repository across instances", () => {
   const descriptor = (params: {
@@ -570,6 +570,73 @@ describe("pooling one repository across instances", () => {
     expect(projects).toHaveLength(1);
     expect(projects[0].label).toBe("Workspaces");
     expect(projects[0].totalThreadCount).toBe(30);
+  });
+
+  /**
+   * The duplicate names on the map.
+   *
+   * The thread list groups a directory by its FOLDER NAME, and a Star Map
+   * project is meant to be the same grouping. Keying strictly on the
+   * origin split one repository in two the moment a single instance had
+   * not read its remote — a fresh clone, a scan that had not finished, a
+   * peer that answered before its Git status did — and the two bodies sat
+   * side by side wearing the same name.
+   */
+  it("pools a checkout that has not read its remote with one that has", () => {
+    const known = thread({ id: "known", repoPath: "/Users/h/pwrdrvr/PwrAgnt" });
+    const quiet = thread({ id: "quiet", repoPath: "/Volumes/ext/PwrAgnt" });
+    const projects = groupThreadsByProject(
+      new Map([["mini", [known]], ["laptop", [quiet]]]),
+      {
+        now: 100,
+        descriptorsByInstance: new Map([
+          ["mini", [descriptor({
+            key: threadProjectKey(known), label: "PwrAgnt", total: 38,
+            repositoryKey: "github.com/pwrdrvr/pwragent",
+          })]],
+          ["laptop", [descriptor({
+            key: threadProjectKey(quiet), label: "PwrAgnt", total: 4,
+          })]],
+        ]),
+      },
+    );
+
+    expect(projects).toHaveLength(1);
+    expect(projects[0].totalThreadCount).toBe(42);
+    expect(projects[0].threads.map((entry) => entry.id).sort()).toEqual([
+      "known",
+      "quiet",
+    ]);
+  });
+
+  it("will not guess an origin for a name two repositories answer to", () => {
+    const mine = thread({ id: "mine", repoPath: "/Users/h/work/machine-configs" });
+    const theirs = thread({ id: "theirs", repoPath: "/Users/h/side/machine-configs" });
+    const quiet = thread({ id: "quiet", repoPath: "/Volumes/ext/machine-configs" });
+    const projects = groupThreadsByProject(
+      new Map([["mini", [mine]], ["laptop", [theirs]], ["nas", [quiet]]]),
+      {
+        now: 100,
+        descriptorsByInstance: new Map([
+          ["mini", [descriptor({
+            key: threadProjectKey(mine), label: "machine-configs", total: 3,
+            repositoryKey: "github.com/pwrdrvr/machine-configs",
+          })]],
+          ["laptop", [descriptor({
+            key: threadProjectKey(theirs), label: "machine-configs", total: 2,
+            repositoryKey: "gitlab.com/someone/machine-configs",
+          })]],
+          ["nas", [descriptor({
+            key: threadProjectKey(quiet), label: "machine-configs", total: 1,
+          })]],
+        ]),
+      },
+    );
+
+    // The unversioned folder could belong to either, so it belongs to
+    // neither: three bodies, not a coin toss that silently files a
+    // checkout under the wrong repository.
+    expect(projects).toHaveLength(3);
   });
 
   it("keys on the owner's own path when no instance sent geometry", () => {

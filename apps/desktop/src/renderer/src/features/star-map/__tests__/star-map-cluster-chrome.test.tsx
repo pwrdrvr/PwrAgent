@@ -6,6 +6,7 @@ import type { DesktopApi } from "../../../lib/desktop-api";
 import { StarMapScreen } from "../StarMapScreen";
 import {
   buildInstanceClusters,
+  type StarMapCloudMemory,
   computeClusterCloud,
 } from "../star-map-clusters";
 
@@ -248,14 +249,25 @@ describe("star map project cloud chrome", () => {
     // jsdom has no ResizeObserver, so every card keeps the estimated
     // height — the same inputs the screen feeds the pure layout, which
     // makes the expected anchor computable here.
-    const centerFor = (list: NavigationThreadSummary[]) =>
+    //
+    // Chained through the layout's memory exactly as the screen chains
+    // it. Re-deriving the second cloud from scratch measured a DIFFERENT
+    // layout from the one on screen — cloud geometry is incremental by
+    // design, and a fresh two-card cloud is not the three-card cloud
+    // that lost a card.
+    const cloudFor = (
+      list: NavigationThreadSummary[],
+      memory?: StarMapCloudMemory,
+    ) =>
       computeClusterCloud({
         clusters: buildInstanceClusters({ threads: list }),
         cardWidth: 200,
         heightForThread: () => 112,
-      }).clusters[0].center;
+        memory,
+      });
 
-    const before = centerFor(threads);
+    const first = cloudFor(threads);
+    const before = first.clusters[0].center;
     await waitFor(() => {
       const shell = cardShell(container, "codex:a1");
       expect(shell.style.left).toBe(`${before.x + stored.dx}px`);
@@ -266,7 +278,7 @@ describe("star map project cloud chrome", () => {
     // shifts a little — and the placed card keeps EXACTLY its stored
     // offset from that origin instead of resetting.
     rerenderThreads(threads.slice(0, 2));
-    const after = centerFor(threads.slice(0, 2));
+    const after = cloudFor(threads.slice(0, 2), first.memory).clusters[0].center;
     await waitFor(() => {
       const shell = cardShell(container, "codex:a1");
       expect(shell.style.left).toBe(`${after.x + stored.dx}px`);

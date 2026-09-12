@@ -8,22 +8,31 @@ import { StarMapScreen } from "../StarMapScreen";
 /**
  * Projects-lens clouds.
  *
- * A project draws ONE system: its body in the middle of its own ring of
- * cards. Two earlier shapes failed differently and both are guarded here.
- * A flat ring capped the whole body at sixteen cards with a single dead
- * "+N more" caption. Reusing the Instances lens's per-parent clouds fixed
- * the caption and broke the seating: cloud seating throws every cloud
- * clear of an INSTANCE's chrome, and a project body is a label, so a
- * project with two parent groups seated its three clouds at (-477, +224),
- * (+16, -378) and (+314, +417) from its own body — nothing within 400px
- * of the name, and a reserved footprint nearly twice what it drew.
+ * A project draws one system: its own cards ringed around its body, and
+ * a sub-cloud beside them for each parent thread that has replies. Three
+ * earlier shapes failed differently and all are guarded here. A flat ring
+ * capped the whole body at sixteen cards with a single dead "+N more"
+ * caption. Reusing the Instances lens's seating fixed the caption and
+ * broke the placement: every cloud was thrown clear of an INSTANCE's
+ * chrome and cleared its neighbours box-to-box, and a project body is a
+ * label, so a project with two parent groups seated its clouds at
+ * (-477, +224), (+16, -378) and (+314, +417) from its own body — nothing
+ * within 400px of the name. Collapsing the whole project into one ring
+ * put the cards back but dropped the parent/child grouping entirely.
  *
  * So the assertions below are about *distance*: a project's cards belong
- * to the body that names them, and to no other body.
+ * to the body that names them, and to no other body — with the sub-clouds
+ * intact.
  */
 
-/** Half-extent a one-ring project cloud claims; see `extentForRings`. */
-const CLOUD_RADIUS = 362;
+/**
+ * How far a project's cards may be from its body.
+ *
+ * Its own ring reaches ~335px; a sub-cloud sits beside that ring, so its
+ * far side is about twice out. Generous on purpose — the defect this
+ * guards drew cards at 850px and beyond, past the neighbouring project.
+ */
+const CLOUD_RADIUS = 700;
 
 function buildDesktopApi(): DesktopApi {
   return {
@@ -154,18 +163,16 @@ describe("star map projects lens clouds", () => {
       expect(Math.hypot(card.dx, card.dy)).toBeGreaterThan(100);
     }
 
-    // No parent pill in this lens. A project IS the grouping here, and a
-    // cloud per parent thread is what threw the cards off the body;
-    // parent/child adjacency rides the ring order instead. The pill stays
-    // in the Instances lens, where bodies are few and clouds have room.
-    expect(
-      container.querySelector(".star-map__cluster-label--parent"),
-    ).toBeNull();
+    // The parent and its two replies are their own sub-cloud, named by
+    // its own pill. A project is the grouping, but it is not the ONLY
+    // grouping: a thread and its replies are a unit inside it.
+    const pill = container.querySelector(".star-map__cluster-label--parent");
+    expect(pill?.textContent).toContain("Root work");
   });
 
-  it("keeps a parent and its replies adjacent on the ring", async () => {
+  it("hangs a parent's replies off the parent, above them", async () => {
     const { container } = renderProjects([
-      thread({ id: "before", path: "/repo/alpha", label: "AlphaDir" }),
+      thread({ id: "loose", path: "/repo/alpha", label: "AlphaDir" }),
       thread({ id: "p1", path: "/repo/alpha", label: "AlphaDir", title: "Root work" }),
       thread({
         id: "c1",
@@ -174,24 +181,44 @@ describe("star map projects lens clouds", () => {
         label: "AlphaDir",
         title: "Child one",
       }),
-      thread({ id: "after", path: "/repo/alpha", label: "AlphaDir" }),
+      thread({
+        id: "c2",
+        parentThreadId: "p1",
+        path: "/repo/alpha",
+        label: "AlphaDir",
+        title: "Child two",
+      }),
     ]);
 
     await waitFor(() => {
       expect(projectSystems(container)[0]?.cards).toHaveLength(4);
     });
-    // Seats are handed out in list order, and `orderParentAdjacent` is
-    // what puts a child straight after its parent in that list — so the
-    // ring keeps the relationship the dropped parent cloud used to show.
-    const keys = projectSystems(container)[0].cards.map((card) => card.key);
-    expect(keys.indexOf("pwr_local::codex:c1")).toBe(
-      keys.indexOf("pwr_local::codex:p1") + 1,
+    const cards = new Map(
+      projectSystems(container)[0].cards.map((card) => [card.key, card]),
     );
+    const parent = cards.get("pwr_local::codex:p1")!;
+    const children = ["c1", "c2"].map(
+      (id) => cards.get(`pwr_local::codex:${id}`)!,
+    );
+    // The parent heads its sub-cloud: it sits above both replies, and
+    // each reply is nearer the parent than the project's own loose card.
+    const loose = cards.get("pwr_local::codex:loose")!;
+    for (const child of children) {
+      expect(parent.dy).toBeLessThan(child.dy);
+      expect(Math.hypot(child.dx - parent.dx, child.dy - parent.dy)).toBeLessThan(
+        Math.hypot(child.dx - loose.dx, child.dy - loose.dy),
+      );
+    }
   });
 
+  /**
+   * The cap is `PROJECT_MAX_CARDS_PER_GROUP`, deliberately higher than
+   * the Instances lens's: a project body IS the thing being looked at,
+   * and eight cards was less than one page of its thread list.
+   */
   it("expands past the per-cloud cap from the chip", async () => {
     renderProjects(
-      Array.from({ length: 11 }, (unused, index) =>
+      Array.from({ length: 15 }, (unused, index) =>
         thread({ id: `t${index}`, path: "/repo/alpha", label: "AlphaDir" }),
       ),
     );
@@ -202,7 +229,7 @@ describe("star map projects lens clouds", () => {
     expect(chip.textContent).toBe("+3 more");
     expect(
       screen.getAllByRole("button", { name: /^Open thread:/ }),
-    ).toHaveLength(8);
+    ).toHaveLength(12);
 
     // Re-query at click time: card measurement re-renders the map.
     fireEvent.click(
@@ -211,7 +238,7 @@ describe("star map projects lens clouds", () => {
     await waitFor(() => {
       expect(
         screen.getAllByRole("button", { name: /^Open thread:/ }),
-      ).toHaveLength(11);
+      ).toHaveLength(15);
     });
   });
 
