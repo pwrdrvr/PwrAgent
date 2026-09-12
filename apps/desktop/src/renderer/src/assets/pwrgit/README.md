@@ -13,7 +13,7 @@ sister PwrSuite repository:
 To refresh it, point the sync script at a PwrGit checkout:
 
 ```bash
-node apps/desktop/scripts/sync-pwrsuite-brand-icon.mjs --app pwrgit --repo ~/src/PwrGit
+pnpm --filter @pwragent/desktop sync:brand-icon -- --app pwrgit --repo ~/src/PwrGit
 ```
 
 `--repo` defaults to a `PwrGit` checkout beside this one. The script refuses a

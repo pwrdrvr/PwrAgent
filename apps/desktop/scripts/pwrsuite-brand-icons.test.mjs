@@ -209,6 +209,12 @@ describe("PwrSuite brand mark compensation", () => {
       // was here: a correction written as a ratio of two other numbers, or as
       // a percentage, is the same mistake wearing different arithmetic.
       const rules = source.match(/\.(?:mcp-connection__icon|app-mark)[\w-]*\s*\{[^}]*\}/g) ?? [];
+      // Asserted before the loop, because an empty match list satisfies every
+      // assertion inside one. Rename either class and this test would report
+      // green having checked nothing — the same silent pass `matchCss` exists
+      // to prevent, and the loop below cannot notice on its own.
+      expect(rules.length, `${where} states no mark rules at all — did a class get renamed?`)
+        .toBeGreaterThan(0);
       for (const rule of rules) {
         expect(
           rule,

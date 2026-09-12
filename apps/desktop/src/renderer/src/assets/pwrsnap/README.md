@@ -13,7 +13,7 @@ sister PwrSuite repository:
 To refresh it, point the sync script at a PwrSnap checkout:
 
 ```bash
-node apps/desktop/scripts/sync-pwrsuite-brand-icon.mjs --app pwrsnap --repo ~/src/PwrSnap
+pnpm --filter @pwragent/desktop sync:brand-icon -- --app pwrsnap --repo ~/src/PwrSnap
 ```
 
 `--repo` defaults to a `PwrSnap` checkout beside this one. The script refuses a

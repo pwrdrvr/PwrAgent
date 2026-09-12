@@ -8,13 +8,13 @@
 // top-level `await main()`, and an import would run it on load with this
 // file's own argv.
 import { execFile } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { createCanvas } from "@napi-rs/canvas";
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { opaqueBounds, readPixels } from "./lib/icon-pixels.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -65,6 +65,15 @@ describe("sync-pwrsuite-brand-icon", () => {
     // 100-in-1024 is Apple's template, the margin every `.icns` member carries.
     padded = fakeSisterRepo({ size: 1024, inset: 100 });
     out = mkdtempSync(resolve(tmpdir(), "pwrsuite-icon-out-"));
+  });
+
+  // Each run makes three temp directories holding two 1024px PNGs. Nothing
+  // else knows to collect them, so they would pile up in the OS temp dir on
+  // every local run and on any CI runner with a persistent disk.
+  afterAll(() => {
+    for (const directory of [fullBleed, padded, out]) {
+      rmSync(directory, { force: true, recursive: true });
+    }
   });
 
   it("writes a full-bleed 256px copy from a full-bleed master", async () => {

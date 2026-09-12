@@ -1075,7 +1075,7 @@ budget is a record of what a path costs, not permission for it to cost that.
 
 ## Third-Party Brand Assets
 
-- Vendor-supplied brand assets (logos, marks, icons) live under `src/renderer/src/assets/<vendor>/` as **verbatim files from the vendor's official brand kit** — never hand-redrawn, recolored, or otherwise altered.
+- Vendor-supplied brand assets (logos, marks, icons) live under `src/renderer/src/assets/<vendor>/` as **files from the vendor's official brand kit** — never hand-redrawn, recolored, cropped, or padded. A mechanical, scripted resize of the vendor's own artwork is the one transformation allowed, and only when the asset's `README.md` records it and a script reproduces it; see the PwrSuite sister marks below.
 - Each asset directory MUST include a `README.md` documenting: the source URL, the vendor's usage rules, and the procedure for re-fetching on update. See [`src/renderer/src/assets/mattermost/README.md`](src/renderer/src/assets/mattermost/README.md) as the reference example.
 - Render verbatim assets via `<img>`, NOT inline `<svg>` with `currentColor`. The `<img>` tag is structurally insulated from parent CSS `color` rules, which protects the asset from accidental recoloring.
 - Do not add hand-drawn `currentColor` vendor silhouettes. If a platform has a recognizable mark, follow the Mattermost/Telegram/Discord pattern instead.
