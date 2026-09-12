@@ -117,6 +117,11 @@ export function threadProjectLabel(thread: NavigationThreadSummary): string {
   return segments[segments.length - 1] ?? descriptor.label;
 }
 
+/** A folder name, folded for comparison. */
+function projectNameKey(label: string): string {
+  return label.trim().toLowerCase();
+}
+
 /**
  * What a directory row pools under, fleet-wide.
  *
@@ -150,10 +155,6 @@ export function threadProjectLabel(thread: NavigationThreadSummary): string {
  * The sentinel key for directory-less threads is already fleet-wide and
  * passes through untouched.
  */
-function projectNameKey(label: string): string {
-  return label.trim().toLowerCase();
-}
-
 function identityForRow(
   row: { key: string; name: string; origin?: string },
   originsByName: ReadonlyMap<string, ReadonlySet<string>>,

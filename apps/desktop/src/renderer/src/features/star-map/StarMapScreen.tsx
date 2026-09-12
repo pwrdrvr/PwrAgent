@@ -26,6 +26,7 @@ import {
   type StarMapWorkspaceAnchor,
 } from "@pwragent/shared";
 import { useStarMapProjectPages, starMapProjectResource } from "./useStarMapProjectPages";
+import type { NavigationWindowResource } from "../../lib/navigation-window-queries";
 import type { DesktopApi } from "../../lib/desktop-api";
 import type { ComposerDraftStore } from "../composer/useComposerDraftStore";
 import { SearchIcon } from "../../icons";
@@ -93,7 +94,6 @@ import {
 import { buildFederationTopology } from "./star-map-topology";
 import {
   groupThreadsByProject,
-  starMapProjectIdentities,
   threadProjectKey,
   projectThreadOwner,
   type StarMapProjectMember,
@@ -1574,6 +1574,13 @@ export function StarMapScreen(props: StarMapScreenProps) {
     [toggleClusterExpandedIn],
   );
 
+  const [projectGeometryTime] = useState(Date.now);
+  const projects = useMemo(
+    () => groupThreadsByProject(attentionByInstance, { summonedKeys, now: projectGeometryTime,
+      descriptorsByInstance: projectDescriptorsByInstance }),
+    [attentionByInstance, summonedKeys, projectDescriptorsByInstance, projectGeometryTime],
+  );
+
   /**
    * Which of a project's members still have cards to hand over, and which
    * need a rebaseline — keyed by the project's fleet-wide identity.
@@ -1583,44 +1590,36 @@ export function StarMapScreen(props: StarMapScreenProps) {
    * owns it, addressed by THAT instance's own directory key. Keying these
    * by the project key alone worked only while the two were the same
    * string.
+   *
+   * Read off `StarMapProject.members`, which the pooling pass has already
+   * resolved: re-deriving the fleet-wide identity here meant walking every
+   * instance's directory rows a second time on every render, and two
+   * copies of a rule that has to agree to work at all.
    */
-  const projectIdentityFor = useMemo(
-    () => starMapProjectIdentities(projectDescriptorsByInstance),
-    [projectDescriptorsByInstance],
-  );
-  const projectPageMembers = useMemo(() => {
-    const members = new Map<string, StarMapProjectMember[]>();
-    for (const [instanceId, descriptors] of projectDescriptorsByInstance) {
-      if (remote.unreachableInstanceIds.has(instanceId)) continue;
-      for (const descriptor of descriptors) {
-        if (!projectPages.state.resources.get(starMapProjectResource(instanceId, descriptor.key))?.state.page?.nextCursor) continue;
-        const identity = projectIdentityFor(instanceId, descriptor.key);
-        const pooled = members.get(identity) ?? [];
-        if (!pooled.some((member) => member.instanceId === instanceId && member.directoryKey === descriptor.key)) {
-          pooled.push({ instanceId, directoryKey: descriptor.key });
+  const projectMembersWhere = useCallback(
+    (wanted: (resource: NavigationWindowResource) => boolean) => {
+      const members = new Map<string, StarMapProjectMember[]>();
+      for (const project of projects) {
+        for (const member of project.members) {
+          if (remote.unreachableInstanceIds.has(member.instanceId)) continue;
+          const resource = projectPages.state.resources.get(
+            starMapProjectResource(member.instanceId, member.directoryKey),
+          );
+          if (!resource || !wanted(resource)) continue;
+          members.set(project.key, [...members.get(project.key) ?? [], member]);
         }
-        members.set(identity, pooled);
       }
-    }
-    return members;
-  }, [projectDescriptorsByInstance, projectIdentityFor, projectPages.state, remote.unreachableInstanceIds]);
-  const projectRecoveryMembers = useMemo(() => {
-    const members = new Map<string, StarMapProjectMember[]>();
-    for (const [instanceId, descriptors] of projectDescriptorsByInstance) {
-      if (remote.unreachableInstanceIds.has(instanceId)) continue;
-      for (const descriptor of descriptors) {
-        if (!projectPages.state.resources.get(starMapProjectResource(instanceId, descriptor.key))?.state.rebaselineRequired) continue;
-        const identity = projectIdentityFor(instanceId, descriptor.key);
-        members.set(identity, [...members.get(identity) ?? [], { instanceId, directoryKey: descriptor.key }]);
-      }
-    }
-    return members;
-  }, [projectDescriptorsByInstance, projectIdentityFor, projectPages.state, remote.unreachableInstanceIds]);
-  const [projectGeometryTime] = useState(Date.now);
-  const projects = useMemo(
-    () => groupThreadsByProject(attentionByInstance, { summonedKeys, now: projectGeometryTime,
-      descriptorsByInstance: projectDescriptorsByInstance }),
-    [attentionByInstance, summonedKeys, projectDescriptorsByInstance, projectGeometryTime],
+      return members;
+    },
+    [projectPages.state, projects, remote.unreachableInstanceIds],
+  );
+  const projectPageMembers = useMemo(
+    () => projectMembersWhere((resource) => Boolean(resource.state.page?.nextCursor)),
+    [projectMembersWhere],
+  );
+  const projectRecoveryMembers = useMemo(
+    () => projectMembersWhere((resource) => Boolean(resource.state.rebaselineRequired)),
+    [projectMembersWhere],
   );
 
   /**
@@ -5230,7 +5229,12 @@ export function StarMapScreen(props: StarMapScreenProps) {
                   {overview
                     ? null
                     : cloud.clusters.map((cluster) =>
-                        cluster.overflowSlot ? (
+                        // This chip only expands and collapses what is
+                        // already loaded. A cloud whose declared count runs
+                        // ahead of its cards has a chip slot but nothing to
+                        // toggle — the body's own "Load more" fetches those.
+                        cluster.overflowSlot
+                        && (cluster.overflow > 0 || cluster.expandable) ? (
                           <button
                             key={`project-cluster-overflow:${cluster.key}`}
                             type="button"

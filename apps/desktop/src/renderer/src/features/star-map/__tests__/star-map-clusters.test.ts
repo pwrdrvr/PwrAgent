@@ -392,6 +392,40 @@ describe("computeClusterCloud", () => {
   });
 
   /**
+   * A project always draws its catch-all so the body keeps its own seat,
+   * which makes an EMPTY cloud reachable: every loaded thread landed in a
+   * parent group. Its declared total still runs ahead of its cards, so it
+   * gets a chip slot — and a reader that can only expand and collapse must
+   * check `overflow`/`expandable` before drawing one. The Projects lens
+   * skipped that check and printed "Show fewer" over blank sky.
+   */
+  it("leaves an empty catch-all nothing to expand or collapse", () => {
+    const clusters = buildInstanceClusters({
+      maxCardsPerGroup: PROJECT_MAX_CARDS_PER_GROUP,
+      project: { key: "one", label: "AlphaDir", totalCount: 23 },
+      threads: [
+        thread("p1", { path: "/repo/alpha" }),
+        thread("c1", { path: "/repo/alpha", parentId: "p1" }),
+      ],
+    });
+    const catchAll = clusters.find((cluster) => cluster.key === "one")!;
+    expect(catchAll.threads).toHaveLength(0);
+    expect(catchAll.overflow).toBe(0);
+    expect(catchAll.expandable).toBe(false);
+    // The slot is still offered: the Instances lens's chip pages the
+    // project's window, and 21 threads have not arrived yet.
+    const cloud = computeClusterCloud({
+      clusters,
+      cardWidth: 200,
+      core: "one",
+      heightForThread: height,
+    });
+    expect(
+      cloud.clusters.find((cluster) => cluster.key === "one")?.overflowSlot,
+    ).toBeDefined();
+  });
+
+  /**
    * Holding seat 0 empty is not enough for the cloud seated ON a body: a
    * ring is an ellipse and a body's chrome is a box, so two of ring 1's
    * eight seats land diagonally across the corner of a project's name

@@ -7,7 +7,10 @@ import {
   STAR_MAP_ESTIMATED_CARD_HEIGHT,
   type StarMapCardSlot,
 } from "./star-map-layout";
-import { STAR_MAP_INSTANCE_KEEPOUT } from "./star-map-orbit";
+import {
+  STAR_MAP_INSTANCE_KEEPOUT,
+  STAR_MAP_PROJECT_KEEPOUT,
+} from "./star-map-orbit";
 import {
   STAR_MAP_NO_PROJECT_KEY,
   projectThreadOwner,
@@ -56,24 +59,7 @@ export const ORBIT_MAX_CARDS_PER_GROUP = 8;
  */
 export const PROJECT_MAX_CARDS_PER_GROUP = 12;
 
-/**
- * Chrome a project body draws, as half-extents from its centre.
- *
- * A project is a label and a count, not a sun with a name pill and an
- * intake button, so its clouds pack in far tighter than an instance's.
- * Measured from `.star-map-project` in app.css: a 26px core over a 24px
- * label with a 6px gap, centred, so the box runs 28px either side of the
- * centre; the label caps at 190px plus its border, so 96px either side;
- * the action row is absolutely positioned at `bottom: calc(100% - 14px)`,
- * putting its 24px top edge 38px up. A few pixels of air on each figure.
- * Handing this body the instance's box instead is what threw a project's
- * clouds hundreds of pixels off their own name.
- */
-export const STAR_MAP_PROJECT_KEEPOUT = {
-  above: 42,
-  below: 32,
-  halfWidth: 100,
-};
+export { STAR_MAP_PROJECT_KEEPOUT };
 
 /** Cards may shingle slightly on a ring; hover raises the one under the
  * pointer, and the overlap is what makes the scatter read as a cloud
@@ -724,6 +710,16 @@ function seatRects(params: {
   return { rects, scales };
 }
 
+/** The same rectangle, in the module's other shape. */
+function boxOf(bounds: CloudBounds): Box {
+  return {
+    x: bounds.left,
+    y: bounds.top,
+    width: bounds.right - bounds.left,
+    height: bounds.bottom - bounds.top,
+  };
+}
+
 /** The box that holds every one of these, or nothing when there are none. */
 function boundsOf(rects: readonly Box[]): CloudBounds | undefined {
   if (rects.length === 0) return undefined;
@@ -817,35 +813,68 @@ function movedTo(
   }));
 }
 
+/** Gutters a cloud looking for somewhere to sit must clear. */
+const SEATING_GAPS = { cluster: CLUSTER_GAP, keepout: KEEPOUT_GAP };
+
+/**
+ * What a cloud already on screen must clear to keep its spot.
+ *
+ * Zero between clouds: one card joining a ring nudges the cloud's edge by
+ * a few pixels, and charging it a fresh arrival's gutter for that re-seats
+ * a cloud the operator is reading. The body's chrome keeps its full gap —
+ * that box never moves, so demanding it costs no churn, and `KEEPOUT_GAP`
+ * exists precisely so a card edge never touches the pill it is clearing.
+ */
+const RETAINED_GAPS = { cluster: 0, keepout: KEEPOUT_GAP };
+
+/**
+ * A cloud's boxes, plus the one box that holds all of them.
+ *
+ * `outline` is what makes card-by-card clearance affordable: a candidate
+ * position is rejected against one box per neighbour, and only a neighbour
+ * the outline actually reaches is worth opening the per-card loop for.
+ * Without it a crowded seating pass is |cards| x |everything placed| box
+ * tests at every one of `SEAT_MAX_PROBES` x `REFIT_BEARINGS` candidates.
+ */
+type CloudShape = { rects: readonly Box[]; outline: Box };
+
 function isClear(
-  rects: readonly Box[],
+  cloud: CloudShape,
   center: { x: number; y: number },
   placed: readonly Box[],
   keepout: Box,
   /**
    * Gutters demanded around this cloud's cards — from another cloud's
-   * cards, and from the body's own chrome. Both are the designed air
-   * when choosing where to PUT a cloud, and both are zero when asking
-   * whether one already placed may STAY: a cloud on screen is asked only
-   * not to cover anything.
+   * cards, and from the body's own chrome. `SEATING_GAPS` when choosing
+   * where to PUT a cloud, `RETAINED_GAPS` when asking whether one already
+   * placed may STAY.
    */
-  gaps: { cluster: number; keepout: number } = {
-    cluster: CLUSTER_GAP,
-    keepout: KEEPOUT_GAP,
-  },
+  gaps: { cluster: number; keepout: number } = SEATING_GAPS,
 ): boolean {
-  for (const rect of rects) {
-    const moved = { ...rect, x: rect.x + center.x, y: rect.y + center.y };
-    if (boxesOverlap(moved, keepout, gaps.keepout)) return false;
-    for (const other of placed) {
-      if (boxesOverlap(moved, other, gaps.cluster)) return false;
+  const outline = {
+    ...cloud.outline,
+    x: cloud.outline.x + center.x,
+    y: cloud.outline.y + center.y,
+  };
+  const hits = (other: Box, gap: number): boolean => {
+    for (const rect of cloud.rects) {
+      const moved = { ...rect, x: rect.x + center.x, y: rect.y + center.y };
+      if (boxesOverlap(moved, other, gap)) return true;
     }
+    return false;
+  };
+  if (
+    boxesOverlap(outline, keepout, gaps.keepout)
+    && hits(keepout, gaps.keepout)
+  ) {
+    return false;
+  }
+  for (const other of placed) {
+    if (!boxesOverlap(outline, other, gaps.cluster)) continue;
+    if (hits(other, gaps.cluster)) return false;
   }
   return true;
 }
-
-/** What a cloud already on screen must clear to keep its spot. */
-const RETAINED_GAPS = { cluster: 0, keepout: 0 };
 
 /**
  * Seat one cloud, walking outward from the body until it clears the
@@ -861,7 +890,7 @@ const RETAINED_GAPS = { cluster: 0, keepout: 0 };
  */
 function seatCluster(params: {
   key: string;
-  rects: readonly Box[];
+  cloud: CloudShape;
   keepout: Box;
   placed: readonly Box[];
 }): { x: number; y: number } {
@@ -877,7 +906,7 @@ function seatCluster(params: {
         x: Math.cos(angle) * radius * SEAT_ASPECT_X,
         y: Math.sin(angle) * radius,
       };
-      if (isClear(params.rects, center, params.placed, params.keepout)) {
+      if (isClear(params.cloud, center, params.placed, params.keepout)) {
         return center;
       }
     }
@@ -907,11 +936,11 @@ function seatCluster(params: {
 function reseatCluster(params: {
   key: string;
   from: { x: number; y: number };
-  rects: readonly Box[];
+  cloud: CloudShape;
   keepout: Box;
   placed: readonly Box[];
 }): { x: number; y: number } {
-  if (isClear(params.rects, params.from, params.placed, params.keepout)) {
+  if (isClear(params.cloud, params.from, params.placed, params.keepout)) {
     return params.from;
   }
   const outward = Math.atan2(params.from.y, params.from.x / SEAT_ASPECT_X);
@@ -925,7 +954,7 @@ function reseatCluster(params: {
         x: params.from.x + Math.cos(angle) * radius * SEAT_ASPECT_X,
         y: params.from.y + Math.sin(angle) * radius,
       };
-      if (isClear(params.rects, center, params.placed, params.keepout)) {
+      if (isClear(params.cloud, center, params.placed, params.keepout)) {
         return center;
       }
     }
@@ -933,10 +962,10 @@ function reseatCluster(params: {
   // Nowhere within reach of where it stands: fall back to the arrival
   // walk, which is guaranteed to leave the instance's chrome behind.
   return seatCluster({
+    cloud: params.cloud,
     keepout: params.keepout,
     key: params.key,
     placed: params.placed,
-    rects: params.rects,
   });
 }
 
@@ -1044,16 +1073,19 @@ export function computeClusterCloud(params: {
         height: NOMINAL_CARD_HEIGHT,
       });
     }
-    const measured = header ? { ...ring, top: headerTop } : ring;
+    // Measured from the boxes INCLUDING the header, not from the ring with
+    // the header's top pasted on: the header is a full card wide and the
+    // ring's own span need not contain it, so taking `ring` and overriding
+    // only `top` left up to 85px of a card the cloud draws outside the
+    // footprint the cloud reports.
+    const measured = boundsOf(rects) ?? ring;
     // Grow-only: an outermost card leaving must not pull the cloud in and
     // shove its neighbours around. Collapsing the cloud is the operator's
     // call and drops this one entry (see `refitCluster`).
     const held = previous.bounds.get(spec.key);
-    const bounds = padBounds(
-      held ? unionBounds(measured, held) : measured,
-      CLOUD_EXTENT_PAD,
-    );
-    nextBounds.set(spec.key, held ? unionBounds(measured, held) : measured);
+    const grown = held ? unionBounds(measured, held) : measured;
+    const bounds = padBounds(grown, CLOUD_EXTENT_PAD);
+    nextBounds.set(spec.key, grown);
     // The label and the chip are chrome the next cloud must not sit on,
     // so they claim their room the same way a card does. Both are pills
     // centred over the cloud, so they claim a card's width rather than
@@ -1072,7 +1104,19 @@ export function computeClusterCloud(params: {
       height: CLOUD_CHIP_ROOM,
     });
     const slots = new Map<string, StarMapCardSlot>();
-    if (header) slots.set(threadKeyOf(header), { dx: 0, dy: headerTop });
+    if (header) {
+      // Hung by its BOTTOM edge, so `HEADER_GAP` is the air the operator
+      // actually sees. Anchoring the top at the nominal height sent every
+      // pixel a taller-than-nominal header owns straight down through the
+      // gap and over the replies it heads — a 300px parent covered both of
+      // its own children. A ring card is centred on its seat and splits
+      // that overhang; this one now takes it upward, where the cloud's
+      // own label is the only thing above it.
+      slots.set(threadKeyOf(header), {
+        dx: 0,
+        dy: ring.top - HEADER_GAP - params.heightForThread(header),
+      });
+    }
     for (const thread of ringed) {
       const seat = seats.get(threadKeyOf(thread)) ?? 0;
       slots.set(threadKeyOf(thread), seatSlot({
@@ -1091,7 +1135,8 @@ export function computeClusterCloud(params: {
       slots: visible.map((thread) => slots.get(threadKeyOf(thread))!),
       bounds,
       extent: extentOf(bounds),
-      rects,
+      // Measured last, so it holds the label and chip boxes too.
+      cloud: { outline: boxOf(boundsOf(rects)!), rects },
       visible,
     };
   });
@@ -1106,7 +1151,7 @@ export function computeClusterCloud(params: {
   const core = sized.find((cluster) => cluster.isCore);
   if (core) {
     nextCenters.set(core.spec.key, { x: 0, y: 0 });
-    placed.push(...core.rects);
+    placed.push(...core.cloud.rects);
   }
   const seatable = sized.filter((cluster) => !cluster.isCore);
   const retained = seatable.filter((cluster) =>
@@ -1123,9 +1168,9 @@ export function computeClusterCloud(params: {
     // the gutter a fresh arrival is given. One card joining a ring nudges
     // the cloud's edge by a few pixels, and charging it the full gutter
     // for that re-seated a cloud the operator was reading.
-    if (isClear(cluster.rects, center, placed, keepoutBox, RETAINED_GAPS)) {
+    if (isClear(cluster.cloud, center, placed, keepoutBox, RETAINED_GAPS)) {
       nextCenters.set(cluster.spec.key, center);
-      placed.push(...movedTo(cluster.rects, center));
+      placed.push(...movedTo(cluster.cloud.rects, center));
     } else {
       // It outgrew its seat. The cloud that changed is the one that moves.
       reseat.push(cluster);
@@ -1158,20 +1203,20 @@ export function computeClusterCloud(params: {
           }
         : held
           ? reseatCluster({
+              cloud: cluster.cloud,
               from: held,
               keepout: keepoutBox,
               key: cluster.spec.key,
               placed,
-              rects: cluster.rects,
             })
           : seatCluster({
+              cloud: cluster.cloud,
               keepout: keepoutBox,
               key: cluster.spec.key,
               placed,
-              rects: cluster.rects,
             });
     nextCenters.set(cluster.spec.key, center);
-    placed.push(...movedTo(cluster.rects, center));
+    placed.push(...movedTo(cluster.cloud.rects, center));
   }
 
   const clusters: StarMapClusterPlacement[] = [];
@@ -1197,6 +1242,11 @@ export function computeClusterCloud(params: {
     const chromeless =
       (cluster.spec.totalCount ?? cluster.spec.threads.length) === 1
       || (sized.length === 1 && !cluster.spec.isProject);
+    // A slot, not a decision: a declared count above the loaded one means a
+    // cloud whose cards have NOT arrived, and only the reader knows whether
+    // it can fetch them. The Instances lens can (its chip pages the
+    // project's window); the Projects lens cannot (the body carries its own
+    // "Load more"), so that reader drops a chip with nothing to toggle.
     const showChip =
       (cluster.spec.totalCount ?? 0) > cluster.spec.threads.length
       || cluster.spec.overflow > 0

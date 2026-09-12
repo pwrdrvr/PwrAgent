@@ -395,7 +395,10 @@ function repositoryKeysByPath(
 ): Map<string, string> {
   const keys = new Map<string, string>();
   for (const directory of index.directories) {
-    const path = directory.path?.trim();
+    // NOT trimmed: `buildProjectGeometry` looks these up with the same
+    // raw `path` the row carries, and normalizing on only one side is a
+    // miss that reads as a repository silently failing to pool.
+    const path = directory.path;
     const repository = directory.gitStatus?.originRepository;
     if (path && repository) keys.set(path, repository);
   }
