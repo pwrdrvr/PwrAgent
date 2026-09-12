@@ -613,6 +613,65 @@ describe("federation agent tools service", () => {
     });
   });
 
+  /**
+   * The Star Map intake's calling thread is an ephemeral turn that dissolves
+   * the moment it finishes. Crediting it as `sourceThread` would render a
+   * ThreadChip on the created thread's first turn that links to nothing —
+   * forever, on every thread the intake ever made.
+   */
+  it("lets a caller override how the created thread records who asked for it", async () => {
+    const materializeDirectoryLaunchpad = vi.fn(
+      async (request: MaterializeDirectoryLaunchpadRequest) => ({
+        backend: "codex" as const,
+        threadId: "thread-9",
+        executionMode:
+          request.launchpad?.executionMode ?? ("default" as const),
+        workMode: request.launchpad?.workMode ?? ("local" as const),
+        turnId: "turn-9",
+      }),
+    );
+    const readPopulation = vi.fn(async () =>
+      buildSnapshot({
+        directories: [
+          {
+            key: "dir:/Users/op/pwragent",
+            kind: "directory",
+            label: "PwrAgent",
+            path: "/Users/op/pwragent",
+            threadKeys: [],
+            needsAttentionCount: 0,
+          },
+        ] as NavigationSnapshot["directories"],
+      }),
+    );
+    const handler = createFederationAgentToolsHandler({
+      collectHostInfo: async () => localHostInfo,
+      resolveMessageOrigin: () => ({ kind: "pwragent" }),
+      runtime: buildRuntime({
+        health: async () => buildHealth(),
+        localBackend: (() => ({
+          readPopulation,
+          materializeDirectoryLaunchpad,
+        })) as never,
+      }),
+    });
+
+    await handler({
+      operation: "create_instance_thread",
+      context,
+      args: {
+        instanceId: "pwr_local",
+        projectKey: "dir:/Users/op/pwragent",
+        input: "Make the donuts.",
+      },
+    });
+
+    expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith(
+      expect.anything(),
+      { messageOrigin: { kind: "pwragent" } },
+    );
+  });
+
   it("creates a local thread with merged launchpad settings and an initial input", async () => {
     const materializeDirectoryLaunchpad = vi.fn(
       async (request: MaterializeDirectoryLaunchpadRequest) => ({

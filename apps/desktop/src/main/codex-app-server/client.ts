@@ -95,6 +95,7 @@ import type {
   TurnStartParams as CodexTurnStartParams,
   TurnSteerParams as CodexTurnSteerParams,
   DynamicToolSpec as CodexDynamicToolSpec,
+  DynamicToolCallResponse,
   UserInput as CodexUserInput,
 } from "@pwrdrvr/codex-app-server-protocol/v2";
 import { IterableMapper } from "@shutterstock/p-map-iterable";
@@ -151,6 +152,8 @@ const DEFAULT_CODEX_COLLABORATION_MODEL = "gpt-5.5";
 export const DEFAULT_CODEX_THREAD_TITLE_MODEL = "gpt-5.6-luna";
 const DEFAULT_CODEX_THREAD_TITLE_TIMEOUT_MS = 20_000;
 const CODEX_THREAD_TITLE_CONFIG_READ_REASON = "thread-title-mcp-inventory";
+/** Wire method Codex uses to invoke a dynamic tool the client advertised. */
+const CODEX_DYNAMIC_TOOL_CALL_METHOD = "item/tool/call";
 const CODEX_CONNECTION_MCP_CONFIG_READ_REASON = "connection-mcp-inventory";
 const CODEX_THREAD_TITLE_WORKSPACE_DIR = path.join(
   tmpdir(),
@@ -7359,6 +7362,16 @@ async function requestThreadListPages(params: {
   return mergedThreads;
 }
 
+/**
+ * Services one dynamic tool call made by a helper tool turn. Receives the raw
+ * request so the single `readAgentDynamicToolCall` parser in agent-tool land
+ * stays the only place that decodes the wire shape.
+ */
+export type HelperThreadToolCallHandler = (request: {
+  method: string;
+  params: Record<string, unknown>;
+}) => Promise<DynamicToolCallResponse>;
+
 type HelperTurnResult =
   | {
       status: "ok";
@@ -7441,6 +7454,30 @@ export class CodexAppServerClient {
     string,
     StructuredRecordPredicate
   >();
+  /**
+   * Helper threads that are allowed to call PwrAgent dynamic tools, and the
+   * handler that services those calls.
+   *
+   * Routing them here rather than through the ordinary notification/request
+   * listeners is the point. `BackendRegistry.handleServerRequest` gates every
+   * dynamic tool call on `activeTurnKeys` — proof that the call came from a
+   * live turn on a thread the registry owns. A helper turn is ephemeral and
+   * never enters that map, so it could not pass the gate; registering the
+   * thread here for exactly the lifetime of its turn is the same proof
+   * expressed by ownership instead of by lookup. Nothing outside the caller's
+   * `runHelperToolTurn` frame can reach the handler.
+   */
+  private readonly helperThreadToolHandlers = new Map<
+    string,
+    HelperThreadToolCallHandler
+  >();
+  /**
+   * Helper threads whose turn completes on `turn/completed` alone, with no
+   * structured record required. A tool turn's outcome is whatever its tools
+   * did, so demanding a final JSON object would fail turns that already
+   * succeeded.
+   */
+  private readonly helperToolTurnThreadIds = new Set<string>();
 
   /** Unknown notification methods already warned about on this connection. */
   private readonly reportedUnknownNotificationMethods = new Set<string>();
@@ -7533,6 +7570,13 @@ export class CodexAppServerClient {
       }
     });
     this.rawConnection.setRequestHandler(async (method, params, rpcId) => {
+      const helperToolCallParams = asRecord(params);
+      const helperToolHandler = helperToolCallParams
+        ? this.resolveHelperThreadToolHandler(method, helperToolCallParams)
+        : undefined;
+      if (helperToolHandler && helperToolCallParams) {
+        return await helperToolHandler({ method, params: helperToolCallParams });
+      }
       const wireRequest = isKnownCodexServerRequestMethod(method)
         ? ({
             method,
@@ -7606,6 +7650,8 @@ export class CodexAppServerClient {
     this.pendingFirstTurnShellEnvironments.clear();
     this.recordedThreadNames.clear();
     this.helperThreadIds.clear();
+    this.helperThreadToolHandlers.clear();
+    this.helperToolTurnThreadIds.clear();
     this.completedHelperTurnResults.clear();
     this.mcpStartupStatusByContext.clear();
     this.helperTurnTitleObjects.clear();
@@ -8084,6 +8130,24 @@ export class CodexAppServerClient {
       readHelperTokenUsage(notification.params) ?? this.helperTurnTokenUsage.get(key);
     this.helperTurnTitleObjects.delete(key);
     this.helperTurnTokenUsage.delete(key);
+    if (!object && this.helperToolTurnThreadIds.has(threadId)) {
+      // A tool turn's product is the side effects its tools had, not a final
+      // JSON record. Completion alone is success; the caller reads what its
+      // own tool handler captured.
+      const completion: Extract<HelperTurnResult, { status: "ok" }> = {
+        status: "ok",
+        object: undefined,
+        ...(tokenUsage !== undefined ? { tokenUsage } : {}),
+      };
+      if (!waiter) {
+        this.completedHelperTurnResults.set(key, completion);
+        return;
+      }
+      clearTimeout(waiter.timer);
+      this.helperTurnWaiters.delete(key);
+      waiter.resolve(completion);
+      return;
+    }
     if (!object) {
       const error = new Error("codex_title_turn_completed_without_title");
       if (!waiter) {
@@ -8143,6 +8207,21 @@ export class CodexAppServerClient {
         timer,
       });
     });
+  }
+
+  /**
+   * Returns the tool handler owning this request, or `undefined` to let the
+   * ordinary listeners have it. Keyed on the helper thread, so a registered
+   * intake turn services its own calls and every other thread is untouched.
+   */
+  private resolveHelperThreadToolHandler(
+    method: string,
+    params: Record<string, unknown>,
+  ): HelperThreadToolCallHandler | undefined {
+    if (method !== CODEX_DYNAMIC_TOOL_CALL_METHOD) return undefined;
+    const threadId = readStringFromRecord(params, "threadId");
+    if (!threadId) return undefined;
+    return this.helperThreadToolHandlers.get(threadId);
   }
 
   private rejectHelperTurnWaiters(error: Error): void {
@@ -9077,6 +9156,34 @@ export class CodexAppServerClient {
   }
 
   /**
+   * Run one ephemeral helper turn that may call PwrAgent dynamic tools.
+   *
+   * The same isolation as `generateStructuredObject` — a throwaway thread, a
+   * scratch cwd, no project docs, every configured MCP server disabled and
+   * attested — with exactly one capability added: the tools in
+   * `dynamicTools`, serviced by `onToolCall` for this turn only.
+   *
+   * There is no return value beyond success or failure. The turn's product is
+   * whatever its tools did, so the caller reads the outcome from the handler
+   * it supplied.
+   */
+  async runHelperToolTurn(params: {
+    model?: string;
+    reasoningEffort?: string;
+    prompt: string;
+    system?: string;
+    dynamicTools: CodexDynamicToolSpec[];
+    onToolCall: HelperThreadToolCallHandler;
+    timeoutMs?: number;
+    turnTimeoutMs?: number;
+  }): Promise<{ status: "ok" } | { status: "failed"; reason: string }> {
+    const result = await this.runHelperStructuredTurn(params);
+    return result.status === "ok"
+      ? { status: "ok" }
+      : { status: "failed", reason: result.reason };
+  }
+
+  /**
    * Returns only the effective MCP server names. Connection setup uses this to
    * avoid creating a transport-less disable entry for an alias that Codex did
    * not inherit. The protocol observer redacts the complete config response.
@@ -9150,9 +9257,17 @@ export class CodexAppServerClient {
     model?: string;
     reasoningEffort?: string;
     prompt: string;
-    schema: Record<string, unknown>;
+    /** Omitted by a tool turn, whose product is its tool calls. */
+    schema?: Record<string, unknown>;
     system?: string;
-    isMatch: StructuredRecordPredicate;
+    isMatch?: StructuredRecordPredicate;
+    /**
+     * PwrAgent tools this helper may call. Supplying these also supplies
+     * `onToolCall`; one without the other either advertises tools nothing can
+     * service or registers a handler nothing can reach.
+     */
+    dynamicTools?: CodexDynamicToolSpec[];
+    onToolCall?: HelperThreadToolCallHandler;
     timeoutMs?: number;
     /**
      * How long the model itself may take to answer, separately from the
@@ -9179,6 +9294,12 @@ export class CodexAppServerClient {
     const helperReasoningEffort =
       normalizeCodexReasoningEffort(params.reasoningEffort) ?? "low";
     const helperSystem = params.system?.trim() || "";
+    const isToolTurn = Boolean(params.onToolCall);
+    // A tool turn has no output schema, so nothing it emits should be
+    // mistaken for a result. Never matching keeps `turn/completed` the only
+    // thing that ends it.
+    const helperPredicate: StructuredRecordPredicate =
+      params.isMatch ?? (isToolTurn ? () => false : TITLE_RECORD_PREDICATE);
     const protocolCompatibility = this.getProtocolCompatibility();
     try {
       const mcpServerNames = await this.readHelperMcpServerNames(
@@ -9207,6 +9328,7 @@ export class CodexAppServerClient {
               serviceTier: null,
               ephemeral: true,
               config: helperConfig,
+              ...(params.dynamicTools ? { dynamicTools: params.dynamicTools } : {}),
             },
             protocolCompatibility,
           ),
@@ -9220,6 +9342,7 @@ export class CodexAppServerClient {
               serviceTier: null,
               ephemeral: true,
               config: legacyHelperConfig,
+              ...(params.dynamicTools ? { dynamicTools: params.dynamicTools } : {}),
             },
             protocolCompatibility,
           ),
@@ -9265,7 +9388,14 @@ export class CodexAppServerClient {
         });
       }
       this.helperThreadIds.add(helperThreadId);
-      this.helperThreadPredicates.set(helperThreadId, params.isMatch);
+      this.helperThreadPredicates.set(helperThreadId, helperPredicate);
+      if (params.onToolCall) {
+        // Registered only after the attestation above proves this thread has
+        // no MCP tools, and torn down in `finally`. Between those two points
+        // the thread is the sole holder of this handler.
+        this.helperThreadToolHandlers.set(helperThreadId, params.onToolCall);
+        this.helperToolTurnThreadIds.add(helperThreadId);
+      }
 
       const turnStartResult = await requestWithFallbacks({
         client: this.connection,
@@ -9278,7 +9408,12 @@ export class CodexAppServerClient {
               model: helperModel,
               serviceTier: null,
               reasoningEffort: helperReasoningEffort,
-              outputSchema: params.schema as CodexTurnStartParams["outputSchema"],
+              ...(params.schema
+                ? {
+                    outputSchema:
+                      params.schema as CodexTurnStartParams["outputSchema"],
+                  }
+                : {}),
             },
             protocolCompatibility,
           ),
@@ -9291,7 +9426,7 @@ export class CodexAppServerClient {
         timeoutMs: Math.max(timeoutMs, turnTimeoutMs),
       });
       helperTurnId = extractTurnIdFromValue(turnStartResult);
-      const immediateObject = findStructuredRecord(turnStartResult, params.isMatch);
+      const immediateObject = findStructuredRecord(turnStartResult, helperPredicate);
       if (immediateObject) {
         helperTurnCompleted = true;
         const tokenUsage = readHelperTokenUsage(turnStartResult);
@@ -9370,6 +9505,8 @@ export class CodexAppServerClient {
         }
         this.helperThreadIds.delete(helperThreadId);
         this.helperThreadPredicates.delete(helperThreadId);
+        this.helperThreadToolHandlers.delete(helperThreadId);
+        this.helperToolTurnThreadIds.delete(helperThreadId);
       }
     }
   }

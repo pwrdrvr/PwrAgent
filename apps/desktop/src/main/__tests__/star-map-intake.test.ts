@@ -5,6 +5,13 @@ const generateStructuredObject = vi.fn();
 const ensureDirectoryLaunchpad = vi.fn();
 const materializeDirectoryLaunchpad = vi.fn();
 const publishLocalEvent = vi.fn(async () => undefined);
+/**
+ * Defaults to `undefined` — "no backend here can run an agent turn" — so every
+ * test below that does not set it exercises the deterministic fallback. That
+ * is deliberate: the fallback is still the path for a machine with no Codex
+ * backend, and it is the one the agent tests would otherwise stop covering.
+ */
+const runStarMapIntakeAgentTurn = vi.fn();
 const readLocalNavigationDirectoryIndex = vi.hoisted(() => vi.fn());
 
 vi.mock("../app-server/backend-registry", () => ({
@@ -13,6 +20,7 @@ vi.mock("../app-server/backend-registry", () => ({
     generateStructuredObject,
     materializeDirectoryLaunchpad,
     publishLocalEvent,
+    runStarMapIntakeAgentTurn,
   }),
 }));
 
@@ -61,6 +69,7 @@ function ranked(
 
 beforeEach(() => {
   vi.clearAllMocks();
+  runStarMapIntakeAgentTurn.mockResolvedValue(undefined);
   readLocalNavigationDirectoryIndex.mockResolvedValue([
       directory("dir-snap", "PwrSnap", { latestUpdatedAt: 10 }),
       directory("dir-agent", "PwrAgent", {
@@ -528,5 +537,286 @@ describe("dispatchStarMapIntake", () => {
     });
     expect(response.status).toBe("failed");
     expect(readLocalNavigationDirectoryIndex).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The agent path, which is what an instance with a Codex backend actually
+ * runs. `runStarMapIntakeAgentTurn` stands in for the turn: these assert what
+ * `dispatchStarMapIntake` does with each outcome the turn can produce, not
+ * that a model produces the right one.
+ */
+describe("dispatchStarMapIntake via the intake agent", () => {
+  /** The reported case: one thread, and the relay sentence never reaches it. */
+  it("returns the thread the agent created and never resolves a project itself", async () => {
+    runStarMapIntakeAgentTurn.mockResolvedValue({
+      status: "ok",
+      outcome: { kind: "created", backend: "codex", threadId: "thread-donut" },
+    });
+
+    const response = await dispatchStarMapIntake({
+      requestId: "req-agent-1",
+      request:
+        "Make a thread in the PwrAgnt project and ask it to make the donuts.",
+    });
+
+    expect(response).toEqual({
+      status: "created",
+      requestId: "req-agent-1",
+      backend: "codex",
+      threadId: "thread-donut",
+    });
+    // Exactly one thread: the agent made it, and nothing here made a second.
+    expect(materializeDirectoryLaunchpad).not.toHaveBeenCalled();
+    // The deterministic classifier is a fallback now, not a first step.
+    expect(generateStructuredObject).not.toHaveBeenCalled();
+  });
+
+  it("passes the agent's ranking and extracted payload to the dialog", async () => {
+    runStarMapIntakeAgentTurn.mockResolvedValue({
+      status: "ok",
+      outcome: {
+        kind: "needs_disambiguation",
+        candidates: [{ directoryKey: "dir-agent", reason: "recent icon work" }],
+        input: "Make the donuts.",
+      },
+    });
+
+    const response = await dispatchStarMapIntake({
+      requestId: "req-agent-2",
+      request: "Make a thread and ask it to make the donuts.",
+    });
+
+    expect(response).toMatchObject({
+      status: "needs_disambiguation",
+      candidateSource: "resolver",
+      candidates: [
+        expect.objectContaining({
+          directoryKey: "dir-agent",
+          label: "PwrAgent",
+          reason: "recent icon work",
+        }),
+      ],
+      input: "Make the donuts.",
+    });
+    expect(generateStructuredObject).not.toHaveBeenCalled();
+  });
+
+  /**
+   * An ask naming nothing usable still asked. Recency is the honest source for
+   * the list it gets shown, the same thing the deterministic path says when
+   * its resolver ran and pointed nowhere — "closest match first" over a
+   * recency ordering would claim a judgment nobody made.
+   */
+  it("falls back to recency when the agent asked with no usable candidate", async () => {
+    runStarMapIntakeAgentTurn.mockResolvedValue({
+      status: "ok",
+      outcome: { kind: "needs_disambiguation", candidates: [] },
+    });
+
+    const response = await dispatchStarMapIntake({
+      requestId: "req-agent-3",
+      request: "Fix the thing",
+    });
+
+    expect(response).toMatchObject({
+      status: "needs_disambiguation",
+      candidateSource: "recent",
+    });
+    expect(
+      response.status === "needs_disambiguation"
+        ? response.candidates.map((candidate) => candidate.directoryKey)
+        : [],
+    ).toEqual(["dir-agent", "dir-snap"]);
+  });
+
+  /**
+   * The operator's answer to "which project?". The agent already separated the
+   * task from the instruction when it asked, so the pick creates the thread
+   * directly — one agent turn per intake, however many times it has to ask.
+   */
+  it("creates with the carried payload when the operator picks a project", async () => {
+    const response = await dispatchStarMapIntake({
+      requestId: "req-agent-4",
+      request:
+        "Make a thread in the PwrAgnt project and ask it to make the donuts.",
+      directoryKey: "dir-agent",
+      input: "Make the donuts.",
+    });
+
+    expect(response).toMatchObject({ status: "created" });
+    expect(runStarMapIntakeAgentTurn).not.toHaveBeenCalled();
+    expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith(
+      expect.objectContaining({
+        directoryKey: "dir-agent",
+        input: [{ type: "text", text: "Make the donuts." }],
+      }),
+      expect.anything(),
+    );
+  });
+
+  /**
+   * The negative control, at the seam this owns. An ordinary work request that
+   * merely mentions threads carries no instruction to strip, so the agent
+   * passes it through and it reaches the thread unchanged. (What keeps the
+   * model from stripping it anyway is the system prompt, asserted in
+   * star-map-intake-agent.test.ts.)
+   */
+  it("sends an ordinary request that merely mentions threads through unchanged", async () => {
+    const request = "Write a feature that creates threads from a template";
+
+    const response = await dispatchStarMapIntake({
+      requestId: "req-agent-5",
+      request,
+      directoryKey: "dir-agent",
+      input: request,
+    });
+
+    expect(response).toMatchObject({ status: "created" });
+    expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith(
+      expect.objectContaining({ input: [{ type: "text", text: request }] }),
+      expect.anything(),
+    );
+  });
+
+  it("ignores a carried payload without a project, so it cannot skip the agent", async () => {
+    runStarMapIntakeAgentTurn.mockResolvedValue({
+      status: "ok",
+      outcome: { kind: "created", backend: "codex", threadId: "thread-donut" },
+    });
+
+    await dispatchStarMapIntake({
+      requestId: "req-agent-6",
+      request: "Make a thread and ask it to make the donuts.",
+      input: "Make the donuts.",
+    });
+
+    expect(runStarMapIntakeAgentTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: "Make a thread and ask it to make the donuts.",
+      }),
+    );
+  });
+
+  it("falls back to the deterministic resolver when the agent turn fails", async () => {
+    runStarMapIntakeAgentTurn.mockResolvedValue({
+      status: "failed",
+      reason: "codex_title_turn_timeout",
+    });
+    generateStructuredObject.mockResolvedValue(
+      ranked([{ directoryKey: "dir-snap", confidence: 0.9 }]),
+    );
+
+    const response = await dispatchStarMapIntake({
+      requestId: "req-agent-7",
+      request: "Look into the screenshot issue in PwrSnap",
+    });
+
+    expect(response).toMatchObject({ status: "created" });
+    expect(generateStructuredObject).toHaveBeenCalled();
+    expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith(
+      expect.objectContaining({ directoryKey: "dir-snap" }),
+      expect.anything(),
+    );
+  });
+
+  it("falls back when the agent turn throws", async () => {
+    runStarMapIntakeAgentTurn.mockRejectedValue(new Error("client closed"));
+    generateStructuredObject.mockResolvedValue(
+      ranked([{ directoryKey: "dir-snap", confidence: 0.9 }]),
+    );
+
+    const response = await dispatchStarMapIntake({
+      requestId: "req-agent-8",
+      request: "Look into the screenshot issue in PwrSnap",
+    });
+
+    expect(response).toMatchObject({ status: "created" });
+    expect(generateStructuredObject).toHaveBeenCalled();
+  });
+
+  /**
+   * A turn that created the thread and then timed out has still created the
+   * thread. Reporting that as a failure would send the fallback on to create
+   * a second one, which is the one outcome a single intake must never have.
+   */
+  it("keeps a thread the agent created even when the turn reports ok with an outcome after trouble", async () => {
+    runStarMapIntakeAgentTurn.mockResolvedValue({
+      status: "ok",
+      outcome: { kind: "created", backend: "codex", threadId: "thread-late" },
+    });
+
+    const response = await dispatchStarMapIntake({
+      requestId: "req-agent-9",
+      request: "Make the donuts in PwrAgent",
+    });
+
+    expect(response).toMatchObject({ threadId: "thread-late" });
+    expect(materializeDirectoryLaunchpad).not.toHaveBeenCalled();
+  });
+
+  it("never runs the agent when no project is registered", async () => {
+    readLocalNavigationDirectoryIndex.mockResolvedValue([]);
+
+    const response = await dispatchStarMapIntake({
+      requestId: "req-agent-10",
+      request: "Make the donuts",
+    });
+
+    expect(response).toMatchObject({
+      status: "failed",
+      error: "No projects are registered on this instance. Add a directory first.",
+    });
+    expect(runStarMapIntakeAgentTurn).not.toHaveBeenCalled();
+  });
+});
+
+describe("dispatchStarMapIntake payload carrying", () => {
+  /**
+   * The payload was extracted for the project the operator picked. When that
+   * project is gone by the time they answer, the pick is discarded and the
+   * fallback resolves somewhere else — the payload must not ride along to it.
+   */
+  it("drops a carried payload when the picked project no longer exists", async () => {
+    generateStructuredObject.mockResolvedValue(
+      ranked([{ directoryKey: "dir-snap", confidence: 0.9 }]),
+    );
+
+    const response = await dispatchStarMapIntake({
+      requestId: "req-stale",
+      request: "Make a thread in the gone project and ask it to make the donuts.",
+      directoryKey: "dir-removed",
+      input: "Make the donuts.",
+    });
+
+    expect(response).toMatchObject({ status: "created" });
+    expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith(
+      expect.objectContaining({
+        directoryKey: "dir-snap",
+        input: [
+          {
+            type: "text",
+            text: "Make a thread in the gone project and ask it to make the donuts.",
+          },
+        ],
+      }),
+      expect.anything(),
+    );
+  });
+
+  it("keeps the operator's request when the pick carried no payload", async () => {
+    const response = await dispatchStarMapIntake({
+      requestId: "req-no-payload",
+      request: "Fix the recorder crash",
+      directoryKey: "dir-agent",
+    });
+
+    expect(response).toMatchObject({ status: "created" });
+    expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: [{ type: "text", text: "Fix the recorder crash" }],
+      }),
+      expect.anything(),
+    );
   });
 });

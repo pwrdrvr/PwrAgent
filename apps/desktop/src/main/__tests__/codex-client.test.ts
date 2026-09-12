@@ -10684,6 +10684,279 @@ describe("CodexAppServerClient", () => {
     await probePromise.catch(() => undefined);
   });
 
+  /**
+   * The intake agent turn: the same isolated helper thread as a structured
+   * probe, plus PwrAgent dynamic tools serviced for that turn only.
+   */
+  describe("runHelperToolTurn", () => {
+    const TOOLS = [
+      {
+        type: "namespace" as const,
+        name: "pwragent",
+        description: "PwrAgent tools.",
+        tools: [
+          {
+            type: "function" as const,
+            name: "create_instance_thread",
+            description: "Create a thread.",
+            inputSchema: { type: "object", properties: {} },
+            deferLoading: false,
+          },
+        ],
+      },
+    ];
+
+    function startToolTurn(
+      client: InstanceType<
+        Awaited<typeof import("../codex-app-server/client")>["CodexAppServerClient"]
+      >,
+      onToolCall: (request: {
+        method: string;
+        params: Record<string, unknown>;
+      }) => Promise<{ success: boolean }>,
+    ) {
+      return client.runHelperToolTurn({
+        prompt: "Make a thread in PwrAgent and ask it to make the donuts.",
+        system: "You are the PwrAgent Star Map intake.",
+        dynamicTools: TOOLS,
+        onToolCall: onToolCall as never,
+        timeoutMs: 5_000,
+      });
+    }
+
+    it("advertises the tools on the helper thread and asks for no output schema", async () => {
+      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      MockTransport.threadStartResult = {
+        thread: { id: "tool-helper" },
+        instructionSources: [],
+      };
+      MockTransport.turnStartResult = { turn: { id: "tool-turn" } };
+      const client = new CodexAppServerClient({
+        command: "codex",
+        directoryResolver: async () => [],
+      });
+      const turnPromise = startToolTurn(client, async () => ({ success: true }));
+      const transport = await waitForLatestTransportRequest("turn/start");
+      const sent = transport.sentMessages.map(
+        (message) => JSON.parse(message) as {
+          method?: string;
+          params?: Record<string, unknown>;
+        },
+      );
+
+      const threadStart = sent.find((entry) => entry.method === "thread/start");
+      expect(JSON.stringify(threadStart?.params?.dynamicTools)).toContain(
+        "create_instance_thread",
+      );
+      expect(threadStart?.params?.ephemeral).toBe(true);
+      // Every configured MCP server stays disabled: the intake's only tools
+      // are the ones it was handed.
+      expect(threadStart?.params?.config).toMatchObject({
+        web_search: "disabled",
+        project_doc_max_bytes: 0,
+      });
+      const turnStart = sent.find((entry) => entry.method === "turn/start");
+      // A tool turn's product is its tool calls; demanding a final JSON record
+      // would fail turns that already did the work.
+      expect(turnStart?.params).not.toHaveProperty("outputSchema");
+
+      transport.emitInbound({
+        jsonrpc: "2.0",
+        method: "turn/completed",
+        params: {
+          threadId: "tool-helper",
+          turn: { id: "tool-turn", status: "completed" },
+        },
+      });
+      await expect(turnPromise).resolves.toEqual({ status: "ok" });
+      await client.close();
+    });
+
+    it("routes a tool call on its helper thread to the supplied handler", async () => {
+      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      MockTransport.threadStartResult = {
+        thread: { id: "tool-helper" },
+        instructionSources: [],
+      };
+      MockTransport.turnStartResult = { turn: { id: "tool-turn" } };
+      const client = new CodexAppServerClient({
+        command: "codex",
+        directoryResolver: async () => [],
+      });
+      const onToolCall = vi.fn(
+        async (_request: { method: string; params: Record<string, unknown> }) => ({
+          success: true,
+        }),
+      );
+      const turnPromise = startToolTurn(client, onToolCall);
+      const transport = await waitForLatestTransportRequest("turn/start");
+
+      transport.emitInbound({
+        jsonrpc: "2.0",
+        id: "tool-call-1",
+        method: "item/tool/call",
+        params: {
+          threadId: "tool-helper",
+          turnId: "tool-turn",
+          callId: "call-1",
+          namespace: "pwragent",
+          tool: "create_instance_thread",
+          arguments: { projectKey: "dir-agent", input: "Make the donuts." },
+        },
+      });
+
+      await vi.waitFor(() => expect(onToolCall).toHaveBeenCalled());
+      expect(onToolCall.mock.calls[0]?.[0]).toMatchObject({
+        method: "item/tool/call",
+        params: { tool: "create_instance_thread", threadId: "tool-helper" },
+      });
+      await vi.waitFor(() => {
+        const answered = transport.sentMessages.some((message) => {
+          const payload = JSON.parse(message) as { id?: unknown };
+          return payload.id === "tool-call-1";
+        });
+        expect(answered).toBe(true);
+      });
+
+      transport.emitInbound({
+        jsonrpc: "2.0",
+        method: "turn/completed",
+        params: {
+          threadId: "tool-helper",
+          turn: { id: "tool-turn", status: "completed" },
+        },
+      });
+      await expect(turnPromise).resolves.toEqual({ status: "ok" });
+      await client.close();
+    });
+
+    /**
+     * The handler is reachable only through the thread that registered it.
+     * That containment is what stands in for the registry's live-turn gate,
+     * which an ephemeral helper turn can never satisfy.
+     */
+    it("does not route a tool call from another thread to the handler", async () => {
+      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      MockTransport.threadStartResult = {
+        thread: { id: "tool-helper" },
+        instructionSources: [],
+      };
+      MockTransport.turnStartResult = { turn: { id: "tool-turn" } };
+      const client = new CodexAppServerClient({
+        command: "codex",
+        directoryResolver: async () => [],
+      });
+      const onToolCall = vi.fn(async () => ({ success: true }));
+      const turnPromise = startToolTurn(client, onToolCall);
+      const transport = await waitForLatestTransportRequest("turn/start");
+
+      transport.emitInbound({
+        jsonrpc: "2.0",
+        id: "tool-call-other",
+        method: "item/tool/call",
+        params: {
+          threadId: "somebody-elses-thread",
+          turnId: "their-turn",
+          callId: "call-2",
+          namespace: "pwragent",
+          tool: "create_instance_thread",
+          arguments: {},
+        },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      expect(onToolCall).not.toHaveBeenCalled();
+
+      transport.emitInbound({
+        jsonrpc: "2.0",
+        method: "turn/completed",
+        params: {
+          threadId: "tool-helper",
+          turn: { id: "tool-turn", status: "completed" },
+        },
+      });
+      await expect(turnPromise).resolves.toEqual({ status: "ok" });
+      await client.close();
+    });
+
+    it("stops routing tool calls once the turn is over", async () => {
+      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      MockTransport.threadStartResult = {
+        thread: { id: "tool-helper" },
+        instructionSources: [],
+      };
+      MockTransport.turnStartResult = { turn: { id: "tool-turn" } };
+      const client = new CodexAppServerClient({
+        command: "codex",
+        directoryResolver: async () => [],
+      });
+      const onToolCall = vi.fn(async () => ({ success: true }));
+      const turnPromise = startToolTurn(client, onToolCall);
+      const transport = await waitForLatestTransportRequest("turn/start");
+      transport.emitInbound({
+        jsonrpc: "2.0",
+        method: "turn/completed",
+        params: {
+          threadId: "tool-helper",
+          turn: { id: "tool-turn", status: "completed" },
+        },
+      });
+      await turnPromise;
+
+      transport.emitInbound({
+        jsonrpc: "2.0",
+        id: "tool-call-late",
+        method: "item/tool/call",
+        params: {
+          threadId: "tool-helper",
+          turnId: "tool-turn",
+          callId: "call-3",
+          namespace: "pwragent",
+          tool: "create_instance_thread",
+          arguments: {},
+        },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      expect(onToolCall).not.toHaveBeenCalled();
+      await client.close();
+    });
+
+    it("reports a failed turn as failed", async () => {
+      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      MockTransport.threadStartResult = {
+        thread: { id: "tool-helper" },
+        instructionSources: [],
+      };
+      MockTransport.turnStartResult = { turn: { id: "tool-turn" } };
+      const client = new CodexAppServerClient({
+        command: "codex",
+        directoryResolver: async () => [],
+      });
+      const turnPromise = startToolTurn(client, async () => ({ success: true }));
+      const transport = await waitForLatestTransportRequest("turn/start");
+
+      transport.emitInbound({
+        jsonrpc: "2.0",
+        method: "turn/completed",
+        params: {
+          threadId: "tool-helper",
+          turn: {
+            id: "tool-turn",
+            status: "failed",
+            error: { message: "nope" },
+          },
+        },
+      });
+
+      await expect(turnPromise).resolves.toEqual({
+        status: "failed",
+        reason: "codex_title_turn_failed",
+      });
+      await client.close();
+    });
+  });
+
   it("uses a fresh helper thread for every title and unsubscribes each one", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     const client = new CodexAppServerClient({

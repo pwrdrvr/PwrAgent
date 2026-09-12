@@ -4,6 +4,10 @@ import { performance } from "node:perf_hooks";
 import { getDesktopBackendRegistry } from "./app-server/backend-registry";
 import { getDesktopOverlayStore } from "./app-server/desktop-overlay-store";
 import { createPwrAgentAppManagementHandler } from "./agent-tools/pwragent-app-management-service";
+import type {
+  CreateInstanceThreadResult,
+  PwrAgentFederationContext,
+} from "@pwragent/shared";
 import { createFederationAgentToolsHandler } from "./federation/federation-agent-tools-service";
 import { createFederatedThreadInspectionHandler } from "./federation/federated-thread-inspection-service";
 import { createFederatedThreadMutationHandler } from "./federation/federated-thread-mutation-service";
@@ -1290,28 +1294,49 @@ export function bootstrapApp(): void {
     );
     // Injected rather than owned by the registry: the federation runtime
     // already imports the registry, so the reverse import would be a cycle.
+    const federationAgentToolOptions = {
+      targetStore: getDesktopOverlayStore(),
+      resolveSourceTurnAttachments: (context: PwrAgentFederationContext) => {
+        const turnId = context.turnId?.trim();
+        return turnId
+          ? getDesktopBackendRegistry().getTurnInputAttachments({
+              backend: context.backend,
+              threadId: context.threadId,
+              turnId,
+            })
+          : [];
+      },
+      onRemoteChildMounted: async ({
+        backend,
+        instanceId,
+        threadId,
+      }: {
+        backend: CreateInstanceThreadResult["backend"];
+        instanceId: string;
+        threadId: string;
+      }) => {
+        await getDesktopBackendRegistry().publishLocalEvent({
+          backend,
+          notification: {
+            method: "navigation/remoteThreadPins/changed",
+            params: { instanceId, threadId, pinned: true },
+          },
+        });
+      },
+    };
     getDesktopBackendRegistry().setPwrAgentFederationHandler(
+      createFederationAgentToolsHandler(federationAgentToolOptions),
+    );
+    // The same tools, for the Star Map [+] intake agent. It differs in one
+    // field: the intake's calling thread is an ephemeral turn that dissolves
+    // the moment it finishes, so crediting it as the created thread's
+    // `sourceThread` would leave a ThreadChip linking to nothing. An intake
+    // thread was asked for by the operator through PwrAgent, which is what
+    // the dialog recorded before there was an agent in the loop.
+    getDesktopBackendRegistry().setStarMapIntakeFederationHandler(
       createFederationAgentToolsHandler({
-        targetStore: getDesktopOverlayStore(),
-        resolveSourceTurnAttachments: (context) => {
-          const turnId = context.turnId?.trim();
-          return turnId
-            ? getDesktopBackendRegistry().getTurnInputAttachments({
-                backend: context.backend,
-                threadId: context.threadId,
-                turnId,
-              })
-            : [];
-        },
-        onRemoteChildMounted: async ({ backend, instanceId, threadId }) => {
-          await getDesktopBackendRegistry().publishLocalEvent({
-            backend,
-            notification: {
-              method: "navigation/remoteThreadPins/changed",
-              params: { instanceId, threadId, pinned: true },
-            },
-          });
-        },
+        ...federationAgentToolOptions,
+        resolveMessageOrigin: () => ({ kind: "pwragent" }),
       }),
     );
     getDesktopBackendRegistry().setFederatedThreadMessageHandler(

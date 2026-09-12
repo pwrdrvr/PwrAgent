@@ -15,6 +15,10 @@ import {
   getDesktopBackendRegistry,
   type DesktopBackendRegistry,
 } from "./backend-registry";
+import {
+  STAR_MAP_INTAKE_AGENT_SYSTEM,
+  type StarMapIntakeAgentOutcome,
+} from "./star-map-intake-agent";
 
 const log = getMainLogger("pwragent:star-map-intake");
 
@@ -43,12 +47,17 @@ const INTAKE_TIMEOUT_MS = 20_000;
 const INTAKE_TURN_TIMEOUT_MS = 90_000;
 const INTAKE_PREFERENCES_MAX_CHARS = 8_000;
 /**
- * How many directories the resolver is shown. Every registered directory
- * used to go into the prompt, so latency and token cost grew with the
- * registry forever and a large enough one crowds the request itself out of
- * the model's attention — the same unbounded-input problem
+ * How many directories the deterministic resolver is shown. Every registered
+ * directory used to go into the prompt, so latency and token cost grew with
+ * the registry forever and a large enough one crowds the request itself out
+ * of the model's attention — the same unbounded-input problem
  * `INTAKE_PREFERENCES_MAX_CHARS` already solves for AGENTS.md. Most-recently
  * active first, so the ones cut are the ones the operator has not touched.
+ *
+ * This bounds a prompt, so it applies only where a prompt is built. The agent
+ * path calls `list_instance_projects` and pages it, and must NOT inherit this
+ * ceiling: an operator's 81st project is not invisible to a tool that can ask
+ * for the next page.
  */
 const INTAKE_MAX_PROMPT_DIRECTORIES = 80;
 const MAX_DISAMBIGUATION_CANDIDATES = 8;
@@ -314,6 +323,85 @@ function candidateOf(entry: RankedDirectory): StarMapIntakeCandidate {
   };
 }
 
+/**
+ * Run the intake as an agent turn: it reads the project list with tools,
+ * separates the task from the instruction that addressed it, and creates the
+ * thread itself.
+ *
+ * Returns `undefined` when no agent could run — no Codex backend, or the turn
+ * failed without having created anything — which sends the caller to the
+ * deterministic resolver below.
+ */
+async function resolveViaIntakeAgent(params: {
+  requestId: string;
+  text: string;
+  preferences?: string;
+  directories: NavigationDirectoryRow[];
+}): Promise<StarMapIntakeAgentOutcome | undefined> {
+  const directoryKeys = new Set(params.directories.map((entry) => entry.key));
+  const labelsByKey = new Map(
+    params.directories.map((entry) => [entry.key, entry.label]),
+  );
+  const startedAt = Date.now();
+  try {
+    const result = await getDesktopBackendRegistry().runStarMapIntakeAgentTurn({
+      system: [
+        STAR_MAP_INTAKE_AGENT_SYSTEM,
+        ...(params.preferences
+          ? [
+              "",
+              "Operator thread-startup preferences (AGENTS.md):",
+              params.preferences,
+            ]
+          : []),
+      ].join("\n"),
+      prompt: params.text,
+      timeoutMs: INTAKE_TIMEOUT_MS,
+      turnTimeoutMs: INTAKE_TURN_TIMEOUT_MS,
+      // Candidates the operator can act on have to be projects on this
+      // instance: the dialog answers with a directoryKey that the next
+      // dispatch looks up in this same local index. A key naming a peer's
+      // project is dropped rather than offered and then failing on the pick.
+      resolveDirectoryKey: (projectKey) =>
+        directoryKeys.has(projectKey) ? projectKey : undefined,
+      onCreateStarting: (projectKey: string) => {
+        publishIntakeStatus({
+          requestId: params.requestId,
+          phase: "creating",
+          directoryLabel: labelsByKey.get(projectKey) ?? projectKey,
+        });
+      },
+    });
+    if (!result) return undefined;
+    if (result.status === "failed") {
+      log.warn("star map intake agent turn failed", {
+        elapsedMs: Date.now() - startedAt,
+        reason: result.reason,
+      });
+      return undefined;
+    }
+    // The only record of what this turn actually costs. Both budgets above
+    // were last set by reasoning about prompt size, because a successful
+    // intake logged nothing and there was no number to set them from.
+    log.info("star map intake agent resolved", {
+      directoryCount: params.directories.length,
+      elapsedMs: Date.now() - startedAt,
+      outcome: result.outcome?.kind ?? "none",
+      preferencesChars: params.preferences?.length ?? 0,
+      ...(result.outcome?.kind === "needs_disambiguation"
+        ? { candidateCount: result.outcome.candidates.length }
+        : {}),
+    });
+    return result.outcome;
+  } catch (error) {
+    log.warn("star map intake agent unavailable", {
+      elapsedMs: Date.now() - startedAt,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return undefined;
+  }
+}
+
 export async function ensureStarMapIntakeLaunchpad(
   registry: Pick<DesktopBackendRegistry, "ensureDirectoryLaunchpad">,
   directory: NavigationDirectoryRow,
@@ -329,19 +417,26 @@ export async function ensureStarMapIntakeLaunchpad(
 }
 
 /**
- * The Star Map [+] intake: resolve the operator's natural-language request
- * to a project (structured call over the directory registry + AGENTS.md
- * preferences, deterministic label match as fallback), then materialize the
- * directory's launchpad with the request as the first turn. Runs on the
- * instance that owns the [+] card.
+ * The Star Map [+] intake: carry out the operator's natural-language request
+ * by starting exactly one thread. Runs on the instance that owns the [+] card.
  *
- * The resolver ranks rather than picks, and the ranking survives a low
+ * The request is addressed *to* the intake, and an agent turn is what lets it
+ * act that way. "Make a thread in Foo and ask it to make the donuts" means
+ * create one thread in Foo whose first turn is "Make the donuts" — the
+ * classifier this replaced could only resolve the project and then paste the
+ * whole sentence in as the prompt, so the created thread's agent read the
+ * instruction, obeyed it, and created a second thread. One relay thread whose
+ * only job was to understand a sentence, at $0.48 a time.
+ *
+ * The agent creates the thread itself, through the same
+ * `create_instance_thread` an operator's own agent would use, so every
+ * capability that tool already has — settings inheritance, model and work-mode
+ * overrides, a target instance — arrives without a schema field per feature.
+ *
+ * The deterministic resolver below is the fallback for when no backend can run
+ * an agent turn. It ranks rather than picks, and the ranking survives a low
  * score: below `AUTO_CREATE_CONFIDENCE` the operator chooses, but from the
- * resolver's order with its reasons attached. The previous shape discarded
- * the whole resolution below the threshold and fell through to a substring
- * match on directory labels — so a request that never typed a project name
- * produced the entire registry in storage order, which reads as the intake
- * having thought about nothing.
+ * resolver's order with its reasons attached.
  */
 export async function dispatchStarMapIntake(
   request: StarMapIntakeRequest,
@@ -376,8 +471,69 @@ export async function dispatchStarMapIntake(
     ) {
       directoryKey = undefined;
     }
+    // Whether the operator answered an earlier ask with a project that still
+    // exists. A `directoryKey` this instance no longer has is cleared above,
+    // and the payload that travelled with it was extracted for that project —
+    // so it must not ride along onto whatever the fallback resolves instead.
+    const operatorPickedProject = directoryKey !== undefined;
     if (!directoryKey) {
       const preferences = await readIntakePreferences();
+      const agentOutcome = await resolveViaIntakeAgent({
+        requestId,
+        text,
+        preferences,
+        directories,
+      });
+      if (agentOutcome?.kind === "created") {
+        publishIntakeStatus({
+          requestId,
+          phase: "done",
+          backend: agentOutcome.backend,
+          threadId: agentOutcome.threadId,
+        });
+        return {
+          status: "created",
+          requestId,
+          backend: agentOutcome.backend,
+          threadId: agentOutcome.threadId,
+        };
+      }
+      if (agentOutcome?.kind === "needs_disambiguation") {
+        // An agent that asked with no usable candidate still asked. Show the
+        // registry by recency rather than an empty list under a heading
+        // promising options: `recent` is the honest source for that, and it
+        // is the same thing the deterministic path says when its resolver
+        // ran and pointed nowhere.
+        const asked: RankedDirectory[] = [];
+        for (const candidate of agentOutcome.candidates) {
+          const directory = directories.find(
+            (entry) => entry.key === candidate.directoryKey,
+          );
+          if (!directory) continue;
+          asked.push({
+            directory,
+            confidence: 0,
+            ...(candidate.reason ? { reason: candidate.reason } : {}),
+          });
+        }
+        publishIntakeStatus({ requestId, phase: "needs_disambiguation" });
+        return {
+          status: "needs_disambiguation",
+          requestId,
+          candidateSource: asked.length > 0 ? "resolver" : "recent",
+          candidates: (asked.length > 0
+            ? asked
+            : [...directories]
+                .sort(byRecency)
+                .map<RankedDirectory>((directory) => ({
+                  directory,
+                  confidence: 0,
+                })))
+            .slice(0, MAX_DISAMBIGUATION_CANDIDATES)
+            .map(candidateOf),
+          ...(agentOutcome.input ? { input: agentOutcome.input } : {}),
+        };
+      }
       const resolved = await resolveViaConfiguredBackend({
         text,
         preferences,
@@ -449,12 +605,20 @@ export async function dispatchStarMapIntake(
     });
     const registry = getDesktopBackendRegistry();
     const launchpad = await ensureStarMapIntakeLaunchpad(registry, directory);
+    // `input` is the task the agent already extracted before it asked which
+    // project. Preferring it is what makes the operator's pick cost one
+    // creation instead of a second agent turn re-deriving the same sentence —
+    // and it is the only way the answer to "which project?" still produces
+    // "Make the donuts" rather than the instruction that asked for it.
+    const firstTurnText = operatorPickedProject
+      ? request.input?.trim() || text
+      : text;
     const materialized = await registry.materializeDirectoryLaunchpad(
       {
         directoryKey,
         launchpad,
         input: [
-          { type: "text", text },
+          { type: "text", text: firstTurnText },
           ...(request.attachments ?? []),
         ],
       },
