@@ -1,30 +1,40 @@
 # PwrGit brand asset
 
-`pwrgit-app-icon.png` is the official PwrGit application icon, copied
-verbatim from the sister PwrSuite repository:
+`pwrgit-app-icon.png` is the official PwrGit application icon, taken from the
+sister PwrSuite repository:
 
 - Repository: <https://github.com/pwrdrvr/PwrGit>
-- Source: the `icon_128x128@2x.png` (256px) member of the legacy `.icns` that
-  electron-builder's `actool` derives from PwrGit's `apps/desktop/build/icon.icon`
-  at package time. It was originally the same member of PwrGit's hand-built
-  `icon.iconset/`, which pwrdrvr/PwrGit#196 removed.
+- Source: `apps/desktop/build/icon.png` — the full-bleed master PwrGit's own
+  build documents as its Windows/Linux source. Downsampled to 256px, which is
+  the only transformation applied.
 - Usage: the New Thread PwrGit connection prompt, and the OAuth callback page
   the browser lands on after PwrGit's authorization screen
 
-To refresh it, take `Contents/Resources/icon.icns` from a packaged PwrGit.app
-(or compile PwrGit's `build/icon.icon` the way its `branding-assets.test.ts`
-does), run `iconutil -c iconset` on it, and copy `icon_128x128@2x.png` here
-unchanged. Do not resample, redraw, recolor, or inline the mark in PwrAgent.
+To refresh it, point the sync script at a PwrGit checkout:
 
-The plate in this copy covers 206 of its 256px — Apple's legacy 824-in-1024
-template — where every mark it is drawn beside is full-bleed: PwrSnap's on the
-New Thread card, PwrAgent's own on the callback page. Each surface compensates
-in CSS rather than in the file, so the marks paint at the same size:
+```bash
+node apps/desktop/scripts/sync-pwrsuite-brand-icon.mjs --app pwrgit --repo ~/src/PwrGit
+```
 
-- `.mcp-connection__icon--inset-plate` in `styles/app.css` (the card)
-- `.app-mark--inset-plate` in `src/main/mcp-connections/local-mcp-connection-service.ts`
-  (the callback page, whose CSS is a template literal in the main process)
+`--repo` defaults to a `PwrGit` checkout beside this one. The script refuses a
+source that is not full-bleed and re-measures what it wrote, so a refresh
+either produces a usable asset or fails saying why.
 
-A refreshed copy with a different margin fails
-`apps/desktop/scripts/pwrsuite-brand-icons.test.mjs`, which measures the asset
-against both rules; correct the ratios there rather than editing the asset.
+Do not redraw, recolor, crop, pad, or inline the mark in PwrAgent. The
+downsample above is mechanical and reproducible from PwrGit at any time, which
+is what keeps this a copy of another product's trademark artwork rather than a
+PwrAgent rendition of it.
+
+## Not the `.icns`, and not `icon-macos.png`
+
+PwrGit builds its macOS icon from an Icon Composer package (`build/icon.icon`),
+and `actool` derives a legacy `.icns` from it at package time. Every member of
+that `.icns` — and `build/icon-macos.png` beside it — is padded to Apple's
+824-in-1024 template, because macOS draws app icons inside a safe area.
+
+A mark taken from one of those covers 80% of its canvas, so it paints at 80% of
+any full-bleed mark beside it. Both surfaces above draw exactly that pairing,
+and both once carried CSS to scale this asset back up. Re-sourcing from
+`build/icon.png` is what removed them. `apps/desktop/scripts/pwrsuite-brand-icons.test.mjs`
+measures this asset against both surfaces and fails if a margin returns — fix
+that by re-running the script above, not by compensating in a stylesheet.

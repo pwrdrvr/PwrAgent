@@ -105,7 +105,7 @@ export function PwrGitConnectionPrompt(props: {
         <img
           alt=""
           aria-hidden="true"
-          className="mcp-connection__icon mcp-connection__icon--inset-plate"
+          className="mcp-connection__icon"
           src={pwrGitIcon}
         />
         <div className="mcp-connection__copy">
@@ -146,7 +146,7 @@ export function PwrGitConnectionPrompt(props: {
       <img
         alt=""
         aria-hidden="true"
-        className="mcp-connection__icon mcp-connection__icon--inset-plate"
+        className="mcp-connection__icon"
         src={pwrGitIcon}
       />
       <div className="mcp-connection__copy">

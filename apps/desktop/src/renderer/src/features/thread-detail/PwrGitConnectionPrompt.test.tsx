@@ -243,11 +243,11 @@ describe("PwrGitConnectionPrompt", () => {
     ).toBeNull();
   });
 
-  // PwrGit's brand asset sits on Apple's legacy 824-in-1024 template while
-  // PwrSnap's is full-bleed, so this card's icon carries the compensating
-  // modifier and PwrSnap's must not. The ratio itself is measured against
-  // both assets in scripts/pwrsuite-brand-icons.test.mjs.
-  it("marks its icon as the inset-plate asset", async () => {
+  // Every PwrSuite brand asset is full-bleed, so no card's icon carries a
+  // sizing modifier — the asset fills the box the card reserves on its own.
+  // The assets are measured against that box in
+  // scripts/pwrsuite-brand-icons.test.mjs.
+  it("leaves its icon unscaled", async () => {
     const { container } = render(
       <PwrGitConnectionPrompt
         backend="codex"
@@ -261,6 +261,8 @@ describe("PwrGitConnectionPrompt", () => {
 
     await screen.findByRole("switch");
     const icon = container.querySelector(".mcp-connection__icon");
-    expect(icon?.classList.contains("mcp-connection__icon--inset-plate")).toBe(true);
+    // The exact list, not the absence of one known modifier: any sizing class
+    // added here would be compensating for an asset that should be re-sourced.
+    expect(icon?.className).toBe("mcp-connection__icon");
   });
 });

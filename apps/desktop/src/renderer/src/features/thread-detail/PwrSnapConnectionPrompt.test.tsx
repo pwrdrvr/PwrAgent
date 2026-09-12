@@ -147,8 +147,8 @@ describe("PwrSnapConnectionPrompt", () => {
     expect(screen.queryByRole("switch")).toBeNull();
   });
 
-  // The mirror of PwrGit's inset-plate assertion: this asset is full-bleed, so
-  // scaling it would overshoot the box the card reserves.
+  // The mirror of PwrGit's assertion: this asset is full-bleed too, so scaling
+  // it would overshoot the box the card reserves.
   it("leaves its icon unscaled", async () => {
     const { container } = render(
       <PwrSnapConnectionPrompt
@@ -168,6 +168,6 @@ describe("PwrSnapConnectionPrompt", () => {
 
     await screen.findByRole("switch");
     const icon = container.querySelector(".mcp-connection__icon");
-    expect(icon?.classList.contains("mcp-connection__icon--inset-plate")).toBe(false);
+    expect(icon?.className).toBe("mcp-connection__icon");
   });
 });
