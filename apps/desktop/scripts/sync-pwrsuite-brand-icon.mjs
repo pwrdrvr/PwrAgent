@@ -2,8 +2,9 @@
 // the connection surfaces draw it.
 //
 // The source is the sister's `apps/desktop/build/icon.png`: the full-bleed
-// master its own README calls the Windows/Linux source, and the same artifact
-// PwrAgent serves for its own mark on the OAuth callback page. It is
+// master its own `apps/desktop/AGENTS.md` documents as its Windows/Linux
+// source, and the same artifact PwrAgent serves for its own mark on the OAuth
+// callback page. It is
 // deliberately NOT the `.icns` member `actool` derives from `build/icon.icon`
 // — that member is padded to Apple's 824-in-1024 template, so a mark taken
 // from it paints at 80% of anything full-bleed beside it, and every surface
@@ -32,7 +33,10 @@ const desktop = resolve(here, "..");
 /** The canvas the committed copies are drawn on, in pixels. */
 const SIZE = 256;
 
-/** Every sister app this repository draws a mark for, and where it lives. */
+/**
+ * Every sister app this repository draws a mark for. `defaultRepo` is resolved
+ * against `apps/desktop`, so it means a checkout sitting beside this one.
+ */
 const APPS = {
   pwrgit: { displayName: "PwrGit", defaultRepo: "../../../PwrGit" },
   pwrsnap: { displayName: "PwrSnap", defaultRepo: "../../../PwrSnap" },
