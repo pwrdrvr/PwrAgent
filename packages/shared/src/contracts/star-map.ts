@@ -54,6 +54,29 @@ export const STAR_MAP_LOAD_CARD_KEY = "system:load";
  */
 export const STAR_MAP_LOAD_CARD_POSITION_KEY = "system:load:position";
 
+/**
+ * Where a card's Projects-lens offset lives.
+ *
+ * The two radial lenses are two coordinate spaces over the same threads: a
+ * card's slot is measured from its INSTANCE's cloud in one and from its
+ * PROJECT's cloud in the other, and the same thread sits in both. One
+ * offset cannot serve both — a card dragged into place around its project
+ * would land that far from where it was left around its machine.
+ *
+ * So the Projects lens writes into its own rows, namespaced the way the
+ * load card already is (see `STAR_MAP_LOAD_CARD_KEY`): still keyed by the
+ * instance that OWNS the thread, so the entry merges, syncs and
+ * last-writer-wins exactly like the Instances-lens offset beside it, and
+ * still additive on the wire, because a peer validates `threadKey` only as
+ * a non-empty string and relays a key it cannot draw.
+ */
+export const STAR_MAP_PROJECT_ARRANGEMENT_PREFIX = "project:";
+
+/** The Projects-lens arrangement row for a thread. */
+export function starMapProjectArrangementKey(threadKey: string): string {
+  return `${STAR_MAP_PROJECT_ARRANGEMENT_PREFIX}${threadKey}`;
+}
+
 export function starMapArrangementEntryKey(
   entry: Pick<StarMapArrangementEntry, "instanceId" | "threadKey">,
 ): string {

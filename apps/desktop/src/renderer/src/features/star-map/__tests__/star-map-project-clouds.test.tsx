@@ -1,5 +1,5 @@
 import "./foreground-fixture";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { NavigationThreadSummary } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
@@ -34,7 +34,7 @@ import { StarMapScreen } from "../StarMapScreen";
  */
 const CLOUD_RADIUS = 700;
 
-function buildDesktopApi(): DesktopApi {
+function buildDesktopApi(overrides?: Partial<DesktopApi>): DesktopApi {
   return {
     readFederationHealth: vi.fn(async () => ({
       health: {
@@ -49,6 +49,7 @@ function buildDesktopApi(): DesktopApi {
       },
     })),
     onAgentEvent: vi.fn(() => () => undefined),
+    ...overrides,
   } as unknown as DesktopApi;
 }
 
@@ -75,14 +76,17 @@ function thread(params: {
   } as unknown as NavigationThreadSummary;
 }
 
-function renderProjects(threads: NavigationThreadSummary[]) {
+function renderProjects(
+  threads: NavigationThreadSummary[],
+  api?: Partial<DesktopApi>,
+) {
   window.localStorage.setItem(
     "pwragent.starMap.viewPreferences",
     JSON.stringify({ layout: "projects" }),
   );
   return render(
     <StarMapScreen
-      desktopApi={buildDesktopApi()}
+      desktopApi={buildDesktopApi(api)}
       localThreads={threads}
       sessionKeys={{}}
       localInstanceLabel="Mac-Mini-M4"
@@ -450,6 +454,113 @@ describe("star map projects lens clouds", () => {
       const chatAfter = chatCardOrigin(container);
       expect(chatAfter.x - after.x).toBeCloseTo(offset.dx, 5);
       expect(chatAfter.y - after.y).toBeCloseTo(offset.dy, 5);
+    });
+  });
+  /**
+   * The lens drew its cards and then refused to let the operator move
+   * any of them: arrangement rows are keyed per federation instance and
+   * a project is not one, so the drag was left off rather than shipped
+   * writing to the Instances lens's rows.
+   *
+   * It writes to its OWN rows instead, still keyed by the instance that
+   * owns the thread — so the offset merges, syncs and last-writer-wins
+   * exactly like the one beside it.
+   */
+  it("drags a card and persists it in the lens's own rows", async () => {
+    const writes: {
+      instanceId: string;
+      threadKey: string;
+      dx: number | null;
+      dy: number | null;
+    }[] = [];
+    const setStarMapCardPosition = vi.fn(async (entry: (typeof writes)[number]) => {
+      writes.push(entry);
+    });
+    const { container } = renderProjects(
+      [
+        thread({ id: "a1", path: "/repo/alpha", label: "AlphaDir" }),
+        thread({ id: "a2", path: "/repo/alpha", label: "AlphaDir" }),
+        thread({ id: "a3", path: "/repo/alpha", label: "AlphaDir" }),
+      ],
+      { setStarMapCardPosition } as unknown as Partial<DesktopApi>,
+    );
+    await waitFor(() => {
+      expect(projectSystems(container)[0]?.cards).toHaveLength(3);
+    });
+
+    const shell = container.querySelector(
+      '.star-map-card-shell[data-card-key="pwr_local::codex:a1"]',
+    ) as HTMLElement;
+    const startLeft = Number.parseFloat(shell.style.left);
+    const startTop = Number.parseFloat(shell.style.top);
+
+    fireEvent.pointerDown(shell, { button: 0, clientX: 500, clientY: 400 });
+    await act(async () => {
+      fireEvent.pointerMove(window, { clientX: 640, clientY: 470 });
+      await new Promise((resolve) =>
+        requestAnimationFrame(() => resolve(null)),
+      );
+    });
+    // It moves under the pointer while the gesture is live.
+    expect(Number.parseFloat(shell.style.left) - startLeft).toBeCloseTo(140, 0);
+    expect(Number.parseFloat(shell.style.top) - startTop).toBeCloseTo(70, 0);
+
+    fireEvent.pointerUp(window, { clientX: 640, clientY: 470 });
+    await waitFor(() => {
+      expect(setStarMapCardPosition).toHaveBeenCalled();
+    });
+    // Owned by the instance that owns the thread, in this lens's own row.
+    expect(writes[0].instanceId).toBe("pwr_local");
+    expect(writes[0].threadKey).toBe("project:codex:a1");
+    expect(writes[0].dx).not.toBeNull();
+  });
+
+  /**
+   * The two radial lenses measure the same card's slot from different
+   * bodies, so one row cannot serve both: an offset written here and read
+   * back around the instance would move the card by the distance between
+   * its project and its machine.
+   */
+  it("leaves the Instances lens's own offset alone", async () => {
+    const entries = [
+      {
+        instanceId: "pwr_local",
+        threadKey: "project:codex:a1",
+        dx: 300,
+        dy: 200,
+        updatedAt: 1,
+        by: "pwr_local",
+      },
+    ];
+    const { container } = renderProjects(
+      [
+        thread({ id: "a1", path: "/repo/alpha", label: "AlphaDir" }),
+        thread({ id: "a2", path: "/repo/alpha", label: "AlphaDir" }),
+      ],
+      {
+        readStarMapArrangement: vi.fn(async () => ({ entries })),
+      } as unknown as Partial<DesktopApi>,
+    );
+
+    // The Projects lens honours it...
+    await waitFor(() => {
+      const shell = container.querySelector(
+        '.star-map-card-shell[data-card-key="pwr_local::codex:a1"]',
+      ) as HTMLElement;
+      expect(Number.parseFloat(shell.style.left)).toBeCloseTo(300, 0);
+      expect(Number.parseFloat(shell.style.top)).toBeCloseTo(200, 0);
+    });
+
+    // ...and the Instances lens, reading `codex:a1` rather than
+    // `project:codex:a1`, does not.
+    fireEvent.click(screen.getByRole("button", { name: /^View$/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Instances" }));
+    await waitFor(() => {
+      const shell = container.querySelector(
+        '.star-map-card-shell[data-card-key="pwr_local::codex:a1"]',
+      ) as HTMLElement;
+      expect(shell).not.toBeNull();
+      expect(Number.parseFloat(shell.style.left)).not.toBeCloseTo(300, 0);
     });
   });
 });
