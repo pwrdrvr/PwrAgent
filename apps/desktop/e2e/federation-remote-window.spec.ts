@@ -898,9 +898,37 @@ test.describe("federation remote window", () => {
         { timeout: 30_000 },
       );
 
-      // Leave the shell running while viewing a local thread, matching the
-      // operator repro. If the quit row loses its federation target, the
-      // renderer cannot match the mounted remote row and stays here.
+      // Actually leave a command running. An idle prompt is not a quit
+      // blocker: the owner reports this shell's foreground state over
+      // `pty.state` and the viewer filters on it, exactly as it does for a
+      // local shell. Poll the queue instead of sleeping -- the owner detects
+      // the transition off the command's own output.
+      await window.locator(".integrated-terminal__viewport").click();
+      await window.keyboard.type("sleep 120");
+      await window.keyboard.press("Enter");
+      await expect
+        .poll(
+          async () =>
+            await window.evaluate(async () => {
+              const api = (window as typeof window & {
+                pwragent?: {
+                  readQuitBlockerQueue?: () => Promise<{
+                    items: Array<{ kind: string }>;
+                  }>;
+                };
+              }).pwragent;
+              if (!api?.readQuitBlockerQueue) return "missing-api";
+              const snapshot = await api.readQuitBlockerQueue();
+              return snapshot.items.filter((item) => item.kind === "terminal")
+                .length;
+            }),
+          { timeout: 30_000 },
+        )
+        .toBe(1);
+
+      // Now view a local thread, matching the operator repro. If the quit row
+      // loses its federation target, the renderer cannot match the mounted
+      // remote row and stays here.
       await window
         .getByRole("button", { name: "Local control thread" })
         .click();
