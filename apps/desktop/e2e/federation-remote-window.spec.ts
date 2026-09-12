@@ -898,9 +898,34 @@ test.describe("federation remote window", () => {
         { timeout: 30_000 },
       );
 
-      // Leave the shell running while viewing a local thread, matching the
-      // operator repro. If the quit row loses its federation target, the
-      // renderer cannot match the mounted remote row and stays here.
+      // An idle shell is not a quit blocker. That holds for a remote shell
+      // too: the owner reports this one's foreground state over `pty.state`
+      // and the viewer filters on it exactly as it does for a local shell.
+      // Start a foreground command so the dialog below has a row to route.
+      await window.locator(".integrated-terminal__viewport").click();
+      await window.keyboard.type(
+        "echo PWRAGENT_REMOTE_QUIT_BLOCKER_READY; sleep 120",
+      );
+      await window.keyboard.press("Enter");
+      await expect(
+        window.locator(".integrated-terminal .xterm-rows"),
+      ).toContainText("PWRAGENT_REMOTE_QUIT_BLOCKER_READY", {
+        timeout: 30_000,
+      });
+      // The marker only proves `echo` finished. The owner derives the state
+      // from the command's own output and streams it back, so wait on the
+      // exact main-process snapshot QuitManager reads — quitting before it
+      // arrives correctly sees no blocker and exits without a prompt.
+      await expect
+        .poll(
+          async () => (await app!.getIntegratedTerminalQuitSnapshot())?.count ?? 0,
+          { timeout: 30_000 },
+        )
+        .toBe(1);
+
+      // Now view a local thread, matching the operator repro. If the quit row
+      // loses its federation target, the renderer cannot match the mounted
+      // remote row and stays here.
       await window
         .getByRole("button", { name: "Local control thread" })
         .click();

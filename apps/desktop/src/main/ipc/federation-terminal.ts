@@ -49,6 +49,10 @@ type RemoteTerminalSession = {
   lastSeq: number;
   /** Output bytes consumed since the last pty.ack. */
   consumedBytes: number;
+  /** Owner-reported "a command is running in here". Only the owner can see
+   *  it, so an owner that never reports leaves this true and the shell keeps
+   *  blocking quit — the conservative answer, unchanged from before. */
+  foregroundCommand: boolean;
 };
 
 /**
@@ -153,6 +157,8 @@ export class FederationTerminalBridge {
           webContents,
           lastSeq: 0,
           consumedBytes: 0,
+          // An owner that predates `pty.state` omits this; stay conservative.
+          foregroundCommand: opened.foregroundCommand ?? true,
         };
         this.sessionsById.set(session.sessionId, session);
         this.ensureStreamSubscription();
@@ -254,11 +260,14 @@ export class FederationTerminalBridge {
   }
 
   /**
-   * Every live remote session, across windows, for the quit blocker. Remote
-   * shells cannot be foreground-filtered the way local ones are (the process
-   * lives on the owner), so all of them count: quitting the viewer ends them,
-   * and silently killing a shell mid-command is the failure this dialog
-   * exists to prevent. A future `pty.status` round-trip could narrow it.
+   * Live remote sessions running a command, across windows, for the quit
+   * blocker. Quitting the viewer ends these shells, and silently killing one
+   * mid-command is the failure this dialog exists to prevent.
+   *
+   * The foreground signal lives on the owner, so the owner computes it and
+   * pushes it over `pty.state`; this is the viewer's cached copy. An owner
+   * that never reports leaves every session flagged, which is the behavior
+   * this had before the signal existed.
    *
    * Each row carries its owning peer: the quit dialog names a thread by
    * looking it up, and a remote thread is not in THIS instance's thread list,
@@ -271,17 +280,23 @@ export class FederationTerminalBridge {
     instanceLabel?: string;
   }> {
     const identities = this.remoteIdentities();
-    return [...this.sessionsById.values()].map((session) => {
-      const instanceLabel = identities.get(
-        session.target.instanceId,
-      )?.instanceLabel;
-      return {
-        sessionId: session.sessionId,
-        threadKey: session.threadKey,
-        target: session.target,
-        ...(instanceLabel ? { instanceLabel } : {}),
-      };
-    });
+    // Same rule the local service applies in `getQuitSnapshot`: a shell
+    // sitting at a prompt is not work in progress. Before the owner reported
+    // this, every idle remote shell blocked the viewer's quit while the
+    // identical local shell did not.
+    return [...this.sessionsById.values()]
+      .filter((session) => session.foregroundCommand)
+      .map((session) => {
+        const instanceLabel = identities.get(
+          session.target.instanceId,
+        )?.instanceLabel;
+        return {
+          sessionId: session.sessionId,
+          threadKey: session.threadKey,
+          target: session.target,
+          ...(instanceLabel ? { instanceLabel } : {}),
+        };
+      });
   }
 
   /**
@@ -419,6 +434,14 @@ export class FederationTerminalBridge {
             });
           });
       }
+      return;
+    }
+    if (event.kind === "state") {
+      // Only an explicit `false` means idle. The params arrive as an
+      // unchecked cast, and every other parse of a malformed message would
+      // drop a running shell out of the quit blocker — the one direction
+      // this must never fail in.
+      session.foregroundCommand = event.params.foregroundCommand !== false;
       return;
     }
     if (event.kind === "exit") {
