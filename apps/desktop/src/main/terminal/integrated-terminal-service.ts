@@ -27,6 +27,7 @@ import { getMainLogger } from "../log";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { resolvePwragentRoot } from "../profile";
+import { terminalHasForegroundCommand } from "./terminal-foreground-command";
 
 const DEFAULT_COLUMNS = 80;
 const DEFAULT_ROWS = 18;
@@ -457,57 +458,23 @@ export class IntegratedTerminalService {
   }
 
   private hasForegroundCommand(session: TerminalSession): boolean {
-    if (this.platform === "linux") {
-      return this.hasLinuxForegroundCommand(session);
-    }
-
-    // node-pty exposes the terminal's foreground process on macOS. Other
-    // platforms return only the originally spawned process name, which cannot
-    // distinguish an idle prompt from a running command. Keep the existing
-    // conservative warning where the signal is unavailable.
-    if (this.platform !== "darwin") {
-      return true;
-    }
-
-    try {
-      const activeProcess = normalizeTerminalProcessName(session.pty.process);
-      const shellProcess = normalizeTerminalProcessName(session.shell);
-      return !activeProcess || !shellProcess || activeProcess !== shellProcess;
-    } catch (error) {
-      this.logger.warn("foreground-process-check-failed", {
-        error: error instanceof Error ? error.message : String(error),
-        sessionId: session.sessionId,
-      });
-      return true;
-    }
-  }
-
-  private hasLinuxForegroundCommand(session: TerminalSession): boolean {
-    try {
-      const stat = this.readLinuxProcessStat(session.pty.pid);
-      const closingParen = stat.lastIndexOf(")");
-      const fields = stat.slice(closingParen + 1).trim().split(/\s+/);
-      // After pid and the parenthesized command name, Linux stat fields begin
-      // at state (field 3); pgrp and tpgid are offsets 2 and 5 from there.
-      const processGroupId = Number(fields[2]);
-      const foregroundProcessGroupId = Number(fields[5]);
-      if (
-        closingParen < 0
-        || !Number.isInteger(processGroupId)
-        || processGroupId <= 0
-        || !Number.isInteger(foregroundProcessGroupId)
-        || foregroundProcessGroupId <= 0
-      ) {
-        throw new Error("Malformed Linux process stat");
-      }
-      return processGroupId !== foregroundProcessGroupId;
-    } catch (error) {
-      this.logger.warn("foreground-process-check-failed", {
-        error: error instanceof Error ? error.message : String(error),
-        sessionId: session.sessionId,
-      });
-      return true;
-    }
+    return terminalHasForegroundCommand(
+      {
+        processName: () => session.pty.process,
+        pid: session.pty.pid,
+        shell: session.shell,
+      },
+      {
+        platform: this.platform,
+        readLinuxProcessStat: this.readLinuxProcessStat,
+        onError: (error) => {
+          this.logger.warn("foreground-process-check-failed", {
+            error: error instanceof Error ? error.message : String(error),
+            sessionId: session.sessionId,
+          });
+        },
+      },
+    );
   }
 
   private toCreateResponse(
@@ -693,10 +660,6 @@ export class IntegratedTerminalService {
       webContents.send(channel, payload);
     }
   }
-}
-
-function normalizeTerminalProcessName(value: string): string {
-  return path.basename(value.trim().replace(/^-+/, ""));
 }
 
 async function loadNodePty(): Promise<Pick<NodePtyModule, "spawn">> {

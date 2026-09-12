@@ -17,6 +17,8 @@ import { FederationRouter } from "../federation/federation-router";
 
 class FakePty implements FederationPtyProcess {
   pid = 4242;
+  /** node-pty's foreground-process getter. Equal to the shell means idle. */
+  process = "/bin/zsh";
   written: string[] = [];
   resizes: { cols: number; rows: number }[] = [];
   killed = false;
@@ -91,6 +93,7 @@ function createHarness(options?: {
     shell: { file: string; args: string[] };
   }>;
   resolveThreadCwd?: () => Promise<string | undefined>;
+  platform?: NodeJS.Platform;
 }) {
   const pty = new FakePty();
   const sent: SentNotification[] = [];
@@ -117,6 +120,7 @@ function createHarness(options?: {
         detail: entry.detail,
       }),
     graceMs: options?.graceMs ?? 10_000,
+    platform: options?.platform ?? "darwin",
   });
   return { audits, pty, sent, service };
 }
@@ -280,6 +284,73 @@ describe("FederationPtyService sessions", () => {
     expect(() =>
       service.input("peer-a", { sessionId, dataBase64: "" }),
     ).toThrow(/not found for this peer/);
+  });
+});
+
+describe("FederationPtyService foreground reporting", () => {
+  it("reports a freshly opened shell as idle in the open response", async () => {
+    const { service } = createHarness();
+    const opened = await service.open("peer-a", OPEN_REQUEST);
+    expect(opened.foregroundCommand).toBe(false);
+  });
+
+  it("pushes pty.state when a command takes and releases the foreground", async () => {
+    vi.useFakeTimers();
+    try {
+      const { pty, sent, service } = createHarness();
+      await service.open("peer-a", OPEN_REQUEST);
+
+      // The newline echo is the output that says "something just happened".
+      pty.process = "/usr/bin/sleep";
+      pty.emitData("\r\n");
+      vi.advanceTimersByTime(250);
+      expect(
+        sent.filter((entry) => entry.method === "pty.state"),
+      ).toEqual([
+        {
+          peerId: "peer-a",
+          method: "pty.state",
+          params: {
+            sessionId: expect.any(String),
+            foregroundCommand: true,
+          },
+        },
+      ]);
+
+      // The prompt coming back is the transition that releases the quit.
+      pty.process = "/bin/zsh";
+      pty.emitData("$ ");
+      vi.advanceTimersByTime(250);
+      expect(
+        sent
+          .filter((entry) => entry.method === "pty.state")
+          .map((entry) => (entry.params as { foregroundCommand: boolean })
+            .foregroundCommand),
+      ).toEqual([true, false]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("sends nothing while the state is unchanged", async () => {
+    vi.useFakeTimers();
+    try {
+      const { pty, sent, service } = createHarness();
+      await service.open("peer-a", OPEN_REQUEST);
+      for (let index = 0; index < 5; index += 1) {
+        pty.emitData(`line ${index}\r\n`);
+        vi.advanceTimersByTime(250);
+      }
+      expect(sent.filter((entry) => entry.method === "pty.state")).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the conservative answer where the platform has no signal", async () => {
+    const { service } = createHarness({ platform: "win32" });
+    const opened = await service.open("peer-a", OPEN_REQUEST);
+    expect(opened.foregroundCommand).toBe(true);
   });
 });
 

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import type {
   AppServerBackendKind,
   FederationCapability,
@@ -8,6 +9,7 @@ import type {
 import { isFederationInstanceId } from "@pwragent/shared";
 import type { FederationRouter } from "./federation-router";
 import type { FederationRpcEndpoint } from "./federation-rpc";
+import { terminalHasForegroundCommand } from "../terminal/terminal-foreground-command";
 
 /**
  * Remote PTY protocol for federated threads.
@@ -36,6 +38,10 @@ export type FederationPtyMethod =
   (typeof FEDERATION_PTY_METHODS)[keyof typeof FEDERATION_PTY_METHODS];
 
 export const FEDERATION_PTY_OUTPUT_METHOD = "pty.output";
+/** Owner → viewer: "this shell is running a command" / "it is at a prompt".
+ *  An owner that never sends it (an older build) leaves the viewer on the
+ *  conservative answer, so nothing regresses to a silently skipped warning. */
+export const FEDERATION_PTY_STATE_METHOD = "pty.state";
 export const FEDERATION_PTY_EXIT_METHOD = "pty.exit";
 export const FEDERATION_PTY_ERROR_METHOD = "pty.error";
 
@@ -87,6 +93,8 @@ export type FederationPtyOpenResponse = {
   sessionId: string;
   cwd: string;
   shell: string;
+  /** Absent from an owner that predates `pty.state`. */
+  foregroundCommand?: boolean;
 };
 
 export type FederationPtyInputRequest = {
@@ -117,6 +125,13 @@ export type FederationPtyOutputParams = {
   dataBase64: string;
 };
 
+export type FederationPtyStateParams = {
+  sessionId: string;
+  /** The owner's `terminalHasForegroundCommand` answer. Only the owner can
+   *  compute it: both signals it reads live on the machine running the shell. */
+  foregroundCommand: boolean;
+};
+
 export type FederationPtyExitParams = {
   sessionId: string;
   exitCode: number | null;
@@ -131,6 +146,7 @@ export type FederationPtyErrorParams = {
 /** Owner → viewer stream event, dispatched by the runtime on the viewer. */
 export type FederationPtyStreamEvent =
   | { kind: "output"; peerId: FederationInstanceId; params: FederationPtyOutputParams }
+  | { kind: "state"; peerId: FederationInstanceId; params: FederationPtyStateParams }
   | { kind: "exit"; peerId: FederationInstanceId; params: FederationPtyExitParams }
   | { kind: "error"; peerId: FederationInstanceId; params: FederationPtyErrorParams };
 
@@ -138,6 +154,8 @@ export type FederationPtyStreamEvent =
  *  and the E2E harness can substitute fakes. */
 export type FederationPtyProcess = {
   pid?: number;
+  /** node-pty's live foreground-process getter, where the platform has one. */
+  readonly process?: string;
   write(data: string): void;
   resize(cols: number, rows: number): void;
   kill(): void;
@@ -191,6 +209,10 @@ type FederationPtyServiceOptions = {
   graceMs?: number;
   pausedAckTimeoutMs?: number;
   now?: () => number;
+  /** Foreground-command detection seams, mirroring the local service so the
+   *  two answer identically for the same shell. */
+  platform?: NodeJS.Platform;
+  readLinuxProcessStat?: (pid: number) => string;
 };
 
 type FederationPtySession = {
@@ -207,9 +229,28 @@ type FederationPtySession = {
   disposables: { dispose(): void }[];
   reapTimer?: ReturnType<typeof setTimeout>;
   reapReason?: "close" | "disconnect";
+  /** Last state reported to the viewer, and when it was computed. */
+  foregroundCommand: boolean;
+  foregroundCheckedAt: number;
+  /** Fires once output settles, catching the prompt returning. */
+  foregroundSettleTimer?: ReturnType<typeof setTimeout>;
   /** Armed while paused at the high-water mark; an ack re-arms or clears it. */
   ackWatchdog?: ReturnType<typeof setTimeout>;
 };
+
+/** Output is the only evidence a foreground command started or ended — both
+ *  transitions print (the newline echo, then the next prompt). Checking on
+ *  that schedule costs nothing while a shell sits idle, which is the whole
+ *  point: a polling timer per remote session would bill every idle terminal
+ *  on every peer forever. */
+const FOREGROUND_SETTLE_MS = 250;
+/** Ceiling on how stale the answer can get under continuously streaming
+ *  output, where the settle timer never fires. */
+const FOREGROUND_MAX_INTERVAL_MS = 1_000;
+
+function readLinuxProcessStatFile(pid: number): string {
+  return readFileSync(`/proc/${pid}/stat`, "utf8");
+}
 
 const MIN_DIMENSION = 2;
 const MAX_PTY_COLUMNS = 500;
@@ -304,7 +345,11 @@ export class FederationPtyService {
       unackedBytes: 0,
       paused: false,
       disposables: [],
+      foregroundCommand: false,
+      foregroundCheckedAt: 0,
     };
+    session.foregroundCommand = this.detectForegroundCommand(session);
+    session.foregroundCheckedAt = this.now();
     this.sessionsById.set(session.sessionId, session);
     session.disposables.push(
       spawned.pty.onData((data) => this.handleOutput(session, data)),
@@ -328,6 +373,7 @@ export class FederationPtyService {
       sessionId: session.sessionId,
       cwd: session.cwd,
       shell: session.shell,
+      foregroundCommand: session.foregroundCommand,
     };
   }
 
@@ -476,6 +522,63 @@ export class FederationPtyService {
       session.pty.pause();
       this.armAckWatchdog(session);
     }
+    this.scheduleForegroundCheck(session);
+  }
+
+  /** Check now if the last answer is stale, and again once output settles.
+   *  The immediate arm catches a command that starts and keeps printing; the
+   *  settle arm catches the prompt coming back, which is the transition that
+   *  decides whether this shell blocks the viewer's quit. */
+  private scheduleForegroundCheck(session: FederationPtySession): void {
+    if (this.now() - session.foregroundCheckedAt >= FOREGROUND_MAX_INTERVAL_MS) {
+      this.publishForegroundCommand(session);
+    }
+    if (session.foregroundSettleTimer) {
+      clearTimeout(session.foregroundSettleTimer);
+    }
+    const timer = setTimeout(() => {
+      session.foregroundSettleTimer = undefined;
+      this.publishForegroundCommand(session);
+    }, FOREGROUND_SETTLE_MS);
+    if (timer.unref) timer.unref();
+    session.foregroundSettleTimer = timer;
+  }
+
+  private publishForegroundCommand(session: FederationPtySession): void {
+    if (this.sessionsById.get(session.sessionId) !== session) return;
+    const foregroundCommand = this.detectForegroundCommand(session);
+    session.foregroundCheckedAt = this.now();
+    if (foregroundCommand === session.foregroundCommand) return;
+    session.foregroundCommand = foregroundCommand;
+    this.options.sendNotification(session.peerId, FEDERATION_PTY_STATE_METHOD, {
+      sessionId: session.sessionId,
+      foregroundCommand,
+    } satisfies FederationPtyStateParams);
+  }
+
+  private now(): number {
+    return (this.options.now ?? Date.now)();
+  }
+
+  private detectForegroundCommand(session: FederationPtySession): boolean {
+    return terminalHasForegroundCommand(
+      {
+        processName: () => session.pty.process ?? "",
+        pid: session.pty.pid,
+        shell: session.shell,
+      },
+      {
+        platform: this.options.platform ?? process.platform,
+        readLinuxProcessStat:
+          this.options.readLinuxProcessStat ?? readLinuxProcessStatFile,
+        onError: (error) => {
+          this.options.log?.warn("remote pty foreground check failed", {
+            error: error instanceof Error ? error.message : String(error),
+            sessionId: session.sessionId,
+          });
+        },
+      },
+    );
   }
 
   private armAckWatchdog(session: FederationPtySession): void {
@@ -546,6 +649,10 @@ export class FederationPtyService {
       session.reapTimer = undefined;
     }
     this.clearAckWatchdog(session);
+    if (session.foregroundSettleTimer) {
+      clearTimeout(session.foregroundSettleTimer);
+      session.foregroundSettleTimer = undefined;
+    }
     for (const disposable of session.disposables.splice(0)) {
       try {
         disposable.dispose();
@@ -702,6 +809,7 @@ export class FederationRemotePtyClient implements FederationRemotePtyOperations 
 export function isFederationPtyStreamMethod(method: string): boolean {
   return (
     method === FEDERATION_PTY_OUTPUT_METHOD ||
+    method === FEDERATION_PTY_STATE_METHOD ||
     method === FEDERATION_PTY_EXIT_METHOD ||
     method === FEDERATION_PTY_ERROR_METHOD
   );

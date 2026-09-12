@@ -294,6 +294,7 @@ import {
 import {
   FEDERATION_PTY_EXIT_METHOD,
   FEDERATION_PTY_OUTPUT_METHOD,
+  FEDERATION_PTY_STATE_METHOD,
   FEDERATION_PTY_METHOD_CAPABILITIES,
   FederationPtyService,
   FederationRemotePtyClient,
@@ -3506,9 +3507,11 @@ export class DesktopFederationRuntime {
     const kind =
       envelope.method === FEDERATION_PTY_OUTPUT_METHOD
         ? "output"
-        : envelope.method === FEDERATION_PTY_EXIT_METHOD
-          ? "exit"
-          : "error";
+        : envelope.method === FEDERATION_PTY_STATE_METHOD
+          ? "state"
+          : envelope.method === FEDERATION_PTY_EXIT_METHOD
+            ? "exit"
+            : "error";
     const event = {
       kind,
       peerId: originInstanceId,

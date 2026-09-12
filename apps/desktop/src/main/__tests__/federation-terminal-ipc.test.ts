@@ -45,11 +45,20 @@ const mocks = vi.hoisted(() => {
     localSessionsChanged: undefined as
       | ((sessions: unknown[]) => void)
       | undefined,
-    remotePtyOpen: vi.fn(async () => ({
-      sessionId: "remote-session",
-      cwd: "/owner/worktree",
-      shell: "/bin/zsh",
-    })),
+    // `foregroundCommand` is declared but not returned by default: that is
+    // the owner-predates-`pty.state` case, which must keep blocking quit.
+    remotePtyOpen: vi.fn(
+      async (): Promise<{
+        sessionId: string;
+        cwd: string;
+        shell: string;
+        foregroundCommand?: boolean;
+      }> => ({
+        sessionId: "remote-session",
+        cwd: "/owner/worktree",
+        shell: "/bin/zsh",
+      }),
+    ),
     remotePtyInput: vi.fn(async () => undefined),
     remotePtyAck: vi.fn(async () => undefined),
     remotePtyClose: vi.fn(async () => undefined),
@@ -428,7 +437,7 @@ describe("integrated terminal IPC federation branch", () => {
     ).toEqual(["local-session", "remote-session"]);
   });
 
-  it("counts remote sessions as quit blockers so they are not killed silently", async () => {
+  it("counts an unreported remote session as a quit blocker so it is not killed silently", async () => {
     const sender = fakeWebContents(6);
     mocks.localQuitSnapshot = {
       count: 1,
@@ -455,6 +464,62 @@ describe("integrated terminal IPC federation branch", () => {
       },
     ]);
     expect(snapshot.sessionIds).toContain("remote-session");
+  });
+
+  it("leaves an idle remote shell out of the quit blockers", async () => {
+    const sender = fakeWebContents(6);
+    mocks.remotePtyOpen.mockResolvedValueOnce({
+      sessionId: "remote-session",
+      cwd: "/owner/worktree",
+      shell: "/bin/zsh",
+      foregroundCommand: false,
+    });
+    await invoke(INTEGRATED_TERMINAL_CREATE_CHANNEL, sender, {
+      threadKey: "codex:remote-pinned",
+      cols: 80,
+      rows: 24,
+      federationTarget: { scope: "remote", instanceId: "peer-a" },
+    });
+
+    // A shell sitting at a prompt on the owner is not work in progress, the
+    // same way the identical local shell is not.
+    expect(getIntegratedTerminalQuitSnapshot()).toEqual({
+      count: 0,
+      sessionIds: [],
+      threads: [],
+    });
+  });
+
+  it("re-counts a remote shell once the owner reports a command running", async () => {
+    const sender = fakeWebContents(6);
+    mocks.remotePtyOpen.mockResolvedValueOnce({
+      sessionId: "remote-session",
+      cwd: "/owner/worktree",
+      shell: "/bin/zsh",
+      foregroundCommand: false,
+    });
+    await invoke(INTEGRATED_TERMINAL_CREATE_CHANNEL, sender, {
+      threadKey: "codex:remote-pinned",
+      cols: 80,
+      rows: 24,
+      federationTarget: { scope: "remote", instanceId: "peer-a" },
+    });
+
+    mocks.remotePtyEventListener?.({
+      kind: "state",
+      peerId: "peer-a",
+      params: { sessionId: "remote-session", foregroundCommand: true },
+    });
+
+    const snapshot = getIntegratedTerminalQuitSnapshot();
+    expect(snapshot.count).toBe(1);
+    expect(snapshot.threads).toEqual([
+      {
+        threadKey: "codex:remote-pinned",
+        target: { scope: "remote", instanceId: "peer-a" },
+        instanceLabel: "Peer Mac",
+      },
+    ]);
   });
 
   it("reveals a remote terminal in the window that owns it", async () => {
