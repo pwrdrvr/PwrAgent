@@ -18,7 +18,29 @@ import {
 
 const log = getMainLogger("pwragent:star-map-intake");
 
+/**
+ * Budget for one protocol round-trip to the app server — a config read, a
+ * thread start, an MCP attestation, a turn start, and the interrupt and
+ * unsubscribe that clean up after a failure. Deliberately NOT the model's
+ * thinking budget: those cleanup calls run on the timeout path, so a number
+ * chosen to give a hard question more thinking time would also multiply how
+ * long a wedged server takes to report that it is wedged.
+ */
 const INTAKE_TIMEOUT_MS = 20_000;
+/**
+ * How long the resolver may take to answer.
+ *
+ * This was 20s, inherited from `DEFAULT_CODEX_THREAD_TITLE_TIMEOUT_MS` by
+ * copying the constant rather than by measuring this call. The title helper
+ * summarizes one message into one line. This one is handed every registered
+ * directory plus up to `INTAKE_PREFERENCES_MAX_CHARS` of AGENTS.md and asked
+ * to rank up to `MAX_DISAMBIGUATION_CANDIDATES` projects with a written
+ * reason for each — a bigger prompt, a bigger answer, and an actual
+ * judgment. On expiry the whole resolution is discarded and the operator is
+ * handed a list ordered by recency, so the cost of being too short is that
+ * they waited and got nothing. Err long.
+ */
+const INTAKE_TURN_TIMEOUT_MS = 90_000;
 const INTAKE_PREFERENCES_MAX_CHARS = 8_000;
 const MAX_DISAMBIGUATION_CANDIDATES = 8;
 /**
@@ -155,9 +177,11 @@ async function resolveViaConfiguredBackend(params: {
   const byKey = new Map(
     params.directories.map((directory) => [directory.key, directory]),
   );
+  const startedAt = Date.now();
   try {
     const result = await getDesktopBackendRegistry().generateStructuredObject({
       timeoutMs: INTAKE_TIMEOUT_MS,
+      turnTimeoutMs: INTAKE_TURN_TIMEOUT_MS,
       schema: INTAKE_SCHEMA,
       schemaName: "star_map_intake_resolution",
       system: [
@@ -222,9 +246,21 @@ async function resolveViaConfiguredBackend(params: {
     // ask the operator about a project it was sure of. Array#sort is stable,
     // so equal confidences keep the resolver's order.
     ranked.sort((left, right) => right.confidence - left.confidence);
-    return ranked.slice(0, MAX_DISAMBIGUATION_CANDIDATES);
+    const candidates = ranked.slice(0, MAX_DISAMBIGUATION_CANDIDATES);
+    // The only record of what this call actually costs. `INTAKE_TURN_TIMEOUT_MS`
+    // was last set by reasoning about prompt size, because a successful
+    // resolution logged nothing and there was no number to set it from.
+    log.info("star map intake resolved", {
+      candidateCount: candidates.length,
+      directoryCount: params.directories.length,
+      elapsedMs: Date.now() - startedAt,
+      leadingConfidence: candidates[0]?.confidence,
+      preferencesChars: params.preferences?.length ?? 0,
+    });
+    return candidates;
   } catch (error) {
     log.warn("star map intake structured resolution unavailable", {
+      elapsedMs: Date.now() - startedAt,
       error: error instanceof Error ? error.message : String(error),
     });
     return undefined;

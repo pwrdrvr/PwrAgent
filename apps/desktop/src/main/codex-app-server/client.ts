@@ -9071,6 +9071,7 @@ export class CodexAppServerClient {
     system?: string;
     isMatch: StructuredRecordPredicate;
     timeoutMs?: number;
+    turnTimeoutMs?: number;
   }): Promise<ThreadTitleAdapterResult> {
     return await this.runHelperStructuredTurn(params);
   }
@@ -9153,6 +9154,18 @@ export class CodexAppServerClient {
     system?: string;
     isMatch: StructuredRecordPredicate;
     timeoutMs?: number;
+    /**
+     * How long the model itself may take to answer, separately from the
+     * protocol round-trips around it. `timeoutMs` governs seven different
+     * requests here — an MCP config read, thread start, MCP attestation,
+     * turn start, and, in `finally`, a turn interrupt and an unsubscribe —
+     * so raising it to buy a harder question more thinking time also grants
+     * every wedged round-trip the same extra hang, including the cleanup
+     * that runs on the timeout path. A caller with a big prompt needs the
+     * one budget raised and the other left alone. Defaults to `timeoutMs`,
+     * so a caller that does not care is unaffected.
+     */
+    turnTimeoutMs?: number;
   }): Promise<ThreadTitleAdapterResult> {
     await this.ensureInitialized();
 
@@ -9160,6 +9173,7 @@ export class CodexAppServerClient {
     let helperTurnId: string | undefined;
     let helperTurnCompleted = false;
     const timeoutMs = params.timeoutMs ?? DEFAULT_CODEX_THREAD_TITLE_TIMEOUT_MS;
+    const turnTimeoutMs = params.turnTimeoutMs ?? timeoutMs;
     const helperWorkspaceDir = await ensureCodexThreadTitleWorkspace();
     const helperModel = params.model?.trim() || DEFAULT_CODEX_THREAD_TITLE_MODEL;
     const helperReasoningEffort =
@@ -9297,7 +9311,7 @@ export class CodexAppServerClient {
       const helperResult = await this.waitForHelperTurnTitle({
         threadId: helperThreadId,
         turnId: helperTurnId,
-        timeoutMs,
+        timeoutMs: turnTimeoutMs,
       });
       helperTurnCompleted = true;
       return {

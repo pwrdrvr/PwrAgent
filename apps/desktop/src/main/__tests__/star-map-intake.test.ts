@@ -360,6 +360,25 @@ describe("dispatchStarMapIntake", () => {
     }
   });
 
+  it("gives the resolver a longer answering budget than the protocol round-trips", async () => {
+    generateStructuredObject.mockResolvedValue(
+      ranked([{ directoryKey: "dir-agent", confidence: 0.9 }]),
+    );
+
+    await dispatchStarMapIntake({
+      requestId: "req-budget",
+      request: "Fix the thread list",
+    });
+
+    const call = generateStructuredObject.mock.calls[0]?.[0] as {
+      timeoutMs: number;
+      turnTimeoutMs: number;
+    };
+    // One number for both would make a wedged server's cleanup — which runs
+    // on the timeout path — as slow as the thinking budget is generous.
+    expect(call.turnTimeoutMs).toBeGreaterThan(call.timeoutMs);
+  });
+
   it("gives the resolver each directory's current branch", async () => {
     generateStructuredObject.mockResolvedValue(
       ranked([{ directoryKey: "dir-agent", confidence: 0.9 }]),

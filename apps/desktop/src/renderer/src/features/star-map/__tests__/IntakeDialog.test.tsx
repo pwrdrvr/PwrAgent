@@ -302,6 +302,86 @@ describe("IntakeDialog", () => {
     });
   });
 
+  it("lets the operator abandon a slow resolve", async () => {
+    // The resolver may think for up to INTAKE_TURN_TIMEOUT_MS, and nothing
+    // has been created yet, so the dialog must not trap them there.
+    const { dispatchStarMapIntake, onClose } = setup(undefined);
+    dispatchStarMapIntake.mockImplementation(
+      async () => new Promise(() => {}) as never,
+    );
+
+    submitText("Something slow");
+    await waitFor(() => {
+      expect(screen.getByRole("status").textContent).toContain(
+        "Finding the right project",
+      );
+    });
+    const closeButton = screen.getByRole("button", { name: "Close" });
+    expect(closeButton.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(closeButton);
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it("keeps the dialog up while the thread is being created", async () => {
+    const { dispatchStarMapIntake, onClose, emitAgentEvent } = setup(undefined);
+    dispatchStarMapIntake.mockImplementation(
+      async (request: { requestId: string }) => {
+        emitAgentEvent({
+          notification: {
+            method: "starMap/intake/status",
+            params: { requestId: request.requestId, phase: "creating" },
+          },
+        });
+        return new Promise(() => {}) as never;
+      },
+    );
+
+    submitText("Something being created");
+    await waitFor(() => {
+      expect(screen.getByRole("status").textContent).toContain(
+        "Creating the thread",
+      );
+    });
+    // A thread is on its way; vanishing now would leave the operator unsure
+    // whether it landed.
+    expect(
+      screen.getByRole("button", { name: "Close" }).hasAttribute("disabled"),
+    ).toBe(true);
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("still reveals a thread created after the operator walked away", async () => {
+    let settle: (response: unknown) => void = () => undefined;
+    const { dispatchStarMapIntake, onCreated } = setup(undefined);
+    dispatchStarMapIntake.mockImplementation(
+      async (request: { requestId: string }) =>
+        (await new Promise((resolve) => {
+          settle = () =>
+            resolve({
+              status: "created",
+              requestId: request.requestId,
+              backend: "codex",
+              threadId: "thread-late",
+            });
+        })) as never,
+    );
+
+    submitText("Start it and let me get on with things");
+    await waitFor(() => {
+      expect(screen.getByRole("status").textContent).toContain(
+        "Finding the right project",
+      );
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    settle(undefined);
+    await waitFor(() => {
+      expect(onCreated).toHaveBeenCalledWith(
+        expect.objectContaining({ threadId: "thread-late" }),
+      );
+    });
+  });
+
   it("keeps the submit disabled while empty", () => {
     setup(undefined);
     const submit = screen.getByRole("button", { name: "Start thread" });

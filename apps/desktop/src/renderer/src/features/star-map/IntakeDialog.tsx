@@ -125,8 +125,21 @@ export function IntakeDialog(props: {
   const requestIdRef = useRef<string | undefined>(undefined);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const previewUrlsRef = useRef(new Set<string>());
+  const closedRef = useRef(false);
   const busy = phase === "resolving" || phase === "creating";
   const preparingImages = preparingImageCount > 0;
+  /**
+   * Resolving is abandonable; creating is not. Nothing exists yet while the
+   * resolver is thinking, so trapping the operator there buys nothing — and
+   * it can think for up to `INTAKE_TURN_TIMEOUT_MS`. Once the launchpad is
+   * being materialized a thread is on its way, and a dialog that vanished
+   * mid-flight would leave the operator unsure whether it landed.
+   */
+  const dismissable = phase !== "creating" && !preparingImages;
+  const close = useCallback(() => {
+    closedRef.current = true;
+    props.onClose();
+  }, [props]);
 
   useEffect(() => {
     textareaRef.current?.focus();
@@ -364,15 +377,19 @@ export function IntakeDialog(props: {
       .then((response) => {
         if (response.requestId !== requestIdRef.current) return;
         if (response.status === "created") {
-          setPhase("done");
+          // Reaches the map even if the operator walked away mid-resolve:
+          // the thread exists, so it still deserves its reveal.
           props.onCreated({
             instanceId: props.target.instanceId,
             backend: response.backend,
             threadId: response.threadId,
           });
-          props.onClose();
+          if (closedRef.current) return;
+          setPhase("done");
+          close();
           return;
         }
+        if (closedRef.current) return;
         if (response.status === "needs_disambiguation") {
           setPhase("needs_disambiguation");
           setCandidates({
@@ -385,6 +402,7 @@ export function IntakeDialog(props: {
         setError(response.error);
       })
       .catch((err: unknown) => {
+        if (closedRef.current) return;
         setPhase("failed");
         setError(err instanceof Error ? err.message : String(err));
       });
@@ -412,9 +430,9 @@ export function IntakeDialog(props: {
       aria-modal="true"
       aria-label={`New thread on ${props.target.label}`}
       onKeyDown={(event) => {
-        if (event.key === "Escape" && !busy && !preparingImages) {
+        if (event.key === "Escape" && dismissable) {
           event.stopPropagation();
-          props.onClose();
+          close();
         }
       }}
     >
@@ -424,7 +442,7 @@ export function IntakeDialog(props: {
         aria-label="Close intake"
         tabIndex={-1}
         onClick={() => {
-          if (!busy && !preparingImages) props.onClose();
+          if (dismissable) close();
         }}
       />
       <div className="star-map-intake__panel">
@@ -437,8 +455,8 @@ export function IntakeDialog(props: {
             type="button"
             className="star-map-intake__close"
             aria-label="Close"
-            disabled={busy || preparingImages}
-            onClick={props.onClose}
+            disabled={!dismissable}
+            onClick={close}
           >
             ✕
           </button>

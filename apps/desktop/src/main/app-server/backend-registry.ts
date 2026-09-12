@@ -799,6 +799,8 @@ type BackendClient = {
     system?: string;
     isMatch: (record: Record<string, unknown>) => boolean;
     timeoutMs?: number;
+    /** Model answering budget, separate from the protocol round-trips. */
+    turnTimeoutMs?: number;
   }): ReturnType<ThreadTitleGenerator["generateTitle"]>;
   listSkills(params?: {
     cwd?: string;
@@ -22447,6 +22449,8 @@ export class DesktopBackendRegistry {
     schema: Record<string, unknown>;
     schemaName?: string;
     timeoutMs?: number;
+    /** Model answering budget, separate from the protocol round-trips. */
+    turnTimeoutMs?: number;
   }): Promise<ThreadTitleAdapterResult> {
     const defaults = await this.overlayStore.getLaunchpadDefaults();
     const backend = params.backend === "codex"
@@ -22472,6 +22476,7 @@ export class DesktopBackendRegistry {
             structuredRequiredFieldMatches(params.schema, record, key)
           ),
         timeoutMs: params.timeoutMs,
+        turnTimeoutMs: params.turnTimeoutMs,
       });
     }
 
