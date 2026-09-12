@@ -319,15 +319,22 @@ export function AccessControlSettings(props: { desktopApi: DesktopApi }) {
   );
   const nodeClass = (active: boolean): string => (trace ? (active ? " is-active" : " is-dim") : "");
 
-  const isPinned = (target: NonNullable<HoverTarget>): boolean => {
-    if (!selected) return false;
-    if (selected.kind !== target.kind) return false;
-    return selected.kind === "subject"
-      ? selected.key === (target as { key: string }).key
-      : selected.id === (target as { id: string }).id;
+  // Takes the selection to compare against rather than closing over it, so the
+  // toggle below can ask the question of the state the updater was handed.
+  const matchesSelection = (
+    selection: HoverTarget,
+    target: NonNullable<HoverTarget>,
+  ): boolean => {
+    if (!selection) return false;
+    if (selection.kind !== target.kind) return false;
+    return selection.kind === "subject"
+      ? selection.key === (target as { key: string }).key
+      : selection.id === (target as { id: string }).id;
   };
+  const isPinned = (target: NonNullable<HoverTarget>): boolean =>
+    matchesSelection(selected, target);
   const toggleSelect = (target: NonNullable<HoverTarget>) => {
-    setSelected((current) => (isPinned(target) ? null : target));
+    setSelected((current) => (matchesSelection(current, target) ? null : target));
   };
 
   // ---- SVG connector wires ----

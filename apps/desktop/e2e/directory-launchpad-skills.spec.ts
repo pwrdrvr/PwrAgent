@@ -1014,7 +1014,7 @@ test("directory launchpad does not intercept macOS ctrl-a as select all", async 
   try {
     await openDirectoryLaunchpad(app);
 
-    const { root: richInput, textbox } = getLaunchpadComposer(app);
+    const { textbox } = getLaunchpadComposer(app);
     await textbox.focus();
     await app.window.keyboard.type("alpha beta");
     const shortcutResults = await textbox.evaluate((element) => {

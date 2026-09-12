@@ -335,7 +335,6 @@ import {
   type PendingRequestDecision,
   type PendingRequestApprovalContext,
   normalizeFileChangeApprovalDiff,
-  PWRSNAP_MCP_CONNECTION_ID,
   MCP_CONNECTION_DISPLAY_NAMES,
   isBuiltInMcpConnectionId,
   readCodexEnvironmentActionRuns,

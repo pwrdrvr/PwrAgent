@@ -627,7 +627,6 @@ test("messaging-activity-blocked — Messaging Activity showing rejected inbound
     const stateDbPath = stateDbPathForHomeRoot(app.homeRoot);
     const now = Date.now();
     const minute = 60_000;
-    const hour = 60 * minute;
     const entries: SeedActivityEntry[] = [
       {
         platform: "telegram",

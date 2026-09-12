@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { cssRuleBodies as ruleBodies, cssRuleBody as ruleBody } from "./css-rule-body";
+import { cssRuleBody as ruleBody } from "./css-rule-body";
 
 /**
  * The Automations screen scrolls at `.automations-content`; everything inside

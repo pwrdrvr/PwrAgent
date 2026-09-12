@@ -51,21 +51,16 @@ import type {
   NavigationLaunchpadFileAttachment,
   NavigationLaunchpadImageAttachment,
   NavigationThreadSummary,
-  PrSummary,
   RenderComposerPdfPreviewResponse,
   ThreadWorkspaceHandoffStrategy,
   ThreadExecutionMode,
 } from "@pwragent/shared";
 import {
   buildThreadIdentityKey,
-  buildThreadMarkdownLink,
-  buildThreadUrl,
   buildReviewBranchOptions,
   federatedThreadIdentityKey,
   findPreferredReviewWorkspaceCwd,
-  isRemoteFederationTarget,
   normalizeGitOriginUrl,
-  parseThreadUrl,
   readCodexEnvironmentActionRuns,
 } from "@pwragent/shared";
 import {
@@ -127,13 +122,8 @@ import {
   createDesktopAgentThread,
 } from "../../lib/agent-thread";
 import {
-  parsePullRequestUrl,
   usePullRequestLinks,
 } from "../../lib/pull-request-links";
-import {
-  prChipModifierClasses,
-  resolvePrChipPresentation,
-} from "../pr-status/pr-chip-state";
 import {
   resolveThreadHref,
   resolveThreadIdText,
@@ -151,7 +141,6 @@ import {
   findSkillTrigger,
   hydrateSkillLabelsWithMarkdown,
   listMentionedSkills,
-  buildSkillMentionMarkdown,
 } from "../../lib/skill-mentions";
 import {
   formatReviewCommand,
@@ -192,7 +181,6 @@ import {
   ComposerDropdown,
   useDismissableMenu,
 } from "./ComposerDropdown";
-import type { ComposerDropdownIcon, ComposerDropdownOption } from "./ComposerDropdown";
 import { ReferencePicker, type ReferencePickerFile } from "./ReferencePicker";
 import { REMOTE_NATIVE_PICKER_TOOLTIP } from "./native-picker-boundary";
 import { TranscriptCopyButton } from "../thread-detail/TranscriptCopyButton";

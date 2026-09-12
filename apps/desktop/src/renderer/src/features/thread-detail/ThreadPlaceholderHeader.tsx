@@ -1,6 +1,5 @@
 import type { MessagingChannelKind } from "@pwragent/shared";
 import { getDesktopApi, type DesktopApi } from "../../lib/desktop-api";
-import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import { MessagingStatusBar } from "../messaging-status/MessagingStatusBar";
 import { FederationStatusControl } from "../federation-activity/FederationStatusControl";
 import { PanelToggleButtons } from "../chrome/PanelToggleButtons";
