@@ -21,8 +21,8 @@ import { htmlResponse } from "../mcp-connections/local-mcp-connection-service";
  * made "the PwrSnap page never mentions PwrGit" unassertable.
  */
 const CONNECTIONS = [
-  { id: "pwrgit", name: "PwrGit", other: "PwrSnap", inset: true },
-  { id: "pwrsnap", name: "PwrSnap", other: "PwrGit", inset: false },
+  { id: "pwrgit", name: "PwrGit", other: "PwrSnap" },
+  { id: "pwrsnap", name: "PwrSnap", other: "PwrGit" },
 ] as const;
 
 /** The two states the callback server renders: the live poll, and a refusal. */
@@ -72,7 +72,8 @@ describe("OAuth callback page", () => {
         .map((span) => span.textContent))
         .toEqual(["PwrAgent", connection.name]);
       // Whole page, not just the body: comments ship to the browser too, and
-      // the parallel comment in app.css names both apps in one sentence.
+      // the CSS here is commented at length about how the marks are sized —
+      // prose that names the other app is one edit away at any time.
       expect(page).not.toContain(connection.other);
     }
   });
@@ -89,26 +90,29 @@ describe("OAuth callback page", () => {
     }
   });
 
-  it("scales only the sister app whose mark carries a margin", () => {
+  it("draws both marks the same way, because both assets are full-bleed", () => {
+    // Every PwrSuite asset fills its own canvas, so the page needs no per-mark
+    // correction and neither mark may carry one. A class here that scaled one
+    // of them would be compensating for a padded asset — the fix for that is
+    // to re-source the asset, not to patch this page. The assets themselves
+    // are measured in scripts/pwrsuite-brand-icons.test.mjs.
     for (const connection of CONNECTIONS) {
       const [pwragent, sister] = marks(render(connection, connecting(connection)));
       expect(sister?.getAttribute("src")).toBe(`/assets/${connection.id}.png`);
-      expect(sister?.classList.contains("app-mark--inset-plate")).toBe(connection.inset);
-      // PwrAgent's own mark is full-bleed, so it never wears the modifier.
       expect(pwragent?.getAttribute("src")).toBe("/assets/pwragent.png");
-      expect(pwragent?.classList.contains("app-mark--inset-plate")).toBe(false);
+      expect([pwragent?.className, sister?.className]).toEqual(["app-mark", "app-mark"]);
     }
   });
 
-  it("frames each mark in a tile the scale cannot grow", () => {
-    // The compensation is a transform, and a transform on the framed element
-    // would scale its border and backing plate with the artwork — the sister's
-    // tile would come out a quarter larger than PwrAgent's. The frame has to
-    // be the parent for the artwork alone to move.
+  it("frames each mark in a tile that is its parent, not itself", () => {
+    // `.app-mark` fills its tile with `width: 100%`, which resolves against
+    // the tile's content box — so the tile has to be the parent. Merged onto
+    // one element, that 100% would resolve against the grid area instead, and
+    // the tile's padding, border, and backing plate would apply to the
+    // artwork rather than frame it.
     for (const mark of marks(render(CONNECTIONS[0], connecting(CONNECTIONS[0])))) {
       expect(mark.classList.contains("app-icon")).toBe(false);
       expect(mark.parentElement?.classList.contains("app-icon")).toBe(true);
-      expect(mark.parentElement?.classList.contains("app-mark--inset-plate")).toBe(false);
     }
   });
 

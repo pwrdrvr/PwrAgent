@@ -1,17 +1,18 @@
-// The PwrSuite connection cards in the New Thread view each draw the sister
-// app's own application icon, copied verbatim from its repository — see the
-// README beside each asset. The two were authored on different canvases, so
-// `.mcp-connection__icon--inset-plate` in app.css scales one of them back up
-// to the size the other paints at. Nothing about that ratio is visible from
-// either file alone, so this measures the assets and the rule together: a
-// refreshed asset whose margin differs fails here rather than shipping a
-// mismatched pair of icons.
+// Two surfaces draw these marks side by side: the PwrSuite connection cards in
+// the New Thread view, styled by app.css, and the OAuth callback page the
+// browser lands on, whose CSS is a template literal in the main process.
+// Neither compensates for anything, and that only works because every asset is
+// full-bleed — the plate covers its whole canvas, so a mark sized to its box
+// paints at the same size as every mark beside it.
 //
-// Two surfaces draw these marks side by side, and each states the ratio in its
-// own stylesheet: the card in app.css, and the OAuth callback page the browser
-// lands on, whose CSS is a template literal in the main process. The callback
-// page shipped without the compensation and drew PwrGit at 80% of PwrAgent
-// beside it, so both are measured here against the same assets.
+// That property is invisible from any one file, and the padded rendition is
+// the easy one to reach for: `actool` derives a `.icns` from each sister's
+// Icon Composer package, and its members carry Apple's 824-in-1024 margin. A
+// mark taken from one of those paints at 80% of anything beside it, which is
+// what three draw sites across these two stylesheets used to compensate for.
+// So this measures the assets and the rules together: a refreshed asset that
+// brought a margin back fails here rather than shipping a mismatched set.
+// `scripts/sync-pwrsuite-brand-icon.mjs` is the refresh that cannot.
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -38,9 +39,6 @@ const CALLBACK_ASSETS = {
   ...ASSETS,
   PwrAgent: resolve(here, "../build/icon.png"),
 };
-
-/** The asset that carries Apple's legacy margin, and so wears the modifier. */
-const INSET = "PwrGit";
 
 /**
  * Measured once per file: the assets are committed files that cannot change
@@ -116,25 +114,11 @@ function iconBoxWidth(css) {
   return Number(matchCss(rule[1], /(?<![-\w])width:\s*(\d+)px/, "that box's width")[1]);
 }
 
-/**
- * The compensating `scale()` one stylesheet states, read as the
- * canvas-over-plate ratio it spells out. `className` is the modifier's class,
- * without the leading dot; `where` is the file, for the failure message.
- */
-function insetPlateScale(css, className, where) {
-  const match = matchCss(
-    css,
-    new RegExp(`\\.${className}\\s*\\{[^}]*transform:\\s*scale\\(calc\\((\\d+)\\s*/\\s*(\\d+)\\)\\)`),
-    `.${className} as a canvas-over-plate ratio`,
-    where,
-  );
-  return Number(match[1]) / Number(match[2]);
-}
-
-// PwrAgent's own mark included: the callback page sizes the sister app against
-// it, so the exact `fraction === 1` below is what lets the sizing tests treat
-// it as the reference. A margin appearing there would otherwise move both
-// sides of that comparison together and go unnoticed.
+// PwrAgent's own mark included: the callback page draws it beside the sister
+// app's, so it is held to the same `fraction === 1` below. It is the asset
+// least likely to be checked — it is not a copy of anyone else's artwork, and
+// it is the one already correct — which is exactly why a margin arriving there
+// would move every mark on that page together and go unnoticed.
 describe("PwrSuite brand icon assets", () => {
   it("holds a square plate centred on a square canvas", async () => {
     for (const [name, { plate, canvas }] of Object.entries(await plates(CALLBACK_ASSETS))) {
@@ -147,27 +131,22 @@ describe("PwrSuite brand icon assets", () => {
     }
   });
 
-  it("leaves exactly one asset inset inside its canvas", async () => {
+  it("leaves every asset full-bleed inside its canvas", async () => {
     // Fractions, not pixel counts: a vendor shipping the same artwork off a
-    // larger canvas member changes nothing about how the card paints it.
+    // larger canvas changes nothing about how a surface paints it. The exact
+    // 1 is what lets both surfaces size a mark to its box and stop there.
     for (const [name, { fraction }] of Object.entries(await plates(CALLBACK_ASSETS))) {
-      if (name === INSET) {
-        expect(fraction, `${name} sits on Apple's legacy 824-in-1024 template`)
-          .toBeCloseTo(824 / 1024, 3);
-      } else {
-        expect(fraction, `${name} plate fills its canvas`).toBe(1);
-      }
+      expect(fraction, `${name} plate fills its canvas`).toBe(1);
     }
   });
 });
 
 describe("PwrSuite connection card icon sizing", () => {
-  it("paints both plates at the same size", async () => {
+  it("paints every plate at the size the card reserves", async () => {
     const css = readAppCss();
     const box = iconBoxWidth(css);
-    const scale = insetPlateScale(css, "mcp-connection__icon--inset-plate");
     const painted = Object.entries(await plates()).map(
-      ([name, { fraction }]) => [name, box * fraction * (name === INSET ? scale : 1)],
+      ([name, { fraction }]) => [name, box * fraction],
     );
     const [[firstName, first], ...rest] = painted;
     for (const [name, size] of rest) {
@@ -175,37 +154,28 @@ describe("PwrSuite connection card icon sizing", () => {
       expect(Math.abs(size - first), `${name} plate against ${firstName}`)
         .toBeLessThan(0.5);
     }
-    // Not merely equal to each other: both fill the box the card reserves.
+    // Not merely equal to each other: every one fills the box the card
+    // reserves, which is the property a margin on any asset would break.
     expect(first).toBeCloseTo(box, 5);
   });
 });
 
 /**
- * The callback page is measured by its ratio rather than by its box, because
- * its box cannot fail: every painted size there is `box × k`, so comparing
- * them to `box` reduces to `box × |k − 1| < tolerance` and the tile geometry
- * only scales the tolerance. Asserting `fraction × scale` directly says the
- * one thing that is actually true or false, and says it without parsing a
- * `border:` shorthand out of a single-line rule to get there.
+ * The callback page is checked by its rules rather than by a painted size,
+ * because the size cannot be derived from them without parsing the `padding:`
+ * and `border:` shorthands out of a single-line rule to find the content box
+ * the mark actually fills. The half that can go wrong in the artwork — a
+ * margin inside the canvas — is already asserted above, for these same three
+ * assets. What is left is the page's side of the bargain: fill the tile, and
+ * do not reach for a per-mark correction instead of fixing the asset.
  */
 describe("OAuth callback page icon sizing", () => {
-  it("compensates the inset asset back to the size of the marks beside it", async () => {
-    const source = readFileSync(callbackPagePath, "utf8");
-    const scale = insetPlateScale(source, "app-mark--inset-plate", callbackPageName);
-    for (const [name, { fraction }] of Object.entries(await plates(CALLBACK_ASSETS))) {
-      // Four decimals: a whole pixel out at the 104px tile is 1e-2 here, so
-      // this is far tighter than the display, and tighter than the card's.
-      expect(fraction * (name === INSET ? scale : 1), `${name} plate against its tile`)
-        .toBeCloseTo(1, 4);
-    }
-  });
-
-  it("sizes every mark to its tile, which is what makes the ratio enough", () => {
-    // The ratio above only holds if each mark fills the tile to begin with.
-    // `place-items: center` centres what is already sized and does not do
-    // this; without the explicit 100% the marks fall back to their intrinsic
-    // 256 and 512px, a mismatch worse than the one this file exists to catch,
-    // and every ratio assertion still passes.
+  it("sizes every mark to its tile, which is what makes full-bleed enough", () => {
+    // Full-bleed assets only pay off if each mark fills its tile to begin
+    // with. `place-items: center` centres what is already sized and does not
+    // do this; without the explicit 100% the marks fall back to their
+    // intrinsic 256 and 512px, a mismatch worse than the one this file exists
+    // to catch, and every assertion about the artwork still passes.
     const source = readFileSync(callbackPagePath, "utf8");
     const rule = matchCss(
       source,
@@ -215,6 +185,44 @@ describe("OAuth callback page icon sizing", () => {
     )[1];
     for (const declaration of ["width: 100%", "height: 100%", "object-fit: contain"]) {
       expect(rule, `.app-mark no longer states ${declaration}`).toContain(declaration);
+    }
+  });
+});
+
+/**
+ * The failure mode this whole file exists for, stated directly. Both
+ * compensations were added in good faith by someone looking at one mark that
+ * painted small, and the second one landed months after the first — the fix
+ * that scales the mark up is local, obvious, and reachable without knowing
+ * the asset is the problem. It is also wrong twice over: it multiplies out of
+ * a canvas the artwork never asked for, and it has to be repeated on every
+ * surface that ever draws the pair.
+ */
+describe("PwrSuite brand mark compensation", () => {
+  it("is stated by no surface, because no asset needs one", () => {
+    const surfaces = [
+      ["app.css", readAppCss()],
+      [callbackPageName, readFileSync(callbackPagePath, "utf8")],
+    ];
+    for (const [where, source] of surfaces) {
+      // Any transform on a mark, not just the `scale(calc(256 / 206))` that
+      // was here: a correction written as a ratio of two other numbers, or as
+      // a percentage, is the same mistake wearing different arithmetic.
+      const rules = source.match(/\.(?:mcp-connection__icon|app-mark)[\w-]*\s*\{[^}]*\}/g) ?? [];
+      // Asserted before the loop, because an empty match list satisfies every
+      // assertion inside one. Rename either class and this test would report
+      // green having checked nothing — the same silent pass `matchCss` exists
+      // to prevent, and the loop below cannot notice on its own.
+      expect(rules.length, `${where} states no mark rules at all — did a class get renamed?`)
+        .toBeGreaterThan(0);
+      for (const rule of rules) {
+        expect(
+          rule,
+          `${where} scales a brand mark. An asset that paints small is a padded asset: `
+          + `re-source it with scripts/sync-pwrsuite-brand-icon.mjs rather than correcting `
+          + `for it here, which every other surface drawing these marks would have to repeat.`,
+        ).not.toMatch(/transform:\s*scale/);
+      }
     }
   });
 });

@@ -233,9 +233,6 @@ export function htmlResponse(
   const displayName = connectionId === "pwrgit" ? "PwrGit" : "PwrSnap";
   const safeTitle = escapeHtml(title);
   const liveStatus = options.liveStatus === true;
-  // PwrGit's brand asset is the only one of the three that carries Apple's
-  // legacy margin; see `.app-mark--inset-plate` below.
-  const insetPlate = connectionId === "pwrgit";
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -260,26 +257,13 @@ export function htmlResponse(
     .connection { display: grid; grid-template-columns: 138px minmax(140px, 1fr) 138px; align-items: center; gap: 22px; max-width: 650px; margin: 58px auto 50px; }
     .app { display: grid; justify-items: center; gap: 13px; color: #d9d4cd; font-size: 13px; font-weight: 680; }
     .app-icon { display: grid; place-items: center; width: 104px; height: 104px; padding: 4px; border: 1px solid #2b2926; border-radius: 27px; background: #141312; box-shadow: 0 20px 55px rgba(0, 0, 0, .45); }
+    /* Each mark is its own app's icon, copied verbatim, and every one of them
+       is full-bleed: the plate covers its whole canvas, so the marks fill
+       their tiles at the same size with nothing to compensate for. The
+       explicit 100% below is what does the filling and looks removable —
+       place-items only centres what is already sized, and without it each
+       mark falls back to its intrinsic 256 or 512px. */
     .app-mark { width: 100%; height: 100%; object-fit: contain; }
-    /* Each mark is its own app's icon, copied verbatim, and they were authored
-       on different canvases: most plates fill theirs, while the one flagged
-       here sits on Apple's legacy 824-in-1024 template, so a fifth of that
-       canvas is transparent margin. Drawn into the same tile it paints at 80%
-       of the mark beside it, which reads as a small icon lost inside an empty
-       frame. Scale it back by the canvas over the plate it holds — the same
-       ratio, and the same reason, as \`.mcp-connection__icon--inset-plate\` in
-       the renderer's app.css. The tile is the parent, so only the artwork
-       grows, and the only thing this paints outside the tile is the asset's
-       own transparent margin.
-
-       Two things here are load-bearing and look removable. The explicit 100%
-       on .app-mark is what fills the tile — place-items only centres what is
-       already sized, and without the 100% each mark falls back to its
-       intrinsic 256 or 512px. And the tile must stay unclipped: the scaled
-       mark overhangs it by 6.4px per side by design, so an overflow: hidden
-       added to .app-icon crops the plate straight back to the 80% this rule
-       exists to undo. */
-    .app-mark--inset-plate { transform: scale(calc(256 / 206)); }
     .line { position: relative; height: 38px; }
     .line::before { content: ""; position: absolute; top: 18px; left: 0; right: 0; height: 2px; background: linear-gradient(90deg, #8a3c17, #ff8a1f 45%, #ffc174 55%, #8a3c17); box-shadow: 0 0 14px rgba(255, 138, 31, .7); }
     .signal { position: absolute; top: 12px; left: -4px; width: 14px; height: 14px; border: 3px solid #090909; border-radius: 50%; background: #ff9c43; box-shadow: 0 0 0 3px rgba(255, 138, 31, .18), 0 0 18px #ff8a1f; animation: call 1.8s cubic-bezier(.45, 0, .25, 1) infinite; }
@@ -306,7 +290,7 @@ export function htmlResponse(
     <div class="connection" role="group" aria-label="PwrAgent connection to ${displayName}">
       <div class="app"><span class="app-icon"><img class="app-mark" src="/assets/pwragent.png" alt=""></span><span>PwrAgent</span></div>
       <div class="line" aria-hidden="true"><span class="signal"></span></div>
-      <div class="app"><span class="app-icon"><img class="app-mark${insetPlate ? " app-mark--inset-plate" : ""}" src="/assets/${connectionId}.png" alt=""></span><span>${displayName}</span></div>
+      <div class="app"><span class="app-icon"><img class="app-mark" src="/assets/${connectionId}.png" alt=""></span><span>${displayName}</span></div>
     </div>
     <div class="status"><span class="status-dot"></span><span id="status">${liveStatus ? "Finishing secure connection…" : "Connection stopped"}</span></div>
     <!-- Names the app that opened this window. The heading names PwrAgent
