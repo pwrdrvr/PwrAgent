@@ -8,6 +8,8 @@ import {
   orderParentAdjacent,
   resolveCloudDrop,
   ORBIT_MAX_CARDS_PER_GROUP,
+  PROJECT_MAX_CARDS_PER_GROUP,
+  STAR_MAP_PROJECT_KEEPOUT,
 } from "../star-map-clusters";
 
 import { groupThreadsByProject, projectThreadOwner } from "../star-map-projects";
@@ -384,6 +386,41 @@ describe("computeClusterCloud", () => {
           || boxes[j].right <= boxes[i].left
           || boxes[i].bottom <= boxes[j].top
           || boxes[j].bottom <= boxes[i].top;
+        expect(apart).toBe(true);
+      }
+    }
+  });
+
+  /**
+   * Holding seat 0 empty is not enough for the cloud seated ON a body: a
+   * ring is an ellipse and a body's chrome is a box, so two of ring 1's
+   * eight seats land diagonally across the corner of a project's name
+   * pill. The card the operator can read is the one that tells them which
+   * project they are looking at.
+   */
+  it("keeps the core cloud's cards off the body they sit on", () => {
+    const keepout = STAR_MAP_PROJECT_KEEPOUT;
+    for (const count of [2, 4, 8, 12]) {
+      const cloud = computeClusterCloud({
+        cardWidth: 200,
+        clusters: buildInstanceClusters({
+          maxCardsPerGroup: PROJECT_MAX_CARDS_PER_GROUP,
+          project: { key: "one", label: "AlphaDir" },
+          threads: Array.from({ length: count }, (unused, index) =>
+            thread(`t${index}`, { path: "/repo/alpha" }),
+          ),
+        }),
+        core: "one",
+        heightForThread: height,
+        keepout,
+      });
+      expect(cloud.slots).toHaveLength(count);
+      for (const slot of cloud.slots) {
+        const apart =
+          slot.dx + 100 <= -keepout.halfWidth
+          || slot.dx - 100 >= keepout.halfWidth
+          || slot.dy + height() <= -keepout.above
+          || slot.dy >= keepout.below;
         expect(apart).toBe(true);
       }
     }

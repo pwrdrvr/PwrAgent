@@ -122,6 +122,9 @@ const SEAT_MAX_PROBES = 240;
 const SEAT_ASPECT_X = 1.3;
 /** Directions tried around a cloud that is re-fitting into a new size. */
 const REFIT_BEARINGS = 16;
+/** Outward push tried per step for a seat that lands on its own body. */
+const SEAT_PUSH_STEP = 0.04;
+const SEAT_PUSH_STEPS = 25;
 
 export type StarMapClusterSpec = {
   /** Stable identity: project key, or `${projectKey}::pc:${parentKey}`. */
@@ -522,6 +525,8 @@ function seatSlot(params: {
   clusterKey: string;
   threadKey: string;
   height: number;
+  /** Radial push that keeps this seat's card off the body (see `seatScale`). */
+  radiusScale?: number;
 }): StarMapCardSlot {
   const address = seatAddress(params.seat, params.cardWidth);
   if (address.ring === 0) return { dx: 0, dy: -params.height / 2 };
@@ -536,7 +541,9 @@ function seatSlot(params: {
     + address.position * pitch
     + (address.ring % 2 === 1 ? 0 : pitch / 2)
     + (noise(params.threadKey, 5) * 2 - 1) * pitch * JITTER_ANGLE_SHARE;
-  const reach = 1 + noise(params.threadKey, 7) * JITTER_RADIUS_SHARE;
+  const reach =
+    (1 + noise(params.threadKey, 7) * JITTER_RADIUS_SHARE)
+    * (params.radiusScale ?? 1);
   return {
     dx: Math.cos(angle) * ring.rx * reach,
     dy: Math.sin(angle) * ring.ry * reach - params.height / 2,
@@ -612,51 +619,109 @@ function extentOf(bounds: CloudBounds): { rx: number; ry: number } {
  * `NOMINAL_CARD_HEIGHT`. A card taller than nominal overhangs its own
  * box downward and moves nothing else.
  */
+function seatEnvelope(params: {
+  seat: number;
+  cardWidth: number;
+  clusterKey: string;
+  radiusScale: number;
+}): Box {
+  const halfWidth = params.cardWidth / 2;
+  const halfHeight = NOMINAL_CARD_HEIGHT / 2;
+  const address = seatAddress(params.seat, params.cardWidth);
+  if (address.ring === 0) {
+    return {
+      x: -halfWidth,
+      y: -halfHeight,
+      width: params.cardWidth,
+      height: NOMINAL_CARD_HEIGHT,
+    };
+  }
+  const ring = ringGeometry(address.ring, params.cardWidth);
+  const baseAngle =
+    Math.PI / 2 + (noise(params.clusterKey, 3) * 2 - 1) * 0.7;
+  const pitch = (2 * Math.PI) / address.capacity;
+  const center =
+    baseAngle
+    + address.position * pitch
+    + (address.ring % 2 === 1 ? 0 : pitch / 2);
+  const spread = pitch * JITTER_ANGLE_SHARE;
+  let left = Infinity;
+  let right = -Infinity;
+  let top = Infinity;
+  let bottom = -Infinity;
+  // Five samples across the jitter arc: the extremes plus the middle,
+  // which is where a nearly-axis-aligned seat reaches furthest.
+  for (let step = 0; step <= 4; step += 1) {
+    const angle = center + spread * (step / 2 - 1);
+    for (const reach of [1, 1 + JITTER_RADIUS_SHARE]) {
+      const x = Math.cos(angle) * ring.rx * reach * params.radiusScale;
+      const y = Math.sin(angle) * ring.ry * reach * params.radiusScale;
+      left = Math.min(left, x - halfWidth);
+      right = Math.max(right, x + halfWidth);
+      top = Math.min(top, y - halfHeight);
+      bottom = Math.max(bottom, y + halfHeight);
+    }
+  }
+  return { x: left, y: top, width: right - left, height: bottom - top };
+}
+
+/**
+ * How far out one seat has to be pushed to keep its card off the body.
+ *
+ * Only the cloud seated ON a body needs this, and only a couple of its
+ * seats do. Holding seat 0 empty keeps a card off the body's centre, but
+ * a ring is an ellipse and a body's chrome is a box: two of ring 1's
+ * eight seats land diagonally across the corner of a project's name pill
+ * — measured, not guessed. Pushing those seats outward moves the two
+ * cards that collide instead of inflating the ring under all eight, which
+ * is what growing the radius would do.
+ *
+ * Derived from the seat and the body alone, so it is the same every time
+ * and does not depend on which thread is sitting there.
+ */
+function seatScale(params: {
+  seat: number;
+  cardWidth: number;
+  clusterKey: string;
+  keepout: Box;
+}): number {
+  for (let step = 0; step <= SEAT_PUSH_STEPS; step += 1) {
+    const radiusScale = 1 + step * SEAT_PUSH_STEP;
+    const envelope = seatEnvelope({ ...params, radiusScale });
+    if (!boxesOverlap(envelope, params.keepout, 0)) return radiusScale;
+  }
+  return 1 + SEAT_PUSH_STEPS * SEAT_PUSH_STEP;
+}
+
+/**
+ * One box per seat, and the radial push each one needed.
+ */
 function seatRects(params: {
   seats: readonly number[];
   cardWidth: number;
   clusterKey: string;
-}): Box[] {
-  const halfWidth = params.cardWidth / 2;
-  const halfHeight = NOMINAL_CARD_HEIGHT / 2;
-  const baseAngle =
-    Math.PI / 2 + (noise(params.clusterKey, 3) * 2 - 1) * 0.7;
-  return params.seats.map((seat) => {
-    const address = seatAddress(seat, params.cardWidth);
-    if (address.ring === 0) {
-      return {
-        x: -halfWidth,
-        y: -halfHeight,
-        width: params.cardWidth,
-        height: NOMINAL_CARD_HEIGHT,
-      };
-    }
-    const ring = ringGeometry(address.ring, params.cardWidth);
-    const pitch = (2 * Math.PI) / address.capacity;
-    const center =
-      baseAngle
-      + address.position * pitch
-      + (address.ring % 2 === 1 ? 0 : pitch / 2);
-    const spread = pitch * JITTER_ANGLE_SHARE;
-    let left = Infinity;
-    let right = -Infinity;
-    let top = Infinity;
-    let bottom = -Infinity;
-    // Five samples across the jitter arc: the extremes plus the middle,
-    // which is where a nearly-axis-aligned seat reaches furthest.
-    for (let step = 0; step <= 4; step += 1) {
-      const angle = center + spread * (step / 2 - 1);
-      for (const reach of [1, 1 + JITTER_RADIUS_SHARE]) {
-        const x = Math.cos(angle) * ring.rx * reach;
-        const y = Math.sin(angle) * ring.ry * reach;
-        left = Math.min(left, x - halfWidth);
-        right = Math.max(right, x + halfWidth);
-        top = Math.min(top, y - halfHeight);
-        bottom = Math.max(bottom, y + halfHeight);
-      }
-    }
-    return { x: left, y: top, width: right - left, height: bottom - top };
+  /** The body this cloud sits on, when it sits on one. */
+  keepout?: Box;
+}): { rects: Box[]; scales: Map<number, number> } {
+  const scales = new Map<number, number>();
+  const rects = params.seats.map((seat) => {
+    const radiusScale = params.keepout
+      ? seatScale({
+          cardWidth: params.cardWidth,
+          clusterKey: params.clusterKey,
+          keepout: params.keepout,
+          seat,
+        })
+      : 1;
+    if (radiusScale !== 1) scales.set(seat, radiusScale);
+    return seatEnvelope({
+      cardWidth: params.cardWidth,
+      clusterKey: params.clusterKey,
+      radiusScale,
+      seat,
+    });
   });
+  return { rects, scales };
 }
 
 /** The box that holds every one of these, or nothing when there are none. */
@@ -951,10 +1016,14 @@ export function computeClusterCloud(params: {
       reserveCenter: isCore || header !== undefined,
     });
     nextSeats.set(spec.key, seats);
-    const rects = seatRects({
+    // Only the core cloud is seated on the body, so only its seats can
+    // land on the body's own chrome; every other cloud clears the whole
+    // box by being placed outside it.
+    const { rects, scales } = seatRects({
       seats: [...seats.values()],
       cardWidth: params.cardWidth,
       clusterKey: spec.key,
+      ...(isCore ? { keepout: keepoutBox } : {}),
     });
     const ring = boundsOf(rects) ?? {
       left: -params.cardWidth / 2,
@@ -1005,11 +1074,13 @@ export function computeClusterCloud(params: {
     const slots = new Map<string, StarMapCardSlot>();
     if (header) slots.set(threadKeyOf(header), { dx: 0, dy: headerTop });
     for (const thread of ringed) {
+      const seat = seats.get(threadKeyOf(thread)) ?? 0;
       slots.set(threadKeyOf(thread), seatSlot({
         cardWidth: params.cardWidth,
         clusterKey: spec.key,
         height: params.heightForThread(thread),
-        seat: seats.get(threadKeyOf(thread)) ?? 0,
+        radiusScale: scales.get(seat),
+        seat,
         threadKey: threadKeyOf(thread),
       }));
     }
