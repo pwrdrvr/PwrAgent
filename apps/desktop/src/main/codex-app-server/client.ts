@@ -9283,7 +9283,12 @@ export class CodexAppServerClient {
             protocolCompatibility,
           ),
         ],
-        timeoutMs,
+        // This request can carry the finished answer (see the immediate
+        // record check below), so it is the one round-trip that also has to
+        // honour the model's budget. Bounding it at `timeoutMs` would make
+        // a raised `turnTimeoutMs` a no-op whenever the app server
+        // completes the helper turn inside `turn/start`.
+        timeoutMs: Math.max(timeoutMs, turnTimeoutMs),
       });
       helperTurnId = extractTurnIdFromValue(turnStartResult);
       const immediateObject = findStructuredRecord(turnStartResult, params.isMatch);

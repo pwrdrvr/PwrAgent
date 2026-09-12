@@ -86,14 +86,16 @@ describe("findStarMapIntakeRevealTarget", () => {
     ).toBe(created);
   });
 
-  it("reveals a thread captured while health is momentarily absent", () => {
+  it("keeps a remote reveal remote while health is momentarily absent", () => {
+    // The placeholder tolerance is for a reveal captured UNDER it, not for
+    // every reveal that outlives a health blip.
     const created = thread("thread-new");
     expect(
       findStarMapIntakeRevealTarget({
         localInstanceId: "local",
-        localThreads: [created],
-        remoteThreadsByInstance: new Map(),
-        reveal: { instanceId: LOCAL, threadKey: "codex:thread-new" },
+        localThreads: [thread("thread-new")],
+        remoteThreadsByInstance: new Map([["pwr_peer", [created]]]),
+        reveal: { instanceId: "pwr_peer", threadKey: "codex:thread-new" },
       }),
     ).toBe(created);
   });

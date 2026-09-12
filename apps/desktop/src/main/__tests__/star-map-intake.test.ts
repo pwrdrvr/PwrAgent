@@ -446,6 +446,81 @@ describe("dispatchStarMapIntake", () => {
     });
   });
 
+  it("names the real problem when no projects are registered", async () => {
+    readLocalNavigationDirectoryIndex.mockResolvedValue([]);
+
+    const response = await dispatchStarMapIntake({
+      requestId: "req-empty-registry",
+      request: "Do a thing",
+    });
+
+    // Not a candidate list with no rows: a heading promising options above
+    // nothing is a dead end with no way forward.
+    expect(response.status).toBe("failed");
+    if (response.status === "failed") {
+      expect(response.error).toContain("No projects are registered");
+    }
+    expect(generateStructuredObject).not.toHaveBeenCalled();
+  });
+
+  it("caps how many directories reach the resolver prompt", async () => {
+    readLocalNavigationDirectoryIndex.mockResolvedValue(
+      Array.from({ length: 200 }, (_unused, index) =>
+        directory(`dir-${index}`, `Project${index}`, {
+          latestUpdatedAt: index,
+        }),
+      ),
+    );
+    generateStructuredObject.mockResolvedValue(
+      ranked([{ directoryKey: "dir-199", confidence: 0.9 }]),
+    );
+
+    await dispatchStarMapIntake({
+      requestId: "req-many",
+      request: "Do a thing",
+    });
+
+    const prompt = generateStructuredObject.mock.calls[0]?.[0].prompt as string;
+    const listed = prompt.match(/^- key=/gmu)?.length ?? 0;
+    expect(listed).toBeLessThanOrEqual(80);
+    // Most recently active survive the cut; the oldest do not.
+    expect(prompt).toContain("key=dir-199");
+    expect(prompt).not.toContain("key=dir-0 ");
+    expect(prompt).toContain("less recently active directories omitted");
+  });
+
+  it("asks rather than letting a lone label match overrule the resolver", async () => {
+    generateStructuredObject.mockResolvedValue(
+      ranked([{ directoryKey: "dir-agent", confidence: 0.45 }]),
+    );
+
+    // "PwrSnap" appears literally, but the resolver ranked PwrAgent first.
+    const response = await dispatchStarMapIntake({
+      requestId: "req-disagree",
+      request: "Port the PwrSnap helper",
+    });
+
+    expect(materializeDirectoryLaunchpad).not.toHaveBeenCalled();
+    expect(response.status).toBe("needs_disambiguation");
+  });
+
+  it("still short-circuits when a lone label match is the resolver's pick", async () => {
+    generateStructuredObject.mockResolvedValue(
+      ranked([{ directoryKey: "dir-snap", confidence: 0.45 }]),
+    );
+
+    const response = await dispatchStarMapIntake({
+      requestId: "req-agree",
+      request: "Port the PwrSnap helper",
+    });
+
+    expect(response.status).toBe("created");
+    expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith(
+      expect.objectContaining({ directoryKey: "dir-snap" }),
+      expect.anything(),
+    );
+  });
+
   it("rejects empty requests without touching the registry", async () => {
     const response = await dispatchStarMapIntake({
       requestId: "req-6",

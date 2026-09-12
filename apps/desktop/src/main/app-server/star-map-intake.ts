@@ -42,6 +42,15 @@ const INTAKE_TIMEOUT_MS = 20_000;
  */
 const INTAKE_TURN_TIMEOUT_MS = 90_000;
 const INTAKE_PREFERENCES_MAX_CHARS = 8_000;
+/**
+ * How many directories the resolver is shown. Every registered directory
+ * used to go into the prompt, so latency and token cost grew with the
+ * registry forever and a large enough one crowds the request itself out of
+ * the model's attention — the same unbounded-input problem
+ * `INTAKE_PREFERENCES_MAX_CHARS` already solves for AGENTS.md. Most-recently
+ * active first, so the ones cut are the ones the operator has not touched.
+ */
+const INTAKE_MAX_PROMPT_DIRECTORIES = 80;
 const MAX_DISAMBIGUATION_CANDIDATES = 8;
 /**
  * Create without asking at or above this much confidence in the leading
@@ -177,6 +186,9 @@ async function resolveViaConfiguredBackend(params: {
   const byKey = new Map(
     params.directories.map((directory) => [directory.key, directory]),
   );
+  const promptDirectories = [...params.directories]
+    .sort(byRecency)
+    .slice(0, INTAKE_MAX_PROMPT_DIRECTORIES);
   const startedAt = Date.now();
   try {
     const result = await getDesktopBackendRegistry().generateStructuredObject({
@@ -204,7 +216,13 @@ async function resolveViaConfiguredBackend(params: {
           ? `Operator thread-startup preferences (AGENTS.md):\n${params.preferences}\n`
           : "",
         "Registered project directories:",
-        ...params.directories.map((directory) => `- ${describeDirectory(directory)}`),
+        ...promptDirectories.map((directory) => `- ${describeDirectory(directory)}`),
+        ...(promptDirectories.length < params.directories.length
+          ? [
+              `(${params.directories.length - promptDirectories.length} less`
+              + " recently active directories omitted.)",
+            ]
+          : []),
         "",
         `Task request: ${params.text}`,
       ].join("\n"),
@@ -253,6 +271,7 @@ async function resolveViaConfiguredBackend(params: {
     log.info("star map intake resolved", {
       candidateCount: candidates.length,
       directoryCount: params.directories.length,
+      promptDirectoryCount: promptDirectories.length,
       elapsedMs: Date.now() - startedAt,
       leadingConfidence: candidates[0]?.confidence,
       preferencesChars: params.preferences?.length ?? 0,
@@ -341,6 +360,14 @@ export async function dispatchStarMapIntake(
     const directories = (await readLocalNavigationDirectoryIndex()).filter(
       (directory) => directory.kind !== "unlinked",
     );
+    if (directories.length === 0) {
+      // Every path below ends in a list of projects to choose from, and with
+      // no projects that list is empty — a heading promising options above
+      // nothing, with no way forward. Name the actual problem instead.
+      throw new Error(
+        "No projects are registered on this instance. Add a directory first.",
+      );
+    }
 
     let directoryKey = request.directoryKey;
     if (
@@ -361,7 +388,14 @@ export async function dispatchStarMapIntake(
         directoryKey = leading.directory.key;
       } else {
         const fuzzy = fuzzyMatchDirectories(text, directories);
-        if (fuzzy.length === 1) {
+        // A request that literally names one project is strong evidence, so
+        // it still short-circuits — but not over the resolver's objection.
+        // When the resolver ranked something else first, a raw substring hit
+        // beating a reasoned pick is exactly the call the operator should
+        // make, so fall through and show them both.
+        const resolverAgrees =
+          !leading || leading.directory.key === fuzzy[0]?.key;
+        if (fuzzy.length === 1 && resolverAgrees) {
           directoryKey = fuzzy[0].key;
         } else {
           // Prefer the resolver's ranking; then the label match; then the

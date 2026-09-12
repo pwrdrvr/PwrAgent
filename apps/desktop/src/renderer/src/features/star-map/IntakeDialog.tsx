@@ -61,7 +61,9 @@ const CANDIDATE_HINT: Record<StarMapIntakeCandidateSource, string> = {
  * which is worse than the bare "Which project?" this replaced.
  */
 function candidateHint(source: StarMapIntakeCandidateSource | undefined) {
-  return (source && CANDIDATE_HINT[source]) ?? "Which project?";
+  // `||`, not `??`: an empty-string source is as unusable as a missing one,
+  // and would otherwise render the unlabelled list this exists to prevent.
+  return (source && CANDIDATE_HINT[source]) || "Which project?";
 }
 
 type IntakeImageAttachment = {
@@ -136,10 +138,11 @@ export function IntakeDialog(props: {
    * mid-flight would leave the operator unsure whether it landed.
    */
   const dismissable = phase !== "creating" && !preparingImages;
+  const { onClose } = props;
   const close = useCallback(() => {
     closedRef.current = true;
-    props.onClose();
-  }, [props]);
+    onClose();
+  }, [onClose]);
 
   useEffect(() => {
     textareaRef.current?.focus();

@@ -47,10 +47,12 @@ export function findStarMapIntakeRevealTarget(params: {
 }): NavigationThreadSummary | undefined {
   const reveal = params.reveal;
   if (!reveal) return undefined;
+  // Only a reveal captured UNDER the placeholder needs the tolerance. Also
+  // accepting it whenever `localInstanceId` is the placeholder would send a
+  // genuinely remote reveal to the local feed every time health drops.
   const isLocal =
     reveal.instanceId === params.localInstanceId
-    || reveal.instanceId === STAR_MAP_LOCAL_INSTANCE_PLACEHOLDER
-    || params.localInstanceId === STAR_MAP_LOCAL_INSTANCE_PLACEHOLDER;
+    || reveal.instanceId === STAR_MAP_LOCAL_INSTANCE_PLACEHOLDER;
   const threads = isLocal
     ? params.localThreads
     : params.remoteThreadsByInstance.get(reveal.instanceId) ?? [];
