@@ -37,8 +37,18 @@
  * `rethrowWithLastFailure` puts the last caught error back into the
  * message. A read that succeeds clears it, so a poll that times out against
  * an app that answered every time is never blamed on a stale blip.
+ *
+ * ONE CONSTRAINT on the matcher, because a failed read reports as
+ * `undefined`: the matcher must be one `undefined` cannot satisfy. Every
+ * caller today is `toBe(true)`, `toBe("function")`, or `toMatchObject`, all
+ * of which treat `undefined` as "keep polling". Under `not.toBe(...)`,
+ * `toBeFalsy()`, or `toBeUndefined()` the tolerance would turn an RPC that
+ * never answered into a poll that PASSES on its first tick — a barrier that
+ * resolves without ever having read the app. Use `assertAnswered` after such
+ * a poll, or do not wrap it.
  */
 export function tolerateTransientRpcFailure<T>(read: () => Promise<T>): {
+  assertAnswered: () => void;
   read: () => Promise<T | undefined>;
   rethrowWithLastFailure: (pollError: unknown) => never;
 } {
@@ -46,6 +56,26 @@ export function tolerateTransientRpcFailure<T>(read: () => Promise<T>): {
   // `undefined` still counts as a failure.
   let lastFailure: { error: unknown } | undefined;
   return {
+    /**
+     * Call after a poll RESOLVED, when the matcher is one `undefined` could
+     * satisfy: a retained failure then means the poll passed on an attempt
+     * that never reached the app.
+     */
+    assertAnswered: () => {
+      if (!lastFailure) {
+        return;
+      }
+
+      throw new Error(
+        [
+          "A poll resolved on an attempt whose call failed, so the value the",
+          "matcher accepted was the absence of an answer rather than app",
+          "state. Give this poll a matcher that `undefined` cannot satisfy.",
+          `  ${describePollFailure(lastFailure.error)}`,
+        ].join("\n"),
+        { cause: lastFailure.error },
+      );
+    },
     read: async () => {
       try {
         const value = await read();
@@ -64,15 +94,25 @@ export function tolerateTransientRpcFailure<T>(read: () => Promise<T>): {
       const explanation = [
         "",
         "The last poll attempt produced no value because the call itself",
-        "failed. That is usually a failed Playwright <-> Electron round trip",
-        "rather than app state:",
+        "threw — either a failed Playwright <-> Electron round trip or a throw",
+        "from inside the callback. The error below says which:",
         `  ${describePollFailure(lastFailure.error)}`,
       ].join("\n");
       if (pollError instanceof Error) {
         // Appended in place: Playwright's own assertion error carries the
         // matcher result and a stack its reporter formats, and rewrapping
-        // would trade both for a plain `Error`.
+        // would trade both for a plain `Error`. `filterStackTrace` rebuilds
+        // the serialized stack from the live `message`, so the explanation
+        // reaches the reporter even though `ExpectError` froze its `stack`
+        // at construction.
         pollError.message += `\n${explanation}`;
+        // The message carries the failure's text; `cause` carries its FRAMES,
+        // which is what a non-RPC throw from inside the callback needs. The
+        // reporter prints it as `[cause]:`, so this echoes one line rather
+        // than replacing the appended text — the canary reads `message`.
+        if (pollError.cause === undefined) {
+          pollError.cause = lastFailure.error;
+        }
         throw pollError;
       }
 

@@ -900,8 +900,9 @@ async function applyRendererViewport(params: {
   // each attempt is three round trips, any of which can fail transiently,
   // and an aborted poll here fails the launch rather than the assertion.
   // The one behavior this trades away is instant reporting of the
-  // window-destroyed check below — it now surfaces at the poll deadline,
-  // still by name, through `rethrowWithLastFailure`.
+  // window-destroyed check below. That check is deliberate, not an RPC
+  // failure, so it is retried like one and then surfaces verbatim at the
+  // poll deadline through `rethrowWithLastFailure` — later, still by name.
   const resizedViewport = tolerateTransientRpcFailure(async () => {
     const observed = await window.evaluate(() => ({
       innerHeight: globalThis.innerHeight,
