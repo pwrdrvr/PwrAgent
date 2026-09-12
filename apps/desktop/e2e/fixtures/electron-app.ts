@@ -51,6 +51,7 @@ import {
   type ElectronCloseExecution,
   type ElectronShutdownSummary,
 } from "./electron-shutdown-policy";
+import { tolerateTransientRpcFailure } from "./transient-rpc-poll";
 
 const fixtureDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -754,15 +755,27 @@ export async function waitForRendererReady(params: {
   const wizardWatch = params.suppressOnboarding
     ? watchForOnboardingWizard(params.window, params)
     : undefined;
+  // Wrapped because `expect.poll` does not retry a THROWING callback, and
+  // this callback crosses the Electron RPC boundary: one
+  // `electronApplication.evaluate: Resulting promise was garbage collected`
+  // ended this poll on its first tick and, through the pre-flight canary,
+  // took down an entire E2E shard before any test ran. See
+  // `tolerateTransientRpcFailure` for the run and the Playwright source.
+  const replayDriverInstalled = tolerateTransientRpcFailure(async () =>
+    await params.electronApp.evaluate(() =>
+      Boolean(globalThis.__PWRAGENT_REPLAY_DRIVER__)
+    )
+  );
   try {
     const ready = params.requiresReplayDriver
       ? expect
-        .poll(async () =>
-          await params.electronApp.evaluate(() =>
-            Boolean(globalThis.__PWRAGENT_REPLAY_DRIVER__)
-          )
-        )
+        .poll(replayDriverInstalled.read, {
+          message:
+            "the replay driver never appeared on the main-process global,"
+            + " so no spec could have driven a turn",
+        })
         .toBe(true)
+        .catch(replayDriverInstalled.rethrowWithLastFailure)
       // Wizard specs: just wait for the renderer to mount. We don't
       // care about the replay driver — there's no thread to replay.
       : params.window.waitForLoadState("domcontentloaded");
@@ -883,50 +896,58 @@ async function applyRendererViewport(params: {
 
   let attempt = 0;
   let previousRequest: NativeContentSize | null = null;
+  // Same RPC tolerance as `waitForRendererReady`, and for the same reason:
+  // each attempt is three round trips, any of which can fail transiently,
+  // and an aborted poll here fails the launch rather than the assertion.
+  // The one behavior this trades away is instant reporting of the
+  // window-destroyed check below — it now surfaces at the poll deadline,
+  // still by name, through `rethrowWithLastFailure`.
+  const resizedViewport = tolerateTransientRpcFailure(async () => {
+    const observed = await window.evaluate(() => ({
+      innerHeight: globalThis.innerHeight,
+      innerWidth: globalThis.innerWidth,
+    }));
+    if (
+      observed.innerHeight === targetSize.height
+      && observed.innerWidth === targetSize.width
+    ) {
+      return observed;
+    }
+
+    const request = nextRendererViewportRequest({
+      attempt,
+      observed,
+      previousRequest,
+      target: targetSize,
+    });
+    previousRequest = request;
+    attempt += 1;
+
+    await electronApp.evaluate(
+      ({ BrowserWindow }, resize) => {
+        const window = BrowserWindow.fromId(resize.windowId);
+        if (!window || window.isDestroyed()) {
+          throw new Error(
+            "Expected the replay E2E BrowserWindow to remain live while resizing",
+          );
+        }
+        window.setContentSize(resize.request.width, resize.request.height);
+      },
+      { request, windowId },
+    );
+
+    return await window.evaluate(() => ({
+      innerHeight: globalThis.innerHeight,
+      innerWidth: globalThis.innerWidth,
+    }));
+  });
   await expect
-    .poll(async () => {
-      const observed = await window.evaluate(() => ({
-        innerHeight: globalThis.innerHeight,
-        innerWidth: globalThis.innerWidth,
-      }));
-      if (
-        observed.innerHeight === targetSize.height
-        && observed.innerWidth === targetSize.width
-      ) {
-        return observed;
-      }
-
-      const request = nextRendererViewportRequest({
-        attempt,
-        observed,
-        previousRequest,
-        target: targetSize,
-      });
-      previousRequest = request;
-      attempt += 1;
-
-      await electronApp.evaluate(
-        ({ BrowserWindow }, resize) => {
-          const window = BrowserWindow.fromId(resize.windowId);
-          if (!window || window.isDestroyed()) {
-            throw new Error(
-              "Expected the replay E2E BrowserWindow to remain live while resizing",
-            );
-          }
-          window.setContentSize(resize.request.width, resize.request.height);
-        },
-        { request, windowId },
-      );
-
-      return await window.evaluate(() => ({
-        innerHeight: globalThis.innerHeight,
-        innerWidth: globalThis.innerWidth,
-      }));
-    })
+    .poll(resizedViewport.read)
     .toMatchObject({
       innerHeight: targetSize.height,
       innerWidth: targetSize.width,
-    });
+    })
+    .catch(resizedViewport.rethrowWithLastFailure);
 }
 
 /**

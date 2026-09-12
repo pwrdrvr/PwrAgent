@@ -117,6 +117,27 @@ describe("desktop E2E pre-flight canary", () => {
     expect(message).not.toContain("60000ms");
   });
 
+  // The framing this replaced was binary: a timeout meant a sick guest and
+  // anything else meant a deterministic problem to fix in the branch. A
+  // transient Playwright round-trip failure is neither, and reading it as the
+  // second sent a whole investigation after a branch defect that did not
+  // exist.
+  it("names the transient round trip alongside the deterministic diagnosis", () => {
+    const message = describeCanaryFailure({
+      timeoutMs: 60_000,
+      runnerName: "some-runner",
+      detail:
+        "electronApplication.evaluate: Resulting promise was garbage collected",
+      timedOut: false,
+    });
+
+    expect(message).toContain("garbage collected");
+    expect(message).toContain("other lanes passed on this commit");
+    // The replaced text told the reader the error "is the actual problem",
+    // which is precisely wrong for a failed round trip.
+    expect(message).not.toContain("the actual problem");
+  });
+
   it("keeps the timeout narrative when the canary gave up waiting", () => {
     const message = describeCanaryFailure({
       timeoutMs: 60_000,

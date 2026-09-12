@@ -12,6 +12,7 @@
 // anybody has, so the wait now reports which one it was.
 import { expect, type ConsoleMessage, type Page } from "@playwright/test";
 import type { launchElectronApp } from "./electron-app";
+import { tolerateTransientRpcFailure } from "./transient-rpc-poll";
 
 type LaunchedApp = Awaited<ReturnType<typeof launchElectronApp>>;
 
@@ -204,30 +205,40 @@ async function waitForStarMapWindow(
  * here. This makes the barrier explicit instead of incidental.
  */
 export async function openStarMapWindow(app: LaunchedApp): Promise<Page> {
-  await expect
-    .poll(
-      async () =>
-        await app.window.evaluate(
-          () =>
-            typeof (
-              window as Window & {
-                pwragent?: { openStarMapWindow?: unknown };
-              }
-            ).pwragent?.openStarMapWindow,
-        ),
-      {
-        message:
-          "the main window's preload bridge never exposed openStarMapWindow,"
-          + " so the header control could never have opened the map",
-      },
+  // Both barriers read across the Electron RPC boundary, so both are wrapped:
+  // `expect.poll` does not retry a THROWING callback, and a round trip can
+  // fail for reasons unrelated to the readiness being polled. See
+  // `tolerateTransientRpcFailure`.
+  const bridgeMethod = tolerateTransientRpcFailure(async () =>
+    await app.window.evaluate(
+      () =>
+        typeof (
+          window as Window & {
+            pwragent?: { openStarMapWindow?: unknown };
+          }
+        ).pwragent?.openStarMapWindow,
     )
-    .toBe("function");
+  );
+  await expect
+    .poll(bridgeMethod.read, {
+      message:
+        "the main window's preload bridge never exposed openStarMapWindow,"
+        + " so the header control could never have opened the map",
+    })
+    .toBe("function")
+    .catch(bridgeMethod.rethrowWithLastFailure);
 
   // A DOM-clickable header can precede native ready-to-show. Wait for the
   // window to be shown, but do not require OS focus: the runner can deliver
   // Playwright input without macOS making this the foreground application.
   const nativeWindow = await app.electronApp.browserWindow(app.window);
-  await expect.poll(() => nativeWindow.evaluate((window) => window.isVisible())).toBe(true);
+  const nativeWindowShown = tolerateTransientRpcFailure(async () =>
+    await nativeWindow.evaluate((window) => window.isVisible())
+  );
+  await expect
+    .poll(nativeWindowShown.read)
+    .toBe(true)
+    .catch(nativeWindowShown.rethrowWithLastFailure);
 
   const errorLog = recordRendererErrors(app.window);
   try {
