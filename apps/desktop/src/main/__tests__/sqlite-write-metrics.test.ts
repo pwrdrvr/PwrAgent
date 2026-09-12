@@ -709,6 +709,36 @@ describe("sqlite write metrics", () => {
     }
   });
 
+  it("budgets demand-driven directory repair and unchanged refreshes", async () => {
+    const cwd = path.join(tempDir, ".codex", "worktrees", "one", "repo");
+    const thread: AppServerThreadSummary = {
+      id: "directory-demand", source: "codex", title: "Demand", titleSource: "explicit",
+      projectKey: cwd, linkedDirectories: [],
+    };
+    const client = Object.assign(createStubBackendClient({ threads: [thread] }), {
+      enrichThreadDirectories: async () => [{ ...thread, linkedDirectories: [{
+        id: tempDir, path: tempDir, worktreePath: cwd, label: "repo", kind: "worktree" as const,
+      }] }],
+    });
+    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore: store as never });
+    try {
+      const { writes } = await measureSqliteWrites(() => registry.refreshThreadDirectoryRelationship({
+        backend: "codex", threadId: thread.id,
+      }));
+      expectSqliteWriteBudget({ scenario: "directory-demand-first-repair",
+        note: "one previously unknown directory relationship repaired on demand", writes });
+      const { writes: unchanged } = await measureSqliteWrites(async () => {
+        for (let index = 0; index < 100; index += 1) {
+          await registry.refreshThreadDirectoryRelationship({ backend: "codex", threadId: thread.id });
+        }
+      });
+      expectSqliteWriteBudget({ scenario: "directory-demand-unchanged-refreshes",
+        note: "100 unchanged directory demand refreshes add no SQLite commits", writes: unchanged });
+    } finally {
+      await registry.close();
+    }
+  });
+
   it("budgets first-use Star Map intake launchpad initialization", async () => {
     const registry = new DesktopBackendRegistry({
       codexClient: createStubBackendClient(),

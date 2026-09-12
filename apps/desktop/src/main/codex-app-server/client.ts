@@ -7386,6 +7386,7 @@ export class CodexAppServerClient {
   private pendingCloses = 0;
   private serverGeneration = 0;
   private transportClosePromise: Promise<void> | null = null;
+  private readonly lastDirectoryEnrichment = new Map<string, ThreadDirectoryEnrichment>();
   private readonly threadDirectoryEnricher: (
     projectKey?: string,
     caller?: DirectoryEnrichmentCaller,
@@ -8379,11 +8380,13 @@ export class CodexAppServerClient {
           ...publicThread
         } = thread;
         const projectKey = publicThread.projectKey?.trim() || undefined;
+        const remembered = projectKey ? this.lastDirectoryEnrichment.get(path.resolve(projectKey)) : undefined;
         return {
           ...publicThread,
           projectKey,
           gitBranch: publicThread.gitBranch,
-          linkedDirectories: buildProjectKeyLinkedDirectories(projectKey),
+          linkedDirectories: remembered?.linkedDirectories ?? buildProjectKeyLinkedDirectories(projectKey),
+          observedGitBranch: remembered?.observedGitBranch,
           source: "codex" as const,
         };
       });
@@ -8432,6 +8435,7 @@ export class CodexAppServerClient {
             directories.set(directoryKey, pending);
           }
           enrichment = await pending;
+          if (projectKey) this.lastDirectoryEnrichment.set(path.resolve(projectKey), enrichment);
         } catch (error) {
           codexClientLog.warn("thread directory enrichment failed", {
             threadId: thread.id,

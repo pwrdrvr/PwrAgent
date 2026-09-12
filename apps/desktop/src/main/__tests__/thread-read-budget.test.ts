@@ -319,11 +319,11 @@ describe("directory enrichment budget", () => {
     titleSource: "explicit",
   });
 
-  it("enriches a worktree thread's directories once per backfill-capable listing", async () => {
+  it("does not enrich a worktree merely to list it in navigation", async () => {
     const { client, registry } = build([WORKTREE_THREAD]);
     await registry.listThreads(NAVIGATION_REFRESH);
 
-    expect(client.directoryEnrichmentCallCount).toBeGreaterThan(0);
+    expect(client.directoryEnrichmentCallCount).toBe(0);
     expectThreadReadBudget({
       note: "one navigation refresh over a single worktree-backed thread",
       reads: client.counts,
@@ -331,9 +331,10 @@ describe("directory enrichment budget", () => {
     });
   });
 
-  it("does not re-enrich a worktree thread for label reads across turns", async () => {
+  it("refreshes a known worktree at turn boundaries without label-read amplification", async () => {
     const { client, registry } = build([WORKTREE_THREAD]);
     await registry.listThreads(NAVIGATION_REFRESH);
+    await registry.refreshThreadDirectoryRelationship({ backend: "codex", threadId: WORKTREE_THREAD.id });
     client.resetCounts();
 
     for (let turn = 0; turn < 5; turn += 1) {
@@ -341,8 +342,10 @@ describe("directory enrichment budget", () => {
         method: "turn/started",
         params: { threadId: "thread-worktree", turnId: `turn-${turn}`, turn: { id: `turn-${turn}` } },
       });
+      const readsBeforeLabel = { ...client.counts };
       expect(registry.getThreadInfo({ backend: "codex", threadId: "thread-worktree" })?.title)
         .toBe("Worktree thread");
+      expect(client.counts).toEqual(readsBeforeLabel);
       await publishNotification(registry, {
         method: "turn/completed",
         params: {
@@ -354,7 +357,7 @@ describe("directory enrichment budget", () => {
     }
 
     expectThreadReadBudget({
-      note: "five turns on an already-enriched worktree thread",
+      note: "five turns refresh one known worktree at start and completion; labels add no reads",
       reads: client.counts,
       scenario: "worktree-turns-after-enrichment",
     });

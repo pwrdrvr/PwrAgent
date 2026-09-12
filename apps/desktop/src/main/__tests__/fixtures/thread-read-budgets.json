@@ -40,13 +40,13 @@
     "providerListCalls": 0
   },
   "worktree-navigation-refresh": {
-    "directoryEnrichments": 1,
+    "directoryEnrichments": 0,
     "note": "one navigation refresh over a single worktree-backed thread",
     "providerListCalls": 1
   },
   "worktree-turns-after-enrichment": {
-    "directoryEnrichments": 0,
-    "note": "five turns on an already-enriched worktree thread",
+    "directoryEnrichments": 10,
+    "note": "five turns refresh one known worktree at start and completion; labels add no reads",
     "providerListCalls": 0
   }
 }

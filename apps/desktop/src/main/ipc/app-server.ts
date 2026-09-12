@@ -3398,6 +3398,7 @@ class DesktopAppServerService {
   async refreshThreadGitWorkingState(
     request: RefreshThreadGitWorkingStateRequest,
   ): Promise<RefreshThreadGitWorkingStateResponse> {
+    await getDesktopBackendRegistry().refreshThreadDirectoryRelationship(request);
     const threadKey = buildThreadIdentityKey(request.backend, request.threadId);
     const worktreePath = this.worktreePathByThreadKey.get(threadKey);
     if (!worktreePath) {
