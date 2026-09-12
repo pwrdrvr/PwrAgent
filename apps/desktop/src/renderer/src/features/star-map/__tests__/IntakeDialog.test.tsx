@@ -25,9 +25,18 @@ function setup(
     async (_request: { requestId: string; directoryKey?: string }) =>
       dispatchResult as never,
   );
+  // The owning instance streams progress over this channel, so the tests
+  // that assert on progress copy need to be able to push into it.
+  const agentEventListeners = new Set<(event: never) => void>();
+  const emitAgentEvent = (event: unknown) => {
+    for (const listener of agentEventListeners) listener(event as never);
+  };
   const desktopApi: DesktopApi = {
     dispatchStarMapIntake,
-    onAgentEvent: vi.fn(() => () => undefined),
+    onAgentEvent: vi.fn((listener: (event: never) => void) => {
+      agentEventListeners.add(listener);
+      return () => agentEventListeners.delete(listener);
+    }),
   };
   const onClose = vi.fn();
   const onCreated = vi.fn();
@@ -40,7 +49,7 @@ function setup(
       onCreated={onCreated}
     />,
   );
-  return { dispatchStarMapIntake, onClose, onCreated };
+  return { dispatchStarMapIntake, emitAgentEvent, onClose, onCreated };
 }
 
 function pastePng(bytes = new Uint8Array([137, 80, 78, 71])) {
@@ -163,8 +172,14 @@ describe("IntakeDialog", () => {
           : {
               status: "needs_disambiguation",
               requestId: request.requestId,
+              candidateSource: "resolver",
               candidates: [
-                { directoryKey: "dir-a", label: "PwrSnap", path: "/r/PwrSnap" },
+                {
+                  directoryKey: "dir-a",
+                  label: "PwrSnap",
+                  path: "/r/PwrSnap",
+                  reason: "the screenshot pipeline lives here",
+                },
                 { directoryKey: "dir-b", label: "PwrAgent" },
               ],
             }) as never,
@@ -172,12 +187,98 @@ describe("IntakeDialog", () => {
 
     submitText("Do a thing");
     await waitFor(() => {
-      expect(screen.getByText("Which project?")).toBeTruthy();
+      expect(screen.getByText(/Closest match first/)).toBeTruthy();
     });
+    // The reason is why this list beats the bare registry dump it replaced.
+    expect(
+      screen.getByText("the screenshot pipeline lives here"),
+    ).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: /PwrSnap/ }));
     await waitFor(() => {
       expect(dispatchStarMapIntake).toHaveBeenCalledWith(
         expect.objectContaining({ directoryKey: "dir-a" }),
+      );
+    });
+  });
+
+  it("says so when the list is a recency fallback rather than a ranking", async () => {
+    const { dispatchStarMapIntake } = setup(undefined);
+    dispatchStarMapIntake.mockImplementation(
+      async (request: { requestId: string }) =>
+        ({
+          status: "needs_disambiguation",
+          requestId: request.requestId,
+          candidateSource: "recent",
+          candidates: [{ directoryKey: "dir-a", label: "PwrSnap" }],
+        }) as never,
+    );
+
+    submitText("Do a thing");
+    await waitFor(() => {
+      expect(screen.getByText(/No project matched/)).toBeTruthy();
+    });
+  });
+
+  it("keeps a heading when a peer answers without a candidate source", async () => {
+    // A remote [+] runs on the peer that owns it; one predating
+    // `candidateSource` answers without the field.
+    const { dispatchStarMapIntake } = setup(undefined);
+    dispatchStarMapIntake.mockImplementation(
+      async (request: { requestId: string }) =>
+        ({
+          status: "needs_disambiguation",
+          requestId: request.requestId,
+          candidates: [{ directoryKey: "dir-a", label: "PwrSnap" }],
+        }) as never,
+    );
+
+    submitText("Do a thing");
+    await waitFor(() => {
+      expect(screen.getByText("Which project?")).toBeTruthy();
+    });
+    expect(screen.getByRole("button", { name: /PwrSnap/ })).toBeTruthy();
+  });
+
+  it("says the resolver could not run rather than claiming nothing matched", async () => {
+    const { dispatchStarMapIntake } = setup(undefined);
+    dispatchStarMapIntake.mockImplementation(
+      async (request: { requestId: string }) =>
+        ({
+          status: "needs_disambiguation",
+          requestId: request.requestId,
+          candidateSource: "unresolved",
+          candidates: [{ directoryKey: "dir-a", label: "PwrSnap" }],
+        }) as never,
+    );
+
+    submitText("Do a thing");
+    await waitFor(() => {
+      expect(screen.getByText(/Could not check the projects/)).toBeTruthy();
+    });
+  });
+
+  it("names the resolved project while the thread is being created", async () => {
+    const { dispatchStarMapIntake, emitAgentEvent } = setup(undefined);
+    dispatchStarMapIntake.mockImplementation(
+      async (request: { requestId: string }) => {
+        emitAgentEvent({
+          notification: {
+            method: "starMap/intake/status",
+            params: {
+              requestId: request.requestId,
+              phase: "creating",
+              directoryLabel: "PwrSnap",
+            },
+          },
+        });
+        return new Promise(() => {}) as never;
+      },
+    );
+
+    submitText("Look into the screenshot issue");
+    await waitFor(() => {
+      expect(screen.getByRole("status").textContent).toContain(
+        "Creating the thread in PwrSnap…",
       );
     });
   });
@@ -197,6 +298,88 @@ describe("IntakeDialog", () => {
     await waitFor(() => {
       expect(screen.getByRole("status").textContent).toContain(
         "No backends available",
+      );
+    });
+  });
+
+  it("lets the operator abandon a slow resolve", async () => {
+    // The resolver may think for up to INTAKE_TURN_TIMEOUT_MS, and nothing
+    // has been created yet, so the dialog must not trap them there.
+    const { dispatchStarMapIntake, onClose } = setup(undefined);
+    dispatchStarMapIntake.mockImplementation(
+      async () => new Promise(() => {}) as never,
+    );
+
+    submitText("Something slow");
+    await waitFor(() => {
+      expect(screen.getByRole("status").textContent).toContain(
+        "Finding the right project",
+      );
+    });
+    const closeButton = screen.getByRole("button", { name: "Close" });
+    expect(closeButton.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(closeButton);
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it("keeps the dialog up while the thread is being created", async () => {
+    const { dispatchStarMapIntake, onClose, emitAgentEvent } = setup(undefined);
+    dispatchStarMapIntake.mockImplementation(
+      async (request: { requestId: string }) => {
+        emitAgentEvent({
+          notification: {
+            method: "starMap/intake/status",
+            params: { requestId: request.requestId, phase: "creating" },
+          },
+        });
+        return new Promise(() => {}) as never;
+      },
+    );
+
+    submitText("Something being created");
+    await waitFor(() => {
+      expect(screen.getByRole("status").textContent).toContain(
+        "Creating the thread",
+      );
+    });
+    // A thread is on its way; vanishing now would leave the operator unsure
+    // whether it landed.
+    expect(
+      screen.getByRole("button", { name: "Close" }).hasAttribute("disabled"),
+    ).toBe(true);
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("still reveals a thread created after the operator walked away", async () => {
+    let settle: (response: unknown) => void = () => undefined;
+    const { dispatchStarMapIntake, onCreated } = setup(undefined);
+    dispatchStarMapIntake.mockImplementation(
+      async (request: { requestId: string }) =>
+        // Annotated: a bare `new Promise` here is contextually typed from
+        // the mock's `Promise<never>` return, so `resolve` would take never.
+        (await new Promise<unknown>((resolve) => {
+          settle = () =>
+            resolve({
+              status: "created",
+              requestId: request.requestId,
+              backend: "codex",
+              threadId: "thread-late",
+            });
+        })) as never,
+    );
+
+    submitText("Start it and let me get on with things");
+    await waitFor(() => {
+      expect(screen.getByRole("status").textContent).toContain(
+        "Finding the right project",
+      );
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    settle(undefined);
+    await waitFor(() => {
+      expect(onCreated).toHaveBeenCalledWith(
+        expect.objectContaining({ threadId: "thread-late" }),
       );
     });
   });

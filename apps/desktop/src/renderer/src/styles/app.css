@@ -13484,6 +13484,12 @@ a.button {
   font-weight: 600;
 }
 
+.star-map-intake__candidate-reason {
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
 .star-map-intake__candidate-path {
   color: var(--text-muted);
   font-size: 11px;

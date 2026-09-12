@@ -28,6 +28,7 @@ import { dispatchStarMapIntake } from "../app-server/star-map-intake";
 function directory(
   key: string,
   label: string,
+  options?: { latestUpdatedAt?: number; currentBranch?: string },
 ): NavigationDirectoryRow {
   return {
     key,
@@ -35,15 +36,37 @@ function directory(
     label,
     path: `/repos/${label}`,
     counts: { total: 0, active: 0, unread: 0, review: 0 },
+    latestUpdatedAt: options?.latestUpdatedAt,
+    ...(options?.currentBranch
+      ? { gitStatus: { currentBranch: options.currentBranch } }
+      : {}),
     pinnedRootCount: 0, unpinnedRootCount: 0, launchpadPresent: false,
   } as unknown as NavigationDirectoryRow;
+}
+
+/** The ranked shape the resolver now returns. */
+function ranked(
+  entries: Array<{ directoryKey: string; confidence: number; reason?: string }>,
+) {
+  return {
+    status: "ok",
+    object: {
+      candidates: entries.map((entry) => ({
+        reason: "because",
+        ...entry,
+      })),
+    },
+  };
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
   readLocalNavigationDirectoryIndex.mockResolvedValue([
-      directory("dir-snap", "PwrSnap"),
-      directory("dir-agent", "PwrAgent"),
+      directory("dir-snap", "PwrSnap", { latestUpdatedAt: 10 }),
+      directory("dir-agent", "PwrAgent", {
+        currentBranch: "feat/icons",
+        latestUpdatedAt: 20,
+      }),
   ]);
   materializeDirectoryLaunchpad.mockResolvedValue({
     backend: "codex",
@@ -68,14 +91,9 @@ beforeEach(() => {
 
 describe("dispatchStarMapIntake", () => {
   it("creates a thread in the backend-resolved directory with the request as first turn", async () => {
-    generateStructuredObject.mockResolvedValue({
-      status: "ok",
-      object: {
-        title: "Investigate PwrSnap issue",
-        directoryKey: "dir-snap",
-        confidence: 0.9,
-      },
-    });
+    generateStructuredObject.mockResolvedValue(
+      ranked([{ directoryKey: "dir-snap", confidence: 0.9 }]),
+    );
 
     const response = await dispatchStarMapIntake({
       requestId: "req-1",
@@ -86,7 +104,6 @@ describe("dispatchStarMapIntake", () => {
       status: "created",
       backend: "codex",
       threadId: "thread-9",
-      title: "Investigate PwrSnap issue",
     });
     expect(ensureDirectoryLaunchpad).toHaveBeenCalledWith({
       directoryKey: "dir-snap",
@@ -167,10 +184,7 @@ describe("dispatchStarMapIntake", () => {
   });
 
   it("asks for disambiguation when no directory clearly matches", async () => {
-    generateStructuredObject.mockResolvedValue({
-      status: "ok",
-      object: { title: "Do a thing", directoryKey: null, confidence: 0.1 },
-    });
+    generateStructuredObject.mockResolvedValue(ranked([]));
 
     const response = await dispatchStarMapIntake({
       requestId: "req-3",
@@ -179,12 +193,227 @@ describe("dispatchStarMapIntake", () => {
 
     expect(response.status).toBe("needs_disambiguation");
     if (response.status === "needs_disambiguation") {
+      // Recency order, not registry order: dir-agent is the newer of the two.
+      expect(response.candidateSource).toBe("recent");
       expect(response.candidates.map((entry) => entry.directoryKey)).toEqual([
-        "dir-snap",
         "dir-agent",
+        "dir-snap",
       ]);
     }
     expect(materializeDirectoryLaunchpad).not.toHaveBeenCalled();
+  });
+
+  it("offers the resolver's ranking with its reasons when no pick is confident enough", async () => {
+    generateStructuredObject.mockResolvedValue(
+      ranked([
+        { directoryKey: "dir-agent", confidence: 0.4, reason: "mentions threads" },
+        { directoryKey: "dir-snap", confidence: 0.2, reason: "also takes shots" },
+      ]),
+    );
+
+    const response = await dispatchStarMapIntake({
+      requestId: "req-ranked",
+      request: "Tidy up the thread list",
+    });
+
+    expect(response.status).toBe("needs_disambiguation");
+    if (response.status === "needs_disambiguation") {
+      expect(response.candidateSource).toBe("resolver");
+      expect(response.candidates).toEqual([
+        {
+          directoryKey: "dir-agent",
+          label: "PwrAgent",
+          path: "/repos/PwrAgent",
+          reason: "mentions threads",
+        },
+        {
+          directoryKey: "dir-snap",
+          label: "PwrSnap",
+          path: "/repos/PwrSnap",
+          reason: "also takes shots",
+        },
+      ]);
+    }
+  });
+
+  it("labels a multi-name request as a name match, not a recency fallback", async () => {
+    generateStructuredObject.mockResolvedValue(ranked([]));
+
+    const response = await dispatchStarMapIntake({
+      requestId: "req-both",
+      request: "Port the PwrSnap capture helper into PwrAgent",
+    });
+
+    expect(response.status).toBe("needs_disambiguation");
+    if (response.status === "needs_disambiguation") {
+      expect(response.candidateSource).toBe("label");
+      expect(response.candidates.map((entry) => entry.directoryKey)).toEqual([
+        "dir-agent",
+        "dir-snap",
+      ]);
+    }
+  });
+
+  it("ranks by reported confidence rather than the resolver's array order", async () => {
+    // The prompt asks for most-likely-first and nothing enforces it, so a
+    // strong pick emitted second must still create the thread.
+    generateStructuredObject.mockResolvedValue(
+      ranked([
+        { directoryKey: "dir-snap", confidence: 0.3 },
+        { directoryKey: "dir-agent", confidence: 0.92 },
+      ]),
+    );
+
+    const response = await dispatchStarMapIntake({
+      requestId: "req-unsorted",
+      request: "Fix the thread list",
+    });
+
+    expect(response.status).toBe("created");
+    expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith(
+      expect.objectContaining({ directoryKey: "dir-agent" }),
+      expect.anything(),
+    );
+  });
+
+  it("orders a low-confidence disambiguation list by confidence", async () => {
+    generateStructuredObject.mockResolvedValue(
+      ranked([
+        { directoryKey: "dir-snap", confidence: 0.1 },
+        { directoryKey: "dir-agent", confidence: 0.4 },
+      ]),
+    );
+
+    const response = await dispatchStarMapIntake({
+      requestId: "req-unsorted-low",
+      request: "Do something",
+    });
+
+    expect(response.status).toBe("needs_disambiguation");
+    if (response.status === "needs_disambiguation") {
+      expect(response.candidates.map((entry) => entry.directoryKey)).toEqual([
+        "dir-agent",
+        "dir-snap",
+      ]);
+    }
+  });
+
+  it("separates a resolver that could not run from one that pointed nowhere", async () => {
+    generateStructuredObject.mockResolvedValue({
+      status: "unavailable",
+      reason: "codex_structured_generation_unavailable",
+    });
+
+    const response = await dispatchStarMapIntake({
+      requestId: "req-unresolved",
+      request: "Do a thing somewhere",
+    });
+
+    expect(response.status).toBe("needs_disambiguation");
+    if (response.status === "needs_disambiguation") {
+      // Not "recent": nothing judged that no project matched.
+      expect(response.candidateSource).toBe("unresolved");
+    }
+  });
+
+  it("truncates an overlong reason on a character boundary", async () => {
+    const reason = `${"x".repeat(119)}🛰️ trailing`;
+    generateStructuredObject.mockResolvedValue(
+      ranked([{ directoryKey: "dir-snap", confidence: 0.2, reason }]),
+    );
+
+    const response = await dispatchStarMapIntake({
+      requestId: "req-long-reason",
+      request: "Do a thing somewhere",
+    });
+
+    expect(response.status).toBe("needs_disambiguation");
+    if (response.status === "needs_disambiguation") {
+      const truncated = response.candidates[0]?.reason ?? "";
+      expect([...truncated]).toHaveLength(120);
+      // A code-unit slice would leave the high half of the surrogate pair.
+      expect(truncated).not.toMatch(/[\uD800-\uDBFF]$/u);
+    }
+  });
+
+  it("drops resolver candidates that name a directory outside the registry", async () => {
+    generateStructuredObject.mockResolvedValue(
+      ranked([
+        { directoryKey: "dir-invented", confidence: 0.95 },
+        { directoryKey: "dir-snap", confidence: 0.3 },
+      ]),
+    );
+
+    const response = await dispatchStarMapIntake({
+      requestId: "req-hallucinated",
+      request: "Do a thing somewhere",
+    });
+
+    // The invented leader must not create a thread, and must not survive
+    // into the list the operator picks from.
+    expect(materializeDirectoryLaunchpad).not.toHaveBeenCalled();
+    expect(response.status).toBe("needs_disambiguation");
+    if (response.status === "needs_disambiguation") {
+      expect(response.candidates.map((entry) => entry.directoryKey)).toEqual([
+        "dir-snap",
+      ]);
+    }
+  });
+
+  it("gives the resolver a longer answering budget than the protocol round-trips", async () => {
+    generateStructuredObject.mockResolvedValue(
+      ranked([{ directoryKey: "dir-agent", confidence: 0.9 }]),
+    );
+
+    await dispatchStarMapIntake({
+      requestId: "req-budget",
+      request: "Fix the thread list",
+    });
+
+    const call = generateStructuredObject.mock.calls[0]?.[0] as {
+      timeoutMs: number;
+      turnTimeoutMs: number;
+    };
+    // One number for both would make a wedged server's cleanup — which runs
+    // on the timeout path — as slow as the thinking budget is generous.
+    expect(call.turnTimeoutMs).toBeGreaterThan(call.timeoutMs);
+  });
+
+  it("gives the resolver each directory's current branch", async () => {
+    generateStructuredObject.mockResolvedValue(
+      ranked([{ directoryKey: "dir-agent", confidence: 0.9 }]),
+    );
+
+    await dispatchStarMapIntake({
+      requestId: "req-branch",
+      request: "Finish the icon work",
+    });
+
+    const prompt = generateStructuredObject.mock.calls[0]?.[0].prompt as string;
+    expect(prompt).toContain("branch=feat/icons");
+  });
+
+  it("names the resolved project on the creating event", async () => {
+    generateStructuredObject.mockResolvedValue(
+      ranked([{ directoryKey: "dir-snap", confidence: 0.9 }]),
+    );
+
+    await dispatchStarMapIntake({
+      requestId: "req-label",
+      request: "Look into the screenshot issue",
+    });
+
+    const creating = publishLocalEvent.mock.calls
+      .map(
+        (call) =>
+          (call as unknown as [{
+            notification: {
+              params: { phase: string; directoryLabel?: string };
+            };
+          }])[0].notification.params,
+      )
+      .find((params) => params.phase === "creating");
+    expect(creating?.directoryLabel).toBe("PwrSnap");
   });
 
   it("honors a disambiguation resubmit without re-resolving", async () => {
@@ -199,10 +428,9 @@ describe("dispatchStarMapIntake", () => {
   });
 
   it("reports creation failures with a failed status event", async () => {
-    generateStructuredObject.mockResolvedValue({
-      status: "ok",
-      object: { title: "T", directoryKey: "dir-snap", confidence: 0.9 },
-    });
+    generateStructuredObject.mockResolvedValue(
+      ranked([{ directoryKey: "dir-snap", confidence: 0.9 }]),
+    );
     materializeDirectoryLaunchpad.mockRejectedValue(
       new Error("launchpad exploded"),
     );
@@ -216,6 +444,81 @@ describe("dispatchStarMapIntake", () => {
       status: "failed",
       error: "launchpad exploded",
     });
+  });
+
+  it("names the real problem when no projects are registered", async () => {
+    readLocalNavigationDirectoryIndex.mockResolvedValue([]);
+
+    const response = await dispatchStarMapIntake({
+      requestId: "req-empty-registry",
+      request: "Do a thing",
+    });
+
+    // Not a candidate list with no rows: a heading promising options above
+    // nothing is a dead end with no way forward.
+    expect(response.status).toBe("failed");
+    if (response.status === "failed") {
+      expect(response.error).toContain("No projects are registered");
+    }
+    expect(generateStructuredObject).not.toHaveBeenCalled();
+  });
+
+  it("caps how many directories reach the resolver prompt", async () => {
+    readLocalNavigationDirectoryIndex.mockResolvedValue(
+      Array.from({ length: 200 }, (_unused, index) =>
+        directory(`dir-${index}`, `Project${index}`, {
+          latestUpdatedAt: index,
+        }),
+      ),
+    );
+    generateStructuredObject.mockResolvedValue(
+      ranked([{ directoryKey: "dir-199", confidence: 0.9 }]),
+    );
+
+    await dispatchStarMapIntake({
+      requestId: "req-many",
+      request: "Do a thing",
+    });
+
+    const prompt = generateStructuredObject.mock.calls[0]?.[0].prompt as string;
+    const listed = prompt.match(/^- key=/gmu)?.length ?? 0;
+    expect(listed).toBeLessThanOrEqual(80);
+    // Most recently active survive the cut; the oldest do not.
+    expect(prompt).toContain("key=dir-199");
+    expect(prompt).not.toContain("key=dir-0 ");
+    expect(prompt).toContain("less recently active directories omitted");
+  });
+
+  it("asks rather than letting a lone label match overrule the resolver", async () => {
+    generateStructuredObject.mockResolvedValue(
+      ranked([{ directoryKey: "dir-agent", confidence: 0.45 }]),
+    );
+
+    // "PwrSnap" appears literally, but the resolver ranked PwrAgent first.
+    const response = await dispatchStarMapIntake({
+      requestId: "req-disagree",
+      request: "Port the PwrSnap helper",
+    });
+
+    expect(materializeDirectoryLaunchpad).not.toHaveBeenCalled();
+    expect(response.status).toBe("needs_disambiguation");
+  });
+
+  it("still short-circuits when a lone label match is the resolver's pick", async () => {
+    generateStructuredObject.mockResolvedValue(
+      ranked([{ directoryKey: "dir-snap", confidence: 0.45 }]),
+    );
+
+    const response = await dispatchStarMapIntake({
+      requestId: "req-agree",
+      request: "Port the PwrSnap helper",
+    });
+
+    expect(response.status).toBe("created");
+    expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith(
+      expect.objectContaining({ directoryKey: "dir-snap" }),
+      expect.anything(),
+    );
   });
 
   it("rejects empty requests without touching the registry", async () => {

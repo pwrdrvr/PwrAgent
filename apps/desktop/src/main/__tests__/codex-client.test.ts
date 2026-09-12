@@ -10644,6 +10644,46 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("lets turnTimeoutMs bound turn/start, which can carry the answer", async () => {
+    // `turn/start` returns the finished structured record on some servers
+    // (the immediate-record branch exists for exactly that), so bounding it
+    // at `timeoutMs` would make a raised `turnTimeoutMs` a silent no-op.
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.threadStartResult = {
+      thread: { id: "budget-helper" },
+      instructionSources: [],
+    };
+    // Never answered: the only thing that can settle this is a timeout.
+    MockTransport.turnStartResult = undefined;
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+    let settled = false;
+    const probePromise = client.generateStructuredObject({
+      prompt: "Return the requested status object.",
+      schema: {
+        type: "object",
+        required: ["status"],
+        properties: { status: { type: "string" } },
+      },
+      isMatch: (record) => record.status === "complete",
+      timeoutMs: 60,
+      turnTimeoutMs: 5_000,
+    }).then((result) => {
+      settled = true;
+      return result;
+    });
+    await waitForLatestTransportRequest("turn/start");
+    await new Promise((resolve) => setTimeout(resolve, 400));
+
+    // Bounded by timeoutMs this would have rejected at 60ms.
+    expect(settled).toBe(false);
+
+    await client.close();
+    await probePromise.catch(() => undefined);
+  });
+
   it("uses a fresh helper thread for every title and unsubscribes each one", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     const client = new CodexAppServerClient({

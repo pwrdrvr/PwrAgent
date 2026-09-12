@@ -11,6 +11,7 @@ import type {
   CelestialIconId,
   FederationTarget,
   StarMapIntakeCandidate,
+  StarMapIntakeCandidateSource,
   StarMapIntakePhase,
 } from "@pwragent/shared";
 import { MAX_STAR_MAP_INTAKE_IMAGE_UPLOADS } from "../../../../shared/star-map-intake";
@@ -40,6 +41,30 @@ const PHASE_COPY: Partial<Record<StarMapIntakePhase, string>> = {
   resolving: "Finding the right project…",
   creating: "Creating the thread…",
 };
+
+/**
+ * Say which question the list answers. "Which project?" over a recency
+ * fallback implies a judgment that was never made, and the operator reads
+ * the first row as a recommendation it is not.
+ */
+const CANDIDATE_HINT: Record<StarMapIntakeCandidateSource, string> = {
+  resolver: "Closest match first — pick the project:",
+  label: "Your request names more than one project:",
+  recent: "No project matched. Your most recent, newest first:",
+  unresolved: "Could not check the projects. Your most recent, newest first:",
+};
+
+/**
+ * Fall back rather than index blindly. A remote [+] runs the intake on the
+ * peer that owns it, so a peer predating `candidateSource` answers without
+ * one — and a bare lookup would render the list with no heading at all,
+ * which is worse than the bare "Which project?" this replaced.
+ */
+function candidateHint(source: StarMapIntakeCandidateSource | undefined) {
+  // `||`, not `??`: an empty-string source is as unusable as a missing one,
+  // and would otherwise render the unlabelled list this exists to prevent.
+  return (source && CANDIDATE_HINT[source]) || "Which project?";
+}
 
 type IntakeImageAttachment = {
   bytes: Uint8Array;
@@ -88,12 +113,36 @@ export function IntakeDialog(props: {
     IntakeImageAttachment[]
   >([]);
   const [preparingImageCount, setPreparingImageCount] = useState(0);
-  const [candidates, setCandidates] = useState<StarMapIntakeCandidate[]>();
+  const [candidates, setCandidates] = useState<{
+    entries: StarMapIntakeCandidate[];
+    source: StarMapIntakeCandidateSource;
+  }>();
+  /**
+   * The project the owning instance resolved to, streamed with `creating`.
+   * When the resolver is confident it never asks, so this line is the only
+   * place the operator sees the pick while it is still worth seeing.
+   */
+  const [resolvedDirectoryLabel, setResolvedDirectoryLabel] =
+    useState<string>();
   const requestIdRef = useRef<string | undefined>(undefined);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const previewUrlsRef = useRef(new Set<string>());
+  const closedRef = useRef(false);
   const busy = phase === "resolving" || phase === "creating";
   const preparingImages = preparingImageCount > 0;
+  /**
+   * Resolving is abandonable; creating is not. Nothing exists yet while the
+   * resolver is thinking, so trapping the operator there buys nothing — and
+   * it can think for up to `INTAKE_TURN_TIMEOUT_MS`. Once the launchpad is
+   * being materialized a thread is on its way, and a dialog that vanished
+   * mid-flight would leave the operator unsure whether it landed.
+   */
+  const dismissable = phase !== "creating" && !preparingImages;
+  const { onClose } = props;
+  const close = useCallback(() => {
+    closedRef.current = true;
+    onClose();
+  }, [onClose]);
 
   useEffect(() => {
     textareaRef.current?.focus();
@@ -118,9 +167,13 @@ export function IntakeDialog(props: {
         requestId: string;
         phase: StarMapIntakePhase;
         message?: string;
+        directoryLabel?: string;
       };
       if (params.requestId !== requestIdRef.current) return;
       setPhase(params.phase);
+      if (params.directoryLabel) {
+        setResolvedDirectoryLabel(params.directoryLabel);
+      }
       if (params.phase === "failed" && params.message) {
         setError(params.message);
       }
@@ -306,6 +359,7 @@ export function IntakeDialog(props: {
     setError(undefined);
     setAttachmentError(undefined);
     setCandidates(undefined);
+    setResolvedDirectoryLabel(undefined);
     setPhase("resolving");
     void props.desktopApi
       .dispatchStarMapIntake({
@@ -326,28 +380,51 @@ export function IntakeDialog(props: {
       .then((response) => {
         if (response.requestId !== requestIdRef.current) return;
         if (response.status === "created") {
-          setPhase("done");
+          // Reaches the map even if the operator walked away mid-resolve:
+          // the thread exists, so it still deserves its reveal.
           props.onCreated({
             instanceId: props.target.instanceId,
             backend: response.backend,
             threadId: response.threadId,
           });
-          props.onClose();
+          if (closedRef.current) return;
+          setPhase("done");
+          close();
           return;
         }
+        if (closedRef.current) return;
         if (response.status === "needs_disambiguation") {
           setPhase("needs_disambiguation");
-          setCandidates(response.candidates);
+          setCandidates({
+            entries: response.candidates,
+            source: response.candidateSource,
+          });
           return;
         }
         setPhase("failed");
         setError(response.error);
       })
       .catch((err: unknown) => {
+        if (closedRef.current) return;
         setPhase("failed");
         setError(err instanceof Error ? err.message : String(err));
       });
   };
+
+  /**
+   * One status line, in precedence order. Named branches rather than a
+   * chain of ternaries inside JSX: the ordering between an attachment
+   * error, a failure, and a phase is the whole meaning of this string.
+   */
+  const statusMessage = (() => {
+    if (attachmentError) return attachmentError;
+    if (phase === "failed") return error ?? "";
+    if (preparingImages) return "Preparing image…";
+    if (phase === "creating" && resolvedDirectoryLabel) {
+      return `Creating the thread in ${resolvedDirectoryLabel}…`;
+    }
+    return PHASE_COPY[phase as StarMapIntakePhase] ?? "";
+  })();
 
   return createPortal(
     <div
@@ -356,9 +433,9 @@ export function IntakeDialog(props: {
       aria-modal="true"
       aria-label={`New thread on ${props.target.label}`}
       onKeyDown={(event) => {
-        if (event.key === "Escape" && !busy && !preparingImages) {
+        if (event.key === "Escape" && dismissable) {
           event.stopPropagation();
-          props.onClose();
+          close();
         }
       }}
     >
@@ -368,7 +445,7 @@ export function IntakeDialog(props: {
         aria-label="Close intake"
         tabIndex={-1}
         onClick={() => {
-          if (!busy && !preparingImages) props.onClose();
+          if (dismissable) close();
         }}
       />
       <div className="star-map-intake__panel">
@@ -381,8 +458,8 @@ export function IntakeDialog(props: {
             type="button"
             className="star-map-intake__close"
             aria-label="Close"
-            disabled={busy || preparingImages}
-            onClick={props.onClose}
+            disabled={!dismissable}
+            onClick={close}
           >
             ✕
           </button>
@@ -446,8 +523,10 @@ export function IntakeDialog(props: {
         ) : null}
         {candidates ? (
           <div className="star-map-intake__candidates">
-            <p className="star-map-intake__hint">Which project?</p>
-            {candidates.map((candidate) => (
+            <p className="star-map-intake__hint">
+              {candidateHint(candidates.source)}
+            </p>
+            {candidates.entries.map((candidate) => (
               <button
                 key={candidate.directoryKey}
                 type="button"
@@ -457,6 +536,11 @@ export function IntakeDialog(props: {
                 <span className="star-map-intake__candidate-label">
                   {candidate.label}
                 </span>
+                {candidate.reason ? (
+                  <span className="star-map-intake__candidate-reason">
+                    {candidate.reason}
+                  </span>
+                ) : null}
                 {candidate.path ? (
                   <span className="star-map-intake__candidate-path">
                     {candidate.path}
@@ -473,12 +557,7 @@ export function IntakeDialog(props: {
             }${phase === "failed" || attachmentError ? " is-failed" : ""}`}
             role="status"
           >
-            {attachmentError
-              ?? (phase === "failed"
-                ? error
-                : preparingImages
-                  ? "Preparing image…"
-                  : PHASE_COPY[phase as StarMapIntakePhase] ?? "")}
+            {statusMessage}
           </span>
           <button
             type="button"
