@@ -67,9 +67,21 @@ type ConnectionEditDraft = {
   connectionId: string;
   displayName: string;
   serverUrl: string;
-  /** Re-pointing discards credentials, so the save says so. */
-  serverUrlChanged: boolean;
+  /**
+   * What the row held when the dialog opened.
+   *
+   * Re-pointing discards credentials, so the dialog and the save notice both
+   * say so -- but this has to be *compared*, not latched on the first
+   * keystroke. A flag set in `onChange` stayed true after a character was
+   * typed and deleted, and told the operator to re-authorize a connection
+   * that was never touched.
+   */
+  originalServerUrl: string;
 };
+
+function editDraftRepointsServer(draft: ConnectionEditDraft): boolean {
+  return draft.serverUrl.trim() !== draft.originalServerUrl.trim();
+}
 
 type StartupResult = {
   status: "ready" | "failed" | "cancelled";
@@ -305,11 +317,17 @@ export function PluginsSettings(props: {
     ? "Loading..."
     : readiness.total === 0
       ? "None yet"
-      : [
-          `${readiness.ready} ready`,
-          ...(readiness.parked ? [`${readiness.parked} parked`] : []),
-          ...(readiness.needsSetup ? [`${readiness.needsSetup} to set up`] : []),
-        ].join(" · ");
+      // The switch masks every per-connection state, so counting readiness
+      // under it would report setup work whose only remedy is the switch.
+      : readiness.gatewayOff === readiness.total
+        ? "Gateway off"
+        : [
+            `${readiness.ready} ready`,
+            ...(readiness.parked ? [`${readiness.parked} parked`] : []),
+            ...(readiness.needsSetup
+              ? [`${readiness.needsSetup} to set up`]
+              : []),
+          ].join(" · ");
 
   const loadConnections = useCallback(async () => {
     if (!props.desktopApi?.listMcpConnections) {
@@ -739,7 +757,7 @@ export function PluginsSettings(props: {
         kind: "success",
         // Re-pointing drops the credentials the old server issued, so say so
         // rather than letting the row look merely renamed.
-        text: draft.serverUrlChanged
+        text: editDraftRepointsServer(draft)
           ? `${draft.displayName} now points at a different server. Authorize it again.`
           : `${draft.displayName} was updated.`,
       });
@@ -1008,7 +1026,7 @@ export function PluginsSettings(props: {
                     connectionId: connection.id,
                     displayName: connection.displayName,
                     serverUrl: connection.serverUrl,
-                    serverUrlChanged: false,
+                    originalServerUrl: connection.serverUrl,
                   })
                 }
                 onNotice={setConnectionNotice}
@@ -1234,13 +1252,12 @@ export function PluginsSettings(props: {
                     setConnectionEdit({
                       ...connectionEdit,
                       serverUrl: event.target.value,
-                      serverUrlChanged: true,
                     })
                   }
                 />
               </label>
             </div>
-            {connectionEdit.serverUrlChanged ? (
+            {editDraftRepointsServer(connectionEdit) ? (
               <p>
                 Changing the address discards the credentials the old server
                 issued. You will need to authorize this connection again.
@@ -1333,26 +1350,43 @@ function useLocalConnectionStatus(
     ? desktopApi?.readPwrGitConnectionStatus
     : app === "PwrSnap" ? desktopApi?.readPwrSnapConnectionStatus : undefined;
 
+  // Two probes can be in flight at once -- the mount read and a focus read,
+  // or two focus reads from a quick alt-tab -- and they can resolve out of
+  // order. Without a sequence number the older answer wins and the row
+  // reports an app as not running after it started.
+  const latestRead = useRef(0);
+
   const refresh = useCallback(async (): Promise<void> => {
     if (!read) return;
+    const sequence = latestRead.current + 1;
+    latestRead.current = sequence;
     try {
-      setStatus(await read());
+      const next = await read();
+      if (latestRead.current === sequence) setStatus(next);
     } catch {
       // The row still resolves a state from the connection record, so a
       // failed probe degrades to the credential-only reading rather than
       // asserting the app is missing.
-      setStatus(undefined);
+      if (latestRead.current === sequence) setStatus(undefined);
     }
   }, [read]);
 
   useEffect(() => {
+    // A remote connection has nothing local to probe, so it registers no
+    // listener at all rather than one that wakes for every window focus to
+    // do nothing.
+    if (!read) return;
     void refresh();
     const onFocus = (): void => {
       void refresh();
     };
     window.addEventListener("focus", onFocus);
-    return () => window.removeEventListener("focus", onFocus);
-  }, [refresh]);
+    return () => {
+      // Anything still in flight belongs to a row that is going away.
+      latestRead.current += 1;
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [read, refresh]);
 
   return { status, refresh };
 }

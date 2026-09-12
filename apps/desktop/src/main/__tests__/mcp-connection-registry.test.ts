@@ -35,6 +35,36 @@ describe("McpConnectionRegistry", () => {
     expect(registry.get(created.id)?.serverUrl).toBe("https://mcp.example.com/mcp");
   });
 
+  it("refuses a second connection for an address that already has one", () => {
+    // `uniqueId` only keeps the slug distinct, so the same endpoint could be
+    // registered repeatedly -- each row needing its own consent and showing
+    // up separately in every thread's picker. The agent tool reaches this
+    // without a person: a model retrying a `create` it never saw the answer
+    // to would write the second row.
+    const registry = new McpConnectionRegistry({ configPath: configPath() });
+    registry.create({
+      displayName: "Datadog",
+      serverUrl: "https://mcp.example.com/mcp",
+    });
+    expect(() =>
+      registry.create({
+        displayName: "Datadog again",
+        serverUrl: "https://mcp.example.com/mcp",
+      }),
+    ).toThrow("Datadog is already registered for that address.");
+    expect(registry.list().filter((entry) => entry.kind === "remote")).toHaveLength(1);
+  });
+
+  it("refuses a connection that shadows a built-in's address", () => {
+    const registry = new McpConnectionRegistry({ configPath: configPath() });
+    expect(() =>
+      registry.create({
+        displayName: "Not PwrSnap",
+        serverUrl: "http://127.0.0.1:51729/mcp",
+      }),
+    ).toThrow("PwrSnap is already registered for that address.");
+  });
+
   it("re-points a connection in place instead of forcing remove-and-retype", () => {
     // `create` persists before authorization is attempted, so a single
     // mistyped character used to leave a dead row whose only exit was Remove

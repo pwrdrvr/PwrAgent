@@ -13845,6 +13845,31 @@ script = "echo setup"
     await registry.close();
   });
 
+  it("refuses the same way for a remote connection this runtime cannot serve", async () => {
+    // The guard used to be `isMcpConnectionId`, which matches only the two
+    // built-in ids -- so every remote connection took the "unknown id" branch
+    // and was dropped with a warning, starting the turn without the server
+    // the operator selected.
+    const codexClient = new MockBackendClient({ threads: [] });
+    const startThread = vi.spyOn(codexClient, "startThread");
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+      mcpConnectionService: null,
+      createScratchProjectDirectory: async () => "/tmp/pwragent-scratch",
+    });
+
+    await expect(
+      registry.startThread({
+        backend: "codex",
+        mcpConnectionIds: ["datadog"],
+      }),
+    ).rejects.toThrow("MCP connections are unavailable in this PwrAgent runtime.");
+
+    expect(startThread).not.toHaveBeenCalled();
+    await registry.close();
+  });
+
   it("routes selected PwrGit through the managed gateway", async () => {
     const codexClient = new MockBackendClient({ threads: [] });
     const registerBridge = vi.fn(async () => ({

@@ -337,7 +337,7 @@ import {
   normalizeFileChangeApprovalDiff,
   PWRSNAP_MCP_CONNECTION_ID,
   MCP_CONNECTION_DISPLAY_NAMES,
-  isMcpConnectionId,
+  isBuiltInMcpConnectionId,
   readCodexEnvironmentActionRuns,
   DEFAULT_TASK_MONITOR_MODEL,
   DEFAULT_TASK_MONITOR_POLL_INTERVAL_SECONDS,
@@ -7541,7 +7541,7 @@ function userActionableMcpConnectionConfigError(
   registrations: McpConnectionBridgeRegistration[],
 ): unknown {
   const names = registrations.map(({ server }) =>
-    isMcpConnectionId(server.name)
+    isBuiltInMcpConnectionId(server.name)
       ? MCP_CONNECTION_DISPLAY_NAMES[server.name]
       : server.name,
   );
@@ -16236,18 +16236,15 @@ export class DesktopBackendRegistry {
     for (const connectionId of selected) {
       const service = this.mcpConnectionService;
       if (!service) {
-        // A known connection with no service behind it is a runtime that
-        // cannot honor the thread's setting. That fails loudly rather than
-        // starting the thread without the app the operator enabled; only a
-        // genuinely unknown id is dropped.
-        if (isMcpConnectionId(connectionId)) {
-          throw new Error("MCP connections are unavailable in this PwrAgent runtime.");
-        }
-        backendRegistryLog.warn("ignoring unknown MCP connection", {
-          connectionId,
-          threadId: threadId ?? null,
-        });
-        continue;
+        // A selected connection with no service behind it is a runtime that
+        // cannot honor the thread's setting, so the turn fails rather than
+        // starting without the connection the operator chose. This used to
+        // throw only for the built-in-id guard, which matches the two built-in
+        // ids alone -- so every remote connection took the "unknown id"
+        // branch and was dropped with a warning instead. Nothing here can
+        // tell a stale id from a live one anyway: that is what the catch
+        // below does, and it needs a service to do it.
+        throw new Error("MCP connections are unavailable in this PwrAgent runtime.");
       }
       try {
         const registration = await service.registerBridge(connectionId, threadId);
@@ -20185,10 +20182,17 @@ export class DesktopBackendRegistry {
     request: DescribeThreadMcpConnectionsRequest,
   ): Promise<DescribeThreadMcpConnectionsResponse> {
     const selection = await this.readThreadMcpConnections(request);
-    const service = getMcpConnectionGatewayService();
-    const statuses = await service.listConnections();
+    // Through the injected seam, like every other connection call here.
+    // Reaching for the module singleton would leave this one method
+    // unstubbable and silently outside whatever a caller injected.
+    const service = this.mcpConnectionService;
+    const statuses = (await service?.listConnections?.()) ?? [];
     const byId = new Map(statuses.map((status) => [status.id, status]));
-    const agentInventoryAvailable = !isAcpBackendId(request.backend);
+    // Starts as "this backend can be asked" and is downgraded to what is
+    // actually true: an inventory we failed to read is not one we have. The
+    // renderer distinguishes "the agent did not list it" from "we could not
+    // ask" on this flag, so it has to mean the latter.
+    let agentInventoryAvailable = !isAcpBackendId(request.backend);
     const toolCounts = new Map<string, number>();
     if (agentInventoryAvailable && selection.connectionIds.length > 0) {
       try {
@@ -20202,12 +20206,13 @@ export class DesktopBackendRegistry {
       } catch {
         // An older Codex build cannot report its inventory. The selection is
         // still worth showing; only the tool counts go missing.
+        agentInventoryAvailable = false;
       }
     }
     const connections: ThreadMcpConnectionReport[] = selection.connectionIds
       .map((connectionId) => {
         const status = byId.get(connectionId);
-        const bridge = service.peekThreadBridge?.(
+        const bridge = service?.peekThreadBridge?.(
           connectionId,
           request.threadId,
         );
@@ -20227,7 +20232,7 @@ export class DesktopBackendRegistry {
           ...(toolCount === undefined ? {} : { toolCount }),
         } satisfies ThreadMcpConnectionReport;
       });
-    const handedOverAt = service.threadHandoverAt?.(request.threadId);
+    const handedOverAt = service?.threadHandoverAt?.(request.threadId);
     return {
       backend: request.backend,
       threadId: request.threadId,

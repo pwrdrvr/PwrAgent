@@ -15,7 +15,14 @@ export const MCP_CONNECTION_IDS = [
   PWRSNAP_MCP_CONNECTION_ID,
   PWRGIT_MCP_CONNECTION_ID,
 ] as const;
+/**
+ * Any connection id. Remote connections are slugged from their display name,
+ * so this is deliberately open.
+ */
 export type McpConnectionId = string;
+
+/** The two connections PwrAgent synthesizes rather than stores. */
+export type BuiltInMcpConnectionId = (typeof MCP_CONNECTION_IDS)[number];
 
 export type McpConnectionAuthMode = "oauth";
 
@@ -95,12 +102,23 @@ export type MutateMcpConnectionResponse = {
 };
 
 
-export function isMcpConnectionId(value: string): value is McpConnectionId {
+/**
+ * Narrow an arbitrary id to one of the built-ins.
+ *
+ * Named for what it tests. As `isMcpConnectionId` against the open
+ * `McpConnectionId` it was a no-op guard -- `value is string` for a `string`
+ * -- which let a caller treat "matches a built-in" and "is a connection id"
+ * as the same question. They are not, and one caller had already conflated
+ * them.
+ */
+export function isBuiltInMcpConnectionId(
+  value: string,
+): value is BuiltInMcpConnectionId {
   return (MCP_CONNECTION_IDS as readonly string[]).includes(value);
 }
 
 /** Product names for copy that has to name the app behind a connection id. */
-export const MCP_CONNECTION_DISPLAY_NAMES: Record<McpConnectionId, string> = {
+export const MCP_CONNECTION_DISPLAY_NAMES: Record<BuiltInMcpConnectionId, string> = {
   [PWRSNAP_MCP_CONNECTION_ID]: "PwrSnap",
   [PWRGIT_MCP_CONNECTION_ID]: "PwrGit",
 };
@@ -407,16 +425,27 @@ export function resolveMcpConnectionSetup(
  */
 export function summarizeMcpConnectionReadiness(
   summaries: readonly McpConnectionSetupSummary[],
-): { ready: number; parked: number; needsSetup: number; total: number } {
+): {
+  ready: number;
+  parked: number;
+  needsSetup: number;
+  gatewayOff: number;
+  total: number;
+} {
   let ready = 0;
   let parked = 0;
   let needsSetup = 0;
+  let gatewayOff = 0;
   for (const summary of summaries) {
     if (summary.state === "ready") ready += 1;
     else if (summary.state === "parked") parked += 1;
+    // Counted apart from `needsSetup`: the gateway switch masks every other
+    // state, so folding these in reported "4 to set up" for four fully
+    // authorized connections whose only remedy is the switch itself.
+    else if (summary.state === "gateway_off") gatewayOff += 1;
     else needsSetup += 1;
   }
-  return { ready, parked, needsSetup, total: summaries.length };
+  return { ready, parked, needsSetup, gatewayOff, total: summaries.length };
 }
 
 /**

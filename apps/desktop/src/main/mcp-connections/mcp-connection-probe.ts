@@ -58,6 +58,21 @@ function parseProbeUrl(value: string): URL | undefined {
   return url;
 }
 
+/**
+ * Whether `normalizeMcpServerUrl` would accept this address.
+ *
+ * The two-step flow is only worth having if Check is authoritative: a probe
+ * that reports success for an address `create` then refuses replaces one
+ * confusing failure with two. Plain `http:` is the case that reaches here --
+ * discovery can succeed over it, and the registry still rejects it.
+ */
+function isStorableProbeUrl(url: URL): boolean {
+  if (url.protocol === "https:") return true;
+  return url.hostname === "127.0.0.1"
+    || url.hostname === "localhost"
+    || url.hostname === "[::1]";
+}
+
 type InitializeProbe =
   | { kind: "mcp"; serverName?: string }
   | { kind: "oauth_challenge"; scheme?: string }
@@ -167,6 +182,13 @@ export async function probeMcpConnectionUrl(
       ok: false,
       problem: "not_a_url",
       message: "Enter an https:// address for a remote MCP server.",
+    };
+  }
+  if (!isStorableProbeUrl(url)) {
+    return {
+      ok: false,
+      problem: "not_a_url",
+      message: `PwrAgent only stores MCP servers reached over HTTPS, so ${url.host} cannot be added over plain http.`,
     };
   }
 

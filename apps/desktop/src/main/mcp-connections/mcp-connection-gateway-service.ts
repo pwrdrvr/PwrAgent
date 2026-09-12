@@ -598,7 +598,16 @@ export class McpConnectionGatewayService {
         request,
       );
     }
-    return await probeMcpConnectionUrl(request.serverUrl, this.fetchFn);
+    // Through the same guard every other outbound path here uses. The probe
+    // takes its URL from the renderer or from an agent tool, so it is the
+    // one call in this file reachable with a wholly attacker-chosen host --
+    // exactly what `createMcpSafeFetch` exists to refuse. `allowLoopback` is
+    // false because only the built-in PwrSuite connections are local, and
+    // those are never probed.
+    return await probeMcpConnectionUrl(
+      request.serverUrl,
+      createMcpSafeFetch({ allowLoopback: false, fetchFn: this.fetchFn }),
+    );
   }
 
   /**

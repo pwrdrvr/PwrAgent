@@ -39,6 +39,36 @@ describe("probeMcpConnectionUrl", () => {
     expect(result.problem).toBe("not_a_url");
   });
 
+  it("refuses plain http to a remote host that create would reject", async () => {
+    // Discovery can succeed over http, so without this the probe reported
+    // "Found an MCP server ..." and offered Add for an address
+    // `normalizeMcpServerUrl` then refused. The two-step flow is only worth
+    // having if Check answers the same question the save does.
+    const fetchFn = vi.fn();
+    const result = await probeMcpConnectionUrl(
+      "http://oauth.example.com/mcp",
+      fetchFn as never,
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.problem).toBe("not_a_url");
+    expect(result.message).toContain("HTTPS");
+    // Refused before anything left the machine.
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+
+  it("still allows a loopback http endpoint, as the registry does", async () => {
+    const result = await probeMcpConnectionUrl(
+      "http://127.0.0.1:51729/mcp",
+      vi.fn(async () => jsonResponse({ jsonrpc: "2.0", result: {} })) as never,
+    );
+    // Reaches the probe rather than being refused for its scheme; the
+    // built-in PwrSuite connections live on exactly these addresses.
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.problem).not.toBe("not_a_url");
+  });
+
   it("accepts an endpoint that offers OAuth discovery", async () => {
     const result = await probeMcpConnectionUrl(
       "https://oauth.example.com/mcp",

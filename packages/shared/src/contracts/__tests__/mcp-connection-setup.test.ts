@@ -117,6 +117,24 @@ describe("summarizeMcpConnectionReadiness", () => {
       ready: 1,
       parked: 0,
       needsSetup: 1,
+      gatewayOff: 0,
+      total: 2,
+    });
+  });
+
+  it("keeps gateway-off rows out of the setup count", () => {
+    // Every state collapses to `gateway_off` while the switch is off, so
+    // counting them as setup work told the operator four authorized
+    // connections needed attention they did not need.
+    const summaries = [connection(), connection({ id: "atlassian" })].map(
+      (entry) =>
+        resolveMcpConnectionSetup({ connection: entry, gatewayEnabled: false }),
+    );
+    expect(summarizeMcpConnectionReadiness(summaries)).toEqual({
+      ready: 0,
+      parked: 0,
+      needsSetup: 0,
+      gatewayOff: 2,
       total: 2,
     });
   });

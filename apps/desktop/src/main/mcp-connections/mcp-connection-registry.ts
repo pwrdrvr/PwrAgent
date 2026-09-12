@@ -47,13 +47,18 @@ export class McpConnectionRegistry {
   }
 
   list(): McpConnectionRecord[] {
-    return [this.pwrSnapConnection(), this.pwrGitConnection(), ...this.readStoredConnections()];
+    // One read, one parse. Each of these three used to open and parse
+    // config.toml for itself, so a single `list()` cost three -- and `get()`
+    // goes through `list()`, so every connection lookup did too.
+    const table = this.readConnectionsTable();
+    return [
+      this.pwrSnapConnection(table),
+      this.pwrGitConnection(table),
+      ...this.readStoredConnections(table),
+    ];
   }
 
   get(connectionId: string): McpConnectionRecord | undefined {
-    if (connectionId === PWRSNAP_MCP_CONNECTION_ID) {
-      return this.pwrSnapConnection();
-    }
     return this.list().find((connection) => connection.id === connectionId);
   }
 
@@ -92,32 +97,37 @@ export class McpConnectionRegistry {
     return updated;
   }
 
-  private pwrSnapConnection(): McpConnectionRecord {
-    return { ...builtInPwrSnapConnection(), enabled: this.readPwrSnapEnabled() };
+  /** The `[mcp_connections]` table, or undefined when there is no config yet. */
+  private readConnectionsTable(): Record<string, unknown> | undefined {
+    if (!fs.existsSync(this.configPath)) return undefined;
+    const source = fs.readFileSync(this.configPath, "utf8");
+    return parseTomlTables(source, this.configPath).mcp_connections as
+      | Record<string, unknown>
+      | undefined;
   }
 
-  private pwrGitConnection(): McpConnectionRecord {
-    const table = fs.existsSync(this.configPath)
-      ? parseTomlTables(fs.readFileSync(this.configPath, "utf8"), this.configPath).mcp_connections
-      : undefined;
+  private pwrSnapConnection(
+    table = this.readConnectionsTable(),
+  ): McpConnectionRecord {
+    return {
+      ...builtInPwrSnapConnection(),
+      enabled: table?.pwrsnap_enabled !== false,
+    };
+  }
+
+  private pwrGitConnection(
+    table = this.readConnectionsTable(),
+  ): McpConnectionRecord {
     return {
       id: PWRGIT_MCP_CONNECTION_ID,
       displayName: "PwrGit",
       serverUrl: "http://127.0.0.1:51731/mcp",
       authMode: "oauth",
       kind: "pwrgit",
-      enabled: (table as Record<string, unknown> | undefined)?.pwrgit_enabled !== false,
+      enabled: table?.pwrgit_enabled !== false,
       createdAt: 0,
       updatedAt: 0,
     };
-  }
-
-  private readPwrSnapEnabled(): boolean {
-    if (!fs.existsSync(this.configPath)) return true;
-    const source = fs.readFileSync(this.configPath, "utf8");
-    const table = parseTomlTables(source, this.configPath).mcp_connections;
-    return (table as Record<string, unknown> | undefined)?.pwrsnap_enabled
-      !== false;
   }
 
   private writeScalar(path: readonly string[], value: boolean): void {
@@ -132,7 +142,23 @@ export class McpConnectionRegistry {
   }): McpConnectionRecord {
     const displayName = normalizeDisplayName(input.displayName);
     const serverUrl = normalizeMcpServerUrl(input.serverUrl);
-    const current = this.readStoredConnections();
+    const table = this.readConnectionsTable();
+    const current = this.readStoredConnections(table);
+    // One address, one connection. `uniqueId` only keeps the slug distinct,
+    // so nothing stopped the same endpoint being registered twice -- each
+    // row needing its own consent and appearing separately in every thread's
+    // picker. The agent tool makes that reachable without a person: a model
+    // that retries a `create` whose response it never saw writes a second row.
+    const duplicate = [
+      this.pwrSnapConnection(table),
+      this.pwrGitConnection(table),
+      ...current,
+    ].find((connection) => connection.serverUrl === serverUrl);
+    if (duplicate) {
+      throw new Error(
+        `${duplicate.displayName} is already registered for that address.`,
+      );
+    }
     const id = this.uniqueId(displayName, current);
     const now = this.now();
     const connection: McpConnectionRecord = {
@@ -212,11 +238,10 @@ export class McpConnectionRegistry {
     return true;
   }
 
-  private readStoredRows(): StoredConnectionRow[] {
-    if (!fs.existsSync(this.configPath)) return [];
-    const source = fs.readFileSync(this.configPath, "utf8");
-    const rows = parseTomlTables(source, this.configPath).mcp_connections
-      ?.connections;
+  private readStoredRows(
+    table = this.readConnectionsTable(),
+  ): StoredConnectionRow[] {
+    const rows = table?.connections;
     if (!Array.isArray(rows)) return [];
     return rows.filter(
       (raw): raw is StoredConnectionRow =>
@@ -224,10 +249,12 @@ export class McpConnectionRegistry {
     );
   }
 
-  private readStoredConnections(): McpConnectionRecord[] {
+  private readStoredConnections(
+    table = this.readConnectionsTable(),
+  ): McpConnectionRecord[] {
     const connections: McpConnectionRecord[] = [];
     const ids = new Set<string>(MCP_CONNECTION_IDS);
-    for (const row of this.readStoredRows()) {
+    for (const row of this.readStoredRows(table)) {
       const connection = connectionFromRow(row);
       if (!connection || ids.has(connection.id)) continue;
       ids.add(connection.id);

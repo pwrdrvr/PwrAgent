@@ -354,6 +354,22 @@ export function useThreadMcpConnectionCount(params: {
 }): number | undefined {
   const { backend, desktopApi, threadId, token } = params;
   const [count, setCount] = useState<number>();
+  // A selection can also change from outside this window -- a peer, a
+  // messaging surface, a second window -- and `thread/mcpConnections/updated`
+  // is emitted for exactly that. Without a subscriber the badge only
+  // re-reads when the caller bumps `token`, which it does when the panel
+  // closes; a change made anywhere else would sit stale until then.
+  const [busToken, setBusToken] = useState(0);
+
+  useEffect(() => {
+    const subscribe = desktopApi?.onAgentEvent;
+    if (!subscribe || !threadId) return;
+    return subscribe((event) => {
+      if (event.notification.method !== "thread/mcpConnections/updated") return;
+      if (event.notification.params.threadId !== threadId) return;
+      setBusToken((current) => current + 1);
+    });
+  }, [desktopApi, threadId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -375,7 +391,7 @@ export function useThreadMcpConnectionCount(params: {
     return () => {
       cancelled = true;
     };
-  }, [backend, desktopApi, threadId, token]);
+  }, [backend, busToken, desktopApi, threadId, token]);
 
   return count;
 }
@@ -445,13 +461,19 @@ function ThreadMcpVerification(props: {
               {entry.displayName}
             </span>
             <span className="mcp-access-panel__verify-meta">
-              {entry.toolCount === undefined
-                ? entry.serverNameInAgent
-                  ? "passed to the agent"
-                  : "not passed yet"
-                : `${entry.toolCount} ${
+              {entry.toolCount !== undefined
+                ? `${entry.toolCount} ${
                     entry.toolCount === 1 ? "tool" : "tools"
-                  }`}
+                  }`
+                : !entry.serverNameInAgent
+                  ? "not passed yet"
+                  // The inventory was readable and this alias was not in it.
+                  // Reporting "passed to the agent" here would be the one
+                  // claim this panel exists to check, made against the
+                  // evidence rather than from it.
+                  : report.agentInventoryAvailable
+                    ? "not in the agent's list"
+                    : "passed to the agent"}
             </span>
           </li>
         ))}
