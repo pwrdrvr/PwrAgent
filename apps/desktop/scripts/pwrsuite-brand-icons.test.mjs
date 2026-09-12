@@ -21,10 +21,8 @@ import { opaqueBounds, readPixels } from "./lib/icon-pixels.mjs";
 const here = dirname(fileURLToPath(import.meta.url));
 const rendererSrc = resolve(here, "../src/renderer/src");
 const appCssPath = resolve(rendererSrc, "styles/app.css");
-const callbackPagePath = resolve(
-  here,
-  "../src/main/mcp-connections/local-mcp-connection-service.ts",
-);
+const callbackPageName = "local-mcp-connection-service.ts";
+const callbackPagePath = resolve(here, `../src/main/mcp-connections/${callbackPageName}`);
 
 const ASSETS = {
   PwrSnap: resolve(rendererSrc, "assets/pwrsnap/pwrsnap-app-icon.png"),
@@ -87,10 +85,15 @@ function readAppCss() {
   return readFileSync(appCssPath, "utf8");
 }
 
-/** Reports the rule that went missing, rather than throwing on a null match. */
-function matchCss(css, pattern, what) {
+/**
+ * Reports the rule that went missing, rather than throwing on a null match.
+ * `where` names the file it was looked for in: the callback page's CSS lives
+ * in a template literal in the main process, and a failure there that blamed
+ * app.css would send the next reader to a stylesheet that never held the rule.
+ */
+function matchCss(css, pattern, what, where = "app.css") {
   const match = pattern.exec(css);
-  expect(match, `app.css no longer states ${what}`).not.toBeNull();
+  expect(match, `${where} no longer states ${what}`).not.toBeNull();
   return match;
 }
 
@@ -108,51 +111,30 @@ function iconBoxWidth(css) {
     /^\.mcp-connection__icon\s*\{([^}]*)\}/m,
     "an unconditional .mcp-connection__icon box",
   );
-  return Number(matchCss(rule[1], /width:\s*(\d+)px/, "that box's width")[1]);
+  // The lookbehind keeps `width:` from matching the tail of a `max-width:` or
+  // `min-width:` declaration and silently measuring the wrong number.
+  return Number(matchCss(rule[1], /(?<![-\w])width:\s*(\d+)px/, "that box's width")[1]);
 }
 
 /**
  * The compensating `scale()` one stylesheet states, read as the
  * canvas-over-plate ratio it spells out. `className` is the modifier's class,
- * without the leading dot.
+ * without the leading dot; `where` is the file, for the failure message.
  */
-function insetPlateScale(css, className) {
+function insetPlateScale(css, className, where) {
   const match = matchCss(
     css,
     new RegExp(`\\.${className}\\s*\\{[^}]*transform:\\s*scale\\(calc\\((\\d+)\\s*/\\s*(\\d+)\\)\\)`),
     `.${className} as a canvas-over-plate ratio`,
+    where,
   );
   return Number(match[1]) / Number(match[2]);
 }
 
-/**
- * The box the callback page's mark fills, in CSS pixels. Unlike the card, that
- * page frames each mark in a padded, bordered tile and sizes the image to the
- * tile's content box, so the padding and border are part of the answer —
- * `* { box-sizing: border-box }` puts them inside the stated width.
- *
- * Anchored to the start of a line: the page states `.app-icon` a second time
- * inside a `@media` block, mid-line after another rule's closing brace, and a
- * match that landed there would measure the narrow phone tile instead.
- */
-function callbackMarkBox(source) {
-  const rule = matchCss(
-    source,
-    /^\s*\.app-icon\s*\{([^}]*)\}/m,
-    "an unconditional .app-icon tile on the callback page",
-  );
-  const value = (pattern, what) => Number(matchCss(rule[1], pattern, what)[1]);
-  return (
-    value(/width:\s*(\d+)px/, "that tile's width")
-    - 2 * value(/padding:\s*(\d+)px/, "that tile's padding")
-    - 2 * value(/border:\s*(\d+)px/, "that tile's border width")
-  );
-}
-
 // PwrAgent's own mark included: the callback page sizes the sister app against
-// it, so `fraction === 1` below is what makes the half-pixel tolerance there
-// enough — a margin appearing in the reference would otherwise move both sides
-// of that comparison together and go unnoticed.
+// it, so the exact `fraction === 1` below is what lets the sizing tests treat
+// it as the reference. A margin appearing there would otherwise move both
+// sides of that comparison together and go unnoticed.
 describe("PwrSuite brand icon assets", () => {
   it("holds a square plate centred on a square canvas", async () => {
     for (const [name, { plate, canvas }] of Object.entries(await plates(CALLBACK_ASSETS))) {
@@ -179,54 +161,60 @@ describe("PwrSuite brand icon assets", () => {
   });
 });
 
-/**
- * Every plate the surface draws, at the size it lands on screen, given the box
- * the surface reserves and the compensation it applies to the inset asset.
- */
-function paintedSizes(measurements, box, scale) {
-  return Object.entries(measurements).map(
-    ([name, { fraction }]) => [name, box * fraction * (name === INSET ? scale : 1)],
-  );
-}
-
-/** Each plate fills `box`, and so also matches every other plate beside it. */
-function expectPaintedTogether(painted, box) {
-  for (const [name, size] of painted) {
-    // Half a CSS pixel: closer than the display can resolve the difference.
-    expect(Math.abs(size - box), `${name} plate against its ${box}px box`)
-      .toBeLessThan(0.5);
-  }
-}
-
 describe("PwrSuite connection card icon sizing", () => {
   it("paints both plates at the same size", async () => {
     const css = readAppCss();
     const box = iconBoxWidth(css);
     const scale = insetPlateScale(css, "mcp-connection__icon--inset-plate");
-    expectPaintedTogether(paintedSizes(await plates(), box, scale), box);
+    const painted = Object.entries(await plates()).map(
+      ([name, { fraction }]) => [name, box * fraction * (name === INSET ? scale : 1)],
+    );
+    const [[firstName, first], ...rest] = painted;
+    for (const [name, size] of rest) {
+      // Half a CSS pixel: closer than the display can resolve the difference.
+      expect(Math.abs(size - first), `${name} plate against ${firstName}`)
+        .toBeLessThan(0.5);
+    }
+    // Not merely equal to each other: both fill the box the card reserves.
+    expect(first).toBeCloseTo(box, 5);
   });
 });
 
+/**
+ * The callback page is measured by its ratio rather than by its box, because
+ * its box cannot fail: every painted size there is `box × k`, so comparing
+ * them to `box` reduces to `box × |k − 1| < tolerance` and the tile geometry
+ * only scales the tolerance. Asserting `fraction × scale` directly says the
+ * one thing that is actually true or false, and says it without parsing a
+ * `border:` shorthand out of a single-line rule to get there.
+ */
 describe("OAuth callback page icon sizing", () => {
-  it("paints the sister app's plate at the size of PwrAgent's beside it", async () => {
+  it("compensates the inset asset back to the size of the marks beside it", async () => {
     const source = readFileSync(callbackPagePath, "utf8");
-    const box = callbackMarkBox(source);
-    const scale = insetPlateScale(source, "app-mark--inset-plate");
-    expectPaintedTogether(paintedSizes(await plates(CALLBACK_ASSETS), box, scale), box);
+    const scale = insetPlateScale(source, "app-mark--inset-plate", callbackPageName);
+    for (const [name, { fraction }] of Object.entries(await plates(CALLBACK_ASSETS))) {
+      // Four decimals: a whole pixel out at the 104px tile is 1e-2 here, so
+      // this is far tighter than the display, and tighter than the card's.
+      expect(fraction * (name === INSET ? scale : 1), `${name} plate against its tile`)
+        .toBeCloseTo(1, 4);
+    }
   });
 
-  it("wears the modifier on the inset asset and on nothing else", () => {
+  it("sizes every mark to its tile, which is what makes the ratio enough", () => {
+    // The ratio above only holds if each mark fills the tile to begin with.
+    // `place-items: center` centres what is already sized and does not do
+    // this; without the explicit 100% the marks fall back to their intrinsic
+    // 256 and 512px, a mismatch worse than the one this file exists to catch,
+    // and every ratio assertion still passes.
     const source = readFileSync(callbackPagePath, "utf8");
-    // The page draws one sister app per render and picks the class from the
-    // connection id, so the guard is on that condition rather than on markup:
-    // dropping it would leave PwrGit inset again, and widening it to every
-    // connection would scale PwrSnap's already full-bleed plate past its tile.
-    const match = matchCss(
+    const rule = matchCss(
       source,
-      /const insetPlate = connectionId === "(\w+)";/,
-      "which connection the callback page treats as inset",
-    );
-    expect(match[1], "the inset asset the measurements above identified")
-      .toBe(INSET.toLowerCase());
+      /^\s*\.app-mark\s*\{([^}]*)\}/m,
+      "an .app-mark rule sizing the mark to its tile",
+      callbackPageName,
+    )[1];
+    for (const declaration of ["width: 100%", "height: 100%", "object-fit: contain"]) {
+      expect(rule, `.app-mark no longer states ${declaration}`).toContain(declaration);
+    }
   });
 });

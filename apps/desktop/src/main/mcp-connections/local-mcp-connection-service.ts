@@ -270,7 +270,15 @@ export function htmlResponse(
        ratio, and the same reason, as \`.mcp-connection__icon--inset-plate\` in
        the renderer's app.css. The tile is the parent, so only the artwork
        grows, and the only thing this paints outside the tile is the asset's
-       own transparent margin. */
+       own transparent margin.
+
+       Two things here are load-bearing and look removable. The explicit 100%
+       on .app-mark is what fills the tile — place-items only centres what is
+       already sized, and without the 100% each mark falls back to its
+       intrinsic 256 or 512px. And the tile must stay unclipped: the scaled
+       mark overhangs it by 6.4px per side by design, so an overflow: hidden
+       added to .app-icon crops the plate straight back to the 80% this rule
+       exists to undo. */
     .app-mark--inset-plate { transform: scale(calc(256 / 206)); }
     .line { position: relative; height: 38px; }
     .line::before { content: ""; position: absolute; top: 18px; left: 0; right: 0; height: 2px; background: linear-gradient(90deg, #8a3c17, #ff8a1f 45%, #ffc174 55%, #8a3c17); box-shadow: 0 0 14px rgba(255, 138, 31, .7); }
@@ -292,7 +300,10 @@ export function htmlResponse(
     <p class="eyebrow">PwrSuite connection</p>
     <h1 id="title">${safeTitle}</h1>
     <p class="detail" id="detail">${escapeHtml(detail)}</p>
-    <div class="connection" aria-label="PwrAgent connection to ${displayName}">
+    <!-- role="group" so the label is announced: aria-label is ignored on a
+         bare div, which is role="generic", so the relationship this diagram
+         draws reached assistive technology as two loose words. -->
+    <div class="connection" role="group" aria-label="PwrAgent connection to ${displayName}">
       <div class="app"><span class="app-icon"><img class="app-mark" src="/assets/pwragent.png" alt=""></span><span>PwrAgent</span></div>
       <div class="line" aria-hidden="true"><span class="signal"></span></div>
       <div class="app"><span class="app-icon"><img class="app-mark${insetPlate ? " app-mark--inset-plate" : ""}" src="/assets/${connectionId}.png" alt=""></span><span>${displayName}</span></div>
@@ -314,10 +325,18 @@ export function htmlResponse(
       document.getElementById("detail").textContent = detail;
       document.getElementById("status").textContent = status;
     };
+    // PwrAgent stops answering 30s after it finishes with this flow. Without a
+    // cap, a tab still open after that polls a closed loopback port four times
+    // a second for as long as it stays open, while the page goes on promising
+    // a result it can no longer get. Counts consecutive unanswered polls only,
+    // so a slow start costs nothing: 240 of them is a minute, well past the
+    // close, and any answer at all resets it.
+    let unanswered = 0;
     const check = async () => {
       try {
         const response = await fetch("/oauth/status", { cache: "no-store" });
         const result = await response.json();
+        unanswered = 0;
         if (result.state === "connected") {
           settle("is-connected", "PwrAgent is connected to ${displayName}", result.detail, "Secure connection ready");
           return;
@@ -326,7 +345,17 @@ export function htmlResponse(
           settle("is-failed", "Connection could not be completed", result.detail, "Connection stopped");
           return;
         }
-      } catch {}
+      } catch {
+        if (++unanswered > 240) {
+          settle(
+            "is-failed",
+            "Connection could not be completed",
+            "PwrAgent stopped reporting on this connection. Check PwrAgent to see whether it finished.",
+            "Connection stopped",
+          );
+          return;
+        }
+      }
       setTimeout(check, 250);
     };
     void check();
@@ -340,8 +369,14 @@ function connectionAsset(name: "pwragent" | ConnectionId): Buffer | null {
   const sourceFile = name === "pwragent"
     ? "build/icon.png"
     : `src/renderer/src/assets/${name}/${name}-app-icon.png`;
+  // `process.resourcesPath` is an Electron addition, and `join` throws on the
+  // `undefined` it is everywhere else — outside the loop's try, so the whole
+  // function threw instead of returning null. Only Electron has a packaged
+  // copy to find, so drop the candidate rather than the caller.
   const candidates = [
-    join(process.resourcesPath, fileName),
+    ...(typeof process.resourcesPath === "string"
+      ? [join(process.resourcesPath, fileName)]
+      : []),
     join(__dirname, "../../", sourceFile),
     join(__dirname, "../../../", sourceFile),
   ];
