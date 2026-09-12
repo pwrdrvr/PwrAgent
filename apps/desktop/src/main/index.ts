@@ -1327,17 +1327,28 @@ export function bootstrapApp(): void {
     getDesktopBackendRegistry().setPwrAgentFederationHandler(
       createFederationAgentToolsHandler(federationAgentToolOptions),
     );
-    // The same tools, for the Star Map [+] intake agent. It differs in one
-    // field: the intake's calling thread is an ephemeral turn that dissolves
-    // the moment it finishes, so crediting it as the created thread's
-    // `sourceThread` would leave a ThreadChip linking to nothing. An intake
-    // thread was asked for by the operator through PwrAgent, which is what
-    // the dialog recorded before there was an agent in the loop.
-    getDesktopBackendRegistry().setStarMapIntakeFederationHandler(
-      createFederationAgentToolsHandler({
-        ...federationAgentToolOptions,
-        resolveMessageOrigin: () => ({ kind: "pwragent" }),
-      }),
+    // The same tools, for the Star Map [+] intake agent — built per intake
+    // rather than once, because two of its options are properties of the one
+    // request rather than of the machine:
+    //
+    // - `resolveMessageOrigin`: the intake's calling thread is an ephemeral
+    //   turn that dissolves the moment it finishes, so crediting it as the
+    //   created thread's `sourceThread` would leave a ThreadChip linking to
+    //   nothing. An intake thread was asked for by the operator through
+    //   PwrAgent, which is what the dialog recorded before there was an agent
+    //   in the loop.
+    // - `resolveSourceTurnAttachments`: the shared resolver looks the calling
+    //   thread's turn up in the registry, and an ephemeral helper turn is not
+    //   in it — so it returns nothing and the operator's pasted screenshots
+    //   never reach the thread they described. The intake's staged
+    //   attachments are handed in directly instead.
+    getDesktopBackendRegistry().setStarMapIntakeFederationHandlerFactory(
+      (attachments) =>
+        createFederationAgentToolsHandler({
+          ...federationAgentToolOptions,
+          resolveMessageOrigin: () => ({ kind: "pwragent" }),
+          resolveSourceTurnAttachments: () => attachments,
+        }),
     );
     getDesktopBackendRegistry().setFederatedThreadMessageHandler(
       createFederatedThreadMessageHandler({

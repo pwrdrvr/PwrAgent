@@ -246,6 +246,52 @@ describe("IntakeDialog", () => {
     });
   });
 
+  /**
+   * The textarea stays live while the operator chooses, so a payload derived
+   * from the old wording must not survive an edit — otherwise their
+   * correction is silently replaced by the sentence they corrected.
+   */
+  it("retires the extracted payload when the request is edited before the pick", async () => {
+    const { dispatchStarMapIntake } = setup(undefined);
+    let calls = 0;
+    dispatchStarMapIntake.mockImplementation(
+      async (request: { requestId: string }) =>
+        (calls++ > 0
+          ? {
+              status: "created",
+              requestId: request.requestId,
+              backend: "codex",
+              threadId: "thread-2",
+            }
+          : {
+              status: "needs_disambiguation",
+              requestId: request.requestId,
+              candidateSource: "resolver",
+              candidates: [{ directoryKey: "dir-a", label: "PwrSnap" }],
+              input: "Make the donuts.",
+            }) as never,
+    );
+
+    submitText("Make a thread and ask it to make the donuts.");
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /PwrSnap/ })).toBeTruthy();
+    });
+
+    fireEvent.change(screen.getByPlaceholderText(/Give me a task/), {
+      target: { value: "Make the donuts, but only the glazed ones." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /PwrSnap/ }));
+
+    await waitFor(() => {
+      const last = dispatchStarMapIntake.mock.calls.at(-1)?.[0] as unknown as {
+        request: string;
+        input?: string;
+      };
+      expect(last.request).toBe("Make the donuts, but only the glazed ones.");
+      expect(last.input).toBeUndefined();
+    });
+  });
+
   it("omits the payload on a first dispatch, which has nothing to carry", async () => {
     const { dispatchStarMapIntake } = setup(undefined);
     dispatchStarMapIntake.mockImplementation(

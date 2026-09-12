@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import type {
+  AppServerTurnInputItem,
   NavigationDirectoryRow,
   StarMapIntakeCandidate,
   StarMapIntakeCandidateSource,
@@ -19,6 +20,10 @@ import {
   STAR_MAP_INTAKE_AGENT_SYSTEM,
   type StarMapIntakeAgentOutcome,
 } from "./star-map-intake-agent";
+import {
+  MAX_DISAMBIGUATION_CANDIDATES,
+  truncateCandidateReason,
+} from "./star-map-intake-candidates";
 
 const log = getMainLogger("pwragent:star-map-intake");
 
@@ -32,7 +37,7 @@ const log = getMainLogger("pwragent:star-map-intake");
  */
 const INTAKE_TIMEOUT_MS = 20_000;
 /**
- * How long the resolver may take to answer.
+ * How long the deterministic resolver may take to answer.
  *
  * This was 20s, inherited from `DEFAULT_CODEX_THREAD_TITLE_TIMEOUT_MS` by
  * copying the constant rather than by measuring this call. The title helper
@@ -45,6 +50,23 @@ const INTAKE_TIMEOUT_MS = 20_000;
  * they waited and got nothing. Err long.
  */
 const INTAKE_TURN_TIMEOUT_MS = 90_000;
+/**
+ * How long the intake agent's turn may take — a different workload with a
+ * different failure mode, so deliberately not the resolver's number.
+ *
+ * The agent does not answer a question, it does the work: several tool calls,
+ * then a thread creation that `create_instance_thread` itself warns "can take
+ * minutes" (worktree preparation, environment startup), and for which the
+ * federation client alone allows 120s. A budget under that expires *while the
+ * creation runs*, which is the expensive direction here: the intake then has
+ * no confirmed thread. `isCreationInFlight` keeps that from becoming a second
+ * thread, but the operator still waits and then reads an unconfirmed result,
+ * so the budget has to clear a slow creation rather than merely survive one.
+ *
+ * A remote [+] card has its own ceiling regardless: the federation
+ * `starMapIntake` RPC is bounded at 120s by the calling instance.
+ */
+const INTAKE_AGENT_TURN_TIMEOUT_MS = 240_000;
 const INTAKE_PREFERENCES_MAX_CHARS = 8_000;
 /**
  * How many directories the deterministic resolver is shown. Every registered
@@ -60,22 +82,12 @@ const INTAKE_PREFERENCES_MAX_CHARS = 8_000;
  * for the next page.
  */
 const INTAKE_MAX_PROMPT_DIRECTORIES = 80;
-const MAX_DISAMBIGUATION_CANDIDATES = 8;
 /**
  * Create without asking at or above this much confidence in the leading
  * project. Below it the operator picks — but from the resolver's ranking,
  * not from the registry in storage order.
  */
 const AUTO_CREATE_CONFIDENCE = 0.5;
-const MAX_CANDIDATE_REASON_CHARS = 120;
-/**
- * Cut a reason at a character boundary, so a clause ending in an emoji or
- * other non-BMP character does not leave a lone surrogate in the row.
- */
-function truncateReason(reason: string): string {
-  if (reason.length <= MAX_CANDIDATE_REASON_CHARS) return reason;
-  return [...reason].slice(0, MAX_CANDIDATE_REASON_CHARS).join("");
-}
 
 /**
  * The resolver ranks; it does not choose. One pick plus a confidence number
@@ -263,7 +275,7 @@ async function resolveViaConfiguredBackend(params: {
           && Number.isFinite(record.confidence)
             ? record.confidence
             : 0,
-        reason: reason ? truncateReason(reason) : undefined,
+        reason: reason ? truncateCandidateReason(reason) : undefined,
       });
     }
     // Order by the confidence the resolver reported rather than by the
@@ -337,6 +349,7 @@ async function resolveViaIntakeAgent(params: {
   text: string;
   preferences?: string;
   directories: NavigationDirectoryRow[];
+  attachments: AppServerTurnInputItem[];
 }): Promise<StarMapIntakeAgentOutcome | undefined> {
   const directoryKeys = new Set(params.directories.map((entry) => entry.key));
   const labelsByKey = new Map(
@@ -356,8 +369,13 @@ async function resolveViaIntakeAgent(params: {
           : []),
       ].join("\n"),
       prompt: params.text,
+      // The operator's staged images and files. `create_instance_thread`
+      // otherwise resolves attachments from the calling thread's turn, and an
+      // ephemeral intake turn has none — so without this the screenshot the
+      // operator pasted never reaches the thread they pasted it for.
+      attachments: params.attachments,
       timeoutMs: INTAKE_TIMEOUT_MS,
-      turnTimeoutMs: INTAKE_TURN_TIMEOUT_MS,
+      turnTimeoutMs: INTAKE_AGENT_TURN_TIMEOUT_MS,
       // Candidates the operator can act on have to be projects on this
       // instance: the dialog answers with a directoryKey that the next
       // dispatch looks up in this same local index. A key naming a peer's
@@ -483,6 +501,7 @@ export async function dispatchStarMapIntake(
         text,
         preferences,
         directories,
+        attachments: request.attachments ?? [],
       });
       if (agentOutcome?.kind === "created") {
         publishIntakeStatus({
@@ -497,6 +516,16 @@ export async function dispatchStarMapIntake(
           backend: agentOutcome.backend,
           threadId: agentOutcome.threadId,
         };
+      }
+      if (agentOutcome?.kind === "creation_unconfirmed") {
+        // The creation had not answered when the turn ended. Falling through
+        // would create a second thread for the same request, which is the one
+        // outcome a single intake must never have, so stop and say so.
+        const message =
+          "The thread is still being created. It will appear on the map when"
+          + " it is ready — check before asking again.";
+        publishIntakeStatus({ requestId, phase: "failed", message });
+        return { status: "failed", requestId, error: message };
       }
       if (agentOutcome?.kind === "needs_disambiguation") {
         // An agent that asked with no usable candidate still asked. Show the

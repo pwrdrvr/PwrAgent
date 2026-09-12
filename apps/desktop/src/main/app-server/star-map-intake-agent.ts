@@ -20,6 +20,10 @@ import {
   type PwrAgentFederationHandler,
 } from "../agent-tools/pwragent-federation-agent-tools";
 import type { HelperThreadToolCallHandler } from "../codex-app-server/client";
+import {
+  MAX_DISAMBIGUATION_CANDIDATES,
+  truncateCandidateReason,
+} from "./star-map-intake-candidates";
 
 /**
  * The tools the Star Map `[+]` intake agent may call.
@@ -51,10 +55,6 @@ const INTAKE_FEDERATION_TOOLS: readonly PwrAgentFederationOperationName[] = [
 
 export const ASK_OPERATOR_TO_PICK_PROJECT_TOOL = "ask_operator_to_pick_project";
 
-/** Mirrors `MAX_DISAMBIGUATION_CANDIDATES` in the dialog's response contract. */
-const MAX_ASK_CANDIDATES = 8;
-const MAX_ASK_REASON_CHARS = 120;
-
 export type StarMapIntakeAgentOutcome =
   | {
       kind: "created";
@@ -71,16 +71,16 @@ export type StarMapIntakeAgentOutcome =
        * second agent turn to re-derive the same sentence.
        */
       input?: string;
+    }
+  | {
+      /**
+       * A creation was still running when the turn ended. The thread is
+       * probably being created and this intake is finished either way: the
+       * one thing that must not happen is the caller treating this as "no
+       * thread" and creating a second one.
+       */
+      kind: "creation_unconfirmed";
     };
-
-/**
- * Cut at a character boundary so a clause ending in an emoji does not leave a
- * lone surrogate in the row. Same rule as the deterministic resolver's.
- */
-function truncateReason(reason: string): string {
-  if (reason.length <= MAX_ASK_REASON_CHARS) return reason;
-  return [...reason].slice(0, MAX_ASK_REASON_CHARS).join("");
-}
 
 function readString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
@@ -110,8 +110,23 @@ export function buildStarMapIntakeAgentTools(params: {
   dynamicTools: DynamicToolSpec[];
   handleToolCall: HelperThreadToolCallHandler;
   readOutcome: () => StarMapIntakeAgentOutcome | undefined;
+  /**
+   * Whether a creation was started and has not answered yet. The caller reads
+   * this when a turn ends without an outcome: a creation still running is not
+   * the same as no thread, and treating it as one is how a single request
+   * ends up with two threads.
+   */
+  isCreationInFlight: () => boolean;
 } {
   let outcome: StarMapIntakeAgentOutcome | undefined;
+  /**
+   * Set synchronously, before the creation is awaited. `outcome` alone cannot
+   * hold the cap: it is only assigned once the creation resolves, so two calls
+   * arriving in the same step would both read it as unset and both proceed.
+   * Codex dispatches inbound tool calls concurrently, so that is a real
+   * interleaving and not a theoretical one.
+   */
+  let creationInFlight = false;
 
   /**
    * The one-thread cap. The classifier this replaces could only ever create a
@@ -119,6 +134,10 @@ export function buildStarMapIntakeAgentTools(params: {
    * the second creation keeps the blast radius of a misfire identical to what
    * it was, and says why, so a model that misread the request stops rather
    * than retrying against a generic error.
+   *
+   * A creation that *failed* releases the flag: the model may legitimately
+   * retry a different project after a `not_found`. Only a creation that
+   * succeeded is final.
    */
   const federationHandler: PwrAgentFederationHandler | undefined =
     params.federationHandler
@@ -126,30 +145,43 @@ export function buildStarMapIntakeAgentTools(params: {
           if (request.operation !== "create_instance_thread") {
             return await params.federationHandler!(request);
           }
-          if (outcome) {
+          if (outcome || creationInFlight) {
             return {
               ok: false,
               error: {
                 code: "forbidden",
-                message:
-                  "This intake has already finished. Exactly one thread is"
-                  + " created per request, so do not call this tool again —"
-                  + " end the turn instead.",
+                message: outcome
+                  ? "This intake has already finished. Exactly one thread is"
+                    + " created per request, so do not call this tool again —"
+                    + " end the turn instead."
+                  : "A thread is already being created for this request. Wait"
+                    + " for that call to return; do not start another.",
               },
             };
           }
-          const projectKey = readString(request.args.projectKey);
-          if (projectKey) params.onCreateStarting?.(projectKey);
-          const response = await params.federationHandler!(request);
-          if (response.ok) {
-            const result = response.data as CreateInstanceThreadResult;
-            outcome = {
-              kind: "created",
-              backend: result.backend,
-              threadId: result.threadId,
-            };
+          creationInFlight = true;
+          try {
+            // Only a key this instance recognizes is announced: the fallback
+            // would put a raw directory key where the dialog prints a project
+            // name, on the one line that exists for the operator to catch a
+            // wrong pick.
+            const projectKey = readString(request.args.projectKey);
+            if (projectKey && params.resolveDirectoryKey(projectKey)) {
+              params.onCreateStarting?.(projectKey);
+            }
+            const response = await params.federationHandler!(request);
+            if (response.ok) {
+              const result = response.data as CreateInstanceThreadResult;
+              outcome = {
+                kind: "created",
+                backend: result.backend,
+                threadId: result.threadId,
+              };
+            }
+            return response;
+          } finally {
+            creationInFlight = false;
           }
-          return response;
         }
       : undefined;
 
@@ -174,7 +206,7 @@ export function buildStarMapIntakeAgentTools(params: {
           type: "array",
           description:
             "Plausible projects, most likely first, at most"
-            + ` ${MAX_ASK_CANDIDATES}. Use projectKey values from`
+            + ` ${MAX_DISAMBIGUATION_CANDIDATES}. Use projectKey values from`
             + " list_instance_projects only. Return an empty array when"
             + " nothing in the request points anywhere: the operator is then"
             + " shown their recent projects, and an invented ranking makes"
@@ -227,9 +259,9 @@ export function buildStarMapIntakeAgentTools(params: {
         const reason = readString(record.reason);
         candidates.push({
           directoryKey,
-          ...(reason ? { reason: truncateReason(reason) } : {}),
+          ...(reason ? { reason: truncateCandidateReason(reason) } : {}),
         });
-        if (candidates.length >= MAX_ASK_CANDIDATES) break;
+        if (candidates.length >= MAX_DISAMBIGUATION_CANDIDATES) break;
       }
       const input = readString(args.input);
       outcome = {
@@ -264,17 +296,20 @@ export function buildStarMapIntakeAgentTools(params: {
     dynamicTools: router.buildDynamicToolSpecs(),
     handleToolCall: async (request) => {
       const call = readAgentDynamicToolCall(request);
-      if (!call || !router.acceptsDynamicToolCall(call)) {
+      if (!call) {
         return toDynamicToolResponse(
           agentToolFailure({
-            code: "unsupported_operation",
-            message: "That tool is not available to the Star Map intake.",
+            code: "invalid_arguments",
+            message: "That is not a PwrAgent tool call.",
           }),
         );
       }
+      // An unknown or withheld tool is refused by the router itself, with the
+      // `unsupportedMessage` it was constructed with.
       return await router.handleDynamicToolCall({ backend: "codex", call });
     },
     readOutcome: () => outcome,
+    isCreationInFlight: () => creationInFlight,
   };
 }
 

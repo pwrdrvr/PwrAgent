@@ -122,6 +122,13 @@ export function IntakeDialog(props: {
      * than a second resolution of the same sentence.
      */
     input?: string;
+    /**
+     * The request that payload was extracted from. The textarea stays live
+     * while the operator chooses, so an edit made before they pick has to
+     * retire the payload — otherwise their correction is silently replaced by
+     * the sentence they corrected.
+     */
+    requestText?: string;
   }>();
   /**
    * The project the owning instance resolved to, streamed with `creating`.
@@ -405,7 +412,9 @@ export function IntakeDialog(props: {
           setCandidates({
             entries: response.candidates,
             source: response.candidateSource,
-            ...(response.input ? { input: response.input } : {}),
+            ...(response.input
+              ? { input: response.input, requestText: request }
+              : {}),
           });
           return;
         }
@@ -539,7 +548,16 @@ export function IntakeDialog(props: {
                 key={candidate.directoryKey}
                 type="button"
                 className="star-map-intake__candidate"
-                onClick={() => submit(candidate.directoryKey, candidates.input)}
+                onClick={() =>
+                  submit(
+                    candidate.directoryKey,
+                    // Only when the request is still the one it was derived
+                    // from; an edited request has to be read afresh.
+                    candidates.requestText === text.trim()
+                      ? candidates.input
+                      : undefined,
+                  )
+                }
               >
                 <span className="star-map-intake__candidate-label">
                   {candidate.label}

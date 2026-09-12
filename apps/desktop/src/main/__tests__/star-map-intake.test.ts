@@ -771,6 +771,79 @@ describe("dispatchStarMapIntake via the intake agent", () => {
   });
 });
 
+describe("dispatchStarMapIntake agent-path safety", () => {
+  /**
+   * A creation still running when the turn ended is not "no thread". Falling
+   * through to the deterministic resolver would create a second one for the
+   * same request.
+   */
+  it("never creates a second thread when a creation was still in flight", async () => {
+    runStarMapIntakeAgentTurn.mockResolvedValue({
+      status: "ok",
+      outcome: { kind: "creation_unconfirmed" },
+    });
+    generateStructuredObject.mockResolvedValue(
+      ranked([{ directoryKey: "dir-snap", confidence: 0.9 }]),
+    );
+
+    const response = await dispatchStarMapIntake({
+      requestId: "req-inflight",
+      request: "Make the donuts in PwrAgent",
+    });
+
+    expect(response).toMatchObject({
+      status: "failed",
+      error: expect.stringContaining("still being created"),
+    });
+    expect(materializeDirectoryLaunchpad).not.toHaveBeenCalled();
+    expect(generateStructuredObject).not.toHaveBeenCalled();
+  });
+
+  /**
+   * `create_instance_thread` resolves attachments from the calling thread's
+   * turn, and an ephemeral intake turn has none — so the operator's staged
+   * images have to be handed to the agent's federation handler directly.
+   */
+  it("hands the operator's attachments to the agent turn", async () => {
+    runStarMapIntakeAgentTurn.mockResolvedValue({
+      status: "ok",
+      outcome: { kind: "created", backend: "codex", threadId: "thread-donut" },
+    });
+    const attachments = [
+      { type: "localImage" as const, name: "shot.png", path: "/staged/shot.png" },
+    ];
+
+    await dispatchStarMapIntake({
+      requestId: "req-attach",
+      request: "Fix this crash",
+      attachments,
+    });
+
+    expect(runStarMapIntakeAgentTurn).toHaveBeenCalledWith(
+      expect.objectContaining({ attachments }),
+    );
+  });
+
+  it("gives the agent turn a budget that outlives a slow creation", async () => {
+    runStarMapIntakeAgentTurn.mockResolvedValue({
+      status: "ok",
+      outcome: { kind: "created", backend: "codex", threadId: "thread-donut" },
+    });
+
+    await dispatchStarMapIntake({
+      requestId: "req-budget",
+      request: "Make the donuts in PwrAgent",
+    });
+
+    // The federation client alone allows 120s for create_instance_thread, so
+    // a turn budget at or under that expires while the creation runs.
+    const [call] = runStarMapIntakeAgentTurn.mock.calls.at(-1) as [
+      { turnTimeoutMs: number },
+    ];
+    expect(call.turnTimeoutMs).toBeGreaterThan(120_000);
+  });
+});
+
 describe("dispatchStarMapIntake payload carrying", () => {
   /**
    * The payload was extracted for the project the operator picked. When that

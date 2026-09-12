@@ -8695,7 +8695,9 @@ export class DesktopBackendRegistry {
   private readonly threadOrchestrationHandler: PwrAgentThreadOrchestrationHandler =
     async (request) => await this.handleThreadOrchestrationRequest(request);
   private federationHandler: PwrAgentFederationHandler | undefined;
-  private starMapIntakeFederationHandler: PwrAgentFederationHandler | undefined;
+  private starMapIntakeFederationHandlerFactory:
+    | ((attachments: AppServerTurnInputItem[]) => PwrAgentFederationHandler)
+    | undefined;
   private federatedThreadMessageHandler:
     | PwrAgentFederatedThreadMessageHandler
     | undefined;
@@ -9921,15 +9923,19 @@ export class DesktopBackendRegistry {
   }
 
   /**
-   * The federation tools as the Star Map intake agent sees them. A separate
-   * instance rather than a flag on the shared one: it differs only in how a
-   * created thread records who asked for it, and that difference is a
-   * property of the caller, not of the call.
+   * The federation tools as the Star Map intake agent sees them. A factory
+   * rather than a handler: the intake's options depend on the request being
+   * served — who is credited for the created thread, and which staged
+   * attachments belong to it — so one instance built at startup could not
+   * carry either.
    */
-  setStarMapIntakeFederationHandler(
-    handler: PwrAgentFederationHandler | null | undefined,
+  setStarMapIntakeFederationHandlerFactory(
+    factory:
+      | ((attachments: AppServerTurnInputItem[]) => PwrAgentFederationHandler)
+      | null
+      | undefined,
   ): void {
-    this.starMapIntakeFederationHandler = handler ?? undefined;
+    this.starMapIntakeFederationHandlerFactory = factory ?? undefined;
   }
 
   setFederatedThreadMessageHandler(
@@ -22755,6 +22761,7 @@ export class DesktopBackendRegistry {
     prompt: string;
     system: string;
     resolveDirectoryKey: (projectKey: string) => string | undefined;
+    attachments?: AppServerTurnInputItem[];
     onCreateStarting?: (projectKey: string) => void;
     model?: string;
     reasoningEffort?: string;
@@ -22765,13 +22772,21 @@ export class DesktopBackendRegistry {
     | { status: "failed"; reason: string }
     | undefined
   > {
+    // Without the factory every tool the agent could call answers
+    // "unavailable", so the turn is bought and guaranteed to produce nothing.
+    // Declining here sends the caller straight to the deterministic resolver.
+    if (!this.starMapIntakeFederationHandlerFactory) {
+      return undefined;
+    }
     const codex = (await this.listBackends({ includeUnavailable: true })).backends
       .find((summary) => summary.kind === "codex");
     if (!codex?.available || !this.codexClient.runHelperToolTurn) {
       return undefined;
     }
     const tools = buildStarMapIntakeAgentTools({
-      federationHandler: this.starMapIntakeFederationHandler,
+      federationHandler: this.starMapIntakeFederationHandlerFactory(
+        params.attachments ?? [],
+      ),
       resolveDirectoryKey: params.resolveDirectoryKey,
       ...(params.onCreateStarting
         ? { onCreateStarting: params.onCreateStarting }
@@ -22793,7 +22808,14 @@ export class DesktopBackendRegistry {
     // send the fallback on to create a second thread.
     const outcome = tools.readOutcome();
     if (result.status === "failed" && !outcome) {
-      return { status: "failed", reason: result.reason };
+      // A creation that had not answered when the turn ended may still be
+      // running: `create_instance_thread` warns that startup "can take
+      // minutes", and the federation client alone allows two for it. Reported
+      // as a failure this becomes the fallback's cue to create a second
+      // thread for the same request, so say what actually happened instead.
+      return tools.isCreationInFlight()
+        ? { status: "ok", outcome: { kind: "creation_unconfirmed" } }
+        : { status: "failed", reason: result.reason };
     }
     return { status: "ok", outcome };
   }

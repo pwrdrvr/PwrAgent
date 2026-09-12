@@ -207,6 +207,142 @@ describe("star map intake agent tool surface", () => {
     expect(tools.readOutcome()).toMatchObject({ threadId: "thread-new" });
   });
 
+  /**
+   * `outcome` alone cannot hold the cap: it is assigned only after the
+   * creation resolves, so two calls arriving in the same step would both read
+   * it as unset. Codex dispatches inbound tool calls concurrently.
+   */
+  it("refuses a second creation that arrives while the first is still running", async () => {
+    let releaseFirst: () => void = () => {};
+    const federationHandler = vi.fn(async (_request: PwrAgentFederationRequest) => {
+      await new Promise<void>((resolve) => {
+        releaseFirst = resolve;
+      });
+      return {
+        ok: true as const,
+        data: {
+          instanceId: "inst-local",
+          instanceLabel: "This Mac",
+          isLocal: true,
+          backend: "codex" as const,
+          threadId: "thread-new",
+          executionMode: "default" as const,
+          workMode: "local" as const,
+          groupingMode: "none" as const,
+          message: "created",
+        },
+      };
+    });
+    const tools = build({ federationHandler });
+
+    const first = tools.handleToolCall(call("create_instance_thread", DONUT_CREATE));
+    // Second call lands before the first has resolved, so `outcome` is unset.
+    const second = await tools.handleToolCall(
+      call("create_instance_thread", { ...DONUT_CREATE, input: "And again." }),
+    );
+
+    expect(second.success).toBe(false);
+    expect(federationHandler).toHaveBeenCalledTimes(1);
+
+    releaseFirst();
+    expect((await first).success).toBe(true);
+    expect(tools.readOutcome()).toMatchObject({ threadId: "thread-new" });
+  });
+
+  it("reports a creation that has not answered yet as in flight", async () => {
+    let releaseFirst: () => void = () => {};
+    const federationHandler = vi.fn(async (_request: PwrAgentFederationRequest) => {
+      await new Promise<void>((resolve) => {
+        releaseFirst = resolve;
+      });
+      return {
+        ok: true as const,
+        data: {
+          instanceId: "inst-local",
+          instanceLabel: "This Mac",
+          isLocal: true,
+          backend: "codex" as const,
+          threadId: "thread-new",
+          executionMode: "default" as const,
+          workMode: "local" as const,
+          groupingMode: "none" as const,
+          message: "created",
+        },
+      };
+    });
+    const tools = build({ federationHandler });
+
+    expect(tools.isCreationInFlight()).toBe(false);
+    const pending = tools.handleToolCall(
+      call("create_instance_thread", DONUT_CREATE),
+    );
+    expect(tools.isCreationInFlight()).toBe(true);
+
+    releaseFirst();
+    await pending;
+    expect(tools.isCreationInFlight()).toBe(false);
+  });
+
+  /**
+   * A `not_found` on one project is not the end of the intake — the model may
+   * legitimately try another. Only a creation that succeeded is final.
+   */
+  it("lets the agent retry after a creation fails", async () => {
+    const federationHandler = vi.fn(async (request: PwrAgentFederationRequest) => {
+      const args = request.args as { projectKey?: string };
+      return args.projectKey === "dir-agent"
+        ? {
+            ok: false as const,
+            error: { code: "not_found" as const, message: "gone" },
+          }
+        : {
+            ok: true as const,
+            data: {
+              instanceId: "inst-local",
+              instanceLabel: "This Mac",
+              isLocal: true,
+              backend: "codex" as const,
+              threadId: "thread-second",
+              executionMode: "default" as const,
+              workMode: "local" as const,
+              groupingMode: "none" as const,
+              message: "created",
+            },
+          };
+    });
+    const tools = build({ federationHandler });
+
+    const failed = await tools.handleToolCall(
+      call("create_instance_thread", DONUT_CREATE),
+    );
+    const retried = await tools.handleToolCall(
+      call("create_instance_thread", { ...DONUT_CREATE, projectKey: "dir-snap" }),
+    );
+
+    expect(failed.success).toBe(false);
+    expect(retried.success).toBe(true);
+    expect(tools.readOutcome()).toMatchObject({ threadId: "thread-second" });
+  });
+
+  /**
+   * The `creating` line is where the dialog prints a project name, and it is
+   * the operator's last chance to catch a wrong pick. A key this instance
+   * does not have would put a raw directory key there instead.
+   */
+  it("does not announce a project key this instance does not have", async () => {
+    const onCreateStarting = vi.fn();
+    const tools = build({ onCreateStarting });
+
+    await tools.handleToolCall(
+      call("create_instance_thread", {
+        ...DONUT_CREATE,
+        projectKey: "dir-on-some-peer",
+      }),
+    );
+
+    expect(onCreateStarting).not.toHaveBeenCalled();
+  });
+
   it("does not let a creation follow an ask", async () => {
     const federationHandler = vi.fn();
     const tools = build({
