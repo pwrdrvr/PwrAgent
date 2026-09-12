@@ -1,8 +1,13 @@
 // @vitest-environment jsdom
-// The page the browser lands on after PwrSnap's or PwrGit's authorization
-// screen. It is served from a throwaway localhost port by an app the person is
-// not looking at, so the page itself has to say what opened it — and it is the
+// The page the browser lands on after an MCP server's authorization screen.
+// It is served from a throwaway localhost port by an app the person is not
+// looking at, so the page itself has to say what opened it — and it is the
 // one PwrAgent surface with no window chrome, no renderer, and no E2E lane.
+//
+// The page moved into the managed gateway when that took over the callback
+// flow for every connection, sister apps included. Only the two sisters ship
+// a mark, so only they are parameterized here; a remote server gets the
+// lettered tile and draws one <img>, not two.
 //
 // Parsed rather than string-matched: this project is `environment: "node"`, so
 // the file opts into jsdom for `DOMParser` alone. Nothing here executes the
@@ -12,7 +17,7 @@
 // The icon geometry the page depends on lives with the assets it measures, in
 // `scripts/pwrsuite-brand-icons.test.mjs`.
 import { describe, expect, it } from "vitest";
-import { htmlResponse } from "../mcp-connections/local-mcp-connection-service";
+import { htmlResponse } from "../mcp-connections/mcp-connection-gateway-service";
 
 /**
  * Both sister apps, each with its own copy. Parameterized because the page is
@@ -37,7 +42,11 @@ function render(
   connection: (typeof CONNECTIONS)[number],
   [title, detail, options]: readonly [string, string, { liveStatus?: boolean }],
 ) {
-  return htmlResponse(title, detail, options, connection.id);
+  return htmlResponse(title, detail, {
+    ...options,
+    connectionId: connection.id,
+    displayName: connection.name,
+  });
 }
 
 function parse(page: string): Document {
@@ -140,16 +149,25 @@ describe("OAuth callback page", () => {
     // with the real sink unescaped — and this page's CSP allows inline script.
     const payload = '<script>alert("t")</script>';
     for (const connection of CONNECTIONS) {
+      const branded = {
+        connectionId: connection.id,
+        displayName: connection.name,
+      };
       for (const page of [
-        htmlResponse(`${connection.name} connection declined`, payload, {}, connection.id),
-        htmlResponse(payload, "The user declined.", {}, connection.id),
+        htmlResponse(`${connection.name} connection declined`, payload, branded),
+        htmlResponse(payload, "The user declined.", branded),
       ]) {
         expect(parse(page).querySelectorAll("script")).toHaveLength(0);
         expect(page).toContain("&lt;script&gt;alert(&quot;t&quot;)&lt;/script&gt;");
       }
     }
     // The escaped text still reads back as the original, in both slots.
-    const rendered = parse(htmlResponse(payload, payload, {}, "pwrgit"));
+    const rendered = parse(
+      htmlResponse(payload, payload, {
+        connectionId: "pwrgit",
+        displayName: "PwrGit",
+      }),
+    );
     expect(rendered.getElementById("title")?.textContent).toBe(payload);
     expect(rendered.getElementById("detail")?.textContent).toBe(payload);
   });

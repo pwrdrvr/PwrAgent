@@ -182,14 +182,33 @@ function delay(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
-function htmlResponse(
+/**
+ * The page the browser lands on after the MCP server's authorization screen.
+ * Exported for `oauth-callback-page.test.ts`: it is the only part of this
+ * service a person ever looks at, and nothing else here renders markup.
+ */
+export function htmlResponse(
   title: string,
   detail: string,
-  options: { displayName?: string; liveStatus?: boolean } = {},
+  options: {
+    /**
+     * Picks the mark beside PwrAgent's. The two sister apps ship one; every
+     * other connection is a remote server PwrAgent has no artwork for and
+     * gets the lettered tile instead.
+     */
+    connectionId?: string;
+    displayName?: string;
+    liveStatus?: boolean;
+  } = {},
 ): string {
   const safeTitle = escapeHtml(title);
   const displayName = options.displayName ?? "MCP server";
   const safeDisplayName = escapeHtml(displayName);
+  const connectionId = options.connectionId;
+  const brandedMark = connectionId === PWRSNAP_MCP_CONNECTION_ID
+    || connectionId === PWRGIT_MCP_CONNECTION_ID
+      ? connectionId
+      : undefined;
   const connectedTitle = JSON.stringify(
     `PwrAgent is connected to ${displayName}`,
   ).replaceAll("<", "\\u003c");
@@ -201,6 +220,11 @@ function htmlResponse(
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="referrer" content="no-referrer">
   <title>${safeTitle}</title>
+  <!-- PwrAgent's own mark, not the server's: this window belongs to
+       PwrAgent, and the tab is where someone looks to ask what opened it.
+       Same route the diagram below draws from, so it needs no second asset
+       and nothing new from this page's own img-src 'self' policy. -->
+  <link rel="icon" type="image/png" href="/assets/pwragent.png">
   <style>
     :root { color-scheme: dark; font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
     * { box-sizing: border-box; }
@@ -212,7 +236,14 @@ function htmlResponse(
     .detail { max-width: 610px; margin: 20px auto 0; color: #aaa49d; font-size: 17px; line-height: 1.55; }
     .connection { display: grid; grid-template-columns: 138px minmax(140px, 1fr) 138px; align-items: center; gap: 22px; max-width: 650px; margin: 58px auto 50px; }
     .app { display: grid; justify-items: center; gap: 13px; color: #d9d4cd; font-size: 13px; font-weight: 680; }
-    .app-icon { display: grid; width: 104px; height: 104px; padding: 4px; place-items: center; border: 1px solid #2b2926; border-radius: 27px; object-fit: contain; color: #f1883a; background: #141312; box-shadow: 0 20px 55px rgba(0, 0, 0, .45); font-size: 30px; font-weight: 760; }
+    .app-icon { display: grid; place-items: center; width: 104px; height: 104px; padding: 4px; border: 1px solid #2b2926; border-radius: 27px; color: #f1883a; background: #141312; box-shadow: 0 20px 55px rgba(0, 0, 0, .45); font-size: 30px; font-weight: 760; }
+    /* Each mark is its own app's icon, copied verbatim, and every one of them
+       is full-bleed: the plate covers its whole canvas, so the marks fill
+       their tiles at the same size with nothing to compensate for. The
+       explicit 100% below is what does the filling and looks removable —
+       place-items only centres what is already sized, and without it each
+       mark falls back to its intrinsic 256 or 512px. */
+    .app-mark { width: 100%; height: 100%; object-fit: contain; }
     .line { position: relative; height: 38px; }
     .line::before { content: ""; position: absolute; top: 18px; left: 0; right: 0; height: 2px; background: linear-gradient(90deg, #8a3c17, #ff8a1f 45%, #ffc174 55%, #8a3c17); box-shadow: 0 0 14px rgba(255, 138, 31, .7); }
     .signal { position: absolute; top: 12px; left: -4px; width: 14px; height: 14px; border: 3px solid #090909; border-radius: 50%; background: #ff9c43; box-shadow: 0 0 0 3px rgba(255, 138, 31, .18), 0 0 18px #ff8a1f; animation: call 1.8s cubic-bezier(.45, 0, .25, 1) infinite; }
@@ -233,36 +264,64 @@ function htmlResponse(
     <p class="eyebrow">Secure MCP connection</p>
     <h1 id="title">${safeTitle}</h1>
     <p class="detail" id="detail">${escapeHtml(detail)}</p>
-    <div class="connection" aria-label="PwrAgent connection to ${safeDisplayName}">
-      <div class="app"><img class="app-icon" src="/assets/pwragent.png" alt="PwrAgent"><span>PwrAgent</span></div>
+    <!-- role="group" so the label is announced: aria-label is ignored on a
+         bare div, which is role="generic", so the relationship this diagram
+         draws reached assistive technology as two loose words. -->
+    <div class="connection" role="group" aria-label="PwrAgent connection to ${safeDisplayName}">
+      <div class="app"><span class="app-icon"><img class="app-mark" src="/assets/pwragent.png" alt=""></span><span>PwrAgent</span></div>
       <div class="line" aria-hidden="true"><span class="signal"></span></div>
-      <div class="app">${displayName === "PwrSnap"
-        ? `<img class="app-icon" src="/assets/pwrsnap.png" alt="PwrSnap">`
+      <div class="app">${brandedMark
+        ? `<span class="app-icon"><img class="app-mark" src="/assets/${brandedMark}.png" alt=""></span>`
         : `<span class="app-icon" aria-hidden="true">MCP</span>`}<span>${safeDisplayName}</span></div>
     </div>
     <div class="status"><span class="status-dot"></span><span id="status">${liveStatus ? "Finishing secure connection…" : "Connection stopped"}</span></div>
-    <p class="close">You can close this window at any time.</p>
+    <!-- Names the app that opened this window. The heading names PwrAgent
+         only while the connection is going well; "Connection could not be
+         completed" on a stranger's tab names nobody at all. -->
+    <p class="close">PwrAgent opened this window — you can close it at any time.</p>
   </main>
   ${liveStatus ? `<script>
+    // The heading and the tab move together: the tab is the only part of this
+    // page a backgrounded window still shows, and left alone it kept saying
+    // "Connecting…" long after the connection was up or had failed.
+    const settle = (state, heading, detail, status) => {
+      document.body.className = state;
+      document.title = heading;
+      document.getElementById("title").textContent = heading;
+      document.getElementById("detail").textContent = detail;
+      document.getElementById("status").textContent = status;
+    };
+    // PwrAgent stops answering 30s after it finishes with this flow. Without a
+    // cap, a tab still open after that polls a closed loopback port four times
+    // a second for as long as it stays open, while the page goes on promising
+    // a result it can no longer get. Counts consecutive unanswered polls only,
+    // so a slow start costs nothing: 240 of them is a minute, well past the
+    // close, and any answer at all resets it.
+    let unanswered = 0;
     const check = async () => {
       try {
         const response = await fetch("/oauth/status", { cache: "no-store" });
         const result = await response.json();
+        unanswered = 0;
         if (result.state === "connected") {
-          document.body.className = "is-connected";
-          document.getElementById("title").textContent = ${connectedTitle};
-          document.getElementById("detail").textContent = result.detail;
-          document.getElementById("status").textContent = "Secure connection ready";
+          settle("is-connected", ${connectedTitle}, result.detail, "Secure connection ready");
           return;
         }
         if (result.state === "failed") {
-          document.body.className = "is-failed";
-          document.getElementById("title").textContent = "Connection could not be completed";
-          document.getElementById("detail").textContent = result.detail;
-          document.getElementById("status").textContent = "Connection stopped";
+          settle("is-failed", "Connection could not be completed", result.detail, "Connection stopped");
           return;
         }
-      } catch {}
+      } catch {
+        if (++unanswered > 240) {
+          settle(
+            "is-failed",
+            "Connection could not be completed",
+            "PwrAgent stopped reporting on this connection. Check PwrAgent to see whether it finished.",
+            "Connection stopped",
+          );
+          return;
+        }
+      }
       setTimeout(check, 250);
     };
     void check();
@@ -271,13 +330,26 @@ function htmlResponse(
 </html>`;
 }
 
-function connectionAsset(name: "pwragent" | "pwrsnap"): Buffer | null {
-  const fileName = name === "pwragent" ? "pwragent-app-icon.png" : "pwrsnap-app-icon.png";
+const BRANDED_MARKS = ["pwragent", PWRSNAP_MCP_CONNECTION_ID, PWRGIT_MCP_CONNECTION_ID] as const;
+type BrandedMark = (typeof BRANDED_MARKS)[number];
+
+function isBrandedMark(value: string): value is BrandedMark {
+  return (BRANDED_MARKS as readonly string[]).includes(value);
+}
+
+function connectionAsset(name: BrandedMark): Buffer | null {
+  const fileName = `${name}-app-icon.png`;
   const sourceFile = name === "pwragent"
     ? "build/icon.png"
-    : "src/renderer/src/assets/pwrsnap/pwrsnap-app-icon.png";
+    : `src/renderer/src/assets/${name}/${name}-app-icon.png`;
+  // `process.resourcesPath` is an Electron addition, and `join` throws on the
+  // `undefined` it is everywhere else — outside the loop's try, so the whole
+  // function threw instead of returning null. Only Electron has a packaged
+  // copy to find, so drop the candidate rather than the caller.
   const candidates = [
-    join(process.resourcesPath, fileName),
+    ...(typeof process.resourcesPath === "string"
+      ? [join(process.resourcesPath, fileName)]
+      : []),
     join(__dirname, "../../", sourceFile),
     join(__dirname, "../../../", sourceFile),
   ];
@@ -516,6 +588,7 @@ export class McpConnectionGatewayService {
     const callback = await this.createOAuthCallback(
       authorizationState,
       connection.displayName,
+      connection.id,
     );
     try {
       await this.coordinatorFor(connection).authorize({
@@ -1040,6 +1113,7 @@ export class McpConnectionGatewayService {
   private async createOAuthCallback(
     expectedState: string,
     displayName: string,
+    connectionId: string,
   ): Promise<{
     url: URL;
     waitForCode: () => Promise<string>;
@@ -1072,10 +1146,12 @@ export class McpConnectionGatewayService {
         response.end(JSON.stringify(callbackState));
         return;
       }
-      if (requestUrl.pathname === "/assets/pwragent.png" || requestUrl.pathname === "/assets/pwrsnap.png") {
-        const asset = connectionAsset(
-          requestUrl.pathname.endsWith("pwragent.png") ? "pwragent" : "pwrsnap",
-        );
+      const markName = requestUrl.pathname.startsWith("/assets/")
+        && requestUrl.pathname.endsWith(".png")
+        ? requestUrl.pathname.slice("/assets/".length, -".png".length)
+        : undefined;
+      if (markName !== undefined && isBrandedMark(markName)) {
+        const asset = connectionAsset(markName);
         if (asset === null) {
           response.writeHead(404).end();
           return;
@@ -1105,7 +1181,7 @@ export class McpConnectionGatewayService {
           htmlResponse(
             `${displayName} connection rejected`,
             "The authorization state did not match.",
-            { displayName },
+            { connectionId, displayName },
           ),
         );
         rejectRequest?.(new Error(`${displayName} authorization state did not match.`));
@@ -1118,6 +1194,7 @@ export class McpConnectionGatewayService {
         callbackState = { state: "failed", detail };
         response.writeHead(400, callbackHtmlHeaders());
         response.end(htmlResponse(`${displayName} connection declined`, detail, {
+          connectionId,
           displayName,
         }));
         rejectRequest?.(new Error(detail));
@@ -1128,7 +1205,7 @@ export class McpConnectionGatewayService {
         htmlResponse(
           `Connecting PwrAgent to ${displayName}`,
           `${displayName} approved the request. PwrAgent is finishing the secure connection.`,
-          { displayName, liveStatus: true },
+          { connectionId, displayName, liveStatus: true },
         ),
       );
       resolveRequest?.(requestUrl);
