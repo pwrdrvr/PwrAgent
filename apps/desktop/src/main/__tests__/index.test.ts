@@ -162,7 +162,8 @@ const registerMessagingStatusIpcHandlersMock = vi.fn();
 const disposeMessagingStatusIpcHandlersMock = vi.fn();
 const registerMcpConnectionIpcHandlersMock = vi.fn();
 const disposeMcpConnectionIpcHandlersMock = vi.fn();
-const closePwrSnapConnectionServiceMock = vi.fn<() => Promise<void>>();
+const startMcpConnectionGatewayServiceMock = vi.fn<() => Promise<void>>();
+const closeMcpConnectionGatewayServiceMock = vi.fn<() => Promise<void>>();
 const registerMessagingRbacIpcHandlersMock = vi.fn();
 const setApplicationMenuMock = vi.fn();
 const buildFromTemplateMock = vi.fn((template: unknown) => ({
@@ -202,10 +203,12 @@ const isCodexBootstrapDeferredMock = vi.fn(() => false);
 const refreshStartupDiscoveryMock = vi.fn<() => Promise<void>>(
   async () => undefined,
 );
+const resolveMcpGatewayEnabledMock = vi.fn(() => true);
 const getDesktopSettingsServiceMock = vi.fn(() => ({
   resolveDeveloperMode: resolveDeveloperModeMock,
   isCodexBootstrapDeferred: isCodexBootstrapDeferredMock,
   refreshStartupDiscovery: refreshStartupDiscoveryMock,
+  resolveMcpGatewayEnabled: resolveMcpGatewayEnabledMock,
 }));
 const profileFocusRequestWatcherStopMock = vi.fn();
 const resolveActiveProfileNameMock = vi.fn(() => "default");
@@ -570,9 +573,10 @@ vi.mock("../ipc/mcp-connections", () => ({
   disposeMcpConnectionIpcHandlers: disposeMcpConnectionIpcHandlersMock,
 }));
 
-vi.mock("../mcp-connections/pwrsnap-connection-service", () => ({
-  getPwrSnapConnectionService: vi.fn(() => ({
-    close: closePwrSnapConnectionServiceMock,
+vi.mock("../mcp-connections/mcp-connection-gateway-service", () => ({
+  getMcpConnectionGatewayService: vi.fn(() => ({
+    start: startMcpConnectionGatewayServiceMock,
+    close: closeMcpConnectionGatewayServiceMock,
   })),
 }));
 
@@ -723,6 +727,8 @@ describe("bootstrapApp", () => {
     prewarmWindowsJobWrapperMock.mockResolvedValue();
     messagingRuntimeStartMock.mockReset();
     messagingRuntimeStartMock.mockResolvedValue();
+    startMcpConnectionGatewayServiceMock.mockReset();
+    startMcpConnectionGatewayServiceMock.mockResolvedValue();
     federationRuntimeRestartMock.mockReset();
     federationRuntimeRestartMock.mockResolvedValue();
     disposeDesktopFederationRuntimeMock.mockReset();
@@ -778,8 +784,8 @@ describe("bootstrapApp", () => {
     disposeMessagingStatusIpcHandlersMock.mockReset();
     registerMcpConnectionIpcHandlersMock.mockReset();
     disposeMcpConnectionIpcHandlersMock.mockReset();
-    closePwrSnapConnectionServiceMock.mockReset();
-    closePwrSnapConnectionServiceMock.mockResolvedValue();
+    closeMcpConnectionGatewayServiceMock.mockReset();
+    closeMcpConnectionGatewayServiceMock.mockResolvedValue();
     setApplicationMenuMock.mockReset();
     shellOpenExternalMock.mockReset();
     shellOpenPathMock.mockReset();
@@ -1738,7 +1744,7 @@ describe("bootstrapApp", () => {
     );
     expect(disposeDesktopMessagingRuntimeMock).toHaveBeenCalledTimes(1);
     expect(disposeDesktopFederationRuntimeMock).toHaveBeenCalledTimes(1);
-    expect(closePwrSnapConnectionServiceMock).toHaveBeenCalledTimes(1);
+    expect(closeMcpConnectionGatewayServiceMock).toHaveBeenCalledTimes(1);
     expect(disposeAppStateMock).toHaveBeenCalledTimes(1);
     expect(quitMock).toHaveBeenCalledTimes(1);
 
@@ -1747,7 +1753,7 @@ describe("bootstrapApp", () => {
     expect(disposeAppServerIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(disposeDesktopMessagingRuntimeMock).toHaveBeenCalledTimes(1);
     expect(disposeDesktopFederationRuntimeMock).toHaveBeenCalledTimes(1);
-    expect(closePwrSnapConnectionServiceMock).toHaveBeenCalledTimes(1);
+    expect(closeMcpConnectionGatewayServiceMock).toHaveBeenCalledTimes(1);
   });
 
   it("closes renderer windows before disposing their ipc handlers", async () => {

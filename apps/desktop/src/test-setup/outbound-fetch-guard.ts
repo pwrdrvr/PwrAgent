@@ -3,7 +3,7 @@
 // The suites reach several live network paths with no test-mode gate of their
 // own: `ensureManagedGrokRuntime` asks the GitHub releases API what to install
 // and then downloads a ~353 MB Grok runtime, `acp-registry-service` and
-// `pwrsnap-connection-service` call their own endpoints, and `auto-updater`
+// `mcp-connection-gateway-service` call their own endpoints, and `auto-updater`
 // polls GitHub for releases. Only `managedGrok.enabled` gates the first, and
 // two live callers pass it: `resolveManagedGrokCommand` in ACP discovery and
 // the `refreshLocal` branch of the settings IPC.

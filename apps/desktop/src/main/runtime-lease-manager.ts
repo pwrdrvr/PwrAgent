@@ -15,7 +15,7 @@ import type {
 export const PWRAGENT_INSTANCE_ROOT_ENV = "PWRAGENT_INSTANCE_ROOT";
 const RUNTIME_BOOT_TIME_TOLERANCE_MS = 5_000;
 
-export type RuntimeLeaseKind = "messaging" | "federation";
+export type RuntimeLeaseKind = "messaging" | "federation" | "mcp_connections";
 
 export type RuntimeLeaseHolder = {
   instanceId: string;
@@ -154,10 +154,11 @@ export class RuntimeLeaseManager {
         this.ownerPredatesCurrentBoot(owner),
       now: this.now(),
     };
-    const result =
-      kind === "messaging"
-        ? this.store.acquireMessagingLease(params)
-        : this.store.acquireFederationLease(params);
+    const result = kind === "messaging"
+      ? this.store.acquireMessagingLease(params)
+      : kind === "federation"
+        ? this.store.acquireFederationLease(params)
+        : this.store.acquireMcpConnectionsLease(params);
     if (result.acquired) {
       this.heldLeases.add(kind);
       return { acquired: true };
@@ -171,16 +172,12 @@ export class RuntimeLeaseManager {
 
   release(kind: RuntimeLeaseKind): boolean {
     const now = this.now();
-    const released =
-      kind === "messaging"
-        ? this.store.releaseMessagingLease({
-            instanceId: this.instanceId,
-            now,
-          })
-        : this.store.releaseFederationLease({
-            instanceId: this.instanceId,
-            now,
-          });
+    const params = { instanceId: this.instanceId, now };
+    const released = kind === "messaging"
+      ? this.store.releaseMessagingLease(params)
+      : kind === "federation"
+        ? this.store.releaseFederationLease(params)
+        : this.store.releaseMcpConnectionsLease(params);
     this.heldLeases.delete(kind);
     return released;
   }
@@ -250,7 +247,9 @@ export class RuntimeLeaseManager {
   private readLease(kind: RuntimeLeaseKind): MessagingRuntimeLeaseRecord | undefined {
     return kind === "messaging"
       ? this.store.getMessagingLease()
-      : this.store.getFederationLease();
+      : kind === "federation"
+        ? this.store.getFederationLease()
+        : this.store.getMcpConnectionsLease();
   }
 
   private describeLeaseHolder(

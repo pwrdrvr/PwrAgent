@@ -594,6 +594,9 @@ function DesktopAppShell(props: {
   const openMessagingSettings = useCallback(() => {
     openSettingsSection("messaging");
   }, [openSettingsSection]);
+  const openPluginSettings = useCallback(() => {
+    openSettingsSection("plugins");
+  }, [openSettingsSection]);
   const dismissGithubPrSamlNotice = useCallback(() => {
     dispatchAppNotice({ type: "dismiss-prefix", prefix: "github-pr-saml:" });
     setGithubPrSamlEvents((current) => current.slice(1));
@@ -2401,6 +2404,7 @@ function DesktopAppShell(props: {
     },
     onOpenMessagingActivity: openMessagingActivityWindow,
     onOpenMessagingSettings: openMessagingSettings,
+    onOpenPluginSettings: openPluginSettings,
     onRevealSelectedThreadInList: revealSelectedThreadInList,
     contextRailPinned,
     onContextRailPinnedChange: setContextRailPinnedPersisted,

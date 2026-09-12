@@ -213,7 +213,7 @@ import {
   discoverDesktopApplications,
   openDesktopApplication,
 } from "../settings/application-discovery";
-import { getPwrSnapConnectionService } from "../mcp-connections/pwrsnap-connection-service";
+import { getMcpConnectionGatewayService } from "../mcp-connections/mcp-connection-gateway-service";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
 import { getAppStateDb, isAppStateInitialized } from "../state/app-state";
 import {
@@ -6176,7 +6176,7 @@ function localBackendOperations(): FederationBackendOperations {
       return await openDesktopApplication(request);
     },
     async readPwrSnapConnectionStatus(): Promise<PwrSnapConnectionStatus> {
-      return await getPwrSnapConnectionService().readStatus();
+      return await getMcpConnectionGatewayService().readStatus();
     },
     async getLoadStatus(): Promise<FederationLoadStatus> {
       return await collectFederationLoadStatus();

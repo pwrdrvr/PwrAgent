@@ -14,6 +14,8 @@ import {
 } from "./event-subscription-multiplexer";
 import type {
   AgentEvent,
+  AuthorizeMcpConnectionRequest,
+  AuthorizeMcpConnectionResponse,
   ApplyThreadModelMigrationRequest,
   ApplyThreadModelMigrationResponse,
   AutomationIdRequest,
@@ -29,6 +31,13 @@ import type {
   ReleaseQueuedTurnRequest,
   ReleaseQueuedTurnResponse,
   CreateScheduledThreadActionRequest,
+  CreateMcpConnectionRequest,
+  CreateMcpConnectionResponse,
+  UpdateMcpConnectionRequest,
+  ProbeMcpConnectionRequest,
+  ProbeMcpConnectionResponse,
+  DescribeThreadMcpConnectionsRequest,
+  DescribeThreadMcpConnectionsResponse,
   DesktopAppearanceDensity,
   DesktopAppearanceTheme,
   DesktopTextSize,
@@ -57,6 +66,7 @@ import type {
   ListAutomationsResponse,
   ListBackendsRequest,
   ListBackendsResponse,
+  ListMcpConnectionsResponse,
   ListCodexMcpServersRequest,
   ListCodexMcpServersResponse,
   ListThreadMcpServersRequest,
@@ -70,6 +80,13 @@ import type {
   ReloadCodexMcpConfigResponse,
   ReloadCodexMcpServersResponse,
   ReloadCodexMcpServersRequest,
+  DisconnectMcpConnectionRequest,
+  MutateMcpConnectionResponse,
+  RemoveMcpConnectionRequest,
+  SetMcpConnectionEnabledRequest,
+  ReadThreadMcpConnectionsRequest,
+  SetThreadMcpConnectionsRequest,
+  SetThreadMcpConnectionsResponse,
   RemoveCodexMcpServerRequest,
   RemoveCodexMcpServerResponse,
   RewindAcpThreadRequest,
@@ -660,6 +677,17 @@ import {
   MCP_CONNECTION_PWRGIT_CONNECT_CHANNEL,
   MCP_CONNECTION_PWRGIT_OPEN_CHANNEL,
   MCP_CONNECTION_PWRGIT_DOWNLOAD_CHANNEL,
+  MCP_CONNECTION_AUTHORIZE_CHANNEL,
+  MCP_CONNECTION_CREATE_CHANNEL,
+  MCP_CONNECTION_DISCONNECT_CHANNEL,
+  MCP_CONNECTION_LIST_CHANNEL,
+  MCP_CONNECTION_REMOVE_CHANNEL,
+  MCP_CONNECTION_SET_ENABLED_CHANNEL,
+  MCP_CONNECTION_SET_THREAD_CHANNEL,
+  MCP_CONNECTION_READ_THREAD_CHANNEL,
+  MCP_CONNECTION_DESCRIBE_THREAD_CHANNEL,
+  MCP_CONNECTION_UPDATE_CHANNEL,
+  MCP_CONNECTION_PROBE_CHANNEL,
   MESSAGING_APPROVE_PAIRING_CHANNEL,
   MESSAGING_CLEAR_DEFAULT_AGENT_CHANNEL,
   MESSAGING_GENERATE_PAIRING_TOKEN_CHANNEL,
@@ -934,6 +962,48 @@ const desktopApi = Object.freeze({
   copyRichText: async (payload: { text: string; html: string }): Promise<void> => {
     await ipcRenderer.invoke(CLIPBOARD_WRITE_RICH_TEXT_CHANNEL, payload);
   },
+  listMcpConnections: async (): Promise<ListMcpConnectionsResponse> =>
+    await ipcRenderer.invoke(MCP_CONNECTION_LIST_CHANNEL),
+  createMcpConnection: async (
+    request: CreateMcpConnectionRequest,
+  ): Promise<CreateMcpConnectionResponse> =>
+    await ipcRenderer.invoke(MCP_CONNECTION_CREATE_CHANNEL, request),
+  authorizeMcpConnection: async (
+    request: AuthorizeMcpConnectionRequest,
+  ): Promise<AuthorizeMcpConnectionResponse> =>
+    await ipcRenderer.invoke(MCP_CONNECTION_AUTHORIZE_CHANNEL, request),
+  disconnectMcpConnection: async (
+    request: DisconnectMcpConnectionRequest,
+  ): Promise<MutateMcpConnectionResponse> =>
+    await ipcRenderer.invoke(MCP_CONNECTION_DISCONNECT_CHANNEL, request),
+  removeMcpConnection: async (
+    request: RemoveMcpConnectionRequest,
+  ): Promise<MutateMcpConnectionResponse> =>
+    await ipcRenderer.invoke(MCP_CONNECTION_REMOVE_CHANNEL, request),
+  updateMcpConnection: async (
+    request: UpdateMcpConnectionRequest,
+  ): Promise<MutateMcpConnectionResponse> =>
+    await ipcRenderer.invoke(MCP_CONNECTION_UPDATE_CHANNEL, request),
+  probeMcpConnection: async (
+    request: ProbeMcpConnectionRequest,
+  ): Promise<ProbeMcpConnectionResponse> =>
+    await ipcRenderer.invoke(MCP_CONNECTION_PROBE_CHANNEL, request),
+  setMcpConnectionEnabled: async (
+    request: SetMcpConnectionEnabledRequest,
+  ): Promise<MutateMcpConnectionResponse> =>
+    await ipcRenderer.invoke(MCP_CONNECTION_SET_ENABLED_CHANNEL, request),
+  setThreadMcpConnections: async (
+    request: SetThreadMcpConnectionsRequest,
+  ): Promise<SetThreadMcpConnectionsResponse> =>
+    await ipcRenderer.invoke(MCP_CONNECTION_SET_THREAD_CHANNEL, request),
+  readThreadMcpConnections: async (
+    request: ReadThreadMcpConnectionsRequest,
+  ): Promise<SetThreadMcpConnectionsResponse> =>
+    await ipcRenderer.invoke(MCP_CONNECTION_READ_THREAD_CHANNEL, request),
+  describeThreadMcpConnections: async (
+    request: DescribeThreadMcpConnectionsRequest,
+  ): Promise<DescribeThreadMcpConnectionsResponse> =>
+    await ipcRenderer.invoke(MCP_CONNECTION_DESCRIBE_THREAD_CHANNEL, request),
   readPwrSnapConnectionStatus: async (
     request: ReadPwrSnapConnectionStatusRequest = {},
   ): Promise<PwrSnapConnectionStatus> =>

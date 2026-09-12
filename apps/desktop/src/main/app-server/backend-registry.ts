@@ -49,14 +49,10 @@ import { PerKeyAsyncLock } from "../util/per-key-async-lock";
 import type { AcpMcpServerRegistration } from "../acp/acp-client";
 import { MCP_CONNECTION_TOOL_TIMEOUT_SECONDS } from "../mcp-connections/mcp-connection-timeouts";
 import {
-  getPwrSnapConnectionService,
+  getMcpConnectionGatewayService,
   type McpConnectionBridgeRegistration,
-  type PwrSnapConnectionService,
-} from "../mcp-connections/pwrsnap-connection-service";
-import {
-  getPwrGitConnectionService,
-  type PwrGitConnectionService,
-} from "../mcp-connections/pwrgit-connection-service";
+  type McpConnectionGatewayService,
+} from "../mcp-connections/mcp-connection-gateway-service";
 import {
   buildManagedReviewContextInput,
   buildManagedReviewPrompt,
@@ -79,6 +75,9 @@ import {
   buildAppendPinRank,
   buildThreadMarkdownLink,
   buildThreadUrl,
+  canIsolateMcpProviderServers,
+  mcpSelectionApplyTiming,
+  resolveMcpConnectionSetup,
   estimateTokenUsageCost,
   formatTokenUsageUsd,
   isCodexNativeSubAgentVisibleInNavigation,
@@ -206,6 +205,14 @@ import {
   type RestoreThreadWorktreeResult,
   type SetThreadExecutionModeRequest,
   type SetThreadExecutionModeResponse,
+  type ReadThreadMcpConnectionsRequest,
+  type DescribeThreadMcpConnectionsRequest,
+  type DescribeThreadMcpConnectionsResponse,
+  type ThreadMcpConnectionReport,
+  type PwrAgentMcpConnectionRequest,
+  type PwrAgentMcpConnectionResponse,
+  type SetThreadMcpConnectionsRequest,
+  type SetThreadMcpConnectionsResponse,
   type SetThreadModelSettingsRequest,
   type SetThreadModelSettingsResponse,
   type SetThreadPrAutoDispatchRequest,
@@ -329,9 +336,8 @@ import {
   type PendingRequestApprovalContext,
   normalizeFileChangeApprovalDiff,
   PWRSNAP_MCP_CONNECTION_ID,
-  PWRGIT_MCP_CONNECTION_ID,
   MCP_CONNECTION_DISPLAY_NAMES,
-  isMcpConnectionId,
+  isBuiltInMcpConnectionId,
   readCodexEnvironmentActionRuns,
   DEFAULT_TASK_MONITOR_MODEL,
   DEFAULT_TASK_MONITOR_POLL_INTERVAL_SECONDS,
@@ -7414,7 +7420,33 @@ function buildCodexPdfMcpDisabledConfig(): CodexThreadStartParams["config"] {
   } as CodexThreadStartParams["config"];
 }
 
-function buildCodexConnectionMcpServerName(
+/**
+ * What the backend registry needs from the MCP connection gateway.
+ *
+ * Named rather than inlined because it is no longer one method: the registry
+ * registers bridges for a turn, records when a selection reached the agent,
+ * and answers the agent tool's read operations. Tests supply a stub for
+ * exactly this shape.
+ */
+export type BackendRegistryMcpConnectionService =
+  Pick<McpConnectionGatewayService, "registerBridge">
+  // Everything past bridge registration is optional so a test can stub the
+  // one method it exercises. A runtime that supplies only `registerBridge`
+  // still starts turns; it just cannot answer the agent tool's reads, which
+  // the handler reports rather than crashing on.
+  & Partial<
+    Pick<
+      McpConnectionGatewayService,
+      | "noteThreadHandover"
+      | "threadHandoverAt"
+      | "peekThreadBridge"
+      | "listConnections"
+      | "createConnection"
+      | "probeConnection"
+    >
+  >;
+
+export function buildCodexConnectionMcpServerName(
   server: McpConnectionBridgeRegistration["server"],
 ): string {
   const identity = createHash("sha256")
@@ -7433,15 +7465,43 @@ function buildCodexConnectionMcpServerName(
   return `${PWRAGENT_CONNECTION_MCP_SERVER_PREFIX}${server.name}_${identity}`;
 }
 
-function buildCodexConnectionMcpConfig(
+/**
+ * Thrown when a thread asked for PwrAgent-only MCP access and PwrAgent cannot
+ * prove it delivered it.
+ *
+ * Isolation is expressed as `{ enabled: false }` overrides for the servers
+ * Codex inherited, which requires reading that inventory. When the running
+ * Codex build cannot report it, continuing would run the turn with the
+ * operator's other MCP servers still live while the UI claimed otherwise.
+ * Refusing is the honest failure.
+ */
+function codexMcpIsolationUnavailableError(): Error {
+  return new Error(
+    "This thread is set to use PwrAgent connections only, but the installed Codex build cannot report its configured MCP servers, so PwrAgent cannot turn them off. Update Codex, or allow the agent's own MCP servers for this thread.",
+  );
+}
+
+export function buildCodexConnectionMcpConfig(
   registrations: McpConnectionBridgeRegistration[],
   inheritedServerNames?: readonly string[],
+  options: { isolateFromInherited?: boolean } = {},
 ): CodexThreadStartParams["config"] | undefined {
-  if (registrations.length === 0) return undefined;
+  if (registrations.length === 0 && !options.isolateFromInherited) {
+    return undefined;
+  }
   const inheritedNames = new Set(inheritedServerNames ?? []);
+  // "PwrAgent connections only" is expressed the same way a collision is:
+  // an `{ enabled: false }` override for a server Codex actually inherited.
+  // Naming a server Codex does not have would create a transport-less entry
+  // that Codex rejects, so an unavailable inventory yields no overrides at
+  // all -- which is why the caller refuses the turn instead of pretending.
+  const isolationOverrides = options.isolateFromInherited
+    ? [...inheritedNames].map((name) => [name, { enabled: false }] as const)
+    : [];
   return {
-    mcp_servers: Object.fromEntries(
-      registrations.flatMap(({ server }) => {
+    mcp_servers: Object.fromEntries([
+      ...isolationOverrides,
+      ...registrations.flatMap(({ server }) => {
         // Codex recursively merges thread config over the operator's global
         // config. Disable only aliases that were actually inherited: a new
         // `{ enabled: false }` entry has no command or URL, which Codex
@@ -7466,7 +7526,7 @@ function buildCodexConnectionMcpConfig(
           ] as const,
         ];
       }),
-    ),
+    ]),
   } as CodexThreadStartParams["config"];
 }
 
@@ -7481,7 +7541,7 @@ function userActionableMcpConnectionConfigError(
   registrations: McpConnectionBridgeRegistration[],
 ): unknown {
   const names = registrations.map(({ server }) =>
-    isMcpConnectionId(server.name)
+    isBuiltInMcpConnectionId(server.name)
       ? MCP_CONNECTION_DISPLAY_NAMES[server.name]
       : server.name,
   );
@@ -8801,19 +8861,7 @@ export class DesktopBackendRegistry {
     command: string;
     version?: string;
   }>;
-  private readonly mcpConnectionService?: Pick<
-    PwrSnapConnectionService,
-    "registerBridge"
-  >;
-  /**
-   * PwrGit's server is a stdio binary that takes a bearer token in its
-   * environment, so its registration is a direct launch rather than a bridged
-   * proxy. Same shape, so `registerMcpConnections` routes to either one.
-   */
-  private readonly pwrGitConnectionService?: Pick<
-    PwrGitConnectionService,
-    "registerBridge"
-  >;
+  private readonly mcpConnectionService?: BackendRegistryMcpConnectionService;
   /**
    * Reports whether the registry is running inside the throwaway
    * bootstrap profile (`.bootstrap/`). When `true`, `listThreads`
@@ -8854,14 +8902,7 @@ export class DesktopBackendRegistry {
     createAcpClient?: AcpClientFactory;
     agentToolMcpServer?: AgentToolMcpServerLike | null;
     pdfToolMcpServer?: AgentToolMcpServerLike | null;
-    mcpConnectionService?: Pick<
-      PwrSnapConnectionService,
-      "registerBridge"
-    > | null;
-    pwrGitConnectionService?: Pick<
-      PwrGitConnectionService,
-      "registerBridge"
-    > | null;
+    mcpConnectionService?: BackendRegistryMcpConnectionService | null;
     messagingStore?: MessagingArchiveCleanupStore | null;
     messagingArchiveCleaner?: MessagingArchiveCleaner | null;
     automationInspectionMcpCommand?: string;
@@ -8928,12 +8969,7 @@ export class DesktopBackendRegistry {
       options?.mcpConnectionService === null
         ? undefined
         : options?.mcpConnectionService ??
-          (isAppStateInitialized() ? getPwrSnapConnectionService() : undefined);
-    this.pwrGitConnectionService =
-      options?.pwrGitConnectionService === null
-        ? undefined
-        : options?.pwrGitConnectionService ??
-          (isAppStateInitialized() ? getPwrGitConnectionService() : undefined);
+          (isAppStateInitialized() ? getMcpConnectionGatewayService() : undefined);
     this.providerThreadSnapshotStore =
       options?.providerThreadSnapshotStore === null
         ? undefined
@@ -9395,6 +9431,8 @@ export class DesktopBackendRegistry {
                 appManagementHandler: this.appManagementHandler,
                 automationInspectionHandler: this.automationInspectionHandler,
                 federationHandler: this.federationHandler,
+                mcpConnectionHandler: async (request) =>
+                  await this.handleAgentMcpConnectionRequest(request),
                 messagingHandler: this.messagingHandler,
                 taskMonitorHandler: async (request) =>
                   await this.handleAgentTaskMonitorRequest(request),
@@ -14787,6 +14825,7 @@ export class DesktopBackendRegistry {
     reasoningEffort?: string;
     fastMode?: boolean;
     mcpConnectionIds?: string[];
+    mcpProviderServersEnabled?: boolean;
     agent?: StartThreadRequest["agent"];
     acpRuntime?: BackendAcpSessionRuntimeState;
     workMode?: NavigationLaunchpadDraft["workMode"];
@@ -14815,6 +14854,7 @@ export class DesktopBackendRegistry {
       prAutoDispatchEnabled,
       tokenMiserEnabled: tokenMiserOverride,
       mcpConnectionIds,
+      mcpProviderServersEnabled,
       ...request
     } = params;
     const modelSettings = await this.resolveModelSettings(backend, request);
@@ -14941,6 +14981,8 @@ export class DesktopBackendRegistry {
       appManagementHandler: this.appManagementHandler,
       automationInspectionHandler: this.automationInspectionHandler,
       federationHandler: this.federationHandler,
+      mcpConnectionHandler: async (request) =>
+        await this.handleAgentMcpConnectionRequest(request),
       messagingHandler: this.messagingHandler,
       taskMonitorHandler: async (request) =>
         await this.handleAgentTaskMonitorRequest(request),
@@ -14972,11 +15014,20 @@ export class DesktopBackendRegistry {
       backend === "codex" || isAcpBackendId(backend)
         ? await this.registerMcpConnections(mcpConnectionIds)
         : [];
+    const isolateFromInherited =
+      backend === "codex" && mcpProviderServersEnabled === false;
+    const inheritedCodexMcpServerNames =
+      backend === "codex"
+      && (mcpConnectionRegistrations.length > 0 || isolateFromInherited)
+        ? await this.readConfiguredCodexMcpServerNames(cwd)
+        : undefined;
+    if (isolateFromInherited && inheritedCodexMcpServerNames === undefined) {
+      throw codexMcpIsolationUnavailableError();
+    }
     const connectionMcpConfig = buildCodexConnectionMcpConfig(
       mcpConnectionRegistrations,
-      backend === "codex" && mcpConnectionRegistrations.length > 0
-        ? await this.readConfiguredCodexMcpServerNames(cwd)
-        : undefined,
+      inheritedCodexMcpServerNames,
+      { isolateFromInherited },
     );
     const tokenMiserConfig = client
       ? await this.buildSupportedCodexTokenMiserConfig({
@@ -15170,11 +15221,12 @@ export class DesktopBackendRegistry {
       enabled:
         prAutoDispatchEnabled ?? this.resolveDefaultPrAutoDispatchEnabledFn(),
     });
-    if (mcpConnectionIds?.length) {
+    if (mcpConnectionIds?.length || mcpProviderServersEnabled === false) {
       await this.overlayStore.setThreadMcpConnectionIds({
         backend,
         threadId: result.threadId,
-        connectionIds: mcpConnectionIds,
+        connectionIds: mcpConnectionIds ?? [],
+        providerServersEnabled: mcpProviderServersEnabled,
       });
     }
     if (request.agent) {
@@ -16182,30 +16234,40 @@ export class DesktopBackendRegistry {
     if (selected.length === 0) return [];
     const registrations: McpConnectionBridgeRegistration[] = [];
     for (const connectionId of selected) {
-      const service =
-        connectionId === PWRSNAP_MCP_CONNECTION_ID
-          ? this.mcpConnectionService
-          : connectionId === PWRGIT_MCP_CONNECTION_ID
-            ? this.pwrGitConnectionService
-            : undefined;
+      const service = this.mcpConnectionService;
       if (!service) {
-        // A known connection with no service behind it is a runtime that
-        // cannot honor the thread's setting. That fails loudly rather than
-        // starting the thread without the app the operator enabled; only a
-        // genuinely unknown id is dropped.
-        if (isMcpConnectionId(connectionId)) {
-          throw new Error("MCP connections are unavailable in this PwrAgent runtime.");
-        }
-        backendRegistryLog.warn("ignoring unknown MCP connection", {
+        // A selected connection with no service behind it is a runtime that
+        // cannot honor the thread's setting, so the turn fails rather than
+        // starting without the connection the operator chose. This used to
+        // throw only for the built-in-id guard, which matches the two built-in
+        // ids alone -- so every remote connection took the "unknown id"
+        // branch and was dropped with a warning instead. Nothing here can
+        // tell a stale id from a live one anyway: that is what the catch
+        // below does, and it needs a service to do it.
+        throw new Error("MCP connections are unavailable in this PwrAgent runtime.");
+      }
+      try {
+        const registration = await service.registerBridge(connectionId, threadId);
+        if (registration) registrations.push(registration);
+      } catch (error) {
+        // A connection the operator parked, removed, or locked behind the
+        // gateway switch must drop out of the turn, not fail it. The
+        // selection is sticky and there is no path that prunes a stale id
+        // from a thread, so throwing here would brick every later turn on
+        // that thread with no way to recover from inside the app.
+        backendRegistryLog.warn("connection_mcp_bridge_unavailable", {
           connectionId,
+          error: error instanceof Error ? error.message : String(error),
           threadId: threadId ?? null,
         });
-        continue;
       }
-      // Both local apps use revocable grants; authorization failures are
-      // reported through the bridge without preventing the thread from starting.
-      const registration = await service.registerBridge(connectionId, threadId);
-      if (registration) registrations.push(registration);
+    }
+    // An ACP agent cannot be asked what it loaded, so the moment PwrAgent
+    // handed the selection over is the only evidence a verification surface
+    // will ever have for those backends. Record it for every backend, and
+    // only once a bridge actually exists.
+    if (threadId && registrations.length > 0) {
+      this.mcpConnectionService?.noteThreadHandover?.(threadId, Date.now());
     }
     return registrations;
   }
@@ -16502,17 +16564,29 @@ export class DesktopBackendRegistry {
           ? buildCodexPdfMcpConfig(registration)
           : buildCodexPdfMcpDisabledConfig();
       }
-      if (params.backend === "codex" && overlay?.mcpConnectionIds?.length) {
+      // Re-read per turn so a mid-thread change to the selection or the
+      // provider policy lands on the operator's next message.
+      const isolateFromInherited =
+        params.backend === "codex"
+        && overlay?.mcpProviderServersEnabled === false;
+      if (
+        params.backend === "codex"
+        && (overlay?.mcpConnectionIds?.length || isolateFromInherited)
+      ) {
         const registrations = await this.registerMcpConnections(
-          overlay.mcpConnectionIds,
+          overlay?.mcpConnectionIds ?? [],
           params.threadId,
         );
+        const inheritedNames =
+          await this.readConfiguredCodexMcpServerNames(cwd);
+        if (isolateFromInherited && inheritedNames === undefined) {
+          throw codexMcpIsolationUnavailableError();
+        }
         codexThreadConfig = mergeCodexThreadConfigs(
           codexThreadConfig,
-          buildCodexConnectionMcpConfig(
-            registrations,
-            await this.readConfiguredCodexMcpServerNames(cwd),
-          ),
+          buildCodexConnectionMcpConfig(registrations, inheritedNames, {
+            isolateFromInherited,
+          }),
         );
       }
       const preparedPdfInput = await preparePdfTurnInput({
@@ -20069,6 +20143,148 @@ export class DesktopBackendRegistry {
     }
   }
 
+  /**
+   * Read a thread's saved MCP selection.
+   *
+   * Read on demand rather than carried on every navigation summary: the
+   * selection matters only while the operator has the picker open.
+   */
+  async readThreadMcpConnections(
+    request: ReadThreadMcpConnectionsRequest,
+  ): Promise<SetThreadMcpConnectionsResponse> {
+    const overlay = await this.overlayStore.getThreadOverlayState({
+      backend: request.backend,
+      threadId: request.threadId,
+    });
+    return {
+      connectionIds: overlay?.mcpConnectionIds ?? [],
+      providerServersEnabled:
+        !canIsolateMcpProviderServers(request.backend)
+        || overlay?.mcpProviderServersEnabled !== false,
+    };
+  }
+
+  /**
+   * What a thread's managed selection actually became inside the agent.
+   *
+   * Settings can say a connection is authorized; nothing said a given thread
+   * loaded its tools, and the only surface that could — the agent's own MCP
+   * inventory — names a managed connection by the hashed alias PwrAgent
+   * injected it under, which appears nowhere else in the product. This joins
+   * the two, so a surface can show the operator's own name and still match
+   * what the agent reports.
+   *
+   * For a backend PwrAgent cannot interrogate, `agentInventoryAvailable` is
+   * false and `handedOverAt` carries the honest remainder: what was passed
+   * over, and when.
+   */
+  async describeThreadMcpConnections(
+    request: DescribeThreadMcpConnectionsRequest,
+  ): Promise<DescribeThreadMcpConnectionsResponse> {
+    const selection = await this.readThreadMcpConnections(request);
+    // Through the injected seam, like every other connection call here.
+    // Reaching for the module singleton would leave this one method
+    // unstubbable and silently outside whatever a caller injected.
+    const service = this.mcpConnectionService;
+    const statuses = (await service?.listConnections?.()) ?? [];
+    const byId = new Map(statuses.map((status) => [status.id, status]));
+    // Starts as "this backend can be asked" and is downgraded to what is
+    // actually true: an inventory we failed to read is not one we have. The
+    // renderer distinguishes "the agent did not list it" from "we could not
+    // ask" on this flag, so it has to mean the latter.
+    let agentInventoryAvailable = !isAcpBackendId(request.backend);
+    const toolCounts = new Map<string, number>();
+    if (agentInventoryAvailable && selection.connectionIds.length > 0) {
+      try {
+        const inventory = await this.listThreadMcpServers({
+          backend: request.backend,
+          threadId: request.threadId,
+        });
+        for (const server of inventory.servers) {
+          toolCounts.set(server.name, server.tools?.length ?? 0);
+        }
+      } catch {
+        // An older Codex build cannot report its inventory. The selection is
+        // still worth showing; only the tool counts go missing.
+        agentInventoryAvailable = false;
+      }
+    }
+    const connections: ThreadMcpConnectionReport[] = selection.connectionIds
+      .map((connectionId) => {
+        const status = byId.get(connectionId);
+        const bridge = service?.peekThreadBridge?.(
+          connectionId,
+          request.threadId,
+        );
+        const serverNameInAgent = bridge
+          ? buildCodexConnectionMcpServerName(bridge)
+          : undefined;
+        const toolCount = serverNameInAgent
+          ? toolCounts.get(serverNameInAgent)
+          : undefined;
+        return {
+          connectionId,
+          displayName: status?.displayName ?? connectionId,
+          ...(serverNameInAgent ? { serverNameInAgent } : {}),
+          state: status?.state ?? "disconnected",
+          configured: status?.configured ?? false,
+          enabled: status?.enabled ?? false,
+          ...(toolCount === undefined ? {} : { toolCount }),
+        } satisfies ThreadMcpConnectionReport;
+      });
+    const handedOverAt = service?.threadHandoverAt?.(request.threadId);
+    return {
+      backend: request.backend,
+      threadId: request.threadId,
+      connections,
+      providerServersEnabled: selection.providerServersEnabled,
+      appliesAt: mcpSelectionApplyTiming(request.backend),
+      ...(handedOverAt === undefined ? {} : { handedOverAt }),
+      agentInventoryAvailable,
+    };
+  }
+
+  /**
+   * Change a live thread's MCP selection.
+   *
+   * Codex re-reads this overlay while starting each turn, so the change
+   * reaches the agent on the operator's next message. ACP resolves MCP
+   * servers only at `session/new` and `session/load`, so there the change
+   * waits for the thread's next session load. Callers surface which of those
+   * applies rather than reporting a bare "saved".
+   */
+  async setThreadMcpConnections(
+    request: SetThreadMcpConnectionsRequest,
+  ): Promise<SetThreadMcpConnectionsResponse> {
+    // A backend that cannot suppress its own servers must never be left
+    // holding an "off" it will ignore. The flag is sticky and its control is
+    // hidden for those backends, so a value stored once — by an older build,
+    // a peer, or a launchpad draft that changed provider — would otherwise
+    // never be reachable again.
+    const state = await this.overlayStore.setThreadMcpConnectionIds({
+      backend: request.backend,
+      threadId: request.threadId,
+      connectionIds: request.connectionIds,
+      providerServersEnabled: canIsolateMcpProviderServers(request.backend)
+        ? request.providerServersEnabled
+        : true,
+    });
+    const connectionIds = state.mcpConnectionIds ?? [];
+    const providerServersEnabled = state.mcpProviderServersEnabled !== false;
+    await this.emit({
+      backend: request.backend,
+      notification: {
+        method: "thread/mcpConnections/updated",
+        params: {
+          threadId: request.threadId,
+          connectionIds,
+          providerServersEnabled,
+        },
+      },
+    });
+    return { connectionIds, providerServersEnabled };
+  }
+
   async setThreadModelSettings(
     params: SetThreadModelSettingsRequest
   ): Promise<SetThreadModelSettingsResponse> {
@@ -21937,6 +22153,13 @@ export class DesktopBackendRegistry {
       serviceTier: launchpad.serviceTier,
       fastMode: launchpad.backend === "codex" ? launchpad.fastMode : undefined,
       mcpConnectionIds: launchpad.mcpConnectionIds,
+      // Same Codex-only guard as `fastMode` above: switching a draft's
+      // provider leaves the stale isolation flag behind, and the ACP path
+      // would then run with the agent's own servers live while the thread
+      // claims otherwise.
+      mcpProviderServersEnabled: canIsolateMcpProviderServers(launchpad.backend)
+        ? launchpad.mcpProviderServersEnabled
+        : undefined,
       prAutoDispatchEnabled:
         launchpad.prAutoDispatchEnabled ?? this.resolveDefaultPrAutoDispatchEnabledFn(),
       tokenMiserEnabled: launchpad.tokenMiserEnabled,
@@ -22661,6 +22884,8 @@ export class DesktopBackendRegistry {
         appManagementHandler: this.appManagementHandler,
         automationInspectionHandler: this.automationInspectionHandler,
         federationHandler: this.federationHandler,
+        mcpConnectionHandler: async (request) =>
+          await this.handleAgentMcpConnectionRequest(request),
         messagingHandler: this.messagingHandler,
         taskMonitorHandler: async (request) =>
           await this.handleAgentTaskMonitorRequest(request),
@@ -34580,6 +34805,139 @@ export class DesktopBackendRegistry {
       request.context,
       request.args as CompleteMonitoringToolArgs,
     );
+  }
+
+  /**
+   * Back the `manage_mcp_connections` agent tool.
+   *
+   * The split here is deliberate and is the whole safety story: an agent may
+   * read the registry and propose an addition to it, while authorizing,
+   * enabling and removing stay with a person in Settings. `create` writes an
+   * inert record — it reaches no network and mints no bridge grant — so the
+   * worst a prompt injection can achieve is a row an operator has to look at
+   * and consent to before anything can use it.
+   */
+  private async handleAgentMcpConnectionRequest(
+    request: PwrAgentMcpConnectionRequest,
+  ): Promise<PwrAgentMcpConnectionResponse> {
+    const service = this.mcpConnectionService;
+    if (
+      !service?.listConnections
+      || !service.createConnection
+      || !service.probeConnection
+    ) {
+      return {
+        ok: false,
+        error: {
+          code: "unsupported_operation",
+          message: "MCP connections are unavailable in this PwrAgent runtime.",
+        },
+      };
+    }
+    try {
+      if (request.args.action === "list") {
+        const gatewayEnabled = this.readMcpGatewayEnabled();
+        const statuses = await service.listConnections();
+        return {
+          ok: true,
+          data: {
+            action: "list",
+            gatewayEnabled,
+            connections: statuses.map((connection) => {
+              const setup = resolveMcpConnectionSetup({
+                connection,
+                gatewayEnabled,
+              });
+              return {
+                id: connection.id,
+                displayName: connection.displayName,
+                serverUrl: connection.serverUrl,
+                kind: connection.kind,
+                authMode: connection.authMode,
+                state: connection.state,
+                setupState: setup.state,
+                setupDetail: setup.detail,
+                configured: connection.configured,
+                enabled: connection.enabled,
+                threadSelectable: setup.threadSelectable,
+              };
+            }),
+          },
+        };
+      }
+      if (request.args.action === "create") {
+        // Probed before it is written, exactly as the Settings form does, so
+        // an agent gets the same actionable answer rather than a saved row
+        // and an OAuth discovery failure.
+        const probe = await service.probeConnection({
+          serverUrl: request.args.serverUrl,
+        });
+        if (!probe.ok) {
+          return {
+            ok: false,
+            error: { code: "invalid_arguments", message: probe.message },
+          };
+        }
+        const connection = await service.createConnection({
+          displayName: request.args.displayName,
+          serverUrl: probe.serverUrl,
+        });
+        const setup = resolveMcpConnectionSetup({
+          connection,
+          gatewayEnabled: this.readMcpGatewayEnabled(),
+        });
+        return {
+          ok: true,
+          data: {
+            action: "create",
+            id: connection.id,
+            displayName: connection.displayName,
+            serverUrl: connection.serverUrl,
+            setupState: setup.state,
+            nextStep:
+              `Registered, but not yet usable. A person has to authorize ${connection.displayName} in Settings → Plugins; PwrAgent cannot complete the OAuth consent on its own. After that it can be selected per thread under MCP access.`,
+          },
+        };
+      }
+      const threadId = request.args.threadId ?? request.context.threadId;
+      if (!threadId) {
+        return {
+          ok: false,
+          error: {
+            code: "invalid_arguments",
+            message: "Pass threadId, or call this from inside a thread.",
+          },
+        };
+      }
+      return {
+        ok: true,
+        data: {
+          action: "describe_thread",
+          ...(await this.describeThreadMcpConnections({
+            backend: request.context.backend,
+            threadId,
+          })),
+        },
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        error: {
+          code: "internal_error",
+          message: error instanceof Error ? error.message : String(error),
+        },
+      };
+    }
+  }
+
+  private readMcpGatewayEnabled(): boolean {
+    try {
+      return getDesktopSettingsService().resolveMcpGatewayEnabled();
+    } catch {
+      // The gateway defaults on, and a settings read failure is not evidence
+      // that an operator turned it off.
+      return true;
+    }
   }
 
   private async handleAgentTaskMonitorRequest(

@@ -4,8 +4,8 @@ import { FakeAcpAgentTransport } from "../acp/testing/fake-acp-agent";
 import { afterEach, describe, expect, it } from "vitest";
 import { AcpAgentClient, type AcpJsonRpcTransport } from "../acp/acp-client";
 import { AcpSessionStore } from "../acp/acp-session-store";
-import { PwrGitConnectionService } from "../mcp-connections/pwrgit-connection-service";
-import { PwrSnapConnectionService } from "../mcp-connections/pwrsnap-connection-service";
+import { McpConnectionGatewayService } from "../mcp-connections/mcp-connection-gateway-service";
+import type { McpCredentialVault } from "../mcp-connections/mcp-credential-vault";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
 
 // Validate the exact outgoing params against the published ACP JSON schema.
@@ -51,11 +51,20 @@ describe("ACP MCP request serialization", () => {
     const db = openInMemoryStateDb();
     cleanup.push(() => db.close());
     const store = new AcpSessionStore(db);
-    const git = new PwrGitConnectionService();
-    const snap = new PwrSnapConnectionService();
-    cleanup.push(() => git.close(), () => snap.close());
-    // Registration creates local grants without reading upstream credentials.
-    const gitBridge = await git.registerBridge("pwrgit", "local-session");
+    const snap = new McpConnectionGatewayService({
+      leaseManager: null,
+      gatewayEnabled: () => true,
+      settings: {} as never,
+      credentialVault: {
+        read: async () => ({
+          resourceUrl: "http://127.0.0.1:51729/mcp",
+          tokens: { access_token: "wire-test-token", token_type: "bearer" },
+        }),
+      } as unknown as McpCredentialVault,
+    });
+    cleanup.push(() => snap.close());
+    // Both products use the same gateway and its ACP-safe registrations.
+    const gitBridge = await snap.registerBridge("pwrgit", "local-session");
     const snapBridge = await snap.registerBridge("pwrsnap", "local-session");
     const originals = JSON.stringify([gitBridge.server, snapBridge.server]);
     const { transport, requests } = validatingTransport();

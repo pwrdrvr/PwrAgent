@@ -1,6 +1,11 @@
 import { fileURLToPath } from "node:url";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PwrGitConnectionService } from "../mcp-connections/pwrgit-connection-service";
+import { McpConnectionGatewayService } from "../mcp-connections/mcp-connection-gateway-service";
+import { McpConnectionRegistry } from "../mcp-connections/mcp-connection-registry";
 
 const ENDPOINT = "http://127.0.0.1:51731/mcp";
 // PwrGit's desktop HTTP surface has no /health, /pair/* or bundled stdio helper.
@@ -9,10 +14,19 @@ const METADATA = {
   resource_name: "PwrGit",
   authorization_servers: ["http://127.0.0.1:51731/"],
 };
-const services: PwrGitConnectionService[] = [];
+const services: McpConnectionGatewayService[] = [];
+const directories: string[] = [];
+const gateways = new Map<PwrGitConnectionService, McpConnectionGatewayService>();
 function settings(initial?: string) {
   let value = initial;
+  let shared: string | undefined;
   return {
+    resolveMcpConnectionCredentials: vi.fn(async () => shared),
+    saveMcpConnectionCredentials: vi.fn(async (next: string) => { shared = next; }),
+    clearMcpConnectionCredentials: vi.fn(async () => { shared = undefined; }),
+    resolvePwrSnapMcpCredential: vi.fn(async () => undefined),
+    savePwrSnapMcpCredential: vi.fn(async () => undefined),
+    clearPwrSnapMcpCredential: vi.fn(async () => undefined),
     resolvePwrGitMcpCredential: vi.fn(async () => value),
     savePwrGitMcpCredential: vi.fn(async (next: string) => { value = next; }),
     clearPwrGitMcpCredential: vi.fn(async () => { value = undefined; }),
@@ -25,15 +39,31 @@ function reachable(input: string | URL) {
   }
   return Promise.resolve(Response.json({ error: "not_found" }, { status: 404 }));
 }
-function create(options: ConstructorParameters<typeof PwrGitConnectionService>[0] = {}) {
-  const service = new PwrGitConnectionService({
-    settings: settings(), fetchFn: reachable, resolveInstallPaths: () => [], ...options,
+function create(options: ConstructorParameters<typeof PwrGitConnectionService>[0] & {
+  settings?: ReturnType<typeof settings>;
+  gatewayEnabled?: () => boolean;
+} = {}) {
+  const directory = mkdtempSync(join(tmpdir(), "pwrgit-gateway-test-"));
+  directories.push(directory);
+  const gateway = new McpConnectionGatewayService({
+    settings: options.settings ?? settings(),
+    fetchFn: options.fetchFn ?? reachable,
+    openExternal: options.openExternal,
+    leaseManager: null,
+    registry: new McpConnectionRegistry({ configPath: join(directory, "config.toml") }),
+    gatewayEnabled: options.gatewayEnabled ?? (() => true),
   });
-  services.push(service);
+  const service = new PwrGitConnectionService({
+    fetchFn: reachable, resolveInstallPaths: () => [], ...options, gateway,
+  });
+  services.push(gateway);
+  gateways.set(service, gateway);
   return service;
 }
 afterEach(async () => {
   await Promise.all(services.splice(0).map((service) => service.close()));
+  for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true });
+  gateways.clear();
 });
 
 describe("PwrGit OAuth connection", () => {
@@ -121,6 +151,9 @@ describe("PwrGit OAuth connection", () => {
     const service = create({ settings: store, fetchFn, openExternal: async (url) => {
       const authorization = new URL(url);
       expect(authorization.pathname).toBe("/authorize");
+      expect(authorization.searchParams.get("scope")).toBe(
+        "repository.roots.read repository.checkout.locate repository.metadata.read forge.status.read status.subscribe",
+      );
       const callback = new URL(authorization.searchParams.get("redirect_uri")!);
       callback.searchParams.set("state", authorization.searchParams.get("state")!);
       callback.searchParams.set("code", "approved-test-code");
@@ -131,12 +164,37 @@ describe("PwrGit OAuth connection", () => {
     } });
     await expect(service.connect()).resolves.toMatchObject({ outcome: "connected", status: { configured: true } });
     expect(registration?.client_name).toBe("PwrAgent");
-    expect(JSON.parse((await store.resolvePwrGitMcpCredential())!).tokens.access_token).toBe("provider-secret");
-    const bridge = service as unknown as { dispatchBridgeOperation: (op: string, params: unknown) => Promise<unknown> };
-    await expect(bridge.dispatchBridgeOperation("tools/list", {})).resolves.toMatchObject({
+    expect(JSON.parse((await store.resolveMcpConnectionCredentials())!).credentials.pwrgit.tokens.access_token).toBe("provider-secret");
+    expect(await store.resolvePwrGitMcpCredential()).toBeUndefined();
+    const registrationBridge = await service.registerBridge("pwrgit", "test-thread");
+    const bridge = gateways.get(service) as unknown as {
+      dispatchBridgeOperation: (token: string, grant: { connectionId: string }, op: string, params: unknown) => Promise<unknown>;
+    };
+    await expect(bridge.dispatchBridgeOperation(registrationBridge.server.env.PWRAGENT_MCP_CONNECTION_TOKEN!, { connectionId: "pwrgit" }, "tools/list", {})).resolves.toMatchObject({
       tools: [{ name: "pwrgit_app_profiles" }],
     });
     expect(fetchFn.mock.calls.some(([url]) => /\/health|\/pair\//u.test(String(url)))).toBe(false);
+  });
+
+  it("enforces global and connection switches without losing authorization", async () => {
+    let enabled = true;
+    const service = create({
+      settings: settings(JSON.stringify({ tokens: { access_token: "stored", token_type: "bearer" } })),
+      gatewayEnabled: () => enabled,
+    });
+    const gateway = gateways.get(service)!;
+    await service.registerBridge("pwrgit", "one");
+    enabled = false;
+    await expect(service.registerBridge("pwrgit", "two")).rejects.toThrow();
+    enabled = true;
+    await gateway.setConnectionEnabled("pwrgit", false);
+    await expect(service.registerBridge("pwrgit", "two")).rejects.toThrow();
+    await expect(service.readStatus()).resolves.toMatchObject({ configured: true });
+    await gateway.setConnectionEnabled("pwrgit", true);
+    await expect(service.registerBridge("pwrgit", "two")).resolves.toBeDefined();
+    await gateway.disconnectConnection("pwrgit");
+    await expect(service.readStatus()).resolves.toMatchObject({ configured: false });
+    await expect(gateway.removeConnection("pwrgit")).rejects.toThrow("Built-in");
   });
 
 });

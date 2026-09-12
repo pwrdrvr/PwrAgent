@@ -92,8 +92,7 @@ import {
   disposeMcpConnectionIpcHandlers,
   registerMcpConnectionIpcHandlers,
 } from "./ipc/mcp-connections";
-import { getPwrGitConnectionService } from "./mcp-connections/pwrgit-connection-service";
-import { getPwrSnapConnectionService } from "./mcp-connections/pwrsnap-connection-service";
+import { getMcpConnectionGatewayService } from "./mcp-connections/mcp-connection-gateway-service";
 import {
   disposePreloadLogIpcHandlers,
   registerPreloadLogIpcHandlers,
@@ -747,7 +746,7 @@ const runMainProcessShutdownBarrier = createShutdownBarrier({
       name: "mcp-connections",
       timeoutMs: MCP_CONNECTION_SHUTDOWN_TIMEOUT_MS,
       run: async () => {
-        await Promise.all([getPwrSnapConnectionService().close(), getPwrGitConnectionService().close()]);
+        await getMcpConnectionGatewayService().close();
       },
     },
   ],
@@ -1344,6 +1343,19 @@ export function bootstrapApp(): void {
     registerImageNormalizationIpcHandlers();
     registerIntegratedTerminalIpcHandlers();
     registerMcpConnectionIpcHandlers();
+    // Only pre-start the bridge for a profile that actually uses it. Settings
+    // still reaches the gateway on demand, so turning the switch back on does
+    // not require a restart.
+    if (
+      bootMode === "active-profile"
+      && getDesktopSettingsService().resolveMcpGatewayEnabled()
+    ) {
+      void getMcpConnectionGatewayService().start().catch((error) => {
+        mainLog.error("MCP connection gateway failed during startup", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    }
     installTranscriptImageProtocol({
       resolveFederatedImage: async ({ instanceId, url }) =>
         await getDesktopFederationRuntime()
@@ -1372,6 +1384,17 @@ export function bootstrapApp(): void {
           // consecutive mode changes cannot collapse into the first restart
           // and leave the runtime serving an obsolete mode.
           await getDesktopFederationRuntime().restart();
+        }
+        if (patch.general?.mcpGatewayEnabled === false) {
+          // The switch forbids new bridges on its own, but a session opened
+          // while it was on stays authorized until something ends it.
+          await getMcpConnectionGatewayService()
+            .closeAllUpstreamSessions()
+            .catch((error) => {
+              mainLog.error("MCP connection gateway failed to close sessions", {
+                error: error instanceof Error ? error.message : String(error),
+              });
+            });
         }
         if (
           patch.general?.developerMode !== undefined ||

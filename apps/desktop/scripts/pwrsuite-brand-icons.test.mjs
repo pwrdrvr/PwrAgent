@@ -22,7 +22,7 @@ import { opaqueBounds, readPixels } from "./lib/icon-pixels.mjs";
 const here = dirname(fileURLToPath(import.meta.url));
 const rendererSrc = resolve(here, "../src/renderer/src");
 const appCssPath = resolve(rendererSrc, "styles/app.css");
-const callbackPageName = "local-mcp-connection-service.ts";
+const callbackPageName = "mcp-connection-gateway-service.ts";
 const callbackPagePath = resolve(here, `../src/main/mcp-connections/${callbackPageName}`);
 
 const ASSETS = {

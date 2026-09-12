@@ -2101,7 +2101,8 @@ describe("ThreadView", () => {
     const launchpadRail = screen.getByLabelText("New thread context");
     expect(launchpadRail.parentElement).toHaveClass("thread-view__layout");
     expect(launchpadRail.parentElement?.parentElement).toHaveClass("thread-view");
-    // Both PwrSuite connection cards render into ONE list, and that list is
+    // PwrSuite cards render into ONE list (only PwrGit here, since local
+    // PwrSnap is offered in MCP access), and that list is
     // a sibling of the composer inside `.thread-view__primary`. The list is
     // the only box in that column allowed to shrink and scroll; while the
     // cards were direct siblings of the composer, nothing in the column
@@ -2112,7 +2113,7 @@ describe("ThreadView", () => {
     // against a real render in `e2e/launchpad-composer-bounds.spec.ts`.
     const connectionList = document.querySelector(".thread-view__connections");
     expect(connectionList).not.toBeNull();
-    expect(connectionList?.querySelectorAll(".mcp-connection")).toHaveLength(2);
+    expect(connectionList?.querySelectorAll(".mcp-connection")).toHaveLength(1);
     expect(connectionList?.parentElement).toHaveClass("thread-view__primary");
     expect(connectionList?.nextElementSibling).toHaveClass(
       "thread-view__launchpad-composer",

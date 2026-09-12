@@ -21,6 +21,7 @@ export * from "./contracts/federation";
 export * from "./contracts/federation-tools";
 export * from "./contracts/messaging";
 export * from "./contracts/messaging-tools";
+export * from "./contracts/mcp-connection-tools";
 export * from "./contracts/mcp-connections";
 export * from "./contracts/navigation";
 export * from "./navigation-query-events";
