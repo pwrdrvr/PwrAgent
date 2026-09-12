@@ -490,6 +490,33 @@ describe("integrated terminal IPC federation branch", () => {
     });
   });
 
+  it("keeps a session blocking when the owner's state message is malformed", async () => {
+    const sender = fakeWebContents(6);
+    mocks.remotePtyOpen.mockResolvedValueOnce({
+      sessionId: "remote-session",
+      cwd: "/owner/worktree",
+      shell: "/bin/zsh",
+      foregroundCommand: true,
+    });
+    await invoke(INTEGRATED_TERMINAL_CREATE_CHANNEL, sender, {
+      threadKey: "codex:remote-pinned",
+      cols: 80,
+      rows: 24,
+      federationTarget: { scope: "remote", instanceId: "peer-a" },
+    });
+
+    // The params reach the bridge through an unchecked cast. Anything but an
+    // explicit `false` has to stay blocking: dropping a running shell out of
+    // the quit blocker is the one direction this must never fail in.
+    mocks.remotePtyEventListener?.({
+      kind: "state",
+      peerId: "peer-a",
+      params: { sessionId: "remote-session" },
+    });
+
+    expect(getIntegratedTerminalQuitSnapshot().count).toBe(1);
+  });
+
   it("re-counts a remote shell once the owner reports a command running", async () => {
     const sender = fakeWebContents(6);
     mocks.remotePtyOpen.mockResolvedValueOnce({

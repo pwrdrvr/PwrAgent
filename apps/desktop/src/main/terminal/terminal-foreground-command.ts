@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import path from "node:path";
 
 /**
@@ -23,9 +24,14 @@ export type TerminalForegroundProbe = {
 
 export type TerminalForegroundOptions = {
   platform: NodeJS.Platform;
+  /** Injected by tests; both services otherwise share the default below. */
   readLinuxProcessStat?: (pid: number) => string;
   onError?: (error: unknown) => void;
 };
+
+export function readLinuxProcessStat(pid: number): string {
+  return readFileSync(`/proc/${pid}/stat`, "utf8");
+}
 
 export function terminalHasForegroundCommand(
   probe: TerminalForegroundProbe,
@@ -58,10 +64,12 @@ function hasLinuxForegroundCommand(
   options: TerminalForegroundOptions,
 ): boolean {
   try {
-    if (probe.pid === undefined || !options.readLinuxProcessStat) {
+    if (probe.pid === undefined) {
       throw new Error("Linux process stat is unavailable");
     }
-    const stat = options.readLinuxProcessStat(probe.pid);
+    const stat = (options.readLinuxProcessStat ?? readLinuxProcessStat)(
+      probe.pid,
+    );
     const closingParen = stat.lastIndexOf(")");
     const fields = stat.slice(closingParen + 1).trim().split(/\s+/);
     // After pid and the parenthesized command name, Linux stat fields begin
@@ -84,6 +92,6 @@ function hasLinuxForegroundCommand(
   }
 }
 
-export function normalizeTerminalProcessName(value: string): string {
+function normalizeTerminalProcessName(value: string): string {
   return path.basename(value.trim().replace(/^-+/, ""));
 }

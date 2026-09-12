@@ -94,6 +94,7 @@ function createHarness(options?: {
   }>;
   resolveThreadCwd?: () => Promise<string | undefined>;
   platform?: NodeJS.Platform;
+  readLinuxProcessStat?: (pid: number) => string;
 }) {
   const pty = new FakePty();
   const sent: SentNotification[] = [];
@@ -121,6 +122,9 @@ function createHarness(options?: {
       }),
     graceMs: options?.graceMs ?? 10_000,
     platform: options?.platform ?? "darwin",
+    ...(options?.readLinuxProcessStat
+      ? { readLinuxProcessStat: options.readLinuxProcessStat }
+      : {}),
   });
   return { audits, pty, sent, service };
 }
@@ -345,6 +349,57 @@ describe("FederationPtyService foreground reporting", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("re-sends a state change the peer never received", async () => {
+    vi.useFakeTimers();
+    try {
+      let deliverable = false;
+      const { pty, sent, service } = createHarness({
+        deliverable: () => deliverable,
+      });
+      await service.open("peer-a", OPEN_REQUEST);
+
+      pty.process = "/usr/bin/sleep";
+      pty.emitData("\r\n");
+      vi.advanceTimersByTime(250);
+      expect(sent.filter((entry) => entry.method === "pty.state")).toEqual([]);
+
+      // The link comes back, but the shell's state never changes again. An
+      // owner that had committed the undelivered value would stay silent on
+      // this send-on-change stream, leaving the viewer sure the shell is idle
+      // and free to quit out from under a running command.
+      deliverable = true;
+      pty.emitData("still running\r\n");
+      vi.advanceTimersByTime(250);
+      expect(
+        sent
+          .filter((entry) => entry.method === "pty.state")
+          .map((entry) => (entry.params as { foregroundCommand: boolean })
+            .foregroundCommand),
+      ).toEqual([true]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reads the Linux foreground process group for a remote shell", async () => {
+    // After "(zsh)": state ppid pgrp session tty_nr tpgid.
+    const { service } = createHarness({
+      platform: "linux",
+      readLinuxProcessStat: () => "4242 (zsh) S 1 4242 4242 34816 5000 0 0",
+    });
+    expect((await service.open("peer-a", OPEN_REQUEST)).foregroundCommand)
+      .toBe(true);
+  });
+
+  it("reports a Linux shell owning its own terminal as idle", async () => {
+    const { service } = createHarness({
+      platform: "linux",
+      readLinuxProcessStat: () => "4242 (zsh) S 1 4242 4242 34816 4242 0 0",
+    });
+    expect((await service.open("peer-a", OPEN_REQUEST)).foregroundCommand)
+      .toBe(false);
   });
 
   it("keeps the conservative answer where the platform has no signal", async () => {

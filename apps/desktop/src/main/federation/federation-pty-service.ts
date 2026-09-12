@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
 import type {
   AppServerBackendKind,
   FederationCapability,
@@ -234,6 +233,8 @@ type FederationPtySession = {
   foregroundCheckedAt: number;
   /** Fires once output settles, catching the prompt returning. */
   foregroundSettleTimer?: ReturnType<typeof setTimeout>;
+  /** When output last arrived, so a timer that fires early can re-arm. */
+  lastOutputAt: number;
   /** Armed while paused at the high-water mark; an ack re-arms or clears it. */
   ackWatchdog?: ReturnType<typeof setTimeout>;
 };
@@ -247,10 +248,6 @@ const FOREGROUND_SETTLE_MS = 250;
 /** Ceiling on how stale the answer can get under continuously streaming
  *  output, where the settle timer never fires. */
 const FOREGROUND_MAX_INTERVAL_MS = 1_000;
-
-function readLinuxProcessStatFile(pid: number): string {
-  return readFileSync(`/proc/${pid}/stat`, "utf8");
-}
 
 const MIN_DIMENSION = 2;
 const MAX_PTY_COLUMNS = 500;
@@ -347,6 +344,7 @@ export class FederationPtyService {
       disposables: [],
       foregroundCommand: false,
       foregroundCheckedAt: 0,
+      lastOutputAt: 0,
     };
     session.foregroundCommand = this.detectForegroundCommand(session);
     session.foregroundCheckedAt = this.now();
@@ -528,32 +526,66 @@ export class FederationPtyService {
   /** Check now if the last answer is stale, and again once output settles.
    *  The immediate arm catches a command that starts and keeps printing; the
    *  settle arm catches the prompt coming back, which is the transition that
-   *  decides whether this shell blocks the viewer's quit. */
+   *  decides whether this shell blocks the viewer's quit.
+   *
+   *  The settle timer is armed once and left alone rather than re-armed per
+   *  chunk: `handleOutput` runs for every delta a streaming command emits
+   *  (hundreds a second is normal), and a clear+set on each one is pure
+   *  churn. A timer that fires early re-arms itself for the remainder. */
   private scheduleForegroundCheck(session: FederationPtySession): void {
-    if (this.now() - session.foregroundCheckedAt >= FOREGROUND_MAX_INTERVAL_MS) {
+    session.lastOutputAt = this.now();
+    if (
+      session.lastOutputAt - session.foregroundCheckedAt
+      >= FOREGROUND_MAX_INTERVAL_MS
+    ) {
       this.publishForegroundCommand(session);
     }
-    if (session.foregroundSettleTimer) {
-      clearTimeout(session.foregroundSettleTimer);
-    }
+    this.armForegroundSettleTimer(session, FOREGROUND_SETTLE_MS);
+  }
+
+  private armForegroundSettleTimer(
+    session: FederationPtySession,
+    delayMs: number,
+  ): void {
+    if (session.foregroundSettleTimer) return;
     const timer = setTimeout(() => {
       session.foregroundSettleTimer = undefined;
+      const quietFor = this.now() - session.lastOutputAt;
+      if (quietFor < FOREGROUND_SETTLE_MS) {
+        // Output arrived while this was pending: wait out the remainder
+        // instead of reporting a state read mid-stream.
+        this.armForegroundSettleTimer(session, FOREGROUND_SETTLE_MS - quietFor);
+        return;
+      }
       this.publishForegroundCommand(session);
-    }, FOREGROUND_SETTLE_MS);
+    }, delayMs);
     if (timer.unref) timer.unref();
     session.foregroundSettleTimer = timer;
   }
 
   private publishForegroundCommand(session: FederationPtySession): void {
     if (this.sessionsById.get(session.sessionId) !== session) return;
+    // A reaped session is already gone from the viewer's side; probing the
+    // shell and framing a notification for it is wasted work either way.
+    if (session.reapReason) return;
     const foregroundCommand = this.detectForegroundCommand(session);
     session.foregroundCheckedAt = this.now();
     if (foregroundCommand === session.foregroundCommand) return;
-    session.foregroundCommand = foregroundCommand;
-    this.options.sendNotification(session.peerId, FEDERATION_PTY_STATE_METHOD, {
-      sessionId: session.sessionId,
-      foregroundCommand,
-    } satisfies FederationPtyStateParams);
+    // Commit only what the peer actually received. `sendNotification` reports
+    // an unreachable opener, and this is a send-on-change stream: recording a
+    // change that never landed means it is never sent again, leaving the
+    // viewer's cached answer stale for the life of the shell.
+    const delivered = this.options.sendNotification(
+      session.peerId,
+      FEDERATION_PTY_STATE_METHOD,
+      {
+        sessionId: session.sessionId,
+        foregroundCommand,
+      } satisfies FederationPtyStateParams,
+    );
+    if (delivered) {
+      session.foregroundCommand = foregroundCommand;
+    }
   }
 
   private now(): number {
@@ -569,8 +601,9 @@ export class FederationPtyService {
       },
       {
         platform: this.options.platform ?? process.platform,
-        readLinuxProcessStat:
-          this.options.readLinuxProcessStat ?? readLinuxProcessStatFile,
+        ...(this.options.readLinuxProcessStat
+          ? { readLinuxProcessStat: this.options.readLinuxProcessStat }
+          : {}),
         onError: (error) => {
           this.options.log?.warn("remote pty foreground check failed", {
             error: error instanceof Error ? error.message : String(error),

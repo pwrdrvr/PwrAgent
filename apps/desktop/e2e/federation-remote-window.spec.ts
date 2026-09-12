@@ -914,7 +914,7 @@ test.describe("federation remote window", () => {
       });
       // The marker only proves `echo` finished. The owner derives the state
       // from the command's own output and streams it back, so wait on the
-      // exact main-process snapshot QuitManager reads -- quitting before it
+      // exact main-process snapshot QuitManager reads — quitting before it
       // arrives correctly sees no blocker and exits without a prompt.
       await expect
         .poll(

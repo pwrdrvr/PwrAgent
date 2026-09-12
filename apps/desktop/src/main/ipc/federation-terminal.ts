@@ -437,7 +437,11 @@ export class FederationTerminalBridge {
       return;
     }
     if (event.kind === "state") {
-      session.foregroundCommand = event.params.foregroundCommand;
+      // Only an explicit `false` means idle. The params arrive as an
+      // unchecked cast, and every other parse of a malformed message would
+      // drop a running shell out of the quit blocker — the one direction
+      // this must never fail in.
+      session.foregroundCommand = event.params.foregroundCommand !== false;
       return;
     }
     if (event.kind === "exit") {

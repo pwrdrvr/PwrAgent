@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { mkdir, readdir, rename, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
@@ -260,7 +260,7 @@ export class IntegratedTerminalService {
     sessions: IntegratedTerminalSessionSummary[],
   ) => void;
   private readonly platform: NodeJS.Platform;
-  private readonly readLinuxProcessStat: (pid: number) => string;
+  private readonly readLinuxProcessStat?: (pid: number) => string;
   /** Threads whose PTY is mid-spawn — the window in which a close has nothing
    *  to act on yet. */
   private readonly spawningThreadKeys = new Set<string>();
@@ -277,9 +277,7 @@ export class IntegratedTerminalService {
     this.now = options.now ?? Date.now;
     this.onSessionsChanged = options.onSessionsChanged;
     this.platform = options.platform ?? process.platform;
-    this.readLinuxProcessStat =
-      options.readLinuxProcessStat
-      ?? ((pid) => readFileSync(`/proc/${pid}/stat`, "utf8"));
+    this.readLinuxProcessStat = options.readLinuxProcessStat;
   }
 
   async createOrAttach(
@@ -466,7 +464,9 @@ export class IntegratedTerminalService {
       },
       {
         platform: this.platform,
-        readLinuxProcessStat: this.readLinuxProcessStat,
+        ...(this.readLinuxProcessStat
+          ? { readLinuxProcessStat: this.readLinuxProcessStat }
+          : {}),
         onError: (error) => {
           this.logger.warn("foreground-process-check-failed", {
             error: error instanceof Error ? error.message : String(error),
