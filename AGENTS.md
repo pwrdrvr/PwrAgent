@@ -164,7 +164,8 @@
 - `pnpm lint:eslint` is the command that fails.
 - CI runs it as the `ESLint` step of the `Lint` job in
   [`ci.yml`](.github/workflows/ci.yml).
-- `pnpm build` does not catch this. It is esbuild and checks no types.
+- `pnpm build` does not catch this. It is `electron-vite build`, which
+  strips types through Vite and Rollup without checking them.
 - The rule exists for one defect: a refactor moves code out of a file and
   leaves its imports behind.
 - As a warning the rule printed a line nobody had to act on. Neither ESLint
@@ -202,10 +203,11 @@
   unused parameter, and does **not** silence an unused local or an unused type
   alias.
 - Enabling both flags would reject the existing `_`-prefixed intentionally
-  unused locals and would cost 49 fixes.
-- Fifteen of those 49 are parameter renames in the Star Map cluster tests.
-- The flags would add one thing ESLint cannot see: unused class members.
-- That gap is the second hand check listed above.
+  unused locals and would cost 27 fixes, measured on the current tree.
+- Fifteen of those 27 are parameter renames in the Star Map cluster tests.
+- The flags would add the first two hand checks listed above: a leading
+  unused parameter, and an unused class member.
+- They would not add the third. No tool here reports an unused export.
 
 ### Formatting
 

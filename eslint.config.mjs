@@ -31,10 +31,10 @@ export default tseslint.config(
       // hand-written shared helper code — `capture-window-placement.ts`,
       // the state seeders — and stays linted: extracting a helper out of a
       // spec file and into here must not quietly drop it out of CI's
-      // correctness gate. What makes that true is the `apps/*/**` glob on
-      // `lint:eslint:cached`; under the old `apps/*/src/**` the ignore below
-      // was the only part of this claim CI actually enforced, and those 15
-      // files were linted by nothing.
+      // correctness gate. The `apps/*/**` glob on `lint:eslint:cached` is what
+      // makes that true. Under the old `apps/*/src/**` it was aspirational:
+      // the ignore below excluded the JSON, and no glob reached the 15
+      // TypeScript files beside it, so nothing linted them at all.
       "**/e2e/fixtures/**/*.json",
       "**/__fixtures__/**",
     ],
