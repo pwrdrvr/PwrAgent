@@ -356,7 +356,9 @@ describe("IntakeDialog", () => {
     const { dispatchStarMapIntake, onCreated } = setup(undefined);
     dispatchStarMapIntake.mockImplementation(
       async (request: { requestId: string }) =>
-        (await new Promise((resolve) => {
+        // Annotated: a bare `new Promise` here is contextually typed from
+        // the mock's `Promise<never>` return, so `resolve` would take never.
+        (await new Promise<unknown>((resolve) => {
           settle = () =>
             resolve({
               status: "created",
