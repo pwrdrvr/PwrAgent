@@ -595,10 +595,37 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
     [cardKey, onRaise, rect],
   );
 
+  /**
+   * End the gesture and commit it, from wherever the news arrived.
+   *
+   * A drag has to survive losing its pointer: `pointerup` can go missing
+   * (the capturing node reordered out from under the capture, the OS
+   * taking the pointer for a window drag), and the drag state that
+   * outlives it turns every later pointermove over the bar into a jump —
+   * the card follows a mouse with no button held. So the release is
+   * recognised from four places, and the gesture is idempotent: whichever
+   * arrives first clears `dragRef`, and the rest no-op.
+   */
+  const finishDrag = useCallback(
+    (drag: DragState) => {
+      dragRef.current = undefined;
+      onGuidesChange?.([]);
+      if (drag.moved || drag.raised) onRectCommit?.(cardKey, drag.lastRect);
+    },
+    [cardKey, onGuidesChange, onRectCommit],
+  );
+
   const continueDrag = useCallback(
     (event: ReactPointerEvent) => {
       const drag = dragRef.current;
       if (!drag || drag.pointerId !== event.pointerId) return;
+      // No button held: the release happened somewhere this card never
+      // heard about. Take the move as the release rather than dragging the
+      // card along behind a mouse the operator has let go of.
+      if (event.buttons === 0) {
+        finishDrag(drag);
+        return;
+      }
       // Screen pixels in, canvas pixels out.
       const zoom = scale > 0 ? scale : 1;
       const deltaX = (event.clientX - drag.originX) / zoom;
@@ -628,21 +655,33 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
       onGuidesChange?.(resolved.guides);
       onRectChange(cardKey, next, true);
     },
-    [bounds, cardKey, onGuidesChange, onRectChange, resolveRect, scale],
+    [bounds, cardKey, finishDrag, onGuidesChange, onRectChange, resolveRect, scale],
   );
 
   const endDrag = useCallback(
     (event: ReactPointerEvent) => {
       const drag = dragRef.current;
       if (!drag || drag.pointerId !== event.pointerId) return;
-      dragRef.current = undefined;
-      onGuidesChange?.([]);
-      if (drag.moved || drag.raised) {
-        onRectCommit?.(cardKey, drag.lastRect);
+      finishDrag(drag);
+      if (event.currentTarget.hasPointerCapture?.(event.pointerId)) {
+        event.currentTarget.releasePointerCapture?.(event.pointerId);
       }
-      event.currentTarget.releasePointerCapture?.(event.pointerId);
     },
-    [cardKey, onGuidesChange, onRectCommit],
+    [finishDrag],
+  );
+
+  /**
+   * The capture went away without a release of ours. Nothing left will
+   * report this gesture, so close it here — and NOT by calling `endDrag`,
+   * which would try to release a capture that no longer exists.
+   */
+  const dropDrag = useCallback(
+    (event: ReactPointerEvent) => {
+      const drag = dragRef.current;
+      if (!drag || drag.pointerId !== event.pointerId) return;
+      finishDrag(drag);
+    },
+    [finishDrag],
   );
 
   // No window-resize clamp: the card is anchored in the map, not in the
@@ -1421,6 +1460,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
         onPointerMove={continueDrag}
         onPointerUp={endDrag}
         onPointerCancel={endDrag}
+        onLostPointerCapture={dropDrag}
       >
         {props.instanceIcon ? (
           <span className="star-map-chat-card__watermark" aria-hidden="true">
@@ -1690,6 +1730,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
         onPointerMove={continueDrag}
         onPointerUp={endDrag}
         onPointerCancel={endDrag}
+        onLostPointerCapture={dropDrag}
       />
     </section>
   );

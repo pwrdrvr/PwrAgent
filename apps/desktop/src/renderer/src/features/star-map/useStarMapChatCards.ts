@@ -80,6 +80,8 @@ export type StarMapChatCardsController = {
     rect: ChatCardRect,
     anchor?: StarMapChatCardAnchorPlacement,
   ) => void;
+  /** Put every card back on its anchor, whoever placed it. */
+  beginAnchorRebase: () => void;
   resolveRestoredAnchors: (
     resolve: (
       anchor: StarMapWorkspaceAnchor,
@@ -626,6 +628,42 @@ export function useStarMapChatCards(params: {
     [applyState],
   );
 
+  /**
+   * Ask for every card to be re-seated on the thread card it belongs to.
+   *
+   * A card keeps ONE rect, but its anchor is a thread card that sits
+   * somewhere different in every lens: the Instances lens rings it around
+   * its instance, the Projects lens around its project. Switching lens
+   * therefore leaves the chat card over whatever is now at those
+   * coordinates, which is usually another instance's sky entirely.
+   *
+   * Raising the flag the restore pass already reads, rather than moving
+   * anything here: that pass knows an owner can still be loading (it
+   * leaves those cards alone and picks them up on a later pass) and it
+   * knows the instance-body fallback for a thread with no card in this
+   * lens. A lens switch wants all of that; it differs from a cold start
+   * only in WHEN it happens.
+   *
+   * Applies to hand-placed cards too, and deliberately: the offset the
+   * operator chose is exactly what gets carried to the new lens.
+   */
+  const beginAnchorRebase = useCallback(() => {
+    const current = stateRef.current;
+    if (current.cards.length === 0) return;
+    if (current.cards.every((card) => card.pendingAnchorRestore)) return;
+    applyState(
+      {
+        ...current,
+        cards: current.cards.map((card) =>
+          card.pendingAnchorRestore
+            ? card
+            : { ...card, pendingAnchorRestore: true },
+        ),
+      },
+      false,
+    );
+  }, [applyState]);
+
   const resolveRestoredAnchors = useCallback(
     (
       resolve: (
@@ -752,6 +790,7 @@ export function useStarMapChatCards(params: {
     () => ({
       cards: state.cards,
       hydrated,
+      beginAnchorRebase,
       close,
       closeAll,
       commitRect,
@@ -770,6 +809,7 @@ export function useStarMapChatCards(params: {
       viewFor,
     }),
     [
+      beginAnchorRebase,
       close,
       closeAll,
       commitRect,

@@ -3416,6 +3416,30 @@ export function StarMapScreen(props: StarMapScreenProps) {
     chatCards.resolveRestoredAnchors(resolveWorkspaceAnchor, federationLayoutReady);
   }, [chatCards, federationLayoutReady, resolveWorkspaceAnchor]);
 
+  /**
+   * A lens switch moves every thread card, so it moves the chat cards too.
+   *
+   * The two radial lenses draw the same thread in completely different
+   * places — around its instance, or around its project — while a chat
+   * card holds one rect. Left alone the card stays at coordinates that
+   * belonged to the other lens and reads as stranded in open sky, which
+   * is exactly what it is.
+   *
+   * Only on a CHANGE: the first pass belongs to the restore above, which
+   * runs against the rects the snapshot was written from.
+   */
+  const rebasedLayoutRef = useRef<StarMapViewPreferences["layout"] | undefined>(
+    undefined,
+  );
+  useLayoutEffect(() => {
+    if (!chatCards.hydrated || !federationLayoutReady) return;
+    const previous = rebasedLayoutRef.current;
+    if (previous === preferences.layout) return;
+    rebasedLayoutRef.current = preferences.layout;
+    if (previous === undefined) return;
+    chatCards.beginAnchorRebase();
+  }, [chatCards, federationLayoutReady, preferences.layout]);
+
   useEffect(() => {
     if (!pendingFlight) return;
     const rect = rectForThreadKey(flightRects, pendingFlight);
@@ -4167,6 +4191,11 @@ export function StarMapScreen(props: StarMapScreenProps) {
    * folded into a cloud's overflow) simply gets no tether: a line to
    * nowhere is worse than no line.
    *
+   * Read through `flightRects`, so the line is drawn in whichever lens is
+   * showing — the Projects lens places its cards in canvas coordinates
+   * like any other, and its clouds are exactly where an untethered chat
+   * card is hardest to account for.
+   *
    * The arc runs to the thread card's centre but is painted UNDER the
    * clouds (`.star-map__tethers` z-index), so the stretch across the card
    * — and across any other card or menu in its way — is hidden. A dot at
@@ -4175,9 +4204,9 @@ export function StarMapScreen(props: StarMapScreenProps) {
    * `tetherExitPoint`.
    */
   const chatTethers = useMemo(() => {
-    if (chatCards.cards.length === 0 || projectsMode) return [];
+    if (chatCards.cards.length === 0) return [];
     return chatCards.cards.flatMap((card) => {
-      const source = cardRects.get(card.key);
+      const source = flightRects.get(card.key);
       if (!source) return [];
       const target = {
         x: source.x + source.width / 2,
@@ -4231,7 +4260,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
         },
       ];
     });
-  }, [cardRects, chatCards.cards, projectsMode]);
+  }, [chatCards.cards, flightRects]);
 
   const chatTetherPaths =
     chatTethers.length > 0 ? (

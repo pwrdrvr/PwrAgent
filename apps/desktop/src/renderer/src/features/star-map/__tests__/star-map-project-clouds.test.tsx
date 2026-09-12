@@ -120,6 +120,37 @@ function projectSystems(container: HTMLElement) {
   );
 }
 
+/**
+ * Where a thread card sits in CANVAS coordinates, in either lens.
+ *
+ * Both lenses nest their cards one box deep — `.star-map__project-cloud`
+ * at the project's body here, `.star-map__cloud` at the instance's there
+ * — so a card's own `left`/`top` are offsets inside it. Summing every
+ * positioned box up to the canvas covers both, which is what makes the
+ * two readings comparable across a lens switch.
+ */
+function cardOrigin(shell: HTMLElement): { x: number; y: number } {
+  let x = Number.parseFloat(shell.style.left);
+  let y = Number.parseFloat(shell.style.top);
+  let node = shell.parentElement;
+  while (node && !node.classList.contains("star-map__canvas")) {
+    const left = Number.parseFloat(node.style.left);
+    const top = Number.parseFloat(node.style.top);
+    if (Number.isFinite(left)) x += left;
+    if (Number.isFinite(top)) y += top;
+    node = node.parentElement;
+  }
+  return { x, y };
+}
+
+function chatCardOrigin(container: HTMLElement): { x: number; y: number } {
+  const chat = container.querySelector(".star-map-chat-card") as HTMLElement;
+  return {
+    x: Number.parseFloat(chat.style.left),
+    y: Number.parseFloat(chat.style.top),
+  };
+}
+
 describe("star map projects lens clouds", () => {
   afterEach(() => {
     window.localStorage.removeItem("pwragent.starMap.viewPreferences");
@@ -330,6 +361,95 @@ describe("star map projects lens clouds", () => {
       expect(
         container.querySelectorAll(".star-map-card-shell--selected"),
       ).toHaveLength(3);
+    });
+  });
+
+  /**
+   * A chat card says which thread it belongs to by the line to its card.
+   * This lens drew none: the tether read the Instances lens's rect map,
+   * which is empty by construction here, and then skipped the lens
+   * outright. Five open chats over a field of project clouds and nothing
+   * saying which cloud any of them came from.
+   */
+  it("tethers an open chat card to its thread card", async () => {
+    const { container } = renderProjects([
+      thread({ id: "a1", path: "/repo/alpha", label: "AlphaDir" }),
+      thread({ id: "a2", path: "/repo/alpha", label: "AlphaDir" }),
+    ]);
+    await screen.findByRole("button", { name: /Open thread: Thread a1/ });
+    // Re-query at click time: card measurement re-renders the map, and a
+    // click on the detached node never reaches React's root listener.
+    fireEvent.click(
+      screen.getByRole("button", { name: /Open thread: Thread a1/ }),
+    );
+
+    await waitFor(() => {
+      expect(container.querySelector(".star-map__tether")).not.toBeNull();
+    });
+    // One dot at each end, as in the Instances lens: a single anchor means
+    // an endpoint stopped clearing its own card.
+    expect(
+      container.querySelectorAll(".star-map__tether-anchor"),
+    ).toHaveLength(2);
+  });
+
+  /**
+   * A chat card holds ONE rect, but the thread card it is tied to sits
+   * somewhere completely different in each lens. Switching lens used to
+   * leave the card at the other lens's coordinates — stranded over some
+   * unrelated project's sky, which reads as "light years away from its
+   * thread card".
+   */
+  it("carries an open chat card into the lens it switches to", async () => {
+    // Four projects of four, so the canvas is wider than the offset the
+    // card is carrying: `clampChatCardRect` pins a card that would land
+    // off the canvas, and a fixture small enough to hit that clamp would
+    // pass whether or not the rebase ran.
+    const { container } = renderProjects(
+      ["alpha", "beta", "gamma", "delta"].flatMap((name) =>
+        Array.from({ length: 4 }, (unused, index) =>
+          thread({
+            id: `${name}${index}`,
+            path: `/repo/${name}`,
+            label: `${name}Dir`,
+          }),
+        ),
+      ),
+    );
+    await screen.findByRole("button", { name: /Open thread: Thread alpha0/ });
+    // Re-query at click time: card measurement re-renders the map, and a
+    // click on the detached node never reaches React's root listener.
+    fireEvent.click(
+      screen.getByRole("button", { name: /Open thread: Thread alpha0/ }),
+    );
+    await waitFor(() => {
+      expect(container.querySelector(".star-map-chat-card")).not.toBeNull();
+    });
+
+    const shellFor = (key: string) =>
+      container.querySelector(
+        `.star-map-card-shell[data-card-key="${key}"]`,
+      ) as HTMLElement;
+    const before = cardOrigin(shellFor("pwr_local::codex:alpha0"));
+    const chatBefore = chatCardOrigin(container);
+    const offset = {
+      dx: chatBefore.x - before.x,
+      dy: chatBefore.y - before.y,
+    };
+
+    fireEvent.click(screen.getByRole("button", { name: /^View$/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Instances" }));
+
+    await waitFor(() => {
+      expect(cardOrigin(shellFor("pwr_local::codex:alpha0"))).not.toEqual(
+        before,
+      );
+    });
+    await waitFor(() => {
+      const after = cardOrigin(shellFor("pwr_local::codex:alpha0"));
+      const chatAfter = chatCardOrigin(container);
+      expect(chatAfter.x - after.x).toBeCloseTo(offset.dx, 5);
+      expect(chatAfter.y - after.y).toBeCloseTo(offset.dy, 5);
     });
   });
 });
