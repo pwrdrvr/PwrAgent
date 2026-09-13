@@ -257,6 +257,18 @@ async function resolveBinary(
   }
 
   for (const binaryName of application.binaryNames ?? []) {
+    if (process.platform === "win32") {
+      // `/usr/bin/which` does not exist on Windows, so this loop used to throw
+      // for every candidate and discovery found NO editor at all — the
+      // Applications surface came up empty and a transcript source link had
+      // nothing to open. Walk PATH here instead of handing off to `where.exe`:
+      // one less process, and no Git-for-Windows launcher in the path.
+      const resolvedPath = await findOnWindowsPath(binaryName, env);
+      if (resolvedPath) {
+        return resolvedPath;
+      }
+      continue;
+    }
     try {
       const result = await execFile("/usr/bin/which", [binaryName], {
         env,
@@ -278,6 +290,60 @@ async function resolveBinary(
     return bundledPath;
   }
 
+  return undefined;
+}
+
+/**
+ * Resolve `binaryName` against PATH the way Windows itself does: each PATH
+ * entry, each PATHEXT extension in order, plus the bare name for something
+ * already carrying its own extension.
+ *
+ * Environment names are case-insensitive on Windows and the real spelling is
+ * usually `Path`, so both variables are read case-insensitively rather than by
+ * the POSIX spelling.
+ */
+async function findOnWindowsPath(
+  binaryName: string,
+  env: NodeJS.ProcessEnv,
+): Promise<string | undefined> {
+  const searchPath = readEnvIgnoringCase(env, "PATH");
+  if (!searchPath) {
+    return undefined;
+  }
+  const extensions = [
+    "",
+    ...(readEnvIgnoringCase(env, "PATHEXT") ?? ".COM;.EXE;.BAT;.CMD")
+      .split(";")
+      .map((extension) => extension.trim())
+      .filter(Boolean),
+  ];
+  for (const entry of searchPath.split(path.delimiter)) {
+    // A quoted PATH entry is legal on Windows and the quotes are not part of
+    // the directory name.
+    const directory = entry.trim().replace(/^"(.*)"$/, "$1");
+    if (!directory) {
+      continue;
+    }
+    for (const extension of extensions) {
+      const candidate = path.join(directory, `${binaryName}${extension}`);
+      if (await pathExists(candidate)) {
+        return candidate;
+      }
+    }
+  }
+  return undefined;
+}
+
+function readEnvIgnoringCase(
+  env: NodeJS.ProcessEnv,
+  name: string,
+): string | undefined {
+  const lowered = name.toLowerCase();
+  for (const [key, value] of Object.entries(env)) {
+    if (key.toLowerCase() === lowered && value) {
+      return value;
+    }
+  }
   return undefined;
 }
 

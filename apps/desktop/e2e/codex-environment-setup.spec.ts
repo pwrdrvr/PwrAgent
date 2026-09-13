@@ -6,6 +6,25 @@ import path from "node:path";
 import { expect, test } from "@playwright/test";
 import { launchElectronApp } from "./fixtures/electron-app";
 
+/**
+ * Put a path the "Capture CWD" action wrote beside one Node produced.
+ *
+ * Environment actions always run through a POSIX login shell (`-lc`), which on
+ * Windows is Git for Windows' bash — so `pwd -P` answers in MSYS form,
+ * `/c/Users/...`, while `realpath` answers `C:\Users\...`. Both name the same
+ * directory; only the spelling differs, and comparing the raw strings asserted
+ * the spelling. Fold both to one form instead: drive letter, forward slashes.
+ */
+function comparableCommandCwd(value: string): string {
+  const trimmed = value.trim().replace(/\\/g, "/");
+  const msysDrive = trimmed.match(/^\/([A-Za-z])\/(.*)$/);
+  const normalized = msysDrive
+    ? `${msysDrive[1]}:/${msysDrive[2]}`
+    : trimmed;
+  return normalized.replace(/^([A-Za-z]):/, (_match, drive: string) =>
+    `${drive.toUpperCase()}:`);
+}
+
 async function createCodexEnvironmentSetupFixture(params?: {
   includeExistingRunningSteps?: boolean;
   includeExistingThread?: boolean;
@@ -535,15 +554,17 @@ test("thread environment Run command uses the current cwd after workspace handof
     await expect
       .poll(
         async () =>
-          await readActionCwdMarker({
-            localPath: fixture.repoDir,
-            worktreePath: worktreePath!,
-          }),
+          comparableCommandCwd(
+            await readActionCwdMarker({
+              localPath: fixture.repoDir,
+              worktreePath: worktreePath!,
+            }),
+          ),
         {
           timeout: 5_000,
         },
       )
-      .toBe(`${await realpath(worktreePath!)}\n`);
+      .toBe(comparableCommandCwd(await realpath(worktreePath!)));
 
     await app.window.getByLabel("Workspace mode").click();
     await app.window.getByRole("menuitem", { name: "Handoff to Local" }).click();
@@ -556,15 +577,17 @@ test("thread environment Run command uses the current cwd after workspace handof
     await expect
       .poll(
         async () =>
-          await readFile(
-            path.join(fixture.repoDir, ".pwragent-e2e-action-cwd"),
-            "utf8",
+          comparableCommandCwd(
+            await readFile(
+              path.join(fixture.repoDir, ".pwragent-e2e-action-cwd"),
+              "utf8",
+            ),
           ),
         {
           timeout: 5_000,
         },
       )
-      .toBe(`${await realpath(fixture.repoDir)}\n`);
+      .toBe(comparableCommandCwd(await realpath(fixture.repoDir)));
   } finally {
     await app.close();
     await fixture.cleanup();

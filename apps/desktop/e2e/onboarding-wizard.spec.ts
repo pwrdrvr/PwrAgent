@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { expect, test } from "@playwright/test";
+import { killGraduatedProfileInstances } from "./fixtures/detached-profile-instances";
 import { launchElectronApp } from "./fixtures/electron-app";
 
 /**
@@ -581,6 +582,10 @@ test.describe("Onboarding wizard", () => {
       );
       expect(profileConfig).toContain("completed = true");
     } finally {
+      // The relaunched instance is detached, so `close()` — which reaps only
+      // this app's own process tree — never sees it. Left running it holds
+      // `state.db` open, and Windows then refuses to unlink the home tree.
+      await killGraduatedProfileInstances("test2");
       await app.close();
     }
   });
@@ -691,6 +696,10 @@ test.describe("Onboarding wizard", () => {
       );
       expect(profilesToml).toContain('default_profile = "personal"');
     } finally {
+      // Graduation spawned a detached `personal` instance that outlives the
+      // bootstrap window by design. Nothing else reaps it, and on Windows its
+      // open `state.db` blocks the home tree's removal.
+      await killGraduatedProfileInstances("personal");
       // Even if the bootstrap process already exited, close() is
       // safe — it just tears down handles.
       await app.close();
