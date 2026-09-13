@@ -43,6 +43,35 @@ export async function killGraduatedProfileInstances(
       // Already gone, or not ours to kill.
     }
   }
+  if (pids.length > 0) {
+    await waitForProfileInstancesToExit(profile);
+  }
+}
+
+/**
+ * Block until the killed instances are actually gone.
+ *
+ * Signalling a process is not the same as it having exited, and the caller's
+ * very next act is to delete the directory those processes hold open. Windows
+ * refuses to unlink an open file, so the gap between `taskkill` returning and
+ * the last handle closing surfaced as an intermittent
+ * `EBUSY: ... unlink '...\state\state.db-shm'` — every assertion already
+ * passed, failing in cleanup.
+ *
+ * Polling the process table rather than sleeping a fixed interval: the wait is
+ * as long as the exit actually takes and no longer, and a stuck process is
+ * reported as the deadline expiring instead of being silently raced. Still
+ * best-effort — the caller deletes either way, and throwing here would swap one
+ * cleanup-shaped failure for another.
+ */
+async function waitForProfileInstancesToExit(profile: string): Promise<void> {
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    if ((await listGraduatedProfilePids(profile)).length === 0) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
 }
 
 async function listGraduatedProfilePids(profile: string): Promise<number[]> {
