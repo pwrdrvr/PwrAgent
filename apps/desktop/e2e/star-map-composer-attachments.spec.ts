@@ -133,12 +133,17 @@ test("sends pasted, dropped, and local-file attachments from a Star Map chat car
     const messageInput = chatCard.getByRole("textbox", {
       name: `Message ${LOCAL_THREAD_TITLE}`,
     });
-    // The card mounts its composer disabled and enables it once
-    // `useNavigationSelectedDetail` and the queue both report ready — two IPC
-    // round trips after the card opens. Attaching does not consult that state,
-    // so the attachment steps below run either way and the run only fails
-    // later, at the first keystroke, reading as "element is not editable"
-    // rather than "the composer was never ready". Wait for the evidence here.
+    // Readiness is not a one-way latch. The card enables its composer once
+    // `useNavigationSelectedDetail` and the queue both report ready, and a
+    // later refresh can drop it back to disabled — so this waits here AND
+    // again at the keystroke below. Both are needed: attaching never consults
+    // the state, so without the first guard the attachment steps run against
+    // a dead composer, and without the second the run dies mid-test after a
+    // refresh lands between them (which is what Windows showed).
+    //
+    // It has to be an explicit wait rather than letting `fill` handle it:
+    // Playwright rejects a `contenteditable="false"` node as the wrong
+    // element type outright instead of retrying until it becomes editable.
     await expect(messageInput).toBeEditable();
 
     await attachPng(messageInput, {
@@ -168,6 +173,7 @@ test("sends pasted, dropped, and local-file attachments from a Star Map chat car
       chatCard.locator('[aria-label="Attached files"]'),
     ).toContainText("star-map-notes.txt");
 
+    await expect(messageInput).toBeEditable();
     await messageInput.fill("Inspect these Star Map attachments");
     await chatCard.getByRole("button", { name: "Send" }).click();
 

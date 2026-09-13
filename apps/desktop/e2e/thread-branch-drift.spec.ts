@@ -6,9 +6,7 @@ test("keeps the branch drift warning open after refreshing observed checkout sta
   const fixture = await createBranchDriftFixture();
   const app = await launchElectronApp({
     fixturePath: fixture.fixturePath,
-    env: {
-      HOME: fixture.homeDir,
-    },
+    env: fixture.env,
   });
 
   try {
@@ -58,9 +56,7 @@ test("keeps the branch drift indicator when the user keeps the warning", async (
   const fixture = await createBranchDriftFixture();
   const app = await launchElectronApp({
     fixturePath: fixture.fixturePath,
-    env: {
-      HOME: fixture.homeDir,
-    },
+    env: fixture.env,
   });
 
   try {
@@ -94,9 +90,7 @@ test("updates the expected branch when the user accepts the current branch", asy
   const fixture = await createBranchDriftFixture();
   const app = await launchElectronApp({
     fixturePath: fixture.fixturePath,
-    env: {
-      HOME: fixture.homeDir,
-    },
+    env: fixture.env,
   });
 
   try {
@@ -123,9 +117,7 @@ test("repairs a stale HEAD drift without opening a warning", async () => {
   const fixture = await createBranchDriftFixture({ expectedBranch: "HEAD" });
   const app = await launchElectronApp({
     fixturePath: fixture.fixturePath,
-    env: {
-      HOME: fixture.homeDir,
-    },
+    env: fixture.env,
   });
 
   try {

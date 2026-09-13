@@ -9,6 +9,7 @@ export async function createBranchDriftFixture(options: {
   expectedBranch?: string;
 } = {}): Promise<{
   cleanup: () => Promise<void>;
+  env: Record<string, string>;
   fixturePath: string;
   homeDir: string;
 }> {
@@ -158,6 +159,23 @@ export async function createBranchDriftFixture(options: {
   return {
     cleanup: async () => {
       await rm(rootDir, { force: true, recursive: true });
+    },
+    // The whole scenario rides on the legacy import above being found, so the
+    // launch environment belongs to the fixture that wrote those files rather
+    // than to each spec that uses it.
+    //
+    // `HOME` alone is not enough. `findLegacyPaths` derives the XDG defaults
+    // from `os.homedir()`, which on Windows reads `USERPROFILE` and ignores
+    // `HOME` entirely — so the app went looking under the real operator
+    // profile, imported nothing, and every assertion here failed downstream of
+    // a thread row that was never written. `XDG_STATE_HOME` is consulted
+    // ahead of that fallback on every platform, which makes it the seam: it
+    // names the directory the fixture actually wrote instead of racing
+    // Windows over what "home" means.
+    env: {
+      HOME: rootDir,
+      XDG_STATE_HOME: path.join(rootDir, ".local", "state"),
+      XDG_CONFIG_HOME: path.join(rootDir, ".config"),
     },
     fixturePath,
     homeDir: rootDir,

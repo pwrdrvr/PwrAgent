@@ -802,9 +802,12 @@ test("new-thread picker starts a newly added directory in local checkout by defa
     await expect
       .poll(
         async () =>
-          ((await app.getLastStartTurn()) as { cwd?: string } | undefined)?.cwd,
+          navigationPath(
+            ((await app.getLastStartTurn()) as { cwd?: string } | undefined)?.cwd
+              ?? "",
+          ),
       )
-      .toBe(fixture.pickedRepoDir);
+      .toBe(navigationPath(fixture.pickedRepoDir));
   } finally {
     await app.close();
     await fixture.cleanup();
@@ -949,6 +952,17 @@ test("directory launchpad repairs stale drafts that saved the internal directory
     const repoDir = path.join(rootDir, "FixtureRepo");
     const directoryKey = directoryKeyFor(repoDir);
 
+    // Seeded after the directory row exists, not straight off the launch.
+    // The app writes this record itself while it settles, and an IPC patch
+    // that lands first is simply overwritten — which on the slower Windows
+    // runner left `prompt` empty and read as the repair having erased the
+    // draft. The row is the app's own signal that it is past that write.
+    await app.window.getByRole("tab", { name: "directories" }).click();
+    const launchpad = app.window.getByRole("button", {
+      name: "Open new thread launchpad for FixtureRepo",
+    });
+    await expect(launchpad).toBeVisible();
+
     await app.window.evaluate(async (key) => {
       await (window as any).pwragent.updateDirectoryLaunchpad({
         directoryKey: key,
@@ -957,11 +971,20 @@ test("directory launchpad repairs stale drafts that saved the internal directory
         },
       });
     }, directoryKey);
+    // The draft has to be stale BEFORE the launchpad opens, or the test is
+    // no longer about repairing one. Asserted rather than assumed, so a
+    // clobbered seed cannot masquerade as a repair that dropped the prompt.
+    await expect
+      .poll(async () => {
+        const overlay = await readOverlayState(app.homeRoot);
+        const record = overlay.directoryLaunchpads?.[directoryKey] as
+          | { prompt?: string }
+          | undefined;
+        return record?.prompt;
+      })
+      .toBe("A stale draft that already has content");
 
-    await app.window.getByRole("tab", { name: "directories" }).click();
-    await app.window
-      .getByRole("button", { name: "Open new thread launchpad for FixtureRepo" })
-      .click();
+    await launchpad.click();
 
     await expectDirectoryLaunchpadHeader(app, "FixtureRepo");
     await expect(app.window.getByText(/^directory:/)).toHaveCount(0);

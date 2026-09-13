@@ -94,6 +94,19 @@ export default defineConfig({
   // error. Ordinary assertion failures retain normal retry/suite behavior.
   reporter: reporters,
   use: {
+    // Playwright leaves actions unbounded by default, so a click that never
+    // becomes actionable waits out the whole test budget and the run reports
+    // a bare "Test timeout of 30000ms exceeded" — no call log, no "resolved to
+    // N elements", no "intercepts pointer events" and no element to blame.
+    // Two Windows transcript hangs cost a full CI cycle each for exactly that
+    // reason, and the Electron trace carries no DOM snapshots to fall back on.
+    //
+    // This shortens an unbounded wait rather than extending a real one: no
+    // action here legitimately runs for twenty seconds, and one that reached
+    // this cap has already left too little of the 30s test budget to pass.
+    // `expect` polling is unaffected — it has its own timeout — so assertions
+    // that deliberately wait longer keep their behavior.
+    actionTimeout: 20_000,
     screenshot: process.env.CI ? "only-on-failure" : "off",
     trace: "on-first-retry",
     video: process.env.CI ? "retain-on-failure" : "off"
