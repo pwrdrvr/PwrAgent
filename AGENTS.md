@@ -458,6 +458,24 @@ These variables are for development only.
 - The metrics file gets one JSON line of totals for each source.
 - Read "Sqlite Write-Volume Instrumentation" in [apps/desktop/AGENTS.md](apps/desktop/AGENTS.md).
 
+`PWRAGENT_DEV_REACT_DEVTOOLS=1`
+
+- Load the standalone React DevTools backend as the renderer's first `<head>` script.
+- `PWRAGENT_DEV_REACT_DEVTOOLS_HOST` and `PWRAGENT_DEV_REACT_DEVTOOLS_PORT` select the endpoint.
+- Default the endpoint to `localhost:8097`.
+- Give each checkout its own port when profiling more than one at a time.
+- This variable is read by [electron.vite.config.ts](apps/desktop/electron.vite.config.ts) at build time, not by the app process.
+- A build made with this variable set must never ship.
+- `verify-asar-contents.mjs` fails packaging when renderer HTML loads a remote script.
+
+`PWRAGENT_DEV_REACT_PROFILING=1`
+
+- Alias `react-dom/client` to `react-dom/profiling` for `electron-vite build`.
+- Use this variable only when an absolute millisecond number must be trustworthy.
+- The dev server already serves a profilable `react-dom`, so this variable is a no-op there.
+- Use the dev build to find re-render storms. It carries richer render attribution.
+- Read "Profiling the Renderer with React DevTools" in [apps/desktop/AGENTS.md](apps/desktop/AGENTS.md).
+
 ## Frontend and Desktop UI
 
 - Before renderer UI work, read the [desktop style guide](docs/design/desktop-style-guide.md).

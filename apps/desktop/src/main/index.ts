@@ -1153,6 +1153,17 @@ function rejectDevOnlyEnvVarsInProduction(): void {
     SECRET_STORAGE_DISABLED_ENV,
     SQLITE_WRITE_METRICS_ENV,
     SQLITE_WRITE_METRICS_FILE_ENV,
+    // The React DevTools / profiling vars below are read by
+    // `electron.vite.config.ts` at build time, not by this process, so the
+    // `delete` accomplishes nothing for them. They are listed anyway for the
+    // error line: an operator who exports one and then launches a packaged
+    // build is owed a loud "that did nothing" rather than a silent Profiler
+    // tab that never connects. Names are literals because the canonical
+    // declarations live in the Vite config, which main must not import.
+    "PWRAGENT_DEV_REACT_DEVTOOLS",
+    "PWRAGENT_DEV_REACT_DEVTOOLS_HOST",
+    "PWRAGENT_DEV_REACT_DEVTOOLS_PORT",
+    "PWRAGENT_DEV_REACT_PROFILING",
   ];
   for (const name of devOnlyVars) {
     if (process.env[name] !== undefined) {
