@@ -33,3 +33,35 @@ describe("window-owned directory disclosure", () => {
     expect(screen.queryByRole("list", { name: "Threads in Project 1" })).not.toBeNull();
   });
 });
+
+describe("directory disclosure writes", () => {
+  it("does not rewrite disclosure state for a selection inside an open directory", () => {
+    const observed: Record<string, boolean>[] = [];
+    function ObservedWindow({ selected }: { selected: number }) {
+      const disclosure = useNavigationDirectoryDisclosure();
+      observed.push(disclosure.expandedByKey);
+      const thread = fixture.threads[selected]!;
+      return <DirectoriesList
+        directoryDisclosure={disclosure}
+        directories={fixture.directories}
+        threads={fixture.threads}
+        selectedItemKey={buildThreadIdentityKey(thread.source, thread.id)}
+        onOpenLaunchpad={async () => {}}
+        onOpenThreadContextMenu={() => {}}
+        onSelectThread={() => {}}
+      />;
+    }
+
+    const view = render(<ObservedWindow selected={0} />);
+    const opened = observed.at(-1)!;
+    expect(opened["directory:/fixture/project-1"]).toBe(true);
+
+    // Selecting another thread in the same already-open directory must not
+    // allocate a new disclosure map. That write changes nothing, re-renders
+    // the navigation tree, and — because this effect re-runs whenever the
+    // directory array arrives with a new identity — feeds itself.
+    view.rerender(<ObservedWindow selected={1} />);
+    expect(observed.at(-1)).toBe(opened);
+    expect(new Set(observed).size).toBe(2);
+  });
+});
