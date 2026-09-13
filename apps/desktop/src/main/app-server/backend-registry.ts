@@ -898,6 +898,7 @@ type BackendClient = {
     callerReason?: string;
     ownerId?: string;
   }): Promise<BackendModelOption[]>;
+  isAuthenticationRequired?(): boolean;
   readAccount?(): Promise<BackendAccountSummary>;
   readRateLimits?(): Promise<BackendRateLimitSummary[]>;
   interruptTurn(params: {
@@ -25419,6 +25420,7 @@ export class DesktopBackendRegistry {
     backendGeneration: number;
     notificationVersion: number;
   }): Promise<boolean> {
+    if (this.codexClient.isAuthenticationRequired?.()) return false;
     let refetchedRateLimits: BackendRateLimitSummary[];
     try {
       refetchedRateLimits = await readClientRateLimits(this.codexClient);

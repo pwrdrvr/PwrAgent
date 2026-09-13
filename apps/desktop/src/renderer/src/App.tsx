@@ -1,3 +1,4 @@
+import { CodexAuthProfileLoginDialog } from "./features/settings/CodexAuthProfileSelect";
 import { navigationIdentityFromThreadKey } from "./lib/navigation-query-state";
 import { classifyDirectory } from "@pwragent/shared";
 import type { NavigationDirectoryView as NavigationDirectorySummary } from "./lib/navigation-loaded-rows";
@@ -389,6 +390,7 @@ function DesktopAppShell(props: {
   // This is intentionally a queue rather than one slot per producer: backend
   // failures can arrive while another safety notice is already visible, and
   // every failure must remain individually reviewable and dismissible.
+  const [codexLoginProfile, setCodexLoginProfile] = useState<{ name: string; displayName: string }>();
   const [appNotices, dispatchAppNotice] = useReducer(
     appNoticeReducer,
     INITIAL_APP_NOTICE_STATE,
@@ -396,6 +398,33 @@ function DesktopAppShell(props: {
   const showAppNotice = useCallback((notice: AppNoticeToastNotice): void => {
     dispatchAppNotice({ type: "show", notice });
   }, []);
+  const codexProfiles = props.settings.snapshot?.models.codex.profiles;
+  const activeCodexProfileRef = useRef(codexProfiles);
+  activeCodexProfileRef.current = codexProfiles;
+  const openCodexLogin = useCallback(() => {
+    const discovery = activeCodexProfileRef.current;
+    const profile = discovery?.profiles.find((entry) => entry.codexHome === discovery.effectiveCodexHome);
+    if (profile) setCodexLoginProfile(profile);
+  }, []);
+  const rejectedCodexHomes = useRef(new Set<string>());
+  useEffect(() => {
+    const rejected = codexProfiles?.profiles.filter((profile) => profile.authenticationRequired) ?? [];
+    const nextHomes = new Set(rejected.map((profile) => profile.codexHome));
+    for (const profile of rejected) {
+      if (rejectedCodexHomes.current.has(profile.codexHome)) continue;
+      showAppNotice({
+        id: `codex-auth:${profile.codexHome}`,
+        title: "Codex login required",
+        message: `${profile.displayName} is logged out. Codex operations are paused until you sign in again.`,
+        autoDismiss: false,
+        actions: [{ label: "Login", onClick: () => setCodexLoginProfile(profile) }],
+      });
+    }
+    for (const home of rejectedCodexHomes.current) {
+      if (!nextHomes.has(home)) dispatchAppNotice({ type: "dismiss", id: `codex-auth:${home}` });
+    }
+    rejectedCodexHomes.current = nextHomes;
+  }, [codexProfiles, showAppNotice]);
   const dismissAppNotice = useCallback((id: string): void => {
     dispatchAppNotice({ type: "dismiss", id });
   }, []);
@@ -1151,6 +1180,7 @@ function DesktopAppShell(props: {
           type: "backend-error",
           signal: {
             kind: "turn-failed",
+            onCodexLogin: openCodexLogin,
             backend: event.backend,
             threadId: params.threadId ?? "unknown",
             turnId: params.turnId ?? "unknown",
@@ -1208,7 +1238,7 @@ function DesktopAppShell(props: {
         return;
       }
     });
-  }, [acknowledgeThreadSpendAlert, desktopApi]);
+  }, [acknowledgeThreadSpendAlert, desktopApi, openCodexLogin]);
   // `instant` is for callers that are about to hide the sidebar (the ⌘K peek):
   // a smooth scroll is animated over several frames, and hiding the sidebar
   // mid-animation abandons it wherever it got to. An instant scroll lands in one
@@ -2623,6 +2653,15 @@ function DesktopAppShell(props: {
       onShowThread={showThreadFromLink}
       threads={navigation.threads}
     >
+      {codexLoginProfile ? (
+        <CodexAuthProfileLoginDialog
+          desktopApi={desktopApi}
+          profile={codexLoginProfile.name}
+          displayName={codexLoginProfile.displayName}
+          onCancel={() => setCodexLoginProfile(undefined)}
+          onAuthenticated={settings.refresh}
+        />
+      ) : null}
       <AppTitleBar
         desktopApi={desktopApi}
         onOpenMessagingActivity={openMessagingActivityWindow}

@@ -6346,6 +6346,31 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  it("suspends quota probes while Codex authentication is rejected and resumes after verification", async () => {
+    const codexClient = Object.assign(new MockBackendClient({
+      rateLimits: [{ name: "Weekly limit", remaining: 91 }],
+    }), {
+      isAuthenticationRequired: vi.fn(() => false),
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+    });
+    await registry.refreshProvidersAtStartup(issueProviderDiscoveryPermit("startup"));
+    const read = vi.spyOn(codexClient, "readRateLimits");
+    codexClient.isAuthenticationRequired.mockReturnValue(true);
+    await registry.listBackends({ refreshRateLimits: true });
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 30_000);
+    await registry.listBackends({ refreshRateLimits: true });
+    expect(read).not.toHaveBeenCalled();
+    codexClient.isAuthenticationRequired.mockReturnValue(false);
+    clock.mockReturnValue(Date.now() + 30_000);
+    await registry.listBackends({ refreshRateLimits: true });
+    expect(read).toHaveBeenCalledOnce();
+    clock.mockRestore();
+    await registry.close();
+  });
+
   it("refreshes idle Codex quotas without rediscovery and coalesces repeated reads", async () => {
     const codexClient = new MockBackendClient({
       rateLimits: [{ name: "Weekly limit", remaining: 91 }],

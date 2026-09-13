@@ -6,6 +6,7 @@ import type {
 import { normalizeProfileName } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { tildifyPath } from "../../lib/tildify-path";
+import { BACKEND_SUMMARIES_REFRESH_EVENT } from "../../lib/useBackendSummaries";
 import { SettingsSplitPath } from "./SettingsSplitPath";
 
 const CREATE_VALUE = "__create_codex_profile__";
@@ -63,13 +64,22 @@ export function CodexAuthProfileSelect(props: {
         {profiles.map((profile) => (
           <option key={profile.name || "default"} value={profile.name}>
             {profile.displayName}
-            {profile.hasAuthFile ? "" : " (no auth)"}
+            {profile.authenticationRequired ? " (logged out)" : profile.hasAuthFile ? "" : " (no auth)"}
           </option>
         ))}
         <option value={CREATE_VALUE}>Create New Codex Profile...</option>
       </select>
 
       {selected ? <CodexAuthProfileStatus profile={selected} /> : null}
+      {selected && (selected.authenticationRequired || !selected.hasAuthFile) ? (
+        <CodexAuthProfileLoginButton
+          desktopApi={props.desktopApi}
+          disabled={props.disabled}
+          displayName={selected.displayName}
+          profile={selected.name}
+          onAuthenticated={props.onAfterProfilesChanged}
+        />
+      ) : null}
 
       {createOpen ? (
         <CodexAuthProfileCreateDialog
@@ -130,7 +140,7 @@ export function CodexAuthProfileLoginButton(props: {
     <>
       <button
         className="button button--secondary"
-        disabled={props.disabled || !props.profile}
+        disabled={props.disabled}
         type="button"
         onClick={() => setLoginOpen(true)}
       >
@@ -175,12 +185,12 @@ function CodexAuthProfileStatus(props: {
         </span>
         <span
           className={`settings-pathrow__chip${
-            profile.hasAuthFile || !profile.name
+            !profile.authenticationRequired && profile.hasAuthFile
               ? ""
               : " settings-pathrow__chip--err"
           }`}
         >
-          {profile.hasAuthFile ? "auth" : "no auth"}
+          {profile.authenticationRequired ? "Logged out" : profile.hasAuthFile ? "auth" : "no auth"}
         </span>
         {profile.hasConfigFile ? (
           <span className="settings-pathrow__chip">config</span>
@@ -433,7 +443,7 @@ function CodexAuthProfileCreateDialog(props: {
   );
 }
 
-function CodexAuthProfileLoginDialog(props: {
+export function CodexAuthProfileLoginDialog(props: {
   desktopApi?: DesktopApi;
   displayName: string;
   profile: string;
@@ -449,8 +459,7 @@ function CodexAuthProfileLoginDialog(props: {
   const authenticatedRef = useRef(false);
   const canLogin = Boolean(
     props.desktopApi?.startCodexAuthProfileLogin
-      && props.desktopApi.checkCodexAuthProfileStatus
-      && props.profile,
+      && props.desktopApi.checkCodexAuthProfileStatus,
   );
 
   const startLogin = async () => {
@@ -497,7 +506,6 @@ function CodexAuthProfileLoginDialog(props: {
     if (
       busy
       || !props.desktopApi?.checkCodexAuthProfileStatus
-      || !props.profile
     ) {
       return;
     }
@@ -593,6 +601,7 @@ function CodexAuthProfileLoginDialog(props: {
               onClick={() => {
                 void (async () => {
                   await props.onAuthenticated?.();
+                  window.dispatchEvent(new Event(BACKEND_SUMMARIES_REFRESH_EVENT));
                   props.onCancel();
                 })();
               }}

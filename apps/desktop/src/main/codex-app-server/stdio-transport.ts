@@ -1,3 +1,6 @@
+import path from "node:path";
+import { resolveDefaultCodexHome } from "@pwrdrvr/codex-discovery";
+import { codexAuthState, isCodexAuthenticationFailure } from "../codex-auth-state";
 import {
   spawn,
   type ChildProcessWithoutNullStreams,
@@ -33,6 +36,9 @@ const PROCESS_FORCE_CLOSE_TIMEOUT_MS = 5_000;
 
 export type StdioJsonRpcTransportOptions = {
   command: string;
+  authenticationRecovery?: boolean;
+  onAuthenticationRejected?: (home: string) => void;
+
   args?: string[];
   env?: NodeJS.ProcessEnv;
   resolveArgs?: (env: NodeJS.ProcessEnv) => Promise<string[]> | string[];
@@ -68,6 +74,8 @@ function isJsonRpcResponseEnvelope(message: string): boolean {
 }
 
 export class StdioJsonRpcTransport implements JsonRpcTransport {
+  private codexHome?: string;
+  private unsubscribeAuth?: () => void;
   private childProcess: ChildProcessWithoutNullStreams | null = null;
   private messageHandler: (message: string) => void = () => undefined;
   private closeHandler: (error?: Error) => void = () => undefined;
@@ -120,6 +128,14 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
       ? await this.options.resolveEnv()
       : this.options.env ?? process.env;
     this.assertCurrentGeneration(generation);
+    this.codexHome = resolvedEnv.CODEX_HOME || resolveDefaultCodexHome();
+    if (!this.options.authenticationRecovery) codexAuthState.assertAvailable(this.codexHome);
+    this.unsubscribeAuth?.();
+    this.unsubscribeAuth = codexAuthState.subscribe((home) => {
+      if (this.codexHome && path.resolve(this.codexHome) === home && codexAuthState.isBlocked(home)) {
+        this.options.onAuthenticationRejected?.(this.codexHome);
+      }
+    });
     const env = prependBundledToolsToPath(
       buildPwrAgentChildProcessEnv(resolvedEnv),
       {
@@ -185,6 +201,15 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
 
     const stdoutReader = readline.createInterface({ input: child.stdout });
     stdoutReader.on("line", (line: string) => {
+      // Only error envelopes and error notifications are auth evidence;
+      // transcript text and tool output must never invalidate a login.
+      try {
+        const message = JSON.parse(line);
+        const error = message.error
+          ?? (message.method === "error" ? message.params : undefined)
+          ?? (["turn/completed", "turn/failed"].includes(message.method) ? message.params?.turn?.error : undefined);
+        if (error) this.observeAuthenticationError(JSON.stringify(error));
+      } catch { /* JSON-RPC owns malformed-message reporting. */ }
       this.messageHandler(line);
     });
 
@@ -202,6 +227,7 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
     let stderrLinesThisWindow = 0;
     let stderrSuppressedThisWindow = 0;
     stderrReader.on("line", (line: string) => {
+      this.observeAuthenticationError(line);
       const trimmed = line.trim();
       if (trimmed.length === 0) {
         return;
@@ -245,6 +271,8 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
   }
 
   async close(): Promise<void> {
+    this.unsubscribeAuth?.();
+    this.unsubscribeAuth = undefined;
     this.closeRequested = true;
     this.lifecycleGeneration += 1;
     if (this.closePromise) {
@@ -267,7 +295,28 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
     return await this.closePromise;
   }
 
+  private observeAuthenticationError(message: string): void {
+    if (!this.closeRequested && this.codexHome && isCodexAuthenticationFailure(message)) {
+      const alreadyBlocked = codexAuthState.isBlocked(this.codexHome);
+      codexAuthState.reject(this.codexHome);
+      // Recovery clients connect while the latch is already set. Their own
+      // rejection must still stop verification; cached model data is not proof
+      // that refreshed credentials work.
+      if (alreadyBlocked) this.options.onAuthenticationRejected?.(this.codexHome);
+    }
+  }
+
   send(message: string): void {
+    if (this.codexHome && !isJsonRpcResponseEnvelope(message)) {
+      if (!this.options.authenticationRecovery) {
+        codexAuthState.assertAvailable(this.codexHome);
+      } else {
+        const method = JSON.parse(message).method;
+        if (!["initialize", "initialized", "account/read", "account/rateLimits/read"].includes(method)) {
+          throw new Error("Only authentication verification is allowed during Codex recovery.");
+        }
+      }
+    }
     const child = this.childProcess;
     if (this.closeRequested) {
       if (isJsonRpcResponseEnvelope(message)) {

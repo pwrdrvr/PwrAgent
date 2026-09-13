@@ -781,6 +781,50 @@ describe("settings ipc", () => {
     disposeSettingsIpcHandlers();
   });
 
+  it("keeps a rejected profile blocked until an authenticated API probe succeeds", async () => {
+    const { codexAuthState } = await import("../codex-auth-state");
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-auth-recovery-"));
+    tempRoots.push(root);
+    vi.stubEnv("CODEX_HOME", root);
+    codexAuthState.reject(root);
+    childProcessMocks.spawn.mockImplementation(() => createMockSpawnChild((child) => {
+      queueMicrotask(() => {
+        child.stdout.emit("data", "Logged in using ChatGPT");
+        child.emit("close", 0);
+      });
+    }));
+    const probe = vi.spyOn(CodexAppServerClient.prototype, "readRateLimits")
+      .mockRejectedValueOnce(new Error("401 Unauthorized"))
+      .mockResolvedValueOnce([]);
+    const close = vi.spyOn(CodexAppServerClient.prototype, "close").mockResolvedValue();
+    const service = {
+      resolveCodexCommand: vi.fn(async () => ({ command: "codex", source: "config" })),
+      readCodexProfiles: vi.fn(() => ({ effectiveCodexHome: root })),
+    } as unknown as DesktopSettingsService;
+    const { registerSettingsIpcHandlers, disposeSettingsIpcHandlers } = await import("../ipc/settings");
+    const { SETTINGS_CHECK_CODEX_AUTH_PROFILE_STATUS_CHANNEL } = await import("../../shared/ipc");
+    registerSettingsIpcHandlers(service);
+    try {
+      const check = handlers.get(SETTINGS_CHECK_CODEX_AUTH_PROFILE_STATUS_CHANNEL)!;
+      await expect(check({}, { profile: "" })).resolves.toMatchObject({ authenticated: false });
+      expect(codexAuthState.isBlocked(root)).toBe(true);
+      await expect(check({}, { profile: "" })).resolves.toMatchObject({ authenticated: true });
+      expect(codexAuthState.isBlocked(root)).toBe(false);
+      expect(listBackendsMock).toHaveBeenCalledWith(
+        { refreshModels: "codex" },
+        expect.objectContaining({ intent: "settings-user-action" }),
+      );
+      expect(probe).toHaveBeenCalledTimes(2);
+      expect(close).toHaveBeenCalledTimes(2);
+    } finally {
+      probe.mockRestore();
+      close.mockRestore();
+      codexAuthState.verified(root);
+      disposeSettingsIpcHandlers();
+    }
+  });
+
   it("starts named Codex auth profile login with the browser OAuth flow", async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-settings-ipc-"));
     tempRoots.push(tempRoot);

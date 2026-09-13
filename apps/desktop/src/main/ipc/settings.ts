@@ -1,3 +1,5 @@
+import { codexAuthState } from "../codex-auth-state";
+import { CodexAppServerClient } from "../codex-app-server/client";
 import { validateGlabCommand } from "../settings/glab-discovery";
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
 import { mkdir } from "node:fs/promises";
@@ -984,7 +986,34 @@ async function checkCodexProfileAuthStatus(
   const codexHome = resolveRequiredCodexProfileHome(profile);
   const command = await resolveCodexCommandForProfileWorkflow(service);
   const result = await collectCodexStatus(command, codexHome);
-  const authenticated = result.code === 0;
+  let authenticated = result.code === 0;
+  let verificationError: string | undefined;
+  if (authenticated && codexAuthState.isBlocked(codexHome)) {
+    // CLI login status only proves a credential exists. A fresh app-server
+    // must successfully use it before ordinary clients may resume.
+    const client = new CodexAppServerClient({
+      command,
+      env: { ...process.env, CODEX_HOME: codexHome },
+      authenticationRecovery: true,
+    });
+    try {
+      await client.readRateLimits();
+      codexAuthState.verified(codexHome);
+    } catch {
+      authenticated = false;
+      verificationError = "Codex authentication is still rejected. Complete login, then check status again.";
+    } finally {
+      await client.close();
+    }
+    if (authenticated && service.readCodexProfiles().effectiveCodexHome === codexHome) {
+      // Startup may have cached Codex as unavailable. Login is an explicit
+      // user action authorizing a fresh model/account discovery.
+      await getDesktopBackendRegistry().listBackends(
+        { refreshModels: "codex" },
+        issueProviderDiscoveryPermit("settings-user-action"),
+      );
+    }
+  }
   // When the CLI reports authenticated, surface the JWT-derived identity
   // fields too — the onboarding wizard's name+login step renders them
   // inline so the operator can confirm they signed in with the right
@@ -1000,7 +1029,7 @@ async function checkCodexProfileAuthStatus(
         : authenticated
           ? "authenticated"
           : "unauthenticated",
-    ...(result.detail ? { detail: result.detail } : {}),
+    ...(verificationError || result.detail ? { detail: verificationError ?? result.detail } : {}),
     ...(authInfo.email ? { email: authInfo.email } : {}),
     ...(authInfo.planType ? { planType: authInfo.planType } : {}),
   };
@@ -1546,11 +1575,16 @@ export function registerSettingsIpcHandlers(
         getService(service),
       );
       try {
-        return await codexLoginManager.startProfileLogin({
+        const login = await codexLoginManager.startProfileLogin({
           codexHome,
           command,
           profile,
         });
+        if (login.authenticated && codexAuthState.isBlocked(codexHome)) {
+          const status = await checkCodexProfileAuthStatus(getService(service), { profile });
+          return { ...login, authenticated: status.authenticated, detail: status.detail };
+        }
+        return login;
       } catch (error) {
         // The codex-discovery CodexLoginManager rejects when `codex login`
         // exits without emitting a login link (e.g. it printed "Not logged
