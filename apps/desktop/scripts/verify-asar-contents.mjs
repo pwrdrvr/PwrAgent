@@ -143,6 +143,47 @@ if (violations.length > 0) {
   process.exit(1);
 }
 
+// A packaged renderer must load every script from inside the asar. The one
+// thing that has ever wanted to break that rule is the dev-only React
+// DevTools bridge (PWRAGENT_DEV_REACT_DEVTOOLS), which injects
+// `<script src="http://localhost:8097">` as the first head script at Vite
+// config time. That is a build-time decision, so nothing at app runtime can
+// undo it — this is where it gets caught. Any remote script in a shipped
+// renderer is a hole regardless of which flag put it there, so the rule is
+// written against the shape, not against the flag.
+const remoteScriptPattern = /<script\b[^>]*\bsrc\s*=\s*["']?(?:https?:)?\/\//i;
+const htmlEntries = listing.filter((entry) => entry.endsWith(".html"));
+const remoteScriptViolations = [];
+for (const entry of htmlEntries) {
+  let contents;
+  try {
+    contents = asar.extractFile(asarPath, entry.replace(/^\//, "")).toString("utf8");
+  } catch {
+    // Directory entries and unpacked files surface as extraction failures.
+    // Neither can carry renderer markup, so there is nothing to inspect.
+    continue;
+  }
+  const match = remoteScriptPattern.exec(contents);
+  if (match) {
+    remoteScriptViolations.push({ entry, snippet: match[0] });
+  }
+}
+
+if (remoteScriptViolations.length > 0) {
+  console.error(
+    `\nverify-asar-contents: ${remoteScriptViolations.length} packaged HTML file(s) load a remote script\n`,
+  );
+  for (const { entry, snippet } of remoteScriptViolations) {
+    console.error(`  ${entry}`);
+    console.error(`    ${snippet}`);
+  }
+  console.error(
+    "\nBuild without PWRAGENT_DEV_REACT_DEVTOOLS set. That bridge is for local"
+    + "\nprofiling builds only and must never reach a packaged app.",
+  );
+  process.exit(1);
+}
+
 console.log(
-  `verify-asar-contents: OK (${listing.length} entries, required runtime files present, no forbidden patterns)`,
+  `verify-asar-contents: OK (${listing.length} entries, required runtime files present, no forbidden patterns, no remote scripts)`,
 );
