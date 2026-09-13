@@ -8,21 +8,30 @@ import {
 
 type Listener = (maximized: boolean) => void;
 
-function stubDesktopApi(): { emit: Listener; unsubscribe: ReturnType<typeof vi.fn> } {
+function stubDesktopApi(): {
+  emit: Listener;
+  subscribe: ReturnType<typeof vi.fn>;
+  unsubscribe: ReturnType<typeof vi.fn>;
+} {
   let emit: Listener = () => {};
   const unsubscribe = vi.fn();
+  // A spy, not just a capture: a second subscription would register the same
+  // module-level `apply`, so nothing downstream of `emit` can tell one
+  // subscription from two. Only the call count can.
+  const subscribe = vi.fn((callback: Listener) => {
+    emit = callback;
+    return unsubscribe;
+  });
   Object.defineProperty(window, "pwragent", {
     configurable: true,
     value: {
       platform: "linux",
-      onWindowFrameState: (callback: Listener) => {
-        emit = callback;
-        return unsubscribe;
-      },
+      onWindowFrameState: subscribe,
     },
   });
   return {
     emit: (maximized: boolean) => emit(maximized),
+    subscribe,
     unsubscribe,
   };
 }
@@ -87,8 +96,23 @@ describe("window frame state", () => {
     startWindowFrameSync("linux");
     startWindowFrameSync("linux");
 
+    // The call count is the assertion. Emitting and reading the store passes
+    // with the `started` guard deleted, because the second subscription hands
+    // the bridge the same `apply` the first one did.
+    expect(api.subscribe).toHaveBeenCalledTimes(1);
     api.emit(true);
     expect(isWindowMaximized()).toBe(true);
+  });
+
+  it("releases the bridge subscription when it is reset", () => {
+    // `__resetWindowFrameForTests` promises each test starts from zero, and a
+    // subscription the module can no longer reach is not zero.
+    const api = stubDesktopApi();
+    startWindowFrameSync("linux");
+
+    __resetWindowFrameForTests();
+
+    expect(api.unsubscribe).toHaveBeenCalledTimes(1);
   });
 
   it("does nothing off Linux", () => {

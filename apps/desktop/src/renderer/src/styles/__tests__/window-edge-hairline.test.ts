@@ -9,10 +9,16 @@ const css = readFileSync(path.resolve(testDir, "../app.css"), "utf8");
 const HAIRLINE_SELECTOR =
   ':root[data-platform="linux"]:not([data-window-frame="maximized"]) #root::after';
 
-function hairlineBody(): string {
+/** Where the hairline's own declaration block sits in app.css. */
+function hairlineRange(): { start: number; end: number } {
   const start = css.indexOf(`\n${HAIRLINE_SELECTOR} {`);
   expect(start, `app.css should declare ${HAIRLINE_SELECTOR}`).toBeGreaterThan(-1);
-  return css.slice(start, css.indexOf("\n}", start));
+  return { start, end: css.indexOf("\n}", start) };
+}
+
+function hairlineBody(): string {
+  const { start, end } = hairlineRange();
+  return css.slice(start, end);
 }
 
 /**
@@ -45,10 +51,15 @@ describe("Linux window edge hairline", () => {
     const hairline = /z-index:\s*(\d+);/.exec(hairlineBody());
     expect(hairline, "the hairline should declare a z-index").not.toBeNull();
 
+    // Exclude the hairline's own declaration by POSITION, not by value:
+    // filtering on the number would also drop a different rule that happened
+    // to declare 10001, and the test would pass while that rule — later in
+    // source order, so painted on top at equal z-index — covered the edge.
+    const { start, end } = hairlineRange();
     const ceiling = Math.max(
       ...[...css.matchAll(/z-index:\s*(\d+)/g)]
-        .map((match) => Number(match[1]))
-        .filter((value) => value !== Number(hairline?.[1])),
+        .filter((match) => (match.index ?? 0) < start || (match.index ?? 0) >= end)
+        .map((match) => Number(match[1])),
     );
     expect(Number(hairline?.[1])).toBeGreaterThan(ceiling);
   });
@@ -64,8 +75,19 @@ describe("Linux window edge hairline", () => {
     // `#root`, not `.app-shell`: the auxiliary windows keep the native Linux
     // frame, whose GTK border vanishes against our own dark surfaces, and they
     // render no `.app-shell` at all.
-    expect(HAIRLINE_SELECTOR).toContain("#root::after");
-    expect(HAIRLINE_SELECTOR).not.toContain(".app-shell");
+    //
+    // Read app.css for it. Asserting that HAIRLINE_SELECTOR — this file's own
+    // constant — contains "#root::after" compares a literal to itself and
+    // stays green however the stylesheet is rewritten.
+    const declared = [
+      ...css.matchAll(/\n(:root\[data-platform="linux"\][^\n{]*::after)\s*\{/g),
+    ].map((match) => match[1]);
+
+    expect(declared, "app.css should declare exactly one Linux edge").toEqual([
+      HAIRLINE_SELECTOR,
+    ]);
+    expect(declared[0]).toContain("#root::after");
+    expect(declared[0]).not.toContain(".app-shell");
   });
 
   it("stays square-cornered", () => {

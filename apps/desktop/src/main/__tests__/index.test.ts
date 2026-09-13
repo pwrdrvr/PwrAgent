@@ -9,6 +9,7 @@ const processEventHandlers = new Map<string, (...args: unknown[]) => void>();
 const mainRendererHandlers = new Map<string, (...args: unknown[]) => void>();
 const mainWindowHandlers = new Map<string, (...args: unknown[]) => void>();
 const installWindowFrameSyncMock = vi.fn();
+const wireWindowControlsBridgeMock = vi.fn();
 const createMainWindowMock = vi.fn();
 const registerAppServerIpcHandlersMock = vi.fn();
 const startAppServerOwnerNavigationMock = vi.fn(async () => undefined);
@@ -301,7 +302,7 @@ vi.mock("../app-menu-bridge", () => ({
 // Both reach `ipcMain` / `app.on`, which the electron mock above does not
 // carry; they have their own tests.
 vi.mock("../window-controls-bridge", () => ({
-  wireWindowControlsBridge: vi.fn(),
+  wireWindowControlsBridge: wireWindowControlsBridgeMock,
 }));
 
 vi.mock("../window-frame-sync", () => ({
@@ -1108,6 +1109,22 @@ describe("bootstrapApp", () => {
       onShown: expect.any(Function),
       startupCpuProfiler: startupProfilerInstance,
     });
+  });
+
+  it("wires the Linux window chrome bridges during bootstrap", async () => {
+    // Both are mocked above so they never reach `ipcMain` / `app.on`, which
+    // means nothing else in this file would notice either call going away.
+    // Drop `installWindowFrameSync(app)` and every Linux window boots with no
+    // maximize state: the caption glyph freezes on the restored icon and the
+    // painted window hairline stays on over a maximized window.
+    startupProfilerInstance.start.mockResolvedValue();
+
+    await import("../index");
+    await flushMicrotasks();
+
+    const { app } = await import("electron");
+    expect(wireWindowControlsBridgeMock).toHaveBeenCalledTimes(1);
+    expect(installWindowFrameSyncMock).toHaveBeenCalledWith(app);
   });
 
   it.each(["oom", "crashed", "killed", "abnormal-exit", "launch-failed", "integrity-failure", "memory-eviction"])(

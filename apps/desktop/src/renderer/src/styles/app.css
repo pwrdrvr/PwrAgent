@@ -965,12 +965,19 @@ textarea,
   padding-left: 14px;
 }
 
-/* Windows custom title-bar strip (File / View / Profiles / Window / Help).
-   Frameless WCO draws the OS caption buttons at the top-right; this strip
-   fills the rest of that line with the painted menu bar (left) and a draggable
-   remainder. The whole app shell is pushed below it so nothing renders under
-   the caption buttons. macOS/Linux never set data-platform="win32", so the
-   strip isn't mounted and these offsets don't apply. */
+/* The painted custom title-bar strip (File / View / Profiles / Window / Help),
+   mounted on BOTH platforms that hide the native title bar — win32 and linux
+   (`paintsAppTitleBar`). It fills the line with the painted menu bar (left) and
+   a draggable remainder, and the whole app shell is pushed below it.
+
+   Who occupies the right end differs, and that is the only difference: Windows
+   reserves the Window Controls Overlay the OS paints into (the `padding-right`
+   below), while Linux gets no overlay and paints its own caption buttons as
+   real flex children — so `:root[data-platform="linux"] .app-titlebar` further
+   down replaces that reservation with the strip's own 10px inset.
+
+   macOS never sets either platform value, so the strip isn't mounted there and
+   none of these offsets apply. */
 .app-titlebar {
   position: fixed;
   top: 0;
@@ -1040,9 +1047,7 @@ textarea,
 /* Linux caption buttons. A frameless window there gets neither macOS
    stoplights nor a Windows controls overlay, so nothing draws min/max/close
    unless the strip does — GNOME's side, order and roundness, in our own
-   palette. Close hovers to the danger wash rather than a solid red fill: the
-   glyph has to stay legible in both themes, and `--danger-base` is a mid red
-   in one and a near-black red in the other.
+   palette.
 
    Its own no-drag: `.app-titlebar__left`/`__right` carry theirs, and these
    are a third cluster outside both. Without it the whole group is title-bar
@@ -24014,11 +24019,11 @@ a.transcript-message__messaging-origin:focus-visible {
   display: flex;
   /* Anchored to `.thread-view__layout` (position: relative), NOT the window,
      so the rail starts BELOW the thread header and spans only the chat area.
-     WINDOWS IS THE EXCEPTION: there the title strip is the window's chrome
-     row, so `.thread-view` takes the positioning context instead (search
-     app.css for `data-platform="win32"] .thread-view`) and this rail runs the
-     full column height up to the strip, with the header reserving its width.
-     Everything below describes the macOS/Linux anchor.
+     THE STRIP PLATFORMS ARE THE EXCEPTION: on win32 and linux the title strip
+     is the window's chrome row, so `.thread-view` takes the positioning
+     context instead (search app.css for `[data-platform="linux"]) .thread-view`)
+     and this rail runs the full column height up to the strip, with the header
+     reserving its width. Everything below describes the macOS anchor.
      The header then keeps its full width and never has to reserve a gutter
      or squash its toggles/MSG to clear a rail that overlaps the title line.
      `right: 0` lands on the layout's padding edge = the window's right edge;

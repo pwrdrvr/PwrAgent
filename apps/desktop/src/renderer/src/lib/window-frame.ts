@@ -22,6 +22,8 @@ import { paintsOwnWindowControls } from "./window-chrome";
  */
 let maximized = false;
 let started = false;
+/** The bridge subscription, so `__resetWindowFrameForTests` can release it. */
+let release: (() => void) | undefined;
 const listeners = new Set<() => void>();
 
 function apply(next: boolean): void {
@@ -43,7 +45,7 @@ export function startWindowFrameSync(
   // frame. Main re-sends the real state on `did-finish-load`, which is what
   // corrects a window that came back already maximized.
   apply(false);
-  getDesktopApi()?.onWindowFrameState?.(apply);
+  release = getDesktopApi()?.onWindowFrameState?.(apply);
 }
 
 export function subscribeWindowFrame(onChange: () => void): () => void {
@@ -59,6 +61,11 @@ export function isWindowMaximized(): boolean {
 
 /** One module instance serves a whole test file; start each test from zero. */
 export function __resetWindowFrameForTests(): void {
+  // Drop the bridge subscription too. Without it every previous `apply` stays
+  // registered against a module-scoped fake bridge, so one emit drives all of
+  // them and "from zero" is not what the next test gets.
+  release?.();
+  release = undefined;
   started = false;
   maximized = false;
   listeners.clear();

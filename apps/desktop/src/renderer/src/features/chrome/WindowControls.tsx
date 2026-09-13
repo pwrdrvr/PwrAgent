@@ -39,7 +39,22 @@ export function WindowControls(): ReactElement | null {
   );
 
   const run = useCallback((action: WindowControlAction): void => {
-    void getDesktopApi()?.runWindowControl?.(action);
+    const api = getDesktopApi();
+    // `invoke`, so a control that never reached a handler rejects instead of
+    // looking like it worked — but the rejection has to be OBSERVED. Left
+    // uncaught it lands in `installGlobalRendererErrorHandlers`'
+    // `unhandledrejection` listener and files a renderer error report, which
+    // is not what a caption button failing deserves. There is no recovery to
+    // offer either: log it and leave the window alone.
+    void api?.runWindowControl?.(action)?.catch((error: unknown) => {
+      void api
+        ?.logRendererDiagnostic?.({
+          level: "warn",
+          message: "Window control did not reach the main process.",
+          details: { action, error: String(error) },
+        })
+        ?.catch(() => undefined);
+    });
   }, []);
 
   if (!paintsOwnWindowControls()) return null;
