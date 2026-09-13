@@ -2,7 +2,7 @@ import type { PrSummary, PullRequestProviderAvailability } from "@pwragent/share
 import { GithubPrFetcher, type GithubPrFetcherOptions } from "./github-pr-fetcher";
 import { parsePrRefFromUrl, type PrRef } from "./github-graphql-client";
 import { GitLabPrFetcher, parseGitLabMrUrl } from "./gitlab-pr-fetcher";
-import { resolveGitHubReposForDirectory, resolveGitLabReposForDirectory } from "./git-remote";
+import { resolveGitHubReposForDirectory } from "./git-remote";
 
 export type ForgePrRef = PrRef & { gitlabHost?: string };
 

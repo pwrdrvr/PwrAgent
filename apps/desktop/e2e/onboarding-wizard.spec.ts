@@ -669,7 +669,6 @@ test.describe("Onboarding wizard", () => {
         });
       });
       if (!exited) {
-        // eslint-disable-next-line no-console
         console.warn(
           "[wizard-e2e] bootstrap process didn't exit within 20s; " +
             "likely the spawned profile process never reported alive. " +

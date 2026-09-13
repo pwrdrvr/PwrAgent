@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { expect, test, type Locator, type Page } from "@playwright/test";
+import { expect, test, type Locator } from "@playwright/test";
 import type { NavigationLaunchpadDefaults } from "@pwragent/shared";
 import { launchElectronApp } from "./fixtures/electron-app";
 
@@ -23,15 +23,6 @@ async function assertTangerineFocusRing(locator: Locator) {
       outlineColor: "rgb(255, 138, 31)",
       outlineStyle: "solid",
     });
-}
-
-async function selectComposerOption(params: {
-  option: string | RegExp;
-  select: Locator;
-  window: Page;
-}) {
-  await params.select.click();
-  await params.window.getByRole("option", { name: params.option }).click();
 }
 
 async function createProviderSelectorFixture(params: {

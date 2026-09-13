@@ -7,11 +7,11 @@
 // deliberately does not run.
 //
 // Adoption posture: the codebase predates ESLint, so a handful of pre-existing
-// patterns (untyped `any`, unused symbols, intentional control-char regexes in
-// validation code, deliberate whitespace test fixtures) are set to "warn"
-// rather than "error". They are a baseline to burn down over time — CI blocks
-// on errors, surfaces warnings. Tighten a rule to "error" once its warning
-// count reaches zero.
+// patterns (untyped `any`, intentional control-char regexes in validation code,
+// deliberate whitespace test fixtures) are set to "warn" rather than "error".
+// They are a baseline to burn down over time — CI blocks on errors, surfaces
+// warnings. Tighten a rule to "error" once its warning count reaches zero.
+// `no-unused-vars` completed that burn-down and is an error; see its comment.
 import js from "@eslint/js";
 import tseslint from "typescript-eslint";
 import reactHooks from "eslint-plugin-react-hooks";
@@ -31,7 +31,10 @@ export default tseslint.config(
       // hand-written shared helper code — `capture-window-placement.ts`,
       // the state seeders — and stays linted: extracting a helper out of a
       // spec file and into here must not quietly drop it out of CI's
-      // correctness gate.
+      // correctness gate. The `apps/*/**` glob on `lint:eslint:cached` is what
+      // makes that true. Under the old `apps/*/src/**` it was aspirational:
+      // the ignore below excluded the JSON, and no glob reached the 15
+      // TypeScript files beside it, so nothing linted them at all.
       "**/e2e/fixtures/**/*.json",
       "**/__fixtures__/**",
     ],
@@ -61,9 +64,19 @@ export default tseslint.config(
       globals: { ...globals.node, ...globals.browser },
     },
     rules: {
-      // Underscore-prefixed args/vars are an intentional "unused" marker.
+      // Error, not warn: a dead import or an orphaned local is the one thing
+      // here a reviewer reliably misses and a green CI run must not. Neither
+      // ESLint invocation passes `--max-warnings 0`, so as a warning this rule
+      // printed a line nobody had to act on — which is how a hook extraction
+      // can leave its imports behind and still ship.
+      //
+      // Escape hatch: an underscore prefix. `varsIgnorePattern` covers locals
+      // and imports, `argsIgnorePattern` parameters, `caughtErrorsIgnorePattern`
+      // a caught error — an intentionally unused binding is spelled `_name`.
+      // (TypeScript's own `noUnusedLocals` honors no such prefix for locals,
+      // which is one reason the gate lives here rather than in tsconfig.)
       "@typescript-eslint/no-unused-vars": [
-        "warn",
+        "error",
         {
           argsIgnorePattern: "^_",
           varsIgnorePattern: "^_",

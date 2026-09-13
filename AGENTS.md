@@ -158,6 +158,57 @@
 - Do not add style or whitespace rules to ESLint.
 - Do not use `eslint --fix` to format code.
 
+### Unused imports and locals fail CI
+
+- `@typescript-eslint/no-unused-vars` is `"error"`, not `"warn"`.
+- `pnpm lint:eslint` is the command that fails.
+- CI runs it as the `ESLint` step of the `Lint` job in
+  [`ci.yml`](.github/workflows/ci.yml).
+- `pnpm build` does not catch this. It is `electron-vite build`, which
+  strips types through Vite and Rollup without checking them.
+- The rule exists for one defect: a refactor moves code out of a file and
+  leaves its imports behind.
+- As a warning the rule printed a line nobody had to act on. Neither ESLint
+  invocation passes `--max-warnings 0`.
+- The escape hatch is an underscore prefix.
+- Under this configuration `_x` silences an unused import, local, type alias,
+  interface, enum, class, parameter, and caught error.
+- Before you delete an unused binding, ask what it was for.
+- An unused binding is sometimes a missing call or a missing assertion.
+- The rule does not see three things. Check each by hand:
+  - A leading unused parameter. `args` defaults to `after-used`, so the rule
+    reports only a trailing one.
+  - An unused class member, including a `private readonly` constructor
+    parameter property.
+  - An export whose last importer you just removed. Grep for the symbol.
+
+#### What the ESLint globs reach
+
+- `lint:eslint:cached` runs over `packages/**/*.{ts,tsx}`,
+  `apps/*/**/*.{ts,tsx}`, and root-level `*.ts`.
+- That reaches `apps/desktop/e2e/`, `apps/desktop/scripts/`,
+  `apps/desktop/eval/`, the `apps/desktop/*.config.ts` files, and
+  `vitest.workspace.ts`.
+- No `.mjs` file is linted anywhere, including the build and CI scripts under
+  `scripts/`.
+- `lint:eslint:typed` stays on `apps/*/src/**` and `packages/**`.
+- Its own configuration matches no other path, so widening its globs would
+  lint files against no rules.
+
+#### Why this gate is not `noUnusedLocals`
+
+- `tsconfig.base.json` sets neither `noUnusedLocals` nor `noUnusedParameters`.
+- TypeScript's underscore exemption is narrower than ESLint's.
+- Measured against this repository: `_x` silences an unused import and an
+  unused parameter, and does **not** silence an unused local or an unused type
+  alias.
+- Enabling both flags would reject the existing `_`-prefixed intentionally
+  unused locals and would cost 27 fixes, measured on the current tree.
+- Fifteen of those 27 are parameter renames in the Star Map cluster tests.
+- The flags would add the first two hand checks listed above: a leading
+  unused parameter, and an unused class member.
+- They would not add the third. No tool here reports an unused export.
+
 ### Formatting
 
 - The repository intentionally has no automatic formatter.

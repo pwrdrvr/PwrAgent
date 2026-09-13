@@ -1,6 +1,6 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { expect, test, type Locator } from "@playwright/test";
+import { expect, test } from "@playwright/test";
 import { launchElectronApp } from "./fixtures/electron-app";
 
 const specDir = path.dirname(fileURLToPath(import.meta.url));
@@ -27,14 +27,6 @@ async function openSkillAutocompleteThread(
   await expect(
     app.window.getByText("Ready to exercise the thread reply composer."),
   ).toBeVisible();
-}
-
-async function getActiveOptionIndex(
-  listbox: Locator,
-): Promise<number> {
-  return await listbox.getByRole("option").evaluateAll((options) =>
-    options.findIndex((option) => option.getAttribute("aria-selected") === "true"),
-  );
 }
 
 test("thread reply Tiptap skill autocomplete filters and commits the reported multi-line draft", async () => {

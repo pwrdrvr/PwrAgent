@@ -94,7 +94,6 @@ import {
   type RegisterDirectoryFromDiskResponse,
   type MarkThreadSeenRequest,
   type MarkThreadSeenResponse,
-  type NavigationDirectorySummary,
   type NavigationDirectoryRow,
   NAVIGATION_QUERY_MAX_RESULT_BYTES,
   type NavigationDirectoryGitStatus,

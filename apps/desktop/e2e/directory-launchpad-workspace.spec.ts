@@ -2,12 +2,9 @@ import { execFileSync } from "node:child_process";
 import { chmod, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import Database from "better-sqlite3";
 import { launchElectronApp } from "./fixtures/electron-app";
-
-const specDir = path.dirname(fileURLToPath(import.meta.url));
 
 async function selectComposerOption(params: {
   option: string | RegExp;

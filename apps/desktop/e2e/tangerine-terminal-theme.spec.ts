@@ -120,7 +120,7 @@ async function openTodoThread(page: Page) {
   ).toBeVisible();
 }
 
-test("renders the desktop shell with the black-first Tangerine Terminal theme", async ({}, testInfo) => {
+test("renders the desktop shell with the black-first Tangerine Terminal theme", async ({ browserName: _browserName }, testInfo) => {
   const app = await launchElectronApp({
     fixturePath: path.resolve(
       themeSpecDir,
@@ -210,7 +210,7 @@ test("renders the desktop shell with the black-first Tangerine Terminal theme", 
   }
 });
 
-test("keeps workflow states, scanner phases, and narrow desktop layout stable", async ({}, testInfo) => {
+test("keeps workflow states, scanner phases, and narrow desktop layout stable", async ({ browserName: _browserName }, testInfo) => {
   const app = await launchElectronApp({
     fixturePath: path.resolve(
       themeSpecDir,

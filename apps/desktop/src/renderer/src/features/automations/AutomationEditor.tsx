@@ -2799,18 +2799,6 @@ function parseAllowlist(value: string): string[] {
     .filter((entry) => entry.length > 0);
 }
 
-
-
-function includeCurrentOption(
-  options: readonly string[],
-  current: string,
-): string[] {
-  const trimmed = current.trim();
-  return trimmed && !options.includes(trimmed)
-    ? [trimmed, ...options]
-    : [...options];
-}
-
 /**
  * Persist the display names the picker resolved onto the conditions
  * themselves. Without this the labels die with the editor session, and every

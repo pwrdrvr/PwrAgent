@@ -27,7 +27,6 @@ import type {
   AppServerLocalImageInputItem,
   AppServerThreadMessageOrigin,
   AppServerTurnInputItem,
-  AgentEvent,
   ArchiveThreadRequest,
   ArchiveThreadResponse,
   ReadQueuedTurnRequest,
