@@ -8,6 +8,8 @@
   "copyright": "Copyright © 2026 PwrDrvr LLC.",
   "packageManager": "pnpm@10.33.0",
   "scripts": {
+    "fix:linux-sandbox": "node ./scripts/linux-sandbox.mjs --fix",
+    "check:linux-sandbox": "node ./scripts/linux-sandbox.mjs --warn",
     "build": "pnpm --filter @pwragent/desktop build",
     "dev": "pnpm --filter @pwragent/desktop dev",
     "dev:dev": "pnpm --filter @pwragent/desktop dev:dev",
