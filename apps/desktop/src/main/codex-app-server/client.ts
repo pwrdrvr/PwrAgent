@@ -8994,6 +8994,7 @@ export class CodexAppServerClient {
     defaultModeRequestUserInput?: boolean;
     dynamicTools?: CodexDynamicToolSpec[];
     pwrdrvrTokenMiser?: CodexPwrdrvrTokenMiserActivation | null;
+    suppressThreadTitleDerivation?: boolean;
   }): Promise<{
     threadId: string;
     turnId: string;
@@ -9124,10 +9125,12 @@ export class CodexAppServerClient {
     const turnId = extractTurnIdFromValue(result) ?? `pending:${threadId}`;
     this.pendingFirstTurnThreadResults.delete(params.threadId);
     this.pendingFirstTurnShellEnvironments.delete(params.threadId);
-    await this.recordDerivedThreadNameWithCodex({
-      threadId: params.threadId,
-      input: params.input,
-    });
+    if (!params.suppressThreadTitleDerivation) {
+      await this.recordDerivedThreadNameWithCodex({
+        threadId: params.threadId,
+        input: params.input,
+      });
+    }
 
     return { threadId, turnId };
   }

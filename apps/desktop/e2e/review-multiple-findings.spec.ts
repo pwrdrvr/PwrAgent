@@ -30,11 +30,15 @@ test("renders captured Codex review findings as separate cards without duplicate
     await app.window.getByRole("button", { name: "Send" }).click();
 
     await expect
-      .poll(async () => await app.getLastStartReview())
+      .poll(async () => await app.getLastStartTurn())
       .toMatchObject({
         threadId: "019dd4ce-4fec-76c0-8ede-5e65d7377417",
-        target: { type: "baseBranch", branch: "main" },
-        delivery: "inline",
+        input: [{
+          type: "text",
+          text: expect.stringMatching(
+            /<user_action><action>review<\/action><\/user_action>[\s\S]*base branch 'main'/,
+          ),
+        }],
       });
 
     const transcript = app.window.getByRole("region", { name: "Transcript" });

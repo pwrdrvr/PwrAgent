@@ -22,6 +22,17 @@ const REVIEW_OUTPUT_INSTRUCTIONS = [
   "Do not wrap the JSON in Markdown fences and do not include prose outside it.",
 ].join("\n");
 
+export function buildInlineReviewPrompt(
+  target: AppServerReviewTarget,
+): string {
+  return [
+    "Review the code changes requested below. Do not modify files.",
+    "<user_action><action>review</action></user_action>",
+    reviewTargetInstructions(target),
+    "Return a concise Markdown review with prioritized findings. For each finding, cite the affected file and line range, explain the concrete impact, and suggest the smallest useful remedy. If there are no actionable findings, say so directly.",
+  ].join("\n\n");
+}
+
 export function buildManagedReviewPrompt(
   target: AppServerReviewTarget,
 ): string {
