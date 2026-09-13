@@ -994,6 +994,18 @@ export function DirectoriesList(props: DirectoriesListProps) {
       // selected key as consumed after a matching directory exists;
       // showThread() can set selection before the refreshed
       // directory snapshot includes the thread.
+      //
+      // An already-open directory needs no write at all. Returning a fresh
+      // object for a selection change alone re-renders the whole navigation
+      // tree and recomputes bounded-window demand to reach the same value —
+      // and this effect re-runs on every render whenever `directories`
+      // arrives with a new identity, which is exactly what the hover-stable
+      // sidebar snapshot produces while the pointer rests on a row. That
+      // pair is a self-feeding update loop, and it is the write React named
+      // when the renderer died with "Maximum update depth exceeded".
+      if (current[matchingDirectory.key] === true) {
+        return current;
+      }
       if (
         current[matchingDirectory.key] !== undefined &&
         !selectedItemKeyChanged
