@@ -1,7 +1,7 @@
 import type { AppServerBackendKind, NavigationSnapshot } from "@pwragent/shared";
-import { buildThreadIdentityKey, federatedThreadIdentityKey, normalizeNavigationSnapshotThreadKeys } from "@pwragent/shared";
+import { buildThreadIdentityKey, federatedThreadIdentityKey, parseThreadIdentityKey, NAVIGATION_QUERY_MAX_PAGE_ROWS, NAVIGATION_QUERY_MAX_RESULT_BYTES } from "@pwragent/shared";
 import type { FederationBackendOperations } from "./federation-backend-bridge";
-import { FEDERATION_COLLECTION_PAGE_BYTES, FEDERATION_COLLECTION_PAGE_ROWS } from "./federation-collection-reads";
+import { FEDERATION_COLLECTION_PAGE_ROWS } from "./federation-collection-reads";
 import { hasFederationErrorCode, type FederationRpcRequestOptions } from "./federation-rpc";
 
 export async function readFederationPinnedSnapshot(
@@ -9,50 +9,64 @@ export async function readFederationPinnedSnapshot(
   threadKeys: string[],
   rpcOptions: FederationRpcRequestOptions = { deadlineAt: Date.now() + 10_000 },
 ): Promise<NavigationSnapshot> {
-  if (backend.getNavigationDescendantPage) {
+  if (backend.getNavigationQueryPage) {
     try {
-      let result: NavigationSnapshot | undefined;
-      let revision: string | undefined;
+      const roots = [...new Set(threadKeys)].map((key) => {
+        const identity = parseThreadIdentityKey(key);
+        if (!identity?.threadId) throw new Error("Pinned navigation requires valid thread identities.");
+        return identity;
+      });
+      if (!roots.length) throw new Error("Pinned navigation requires at least one root.");
+      const result: NavigationSnapshot = {
+        backend: "all", fetchedAt: Date.now(), unchanged: false,
+        threads: [], inboxThreadKeys: [], directories: [],
+        launchpadDefaults: { backend: "codex", executionMode: "default" },
+      };
       let bytes = 0;
       let pages = 0;
-      const selected = [...new Set(threadKeys)];
-      for (let offset = 0; offset < selected.length; offset += FEDERATION_COLLECTION_PAGE_ROWS) {
-        let afterKey: string | undefined;
+      // The pin cache must use the same owner projection as visible rows.
+      // The retired descendant-snapshot RPC leaves persisted unread flags
+      // stuck forever on peers that correctly reject that old protocol.
+      for (let offset = 0; offset < roots.length; offset += NAVIGATION_QUERY_MAX_PAGE_ROWS) {
+        let cursor: string | undefined;
+        let revision: string | undefined;
+        const cursors = new Set<string>();
         do {
+          rpcOptions.signal?.throwIfAborted();
           if (++pages > 256 || (rpcOptions.deadlineAt !== undefined && Date.now() >= rpcOptions.deadlineAt)) {
             throw new Error("Pinned navigation pagination exceeded its page/deadline budget.");
           }
-          const page = await backend.getNavigationDescendantPage({
-            threadKeys: selected.slice(offset, offset + FEDERATION_COLLECTION_PAGE_ROWS),
-            afterKey,
-            revision,
+          const page = await backend.getNavigationQueryPage({
+            protocol: 2, consumer: "main-sidebar", inventory: "owner",
+            query: { kind: "group-members", roots: roots.slice(offset, offset + NAVIGATION_QUERY_MAX_PAGE_ROWS) },
+            pageSize: NAVIGATION_QUERY_MAX_PAGE_ROWS,
+            ...(cursor ? { cursor } : {}),
           }, rpcOptions);
-          const pageBytes = Buffer.byteLength(JSON.stringify(page));
+          rpcOptions.signal?.throwIfAborted();
+          const pageBytes = Buffer.byteLength(JSON.stringify(page), "utf8");
           bytes += pageBytes;
-          if (pageBytes > FEDERATION_COLLECTION_PAGE_BYTES || page.snapshot.threads.length > FEDERATION_COLLECTION_PAGE_ROWS
-            || bytes > 16 * 1024 * 1024 || (revision !== undefined && revision !== page.revision)
-            || (page.nextAfterKey !== undefined && afterKey !== undefined && page.nextAfterKey <= afterKey)) {
+          const pageRevision = JSON.stringify([page.ownerEpoch, page.generation, page.queryKey]);
+          if (page.protocol !== 2 || page.unchanged
+            || pageBytes > NAVIGATION_QUERY_MAX_RESULT_BYTES || page.entries.length > NAVIGATION_QUERY_MAX_PAGE_ROWS
+            || bytes > 16 * 1024 * 1024 || (revision !== undefined && revision !== pageRevision)
+            || (!page.complete && (!page.nextCursor || cursors.has(page.nextCursor)))
+            || (page.complete && page.nextCursor !== undefined)) {
             throw new Error("Pinned navigation returned an oversized or inconsistent collection.");
           }
-          revision = page.revision;
-          const snapshot = normalizeNavigationSnapshotThreadKeys(page.snapshot);
-          result = result ? {
-            ...result,
-            threads: [...result.threads, ...snapshot.threads],
-            inboxThreadKeys: [...result.inboxThreadKeys, ...snapshot.inboxThreadKeys],
-          } : snapshot;
-          afterKey = page.nextAfterKey;
-        } while (afterKey !== undefined);
+          revision = pageRevision;
+          result.threads.push(...page.entries.map(({ row }) => row));
+          cursor = page.complete ? undefined : page.nextCursor;
+          if (cursor) cursors.add(cursor);
+        } while (cursor !== undefined);
       }
-      if (result) return {
-        ...result,
-        threads: [...new Map(result.threads.map((thread) => [
-          thread.federation?.ref ? federatedThreadIdentityKey(thread.federation.ref)
-            : buildThreadIdentityKey(thread.source, thread.id), thread,
-        ])).values()],
-        inboxThreadKeys: [...new Set(result.inboxThreadKeys)],
-      };
-      throw new Error("Pinned navigation requires at least one root.");
+      result.threads = [...new Map(result.threads.map((thread) => [
+        thread.federation?.ref ? federatedThreadIdentityKey(thread.federation.ref)
+          : buildThreadIdentityKey(thread.source, thread.id), thread,
+      ])).values()];
+      result.inboxThreadKeys = result.threads.filter((thread) => thread.inbox.inInbox).map((thread) =>
+        thread.federation?.ref ? federatedThreadIdentityKey(thread.federation.ref)
+          : buildThreadIdentityKey(thread.source, thread.id));
+      return result;
     } catch (error) {
       if (!hasFederationErrorCode(error, "method_not_found")) throw error;
     }
