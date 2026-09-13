@@ -781,11 +781,14 @@ describe("settings ipc", () => {
     disposeSettingsIpcHandlers();
   });
 
-  it("keeps a rejected profile blocked until an authenticated API probe succeeds", async () => {
+  it.each(["native", "windows"])("recovers a rejected profile and refreshes its backend with %s paths", async (pathStyle) => {
     const { codexAuthState } = await import("../codex-auth-state");
     const { CodexAppServerClient } = await import("../codex-app-server/client");
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-auth-recovery-"));
-    tempRoots.push(root);
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-auth-recovery-"));
+    tempRoots.push(tempRoot);
+    const root = pathStyle === "windows" ? String.raw`C:\Users\fixture\.codex` : tempRoot;
+    const discovery = await import("@pwrdrvr/codex-discovery");
+    const resolveHome = vi.spyOn(discovery, "resolveDefaultCodexHome").mockReturnValue(root);
     vi.stubEnv("CODEX_HOME", root);
     codexAuthState.reject(root);
     childProcessMocks.spawn.mockImplementation(() => createMockSpawnChild((child) => {
@@ -800,7 +803,7 @@ describe("settings ipc", () => {
     const close = vi.spyOn(CodexAppServerClient.prototype, "close").mockResolvedValue();
     const service = {
       resolveCodexCommand: vi.fn(async () => ({ command: "codex", source: "config" })),
-      readCodexProfiles: vi.fn(() => ({ effectiveCodexHome: root })),
+      readCodexProfiles: vi.fn(() => ({ effectiveCodexHome: root.replace(/\\/g, "/") })),
     } as unknown as DesktopSettingsService;
     const { registerSettingsIpcHandlers, disposeSettingsIpcHandlers } = await import("../ipc/settings");
     const { SETTINGS_CHECK_CODEX_AUTH_PROFILE_STATUS_CHANNEL } = await import("../../shared/ipc");
@@ -818,6 +821,7 @@ describe("settings ipc", () => {
       expect(probe).toHaveBeenCalledTimes(2);
       expect(close).toHaveBeenCalledTimes(2);
     } finally {
+      resolveHome.mockRestore();
       probe.mockRestore();
       close.mockRestore();
       codexAuthState.verified(root);

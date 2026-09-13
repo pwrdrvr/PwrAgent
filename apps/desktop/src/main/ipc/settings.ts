@@ -1005,7 +1005,11 @@ async function checkCodexProfileAuthStatus(
     } finally {
       await client.close();
     }
-    if (authenticated && service.readCodexProfiles().effectiveCodexHome === codexHome) {
+    if (
+      authenticated
+      && service.readCodexProfiles().effectiveCodexHome.replace(/\\/g, "/")
+        === codexHome.replace(/\\/g, "/")
+    ) {
       // Startup may have cached Codex as unavailable. Login is an explicit
       // user action authorizing a fresh model/account discovery.
       await getDesktopBackendRegistry().listBackends(
