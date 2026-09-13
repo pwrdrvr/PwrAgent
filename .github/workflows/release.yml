@@ -312,6 +312,35 @@ jobs:
           node apps/desktop/scripts/release.mjs
           --win --sign-stage-only --no-publish --require-signing
 
+      # `/releases/latest/download/<name>` only resolves for a version-independent
+      # asset name. macOS publishes `PwrAgent.dmg` and Linux publishes
+      # `PwrAgent-linux-<arch>.deb`; `PwrAgent.Setup.exe` is the Windows
+      # equivalent, spelled the way a Windows installer is normally named. The
+      # copy has to happen after the packaging step above so the alias carries
+      # the same Authenticode signature as the installer it copies.
+      #
+      # The versioned installer and its .blockmap stay beside it. This branch
+      # publishes no Windows `latest.yml`, so nothing here resolves an update
+      # by asset name, but the versioned pair is what a published release is
+      # verified against and what a future updater feed would name.
+      - name: Prepare stable-name Windows installer alias
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          node apps/desktop/scripts/windows-release-artifacts.mjs apps/desktop/release-stage
+          if ($LASTEXITCODE -ne 0) {
+            throw "Cutting the stable Windows alias failed (exit code $LASTEXITCODE)."
+          }
+          # Assert the file exists rather than trusting the exit code: a script
+          # that no-ops still exits 0, and the upload step only warns when one
+          # of several globs matches nothing. Without this the release ships
+          # without its stable URL and nothing goes red.
+          $aliases = @(Get-ChildItem "apps/desktop/release-stage/dist" -File -Filter "PwrAgent.Setup*.exe")
+          if ($aliases.Count -eq 0) {
+            throw "No PwrAgent.Setup*.exe was produced; the stable download URL would 404."
+          }
+          $aliases | ForEach-Object { "cut alias $($_.Name) ($($_.Length) bytes)" }
+
       - name: Upload Windows installer artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:

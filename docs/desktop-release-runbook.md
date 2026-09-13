@@ -180,7 +180,12 @@ seven job definitions (the Linux package job fans out across two architectures):
    --sign-stage-only --no-publish --require-signing`. The post-package ASAR
    verifier resolves from the staged toolchain, not the workspace. The Azure
    service-principal secrets are injected only into this signing-aware packaging
-   step.
+   step. After packaging it runs
+   `apps/desktop/scripts/windows-release-artifacts.mjs`, which verifies the
+   signed installer against its `SHA256SUMS` entry, copies it to the stable name
+   `PwrAgent.Setup.exe`, and records that copy in the Windows `SHA256SUMS`
+   manifest. Cutting the alias here and nowhere earlier is what makes it a copy
+   of a signed installer rather than of an unsigned intermediate.
 6. `Publish release assets`, which waits for successful macOS signing, both
    Linux packages, and the signed Windows installer. Only then does it create
    the GitHub Release — always as a `Pre-release`, whatever the tag suffix —
@@ -286,6 +291,24 @@ Stable landing-page URL:
 ```text
 https://github.com/pwrdrvr/PwrAgent/releases/latest/download/PwrAgent.dmg
 ```
+
+Stable Windows download URL:
+
+```text
+https://github.com/pwrdrvr/PwrAgent/releases/latest/download/PwrAgent.Setup.exe
+```
+
+`PwrAgent.Setup.exe` is spelled the way a Windows installer usually is —
+product name, one plain English word, no version and no architecture — and the
+periods are not a style choice. GitHub Releases rewrites every space in an
+uploaded asset's filename to a period, and renaming the asset afterwards does
+not put the space back, so the build names the file what GitHub would store
+anyway. Do not "fix" it to `PwrAgent Setup.exe`: the local artifact would then
+disagree with the published asset, which is only visible in the release.
+
+There is no stable Windows `SHA256SUMS` URL on this branch. The publish step
+uploads only the Windows `.exe` and `.blockmap`; the release's `SHA256SUMS`
+asset is the Linux one.
 
 Stable Linux download URLs:
 
