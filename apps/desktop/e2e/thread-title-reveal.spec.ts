@@ -411,6 +411,13 @@ test("quick jump reveals a hidden child before restoring a hidden sidebar", asyn
       .locator(".thread-row.is-selected")
       .filter({ hasText: "Hidden linked child thread" });
     await expect(selectedChild).toBeVisible();
+
+    // Same guard the title-reveal case carries, and for the same reason: the
+    // bounds comparison below reads once and cannot retry, so it needs the
+    // reveal to have landed rather than to be one commit away. This case
+    // reaches the row through the peek instead of a visible sidebar, but the
+    // scroll it depends on is the same one.
+    await expect(selectedChild).toBeInViewport({ ratio: 1 });
     const scrollRegion = threadBrowser.locator(".sidebar__scroll-region");
     const [childBox, scrollBox] = await Promise.all([
       selectedChild.boundingBox(),
