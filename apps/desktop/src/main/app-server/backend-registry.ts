@@ -390,6 +390,7 @@ import {
   formatRateLimitWindowName,
   type CodexPwrdrvrTokenMiserActivation,
   type CodexServerCapabilities,
+  type HelperThreadToolCallHandler,
 } from "../codex-app-server/client";
 import {
   isCodexInvalidResponseMessageIdError,
@@ -470,6 +471,10 @@ import type { PwrAgentFederationHandler } from "../agent-tools/pwragent-federati
 import type { MessagingAgentToolService } from "../messaging/messaging-agent-tool-service";
 import { resolveAutomationInspectionMcpCommand } from "../automations/automation-inspection-cli";
 import { resolveAgentToolCatalogs } from "../agent-tools/agent-tool-catalog-registry";
+import {
+  buildStarMapIntakeAgentTools,
+  type StarMapIntakeAgentOutcome,
+} from "./star-map-intake-agent";
 import {
   AgentToolRouter,
   readAgentDynamicToolCall,
@@ -807,6 +812,21 @@ type BackendClient = {
     /** Model answering budget, separate from the protocol round-trips. */
     turnTimeoutMs?: number;
   }): ReturnType<ThreadTitleGenerator["generateTitle"]>;
+  /**
+   * One ephemeral helper turn that may call the supplied PwrAgent dynamic
+   * tools. Optional: only Codex advertises dynamic tools, so a backend
+   * without it simply has no agent-driven intake path.
+   */
+  runHelperToolTurn?(params: {
+    model?: string;
+    reasoningEffort?: string;
+    prompt: string;
+    system?: string;
+    dynamicTools: CodexDynamicToolSpec[];
+    onToolCall: HelperThreadToolCallHandler;
+    timeoutMs?: number;
+    turnTimeoutMs?: number;
+  }): Promise<{ status: "ok" } | { status: "failed"; reason: string }>;
   listSkills(params?: {
     cwd?: string;
     cwds?: string[];
@@ -8655,6 +8675,9 @@ export class DesktopBackendRegistry {
   private readonly threadOrchestrationHandler: PwrAgentThreadOrchestrationHandler =
     async (request) => await this.handleThreadOrchestrationRequest(request);
   private federationHandler: PwrAgentFederationHandler | undefined;
+  private starMapIntakeFederationHandlerFactory:
+    | ((attachments: AppServerTurnInputItem[]) => PwrAgentFederationHandler)
+    | undefined;
   private federatedThreadMessageHandler:
     | PwrAgentFederatedThreadMessageHandler
     | undefined;
@@ -9876,6 +9899,22 @@ export class DesktopBackendRegistry {
     handler: PwrAgentFederationHandler | null | undefined,
   ): void {
     this.federationHandler = handler ?? undefined;
+  }
+
+  /**
+   * The federation tools as the Star Map intake agent sees them. A factory
+   * rather than a handler: the intake's options depend on the request being
+   * served — who is credited for the created thread, and which staged
+   * attachments belong to it — so one instance built at startup could not
+   * carry either.
+   */
+  setStarMapIntakeFederationHandlerFactory(
+    factory:
+      | ((attachments: AppServerTurnInputItem[]) => PwrAgentFederationHandler)
+      | null
+      | undefined,
+  ): void {
+    this.starMapIntakeFederationHandlerFactory = factory ?? undefined;
   }
 
   setFederatedThreadMessageHandler(
@@ -22687,6 +22726,80 @@ export class DesktopBackendRegistry {
       status: "unavailable",
       reason: `${params.backend ?? backend?.kind ?? "backend"}_structured_generation_unavailable`,
     };
+  }
+
+  /**
+   * Run the Star Map `[+]` intake as one ephemeral agent turn.
+   *
+   * The turn creates the thread itself, through the same
+   * `create_instance_thread` an operator's own agent would use, and then
+   * dissolves. Nothing persists and nothing is shown: the operator sees the
+   * thread they asked for appear, not a relay thread that asked for it.
+   *
+   * Returns `undefined` when no backend here can run a tool-using turn, which
+   * is the caller's signal to fall back to the deterministic resolver.
+   */
+  async runStarMapIntakeAgentTurn(params: {
+    prompt: string;
+    system: string;
+    resolveDirectoryKey: (projectKey: string) => string | undefined;
+    attachments?: AppServerTurnInputItem[];
+    onCreateStarting?: (projectKey: string) => void;
+    model?: string;
+    reasoningEffort?: string;
+    timeoutMs?: number;
+    turnTimeoutMs?: number;
+  }): Promise<
+    | { status: "ok"; outcome: StarMapIntakeAgentOutcome | undefined }
+    | { status: "failed"; reason: string }
+    | undefined
+  > {
+    // Without the factory every tool the agent could call answers
+    // "unavailable", so the turn is bought and guaranteed to produce nothing.
+    // Declining here sends the caller straight to the deterministic resolver.
+    if (!this.starMapIntakeFederationHandlerFactory) {
+      return undefined;
+    }
+    const codex = (await this.listBackends({ includeUnavailable: true })).backends
+      .find((summary) => summary.kind === "codex");
+    if (!codex?.available || !this.codexClient.runHelperToolTurn) {
+      return undefined;
+    }
+    const tools = buildStarMapIntakeAgentTools({
+      federationHandler: this.starMapIntakeFederationHandlerFactory(
+        params.attachments ?? [],
+      ),
+      resolveDirectoryKey: params.resolveDirectoryKey,
+      ...(params.onCreateStarting
+        ? { onCreateStarting: params.onCreateStarting }
+        : {}),
+    });
+    const result = await this.codexClient.runHelperToolTurn({
+      model: params.model,
+      reasoningEffort: params.reasoningEffort,
+      system: params.system,
+      prompt: params.prompt,
+      dynamicTools: tools.dynamicTools,
+      onToolCall: tools.handleToolCall,
+      timeoutMs: params.timeoutMs,
+      turnTimeoutMs: params.turnTimeoutMs,
+    });
+    // A failed turn can still have created the thread — the tool call
+    // succeeds well before the turn ends, and a timeout after that point
+    // would otherwise report an intake that worked as one that did not, and
+    // send the fallback on to create a second thread.
+    const outcome = tools.readOutcome();
+    if (result.status === "failed" && !outcome) {
+      // A creation that had not answered when the turn ended may still be
+      // running: `create_instance_thread` warns that startup "can take
+      // minutes", and the federation client alone allows two for it. Reported
+      // as a failure this becomes the fallback's cue to create a second
+      // thread for the same request, so say what actually happened instead.
+      return tools.isCreationInFlight()
+        ? { status: "ok", outcome: { kind: "creation_unconfirmed" } }
+        : { status: "failed", reason: result.reason };
+    }
+    return { status: "ok", outcome };
   }
 
   /** Probe once per client; reducer support is immutable for one app-server. */

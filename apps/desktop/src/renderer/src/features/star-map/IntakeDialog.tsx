@@ -116,6 +116,19 @@ export function IntakeDialog(props: {
   const [candidates, setCandidates] = useState<{
     entries: StarMapIntakeCandidate[];
     source: StarMapIntakeCandidateSource;
+    /**
+     * The task the intake already extracted before it asked which project.
+     * Sent back with the pick so answering costs a thread creation rather
+     * than a second resolution of the same sentence.
+     */
+    input?: string;
+    /**
+     * The request that payload was extracted from. The textarea stays live
+     * while the operator chooses, so an edit made before they pick has to
+     * retire the payload — otherwise their correction is silently replaced by
+     * the sentence they corrected.
+     */
+    requestText?: string;
   }>();
   /**
    * The project the owning instance resolved to, streamed with `creating`.
@@ -345,7 +358,7 @@ export function IntakeDialog(props: {
     }
   }, [attachTransferredImages]);
 
-  const submit = (directoryKey?: string) => {
+  const submit = (directoryKey?: string, input?: string) => {
     const request = text.trim();
     if (
       !request
@@ -366,6 +379,7 @@ export function IntakeDialog(props: {
         requestId,
         request,
         directoryKey,
+        ...(directoryKey && input ? { input } : {}),
         federationTarget: props.target.federationTarget,
         ...(imageAttachments.length > 0
           ? {
@@ -398,6 +412,9 @@ export function IntakeDialog(props: {
           setCandidates({
             entries: response.candidates,
             source: response.candidateSource,
+            ...(response.input
+              ? { input: response.input, requestText: request }
+              : {}),
           });
           return;
         }
@@ -531,7 +548,16 @@ export function IntakeDialog(props: {
                 key={candidate.directoryKey}
                 type="button"
                 className="star-map-intake__candidate"
-                onClick={() => submit(candidate.directoryKey)}
+                onClick={() =>
+                  submit(
+                    candidate.directoryKey,
+                    // Only when the request is still the one it was derived
+                    // from; an edited request has to be read afresh.
+                    candidates.requestText === text.trim()
+                      ? candidates.input
+                      : undefined,
+                  )
+                }
               >
                 <span className="star-map-intake__candidate-label">
                   {candidate.label}

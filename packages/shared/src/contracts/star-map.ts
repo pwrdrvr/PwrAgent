@@ -534,6 +534,14 @@ export type StarMapIntakeRequest = {
   requestId: string;
   request: string;
   directoryKey?: string;
+  /**
+   * The task for the created thread's first turn, when the intake already
+   * worked it out. Sent back with `directoryKey` after the operator picks a
+   * project, so their answer costs a thread creation rather than a second
+   * agent turn to re-read the same sentence. Absent on a first dispatch, and
+   * ignored without `directoryKey`.
+   */
+  input?: string;
   attachments?: StarMapIntakeAttachment[];
 };
 
@@ -551,6 +559,11 @@ export type StarMapIntakeResponse =
       candidates: StarMapIntakeCandidate[];
       /** Whether `candidates` is a real ranking or a recency fallback. */
       candidateSource: StarMapIntakeCandidateSource;
+      /**
+       * The task the intake extracted from the request before it got stuck on
+       * which project. Echo it back as `input` with the operator's pick.
+       */
+      input?: string;
     }
   | {
       status: "failed";

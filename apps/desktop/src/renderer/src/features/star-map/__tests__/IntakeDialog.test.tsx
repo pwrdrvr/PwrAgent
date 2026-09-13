@@ -201,6 +201,115 @@ describe("IntakeDialog", () => {
     });
   });
 
+  /**
+   * The intake already separated the task from the instruction that addressed
+   * it before it asked which project. Echoing that payload back with the pick
+   * is what keeps the operator's answer to one thread creation instead of a
+   * second agent turn re-reading the same sentence.
+   */
+  it("sends the extracted payload back with the operator's pick", async () => {
+    const { dispatchStarMapIntake } = setup(undefined);
+    let calls = 0;
+    dispatchStarMapIntake.mockImplementation(
+      async (request: { requestId: string }) =>
+        (calls++ > 0
+          ? {
+              status: "created",
+              requestId: request.requestId,
+              backend: "codex",
+              threadId: "thread-2",
+            }
+          : {
+              status: "needs_disambiguation",
+              requestId: request.requestId,
+              candidateSource: "resolver",
+              candidates: [
+                { directoryKey: "dir-a", label: "PwrSnap" },
+              ],
+              input: "Make the donuts.",
+            }) as never,
+    );
+
+    submitText("Make a thread and ask it to make the donuts.");
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /PwrSnap/ })).toBeTruthy();
+    });
+    fireEvent.click(screen.getByRole("button", { name: /PwrSnap/ }));
+
+    await waitFor(() => {
+      expect(dispatchStarMapIntake).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          directoryKey: "dir-a",
+          input: "Make the donuts.",
+        }),
+      );
+    });
+  });
+
+  /**
+   * The textarea stays live while the operator chooses, so a payload derived
+   * from the old wording must not survive an edit — otherwise their
+   * correction is silently replaced by the sentence they corrected.
+   */
+  it("retires the extracted payload when the request is edited before the pick", async () => {
+    const { dispatchStarMapIntake } = setup(undefined);
+    let calls = 0;
+    dispatchStarMapIntake.mockImplementation(
+      async (request: { requestId: string }) =>
+        (calls++ > 0
+          ? {
+              status: "created",
+              requestId: request.requestId,
+              backend: "codex",
+              threadId: "thread-2",
+            }
+          : {
+              status: "needs_disambiguation",
+              requestId: request.requestId,
+              candidateSource: "resolver",
+              candidates: [{ directoryKey: "dir-a", label: "PwrSnap" }],
+              input: "Make the donuts.",
+            }) as never,
+    );
+
+    submitText("Make a thread and ask it to make the donuts.");
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /PwrSnap/ })).toBeTruthy();
+    });
+
+    fireEvent.change(screen.getByPlaceholderText(/Give me a task/), {
+      target: { value: "Make the donuts, but only the glazed ones." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /PwrSnap/ }));
+
+    await waitFor(() => {
+      const last = dispatchStarMapIntake.mock.calls.at(-1)?.[0] as unknown as {
+        request: string;
+        input?: string;
+      };
+      expect(last.request).toBe("Make the donuts, but only the glazed ones.");
+      expect(last.input).toBeUndefined();
+    });
+  });
+
+  it("omits the payload on a first dispatch, which has nothing to carry", async () => {
+    const { dispatchStarMapIntake } = setup(undefined);
+    dispatchStarMapIntake.mockImplementation(
+      async (request: { requestId: string }) =>
+        ({
+          status: "created",
+          requestId: request.requestId,
+          backend: "codex",
+          threadId: "thread-2",
+        }) as never,
+    );
+
+    submitText("Make the donuts in PwrSnap");
+
+    await waitFor(() => expect(dispatchStarMapIntake).toHaveBeenCalled());
+    expect(dispatchStarMapIntake.mock.calls[0][0]).not.toHaveProperty("input");
+  });
+
   it("says so when the list is a recency fallback rather than a ranking", async () => {
     const { dispatchStarMapIntake } = setup(undefined);
     dispatchStarMapIntake.mockImplementation(

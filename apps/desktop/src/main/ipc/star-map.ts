@@ -110,6 +110,7 @@ async function stageStarMapIntakeRequest(
     ...(request.directoryKey !== undefined
       ? { directoryKey: request.directoryKey }
       : {}),
+    ...(request.input !== undefined ? { input: request.input } : {}),
     ...(attachments.length > 0 ? { attachments } : {}),
   };
 }

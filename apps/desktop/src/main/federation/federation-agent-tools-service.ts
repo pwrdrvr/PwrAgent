@@ -118,6 +118,17 @@ export function createFederationAgentToolsHandler(
     resolveSourceTurnAttachments?: (
       context: PwrAgentFederationContext,
     ) => AppServerTurnInputItem[] | Promise<AppServerTurnInputItem[]>;
+    /**
+     * Overrides how a created thread records who asked for it. The default
+     * credits the calling thread, which is right for one agent delegating to
+     * another. A caller whose "calling thread" is an ephemeral turn that
+     * dissolves — the Star Map intake agent — must override it: a
+     * `sourceThread` pointing at a thread that no longer exists renders a
+     * dead ThreadChip on the created thread's first turn forever.
+     */
+    resolveMessageOrigin?: (
+      context: PwrAgentFederationContext,
+    ) => AppServerThreadMessageOrigin;
   } = {},
 ): PwrAgentFederationHandler {
   const runtime = options.runtime ?? getDesktopFederationRuntime;
@@ -148,6 +159,7 @@ export function createFederationAgentToolsHandler(
           options.targetStore,
           options.onRemoteChildMounted,
           options.resolveSourceTurnAttachments,
+          options.resolveMessageOrigin,
         );
       }
       return await searchFederationThreads(
@@ -391,6 +403,9 @@ async function createInstanceThread(
   resolveSourceTurnAttachments: ((
     context: PwrAgentFederationContext,
   ) => AppServerTurnInputItem[] | Promise<AppServerTurnInputItem[]>) | undefined,
+  resolveMessageOrigin: ((
+    context: PwrAgentFederationContext,
+  ) => AppServerThreadMessageOrigin) | undefined,
 ): Promise<PwrAgentFederationResponse> {
   const resolved = await resolveInstance(runtime, args.instanceId, collectHostInfo);
   if (!resolved.ok) {
@@ -447,13 +462,15 @@ async function createInstanceThread(
     ? groupingParent.instanceId
     : undefined;
   const draft = buildLaunchpadDraft({ config, directory, args });
-  const messageOrigin: AppServerThreadMessageOrigin = {
-    kind: "agent",
-    sourceThread: {
-      backend: context.backend,
-      threadId: context.threadId,
-    },
-  };
+  const messageOrigin: AppServerThreadMessageOrigin = resolveMessageOrigin
+    ? resolveMessageOrigin(context)
+    : {
+        kind: "agent",
+        sourceThread: {
+          backend: context.backend,
+          threadId: context.threadId,
+        },
+      };
   const attachmentInput = resolveSourceTurnAttachments
     ? await resolveSourceTurnAttachments(context)
     : [];
