@@ -1,16 +1,23 @@
-// Renderer <-> main bridge for the Windows custom title-bar menu bar.
+// Renderer <-> main bridge for the painted custom title-bar menu bar.
 //
-// On Windows we hide the native title bar (titleBarStyle: "hidden") to draw our
-// own chrome, which ALSO removes the native menu bar (the menu lives in the
-// title bar Windows just hid). So the renderer paints its own always-visible
-// top-level menu buttons (File / View / Profiles / Window / Help) and, on click
-// or Alt-mnemonic, asks main to pop the REAL native submenu at that spot via
-// `Menu.popup()`. The submenus — roles (Undo/Copy/Paste), accelerators,
-// dynamic enable/disable, click handlers — are exactly the ones
-// `installApplicationMenu` already builds, so there is a single source of truth
-// for menu behavior; the renderer only owns the top-level bar's looks.
+// Windows and Linux both hide the native title bar (titleBarStyle: "hidden") so
+// we can draw our own chrome, and on both that takes the native menu bar with
+// it — on Windows because the menu lived in the title bar, and on Linux because
+// `titleBarStyle: "hidden"` IS `frame: false` there and Electron's
+// `RootView::SetMenu` returns before constructing a menu bar for a frameless
+// window. (It registers that menu's accelerators BEFORE the early return, so
+// Ctrl+N and Ctrl+, keep working — but nothing is drawn.)
 //
-// macOS/Linux never reach the renderer path — they keep their native menu bar.
+// So the renderer paints its own always-visible top-level menu buttons (File /
+// View / Profiles / Window / Help) and, on click or Alt-mnemonic, asks main to
+// pop the REAL native submenu at that spot via `Menu.popup()`. The submenus —
+// roles (Undo/Copy/Paste), accelerators, dynamic enable/disable, click handlers
+// — are exactly the ones `installApplicationMenu` already builds, so there is a
+// single source of truth for menu behavior; the renderer only owns the
+// top-level bar's looks.
+//
+// macOS never reaches the renderer path — it keeps its system menu bar at the
+// top of the screen.
 
 import { BrowserWindow, ipcMain, Menu } from "electron";
 import {
@@ -24,7 +31,7 @@ import { timeStartupProfileOperation } from "./diagnostics/startup-profile-event
  * Top-level entries of the current application menu, for the renderer's custom
  * menu bar. `buildFromTemplate` has already expanded roles, so labels like
  * "View" / "Window" are concrete. The macOS app menu (role: "appMenu") is
- * excluded — it never appears on Windows, where this bridge is used.
+ * excluded — it never appears on the platforms this bridge serves.
  */
 function appMenuTopLevel(): AppMenuTopLevel[] {
   const menu = Menu.getApplicationMenu();

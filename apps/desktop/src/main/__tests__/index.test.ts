@@ -8,6 +8,7 @@ const processEventHandlers = new Map<string, (...args: unknown[]) => void>();
 // (quit-on-main-window-close).
 const mainRendererHandlers = new Map<string, (...args: unknown[]) => void>();
 const mainWindowHandlers = new Map<string, (...args: unknown[]) => void>();
+const installWindowFrameSyncMock = vi.fn();
 const createMainWindowMock = vi.fn();
 const registerAppServerIpcHandlersMock = vi.fn();
 const startAppServerOwnerNavigationMock = vi.fn(async () => undefined);
@@ -295,6 +296,16 @@ vi.mock("../windows-job-wrapper", () => ({
 
 vi.mock("../app-menu-bridge", () => ({
   wireAppMenuBridge: vi.fn(),
+}));
+
+// Both reach `ipcMain` / `app.on`, which the electron mock above does not
+// carry; they have their own tests.
+vi.mock("../window-controls-bridge", () => ({
+  wireWindowControlsBridge: vi.fn(),
+}));
+
+vi.mock("../window-frame-sync", () => ({
+  installWindowFrameSync: installWindowFrameSyncMock,
 }));
 
 vi.mock("../window-open-settings", () => ({

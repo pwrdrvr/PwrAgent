@@ -12,18 +12,25 @@ import type { AppMenuTopLevel } from "../../../../shared/app-menu";
 
 /**
  * The painted application menu bar (File / Edit / View / Profiles / Window /
- * Help), rendered inside the Windows title strip by `AppTitleBar`.
+ * Help), rendered inside the painted title strip by `AppTitleBar`.
  *
- * Under `titleBarStyle: "hidden"` the native Windows menu bar is gone — the
- * menu lived in the title bar we hid. So we paint the top-level entries as
- * buttons and, on click or Alt-mnemonic, ask main to pop the REAL native
- * submenu at the button (`popupAppMenu`). Roles, accelerators, dynamic
- * enable/disable, and click handlers all live in the application menu main
- * already builds — this component owns only the bar's looks + keyboard entry.
+ * Under `titleBarStyle: "hidden"` the native menu bar is gone on both
+ * platforms that use it, for two different reasons. On Windows the menu lived
+ * in the title bar we hid. On Linux `titleBarStyle: "hidden"` IS `frame:
+ * false`, and Electron's `RootView::SetMenu` returns before constructing a
+ * menu bar for a window with no frame — it registers that menu's accelerators
+ * BEFORE the early return, so Ctrl+N and Ctrl+, still work with no bar to hang
+ * them on, but nothing is drawn.
+ *
+ * So we paint the top-level entries as buttons and, on click or Alt-mnemonic,
+ * ask main to pop the REAL native submenu at the button (`popupAppMenu`).
+ * Roles, accelerators, dynamic enable/disable, and click handlers all live in
+ * the application menu main already builds — this component owns only the
+ * bar's looks + keyboard entry.
  *
  * Renders the `<nav>` only (no strip chrome — `AppTitleBar` owns that) and
- * nothing until the model loads. `AppTitleBar` gates on win32, so this is only
- * ever mounted there.
+ * nothing until the model loads. `AppTitleBar` gates on `paintsAppTitleBar`,
+ * so this is only ever mounted where the native bar is gone.
  */
 export function AppMenuBar(): ReactElement | null {
   const [items, setItems] = useState<AppMenuTopLevel[]>([]);

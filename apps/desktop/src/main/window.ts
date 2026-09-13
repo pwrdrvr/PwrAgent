@@ -30,7 +30,7 @@ import { SharedHotCpuProfiler } from "./diagnostics/shared-hot-cpu-profiler";
 import { HotCpuProfiler } from "./diagnostics/hot-cpu-profiler";
 import { isSafeExternalOpenUrl } from "./external-url-policy";
 import { getMainLogger } from "./log";
-import { macosTitleBarChrome } from "./macos-window-chrome";
+import { mainWindowChromeOptions } from "./main-window-chrome";
 import { lockMainWindowTitle, mainWindowTitle } from "./main-window-title";
 import { recordStartupProfileEvent } from "./diagnostics/startup-profile-events";
 import { resolveActiveProfilePath } from "./profile";
@@ -74,7 +74,6 @@ import {
 } from "./settings/appearance-bootstrap";
 import {
   installWindowsTitleBarAppearanceSync,
-  themedTitleBarOverlay,
   themedWindowBackgroundColor,
 } from "./native-appearance";
 import {
@@ -121,7 +120,6 @@ export function federationWindowTargetForWebContents(
 
 const isDevelopment = process.env.NODE_ENV !== "production";
 const isMac = process.platform === "darwin";
-const isWindows = process.platform === "win32";
 const moduleDirectory = dirname(fileURLToPath(import.meta.url));
 const MAIN_WINDOW_WIDTH = 1440;
 const MAIN_WINDOW_HEIGHT = 960;
@@ -372,23 +370,7 @@ export function createMainWindow(options?: {
     MAIN_WINDOW_WIDTH,
     MAIN_WINDOW_HEIGHT,
   );
-  const windowChrome = isMac
-    ? macosTitleBarChrome()
-    : isWindows
-      ? {
-          // Frameless + Window Controls Overlay: the OS draws min/max/close in
-          // a reserved region at the top-right. titleBarStyle:"hidden" ALSO
-          // removes the native menu bar on Windows (it lived in the title bar
-          // we hid), so the renderer paints its own always-visible menu bar
-          // (File/View/Profiles/Window/Help) in the strip and pops the real
-          // native submenus via the app-menu bridge — GitHub-Desktop style.
-          // autoHideMenuBar is moot here (no native bar to toggle); keep it
-          // true so no phantom native bar can ever appear above our painted one.
-          titleBarStyle: "hidden" as const,
-          titleBarOverlay: themedTitleBarOverlay(appearance),
-          autoHideMenuBar: true,
-        }
-      : {};
+  const windowChrome = mainWindowChromeOptions(appearance);
   const window = new BrowserWindow({
     ...initialBounds,
     minWidth: Math.min(MAIN_WINDOW_MIN_WIDTH, initialBounds.width),

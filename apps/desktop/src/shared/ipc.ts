@@ -513,6 +513,30 @@ export const WINDOW_FOCUS_SYNC_CHANNEL = "window:focus-sync";
 export const WINDOW_FULLSCREEN_SYNC_CHANNEL = "window:fullscreen-sync";
 export const WINDOW_POINTER_SNAPSHOT_CHANNEL = "window:pointer-snapshot";
 /**
+ * Main → renderer push: fired on the window's own `maximize` / `unmaximize`
+ * events. Linux-only in practice — see `window-frame-sync.ts` for why the
+ * glyph and the hairline follow the window rather than the last button press.
+ */
+export const WINDOW_FRAME_SYNC_CHANNEL = "window:frame-sync";
+/**
+ * Renderer → main: run one caption-button action on the calling window.
+ * Linux paints its own min/max/close (`WindowControls.tsx`) because a
+ * frameless window there gets neither macOS stoplights nor a Windows
+ * controls overlay, so this is the only path from those buttons to the
+ * window.
+ */
+export const WINDOW_CONTROL_CHANNEL = "window:control";
+/** What a painted caption button asks the main process to do. */
+export type WindowControlAction = "minimize" | "toggle-maximize" | "close";
+/**
+ * What the maximize button has to draw, and whether the window still has an
+ * edge to paint. The window manager maximizes windows behind our back — a
+ * double-click on the drag strip, Super+Up, a tiling keybind — so this
+ * reports the window's own state rather than whatever a button last asked
+ * for.
+ */
+export type WindowFrameState = { maximized: boolean };
+/**
  * Main → renderer push: fired when the user invokes File → New Thread
  * or presses the native `CmdOrCtrl+N` accelerator. The renderer's
  * `App` shell listens on this channel and routes into the existing

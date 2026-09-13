@@ -178,6 +178,8 @@ import { requestReplayOnboarding } from "./window-replay-onboarding";
 import { requestCopyLocalDiagnosticsInfo } from "./window-copy-local-diagnostics-info";
 import { buildApplicationMenuTemplate } from "./menu";
 import { wireAppMenuBridge } from "./app-menu-bridge";
+import { wireWindowControlsBridge } from "./window-controls-bridge";
+import { installWindowFrameSync } from "./window-frame-sync";
 import {
   appQuitManager,
   requestQuit,
@@ -1370,10 +1372,15 @@ export function bootstrapApp(): void {
         targetStore: getDesktopOverlayStore(),
       }),
     );
-    // Windows: serve the painted title-bar menu bar from the live application
-    // menu (idempotent; the renderer mounts the bar only on win32).
+    // Windows and Linux: serve the painted title-bar menu bar from the live
+    // application menu (idempotent; the renderer mounts the bar only where the
+    // native title bar — and with it the native menu bar — is hidden).
     wireAppMenuBridge();
     installWindowMenuRefreshHandlers();
+    // Linux: back the caption buttons the renderer paints, and tell every
+    // window's renderer when the window manager maximizes it.
+    wireWindowControlsBridge();
+    installWindowFrameSync(app);
     registerAppServerIpcHandlers();
     void startAppServerOwnerNavigation().catch((error) => {
       mainLog.warn("failed to initialize owner navigation metadata", { error: String(error) });
