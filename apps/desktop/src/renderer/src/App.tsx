@@ -745,7 +745,20 @@ function DesktopAppShell(props: {
       showAppNotice({
         autoDismiss: false,
         copyText: buildHotCpuProfileHandoffMessage(event),
-        detail: `Session: ${event.sessionDirectoryName}`,
+        detail: [
+          `Local app${event.sourceHostname ? ` on ${event.sourceHostname}` : ""}`,
+          `Captured: ${new Date(event.capturedAt).toLocaleString(undefined, {
+            year: "numeric",
+            month: "short",
+            day: "numeric",
+            hour: "numeric",
+            minute: "2-digit",
+            second: "2-digit",
+            timeZoneName: "short",
+          })}`,
+          `Session: ${event.sessionDirectoryName}`,
+        ].join("\n"),
+        dismissGroup: { key: "hot-cpu-profile", label: "CPU profile notices" },
         id: `hot-cpu-profile:${event.capturedAt}:${event.profileFilename}`,
         title: `${event.target === "main" ? "Main" : "Renderer"} CPU profile captured`,
         message: [

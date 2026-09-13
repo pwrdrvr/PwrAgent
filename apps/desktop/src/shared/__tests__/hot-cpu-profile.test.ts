@@ -3,8 +3,9 @@ import { buildHotCpuProfileHandoffMessage } from "../hot-cpu-profile";
 
 describe("hot CPU profile handoff message", () => {
   it("identifies main-process captures", () => {
-    expect(buildHotCpuProfileHandoffMessage({
+    const message = buildHotCpuProfileHandoffMessage({
       target: "main",
+      sourceHostname: "fixture-m5.local",
       capturedAt: "2026-09-05T23:00:00.000Z",
       profileFilename: "main-hot-0001.cpuprofile",
       profilePath: "/tmp/hot-cpu/main-hot-0001.cpuprofile",
@@ -14,7 +15,10 @@ describe("hot CPU profile handoff message", () => {
       triggerCpuPercent: 206,
       triggerMode: "sustained",
       triggerThresholdPercent: 50,
-    })).toContain("PwrAgent captured a main CPU profile.");
+    });
+    expect(message).toContain("PwrAgent captured a main CPU profile.");
+    expect(message).toContain("Source: Local app on fixture-m5.local");
+    expect(message).toContain("Captured at: 2026-09-05T23:00:00.000Z");
   });
 
   it("includes copyable basenames and absolute paths", () => {
@@ -35,6 +39,8 @@ describe("hot CPU profile handoff message", () => {
     ).toBe(
       [
         "PwrAgent captured a renderer CPU profile.",
+        "Source: Local app",
+        "Captured at: 2026-06-10T12:00:00.000Z",
         "Trigger: Slowburn (2 consecutive samples >= 15%; trigger sample 24.3%)",
         "Session basename: 20260610T120000Z",
         "Session directory path: /Users/test/.pwragent/profiles/dev/diagnostics/hot-cpu/20260610T120000Z",
@@ -73,6 +79,8 @@ describe("hot CPU profile handoff message", () => {
     ).toBe(
       [
         "PwrAgent captured a renderer CPU profile.",
+        "Source: Local app",
+        "Captured at: 2026-06-10T12:00:00.000Z",
         "Trigger: Spike (1 sample >= 50%; trigger sample 80%)",
         "Session basename: hot-cpu",
         "Session directory path: /tmp/hot-cpu",
