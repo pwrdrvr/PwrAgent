@@ -668,7 +668,7 @@ jobs:
       fail-fast: false
       matrix:
         lane: [1, 2, 3, 4]
-    timeout-minutes: 35
+    timeout-minutes: 40
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -686,7 +686,13 @@ jobs:
           cache-electron: "true"
 
       - name: Run desktop replay-backed Electron tests
-        timeout-minutes: 25
+        # 30, not the macOS lane's 20. This budget is for the lane to finish
+        # REPORTING, not for any individual test to pass: a failing spec costs
+        # its 30s timeout twice (CI retries once), so a lane with real failures
+        # runs far longer than a green one. The first run truncated lanes 1, 2
+        # and 4 mid-suite and never reached `windows-codex-discovery.spec.ts`
+        # at all. No test-level timeout is raised anywhere.
+        timeout-minutes: 30
         # windows-latest provides an interactive desktop session, so unlike the
         # Linux lane this needs neither xvfb nor a window manager.
         #
