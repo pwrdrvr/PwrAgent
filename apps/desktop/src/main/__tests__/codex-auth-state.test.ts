@@ -1,3 +1,4 @@
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { CodexAuthState, isCodexAuthenticationFailure } from "../codex-auth-state";
 
@@ -30,6 +31,7 @@ describe("Codex rejected authentication", () => {
     expect(state.isBlocked("/fixture/default")).toBe(true);
     state.verified("/fixture/default");
     expect(() => state.assertAvailable("/fixture/default")).not.toThrow();
-    expect(changes).toEqual(["/fixture/default", "/fixture/default"]);
+    const normalizedHome = path.resolve("/fixture/default");
+    expect(changes).toEqual([normalizedHome, normalizedHome]);
   });
 });

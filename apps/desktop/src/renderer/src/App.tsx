@@ -398,7 +398,7 @@ function DesktopAppShell(props: {
   const showAppNotice = useCallback((notice: AppNoticeToastNotice): void => {
     dispatchAppNotice({ type: "show", notice });
   }, []);
-  const codexProfiles = props.settings.snapshot?.models.codex.profiles;
+  const codexProfiles = props.settings.snapshot?.models?.codex?.profiles;
   const activeCodexProfileRef = useRef(codexProfiles);
   activeCodexProfileRef.current = codexProfiles;
   const openCodexLogin = useCallback(() => {
