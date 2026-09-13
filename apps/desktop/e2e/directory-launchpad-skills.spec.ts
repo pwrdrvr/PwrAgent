@@ -595,14 +595,20 @@ test("directory launchpad Tiptap WYSIWYG composer serializes markdown blocks", a
     await app.window.keyboard.press("Alt+Enter");
     await app.window.keyboard.type("continued");
 
-    await expect(tiptapInput.locator("li")).toHaveCount(2);
-    await expect(
-      tiptapInput.locator("li", { hasText: /Second item\s*continued/ }),
-    ).toBeVisible();
+    // `data-value` first, deliberately. It is the serialization contract this
+    // test is about, and it fails with a diff naming what the editor actually
+    // holds. The DOM assertions below fail with "element not found", which
+    // says nothing about whether the soft break was inserted, swallowed, or
+    // typed somewhere else entirely — and on Windows that is the open
+    // question, since `Alt` there is also the menu-bar activation key.
     await expect(tiptapInput).toHaveAttribute(
       "data-value",
       "- Some item\n- Second item\ncontinued",
     );
+    await expect(tiptapInput.locator("li")).toHaveCount(2);
+    await expect(
+      tiptapInput.locator("li", { hasText: /Second item\s*continued/ }),
+    ).toBeVisible();
   } finally {
     await app.close();
     await fixture.cleanup();

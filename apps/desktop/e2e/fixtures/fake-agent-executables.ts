@@ -45,21 +45,22 @@ export type FakeCodexProtocolRequest = {
  * pointing at one names a file that cannot be spawned and the agent never
  * reports available.
  *
- * The shim is a `.cmd` SIBLING rather than a replacement because that is the
- * layout the product already resolves. npm writes `kimi`, `kimi.cmd` and
- * `kimi.ps1` next to each other, and `resolveWindowsCodexSibling` exists to
- * pick the spawnable one — so seeding the same shape exercises that real path
- * instead of routing around it. See `codex-windows-launch.ts`, including why
- * `.ps1` is a discovery signal and never a launch target.
+ * Written beside the original as a `.cmd`, which is the layout npm produces
+ * (`kimi`, `kimi.cmd`, `kimi.ps1` next to each other) — but the shim is also
+ * what callers must USE. `resolveWindowsCodexSibling` finds a spawnable
+ * sibling for an extensionless command, and only the Codex transport consults
+ * it; `acp-stdio-transport.ts` passes the configured path to
+ * `createCommandInvocation`, which builds for a `.cmd` it is handed and does
+ * not go looking for one. So this returns the path to seed into `cli_path`.
  *
  * Node runs the extensionless original directly (it ignores the shebang
  * line), so the body stays single-sourced. `exit /b` is required: without it
  * a `.cmd` reports its own success rather than node's, and a fake that failed
  * to start would read as a clean `--version` probe.
  */
-async function writeWindowsSpawnableShim(targetPath: string): Promise<void> {
+async function writeWindowsSpawnableShim(targetPath: string): Promise<string> {
   if (process.platform !== "win32") {
-    return;
+    return targetPath;
   }
   await writeFile(
     `${targetPath}.cmd`,
@@ -71,6 +72,7 @@ async function writeWindowsSpawnableShim(targetPath: string): Promise<void> {
     ].join("\r\n"),
     "utf8",
   );
+  return `${targetPath}.cmd`;
 }
 
 export async function writeFakeKimiExecutable(
@@ -124,8 +126,7 @@ input.on("line", (line) => {
     "utf8",
   );
   await chmod(targetPath, 0o755);
-  await writeWindowsSpawnableShim(targetPath);
-  return targetPath;
+  return await writeWindowsSpawnableShim(targetPath);
 }
 
 export async function writeFakeCodexExecutable(params: {
@@ -442,8 +443,7 @@ input.on("line", (line) => {
     "utf8",
   );
   await chmod(params.targetPath, 0o755);
-  await writeWindowsSpawnableShim(params.targetPath);
-  return params.targetPath;
+  return await writeWindowsSpawnableShim(params.targetPath);
 }
 
 export async function readFakeCodexProtocolLog(
@@ -594,13 +594,15 @@ export async function installOwnerFakeAgents(params: {
   launchMarkerPath: string;
 }> {
   const binDir = params.binDir ?? path.join(params.homeRoot, "bin");
-  const fakeKimiPath = path.join(binDir, "fake-kimi");
-  const fakeCodexPath = path.join(binDir, "fake-codex");
   const protocolLogPath = path.join(binDir, "fake-codex.protocol.jsonl");
   const launchMarkerPath = path.join(binDir, "fake-codex.launched");
-  await writeFakeKimiExecutable(fakeKimiPath);
-  await writeFakeCodexExecutable({
-    targetPath: fakeCodexPath,
+  // Both writers return the path to LAUNCH, which on Windows is the `.cmd`
+  // shim rather than the extensionless file they also write.
+  const fakeKimiPath = await writeFakeKimiExecutable(
+    path.join(binDir, "fake-kimi"),
+  );
+  const fakeCodexPath = await writeFakeCodexExecutable({
+    targetPath: path.join(binDir, "fake-codex"),
     protocolLogPath,
     launchMarkerPath,
   });
@@ -629,9 +631,8 @@ export async function seedFakeCodexExecutable(params: {
   requestLogPath: string;
   launchMarkerPath: string;
 }): Promise<{ executablePath: string }> {
-  const executablePath = path.join(params.homeRoot, "bin", "fake-codex");
-  await writeFakeCodexExecutable({
-    targetPath: executablePath,
+  const executablePath = await writeFakeCodexExecutable({
+    targetPath: path.join(params.homeRoot, "bin", "fake-codex"),
     protocolLogPath: params.requestLogPath,
     launchMarkerPath: params.launchMarkerPath,
   });
