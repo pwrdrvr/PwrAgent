@@ -147,6 +147,75 @@ describe("launchpad composer handoff", () => {
     expect(unsubscribe).toHaveBeenCalledTimes(1);
   });
 
+  it.each(["turn/failed", "turn/cancelled"] as const)("recovers unconfirmed delivery on %s", async (method) => {
+    const { result } = renderHook(useComposerDraftStore);
+    let emit: Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0] = () => undefined;
+    const unsubscribe = vi.fn();
+    result.current.setQueuedTurns(source, [{ ...queued("correction"), steerWhenReady: true }]);
+    await act(async () => handoffLaunchpadComposer(result.current, "project", thread, {
+      steerTurn: async () => ({ backend: "codex", threadId: thread.id, turnId: "first-turn", disposition: "steered" }),
+      onAgentEvent: (callback) => { emit = callback; return unsubscribe; },
+    }));
+    act(() => emit({ backend: "codex", notification: method === "turn/failed"
+      ? { method, params: { threadId: thread.id, turnId: "first-turn", turn: { id: "first-turn", status: "failed", error: { message: "Provider failed" } } } }
+      : { method, params: { threadId: thread.id, turnId: "first-turn", turn: { id: "first-turn", status: "cancelled" } } },
+    }));
+    expect(result.current.getQueuedTurns(target)[0]).toMatchObject({ manualReleaseRequired: true, backendQueuePending: false });
+    expect(unsubscribe).toHaveBeenCalledOnce();
+  });
+
+  it.each(["before", "after", "delivery-before"])("keeps ACP ownership across the old turn ending %s the response", async (order) => {
+    const { result } = renderHook(useComposerDraftStore);
+    const acpThread = { ...thread, source: "acp:grok" as const };
+    const acpTarget = buildThreadComposerScopeKey(acpThread.source, thread.id);
+    let emit: Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0] = () => undefined;
+    const unsubscribe = vi.fn();
+    let resolve!: (value: Awaited<ReturnType<NonNullable<DesktopApi["steerTurn"]>>>) => void;
+    result.current.setQueuedTurns(source, [{ ...queued("correction"), steerWhenReady: true }]);
+    act(() => handoffLaunchpadComposer(result.current, "project", acpThread, {
+      steerTurn: () => new Promise((done) => { resolve = done; }),
+      onAgentEvent: (callback) => { emit = callback; return unsubscribe; },
+    }));
+    const end = () => emit({ backend: acpThread.source, notification: {
+      method: "turn/completed", params: { threadId: thread.id, turnId: "first-turn", turn: { id: "first-turn", status: "completed", output: [] } },
+    } });
+    const deliver = () => emit({ backend: acpThread.source, notification: { method: "item/completed", params: {
+      threadId: thread.id, turnId: "next-turn", item: { id: "delivered-message", type: "userMessage", content: [{ type: "text", text: "correction" }] },
+    } } });
+    if (order !== "after") act(end);
+    if (order === "delivery-before") act(deliver);
+    await act(async () => resolve({ backend: acpThread.source, threadId: thread.id, turnId: "first-turn", disposition: "queued" }));
+    if (order === "after") act(end);
+    if (order === "delivery-before") {
+      expect(result.current.getQueuedTurns(acpTarget)).toEqual([]);
+      expect(unsubscribe).toHaveBeenCalledOnce();
+      return;
+    }
+    expect(result.current.getQueuedTurns(acpTarget)[0]).toMatchObject({ backendQueuePending: true, steerDelivery: "accepted" });
+    expect(result.current.getQueuedTurns(acpTarget)[0].manualReleaseRequired).not.toBe(true);
+    expect(unsubscribe).not.toHaveBeenCalled();
+    act(deliver);
+    expect(result.current.getQueuedTurns(acpTarget)).toEqual([]);
+    expect(unsubscribe).toHaveBeenCalledOnce();
+  });
+
+  it("confirms file-only delivery using the submitted file-reference text", async () => {
+    const { result } = renderHook(useComposerDraftStore);
+    let emit: Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0] = () => undefined;
+    result.current.setQueuedTurns(source, [{ ...queued(""), steerWhenReady: true,
+      input: [{ type: "text", text: "[@notes.txt](/repo/notes.txt)" }],
+      fileAttachments: [{ id: "file", label: "notes.txt", path: "/repo/notes.txt" }],
+    }]);
+    await act(async () => handoffLaunchpadComposer(result.current, "project", thread, {
+      steerTurn: async () => ({ backend: "codex", threadId: thread.id, turnId: "first-turn", disposition: "steered" }),
+      onAgentEvent: (callback) => { emit = callback; return () => undefined; },
+    }));
+    act(() => emit({ backend: "codex", notification: { method: "item/completed", params: {
+      threadId: thread.id, turnId: "first-turn", item: { id: "delivered-message", type: "userMessage", content: [{ type: "text", text: "[@notes.txt](/repo/notes.txt)" }] },
+    } } }));
+    expect(result.current.getQueuedTurns(target)).toEqual([]);
+  });
+
   it("holds a failed steer for explicit recovery without losing its content", async () => {
     const { result } = renderHook(useComposerDraftStore);
     const steerTurn = vi.fn().mockRejectedValue(new Error("Connection lost"));

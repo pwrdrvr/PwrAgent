@@ -141,6 +141,8 @@ export function handoffLaunchpadComposer(
     // and the newly selected Composer may not have mounted yet.
     let settled = false;
     let responseReceived = false;
+    let providerQueued = false;
+    const matchingUserTurnIds = new Set<string>();
     let endedTurnId: string | undefined;
     let deliveredTurnId = expectedTurnId;
     const holdUnconfirmed = (): void => {
@@ -162,18 +164,28 @@ export function handoffLaunchpadComposer(
         || event.backend !== thread.source
         || params.threadId !== thread.id
         || !federationTargetsEqual(event.federationTarget, federationTarget)
-        || (params.turnId ?? (params.turn as { id?: string } | undefined)?.id) !== deliveredTurnId
       ) return;
+      const eventTurnId = params.turnId ?? (params.turn as { id?: string } | undefined)?.id;
+      if (typeof eventTurnId !== "string") return;
       const item = params.item as { type?: string } | undefined;
       if (
         method === "item/completed"
         && item?.type === "userMessage"
         && notificationIncludesDraftContent(params, entry)
       ) {
+        // ACP next-turn delivery can arrive before its queued response.
+        // Remember positive evidence, but only accept another turn after
+        // the provider has explicitly claimed next-turn ownership.
+        matchingUserTurnIds.add(eventTurnId);
+        if (eventTurnId !== deliveredTurnId && !providerQueued) return;
         settled = true;
         unsubscribe?.();
         store.removeQueuedTurnById(target, entry.id);
-      } else if (method === "turn/completed") {
+      } else if (
+        (method === "turn/completed" || method === "turn/failed" || method === "turn/cancelled")
+        && eventTurnId === deliveredTurnId
+        && !providerQueued
+      ) {
         endedTurnId = deliveredTurnId;
         // The in-flight request may still return a durable fallback. Let
         // that response establish ownership before converting to recovery.
@@ -207,6 +219,7 @@ export function handoffLaunchpadComposer(
       });
       if (settled) return;
       responseReceived = true;
+      providerQueued = response.disposition === "queued";
       deliveredTurnId = response.turnId ?? expectedTurnId;
       if (response.scheduledAction?.status === "failed") {
         throw new Error(response.scheduledAction.errorMessage ?? "The follow-up could not be dispatched.");
@@ -222,7 +235,11 @@ export function handoffLaunchpadComposer(
           manualReleaseRequired: response.disposition === "held",
           holdReason: response.holdReason,
         });
-      } else if (endedTurnId && endedTurnId === deliveredTurnId) {
+      } else if (providerQueued && matchingUserTurnIds.size > 0) {
+        settled = true;
+        unsubscribe?.();
+        store.removeQueuedTurnById(target, entry.id);
+      } else if (!providerQueued && endedTurnId && endedTurnId === deliveredTurnId) {
         holdUnconfirmed();
       } else {
         update({ steerDelivery: "accepted" });

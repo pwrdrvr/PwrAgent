@@ -88,13 +88,23 @@ function collectImageUrls(value: unknown): string[] {
 
 export function notificationIncludesDraftContent(
   params: unknown,
-  draft: Pick<ComposerQueuedTurnSnapshot, "text" | "imageAttachments">,
+  draft: Pick<ComposerQueuedTurnSnapshot, "text" | "imageAttachments" | "input">,
 ): boolean {
   const preview = draft.text.trim();
   if (preview) {
     return collectTextFragments(params).some((fragment) =>
       fragment.includes(preview)
     );
+  }
+
+  // File-only drafts have no composer text. Their submitted text includes
+  // the file-reference markdown that the provider echoes in its user item.
+  const submittedText = draft.input?.flatMap((item) =>
+    item.type === "text" && item.text.trim() ? [item.text.trim()] : []
+  ) ?? [];
+  if (submittedText.length > 0) {
+    const fragments = collectTextFragments(params);
+    return submittedText.every((text) => fragments.some((fragment) => fragment.includes(text)));
   }
 
   const attachmentUrls = draft.imageAttachments.map(
