@@ -872,14 +872,24 @@ export function DirectoriesList(props: DirectoriesListProps) {
   // Every visible directory counts, not only the selected row's: the sections
   // share one `.directory-list` scroll container, so a page landing in the one
   // above moves the row exactly the same way.
-  const pagedResources = props.pagedNavigation?.resources;
+  //
+  // `presentationReady` answers the first half — every page this lens demands
+  // has arrived — but it stays true through a re-read of a page already held,
+  // which is exactly what the reveal's own `rebaseline` is. So the in-flight
+  // reads are checked too.
+  const pagedNavigation = props.pagedNavigation;
   const revealPagesInFlight = useMemo(
-    () =>
-      visibleDirectories.some((directory) =>
-        Boolean(pagedResources?.get(`directory:${directory.key}`)?.loading)
-        || Boolean(pagedResources?.get(`directory-pins:${directory.key}`)?.loading),
-      ),
-    [pagedResources, visibleDirectories],
+    () => {
+      if (!pagedNavigation) {
+        return false;
+      }
+      return !pagedNavigation.presentationReady
+        || visibleDirectories.some((directory) =>
+          Boolean(pagedNavigation.resources.get(`directory:${directory.key}`)?.loading)
+          || Boolean(pagedNavigation.resources.get(`directory-pins:${directory.key}`)?.loading),
+        );
+    },
+    [pagedNavigation, visibleDirectories],
   );
   // Released monotonically: once the rows have been handed a request it is
   // never taken back. ThreadRow re-runs its scroll on EVERY change of the

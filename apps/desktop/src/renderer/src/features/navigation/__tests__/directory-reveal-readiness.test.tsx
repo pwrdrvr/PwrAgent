@@ -182,6 +182,10 @@ function pagedNavigation(rootLoaded: boolean) {
     directories: [directory],
     selectedDirectoryKeys: [directoryKey],
     connected: true,
+    // Every demanded page is present in both phases. `rootLoaded: false` is a
+    // re-read of a page this lens already has — the reveal's own rebaseline —
+    // which is exactly the case `presentationReady` alone cannot see.
+    presentationReady: true,
     invalidate: () => undefined,
     refresh: async () => undefined,
     loadMore: async () => undefined,
