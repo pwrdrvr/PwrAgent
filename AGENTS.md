@@ -63,6 +63,23 @@
   - Validate the thread before the repair.
   - Remove only invalid `id` fields from response items with type `message`.
 
+### Linux sandbox setup
+
+- Install and desktop dev/preview run an advisory, read-only check of Electron's
+  setuid helper. User namespaces may allow launch without that helper.
+- From the repository root, use `pnpm check:linux-sandbox` to repeat the check
+  and `pnpm fix:linux-sandbox` for the fatal SUID sandbox error.
+- The fixer resolves this checkout's installed helper and explicitly uses sudo
+  for `chown root:root` followed by `chmod 4755`, then verifies the result.
+  It is idempotent; both commands safely no-op on non-Linux platforms.
+- Never request sudo automatically during install or launch, run the app as
+  root, or disable sandboxing. Reinstalling dependencies or replacing Electron
+  may require repeating the repair. Mount/security policy can still block startup.
+- Keep a separate `pnpm install` per worktree. Sharing root `node_modules` cannot
+  supply package-local links; sharing package `node_modules` can bind workspace
+  imports to donor source and make installs/native staging mutate shared files.
+  A symlink to a repaired helper inherits permissions but is not a complete fix.
+
 ### Desktop test operations
 
 - Use the [desktop E2E fixture seeding skill](.agents/skills/desktop-e2e-fixture-seeding/SKILL.md) for live captured sessions.

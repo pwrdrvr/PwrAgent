@@ -19,7 +19,8 @@ const TERMINAL_SHUTDOWN_SIGNALS = ["SIGHUP", "SIGINT", "SIGTERM"];
 export const DEV_SETUP_SCRIPTS = [
   ["./scripts/stage-ripgrep-bundle.mjs", "--platform", "current"],
   "./scripts/ensure-electron-runtime.mjs",
-  "./scripts/rebuild-native-for-electron.mjs"
+  "./scripts/rebuild-native-for-electron.mjs",
+  ["../../scripts/linux-sandbox.mjs", "--warn"],
 ];
 
 export function sanitizeDevEnv(input = process.env) {
