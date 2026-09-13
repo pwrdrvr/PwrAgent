@@ -33,6 +33,31 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
+it("returns to the loaded lens range without a loading or missing-row frame", async () => {
+  const f = fixture();
+  const originalRead = f.read.getMockImplementation()!;
+  let hold = false;
+  let release!: () => void;
+  const pending = new Promise<void>((resolve) => { release = resolve; });
+  f.read.mockImplementation(async (request) => {
+    if (hold && request.query.kind === "lens") await pending;
+    return originalRead(request);
+  });
+  const { result, unmount } = renderHook(() => useThreadNavigation(f.api));
+  await waitFor(() => expect(result.current.threads.length).toBe(10));
+  await act(() => result.current.pagedNavigation.loadMore("lens"));
+  expect(result.current.threads.length).toBe(20);
+  act(() => result.current.setBrowseMode("recents"));
+  await waitFor(() => expect(result.current.pagedNavigation.resources.get("lens")?.loading).toBe(false));
+  hold = true;
+  act(() => result.current.setBrowseMode("inbox"));
+  expect(result.current.loading).toBe(false);
+  expect(result.current.threads).toHaveLength(20);
+  expect(result.current.pagedNavigation.resources.get("lens")?.state.page?.entries).toHaveLength(20);
+  await act(async () => { hold = false; release(); await pending; });
+  unmount();
+});
+
 it.each([false, true])("waits for New Thread owner authority and respects changed selection=%s", async (changeSelection) => {
   const f = fixture();
   let resolve!: (detail: NavigationSelectedDetailResponse) => void;

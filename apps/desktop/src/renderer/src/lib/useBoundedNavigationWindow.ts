@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { classifyDirectory } from "@pwragent/shared";
 import type { NavigationDirectoryRow, NavigationQueryAnchor } from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
@@ -92,7 +92,7 @@ export function useBoundedNavigationWindow(params: Demand & {
     };
   }, [desktopApi]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const controller = controllerRef.current;
     if (!controller) return;
     controller.setVisible(enabled && visible && connected);

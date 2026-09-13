@@ -1,6 +1,7 @@
 import { readNavigationPresentationOrder, retainNavigationPresentationOrder, type NavigationPresentationOrder } from "./navigation-presentation-order";
 import type { useBoundedNavigationWindow } from "../../lib/useBoundedNavigationWindow";
 import { navigationThreadSelectionKey } from "../../lib/navigation-query-state";
+import { useLensScrollRestoration } from "../../lib/useLensScrollRestoration";
 import type { NavigationDirectoryView as NavigationDirectorySummary } from "../../lib/navigation-loaded-rows";
 import type { PendingLaunchpadCreation } from "../../lib/useThreadNavigation";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -567,6 +568,14 @@ export function Sidebar(props: SidebarProps) {
   const rowsByKey = useMemo(() => new Map(props.threads.map((thread) => [threadSummaryIdentityKey(thread), thread])), [props.threads]);
   const visibleThreads = [...new Map(lensResources.flatMap((resource) => resource.state.page?.entries ?? [])
     .map((entry) => [navigationThreadSelectionKey(entry.row.ref), rowsByKey.get(navigationThreadSelectionKey(entry.row.ref))])).values()].filter((thread): thread is NavigationThreadSummary => Boolean(thread));
+  const lensQuery = props.pagedNavigation?.resources.get("lens")?.state.request.query;
+  const lensMatches = !props.pagedNavigation || props.browseMode === "directories" || props.browseMode === "drafts"
+    || (lensQuery?.kind === "lens" && lensQuery.lens === props.browseMode);
+  const lensScroll = useLensScrollRestoration(
+    JSON.stringify([federationTarget, props.browseMode]),
+    !props.loading && lensMatches && lensResources.every((resource) =>
+      resource.state.page?.entries.every((entry) => rowsByKey.has(navigationThreadSelectionKey(entry.row.ref))) ?? !resource.loading),
+  );
   const hoverStableSnapshot = useHoverStableSnapshot({
     hydrateFrozenValue: (frozen, latest) =>
       hydrateHoverStableSidebarSnapshot(frozen, latest, {
@@ -1940,7 +1949,9 @@ export function Sidebar(props: SidebarProps) {
         </div>
 
         <div
+          ref={lensScroll.ref}
           className="sidebar__scroll-region"
+          onScroll={lensScroll.onScroll}
           onClickCapture={hoverStableSnapshot.onClickCapture}
           onPointerCancel={hoverStableSnapshot.onPointerCancel}
           onPointerLeave={hoverStableSnapshot.onPointerLeave}
