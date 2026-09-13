@@ -8562,10 +8562,22 @@ a.button {
 /* Exit Settings — plain text-style link styled like a quiet nav row.
    No border, no panel background — matches the design's
    `pa-settings__exit`. Sits above the GENERAL group label. */
+/* Baseline, not centre, and the arrow is why.
+   `←` (U+2190) is in none of the fonts this app asks for by name, nothing here
+   declares an `@font-face`, so which font draws it is whatever the OS
+   substitutes — and that is a different font from the one drawing the label
+   beside it. `align-items: center` equalises each flex item's BOX, so a
+   substitute with a taller ascent/descent puts the glyph off the label's
+   baseline; `align-items: baseline` equalises what the eye actually reads.
+   Measured in headless Chromium at a 48px font, forcing four substitutes with
+   different metrics: centre drifts up to 6.5px (≈1.6px at this row's real
+   12px), baseline is 0.00px for every one of them. macOS happens to substitute
+   something metrically close, which is why this read level there and tilted on
+   a stock Ubuntu. */
 .settings-nav__exit {
   display: inline-flex;
   width: 100%;
-  align-items: center;
+  align-items: baseline;
   appearance: none;
   cursor: pointer;
   gap: 6px;
