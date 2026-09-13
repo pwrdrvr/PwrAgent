@@ -735,13 +735,25 @@ for (const theme of AUDIT_THEMES) {
         // offset, the same way the pointer is returned to a defined corner.
         const settle = async () => {
           await app.window.mouse.move(0, 0);
-          await threads.evaluate((list) => {
+          // Anchored on the directory row, not its thread list: the list is
+          // unmounted for the collapsed scan, and a locator that resolves to
+          // nothing does not no-op, it waits and then throws.
+          await directoryRow.evaluate((row) => {
             for (
-              let node = list.parentElement;
+              let node = row.parentElement;
               node;
               node = node.parentElement
             ) {
-              if (node.scrollHeight > node.clientHeight + 1) {
+              // Both halves matter. An element with `overflow: visible`
+              // whose content is simply taller than its box also reports
+              // `scrollHeight > clientHeight`, and assigning `scrollTop`
+              // there does nothing — the walk would stop on it and leave the
+              // real container scrolled.
+              const overflowY = getComputedStyle(node).overflowY;
+              if (
+                (overflowY === "auto" || overflowY === "scroll")
+                && node.scrollHeight > node.clientHeight + 1
+              ) {
                 node.scrollTop = 0;
                 return;
               }
