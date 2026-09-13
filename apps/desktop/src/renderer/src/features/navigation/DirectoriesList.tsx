@@ -1107,6 +1107,22 @@ export function DirectoriesList(props: DirectoriesListProps) {
     const pinResource = props.pagedNavigation?.resources.get(pinResourceId);
     const rootResourceId = `directory:${directory.key}`;
     const rootResource = props.pagedNavigation?.resources.get(rootResourceId);
+    // Revealing this directory re-anchors its root range and creates demand
+    // for pages that were never read while it was closed. Those pages land in
+    // a LATER commit and insert rows ABOVE the selected row. ThreadRow's
+    // reveal is one-shot — it scrolls when the row first renders active, and
+    // once more on the next animation frame — so a request handed to the rows
+    // while a read is still outstanding aims both of those scrolls at a
+    // position the row is about to lose, and nothing scrolls again. Withhold
+    // the request until this directory's own reads have landed: the row then
+    // first renders where the reveal is taking it, and its mount-time scroll
+    // is the final one instead of a bet on which lands first, the page or the
+    // frame.
+    const directoryReadInFlight =
+      Boolean(rootResource?.loading) || Boolean(pinResource?.loading);
+    const rowRevealSelectedThreadRequest = directoryReadInFlight
+      ? 0
+      : props.revealSelectedThreadRequest;
     const directorySummaryLabel = [
       directory.label,
       directoryUnconfigured ? "not configured on this instance" : undefined,
@@ -1193,7 +1209,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                 linkedDirectoryMode={getDirectoryRowLinkedDirectoryMode(child)}
                 nested
                 nestedDepth={trays.depth(childKey)}
-                revealSelectedThreadRequest={props.revealSelectedThreadRequest}
+                revealSelectedThreadRequest={rowRevealSelectedThreadRequest}
                 selectedThreadKey={props.selectedItemKey}
                 selectedThreadKeys={props.selectedThreadKeys}
                 thinkingThreadKeys={props.thinkingThreadKeys}
@@ -1339,7 +1355,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
             pointerDraggable={Boolean(props.onReorderThreadPins)}
             includeLinkedDirectories
             linkedDirectoryMode={getDirectoryRowLinkedDirectoryMode(thread)}
-            revealSelectedThreadRequest={props.revealSelectedThreadRequest}
+            revealSelectedThreadRequest={rowRevealSelectedThreadRequest}
             selectedThreadKey={props.selectedItemKey}
             selectedThreadKeys={props.selectedThreadKeys}
             subthreadCount={subthreadCount}
@@ -1777,7 +1793,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                           includeLinkedDirectories
                           linkedDirectoryMode={getDirectoryRowLinkedDirectoryMode(thread)}
                           revealSelectedThreadRequest={
-                            props.revealSelectedThreadRequest
+                            rowRevealSelectedThreadRequest
                           }
 	                          selectedThreadKey={props.selectedItemKey}
 	                          selectedThreadKeys={props.selectedThreadKeys}
