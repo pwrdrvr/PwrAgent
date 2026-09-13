@@ -49,7 +49,21 @@ describe("renderer error ipc", () => {
     await expect(handlers.get(RENDERER_ERROR_REPORT_CHANNEL)?.({}, report)).resolves.toEqual({
       ok: true,
     });
-    expect(errorLog.error).toHaveBeenCalledWith("report", report);
+    expect(errorLog.error).toHaveBeenCalledWith("report", {
+      href: "http://localhost:5173/",
+      message: "Should have a queue",
+      name: "Error",
+      source: "error-boundary",
+      timestamp: "2026-04-20T12:28:04.188Z",
+      userAgent: "Vitest",
+    });
+    // The compact field formatter caps a structured value at 320 characters;
+    // the stacks carry the only frames that identify the faulty code, so they
+    // are logged verbatim as their own messages.
+    expect(errorLog.error).toHaveBeenCalledWith(
+      "report stack\nError: Should have a queue",
+    );
+    expect(errorLog.error).toHaveBeenCalledWith("report component stack\nat App");
 
     disposeRendererErrorIpcHandlers();
     expect(handlers.has(RENDERER_ERROR_REPORT_CHANNEL)).toBe(false);
