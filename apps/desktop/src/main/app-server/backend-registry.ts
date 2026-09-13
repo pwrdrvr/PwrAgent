@@ -1,3 +1,9 @@
+import {
+  buildPullRequestReferenceUrl,
+  parsePullRequestReferenceUrl,
+  type PullRequestRepositoryRef,
+  type PullRequestReferenceIdentity,
+} from "../pr-status/forge-reference";
 import { projectThreadDisplay } from "./thread-display";
 import type { ReadQueuedTurnRequest, ReadQueuedTurnResponse } from "@pwragent/shared";
 import { ThreadCorrespondenceStore } from "./thread-correspondence-store";
@@ -1731,63 +1737,6 @@ function linkedDirectoriesActiveWorkspaceCoversCwd(params: {
   );
 }
 
-type PullRequestRepositoryRef = {
-  provider: string;
-  org: string;
-  repo: string;
-  urlBase?: string;
-};
-
-type PullRequestReferenceIdentity = PullRequestRepositoryRef & {
-  number: number;
-  url: string;
-};
-
-function parsePullRequestReferenceUrl(
-  value: string | undefined,
-): PullRequestReferenceIdentity | undefined {
-  const trimmed = value?.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  let parsed: URL;
-  try {
-    parsed = new URL(trimmed);
-  } catch {
-    return undefined;
-  }
-  const segments = parsed.pathname.split("/").filter(Boolean);
-  const markerIndex = segments.findIndex(
-    (segment) => segment === "pull" || segment === "merge_requests",
-  );
-  if (markerIndex <= 0 || markerIndex >= segments.length - 1) {
-    return undefined;
-  }
-  const number = Number.parseInt(segments[markerIndex + 1] ?? "", 10);
-  if (!Number.isInteger(number) || number <= 0) {
-    return undefined;
-  }
-  const repoIndex = segments[markerIndex - 1] === "-"
-    ? markerIndex - 2
-    : markerIndex - 1;
-  if (repoIndex <= 0) {
-    return undefined;
-  }
-  const org = segments.slice(0, repoIndex).join("/");
-  const repo = segments[repoIndex];
-  if (!org || !repo) {
-    return undefined;
-  }
-  return {
-    provider: normalizePullRequestProvider(parsed.hostname),
-    org,
-    repo,
-    number,
-    url: trimmed,
-    urlBase: `${parsed.protocol}//${parsed.host}`,
-  };
-}
-
 function parseGitRemoteRepositoryUrl(
   value: string | undefined,
 ): PullRequestRepositoryRef | undefined {
@@ -1838,18 +1787,6 @@ function parseGitRemotePath(
 
 function pullRequestRepositoryKey(ref: PullRequestRepositoryRef): string {
   return `${normalizePullRequestProvider(ref.provider)}/${ref.org.toLowerCase()}/${ref.repo.toLowerCase()}`;
-}
-
-function buildPullRequestReferenceUrl(ref: PullRequestRepositoryRef & { number: number }): string {
-  const provider = normalizePullRequestProvider(ref.provider);
-  const base = ref.urlBase?.replace(/\/+$/, "") || `https://${provider}`;
-  const encodedPath = [...ref.org.split("/"), ref.repo]
-    .map((part) => encodeURIComponent(part))
-    .join("/");
-  const marker = provider.includes("gitlab")
-    ? "-/merge_requests"
-    : "pull";
-  return `${base}/${encodedPath}/${marker}/${ref.number}`;
 }
 
 function normalizePositivePullRequestNumber(value: unknown): number | undefined {
@@ -37251,11 +37188,13 @@ export class DesktopBackendRegistry {
   ): Promise<PullRequestRepositoryRef[]> {
     const byKey = new Map<string, PullRequestRepositoryRef>();
     for (const pr of summary.pullRequests ?? []) {
+      const parsedUrl = parsePullRequestReferenceUrl(pr.url);
       const ref = {
         provider: normalizePullRequestProvider(pr.provider),
         org: pr.org,
         repo: pr.repo,
-        urlBase: parsePullRequestReferenceUrl(pr.url)?.urlBase,
+        kind: parsedUrl?.kind,
+        urlBase: parsedUrl?.urlBase,
       };
       byKey.set(pullRequestRepositoryKey(ref), ref);
     }
@@ -37267,7 +37206,9 @@ export class DesktopBackendRegistry {
         }
         const ref = await this.readPullRequestRepositoryFromGitRemote(cwd);
         if (ref) {
-          byKey.set(pullRequestRepositoryKey(ref), ref);
+          const key = pullRequestRepositoryKey(ref);
+          // A known PR URL is stronger evidence than an unclassified remote.
+          byKey.set(key, { ...ref, kind: byKey.get(key)?.kind ?? ref.kind });
         }
       }),
     );

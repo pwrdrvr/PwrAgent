@@ -1,3 +1,4 @@
+import { FORGE_PRODUCTS, type ForgeKind } from "@pwragent/shared";
 import type {
   DesktopAppearanceDensity,
   DesktopAppearanceTheme,
@@ -2870,14 +2871,15 @@ export class DesktopSettingsService {
    * apply here exactly as they do in Settings — the pane and the fetcher
    * must never disagree about whether a forge is live.
    */
-  isForgeEnabled(provider: "github" | "gitlab"): boolean {
+  isForgeEnabled(provider: ForgeKind): boolean {
     // Sync on purpose: the PR fetcher calls this per lookup, long after
     // startup discovery has settled, so the memoized result is available.
     return this.resolveForgeEnabled(
       provider,
-      provider === "gitlab"
-        ? this.glabDiscoveryCache?.result
-        : this.ghDiscoveryCache?.result,
+      ({
+        github: this.ghDiscoveryCache?.result,
+        gitlab: this.glabDiscoveryCache?.result,
+      } satisfies Record<ForgeKind, unknown>)[provider],
     ).value;
   }
 
@@ -2889,14 +2891,14 @@ export class DesktopSettingsService {
    * the in-flight probe first, the fetcher gate reads the memoized result.
    */
   private resolveForgeEnabled(
-    provider: "github" | "gitlab",
+    provider: ForgeKind,
     discovery: { candidates: Array<{ executable: boolean }> } | undefined,
   ): DesktopSettingsValue<boolean> {
     const applications = this.configStore.read("applications");
     return this.resolveBoolean(
-      provider === "gitlab" ? applications.glab?.enabled : applications.gh?.enabled,
+      applications[FORGE_PRODUCTS[provider].cli]?.enabled,
       forgeCliPresent(discovery),
-      provider === "gitlab" ? GLAB_ENABLED_ENV : GH_ENABLED_ENV,
+      ({ github: GH_ENABLED_ENV, gitlab: GLAB_ENABLED_ENV } satisfies Record<ForgeKind, string>)[provider],
     );
   }
 

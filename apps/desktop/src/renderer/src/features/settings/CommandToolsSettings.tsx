@@ -1,3 +1,5 @@
+import { FORGE_PRODUCTS, type ForgeKind, type ForgeCli } from "@pwragent/shared";
+import { FORGE_SETTINGS } from "./forge-settings";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   DesktopCodeSignature,
@@ -28,8 +30,8 @@ import {
   describeCommandDiscoveryFailure as describeSharedCommandDiscoveryFailure,
 } from "./command-discovery-failure";
 
-/** Probed when the operator has configured no GitLab host of their own. */
-const DEFAULT_GITLAB_HOST = "gitlab.com";
+/** Every configured CLI must have a deliberate brand mark. */
+const FORGE_CLI_ICONS = { gh: GitHubIcon, glab: GitLabIcon } satisfies Record<ForgeCli, typeof GitHubIcon>;
 
 /**
  * The `git` and `gh` sections of Settings.
@@ -285,7 +287,7 @@ export function GitToolSection(props: {
 
 export function GhToolSection(props: {
   desktopApi?: DesktopApi;
-  provider?: "github" | "gitlab";
+  provider?: ForgeKind;
   saving: boolean;
   snapshot: DesktopSettingsSnapshot;
   /** GitLab only: persist the host the connection check probes. */
@@ -296,10 +298,10 @@ export function GhToolSection(props: {
    *  state without probing a second time. */
   onStatusChange?: (status: GhStatus | undefined) => void;
 }) {
-  const isGitLab = props.provider === "gitlab";
-  const cli = isGitLab ? "glab" : "gh";
-  const label = isGitLab ? "GitLab" : "GitHub";
-  const request = isGitLab ? "merge request" : "pull request";
+  const provider = props.provider ?? "github";
+  const product = FORGE_PRODUCTS[provider];
+  const settings = FORGE_SETTINGS[provider];
+  const { cli, label, changeRequest: request, configurableHost } = product;
   const desktopApi = props.desktopApi;
   // The host has to come from config, not component state. It is only ever
   // touched by self-managed operators, and an unpersisted field sent them
@@ -308,9 +310,11 @@ export function GhToolSection(props: {
   // GitLab only. Reading this for the GitHub instance too put glab's host in
   // `load`'s dependency list for both, so editing the GitLab host re-probed
   // GitHub and flashed its pill back to "Checking…".
-  const configuredHost = isGitLab
-    ? props.snapshot.applications.glab?.host?.value.trim() || DEFAULT_GITLAB_HOST
-    : DEFAULT_GITLAB_HOST;
+  const application = props.snapshot.applications[cli];
+  const hostSetting = application && "host" in application ? application.host : undefined;
+  const configuredHost = configurableHost
+    ? hostSetting?.value.trim() || product.saasHost
+    : product.saasHost;
   const [host, setHost] = useState(configuredHost);
   useEffect(() => {
     setHost(configuredHost);
@@ -319,12 +323,12 @@ export function GhToolSection(props: {
   useEffect(() => {
     onStatusChangeRef.current = props.onStatusChange;
   });
-  const getStatus = isGitLab ? desktopApi?.getGlabStatus : desktopApi?.getGhStatus;
-  const pickCommand = isGitLab ? desktopApi?.pickGlabCommand : desktopApi?.pickGhCommand;
+  const getStatus = desktopApi?.[settings.statusMethod];
+  const pickCommand = desktopApi?.[settings.pickMethod];
   const [status, setStatus] = useState<GhStatus | undefined>(undefined);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | undefined>(undefined);
-  const gh = (isGitLab ? props.snapshot.applications.glab : props.snapshot.applications.gh)
+  const gh = application
     ?? {
       enabled: { value: false, source: "default" as const },
       path: { value: "", source: "default" as const },
@@ -335,9 +339,9 @@ export function GhToolSection(props: {
   const discovery = status?.discovery ?? gh.discovery;
   const candidates = discovery.candidates;
   const installCommand = desktopApi?.platform === "darwin"
-    ? "brew install glab"
+    ? product.install?.darwin
     : desktopApi?.platform === "win32"
-      ? "winget install --exact --id glab.glab"
+      ? product.install?.win32
       : undefined;
 
   const load = useCallback(
@@ -355,7 +359,7 @@ export function GhToolSection(props: {
       setStatus(undefined);
       onStatusChangeRef.current?.(undefined);
       try {
-        const next = await getStatus({ recheck, ...(isGitLab ? { host } : {}) });
+        const next = await getStatus({ recheck, ...(configurableHost ? { host } : {}) });
         setStatus(next);
         onStatusChangeRef.current?.(next);
       } catch (caught) {
@@ -364,7 +368,7 @@ export function GhToolSection(props: {
         setLoading(false);
       }
     },
-    [enabled, getStatus, host, isGitLab],
+    [enabled, getStatus, host, configurableHost],
   );
 
   useEffect(() => {
@@ -389,7 +393,7 @@ export function GhToolSection(props: {
     "login",
     // `gh auth login` defaults to github.com and prompts for anything else;
     // glab has no default, so its host is always explicit.
-    ...(isGitLab
+    ...(configurableHost
       ? ["--hostname", quoteTerminalArgument(host, desktopApi?.platform)]
       : []),
   ].filter((part) => part !== undefined).join(" ");
@@ -408,7 +412,7 @@ export function GhToolSection(props: {
   return (
     <SettingsSection
       eyebrow="Git"
-      sectionId={isGitLab ? "gitlab" : "github"}
+      sectionId={provider}
       chip={enabled ? "On" : "Off"}
       chipKind={enabled ? settingsChipToneForPill(pill.tone) : "default"}
       title={`${label} CLI (${cli})`}
@@ -432,22 +436,22 @@ export function GhToolSection(props: {
           source={gh.enabled.source === "default" ? "auto" : gh.enabled.source}
           onChange={(next) => props.onSaveEnabled(next)}
         />
-        {isGitLab ? (
+        {configurableHost ? (
           <SettingsField
-            label="GitLab host"
+            label={`${label} host`}
             sub="The host this check probes. Merge request status follows each thread's own remote."
             source={
-              props.snapshot.applications.glab?.host?.source === "env"
+              hostSetting?.source === "env"
                 ? "env override active"
                 : undefined
             }
             control={
               <input
                 className="settings-input"
-                aria-label="GitLab host"
+                aria-label={`${label} host`}
                 key={configuredHost}
                 defaultValue={configuredHost}
-                placeholder={DEFAULT_GITLAB_HOST}
+                placeholder={product.saasHost}
                 spellCheck={false}
                 onKeyDown={(event) => {
                   if (event.key === "Enter") event.currentTarget.blur();
@@ -455,7 +459,7 @@ export function GhToolSection(props: {
                 onBlur={(event) => {
                   const next = event.currentTarget.value.trim().toLowerCase();
                   if (next === configuredHost) return;
-                  setHost(next || DEFAULT_GITLAB_HOST);
+                  setHost(next || product.saasHost);
                   void props.onSaveHost?.(next);
                 }}
               />
@@ -531,9 +535,7 @@ export function GhToolSection(props: {
                 <div className="settings-inline-actions">
                   <a
                     className="button button--secondary"
-                    href={isGitLab
-                      ? "https://docs.gitlab.com/cli/authentication/"
-                      : "https://cli.github.com/manual/gh_auth_login"}
+                    href={product.signInGuide}
                     target="_blank"
                     rel="noreferrer"
                   >
@@ -544,9 +546,9 @@ export function GhToolSection(props: {
             }
           />
         ) : null}
-        {isGitLab && status && !status.installed ? (
+        {product.install && status && !status.installed ? (
           <SettingsField
-            label="Install GitLab CLI"
+            label={`Install ${label} CLI`}
             sub={installCommand
               ? `Run in ${desktopApi?.platform === "darwin" ? "Terminal with Homebrew installed" : "PowerShell with WinGet installed"}, then click Re-check.`
               : "Choose the installation method for your system, then click Re-check."}
@@ -556,13 +558,13 @@ export function GhToolSection(props: {
                   <SettingsCopyValue
                     value={installCommand}
                     desktopApi={desktopApi}
-                    label="GitLab CLI install command"
+                    label={`${label} CLI install command`}
                   />
                 ) : null}
                 <div className="settings-inline-actions">
                   <a
                     className="button button--secondary"
-                    href="https://gitlab.com/gitlab-org/cli/-/blob/main/docs/installation_options.md"
+                    href={product.install.guide}
                     target="_blank"
                     rel="noreferrer"
                   >
@@ -708,13 +710,14 @@ function GitCandidateRow(props: {
 
 /** One gh candidate. Same grammar as the git row — see `GitCandidateRow`. */
 function GhCandidateRow(props: {
-  cli?: string;
+  cli?: ForgeCli;
   candidate: DesktopGhDiscoveryCandidate;
   disabled?: boolean;
   signature?: DesktopCodeSignature;
   onSelect: (command: string) => void;
 }) {
   const candidate = props.candidate;
+  const ForgeIcon = FORGE_CLI_ICONS[props.cli ?? "gh"];
   const unavailableLabel = describeCommandDiscoveryFailure(candidate.failureReason);
   // `executable` comes from fs.access(X_OK), which succeeds for any existing
   // file on Windows, so an sh shim scores true. Gate on the same predicate
@@ -743,7 +746,7 @@ function GhCandidateRow(props: {
 
   return (
     <SettingsPathRow
-      icon={props.cli === "glab" ? <GitLabIcon size={18} /> : <GitHubIcon size={18} />}
+      icon={<ForgeIcon size={18} />}
       title={source}
       meta={usable ? candidate.version : undefined}
       path={detail ?? candidate.command}
