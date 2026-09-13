@@ -56,6 +56,9 @@ import {
   WINDOWS_UPDATE_CHANNEL_FILE,
 } from "./update-channel-files.mjs";
 import { handoffPreloadedCodesignIdentity } from "./release-signing-environment.mjs";
+// The checksum manifest is written here and parsed by the signing job when it
+// cuts the stable aliases; one module owns both halves of that format.
+import { writeWindowsChecksums } from "./windows-release-artifacts.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -367,30 +370,6 @@ function findWindowsUnpackedDir(distDir) {
     throw new Error(`No windows unpacked app directory found under ${distDir}`);
   }
   return candidates[0];
-}
-
-function windowsInstallerArtifacts(distDir) {
-  const artifacts = readdirSync(distDir)
-    .filter((entry) => entry.endsWith(".exe"))
-    .sort()
-    .map((name) => ({ name, path: join(distDir, name) }));
-  if (artifacts.length === 0) {
-    throw new Error(`No .exe installer artifacts found under ${distDir}`);
-  }
-  return artifacts;
-}
-
-function writeWindowsChecksums(distDir) {
-  const artifacts = windowsInstallerArtifacts(distDir);
-  const lines = artifacts
-    .map(({ name, path }) => {
-      const digest = createHash("sha256").update(readFileSync(path)).digest("hex");
-      return `${digest}  ${name}`;
-    })
-    .join("\n");
-  const checksumPath = join(distDir, "SHA256SUMS");
-  writeFileSync(checksumPath, `${lines}\n`);
-  return checksumPath;
 }
 
 function publishLinuxArtifacts(distDir, channelFile) {

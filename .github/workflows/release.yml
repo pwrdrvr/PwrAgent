@@ -103,6 +103,7 @@ jobs:
             apps/desktop/scripts/release.mjs \
             apps/desktop/scripts/assemble-mac-release.mjs \
             apps/desktop/scripts/release-signing-environment.mjs \
+            apps/desktop/scripts/windows-release-artifacts.mjs \
             apps/desktop/scripts/update-channel-files.mjs \
             apps/desktop/scripts/verify-asar-contents.mjs \
             apps/desktop/scripts/asar-entry-paths.mjs \
@@ -387,30 +388,27 @@ jobs:
 
       # `/releases/latest/download/<name>` only resolves for a version-independent
       # asset name. macOS publishes `PwrAgent.dmg` and Linux publishes
-      # `PwrAgent-linux-<arch>.deb`; this is the Windows equivalent. The copy has
-      # to happen after the packaging step above so the alias carries the same
-      # Authenticode signature as the installer it copies.
+      # `PwrAgent-linux-<arch>.deb`; `PwrAgent.Setup.exe` is the Windows
+      # equivalent, spelled the way a Windows installer is normally named. The
+      # copy has to happen after the packaging step above so the alias carries
+      # the same Authenticode signature as the installer it copies.
       - name: Prepare stable-name Windows installer alias
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $dist = "apps/desktop/release-stage/dist"
-          $versioned = Get-ChildItem -Path $dist -File -Filter "PwrAgent-*-windows-x64-setup.exe" |
-            Sort-Object -Property Name |
-            Select-Object -First 1
-          if (-not $versioned) {
-            throw "No versioned Windows installer found under $dist."
+          node apps/desktop/scripts/windows-release-artifacts.mjs apps/desktop/release-stage
+          if ($LASTEXITCODE -ne 0) {
+            throw "Cutting the stable Windows alias failed (exit code $LASTEXITCODE)."
           }
-          $aliasName = "PwrAgent-windows-x64-setup.exe"
-          $aliasPath = Join-Path $dist $aliasName
-          Copy-Item -LiteralPath $versioned.FullName -Destination $aliasPath -Force
-          # release.mjs wrote SHA256SUMS before this copy existed. Append the alias
-          # so the manifest names every published installer, the way the Linux
-          # manifest covers both the versioned package and its stable-name alias.
-          $digest = (Get-FileHash -Algorithm SHA256 -LiteralPath $aliasPath).Hash.ToLowerInvariant()
-          $manifest = Join-Path $dist "SHA256SUMS"
-          Add-Content -LiteralPath $manifest -Value "$digest  $aliasName`n" -NoNewline -Encoding ascii
-          Write-Host "alias: $aliasPath"
+          # Assert the file exists rather than trusting the exit code: a script
+          # that no-ops still exits 0, and the upload step only warns when one
+          # of several globs matches nothing. Without this the release ships
+          # without its stable URL and nothing goes red.
+          $aliases = @(Get-ChildItem "apps/desktop/release-stage/dist" -File -Filter "PwrAgent.Setup*.exe")
+          if ($aliases.Count -eq 0) {
+            throw "No PwrAgent.Setup*.exe was produced; the stable download URL would 404."
+          }
+          $aliases | ForEach-Object { "cut alias $($_.Name) ($($_.Length) bytes)" }
 
       # `latest.yml` is the channel file electron-updater fetches on Windows.
       # It keeps naming the versioned installer, not the stable-name alias
