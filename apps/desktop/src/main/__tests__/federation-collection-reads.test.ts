@@ -2,9 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 import type { FederationProtocolEnvelope, NavigationSnapshot } from "@pwragent/shared";
 import {
   FEDERATION_BACKEND_METHOD_CAPABILITIES,
+  FederationRemoteBackendClient,
   registerFederationBackendHandlers,
   type FederationBackendOperations,
 } from "../federation/federation-backend-bridge";
+import { NavigationQueryStore } from "../app-server/navigation-query-store";
 import { FederationRouter } from "../federation/federation-router";
 import {
   FEDERATION_COLLECTION_PAGE_BYTES,
@@ -55,6 +57,35 @@ async function request(
 }
 
 describe("bounded Federation collection reads", () => {
+  it("refreshes mounted unread state through the current owner protocol", async () => {
+    const store = new NavigationQueryStore();
+    const getNavigationQueryPage = vi.fn((query) => store.readPage({
+      request: query, scopeKey: "viewer", loadIndex: async () => ({
+        ...snapshot(),
+        threads: [
+          { id: "mounted", source: "codex" as const, titleSource: "explicit" as const, title: "Already read", linkedDirectories: [], inbox: { inInbox: false } },
+          { id: "child", source: "codex" as const, titleSource: "explicit" as const, title: "Unread child", parentThreadId: "mounted",
+            linkedDirectories: [], inbox: { inInbox: true, reason: "updated-since-seen" as const } },
+          { id: "unmounted", source: "codex" as const, titleSource: "explicit" as const, title: "Unrelated unread", linkedDirectories: [],
+            inbox: { inInbox: true, reason: "new-thread" as const } },
+        ],
+      }),
+    }));
+    const owner = { getNavigationQueryPage } as unknown as FederationBackendOperations;
+    // Exercise the registered handlers, including rejection of retired RPCs.
+    const client = new FederationRemoteBackendClient({ request: async (call: { method: string; params: unknown }) => {
+      const reply = await request(owner, call.method, call.params);
+      if (reply?.kind === "error") throw new Error(reply.error.message);
+      if (reply?.kind !== "response") throw new Error("Missing owner response");
+      return reply.result;
+    } } as never);
+    const refreshed = await readFederationPinnedSnapshot(client, ["codex:mounted"]);
+    expect(refreshed.threads.map((thread) => thread.id).sort()).toEqual(["child", "mounted"]);
+    expect(refreshed.threads.find((thread) => thread.id === "mounted")?.inbox.inInbox).toBe(false);
+    expect(refreshed.inboxThreadKeys).toEqual(["codex:child"]);
+    expect(getNavigationQueryPage).toHaveBeenCalled();
+  });
+
   it("rejects local viewer inventory at the Federation boundary", async () => {
     const read = vi.fn();
     const reply = await request({ getNavigationQueryPage: read } as unknown as FederationBackendOperations,
@@ -230,7 +261,7 @@ describe("bounded Federation collection reads", () => {
     const legacy = vi.fn();
     const unavailable = mode === "missing" ? undefined
       : vi.fn().mockRejectedValue(Object.assign(new Error("method_not_found"), { code: "method_not_found" }));
-    const backend = { getProjectPage: unavailable, getNavigationDescendantPage: unavailable, lookupArchivedThreads: unavailable,
+    const backend = { getProjectPage: unavailable, getNavigationQueryPage: unavailable, lookupArchivedThreads: unavailable,
       getNavigationSnapshot: legacy, listThreads: legacy } as unknown as FederationBackendOperations;
     await expect(readFederationPinnedSnapshot(backend, ["codex:one"])).rejects.toThrow("Upgrade");
     await expect(readFederationProjectSnapshot(backend)).rejects.toThrow("Upgrade");
