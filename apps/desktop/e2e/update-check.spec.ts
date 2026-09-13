@@ -53,11 +53,13 @@ test("a menu check reports itself live and ends on an actionable offer", async (
 
     const card = window.locator(".app-update-banner--progress");
     await expect(card).toContainText("Checking for updates");
-    // The card reports work in flight, so it carries a progress track and NOT
-    // the countdown a transient notice would drain toward while the check is
-    // still running.
     await expect(card.locator("[role='progressbar']")).toBeVisible();
-    await expect(window.locator(".app-notice-toast__timer")).toHaveCount(0);
+    // The card reports work in flight, so it is its own surface and NOT a
+    // notice in the stack, which would drain a 9-second countdown toward a
+    // dismissal while the check it reports is still running.
+    await expect(
+      window.locator(".app-notice-toast", { hasText: "Checking for updates" }),
+    ).toHaveCount(0);
 
     await expect(card).toContainText("Downloading update", { timeout: 15_000 });
     await expect(card).toContainText(`PwrAgent v${FAKE_VERSION}`);
@@ -70,10 +72,11 @@ test("a menu check reports itself live and ends on an actionable offer", async (
     );
 
     // And it ends on the one thing there is to do about it.
-    await expect(window.locator(".app-update-banner")).toContainText(
-      `Restart to update to v${FAKE_VERSION}.`,
-      { timeout: 30_000 },
-    );
+    await expect(
+      window.locator(".app-update-banner:not(.app-update-banner--progress)"),
+    ).toContainText(`Restart to update to v${FAKE_VERSION}.`, {
+      timeout: 30_000,
+    });
     await expect(
       window.getByRole("button", { name: "Restart" }),
     ).toBeVisible();
@@ -98,8 +101,16 @@ test("Cancel stops the download and says so without crying failure", async () =>
 
     await card.getByRole("button", { name: "Cancel" }).click();
 
-    const notice = window.locator(".app-notice-toast");
+    // Addressed by id: the stack can hold other notices at the same time — a
+    // runner with no agent installed carries a durable backend warning for
+    // the whole run — and a bare `.app-notice-toast` matches all of them.
+    const notice = window.locator(
+      ".app-notice-toast[data-notice-id='app-update-check:canceled']",
+    );
     await expect(notice).toContainText("Download canceled", { timeout: 15_000 });
+    // Exactly one, so an ambiguous locator fails as a count rather than as a
+    // strict-mode error somewhere further down.
+    await expect(notice).toHaveCount(1);
     await expect(notice).toContainText(
       `PwrAgent v${FAKE_VERSION} is still available`,
     );
