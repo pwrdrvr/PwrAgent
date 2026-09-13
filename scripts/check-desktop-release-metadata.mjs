@@ -487,6 +487,10 @@ for (const expected of [
   "apps/desktop/release-stage/node_modules/.pnpm/node_modules",
   "apps/desktop/release-stage",
   "apps/desktop/scripts/release.mjs",
+  // release.mjs imports this module for the checksum writer and the signing job
+  // runs it for the alias, so a missing entry fails at import time on a release
+  // runner -- and no CI job exercises the signing path to catch it first.
+  "apps/desktop/scripts/windows-release-artifacts.mjs",
   "scripts/release/install-trusted-signing.ps1",
   "tar.exe -czf",
 ]) {
@@ -494,6 +498,14 @@ for (const expected of [
     fail(`${windowsArchiveScriptPath} must contain ${JSON.stringify(expected)} for Windows signing input isolation`);
   }
 }
+// The macOS signing job runs from its own allowlisted tar, and release.mjs
+// imports the alias module there too.
+assertWorkflowJobContainsText(
+  releaseWorkflow,
+  ".github/workflows/release.yml",
+  "prepare",
+  "apps/desktop/scripts/windows-release-artifacts.mjs",
+);
 if (!asarVerifier.includes("PWRAGENT_ASAR_MODULE_ROOT")) {
   fail("apps/desktop/scripts/verify-asar-contents.mjs must accept the staged ASAR module root");
 }

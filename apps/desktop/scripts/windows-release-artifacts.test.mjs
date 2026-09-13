@@ -1,14 +1,19 @@
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, test } from "vitest";
 import {
   WINDOWS_ALIAS_NAMES,
   installerName,
+  writeWindowsChecksums,
   writeWindowsReleaseAliases,
 } from "./windows-release-artifacts.mjs";
+
+const MODULE_PATH = fileURLToPath(new URL("./windows-release-artifacts.mjs", import.meta.url));
 
 const require = createRequire(import.meta.url);
 const { findFile, parseUpdateInfo } = require("electron-updater/out/providers/Provider");
@@ -21,20 +26,17 @@ function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
-// release.mjs writes SHA256SUMS over every installer it packaged, before any
-// alias exists. Spell that here rather than importing it: the production writer
-// scans for `.exe` and would happily record an alias as an installer, which is
-// exactly the input this module must not be tested against.
-function writeChecksums(dist, installers) {
-  const lines = installers.map((name) => `${sha256(readFileSync(join(dist, name)))}  ${name}`);
-  writeFileSync(join(dist, "SHA256SUMS"), `${lines.join("\n")}\n`);
+// The real writer, not a re-spelling of its format: readChecksums parses what
+// this produces, and the two drifting apart would only ever fail on the release
+// runner. release.mjs calls exactly this function at the end of Windows
+// packaging, so keeping the test on the production writer is the point.
+function writeChecksums(dist) {
+  writeWindowsChecksums(dist);
 }
 
 // electron-builder's own Windows output: the installer, its blockmap, and a
 // latest.yml naming that installer, in the shape a published release carries.
-function fixture(architectures = ["x64"]) {
-  const dist = mkdtempSync(join(tmpdir(), "pwragent-windows-artifacts-"));
-  directories.push(dist);
+function populate(dist, architectures = ["x64"]) {
   const files = architectures.map((arch) => {
     const url = installerName(version, arch);
     const bytes = Buffer.from(`installer bytes for ${arch}`);
@@ -58,8 +60,14 @@ function fixture(architectures = ["x64"]) {
       "",
     ].join("\n"),
   );
-  writeChecksums(dist, files.map((file) => file.url));
+  writeChecksums(dist);
   return dist;
+}
+
+function fixture(architectures = ["x64"]) {
+  const dist = mkdtempSync(join(tmpdir(), "pwragent-windows-artifacts-"));
+  directories.push(dist);
+  return populate(dist, architectures);
 }
 
 afterEach(() => {
@@ -95,6 +103,83 @@ describe("Windows release aliases", () => {
     expect(WINDOWS_ALIAS_NAMES).toEqual({
       x64: "PwrAgent.Setup.exe",
       arm64: "PwrAgent.Setup.Arm.exe",
+    });
+  });
+
+  // windowsInstallerArtifacts asks "what did electron-builder build" by matching
+  // the -setup.exe suffix, and relies on no alias matching it. Name an alias
+  // something ending in -setup.exe and a second run would alias its own copy.
+  test("no alias name can be mistaken for an installer by the artifact scan", () => {
+    for (const name of Object.values(WINDOWS_ALIAS_NAMES)) {
+      expect(name.endsWith("-setup.exe")).toBe(false);
+    }
+  });
+
+  test("hashes the alias it wrote, not the installer it copied", () => {
+    const dist = fixture();
+    const [alias] = writeWindowsReleaseAliases(dist, version);
+    const recorded = new Map(
+      readFileSync(join(dist, "SHA256SUMS"), "utf8")
+        .split("\n")
+        .filter((line) => line !== "")
+        .map((line) => [line.slice(66), line.slice(0, 64)]),
+    );
+
+    // Every published line must describe the bytes of the file it names.
+    for (const [name, digest] of recorded) {
+      expect(digest).toBe(sha256(readFileSync(join(dist, name))));
+    }
+    expect(recorded.get("PwrAgent.Setup.exe")).toBe(alias.sha256);
+  });
+
+  // The CLI is how this module is actually invoked -- the workflow runs it as a
+  // process and nothing else does, so nothing but this covers the entrypoint
+  // guard, the stage package.json read, or the argument handling. The guard in
+  // particular has to fire on Windows, where argv[1] and import.meta.url
+  // normalize differently.
+  describe("command line", () => {
+    function run(...args) {
+      return spawnSync(process.execPath, [MODULE_PATH, ...args], { encoding: "utf8" });
+    }
+
+    function stage(manifest = { version }, architectures = ["x64"]) {
+      const root = mkdtempSync(join(tmpdir(), "pwragent-windows-stage-"));
+      directories.push(root);
+      mkdirSync(join(root, "dist"));
+      populate(join(root, "dist"), architectures);
+      writeFileSync(join(root, "package.json"), JSON.stringify(manifest));
+      return root;
+    }
+
+    test("cuts the alias when invoked as a process", () => {
+      const root = stage();
+      const result = run(root);
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain("PwrAgent.Setup.exe <- ");
+      expect(result.stdout).toContain("wrote 1 stable Windows alias(es)");
+      expect(readFileSync(join(root, "dist", "PwrAgent.Setup.exe"), "utf8")).toBe(
+        "installer bytes for x64",
+      );
+    });
+
+    test("takes the version from the stage manifest, not from the file names", () => {
+      const root = stage({ version: "9.9.9" });
+      const result = run(root);
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("No Windows installer for 9.9.9");
+      expect(existsSync(join(root, "dist", "PwrAgent.Setup.exe"))).toBe(false);
+    });
+
+    test("refuses a stage with no directory argument and one with no manifest", () => {
+      const missingArgument = run();
+      expect(missingArgument.status).toBe(1);
+      expect(missingArgument.stderr).toContain("Usage: windows-release-artifacts.mjs");
+
+      const root = stage();
+      rmSync(join(root, "package.json"));
+      expect(run(root).status).not.toBe(0);
     });
   });
 
@@ -174,7 +259,7 @@ describe("Windows release aliases", () => {
     const dist = fixture(["x64"]);
     const surprise = `PwrAgent-${version}-windows-ia32-setup.exe`;
     writeFileSync(join(dist, surprise), "surprise");
-    writeChecksums(dist, [installerName(version, "x64"), surprise]);
+    writeChecksums(dist);
 
     expect(() => writeWindowsReleaseAliases(dist, version)).toThrow("no stable alias is defined");
     // Validation runs to completion before any copy, so x64 gets no stale alias.
@@ -187,7 +272,7 @@ describe("Windows release aliases", () => {
     const dist = fixture();
     const stale = "PwrAgent-0.0.1-windows-x64-setup.exe";
     writeFileSync(join(dist, stale), "an older build");
-    writeChecksums(dist, [stale, installerName(version, "x64")]);
+    writeChecksums(dist);
 
     const [alias] = writeWindowsReleaseAliases(dist, version);
     expect(alias.installer).toBe(installerName(version, "x64"));
@@ -199,7 +284,7 @@ describe("Windows release aliases", () => {
     const stale = "PwrAgent-0.0.1-windows-x64-setup.exe";
     rmSync(join(dist, installerName(version, "x64")));
     writeFileSync(join(dist, stale), "an older build");
-    writeChecksums(dist, [stale]);
+    writeChecksums(dist);
 
     expect(() => writeWindowsReleaseAliases(dist, version)).toThrow(`No Windows installer for ${version}`);
     expect(existsSync(join(dist, "PwrAgent.Setup.exe"))).toBe(false);
