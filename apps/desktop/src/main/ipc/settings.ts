@@ -972,6 +972,8 @@ function resolveRequiredCodexProfileHome(profile: string): string {
 }
 
 
+const pendingCodexProviderRecovery = new Map<string, { work?: Promise<void> }>();
+
 async function checkCodexProfileAuthStatus(
   service: DesktopSettingsService,
   request: CheckDesktopCodexAuthProfileStatusRequest,
@@ -998,6 +1000,7 @@ async function checkCodexProfileAuthStatus(
     });
     try {
       await client.readRateLimits();
+      pendingCodexProviderRecovery.set(codexHome.replace(/\\/g, "/"), {});
       codexAuthState.verified(codexHome);
     } catch {
       authenticated = false;
@@ -1005,16 +1008,21 @@ async function checkCodexProfileAuthStatus(
     } finally {
       await client.close();
     }
-    if (
-      authenticated
-      && service.readCodexProfiles().effectiveCodexHome.replace(/\\/g, "/")
-        === codexHome.replace(/\\/g, "/")
-    ) {
-      // Recover model/account availability and the provider's navigation data.
-      await getDesktopBackendRegistry().refreshCodexAfterAuthentication(
-        issueProviderDiscoveryPermit("settings-user-action"),
-      );
-    }
+  }
+  const recoveryKey = codexHome.replace(/\\/g, "/");
+  const recovery = pendingCodexProviderRecovery.get(recoveryKey);
+  if (authenticated && recovery
+    && service.readCodexProfiles().effectiveCodexHome.replace(/\\/g, "/") === recoveryKey) {
+    // Authentication can be valid while provider/navigation recovery is still
+    // unfinished. Keep failures retryable through a later explicit status check.
+    recovery.work ??= getDesktopBackendRegistry().refreshCodexAfterAuthentication(
+      issueProviderDiscoveryPermit("settings-user-action"),
+    ).then(() => {
+      if (pendingCodexProviderRecovery.get(recoveryKey) === recovery) {
+        pendingCodexProviderRecovery.delete(recoveryKey);
+      }
+    }).finally(() => { recovery.work = undefined; });
+    await recovery.work;
   }
   // When the CLI reports authenticated, surface the JWT-derived identity
   // fields too — the onboarding wizard's name+login step renders them
@@ -1582,7 +1590,8 @@ export function registerSettingsIpcHandlers(
           command,
           profile,
         });
-        if (login.authenticated && codexAuthState.isBlocked(codexHome)) {
+        if (login.authenticated && (codexAuthState.isBlocked(codexHome)
+          || pendingCodexProviderRecovery.has(codexHome.replace(/\\/g, "/")))) {
           const status = await checkCodexProfileAuthStatus(getService(service), { profile });
           return { ...login, authenticated: status.authenticated, detail: status.detail };
         }
@@ -1967,6 +1976,7 @@ export function registerSettingsIpcHandlers(
 
 export function disposeSettingsIpcHandlers(): void {
   codexLoginManager.dispose();
+  pendingCodexProviderRecovery.clear();
   recentAcpRefreshes.clear();
   ipcMain.removeHandler(ACP_AGENTS_LIST_CHANNEL);
   ipcMain.removeHandler(ACP_AGENT_UPDATE_ACKNOWLEDGE_CHANNEL);

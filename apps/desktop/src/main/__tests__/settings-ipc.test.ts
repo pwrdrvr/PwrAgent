@@ -811,12 +811,17 @@ describe("settings ipc", () => {
     const { registerSettingsIpcHandlers, disposeSettingsIpcHandlers } = await import("../ipc/settings");
     const { SETTINGS_CHECK_CODEX_AUTH_PROFILE_STATUS_CHANNEL } = await import("../../shared/ipc");
     registerSettingsIpcHandlers(service);
+    refreshCodexAfterAuthenticationMock.mockRejectedValueOnce(new Error("Thread refresh failed"));
     try {
       const check = handlers.get(SETTINGS_CHECK_CODEX_AUTH_PROFILE_STATUS_CHANNEL)!;
       await expect(check({}, { profile: "" })).resolves.toMatchObject({ authenticated: false });
       expect(codexAuthState.isBlocked(root)).toBe(true);
-      await expect(check({}, { profile: "" })).resolves.toMatchObject({ authenticated: true });
+      await expect(check({}, { profile: "" })).rejects.toThrow("Thread refresh failed");
       expect(codexAuthState.isBlocked(root)).toBe(false);
+      await expect(check({}, { profile: "" })).resolves.toMatchObject({ authenticated: true });
+      expect(refreshCodexAfterAuthenticationMock).toHaveBeenCalledTimes(2);
+      await expect(check({}, { profile: "" })).resolves.toMatchObject({ authenticated: true });
+      expect(refreshCodexAfterAuthenticationMock).toHaveBeenCalledTimes(2);
       expect(refreshCodexAfterAuthenticationMock).toHaveBeenCalledWith(
         expect.objectContaining({ intent: "settings-user-action" }),
       );
