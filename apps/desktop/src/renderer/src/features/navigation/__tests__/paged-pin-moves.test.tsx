@@ -29,7 +29,7 @@ function mount(terminal = false) {
     [`directory-pins:${directory.key}`, resource(`directory-pins:${directory.key}`, { kind: "directory", directoryKey: directory.key, roots: "pinned" },
       { rangeStart: 5, complete: false, nextCursor: terminal ? undefined : "next", entries: rows.map((row) => ({ row, placement: { kind: "root" }, orderKey: row.pinnedRank! })) })],
   ]);
-  const navigation = { resources, directories: [directory], selectedDirectoryKeys: [directory.key], connected: true,
+  const navigation = { resources, presentationReady: true, directories: [directory], selectedDirectoryKeys: [directory.key], connected: true,
     invalidate: () => undefined, refresh: async () => undefined, loadMore: async () => undefined,
     rebaseline: async () => undefined, restart, setVisibleAnchor: () => undefined };
   const mounted = render(<Sidebar backends={[]} browseMode="directories" directories={[directory]} threads={rows}
@@ -152,7 +152,7 @@ it("breadcrumb reveal uses exact owner ancestry even when loaded summaries lack 
   const resources = new Map([["selected-context", exact], [rootId,
     resource(rootId, { kind: "directory", directoryKey: directory.key, roots: "unpinned" }, {})]]);
   const rebaseline = vi.fn(async () => undefined);
-  const navigation = { resources, directories: [directory], selectedDirectoryKeys: [directory.key], connected: true,
+  const navigation = { resources, presentationReady: true, directories: [directory], selectedDirectoryKeys: [directory.key], connected: true,
     invalidate: () => undefined, refresh: async () => undefined, loadMore: async () => undefined,
     rebaseline, restart: async () => undefined, setVisibleAnchor: () => undefined };
   const view = render(<Sidebar backends={[]} browseMode="directories" directories={[directory]} threads={[parent, child]}
@@ -178,7 +178,7 @@ it.each(["directories", "inbox"] as const)("keeps expected disconnected child-pa
   resources.set("lens", resource("lens", { kind: "lens", lens: "inbox" }, {
     entries: [{ row: parent, placement: { kind: "root" }, orderKey: "0" }],
   }));
-  const navigation = { resources, directories: [directory], selectedDirectoryKeys: [directory.key], connected: true,
+  const navigation = { resources, presentationReady: true, directories: [directory], selectedDirectoryKeys: [directory.key], connected: true,
     invalidate: () => undefined, refresh: async () => undefined, loadMore: async () => undefined,
     rebaseline: async () => undefined, restart: async () => undefined, setVisibleAnchor: () => undefined };
   const view = render(<Sidebar backends={[]} browseMode={browseMode} directories={[directory]} threads={[parent]}
@@ -211,7 +211,7 @@ it("keeps a paged sub-thread tray a valid list", () => {
   const resources = new Map([[childId, children], [pinsId, resource(pinsId,
     { kind: "directory", directoryKey: directory.key, roots: "pinned" },
     { entries: [{ row: parent, placement: { kind: "root" }, orderKey: "0" }] })]]);
-  const navigation = { resources, directories: [directory], selectedDirectoryKeys: [directory.key], connected: true,
+  const navigation = { resources, presentationReady: true, directories: [directory], selectedDirectoryKeys: [directory.key], connected: true,
     invalidate: () => undefined, refresh: async () => undefined, loadMore: async () => undefined,
     rebaseline: async () => undefined, restart: async () => undefined, setVisibleAnchor: () => undefined };
   const view = render(<Sidebar backends={[]} browseMode="directories" directories={[directory]} threads={[parent, child]}

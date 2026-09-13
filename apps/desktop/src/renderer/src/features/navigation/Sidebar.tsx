@@ -568,14 +568,6 @@ export function Sidebar(props: SidebarProps) {
   const rowsByKey = useMemo(() => new Map(props.threads.map((thread) => [threadSummaryIdentityKey(thread), thread])), [props.threads]);
   const visibleThreads = [...new Map(lensResources.flatMap((resource) => resource.state.page?.entries ?? [])
     .map((entry) => [navigationThreadSelectionKey(entry.row.ref), rowsByKey.get(navigationThreadSelectionKey(entry.row.ref))])).values()].filter((thread): thread is NavigationThreadSummary => Boolean(thread));
-  const lensQuery = props.pagedNavigation?.resources.get("lens")?.state.request.query;
-  const lensMatches = !props.pagedNavigation || props.browseMode === "directories" || props.browseMode === "drafts"
-    || (lensQuery?.kind === "lens" && lensQuery.lens === props.browseMode);
-  const lensScroll = useLensScrollRestoration(
-    JSON.stringify([federationTarget, props.browseMode]),
-    !props.loading && lensMatches && lensResources.every((resource) =>
-      resource.state.page?.entries.every((entry) => rowsByKey.has(navigationThreadSelectionKey(entry.row.ref))) ?? !resource.loading),
-  );
   const hoverStableSnapshot = useHoverStableSnapshot({
     hydrateFrozenValue: (frozen, latest) =>
       hydrateHoverStableSidebarSnapshot(frozen, latest, {
@@ -595,6 +587,15 @@ export function Sidebar(props: SidebarProps) {
   const presentedByKey = new Map(presentedThreads.map((thread) => [threadSummaryIdentityKey(thread), thread]));
   const renderedThreads = props.browseMode === "directories" ? presentedThreads
     : hoverStableSnapshot.value.visibleKeys.map((key) => presentedByKey.get(key)).filter((thread): thread is NavigationThreadSummary => Boolean(thread));
+  const renderedDirectoryKeys = new Set(renderedDirectories.map((directory) => directory.key));
+  const lensScroll = useLensScrollRestoration(
+    JSON.stringify([federationTarget, props.browseMode]),
+    !props.loading && (!props.pagedNavigation || (props.pagedNavigation.presentationReady
+      && [...props.pagedNavigation.resources.values()].every(({ state }) =>
+        (state.page?.entries.every((entry) => presentedByKey.has(navigationThreadSelectionKey(entry.row.ref))) ?? true)
+        && (props.browseMode !== "directories"
+          || (state.page?.directories?.every((directory) => renderedDirectoryKeys.has(directory.key)) ?? true))))),
+  );
   /**
    * Hover stability protects a target from background list churn. A command
    * the operator chose must instead reveal its resulting snapshot immediately.

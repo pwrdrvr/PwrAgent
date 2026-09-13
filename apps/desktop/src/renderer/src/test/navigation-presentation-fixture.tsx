@@ -81,7 +81,7 @@ function usePresentationOwner(props: FixtureProps) {
   const directories = (index.directories ?? []).map((descriptor) => ({ ...descriptor,
     launchpad: props.directories.find((directory) => directory.key === descriptor.key)?.launchpad }));
   const loadMore = async (id: string) => setLimits((current) => ({ ...current, [id]: (current[id] ?? 10) + 10 }));
-  const navigation = { resources, directories: index.directories ?? [], selectedDirectoryKeys: undefined, connected: true,
+  const navigation = { resources, presentationReady: true, directories: index.directories ?? [], selectedDirectoryKeys: undefined, connected: true,
     invalidate: () => undefined, refresh: async () => undefined, loadMore,
     rebaseline: async () => undefined, restart: async () => undefined, setVisibleAnchor: () => undefined };
   return { directories, navigation, selectedThreadDirectoryKeys };
