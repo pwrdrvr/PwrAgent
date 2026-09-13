@@ -141,6 +141,9 @@ function updateResultText(result: AppUpdateCheckResult): string {
       ? `Switch ready: v${result.version}. Restart to switch.`
       : `Update ready: v${result.version}. Restart to install.`;
   }
+  if (result.status === "canceled") {
+    return `Download canceled. v${result.version} is still available - check again to download it.`;
+  }
   return result.direction === "downgrade"
     ? `Switch to v${result.version}. Downloading in the background.`
     : `Update available: v${result.version}. Downloading in the background.`;

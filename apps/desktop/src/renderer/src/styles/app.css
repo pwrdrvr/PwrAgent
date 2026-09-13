@@ -7812,9 +7812,98 @@ a.button {
 }
 
 .app-update-banner__restart,
-.app-update-banner__dismiss {
+.app-update-banner__dismiss,
+.app-update-banner__cancel {
   min-height: 30px;
   padding: 0 10px;
+}
+
+/* Live progress for a check the operator asked for. This card carries no
+   `.app-notice-toast__timer`, because the work it reports has no fixed
+   duration - the track below is the only bar on it, and it means the thing
+   the operator is actually waiting on.
+
+   The min-width is the point of the rule: `.app-update-banner` is
+   `width: max-content`, so without it the card would breathe in and out as
+   the percent text changed width, and the bar would be as narrow as the
+   shortest line on the card. */
+.app-update-banner--progress {
+  align-items: center;
+}
+
+/* Only the phases that offer Cancel get a second track. Declaring it
+   unconditionally would spend the card's 12px gap on an empty column during
+   the release read, so the checking card would sit wider than the downloading
+   one for no reason. */
+.app-update-banner--progress:has(.app-update-banner__actions) {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.app-update-banner--progress .app-update-banner__content {
+  min-width: 236px;
+}
+
+/* Same measurements as `.context-usage-card__meter` and
+   `.incident-explorer__meter`, so the app keeps one bar language. */
+.app-update-banner__track {
+  display: block;
+  overflow: hidden;
+  height: 5px;
+  margin-top: 8px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--text-primary) 9%, transparent);
+}
+
+.app-update-banner__track i {
+  display: block;
+  width: 0;
+  height: 100%;
+  min-width: 2px;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width 120ms linear;
+}
+
+/* No percent to draw - a release read, or a feed that sends no content
+   length. A bar parked at 0 would read as a stalled download. */
+.app-update-banner__track--indeterminate i {
+  width: 35%;
+  animation: app-update-banner-sweep 1.1s ease-in-out infinite;
+  transition: none;
+}
+
+/* Without this the sweep keeps running for an operator who asked it not to;
+   with a naive `animation: none` it would leave a 35% bar that reads as a
+   download stuck at 35%. Fill the track instead, dimmed: "working, extent
+   unknown". */
+@media (prefers-reduced-motion: reduce) {
+  .app-update-banner__track i {
+    transition: none;
+  }
+
+  .app-update-banner__track--indeterminate i {
+    width: 100%;
+    animation: none;
+    opacity: 0.5;
+  }
+}
+
+@keyframes app-update-banner-sweep {
+  from {
+    transform: translateX(-110%);
+  }
+
+  to {
+    transform: translateX(300%);
+  }
+}
+
+.app-update-banner__meter {
+  margin: 6px 0 0;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
 }
 
 @keyframes app-notice-toast-countdown {

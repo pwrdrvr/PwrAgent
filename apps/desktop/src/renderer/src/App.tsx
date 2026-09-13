@@ -3154,7 +3154,11 @@ function DesktopAppShell(props: {
           ]}
         >
           <QuitBlockerQueueToast desktopApi={desktopApi} />
-          <AppUpdateBanner desktopApi={desktopApi} />
+          <AppUpdateBanner
+            desktopApi={desktopApi}
+            showNotice={showAppNotice}
+            dismissNotice={dismissAppNotice}
+          />
         </AppNoticeStack>
       </div>
     </TranscriptLinkProvider>

@@ -69,6 +69,13 @@ export type PwrAgentUpdateToolStatus =
       version: string;
       direction?: PwrAgentUpdateToolDirection;
     }
+  /** The operator stopped the download. Nothing failed and nothing is
+   *  downloading, so the agent must not report it as either. */
+  | {
+      status: "canceled";
+      version: string;
+      direction?: PwrAgentUpdateToolDirection;
+    }
   | { status: "error"; message: string };
 
 export type PwrAgentAppRuntimeStatus = {
