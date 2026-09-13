@@ -29,8 +29,8 @@ describe("GitLab MR routing and status", () => {
     expect(parsePrRefFromUrl(mr.web_url)).toBeUndefined();
     expect(parsePrRefFromUrl("https://gitlab.com/team/project/pull/17")).toBeUndefined();
     expect(parseGitLabMrUrl("https://github.com/team/project/-/merge_requests/17")).toBeUndefined();
-    expect(parseForgePrRefFromUrl(mr.web_url)).toEqual({ owner: ref.owner, repo: ref.repo, number: 17, gitlabHost: "gitlab.com" });
-    expect(parseForgePrRefFromUrl("https://github.com/team/project/pull/17")).toEqual({ owner: "team", repo: "project", number: 17 });
+    expect(parseForgePrRefFromUrl(mr.web_url)).toEqual({ owner: ref.owner, repo: ref.repo, number: 17, kind: "gitlab", host: "gitlab.com" });
+    expect(parseForgePrRefFromUrl("https://github.com/team/project/pull/17")).toEqual({ owner: "team", repo: "project", number: 17, kind: "github", host: "github.com" });
     expect(parseGitLabMrUrl(mr.web_url.replace("gitlab.com", "code.example.com"))?.host).toBe("code.example.com");
   });
 
@@ -122,6 +122,30 @@ describe("GitLab MR routing and status", () => {
     expect(probeGhAvailable).not.toHaveBeenCalled();
     expect(graphqlClient.fetchPullRequests).not.toHaveBeenCalled();
     expect(graphqlClient.fetchPullRequestsForBranches).not.toHaveBeenCalled();
+  });
+
+  it("routes reconnect polling and preserves an already paid GitLab request", async () => {
+    const graphqlClient = {
+      fetchPullRequests: vi.fn(async () => []),
+      fetchPullRequestsAfterReconnect: vi.fn(async () => []),
+      fetchPullRequestsForBranches: vi.fn(async () => new Map()),
+    };
+    const tryTakeRequestToken = vi.fn(() => false);
+    const run = vi.fn(async () => JSON.stringify(mr));
+    const gitlab = new GitLabPrFetcher({ discover: async () => discovery, run, tryTakeRequestToken });
+    const fetcher = new ForgePrFetcher({ graphqlClient }, gitlab);
+    const refs = [
+      parseForgePrRefFromUrl("https://github.com/team/project/pull/17")!,
+      parseForgePrRefFromUrl(mr.web_url)!,
+    ];
+    expect(await fetcher.fetchPullRequests(refs, { reconnect: true, requestTokenTaken: true })).toHaveLength(1);
+    expect(graphqlClient.fetchPullRequestsAfterReconnect).toHaveBeenCalledWith([refs[0]]);
+    expect(graphqlClient.fetchPullRequests).not.toHaveBeenCalled();
+    expect(run).toHaveBeenCalledOnce();
+    expect(tryTakeRequestToken).not.toHaveBeenCalled();
+    expect(await fetcher.fetchPullRequests([refs[1]!])).toEqual([]);
+    expect(tryTakeRequestToken).toHaveBeenCalledOnce();
+    expect(run).toHaveBeenCalledOnce();
   });
 
   it("queries the exact encoded project and branch and hydrates pipeline details", async () => {

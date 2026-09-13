@@ -5662,6 +5662,7 @@ class DesktopAppServerService {
   private async primeDiscoveryBranchLookups(
     contexts: ThreadPrRefreshContext[],
   ): Promise<void> {
+    if (!this.getPrFetcher().isProviderEnabled("github")) return;
     const wanted = new Map<
       string,
       { cwd: string; branch: string; refs: BranchRef[] }
@@ -5721,7 +5722,7 @@ class DesktopAppServerService {
     if (primed.length === 0) {
       return;
     }
-    this.getPrFetcher().primeBranchLookup(primed);
+    this.getPrFetcher().github.primeBranchLookup(primed);
     appServerLog.debug("pr discovery primed branch lookups", {
       requested: refs.length,
       primed: primed.length,
@@ -5913,7 +5914,7 @@ class DesktopAppServerService {
       ...new Map(
         uniquePrimaryPrs.flatMap((pr) => {
           const ref = parsePrRefFromUrl(pr.url);
-          return ref ? [[`${ref.gitlabHost ?? "github.com"}/${ref.owner}/${ref.repo}#${ref.number}`, ref] as const] : [];
+          return ref ? [[`${ref.host}/${ref.owner}/${ref.repo}#${ref.number}`, ref] as const] : [];
         }),
       ).values(),
     ];
@@ -6079,31 +6080,8 @@ class DesktopAppServerService {
     return new Set(refreshed.map((pr) => getPrStatusKey(pr)));
   }
 
-  private async fetchForgePullRequests(refs: ForgePrRef[], reconnect = false, gitlabTokensTaken = false): Promise<PrSummary[]> {
-    // This path reaches the transports directly rather than through
-    // ForgePrFetcher's own methods, so it has to apply the operator's
-    // per-forge switch itself. Without this the background poller keeps
-    // spawning `glab` and minting GitHub tokens for a forge that Settings
-    // reports as disabled.
-    const fetcher = this.getPrFetcher();
-    const github = fetcher.isProviderEnabled("github")
-      ? refs.filter((ref) => !ref.gitlabHost)
-      : [];
-    // Copy: the client owns the array it returned and may retain it.
-    const results = github.length === 0 ? [] : [...(reconnect
-      ? await this.getPrGraphqlClient().fetchPullRequestsAfterReconnect(github)
-      : await this.getPrGraphqlClient().fetchPullRequests(github))];
-    if (!fetcher.isProviderEnabled("gitlab")) return results;
-    // Keep GitLab REST calls sequential within each admitted poll batch.
-    for (const ref of refs) {
-      if (!ref.gitlabHost) continue;
-      try {
-        results.push(await fetcher.gitlab.fetchByRef({ ...ref, host: ref.gitlabHost }, gitlabTokensTaken));
-      } catch {
-        // Preserve the previous observation and timestamp on provider failure.
-      }
-    }
-    return results;
+  private async fetchForgePullRequests(refs: ForgePrRef[], reconnect = false, requestTokenTaken = false): Promise<PrSummary[]> {
+    return this.getPrFetcher().fetchPullRequests(refs, { reconnect, requestTokenTaken });
   }
 
   async getGlabStatus(request: GetGlabStatusRequest): Promise<GlabStatus> {
@@ -6113,13 +6091,13 @@ class DesktopAppServerService {
   async getGhStatus(request: GetGhStatusRequest): Promise<GhStatus> {
     const fetcher = this.getPrFetcher();
     if (request.recheck) {
-      fetcher.invalidateGhCaches();
+      fetcher.github.invalidateGhCaches();
       this.getPrGraphqlClient().invalidateToken();
     }
     // The fetcher logs once per fresh probe (cache + in-flight dedup
     // keep StrictMode mount duplicates silent). The IPC layer just
     // returns the parsed status.
-    return await fetcher.getAuthStatus();
+    return await fetcher.github.getAuthStatus();
   }
 
   async setThreadToolIncidentNotice(

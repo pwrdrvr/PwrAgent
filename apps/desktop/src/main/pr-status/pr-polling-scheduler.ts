@@ -1,6 +1,6 @@
-import type { PrSummary } from "@pwragent/shared";
+import { FORGE_PRODUCTS, type PrSummary } from "@pwragent/shared";
 import { getMainLogger } from "../log";
-import { parseForgePrRefFromUrl as parsePrRefFromUrl, type ForgePrRef as PrRef } from "./forge-pr-fetcher";
+import { parseForgePrRefFromUrl as parsePrRefFromUrl, type ForgePrRef as PrRef } from "./forge-pr-ref";
 import {
   GITHUB_RECONNECT_DEDUP_MS,
 } from "./github-graphql-client";
@@ -75,7 +75,6 @@ export const ICEBOX_AFTER_MS = 24 * 60 * 60_000;
 const HIDDEN_WINDOW_CADENCE_MULTIPLIER = 4;
 
 const TICK_INTERVAL_MS = 15_000;
-const BATCH_SIZE = 40;
 /**
  * Cap requests per tick. Bounds concurrency by construction (the batches below
  * this cap run together) and spreads a large backlog across ticks instead of
@@ -470,24 +469,24 @@ export class PrPollingScheduler {
 /** Each batch is one paid request: GitHub batches up to 40, GitLab reads one MR. */
 export function buildPrPollBatches(targets: PrPollTarget[]): PrPollTarget[][] {
   const batches: PrPollTarget[][] = [];
-  let github: PrPollTarget[] = [];
+  let batch: PrPollTarget[] = [];
+  let batchKey: string | undefined;
   for (const target of targets) {
     const ref = parsePrRefFromUrl(target.pr.url);
-    // A URL this scheduler cannot parse still rides the general batch, as it
-    // did before batching became provider-aware. Dropping it here would leave
-    // it unpolled AND unmarked, so it stays due and is reselected every tick.
-    if (ref?.gitlabHost) {
-      if (github.length) batches.push(github);
-      github = [];
-      batches.push([target]);
-    } else {
-      github.push(target);
-      if (github.length === BATCH_SIZE) {
-        batches.push(github);
-        github = [];
-      }
+    // Invalid URLs still get marked polled, but never reach a transport.
+    const key = ref ? `${ref.kind}/${ref.host}` : undefined;
+    const limit = ref ? FORGE_PRODUCTS[ref.kind].pollBatchSize : 1;
+    if (batch.length && (batchKey !== key || batch.length >= limit)) {
+      batches.push(batch);
+      batch = [];
+    }
+    batchKey = key;
+    batch.push(target);
+    if (batch.length === limit) {
+      batches.push(batch);
+      batch = [];
     }
   }
-  if (github.length) batches.push(github);
+  if (batch.length) batches.push(batch);
   return batches;
 }

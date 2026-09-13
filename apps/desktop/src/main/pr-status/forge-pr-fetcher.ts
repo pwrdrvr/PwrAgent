@@ -1,113 +1,144 @@
-import type { PrSummary, PullRequestProviderAvailability } from "@pwragent/shared";
+import { FORGE_KINDS, FORGE_PRODUCTS, type ForgeKind, type PrSummary, type PullRequestProviderAvailability } from "@pwragent/shared";
 import { GithubPrFetcher, type GithubPrFetcherOptions } from "./github-pr-fetcher";
-import { parsePrRefFromUrl, type PrRef } from "./github-graphql-client";
-import { GitLabPrFetcher, parseGitLabMrUrl } from "./gitlab-pr-fetcher";
-import { resolveGitHubReposForDirectory } from "./git-remote";
+import { GithubGraphqlPrClient } from "./github-graphql-client";
+import { GitLabPrFetcher } from "./gitlab-pr-fetcher";
+import { resolveGitHubReposForDirectory, type GitHubRepoRef } from "./git-remote";
+import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
+import { parseForgePrRefFromUrl, type ForgePrRef } from "./forge-pr-ref";
 
-export type ForgePrRef = PrRef & { gitlabHost?: string };
+export { parseForgePrRefFromUrl, type ForgePrRef } from "./forge-pr-ref";
 
-export function parseForgePrRefFromUrl(url: string): ForgePrRef | undefined {
-  const gitlab = parseGitLabMrUrl(url);
-  if (gitlab) return { owner: gitlab.owner, repo: gitlab.repo, number: gitlab.number, gitlabHost: gitlab.host };
-  return parsePrRefFromUrl(url);
-}
+type BranchLookup = { cwd: string; branch: string; allowPrimed?: boolean; onProviderFailure?: () => void };
+type UrlLookup = { cwd: string; url: string; onProviderFailure?: () => void };
+type PollOptions = { reconnect?: boolean; requestTokenTaken?: boolean };
 
-/** Provider routing precedes CLI or API access, including mixed-remote checkouts. */
-export class ForgePrFetcher extends GithubPrFetcher {
+/** The only transport seam the router needs. Provider-specific auth and
+ * GraphQL branch priming stay on their concrete adapters. */
+export type ForgePrProvider = {
+  resolveRepos: (cwd: string) => Promise<GitHubRepoRef[]>;
+  isAvailable: () => Promise<boolean>;
+  availabilityError: (host: string, available: boolean) => string | undefined;
+  fetchForBranch: (params: BranchLookup) => Promise<PrSummary[]>;
+  fetchByUrl: (params: UrlLookup, ref: ForgePrRef) => Promise<PrSummary | undefined>;
+  fetchRefs: (refs: ForgePrRef[], options: PollOptions) => Promise<PrSummary[]>;
+};
+
+type ForgePrFetcherOptions = GithubPrFetcherOptions & {
+  graphqlClient?: GithubPrFetcherOptions["graphqlClient"] & Partial<Pick<GithubGraphqlPrClient, "fetchPullRequestsAfterReconnect">>;
+  isProviderEnabled?: (provider: ForgeKind) => boolean;
+  providers?: Record<ForgeKind, ForgePrProvider>;
+};
+
+/** All entry points apply the same provider gate before remote or CLI access. */
+export class ForgePrFetcher {
+  readonly github: GithubPrFetcher;
   readonly gitlab: GitLabPrFetcher;
-  /** Operator's per-forge switch; defaults to on so tests and callers
-   *  that never wire it keep the pre-gate behavior. */
-  private readonly providerEnabled: (provider: "github" | "gitlab") => boolean;
+  private readonly providers: Record<ForgeKind, ForgePrProvider>;
+  private readonly providerEnabled: (provider: ForgeKind) => boolean;
 
-  /** The operator's per-forge switch. Public because the poll path reaches
-   *  the transports directly and must apply the same gate. */
-  isProviderEnabled(provider: "github" | "gitlab"): boolean {
+  constructor(options: ForgePrFetcherOptions = {}, gitlab = new GitLabPrFetcher()) {
+    const graphql = options.graphqlClient ?? new GithubGraphqlPrClient({
+      getConfiguredGhCommand: () => getDesktopSettingsService().resolveGhCommandPreference(),
+    });
+    this.github = new GithubPrFetcher({ ...options, graphqlClient: graphql });
+    this.gitlab = gitlab;
+    this.providerEnabled = options.isProviderEnabled ?? (() => true);
+    this.providers = options.providers ?? {
+      github: {
+        resolveRepos: options.resolveGitHubRepos ?? resolveGitHubReposForDirectory,
+        isAvailable: () => this.github.isGhAvailable(),
+        availabilityError: () => undefined,
+        fetchForBranch: (params) => this.github.fetchAllPullRequestsForBranch(params),
+        fetchByUrl: (params) => this.github.fetchPullRequestByUrl(params),
+        fetchRefs: (refs, poll) => poll.reconnect && graphql.fetchPullRequestsAfterReconnect
+          ? graphql.fetchPullRequestsAfterReconnect(refs)
+          : graphql.fetchPullRequests(refs),
+      },
+      gitlab: {
+        resolveRepos: (cwd) => gitlab.resolveRepos(cwd),
+        isAvailable: () => gitlab.isAvailable(),
+        availabilityError: (host, available) => available
+          ? gitlab.getLastError(host)
+          : "Install glab or select its path in Settings → Git.",
+        fetchForBranch: (params) => gitlab.fetchForBranch(params.cwd, params.branch),
+        fetchByUrl: (_params, ref) => gitlab.fetchByRef(ref),
+        fetchRefs: async (refs, poll) => {
+          const results: PrSummary[] = [];
+          // Each MR is one REST request. A failed observation must not discard
+          // successful siblings or overwrite the previous persisted status.
+          for (const ref of refs) {
+            try {
+              results.push(await gitlab.fetchByRef(ref, poll.requestTokenTaken));
+            } catch {
+              // Preserve the previous observation and timestamp.
+            }
+          }
+          return results;
+        },
+      },
+    } satisfies Record<ForgeKind, ForgePrProvider>;
+  }
+
+  isProviderEnabled(provider: ForgeKind): boolean {
     return this.providerEnabled(provider);
   }
 
-  private readonly options: GithubPrFetcherOptions;
-
-  constructor(
-    options: GithubPrFetcherOptions & {
-      isProviderEnabled?: (provider: "github" | "gitlab") => boolean;
-    } = {},
-    gitlab = new GitLabPrFetcher(),
-  ) {
-    super(options);
-    this.options = options;
-    this.gitlab = gitlab;
-    this.providerEnabled = options.isProviderEnabled ?? (() => true);
-  }
-
   async getProviderAvailability(directories: string[], urls: string[] = []): Promise<PullRequestProviderAvailability[]> {
-    // A disabled forge reports nothing rather than reporting unavailable:
-    // "you turned this off" is not a failure the operator needs told about
-    // on every refresh. Decided first so a disabled forge costs no remote
-    // resolution at all.
-    const wantGithub = this.isProviderEnabled("github");
-    const wantGitLab = this.isProviderEnabled("gitlab");
-    let github = wantGithub && urls.some((url) => Boolean(parsePrRefFromUrl(url)));
-    const gitlabHosts = new Set(wantGitLab ? urls.flatMap((url) => {
-      const ref = parseGitLabMrUrl(url);
-      return ref ? [ref.host] : [];
-    }) : []);
-    // Both resolvers read the same TTL-cached remote list, so the two passes
-    // over one directory cost one `git remote` at most.
-    const resolveGitHub = this.options.resolveGitHubRepos ?? resolveGitHubReposForDirectory;
-    const resolveGitLab = this.gitlab.resolveRepos;
-    await Promise.all(directories.map(async (cwd) => {
-      if (wantGithub && !github && (await resolveGitHub(cwd)).length > 0) github = true;
-      if (wantGitLab) {
-        for (const repo of await resolveGitLab(cwd)) gitlabHosts.add(repo.host);
-      }
-    }));
     const statuses: PullRequestProviderAvailability[] = [];
-    if (github) {
-      statuses.push({ provider: "github.com", cli: "gh", available: await this.isGhAvailable() });
-    }
-    if (gitlabHosts.size > 0) {
-      const available = await this.gitlab.isAvailable();
-      for (const provider of gitlabHosts) {
-        statuses.push({ provider, cli: "glab", available, error: available
-          ? this.gitlab.getLastError(provider)
-          : "Install glab or select its path in Settings → Git." });
+    for (const kind of FORGE_KINDS) {
+      if (!this.isProviderEnabled(kind)) continue;
+      const provider = this.providers[kind];
+      const hosts = new Set(urls.flatMap((url) => {
+        const ref = parseForgePrRefFromUrl(url);
+        return ref?.kind === kind ? [ref.host] : [];
+      }));
+      // All resolvers share the TTL-cached git remote list.
+      for (const repos of await Promise.all(directories.map((cwd) => provider.resolveRepos(cwd)))) {
+        for (const repo of repos) hosts.add(repo.host);
+      }
+      if (!hosts.size) continue;
+      const available = await provider.isAvailable();
+      for (const host of hosts) {
+        const error = provider.availabilityError(host, available);
+        statuses.push({ provider: host, cli: FORGE_PRODUCTS[kind].cli, available, ...(error ? { error } : {}) });
       }
     }
     return statuses;
   }
 
-  override async fetchAllPullRequestsForBranch(params: {
-    cwd: string; branch: string; allowPrimed?: boolean; onProviderFailure?: () => void;
-  }): Promise<PrSummary[]> {
-    const github = this.isProviderEnabled("github")
-      ? await super.fetchAllPullRequestsForBranch(params)
-      : [];
-    if (!this.isProviderEnabled("gitlab")) return github;
+  async fetchAllPullRequestsForBranch(params: BranchLookup): Promise<PrSummary[]> {
+    const results: PrSummary[] = [];
+    for (const kind of FORGE_KINDS) {
+      if (!this.isProviderEnabled(kind)) continue;
+      try {
+        results.push(...await this.providers[kind].fetchForBranch(params));
+      } catch {
+        params.onProviderFailure?.();
+      }
+    }
+    return results;
+  }
+
+  async fetchPullRequestByUrl(params: UrlLookup): Promise<PrSummary | undefined> {
+    const ref = parseForgePrRefFromUrl(params.url);
+    if (!ref || !this.isProviderEnabled(ref.kind)) return undefined;
     try {
-      const gitlab = await this.gitlab.fetchForBranch(params.cwd, params.branch);
-      return [...github, ...gitlab];
+      return await this.providers[ref.kind].fetchByUrl(params, ref);
     } catch {
       params.onProviderFailure?.();
-      return github;
+      return undefined;
     }
   }
 
-  override async fetchPullRequestByUrl(params: {
-    cwd: string; url: string; onProviderFailure?: () => void;
-  }): Promise<PrSummary | undefined> {
-    const ref = parseGitLabMrUrl(params.url);
-    if (ref) {
-      // A disabled forge is not a failure, so it reports none.
-      if (!this.isProviderEnabled("gitlab")) return undefined;
-      try {
-        return await this.gitlab.fetchByRef(ref);
-      } catch {
-        params.onProviderFailure?.();
-        return undefined;
-      }
+  async fetchPullRequests(refs: ForgePrRef[], options: PollOptions = {}): Promise<PrSummary[]> {
+    const results: PrSummary[] = [];
+    for (const kind of FORGE_KINDS) {
+      if (!this.isProviderEnabled(kind)) continue;
+      const matching = refs.filter((ref) => ref.kind === kind);
+      if (!matching.length) continue;
+      // The caller owns the aggregate, never a transport's retained array.
+      results.push(...await this.providers[kind].fetchRefs(matching, options));
     }
-    return this.isProviderEnabled("github")
-      ? await super.fetchPullRequestByUrl(params)
-      : undefined;
+    return results;
   }
 }
