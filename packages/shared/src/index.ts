@@ -67,3 +67,5 @@ export * from "./thread-incident-summary";
 
 export * from "./thread-tool-display";
 export * from "./subagent-kind";
+
+export { isCodexAuthenticationFailure } from "./codex-authentication";

@@ -11,11 +11,13 @@ const handlers = new Map<string, (...args: unknown[]) => Promise<unknown>>();
 const tempRoots: string[] = [];
 const disposeDesktopBackendRegistryMock = vi.fn(async () => undefined);
 const listThreadsMock = vi.fn(async () => [] as unknown[]);
+const refreshCodexAfterAuthenticationMock = vi.fn(async () => undefined);
 const listBackendsMock = vi.fn(async () => ({ backends: [], fetchedAt: 1 }));
 const invalidateAcpBackendDiscoveryMock = vi.fn();
 const getDesktopBackendRegistryMock = vi.fn(() => ({
   invalidateAcpBackendDiscovery: invalidateAcpBackendDiscoveryMock,
   listBackends: listBackendsMock,
+  refreshCodexAfterAuthentication: refreshCodexAfterAuthenticationMock,
   listThreads: listThreadsMock,
 }));
 const desktopConfigStoreMock = vi.hoisted(() => ({
@@ -238,6 +240,7 @@ describe("settings ipc", () => {
     disposeDesktopBackendRegistryMock.mockClear();
     invalidateAcpBackendDiscoveryMock.mockClear();
     listBackendsMock.mockClear();
+    refreshCodexAfterAuthenticationMock.mockClear();
     listThreadsMock.mockClear();
     listThreadsMock.mockResolvedValue([]);
     getDesktopBackendRegistryMock.mockClear();
@@ -779,6 +782,58 @@ describe("settings ipc", () => {
     });
 
     disposeSettingsIpcHandlers();
+  });
+
+  it.each(["native", "windows"])("recovers a rejected profile and refreshes its backend with %s paths", async (pathStyle) => {
+    const { codexAuthState } = await import("../codex-auth-state");
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-auth-recovery-"));
+    tempRoots.push(tempRoot);
+    const root = pathStyle === "windows" ? String.raw`C:\Users\fixture\.codex` : tempRoot;
+    const discovery = await import("@pwrdrvr/codex-discovery");
+    const resolveHome = vi.spyOn(discovery, "resolveDefaultCodexHome").mockReturnValue(root);
+    vi.stubEnv("CODEX_HOME", root);
+    codexAuthState.reject(root);
+    childProcessMocks.spawn.mockImplementation(() => createMockSpawnChild((child) => {
+      queueMicrotask(() => {
+        child.stdout.emit("data", "Logged in using ChatGPT");
+        child.emit("close", 0);
+      });
+    }));
+    const probe = vi.spyOn(CodexAppServerClient.prototype, "readRateLimits")
+      .mockRejectedValueOnce(new Error("401 Unauthorized"))
+      .mockResolvedValueOnce([]);
+    const close = vi.spyOn(CodexAppServerClient.prototype, "close").mockResolvedValue();
+    const service = {
+      resolveCodexCommand: vi.fn(async () => ({ command: "codex", source: "config" })),
+      readCodexProfiles: vi.fn(() => ({ effectiveCodexHome: root.replace(/\\/g, "/") })),
+    } as unknown as DesktopSettingsService;
+    const { registerSettingsIpcHandlers, disposeSettingsIpcHandlers } = await import("../ipc/settings");
+    const { SETTINGS_CHECK_CODEX_AUTH_PROFILE_STATUS_CHANNEL } = await import("../../shared/ipc");
+    registerSettingsIpcHandlers(service);
+    refreshCodexAfterAuthenticationMock.mockRejectedValueOnce(new Error("Thread refresh failed"));
+    try {
+      const check = handlers.get(SETTINGS_CHECK_CODEX_AUTH_PROFILE_STATUS_CHANNEL)!;
+      await expect(check({}, { profile: "" })).resolves.toMatchObject({ authenticated: false });
+      expect(codexAuthState.isBlocked(root)).toBe(true);
+      await expect(check({}, { profile: "" })).rejects.toThrow("Thread refresh failed");
+      expect(codexAuthState.isBlocked(root)).toBe(false);
+      await expect(check({}, { profile: "" })).resolves.toMatchObject({ authenticated: true });
+      expect(refreshCodexAfterAuthenticationMock).toHaveBeenCalledTimes(2);
+      await expect(check({}, { profile: "" })).resolves.toMatchObject({ authenticated: true });
+      expect(refreshCodexAfterAuthenticationMock).toHaveBeenCalledTimes(2);
+      expect(refreshCodexAfterAuthenticationMock).toHaveBeenCalledWith(
+        expect.objectContaining({ intent: "settings-user-action" }),
+      );
+      expect(probe).toHaveBeenCalledTimes(2);
+      expect(close).toHaveBeenCalledTimes(2);
+    } finally {
+      resolveHome.mockRestore();
+      probe.mockRestore();
+      close.mockRestore();
+      codexAuthState.verified(root);
+      disposeSettingsIpcHandlers();
+    }
   });
 
   it("starts named Codex auth profile login with the browser OAuth flow", async () => {

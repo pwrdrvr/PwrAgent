@@ -1,3 +1,5 @@
+import { codexAuthState } from "../codex-auth-state";
+import { CodexAppServerClient } from "../codex-app-server/client";
 import { validateGlabCommand } from "../settings/glab-discovery";
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
 import { mkdir } from "node:fs/promises";
@@ -970,6 +972,8 @@ function resolveRequiredCodexProfileHome(profile: string): string {
 }
 
 
+const pendingCodexProviderRecovery = new Map<string, { work?: Promise<void> }>();
+
 async function checkCodexProfileAuthStatus(
   service: DesktopSettingsService,
   request: CheckDesktopCodexAuthProfileStatusRequest,
@@ -984,7 +988,42 @@ async function checkCodexProfileAuthStatus(
   const codexHome = resolveRequiredCodexProfileHome(profile);
   const command = await resolveCodexCommandForProfileWorkflow(service);
   const result = await collectCodexStatus(command, codexHome);
-  const authenticated = result.code === 0;
+  let authenticated = result.code === 0;
+  let verificationError: string | undefined;
+  if (authenticated && codexAuthState.isBlocked(codexHome)) {
+    // CLI login status only proves a credential exists. A fresh app-server
+    // must successfully use it before ordinary clients may resume.
+    const client = new CodexAppServerClient({
+      command,
+      env: { ...process.env, CODEX_HOME: codexHome },
+      authenticationRecovery: true,
+    });
+    try {
+      await client.readRateLimits();
+      pendingCodexProviderRecovery.set(codexHome.replace(/\\/g, "/"), {});
+      codexAuthState.verified(codexHome);
+    } catch {
+      authenticated = false;
+      verificationError = "Codex authentication is still rejected. Complete login, then check status again.";
+    } finally {
+      await client.close();
+    }
+  }
+  const recoveryKey = codexHome.replace(/\\/g, "/");
+  const recovery = pendingCodexProviderRecovery.get(recoveryKey);
+  if (authenticated && recovery
+    && service.readCodexProfiles().effectiveCodexHome.replace(/\\/g, "/") === recoveryKey) {
+    // Authentication can be valid while provider/navigation recovery is still
+    // unfinished. Keep failures retryable through a later explicit status check.
+    recovery.work ??= getDesktopBackendRegistry().refreshCodexAfterAuthentication(
+      issueProviderDiscoveryPermit("settings-user-action"),
+    ).then(() => {
+      if (pendingCodexProviderRecovery.get(recoveryKey) === recovery) {
+        pendingCodexProviderRecovery.delete(recoveryKey);
+      }
+    }).finally(() => { recovery.work = undefined; });
+    await recovery.work;
+  }
   // When the CLI reports authenticated, surface the JWT-derived identity
   // fields too — the onboarding wizard's name+login step renders them
   // inline so the operator can confirm they signed in with the right
@@ -1000,7 +1039,7 @@ async function checkCodexProfileAuthStatus(
         : authenticated
           ? "authenticated"
           : "unauthenticated",
-    ...(result.detail ? { detail: result.detail } : {}),
+    ...(verificationError || result.detail ? { detail: verificationError ?? result.detail } : {}),
     ...(authInfo.email ? { email: authInfo.email } : {}),
     ...(authInfo.planType ? { planType: authInfo.planType } : {}),
   };
@@ -1546,11 +1585,17 @@ export function registerSettingsIpcHandlers(
         getService(service),
       );
       try {
-        return await codexLoginManager.startProfileLogin({
+        const login = await codexLoginManager.startProfileLogin({
           codexHome,
           command,
           profile,
         });
+        if (login.authenticated && (codexAuthState.isBlocked(codexHome)
+          || pendingCodexProviderRecovery.has(codexHome.replace(/\\/g, "/")))) {
+          const status = await checkCodexProfileAuthStatus(getService(service), { profile });
+          return { ...login, authenticated: status.authenticated, detail: status.detail };
+        }
+        return login;
       } catch (error) {
         // The codex-discovery CodexLoginManager rejects when `codex login`
         // exits without emitting a login link (e.g. it printed "Not logged
@@ -1931,6 +1976,7 @@ export function registerSettingsIpcHandlers(
 
 export function disposeSettingsIpcHandlers(): void {
   codexLoginManager.dispose();
+  pendingCodexProviderRecovery.clear();
   recentAcpRefreshes.clear();
   ipcMain.removeHandler(ACP_AGENTS_LIST_CHANNEL);
   ipcMain.removeHandler(ACP_AGENT_UPDATE_ACKNOWLEDGE_CHANNEL);

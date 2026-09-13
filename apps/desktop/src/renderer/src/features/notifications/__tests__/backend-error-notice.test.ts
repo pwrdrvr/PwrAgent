@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { AppNoticeToastNotice } from "../AppNoticeToast";
 import {
   resolveBackendErrorNotice,
@@ -6,6 +6,25 @@ import {
 } from "../backend-error-notice";
 
 describe("resolveBackendErrorNotice", () => {
+  it("offers local Codex login for a rejected token, without logging in to a peer's profile", () => {
+    const onCodexLogin = vi.fn();
+    const signal = {
+      kind: "turn-failed" as const,
+      backend: "codex" as const,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      threadLabel: "Fixture thread",
+      errorMessage: "Your access token could not be refreshed. Please log out and sign in again.",
+      onCodexLogin,
+    };
+    const notice = resolveBackendErrorNotice(signal, undefined);
+    expect(notice?.actions?.[0]?.label).toBe("Login");
+    notice?.actions?.[0]?.onClick();
+    expect(onCodexLogin).toHaveBeenCalledOnce();
+    expect(resolveBackendErrorNotice({ ...signal, instanceId: "peer-1" }, undefined)?.actions).toBeUndefined();
+    expect(resolveBackendErrorNotice({ ...signal, errorMessage: "Connection timed out" }, undefined)?.actions).toBeUndefined();
+  });
+
   const invalidIdFailure =
     "[ApiIdParam] [input[169].id] [invalid_id_prefix] "
     + "Invalid 'input[169].id': 'review_rollout_user'. "

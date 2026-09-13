@@ -1596,8 +1596,8 @@ function CodexProfileRow(props: {
   const chips: SettingsPathRowChip[] = [
     { label: profile.source === "default" ? "default" : "profile", tone: "muted" },
     {
-      label: profile.hasAuthFile ? "auth" : "no auth",
-      tone: profile.hasAuthFile || !profile.name ? "muted" : "err",
+      label: profile.authenticationRequired ? "Logged out" : profile.hasAuthFile ? "auth" : "no auth",
+      tone: !profile.authenticationRequired && profile.hasAuthFile ? "muted" : "err",
     },
   ];
 
@@ -1624,7 +1624,7 @@ function CodexProfileRow(props: {
       selectedLabel="Next launch"
       disabled={props.disabled || !profile.exists}
       extraAction={
-        profile.name && profile.exists && !profile.hasAuthFile ? (
+        profile.authenticationRequired || !profile.hasAuthFile ? (
           <CodexAuthProfileLoginButton
             desktopApi={props.desktopApi}
             disabled={props.disabled}

@@ -1306,6 +1306,31 @@ async function waitForLatestTransportRequest(
 }
 
 describe("CodexAppServerClient", () => {
+  it("fails active turns and blocks probes until the rejected profile is verified", async () => {
+    const { codexAuthState } = await import("../codex-auth-state");
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const home = "/fixture/client-auth";
+    const client = new CodexAppServerClient();
+    const notifications: AppServerNotification[] = [];
+    client.onNotification((notification) => { notifications.push(notification); });
+    await client.readRateLimits();
+    const transport = MockTransport.instances.at(-1)!;
+    transport.emitInbound({ method: "turn/started", params: {
+      threadId: "auth-thread", turn: { id: "auth-turn", status: "inProgress" },
+    } });
+    await vi.waitFor(() => expect(notifications.some((n) => n.method === "turn/started")).toBe(true));
+    codexAuthState.reject(home);
+    (transport.options as { onAuthenticationRejected: (home: string) => void })
+      .onAuthenticationRejected(home);
+    await vi.waitFor(() => expect(notifications.some((n) => n.method === "turn/failed")).toBe(true));
+    expect(client.isAuthenticationRequired()).toBe(true);
+    await expect(client.readRateLimits()).rejects.toThrow("sign in");
+    codexAuthState.verified(home);
+    await expect(client.readRateLimits()).resolves.toBeDefined();
+    expect(client.isAuthenticationRequired()).toBe(false);
+    await client.close();
+  });
+
   beforeEach(() => {
     codexClientLogError.mockClear();
     codexClientLogInfo.mockClear();

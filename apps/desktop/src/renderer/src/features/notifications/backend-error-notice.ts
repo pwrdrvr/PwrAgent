@@ -1,3 +1,4 @@
+import { isCodexAuthenticationFailure } from "@pwragent/shared";
 import type {
   AppServerBackendKind,
   FederationInstanceId,
@@ -24,6 +25,7 @@ export type BackendErrorSignal =
     }
   | {
       kind: "turn-failed";
+      onCodexLogin?: () => void;
       backend: AppServerBackendKind;
       threadId: string;
       turnId: string;
@@ -111,6 +113,10 @@ export function resolveBackendErrorNotice(
       autoDismiss: false,
       id: `turn-failed:${signal.backend}:${signal.threadId}:${signal.turnId}`,
       title: "Turn failed",
+      ...(signal.backend === "codex" && !signal.instanceId
+        && signal.onCodexLogin && isCodexAuthenticationFailure(signal.errorMessage)
+        ? { actions: [{ label: "Login", onClick: signal.onCodexLogin }] }
+        : {}),
       message: signal.errorMessage,
       detail: signal.threadLabel,
       threadLink: {
