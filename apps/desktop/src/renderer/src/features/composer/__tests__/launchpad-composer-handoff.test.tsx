@@ -69,7 +69,82 @@ describe("launchpad composer handoff", () => {
       expectedTurnId: "first-turn",
       input: [{ type: "text", text: "correction" }],
     }));
-    await waitFor(() => expect(result.current.getQueuedTurns(target)).toEqual([]));
+    await waitFor(() => expect(result.current.getQueuedTurns(target)[0]).toMatchObject({ steerDelivery: "accepted", backendQueuePending: true }));
+  });
+
+  it.each(["before", "after"])("keeps the steer visible until its user message arrives %s the response", async (order) => {
+    const { result } = renderHook(useComposerDraftStore);
+    let emit: Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0] = () => undefined;
+    const unsubscribe = vi.fn();
+    let resolve!: (value: Awaited<ReturnType<NonNullable<DesktopApi["steerTurn"]>>>) => void;
+    const steerTurn = vi.fn(() => new Promise<Awaited<ReturnType<NonNullable<DesktopApi["steerTurn"]>>>>((done) => { resolve = done; }));
+    result.current.setQueuedTurns(source, [{ ...queued("correction"), steerWhenReady: true }]);
+    act(() => handoffLaunchpadComposer(result.current, "project", thread, {
+      steerTurn,
+      onAgentEvent: (callback) => { emit = callback; return unsubscribe; },
+    }));
+    expect(result.current.getQueuedTurns(target)[0]).toMatchObject({ steerDelivery: "sending", backendQueuePending: true });
+    const message = (type = "userMessage", threadId = thread.id, turnId = "first-turn") => emit({
+      backend: "codex", notification: { method: "item/completed", params: {
+        threadId, turnId, item: { id: "user-correction", type, content: [{ type: "text", text: "correction" }] },
+      } },
+    });
+    act(() => { message("agentMessage"); message("userMessage", "other"); message("userMessage", thread.id, "other-turn"); });
+    expect(result.current.getQueuedTurns(target)).toHaveLength(1);
+    if (order === "before") act(() => message());
+    await act(async () => resolve({ backend: "codex", threadId: thread.id, turnId: "first-turn", disposition: "steered" }));
+    if (order === "after") {
+      expect(result.current.getQueuedTurns(target)[0]).toMatchObject({ steerDelivery: "accepted", backendQueuePending: true });
+      expect(getNextReleasableQueuedTurn(result.current.getQueuedTurns(target))).toBeUndefined();
+      act(() => message());
+    }
+    expect(result.current.getQueuedTurns(target)).toEqual([]);
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+  });
+
+  it("holds unconfirmed delivery when the turn ends and releases its listener", async () => {
+    const { result } = renderHook(useComposerDraftStore);
+    let emit: Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0] = () => undefined;
+    const unsubscribe = vi.fn();
+    const steerTurn = vi.fn<NonNullable<DesktopApi["steerTurn"]>>().mockResolvedValue({
+      backend: "codex", threadId: thread.id, turnId: "first-turn", disposition: "steered",
+    });
+    result.current.setQueuedTurns(source, [{ ...queued("correction"), steerWhenReady: true }]);
+    act(() => handoffLaunchpadComposer(result.current, "project", thread, {
+      steerTurn, onAgentEvent: (callback) => { emit = callback; return unsubscribe; },
+    }));
+    await waitFor(() => expect(result.current.getQueuedTurns(target)[0].steerDelivery).toBe("accepted"));
+    act(() => emit({ backend: "codex", notification: {
+      method: "turn/completed", params: { threadId: thread.id, turnId: "first-turn", turn: { id: "first-turn", status: "completed", output: [] } },
+    } }));
+    expect(result.current.getQueuedTurns(target)[0]).toMatchObject({
+      text: "correction", manualReleaseRequired: true, backendQueuePending: false, steerDelivery: undefined,
+    });
+    expect(getNextReleasableQueuedTurn(result.current.getQueuedTurns(target))).toBeUndefined();
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+  });
+
+  it("retains backend recovery ownership when the turn ends before a held response", async () => {
+    const { result } = renderHook(useComposerDraftStore);
+    let emit: Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0] = () => undefined;
+    const unsubscribe = vi.fn();
+    let resolve!: (value: Awaited<ReturnType<NonNullable<DesktopApi["steerTurn"]>>>) => void;
+    const steerTurn = vi.fn(() => new Promise<Awaited<ReturnType<NonNullable<DesktopApi["steerTurn"]>>>>((done) => { resolve = done; }));
+    result.current.setQueuedTurns(source, [{ ...queued("correction"), steerWhenReady: true }]);
+    act(() => handoffLaunchpadComposer(result.current, "project", thread, {
+      steerTurn, onAgentEvent: (callback) => { emit = callback; return unsubscribe; },
+    }));
+    act(() => emit({ backend: "codex", notification: {
+      method: "turn/completed", params: { threadId: thread.id, turnId: "first-turn", turn: { id: "first-turn", status: "completed", output: [] } },
+    } }));
+    await act(async () => resolve({ backend: "codex", threadId: thread.id, turnId: "first-turn",
+      disposition: "held", queueEntryId: "held-entry", holdReason: "Turn finished",
+    }));
+    expect(result.current.getQueuedTurns(target)[0]).toMatchObject({
+      queueEntryId: "held-entry", text: "correction", manualReleaseRequired: true,
+      backendQueuePending: false, steerDelivery: undefined,
+    });
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
   });
 
   it("holds a failed steer for explicit recovery without losing its content", async () => {
@@ -129,7 +204,7 @@ describe("launchpad composer handoff", () => {
       turnId: "scheduled-turn", displayText: "First message",
     }));
     expect(steerTurn).toHaveBeenCalledWith(expect.objectContaining({ expectedTurnId: "scheduled-turn" }));
-    await waitFor(() => expect(result.current.getQueuedTurns(target)).toEqual([]));
+    await waitFor(() => expect(result.current.getQueuedTurns(target)[0]).toMatchObject({ steerDelivery: "accepted", backendQueuePending: true }));
   });
 
   it("does not release follow-ups ahead of a first message whose setup failed", () => {

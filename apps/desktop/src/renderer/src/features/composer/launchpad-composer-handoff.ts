@@ -1,3 +1,5 @@
+import { federationTargetsEqual } from "../../lib/federated-thread-events";
+import { notificationIncludesDraftContent } from "./queued-message-content";
 import type { FederationTarget, NavigationThreadSummary, ScheduledThreadAction } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { readRendererFederationTarget } from "../../lib/federation-window";
@@ -96,7 +98,8 @@ export function handoffLaunchpadComposer(
   desktopApi?: DesktopApi,
 ): void {
   const source = `launchpad:${directoryKey}`;
-  const target = buildThreadComposerScopeKey(thread.source, thread.id, thread.federation?.ref.target ?? readRendererFederationTarget() ?? { scope: "local" });
+  const federationTarget = thread.federation?.ref.target ?? readRendererFederationTarget();
+  const target = buildThreadComposerScopeKey(thread.source, thread.id, federationTarget ?? { scope: "local" });
   getLaunchpadComposerDestination(store, source).scopeKey = target;
   const draft = store.get(source);
   if (draft) {
@@ -120,7 +123,7 @@ export function handoffLaunchpadComposer(
     ...(!turnId && thread.scheduledStart ? {
       waitingForScheduledActionId: thread.scheduledStart.actionId,
     } : {}),
-    ...(entry.steerWhenReady && turnId ? { backendQueuePending: true } : {}),
+    ...(entry.steerWhenReady && turnId ? { backendQueuePending: true, steerDelivery: "sending" as const } : {}),
   }));
   store.setQueuedTurns(target, [...store.getQueuedTurns(target), ...queued]);
   store.deleteQueuedTurn(source);
@@ -134,13 +137,56 @@ export function handoffLaunchpadComposer(
         current.id === entry.id ? { ...current, ...patch } : current,
       ));
     };
+    // Subscribe before submission: a user item can precede the RPC response,
+    // and the newly selected Composer may not have mounted yet.
+    let settled = false;
+    let responseReceived = false;
+    let endedTurnId: string | undefined;
+    let deliveredTurnId = expectedTurnId;
+    const holdUnconfirmed = (): void => {
+      settled = true;
+      unsubscribe?.();
+      update({
+        backendQueuePending: false,
+        steerWhenReady: false,
+        steerDelivery: undefined,
+        manualReleaseRequired: true,
+        holdReason: "The turn ended before delivery was confirmed. Check the transcript before sending again.",
+      });
+    };
+    const unsubscribe = desktopApi?.onAgentEvent?.((event) => {
+      const { method } = event.notification;
+      const params = event.notification.params as Record<string, unknown>;
+      if (
+        settled
+        || event.backend !== thread.source
+        || params.threadId !== thread.id
+        || !federationTargetsEqual(event.federationTarget, federationTarget)
+        || (params.turnId ?? (params.turn as { id?: string } | undefined)?.id) !== deliveredTurnId
+      ) return;
+      const item = params.item as { type?: string } | undefined;
+      if (
+        method === "item/completed"
+        && item?.type === "userMessage"
+        && notificationIncludesDraftContent(params, entry)
+      ) {
+        settled = true;
+        unsubscribe?.();
+        store.removeQueuedTurnById(target, entry.id);
+      } else if (method === "turn/completed") {
+        endedTurnId = deliveredTurnId;
+        // The in-flight request may still return a durable fallback. Let
+        // that response establish ownership before converting to recovery.
+        if (responseReceived) holdUnconfirmed();
+      }
+    });
     try {
       if (!desktopApi?.steerTurn || !expectedTurnId || !entry.input?.length) {
         throw new Error("Steering is unavailable. Edit this message to send it again.");
       }
       const response = await desktopApi.steerTurn({
         backend: thread.source,
-        federationTarget: thread.federation?.ref.target ?? readRendererFederationTarget(),
+        federationTarget,
         threadId: thread.id,
         expectedTurnId,
         requestId: entry.id,
@@ -159,23 +205,33 @@ export function handoffLaunchpadComposer(
           },
         },
       });
+      if (settled) return;
+      responseReceived = true;
+      deliveredTurnId = response.turnId ?? expectedTurnId;
       if (response.scheduledAction?.status === "failed") {
         throw new Error(response.scheduledAction.errorMessage ?? "The follow-up could not be dispatched.");
       }
       if (response.disposition === "held" || response.disposition === "scheduled") {
+        unsubscribe?.();
         update({
           backendQueuePending: false,
           steerWhenReady: false,
+          steerDelivery: undefined,
           queueEntryId: response.queueEntryId,
           scheduledActionId: response.scheduledAction?.id,
           manualReleaseRequired: response.disposition === "held",
           holdReason: response.holdReason,
         });
+      } else if (endedTurnId && endedTurnId === deliveredTurnId) {
+        holdUnconfirmed();
       } else {
-        store.removeQueuedTurnById(target, entry.id);
+        update({ steerDelivery: "accepted" });
       }
     } catch (error) {
+      if (settled) return;
+      unsubscribe?.();
       update({
+        steerDelivery: undefined,
         backendQueuePending: false,
         steerWhenReady: false,
         manualReleaseRequired: true,
@@ -196,7 +252,7 @@ export function handoffLaunchpadComposer(
         const next = {
           ...entry,
           waitingForScheduledActionId: undefined,
-          ...(steerReady ? { backendQueuePending: true } : {}),
+          ...(steerReady ? { backendQueuePending: true, steerDelivery: "sending" as const } : {}),
           ...(!admitted ? {
             manualReleaseRequired: true,
             holdReason: action.errorMessage ?? "The scheduled first message did not start. Edit this follow-up to send it.",
