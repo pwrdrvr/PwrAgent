@@ -575,7 +575,9 @@ import {
   APP_LICENSE_DOCUMENT_READ_CHANNEL,
   APP_METADATA_READ_CHANNEL,
   APP_THIRD_PARTY_NOTICES_WINDOW_OPEN_CHANNEL,
+  APP_UPDATE_CANCEL_DOWNLOAD_CHANNEL,
   APP_UPDATE_CHECK_CHANNEL,
+  APP_UPDATE_CHECK_RESULT_EVENT_CHANNEL,
   APP_UPDATE_INSTALL_CHANNEL,
   APP_UPDATE_RELEASES_READ_CHANNEL,
   APP_UPDATE_STATUS_EVENT_CHANNEL,
@@ -845,6 +847,7 @@ import type {
   AppLicenseDocument,
   AppLicenseDocumentKind,
   AppMetadata,
+  AppUpdateCancelResult,
   AppUpdateCheckResult,
   AppUpdateInstallResult,
   AppUpdateReleaseVersions,
@@ -1071,6 +1074,20 @@ const desktopApi = Object.freeze({
       ipcRenderer.off(APP_UPDATE_STATUS_EVENT_CHANNEL, listener);
     };
   },
+  onAppUpdateCheckResult: (
+    callback: (result: AppUpdateCheckResult) => void,
+  ): (() => void) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      payload: AppUpdateCheckResult,
+    ) => callback(payload);
+    ipcRenderer.on(APP_UPDATE_CHECK_RESULT_EVENT_CHANNEL, listener);
+    return () => {
+      ipcRenderer.off(APP_UPDATE_CHECK_RESULT_EVENT_CHANNEL, listener);
+    };
+  },
+  cancelAppUpdateDownload: async (): Promise<AppUpdateCancelResult> =>
+    await ipcRenderer.invoke(APP_UPDATE_CANCEL_DOWNLOAD_CHANNEL),
   onHotCpuProfileCaptured: (
     callback: (event: HotCpuProfileCapturedEvent) => void,
   ): (() => void) => {

@@ -494,6 +494,7 @@ import type {
   AppLicenseDocument,
   AppLicenseDocumentKind,
   AppMetadata,
+  AppUpdateCancelResult,
   AppUpdateCheckResult,
   AppUpdateInstallResult,
   AppUpdateReleaseVersions,
@@ -563,6 +564,11 @@ export type DesktopApi = {
   readAppUpdateStatus?: () => Promise<AppUpdateStatus>;
   readAppUpdateReleaseVersions?: () => Promise<AppUpdateReleaseVersions>;
   onAppUpdateStatus?: (callback: (status: AppUpdateStatus) => void) => () => void;
+  /** Only an app-menu check reports here — see the channel's own comment. */
+  onAppUpdateCheckResult?: (
+    callback: (result: AppUpdateCheckResult) => void,
+  ) => () => void;
+  cancelAppUpdateDownload?: () => Promise<AppUpdateCancelResult>;
   onHotCpuProfileCaptured?: (
     callback: (event: HotCpuProfileCapturedEvent) => void,
   ) => () => void;

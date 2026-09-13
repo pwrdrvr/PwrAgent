@@ -629,6 +629,20 @@ export const APP_LOG_WINDOW_OPEN_CHANNEL = "app:open-log-window";
 export const APP_UPDATE_CHECK_CHANNEL = "app:check-for-updates";
 export const APP_UPDATE_STATUS_READ_CHANNEL = "app:read-update-status";
 export const APP_UPDATE_STATUS_EVENT_CHANNEL = "app:update-status-event";
+/**
+ * Main → renderer push: the outcome of a check the *operator* asked for.
+ *
+ * Deliberately separate from `APP_UPDATE_STATUS_EVENT_CHANNEL`, which every
+ * check moves — including the hourly background poll. This one is emitted
+ * from the app-menu check alone, so it is the only thing that distinguishes
+ * "someone is waiting for this answer" from "the hour hand looked again".
+ * Collapsing the two would either silence the menu check or make a background
+ * download raise UI nobody asked for. Settings' own Check for Update button
+ * does not emit it either: that surface answers inline, and a toast repeating
+ * the answer beside it would say the same thing twice.
+ */
+export const APP_UPDATE_CHECK_RESULT_EVENT_CHANNEL =
+  "app:update-check-result-event";
 export const HOT_CPU_PROFILE_CAPTURED_EVENT_CHANNEL =
   "hot-cpu-profile:captured";
 /** Main → renderer push: appearance (theme + density) was written to
@@ -642,6 +656,8 @@ export const SETTINGS_RUNTIME_CHANGED_EVENT_CHANNEL =
   "settings:runtime-changed";
 export const APP_UPDATE_INSTALL_CHANNEL = "app:install-update";
 export const APP_UPDATE_RELEASES_READ_CHANNEL = "app:read-update-releases";
+export const APP_UPDATE_CANCEL_DOWNLOAD_CHANNEL =
+  "app:cancel-update-download";
 export const PROFILES_LIST_CHANNEL = "profiles:list";
 export const PROFILES_OPEN_CHANNEL = "profiles:open";
 export const PROFILES_CREATE_CHANNEL = "profiles:create";

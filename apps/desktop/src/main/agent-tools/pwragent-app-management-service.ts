@@ -214,6 +214,7 @@ function toToolUpdateStatus(
     // agent describes a move backwards as forward progress.
     case "available":
     case "downloaded":
+    case "canceled":
       return {
         status: status.status,
         version: status.version,

@@ -71,7 +71,24 @@ export type AppUpdateCheckResult =
   | { status: "checking" }
   | { status: "no-update"; version: string }
   | { status: "downloaded"; version: string; direction?: AppUpdateDirection }
-  | { status: "available"; version: string; direction?: AppUpdateDirection };
+  | { status: "available"; version: string; direction?: AppUpdateDirection }
+  | { status: "canceled"; version: string; direction?: AppUpdateDirection };
+
+/**
+ * Bytes moved so far on the update payload. Optional throughout: a provider
+ * that reports no content length gives electron-updater a percent and nothing
+ * else, and the meter has to degrade to that rather than print `NaN MB`.
+ *
+ * A percent alone cannot tell a 4 MB delta apart from a 120 MB full download,
+ * and on a slow link that is the whole question of whether waiting is worth
+ * it — which is why these ride along instead of staying in the log.
+ */
+export type AppUpdateDownloadProgress = {
+  percent?: number;
+  transferred?: number;
+  total?: number;
+  bytesPerSecond?: number;
+};
 
 export type AppUpdateStatus =
   | { status: "idle" }
@@ -79,14 +96,26 @@ export type AppUpdateStatus =
   | { status: "checking" }
   | { status: "no-update"; version: string }
   | { status: "available"; version: string; direction?: AppUpdateDirection }
-  | {
+  | ({
       status: "downloading";
       version: string;
-      percent?: number;
       direction?: AppUpdateDirection;
-    }
+    } & AppUpdateDownloadProgress)
   | { status: "downloaded"; version: string; direction?: AppUpdateDirection }
+  /**
+   * The operator stopped the download. The release is still published, so
+   * this is not `available` (which promises a download is under way) and not
+   * an `error` (nothing failed) — it stands until the next check.
+   */
+  | { status: "canceled"; version: string; direction?: AppUpdateDirection }
   | { status: "error"; message: string };
+
+/**
+ * Whether a download was actually running to stop. `false` is the ordinary
+ * race — the download finished, or never started, while the click was in
+ * flight — not a fault.
+ */
+export type AppUpdateCancelResult = { canceled: boolean };
 
 export type AppUpdateInstallResult =
   | { status: "restarting" }

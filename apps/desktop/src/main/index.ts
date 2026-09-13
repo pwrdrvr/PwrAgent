@@ -35,6 +35,8 @@ import {
   checkForAppUpdatesNow,
   disposeAppUpdateIpcHandlers,
   initAutoUpdater,
+  PWRAGENT_DEV_FAKE_UPDATE_ENV,
+  PWRAGENT_DEV_FAKE_UPDATE_STEP_MS_ENV,
   registerAppUpdateIpcHandlers,
 } from "./auto-updater";
 import { showAppLogWindow } from "./app-log-window";
@@ -1153,6 +1155,8 @@ function rejectDevOnlyEnvVarsInProduction(): void {
     SECRET_STORAGE_DISABLED_ENV,
     SQLITE_WRITE_METRICS_ENV,
     SQLITE_WRITE_METRICS_FILE_ENV,
+    PWRAGENT_DEV_FAKE_UPDATE_ENV,
+    PWRAGENT_DEV_FAKE_UPDATE_STEP_MS_ENV,
     // The React DevTools / profiling vars below are read by
     // `electron.vite.config.ts` at build time, not by this process, so the
     // `delete` accomplishes nothing for them. They are listed anyway for the

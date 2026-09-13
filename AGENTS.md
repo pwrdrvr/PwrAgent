@@ -476,6 +476,23 @@ These variables are for development only.
 - Use the dev build to find re-render storms. It carries richer render attribution.
 - Read "Profiling the Renderer with React DevTools" in [apps/desktop/AGENTS.md](apps/desktop/AGENTS.md).
 
+`PWRAGENT_DEV_FAKE_UPDATE=1`
+
+- Walk a fake update check instead of answering `skipped` in development.
+- Real auto-update runs in packaged builds only, so this is the only way to
+  see the update progress card, its byte meter, and Cancel without cutting a
+  release.
+- The fake applies to operator-initiated checks only. Startup and periodic
+  checks still answer `skipped`, so an opted-in dev launch raises nothing on
+  its own.
+- The offered version is `420.0.0`. Restart declines it; nothing was
+  downloaded to install.
+- Set `PWRAGENT_DEV_FAKE_UPDATE_STEP_MS=<ms>` to pace the walk. The default is
+  300 ms per step. `e2e/update-check.spec.ts` slows it so the mid-download
+  Cancel button is a target rather than a race.
+- Read the [update feature guidance](apps/desktop/src/renderer/src/features/update/AGENTS.md)
+  for why the fake is opt-in here and not in PwrGit.
+
 ## Frontend and Desktop UI
 
 - Before renderer UI work, read the [desktop style guide](docs/design/desktop-style-guide.md).
