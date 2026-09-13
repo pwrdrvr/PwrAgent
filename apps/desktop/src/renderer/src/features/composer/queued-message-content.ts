@@ -37,3 +37,83 @@ export function restoreQueuedMessage(
     ),
   };
 }
+
+function collectTextFragments(value: unknown): string[] {
+  if (typeof value === "string") {
+    return [value];
+  }
+  if (!value || typeof value !== "object") {
+    return [];
+  }
+  if (Array.isArray(value)) {
+    return value.flatMap((entry) => collectTextFragments(entry));
+  }
+
+  const record = value as Record<string, unknown>;
+  const directText = ["text", "content", "message", "input"].flatMap((key) =>
+    typeof record[key] === "string" ? [record[key] as string] : []
+  );
+  const nestedText = ["content", "parts", "input", "item"].flatMap((key) =>
+    typeof record[key] === "string" ? [] : collectTextFragments(record[key])
+  );
+  return [...directText, ...nestedText];
+}
+
+function collectImageUrls(value: unknown): string[] {
+  if (!value || typeof value !== "object") {
+    return [];
+  }
+
+  if (Array.isArray(value)) {
+    return value.flatMap((entry) => collectImageUrls(entry));
+  }
+
+  const record = value as Record<string, unknown>;
+  const directImages = Object.entries(record).flatMap(([key, entry]) =>
+    typeof entry === "string" &&
+    (key === "url" ||
+      key === "image_url" ||
+      key === "imageUrl" ||
+      key === "image" ||
+      key === "src" ||
+      entry.startsWith("data:image/"))
+      ? [entry]
+      : []
+  );
+  const nestedImages = Object.values(record).flatMap((entry) =>
+    typeof entry === "string" ? [] : collectImageUrls(entry)
+  );
+  return [...directImages, ...nestedImages];
+}
+
+export function notificationIncludesDraftContent(
+  params: unknown,
+  draft: Pick<ComposerQueuedTurnSnapshot, "text" | "imageAttachments" | "input">,
+): boolean {
+  const preview = draft.text.trim();
+  if (preview) {
+    return collectTextFragments(params).some((fragment) =>
+      fragment.includes(preview)
+    );
+  }
+
+  // File-only drafts have no composer text. Their submitted text includes
+  // the file-reference markdown that the provider echoes in its user item.
+  const submittedText = draft.input?.flatMap((item) =>
+    item.type === "text" && item.text.trim() ? [item.text.trim()] : []
+  ) ?? [];
+  if (submittedText.length > 0) {
+    const fragments = collectTextFragments(params);
+    return submittedText.every((text) => fragments.some((fragment) => fragment.includes(text)));
+  }
+
+  const attachmentUrls = draft.imageAttachments.map(
+    (attachment) => attachment.url,
+  );
+  if (attachmentUrls.length === 0) {
+    return false;
+  }
+
+  const notificationImageUrls = new Set(collectImageUrls(params));
+  return attachmentUrls.every((url) => notificationImageUrls.has(url));
+}
