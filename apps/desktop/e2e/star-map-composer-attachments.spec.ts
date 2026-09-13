@@ -133,6 +133,13 @@ test("sends pasted, dropped, and local-file attachments from a Star Map chat car
     const messageInput = chatCard.getByRole("textbox", {
       name: `Message ${LOCAL_THREAD_TITLE}`,
     });
+    // The card mounts its composer disabled and enables it once
+    // `useNavigationSelectedDetail` and the queue both report ready — two IPC
+    // round trips after the card opens. Attaching does not consult that state,
+    // so the attachment steps below run either way and the run only fails
+    // later, at the first keystroke, reading as "element is not editable"
+    // rather than "the composer was never ready". Wait for the evidence here.
+    await expect(messageInput).toBeEditable();
 
     await attachPng(messageInput, {
       color: "#2255aa",
@@ -248,6 +255,7 @@ test("rejects a local file on a remote Star Map chat card", async () => {
     const messageInput = chatCard.getByRole("textbox", {
       name: `Message ${REMOTE_THREAD_TITLE}`,
     });
+    await expect(messageInput).toBeEditable();
     await attachFilesystemFile(mapWindow, messageInput, notesPath);
 
     await expect(chatCard.getByRole("alert")).toContainText(

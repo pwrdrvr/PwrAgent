@@ -173,6 +173,36 @@ function listItems(list: Locator): Locator {
   return list.locator("> [role=listitem]");
 }
 
+/** One violating node, as `AxeBuilder.analyze()` reports it. */
+type AxeViolationNode =
+  Awaited<ReturnType<AxeBuilder["analyze"]>>["violations"][number]["nodes"][number];
+
+/**
+ * The measurement behind one violating node, for the CI log.
+ *
+ * A rule's `help` states the requirement; only the node's own check results
+ * carry the value that failed it, and for several rules the requirement alone
+ * cannot be acted on. `target-size` is the worked example: "24px by 20px,
+ * should be at least 24px by 24px" is a box to grow, while "insufficient space
+ * to its closest neighbors" is a margin to add and "partially obscured" is a
+ * z-order overlap — three different fixes behind one sentence of help text.
+ * The Windows lane spent a cycle guessing between them.
+ *
+ * `html` comes along because a `target` selector is built from whatever
+ * attributes make the node unique, so it is often an `aria-label` with no hint
+ * of which component drew the element. Truncated: axe returns the full outer
+ * HTML, and a row with children can run for thousands of characters.
+ */
+function describeNode(node: AxeViolationNode): string {
+  const reasons = [...node.any, ...node.all, ...node.none].map(
+    (check) => check.message,
+  );
+  const lines = [...new Set(reasons)].map((reason) => `        ${reason}`);
+  const html = node.html.replace(/\s+/g, " ").trim();
+  lines.push(`        html: ${html.length > 200 ? `${html.slice(0, 200)}…` : html}`);
+  return lines.join("\n");
+}
+
 async function runAxe(
   window: Page,
   surface: string,
@@ -232,7 +262,7 @@ async function runAxe(
     const summary = results.violations
       .map((violation) => {
         const nodes = violation.nodes
-          .map((node) => `    - ${node.target.join(" ")}`)
+          .map((node) => `    - ${node.target.join(" ")}\n${describeNode(node)}`)
           .join("\n");
         return `  ${violation.id} (${violation.impact ?? "n/a"}): ${violation.help}\n${nodes}\n    ${violation.helpUrl}`;
       })

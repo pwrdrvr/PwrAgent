@@ -1,15 +1,23 @@
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
 import { launchElectronApp } from "./fixtures/electron-app";
 
 const specDir = path.dirname(fileURLToPath(import.meta.url));
-// `/tmp` is a real directory only on POSIX; on Windows it resolves against the
-// current drive and is not where temporary files belong.
-const sourceRoot = path.join(os.tmpdir(), "pwragent-source-link-e2e");
-const sourcePath = path.join(sourceRoot, "source.ts");
+// The replay fixture hard-codes this exact string in the transcript's source
+// link, so it is what the renderer sends, what the main process stats, and
+// what the capture file echoes back. The spec cannot pick its own temp
+// directory: substituting `os.tmpdir()` here left the app resolving the
+// fixture's `/tmp/...` while the file sat under `/var/folders/...`, and the
+// open silently produced no capture.
+const FIXTURE_SOURCE_PATH = "/tmp/pwragent-source-link-e2e/source.ts";
+// Where that string lands on this OS. Windows has no `/tmp`, but it does
+// resolve a root-relative path against the current drive — and the harness
+// launches Electron with a cwd inside this checkout, so the app and this
+// process resolve it to the same place. On POSIX the two are identical.
+const sourcePath = path.resolve(FIXTURE_SOURCE_PATH);
+const sourceRoot = path.dirname(sourcePath);
 const isWindows = process.platform === "win32";
 
 /** The env var's real spelling is usually `Path` on Windows, and Windows
@@ -108,11 +116,11 @@ test("opens transcript source links with VS Code line metadata", async () => {
         request: {
           applicationId: "vscode",
           kind: "editor",
-          targetPath: sourcePath,
+          targetPath: FIXTURE_SOURCE_PATH,
           targetLine: 12,
         },
         invocation: {
-          args: ["--goto", `${sourcePath}:12`],
+          args: ["--goto", `${FIXTURE_SOURCE_PATH}:12`],
         },
       });
   } finally {
