@@ -36,6 +36,43 @@ export type FakeCodexProtocolRequest = {
   setupMarkerPath?: string;
 };
 
+/**
+ * Give a POSIX-style fake agent a form Windows can actually start.
+ *
+ * These fakes are written as extensionless files with a `#!/usr/bin/env node`
+ * shebang and `chmod 0o755`. Both are no-ops on Windows: the shebang means
+ * nothing to CreateProcess and the mode bit does not exist, so a `cli_path`
+ * pointing at one names a file that cannot be spawned and the agent never
+ * reports available.
+ *
+ * The shim is a `.cmd` SIBLING rather than a replacement because that is the
+ * layout the product already resolves. npm writes `kimi`, `kimi.cmd` and
+ * `kimi.ps1` next to each other, and `resolveWindowsCodexSibling` exists to
+ * pick the spawnable one — so seeding the same shape exercises that real path
+ * instead of routing around it. See `codex-windows-launch.ts`, including why
+ * `.ps1` is a discovery signal and never a launch target.
+ *
+ * Node runs the extensionless original directly (it ignores the shebang
+ * line), so the body stays single-sourced. `exit /b` is required: without it
+ * a `.cmd` reports its own success rather than node's, and a fake that failed
+ * to start would read as a clean `--version` probe.
+ */
+async function writeWindowsSpawnableShim(targetPath: string): Promise<void> {
+  if (process.platform !== "win32") {
+    return;
+  }
+  await writeFile(
+    `${targetPath}.cmd`,
+    [
+      "@echo off",
+      `node "%~dp0${path.basename(targetPath)}" %*`,
+      "exit /b %ERRORLEVEL%",
+      "",
+    ].join("\r\n"),
+    "utf8",
+  );
+}
+
 export async function writeFakeKimiExecutable(
   targetPath: string,
 ): Promise<string> {
@@ -87,6 +124,7 @@ input.on("line", (line) => {
     "utf8",
   );
   await chmod(targetPath, 0o755);
+  await writeWindowsSpawnableShim(targetPath);
   return targetPath;
 }
 
@@ -404,6 +442,7 @@ input.on("line", (line) => {
     "utf8",
   );
   await chmod(params.targetPath, 0o755);
+  await writeWindowsSpawnableShim(params.targetPath);
   return params.targetPath;
 }
 

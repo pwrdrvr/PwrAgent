@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { expect, test } from "@playwright/test";
 import { launchElectronApp } from "./fixtures/electron-app";
+import { legacyStateHomeEnv } from "./fixtures/legacy-state-home";
 
 async function createDirectoryLaunchpadSkillsFixture(): Promise<{
   cleanup: () => Promise<void>;
@@ -837,8 +838,7 @@ test("directory launchpad Tiptap composer deletes a persisted skill chip with re
   });
   const app = await launchElectronApp({
     fixturePath: fixture.fixturePath,
-    env: {      HOME: homeDir,
-    },
+    env: legacyStateHomeEnv(homeDir),
   });
 
   try {

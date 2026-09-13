@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { expect } from "@playwright/test";
 import Database from "better-sqlite3";
+import { legacyStateHomeEnv } from "./legacy-state-home";
 
 export async function createBranchDriftFixture(options: {
   expectedBranch?: string;
@@ -163,20 +164,7 @@ export async function createBranchDriftFixture(options: {
     // The whole scenario rides on the legacy import above being found, so the
     // launch environment belongs to the fixture that wrote those files rather
     // than to each spec that uses it.
-    //
-    // `HOME` alone is not enough. `findLegacyPaths` derives the XDG defaults
-    // from `os.homedir()`, which on Windows reads `USERPROFILE` and ignores
-    // `HOME` entirely — so the app went looking under the real operator
-    // profile, imported nothing, and every assertion here failed downstream of
-    // a thread row that was never written. `XDG_STATE_HOME` is consulted
-    // ahead of that fallback on every platform, which makes it the seam: it
-    // names the directory the fixture actually wrote instead of racing
-    // Windows over what "home" means.
-    env: {
-      HOME: rootDir,
-      XDG_STATE_HOME: path.join(rootDir, ".local", "state"),
-      XDG_CONFIG_HOME: path.join(rootDir, ".config"),
-    },
+    env: legacyStateHomeEnv(rootDir),
     fixturePath,
     homeDir: rootDir,
   };
