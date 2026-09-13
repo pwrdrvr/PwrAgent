@@ -46,6 +46,7 @@ export type NavigationQueryMaterialization = {
 
 /** Complete compact owner inventory used to answer bounded queries. */
 export type NavigationQueryIndex = {
+  localInstanceId?: string;
   coverage?: NavigationQueryCoverage;
   directories: NavigationDirectorySummary[];
   threads: NavigationThreadSummary[];
@@ -109,8 +110,11 @@ function parentIdentity(
   const parent = !thread.parentThreadBackend
     ? candidates.find((candidate) => candidate.source === thread.source) ?? (candidates.length === 1 ? candidates[0] : undefined)
     : undefined;
+  const backend = thread.parentThreadBackend ?? parent?.source ?? thread.source;
+  const resolvedParent = candidates.find((candidate) => candidate.source === backend);
+  if (resolvedParent) ownerInstanceId = navigationIdentity(resolvedParent).ownerInstanceId;
   return {
-    backend: thread.parentThreadBackend ?? parent?.source ?? thread.source,
+    backend,
     threadId: thread.parentThreadId,
     ...(ownerInstanceId ? { ownerInstanceId } : {}),
   };
@@ -736,6 +740,11 @@ export function projectNavigationQuery(params: {
     const candidates = parentCandidates.get(key) ?? [];
     candidates.push(thread);
     parentCandidates.set(key, candidates);
+    // Federation relationships carry an absolute owner ID, including when
+    // that owner is this viewer. Alias only our known identity to local rows.
+    if (!ref.ownerInstanceId && params.index.localInstanceId) {
+      parentCandidates.set(JSON.stringify([params.index.localInstanceId, ref.threadId]), candidates);
+    }
   }
   const childCountByParent = new Map<string, number>();
   const viewerChildCountByParent = new Map<string, number>();
