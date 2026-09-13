@@ -1,3 +1,5 @@
+import { FORGE_PRODUCTS, type ForgeKind } from "@pwragent/shared";
+import { codexAuthState } from "../codex-auth-state";
 import type {
   DesktopAppearanceDensity,
   DesktopAppearanceTheme,
@@ -720,7 +722,7 @@ export class DesktopSettingsService {
     const codexDiscovery = this.codexDiscoveryCoordinator.peek?.(
       codexDiscoveryCommand,
     ) ?? codexDiscoveryFromProvider(this.configStore.read("providers").codex);
-    const codexProfiles = this.codexProfiles;
+    const codexProfiles = this.readCodexProfiles();
     // Settle discovery that is ALREADY running before reading its result.
     // Never start it: this must not turn a projection read into a probe,
     // and a caller that arrives before startup discovery simply gets the
@@ -1678,7 +1680,11 @@ export class DesktopSettingsService {
   }
 
   readCodexProfiles(): DesktopCodexAuthProfileDiscoverySnapshot {
-    return structuredClone(this.codexProfiles);
+    const snapshot = structuredClone(this.codexProfiles);
+    for (const profile of snapshot.profiles) {
+      if (codexAuthState.isBlocked(profile.codexHome)) profile.authenticationRequired = true;
+    }
+    return snapshot;
   }
 
   // Applications discovery is config-independent (depends only on this.env
@@ -2870,14 +2876,15 @@ export class DesktopSettingsService {
    * apply here exactly as they do in Settings — the pane and the fetcher
    * must never disagree about whether a forge is live.
    */
-  isForgeEnabled(provider: "github" | "gitlab"): boolean {
+  isForgeEnabled(provider: ForgeKind): boolean {
     // Sync on purpose: the PR fetcher calls this per lookup, long after
     // startup discovery has settled, so the memoized result is available.
     return this.resolveForgeEnabled(
       provider,
-      provider === "gitlab"
-        ? this.glabDiscoveryCache?.result
-        : this.ghDiscoveryCache?.result,
+      ({
+        github: this.ghDiscoveryCache?.result,
+        gitlab: this.glabDiscoveryCache?.result,
+      } satisfies Record<ForgeKind, unknown>)[provider],
     ).value;
   }
 
@@ -2889,14 +2896,14 @@ export class DesktopSettingsService {
    * the in-flight probe first, the fetcher gate reads the memoized result.
    */
   private resolveForgeEnabled(
-    provider: "github" | "gitlab",
+    provider: ForgeKind,
     discovery: { candidates: Array<{ executable: boolean }> } | undefined,
   ): DesktopSettingsValue<boolean> {
     const applications = this.configStore.read("applications");
     return this.resolveBoolean(
-      provider === "gitlab" ? applications.glab?.enabled : applications.gh?.enabled,
+      applications[FORGE_PRODUCTS[provider].cli]?.enabled,
       forgeCliPresent(discovery),
-      provider === "gitlab" ? GLAB_ENABLED_ENV : GH_ENABLED_ENV,
+      ({ github: GH_ENABLED_ENV, gitlab: GLAB_ENABLED_ENV } satisfies Record<ForgeKind, string>)[provider],
     );
   }
 

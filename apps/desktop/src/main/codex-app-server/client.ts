@@ -1,3 +1,4 @@
+import { CODEX_SIGN_IN_REQUIRED, codexAuthState } from "../codex-auth-state";
 import { mkdir } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
@@ -258,6 +259,7 @@ const MCP_RESOURCE_IMAGE_MIME_TYPES = new Set([
 const BASE64_IMAGE_BLOB_PATTERN = /^[A-Za-z0-9+/]+={0,2}$/;
 
 type CodexClientOptions = {
+  authenticationRecovery?: boolean;
   command?: string;
   args?: string[];
   env?: NodeJS.ProcessEnv;
@@ -7398,6 +7400,8 @@ export class CodexAppServerClient {
   private closeGeneration = 0;
   private pendingCloses = 0;
   private serverGeneration = 0;
+  private readonly authActiveTurns = new Map<string, string>();
+  private rejectedCodexHome?: string;
   private transportClosePromise: Promise<void> | null = null;
   private readonly lastDirectoryEnrichment = new Map<string, ThreadDirectoryEnrichment>();
   private readonly threadDirectoryEnricher: (
@@ -7487,6 +7491,27 @@ export class CodexAppServerClient {
     this.rawConnection = new JsonRpcConnection(
       new StdioJsonRpcTransport({
         command: options.command?.trim() || "codex",
+        authenticationRecovery: options.authenticationRecovery,
+        onAuthenticationRejected: (home) => {
+          this.rejectedCodexHome = home;
+          const activeTurns = [...this.authActiveTurns];
+          this.authActiveTurns.clear();
+          void (async () => {
+            await this.close();
+            for (const [threadId, turnId] of activeTurns) {
+              for (const listener of this.notificationListeners) {
+                await listener({
+                  method: "turn/failed",
+                  params: {
+                    threadId,
+                    turnId,
+                    turn: { id: turnId, status: "failed", error: { message: CODEX_SIGN_IN_REQUIRED } },
+                  },
+                });
+              }
+            }
+          })().catch((error) => codexClientLog.warn("Codex auth shutdown failed", { error: String(error) }));
+        },
         args: options.args ?? [],
         env: options.env,
         resolveArgs: options.resolveArgs,
@@ -7560,6 +7585,17 @@ export class CodexAppServerClient {
       if (helperThreadId && this.helperThreadIds.has(helperThreadId)) {
         this.handleHelperThreadNotification(normalized.method, normalized);
         return;
+      }
+
+      const turnMetadata = extractRequestMetadata(normalized.params);
+      const observedTurnId = turnMetadata.turnId
+        ?? pickString(asRecord(asRecord(normalized.params)?.turn) ?? {}, ["id"]);
+      if (turnMetadata.threadId && observedTurnId) {
+        if (normalized.method === "turn/started") {
+          this.authActiveTurns.set(turnMetadata.threadId, observedTurnId);
+        } else if (normalized.method === "turn/completed" || normalized.method === "turn/failed") {
+          this.authActiveTurns.delete(turnMetadata.threadId);
+        }
       }
 
       if (method === "thread/started") {
@@ -7643,6 +7679,7 @@ export class CodexAppServerClient {
 
   private async closeConnection(): Promise<void> {
     this.initialized = false;
+    this.authActiveTurns.clear();
     this.initializationPromise = null;
     this.initializeResult = null;
     this.rejectHelperTurnWaiters(new Error("codex app server client closed"));
@@ -9931,7 +9968,14 @@ export class CodexAppServerClient {
     }
   }
 
+  isAuthenticationRequired(): boolean {
+    return Boolean(this.rejectedCodexHome && codexAuthState.isBlocked(this.rejectedCodexHome));
+  }
+
   private async ensureInitialized(): Promise<void> {
+    if (this.rejectedCodexHome && !this.options.authenticationRecovery) {
+      codexAuthState.assertAvailable(this.rejectedCodexHome);
+    }
     if (this.pendingCloses > 0) throw new Error("codex app server client closed");
     const generation = this.closeGeneration;
     do {

@@ -7,6 +7,8 @@ export type HotCpuProfileHeapSnapshotArtifact = {
 };
 
 export type HotCpuProfileCapturedEvent = {
+  /** Host running the local Electron process that produced this capture. */
+  sourceHostname?: string;
   target?: "main" | "renderer";
   capturedAt: string;
   heapSnapshotArtifacts?: HotCpuProfileHeapSnapshotArtifact[];
@@ -74,6 +76,8 @@ export function buildHotCpuProfileHandoffMessage(
 
   return [
     `PwrAgent captured a ${event.target ?? "renderer"} CPU profile.`,
+    `Source: Local app${event.sourceHostname ? ` on ${event.sourceHostname}` : ""}`,
+    `Captured at: ${event.capturedAt}`,
     `Trigger: ${formatHotCpuProfileTriggerSummary(event)}`,
     `Session basename: ${event.sessionDirectoryName}`,
     `Session directory path: ${event.sessionDirectory}`,

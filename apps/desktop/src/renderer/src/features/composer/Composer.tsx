@@ -8,7 +8,7 @@ import {
   subscribeLaunchpadAttachmentHandoffs,
 } from "./launchpad-composer-handoff";
 import { QueuedMessageInspector } from "./QueuedMessageInspector";
-import { restoreQueuedMessage } from "./queued-message-content";
+import { notificationIncludesDraftContent, restoreQueuedMessage } from "./queued-message-content";
 import {
   Fragment,
   type ReactNode,
@@ -499,6 +499,7 @@ type QueuedTurnDraft = {
   id: string;
   waitingForScheduledActionId?: string;
   steerWhenReady?: boolean;
+  steerDelivery?: "sending" | "accepted";
   backendQueuePending?: boolean;
   queueEntryId?: string;
   scheduledActionId?: string;
@@ -1296,76 +1297,6 @@ export function EnvActionAnchorEntry(props: {
       run={props.run}
     />
   );
-}
-
-function collectTextFragments(value: unknown): string[] {
-  if (typeof value === "string") {
-    return [value];
-  }
-  if (!value || typeof value !== "object") {
-    return [];
-  }
-  if (Array.isArray(value)) {
-    return value.flatMap((entry) => collectTextFragments(entry));
-  }
-
-  const record = value as Record<string, unknown>;
-  const directText = ["text", "content", "message", "input"].flatMap((key) =>
-    typeof record[key] === "string" ? [record[key] as string] : []
-  );
-  const nestedText = ["content", "parts", "input", "item"].flatMap((key) =>
-    typeof record[key] === "string" ? [] : collectTextFragments(record[key])
-  );
-  return [...directText, ...nestedText];
-}
-
-function collectImageUrls(value: unknown): string[] {
-  if (!value || typeof value !== "object") {
-    return [];
-  }
-
-  if (Array.isArray(value)) {
-    return value.flatMap((entry) => collectImageUrls(entry));
-  }
-
-  const record = value as Record<string, unknown>;
-  const directImages = Object.entries(record).flatMap(([key, entry]) =>
-    typeof entry === "string" &&
-    (key === "url" ||
-      key === "image_url" ||
-      key === "imageUrl" ||
-      key === "image" ||
-      key === "src" ||
-      entry.startsWith("data:image/"))
-      ? [entry]
-      : []
-  );
-  const nestedImages = Object.values(record).flatMap((entry) =>
-    typeof entry === "string" ? [] : collectImageUrls(entry)
-  );
-  return [...directImages, ...nestedImages];
-}
-
-function notificationIncludesDraftContent(
-  params: unknown,
-  draft: QueuedTurnDraft,
-): boolean {
-  const preview = draft.text.trim();
-  if (preview) {
-    return collectTextFragments(params).some((fragment) =>
-      fragment.includes(preview)
-    );
-  }
-
-  const attachmentUrls = draft.imageAttachments.map(
-    (attachment) => attachment.url,
-  );
-  if (attachmentUrls.length === 0) {
-    return false;
-  }
-
-  const notificationImageUrls = new Set(collectImageUrls(params));
-  return attachmentUrls.every((url) => notificationImageUrls.has(url));
 }
 
 function parseStaleInterruptError(error: unknown): boolean {
@@ -10477,7 +10408,11 @@ export function Composer(props: ComposerProps) {
           queued.scheduledSendAt,
           scheduleNow,
         );
-        const queuedLabel = queued.waitingForScheduledActionId
+        const queuedLabel = queued.steerDelivery === "sending"
+          ? "Steering…"
+          : queued.steerDelivery === "accepted"
+          ? "Waiting for transcript"
+          : queued.waitingForScheduledActionId
           ? "Waiting for scheduled first message"
           : queued.steerWhenReady
           ? "Steer when ready"
@@ -10519,7 +10454,7 @@ export function Composer(props: ComposerProps) {
             key={queued.id}
           >
             <div className="composer__queued-copy">
-              <span className="composer__queued-label">
+              <span className="composer__queued-label" role="status">
                 {queuedLabel}
               </span>
               <span className="composer__queued-text">
@@ -10545,7 +10480,6 @@ export function Composer(props: ComposerProps) {
                 supportsSteering ? (
                   <button
                     className="composer__secondary-action"
-                    aria-pressed={Boolean(queued.steerWhenReady)}
                     disabled={queued.backendQueuePending}
                     type="button"
                     onClick={() => {
@@ -10555,7 +10489,7 @@ export function Composer(props: ComposerProps) {
                       }));
                     }}
                   >
-                    Steer when ready
+                    {queued.steerWhenReady ? "Queue instead" : "Steer when ready"}
                   </button>
                 ) : null
               ) : queued.manualReleaseRequired && index === 0 ? (
@@ -10597,7 +10531,7 @@ export function Composer(props: ComposerProps) {
                       void steerQueuedTurn(queued);
                     }}
                   >
-                    {steering ? "Steering..." : "Steer"}
+                    {queued.steerDelivery ? "Steering…" : steering ? "Steering..." : "Steer"}
                   </button>
                 ) : null
               ) : !backendOwned && !queued.waitingForScheduledActionId ? (

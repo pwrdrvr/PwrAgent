@@ -812,7 +812,7 @@ describe("Sidebar", () => {
       threads={[sharedThread]} inboxThreads={[]} loading={false} creatingThread={undefined}
       selectedItemKey="codex:thread-1" onBrowseModeChange={() => undefined}
       onCreateThread={async () => undefined} onOpenLaunchpad={async () => undefined} onSelectThread={() => undefined}
-      pagedNavigation={{ resources: new Map([["directory-index", { id: "directory-index", loading: false,
+      pagedNavigation={{ presentationReady: true, resources: new Map([["directory-index", { id: "directory-index", loading: false,
         state: { ...createNavigationPageState(request), page } }]]), directories: [], selectedDirectoryKeys: undefined, connected: true,
         invalidate: () => undefined, refresh: async () => undefined, loadMore: async () => undefined,
         rebaseline: async () => undefined, restart: async () => undefined, setVisibleAnchor: () => undefined }} />);
@@ -3013,31 +3013,58 @@ describe("Sidebar", () => {
     expect(inputChip).toHaveAttribute("title", "Input needed");
   });
 
-  it("does not duplicate new-thread inbox membership as an attention marker in recents", () => {
-    render(
-      <Sidebar
-        backends={backends}
-        browseMode="recents"
-        directories={directories}
-        inboxThreads={[sharedThread]}
-        loading={false}
-        creatingThread={undefined}
-        selectedItemKey={undefined}
-        threads={[sharedThread]}
-        onBrowseModeChange={() => undefined}
-        onCreateThread={async () => undefined}
-        onOpenLaunchpad={async () => undefined}
-        onSelectThread={() => undefined}
-      />
+  describe.each(["local", "remote"] as const)("%s new-thread unread counts", (owner) => {
+    it.each(["directories", "attention", "inbox", "recents"] as const)(
+      "marks counted new threads in %s and clears the cookie when seen",
+      (browseMode) => {
+        const thread: NavigationThreadSummary = {
+          ...sharedThread,
+          ...(owner === "remote" ? {
+            federation: {
+              instanceLabel: "studio",
+              ref: {
+                backend: "codex",
+                target: { scope: "remote", instanceId: "peer-1" },
+                threadId: sharedThread.id,
+              },
+            },
+          } : {}),
+        };
+        const props = {
+          backends,
+          browseMode,
+          directories,
+          inboxThreads: [thread],
+          loading: false,
+          creatingThread: undefined,
+          selectedItemKey: undefined,
+          threads: [thread],
+          onBrowseModeChange: () => undefined,
+          onCreateThread: async () => undefined,
+          onOpenLaunchpad: async () => undefined,
+          onSelectThread: () => undefined,
+        };
+        const view = render(<Sidebar {...props} />);
+        expect(screen.getByRole("tab", {
+          name: "Attention, 0 active threads, 1 thread to review",
+        })).toBeInTheDocument();
+        if (browseMode === "directories") {
+          fireEvent.click(screen.getByRole("button", {
+            name: "PwrAgent, 1 thread to review",
+          }));
+        }
+        const row = threadCard(screen.getByRole("button", { name: thread.title }));
+        expect(row.querySelector('[data-thread-status="unread"]')).not.toBeNull();
+        expect(row.querySelector('[data-thread-status="thinking"]')).toBeNull();
+
+        const seen = { ...thread, inbox: { inInbox: false } };
+        view.rerender(<Sidebar {...props} threads={[seen]} inboxThreads={[]} />);
+        expect(screen.getByRole("tab", {
+          name: "Attention, 0 active threads, 0 threads to review",
+        })).toBeInTheDocument();
+        expect(view.container.querySelector('[data-thread-status="unread"]')).toBeNull();
+      },
     );
-
-    const browseSection = screen.getByRole("region", { name: "Thread browser" });
-    const threadButton = within(browseSection as HTMLElement).getByRole("button", {
-      name: /Cross-project cleanup/i,
-    });
-
-    expect(threadCard(threadButton).querySelector('[data-thread-status="thinking"]')).toBeNull();
-    expect(threadCard(threadButton).querySelector('[data-thread-status="unread"]')).toBeNull();
   });
 
   it("shows an unread marker in recents for threads updated since they were seen", () => {

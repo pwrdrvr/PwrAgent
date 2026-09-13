@@ -36,6 +36,9 @@ export class NavigationWindowQueries {
   private readonly prefix = `navigation-window:${++nextWindow}`;
   private nextResource = 0;
   private readonly resources = new Map<string, Resource>();
+  // Released transport leases need not discard the view. Keep recently used
+  // ranges window-local, sharing the same byte budget as active resources.
+  private readonly retained = new Map<string, { state: NavigationPageState; anchor?: NavigationQueryAnchor; bytes: number }>();
   private readonly listeners = new Set<() => void>();
   private visible = true;
   private disposed = false;
@@ -64,6 +67,19 @@ export class NavigationWindowQueries {
     this.wakeReaders();
   }
 
+  private retainedKey(id: string, requestKey: string): string {
+    return JSON.stringify([id, requestKey]);
+  }
+
+  private trimRetained(activeBytes: number): void {
+    let bytes = activeBytes + [...this.retained.values()].reduce((total, entry) => total + entry.bytes, 0);
+    for (const [key, entry] of this.retained) {
+      if (bytes <= MAX_RETAINED_BYTES && this.retained.size <= 64) break;
+      this.retained.delete(key);
+      bytes -= entry.bytes;
+    }
+  }
+
   setDemand(demand: ReadonlyMap<string, NavigationQueryRequest>): void {
     if (this.disposed) return;
     const admitted = new Map<string, NavigationQueryRequest>();
@@ -79,6 +95,12 @@ export class NavigationWindowQueries {
     for (const [id, resource] of this.resources) {
       const request = admitted.get(id);
       if (!request || JSON.stringify(request) !== resource.requestKey) {
+        if (resource.value.state.page) {
+          const key = this.retainedKey(id, resource.requestKey);
+          this.retained.delete(key);
+          this.retained.set(key, { state: resource.value.state, anchor: resource.anchor,
+            bytes: new TextEncoder().encode(JSON.stringify(resource.value.state.page)).byteLength });
+        }
         this.release(resource);
         this.resources.delete(id);
         changed = true;
@@ -87,15 +109,21 @@ export class NavigationWindowQueries {
     const added: Resource[] = [];
     for (const [id, request] of admitted) {
       if (this.resources.has(id)) continue;
+      const requestKey = JSON.stringify(request);
+      const retainedKey = this.retainedKey(id, requestKey);
+      const retained = this.retained.get(retainedKey);
+      this.retained.delete(retainedKey);
       const resource: Resource = {
-        requestKey: JSON.stringify(request), token: `${this.prefix}:${++this.nextResource}`,
-        value: { id, state: createNavigationPageState(request), loading: false },
-        refreshAfterPending: false, invalidated: false, released: !this.visible, anchor: request.anchor,
+        requestKey, token: `${this.prefix}:${++this.nextResource}`,
+        value: { id, state: retained ? { ...retained.state, stale: true, error: undefined } : createNavigationPageState(request), loading: false },
+        refreshAfterPending: false, invalidated: false, released: !this.visible, anchor: retained?.anchor ?? request.anchor,
       };
       this.resources.set(id, resource);
       added.push(resource);
       changed = true;
     }
+    if (changed) this.trimRetained([...this.resources.values()].reduce((bytes, resource) => bytes
+      + (resource.value.state.page ? new TextEncoder().encode(JSON.stringify(resource.value.state.page)).byteLength : 0), 0));
     if (changed || admissionError !== this.snapshot.admissionError) {
       this.snapshot = { ...this.snapshot, admissionError };
       this.publish();
@@ -231,6 +259,7 @@ export class NavigationWindowQueries {
             const candidatePage = candidate === resource ? next.page : candidate.value.state.page;
             return bytes + (candidatePage ? new TextEncoder().encode(JSON.stringify(candidatePage)).byteLength : 0);
           }, 0);
+          this.trimRetained(retainedBytes);
           if (retainedBytes > MAX_RETAINED_BYTES) throw new Error("Navigation retained-page budget reached. Collapse a directory or change lens to release pages.");
         };
         const readPage = async (request: NavigationQueryRequest) => {
@@ -305,6 +334,7 @@ export class NavigationWindowQueries {
     this.disposed = true;
     for (const resource of this.resources.values()) this.release(resource);
     this.resources.clear();
+    this.retained.clear();
     this.publish();
     this.listeners.clear();
   }

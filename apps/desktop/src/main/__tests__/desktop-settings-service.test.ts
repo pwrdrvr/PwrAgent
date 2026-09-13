@@ -43,6 +43,30 @@ function existsOrEmpty(filePath: string): boolean {
 }
 
 describe("DesktopSettingsService", () => {
+  it("projects runtime rejection without changing auth-file discovery", async () => {
+    const { codexAuthState } = await import("../codex-auth-state");
+    const root = createTempRoot();
+    const service = new DesktopSettingsService({
+      configPath: path.join(root, "config.toml"),
+      env: { CODEX_HOME: path.join(root, "codex") },
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+    const initial = service.readCodexProfiles();
+    const profile = initial.profiles[0]!;
+    codexAuthState.reject(profile.codexHome);
+    try {
+      expect(service.readCodexProfiles().profiles[0]).toMatchObject({
+        authenticationRequired: true,
+        hasAuthFile: profile.hasAuthFile,
+      });
+      expect((await service.readSettingsProjection()).models.codex.profiles.profiles[0])
+        .toMatchObject({ authenticationRequired: true });
+    } finally {
+      codexAuthState.verified(profile.codexHome);
+    }
+    expect(service.readCodexProfiles().profiles[0]?.authenticationRequired).toBeUndefined();
+  });
+
   it("persists an explicit federation compression opt-out in the settings snapshot", async () => {
     const service = new DesktopSettingsService({
       configPath: path.join(createTempRoot(), "config.toml"),

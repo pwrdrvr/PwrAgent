@@ -114,7 +114,9 @@ export function getThreadRowStatus(
     return "thinking";
   }
 
-  if (thread.inbox.reason === "updated-since-seen") {
+  // Counts include newly discovered threads as well as updates. Use the same
+  // membership predicate so every idle thread counted for review has a cookie.
+  if (isThreadAwaitingReview(thread)) {
     return "unread";
   }
 

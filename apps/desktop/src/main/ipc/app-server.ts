@@ -1,3 +1,4 @@
+import { GithubPrAuthenticationNotice } from "../pr-status/github-pr-authentication-notice";
 import { expectedNavigationReadFailure, type NavigationReadFailure } from "../../shared/navigation-ipc-result";
 import { NavigationAttentionViewLeases } from "../app-server/navigation-attention-view-leases";
 import type { NavigationAttentionViewReleaseRequest } from "@pwragent/shared";
@@ -237,6 +238,7 @@ import {
   APP_SERVER_GET_PR_AUTO_DISPATCH_BUDGET_STATUS_CHANNEL,
   APP_SERVER_RESUME_PR_AUTO_DISPATCH_BUDGET_CHANNEL,
   PR_AUTO_DISPATCH_BUDGET_CHANGED_EVENT_CHANNEL,
+  GITHUB_PR_AUTHENTICATION_FAILURE_ACK_CHANNEL,
   GITHUB_PR_AUTHENTICATION_FAILURE_EVENT_CHANNEL,
   GITHUB_PR_SAML_ENFORCEMENT_EVENT_CHANNEL,
   APP_SERVER_LIST_THREADS_CHANNEL,
@@ -1346,7 +1348,10 @@ class DesktopAppServerService {
   private prLookupRegistryLoadPromise: Promise<void> | undefined;
   private prGraphqlClient: GithubGraphqlPrClient | undefined;
   private readonly githubSamlBlockedRepositories = new Set<string>();
-  private githubPrAuthenticationFailureNotified = false;
+  private readonly githubPrAuthenticationNotice = new GithubPrAuthenticationNotice(
+    undefined,
+    (error) => appServerLog.warn("Could not persist GitHub PR authentication notice", { error }),
+  );
   private prPollingScheduler: PrPollingScheduler | undefined;
   private backgroundPrPollingEnabled = false;
   private prAutoDispatchAllowed = false;
@@ -5286,35 +5291,30 @@ class DesktopAppServerService {
     await this.prPollingScheduler?.probeAfterNetworkReconnect();
   }
 
+  acknowledgeGithubPrAuthenticationNotice(): void {
+    this.githubPrAuthenticationNotice.acknowledge();
+  }
+
   private getPrGraphqlClient(): GithubGraphqlPrClient {
     if (!this.prGraphqlClient) {
       this.prGraphqlClient = new GithubGraphqlPrClient({
         getConfiguredGhCommand: () =>
           getDesktopSettingsService().resolveGhCommandPreference(),
         onAuthenticationFailure: (event) => {
-          if (this.githubPrAuthenticationFailureNotified) {
-            return;
-          }
-          this.githubPrAuthenticationFailureNotified = true;
           const notice = {
             occurredAt: Date.now(),
             ...(event.detail ? { detail: event.detail } : {}),
           };
-          for (const webContents of subscribersForChannel(
-            GITHUB_PR_AUTHENTICATION_FAILURE_EVENT_CHANNEL,
-          )) {
-            if (!webContents.isDestroyed()) {
-              webContents.send(
+          this.githubPrAuthenticationNotice.publish(
+            subscribersForChannel(GITHUB_PR_AUTHENTICATION_FAILURE_EVENT_CHANNEL)
+              .filter((webContents) => !webContents.isDestroyed())
+              .map((webContents) => () => webContents.send(
                 GITHUB_PR_AUTHENTICATION_FAILURE_EVENT_CHANNEL,
                 notice,
-              );
-            }
-          }
+              )),
+          );
         },
         onRepositoryAccess: (event) => {
-          if (event.status === "available") {
-            this.githubPrAuthenticationFailureNotified = false;
-          }
           const target = {
             kind: "github-repository" as const,
             owner: event.owner,
@@ -5662,6 +5662,7 @@ class DesktopAppServerService {
   private async primeDiscoveryBranchLookups(
     contexts: ThreadPrRefreshContext[],
   ): Promise<void> {
+    if (!this.getPrFetcher().isProviderEnabled("github")) return;
     const wanted = new Map<
       string,
       { cwd: string; branch: string; refs: BranchRef[] }
@@ -5721,7 +5722,7 @@ class DesktopAppServerService {
     if (primed.length === 0) {
       return;
     }
-    this.getPrFetcher().primeBranchLookup(primed);
+    this.getPrFetcher().github.primeBranchLookup(primed);
     appServerLog.debug("pr discovery primed branch lookups", {
       requested: refs.length,
       primed: primed.length,
@@ -5913,7 +5914,7 @@ class DesktopAppServerService {
       ...new Map(
         uniquePrimaryPrs.flatMap((pr) => {
           const ref = parsePrRefFromUrl(pr.url);
-          return ref ? [[`${ref.gitlabHost ?? "github.com"}/${ref.owner}/${ref.repo}#${ref.number}`, ref] as const] : [];
+          return ref ? [[`${ref.host}/${ref.owner}/${ref.repo}#${ref.number}`, ref] as const] : [];
         }),
       ).values(),
     ];
@@ -6079,31 +6080,8 @@ class DesktopAppServerService {
     return new Set(refreshed.map((pr) => getPrStatusKey(pr)));
   }
 
-  private async fetchForgePullRequests(refs: ForgePrRef[], reconnect = false, gitlabTokensTaken = false): Promise<PrSummary[]> {
-    // This path reaches the transports directly rather than through
-    // ForgePrFetcher's own methods, so it has to apply the operator's
-    // per-forge switch itself. Without this the background poller keeps
-    // spawning `glab` and minting GitHub tokens for a forge that Settings
-    // reports as disabled.
-    const fetcher = this.getPrFetcher();
-    const github = fetcher.isProviderEnabled("github")
-      ? refs.filter((ref) => !ref.gitlabHost)
-      : [];
-    // Copy: the client owns the array it returned and may retain it.
-    const results = github.length === 0 ? [] : [...(reconnect
-      ? await this.getPrGraphqlClient().fetchPullRequestsAfterReconnect(github)
-      : await this.getPrGraphqlClient().fetchPullRequests(github))];
-    if (!fetcher.isProviderEnabled("gitlab")) return results;
-    // Keep GitLab REST calls sequential within each admitted poll batch.
-    for (const ref of refs) {
-      if (!ref.gitlabHost) continue;
-      try {
-        results.push(await fetcher.gitlab.fetchByRef({ ...ref, host: ref.gitlabHost }, gitlabTokensTaken));
-      } catch {
-        // Preserve the previous observation and timestamp on provider failure.
-      }
-    }
-    return results;
+  private async fetchForgePullRequests(refs: ForgePrRef[], reconnect = false, requestTokenTaken = false): Promise<PrSummary[]> {
+    return this.getPrFetcher().fetchPullRequests(refs, { reconnect, requestTokenTaken });
   }
 
   async getGlabStatus(request: GetGlabStatusRequest): Promise<GlabStatus> {
@@ -6113,13 +6091,13 @@ class DesktopAppServerService {
   async getGhStatus(request: GetGhStatusRequest): Promise<GhStatus> {
     const fetcher = this.getPrFetcher();
     if (request.recheck) {
-      fetcher.invalidateGhCaches();
+      fetcher.github.invalidateGhCaches();
       this.getPrGraphqlClient().invalidateToken();
     }
     // The fetcher logs once per fresh probe (cache + in-flight dedup
     // keep StrictMode mount duplicates silent). The IPC layer just
     // returns the parsed status.
-    return await fetcher.getAuthStatus();
+    return await fetcher.github.getAuthStatus();
   }
 
   async setThreadToolIncidentNotice(
@@ -7613,7 +7591,6 @@ class DesktopAppServerService {
     this.prPollingSettingsUnsubscribe = undefined;
     this.prGraphqlClient = undefined;
     this.githubSamlBlockedRepositories.clear();
-    this.githubPrAuthenticationFailureNotified = false;
     this.prPollingFocus.clear();
     this.prPollBackendByKey.clear();
     this.prStatusTransitionListeners.clear();
@@ -7928,6 +7905,12 @@ function invalidateNavigationEvent(event: AgentEvent): void {
 }
 
 export function registerAppServerIpcHandlers(): void {
+  ipcMain.removeHandler(GITHUB_PR_AUTHENTICATION_FAILURE_ACK_CHANNEL);
+  ipcMain.handle(GITHUB_PR_AUTHENTICATION_FAILURE_ACK_CHANNEL, (event) => {
+    if (subscribersForChannel(GITHUB_PR_AUTHENTICATION_FAILURE_EVENT_CHANNEL).includes(event.sender)) {
+      appServerService.acknowledgeGithubPrAuthenticationNotice();
+    }
+  });
   // Refresh a thread's working-state chips when the agent finishes a turn
   // or a git-mutating command in its worktree. Re-registering tears the
   // previous subscription down first so repeated calls don't stack listeners.
@@ -8958,6 +8941,7 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
     for (const token of consumers) navigationQueryPool.release(token);
   }
   navigationQueryConsumersBySender.clear();
+  ipcMain.removeHandler(GITHUB_PR_AUTHENTICATION_FAILURE_ACK_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_LIST_SKILLS_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_LIST_THREADS_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_READ_THREAD_CHANNEL);

@@ -71,6 +71,8 @@ export const MANAGED_GROK_SIGNATURE_REJECTED_EVENT_CHANNEL =
   "acp:managed-grok-signature-rejected";
 export const GITHUB_PR_AUTHENTICATION_FAILURE_EVENT_CHANNEL =
   "app-server:github-pr-authentication-failure";
+export const GITHUB_PR_AUTHENTICATION_FAILURE_ACK_CHANNEL =
+  "app-server:github-pr-authentication-failure-ack";
 export const APP_SERVER_ARCHIVE_THREAD_CHANNEL = "app-server:archive-thread";
 export const APP_SERVER_RESOLVE_MISSING_CODEX_THREADS_CHANNEL =
   "app-server:resolve-missing-codex-threads";

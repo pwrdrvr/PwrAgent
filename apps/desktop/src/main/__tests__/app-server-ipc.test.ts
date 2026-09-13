@@ -897,6 +897,7 @@ const supersedeThreadPrStatusWatches = vi.fn(async () => 0);
 const listActiveThreadPrStatusWatches = vi.fn(async () => []);
 const cancelThreadPrStatusWatchesForPr = vi.fn(async () => 0);
 const isGhAvailable = vi.fn(async () => true);
+const isProviderEnabled = vi.fn(() => true);
 const invalidateGhCaches = vi.fn();
 const getAuthStatus = vi.fn(async () => ({
   installed: true,
@@ -1159,9 +1160,9 @@ vi.mock("../pr-status/forge-pr-fetcher", async () => ({
   ForgePrFetcher: vi.fn(function GithubPrFetcher() {
     return {
       isGhAvailable,
+      isProviderEnabled,
       getProviderAvailability: async () => [{ provider: "github.com", cli: "gh", available: await isGhAvailable() }],
-      invalidateGhCaches,
-      getAuthStatus,
+      github: { invalidateGhCaches, getAuthStatus },
       fetchPullRequestByUrl,
     };
   }),
@@ -1194,6 +1195,30 @@ describe("app server ipc", () => {
     await (await import("../ipc/app-server")).startAppServerOwnerNavigation();
   };
 
+  it("does not prime GitHub discovery while that forge is disabled", async () => {
+    const { appServerService } = await import("../ipc/app-server");
+    const service = appServerService as unknown as {
+      primeDiscoveryBranchLookups: (contexts: { branch: string; directoryPaths: string[] }[]) => Promise<void>;
+      getPrGraphqlClient: () => unknown;
+      getPrFetcher: () => unknown;
+    };
+    // Construct the inert adapters before guarding transport access.
+    service.getPrFetcher();
+    const transport = vi.spyOn(service, "getPrGraphqlClient").mockImplementation(() => {
+      throw new Error("Disabled discovery must not access GraphQL");
+    });
+    isProviderEnabled.mockReturnValue(false);
+    try {
+      await expect(service.primeDiscoveryBranchLookups([
+        { branch: "feature", directoryPaths: ["/fixture/repo"] },
+      ])).resolves.toBeUndefined();
+      expect(isProviderEnabled).toHaveBeenCalledWith("github");
+      expect(transport).not.toHaveBeenCalled();
+    } finally {
+      transport.mockRestore();
+    }
+  });
+
   beforeAll(async () => {
     // Import after the hoisted mocks exist, but before an individual test can
     // pay the cold module-graph evaluation cost.
@@ -1203,6 +1228,7 @@ describe("app server ipc", () => {
   });
 
   beforeEach(() => {
+    isProviderEnabled.mockReturnValue(true);
     backendRegistryLifecycle.existing = true;
     backendRegistryLifecycle.get.mockClear();
     prAutomationSettings.state.backgroundPrPollingEnabled = true;
@@ -1412,6 +1438,28 @@ describe("app server ipc", () => {
       expect.objectContaining({ requestId: 73 }),
     );
     expect(searchForJump).not.toHaveBeenCalled();
+  });
+
+  it("routes notice acknowledgement only from a subscribed renderer", async () => {
+    const { GITHUB_PR_AUTHENTICATION_FAILURE_ACK_CHANNEL } = await import("../../shared/ipc");
+    const { subscribersForChannel } = await import("../window-channels");
+    const { appServerService } = await import("../ipc/app-server");
+    const sender = subscribersForChannel("test")[0]!;
+    const acknowledge = vi.spyOn(appServerService, "acknowledgeGithubPrAuthenticationNotice")
+      .mockImplementation(() => {});
+    registerAppServerIpcHandlers();
+    const handler = handlers.get(GITHUB_PR_AUTHENTICATION_FAILURE_ACK_CHANNEL);
+    expect(handler).toBeDefined();
+    try {
+      vi.mocked(subscribersForChannel).mockReturnValueOnce([sender]);
+      await handler?.({ sender });
+      expect(acknowledge).toHaveBeenCalledTimes(1);
+      vi.mocked(subscribersForChannel).mockReturnValueOnce([sender]);
+      await handler?.({ sender: {} });
+      expect(acknowledge).toHaveBeenCalledTimes(1);
+    } finally {
+      acknowledge.mockRestore();
+    }
   });
 
   it("invalidates the GraphQL token during an auth recheck", async () => {

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { classifyDirectory } from "@pwragent/shared";
 import type { NavigationDirectoryRow, NavigationQueryAnchor } from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
@@ -73,6 +73,15 @@ export function useBoundedNavigationWindow(params: Demand & {
   const demand = buildNavigationWindowDemand({ ...demandParams, disclosedParents });
   addVisibleMountedOwnerDemand({ demand, pages, target: params.target, selectedRef: params.selectedRef });
   const demandKey = JSON.stringify([...demand]);
+  // A previous lens can still own the snapshot during the render that changes
+  // demand. Empty Drafts and collapsed Directories are ready only after that
+  // transition, just like lenses with collection pages.
+  const presentationReady = state.resources.size === demand.size
+    && [...demand].every(([id, request]) => {
+      const resource = state.resources.get(id);
+      return resource && JSON.stringify(resource.state.request) === JSON.stringify(request)
+        && Boolean(resource.state.page || resource.state.error);
+    });
   const demandRef = useRef(demand);
   demandRef.current = demand;
 
@@ -92,7 +101,7 @@ export function useBoundedNavigationWindow(params: Demand & {
     };
   }, [desktopApi]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const controller = controllerRef.current;
     if (!controller) return;
     controller.setVisible(enabled && visible && connected);
@@ -170,5 +179,5 @@ export function useBoundedNavigationWindow(params: Demand & {
   const restart = useCallback((id: string) => controllerRef.current?.restart(id) ?? Promise.resolve(), []);
   const setVisibleAnchor = useCallback((id: string, anchor: NavigationQueryAnchor | undefined) => controllerRef.current?.setVisibleAnchor(id, anchor), []);
   const connectionError = !connected && connection?.target === targetKey ? connection.error : undefined;
-  return { ...state, directories, selectedDirectoryKeys, connected, ...(connectionError ? { connectionError } : {}), invalidate, refresh, loadMore, rebaseline, restart, setVisibleAnchor };
+  return { ...state, presentationReady, directories, selectedDirectoryKeys, connected, ...(connectionError ? { connectionError } : {}), invalidate, refresh, loadMore, rebaseline, restart, setVisibleAnchor };
 }

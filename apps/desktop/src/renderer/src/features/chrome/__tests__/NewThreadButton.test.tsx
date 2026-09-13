@@ -152,6 +152,83 @@ describe("NewThreadButton", () => {
     expect(onCreateThread).not.toHaveBeenCalled();
   });
 
+  it("orders 'Add a Project Directory…' above the federation instances", async () => {
+    render(
+      <NewThreadButton
+        directoryLabel="PwrAgnt"
+        onAddProjectDirectory={vi.fn()}
+        onCreateThread={vi.fn()}
+        onCreateThreadOnTarget={vi.fn()}
+        onCreateThreadWithoutDirectory={vi.fn()}
+        remoteTargets={[
+          {
+            availability: "available",
+            instanceId: "studio-work",
+            label: "Studio Mac / work",
+          },
+          {
+            availability: "available",
+            instanceId: "laptop-default",
+            label: "Laptop",
+          },
+        ]}
+      />,
+    );
+
+    fireEvent.mouseEnter(
+      screen.getByRole("button", { name: "New thread" })
+        .parentElement as HTMLElement,
+    );
+
+    // The federation group is the only unbounded part of this menu, so every
+    // fixed action has to precede it — after it, an action sits at an offset
+    // that grows with the machine count and drops below the scrolling card's
+    // fold. Pinned here because nothing about the JSX order enforces it.
+    const menu = await screen.findByRole("menu");
+    expect(
+      within(menu)
+        .getAllByRole("menuitem")
+        .map((item) => item.textContent),
+    ).toEqual([
+      "New chat in PwrAgnt",
+      "New chat without a directory",
+      "Add a Project Directory…",
+      "Studio Mac / work",
+      "Laptop",
+    ]);
+  });
+
+  it("keeps the Add row focusable and inert while a registration runs", async () => {
+    const onAddProjectDirectory = vi.fn();
+    render(
+      <NewThreadButton
+        addingProjectDirectory
+        onAddProjectDirectory={onAddProjectDirectory}
+        onCreateThread={vi.fn()}
+      />,
+    );
+
+    fireEvent.mouseEnter(
+      screen.getByRole("button", { name: "New thread" })
+        .parentElement as HTMLElement,
+    );
+
+    // `registerDirectoryFromDisk` runs after the native picker closes, so the
+    // window is interactive while this row reads "Adding Project Directory…".
+    // A real `disabled` attribute would drop it from the tab order there and
+    // hide the in-progress state from keyboard and screen-reader users — the
+    // same reason the federation rows use `aria-disabled`.
+    const row = await screen.findByRole("menuitem", {
+      name: "Adding Project Directory…",
+    });
+    expect(row).toHaveAttribute("aria-disabled", "true");
+    expect(row).not.toBeDisabled();
+
+    fireEvent.click(row);
+    expect(onAddProjectDirectory).not.toHaveBeenCalled();
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+  });
+
   it("carries the verb in the group label instead of repeating it per row", async () => {
     render(
       <NewThreadButton

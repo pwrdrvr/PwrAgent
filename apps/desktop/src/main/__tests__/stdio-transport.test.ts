@@ -1,3 +1,4 @@
+import { codexAuthState } from "../codex-auth-state";
 import { EventEmitter } from "node:events";
 import {
   chmodSync,
@@ -93,6 +94,113 @@ describe("stdio transport Codex CLI resolution", () => {
 });
 
 describe("StdioJsonRpcTransport", () => {
+  it("stops further requests after a rejected refresh token", async () => {
+    const child = new MockCodexChildProcess();
+    spawnMock.mockReturnValue(child);
+    const transport = new StdioJsonRpcTransport({
+      command: "codex",
+      env: { ...process.env, CODEX_HOME: "/fixture/rejected-codex" },
+    });
+    await transport.connect();
+    child.stderr.write("ERROR codex_login::auth::manager: Your access token could not be refreshed. Please log out and sign in again.\n");
+    expect(() => transport.send(JSON.stringify({ id: 1, method: "model/list" })))
+      .toThrow("sign in");
+    expect(child.writes).toEqual([]);
+    await transport.close();
+    await expect(transport.connect()).rejects.toThrow("sign in");
+    codexAuthState.verified("/fixture/rejected-codex");
+    const recovered = new MockCodexChildProcess();
+    spawnMock.mockReturnValue(recovered);
+    await transport.connect();
+    transport.send(JSON.stringify({ id: 2, method: "model/list" }));
+    expect(recovered.writes).toHaveLength(1);
+    await transport.close();
+  });
+
+  it("keeps recovery scoped to its profile and restricts it to authentication probes", async () => {
+    const home = "/fixture/recovery-codex";
+    const child = new MockCodexChildProcess();
+    spawnMock.mockReturnValue(child);
+    codexAuthState.reject(home);
+    const rejected = vi.fn();
+    const transport = new StdioJsonRpcTransport({
+      command: "codex",
+      env: { ...process.env, CODEX_HOME: home },
+      authenticationRecovery: true,
+      onAuthenticationRejected: rejected,
+    });
+    await transport.connect();
+    codexAuthState.reject("/fixture/other-codex");
+    expect(rejected).not.toHaveBeenCalled();
+    expect(() => transport.send(JSON.stringify({ id: 1, method: "turn/start" })))
+      .toThrow("Only authentication verification");
+    transport.send(JSON.stringify({ id: 2, method: "account/rateLimits/read" }));
+    child.stderr.write("ERROR codex_login::auth::manager: Your access token could not be refreshed. Please log out and sign in again.\n");
+    expect(rejected).toHaveBeenCalledWith(home);
+    await transport.close();
+    codexAuthState.verified(home);
+    codexAuthState.verified("/fixture/other-codex");
+  });
+
+  it("uses RPC auth errors but ignores transcript text and unrelated MCP errors", async () => {
+    const home = "/fixture/rpc-codex";
+    const child = new MockCodexChildProcess();
+    spawnMock.mockReturnValue(child);
+    const transport = new StdioJsonRpcTransport({
+      command: "codex",
+      env: { ...process.env, CODEX_HOME: home },
+    });
+    await transport.connect();
+    child.stdout.write(JSON.stringify({
+      method: "item/agentMessage/delta",
+      params: { delta: "Your access token could not be refreshed" },
+    }) + "\n");
+    transport.send(JSON.stringify({ id: 1, method: "mcpServer/oauth/login" }));
+    transport.send(JSON.stringify({ id: 2, method: "account/rateLimits/read" }));
+    child.stdout.write(JSON.stringify({ id: 1, error: { message: "MCP server: 401 Unauthorized" } }) + "\n");
+    expect(codexAuthState.isBlocked(home)).toBe(false);
+    child.stdout.write(JSON.stringify({
+      id: 2,
+      error: { message: "failed to fetch codex rate limits: GET https://chatgpt.com/backend-api/wham/usage failed: 401 Unauthorized" },
+    }) + "\n");
+    expect(codexAuthState.isBlocked(home)).toBe(true);
+    await transport.close();
+    codexAuthState.verified(home);
+  });
+
+  it.each(["rpc", "stderr", "turn"])("does not reject the Codex profile for MCP OAuth failures from %s", async (source) => {
+    const home = "/fixture/mcp-auth-" + source;
+    const child = new MockCodexChildProcess();
+    spawnMock.mockReturnValue(child);
+    const rejected = vi.fn();
+    const transport = new StdioJsonRpcTransport({
+      command: "codex",
+      env: { ...process.env, CODEX_HOME: home },
+      onAuthenticationRejected: rejected,
+    });
+    await transport.connect();
+    try {
+      if (source === "rpc") {
+        transport.send(JSON.stringify({ id: 1, method: "mcpServer/oauth/login", params: { name: "fixture" } }));
+        child.stdout.write(JSON.stringify({ id: 1, error: {
+          code: -32603, message: "invalid_refresh_token: Your access token could not be refreshed.",
+        } }) + "\n");
+      } else if (source === "turn") {
+        transport.send(JSON.stringify({ id: 1, method: "turn/start" }));
+        child.stdout.write(JSON.stringify({ id: 1, error: { message: "invalid_refresh_token" } }) + "\n");
+      } else {
+        child.stderr.write("2026-09-13T00:35:46Z ERROR rmcp::auth: invalid_refresh_token\n");
+        child.stderr.write('"code": "invalid_refresh_token"\n');
+      }
+      expect(codexAuthState.isBlocked(home)).toBe(false);
+      expect(rejected).not.toHaveBeenCalled();
+      expect(() => transport.send(JSON.stringify({ id: 2, method: "model/list" }))).not.toThrow();
+    } finally {
+      await transport.close();
+      codexAuthState.verified(home);
+    }
+  });
+
   it("prepends PwrAgent's bundled ripgrep for an external Codex runtime and its shell policy", async () => {
     const child = new MockCodexChildProcess();
     const bundledToolsDirectory = createBundledToolsDirectory();

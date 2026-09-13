@@ -774,6 +774,26 @@ textarea,
   gap: 2px;
 }
 
+/* Nothing in this card may shrink. It is a scrolling container, so negative
+   free space has to become scroll — but a flex column spends that deficit on
+   its children FIRST and only scrolls whatever it could not squeeze out.
+   `min-height: 36px` gives every row a floor to refuse with; the 1px
+   separators have none, so an overflowing card took its whole deficit out of
+   them and computed them to `height: 0` while every row kept its size.
+
+   That is exactly how it presented, and why it read as arbitrary: both rules
+   painted in a directory-less context (card 385px, content 385px), and
+   vanished the moment a directory context added its third row and pushed the
+   content 3px past the 420px cap. The declaration was never missing — the
+   rules were 1px in the stylesheet and 0px on screen.
+
+   On the children rather than the card so anything added here later inherits
+   the guarantee; the federation group already grows without bound, and the
+   whole point of the cap is that this card scrolls. */
+.new-thread-menu__card > * {
+  flex-shrink: 0;
+}
+
 .new-thread-menu__item {
   width: 100%;
   display: block;

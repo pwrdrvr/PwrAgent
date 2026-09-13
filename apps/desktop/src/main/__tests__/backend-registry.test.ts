@@ -6346,6 +6346,31 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  it("suspends quota probes while Codex authentication is rejected and resumes after verification", async () => {
+    const codexClient = Object.assign(new MockBackendClient({
+      rateLimits: [{ name: "Weekly limit", remaining: 91 }],
+    }), {
+      isAuthenticationRequired: vi.fn(() => false),
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+    });
+    await registry.refreshProvidersAtStartup(issueProviderDiscoveryPermit("startup"));
+    const read = vi.spyOn(codexClient, "readRateLimits");
+    codexClient.isAuthenticationRequired.mockReturnValue(true);
+    await registry.listBackends({ refreshRateLimits: true });
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 30_000);
+    await registry.listBackends({ refreshRateLimits: true });
+    expect(read).not.toHaveBeenCalled();
+    codexClient.isAuthenticationRequired.mockReturnValue(false);
+    clock.mockReturnValue(Date.now() + 30_000);
+    await registry.listBackends({ refreshRateLimits: true });
+    expect(read).toHaveBeenCalledOnce();
+    clock.mockRestore();
+    await registry.close();
+  });
+
   it("refreshes idle Codex quotas without rediscovery and coalesces repeated reads", async () => {
     const codexClient = new MockBackendClient({
       rateLimits: [{ name: "Weekly limit", remaining: 91 }],
@@ -8157,6 +8182,91 @@ describe("DesktopBackendRegistry", () => {
       });
     });
     expect(replace).not.toHaveBeenCalled();
+    await registry.close();
+  });
+
+  it("reloads provider threads and publishes navigation after login repairs failed startup", async () => {
+    const replace = vi.fn();
+    const codexClient = new MockBackendClient({
+      listThreadsError: new Error("provider unavailable"),
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+      discoverLocalAcpAgents: async () => [],
+      providerThreadSnapshotStore: {
+        list: () => [
+          {
+            backend: "codex" as const,
+            observedAt: 100,
+            threads: [
+              {
+                id: "last-good-thread",
+                source: "codex" as const,
+                title: "Last known good",
+                titleSource: "explicit" as const,
+                linkedDirectories: [],
+                updatedAt: 100,
+              },
+            ],
+          },
+        ],
+        replace,
+      },
+    });
+
+    await expect(registry.listThreads({
+      callerReason: "navigation-snapshot",
+    })).resolves.toEqual([
+      expect.objectContaining({ id: "last-good-thread" }),
+    ]);
+    await registry.refreshProvidersAtStartup(
+      issueProviderDiscoveryPermit("startup"),
+    );
+    await vi.waitFor(() => {
+      expect(codexClient.listThreadsCallCount).toBe(1);
+    });
+    await vi.waitFor(() => {
+      expect(registry.getStartupProviderRefreshStatus()).toEqual({
+        state: "degraded",
+        failedProviders: 1,
+      });
+    });
+    expect(replace).not.toHaveBeenCalled();
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => { events.push(event); });
+    const recoveredThreads: AppServerThreadSummary[] = [{
+      id: "recovered-thread",
+      source: "codex",
+      title: "Recovered after login",
+      titleSource: "explicit",
+      linkedDirectories: [],
+      updatedAt: 200,
+    }];
+    const listing = vi.spyOn(codexClient, "listThreads")
+      .mockRejectedValueOnce(new Error("Temporary recovery failure"))
+      .mockResolvedValue(recoveredThreads);
+    await expect(registry.refreshCodexAfterAuthentication(
+      issueProviderDiscoveryPermit("settings-user-action"),
+    )).rejects.toThrow("Temporary recovery failure");
+    expect(replace).not.toHaveBeenCalled();
+    expect(events.some((event) => event.notification.method === "navigation/providerThreads/refreshed")).toBe(false);
+    await registry.refreshCodexAfterAuthentication(
+      issueProviderDiscoveryPermit("settings-user-action"),
+    );
+    expect(listing).toHaveBeenCalled();
+    expect(replace).toHaveBeenCalledWith(expect.objectContaining({
+      backend: "codex",
+      threads: [expect.objectContaining({ id: "recovered-thread" })],
+    }));
+    expect(registry.getStartupProviderRefreshStatus()).toEqual({ state: "ready" });
+    expect(events.some((event) => event.notification.method === "navigation/providerThreads/refreshed")).toBe(true);
+    listing.mockClear();
+    await expect(registry.listThreads({
+      callerReason: "navigation-snapshot",
+      enrichDirectories: false,
+    })).resolves.toEqual([expect.objectContaining({ id: "recovered-thread" })]);
+    expect(listing).not.toHaveBeenCalled();
     await registry.close();
   });
 
@@ -46975,6 +47085,27 @@ script = "printf setup"
     expect(messagingArchiveCleaner.requests).toHaveLength(2);
 
     expect(restoreTokenMiser).toHaveBeenCalledExactlyOnceWith("thread-1");
+    await registry.close();
+  });
+
+  it("skips archive cleanup probes while Codex authentication is blocked", async () => {
+    const codexClient = Object.assign(new MockBackendClient({
+      listThreadsError: new Error("Codex is logged out. Please sign in again."),
+    }), {
+      isAuthenticationRequired: () => true,
+    });
+    const listing = vi.spyOn(codexClient, "listThreads");
+    const messagingStore = createMessagingArchiveCleanupStoreMock({
+      bindings: [{ id: "binding-telegram", threadId: "thread-1" }],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      messagingStore,
+      overlayStore: createOverlayStoreMock(),
+    });
+    await expect(registry.listThreads({ backend: "codex" })).resolves.toEqual([]);
+    expect(listing.mock.calls.some(([params]) => params?.archived === true)).toBe(false);
+    expect(messagingStore.revokedBindingIds).toEqual([]);
     await registry.close();
   });
 

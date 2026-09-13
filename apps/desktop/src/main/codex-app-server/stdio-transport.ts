@@ -1,3 +1,6 @@
+import path from "node:path";
+import { resolveDefaultCodexHome } from "@pwrdrvr/codex-discovery";
+import { codexAuthState, isCodexAuthenticationFailure } from "../codex-auth-state";
 import {
   spawn,
   type ChildProcessWithoutNullStreams,
@@ -33,6 +36,9 @@ const PROCESS_FORCE_CLOSE_TIMEOUT_MS = 5_000;
 
 export type StdioJsonRpcTransportOptions = {
   command: string;
+  authenticationRecovery?: boolean;
+  onAuthenticationRejected?: (home: string) => void;
+
   args?: string[];
   env?: NodeJS.ProcessEnv;
   resolveArgs?: (env: NodeJS.ProcessEnv) => Promise<string[]> | string[];
@@ -68,6 +74,9 @@ function isJsonRpcResponseEnvelope(message: string): boolean {
 }
 
 export class StdioJsonRpcTransport implements JsonRpcTransport {
+  private codexHome?: string;
+  private requestMethods = new Map<string | number, string>();
+  private unsubscribeAuth?: () => void;
   private childProcess: ChildProcessWithoutNullStreams | null = null;
   private messageHandler: (message: string) => void = () => undefined;
   private closeHandler: (error?: Error) => void = () => undefined;
@@ -120,6 +129,14 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
       ? await this.options.resolveEnv()
       : this.options.env ?? process.env;
     this.assertCurrentGeneration(generation);
+    this.codexHome = resolvedEnv.CODEX_HOME || resolveDefaultCodexHome();
+    if (!this.options.authenticationRecovery) codexAuthState.assertAvailable(this.codexHome);
+    this.unsubscribeAuth?.();
+    this.unsubscribeAuth = codexAuthState.subscribe((home) => {
+      if (this.codexHome && path.resolve(this.codexHome) === home && codexAuthState.isBlocked(home)) {
+        this.options.onAuthenticationRejected?.(this.codexHome);
+      }
+    });
     const env = prependBundledToolsToPath(
       buildPwrAgentChildProcessEnv(resolvedEnv),
       {
@@ -185,6 +202,23 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
 
     const stdoutReader = readline.createInterface({ input: child.stdout });
     stdoutReader.on("line", (line: string) => {
+      // Only error envelopes and error notifications are auth evidence;
+      // transcript text and tool output must never invalidate a login.
+      try {
+        const message = JSON.parse(line);
+        const requestMethod = message.method === undefined ? this.requestMethods.get(message.id) : undefined;
+        if (message.method === undefined && message.id !== undefined) this.requestMethods.delete(message.id);
+        const error = message.error
+          ?? (message.method === "error" ? message.params : undefined)
+          ?? (["turn/completed", "turn/failed"].includes(message.method) ? message.params?.turn?.error : undefined);
+        const source = message.error ? requestMethod : message.method;
+        // MCP OAuth errors describe that server's credentials, never Codex's.
+        if (error && source && /^(?:account|model|thread|turn)\//.test(source)) {
+          this.observeAuthenticationError(JSON.stringify(error), source.startsWith("account/"));
+        } else if (error && source === "error" && message.params?.threadId) {
+          this.observeAuthenticationError(JSON.stringify(error));
+        }
+      } catch { /* JSON-RPC owns malformed-message reporting. */ }
       this.messageHandler(line);
     });
 
@@ -202,6 +236,12 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
     let stderrLinesThisWindow = 0;
     let stderrSuppressedThisWindow = 0;
     stderrReader.on("line", (line: string) => {
+      // Only a diagnostic attributed to Codex's own auth/API modules is
+      // credential evidence. Multiline JSON and MCP diagnostics have no such
+      // provenance and may describe another OAuth account.
+      const diagnostic = line.replace(/\u001b\[[0-9;]*m/g, "").trim()
+        .match(/^(?:\S+\s+)?(?:ERROR|WARN)\s+(codex_login::auth(?:::[\w]+)*|codex_models_manager::[\w:]+|codex_api::[\w:]+):\s*(.*)$/);
+      if (diagnostic) this.observeAuthenticationError(diagnostic[2], diagnostic[1].startsWith("codex_login::auth"));
       const trimmed = line.trim();
       if (trimmed.length === 0) {
         return;
@@ -245,7 +285,10 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
   }
 
   async close(): Promise<void> {
+    this.unsubscribeAuth?.();
+    this.unsubscribeAuth = undefined;
     this.closeRequested = true;
+    this.requestMethods.clear();
     this.lifecycleGeneration += 1;
     if (this.closePromise) {
       return await this.closePromise;
@@ -267,7 +310,34 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
     return await this.closePromise;
   }
 
+  private observeAuthenticationError(message: string, credentialSource = false): void {
+    // Generic OAuth codes alone are meaningful only at the Codex account/auth
+    // boundary. A turn or model request can also report an MCP failure.
+    if (!credentialSource) {
+      if (/\bmcp\b|mcpServer|rmcp::/i.test(message)) return;
+      message = message.replace(/invalid_refresh_token|refresh_token_(?:expired|reused|invalidated)/gi, "");
+    }
+    if (!this.closeRequested && this.codexHome && isCodexAuthenticationFailure(message)) {
+      const alreadyBlocked = codexAuthState.isBlocked(this.codexHome);
+      codexAuthState.reject(this.codexHome);
+      // Recovery clients connect while the latch is already set. Their own
+      // rejection must still stop verification; cached model data is not proof
+      // that refreshed credentials work.
+      if (alreadyBlocked) this.options.onAuthenticationRejected?.(this.codexHome);
+    }
+  }
+
   send(message: string): void {
+    if (this.codexHome && !isJsonRpcResponseEnvelope(message)) {
+      if (!this.options.authenticationRecovery) {
+        codexAuthState.assertAvailable(this.codexHome);
+      } else {
+        const method = JSON.parse(message).method;
+        if (!["initialize", "initialized", "account/read", "account/rateLimits/read"].includes(method)) {
+          throw new Error("Only authentication verification is allowed during Codex recovery.");
+        }
+      }
+    }
     const child = this.childProcess;
     if (this.closeRequested) {
       if (isJsonRpcResponseEnvelope(message)) {
@@ -281,6 +351,15 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
     }
     if (!child?.stdin) {
       throw new Error("codex app server stdio not connected");
+    }
+    const envelope = JSON.parse(message);
+    if (envelope.id !== undefined && typeof envelope.method === "string") {
+      // Timed-out requests may never receive a response. Eviction fails closed:
+      // an uncorrelated response cannot invalidate profile authentication.
+      if (this.requestMethods.size >= 1024) {
+        this.requestMethods.delete(this.requestMethods.keys().next().value!);
+      }
+      this.requestMethods.set(envelope.id, envelope.method);
     }
     child.stdin.write(`${message}\n`);
   }

@@ -16,6 +16,42 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
+it("restores a lens range synchronously while a fresh lease refreshes it in place", async () => {
+  const refreshed = deferred<NavigationQueryPage>();
+  const read = vi.fn().mockResolvedValueOnce(page({ queryKey: "inbox", complete: true, nextCursor: undefined }))
+    .mockResolvedValueOnce(page({ queryKey: "recents" }))
+    .mockReturnValueOnce(refreshed.promise);
+  const release = vi.fn(async () => undefined);
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read, releaseNavigationQuery: release });
+  const inbox = new Map([["lens", request()]]);
+  const recents = new Map([["lens", { ...request(), query: { kind: "lens" as const, lens: "recents" as const } }]]);
+  queries.setDemand(inbox);
+  await vi.waitFor(() => expect(queries.getSnapshot().resources.get("lens")?.loading).toBe(false));
+  queries.setDemand(recents);
+  await vi.waitFor(() => expect(queries.getSnapshot().resources.get("lens")?.state.page?.queryKey).toBe("recents"));
+  queries.setDemand(inbox);
+  expect(queries.getSnapshot().resources.get("lens")?.state.page?.queryKey).toBe("inbox");
+  expect(queries.getSnapshot().resources.get("lens")?.loading).toBe(true);
+  await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(3));
+  expect(read.mock.calls[2]?.[1]).not.toBe(read.mock.calls[0]?.[1]);
+  expect(read.mock.calls[2]?.[0].completeBaselineRevision).toBeUndefined();
+  refreshed.resolve(page({ queryKey: "inbox-updated" }));
+  await vi.waitFor(() => expect(queries.getSnapshot().resources.get("lens")?.state.page?.queryKey).toBe("inbox-updated"));
+  queries.dispose();
+});
+
+it("does not restore another owner's lens even with the same resource id", async () => {
+  const pending = deferred<NavigationQueryPage>();
+  const read = vi.fn().mockResolvedValueOnce(page()).mockReturnValueOnce(pending.promise);
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+  queries.setDemand(new Map([["lens", request()]]));
+  await vi.waitFor(() => expect(queries.getSnapshot().resources.get("lens")?.loading).toBe(false));
+  queries.setDemand(new Map([["lens", { ...request(), federationTarget: { scope: "remote", instanceId: "other" } }]]));
+  expect(queries.getSnapshot().resources.get("lens")?.state.page).toBeUndefined();
+  queries.dispose();
+  pending.resolve(page());
+});
+
 it("requests only demanded first pages and loads continuation only on explicit demand", async () => {
   const read = vi.fn<NonNullable<DesktopApi["getNavigationQueryPage"]>>(async () => page());
   const release = vi.fn(async () => undefined);
@@ -113,6 +149,25 @@ it("enforces the aggregate retained range budget while keeping the accepted base
   expect(state.stale).toBe(true);
   expect(state.error).toContain("retained-page budget");
   expect(new TextEncoder().encode(JSON.stringify(state.page)).byteLength).toBeLessThan(8 * 1024 * 1024);
+  queries.dispose();
+});
+
+it("evicts inactive ranges before they consume the active view's byte budget", async () => {
+  const read = vi.fn(async () => page({ complete: true, nextCursor: undefined,
+    directories: [{ key: "directory", kind: "directory" as const, label: "x".repeat(240_000),
+      counts: { total: 0, active: 0, unread: 0, review: 0 }, pinnedRootCount: 0, unpinnedRootCount: 0, launchpadPresent: false }],
+  }));
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+  for (let index = 0; index < 37; index += 1) {
+    queries.setDemand(new Map([["lens", request(String(index))]]));
+    await vi.waitFor(() => expect(queries.getSnapshot().resources.get("lens")?.loading).toBe(false));
+    expect(queries.getSnapshot().resources.get("lens")?.state.error).toBeUndefined();
+  }
+  queries.setVisible(false);
+  queries.setDemand(new Map([["lens", request("0")]]));
+  expect(queries.getSnapshot().resources.get("lens")?.state.page).toBeUndefined();
+  queries.setDemand(new Map([["lens", request("36")]]));
+  expect(queries.getSnapshot().resources.get("lens")?.state.page).toBeDefined();
   queries.dispose();
 });
 
