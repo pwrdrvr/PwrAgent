@@ -483,6 +483,28 @@ async function finishElectronLaunch(args: {
       launchId,
     }),
   );
+  // Bound every action on every window this app opens.
+  //
+  // Playwright leaves actions unbounded by default, so a click that never
+  // becomes actionable waits out the whole test budget and reports a bare
+  // "Test timeout of 30000ms exceeded" — no call log, no "resolved to N
+  // elements", no "intercepts pointer events", and Electron traces carry no
+  // DOM snapshots to fall back on. Two Windows transcript hangs cost three
+  // CI cycles between them and produced no evidence at all.
+  //
+  // It has to be set HERE and not as `actionTimeout` in `playwright.config.ts`.
+  // That option is applied by the fixtures that build a browser context;
+  // `_electron.launch()` makes its own, so the config value silently reaches
+  // nothing — which is exactly how those two hangs survived a config that
+  // claimed to bound them. Setting it on the context rather than the first
+  // page also covers the Star Map and federation windows opened later.
+  //
+  // This shortens an unbounded wait; it extends nothing. No action in this
+  // suite legitimately runs for twenty seconds, every `waitFor*` call here
+  // already passes its own explicit timeout (which overrides this), and
+  // `expect` polling has its own budget entirely.
+  electronApp.context().setDefaultTimeout(20_000);
+
   const window = await electronApp.firstWindow();
 
   await waitForRendererReady({
