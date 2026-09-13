@@ -1,4 +1,4 @@
-import { setFederationTrafficCapture } from "../federation/federation-traffic-capture";
+import { setFederationTrafficCapture, snapshotFederationTrafficHistory } from "../federation/federation-traffic-capture";
 import { mkdtempSync, rmSync } from "node:fs";
 import net from "node:net";
 import os from "node:os";
@@ -318,6 +318,7 @@ describe("federation transport", () => {
   });
 
   it.each([[false, false], [true, false], [false, true], [true, true]])("reports correlated frames at both ends (Noise: %s, capture: %s)", async (encrypted, capture) => {
+    const beforeHistory = snapshotFederationTrafficHistory().trim().split("\n").length;
     setFederationTrafficCapture(capture);
     const prefix = capture ? "federation captured frame" : "large federation frame";
     const gatewayNoise = generateNoiseStaticKeyPair();
@@ -404,6 +405,12 @@ describe("federation transport", () => {
       kind: "response",
       requestId: "request-transfer",
     });
+
+    const history = snapshotFederationTrafficHistory().trim().split("\n");
+    const recent = history.slice(beforeHistory).map((line) => JSON.parse(line));
+    expect(recent.filter((record) => record.requestId === "request-transfer")).toHaveLength(4);
+    expect(recent.filter((record) => record.envelopeKind === "request").map((record) => record.direction).sort()).toEqual(["received", "sent"]);
+    expect(history.join("\n")).not.toContain("privatePayload");
 
     // Envelope frames only — the auth exchange fires no taps, so one
     // round-trip is exactly two events per side.

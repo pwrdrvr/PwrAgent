@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { buildThreadPricingDisplay } from "@pwragent/shared";
 import type { AppServerReadThreadResponse } from "@pwragent/shared";
 import { conditionalThreadRead } from "../app-server/conditional-thread-read";
 
@@ -54,4 +55,28 @@ describe("conditional thread pages", () => {
       expect(result.replay).toBe(changed.replay);
     }
   });
+});
+
+
+it("keeps repeated unchanged display pages within a 40 KB budget for 100 revalidations", () => {
+  const original: AppServerReadThreadResponse = {
+    backend: "codex", fetchedAt: 1, threadId: "thread",
+    replay: { entries: [], messages: [], pagination: { supportsPagination: true, hasPreviousPage: false } },
+    display: { revision: "collection", pricing: buildThreadPricingDisplay({}), nextCursor: "collection:20",
+      subAgents: Array.from({ length: 20 }, (_, i) => ({ monitorId: String(i), createdAt: 1, updatedAt: 1,
+        status: "success", task: "x".repeat(10_000) })) },
+  };
+  const initial = conditionalThreadRead(original, "");
+  expect(Buffer.byteLength(JSON.stringify(initial))).toBeGreaterThan(200_000);
+  let bytes = 0;
+  for (let i = 0; i < 100; i++) {
+    const revalidated = conditionalThreadRead({ ...original, fetchedAt: i + 2 }, initial.replayRevision);
+    expect(revalidated.unchanged).toBe(true);
+    expect(revalidated.display).toBeUndefined();
+    bytes += Buffer.byteLength(JSON.stringify(revalidated));
+  }
+  expect(bytes).toBeLessThan(40_000);
+  const changed = conditionalThreadRead({ ...original, display: { ...original.display!, revision: "changed" } }, initial.replayRevision);
+  expect(changed.unchanged).not.toBe(true);
+  expect(changed.display?.revision).toBe("changed");
 });

@@ -230,7 +230,7 @@ describe("bounded Federation collection reads", () => {
     const legacy = vi.fn();
     const unavailable = mode === "missing" ? undefined
       : vi.fn().mockRejectedValue(Object.assign(new Error("method_not_found"), { code: "method_not_found" }));
-    const backend = { getProjectPage: unavailable, getNavigationDescendantPage: unavailable, lookupArchivedThreads: unavailable,
+    const backend = { getProjectPage: unavailable, getNavigationQueryPage: unavailable, lookupArchivedThreads: unavailable,
       getNavigationSnapshot: legacy, listThreads: legacy } as unknown as FederationBackendOperations;
     await expect(readFederationPinnedSnapshot(backend, ["codex:one"])).rejects.toThrow("Upgrade");
     await expect(readFederationProjectSnapshot(backend)).rejects.toThrow("Upgrade");
