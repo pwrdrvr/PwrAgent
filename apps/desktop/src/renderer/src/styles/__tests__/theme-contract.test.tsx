@@ -6,6 +6,16 @@ const testDir = path.dirname(fileURLToPath(import.meta.url));
 const cssPath = path.resolve(testDir, "../app.css");
 const css = readFileSync(cssPath, "utf8");
 
+/**
+ * The two platforms that paint their own title strip, escaped for a regex,
+ * exactly as `app.css` spells them. One constant so that a rule quietly
+ * dropping back to win32-only fails every assertion at once rather than one —
+ * which is what these `.thread-view` / masthead rules would otherwise do to
+ * Linux, silently, since nothing else in the suite renders on it.
+ */
+const STRIP_PLATFORMS =
+  String.raw`:root:is\(\[data-platform="win32"\], \[data-platform="linux"\]\)`;
+
 function extractRootTokens(source: string): Record<string, string> {
   return extractTokensForSelector(source, ":root");
 }
@@ -850,9 +860,9 @@ describe("Tangerine Terminal theme contract", () => {
     );
   });
 
-  it("runs the Windows rail the full column height and bounds the header with it", () => {
-    // Windows draws its own full-width title strip, and that strip carries the
-    // window chrome (panel toggles, Star Map, MSG). What is left in the thread
+  it("runs the painted-strip rail the full column height and bounds the header with it", () => {
+    // Windows and Linux draw their own full-width title strip, and that strip
+    // carries the window chrome (panel toggles, Star Map, MSG). What is left in the thread
     // header is the thread's caption, so the header reads as a caption over
     // the chat column rather than a second chrome bar spanning the window:
     // the rail runs up to the underside of the strip, and the header stops at
@@ -866,10 +876,12 @@ describe("Tangerine Terminal theme contract", () => {
     // two rules are what keep that promise, so changing either without the
     // other silently reintroduces the constant.
     expect(css).toMatch(
-      /:root\[data-platform="win32"\] \.thread-view \{[^}]*position:\s*relative;/
+      new RegExp(`${STRIP_PLATFORMS} \\.thread-view \\{[^}]*position:\\s*relative;`)
     );
     expect(css).toMatch(
-      /:root\[data-platform="win32"\] \.thread-view__layout \{[^}]*position:\s*static;/
+      new RegExp(
+        `${STRIP_PLATFORMS} \\.thread-view__layout \\{[^}]*position:\\s*static;`
+      )
     );
     // Unpinned the header clears the 48px spine; pinned it clears the panel
     // too, read from the SAME `--context-rail-effective` the chat column
@@ -1609,14 +1621,17 @@ describe("Tangerine Terminal theme contract", () => {
       /:root\[data-platform="win32"\]\s*\.activity-titlebar\s*\{[\s\S]*?padding-left:\s*14px;[\s\S]*?padding-right:\s*var\(--win-caption-w[\s\S]*?\}/,
     );
     // The main sidebar masthead drops the stoplight gutter on every non-macOS
-    // platform now: Linux has a normal frame, and on Windows the masthead is
-    // hidden entirely (its wordmark + action buttons moved into the custom
-    // .app-titlebar strip), so there is no left reservation to keep.
+    // platform: there are no stoplights to clear. On the strip platforms it is
+    // hidden outright (its wordmark + action buttons moved into the custom
+    // .app-titlebar strip), so the `padding-left: 0` only ever paints on a
+    // platform that paints neither — which is why both rules are asserted.
     expect(css).toMatch(
       /:root\[data-platform\]:not\(\[data-platform="darwin"\]\)\s*\.sidebar__masthead\s*\{[\s\S]*?padding-left:\s*0;[\s\S]*?\}/,
     );
     expect(css).toMatch(
-      /:root\[data-platform="win32"\]\s*\.sidebar__masthead\s*\{[\s\S]*?display:\s*none;[\s\S]*?\}/,
+      new RegExp(
+        `${STRIP_PLATFORMS}\\s*\\.sidebar__masthead\\s*\\{[\\s\\S]*?display:\\s*none;[\\s\\S]*?\\}`
+      ),
     );
     // Same drop, except the Settings nav keeps its 8px lane inset — that
     // 8px is the row lane, not a stoplight reservation, and it puts the
@@ -1624,10 +1639,12 @@ describe("Tangerine Terminal theme contract", () => {
     expect(css).toMatch(
       /:root\[data-platform\]:not\(\[data-platform="darwin"\]\):not\(\[data-platform="win32"\]\)\s*\.settings-nav__masthead\s*\{[\s\S]*?padding-left:\s*8px;[\s\S]*?\}/,
     );
-    // Settings and Automations use the same Windows title strip as the main
+    // Settings and Automations use the same painted title strip as the main
     // shell, so their in-nav wordmarks would duplicate the one visible there.
     expect(css).toMatch(
-      /:root\[data-platform="win32"\]\s*:is\(\.settings-screen,\s*\.automations-screen\)\s*\.settings-nav__masthead\s*\{[\s\S]*?display:\s*none;[\s\S]*?\}/,
+      new RegExp(
+        `${STRIP_PLATFORMS}\\s*:is\\(\\.settings-screen,\\s*\\.automations-screen\\)\\s*\\.settings-nav__masthead\\s*\\{[\\s\\S]*?display:\\s*none;[\\s\\S]*?\\}`
+      ),
     );
   });
 

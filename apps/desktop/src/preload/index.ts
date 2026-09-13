@@ -455,6 +455,7 @@ import type {
   UpdateThreadExpectedBranchResponse,
   WriteDesktopSettingsConfigRequest,
 } from "@pwragent/shared";
+import type { WindowControlAction } from "../shared/ipc";
 import type { StarMapIntakeDispatchRequest } from "../shared/star-map-intake";
 import type { RendererErrorReport } from "../shared/renderer-error";
 import type { RendererDiagnosticLogRequest } from "../shared/renderer-diagnostic";
@@ -824,6 +825,8 @@ import {
   THREAD_MIGRATION_START_CHANNEL,
   WINDOW_FOCUS_SYNC_CHANNEL,
   WINDOW_FULLSCREEN_SYNC_CHANNEL,
+  WINDOW_CONTROL_CHANNEL,
+  WINDOW_FRAME_SYNC_CHANNEL,
   WINDOW_OPEN_NEW_THREAD_CHANNEL,
   WINDOW_OPEN_SETTINGS_CHANNEL,
   WINDOW_POINTER_SNAPSHOT_CHANNEL,
@@ -2342,6 +2345,25 @@ const desktopApi = Object.freeze({
     ipcRenderer.on(WINDOW_FULLSCREEN_SYNC_CHANNEL, listener);
     return () => {
       ipcRenderer.off(WINDOW_FULLSCREEN_SYNC_CHANNEL, listener);
+    };
+  },
+  // Linux paints its own caption buttons: a frameless window there has no
+  // stoplights and no Window Controls Overlay to hand them to. Invoke, not
+  // send, so a control that never reached a handler rejects rather than
+  // looking like it worked. It resolves with nothing — the glyph redraws from
+  // the frame-state pushes below, not from this call.
+  runWindowControl: (action: WindowControlAction): Promise<void> =>
+    ipcRenderer.invoke(WINDOW_CONTROL_CHANNEL, action) as Promise<void>,
+  onWindowFrameState: (
+    callback: (maximized: boolean) => void,
+  ): (() => void) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      payload?: { maximized?: unknown },
+    ) => callback(Boolean(payload?.maximized));
+    ipcRenderer.on(WINDOW_FRAME_SYNC_CHANNEL, listener);
+    return () => {
+      ipcRenderer.off(WINDOW_FRAME_SYNC_CHANNEL, listener);
     };
   },
   onOpenSettingsRequested: (

@@ -1,5 +1,7 @@
 import type { ReactElement } from "react";
-import { getDesktopApi, type DesktopApi } from "../../lib/desktop-api";
+import { SearchIcon } from "../../icons";
+import type { DesktopApi } from "../../lib/desktop-api";
+import { paintsAppTitleBar } from "../../lib/window-chrome";
 import { readRendererFederationTarget } from "../../lib/federation-window";
 import { FederationRemoteBadge } from "./FederationRemoteBadge";
 import type { FederationThreadTarget } from "./federation-thread-targets";
@@ -7,6 +9,7 @@ import { MessagingStatusBar } from "../messaging-status/MessagingStatusBar";
 import { AppMenuBar } from "./AppMenuBar";
 import { NewThreadButton } from "./NewThreadButton";
 import { PanelToggleButtons } from "./PanelToggleButtons";
+import { WindowControls } from "./WindowControls";
 import { FederationStatusControl } from "../federation-activity/FederationStatusControl";
 import type { StarMapToggleControls } from "../thread-detail/ThreadHeader";
 
@@ -18,19 +21,30 @@ export type AppTitleBarLayoutControls = {
 };
 
 /**
- * Windows-only custom title bar (GitHub-Desktop style). Consolidates the chrome
- * the native title bar would otherwise own into one frameless strip:
+ * The painted custom title bar (GitHub-Desktop style), on the two platforms
+ * that hide the native one AND the menu bar that lived inside it. Consolidates
+ * the chrome the native title bar would otherwise own into one frameless
+ * strip:
  *
  *   [PwrAgent] File … Help  [automations][settings][new]  …drag…  [MSG]   — ▢ ✕
  *
- * The OS caption buttons (min/max/close) are drawn by the Window Controls
- * Overlay at the far right; this strip fills the rest of the line. On Windows
- * the sidebar masthead (wordmark + action buttons) and the per-screen MSG
- * button are hidden (app.css), so these are their single home.
+ * Who draws the three buttons at the right differs, and that is the only
+ * difference between the two:
  *
- * Renders nothing off win32 — macOS keeps `hiddenInset`, the sidebar masthead,
- * and the per-screen MSG button unchanged. `actions`/`desktopApi` are absent in
- * the fatal/startup app states, where only the wordmark + menu render.
+ * - **Windows** reserves a Window Controls Overlay at the far right and the OS
+ *   paints min/max/close into it; this strip fills the rest of the line and
+ *   `app.css` keeps `--win-caption-w` clear for them.
+ * - **Linux** gets no overlay — a frameless window there has no window buttons
+ *   at all — so `WindowControls` paints them as the strip's last child. They
+ *   are real flex children, so nothing is reserved by padding.
+ *
+ * On both, the sidebar masthead (wordmark + action buttons) and the per-screen
+ * MSG button are hidden (app.css), so these are their single home.
+ *
+ * Renders nothing on macOS — it keeps `hiddenInset`, the sidebar masthead, its
+ * stoplights, and the system menu bar at the top of the screen.
+ * `actions`/`desktopApi` are absent in the fatal/startup app states, where only
+ * the wordmark + menu render.
  */
 export function AppTitleBar(props: {
   desktopApi?: DesktopApi;
@@ -42,11 +56,13 @@ export function AppTitleBar(props: {
   actions?: {
     addingProjectDirectory?: boolean;
     automationsActive: boolean;
+    threadSearchActive?: boolean;
     newThreadDirectoryLabel?: string;
     newThreadFederationTargets?: readonly FederationThreadTarget[];
     settingsActive: boolean;
     creatingThread: boolean;
     onAddProjectDirectory?: () => void | Promise<void>;
+    onToggleThreadSearch?: () => void;
     onOpenAutomations: () => void;
     onOpenSettings: () => void;
     onCreateThread: () => void | Promise<void>;
@@ -56,8 +72,7 @@ export function AppTitleBar(props: {
     ) => void | Promise<void>;
   };
 }): ReactElement | null {
-  const isWindows = getDesktopApi()?.platform === "win32";
-  if (!isWindows) return null;
+  if (!paintsAppTitleBar()) return null;
 
   // Automations and Settings open LOCAL surfaces; hide them in a remote
   // federation window so the strip never implies remote settings.
@@ -77,6 +92,21 @@ export function AppTitleBar(props: {
         <AppMenuBar />
         {actions ? (
           <div className="app-titlebar__actions">
+            {/* Search leads, the same order the sidebar masthead uses. It is
+                NOT local-only, so it renders in a federation window too — the
+                sidebar masthead is hidden on these platforms, and this strip
+                is its only home. */}
+            {actions.onToggleThreadSearch ? (
+              <button
+                type="button"
+                aria-label="Search threads"
+                aria-pressed={actions.threadSearchActive}
+                className={`sidebar__icon-button${actions.threadSearchActive ? " is-active" : ""}`}
+                onClick={actions.onToggleThreadSearch}
+              >
+                <SearchIcon size={16} strokeWidth={1.5} aria-hidden="true" />
+              </button>
+            ) : null}
             {isFederationWindow ? null : (
             <button
               type="button"
@@ -139,6 +169,11 @@ export function AppTitleBar(props: {
           ) : null}
         </div>
       ) : null}
+      {/* Linux only (renders null elsewhere). Last child, outside the
+          conditional right cluster: the fatal and startup app states drop that
+          cluster, and a window with no way to close itself is not a state to
+          have. */}
+      <WindowControls />
     </div>
   );
 }

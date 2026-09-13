@@ -5,7 +5,8 @@ import type {
 } from "@pwragent/shared";
 import { formatBackendLabel } from "../../lib/backend-label";
 import { MessagingStatusBar } from "../messaging-status/MessagingStatusBar";
-import { getDesktopApi, type DesktopApi } from "../../lib/desktop-api";
+import type { DesktopApi } from "../../lib/desktop-api";
+import { paintsAppTitleBar } from "../../lib/window-chrome";
 import { useThreadLinkHoverSource } from "../../lib/thread-links";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import { TerminalIcon } from "../../icons/TerminalIcon";
@@ -105,17 +106,19 @@ type ThreadHeaderProps = {
  */
 export function ThreadHeader(props: ThreadHeaderProps) {
   const projectLabel = props.projectLabel?.trim();
-  // On Windows the AppTitleBar strip owns everything window-scoped — the
-  // layout toggles, the Star Map, the MSG chip (hidden by app.css), and the
-  // masthead actions. This header keeps only what is scoped to the THREAD:
-  // history, breadcrumb, chips, and the terminal toggle, whose state
-  // (running dot, per-thread disabled reason) is thread-scoped and would
-  // drag thread state up into a global strip.
-  const isWindows = getDesktopApi()?.platform === "win32";
+  // Where the app paints its own title strip — Windows and Linux, both of
+  // which lose the native title bar and the menu bar inside it — that strip
+  // owns everything window-scoped: the layout toggles, the Star Map, the MSG
+  // chip (hidden by app.css), and the masthead actions. This header keeps only
+  // what is scoped to the THREAD: history, breadcrumb, chips, and the terminal
+  // toggle, whose state (running dot, per-thread disabled reason) is
+  // thread-scoped and would drag thread state up into a global strip.
+  const hasAppTitleBar = paintsAppTitleBar();
   // When the sidebar is hidden, its wordmark + action buttons relocate
-  // here (macOS/Linux only — Windows keeps them in the title bar).
+  // here (macOS only — the strip platforms keep them in the title bar).
   const sidebarHidden = props.layout ? !props.layout.sidebarOpen : false;
-  const showMasthead = sidebarHidden && !isWindows && Boolean(props.masthead);
+  const showMasthead =
+    sidebarHidden && !hasAppTitleBar && Boolean(props.masthead);
   // Custom viewport tooltip for the terminal toggle, so it matches the
   // sidebar/rail toggles sitting right beside it instead of falling back to the
   // slow, edge-clipping native `title`.
@@ -294,7 +297,7 @@ export function ThreadHeader(props: ThreadHeaderProps) {
             </button>
           ) : null}
           {workflowBudgetTooltip.tooltipNode}
-          {props.layout && !isWindows ? (
+          {props.layout && !hasAppTitleBar ? (
             <PanelToggleButtons
               sidebarOpen={props.layout.sidebarOpen}
               railOpen={props.layout.railOpen}
@@ -337,7 +340,7 @@ export function ThreadHeader(props: ThreadHeaderProps) {
             </button>
           ) : null}
           {terminalTooltip.tooltipNode}
-          {props.starMap && !isWindows ? (
+          {props.starMap && !hasAppTitleBar ? (
             <FederationStatusControl desktopApi={props.desktopApi} onOpen={props.starMap.onOpen} />
           ) : null}
           <MessagingStatusBar

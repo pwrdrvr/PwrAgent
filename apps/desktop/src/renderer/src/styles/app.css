@@ -3,10 +3,12 @@
   --font-sans: "Geist", "IBM Plex Sans", "SF Pro Text", "Inter", system-ui, sans-serif;
   font-family: var(--font-sans);
   --font-mono: "IBM Plex Mono", "SFMono-Regular", "SF Mono", Consolas, monospace;
-  /* Windows custom title-bar strip height. Matches TITLE_BAR_OVERLAY_HEIGHT
+  /* Painted title-bar strip height. Matches TITLE_BAR_OVERLAY_HEIGHT
      (appearance-bootstrap.ts) so the painted menu bar and the OS caption
-     buttons sit on the same line. Only consumed under [data-platform="win32"];
-     zero contribution elsewhere. */
+     buttons sit on the same line. Consumed by the two platforms that paint
+     the strip — win32 and linux (`paintsAppTitleBar`) — and contributes
+     nothing on macOS, which keeps its native inset title bar. The `win`
+     in the name is where the strip came from, not where it applies. */
   --win-titlebar-h: 40px;
   /* Height of every top-of-window chrome band: the sidebar masthead, the
      thread header, the Activity/Settings title bars, and the Settings nav
@@ -27,7 +29,11 @@
      band; never re-introduce one-sided padding to position it. */
   --chrome-band-h: 40px;
   /* Width reserved at the strip's right edge for the OS caption buttons
-     (min/max/close) so title-bar content never sits under them. */
+     (min/max/close) so title-bar content never sits under them. Windows
+     only: that reservation holds a Window Controls Overlay the OS paints
+     into, and there is no overlay on Linux — `WindowControls` paints the
+     buttons there as real flex children of the strip, which need no
+     reservation and would sit before an empty 140px gap if they had one. */
   --win-caption-w: 140px;
   --bg-app: #000000;
   --bg-sidebar: #050505;
@@ -628,6 +634,43 @@ body,
   margin: 0;
 }
 
+/* Every window's own edge, on the one platform that draws us none.
+
+   Electron gives a frameless Linux window an `OpaqueFrameView`: no border, no
+   rounded corners, and no drop shadow on X11. There is no option to get them
+   back — `roundedCorners` is handled inside `#if BUILDFLAG(IS_WIN)`, and the
+   only way to round a frameless window is `transparent: true`, which Electron
+   documents as giving up resizing. So the edge is a hairline we paint, and the
+   corners stay square. (Resizing itself is unaffected: `FramelessView::
+   ResizingBorderHitTest` uses an inside-bounds resize border with 16px corner
+   grabs, under this overlay, which takes no clicks.)
+
+   Fixed and `pointer-events: none`, above every layer in this file: it costs
+   no layout and swallows nothing. `window-edge-hairline.test.ts` holds it
+   above the file's own ceiling, so a new layer cannot quietly paint over the
+   window's edge.
+
+   It goes away when the frame is flush with the screen — a maximized window
+   has no edge to show. `<html data-window-frame>` follows the window's own
+   maximize events (`lib/window-frame.ts`), not our caption button, because
+   Super+Up and a tiling keybind maximize without going through it.
+
+   `#root`, not `.app-shell`: the auxiliary windows (Settings' own screens
+   aside, the Logs / Changelog / License / Activity / Star Map windows) keep
+   the native Linux frame, whose GTK border and shadow vanish against our own
+   dark surfaces, and they need the edge just as much. On Wayland Electron
+   does give frameless windows a GTK drop shadow, which is what really
+   separates a GNOME window from the one behind it; on X11 this hairline is
+   all there is. */
+:root[data-platform="linux"]:not([data-window-frame="maximized"]) #root::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 10001;
+  border: 1px solid var(--border-strong);
+  pointer-events: none;
+}
+
 body {
   overflow: hidden;
   background: var(--bg-app);
@@ -922,12 +965,19 @@ textarea,
   padding-left: 14px;
 }
 
-/* Windows custom title-bar strip (File / View / Profiles / Window / Help).
-   Frameless WCO draws the OS caption buttons at the top-right; this strip
-   fills the rest of that line with the painted menu bar (left) and a draggable
-   remainder. The whole app shell is pushed below it so nothing renders under
-   the caption buttons. macOS/Linux never set data-platform="win32", so the
-   strip isn't mounted and these offsets don't apply. */
+/* The painted custom title-bar strip (File / View / Profiles / Window / Help),
+   mounted on BOTH platforms that hide the native title bar — win32 and linux
+   (`paintsAppTitleBar`). It fills the line with the painted menu bar (left) and
+   a draggable remainder, and the whole app shell is pushed below it.
+
+   Who occupies the right end differs, and that is the only difference: Windows
+   reserves the Window Controls Overlay the OS paints into (the `padding-right`
+   below), while Linux gets no overlay and paints its own caption buttons as
+   real flex children — so `:root[data-platform="linux"] .app-titlebar` further
+   down replaces that reservation with the strip's own 10px inset.
+
+   macOS never sets either platform value, so the strip isn't mounted there and
+   none of these offsets apply. */
 .app-titlebar {
   position: fixed;
   top: 0;
@@ -983,6 +1033,77 @@ textarea,
 .app-titlebar__right {
   display: flex;
   align-items: center;
+}
+
+/* Linux paints the caption buttons itself, as the strip's last children, so
+   there is no overlay to hold clear: `--win-caption-w` would put an empty
+   140px gap past the close button. The 10px matches the strip's left inset,
+   so the buttons sit as far from the right edge as the wordmark does from the
+   left. */
+:root[data-platform="linux"] .app-titlebar {
+  padding-right: 10px;
+}
+
+/* Linux caption buttons. A frameless window there gets neither macOS
+   stoplights nor a Windows controls overlay, so nothing draws min/max/close
+   unless the strip does — GNOME's side, order and roundness, in our own
+   palette.
+
+   Its own no-drag: `.app-titlebar__left`/`__right` carry theirs, and these
+   are a third cluster outside both. Without it the whole group is title-bar
+   drag hit-testing and none of the three buttons can be clicked. */
+.app-titlebar__controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 10px;
+  -webkit-app-region: no-drag;
+}
+
+.app-titlebar__controls * {
+  -webkit-app-region: no-drag;
+}
+
+/* Tokens copied from `.sidebar__icon-button`, the strip's own button
+   primitive, rather than picked to look like GNOME's: these sit inches from
+   the Automations / Settings / New Thread buttons and have to read as the same
+   toolbar. Flat until hover is also what Chrome and VS Code draw on Linux.
+   What stays GNOME is the part that identifies them AS caption buttons — round
+   instead of 7px, far right, minimize / maximize / close in that order.
+
+   Close hovers to the danger wash rather than a solid red fill: the glyph has
+   to stay legible in both themes, and `--danger-base` is a mid red in one and
+   a near-black red in the other. */
+.app-titlebar__control {
+  appearance: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.app-titlebar__control:hover {
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
+.app-titlebar__control--close:hover {
+  background: var(--danger-soft);
+  color: var(--danger-text);
+}
+
+.app-titlebar__control:focus-visible {
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 /* Wordmark — reuse the sidebar brand tokens (--text-primary / --accent), sized
@@ -1041,32 +1162,34 @@ textarea,
 }
 
 /* Push the entire shell (main, startup, and fatal variants all carry the
-   .app-shell base) below the fixed title strip on Windows. */
-:root[data-platform="win32"] .app-shell {
+   .app-shell base) below the fixed title strip, on both platforms that
+   paint one. */
+:root:is([data-platform="win32"], [data-platform="linux"]) .app-shell {
   margin-top: var(--win-titlebar-h);
   height: calc(100vh - var(--win-titlebar-h));
   height: calc(100dvh - var(--win-titlebar-h));
 }
 
-/* On Windows the wordmark + masthead action buttons (Automations/Settings/New
-   Thread) live in the title strip instead, so hide the sidebar masthead. */
-:root[data-platform="win32"] .sidebar__masthead {
+/* Where the strip is painted, the wordmark + masthead action buttons
+   (Automations/Settings/New Thread) live in it instead, so hide the sidebar
+   masthead. */
+:root:is([data-platform="win32"], [data-platform="linux"]) .sidebar__masthead {
   display: none;
 }
 
-/* On Windows the MSG status indicator lives in the title strip (one global
-   control), so hide the per-screen copies in every header but restore the one
-   inside the title bar. */
-:root[data-platform="win32"] .messaging-status-bar {
+/* Where the strip is painted, the MSG status indicator lives in it (one
+   global control), so hide the per-screen copies in every header but restore
+   the one inside the title bar. */
+:root:is([data-platform="win32"], [data-platform="linux"]) .messaging-status-bar {
   display: none;
 }
 
-:root[data-platform="win32"] .app-titlebar .messaging-status-bar {
+:root:is([data-platform="win32"], [data-platform="linux"]) .app-titlebar .messaging-status-bar {
   display: flex;
 }
 
-/* Windows runs a real full-width title strip, so that strip is the window's
-   chrome row: wordmark, menu, app actions, panel toggles, Star Map, MSG,
+/* These platforms run a real full-width title strip, so that strip is the
+   window's chrome row: wordmark, menu, app actions, panel toggles, Star Map, MSG,
    caption buttons. What is left in the thread header is the thread's own
    caption — history, breadcrumb, chips, terminal — and it should read as a
    caption over the transcript, not as a second chrome bar spanning the
@@ -1080,11 +1203,11 @@ textarea,
    turns out to be. A hard-coded `top: -40px` would encode the header height
    as a constant, which the note on `.context-rail` warns against for good
    reason — nothing else has to stay in sync for this to keep working. */
-:root[data-platform="win32"] .thread-view {
+:root:is([data-platform="win32"], [data-platform="linux"]) .thread-view {
   position: relative;
 }
 
-:root[data-platform="win32"] .thread-view__layout {
+:root:is([data-platform="win32"], [data-platform="linux"]) .thread-view__layout {
   position: static;
 }
 
@@ -1104,20 +1227,20 @@ textarea,
    `is-pinned` / `is-resizing`, so asking for it directly is right for every
    variant with nothing to keep in sync. The child combinators pin the real
    structure and keep the match off any unrelated nested rail. */
-:root[data-platform="win32"]
+:root:is([data-platform="win32"], [data-platform="linux"])
   .thread-view:has(> .thread-view__layout > .context-rail)
   .thread-header {
   padding-right: 48px;
   transition: padding-right 160ms ease;
 }
 
-:root[data-platform="win32"]
+:root:is([data-platform="win32"], [data-platform="linux"])
   .thread-view:has(> .thread-view__layout > .context-rail.is-pinned)
   .thread-header {
   padding-right: calc(var(--context-rail-effective, 380px) + 48px);
 }
 
-:root[data-platform="win32"]
+:root:is([data-platform="win32"], [data-platform="linux"])
   .thread-view:has(> .thread-view__layout > .context-rail.is-resizing)
   .thread-header {
   transition: none;
@@ -1212,13 +1335,14 @@ textarea,
   animation: jump-palette-fade 110ms ease both;
 }
 
-/* Windows keeps its wordmark, masthead actions, and the global Messaging
-   controller in the fixed title strip, and that strip owns the window's drag
-   region. Every other full-window surface stays below it — Settings sits
+/* The strip platforms keep the wordmark, masthead actions, and the global
+   Messaging controller in the fixed title strip, and that strip owns the
+   window's drag region — on Linux it also owns the only close button the
+   window has. Every other full-window surface stays below it — Settings sits
    inside `.app-shell`, which is already offset by `--win-titlebar-h`. This
    one is portalled to the body, so it has to reproduce that offset by hand
    rather than dimming a strip the operator still needs to drag the window by. */
-:root[data-platform="win32"] .jump-palette {
+:root:is([data-platform="win32"], [data-platform="linux"]) .jump-palette {
   top: var(--win-titlebar-h);
 }
 
@@ -8404,10 +8528,10 @@ a.button {
   padding-left: 8px;
 }
 
-/* Windows already carries the PwrAgent wordmark in its custom title strip.
-   Drop the duplicate overlay masthead so the Exit row starts at the top of
-   both navs, mirroring the main sidebar's Windows treatment. */
-:root[data-platform="win32"]
+/* The strip platforms already carry the PwrAgent wordmark in their custom
+   title strip. Drop the duplicate overlay masthead so the Exit row starts at
+   the top of both navs, mirroring the main sidebar's treatment there. */
+:root:is([data-platform="win32"], [data-platform="linux"])
   :is(.settings-screen, .automations-screen)
   .settings-nav__masthead {
   display: none;
@@ -8443,10 +8567,22 @@ a.button {
 /* Exit Settings — plain text-style link styled like a quiet nav row.
    No border, no panel background — matches the design's
    `pa-settings__exit`. Sits above the GENERAL group label. */
+/* Baseline, not centre, and the arrow is why.
+   `←` (U+2190) is in none of the fonts this app asks for by name, nothing here
+   declares an `@font-face`, so which font draws it is whatever the OS
+   substitutes — and that is a different font from the one drawing the label
+   beside it. `align-items: center` equalises each flex item's BOX, so a
+   substitute with a taller ascent/descent puts the glyph off the label's
+   baseline; `align-items: baseline` equalises what the eye actually reads.
+   Measured in headless Chromium at a 48px font, forcing four substitutes with
+   different metrics: centre drifts up to 6.5px (≈1.6px at this row's real
+   12px), baseline is 0.00px for every one of them. macOS happens to substitute
+   something metrically close, which is why this read level there and tilted on
+   a stock Ubuntu. */
 .settings-nav__exit {
   display: inline-flex;
   width: 100%;
-  align-items: center;
+  align-items: baseline;
   appearance: none;
   cursor: pointer;
   gap: 6px;
@@ -23883,11 +24019,11 @@ a.transcript-message__messaging-origin:focus-visible {
   display: flex;
   /* Anchored to `.thread-view__layout` (position: relative), NOT the window,
      so the rail starts BELOW the thread header and spans only the chat area.
-     WINDOWS IS THE EXCEPTION: there the title strip is the window's chrome
-     row, so `.thread-view` takes the positioning context instead (search
-     app.css for `data-platform="win32"] .thread-view`) and this rail runs the
-     full column height up to the strip, with the header reserving its width.
-     Everything below describes the macOS/Linux anchor.
+     THE STRIP PLATFORMS ARE THE EXCEPTION: on win32 and linux the title strip
+     is the window's chrome row, so `.thread-view` takes the positioning
+     context instead (search app.css for `[data-platform="linux"]) .thread-view`)
+     and this rail runs the full column height up to the strip, with the header
+     reserving its width. Everything below describes the macOS anchor.
      The header then keeps its full width and never has to reserve a gutter
      or squash its toggles/MSG to clear a rail that overlaps the title line.
      `right: 0` lands on the layout's padding edge = the window's right edge;

@@ -1,5 +1,6 @@
 import type { MessagingChannelKind } from "@pwragent/shared";
-import { getDesktopApi, type DesktopApi } from "../../lib/desktop-api";
+import type { DesktopApi } from "../../lib/desktop-api";
+import { paintsAppTitleBar } from "../../lib/window-chrome";
 import { MessagingStatusBar } from "../messaging-status/MessagingStatusBar";
 import { FederationStatusControl } from "../federation-activity/FederationStatusControl";
 import { PanelToggleButtons } from "../chrome/PanelToggleButtons";
@@ -56,9 +57,10 @@ type ThreadPlaceholderHeaderProps = {
  * broken header jammed under the macOS traffic lights.
  */
 export function ThreadPlaceholderHeader(props: ThreadPlaceholderHeaderProps) {
-  const isWindows = getDesktopApi()?.platform === "win32";
+  const hasAppTitleBar = paintsAppTitleBar();
   const sidebarHidden = props.layout ? !props.layout.sidebarOpen : false;
-  const showMasthead = sidebarHidden && !isWindows && Boolean(props.masthead);
+  const showMasthead =
+    sidebarHidden && !hasAppTitleBar && Boolean(props.masthead);
 
   return (
     <header className="thread-header thread-header--placeholder">
@@ -102,7 +104,7 @@ export function ThreadPlaceholderHeader(props: ThreadPlaceholderHeaderProps) {
           </div>
         </div>
         <div className="thread-header__chrome">
-          {props.layout && !isWindows ? (
+          {props.layout && !hasAppTitleBar ? (
             <PanelToggleButtons
               sidebarOpen={props.layout.sidebarOpen}
               railOpen={props.layout.railOpen}
@@ -111,7 +113,7 @@ export function ThreadPlaceholderHeader(props: ThreadPlaceholderHeaderProps) {
               railToggleDisabled={props.layout.railToggleDisabled}
             />
           ) : null}
-          {props.starMap && !isWindows ? (
+          {props.starMap && !hasAppTitleBar ? (
             <FederationStatusControl desktopApi={props.desktopApi} onOpen={props.starMap.onOpen} />
           ) : null}
           <MessagingStatusBar
