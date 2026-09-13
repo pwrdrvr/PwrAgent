@@ -38,9 +38,16 @@ const DEFAULT_REACT_DEVTOOLS_PORT = "8097";
  */
 const REACT_PROFILING_ENV = "PWRAGENT_DEV_REACT_PROFILING";
 
+/**
+ * Matches the allowlist the rest of the repository uses for dev flags
+ * (`isEnvEnabled` in `src/preload/index.ts`, `isEnabled` in
+ * `src/main/app-server/protocol-log-observer.ts`). Anything else is off —
+ * in particular `false`, `off`, and `no`, which a "not empty and not 0"
+ * test would read as on and silently bake the bridge into a build.
+ */
 function isEnabled(name: string): boolean {
-  const value = process.env[name]?.trim();
-  return value !== undefined && value !== "" && value !== "0";
+  const value = process.env[name]?.trim().toLowerCase();
+  return value !== undefined && ["1", "true", "yes", "on"].includes(value);
 }
 
 /**
@@ -65,23 +72,27 @@ function reactDevtoolsBridge(): Plugin {
     name: "pwragent:react-devtools-bridge",
     transformIndexHtml: {
       order: "pre",
-      handler: () => ({
-        html: "",
-        tags: [
-          {
-            tag: "script",
-            attrs: { src: endpoint },
-            injectTo: "head-prepend" as const,
-          },
-          {
-            tag: "script",
-            children: `console.info(${JSON.stringify(
-              `[pwragent] React DevTools bridge -> ${endpoint} (renderer from ${__dirname})`,
-            )});`,
-            injectTo: "head-prepend" as const,
-          },
-        ],
-      }),
+      // Returns the bare tag array rather than `{ html, tags }`: the object
+      // form's `html` is required by the type, and passing "" to mean "leave
+      // the document alone" only works because Vite happens to do
+      // `res.html || html`. The array form says the same thing by contract.
+      handler: () => ([
+        {
+          tag: "script",
+          attrs: { src: endpoint },
+          injectTo: "head-prepend" as const,
+        },
+        {
+          tag: "script",
+          // Vite escapes tag attributes but emits inline-script children
+          // verbatim, and JSON.stringify does not escape `<` — so a host
+          // carrying `</script>` would close this tag early.
+          children: `console.info(${JSON.stringify(
+            `[pwragent] React DevTools bridge -> ${endpoint} (renderer from ${__dirname})`,
+          ).replaceAll("<", "\\u003c")});`,
+          injectTo: "head-prepend" as const,
+        },
+      ]),
     },
   };
 }
@@ -108,16 +119,13 @@ export default defineConfig(({ command }) => {
   // profiling build drops — so aliasing in dev would cost a dependency
   // re-optimization and buy nothing.
   const profilingEnabled = isEnabled(REACT_PROFILING_ENV);
-  if (profilingEnabled && !isBuild) {
+  if (profilingEnabled) {
     console.warn(
-      `[pwragent] ${REACT_PROFILING_ENV} is set but only applies to \`electron-vite build\`;`
-      + " the dev server already serves a profilable react-dom.",
-    );
-  }
-  if (profilingEnabled && isBuild) {
-    console.warn(
-      `[pwragent] ${REACT_PROFILING_ENV} is set: aliasing react-dom/client -> react-dom/profiling.`
-      + " Do not ship this build.",
+      isBuild
+        ? `[pwragent] ${REACT_PROFILING_ENV} is set: aliasing react-dom/client -> react-dom/profiling.`
+          + " Do not ship this build."
+        : `[pwragent] ${REACT_PROFILING_ENV} is set but only applies to \`electron-vite build\`;`
+          + " the dev server already serves a profilable react-dom.",
     );
   }
   if (devtoolsBridgeEnabled && isBuild) {
