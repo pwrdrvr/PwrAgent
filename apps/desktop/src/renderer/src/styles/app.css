@@ -6571,7 +6571,17 @@ a.button {
   width: 100%;
 }
 
-.directory-row__empty {
+/* BOTH classes, and not `.directory-row__empty` alone: the element carries
+   `.sidebar-empty` too, and that rule sets the whole `margin` shorthand
+   (`12px 0 0`) from further DOWN the file. At equal specificity the later
+   rule wins, so the single-class override lost `margin-top` silently and an
+   expanded empty directory sat on 16px of air above the message (4px of
+   `.directory-row__details` top pad + 12px) against 6px below it — a gap the
+   rail reads as a layout break, not as breathing room. The declaration was
+   here the whole time; only its specificity was wrong. Two classes (0-2-0)
+   beat the sidebar-level rule (0-1-0) wherever either one moves to.
+   `padding-left` never noticed, because `.sidebar-empty` sets no padding. */
+.sidebar-empty.directory-row__empty {
   margin-top: 0;
   padding-left: 8px;
 }

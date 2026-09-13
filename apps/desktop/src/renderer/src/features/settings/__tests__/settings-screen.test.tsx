@@ -3093,6 +3093,38 @@ describe("SettingsScreen", () => {
     expect(turnOffCodexFastEverywhere).toHaveBeenCalledTimes(2);
   });
 
+  it("offers login for a rejected system-default profile even with an auth file", async () => {
+    const snapshot = createSnapshot();
+    const profile = snapshot.models.codex.profiles.profiles[0]!;
+    profile.authenticationRequired = true;
+    profile.hasAuthFile = true;
+    const startCodexAuthProfileLogin = vi.fn(async () => ({
+      profile: "",
+      codexHome: profile.codexHome,
+      started: true,
+    }));
+    render(
+      <SettingsScreen
+        desktopApi={{
+          startCodexAuthProfileLogin,
+          checkCodexAuthProfileStatus: vi.fn(async () => ({
+            profile: "",
+            codexHome: profile.codexHome,
+            authenticated: false,
+            status: "unauthenticated",
+          })),
+        } as unknown as DesktopApi}
+        initialSection="models"
+        initialSubsection="codex"
+        settings={createSettingsState(snapshot)}
+        onClose={() => undefined}
+      />,
+    );
+    expect(screen.getByText("Logged out")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Login" }));
+    await waitFor(() => expect(startCodexAuthProfileLogin).toHaveBeenCalledWith({ profile: "" }));
+  });
+
   it("can restart login for an existing Codex auth profile", async () => {
     const snapshot = createSnapshot();
     snapshot.models.codex.profiles.profiles[1]!.hasAuthFile = false;

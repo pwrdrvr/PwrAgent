@@ -1,6 +1,7 @@
 import { readNavigationPresentationOrder, retainNavigationPresentationOrder, type NavigationPresentationOrder } from "./navigation-presentation-order";
 import type { useBoundedNavigationWindow } from "../../lib/useBoundedNavigationWindow";
 import { navigationThreadSelectionKey } from "../../lib/navigation-query-state";
+import { useLensScrollRestoration } from "../../lib/useLensScrollRestoration";
 import type { NavigationDirectoryView as NavigationDirectorySummary } from "../../lib/navigation-loaded-rows";
 import type { PendingLaunchpadCreation } from "../../lib/useThreadNavigation";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -586,6 +587,15 @@ export function Sidebar(props: SidebarProps) {
   const presentedByKey = new Map(presentedThreads.map((thread) => [threadSummaryIdentityKey(thread), thread]));
   const renderedThreads = props.browseMode === "directories" ? presentedThreads
     : hoverStableSnapshot.value.visibleKeys.map((key) => presentedByKey.get(key)).filter((thread): thread is NavigationThreadSummary => Boolean(thread));
+  const renderedDirectoryKeys = new Set(renderedDirectories.map((directory) => directory.key));
+  const lensScroll = useLensScrollRestoration(
+    JSON.stringify([federationTarget, props.browseMode]),
+    !props.loading && (!props.pagedNavigation || (props.pagedNavigation.presentationReady
+      && [...props.pagedNavigation.resources.values()].every(({ state }) =>
+        (state.page?.entries.every((entry) => presentedByKey.has(navigationThreadSelectionKey(entry.row.ref))) ?? true)
+        && (props.browseMode !== "directories"
+          || (state.page?.directories?.every((directory) => renderedDirectoryKeys.has(directory.key)) ?? true))))),
+  );
   /**
    * Hover stability protects a target from background list churn. A command
    * the operator chose must instead reveal its resulting snapshot immediately.
@@ -1940,7 +1950,9 @@ export function Sidebar(props: SidebarProps) {
         </div>
 
         <div
+          ref={lensScroll.ref}
           className="sidebar__scroll-region"
+          onScroll={lensScroll.onScroll}
           onClickCapture={hoverStableSnapshot.onClickCapture}
           onPointerCancel={hoverStableSnapshot.onPointerCancel}
           onPointerLeave={hoverStableSnapshot.onPointerLeave}

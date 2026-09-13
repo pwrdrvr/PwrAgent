@@ -788,6 +788,7 @@ export type DesktopCodexDiscoverySnapshot = {
 export type DesktopCodexAuthProfileSource = "default" | "directory" | "config";
 
 export type DesktopCodexAuthProfileCandidate = {
+  authenticationRequired?: boolean;
   name: string;
   displayName: string;
   codexHome: string;

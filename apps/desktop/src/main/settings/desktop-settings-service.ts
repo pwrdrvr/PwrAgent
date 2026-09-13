@@ -1,4 +1,5 @@
 import { FORGE_PRODUCTS, type ForgeKind } from "@pwragent/shared";
+import { codexAuthState } from "../codex-auth-state";
 import type {
   DesktopAppearanceDensity,
   DesktopAppearanceTheme,
@@ -721,7 +722,7 @@ export class DesktopSettingsService {
     const codexDiscovery = this.codexDiscoveryCoordinator.peek?.(
       codexDiscoveryCommand,
     ) ?? codexDiscoveryFromProvider(this.configStore.read("providers").codex);
-    const codexProfiles = this.codexProfiles;
+    const codexProfiles = this.readCodexProfiles();
     // Settle discovery that is ALREADY running before reading its result.
     // Never start it: this must not turn a projection read into a probe,
     // and a caller that arrives before startup discovery simply gets the
@@ -1679,7 +1680,11 @@ export class DesktopSettingsService {
   }
 
   readCodexProfiles(): DesktopCodexAuthProfileDiscoverySnapshot {
-    return structuredClone(this.codexProfiles);
+    const snapshot = structuredClone(this.codexProfiles);
+    for (const profile of snapshot.profiles) {
+      if (codexAuthState.isBlocked(profile.codexHome)) profile.authenticationRequired = true;
+    }
+    return snapshot;
   }
 
   // Applications discovery is config-independent (depends only on this.env

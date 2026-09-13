@@ -1,3 +1,4 @@
+import { subscribeGithubPrAuthenticationFailure } from "./github-pr-authentication-notice";
 import { unwrapNavigationRead } from "../shared/navigation-ipc-result";
 import type { NavigationAttentionViewReleaseRequest } from "@pwragent/shared";
 import type { MarkNavigationDirectorySeenRequest, MarkNavigationDirectorySeenResponse } from "@pwragent/shared";
@@ -585,7 +586,6 @@ import {
   APP_SERVER_GET_PR_AUTO_DISPATCH_BUDGET_STATUS_CHANNEL,
   APP_SERVER_RESUME_PR_AUTO_DISPATCH_BUDGET_CHANNEL,
   PR_AUTO_DISPATCH_BUDGET_CHANGED_EVENT_CHANNEL,
-  GITHUB_PR_AUTHENTICATION_FAILURE_EVENT_CHANNEL,
   GITHUB_PR_SAML_ENFORCEMENT_EVENT_CHANNEL,
   MANAGED_GROK_SIGNATURE_REJECTED_EVENT_CHANNEL,
   APP_SERVER_LIST_THREADS_CHANNEL,
@@ -2445,14 +2445,7 @@ const desktopApi = Object.freeze({
   onGithubPrAuthenticationFailure: (
     callback: (event: GithubPrAuthenticationFailureEvent) => void,
   ): (() => void) => {
-    const listener = (
-      _event: Electron.IpcRendererEvent,
-      payload: GithubPrAuthenticationFailureEvent,
-    ) => callback(payload);
-    ipcRenderer.on(GITHUB_PR_AUTHENTICATION_FAILURE_EVENT_CHANNEL, listener);
-    return () => {
-      ipcRenderer.off(GITHUB_PR_AUTHENTICATION_FAILURE_EVENT_CHANNEL, listener);
-    };
+    return subscribeGithubPrAuthenticationFailure(ipcRenderer, callback);
   },
   onAppearanceChanged: (
     callback: (appearance: {

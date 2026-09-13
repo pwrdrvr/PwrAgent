@@ -1,3 +1,4 @@
+import { codexAuthState } from "../codex-auth-state";
 import { app, safeStorage } from "electron";
 import { DesktopSettingsService } from "./desktop-settings-service";
 import { DbBackedSafeStorageSecretStore } from "../state/secret-store-sqlite";
@@ -19,6 +20,7 @@ import {
 import { resolveDesktopConfigPath } from "./desktop-config";
 import { setGitCommandResolver } from "../git-command";
 
+let unsubscribeAuth: (() => void) | undefined;
 let desktopSettingsService: DesktopSettingsService | undefined;
 
 export {
@@ -79,6 +81,11 @@ export function getDesktopSettingsService(): DesktopSettingsService {
     // rather than in `index.ts` so the wiring cannot be missed by a code
     // path that reaches settings without going through app startup — and
     // so it is torn down with the service in tests.
+    unsubscribeAuth = codexAuthState.subscribe(() => {
+      for (const webContents of subscribersForChannel(SETTINGS_RUNTIME_CHANGED_EVENT_CHANNEL)) {
+        webContents.send(SETTINGS_RUNTIME_CHANGED_EVENT_CHANNEL);
+      }
+    });
     const service = desktopSettingsService;
     setGitCommandResolver(() => service.resolveGitCommandPreference());
     configStore.subscribe(["general"], ({ values }) => {
@@ -103,6 +110,8 @@ export function getDesktopSettingsService(): DesktopSettingsService {
 }
 
 export function resetDesktopSettingsServiceForTests(): void {
+  unsubscribeAuth?.();
+  unsubscribeAuth = undefined;
   desktopSettingsService = undefined;
   setGitCommandResolver(undefined);
   disposeDesktopConfigStore();

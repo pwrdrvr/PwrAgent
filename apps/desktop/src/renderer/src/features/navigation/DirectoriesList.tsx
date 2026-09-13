@@ -1930,7 +1930,13 @@ export function DirectoriesList(props: DirectoriesListProps) {
                   <p className="sidebar-empty directory-row__empty">{directory.counts ? "No threads in this directory yet." : "Loading directory counts…"}</p>
                 )}
                 {rootResource?.state.error ? <p className="sidebar-error">{rootResource.state.error}</p> : null}
-                {rootResource?.loading && !rootResource.state.page ? <p className="sidebar-empty">Loading threads…</p> : null}
+                {/* `directory-row__empty` reads as "empty" but means "a status
+                    line in a directory's lane" — the sibling above already
+                    wears it for "Loading directory counts…". Without it this
+                    line keeps the sidebar-level 12px top margin and no lane
+                    inset, so it landed 20px below that sibling and 8px to its
+                    left. Both render together while a directory first opens. */}
+                {rootResource?.loading && !rootResource.state.page ? <p className="sidebar-empty directory-row__empty">Loading threads…</p> : null}
                 {rootResource?.state.rebaselineRequired ? (
                   <SidebarShowMore label="Reload this directory" onClick={() => void props.pagedNavigation?.restart(rootResourceId)} />
                 ) : rootResource?.state.page?.nextCursor ? (

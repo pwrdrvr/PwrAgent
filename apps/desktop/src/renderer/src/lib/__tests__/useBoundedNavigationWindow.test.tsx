@@ -1,9 +1,11 @@
-import { act, renderHook, waitFor } from "@testing-library/react";
-import { StrictMode } from "react";
+import { act, fireEvent, render, renderHook, waitFor } from "@testing-library/react";
+import { StrictMode, useLayoutEffect } from "react";
 import { expect, it, vi } from "vitest";
 import type { AgentEvent, NavigationDirectoryRow, NavigationQueryPage, NavigationRow } from "@pwragent/shared";
 import type { DesktopApi } from "../desktop-api";
 import { useBoundedNavigationWindow } from "../useBoundedNavigationWindow";
+import { useNavigationDirectoryDisclosure } from "../useNavigationDirectoryDisclosure";
+import { Sidebar } from "../../features/navigation/Sidebar";
 
 const directory: NavigationDirectoryRow = { key: "directory:off-page", kind: "directory", label: "Project",
   counts: { total: 1000, active: 20, unread: 30, review: 10 }, pinnedRootCount: 4, unpinnedRootCount: 996, launchpadPresent: false };
@@ -24,6 +26,90 @@ function api() {
       onAgentEvent: (callback: (event: AgentEvent) => void) => { listener = callback; return () => { listener = undefined; }; },
     } satisfies DesktopApi };
 }
+
+it.each(["drafts", "directories"] as const)("waits for the demand transition even when %s is empty", async (destination) => {
+  const fixture = api();
+  const renders: boolean[] = [];
+  const { result, rerender, unmount } = renderHook(({ mode }: { mode: "inbox" | typeof destination }) => {
+    const navigation = useBoundedNavigationWindow({ ...base, browseMode: mode, desktopApi: fixture.desktopApi });
+    if (mode === destination) renders.push(navigation.presentationReady);
+    return navigation;
+  }, { initialProps: { mode: "inbox" } });
+  await waitFor(() => expect(result.current.presentationReady).toBe(true));
+  rerender({ mode: destination });
+  expect(renders[0]).toBe(false);
+  await waitFor(() => expect(result.current.presentationReady).toBe(true));
+  unmount();
+});
+
+it("waits for the expanded unpinned section after directory descriptors and pins arrive", async () => {
+  const fixture = api();
+  let finish!: () => void;
+  const pending = new Promise<void>((resolve) => { finish = resolve; });
+  fixture.read.mockImplementation(async (request) => {
+    if (request.query.kind === "directory" && request.query.roots === "unpinned") await pending;
+    return page({ directories: request.query.kind === "directory-index" ? [directory] : undefined });
+  });
+  const { result, unmount } = renderHook(() => useBoundedNavigationWindow({ ...base,
+    desktopApi: fixture.desktopApi, expandedByKey: { [directory.key]: true } }));
+  await waitFor(() => expect(result.current.resources.get(`directory-pins:${directory.key}`)?.state.page).toBeDefined());
+  expect(result.current.presentationReady).toBe(false);
+  await act(async () => finish());
+  await waitFor(() => expect(result.current.presentationReady).toBe(true));
+  unmount();
+});
+
+it.each(["drafts", "directories"] as const)("restores %s only after its cached resources and rendered rows return", async (destination) => {
+  const fixture = api();
+  const rows: NavigationRow[] = Array.from({ length: 10 }, (_, index) => ({
+    id: `saved-${index}`, source: "codex", title: `Saved ${index}`, titleSource: "explicit",
+    ref: { backend: "codex", threadId: `saved-${index}` }, rowRevision: "r", linkedDirectories: [],
+    inbox: { inInbox: true }, ordinaryChildCount: 0, nativeSubAgentGroupPresent: false,
+    queueCount: 0, queueState: "unknown",
+  }));
+  const draftRefs = rows.map((row) => row.ref);
+  fixture.read.mockImplementation(async (request) => page({
+    directories: request.query.kind === "directory-index" ? [directory] : undefined,
+    entries: (request.query.kind === "exact" || (request.query.kind === "directory" && request.query.roots === "unpinned")
+      ? rows : []).map((row) => ({ row, placement: { kind: "root" }, orderKey: row.id })),
+  }));
+  let navigation!: ReturnType<typeof useBoundedNavigationWindow>;
+  function Window(props: { mode: "inbox" | typeof destination; hydrated: boolean }) {
+    const disclosure = useNavigationDirectoryDisclosure();
+    useLayoutEffect(() => { disclosure.setExpandedByKey({ [directory.key]: true }); }, [disclosure.setExpandedByKey]);
+    navigation = useBoundedNavigationWindow({ ...base, browseMode: props.mode, desktopApi: fixture.desktopApi,
+      expandedByKey: disclosure.expandedByKey, draftRefs });
+    const threads = props.hydrated ? [...navigation.resources.values()].flatMap((resource) => resource.state.page?.entries.map(({ row }) => row) ?? []) : [];
+    return <Sidebar backends={[]} browseMode={props.mode} directories={props.hydrated ? navigation.directories : []}
+      threads={threads} inboxThreads={threads} pagedNavigation={navigation} directoryDisclosure={disclosure}
+      loading={false} onBrowseModeChange={() => undefined} onSelectThread={() => undefined}
+      onCreateThread={async () => undefined} onOpenLaunchpad={async () => undefined} />;
+  }
+  const mounted = render(<Window mode={destination} hydrated />);
+  try {
+    await waitFor(() => expect(mounted.container.querySelectorAll(".thread-row-shell")).toHaveLength(10));
+    const scroll = mounted.container.querySelector<HTMLDivElement>(".sidebar__scroll-region")!;
+    let offset = 0;
+    // jsdom does not perform browser layout or clamp scrollTop on a short list.
+    Object.defineProperty(scroll, "scrollTop", { configurable: true, get: () => offset,
+      set: (value: number) => { offset = Math.max(0, Math.min(value, mounted.container.querySelectorAll(".thread-row-shell").length * 50 - 100)); } });
+    scroll.scrollTop = 180;
+    fireEvent.scroll(scroll);
+    mounted.rerender(<Window mode="inbox" hydrated />);
+    await waitFor(() => expect(navigation.presentationReady).toBe(true));
+    expect(scroll.scrollTop).toBe(0);
+    mounted.rerender(<Window mode={destination} hydrated={false} />);
+    expect(scroll.scrollTop).toBe(0);
+    // Cached owner pages have arrived, but the parent has yet to hydrate rows
+    // and directory descriptors into the actual sidebar presentation.
+    await waitFor(() => expect(navigation.presentationReady).toBe(true));
+    mounted.rerender(<Window mode={destination} hydrated />);
+    expect(mounted.container.querySelectorAll(".thread-row-shell")).toHaveLength(10);
+    expect(scroll.scrollTop).toBe(180);
+  } finally {
+    mounted.unmount();
+  }
+});
 
 it.each([
   [false, "owner"], [false, "viewer"], [true, "owner"], [true, "viewer"],

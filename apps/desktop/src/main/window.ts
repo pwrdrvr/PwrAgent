@@ -7,7 +7,7 @@ import {
   type ContextMenuParams,
   type MenuItemConstructorOptions,
 } from "electron";
-import { homedir } from "node:os";
+import { homedir, hostname } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type {
@@ -563,7 +563,10 @@ export function createMainWindow(options?: {
         for (const subscriber of subscribersForChannel(
           HOT_CPU_PROFILE_CAPTURED_EVENT_CHANNEL,
         )) {
-          subscriber.send(HOT_CPU_PROFILE_CAPTURED_EVENT_CHANNEL, event);
+          subscriber.send(HOT_CPU_PROFILE_CAPTURED_EVENT_CHANNEL, {
+            ...event,
+            sourceHostname: hostname(),
+          });
         }
       },
       session: created.session,
@@ -850,8 +853,9 @@ export function createMainWindow(options?: {
   }
 
   applyWindowSecurityHardening(window);
-  // The main window subscribes to every push-event channel — it
-  // hosts the full app shell. Secondary windows register a narrower
+  // Local main windows receive CPU capture notices. Federation viewers
+  // also host the app shell, but must not receive local CPU notices.
+  // Secondary windows register a narrower
   // set (or none) so broadcasters only deliver to what they actually
   // consume. See `apps/desktop/src/main/window-channels.ts`.
   registerWindowChannels(window, WINDOW_KIND_MAIN, [
@@ -860,7 +864,7 @@ export function createMainWindow(options?: {
     DIAGNOSTICS_HEAP_SNAPSHOT_CAPTURED_EVENT_CHANNEL,
     GITHUB_PR_AUTHENTICATION_FAILURE_EVENT_CHANNEL,
     GITHUB_PR_SAML_ENFORCEMENT_EVENT_CHANNEL,
-    HOT_CPU_PROFILE_CAPTURED_EVENT_CHANNEL,
+    ...(options?.federationTarget ? [] : [HOT_CPU_PROFILE_CAPTURED_EVENT_CHANNEL]),
     INTEGRATED_TERMINAL_REVEAL_CHANNEL,
     INTEGRATED_TERMINAL_SESSIONS_CHANNEL,
     MANAGED_GROK_SIGNATURE_REJECTED_EVENT_CHANNEL,

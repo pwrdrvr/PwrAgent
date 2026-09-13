@@ -1,3 +1,4 @@
+import { GithubPrAuthenticationNotice } from "../pr-status/github-pr-authentication-notice";
 import { expectedNavigationReadFailure, type NavigationReadFailure } from "../../shared/navigation-ipc-result";
 import { NavigationAttentionViewLeases } from "../app-server/navigation-attention-view-leases";
 import type { NavigationAttentionViewReleaseRequest } from "@pwragent/shared";
@@ -237,6 +238,7 @@ import {
   APP_SERVER_GET_PR_AUTO_DISPATCH_BUDGET_STATUS_CHANNEL,
   APP_SERVER_RESUME_PR_AUTO_DISPATCH_BUDGET_CHANNEL,
   PR_AUTO_DISPATCH_BUDGET_CHANGED_EVENT_CHANNEL,
+  GITHUB_PR_AUTHENTICATION_FAILURE_ACK_CHANNEL,
   GITHUB_PR_AUTHENTICATION_FAILURE_EVENT_CHANNEL,
   GITHUB_PR_SAML_ENFORCEMENT_EVENT_CHANNEL,
   APP_SERVER_LIST_THREADS_CHANNEL,
@@ -1346,7 +1348,10 @@ class DesktopAppServerService {
   private prLookupRegistryLoadPromise: Promise<void> | undefined;
   private prGraphqlClient: GithubGraphqlPrClient | undefined;
   private readonly githubSamlBlockedRepositories = new Set<string>();
-  private githubPrAuthenticationFailureNotified = false;
+  private readonly githubPrAuthenticationNotice = new GithubPrAuthenticationNotice(
+    undefined,
+    (error) => appServerLog.warn("Could not persist GitHub PR authentication notice", { error }),
+  );
   private prPollingScheduler: PrPollingScheduler | undefined;
   private backgroundPrPollingEnabled = false;
   private prAutoDispatchAllowed = false;
@@ -5286,35 +5291,30 @@ class DesktopAppServerService {
     await this.prPollingScheduler?.probeAfterNetworkReconnect();
   }
 
+  acknowledgeGithubPrAuthenticationNotice(): void {
+    this.githubPrAuthenticationNotice.acknowledge();
+  }
+
   private getPrGraphqlClient(): GithubGraphqlPrClient {
     if (!this.prGraphqlClient) {
       this.prGraphqlClient = new GithubGraphqlPrClient({
         getConfiguredGhCommand: () =>
           getDesktopSettingsService().resolveGhCommandPreference(),
         onAuthenticationFailure: (event) => {
-          if (this.githubPrAuthenticationFailureNotified) {
-            return;
-          }
-          this.githubPrAuthenticationFailureNotified = true;
           const notice = {
             occurredAt: Date.now(),
             ...(event.detail ? { detail: event.detail } : {}),
           };
-          for (const webContents of subscribersForChannel(
-            GITHUB_PR_AUTHENTICATION_FAILURE_EVENT_CHANNEL,
-          )) {
-            if (!webContents.isDestroyed()) {
-              webContents.send(
+          this.githubPrAuthenticationNotice.publish(
+            subscribersForChannel(GITHUB_PR_AUTHENTICATION_FAILURE_EVENT_CHANNEL)
+              .filter((webContents) => !webContents.isDestroyed())
+              .map((webContents) => () => webContents.send(
                 GITHUB_PR_AUTHENTICATION_FAILURE_EVENT_CHANNEL,
                 notice,
-              );
-            }
-          }
+              )),
+          );
         },
         onRepositoryAccess: (event) => {
-          if (event.status === "available") {
-            this.githubPrAuthenticationFailureNotified = false;
-          }
           const target = {
             kind: "github-repository" as const,
             owner: event.owner,
@@ -7591,7 +7591,6 @@ class DesktopAppServerService {
     this.prPollingSettingsUnsubscribe = undefined;
     this.prGraphqlClient = undefined;
     this.githubSamlBlockedRepositories.clear();
-    this.githubPrAuthenticationFailureNotified = false;
     this.prPollingFocus.clear();
     this.prPollBackendByKey.clear();
     this.prStatusTransitionListeners.clear();
@@ -7906,6 +7905,12 @@ function invalidateNavigationEvent(event: AgentEvent): void {
 }
 
 export function registerAppServerIpcHandlers(): void {
+  ipcMain.removeHandler(GITHUB_PR_AUTHENTICATION_FAILURE_ACK_CHANNEL);
+  ipcMain.handle(GITHUB_PR_AUTHENTICATION_FAILURE_ACK_CHANNEL, (event) => {
+    if (subscribersForChannel(GITHUB_PR_AUTHENTICATION_FAILURE_EVENT_CHANNEL).includes(event.sender)) {
+      appServerService.acknowledgeGithubPrAuthenticationNotice();
+    }
+  });
   // Refresh a thread's working-state chips when the agent finishes a turn
   // or a git-mutating command in its worktree. Re-registering tears the
   // previous subscription down first so repeated calls don't stack listeners.
@@ -8936,6 +8941,7 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
     for (const token of consumers) navigationQueryPool.release(token);
   }
   navigationQueryConsumersBySender.clear();
+  ipcMain.removeHandler(GITHUB_PR_AUTHENTICATION_FAILURE_ACK_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_LIST_SKILLS_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_LIST_THREADS_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_READ_THREAD_CHANNEL);

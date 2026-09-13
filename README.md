@@ -53,6 +53,32 @@ pnpm dev:no-messaging   # full UI, no live messaging adapters
 pnpm dev                # full UI + live messaging
 ```
 
+On Linux, install and desktop dev/preview warn if Electron's setuid sandbox
+helper lacks root ownership and mode `4755`. If launch reports the SUID sandbox
+error, run these commands from the repository root:
+
+```bash
+pnpm fix:linux-sandbox
+pnpm dev
+```
+
+The fixer resolves this checkout's installed Electron helper, runs `sudo chown
+root:root` followed by `sudo chmod 4755`, and verifies the result. It is safe to
+repeat; reinstalling dependencies or replacing Electron may require another
+repair. Run the app as your normal user. Install and launch never request sudo
+automatically or disable sandboxing. Both sandbox commands safely do nothing
+on non-Linux platforms.
+
+`pnpm check:linux-sandbox` repeats the read-only advisory check. User namespaces
+may permit launch without the setuid helper; `nosuid` mounts or other security
+policy can still prevent startup even after its permissions are repaired.
+
+Run a separate `pnpm install` in each worktree. Sharing root `node_modules` does
+not create package-local dependency links, and sharing package `node_modules`
+can bind workspace imports to the donor checkout's source. Installs and native
+staging would also mutate shared dependencies. A symlink to a repaired helper
+inherits its permissions, but sharing dependencies is not a complete setup fix.
+
 Codex and ACP CLI setup, the full development workflow, test strategy, replay fixtures, and diagnostics are documented in **[CONTRIBUTING.md](CONTRIBUTING.md)**.
 
 ## How it's built
