@@ -727,12 +727,14 @@ for (const theme of AUDIT_THEMES) {
           await settle();
           await runAxe(app.window, "directories lens, collapsed");
         });
-        await test.step("user expansion reveals lazy pins under a stationary pointer", async () => {
+        await test.step("user expansion restores loaded rows under a stationary pointer", async () => {
           await directory.click();
           await expect(directory).toHaveAttribute("aria-expanded", "true");
-          // No mouse move or hover release before the asynchronous pages arrive.
+          // No mouse move or hover release while the retained pages refresh.
+          // Reopening preserves the extra rows loaded above instead of resetting
+          // the directory to its first ten unpinned roots.
           await expect(threads.locator('[data-thread-pin-state="pinned"]')).toHaveCount(2);
-          await expect(threads.locator('[data-thread-pin-state="unpinned"]')).toHaveCount(10);
+          await expect(threads.locator('[data-thread-pin-state="unpinned"]')).toHaveCount(12);
         });
       } finally {
         await app.close();

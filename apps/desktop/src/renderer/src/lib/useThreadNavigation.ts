@@ -8,7 +8,7 @@ import { loadedThreadRows, loadedDirectoryRows, indexLoadedThreadRows, indexLoad
 import { readNavigationUnlinkPlan } from "./navigation-unlink-plan";
 import { readNavigationActionDetail, readNavigationActionThread } from "./navigation-action-authority";
 import { applyLaunchpadEnvironmentSetupProgress, type LaunchpadEnvironmentSetupProgress } from "./launchpad-setup-progress";
-import { useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type {
   AppServerBackendKind,
   AppServerCollaborationModeRequest,
@@ -3130,7 +3130,7 @@ export function useThreadNavigation(
   const acceptedPagesRef = useRef(new Map<string, unknown>());
   const acceptedDefaultsRef = useRef<unknown>(undefined);
   const acceptedDraftHydrationRef = useRef<number | undefined>(undefined);
-  useEffect(() => {
+  useLayoutEffect(() => {
     const pages = new Map([...boundedNavigation.resources].flatMap(([id, resource]) => resource.state.page ? [[id, resource.state.page] as const] : []));
     const changed = pages.size !== acceptedPagesRef.current.size
       || [...pages].some(([id, page]) => acceptedPagesRef.current.get(id) !== page)

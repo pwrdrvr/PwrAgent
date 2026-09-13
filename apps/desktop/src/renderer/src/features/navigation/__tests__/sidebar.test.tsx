@@ -812,7 +812,7 @@ describe("Sidebar", () => {
       threads={[sharedThread]} inboxThreads={[]} loading={false} creatingThread={undefined}
       selectedItemKey="codex:thread-1" onBrowseModeChange={() => undefined}
       onCreateThread={async () => undefined} onOpenLaunchpad={async () => undefined} onSelectThread={() => undefined}
-      pagedNavigation={{ resources: new Map([["directory-index", { id: "directory-index", loading: false,
+      pagedNavigation={{ presentationReady: true, resources: new Map([["directory-index", { id: "directory-index", loading: false,
         state: { ...createNavigationPageState(request), page } }]]), directories: [], selectedDirectoryKeys: undefined, connected: true,
         invalidate: () => undefined, refresh: async () => undefined, loadMore: async () => undefined,
         rebaseline: async () => undefined, restart: async () => undefined, setVisibleAnchor: () => undefined }} />);
