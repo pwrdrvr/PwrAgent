@@ -1243,6 +1243,10 @@ const desktopApi = Object.freeze({
     request?: ReadFederationTailscaleStatusRequest,
   ): Promise<ReadFederationTailscaleStatusResponse> =>
     await ipcRenderer.invoke(FEDERATION_TAILSCALE_STATUS_CHANNEL, request),
+  configureFederationCloudflare: async (
+    request: import("@pwragent/shared").CloudflareSetupRequest,
+  ): Promise<import("@pwragent/shared").CloudflareSetupStatus> =>
+    await ipcRenderer.invoke("federation:cloudflare-setup", request),
   configureFederationTailscale: async (
     request: ConfigureFederationTailscaleRequest,
   ): Promise<ConfigureFederationTailscaleResponse> =>

@@ -706,6 +706,9 @@ export type DesktopApi = {
   readFederationTailscaleStatus?: (
     request?: ReadFederationTailscaleStatusRequest,
   ) => Promise<ReadFederationTailscaleStatusResponse>;
+  configureFederationCloudflare?: (
+    request: import("@pwragent/shared").CloudflareSetupRequest,
+  ) => Promise<import("@pwragent/shared").CloudflareSetupStatus>;
   configureFederationTailscale?: (
     request: ConfigureFederationTailscaleRequest,
   ) => Promise<ConfigureFederationTailscaleResponse>;

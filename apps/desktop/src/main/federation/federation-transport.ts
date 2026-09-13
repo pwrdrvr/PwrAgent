@@ -1,5 +1,6 @@
 import { federationTrafficCaptureUntil } from "./federation-traffic-capture";
 import http from "node:http";
+import { CloudflareOriginProbes } from "./cloudflare-origin-probes";
 import { randomUUID } from "node:crypto";
 import type { Duplex } from "node:stream";
 import WebSocket, { WebSocketServer } from "ws";
@@ -372,6 +373,7 @@ export type FederationGatewayWebSocketServerOptions = {
 };
 
 export class FederationGatewayWebSocketServer {
+  readonly securityProbes = new CloudflareOriginProbes();
   private readonly envelopeDiagnostics = new FederationEnvelopeDiagnostics();
   private httpServer?: http.Server;
   private wsServer?: WebSocketServer;
@@ -397,14 +399,31 @@ export class FederationGatewayWebSocketServer {
       return { url: `ws://${this.options.host}:${port}`, port };
     }
     this.stopping = false;
-    this.httpServer = http.createServer();
+    this.httpServer = http.createServer((request, response) => {
+      const proof = this.securityProbes.observe(request);
+      response.writeHead(proof ? 204 : 404, {
+        "Cache-Control": "no-store",
+        ...(proof ? { "X-PwrAgent-Probe-Proof": proof } : {}),
+      });
+      response.end();
+    });
     this.wsServer = new WebSocketServer({
-      server: this.httpServer,
+      noServer: true,
       maxPayload: this.options.maxFrameBytes ?? FEDERATION_MAX_FRAME_BYTES,
       // In Noise mode ws sees incompressible ciphertext. Tunnel mode uses the
       // same negotiated inner codec so maxPayload continues to protect wire
       // bytes while the codec separately limits decompressed bytes.
       perMessageDeflate: false,
+    });
+    this.httpServer.on("upgrade", (request, socket, head) => {
+      const proof = this.securityProbes.observe(request);
+      if (proof) {
+        socket.end(`HTTP/1.1 204 No Content\r\nConnection: close\r\nCache-Control: no-store\r\nX-PwrAgent-Probe-Proof: ${proof}\r\n\r\n`);
+        return;
+      }
+      this.wsServer?.handleUpgrade(request, socket, head, (client) => {
+        this.wsServer?.emit("connection", client, request);
+      });
     });
     this.wsServer.on("connection", (socket, request) => void this.handleSocket(socket, request));
     // Belt-and-suspenders behind the per-socket keepalive: sweep sessions
