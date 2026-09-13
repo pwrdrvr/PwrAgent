@@ -1,3 +1,4 @@
+import { GithubPrAuthenticationNotice } from "../pr-status/github-pr-authentication-notice";
 import { expectedNavigationReadFailure, type NavigationReadFailure } from "../../shared/navigation-ipc-result";
 import { NavigationAttentionViewLeases } from "../app-server/navigation-attention-view-leases";
 import type { NavigationAttentionViewReleaseRequest } from "@pwragent/shared";
@@ -1346,7 +1347,10 @@ class DesktopAppServerService {
   private prLookupRegistryLoadPromise: Promise<void> | undefined;
   private prGraphqlClient: GithubGraphqlPrClient | undefined;
   private readonly githubSamlBlockedRepositories = new Set<string>();
-  private githubPrAuthenticationFailureNotified = false;
+  private readonly githubPrAuthenticationNotice = new GithubPrAuthenticationNotice(
+    undefined,
+    (error) => appServerLog.warn("Could not persist GitHub PR authentication notice", { error }),
+  );
   private prPollingScheduler: PrPollingScheduler | undefined;
   private backgroundPrPollingEnabled = false;
   private prAutoDispatchAllowed = false;
@@ -5292,29 +5296,20 @@ class DesktopAppServerService {
         getConfiguredGhCommand: () =>
           getDesktopSettingsService().resolveGhCommandPreference(),
         onAuthenticationFailure: (event) => {
-          if (this.githubPrAuthenticationFailureNotified) {
-            return;
-          }
-          this.githubPrAuthenticationFailureNotified = true;
           const notice = {
             occurredAt: Date.now(),
             ...(event.detail ? { detail: event.detail } : {}),
           };
-          for (const webContents of subscribersForChannel(
-            GITHUB_PR_AUTHENTICATION_FAILURE_EVENT_CHANNEL,
-          )) {
-            if (!webContents.isDestroyed()) {
-              webContents.send(
+          this.githubPrAuthenticationNotice.publish(
+            subscribersForChannel(GITHUB_PR_AUTHENTICATION_FAILURE_EVENT_CHANNEL)
+              .filter((webContents) => !webContents.isDestroyed())
+              .map((webContents) => () => webContents.send(
                 GITHUB_PR_AUTHENTICATION_FAILURE_EVENT_CHANNEL,
                 notice,
-              );
-            }
-          }
+              )),
+          );
         },
         onRepositoryAccess: (event) => {
-          if (event.status === "available") {
-            this.githubPrAuthenticationFailureNotified = false;
-          }
           const target = {
             kind: "github-repository" as const,
             owner: event.owner,
@@ -7613,7 +7608,6 @@ class DesktopAppServerService {
     this.prPollingSettingsUnsubscribe = undefined;
     this.prGraphqlClient = undefined;
     this.githubSamlBlockedRepositories.clear();
-    this.githubPrAuthenticationFailureNotified = false;
     this.prPollingFocus.clear();
     this.prPollBackendByKey.clear();
     this.prStatusTransitionListeners.clear();
