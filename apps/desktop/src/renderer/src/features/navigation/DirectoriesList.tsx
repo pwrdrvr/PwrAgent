@@ -1049,7 +1049,11 @@ export function DirectoriesList(props: DirectoriesListProps) {
     const rootEntry = selectedPage?.entries.find((entry) => entry.placement.kind === "root");
     if (!rootEntry) return;
     handledRevealRequestRef.current = request;
-    setExpandedByKey((current) => ({ ...current, [matchingDirectory.key]: true }));
+    // An already-open directory needs no write here either; see the selection
+    // effect above for what a no-op disclosure write costs.
+    setExpandedByKey((current) => current[matchingDirectory.key] === true
+      ? current
+      : { ...current, [matchingDirectory.key]: true });
     if (rootEntry.row.pinnedRank !== undefined) return;
 
     // The selected child is rendered with its top-level ancestor. Reveal that
