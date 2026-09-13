@@ -764,6 +764,37 @@ describe("auto updater", () => {
       // Silent on the reporting channel, not skipped: each one still ran.
       expect(checkForUpdatesMock).toHaveBeenCalledTimes(3);
     });
+
+    it("still answers the channel when the check throws past its own catch", async () => {
+      // The card is armed by `checking` and only an outcome disarms it, so a
+      // throw that escapes `runAppUpdateCheck` must not leave the operator on
+      // a sweep that cannot end. It also must not reach the menu's `void`
+      // call site as an unhandled rejection.
+      setPlatform("linux");
+      const updater = await importAutoUpdater();
+      const { BrowserWindow } = await import("electron");
+      const getAllWindows = vi.mocked(BrowserWindow.getAllWindows);
+      const windows = getAllWindows();
+      const broken = new Error("broadcast exploded");
+      let calls = 0;
+      getAllWindows.mockImplementation(() => {
+        calls += 1;
+        // Call 1 is the `checking` tick, which is fine. Call 2 is the status
+        // broadcast inside the check — the one outside its own try.
+        if (calls === 2) throw broken;
+        return windows;
+      });
+
+      await expect(updater.checkForAppUpdatesNow("menu")).resolves.toEqual({
+        status: "error",
+        message: broken.message,
+      });
+      // Armed, then disarmed — not left mid-flight.
+      expect(broadcastCheckResults()).toEqual([
+        { status: "checking" },
+        { status: "error", message: broken.message },
+      ]);
+    });
   });
 
   describe("canceling a download", () => {

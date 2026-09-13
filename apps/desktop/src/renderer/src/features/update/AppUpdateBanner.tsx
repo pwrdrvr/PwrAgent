@@ -93,14 +93,17 @@ export function AppUpdateBanner(props: {
     watchingRef.current = false;
     setWatching(false);
     setCanceling(false);
-    if (
-      status.status === "idle"
-      || status.status === "downloaded"
-      || isUpdateCheckInProgress(status)
-    ) {
-      // `downloaded` is actionable, so the sticky card below carries it and a
-      // transient notice repeating the answer would say it twice. `idle` is
-      // not an answer at all.
+    if (status.status === "downloaded") {
+      // Actionable, so the sticky card below carries it and a transient
+      // notice repeating the answer would say it twice. Adopted as the status
+      // because this can be the only place it arrives: a check that joins an
+      // already-held download is answered from `heldDownloadedUpdate`, and
+      // main broadcasts no status event for it.
+      setUpdateStatus(status);
+      return;
+    }
+    if (status.status === "idle" || isUpdateCheckInProgress(status)) {
+      // Not an answer at all.
       return;
     }
     const notice = updateCheckOutcomeNotice(status);
@@ -158,7 +161,16 @@ export function AppUpdateBanner(props: {
           // from a stale `idle` would flash the wrong copy - but a check that
           // JOINED one already downloading is further along than `checking`
           // and must not be walked backwards.
-          if (!isUpdateCheckInProgress(statusRef.current)) {
+          //
+          // Neither may a standing `downloaded` offer: main answers such a
+          // check from `heldDownloadedUpdate` without re-broadcasting the
+          // status, so overwriting it here tears the Restart card down for
+          // good. `downloaded` is not a stale mid-flight value - it is an
+          // offer that outlives the check.
+          if (
+            !isUpdateCheckInProgress(statusRef.current)
+            && statusRef.current.status !== "downloaded"
+          ) {
             setUpdateStatus(result);
           }
           return;
@@ -211,11 +223,21 @@ export function AppUpdateBanner(props: {
     if (canceling) {
       return;
     }
+    const cancel = desktopApi?.cancelAppUpdateDownload;
+    if (!cancel) {
+      // A window whose preload predates this channel. Latching the button
+      // would claim a cancel that was never requested.
+      return;
+    }
     setCanceling(true);
-    void desktopApi?.cancelAppUpdateDownload?.();
-    // No state change on the reply: main answers the click with a status
-    // change either way, and a `canceled: false` race means the download
-    // finished - which is about to raise the Restart card, not un-press this.
+    // No state change on a `canceled: true` reply: main answers the click
+    // with a status change either way, and a `canceled: false` race means the
+    // download finished - which is about to raise the Restart card, not
+    // un-press this. A rejection is different: nothing was asked, so the
+    // button must go back to offering the action.
+    void cancel().catch(() => {
+      setCanceling(false);
+    });
   };
 
   const progress =

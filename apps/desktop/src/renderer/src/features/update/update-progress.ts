@@ -4,6 +4,7 @@
 // is the wording and the arithmetic, and neither needs a DOM to be checked.
 
 import type { AppUpdateStatus } from "../../../../shared/app-metadata";
+import { formatByteCount } from "../../lib/format-bytes";
 
 /**
  * The statuses a check passes through before it has an answer.
@@ -68,15 +69,17 @@ export function updateProgressCopy(
       cancelable: true,
     };
   }
+  // A provider that sends no content length gives electron-updater nothing to
+  // compute a percent from. Fall back to the sweep rather than pinning the bar
+  // at 0% for the length of the download. The message reads the clamped value
+  // too, so an overshooting feed cannot print "104%" beside a full bar.
+  const percent = clampPercent(status.percent);
   return {
     eyebrow: switchingBack ? "Downloading switch" : "Downloading update",
     message: `PwrAgent v${status.version}${
-      status.percent === undefined ? "" : ` - ${status.percent}%`
+      percent === undefined ? "" : ` - ${Math.round(percent)}%`
     }`,
-    // A provider that sends no content length gives electron-updater nothing
-    // to compute a percent from. Fall back to the sweep rather than pinning
-    // the bar at 0% for the length of the download.
-    percent: clampPercent(status.percent),
+    percent,
     meter: downloadMeter(status),
     cancelable: true,
   };
@@ -89,7 +92,9 @@ function clampPercent(percent: number | undefined): number | undefined {
   return Math.min(100, Math.max(0, percent));
 }
 
-/** `24.1 MB of 118.0 MB - 3.2 MB/s`, dropping whichever half is unknown. */
+/** `24.1 MB of 113 MB - 3.2 MB/s`, dropping whichever half is unknown.
+ *  Byte figures go through the shared `formatByteCount` so this meter cannot
+ *  round differently from the rest of the app. */
 export function downloadMeter(status: {
   transferred?: number;
   total?: number;
@@ -98,13 +103,13 @@ export function downloadMeter(status: {
   const parts: string[] = [];
   if (isPositive(status.total) && isCount(status.transferred)) {
     parts.push(
-      `${formatBytes(status.transferred)} of ${formatBytes(status.total)}`,
+      `${formatByteCount(status.transferred)} of ${formatByteCount(status.total)}`,
     );
   } else if (isCount(status.transferred)) {
-    parts.push(`${formatBytes(status.transferred)} transferred`);
+    parts.push(`${formatByteCount(status.transferred)} transferred`);
   }
   if (isPositive(status.bytesPerSecond)) {
-    parts.push(`${formatBytes(status.bytesPerSecond)}/s`);
+    parts.push(`${formatByteCount(status.bytesPerSecond)}/s`);
   }
   return parts.length === 0 ? undefined : parts.join(" - ");
 }
@@ -117,15 +122,6 @@ function isPositive(value: number | undefined): value is number {
   return isCount(value) && value > 0;
 }
 
-export function formatBytes(bytes: number): string {
-  if (bytes < 1024) {
-    return `${Math.round(bytes)} B`;
-  }
-  if (bytes < 1024 * 1024) {
-    return `${(bytes / 1024).toFixed(1)} KB`;
-  }
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
 
 export type UpdateCheckOutcomeCopy = {
   eyebrow: string;

@@ -7704,8 +7704,15 @@ a.button {
    the percent text changed width, and the bar would be as narrow as the
    shortest line on the card. */
 .app-update-banner--progress {
-  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
+}
+
+/* Only the phases that offer Cancel get a second track. Declaring it
+   unconditionally would spend the card's 12px gap on an empty column during
+   the release read, so the checking card would sit wider than the downloading
+   one for no reason. */
+.app-update-banner--progress:has(.app-update-banner__actions) {
+  grid-template-columns: minmax(0, 1fr) auto;
 }
 
 .app-update-banner--progress .app-update-banner__content {

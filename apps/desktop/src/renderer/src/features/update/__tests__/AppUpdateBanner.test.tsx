@@ -183,7 +183,7 @@ describe("AppUpdateBanner", () => {
 
     expect(screen.getByText("PwrAgent v1.0.0 - 42%")).toBeInTheDocument();
     expect(
-      screen.getByText("47.7 MB of 112.5 MB - 3.1 MB/s"),
+      screen.getByText("48 MB of 113 MB - 3.1 MB/s"),
     ).toBeInTheDocument();
     expect(progressBar()?.getAttribute("aria-valuenow")).toBe("42");
     // Still nothing in the notice stack to expire.
@@ -390,6 +390,33 @@ describe("AppUpdateBanner", () => {
     });
     act(() => {
       emit({ status: "downloaded", version: "1.2.3" });
+    });
+
+    expect(screen.getByText("Restart to update to v1.2.3.")).toBeInTheDocument();
+  });
+
+  it("keeps the standing offer when the operator checks again", async () => {
+    // A check that joins an already-downloaded update must not tear the
+    // Restart card down: main answers `downloaded` straight away and never
+    // re-broadcasts the status, so anything the renderer overwrites here is
+    // gone until the window reloads.
+    const { desktopApi, emit, emitResult } = renderBanner({ status: "idle" });
+
+    await waitFor(() => {
+      expect(desktopApi.onAppUpdateCheckResult).toHaveBeenCalledTimes(1);
+    });
+    act(() => {
+      emit({ status: "downloaded", version: "1.2.3" });
+    });
+    expect(screen.getByText("Restart to update to v1.2.3.")).toBeInTheDocument();
+
+    act(() => {
+      emitResult({ status: "checking" });
+    });
+    expect(screen.getByText("Restart to update to v1.2.3.")).toBeInTheDocument();
+
+    act(() => {
+      emitResult({ status: "downloaded", version: "1.2.3" });
     });
 
     expect(screen.getByText("Restart to update to v1.2.3.")).toBeInTheDocument();

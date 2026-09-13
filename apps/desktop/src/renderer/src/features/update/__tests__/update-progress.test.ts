@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   downloadMeter,
-  formatBytes,
   isUpdateCheckInProgress,
   updateCheckOutcomeCopy,
   updateProgressCopy,
@@ -62,7 +61,9 @@ describe("updateProgressCopy", () => {
     expect(copy.eyebrow).toBe("Downloading update");
     expect(copy.message).toBe("PwrAgent v1.0.0 - 42%");
     expect(copy.percent).toBe(42);
-    expect(copy.meter).toBe("47.7 MB of 112.5 MB - 3.1 MB/s");
+    // Byte figures come from the shared `formatByteCount`, so they round the
+    // same way the federation transfer line and Star Map load card do.
+    expect(copy.meter).toBe("48 MB of 113 MB - 3.1 MB/s");
     expect(copy.cancelable).toBe(true);
   });
 
@@ -111,14 +112,14 @@ describe("updateProgressCopy", () => {
 
 describe("downloadMeter", () => {
   it("drops the half it does not know", () => {
-    expect(downloadMeter({ transferred: 2_048 })).toBe("2.0 KB transferred");
+    expect(downloadMeter({ transferred: 2_048 })).toBe("2 KB transferred");
     expect(downloadMeter({ bytesPerSecond: 500 })).toBe("500 B/s");
     expect(downloadMeter({})).toBeUndefined();
   });
 
   it("does not divide by a total the feed reported as zero", () => {
     expect(downloadMeter({ transferred: 1_024, total: 0 })).toBe(
-      "1.0 KB transferred",
+      "1 KB transferred",
     );
   });
 
@@ -127,16 +128,21 @@ describe("downloadMeter", () => {
     // samples to divide.
     expect(
       downloadMeter({ transferred: 0, total: 1_024, bytesPerSecond: 0 }),
-    ).toBe("0 B of 1.0 KB");
+    ).toBe("0 B of 1 KB");
   });
 });
 
-describe("formatBytes", () => {
-  it("switches unit at each boundary rather than printing 1024 KB", () => {
-    expect(formatBytes(0)).toBe("0 B");
-    expect(formatBytes(1_023)).toBe("1023 B");
-    expect(formatBytes(1_024)).toBe("1.0 KB");
-    expect(formatBytes(1_048_576)).toBe("1.0 MB");
+describe("the clamped percent", () => {
+  it("reads the same in the message as on the bar", () => {
+    // A feed that overshoots must not print "104%" beside a full bar.
+    const copy = updateProgressCopy({
+      status: "downloading",
+      version: "1.0.0",
+      percent: 104,
+    });
+
+    expect(copy.percent).toBe(100);
+    expect(copy.message).toBe("PwrAgent v1.0.0 - 100%");
   });
 });
 

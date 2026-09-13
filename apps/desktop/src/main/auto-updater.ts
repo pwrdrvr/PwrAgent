@@ -654,9 +654,27 @@ export async function checkForAppUpdatesNow(
   // The one mid-flight tick on this channel; everything after it is an
   // outcome. It arms the live card, which the status channel then drives.
   emitUpdateCheckResult({ status: "checking" });
-  const result = await runAppUpdateCheck(trigger);
-  emitUpdateCheckResult(result);
-  return result;
+  try {
+    const result = await runAppUpdateCheck(trigger);
+    emitUpdateCheckResult(result);
+    return result;
+  } catch (err) {
+    // `runAppUpdateCheck` answers its own failures, so reaching here means
+    // something outside its try threw. An outcome still has to go out: the
+    // card is armed and nothing else will ever disarm it, leaving the
+    // operator on an indeterminate sweep that cannot end. The menu call site
+    // is `void`-ed, so swallowing the throw also keeps it from becoming an
+    // unhandled rejection in main.
+    const message = err instanceof Error ? err.message : String(err);
+    const failed = { status: "error", message } as const;
+    log.warn("update check threw outside its own error handling", {
+      message,
+      trigger,
+    });
+    setUpdateStatusUnlessDownloaded(failed);
+    emitUpdateCheckResult(failed);
+    return failed;
+  }
 }
 
 async function runAppUpdateCheck(
@@ -893,12 +911,17 @@ function adoptUpdateDownload(
       releaseActiveDownload(download);
       if (download.canceled) {
         log.info("update download canceled", { version: download.version });
-        setUpdateStatusUnlessDownloaded(
-          withDirection({
-            status: "canceled" as const,
-            version: download.version,
-          }),
-        );
+        // Only when electron-updater did not already report it. It emits
+        // `update-cancelled` for every abort it recognizes, and settling the
+        // same status twice broadcasts a transition that did not happen.
+        if (updateStatus.status !== "canceled") {
+          setUpdateStatusUnlessDownloaded(
+            withDirection({
+              status: "canceled" as const,
+              version: download.version,
+            }),
+          );
+        }
         return;
       }
       // The `error` event already carried this to the status; the log line is
@@ -1479,12 +1502,16 @@ export function initAutoUpdater(): void {
       transferred: progress.transferred,
       total: progress.total,
     });
+    // `update-available` has already put the manifest's own version on the
+    // status by the time bytes move, and that is the version
+    // `update-downloaded` will offer. `activeDownload.version` is only the
+    // fallback because it starts life as the GitHub tag, which a release can
+    // spell differently from its manifest.
     const version =
-      activeDownload?.version
-      ?? (updateStatus.status === "available"
-        || updateStatus.status === "downloading"
+      updateStatus.status === "available"
+      || updateStatus.status === "downloading"
         ? updateStatus.version
-        : "unknown");
+        : activeDownload?.version ?? "unknown";
     // The bytes come along for the card's meter, not just the log: a percent
     // alone cannot tell a 4 MB delta apart from a 120 MB full download, and
     // on a slow link that is the whole question of whether waiting is worth
@@ -1559,10 +1586,12 @@ export async function installDownloadedAppUpdate(options?: {
         : "No downloaded update is ready to install.",
     };
   }
-  // Nothing was downloaded: the held offer is the dev/QA fake, and there is
-  // no payload for Squirrel to apply. Say so rather than quitting the app the
-  // operator is previewing in.
-  if (!productionUpdatesEnabled()) {
+  // Nothing was downloaded: this offer is the dev/QA fake, and there is no
+  // payload for Squirrel to apply. Say so rather than quitting the app the
+  // operator is previewing in. Keyed on the fake's own version rather than on
+  // the build type, so a dev or E2E path that ever holds a real download is
+  // not refused with a reason that does not apply to it.
+  if (version === DEV_FAKE_UPDATE_VERSION && !productionUpdatesEnabled()) {
     log.info("declining to install the dev fake update", { version });
     return {
       status: "error",
