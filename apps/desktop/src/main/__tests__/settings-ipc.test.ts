@@ -11,11 +11,13 @@ const handlers = new Map<string, (...args: unknown[]) => Promise<unknown>>();
 const tempRoots: string[] = [];
 const disposeDesktopBackendRegistryMock = vi.fn(async () => undefined);
 const listThreadsMock = vi.fn(async () => [] as unknown[]);
+const refreshCodexAfterAuthenticationMock = vi.fn(async () => undefined);
 const listBackendsMock = vi.fn(async () => ({ backends: [], fetchedAt: 1 }));
 const invalidateAcpBackendDiscoveryMock = vi.fn();
 const getDesktopBackendRegistryMock = vi.fn(() => ({
   invalidateAcpBackendDiscovery: invalidateAcpBackendDiscoveryMock,
   listBackends: listBackendsMock,
+  refreshCodexAfterAuthentication: refreshCodexAfterAuthenticationMock,
   listThreads: listThreadsMock,
 }));
 const desktopConfigStoreMock = vi.hoisted(() => ({
@@ -238,6 +240,7 @@ describe("settings ipc", () => {
     disposeDesktopBackendRegistryMock.mockClear();
     invalidateAcpBackendDiscoveryMock.mockClear();
     listBackendsMock.mockClear();
+    refreshCodexAfterAuthenticationMock.mockClear();
     listThreadsMock.mockClear();
     listThreadsMock.mockResolvedValue([]);
     getDesktopBackendRegistryMock.mockClear();
@@ -814,8 +817,7 @@ describe("settings ipc", () => {
       expect(codexAuthState.isBlocked(root)).toBe(true);
       await expect(check({}, { profile: "" })).resolves.toMatchObject({ authenticated: true });
       expect(codexAuthState.isBlocked(root)).toBe(false);
-      expect(listBackendsMock).toHaveBeenCalledWith(
-        { refreshModels: "codex" },
+      expect(refreshCodexAfterAuthenticationMock).toHaveBeenCalledWith(
         expect.objectContaining({ intent: "settings-user-action" }),
       );
       expect(probe).toHaveBeenCalledTimes(2);

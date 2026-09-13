@@ -8590,6 +8590,7 @@ export class DesktopBackendRegistry {
   private readonly providerThreadSnapshotStore?: ProviderThreadSnapshotStoreLike;
   private durableStartupThreadHydrationAttempted = false;
   private startupProviderRefreshAttempted = false;
+  private startupCodexRefreshFailed = false;
   private startupProviderRefreshPromise?: Promise<void>;
   private startupProviderRefreshStatus?: Readonly<{
     state: "checking" | "degraded" | "ready";
@@ -11079,6 +11080,7 @@ export class DesktopBackendRegistry {
       if (this.closed) {
         return;
       }
+      this.startupCodexRefreshFailed = results[0]?.status === "rejected";
       const failures = results.filter((result) => result.status === "rejected");
       if (failures.length > 0) {
         backendRegistryLog.warn("startup provider thread refresh degraded", {
@@ -11120,6 +11122,40 @@ export class DesktopBackendRegistry {
       this.startupProviderRefreshPromise = undefined;
     });
     return this.startupProviderRefreshPromise;
+  }
+
+  async refreshCodexAfterAuthentication(permit: ProviderDiscoveryPermit): Promise<void> {
+    assertProviderDiscoveryPermit(permit, ["settings-user-action", "setup-user-action"]);
+    // A failed startup refresh must finish publishing before recovery replaces
+    // it. Do not join a thread-list promise admitted under rejected credentials.
+    await this.startupProviderRefreshPromise;
+    if (this.closed) return;
+    this.invalidateThreadListCache();
+    await this.listBackends({ refreshModels: "codex" }, permit);
+    const threads = await this.listThreads({
+      backend: "codex",
+      callerReason: "authentication-recovery",
+      enrichDirectories: false,
+      forceRefresh: true,
+    });
+    if (this.closed) return;
+    this.publishRefreshedProviderThreadsToCache([{ backends: ["codex"], threads }]);
+    const failedProviders = Math.max(
+      0,
+      (this.startupProviderRefreshStatus?.failedProviders ?? 0)
+        - (this.startupCodexRefreshFailed ? 1 : 0),
+    );
+    this.startupCodexRefreshFailed = false;
+    this.startupProviderRefreshStatus = failedProviders > 0
+      ? { state: "degraded", failedProviders }
+      : { state: "ready" };
+    await this.emit({
+      backend: "codex",
+      notification: {
+        method: "navigation/providerThreads/refreshed",
+        params: { failedProviders },
+      },
+    });
   }
 
   private async refreshCodexProviderAtStartup(
@@ -11208,7 +11244,8 @@ export class DesktopBackendRegistry {
     if (
       !this.providerThreadSnapshotStore
       || this.closed
-      || params.callerReason !== "startup-provider-refresh"
+      || (params.callerReason !== "startup-provider-refresh"
+        && params.callerReason !== "authentication-recovery")
       || params.archived === true
       || Boolean(params.filter?.trim())
       || params.limit !== undefined
@@ -24262,6 +24299,8 @@ export class DesktopBackendRegistry {
     filter?: string;
     threads: AppServerThreadSummary[];
   }): Promise<void> {
+    if (params.backend === "codex" && this.codexClient.isAuthenticationRequired?.()) return;
+
     if (params.archived === true) {
       await Promise.all(
         params.threads.map((thread) =>
@@ -24595,6 +24634,7 @@ export class DesktopBackendRegistry {
             if (
               diagnostics?.callerReason === "archive-cleanup"
               || diagnostics?.callerReason === "startup-provider-refresh"
+              || diagnostics?.callerReason === "authentication-recovery"
             ) {
               throw error;
             }

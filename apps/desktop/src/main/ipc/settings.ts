@@ -1010,10 +1010,8 @@ async function checkCodexProfileAuthStatus(
       && service.readCodexProfiles().effectiveCodexHome.replace(/\\/g, "/")
         === codexHome.replace(/\\/g, "/")
     ) {
-      // Startup may have cached Codex as unavailable. Login is an explicit
-      // user action authorizing a fresh model/account discovery.
-      await getDesktopBackendRegistry().listBackends(
-        { refreshModels: "codex" },
+      // Recover model/account availability and the provider's navigation data.
+      await getDesktopBackendRegistry().refreshCodexAfterAuthentication(
         issueProviderDiscoveryPermit("settings-user-action"),
       );
     }
