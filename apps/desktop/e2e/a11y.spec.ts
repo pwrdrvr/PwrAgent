@@ -203,6 +203,62 @@ function describeNode(node: AxeViolationNode): string {
   return lines.join("\n");
 }
 
+/**
+ * Name the elements sitting on top of a target, for an obscured `target-size`.
+ *
+ * axe reports the measurement ("315px by 8.8px") but never what took the rest.
+ * Without this you are reduced to reading the stylesheet and guessing, which
+ * costs a CI cycle per guess — and two of those guesses were wrong here,
+ * because `pointer-events` INHERITS and a rule that looks like it silences an
+ * overlapper may be a no-op on an already-silenced subtree.
+ *
+ * `elementsFromPoint` is the right probe because it applies the same rule axe
+ * does: it omits anything with `pointer-events: none`, which is exactly the
+ * filter in axe's `getTargetRects`. Everything it returns above the target is
+ * therefore a real obscurer, and each one either has to stop taking the
+ * pointer or stop covering the band.
+ *
+ * Sampled on a grid rather than at the centre: an overlapper that covers only
+ * one end is what splits the rect, and the centre alone would miss it.
+ */
+async function describeObscurers(
+  window: Page,
+  selector: string,
+): Promise<string> {
+  const names = await window.evaluate((target) => {
+    const node = document.querySelector(target);
+    if (!node) {
+      return [];
+    }
+    const rect = node.getBoundingClientRect();
+    const found = new Set<string>();
+    for (let row = 1; row <= 3; row += 1) {
+      for (let column = 1; column <= 5; column += 1) {
+        const x = rect.left + (rect.width * column) / 6;
+        const y = rect.top + (rect.height * row) / 4;
+        for (const element of document.elementsFromPoint(x, y)) {
+          if (element === node) {
+            break;
+          }
+          if (node.contains(element)) {
+            continue;
+          }
+          const classes = typeof element.className === "string"
+            ? element.className.trim().split(/\s+/).filter(Boolean)
+            : [];
+          found.add(
+            `${element.tagName.toLowerCase()}${classes.map((name) => `.${name}`).join("")}`,
+          );
+        }
+      }
+    }
+    return [...found];
+  }, selector);
+  return names.length > 0
+    ? `\n        obscured by: ${names.join(", ")}`
+    : "";
+}
+
 async function runAxe(
   window: Page,
   surface: string,
@@ -259,14 +315,29 @@ async function runAxe(
   // you which rules + selectors failed without having to download the
   // Playwright trace artifact.
   if (results.violations.length > 0) {
-    const summary = results.violations
-      .map((violation) => {
-        const nodes = violation.nodes
-          .map((node) => `    - ${node.target.join(" ")}\n${describeNode(node)}`)
-          .join("\n");
-        return `  ${violation.id} (${violation.impact ?? "n/a"}): ${violation.help}\n${nodes}\n    ${violation.helpUrl}`;
-      })
-      .join("\n");
+    const summary = (
+      await Promise.all(
+        results.violations.map(async (violation) => {
+          const nodes = (
+            await Promise.all(
+              violation.nodes.map(async (node) => {
+                const selector = node.target.join(" ");
+                // Only the obscured case needs the extra probe, and only a
+                // string selector can be re-queried in the page.
+                const obscurers =
+                  violation.id === "target-size"
+                  && typeof node.target[0] === "string"
+                  && node.target.length === 1
+                    ? await describeObscurers(window, selector)
+                    : "";
+                return `    - ${selector}\n${describeNode(node)}${obscurers}`;
+              }),
+            )
+          ).join("\n");
+          return `  ${violation.id} (${violation.impact ?? "n/a"}): ${violation.help}\n${nodes}\n    ${violation.helpUrl}`;
+        }),
+      )
+    ).join("\n");
     throw new Error(
       `axe-core found ${results.violations.length} WCAG2 AA violation(s) on ${surface}:\n${summary}`,
     );

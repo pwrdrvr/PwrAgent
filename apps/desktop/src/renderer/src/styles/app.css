@@ -5185,17 +5185,6 @@ a.button {
 }
 
 .thread-row__title {
-  /* Decoration over a hit target, so it must not intercept the pointer —
-     the same rule `.thread-row__chips` states above, for the same reason.
-     The title band IS `.thread-row__open`, an empty absolutely-positioned
-     button at `z-index: 0`; this span paints over it and, being a nowrap
-     ellipsis flex item, its box spans the band whatever the title says.
-     axe measures a target's largest UNOBSCURED rect, so the button was
-     reported at 315x8.8px against the 24x24 floor (WCAG 2.5.8) — the
-     leftover strip under the line box. Clicking the title still opens the
-     thread either way; without this it reached the card div's guarded
-     onClick rather than the button the band advertises. */
-  pointer-events: none;
   padding-bottom: 2px;
   /* Sidebar density pass (2026-08). The previous 15/650 (an issue #240
      "reads thin" follow-up) made every row shout — directory headers
