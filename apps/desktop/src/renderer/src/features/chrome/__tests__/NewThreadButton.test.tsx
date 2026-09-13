@@ -152,6 +152,52 @@ describe("NewThreadButton", () => {
     expect(onCreateThread).not.toHaveBeenCalled();
   });
 
+  it("orders 'Add a Project Directory…' above the federation instances", async () => {
+    render(
+      <NewThreadButton
+        directoryLabel="PwrAgnt"
+        onAddProjectDirectory={vi.fn()}
+        onCreateThread={vi.fn()}
+        onCreateThreadOnTarget={vi.fn()}
+        onCreateThreadWithoutDirectory={vi.fn()}
+        remoteTargets={[
+          {
+            availability: "available",
+            instanceId: "studio-work",
+            label: "Studio Mac / work",
+          },
+          {
+            availability: "available",
+            instanceId: "laptop-default",
+            label: "Laptop",
+          },
+        ]}
+      />,
+    );
+
+    fireEvent.mouseEnter(
+      screen.getByRole("button", { name: "New thread" })
+        .parentElement as HTMLElement,
+    );
+
+    // The federation group grows one row per enrolled machine inside a card
+    // capped at 420px with `overflow-y: auto`. Last place put the menu's one
+    // non-thread-creating action below the fold on exactly the federations
+    // that make the card scroll, so its position is pinned here.
+    const menu = await screen.findByRole("menu");
+    expect(
+      within(menu)
+        .getAllByRole("menuitem")
+        .map((item) => item.textContent),
+    ).toEqual([
+      "New chat in PwrAgnt",
+      "New chat without a directory",
+      "Add a Project Directory…",
+      "Studio Mac / work",
+      "Laptop",
+    ]);
+  });
+
   it("carries the verb in the group label instead of repeating it per row", async () => {
     render(
       <NewThreadButton

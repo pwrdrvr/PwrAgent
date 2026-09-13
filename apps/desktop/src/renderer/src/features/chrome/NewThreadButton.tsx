@@ -21,8 +21,8 @@ import type { FederationThreadTarget } from "./federation-thread-targets";
  *
  *   1. New chat in <directory>     → `onCreateThread` (context default)
  *   2. New chat without a directory → `onCreateThreadWithoutDirectory`
- *   3. New chat on → <instance>     → open that owner's launchpad
- *   4. Add a Project Directory…     → track a repo without starting a chat
+ *   3. Add a Project Directory…     → track a repo without starting a chat
+ *   4. New chat on → <instance>     → open that owner's launchpad
  *
  * The flyout renders when there's either a meaningful directory choice or an
  * explicit project-registration action. That keeps "Add a Project Directory…"
@@ -196,18 +196,13 @@ export function NewThreadButton(props: NewThreadButtonProps): ReactElement {
                 New chat without a directory
               </button>
             )}
-            {hasRemoteTargets && props.remoteTargets ? (
-              <>
-                <div className="new-thread-menu__separator" role="separator" />
-                <FederationTargetMenuSection
-                  targets={props.remoteTargets}
-                  onSelect={(instanceId) => {
-                    dismissImmediately();
-                    void props.onCreateThreadOnTarget?.(instanceId);
-                  }}
-                />
-              </>
-            ) : null}
+            {/* "Add a Project Directory…" sits above the federation group
+                rather than last: that group grows one row per enrolled
+                machine inside a card capped at 420px with `overflow-y: auto`,
+                so a fixed action placed after it is the first thing to fall
+                below the fold on exactly the federations that are hardest to
+                scroll. Ordering it ahead keeps the menu's one
+                non-thread-creating action at a stable offset from the top. */}
             {props.onAddProjectDirectory ? (
               <>
                 <div className="new-thread-menu__separator" role="separator" />
@@ -225,6 +220,18 @@ export function NewThreadButton(props: NewThreadButtonProps): ReactElement {
                     ? "Adding Project Directory…"
                     : "Add a Project Directory…"}
                 </button>
+              </>
+            ) : null}
+            {hasRemoteTargets && props.remoteTargets ? (
+              <>
+                <div className="new-thread-menu__separator" role="separator" />
+                <FederationTargetMenuSection
+                  targets={props.remoteTargets}
+                  onSelect={(instanceId) => {
+                    dismissImmediately();
+                    void props.onCreateThreadOnTarget?.(instanceId);
+                  }}
+                />
               </>
             ) : null}
           </div>
