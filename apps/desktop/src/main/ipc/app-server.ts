@@ -2033,7 +2033,10 @@ class DesktopAppServerService {
           const pins = await loadViewerNavigationPins(getDesktopOverlayStore(),
             getDesktopFederationRuntime().remoteThreadSummaries());
           rpcOptions?.signal.throwIfAborted();
-          return pins.length ? appendViewerNavigationPins(index, pins) : index;
+          if (!pins.length) return index;
+          const localInstanceId = (await getDesktopFederationRuntime().health()).instanceId;
+          rpcOptions?.signal.throwIfAborted();
+          return appendViewerNavigationPins({ ...index, localInstanceId }, pins);
         }
         return index;
       },

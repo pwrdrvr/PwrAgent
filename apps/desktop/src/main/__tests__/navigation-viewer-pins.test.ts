@@ -145,3 +145,33 @@ it("groups a remote parent with its local child across checkout paths and resolv
   expect(exact.entries.map((entry) => entry.row.id)).toEqual(["parent-m5", "child-m4"]);
   expect(exact.selectionDirectory?.key).toBe(directory.key);
 });
+
+
+it.each(["complete", "checking"] as const)("mounts a remote child under its owner-qualified local parent with %s coverage without confusing another peer", (state) => {
+  const parent: NavigationThreadSummary = { id: "parent", source: "codex", title: "Parent", titleSource: "explicit",
+    linkedDirectories: [{ id: "repo", kind: "local", label: "repo", path: "/viewer/repo" }], inbox: { inInbox: false } };
+  const remote = (id: string, owner: string): NavigationThreadSummary => ({ ...parent, id,
+    federation: { ref: buildFederatedThreadRef({ backend: "codex", threadId: id, instanceId: owner }), instanceLabel: owner } });
+  const child = { ...remote("child", "peer"), parentThreadId: "parent", parentThreadBackend: "codex" as const,
+    parentThreadInstanceId: "viewer" };
+  const otherParent = remote("parent", "other");
+  const otherChild = { ...remote("other-child", "peer"), parentThreadId: "parent", parentThreadBackend: "codex" as const,
+    parentThreadInstanceId: "other" };
+  const directory = { key: "repo", kind: "directory" as const, label: "repo", path: "/viewer/repo",
+    threadKeys: ["codex:parent"], needsAttentionCount: 0 };
+  const viewer = appendViewerNavigationPins({ threads: [parent], directories: [directory] }, [child, otherParent, otherChild]);
+  const index = { ...viewer, localInstanceId: "viewer", coverage: { state } };
+  const project = (query: import("@pwragent/shared").NavigationQuery) => projectNavigationQuery({ index,
+    request: { protocol: 2, consumer: "main-sidebar", inventory: "viewer", query } });
+  const roots = project({ kind: "directory", directoryKey: "repo" });
+  expect(roots.entries.map(({ row }) => [row.ref.ownerInstanceId, row.id])).toEqual([[undefined, "parent"], ["other", "parent"]]);
+  expect(roots.entries.find(({ row }) => !row.ref.ownerInstanceId)?.row.ordinaryChildCount).toBe(1);
+  const children = project({ kind: "children", parent: { backend: "codex", threadId: "parent" } });
+  expect(children.entries.map(({ row }) => row.id)).toEqual(["child"]);
+  expect(children.entries[0]?.placement).toEqual({ kind: "child", parent: { backend: "codex", threadId: "parent" } });
+  expect(project({ kind: "children", parent: { backend: "codex", threadId: "parent", ownerInstanceId: "other" } })
+    .entries.map(({ row }) => row.id)).toEqual(["other-child"]);
+  const exact = project({ kind: "exact", identities: [{ backend: "codex", threadId: "child", ownerInstanceId: "peer" }], includeAncestry: true });
+  expect(exact.entries.map(({ row }) => row.id)).toEqual(["parent", "child"]);
+  expect(child.parentThreadInstanceId).toBe("viewer");
+});
