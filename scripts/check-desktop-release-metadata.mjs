@@ -424,7 +424,8 @@ for (const expected of [
   "secrets.AZURE_CLIENT_SECRET",
   "--win --sign-stage-only --no-publish --require-signing",
   "Prepare stable-name Windows installer alias",
-  "PwrAgent-windows-x64-setup.exe",
+  "node apps/desktop/scripts/windows-release-artifacts.mjs",
+  "PwrAgent.Setup.exe",
 ]) {
   assertWorkflowJobContainsText(
     releaseWorkflow,
@@ -643,7 +644,7 @@ for (const stepName of [
 for (const expected of [
   "PwrAgent-linux-x64.deb",
   "PwrAgent-linux-arm64.deb",
-  "PwrAgent-windows-x64-setup.exe",
+  "PwrAgent.Setup.exe",
   "SHA256SUMS",
   "born as a GitHub `Pre-release`",
   "--latest --prerelease=false",
