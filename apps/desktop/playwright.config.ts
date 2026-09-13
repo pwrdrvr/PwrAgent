@@ -101,12 +101,14 @@ export default defineConfig({
     // Two Windows transcript hangs cost a full CI cycle each for exactly that
     // reason, and the Electron trace carries no DOM snapshots to fall back on.
     //
-    // This shortens an unbounded wait rather than extending a real one: no
-    // action here legitimately runs for twenty seconds, and one that reached
-    // this cap has already left too little of the 30s test budget to pass.
-    // `expect` polling is unaffected — it has its own timeout — so assertions
-    // that deliberately wait longer keep their behavior.
-    actionTimeout: 20_000,
+    // This shortens an unbounded wait rather than extending a real one, and
+    // it has to land well inside the 30s test budget to be worth anything:
+    // at 20s the transcript clicks still lost the race, because they start
+    // ~15s in and the test timeout fired first — same bare message, another
+    // cycle spent. 10s is twice the suite's own 5s `expect` default and far
+    // beyond any real click here. `expect` polling is unaffected; it has its
+    // own timeout, so assertions that deliberately wait longer are untouched.
+    actionTimeout: 10_000,
     screenshot: process.env.CI ? "only-on-failure" : "off",
     trace: "on-first-retry",
     video: process.env.CI ? "retain-on-failure" : "off"

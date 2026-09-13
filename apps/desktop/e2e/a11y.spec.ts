@@ -721,8 +721,39 @@ for (const theme of AUDIT_THEMES) {
         // mystery: the cluster's split-button chevron is 16x24, under the
         // `target-size` floor, and is absent here only because an isolated
         // E2E profile has no federation peers to offer.
+        //
+        // Scroll is the same kind of leftover. `.directory-row__header` is
+        // `position: sticky; top: 0` with an opaque background, so once the
+        // list is scrolled it covers whichever row is passing under it, and
+        // axe measures a target's largest UNOBSCURED rect. The paging step
+        // below calls `scrollIntoViewIfNeeded` to reach "Load more threads"
+        // and leaves the list at an offset that bisected exactly one row —
+        // `.thread-row__open` reported at 315x8.8px against the 24x24 floor,
+        // on the narrower Windows window where that row happened to land
+        // under the header. Nothing is design-wrong there: the row is whole
+        // and clickable once scrolled to. So return the list to a defined
+        // offset, the same way the pointer is returned to a defined corner.
         const settle = async () => {
           await app.window.mouse.move(0, 0);
+          await threads.evaluate((list) => {
+            for (
+              let node = list.parentElement;
+              node;
+              node = node.parentElement
+            ) {
+              if (node.scrollHeight > node.clientHeight + 1) {
+                node.scrollTop = 0;
+                return;
+              }
+            }
+          });
+          // One frame, so sticky offsets settle before anything is measured.
+          await app.window.evaluate(
+            async () =>
+              await new Promise((resolve) =>
+                requestAnimationFrame(() => resolve(null)),
+              ),
+          );
         };
 
         // Establish an explicit user disclosure before paging and selection.
