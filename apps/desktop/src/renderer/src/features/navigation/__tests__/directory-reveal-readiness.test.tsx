@@ -1,6 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import { act, render } from "@testing-library/react";
-import { afterEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import type {
   NavigationDirectoryRow,
   NavigationQueryPage,
@@ -191,18 +191,26 @@ function pagedNavigation(rootLoaded: boolean) {
   };
 }
 
+/**
+ * The patch has to live on the prototype — ThreadRow scrolls whatever its ref
+ * points at — so the receiver is recorded with each call. Asserting only that
+ * *something* scrolled would let a scroll from any other element stand in for
+ * the one this file exists to protect.
+ */
 function withMockScrollIntoView(): {
   restore: () => void;
-  scrollIntoView: ReturnType<typeof vi.fn>;
+  scrolls: Array<{ options: unknown; target: HTMLElement }>;
 } {
-  const scrollIntoView = vi.fn();
+  const scrolls: Array<{ options: unknown; target: HTMLElement }> = [];
   const original = Object.getOwnPropertyDescriptor(
     HTMLElement.prototype,
     "scrollIntoView",
   );
   Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
     configurable: true,
-    value: scrollIntoView,
+    value: function scrollIntoView(this: HTMLElement, options: unknown): void {
+      scrolls.push({ options, target: this });
+    },
   });
   return {
     restore: () => {
@@ -212,8 +220,27 @@ function withMockScrollIntoView(): {
         Reflect.deleteProperty(HTMLElement.prototype, "scrollIntoView");
       }
     },
-    scrollIntoView,
+    scrolls,
   };
+}
+
+function threadRows(): HTMLElement[] {
+  return Array.from(document.querySelectorAll<HTMLElement>(".thread-row"));
+}
+
+function selectedChildRow(): HTMLElement {
+  const row = threadRows().find((candidate) =>
+    (candidate.textContent ?? "").includes(child.title),
+  );
+  if (!row) {
+    throw new Error("The selected child row is not rendered.");
+  }
+  return row;
+}
+
+/** Where the selected child sits among the rendered rows. */
+function selectedChildRowIndex(): number {
+  return threadRows().indexOf(selectedChildRow());
 }
 
 /** Let ThreadRow's reveal frame run, so a premature completion is observable. */
@@ -225,15 +252,8 @@ async function flushRevealFrame(): Promise<void> {
   });
 }
 
-const cleanups: Array<() => void> = [];
-
-afterEach(() => {
-  while (cleanups.length > 0) cleanups.pop()!();
-});
-
 it("holds a reveal until the directory's own page read lands", async () => {
   const mocked = withMockScrollIntoView();
-  cleanups.push(mocked.restore);
   const onRevealSelectedThreadComplete = vi.fn();
   const sidebar = (rootLoaded: boolean) => (
     <Sidebar
@@ -256,21 +276,37 @@ it("holds a reveal until the directory's own page read lands", async () => {
     />
   );
 
-  const { rerender } = render(sidebar(false));
-  await flushRevealFrame();
+  try {
+    const { rerender } = render(sidebar(false));
+    await flushRevealFrame();
 
-  // The row is on screen, but above a filler that has not arrived yet.
-  // Scrolling to it here would scroll to a position it is about to lose.
-  expect(onRevealSelectedThreadComplete).not.toHaveBeenCalled();
+    // The row is on screen, but above a filler that has not arrived yet.
+    // Scrolling to it here would scroll to a position it is about to lose.
+    const indexWhileReading = selectedChildRowIndex();
+    expect(onRevealSelectedThreadComplete).not.toHaveBeenCalled();
 
-  mocked.scrollIntoView.mockClear();
-  await act(async () => {
-    rerender(sidebar(true));
-  });
+    mocked.scrolls.length = 0;
+    await act(async () => {
+      rerender(sidebar(true));
+    });
 
-  // The page landed: the reveal reaches the row in that same commit, so its
-  // synchronous scroll measures the layout the row actually keeps.
-  expect(mocked.scrollIntoView).toHaveBeenCalledWith({ block: "nearest" });
-  await flushRevealFrame();
-  expect(onRevealSelectedThreadComplete).toHaveBeenCalledWith(1);
+    // The precondition the reveal has to survive, asserted rather than
+    // assumed: the landed page really did put a row ABOVE the selected child,
+    // so the position it held in the first commit was one it lost.
+    expect(selectedChildRowIndex()).toBeGreaterThan(indexWhileReading);
+
+    // The reveal reaches the row in that commit, so its synchronous scroll
+    // measures the layout the row actually keeps.
+    expect(
+      mocked.scrolls.filter(
+        (scroll) => scroll.target === selectedChildRow(),
+      ),
+    ).toContainEqual(
+      expect.objectContaining({ options: { block: "nearest" } }),
+    );
+    await flushRevealFrame();
+    expect(onRevealSelectedThreadComplete).toHaveBeenCalledWith(1);
+  } finally {
+    mocked.restore();
+  }
 });
