@@ -1414,6 +1414,28 @@ describe("app server ipc", () => {
     expect(searchForJump).not.toHaveBeenCalled();
   });
 
+  it("routes notice acknowledgement only from a subscribed renderer", async () => {
+    const { GITHUB_PR_AUTHENTICATION_FAILURE_ACK_CHANNEL } = await import("../../shared/ipc");
+    const { subscribersForChannel } = await import("../window-channels");
+    const { appServerService } = await import("../ipc/app-server");
+    const sender = subscribersForChannel("test")[0]!;
+    const acknowledge = vi.spyOn(appServerService, "acknowledgeGithubPrAuthenticationNotice")
+      .mockImplementation(() => {});
+    registerAppServerIpcHandlers();
+    const handler = handlers.get(GITHUB_PR_AUTHENTICATION_FAILURE_ACK_CHANNEL);
+    expect(handler).toBeDefined();
+    try {
+      vi.mocked(subscribersForChannel).mockReturnValueOnce([sender]);
+      await handler?.({ sender });
+      expect(acknowledge).toHaveBeenCalledTimes(1);
+      vi.mocked(subscribersForChannel).mockReturnValueOnce([sender]);
+      await handler?.({ sender: {} });
+      expect(acknowledge).toHaveBeenCalledTimes(1);
+    } finally {
+      acknowledge.mockRestore();
+    }
+  });
+
   it("invalidates the GraphQL token during an auth recheck", async () => {
     const { GithubGraphqlPrClient } = await import(
       "../pr-status/github-graphql-client"

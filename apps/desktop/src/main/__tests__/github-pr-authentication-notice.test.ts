@@ -22,6 +22,7 @@ describe("GithubPrAuthenticationNotice", () => {
     const secondWindow = vi.fn();
     const notice = new GithubPrAuthenticationNotice(marker);
     notice.publish([firstWindow, secondWindow]);
+    notice.acknowledge();
     for (let poll = 0; poll < 20; poll += 1) {
       notice.publish([firstWindow, secondWindow]);
     }
@@ -46,10 +47,40 @@ describe("GithubPrAuthenticationNotice", () => {
     const second = new GithubPrAuthenticationNotice(marker);
     const deliver = vi.fn();
     first.publish([deliver]);
+    first.acknowledge();
     second.publish([deliver]);
     expect(deliver).toHaveBeenCalledTimes(1);
     new GithubPrAuthenticationNotice(path.join(root, "other", "notice")).publish([deliver]);
     expect(deliver).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries events lost before the renderer listener mounts, including after restart", () => {
+    const loadingWindowSend = vi.fn();
+    const notice = new GithubPrAuthenticationNotice(marker);
+    notice.publish([loadingWindowSend]);
+    expect(loadingWindowSend).toHaveBeenCalledTimes(1);
+    expect(fs.existsSync(marker)).toBe(false);
+
+    const restarted = new GithubPrAuthenticationNotice(marker);
+    const receive = vi.fn(() => restarted.acknowledge());
+    restarted.publish([receive]);
+    restarted.publish([receive]);
+    expect(receive).toHaveBeenCalledTimes(1);
+    expect(fs.existsSync(marker)).toBe(true);
+  });
+
+  it("retries an unacknowledged delivery on the next poll without restarting", () => {
+    const notice = new GithubPrAuthenticationNotice(marker);
+    notice.publish([vi.fn()]);
+    const receive = vi.fn(() => notice.acknowledge());
+    notice.publish([receive]);
+    notice.publish([receive]);
+    expect(receive).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not consume an acknowledgement before publishing", () => {
+    new GithubPrAuthenticationNotice(marker).acknowledge();
+    expect(fs.existsSync(marker)).toBe(false);
   });
 
   it("logs persistence failures and still limits the notice to once per process", () => {
@@ -58,6 +89,7 @@ describe("GithubPrAuthenticationNotice", () => {
     const deliver = vi.fn();
     const notice = new GithubPrAuthenticationNotice(marker, onError);
     notice.publish([deliver]);
+    notice.acknowledge();
     notice.publish([deliver]);
     expect(onError).toHaveBeenCalledTimes(1);
     expect(deliver).toHaveBeenCalledTimes(1);

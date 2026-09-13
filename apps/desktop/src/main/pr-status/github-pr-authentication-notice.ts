@@ -5,6 +5,7 @@ import { resolveActiveProfilePath } from "../profile";
 /** One advisory per local profile, including across application restarts. */
 export class GithubPrAuthenticationNotice {
   private notified = false;
+  private pending = false;
 
   constructor(
     private readonly markerPath = resolveActiveProfilePath(
@@ -16,6 +17,16 @@ export class GithubPrAuthenticationNotice {
   publish(deliveries: Array<() => void>): void {
     // A background lookup before any window subscribes must not consume it.
     if (this.notified || deliveries.length === 0) return;
+    if (fs.existsSync(this.markerPath)) {
+      this.notified = true;
+      return;
+    }
+    this.pending = true;
+    for (const deliver of deliveries) deliver();
+  }
+
+  acknowledge(): void {
+    if (this.notified || !this.pending) return;
     this.notified = true;
     try {
       fs.mkdirSync(path.dirname(this.markerPath), { recursive: true });
@@ -26,6 +37,5 @@ export class GithubPrAuthenticationNotice {
       // A read-only profile must not break PR polling or repeat every poll.
       this.onPersistenceError(error);
     }
-    for (const deliver of deliveries) deliver();
   }
 }

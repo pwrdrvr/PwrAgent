@@ -238,6 +238,7 @@ import {
   APP_SERVER_GET_PR_AUTO_DISPATCH_BUDGET_STATUS_CHANNEL,
   APP_SERVER_RESUME_PR_AUTO_DISPATCH_BUDGET_CHANNEL,
   PR_AUTO_DISPATCH_BUDGET_CHANGED_EVENT_CHANNEL,
+  GITHUB_PR_AUTHENTICATION_FAILURE_ACK_CHANNEL,
   GITHUB_PR_AUTHENTICATION_FAILURE_EVENT_CHANNEL,
   GITHUB_PR_SAML_ENFORCEMENT_EVENT_CHANNEL,
   APP_SERVER_LIST_THREADS_CHANNEL,
@@ -5290,6 +5291,10 @@ class DesktopAppServerService {
     await this.prPollingScheduler?.probeAfterNetworkReconnect();
   }
 
+  acknowledgeGithubPrAuthenticationNotice(): void {
+    this.githubPrAuthenticationNotice.acknowledge();
+  }
+
   private getPrGraphqlClient(): GithubGraphqlPrClient {
     if (!this.prGraphqlClient) {
       this.prGraphqlClient = new GithubGraphqlPrClient({
@@ -7922,6 +7927,12 @@ function invalidateNavigationEvent(event: AgentEvent): void {
 }
 
 export function registerAppServerIpcHandlers(): void {
+  ipcMain.removeHandler(GITHUB_PR_AUTHENTICATION_FAILURE_ACK_CHANNEL);
+  ipcMain.handle(GITHUB_PR_AUTHENTICATION_FAILURE_ACK_CHANNEL, (event) => {
+    if (subscribersForChannel(GITHUB_PR_AUTHENTICATION_FAILURE_EVENT_CHANNEL).includes(event.sender)) {
+      appServerService.acknowledgeGithubPrAuthenticationNotice();
+    }
+  });
   // Refresh a thread's working-state chips when the agent finishes a turn
   // or a git-mutating command in its worktree. Re-registering tears the
   // previous subscription down first so repeated calls don't stack listeners.
@@ -8952,6 +8963,7 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
     for (const token of consumers) navigationQueryPool.release(token);
   }
   navigationQueryConsumersBySender.clear();
+  ipcMain.removeHandler(GITHUB_PR_AUTHENTICATION_FAILURE_ACK_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_LIST_SKILLS_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_LIST_THREADS_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_READ_THREAD_CHANNEL);
