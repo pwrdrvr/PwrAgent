@@ -180,10 +180,10 @@ describe("NewThreadButton", () => {
         .parentElement as HTMLElement,
     );
 
-    // The federation group grows one row per enrolled machine inside a card
-    // capped at 420px with `overflow-y: auto`. Last place put the menu's one
-    // non-thread-creating action below the fold on exactly the federations
-    // that make the card scroll, so its position is pinned here.
+    // The federation group is the only unbounded part of this menu, so every
+    // fixed action has to precede it — after it, an action sits at an offset
+    // that grows with the machine count and drops below the scrolling card's
+    // fold. Pinned here because nothing about the JSX order enforces it.
     const menu = await screen.findByRole("menu");
     expect(
       within(menu)
@@ -196,6 +196,37 @@ describe("NewThreadButton", () => {
       "Studio Mac / work",
       "Laptop",
     ]);
+  });
+
+  it("keeps the Add row focusable and inert while a registration runs", async () => {
+    const onAddProjectDirectory = vi.fn();
+    render(
+      <NewThreadButton
+        addingProjectDirectory
+        onAddProjectDirectory={onAddProjectDirectory}
+        onCreateThread={vi.fn()}
+      />,
+    );
+
+    fireEvent.mouseEnter(
+      screen.getByRole("button", { name: "New thread" })
+        .parentElement as HTMLElement,
+    );
+
+    // `registerDirectoryFromDisk` runs after the native picker closes, so the
+    // window is interactive while this row reads "Adding Project Directory…".
+    // A real `disabled` attribute would drop it from the tab order there and
+    // hide the in-progress state from keyboard and screen-reader users — the
+    // same reason the federation rows use `aria-disabled`.
+    const row = await screen.findByRole("menuitem", {
+      name: "Adding Project Directory…",
+    });
+    expect(row).toHaveAttribute("aria-disabled", "true");
+    expect(row).not.toBeDisabled();
+
+    fireEvent.click(row);
+    expect(onAddProjectDirectory).not.toHaveBeenCalled();
+    expect(screen.getByRole("menu")).toBeInTheDocument();
   });
 
   it("carries the verb in the group label instead of repeating it per row", async () => {
