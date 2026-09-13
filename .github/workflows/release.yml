@@ -103,6 +103,7 @@ jobs:
             apps/desktop/scripts/release.mjs \
             apps/desktop/scripts/assemble-mac-release.mjs \
             apps/desktop/scripts/release-signing-environment.mjs \
+            apps/desktop/scripts/windows-release-artifacts.mjs \
             apps/desktop/scripts/update-channel-files.mjs \
             apps/desktop/scripts/verify-asar-contents.mjs \
             apps/desktop/scripts/asar-entry-paths.mjs \

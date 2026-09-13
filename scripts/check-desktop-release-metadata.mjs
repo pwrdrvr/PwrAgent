@@ -620,6 +620,25 @@ for (const expected of [
 if (!asarVerifier.includes("PWRAGENT_ASAR_MODULE_ROOT")) {
   fail("apps/desktop/scripts/verify-asar-contents.mjs must accept the staged ASAR module root");
 }
+// Both signing jobs run without a checkout, from an allowlisted archive. A
+// module missing from either list fails at require time on a release runner,
+// and no CI job exercises the signing path (ci.yml is asserted above not to
+// define one), so the allowlists are pinned here instead.
+for (const expected of [
+  "apps/desktop/scripts/windows-release-artifacts.mjs",
+]) {
+  if (!windowsArchiveScript.includes(expected)) {
+    fail(
+      `scripts/release/archive-windows-signing-input.ps1 must archive ${JSON.stringify(expected)}`,
+    );
+  }
+  assertWorkflowJobContainsText(
+    releaseWorkflow,
+    ".github/workflows/release.yml",
+    "prepare",
+    expected,
+  );
+}
 for (const expected of [
   "Install-Module",
   "-Name TrustedSigning",

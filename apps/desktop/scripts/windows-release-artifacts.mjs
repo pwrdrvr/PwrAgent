@@ -2,8 +2,8 @@
 
 import { createHash } from "node:crypto";
 import { closeSync, copyFileSync, openSync, readFileSync, readSync, readdirSync, statSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 
 // A Windows installer is named for a human reading a Downloads folder --
 // "Claude Setup.exe", "ChatGPT Install.exe" -- not for a build system. Those
@@ -30,10 +30,14 @@ export const WINDOWS_ALIAS_NAMES = {
   arm64: "PwrAgent.Setup.Arm.exe",
 };
 
-const ALIAS_NAMES = new Set(Object.values(WINDOWS_ALIAS_NAMES));
 const INSTALLER_SUFFIX = "-setup.exe";
+// One definition of the manifest's shape. Both halves live in this module --
+// writeWindowsChecksums emits it during packaging, readChecksums parses it back
+// when the signing job cuts the aliases -- so the reader cannot drift from the
+// writer with every unit test still green. Deriving the pattern from the
+// separator keeps the two from disagreeing about spacing.
 const CHECKSUM_SEPARATOR = "  ";
-const CHECKSUM_LINE = /^([0-9a-f]{64}) {2}(.+)$/;
+const CHECKSUM_LINE = new RegExp(`^([0-9a-f]{64})${CHECKSUM_SEPARATOR}(.+)$`);
 
 // The installer is ~150 MB. Stream it the way assemble-mac-release.mjs does
 // rather than holding the whole file in a Buffer to hash it.
@@ -56,11 +60,12 @@ export function installerName(version, arch) {
   return `PwrAgent-${version}-windows-${arch}${INSTALLER_SUFFIX}`;
 }
 
-// The aliases are excluded by name: this scan answers "what did electron-builder
-// build", and a previous run's copy is not a build.
-export function windowsInstallerArtifacts(distDir) {
+// This scan answers "what did electron-builder build". No alias name ends in
+// INSTALLER_SUFFIX, so a previous run's copy is already excluded; a test pins
+// that property rather than a guard defending against it.
+function windowsInstallerArtifacts(distDir) {
   const artifacts = readdirSync(distDir)
-    .filter((entry) => entry.endsWith(INSTALLER_SUFFIX) && !ALIAS_NAMES.has(entry))
+    .filter((entry) => entry.endsWith(INSTALLER_SUFFIX))
     .sort();
   if (artifacts.length === 0) {
     throw new Error(
@@ -69,6 +74,18 @@ export function windowsInstallerArtifacts(distDir) {
     );
   }
   return artifacts;
+}
+
+/**
+ * Write the checksum manifest for everything electron-builder just packaged.
+ * Called by release.mjs at the end of Windows packaging, before any alias
+ * exists; writeWindowsReleaseAliases later reads it back and adds the aliases.
+ */
+export function writeWindowsChecksums(distDir) {
+  const entries = new Map(
+    windowsInstallerArtifacts(distDir).map((name) => [name, digest(join(distDir, name))]),
+  );
+  return writeChecksums(distDir, entries);
 }
 
 function readChecksums(distDir) {
@@ -84,7 +101,9 @@ function readChecksums(distDir) {
 
 function writeChecksums(distDir, entries) {
   const lines = [...entries].map(([name, sha256]) => `${sha256}${CHECKSUM_SEPARATOR}${name}`);
-  writeFileSync(join(distDir, "SHA256SUMS"), `${lines.join("\n")}\n`);
+  const checksumPath = join(distDir, "SHA256SUMS");
+  writeFileSync(checksumPath, `${lines.join("\n")}\n`);
+  return checksumPath;
 }
 
 /**
@@ -107,8 +126,9 @@ function writeChecksums(distDir, entries) {
  * download whose own name appears nowhere in the checksums is the worse
  * confusion. `PwrAgent-linux-x64.deb` is already listed the same way, so the
  * repeated digest is an established shape here rather than a new one. Each
- * installer is also checked against its recorded entry before it is copied, so
- * the alias line records a digest that was verified, not merely computed.
+ * installer is checked against its recorded entry before it is copied, and the
+ * alias is hashed again afterwards, so every published line describes the bytes
+ * of the file it names rather than the bytes of some other file.
  */
 export function writeWindowsReleaseAliases(distDir, version) {
   if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version) || version.includes("windows")) {
@@ -152,15 +172,25 @@ export function writeWindowsReleaseAliases(distDir, version) {
     return { installer, alias: WINDOWS_ALIAS_NAMES[arch], arch, sha256, size: statSync(path).size };
   });
 
-  for (const { installer, alias, size } of planned) {
-    copyFileSync(join(distDir, installer), join(distDir, alias));
-    // Compare sizes rather than hashing 150 MB a second time; copyFileSync
-    // raises on a failed or short write.
-    const copiedSize = statSync(join(distDir, alias)).size;
+  for (const entry of planned) {
+    const { installer, alias, sha256, size } = entry;
+    const aliasPath = join(distDir, alias);
+    copyFileSync(join(distDir, installer), aliasPath);
+    // Hash what was actually written. A size check alone would let a
+    // size-preserving bad copy through, and SHA256SUMS is the file a user runs
+    // `sha256sum -c` against -- a line that does not describe its own bytes
+    // reads as tampering. A second pass over 150 MB costs about a second on a
+    // job that spends minutes signing. Report a length mismatch separately,
+    // because that is the failure a truncated write actually produces.
+    const copiedSize = statSync(aliasPath).size;
     if (copiedSize !== size) {
       throw new Error(
         `${alias} is ${copiedSize} bytes but ${installer} is ${size}; the copy did not complete`,
       );
+    }
+    entry.sha256 = digest(aliasPath);
+    if (entry.sha256 !== sha256) {
+      throw new Error(`${alias} does not match ${installer} after copying`);
     }
   }
 
@@ -176,7 +206,13 @@ export function writeWindowsReleaseAliases(distDir, version) {
 // packaging step has already returned. Takes the release stage -- the same
 // directory release.mjs builds -- so the version comes from the packaged
 // package.json instead of being restated in workflow YAML.
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+// Compare file URLs, not paths. This is the first script here that runs its CLI
+// guard on Windows, where `process.argv[1]` carries whatever separators and
+// drive-letter casing the shell supplied while `import.meta.url` is normalized;
+// comparing resolved paths (assemble-mac-release.mjs, macOS only) can miss, and
+// a guard that misses makes this script exit 0 having cut no alias. dev.mjs uses
+// this spelling for the same reason.
+if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const stage = process.argv[2];
   if (!stage) {
     console.error("Usage: windows-release-artifacts.mjs <release-stage-dir>");
