@@ -4,8 +4,21 @@ import os from "node:os";
 import path from "node:path";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import Database from "better-sqlite3";
+import { canonicalizeNavigationPath } from "@pwragent/shared";
 import { launchElectronApp } from "./fixtures/electron-app";
 import { mastheadAction } from "./fixtures/window-chrome";
+
+// Navigation keys and stored directory paths are forward-slash canonical on
+// every platform (see `canonicalizeNavigationPath`). `path.join` and
+// `path.sep` are native, so spelling these by hand matched nothing on Windows
+// — and a hand-written key even registered a second row for FixtureRepo.
+const WORKTREES_FRAGMENT = "/.codex/worktrees/";
+function navigationPath(value: string): string {
+  return canonicalizeNavigationPath(value);
+}
+function directoryKeyFor(value: string): string {
+  return `directory:${navigationPath(value)}`;
+}
 
 async function selectComposerOption(params: {
   option: string | RegExp;
@@ -812,7 +825,7 @@ test("directory launchpad starts a local thread from an unborn git HEAD", async 
 
     await expectDirectoryLaunchpadHeader(app, "PwrTester");
 
-    const directoryKey = `directory:${fixture.repoDir}`;
+    const directoryKey = directoryKeyFor(fixture.repoDir);
     await app.window.evaluate(async (key) => {
       await (window as any).pwragent.updateDirectoryLaunchpad({
         directoryKey: key,
@@ -840,7 +853,7 @@ test("directory launchpad starts a local thread from an unborn git HEAD", async 
     ).toBeVisible();
     await expect(app.window.getByText("ambiguous argument 'HEAD'")).toHaveCount(0);
     const startTurn = (await app.getLastStartTurn()) as { cwd?: string } | undefined;
-    expect(startTurn?.cwd).toBe(fixture.repoDir);
+    expect(navigationPath(startTurn?.cwd ?? "")).toBe(navigationPath(fixture.repoDir));
   } finally {
     await app.close();
     await fixture.cleanup();
@@ -863,7 +876,7 @@ test("opening a directory launchpad persists directory identity for future draft
 
     const rootDir = path.dirname(fixture.fixturePath);
     const repoDir = path.join(rootDir, "FixtureRepo");
-    const directoryKey = `directory:${repoDir}`;
+    const directoryKey = directoryKeyFor(repoDir);
     await expect
       .poll(async () => {
         const overlay = await readOverlayState(app.homeRoot);
@@ -872,7 +885,7 @@ test("opening a directory launchpad persists directory identity for future draft
       .toMatchObject({
         directoryKind: "directory",
         directoryLabel: "FixtureRepo",
-        directoryPath: repoDir,
+        directoryPath: navigationPath(repoDir),
         prompt: "",
       });
   } finally {
@@ -890,7 +903,7 @@ test("directory launchpad draft save does not leak the directory key into projec
   try {
     const rootDir = path.dirname(fixture.fixturePath);
     const repoDir = path.join(rootDir, "FixtureRepo");
-    const directoryKey = `directory:${repoDir}`;
+    const directoryKey = directoryKeyFor(repoDir);
 
     await app.window.getByRole("tab", { name: "directories" }).click();
     await app.window
@@ -912,7 +925,7 @@ test("directory launchpad draft save does not leak the directory key into projec
         directoryKey,
         directoryKind: "directory",
         directoryLabel: "FixtureRepo",
-        directoryPath: repoDir,
+        directoryPath: navigationPath(repoDir),
         prompt: "Keep the project identity stable",
       });
 
@@ -934,7 +947,7 @@ test("directory launchpad repairs stale drafts that saved the internal directory
   try {
     const rootDir = path.dirname(fixture.fixturePath);
     const repoDir = path.join(rootDir, "FixtureRepo");
-    const directoryKey = `directory:${repoDir}`;
+    const directoryKey = directoryKeyFor(repoDir);
 
     await app.window.evaluate(async (key) => {
       await (window as any).pwragent.updateDirectoryLaunchpad({
@@ -962,7 +975,7 @@ test("directory launchpad repairs stale drafts that saved the internal directory
         directoryKey,
         directoryKind: "directory",
         directoryLabel: "FixtureRepo",
-        directoryPath: repoDir,
+        directoryPath: navigationPath(repoDir),
         prompt: "A stale draft that already has content",
       });
   } finally {
@@ -1049,7 +1062,7 @@ test("directory launchpad keeps new worktree as the sticky default after startin
       }),
     ).toBeVisible();
     const startTurn = (await app.getLastStartTurn()) as { cwd?: string } | undefined;
-    expect(startTurn?.cwd).toContain(`${path.sep}.codex${path.sep}worktrees${path.sep}`);
+    expect(navigationPath(startTurn?.cwd ?? "")).toContain(WORKTREES_FRAGMENT);
     const ownerFile = execFileSync(
       "git",
       ["-C", startTurn!.cwd!, "rev-parse", "--git-path", "codex-thread.json"],
@@ -1144,9 +1157,9 @@ test("local-to-worktree handoff records PwrAgent workspace state without rewriti
         extraLinkedDirectories: [
           expect.objectContaining({
             kind: "worktree",
-            path: expect.stringContaining(`${path.sep}FixtureRepo`),
+            path: expect.stringContaining("/FixtureRepo"),
             worktreePath: expect.stringContaining(
-              `${path.sep}.codex${path.sep}worktrees${path.sep}`,
+              WORKTREES_FRAGMENT,
             ),
           }),
         ],
@@ -1159,8 +1172,8 @@ test("local-to-worktree handoff records PwrAgent workspace state without rewriti
       extraLinkedDirectories?: Array<{ worktreePath?: string }>;
     };
     const cwd = threadOverlay.extraLinkedDirectories?.[0]?.worktreePath;
-    expect(cwd).toContain(`${path.sep}.codex${path.sep}worktrees${path.sep}`);
-    expect(cwd).not.toBe(fixture.repoDir);
+    expect(navigationPath(cwd ?? "")).toContain(WORKTREES_FRAGMENT);
+    expect(navigationPath(cwd ?? "")).not.toBe(navigationPath(fixture.repoDir));
 
     const ownerFile = execFileSync(
       "git",

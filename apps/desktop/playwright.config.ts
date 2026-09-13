@@ -26,6 +26,26 @@ if (process.env.PWRAGENT_DEV_SQLITE_WRITE_METRICS !== "0") {
   );
 }
 
+// Git for Windows ships `core.autocrlf=true`, so a fixture repo's LF content
+// comes back from any checkout/stash round trip as CRLF and a byte-for-byte
+// assertion fails — which is what `workspace-handoff-flows.spec.ts` does after
+// the app stashes and restores dirty WIP. That is ordinary git behavior on a
+// real user's Windows repo, not a product bug, so the fix belongs to the repos
+// the fixtures own: they write LF and assert LF.
+//
+// Set through git's environment config rather than a `git config` call after
+// each `git init`, for two reasons. There are twenty of those spread over
+// fifteen spec files, and a twenty-first can be added without noticing this
+// rule; and the environment reaches the git processes the APP runs inside
+// those same repos, which a helper the fixtures call cannot. Harmless off
+// Windows, where nothing converts anyway.
+//
+// Repo-local `.gitattributes` still wins over `core.autocrlf`, so this cannot
+// change how this repository's own checkout is treated.
+process.env.GIT_CONFIG_COUNT = "1";
+process.env.GIT_CONFIG_KEY_0 = "core.autocrlf";
+process.env.GIT_CONFIG_VALUE_0 = "false";
+
 process.env[E2E_SHUTDOWN_DIAGNOSTICS_FILE_ENV] ??= path.join(
   import.meta.dirname,
   "test-results",
