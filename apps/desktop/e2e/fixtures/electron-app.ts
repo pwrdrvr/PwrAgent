@@ -343,7 +343,7 @@ export async function launchElectronApp(
       env[key] = value;
     }
   }
-  mirrorHomeIntoWindowsUserProfile(env);
+  anchorWindowsPwragentRoot(env);
   env[E2E_SHUTDOWN_LAUNCH_ID_ENV] = launchId;
   if (diagnosticsFile) {
     env[E2E_SHUTDOWN_DIAGNOSTICS_FILE_ENV] = diagnosticsFile;
@@ -600,38 +600,40 @@ async function finishElectronLaunch(args: {
 }
 
 /**
- * Point `os.homedir()` at the per-test home on Windows.
+ * Anchor the PwrAgent root to the per-test home on Windows.
  *
- * `resolvePwragentRoot` falls back to `os.homedir()`, and on Windows that
- * reads `USERPROFILE` and ignores `HOME` entirely. So the harness seeded
- * `onboarding.completed = true` into `<homeRoot>/.pwragent/...` — where
- * `resolveSeedConfigPath` is told to look through its `homeDir` override —
- * while the launched app read `C:\Users\<runner>\.pwragent`, found no
- * profile, and dropped into the first-run wizard. Its modal scrim then
- * swallowed the first click of the spec, which Playwright reports as a
- * bare test timeout with no call log: 73 of them on this suite's first
- * Windows run, against 0 on Linux and macOS, where `HOME` alone is enough.
+ * Everywhere else the harness relies on `HOME`: `resolvePwragentRoot` falls
+ * back to `os.homedir()`, which on POSIX honors `HOME`, so the app lands in
+ * the same `<homeRoot>/.pwragent` that `resolveSeedConfigPath` seeds. On
+ * Windows `os.homedir()` reads `USERPROFILE` and ignores `HOME` outright, so
+ * the launched app read `C:\Users\<runner>\.pwragent` instead, found no
+ * profile, and dropped into the first-run wizard — whose modal scrim then
+ * swallowed the spec's first click. Playwright reports that as a bare test
+ * timeout with no call log: 73 of them on this suite's first Windows run,
+ * against zero on Linux and macOS.
  *
- * Mirroring rather than replacing keeps POSIX behavior untouched and keeps
- * the pre-flight `assertOnboardingSeedTook` honest: it resolves with the
- * same `homeDir` the app will now compute for itself.
+ * `PWRAGENT_HOME` rather than a mirrored `USERPROFILE`. The env var is the
+ * root override this project documents for exactly this case, it outranks
+ * `os.homedir()` in `resolvePwragentRoot` instead of racing it, and it moves
+ * only PwrAgent's own root. Repointing `USERPROFILE` moves the home every
+ * Windows library derives paths from, and the desktop app died on the runner
+ * before it wrote a line of stderr when this harness tried it.
  *
- * Windows environment names are case-insensitive, so overwrite whichever
- * spelling the inherited environment already carries instead of adding a
- * second key that `child_process` would have to reconcile.
+ * Scoped to win32 so POSIX keeps resolving through `HOME` exactly as before,
+ * and skipped when a spec set its own — `onboarding-wizard.spec.ts` drives
+ * these resolvers deliberately. The seed follows along on its own:
+ * `resolveSeedConfigPath` reads `PWRAGENT_HOME` from this same environment
+ * first, so it and the app agree, which is what the pre-flight
+ * `assertOnboardingSeedTook` could not otherwise prove.
  */
-function mirrorHomeIntoWindowsUserProfile(env: Record<string, string>): void {
+function anchorWindowsPwragentRoot(env: Record<string, string>): void {
   if (process.platform !== "win32") {
     return;
   }
-  const home = env.HOME;
-  if (!home) {
+  if (env[PWRAGENT_HOME_ENV] || !env.HOME) {
     return;
   }
-  const existingKey = Object.keys(env).find(
-    (candidate) => candidate.toLowerCase() === "userprofile",
-  );
-  env[existingKey ?? "USERPROFILE"] = home;
+  env[PWRAGENT_HOME_ENV] = path.join(env.HOME, ".pwragent");
 }
 
 /**
