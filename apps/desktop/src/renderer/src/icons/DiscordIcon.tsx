@@ -1,4 +1,4 @@
-import type { ImgHTMLAttributes } from "react";
+import { memo, type ImgHTMLAttributes } from "react";
 import { DEFAULT_ICON_SIZE } from "./icon-types";
 import symbolBlackUrl from "../assets/discord/symbol-black.svg";
 import symbolBlurpleUrl from "../assets/discord/symbol-blurple.svg";
@@ -26,7 +26,7 @@ export type DiscordIconProps = Omit<
  * or reconfiguring the mark, so this renders the verbatim SVG via img.
  * Blurple is the default because it remains visible on both PwrAgent themes.
  */
-export function DiscordIcon({
+export const DiscordIcon = memo(function DiscordIcon({
   size = DEFAULT_ICON_SIZE,
   variant = "blurple",
   alt = "",
@@ -42,4 +42,4 @@ export function DiscordIcon({
       {...rest}
     />
   );
-}
+});

@@ -1,3 +1,24 @@
+/**
+ * Every icon in this library is wrapped in `React.memo` at its own export.
+ *
+ * Icons are the leaves of almost every surface, they take only primitives
+ * (`size`, `strokeWidth`, `className`, `aria-*`), and they are re-created by
+ * whatever re-renders above them — so they are the one component class where
+ * a blanket memo is both safe and worth it. A React DevTools Profiler session
+ * over the Directories lens measured 3,093 of 4,503 zero-input renders landing
+ * on eight sidebar icons alone.
+ *
+ * The wrap pays off without anything above being memoized, which is what makes
+ * it independent of the sidebar's own memoization work: memo bails out when the
+ * PARENT re-renders and the icon's props did not change, which is exactly this
+ * case. Props are compared shallowly, so a caller that spreads a fresh object
+ * (`<CelestialSunIcon {...props} />`) still bails out as long as the values
+ * match.
+ *
+ * Keep the inner function named — `memo(function PinIcon(...))`, not
+ * `memo((props) => ...)` — so the Profiler and component stacks still say
+ * `PinIcon` rather than `Anonymous`.
+ */
 import type { SVGAttributes } from "react";
 
 /**

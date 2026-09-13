@@ -1,3 +1,4 @@
+import { memo } from "react";
 import type { NavigationThreadSummary } from "@pwragent/shared";
 import { threadSummaryIdentityKey } from "../../lib/federated-thread-events";
 import { isFederationViewerWindow } from "../../lib/federation-window";
@@ -133,7 +134,22 @@ type ThreadRowStatusProps = {
   remoteWork?: boolean;
 };
 
-export function ThreadRowStatus(props: ThreadRowStatusProps) {
+/**
+ * Memoized for the same reason the icon library is: `features/navigation/`
+ * has no memoization, so every App render re-renders every mounted thread
+ * row, and this mark takes only a string union and a boolean. Once the icons
+ * were memoized it became the single largest source of zero-input renders
+ * left in a Directories-lens Profiler session (310 of 856).
+ *
+ * It bails out where `ThreadRow` cannot: the row is handed a whole `thread`
+ * object that `hydrateHoverStableSidebarSnapshot` rebuilds on every render
+ * while the pointer rests on a row, and this component never sees it — the
+ * call site passes `isThreadRemoteWorkHere(thread)` and the derived status,
+ * both primitives. `thread-row-status-render-cost.test.tsx` pins it.
+ */
+export const ThreadRowStatus = memo(function ThreadRowStatus(
+  props: ThreadRowStatusProps,
+) {
   if (!props.status) {
     return null;
   }
@@ -175,4 +191,4 @@ export function ThreadRowStatus(props: ThreadRowStatusProps) {
       <span aria-hidden="true" className="thread-row__status-cookie" />
     </span>
   );
-}
+});

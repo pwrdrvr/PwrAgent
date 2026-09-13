@@ -1,4 +1,4 @@
-import type { ImgHTMLAttributes } from "react";
+import { memo, type ImgHTMLAttributes } from "react";
 import { DEFAULT_ICON_SIZE } from "./icon-types";
 import iconBlackUrl from "../assets/git/icon-black.svg";
 import iconBrandUrl from "../assets/git/icon-1788c.svg";
@@ -35,7 +35,7 @@ export type GitIconProps = Omit<
   variant?: GitIconVariant;
 };
 
-export function GitIcon({
+export const GitIcon = memo(function GitIcon({
   size = DEFAULT_ICON_SIZE,
   variant = "brand",
   alt = "",
@@ -51,4 +51,4 @@ export function GitIcon({
       {...rest}
     />
   );
-}
+});

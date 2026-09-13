@@ -1,4 +1,4 @@
-import type { ImgHTMLAttributes } from "react";
+import { memo, type ImgHTMLAttributes } from "react";
 import { DEFAULT_ICON_SIZE } from "./icon-types";
 import lineBrandIconUrl from "../assets/line/LINE_Brand_icon.png";
 
@@ -9,7 +9,7 @@ export type LineIconProps = Omit<
   size?: number;
 };
 
-export function LineIcon({
+export const LineIcon = memo(function LineIcon({
   size = DEFAULT_ICON_SIZE,
   alt = "",
   ...rest
@@ -24,4 +24,4 @@ export function LineIcon({
       {...rest}
     />
   );
-}
+});

@@ -1,7 +1,8 @@
+import { memo } from "react";
 import { resolveIconSvgProps, type IconProps } from "./icon-types";
 
 /** Git pull-request glyph: a branch line joining a target circle. */
-export function PullRequestIcon(props: IconProps) {
+export const PullRequestIcon = memo(function PullRequestIcon(props: IconProps) {
   return (
     <svg {...resolveIconSvgProps(props)}>
       <circle cx="6" cy="6" r="2.5" />
@@ -12,4 +13,4 @@ export function PullRequestIcon(props: IconProps) {
       <path d="M15.5 6.5 13 9l2.5 2.5" />
     </svg>
   );
-}
+});

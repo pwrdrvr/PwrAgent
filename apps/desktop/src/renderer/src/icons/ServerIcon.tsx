@@ -1,7 +1,8 @@
+import { memo } from "react";
 import { resolveIconSvgProps, type IconProps } from "./icon-types";
 
 /** Two stacked server units — the agent/provider app-server surface. */
-export function ServerIcon(props: IconProps) {
+export const ServerIcon = memo(function ServerIcon(props: IconProps) {
   return (
     <svg {...resolveIconSvgProps(props)}>
       <rect x="3" y="4" width="18" height="7" rx="2" />
@@ -10,4 +11,4 @@ export function ServerIcon(props: IconProps) {
       <path d="M7 16.5h.01" />
     </svg>
   );
-}
+});

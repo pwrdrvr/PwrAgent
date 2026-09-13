@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { resolveFilledIconSvgProps, type IconProps } from "../icon-types";
 
 /**
@@ -6,7 +7,7 @@ import { resolveFilledIconSvgProps, type IconProps } from "../icon-types";
  * circles underneath it can re-fill them at reduced opacity — depth
  * from opacity layering only, no second color.
  */
-export function CelestialMoonIcon(props: IconProps) {
+export const CelestialMoonIcon = memo(function CelestialMoonIcon(props: IconProps) {
   return (
     <svg {...resolveFilledIconSvgProps(props)}>
       <g fill="currentColor" fillOpacity="0.35">
@@ -27,4 +28,4 @@ export function CelestialMoonIcon(props: IconProps) {
       />
     </svg>
   );
-}
+});

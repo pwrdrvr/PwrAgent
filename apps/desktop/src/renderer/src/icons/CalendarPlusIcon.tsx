@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { resolveIconSvgProps, type IconProps } from "./icon-types";
 
 /**
@@ -10,7 +11,7 @@ import { resolveIconSvgProps, type IconProps } from "./icon-types";
  * "generate" no matter what it is next to, which is exactly the wrong
  * connotation for a sort order.
  */
-export function CalendarPlusIcon(props: IconProps) {
+export const CalendarPlusIcon = memo(function CalendarPlusIcon(props: IconProps) {
   return (
     <svg {...resolveIconSvgProps(props)}>
       <path d="M20 10.5V7a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h6" />
@@ -21,4 +22,4 @@ export function CalendarPlusIcon(props: IconProps) {
       <path d="M14 17.5h6" />
     </svg>
   );
-}
+});

@@ -1,4 +1,4 @@
-import type { ImgHTMLAttributes } from "react";
+import { memo, type ImgHTMLAttributes } from "react";
 import { DEFAULT_ICON_SIZE } from "./icon-types";
 import larkBrandIconUrl from "../assets/feishu/lark.svg";
 
@@ -9,7 +9,7 @@ export type FeishuIconProps = Omit<
   size?: number;
 };
 
-export function FeishuIcon({
+export const FeishuIcon = memo(function FeishuIcon({
   size = DEFAULT_ICON_SIZE,
   alt = "",
   ...rest
@@ -24,4 +24,4 @@ export function FeishuIcon({
       {...rest}
     />
   );
-}
+});

@@ -1,3 +1,4 @@
+import { memo } from "react";
 import type { CelestialIconId } from "@pwragent/shared";
 import type { IconProps } from "../icon-types";
 import { CelestialBlackHoleIcon } from "./CelestialBlackHoleIcon";
@@ -13,7 +14,7 @@ export type CelestialIconProps = { icon: CelestialIconId } & IconProps;
  * nothing — the celestial contract requires renderers to treat future
  * ids as unassigned rather than crashing.
  */
-export function CelestialIcon({ icon, ...props }: CelestialIconProps) {
+export const CelestialIcon = memo(function CelestialIcon({ icon, ...props }: CelestialIconProps) {
   switch (icon) {
     case "sun":
       return <CelestialSunIcon {...props} />;
@@ -28,4 +29,4 @@ export function CelestialIcon({ icon, ...props }: CelestialIconProps) {
     default:
       return null;
   }
-}
+});

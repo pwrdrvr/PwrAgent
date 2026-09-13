@@ -1,4 +1,4 @@
-import type { ImgHTMLAttributes } from "react";
+import { memo, type ImgHTMLAttributes } from "react";
 import { useBrandTheme } from "./brand-theme";
 import { DEFAULT_ICON_SIZE } from "./icon-types";
 import iconBlackUrl from "../assets/mattermost/icon-black.svg";
@@ -44,7 +44,7 @@ export type MattermostIconProps = Omit<
   variant?: MattermostIconVariant;
 };
 
-export function MattermostIcon({
+export const MattermostIcon = memo(function MattermostIcon({
   size = DEFAULT_ICON_SIZE,
   variant,
   alt = "",
@@ -65,7 +65,7 @@ export function MattermostIcon({
       {...rest}
     />
   );
-}
+});
 
 function useMattermostVariant(
   variant: MattermostIconVariant | undefined,

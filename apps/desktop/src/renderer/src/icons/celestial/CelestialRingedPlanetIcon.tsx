@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { resolveFilledIconSvgProps, type IconProps } from "../icon-types";
 
 /**
@@ -6,7 +7,7 @@ import { resolveFilledIconSvgProps, type IconProps } from "../icon-types";
  * half sits behind the disc at reduced opacity, the near (lower) half
  * paints after the disc and crosses in front of it.
  */
-export function CelestialRingedPlanetIcon(props: IconProps) {
+export const CelestialRingedPlanetIcon = memo(function CelestialRingedPlanetIcon(props: IconProps) {
   return (
     <svg {...resolveFilledIconSvgProps(props)}>
       <g transform="rotate(-20 12 12)">
@@ -28,4 +29,4 @@ export function CelestialRingedPlanetIcon(props: IconProps) {
       </g>
     </svg>
   );
-}
+});
