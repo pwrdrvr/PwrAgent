@@ -510,21 +510,25 @@ jobs:
         env:
           LINUX_E2E_RESULT: ${{ needs.desktop-e2e.result }}
           MACOS_E2E_RESULT: ${{ needs.desktop-e2e-macos.result }}
-          # `desktop-e2e-macos` carries a fork guard, so a PR from a public
-          # fork skips it rather than running arbitrary code on a self-hosted
-          # runner. Mirror that guard here instead of accepting `skipped`
-          # outright: a blanket skip-accept would also swallow the skip that
-          # `macos-install-deps` failing produces, which is a real failure.
-          # GitHub Actions does not support YAML anchors, so this condition is
-          # necessarily a copy of the one on `desktop-e2e-macos`. Change both.
-          MACOS_E2E_EXPECTED: >-
-            ${{ github.event_name == 'push'
-            || (github.event_name == 'pull_request'
-            && github.event.pull_request.head.repo.full_name == github.repository) }}
+          # `desktop-e2e-macos` is deliberately not scheduled for fork PRs —
+          # self-hosted runners must not execute arbitrary fork code — so it
+          # reports `skipped` there, and requiring it unconditionally would
+          # leave fork PRs blocked on a lane that can never run.
+          #
+          # Test only for the fork and let every OTHER missing macOS result
+          # fail the gate. Re-stating that job's whole scheduling expression
+          # here would be a second copy of it that can drift; once the two
+          # disagree the gate either blocks fork PRs or passes with no macOS
+          # coverage. This way an event neither job anticipated (a
+          # `merge_group` or `workflow_dispatch` trigger added later) fails
+          # closed instead of silently dropping macOS from the gate.
+          MACOS_E2E_IS_FORK_PR: >-
+            ${{ github.event_name == 'pull_request'
+            && github.event.pull_request.head.repo.full_name != github.repository }}
         run: |
           echo "Linux Desktop E2E matrix result: $LINUX_E2E_RESULT"
           echo "macOS Desktop E2E matrix result: $MACOS_E2E_RESULT" \
-            "(expected to run: $MACOS_E2E_EXPECTED)"
+            "(fork PR: $MACOS_E2E_IS_FORK_PR)"
 
           # Evaluate every platform before exiting, so a red gate names the
           # platform that broke instead of stopping at the first check and
@@ -536,14 +540,11 @@ jobs:
             failed=1
           fi
 
-          if [[ "$MACOS_E2E_EXPECTED" == "true" ]]; then
-            if [[ "$MACOS_E2E_RESULT" != "success" ]]; then
-              echo "::error::macOS Desktop E2E did not succeed: $MACOS_E2E_RESULT"
-              failed=1
-            fi
-          elif [[ "$MACOS_E2E_RESULT" != "skipped" ]]; then
-            echo "::error::macOS Desktop E2E was fork-guarded off but reported:" \
-              "$MACOS_E2E_RESULT"
+          if [[ "$MACOS_E2E_IS_FORK_PR" == "true" && "$MACOS_E2E_RESULT" == "skipped" ]]; then
+            echo "::warning::macOS Desktop E2E did not run for this fork PR;" \
+              "macOS-only coverage is unverified."
+          elif [[ "$MACOS_E2E_RESULT" != "success" ]]; then
+            echo "::error::macOS Desktop E2E did not succeed: $MACOS_E2E_RESULT"
             failed=1
           fi
 
