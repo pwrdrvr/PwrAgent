@@ -1506,10 +1506,19 @@ async function activateRuntime(
   return runtime;
 }
 
-export async function retainManagedCodexCommand(command: string): Promise<void> {
-  const rootDir = managedCodexRoot();
+export async function retainManagedCodexCommand(
+  command: string,
+  options: ManagedCodexRuntimeOptions = {},
+): Promise<void> {
+  const rootDir = options.rootDir ?? managedCodexRoot();
   const versionRoot = path.dirname(command);
   if (path.dirname(versionRoot) !== path.join(rootDir, "versions")) return;
+  // Last-known-good is a selection hint, not proof the installed bundle is
+  // still valid. Reuse the same cache validation as managed runtime discovery.
+  const runtime = await readCachedRuntime(rootDir, options);
+  if (!runtime || runtime.command !== command) {
+    throw new Error("Cached managed Codex selection is no longer valid");
+  }
   await markRuntimeInUse(rootDir, command);
 }
 

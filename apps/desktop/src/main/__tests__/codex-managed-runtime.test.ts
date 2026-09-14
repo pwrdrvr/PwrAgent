@@ -12,6 +12,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ensureManagedCodexRuntime,
+  retainManagedCodexCommand,
   isManagedCodexTagEligible,
   managedCodexAssetPlatform,
   MANAGED_CODEX_CHECK_TTL_MS,
@@ -109,6 +110,56 @@ describe("managed Codex release selection", () => {
     );
     expect(isManagedCodexTagEligible("pwragent-v0.200.0")).toBe(false);
   });
+});
+
+describe("retaining a managed startup selection", () => {
+  it.each(["valid", "obsolete", "platform", "missing companion", "entitlements", "signature", "marker"])(
+    "validates the cached bundle before retaining it: %s", async (scenario) => {
+      const rootDir = await temporaryRoot();
+      const tag = "pwragent-v0.200.0-pwragent.1";
+      const version = "0.200.0-pwragent.1";
+      const directory = path.join(rootDir, "versions", tag);
+      await writeFakeBundle(directory, "darwin");
+      const command = path.join(directory, "codex");
+      const metadata = { asset: `pwragent-codex-${version}-macos-aarch64.tar.gz`,
+        checkedAt: 1, installedAt: 1, repository: "pwrdrvr/codex", schemaVersion: 1,
+        sha256: "a".repeat(64), tag, version };
+      if (scenario === "obsolete") {
+        metadata.tag = "pwragent-v0.100.0-pwragent.1";
+        metadata.version = "0.100.0-pwragent.1";
+      }
+      if (scenario === "platform") metadata.asset = `pwragent-codex-${version}-linux-x86_64.tar.gz`;
+      await writeFile(path.join(rootDir, "managed-release.json"), JSON.stringify(metadata));
+      if (scenario === "missing companion") await rm(path.join(directory, "codex-app-server"));
+      const marker = path.join(directory, `.pwragent-use-${process.pid}`);
+      if (scenario === "marker") await mkdir(marker);
+      const verifyPlatformSignature = vi.fn(async () => {
+        if (scenario === "signature") throw new Error("Invalid signature");
+      });
+      const verifyMacosCodeModeHostEntitlements = vi.fn(async () => {
+        if (scenario === "entitlements") throw new Error("Missing entitlement");
+      });
+      const options = { rootDir, platform: "darwin" as const, arch: "arm64" as const,
+        requirePlatformSignature: true, verifyPlatformSignature, verifyMacosCodeModeHostEntitlements,
+        probeVersion: vi.fn(versionProbe(version)) };
+      if (scenario === "valid") {
+        await retainManagedCodexCommand(command, options);
+        expect(verifyPlatformSignature).toHaveBeenCalledTimes(3);
+        expect(options.probeVersion).toHaveBeenCalledTimes(3);
+        await retainManagedCodexCommand(command, options);
+        expect(verifyPlatformSignature).toHaveBeenCalledTimes(6);
+        expect(options.probeVersion).toHaveBeenCalledTimes(3);
+      } else {
+        await expect(retainManagedCodexCommand(command, options)).rejects.toThrow();
+        if (scenario === "marker") {
+          await rm(marker, { recursive: true });
+          await expect(retainManagedCodexCommand(command, options)).resolves.toBeUndefined();
+        } else {
+          expect(existsSync(marker)).toBe(false);
+        }
+      }
+    },
+  );
 });
 
 describe("ensureManagedCodexRuntime", () => {

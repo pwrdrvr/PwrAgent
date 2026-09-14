@@ -1360,6 +1360,80 @@ describe("DesktopSettingsService", () => {
     configStore.dispose();
   });
 
+  it("clears the session pin before explicit Token Miser enable and disable callbacks", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    const ordinary = path.join(root, "ordinary-codex");
+    fs.writeFileSync(ordinary, "fixture", { mode: 0o755 });
+    fs.writeFileSync(configPath, `[models.codex]\npath = ${JSON.stringify(ordinary)}\n`);
+    const configStore = new DesktopConfigStore({ configPath });
+    const candidate = { command: ordinary, source: "config" as const, version: "0.200.0" };
+    configStore.recordProviderDiscovery("codex", {
+      candidates: [candidate], selectedCommand: ordinary, selectedVersion: candidate.version,
+    });
+    const runtime = {
+      command: "/managed/codex", appServerCommand: "/managed/codex-app-server", codeModeHostCommand: "/managed/codex-code-mode-host",
+      metadata: { asset: "bundle", checkedAt: 1, installedAt: 1, repository: "pwrdrvr/codex", schemaVersion: 1,
+        sha256: "a".repeat(64), tag: "pwragent-v0.200.0-pwragent.1", version: "0.200.0-pwragent.1" },
+    };
+    const service = new DesktopSettingsService({
+      configPath, configStore, env: {}, secretStore: new MemoryDesktopSecretStore(),
+      ensureManagedCodexRuntime: vi.fn(async () => runtime),
+      codexDiscoveryCoordinator: { discover: vi.fn(async () => ({
+        candidates: [{ ...candidate, selected: true, executable: true }], selectedCommand: ordinary,
+      })), invalidate: vi.fn(), resolve: vi.fn() },
+    });
+    await service.refreshStartupDiscovery(issueProviderDiscoveryPermit("startup"));
+    await expect(service.resolveCodexCommand()).resolves.toMatchObject({ command: ordinary });
+    const selected: string[] = [];
+    const stop = service.watchManagedCodexRuntime(async () => {
+      selected.push((await service.resolveCodexCommand()).command);
+    });
+    await service.writeConfigPatchTargeted({ experimental: { tokenMiserEnabled: true } },
+      issueProviderDiscoveryPermit("settings-user-action"));
+    expect(selected).toEqual([runtime.command]);
+    await service.writeConfigPatchTargeted({ experimental: { tokenMiserEnabled: false } });
+    expect(selected).toEqual([runtime.command, ordinary]);
+    stop();
+    configStore.dispose();
+  });
+
+  it.each(["invalid bundle", "EACCES retaining runtime"])("recovers from rejected cached selection: %s", async (reason) => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    const previous = path.join(root, "previous-codex");
+    fs.writeFileSync(previous, "fixture", { mode: 0o755 });
+    const configStore = new DesktopConfigStore({ configPath });
+    configStore.recordProviderDiscovery("codex", {
+      candidates: [{ command: previous, source: "config", version: "0.200.0" }],
+      selectedCommand: previous, selectedVersion: "0.200.0",
+    });
+    let reject!: (error: Error) => void;
+    const validation = new Promise<void>((_resolve, fail) => { reject = fail; });
+    const retain = vi.fn(() => validation);
+    const discover = vi.fn(async () => ({
+      candidates: [{ command: "/replacement/codex", source: "config" as const, executable: true, selected: true }],
+      selectedCommand: "/replacement/codex",
+    }));
+    const service = new DesktopSettingsService({
+      configPath, configStore, env: {}, secretStore: new MemoryDesktopSecretStore(),
+      retainCachedCodexCommand: retain,
+      codexDiscoveryCoordinator: { discover, invalidate: vi.fn(), resolve: vi.fn() },
+    });
+    const startup = service.refreshStartupDiscovery(issueProviderDiscoveryPermit("startup"));
+    let resolved = false;
+    const selection = service.resolveCodexCommand().then((value) => { resolved = true; return value; });
+    await vi.waitFor(() => expect(retain).toHaveBeenCalledOnce());
+    expect(resolved).toBe(false);
+    expect(discover).not.toHaveBeenCalled();
+    reject(new Error(reason));
+    await startup;
+    await expect(selection).resolves.toMatchObject({ command: "/replacement/codex" });
+    await service.refreshCodexDiscovery(issueProviderDiscoveryPermit("settings-user-action"));
+    expect(discover).toHaveBeenCalledTimes(2);
+    configStore.dispose();
+  });
+
   it("waits for the in-flight startup discovery instead of reporting no executable", async () => {
     const configPath = path.join(createTempRoot(), "config.toml");
     fs.writeFileSync(configPath, [

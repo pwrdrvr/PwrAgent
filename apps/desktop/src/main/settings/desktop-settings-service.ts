@@ -276,6 +276,7 @@ type DesktopSettingsServiceOptions = {
   configStore?: DesktopConfigStore;
   defaultDeveloperMode?: boolean;
   defaultManagedGrokBuilds?: boolean;
+  retainCachedCodexCommand?: (command: string) => Promise<void>;
   ensureManagedCodexRuntime?: (options: {
     checkMode: ManagedCodexCheckMode;
     signal?: AbortSignal;
@@ -577,6 +578,7 @@ export class DesktopSettingsService {
   private terminalSpawnEnvHydrationPromise?: Promise<NodeJS.ProcessEnv>;
   private managedCodexRuntime?: ManagedCodexRuntime;
   private sessionCodexCommand?: ResolvedCodexCommandCandidate;
+  private sessionCodexSelectionGeneration = 0;
   private sessionCodexRetention: Promise<void> = Promise.resolve();
   private rejectedStartupCachedCommand = false;
   private readonly managedCodexSelectionListeners = new Set<(
@@ -2295,9 +2297,21 @@ export class DesktopSettingsService {
             throw new Error("Cached executable is missing");
           }
           accessSync(cached.command, process.platform === "win32" ? constants.F_OK : constants.X_OK);
-          this.sessionCodexCommand = cached;
-          this.sessionCodexRetention = retainManagedCodexCommand(cached.command);
-          settingsLog.info("startup Codex selection reused", { source: cached.source });
+          const generation = this.sessionCodexSelectionGeneration;
+          // Withhold the persisted selection until validation AND retention
+          // finish. Neither failure may poison subsequent discovery attempts.
+          this.rejectedStartupCachedCommand = true;
+          this.sessionCodexRetention = Promise.resolve()
+            .then(() => (this.options.retainCachedCodexCommand ?? retainManagedCodexCommand)(cached.command))
+            .then(() => {
+              if (generation !== this.sessionCodexSelectionGeneration) return;
+              this.sessionCodexCommand = cached;
+              this.rejectedStartupCachedCommand = false;
+              settingsLog.info("startup Codex selection reused", { source: cached.source });
+            })
+            .catch(() => {
+              settingsLog.warn("startup Codex cached selection rejected; falling back to discovery");
+            });
         } catch {
           this.rejectedStartupCachedCommand = true;
         }
@@ -2352,6 +2366,7 @@ export class DesktopSettingsService {
     ]);
     // Explicit Settings/setup discovery retains its existing opt-in switch
     // behavior; only automatic background startup discovery is pinned.
+    this.sessionCodexSelectionGeneration += 1;
     this.sessionCodexCommand = undefined;
     await this.runCodexDiscovery(permit);
     return await this.readSettingsProjection();
@@ -2617,6 +2632,10 @@ export class DesktopSettingsService {
       const nextEnabled = this.resolveTokenMiserEnabled();
       if (nextEnabled === enabled) return;
       enabled = nextEnabled;
+      // Availability changes are explicit operator actions. Drop the startup
+      // pin before any listener can reconnect, and fence pending validation.
+      this.sessionCodexSelectionGeneration += 1;
+      this.sessionCodexCommand = undefined;
       if (enabled) {
         this.managedCodexRuntimeSwitchPending = true;
       } else {
