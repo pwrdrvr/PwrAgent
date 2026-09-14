@@ -43,6 +43,30 @@ const absoluteDateFormatter = new Intl.DateTimeFormat(undefined, {
   day: "numeric",
 });
 
+/**
+ * Which row of a list a callback is about.
+ *
+ * A row's handlers used to be closures the list built per row, because the
+ * list knows things the row does not: which directory section it renders
+ * under, and the shift-selection order that section is in. Those closures are
+ * a new function on every parent render, so they defeated this file's `memo`
+ * no matter how stable the row's data was. Handing the identity back instead
+ * lets a list hold ONE handler for all of its rows.
+ */
+export type ThreadRowRef = {
+  /**
+   * The directory section this row renders under. The Directories lens shows
+   * a thread once per directory it is linked to, so the thread alone does not
+   * say which row was acted on. Absent in the lenses with no directory
+   * sections.
+   */
+  directoryKey?: string;
+  /** `threadSummaryIdentityKey(thread)`, so the list need not recompute it. */
+  threadKey: string;
+  /** Whether this row renders in its directory's pinned group. */
+  pinned: boolean;
+};
+
 type ThreadRowProps = {
   approvalRequestThreadKeys?: Record<string, boolean>;
   /** Thread keys with a live integrated terminal in the main process. */
@@ -61,6 +85,8 @@ type ThreadRowProps = {
    */
   composerSourceThreadKey?: string;
   compact?: boolean;
+  /** Reported back through the row's callbacks as `ThreadRowRef`. */
+  directoryKey?: string;
   dropIndicator?: DropIndicatorPosition;
   draggable?: boolean;
   pointerDraggable?: boolean;
@@ -124,18 +150,27 @@ type ThreadRowProps = {
     // overlay button AND from the header's status-indicator forwarder
     // (a span). Consumers only read modifier keys.
     event: MouseEvent<HTMLElement>,
+    row: ThreadRowRef,
   ) => void;
   onRevealSelectedThreadComplete?: (request: number) => void;
-  onToggleSubthreads?: () => void;
+  /** Receives the state the toggle asks for, not the one it is leaving. */
+  onToggleSubthreads?: (
+    thread: NavigationThreadSummary,
+    collapsed: boolean,
+  ) => void;
   onDragStartThread?: (event: DragEvent<HTMLDivElement>) => void;
   onDragOverThread?: (event: DragEvent<HTMLDivElement>) => void;
   onDragLeaveThread?: (event: DragEvent<HTMLDivElement>) => void;
   onDragEndThread?: (event: DragEvent<HTMLDivElement>) => void;
   onDropOnThread?: (event: DragEvent<HTMLDivElement>) => void;
-  onPointerDownThread?: (event: PointerEvent<HTMLDivElement>) => void;
+  onPointerDownThread?: (
+    event: PointerEvent<HTMLDivElement>,
+    row: ThreadRowRef,
+  ) => void;
   onMovePinnedThread?: (
     thread: NavigationThreadSummary,
     direction: "up" | "down",
+    row: ThreadRowRef,
   ) => void;
   onSetReaction?: (
     thread: NavigationThreadSummary,
@@ -198,6 +233,14 @@ export const ThreadRow = memo(function ThreadRow(
   // renderer-side cache.
   const prs = props.thread.prs ?? [];
   const openPr = props.onOpenPullRequest ?? defaultOpenPullRequest;
+  // What this row reports back to the list that owns it, so the list can keep
+  // one handler for every row instead of a closure per row. See `ThreadRowRef`.
+  const rowIdentity: ThreadRowRef = {
+    directoryKey: props.directoryKey,
+    threadKey,
+    pinned: props.threadPinState === "pinned",
+  };
+  const onPointerDownThreadProp = props.onPointerDownThread;
 
   // Stable identities for everything handed to a memoized chip below. These
   // close over `props.thread` and the parent's handlers, both of which change
@@ -321,7 +364,11 @@ export const ThreadRow = memo(function ThreadRow(
       onDragLeave={props.onDragLeaveThread}
       onDragEnd={props.onDragEndThread}
       onDrop={props.onDropOnThread}
-      onPointerDown={props.onPointerDownThread}
+      onPointerDown={
+        onPointerDownThreadProp
+          ? (event) => onPointerDownThreadProp(event, rowIdentity)
+          : undefined
+      }
       onContextMenu={(event) => {
         event.preventDefault();
         props.onOpenContextMenu(props.thread, {
@@ -341,7 +388,10 @@ export const ThreadRow = memo(function ThreadRow(
           type="button"
           onClick={(event) => {
             event.stopPropagation();
-            props.onToggleSubthreads?.();
+            props.onToggleSubthreads?.(
+              props.thread,
+              !props.subthreadsCollapsed,
+            );
           }}
         />
       ) : null}
@@ -370,7 +420,7 @@ export const ThreadRow = memo(function ThreadRow(
           if (target.closest("button, [role='button'], a")) {
             return;
           }
-          props.onSelectThread(props.thread, event);
+          props.onSelectThread(props.thread, event, rowIdentity);
         }}
       >
         {/* The card's primary action: an EMPTY button absolutely
@@ -417,10 +467,13 @@ export const ThreadRow = memo(function ThreadRow(
               props.onMovePinnedThread(
                 props.thread,
                 event.key === "ArrowUp" ? "up" : "down",
+                rowIdentity,
               );
             }
           }}
-          onClick={(event) => props.onSelectThread(props.thread, event)}
+          onClick={(event) =>
+            props.onSelectThread(props.thread, event, rowIdentity)
+          }
         />
 
         {/* Title line — a SIBLING of the open-thread overlay (pointer

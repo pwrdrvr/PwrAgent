@@ -3,6 +3,7 @@ import type { NavigationPresentedThread } from "../../lib/navigation-loaded-rows
 import type { useBoundedNavigationWindow } from "../../lib/useBoundedNavigationWindow";
 import { isNavigationPeerUnavailable, navigationIdentityKey, navigationThreadSelectionKey } from "../../lib/navigation-query-state";
 import { useState, type MouseEvent } from "react";
+import { useEventCallback } from "../../lib/useEventCallback";
 import type {
   MessagingThreadBindingSummary,
   NavigationThreadSummary,
@@ -270,9 +271,7 @@ export function RecentsList(props: RecentsListProps) {
               onRevealSelectedThreadComplete={
                 props.onRevealSelectedThreadComplete
               }
-              onSelectThread={(thread, event) =>
-                props.onSelectThread(thread, event, selectionOrder)
-              }
+              onSelectThread={selectThread}
               onSetReaction={props.onSetReaction}
               onSetThreadPin={props.onSetThreadPin}
               onUnbindMessagingBinding={props.onUnbindMessagingBinding}
@@ -316,6 +315,21 @@ export function RecentsList(props: RecentsListProps) {
     ];
   });
 
+  // One handler for every row rather than a closure per row: a closure per
+  // row is a new function on every render, which the row's `memo` cannot bail
+  // out past. `selectionOrder` belongs to the whole list, so the row has
+  // nothing to report back here.
+  const selectThread = useEventCallback(
+    (thread: NavigationThreadSummary, event: MouseEvent<HTMLElement>) => {
+      props.onSelectThread(thread, event, selectionOrder);
+    },
+  );
+  const toggleSubthreads = useEventCallback(
+    (thread: NavigationThreadSummary, collapsed: boolean) => {
+      void props.onSetSubthreadsCollapsed?.(thread, collapsed);
+    },
+  );
+
   const renderThreadGroup = (thread: NavigationThreadSummary) => {
     const key = threadSummaryIdentityKey(thread);
     const children = trays.subtree(key);
@@ -342,11 +356,7 @@ export function RecentsList(props: RecentsListProps) {
             subthreadCount > 0
               && threadSupportsFederationCapability(thread, "thread_grouping")
               && props.onSetSubthreadsCollapsed
-              ? () =>
-                  void props.onSetSubthreadsCollapsed!(
-                    thread,
-                    !subthreadsCollapsed,
-                  )
+              ? toggleSubthreads
               : undefined
           }
           onOpenContextMenu={props.onOpenThreadContextMenu}
@@ -355,9 +365,7 @@ export function RecentsList(props: RecentsListProps) {
           onPrefetchPullRequests={props.onPrefetchPullRequests}
           onPrefetchGitWorkingState={props.onPrefetchGitWorkingState}
           onRevealSelectedThreadComplete={props.onRevealSelectedThreadComplete}
-          onSelectThread={(target, event) =>
-            props.onSelectThread(target, event, selectionOrder)
-          }
+          onSelectThread={selectThread}
           onSetReaction={props.onSetReaction}
           onSetThreadPin={props.onSetThreadPin}
           onUnbindMessagingBinding={props.onUnbindMessagingBinding}
