@@ -64,4 +64,47 @@ describe("directory disclosure writes", () => {
     expect(observed.at(-1)).toBe(opened);
     expect(new Set(observed).size).toBe(2);
   });
+
+  it("dispatches nothing once the selected directory is open", () => {
+    // An updater that returns `current` still had to be dispatched to say so,
+    // and React counts the dispatch. While another update is pending on this
+    // window's fiber — which is the normal state during a lens expansion — the
+    // eager bail-out cannot apply, so the no-op schedules a real update from
+    // inside the commit phase. Fifty consecutive commits carrying one is what
+    // React stops with "Maximum update depth exceeded".
+    const dispatched: unknown[] = [];
+    function ObservedWindow({ selected }: { selected: number }) {
+      const disclosure = useNavigationDirectoryDisclosure();
+      const observedDisclosure = {
+        ...disclosure,
+        setExpandedByKey: ((value) => {
+          dispatched.push(value);
+          disclosure.setExpandedByKey(value);
+        }) as typeof disclosure.setExpandedByKey,
+      };
+      const thread = fixture.threads[selected]!;
+      // The presentation fixture rebuilds its directory array on every render,
+      // which is the identity churn the hover-stable sidebar snapshot produces
+      // while the pointer rests on a row and a page arrival produces during a
+      // lens expansion. That is what makes the effect under test re-run here.
+      return <DirectoriesList
+        directoryDisclosure={observedDisclosure}
+        directories={fixture.directories}
+        threads={fixture.threads}
+        selectedItemKey={buildThreadIdentityKey(thread.source, thread.id)}
+        onOpenLaunchpad={async () => {}}
+        onOpenThreadContextMenu={() => {}}
+        onSelectThread={() => {}}
+      />;
+    }
+
+    const view = render(<ObservedWindow selected={0} />);
+    expect(dispatched).toHaveLength(1);
+
+    dispatched.length = 0;
+    view.rerender(<ObservedWindow selected={0} />);
+    view.rerender(<ObservedWindow selected={1} />);
+    view.rerender(<ObservedWindow selected={1} />);
+    expect(dispatched).toEqual([]);
+  });
 });

@@ -1050,39 +1050,41 @@ export function DirectoriesList(props: DirectoriesListProps) {
     const selectedItemKeyChanged = selectedItemKey !== previousSelectedItemKey;
     previousSelectedItemKeyRef.current = selectedItemKey;
 
-    setExpandedByKey((current) => {
-      // Preserve explicit user collapse across unrelated directory
-      // snapshot changes, but allow a newly selected item (for
-      // example Back/Forward navigation to a hidden thread) to
-      // reopen its containing directory for reveal. Only mark a
-      // selected key as consumed after a matching directory exists;
-      // showThread() can set selection before the refreshed
-      // directory snapshot includes the thread.
-      //
-      // An already-open directory needs no write at all. Returning a fresh
-      // object for a selection change alone re-renders the whole navigation
-      // tree and recomputes bounded-window demand to reach the same value —
-      // and this effect re-runs on every render whenever `directories`
-      // arrives with a new identity, which is exactly what the hover-stable
-      // sidebar snapshot produces while the pointer rests on a row. That
-      // pair is a self-feeding update loop, and it is the write React named
-      // when the renderer died with "Maximum update depth exceeded".
-      if (current[matchingDirectory.key] === true) {
-        return current;
-      }
-      if (
-        current[matchingDirectory.key] !== undefined &&
-        !selectedItemKeyChanged
-      ) {
-        return current;
-      }
+    // Preserve explicit user collapse across unrelated directory snapshot
+    // changes, but allow a newly selected item (for example Back/Forward
+    // navigation to a hidden thread) to reopen its containing directory for
+    // reveal. Only mark a selected key as consumed after a matching directory
+    // exists; showThread() can set selection before the refreshed directory
+    // snapshot includes the thread.
+    //
+    // Ask this question of the disclosure the render already holds, before
+    // dispatching. The effect re-runs on EVERY render whenever `directories`
+    // arrives with a new identity — which is what the hover-stable sidebar
+    // snapshot produces while the pointer rests on a row, and what a lens
+    // expansion produces on every page that lands. An updater that answers
+    // "nothing to do" still has to be dispatched to say so, and React counts
+    // the dispatch, not the state it returns: once any other update is pending
+    // on this window's fiber the eager bail-out cannot apply, so the no-op
+    // schedules a real update from inside the commit phase. Fifty consecutive
+    // commits carrying one is what React stops with "Maximum update depth
+    // exceeded", which took the whole sidebar down through its error boundary.
+    //
+    // `expandedByKey` can lag a dispatch made earlier in the same batch, so
+    // the updater asks the same question of committed state and stays the
+    // authority; the pre-check only decides whether the dispatch is worth
+    // making.
+    const revealsDirectory = (disclosure: Readonly<Record<string, boolean>>): boolean =>
+      disclosure[matchingDirectory.key] !== true
+      && (disclosure[matchingDirectory.key] === undefined || selectedItemKeyChanged);
 
-      return {
-        ...current,
-        [matchingDirectory.key]: true,
-      };
-    });
-  }, [previousSelectedItemKeyRef, setExpandedByKey, visibleDirectories, props.selectedItemKey]);
+    if (!revealsDirectory(expandedByKey)) {
+      return;
+    }
+
+    setExpandedByKey((current) => revealsDirectory(current)
+      ? { ...current, [matchingDirectory.key]: true }
+      : current);
+  }, [expandedByKey, previousSelectedItemKeyRef, setExpandedByKey, visibleDirectories, props.selectedItemKey]);
 
   useEffect(() => {
     const request = revealSelectedThreadRequest ?? 0;
