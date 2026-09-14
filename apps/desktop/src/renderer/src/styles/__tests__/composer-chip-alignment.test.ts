@@ -23,11 +23,18 @@ import { describe, expect, it } from "vitest";
 const testDir = path.dirname(fileURLToPath(import.meta.url));
 const css = readFileSync(path.resolve(testDir, "../app.css"), "utf8");
 
-/** Body of the first top-level CSS rule whose selector matches exactly. */
+/** Body of the first top-level CSS rule whose selector matches exactly.
+ *
+ * Descendant combinators match any run of whitespace so a selector the file
+ * wraps across lines still resolves — app.css wraps the long ones. */
 function ruleBody(selector: string): string {
-  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const pattern = selector
+    .trim()
+    .split(/\s+/)
+    .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .join("\\s+");
   const match = css.match(
-    new RegExp(`(?:^|\\n)${escaped}\\s*\\{(?<body>[\\s\\S]*?)\\n\\}`)
+    new RegExp(`(?:^|\\n)${pattern}\\s*\\{(?<body>[\\s\\S]*?)\\n\\}`)
   );
   if (!match?.groups?.body) {
     throw new Error(`Expected app.css to define ${selector}`);
@@ -44,6 +51,10 @@ function declaration(body: string, property: string): string | undefined {
 
 const MENTION = ".composer-tiptap-input__editor .composer-tiptap-input__mention";
 const STRUT = `${MENTION}::before`;
+const COMPACT_MENTION = `.compact-composer ${MENTION}`;
+const PR_CHIP = ".composer-tiptap-input__editor .pr-chip.composer-pr-chip";
+const PR_STRUT = `${PR_CHIP}::before`;
+const PR_LABEL = `${PR_CHIP} .pr-chip__label`;
 
 describe("composer inline chip alignment contract", () => {
   it("aligns every mention chip on the paragraph baseline, not a nudge", () => {
@@ -78,11 +89,48 @@ describe("composer inline chip alignment contract", () => {
   });
 
   it("keeps chips inside the line box they interrupt", () => {
-    // 1.35em = 18.9px against the composer's 22.4px line box, which leaves
-    // the chip 14.7px above and 4.2px below the baseline — inside the
-    // 16.0/6.4 the text strut already claims, so a chip never pushes its
-    // own line taller than a plain one.
-    expect(declaration(ruleBody(MENTION), "height")).toBe("1.35em");
+    // The ceiling is a share of the line box, not a fixed `em`: the strut is
+    // centered and sits at the paragraph's own font size, so a chip fills its
+    // line exactly when its height reaches `line-height`. Measured in
+    // headless Chromium against this stylesheet, 1.45em (20.3px of a 22.4px
+    // line box) leaves the chip paragraph exactly two line-units tall and
+    // 1.55em does not.
+    expect(declaration(ruleBody(MENTION), "height")).toBe("1.45em");
+  });
+
+  it("steps the height back for the card composer's shorter line box", () => {
+    // `.compact-composer` runs 12px/1.5. The same 1.45em is 17.4px of an 18px
+    // line box there and pushes every line it lands on; 1.35em is the same
+    // ~0.9 share the full composer gets.
+    expect(declaration(ruleBody(COMPACT_MENTION), "height")).toBe("1.35em");
+  });
+
+  it("keeps the PR pill's internals on .pr-chip's own pixels", () => {
+    // The PR pill is the only mention chip that draws a border, so it is the
+    // only one whose padding is visible. Sizing its internals off the 14px
+    // paragraph put a 14px label in the chip-scale box; these three restore
+    // the dot, gap, and padding the sidebar row and the transcript draw.
+    const body = ruleBody(PR_CHIP);
+    expect(declaration(body, "gap")).toBe("6px");
+    expect(declaration(body, "padding")).toBe("0 8px");
+    expect(declaration(ruleBody(PR_LABEL), "font-size")).toBe("11px");
+  });
+
+  it("cancels the PR pill's own gap, not the shared one", () => {
+    // Same invariant as the shared rule above, restated because this chip
+    // overrides `gap`. Left at the shared `-0.35em` the uncancelled 1.1px
+    // walks the dot off the padding.
+    expect(declaration(ruleBody(PR_STRUT), "margin-inline-end")).toBe(
+      `-${declaration(ruleBody(PR_CHIP), "gap")}`
+    );
+  });
+
+  it("sizes the PR pill's label, never the chip, so the strut stays put", () => {
+    // The strut is sized in `em` off the chip. Shrinking the CHIP's font-size
+    // would shrink the strut with it and drop this chip's baseline out from
+    // under its 14px siblings on the same line (1.1px, measured). Only the
+    // label may carry the smaller size; `align-items: center` places it.
+    expect(declaration(ruleBody(PR_CHIP), "font-size")).toBeUndefined();
   });
 
   it("does not leave an unqualified base rule to lose the cascade with", () => {
