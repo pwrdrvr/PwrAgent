@@ -193,8 +193,8 @@ describe("PrPollingScheduler", () => {
 
     expect(h.fetched).toHaveLength(1);
     expect(h.fetched[0]).toEqual([
-      { owner: "a", repo: "one", number: 1 },
-      { owner: "b", repo: "two", number: 2 },
+      { owner: "a", repo: "one", number: 1, kind: "github", host: "github.com" },
+      { owner: "b", repo: "two", number: 2, kind: "github", host: "github.com" },
     ]);
   });
 
@@ -537,7 +537,7 @@ describe("GitLab polling", () => {
       applyResults,
     });
     await h.scheduler.tick();
-    expect(fetchPullRequests).toHaveBeenCalledWith([{ gitlabHost: "gitlab.example.com", owner: "team/sub/group", repo: "project", number: 17 }]);
+    expect(fetchPullRequests).toHaveBeenCalledWith([{ kind: "gitlab", host: "gitlab.example.com", owner: "team/sub/group", repo: "project", number: 17 }]);
     expect(applyResults).toHaveBeenCalledWith([summary], h.now);
   });
 });

@@ -307,7 +307,12 @@ it("renders owner-prepared pricing with the same visible values and no viewer le
 });
 
 
-it("loads and refreshes only expanded Pricing gate pages while preserving folded totals", async () => {
+it("revalidates only expanded Pricing gate resources and preserves unchanged history and folded totals", async () => {
+  // Freeze read admission timestamps while the initial React work uses real
+  // timers, then exercise the shared store's exact one-second demand budget.
+  const now = 1_800_000_100_000;
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(now);
   const parent = buildMonitorLine({ scope: "turn", source: "live", usageLineId: "parent", turnId: "parent-turn" });
   const gates = Array.from({ length: 23 }, (_, index) => buildMonitorLine({
     usageLineId: `gate-${index}`, sourceItemId: `system:token-miser:${index}`, turnId: `helper-${index}`,
@@ -328,12 +333,13 @@ it("loads and refreshes only expanded Pricing gate pages while preserving folded
   const visibleText = legacy.container.textContent;
   legacy.unmount();
   const listeners = new Set<(event: AgentEvent) => void>();
+  let revision = "r";
   const readThread = vi.fn<NonNullable<DesktopApi["readThread"]>>(async (request) => {
     const offset = Number(request.display?.cursor ?? 0);
     const pricingPage = spend.buildThreadPricingDisplay({ ...input, deferGates: true,
       gateSelection: request.display?.pricingGateGroup, offset, limit: 20 });
     return { backend: "codex", threadId: "thread-1", fetchedAt: 1, replay: { entries: [], messages: [], pagination: { supportsPagination: true, hasPreviousPage: false } },
-      display: { pricing: pricingPage, pricingPage, revision: "r", nextCursor: offset + 20 < pricingPage.totalRows ? String(offset + 20) : undefined } };
+      display: { pricing: pricingPage, pricingPage, revision, nextCursor: offset + 20 < pricingPage.totalRows ? String(offset + 20) : undefined } };
   });
   const desktopApi: DesktopApi = { readThread, onAgentEvent: (listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; } };
   const thread: NavigationThreadSummary = { source: "codex", id: "thread-1", title: "Fixture", titleSource: "explicit", linkedDirectories: [], inbox: { inInbox: false },
@@ -354,16 +360,36 @@ it("loads and refreshes only expanded Pricing gate pages while preserving folded
   await waitFor(() => expect(view.container.querySelectorAll(".pricing-token-miser li.pricing-usage-row")).toHaveLength(23));
   expect(readThread.mock.calls[2]![0].display?.pricingGateGroup?.filter).toBe("small");
   vi.useFakeTimers();
+  vi.setSystemTime(now);
   const invalidate = () => {
     for (const listener of listeners) listener({ backend: "codex", federationTarget: { scope: "remote", instanceId: "owner" },
       notification: { method: "thread/pricing/updated", params: { threadId: "thread-1", displayInvalidated: true, pricing: { lines: [], summaries: [] } } } });
   };
   await act(async () => { invalidate(); invalidate(); await vi.advanceTimersByTimeAsync(250); });
-  // The two opened primary pages and one smaller-gate page are revalidated once.
-  expect(readThread).toHaveBeenCalledTimes(6);
+  expect(readThread).toHaveBeenCalledTimes(3);
+  await act(async () => { await vi.advanceTimersByTimeAsync(749); });
+  expect(readThread).toHaveBeenCalledTimes(3);
+  await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+  // Revalidate the primary and smaller-gate resources once each. The matching
+  // first-page revision retains the second primary page without downloading it.
+  expect(readThread).toHaveBeenCalledTimes(5);
+  expect(readThread.mock.calls.slice(3).map(([request]) => ({
+    filter: request.display?.pricingGateGroup?.filter, cursor: request.display?.cursor,
+  }))).toEqual([{ filter: "primary", cursor: undefined }, { filter: "small", cursor: undefined }]);
+  expect(view.container.querySelectorAll(".pricing-token-miser li.pricing-usage-row")).toHaveLength(23);
   expect(fold).toHaveAttribute("aria-expanded", "true");
-  act(() => fold.click());
+  expect(fold).toHaveTextContent("$4.21 saved");
+  expect(fold).toHaveTextContent("23 gates");
+
+  // A changed collection must still replace all loaded pages consistently.
+  revision = "changed";
+  await act(async () => { invalidate(); invalidate(); await vi.advanceTimersByTimeAsync(1_000); });
+  expect(readThread).toHaveBeenCalledTimes(8);
+  expect(readThread.mock.calls.slice(5).filter(([request]) => request.display?.pricingGateGroup?.filter === "primary")
+    .map(([request]) => request.display?.cursor)).toEqual([undefined, "20"]);
+  expect(view.container.querySelectorAll(".pricing-token-miser li.pricing-usage-row")).toHaveLength(23);
+  act(() => { invalidate(); fold.click(); });
   expect(listeners.size).toBe(0);
-  await act(async () => { invalidate(); await vi.advanceTimersByTimeAsync(250); });
-  expect(readThread).toHaveBeenCalledTimes(6);
+  await act(async () => { invalidate(); await vi.advanceTimersByTimeAsync(1_000); });
+  expect(readThread).toHaveBeenCalledTimes(8);
 });

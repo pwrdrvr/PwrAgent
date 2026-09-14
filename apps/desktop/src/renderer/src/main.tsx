@@ -11,6 +11,7 @@ import { applyAppearanceAttributes, resolveTheme } from "./lib/appearance";
 import { installDevPerformancePruning } from "./lib/dev-performance-pruning";
 import { installGlobalRendererErrorHandlers } from "./lib/renderer-error-reporting";
 import { mountRendererRoot } from "./lib/renderer-root";
+import { startWindowFrameSync } from "./lib/window-frame";
 import "./styles/app.css";
 
 const uninstallGlobalErrorHandlers = installGlobalRendererErrorHandlers();
@@ -58,6 +59,14 @@ desktopApi?.recordStartupProfileEvent?.("renderer-main-module-start", {
 if (desktopApi?.platform) {
   document.documentElement.dataset.platform = desktopApi.platform;
 }
+
+// Linux gives a frameless window no edge of its own to be told apart from
+// whatever sits behind it, so app.css paints one — and has to know when the
+// window is maximized and there is no edge left to draw. Every window kind
+// starts this, the same way every one of them stamps the platform above: the
+// auxiliary windows paint no strip of ours but get the same hairline.
+// No-ops off Linux.
+startWindowFrameSync(desktopApi?.platform);
 const unsubscribeAppearance = desktopApi?.onAppearanceChanged?.(
   (appearance) => {
     applyAppearanceAttributes(

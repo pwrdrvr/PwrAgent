@@ -487,6 +487,7 @@ import type { RuntimeIdentity } from "../../../shared/runtime-identity";
 import type { WindowPointerSnapshot } from "../../../shared/window-pointer";
 import type { WindowShowThreadRequest } from "../../../shared/window-show-thread";
 import type { AppMenuTopLevel, AppMenuPopupRequest } from "../../../shared/app-menu";
+import type { WindowControlAction } from "../../../shared/ipc";
 import type {
   AppChangelogDocument,
   AppLogEntry,
@@ -494,6 +495,7 @@ import type {
   AppLicenseDocument,
   AppLicenseDocumentKind,
   AppMetadata,
+  AppUpdateCancelResult,
   AppUpdateCheckResult,
   AppUpdateInstallResult,
   AppUpdateReleaseVersions,
@@ -563,6 +565,11 @@ export type DesktopApi = {
   readAppUpdateStatus?: () => Promise<AppUpdateStatus>;
   readAppUpdateReleaseVersions?: () => Promise<AppUpdateReleaseVersions>;
   onAppUpdateStatus?: (callback: (status: AppUpdateStatus) => void) => () => void;
+  /** Only an app-menu check reports here — see the channel's own comment. */
+  onAppUpdateCheckResult?: (
+    callback: (result: AppUpdateCheckResult) => void,
+  ) => () => void;
+  cancelAppUpdateDownload?: () => Promise<AppUpdateCancelResult>;
   onHotCpuProfileCaptured?: (
     callback: (event: HotCpuProfileCapturedEvent) => void,
   ) => () => void;
@@ -1501,6 +1508,16 @@ export type DesktopApi = {
    */
   getAppMenuModel?: () => Promise<AppMenuTopLevel[]>;
   popupAppMenu?: (request: AppMenuPopupRequest) => void;
+  /**
+   * Linux painted caption buttons (linux only). `runWindowControl` runs one
+   * min/max/close on this window; `onWindowFrameState` reports the window's
+   * own maximize changes, which is what the glyph and the painted window
+   * hairline draw from. See `lib/window-frame.ts`.
+   */
+  runWindowControl?: (action: WindowControlAction) => Promise<void>;
+  onWindowFrameState?: (
+    callback: (maximized: boolean) => void,
+  ) => () => void;
   platform?: string;
   versions?: {
     chrome?: string;

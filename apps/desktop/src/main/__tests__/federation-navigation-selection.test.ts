@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import type { NavigationQueryRequest, NavigationSnapshot, NavigationThreadSummary } from "@pwragent/shared";
-import { buildFederatedThreadRef, NAVIGATION_QUERY_MAX_RESULT_BYTES } from "@pwragent/shared";
-import { projectNavigationDescendantPage } from "../federation/federation-navigation-selection";
+import type { NavigationSnapshot, NavigationThreadSummary, NavigationQueryRequest } from "@pwragent/shared";
+import { NAVIGATION_QUERY_MAX_RESULT_BYTES } from "@pwragent/shared";
 import { NavigationQueryStore } from "../app-server/navigation-query-store";
 import { readFederationPinnedSnapshot } from "../federation/federation-collection-client";
 import type { FederationBackendOperations } from "../federation/federation-backend-bridge";
@@ -15,21 +14,18 @@ function snapshot(threads: NavigationThreadSummary[]): NavigationSnapshot {
 }
 
 describe("owner-filtered navigation descendants", () => {
-  it("sparse_parent_selection_preserves_remote_descendants without unrelated rows", () => {
+  it("protocol-2 pin queries preserve descendants without unrelated rows", async () => {
     const parent = thread("parent");
-    const child = thread("child", {
-      parentThreadId: "parent", parentThreadBackend: "codex", parentThreadInstanceId: "owner",
-      federation: { ref: buildFederatedThreadRef({ backend: "codex", instanceId: "third", threadId: "child" }),
-        instanceLabel: "Third", peerStatus: "connected", capabilities: [] },
-    });
-    const grandchild = thread("grandchild", {
-      parentThreadId: "child", parentThreadBackend: "codex", parentThreadInstanceId: "third",
-    });
+    const child = thread("child", { parentThreadId: "parent", parentThreadBackend: "codex" });
+    const grandchild = thread("grandchild", { parentThreadId: "child", parentThreadBackend: "codex" });
     const rows = [parent, child, grandchild, ...Array.from({ length: 10_000 }, (_, i) => thread(`unrelated-${i}`))];
-    const page = projectNavigationDescendantPage(snapshot(rows), "1", { threadKeys: ["codex:parent"] });
-    expect(page.snapshot.threads.map((row) => row.id).sort()).toEqual(["child", "grandchild", "parent"]);
-    expect(page.snapshot.threads.find((row) => row.id === "child")?.federation?.ref).toEqual(child.federation?.ref);
-    expect(page.snapshot.directories).toEqual([]);
+    const store = new NavigationQueryStore();
+    const page = await readFederationPinnedSnapshot({ getNavigationQueryPage: (request) =>
+      store.readPage({ scopeKey: "viewer", loadIndex: async () => snapshot(rows), request }),
+    } as FederationBackendOperations, ["codex:parent"]);
+    expect(page.threads.map((row) => row.id).sort()).toEqual(["child", "grandchild", "parent"]);
+    expect(page.threads.find((row) => row.id === "grandchild")?.parentThreadId).toBe("child");
+    expect(page.directories).toEqual([]);
     expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThan(4096);
   });
 
@@ -38,21 +34,21 @@ describe("owner-filtered navigation descendants", () => {
       thread(`child-${String(i).padStart(3, "0")}`, { parentThreadId: "root", title: "日".repeat(1200) }))]);
     const getNavigationSnapshot = vi.fn();
     const store = new NavigationQueryStore();
+    const getNavigationDescendantPage = vi.fn();
     const getNavigationQueryPage = vi.fn(async (request: NavigationQueryRequest) => {
-      const page = await store.readPage({ request, scopeKey: "viewer", loadIndex: async () => value });
+      const page = await store.readPage({ scopeKey: "viewer", loadIndex: async () => value, request });
       expect(page.entries.length).toBeLessThanOrEqual(100);
       expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(NAVIGATION_QUERY_MAX_RESULT_BYTES);
       return page;
     });
-    const getNavigationDescendantPage = vi.fn().mockRejectedValue(new Error("Retired protocol"));
     const result = await readFederationPinnedSnapshot({ getNavigationQueryPage, getNavigationDescendantPage, getNavigationSnapshot } as unknown as FederationBackendOperations,
       ["codex:root"]);
     expect(result.threads).toHaveLength(206);
     expect(new Set(result.threads.map((row) => row.id)).size).toBe(206);
     expect(getNavigationQueryPage.mock.calls.length).toBeGreaterThan(2);
     expect(getNavigationDescendantPage).not.toHaveBeenCalled();
+    expect(getNavigationQueryPage.mock.calls[0]?.[0].query).toEqual({ kind: "group-members", roots: [{ backend: "codex", threadId: "root" }] });
     expect(getNavigationSnapshot).not.toHaveBeenCalled();
-    expect(() => projectNavigationDescendantPage(value, "2", { threadKeys: ["codex:root"], revision: "1" })).toThrow("changed");
   });
 
   it("batches more than 100 roots and deduplicates overlapping descendant groups", async () => {
@@ -70,7 +66,7 @@ describe("owner-filtered navigation descendants", () => {
 
   it.each(["generation", "ownerEpoch", "queryKey"] as const)("rejects %s drift between pages", async (field) => {
     const page = { protocol: 2, ownerEpoch: "owner", generation: "1", queryKey: "pins",
-      entries: [], complete: false, nextCursor: "next" };
+      coverage: { state: "complete" }, entries: [], complete: false, nextCursor: "next" };
     const getNavigationQueryPage = vi.fn().mockResolvedValueOnce(page)
       .mockResolvedValueOnce({ ...page, [field]: "changed", complete: true, nextCursor: undefined });
     await expect(readFederationPinnedSnapshot({ getNavigationQueryPage } as unknown as FederationBackendOperations,
@@ -88,13 +84,8 @@ describe("owner-filtered navigation descendants", () => {
     expect(getNavigationSnapshot).not.toHaveBeenCalled();
   });
 
-  it("rejects oversized rows and terminates cycles and repeated cursors", async () => {
-    const value = snapshot([thread("a", { parentThreadId: "b" }), thread("b", { parentThreadId: "a" })]);
-    expect(projectNavigationDescendantPage(value, "1", { threadKeys: ["codex:a"] }).snapshot.threads).toHaveLength(2);
-    expect(() => projectNavigationDescendantPage(snapshot([thread("a", { title: "日".repeat(100_000) })]), "1",
-      { threadKeys: ["codex:a"] })).toThrow("byte budget");
-    const backend = { getNavigationQueryPage: async () => ({ protocol: 2, ownerEpoch: "owner", generation: "1",
-      queryKey: "pins", entries: [], complete: false, nextCursor: "same" }) } as unknown as FederationBackendOperations;
+  it("terminates repeated cursors", async () => {
+    const backend = { getNavigationQueryPage: async () => ({ protocol: 2, generation: "1", queryKey: "q", ownerEpoch: "e", coverage: { state: "complete" }, entries: [], nextCursor: "same", complete: false }) } as unknown as FederationBackendOperations;
     await expect(readFederationPinnedSnapshot(backend, ["codex:a"])).rejects.toThrow("inconsistent");
   });
 });

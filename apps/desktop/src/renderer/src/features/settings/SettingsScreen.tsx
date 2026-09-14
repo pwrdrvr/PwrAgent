@@ -1,3 +1,5 @@
+import { FORGE_KINDS, FORGE_PRODUCTS, type ForgeKind } from "@pwragent/shared";
+import { FORGE_SETTINGS } from "./forge-settings";
 import type {
   GhStatus,
   AppServerBackendKind,
@@ -121,7 +123,7 @@ const SETTINGS_NAV_GROUPS = new Set<SettingsSection>([
 
 /** Git pane sub-routes. These are `SettingsSection` `sectionId` slugs, so
  *  the nav child and the card it scrolls to share one identifier. */
-const GIT_NAV_CHILDREN = ["git", "github", "gitlab"] as const;
+const GIT_NAV_CHILDREN = ["git", ...FORGE_KINDS] as const;
 
 function messagingPlatformFromSub(
   sub: string | undefined,
@@ -141,10 +143,7 @@ type SettingsNavChild = {
   chip?: string;
 };
 
-type ForgeNavStatuses = {
-  github?: GhStatus;
-  gitlab?: GhStatus;
-};
+type ForgeNavStatuses = Partial<Record<ForgeKind, GhStatus>>;
 
 /**
  * One Git nav child: label, the section slug it scrolls to, and the state
@@ -178,19 +177,17 @@ function describeGitNavChild(
       : { ...base, dot: "bad", chip: "missing" };
   }
 
-  const isGitLab = child === "gitlab";
+  const product = FORGE_PRODUCTS[child];
   const base = {
     key: child,
-    label: isGitLab ? "GitLab" : "GitHub",
+    label: product.label,
     sub: child,
   };
-  const application = isGitLab
-    ? snapshot?.applications.glab
-    : snapshot?.applications.gh;
+  const application = snapshot?.applications[product.cli];
   if (!snapshot || !application) return base;
   if (!application.enabled.value) return { ...base, dot: "off", chip: "off" };
 
-  const status = isGitLab ? statuses.gitlab : statuses.github;
+  const status = statuses[child];
   // No probe has landed yet. An absent dot reads as "we do not know",
   // which is honest; a green one would be a guess.
   if (!status) return base;
@@ -361,25 +358,26 @@ export function SettingsScreen(props: {
   // what makes a Re-check move the nav dot without a second probe.
   const [forgeStatuses, setForgeStatuses] = useState<ForgeNavStatuses>({});
   const reportForgeStatus = useCallback(
-    (provider: "github" | "gitlab", status: GhStatus | undefined) => {
+    (provider: ForgeKind, status: GhStatus | undefined) => {
       setForgeStatuses((current) => ({ ...current, [provider]: status }));
     },
     [],
   );
   const desktopApi = props.desktopApi;
-  const ghEnabled = snapshot?.applications.gh.enabled.value === true;
-  const glabEnabled = snapshot?.applications.glab?.enabled.value === true;
+  const enabledForges = FORGE_KINDS.filter((kind) =>
+    snapshot?.applications[FORGE_PRODUCTS[kind].cli]?.enabled.value === true,
+  ).join(",");
   const seededForgesRef = useRef<string | undefined>(undefined);
   useEffect(() => {
     // Keyed on API availability too: desktopApi is optional and can arrive
     // after the first render, and without it in the key the seed would be
     // marked done having probed nothing.
-    const seedKey = `${Boolean(desktopApi)}:${ghEnabled}:${glabEnabled}`;
+    const seedKey = `${Boolean(desktopApi)}:${enabledForges}`;
     if (seededForgesRef.current === seedKey) return;
     seededForgesRef.current = seedKey;
     let cancelled = false;
     const seed = async (
-      provider: "github" | "gitlab",
+      provider: ForgeKind,
       read: (() => Promise<GhStatus>) | undefined,
     ): Promise<void> => {
       if (!read) return;
@@ -391,16 +389,15 @@ export function SettingsScreen(props: {
         // A nav dot has nowhere to put one, so it stays absent.
       }
     };
-    if (ghEnabled && desktopApi?.getGhStatus) {
-      void seed("github", () => desktopApi.getGhStatus!({ recheck: false }));
-    }
-    if (glabEnabled && desktopApi?.getGlabStatus) {
-      void seed("gitlab", () => desktopApi.getGlabStatus!({ recheck: false }));
+    for (const kind of FORGE_KINDS) {
+      if (!enabledForges.split(",").includes(kind)) continue;
+      const read = desktopApi?.[FORGE_SETTINGS[kind].statusMethod];
+      if (read) void seed(kind, () => read({ recheck: false }));
     }
     return () => {
       cancelled = true;
     };
-  }, [desktopApi, ghEnabled, glabEnabled, reportForgeStatus]);
+  }, [desktopApi, enabledForges, reportForgeStatus]);
   const navChildren = (target: SettingsSection): SettingsNavChild[] => {
     if (target === "plugins") {
       return [{ key: "mcps", label: "MCPs" }];
@@ -725,7 +722,7 @@ function SettingsSectionBody(props: {
   /** Lifted so the settings nav's Git children can show the same
    *  connection state the pane shows, without probing a second time. */
   onForgeStatusChange: (
-    provider: "github" | "gitlab",
+    provider: ForgeKind,
     status: GhStatus | undefined,
   ) => void;
   onOpenRoute: (section: SettingsSection, sub?: string) => void;

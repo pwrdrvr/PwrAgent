@@ -1310,6 +1310,7 @@ describe("App", () => {
   });
 
   it("reveals the sidebar when adding a project from the hidden-sidebar masthead", async () => {
+    const threadViewImported = createDeferred<void>();
     const pickDirectoryFromDisk = vi.fn(async () => ({
       canceled: false as const,
       path: "/Users/me/repos/PwrAgent",
@@ -1359,6 +1360,9 @@ describe("App", () => {
             executionMode: "default" as const,
           },
         }),
+        recordStartupProfileEvent: (name: string) => {
+          if (name === "thread-view-import:end") threadViewImported.resolve(undefined);
+        },
         pickDirectoryFromDisk,
         registerDirectoryFromDisk,
         onAgentEvent: () => () => undefined,
@@ -1366,6 +1370,15 @@ describe("App", () => {
     });
 
     const { container } = render(<App />);
+    // The placeholder header also has a masthead, but is replaced when the
+    // lazy thread view arrives. Interacting before that commit can click a
+    // detached menu on a loaded worker. Wait for the real header's owner.
+    await threadViewImported.promise;
+    await flushReactUpdates();
+    await waitFor(() => {
+      expect(container.querySelector(".thread-view")).not.toBeNull();
+      expect(container.querySelector(".thread-view--pending")).toBeNull();
+    });
     await clickButton("Hide sidebar");
 
     const shell = container.querySelector(".app-shell");

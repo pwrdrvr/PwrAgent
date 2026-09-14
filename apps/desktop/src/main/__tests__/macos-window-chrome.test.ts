@@ -278,11 +278,15 @@ describe("macOS window chrome", () => {
   });
 
   it("keeps the main window off a hardcoded position", () => {
-    // window.ts must reach the position through the shared helper; a
+    // window.ts must reach the position through the shared helpers; a
     // literal here is how the two windows drifted apart before. Match the
-    // assignment, not the word, so a comment pointing at the helper is
-    // still allowed to name it.
+    // assignment, not the word, so a comment pointing at a helper is
+    // still allowed to name it. The shell window reaches
+    // `macosTitleBarChrome` one hop further out than the auxiliary windows
+    // do, through `mainWindowChromeOptions`, which is where the per-platform
+    // branch lives now; `main-window-chrome.test.ts` pins that the darwin
+    // branch is the helper itself and not a second copy of the numbers.
     expect(windowSource).not.toMatch(/trafficLightPosition\s*:/);
-    expect(windowSource).toContain("macosTitleBarChrome()");
+    expect(windowSource).toContain("mainWindowChromeOptions(");
   });
 });

@@ -513,6 +513,30 @@ export const WINDOW_FOCUS_SYNC_CHANNEL = "window:focus-sync";
 export const WINDOW_FULLSCREEN_SYNC_CHANNEL = "window:fullscreen-sync";
 export const WINDOW_POINTER_SNAPSHOT_CHANNEL = "window:pointer-snapshot";
 /**
+ * Main → renderer push: fired on the window's own `maximize` / `unmaximize`
+ * events. Linux-only in practice — see `window-frame-sync.ts` for why the
+ * glyph and the hairline follow the window rather than the last button press.
+ */
+export const WINDOW_FRAME_SYNC_CHANNEL = "window:frame-sync";
+/**
+ * Renderer → main: run one caption-button action on the calling window.
+ * Linux paints its own min/max/close (`WindowControls.tsx`) because a
+ * frameless window there gets neither macOS stoplights nor a Windows
+ * controls overlay, so this is the only path from those buttons to the
+ * window.
+ */
+export const WINDOW_CONTROL_CHANNEL = "window:control";
+/** What a painted caption button asks the main process to do. */
+export type WindowControlAction = "minimize" | "toggle-maximize" | "close";
+/**
+ * What the maximize button has to draw, and whether the window still has an
+ * edge to paint. The window manager maximizes windows behind our back — a
+ * double-click on the drag strip, Super+Up, a tiling keybind — so this
+ * reports the window's own state rather than whatever a button last asked
+ * for.
+ */
+export type WindowFrameState = { maximized: boolean };
+/**
  * Main → renderer push: fired when the user invokes File → New Thread
  * or presses the native `CmdOrCtrl+N` accelerator. The renderer's
  * `App` shell listens on this channel and routes into the existing
@@ -629,6 +653,20 @@ export const APP_LOG_WINDOW_OPEN_CHANNEL = "app:open-log-window";
 export const APP_UPDATE_CHECK_CHANNEL = "app:check-for-updates";
 export const APP_UPDATE_STATUS_READ_CHANNEL = "app:read-update-status";
 export const APP_UPDATE_STATUS_EVENT_CHANNEL = "app:update-status-event";
+/**
+ * Main → renderer push: the outcome of a check the *operator* asked for.
+ *
+ * Deliberately separate from `APP_UPDATE_STATUS_EVENT_CHANNEL`, which every
+ * check moves — including the hourly background poll. This one is emitted
+ * from the app-menu check alone, so it is the only thing that distinguishes
+ * "someone is waiting for this answer" from "the hour hand looked again".
+ * Collapsing the two would either silence the menu check or make a background
+ * download raise UI nobody asked for. Settings' own Check for Update button
+ * does not emit it either: that surface answers inline, and a toast repeating
+ * the answer beside it would say the same thing twice.
+ */
+export const APP_UPDATE_CHECK_RESULT_EVENT_CHANNEL =
+  "app:update-check-result-event";
 export const HOT_CPU_PROFILE_CAPTURED_EVENT_CHANNEL =
   "hot-cpu-profile:captured";
 /** Main → renderer push: appearance (theme + density) was written to
@@ -642,6 +680,8 @@ export const SETTINGS_RUNTIME_CHANGED_EVENT_CHANNEL =
   "settings:runtime-changed";
 export const APP_UPDATE_INSTALL_CHANNEL = "app:install-update";
 export const APP_UPDATE_RELEASES_READ_CHANNEL = "app:read-update-releases";
+export const APP_UPDATE_CANCEL_DOWNLOAD_CHANNEL =
+  "app:cancel-update-download";
 export const PROFILES_LIST_CHANNEL = "profiles:list";
 export const PROFILES_OPEN_CHANNEL = "profiles:open";
 export const PROFILES_CREATE_CHANNEL = "profiles:create";

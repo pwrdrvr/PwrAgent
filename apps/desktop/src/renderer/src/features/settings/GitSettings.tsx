@@ -1,3 +1,5 @@
+import { FORGE_KINDS, type ForgeKind } from "@pwragent/shared";
+import type { ComponentProps } from "react";
 import { useState, type ReactNode } from "react";
 import {
   DEFAULT_BACKGROUND_PR_POLLING,
@@ -81,6 +83,20 @@ export function GitSettings(props: {
   onSaveGhPath: (path: string) => Promise<void>;
   onSaveGitPath: (path: string) => Promise<void>;
 }) {
+  const forgeSections = {
+    github: {
+      onSaveEnabled: props.onSaveGhEnabled,
+      onSaveGhPath: props.onSaveGhPath,
+      onStatusChange: props.onGhStatusChange,
+    },
+    gitlab: {
+      onSaveHost: props.onSaveGlabHost,
+      onSaveEnabled: props.onSaveGlabEnabled,
+      onSaveGhPath: props.onSaveGlabPath,
+      onStatusChange: props.onGlabStatusChange,
+    },
+  } satisfies Record<ForgeKind, Pick<ComponentProps<typeof GhToolSection>,
+    "onSaveHost" | "onSaveEnabled" | "onSaveGhPath" | "onStatusChange">>;
   const previews = useNavigationSettingsPreview(props.desktopApi);
   const backgroundPrPolling =
     props.snapshot.git?.backgroundPrPolling ??
@@ -249,24 +265,16 @@ export function GitSettings(props: {
         onRefresh={props.onRefresh}
         onSaveGitPath={props.onSaveGitPath}
       />
-      <GhToolSection
-        desktopApi={props.desktopApi}
-        saving={props.saving}
-        snapshot={props.snapshot}
-        onSaveEnabled={props.onSaveGhEnabled}
-        onSaveGhPath={props.onSaveGhPath}
-        onStatusChange={props.onGhStatusChange}
-      />
-      <GhToolSection
-        provider="gitlab"
-        desktopApi={props.desktopApi}
-        saving={props.saving}
-        snapshot={props.snapshot}
-        onSaveHost={props.onSaveGlabHost}
-        onSaveEnabled={props.onSaveGlabEnabled}
-        onSaveGhPath={props.onSaveGlabPath}
-        onStatusChange={props.onGlabStatusChange}
-      />
+      {FORGE_KINDS.map((provider) => (
+        <GhToolSection
+          key={provider}
+          provider={provider}
+          desktopApi={props.desktopApi}
+          saving={props.saving}
+          snapshot={props.snapshot}
+          {...forgeSections[provider]}
+        />
+      ))}
       <SettingsSection
         eyebrow="Git"
         title="Background pull request status"

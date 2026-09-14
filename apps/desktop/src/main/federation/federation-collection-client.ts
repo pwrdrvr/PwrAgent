@@ -46,12 +46,13 @@ export async function readFederationPinnedSnapshot(
           const pageBytes = Buffer.byteLength(JSON.stringify(page), "utf8");
           bytes += pageBytes;
           const pageRevision = JSON.stringify([page.ownerEpoch, page.generation, page.queryKey]);
-          if (page.protocol !== 2 || page.unchanged
+          if (page.protocol !== 2 || page.unchanged || page.rangeUnchanged
+            || page.coverage.state !== "complete"
             || pageBytes > NAVIGATION_QUERY_MAX_RESULT_BYTES || page.entries.length > NAVIGATION_QUERY_MAX_PAGE_ROWS
             || bytes > 16 * 1024 * 1024 || (revision !== undefined && revision !== pageRevision)
             || (!page.complete && (!page.nextCursor || cursors.has(page.nextCursor)))
             || (page.complete && page.nextCursor !== undefined)) {
-            throw new Error("Pinned navigation returned an oversized or inconsistent collection.");
+            throw new Error("Pinned navigation returned an oversized, incomplete or inconsistent collection.");
           }
           revision = pageRevision;
           result.threads.push(...page.entries.map(({ row }) => row));

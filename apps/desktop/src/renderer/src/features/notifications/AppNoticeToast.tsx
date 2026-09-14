@@ -128,6 +128,11 @@ export function AppNoticeToast(props: {
     <aside
       className="app-notice-toast"
       data-navigable={props.navigation ? "true" : undefined}
+      // The stack holds several notices at once — a durable backend warning
+      // sits here for the whole run on a machine with no agent installed — so
+      // a spec that wants one of them needs to say which. See "E2E Locator
+      // Hygiene Around Global Chrome" in apps/desktop/AGENTS.md.
+      data-notice-id={props.notice.id}
       data-tone={props.notice.tone ?? "neutral"}
       role="status"
       aria-live="polite"

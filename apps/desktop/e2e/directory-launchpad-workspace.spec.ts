@@ -5,6 +5,7 @@ import path from "node:path";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import Database from "better-sqlite3";
 import { launchElectronApp } from "./fixtures/electron-app";
+import { mastheadAction } from "./fixtures/window-chrome";
 
 async function selectComposerOption(params: {
   option: string | RegExp;
@@ -729,9 +730,7 @@ test("new-thread picker hydrates git status for a newly added directory", async 
   });
 
   try {
-    const newThreadButton = app.window
-      .locator(".sidebar__masthead-actions")
-      .getByRole("button", { name: "New thread" });
+    const newThreadButton = mastheadAction(app.window, "New thread");
     await expect(newThreadButton).toBeEnabled();
     await newThreadButton.click();
     await expect(app.window.getByRole("textbox", { name: "New thread" })).toBeVisible();
@@ -766,9 +765,7 @@ test("new-thread picker starts a newly added directory in local checkout by defa
   });
 
   try {
-    const newThreadButton = app.window
-      .locator(".sidebar__masthead-actions")
-      .getByRole("button", { name: "New thread" });
+    const newThreadButton = mastheadAction(app.window, "New thread");
     await expect(newThreadButton).toBeEnabled();
     await newThreadButton.click();
     await expect(app.window.getByRole("textbox", { name: "New thread" })).toBeVisible();

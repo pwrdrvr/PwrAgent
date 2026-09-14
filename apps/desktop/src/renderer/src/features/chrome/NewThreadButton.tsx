@@ -21,12 +21,13 @@ import type { FederationThreadTarget } from "./federation-thread-targets";
  *
  *   1. New chat in <directory>     → `onCreateThread` (context default)
  *   2. New chat without a directory → `onCreateThreadWithoutDirectory`
- *   3. New chat on → <instance>     → open that owner's launchpad
- *   4. Add a Project Directory…     → track a repo without starting a chat
+ *   3. Add a Project Directory…     → track a repo without starting a chat
+ *   4. New chat on → <instance>     → open that owner's launchpad
  *
- * The flyout renders when there's either a meaningful directory choice or an
- * explicit project-registration action. That keeps "Add a Project Directory…"
- * reachable even when the current context is already directory-less.
+ * The flyout renders when any one of those exists — a meaningful directory
+ * choice, a reachable instance, or the project-registration action. That last
+ * disjunct keeps "Add a Project Directory…" reachable even when the current
+ * context is already directory-less and no peer is enrolled.
  *
  * Shared by the sidebar masthead and the relocated thread-header / Windows
  * title-bar placements so every surface reads identically.
@@ -196,6 +197,45 @@ export function NewThreadButton(props: NewThreadButtonProps): ReactElement {
                 New chat without a directory
               </button>
             )}
+            {/* Order is load-bearing: every fixed action comes first, and
+                the federation group goes last because it is the only part of
+                this menu whose length is not known here — it grows one row
+                per enrolled machine. A fixed action placed after an
+                unbounded list sits at an offset nobody controls, and
+                `.new-thread-menu__card` scrolls once that offset exceeds its
+                height cap, so the action falls below the fold on exactly the
+                federations that make the card hardest to scroll. Keep any
+                new action above this group for the same reason. */}
+            {props.onAddProjectDirectory ? (
+              <>
+                <div className="new-thread-menu__separator" role="separator" />
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="new-thread-menu__item"
+                  // `aria-disabled`, not `disabled`, for the reason
+                  // `FederationTargetMenuSection` gives: a disabled button
+                  // leaves the tab order, and this menu has no arrow-key
+                  // navigation. The registration keeps running after the
+                  // native picker closes, so the window is interactive while
+                  // this row reads "Adding Project Directory…" — dropping it
+                  // from the tab order there hides the in-progress state from
+                  // exactly the users who cannot see it.
+                  aria-disabled={props.addingProjectDirectory || undefined}
+                  onClick={() => {
+                    if (props.addingProjectDirectory) {
+                      return;
+                    }
+                    dismissImmediately();
+                    void props.onAddProjectDirectory?.();
+                  }}
+                >
+                  {props.addingProjectDirectory
+                    ? "Adding Project Directory…"
+                    : "Add a Project Directory…"}
+                </button>
+              </>
+            ) : null}
             {hasRemoteTargets && props.remoteTargets ? (
               <>
                 <div className="new-thread-menu__separator" role="separator" />
@@ -206,25 +246,6 @@ export function NewThreadButton(props: NewThreadButtonProps): ReactElement {
                     void props.onCreateThreadOnTarget?.(instanceId);
                   }}
                 />
-              </>
-            ) : null}
-            {props.onAddProjectDirectory ? (
-              <>
-                <div className="new-thread-menu__separator" role="separator" />
-                <button
-                  type="button"
-                  role="menuitem"
-                  className="new-thread-menu__item"
-                  disabled={props.addingProjectDirectory}
-                  onClick={() => {
-                    dismissImmediately();
-                    void props.onAddProjectDirectory?.();
-                  }}
-                >
-                  {props.addingProjectDirectory
-                    ? "Adding Project Directory…"
-                    : "Add a Project Directory…"}
-                </button>
               </>
             ) : null}
           </div>

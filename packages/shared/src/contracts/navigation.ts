@@ -1,3 +1,4 @@
+import type { ForgeCli } from "../forge-product";
 import type { AppServerTurnInputItem } from "./normalized-app-server";
 import type {
   AcpBackendId,
@@ -2358,7 +2359,7 @@ export type DetachDirectoryFromThreadResponse =
 
 export type PullRequestProviderAvailability = {
   provider: string;
-  cli: "gh" | "glab";
+  cli: ForgeCli;
   available: boolean;
   error?: string;
 };

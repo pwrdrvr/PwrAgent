@@ -1,4 +1,4 @@
-import { setFederationTrafficCapture } from "../federation/federation-traffic-capture";
+import { setFederationTrafficCapture, snapshotFederationTrafficHistory } from "../federation/federation-traffic-capture";
 import { mkdtempSync, rmSync } from "node:fs";
 import net from "node:net";
 import os from "node:os";
@@ -247,6 +247,7 @@ describe("federation transport", () => {
   });
 
   it("carries attachment bytes in the binary blob frame instead of JSON", async () => {
+    const instanceLabel = vi.fn(() => "must not resolve for ordinary blob chunks");
     const transfers: Array<{ direction: "sent" | "received"; dataByteCount: number; byteCount: number }> = [];
     const clientKeyPair = generateFederationIdentityKeyPair();
     const invite = createFederationEnrollmentInvite({
@@ -261,6 +262,7 @@ describe("federation transport", () => {
         gatewayInstanceId: "gateway_one",
         gatewayPrivateKeyPem: gatewayKeyPair.privateKeyPem,
         gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem,
+        instanceLabel,
         host: "127.0.0.1",
         port: 0,
         store,
@@ -271,6 +273,7 @@ describe("federation transport", () => {
     const { url } = await server!.start();
     const client = await connectFederationClient({
       url,
+      instanceLabel,
       mode: "enroll",
       gatewayInstanceId: "gateway_one",
       gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem,
@@ -283,6 +286,7 @@ describe("federation transport", () => {
       role: "client",
       onEnvelopeTransfer: (info) => transfers.push(info),
     });
+    instanceLabel.mockClear();
     const bytes = Buffer.from([0, 1, 2, 0xff]);
 
     await client.sendEnvelopeWithBackpressure!({
@@ -314,10 +318,13 @@ describe("federation transport", () => {
         { direction: "sent", dataByteCount: expectedBytes, byteCount: expectedBytes },
         { direction: "received", dataByteCount: expectedBytes, byteCount: expectedBytes },
       ]);
+    expect(instanceLabel).not.toHaveBeenCalled();
     client.close();
   });
 
-  it.each([[false, false], [true, false], [false, true], [true, true]])("reports correlated frames at both ends (Noise: %s, capture: %s)", async (encrypted, capture) => {
+  it.each([[false, false, false], [true, false, false], [false, false, true], [true, false, true], [false, true, false], [true, true, false]])("reports correlated frames at both ends (Noise: %s, capture: %s, large: %s)", async (encrypted, capture, large) => {
+    const instanceLabel = vi.fn((id: string) => id === "gateway_one" ? "Gateway" : "Client");
+    const beforeHistory = snapshotFederationTrafficHistory().trim().split("\n").length;
     setFederationTrafficCapture(capture);
     const prefix = capture ? "federation captured frame" : "large federation frame";
     const gatewayNoise = generateNoiseStaticKeyPair();
@@ -348,7 +355,7 @@ describe("federation transport", () => {
       gatewayPrivateKeyPem: gatewayKeyPair.privateKeyPem,
       gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem,
       noiseStatic: encrypted ? gatewayNoise : undefined,
-      instanceLabel: (id) => id === "gateway_one" ? "Gateway" : "Client",
+      instanceLabel,
       host: "127.0.0.1",
       port: 0,
       store,
@@ -362,7 +369,7 @@ describe("federation transport", () => {
           targetInstanceId: connection.peerId,
           createdAt: 2_000,
           // This was invisible to the former 512 KiB threshold.
-          result: { privatePayload: "x".repeat(capture ? 250 : 250_000) },
+          result: { privatePayload: "x".repeat(large ? 250_000 : 250) },
         });
       },
       onEnvelopeTransfer: (info) => gatewayTransfers.push(info),
@@ -373,7 +380,7 @@ describe("federation transport", () => {
       void connectFederationClient({
         url,
         noiseStatic: encrypted ? clientNoise : undefined,
-        instanceLabel: (id) => id === "gateway_one" ? "Gateway" : "Client",
+        instanceLabel,
         gatewayNoisePublicKey: encrypted ? gatewayNoise.publicKeyRaw : undefined,
         mode: "enroll",
         gatewayInstanceId: "gateway_one",
@@ -388,6 +395,7 @@ describe("federation transport", () => {
         onEnvelope: resolve,
         onEnvelopeTransfer: (info) => clientTransfers.push(info),
       }).then((client) => {
+        instanceLabel.mockClear();
         client.sendEnvelope({
           id: "request-transfer",
           kind: "request",
@@ -405,13 +413,24 @@ describe("federation transport", () => {
       requestId: "request-transfer",
     });
 
+    const history = snapshotFederationTrafficHistory().trim().split("\n");
+    const recent = history.slice(beforeHistory).map((line) => JSON.parse(line));
+    expect(recent.filter((record) => record.requestId === "request-transfer")).toHaveLength(4);
+    expect(recent.filter((record) => record.envelopeKind === "request").map((record) => record.direction).sort()).toEqual(["received", "sent"]);
+    expect(history.join("\n")).not.toContain("privatePayload");
+    expect(JSON.stringify(recent)).not.toContain("InstanceLabel");
+    expect(JSON.stringify(recent)).not.toContain("peerLabel");
+    expect(recent.filter((record) => record.requestId === "request-transfer").every((record) =>
+      record.sourceInstanceId && record.targetInstanceId && record.peerId)).toBe(true);
+    if (!capture && !large) expect(instanceLabel).not.toHaveBeenCalled();
+
     // Envelope frames only — the auth exchange fires no taps, so one
     // round-trip is exactly two events per side.
     expect(gatewayTransfers).toHaveLength(2);
     expect(clientTransfers).toHaveLength(2);
     const [gatewayReceived, gatewaySent] = gatewayTransfers;
     const [clientSent, clientReceived] = clientTransfers;
-    for (const message of [`${prefix} queued for send`, `${prefix} received`]) {
+    for (const message of capture || large ? [`${prefix} queued for send`, `${prefix} received`] : []) {
       expect(transportLog.info).toHaveBeenCalledWith(message, expect.objectContaining({
         envelopeKind: "response",
         requestId: "request-transfer",
@@ -431,9 +450,11 @@ describe("federation transport", () => {
       expect(clientReceived!.byteCount).toBeLessThan(200_000);
       expect(JSON.stringify(transportLog.info.mock.calls)).not.toContain("privatePayload");
     }
-    expect(largeLogs).toHaveLength(2);
-    expect(largeLogs[0][1]).toMatchObject({ peerId: "client_one", peerLabel: "Client" });
-    expect(largeLogs[1][1]).toMatchObject({ peerId: "gateway_one", peerLabel: "Gateway" });
+    expect(largeLogs).toHaveLength(capture || large ? 2 : 0);
+    if (capture || large) {
+      expect(largeLogs[0][1]).toMatchObject({ peerId: "client_one", peerLabel: "Client" });
+      expect(largeLogs[1][1]).toMatchObject({ peerId: "gateway_one", peerLabel: "Gateway" });
+    }
     expect(JSON.stringify(largeLogs)).not.toContain("privatePayload");
     expect(JSON.stringify(largeLogs)).not.toContain("maxFrameBytes");
     expect(gatewayReceived).toMatchObject({

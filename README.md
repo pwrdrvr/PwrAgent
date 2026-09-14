@@ -8,7 +8,7 @@ An open-source desktop coding agent. Pair it once with Telegram, Discord, Slack,
 
 Choose the `arm64.dmg` asset when available. Not sure which Mac? Choose Universal.
 
-[macOS Universal (Apple Silicon + Intel)](https://github.com/pwrdrvr/PwrAgent/releases/latest/download/PwrAgent.dmg) · [Windows (x64)](https://github.com/pwrdrvr/PwrAgent/releases/latest/download/PwrAgent-windows-x64-setup.exe) · [Debian/Ubuntu installation](https://docs.pwragent.ai/linux/) · [Read the docs](https://docs.pwragent.ai)
+[macOS Universal (Apple Silicon + Intel)](https://github.com/pwrdrvr/PwrAgent/releases/latest/download/PwrAgent.dmg) · [Windows (x64)](https://github.com/pwrdrvr/PwrAgent/releases/latest/download/PwrAgent.Setup.exe) · [Debian/Ubuntu installation](https://docs.pwragent.ai/linux/) · [Read the docs](https://docs.pwragent.ai)
 
 ![PwrAgent desktop in use — Directories lens grouping threads across two repos, a thread mid-conversation, four messenger status icons in the title bar, per-thread model / access / fast-mode / worktree controls above the composer.](https://docs.pwragent.ai/assets/screenshots/desktop-hero.png)
 

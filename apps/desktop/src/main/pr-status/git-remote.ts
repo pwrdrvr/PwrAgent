@@ -1,3 +1,4 @@
+import { FORGE_PRODUCTS, forgeKindForRemoteHost, type ForgeKind } from "@pwragent/shared";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
@@ -163,16 +164,23 @@ export async function resolveGitHubReposForDirectory(
   cwd: string,
   options: ResolveGitHubRepoOptions = {},
 ): Promise<GitHubRepoRef[]> {
-  const remotes = await readParsedGitRemotes(cwd, options);
+  return resolveForgeReposForDirectory(cwd, "github", options);
+}
+
+/** One remote discovery path, with product host/path policy from the catalog. */
+export async function resolveForgeReposForDirectory(
+  cwd: string,
+  kind?: ForgeKind,
+  options: ResolveGitHubRepoOptions = {},
+): Promise<GitHubRepoRef[]> {
   const repos = new Map<string, GitHubRepoRef>();
-  for (const remote of remotes) {
-    if (remote.repo?.host !== "github.com" || remote.repo.owner.includes("/")) {
-      continue;
-    }
-    const key = `${remote.repo.owner.toLowerCase()}/${remote.repo.repo.toLowerCase()}`;
-    if (!repos.has(key)) {
-      repos.set(key, remote.repo);
-    }
+  for (const { repo } of await readParsedGitRemotes(cwd, options)) {
+    if (!repo) continue;
+    const matched = forgeKindForRemoteHost(repo.host);
+    if (!matched || (kind !== undefined && matched !== kind)) continue;
+    if (!FORGE_PRODUCTS[matched].nestedNamespaces && repo.owner.includes("/")) continue;
+    const key = `${repo.host}/${repo.owner}/${repo.repo}`.toLowerCase();
+    if (!repos.has(key)) repos.set(key, repo);
   }
   return [...repos.values()];
 }
@@ -330,23 +338,9 @@ async function defaultResolveSshHostname(
   }
 }
 
-/** Only recognized GitLab hosts are eligible; an arbitrary remote is not evidence. */
-export function isGitLabHost(host: string): boolean {
-  return host === "gitlab.com" || host.startsWith("gitlab.");
-}
-
 export async function resolveGitLabReposForDirectory(
   cwd: string,
   options: ResolveGitHubRepoOptions = {},
 ): Promise<GitHubRepoRef[]> {
-  const repos = new Map<string, GitHubRepoRef>();
-  for (const { repo } of await readParsedGitRemotes(cwd, options)) {
-    if (repo && isGitLabHost(repo.host)) {
-      repos.set(
-        `${repo.host.toLowerCase()}/${repo.owner.toLowerCase()}/${repo.repo.toLowerCase()}`,
-        repo,
-      );
-    }
-  }
-  return [...repos.values()];
+  return resolveForgeReposForDirectory(cwd, "gitlab", options);
 }

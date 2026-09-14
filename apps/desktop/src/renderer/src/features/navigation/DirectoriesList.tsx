@@ -860,6 +860,56 @@ export function DirectoriesList(props: DirectoriesListProps) {
   const revealSelectedThreadRequest = props.revealSelectedThreadRequest;
   const selectedItemKeyForReveal = props.selectedItemKey;
   const setDirectoryThreadsCollapsed = props.onSetDirectoryThreadsCollapsed;
+  // Rows this lens is still waiting on. A reveal opens the selected row's
+  // directory and re-anchors its root range, which puts reads in flight for
+  // pages that were never demanded while it was closed. Those pages land in a
+  // LATER commit and insert rows ABOVE the selected row. ThreadRow's reveal is
+  // one-shot — it scrolls when the row first renders active, and once more on
+  // the next animation frame — so a request handed to the rows while one of
+  // these reads is outstanding aims both of those scrolls at a position the
+  // row is about to lose, and nothing scrolls again.
+  //
+  // Every visible directory counts, not only the selected row's: the sections
+  // share one `.directory-list` scroll container, so a page landing in the one
+  // above moves the row exactly the same way.
+  //
+  // `presentationReady` answers the first half — every page this lens demands
+  // has arrived — but it stays true through a re-read of a page already held,
+  // which is exactly what the reveal's own `rebaseline` is. So the in-flight
+  // reads are checked too.
+  const pagedNavigation = props.pagedNavigation;
+  const revealPagesInFlight = useMemo(
+    () => {
+      if (!pagedNavigation) {
+        return false;
+      }
+      return !pagedNavigation.presentationReady
+        || visibleDirectories.some((directory) =>
+          Boolean(pagedNavigation.resources.get(`directory:${directory.key}`)?.loading)
+          || Boolean(pagedNavigation.resources.get(`directory-pins:${directory.key}`)?.loading),
+        );
+    },
+    [pagedNavigation, visibleDirectories],
+  );
+  // Released monotonically: once the rows have been handed a request it is
+  // never taken back. ThreadRow re-runs its scroll on EVERY change of the
+  // request it is given, so a gate that reopened and closed with each later
+  // read would drag the sidebar back to the selected row on every navigation
+  // refresh — and a close landing inside ThreadRow's pending animation frame
+  // would cancel it through the effect cleanup, losing the completion the ⌘K
+  // peek waits on to restore a deliberately hidden sidebar.
+  const [releasedRevealRequest, setReleasedRevealRequest] = useState(0);
+  useEffect(() => {
+    const request = revealSelectedThreadRequest ?? 0;
+    if (request <= releasedRevealRequest || revealPagesInFlight) {
+      return;
+    }
+    setReleasedRevealRequest(request);
+  }, [releasedRevealRequest, revealPagesInFlight, revealSelectedThreadRequest]);
+  const rowRevealSelectedThreadRequest =
+    (revealSelectedThreadRequest ?? 0) <= releasedRevealRequest
+      ? revealSelectedThreadRequest
+      : 0;
 
   const reorderDirectoryPins = (nextKeys: string[], move?: NavigationRelativePinMove): void => {
     if (move) void props.onReorderDirectoryPins?.(nextKeys, move);
@@ -994,6 +1044,18 @@ export function DirectoriesList(props: DirectoriesListProps) {
       // selected key as consumed after a matching directory exists;
       // showThread() can set selection before the refreshed
       // directory snapshot includes the thread.
+      //
+      // An already-open directory needs no write at all. Returning a fresh
+      // object for a selection change alone re-renders the whole navigation
+      // tree and recomputes bounded-window demand to reach the same value —
+      // and this effect re-runs on every render whenever `directories`
+      // arrives with a new identity, which is exactly what the hover-stable
+      // sidebar snapshot produces while the pointer rests on a row. That
+      // pair is a self-feeding update loop, and it is the write React named
+      // when the renderer died with "Maximum update depth exceeded".
+      if (current[matchingDirectory.key] === true) {
+        return current;
+      }
       if (
         current[matchingDirectory.key] !== undefined &&
         !selectedItemKeyChanged
@@ -1037,7 +1099,11 @@ export function DirectoriesList(props: DirectoriesListProps) {
     const rootEntry = selectedPage?.entries.find((entry) => entry.placement.kind === "root");
     if (!rootEntry) return;
     handledRevealRequestRef.current = request;
-    setExpandedByKey((current) => ({ ...current, [matchingDirectory.key]: true }));
+    // An already-open directory needs no write here either; see the selection
+    // effect above for what a no-op disclosure write costs.
+    setExpandedByKey((current) => current[matchingDirectory.key] === true
+      ? current
+      : { ...current, [matchingDirectory.key]: true });
     if (rootEntry.row.pinnedRank !== undefined) return;
 
     // The selected child is rendered with its top-level ancestor. Reveal that
@@ -1193,7 +1259,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                 linkedDirectoryMode={getDirectoryRowLinkedDirectoryMode(child)}
                 nested
                 nestedDepth={trays.depth(childKey)}
-                revealSelectedThreadRequest={props.revealSelectedThreadRequest}
+                revealSelectedThreadRequest={rowRevealSelectedThreadRequest}
                 selectedThreadKey={props.selectedItemKey}
                 selectedThreadKeys={props.selectedThreadKeys}
                 thinkingThreadKeys={props.thinkingThreadKeys}
@@ -1339,7 +1405,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
             pointerDraggable={Boolean(props.onReorderThreadPins)}
             includeLinkedDirectories
             linkedDirectoryMode={getDirectoryRowLinkedDirectoryMode(thread)}
-            revealSelectedThreadRequest={props.revealSelectedThreadRequest}
+            revealSelectedThreadRequest={rowRevealSelectedThreadRequest}
             selectedThreadKey={props.selectedItemKey}
             selectedThreadKeys={props.selectedThreadKeys}
             subthreadCount={subthreadCount}
@@ -1777,7 +1843,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                           includeLinkedDirectories
                           linkedDirectoryMode={getDirectoryRowLinkedDirectoryMode(thread)}
                           revealSelectedThreadRequest={
-                            props.revealSelectedThreadRequest
+                            rowRevealSelectedThreadRequest
                           }
 	                          selectedThreadKey={props.selectedItemKey}
 	                          selectedThreadKeys={props.selectedThreadKeys}

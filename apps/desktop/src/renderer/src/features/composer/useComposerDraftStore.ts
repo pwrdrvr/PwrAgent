@@ -32,6 +32,8 @@ export type ComposerQueuedTurnSnapshot = {
   id: string;
   /** Apply this follow-up to the first turn once launchpad setup finishes. */
   steerWhenReady?: boolean;
+  /** Keep the handoff visible until the provider publishes its user message. */
+  steerDelivery?: "sending" | "accepted";
   /** Wait for positive admission of the scheduled first action, not its due time. */
   waitingForScheduledActionId?: string;
   /** Submission is in flight to the main-process FIFO. */

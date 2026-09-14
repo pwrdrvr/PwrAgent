@@ -35,6 +35,8 @@ import {
   checkForAppUpdatesNow,
   disposeAppUpdateIpcHandlers,
   initAutoUpdater,
+  PWRAGENT_DEV_FAKE_UPDATE_ENV,
+  PWRAGENT_DEV_FAKE_UPDATE_STEP_MS_ENV,
   registerAppUpdateIpcHandlers,
 } from "./auto-updater";
 import { showAppLogWindow } from "./app-log-window";
@@ -178,6 +180,8 @@ import { requestReplayOnboarding } from "./window-replay-onboarding";
 import { requestCopyLocalDiagnosticsInfo } from "./window-copy-local-diagnostics-info";
 import { buildApplicationMenuTemplate } from "./menu";
 import { wireAppMenuBridge } from "./app-menu-bridge";
+import { wireWindowControlsBridge } from "./window-controls-bridge";
+import { installWindowFrameSync } from "./window-frame-sync";
 import {
   appQuitManager,
   requestQuit,
@@ -1153,6 +1157,19 @@ function rejectDevOnlyEnvVarsInProduction(): void {
     SECRET_STORAGE_DISABLED_ENV,
     SQLITE_WRITE_METRICS_ENV,
     SQLITE_WRITE_METRICS_FILE_ENV,
+    PWRAGENT_DEV_FAKE_UPDATE_ENV,
+    PWRAGENT_DEV_FAKE_UPDATE_STEP_MS_ENV,
+    // The React DevTools / profiling vars below are read by
+    // `electron.vite.config.ts` at build time, not by this process, so the
+    // `delete` accomplishes nothing for them. They are listed anyway for the
+    // error line: an operator who exports one and then launches a packaged
+    // build is owed a loud "that did nothing" rather than a silent Profiler
+    // tab that never connects. Names are literals because the canonical
+    // declarations live in the Vite config, which main must not import.
+    "PWRAGENT_DEV_REACT_DEVTOOLS",
+    "PWRAGENT_DEV_REACT_DEVTOOLS_HOST",
+    "PWRAGENT_DEV_REACT_DEVTOOLS_PORT",
+    "PWRAGENT_DEV_REACT_PROFILING",
   ];
   for (const name of devOnlyVars) {
     if (process.env[name] !== undefined) {
@@ -1370,10 +1387,15 @@ export function bootstrapApp(): void {
         targetStore: getDesktopOverlayStore(),
       }),
     );
-    // Windows: serve the painted title-bar menu bar from the live application
-    // menu (idempotent; the renderer mounts the bar only on win32).
+    // Windows and Linux: serve the painted title-bar menu bar from the live
+    // application menu (idempotent; the renderer mounts the bar only where the
+    // native title bar — and with it the native menu bar — is hidden).
     wireAppMenuBridge();
     installWindowMenuRefreshHandlers();
+    // Linux: back the caption buttons the renderer paints, and tell every
+    // window's renderer when the window manager maximizes it.
+    wireWindowControlsBridge();
+    installWindowFrameSync(app);
     registerAppServerIpcHandlers();
     void startAppServerOwnerNavigation().catch((error) => {
       mainLog.warn("failed to initialize owner navigation metadata", { error: String(error) });

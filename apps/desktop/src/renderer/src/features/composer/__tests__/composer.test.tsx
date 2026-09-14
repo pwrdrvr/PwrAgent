@@ -694,9 +694,60 @@ describe("Composer", () => {
     expect(screen.getByLabelText("New thread")).toHaveValue("Still composing");
     expect(screen.getByLabelText("Queued message")).toHaveTextContent("Correction");
     expect(within(screen.getByLabelText("Queued message")).getByRole("button", {
+      name: "Queue instead",
+    })).toBeEnabled();
+    fireEvent.click(within(screen.getByLabelText("Queued message")).getByRole("button", {
+      name: "Queue instead",
+    }));
+    expect(within(screen.getByLabelText("Queued message")).getByRole("button", {
       name: "Steer when ready",
-    })).toHaveAttribute("aria-pressed", "true");
+    })).toBeEnabled();
+    expect(screen.getByLabelText("Queued message")).toHaveTextContent("Queued next");
     expect(onMaterializeLaunchpad).not.toHaveBeenCalled();
+  });
+
+  it("shows handoff progress until the provider publishes the steered message", async () => {
+    const { result } = renderHook(useComposerDraftStore);
+    const store = result.current;
+    const backend = backendSummary("codex");
+    backend.capabilities.steerTurn = true;
+    const thread: NavigationThreadSummary = {
+      id: "materialized", source: "codex", title: "First message", titleSource: "explicit",
+      linkedDirectories: [], inbox: { inInbox: false }, optimisticActiveTurn: { id: "first-turn" },
+    };
+    const response = createDeferred<Awaited<ReturnType<NonNullable<DesktopApi["steerTurn"]>>>>();
+    const listeners = new Set<Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]>();
+    const desktopApi: DesktopApi = {
+      steerTurn: vi.fn(() => response.promise),
+      onAgentEvent: (callback) => { listeners.add(callback); return () => { listeners.delete(callback); }; },
+    };
+    store.setQueuedTurns("launchpad:project", [{
+      id: "correction", text: "Please add tests", input: [{ type: "text", text: "Please add tests" }],
+      imageAttachments: [], fileAttachments: [], steerWhenReady: true,
+    }]);
+    act(() => handoffLaunchpadComposer(store, "project", thread, desktopApi));
+    const composer = <Composer backends={[backend]} thread={thread} activeTurnId="first-turn"
+      draftStore={store} desktopApi={desktopApi} skills={[]} />;
+    const view = render(composer);
+    const card = screen.getByLabelText("Queued message");
+    expect(within(card).getByRole("status")).toHaveTextContent("Steering…");
+    expect(within(card).getByRole("button", { name: "Steering…" })).toBeDisabled();
+    expect(within(card).getByRole("button", { name: "Edit" })).toBeDisabled();
+    await act(async () => response.resolve({ backend: "codex", threadId: thread.id, turnId: "first-turn", disposition: "steered" }));
+    expect(within(card).getByRole("status")).toHaveTextContent("Waiting for transcript");
+    view.unmount();
+    render(composer);
+    expect(screen.getByLabelText("Queued message")).toHaveTextContent("Please add tests");
+    expect(screen.getByLabelText("Queued message")).toHaveTextContent("Waiting for transcript");
+    await act(async () => {
+      for (const listener of listeners) listener({ backend: "codex", notification: {
+        method: "item/completed", params: { threadId: thread.id, turnId: "first-turn",
+          item: { id: "correction-item", type: "userMessage", content: [{ type: "text", text: "Please add tests" }] },
+        },
+      } });
+    });
+    expect(screen.queryByLabelText("Queued message")).not.toBeInTheDocument();
+    expect(desktopApi.steerTurn).toHaveBeenCalledTimes(1);
   });
 
   it("persists the Auto-fix PR toggle and shows its global polling gate", async () => {

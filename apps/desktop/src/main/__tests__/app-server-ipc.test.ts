@@ -897,6 +897,7 @@ const supersedeThreadPrStatusWatches = vi.fn(async () => 0);
 const listActiveThreadPrStatusWatches = vi.fn(async () => []);
 const cancelThreadPrStatusWatchesForPr = vi.fn(async () => 0);
 const isGhAvailable = vi.fn(async () => true);
+const isProviderEnabled = vi.fn(() => true);
 const invalidateGhCaches = vi.fn();
 const getAuthStatus = vi.fn(async () => ({
   installed: true,
@@ -1159,9 +1160,9 @@ vi.mock("../pr-status/forge-pr-fetcher", async () => ({
   ForgePrFetcher: vi.fn(function GithubPrFetcher() {
     return {
       isGhAvailable,
+      isProviderEnabled,
       getProviderAvailability: async () => [{ provider: "github.com", cli: "gh", available: await isGhAvailable() }],
-      invalidateGhCaches,
-      getAuthStatus,
+      github: { invalidateGhCaches, getAuthStatus },
       fetchPullRequestByUrl,
     };
   }),
@@ -1194,6 +1195,30 @@ describe("app server ipc", () => {
     await (await import("../ipc/app-server")).startAppServerOwnerNavigation();
   };
 
+  it("does not prime GitHub discovery while that forge is disabled", async () => {
+    const { appServerService } = await import("../ipc/app-server");
+    const service = appServerService as unknown as {
+      primeDiscoveryBranchLookups: (contexts: { branch: string; directoryPaths: string[] }[]) => Promise<void>;
+      getPrGraphqlClient: () => unknown;
+      getPrFetcher: () => unknown;
+    };
+    // Construct the inert adapters before guarding transport access.
+    service.getPrFetcher();
+    const transport = vi.spyOn(service, "getPrGraphqlClient").mockImplementation(() => {
+      throw new Error("Disabled discovery must not access GraphQL");
+    });
+    isProviderEnabled.mockReturnValue(false);
+    try {
+      await expect(service.primeDiscoveryBranchLookups([
+        { branch: "feature", directoryPaths: ["/fixture/repo"] },
+      ])).resolves.toBeUndefined();
+      expect(isProviderEnabled).toHaveBeenCalledWith("github");
+      expect(transport).not.toHaveBeenCalled();
+    } finally {
+      transport.mockRestore();
+    }
+  });
+
   beforeAll(async () => {
     // Import after the hoisted mocks exist, but before an individual test can
     // pay the cold module-graph evaluation cost.
@@ -1203,6 +1228,7 @@ describe("app server ipc", () => {
   });
 
   beforeEach(() => {
+    isProviderEnabled.mockReturnValue(true);
     backendRegistryLifecycle.existing = true;
     backendRegistryLifecycle.get.mockClear();
     prAutomationSettings.state.backgroundPrPollingEnabled = true;
@@ -2379,6 +2405,28 @@ describe("app server ipc", () => {
       expect.objectContaining({ ref, summary: saved }),
     ]);
     expect(updateRemoteThreadPinSnapshots).toHaveBeenLastCalledWith([{ ref, summary: idle, instanceLabel: "Peer" }]);
+  });
+
+  it("projects a mounted remote child beneath its local parent through viewer IPC", async () => {
+    const { buildFederatedThreadRef } = await import("@pwragent/shared");
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_QUERY_PAGE_CHANNEL } = await import("../../shared/ipc");
+    const parent: NavigationThreadSummary = { id: "local-parent", source: "codex", title: "Parent", titleSource: "explicit",
+      linkedDirectories: [], inbox: { inInbox: false } };
+    const child: NavigationThreadSummary = { ...parent, id: "remote-child", parentThreadId: parent.id,
+      parentThreadBackend: "codex", parentThreadInstanceId: "pwr_local",
+      federation: { ref: buildFederatedThreadRef({ backend: "codex", threadId: "remote-child", instanceId: "peer" }), instanceLabel: "Peer" } };
+    listThreads.mockResolvedValueOnce([]);
+    readNavigationQueryIndex.mockReturnValueOnce({ threads: [parent], directories: [] });
+    readRemoteThreadPinNavigationRows.mockResolvedValueOnce([child]);
+    federationMock.remoteThreadSummaries.resolvePinnedThreads.mockResolvedValueOnce({ threads: [child], refreshed: [], archived: [] });
+    registerAppServerIpcHandlers();
+    const page = await handlers.get(NAVIGATION_QUERY_PAGE_CHANNEL)!({ sender: { id: 90202, once: vi.fn() } }, {
+      protocol: 2, consumer: "main-sidebar", inventory: "viewer",
+      query: { kind: "children", parent: { backend: "codex", threadId: parent.id } },
+    }) as import("@pwragent/shared").NavigationQueryPage;
+    expect(page.entries.map(({ row }) => row.id)).toEqual([child.id]);
+    expect(page.entries[0]?.placement).toEqual({ kind: "child", parent: { backend: "codex", threadId: parent.id } });
   });
 
   it.each(["FEDERATION_PEER_UNAVAILABLE", "navigation_busy"])("returns expected %s state without rejecting the Electron handler, but still rejects unexpected failures", async (code) => {

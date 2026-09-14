@@ -424,7 +424,8 @@ for (const expected of [
   "secrets.AZURE_CLIENT_SECRET",
   "--win --sign-stage-only --no-publish --require-signing",
   "Prepare stable-name Windows installer alias",
-  "PwrAgent-windows-x64-setup.exe",
+  "node apps/desktop/scripts/windows-release-artifacts.mjs",
+  "PwrAgent.Setup.exe",
 ]) {
   assertWorkflowJobContainsText(
     releaseWorkflow,
@@ -619,6 +620,25 @@ for (const expected of [
 if (!asarVerifier.includes("PWRAGENT_ASAR_MODULE_ROOT")) {
   fail("apps/desktop/scripts/verify-asar-contents.mjs must accept the staged ASAR module root");
 }
+// Both signing jobs run without a checkout, from an allowlisted archive. A
+// module missing from either list fails at require time on a release runner,
+// and no CI job exercises the signing path (ci.yml is asserted above not to
+// define one), so the allowlists are pinned here instead.
+for (const expected of [
+  "apps/desktop/scripts/windows-release-artifacts.mjs",
+]) {
+  if (!windowsArchiveScript.includes(expected)) {
+    fail(
+      `scripts/release/archive-windows-signing-input.ps1 must archive ${JSON.stringify(expected)}`,
+    );
+  }
+  assertWorkflowJobContainsText(
+    releaseWorkflow,
+    ".github/workflows/release.yml",
+    "prepare",
+    expected,
+  );
+}
 for (const expected of [
   "Install-Module",
   "-Name TrustedSigning",
@@ -643,7 +663,7 @@ for (const stepName of [
 for (const expected of [
   "PwrAgent-linux-x64.deb",
   "PwrAgent-linux-arm64.deb",
-  "PwrAgent-windows-x64-setup.exe",
+  "PwrAgent.Setup.exe",
   "SHA256SUMS",
   "born as a GitHub `Pre-release`",
   "--latest --prerelease=false",
