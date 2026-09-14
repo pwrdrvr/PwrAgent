@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppMetadata } from "../app-metadata";
 import {
   buildLocalThreadDiagnosticsInfo,
@@ -23,6 +23,31 @@ const metadata: AppMetadata = {
 };
 
 describe("local diagnostics info", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-14T00:30:45.123-04:00"));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it.each([
+    ["thread", () => buildLocalThreadDiagnosticsInfo({}, metadata)],
+    ["Star Map", () => buildStarMapDiagnosticsInfo({}, metadata)],
+    ["Troubleshooting", () => buildTroubleshootingDiagnosticsInfo(metadata)],
+  ])("refreshes the UTC collection timestamp for each %s copy", (_surface, build) => {
+    expect(build().split("\n")[0]).toBe(
+      "Collected at (UTC): 2026-09-14T04:30:45.123Z",
+    );
+
+    vi.setSystemTime(new Date("2026-09-14T04:35:00.000Z"));
+
+    expect(build().split("\n")[0]).toBe(
+      "Collected at (UTC): 2026-09-14T04:35:00.000Z",
+    );
+  });
+
   it("captures the Star Map intake target when no thread exists yet", () => {
     expect(
       buildStarMapDiagnosticsInfo(
@@ -39,6 +64,7 @@ describe("local diagnostics info", () => {
         metadata,
       ),
     ).toBe([
+      "Collected at (UTC): 2026-09-14T04:30:45.123Z",
       "Surface: Federation Star Map",
       "Thread creation state: Intake open; no thread created yet",
       "Target instance ID: peer-harold-mbp-2018",
@@ -64,6 +90,7 @@ describe("local diagnostics info", () => {
         metadata,
       ),
     ).toBe([
+      "Collected at (UTC): 2026-09-14T04:30:45.123Z",
       "Thread ID: 019ffc54-058f-7691-9325-c8805903b37b",
       "Project directory/worktree path: /Users/operator/.codex/worktrees/abc/PwrAgent",
       "Provider/backend: codex",
@@ -294,6 +321,7 @@ describe("local diagnostics info", () => {
 
   it("formats the Troubleshooting payload with profile, PIDs, and log path", () => {
     expect(buildTroubleshootingDiagnosticsInfo(metadata)).toBe([
+      "Collected at (UTC): 2026-09-14T04:30:45.123Z",
       "PwrAgent profile: personal",
       "Main process PID: 4100",
       "Renderer process PID: 4101",

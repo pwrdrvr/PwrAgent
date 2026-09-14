@@ -64,6 +64,19 @@ function ownerApi(value: object): DesktopApi {
   };
 }
 
+// `App` code-splits the thread detail tree behind `import()`. Vite transforms
+// that whole subtree the first time a test opens a thread, and awaited inside a
+// test body the cost lands in its 5s `testTimeout` — so the first test to reach
+// a transcript was sharing a budget with the compiler. Pay it during collection
+// instead; `App` then resolves the same module from cache.
+//
+// At module scope rather than in `beforeAll` on purpose. The renderer project
+// sets no `hookTimeout` (only `desktop-main` does), so a hook here would carry
+// vitest's 10s default, and a transform that blew it would fail all 48 tests in
+// this file instead of the one that was slow. Collection is not bounded that
+// way. `star-map-edge-arrow-render-cost.test.tsx` warms its import the same way.
+await import("../features/thread-detail/ThreadView");
+
 beforeAll(() => {
   const emptyRect = {
     bottom: 0,
@@ -3849,7 +3862,7 @@ describe("App", () => {
     });
 
     await waitFor(() => {
-      expect(copyText).toHaveBeenCalledWith([
+      expect(copyText).toHaveBeenCalledWith(expect.stringContaining([
         "Thread ID: thread-1",
         "Project directory/worktree path: /Users/operator/.codex/worktrees/abc/PwrAgent",
         "Provider/backend: codex",
@@ -3859,7 +3872,7 @@ describe("App", () => {
         "Renderer process PID: 4101",
         "PwrAgent log path: /Users/operator/Library/Logs/PwrAgent/profile-work.main.log",
         "Codex profile path: /Users/operator/.codex/profiles/work",
-      ].join("\n"));
+      ].join("\n")));
     });
   });
 
