@@ -343,6 +343,9 @@ for (const expected of [
   "scripts/release/install-trusted-signing.ps1",
   "secrets.AZURE_CLIENT_SECRET",
   "--win --sign-stage-only --no-publish --require-signing",
+  "Prepare stable-name Windows installer alias",
+  "node apps/desktop/scripts/windows-release-artifacts.mjs",
+  "PwrAgent.Setup.exe",
 ]) {
   assertWorkflowJobContainsText(
     releaseWorkflow,
@@ -351,6 +354,23 @@ for (const expected of [
     expected,
   );
 }
+// The alias is a copy of an already-signed installer, so it must be made after
+// packaging and before the upload that feeds publish-release-assets. Copying
+// earlier would publish a stable-name .exe without an Authenticode signature.
+assertWorkflowJobOrdersText(
+  releaseWorkflow,
+  ".github/workflows/release.yml",
+  "windows-sign",
+  "--win --sign-stage-only --no-publish --require-signing",
+  "Prepare stable-name Windows installer alias",
+);
+assertWorkflowJobOrdersText(
+  releaseWorkflow,
+  ".github/workflows/release.yml",
+  "windows-sign",
+  "Prepare stable-name Windows installer alias",
+  "Upload Windows installer artifact",
+);
 for (const expected of [
   "--sign-stage-only --no-publish",
   "Upload macOS release assets",
@@ -467,6 +487,10 @@ for (const expected of [
   "apps/desktop/release-stage/node_modules/.pnpm/node_modules",
   "apps/desktop/release-stage",
   "apps/desktop/scripts/release.mjs",
+  // release.mjs imports this module for the checksum writer and the signing job
+  // runs it for the alias, so a missing entry fails at import time on a release
+  // runner -- and no CI job exercises the signing path to catch it first.
+  "apps/desktop/scripts/windows-release-artifacts.mjs",
   "scripts/release/install-trusted-signing.ps1",
   "tar.exe -czf",
 ]) {
@@ -474,6 +498,14 @@ for (const expected of [
     fail(`${windowsArchiveScriptPath} must contain ${JSON.stringify(expected)} for Windows signing input isolation`);
   }
 }
+// The macOS signing job runs from its own allowlisted tar, and release.mjs
+// imports the alias module there too.
+assertWorkflowJobContainsText(
+  releaseWorkflow,
+  ".github/workflows/release.yml",
+  "prepare",
+  "apps/desktop/scripts/windows-release-artifacts.mjs",
+);
 if (!asarVerifier.includes("PWRAGENT_ASAR_MODULE_ROOT")) {
   fail("apps/desktop/scripts/verify-asar-contents.mjs must accept the staged ASAR module root");
 }
@@ -517,6 +549,7 @@ for (const stepName of [
 for (const expected of [
   "PwrAgent-linux-x64.deb",
   "PwrAgent-linux-arm64.deb",
+  "PwrAgent.Setup.exe",
   "SHA256SUMS",
   "born as a GitHub `Pre-release`",
   "--latest --prerelease=false",

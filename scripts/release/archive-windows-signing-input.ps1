@@ -16,11 +16,16 @@ if (Test-Path -LiteralPath $workspaceLinkRoot) {
   throw "Windows release-stage must not contain $workspaceLinkRoot; archive only the hoisted signing input."
 }
 
+# The signing job gets this allowlist instead of a checkout, so every module it
+# runs has to be listed here. verify-asar-contents.mjs imports
+# asar-entry-paths.mjs; the job runs windows-release-artifacts.mjs itself once
+# packaging has signed.
 $paths = @(
   "apps/desktop/release-stage",
   "apps/desktop/scripts/release.mjs",
   "apps/desktop/scripts/verify-asar-contents.mjs",
   "apps/desktop/scripts/asar-entry-paths.mjs",
+  "apps/desktop/scripts/windows-release-artifacts.mjs",
   "scripts/release/install-trusted-signing.ps1"
 )
 foreach ($path in $paths) {
