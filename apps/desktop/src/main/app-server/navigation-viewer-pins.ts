@@ -1,5 +1,5 @@
 import path from "node:path";
-import { buildThreadIdentityKey, federatedThreadIdentityKey } from "@pwragent/shared";
+import { buildThreadIdentityKey, classifyDirectory, federatedThreadIdentityKey } from "@pwragent/shared";
 import type { LinkedDirectorySummary, NavigationDirectorySummary, NavigationThreadSummary } from "@pwragent/shared";
 import type { NavigationQueryIndex } from "./navigation-query-projection";
 import type { RemoteThreadSummaryCache } from "../federation/remote-thread-summary-cache";
@@ -61,9 +61,16 @@ export function appendViewerNavigationPins(index: NavigationQueryIndex, pins: re
  * links, then the owner's linked order.
  */
 export function findRemoteHomeDirectoryIndex(
-  directories: ReadonlyArray<{ label: string; path?: string }>,
+  directories: ReadonlyArray<{ label: string; path?: string; kind?: NavigationDirectorySummary["kind"] }>,
   thread: Pick<NavigationThreadSummary, "linkedDirectories" | "projectKey">,
 ): number | undefined {
+  // Scratch folder names are per-thread identities, not project identities.
+  // Match the containing workspace by kind before considering any raw names.
+  const home = remoteLinkedDirectoriesByHomePreference(thread)[0];
+  if (home && classifyDirectory(home).kind === "workspace") {
+    const index = directories.findIndex((directory) => directory.kind === "workspace");
+    return index === -1 ? undefined : index;
+  }
   const directoryIndexByName = new Map<string, number>();
   directories.forEach((directory, index) => {
     const names = new Set(
@@ -120,6 +127,19 @@ function remoteDirectoryPlaceholder(
   const home = remoteLinkedDirectoriesByHomePreference(thread)[0];
   if (!home) {
     return undefined;
+  }
+  const descriptor = classifyDirectory(home);
+  if (descriptor.kind === "workspace") {
+    // Never expose a peer path as a launchable local directory. All remote
+    // scratch mounts share this group until a local Workspaces row exists.
+    return {
+      key: "unconfigured-workspace",
+      kind: "workspace",
+      label: descriptor.label,
+      localAvailability: "unconfigured",
+      threadKeys: [],
+      needsAttentionCount: 0,
+    };
   }
   const label = home.label.trim() || path.basename(home.path).trim();
   if (!label) {
