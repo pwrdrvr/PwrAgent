@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { NavigationThreadSummary, PrSummary } from "@pwragent/shared";
 import { ThreadRow } from "../ThreadRow";
 import { PrChip } from "../../pr-status/PrChip";
+import { memoRenderObserver } from "../../../test/memo-render-observer";
 
 /**
  * A sidebar row rebuilds its children's callbacks on every render, because
@@ -42,33 +43,25 @@ function thread(prs: PrSummary[]): NavigationThreadSummary {
   } as unknown as NavigationThreadSummary;
 }
 
-type MemoComponent = { type: (props: never) => unknown };
-
-const REACT_MEMO = Symbol.for("react.memo");
-
 let renders = 0;
 /** The `onDetach` the row most recently handed its chip. */
 let lastDetach: ((target: PrSummary) => void) | undefined;
-const memoized = PrChip as unknown as MemoComponent;
-const inner = memoized.type;
+const chipRenders = memoRenderObserver<{
+  onDetach?: (target: PrSummary) => void;
+}>(PrChip, "PrChip");
 
 beforeEach(() => {
-  // Without this the counter simply never fires on a plain function and every
-  // assertion below reports "expected 0 to be 1", which does not name the
-  // actual problem.
-  expect((PrChip as unknown as { $$typeof?: symbol }).$$typeof).toBe(REACT_MEMO);
   renders = 0;
   lastDetach = undefined;
-  memoized.type = (props: never) => {
+  chipRenders.install((props) => {
     renders += 1;
-    lastDetach = (props as { onDetach?: (target: PrSummary) => void }).onDetach;
-    return inner(props);
-  };
+    lastDetach = props.onDetach;
+  });
 });
 
 afterEach(() => {
   cleanup();
-  memoized.type = inner;
+  chipRenders.restore();
 });
 
 /** Fresh inline handlers every time, the way the real parents supply them. */
