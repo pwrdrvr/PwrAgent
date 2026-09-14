@@ -46,6 +46,16 @@ Use the available Computer Use tool's documented native app operations. Inspect
 fresh UI state before selecting controls: AX element IDs can change after
 navigation, HMR, or a dialog. Use current screenshots when AX does not expose a
 control; do not carry coordinates or element IDs across changed layouts.
+If a screenshot result arrives as Token Miser JSON containing base64 rather
+than a rendered image, recover the preserved output with the supplied Token
+Miser tools and emit its image through the tool's image output mechanism.
+Do not conclude that visual evidence is unavailable from the wrapper alone.
+
+After starting a recording in React DevTools, explicitly focus the main
+PwrAgent window before navigation. A native AX click can merely activate an
+unfocused window. Verify each intended selection through the resulting heading
+or `aria-pressed` state; count successful interactions, not attempted clicks.
+Repeat a controlled run if failed attempts make its sequence ambiguous.
 
 In standalone DevTools, open settings, select **Profiler**, and enable
 **Record why each component rendered** before starting the recording. Confirm
@@ -67,6 +77,13 @@ allow its updates to settle, then stop before inspecting the profile. Keep
 unrelated exploration outside the recording. If the operator intervenes, HMR
 fires, or attachment changes, mark the run contaminated and repeat from the
 defined start once control is available; do not silently include it in a pair.
+
+Before a long-list scroll run, verify the target container actually overflows
+and its scroll position changes. A paginated lens may initially have too few
+rows: use **Load more threads** during setup until the list overflows, then
+record the loaded count and starting position. One observed Updated-lens run
+needed two loads to grow from 10 to 30 rows; choose the count for the current
+viewport rather than assuming that example always suffices.
 
 Choose scenarios that exercise the reported symptom, keeping distinct actions
 in separate recordings when attribution would otherwise be ambiguous:
@@ -109,6 +126,18 @@ limitations. Report exact scope and counts, not extrapolated improvements to
 unmeasured navigation. A card-height defect needs visual evidence as well as
 React attribution: fewer commits alone do not prove layout stability, and a
 React profile alone does not measure browser layout/paint cost.
+
+When a height transient is too brief to inspect visually, a separate diagnostic
+run can use a temporary in-memory probe installed through the renderer DevTools
+Console. Verify the current row selector, then observe document `pointerdown`
+and sample the clicked row's `getBoundingClientRect()` with
+`requestAnimationFrame` for a bounded interval (for example, 1800 ms). Record
+CSS-pixel heights and relevant chip text locally, including the initial and
+settled values. Handle row replacement/disconnection as such, not as a zero
+height. Remove the listener and cancel sampling afterward; do not persist the
+probe or modify application data. Layout reads can affect timing, so keep this
+run separate from performance comparisons. Stable samples establish only that
+the transient was not reproduced in those interactions, not that it is fixed.
 
 ## Export and report
 
