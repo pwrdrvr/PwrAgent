@@ -2,6 +2,7 @@ import { useMemo, useSyncExternalStore } from "react";
 import type { NavigationThreadSummary } from "@pwragent/shared";
 import { threadSummaryIdentityKey } from "./federated-thread-events";
 import { readRendererFederationTarget } from "./federation-window";
+import { useStableThreadIndicators } from "./useStableThreadIndicators";
 import {
   buildThreadComposerScopeKey,
   type ComposerDraftStore,
@@ -42,7 +43,7 @@ export function useThreadQueuedMessageIndicators(params: {
     () => composerDraftStore.getQueuedTurnVersion(),
   );
 
-  return useMemo(() => {
+  const indicators = useMemo(() => {
     const indicators: Record<string, ThreadQueuedMessageState> = {};
     const now = Date.now();
     for (const thread of threads) {
@@ -78,4 +79,5 @@ export function useThreadQueuedMessageIndicators(params: {
     // can't see that and flags it as unnecessary.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [composerDraftStore, threads, version]);
+  return useStableThreadIndicators(indicators);
 }

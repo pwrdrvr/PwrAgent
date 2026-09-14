@@ -3,6 +3,7 @@ import { useCallback, useMemo, useSyncExternalStore } from "react";
 import type { NavigationThreadSummary } from "@pwragent/shared";
 import { threadSummaryIdentityKey } from "./federated-thread-events";
 import { readRendererFederationTarget } from "./federation-window";
+import { useStableThreadIndicators } from "./useStableThreadIndicators";
 import {
   buildThreadComposerScopeKey,
   type ComposerDraftStore,
@@ -27,7 +28,7 @@ export function useThreadDraftIndicators(params: {
   );
   const version = useSyncExternalStore(subscribe, getSnapshot);
 
-  return useMemo(() => {
+  const indicators = useMemo(() => {
     const indicators: Record<string, boolean> = {};
     for (const thread of threads) {
       if (
@@ -45,6 +46,7 @@ export function useThreadDraftIndicators(params: {
     // can't see that and flags it as unnecessary.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [composerDraftStore, threads, version]);
+  return useStableThreadIndicators(indicators);
 }
 
 /**

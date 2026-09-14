@@ -70,6 +70,35 @@ function setDraft(
 }
 
 describe("useThreadDraftIndicators", () => {
+  it("preserves indicator identity across unrelated navigation refreshes", () => {
+    const thread = makeThread("thread-1");
+    const other = makeThread("thread-2");
+    const { result, rerender } = renderIndicators([thread, other]);
+    const empty = result.current.indicators;
+
+    rerender({ threads: [{ ...thread, title: "Refreshed title" }, other] });
+    expect(result.current.indicators).toBe(empty);
+
+    setDraft(result.current.store, thread, makeSnapshot({ draft: "unsent" }));
+    const withDraft = result.current.indicators;
+    expect(withDraft).not.toBe(empty);
+    expect(withDraft).toEqual({ "codex:thread-1": true });
+
+    rerender({ threads: [other, { ...thread, updatedAt: 100 }] });
+    expect(result.current.indicators).toBe(withDraft);
+
+    // Equal map sizes must not hide a change in which thread has a draft.
+    act(() => {
+      result.current.store.delete(scopeKey(thread));
+      result.current.store.set(scopeKey(other), makeSnapshot({ draft: "other draft" }));
+    });
+    expect(result.current.indicators).toEqual({ "codex:thread-2": true });
+    expect(result.current.indicators).not.toBe(withDraft);
+    const withOtherDraft = result.current.indicators;
+    rerender({ threads: [other] });
+    expect(result.current.indicators).toBe(withOtherDraft);
+  });
+
   it("marks a thread once its composer holds text", () => {
     const thread = makeThread("thread-1");
     const { result } = renderIndicators([thread]);
