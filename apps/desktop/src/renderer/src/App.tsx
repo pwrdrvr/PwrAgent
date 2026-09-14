@@ -322,14 +322,13 @@ function DesktopAppShell(props: {
   // it after first paint reflows the whole transcript under the operator.
   // `activeContextTab` and the dock prefs keep adopting from the snapshot,
   // because none of them change the transcript's width.
-  const bootstrapLayout = useMemo(readBootstrapLayoutPreferences, []);
   const [sidebarHidden, setSidebarHidden] = useState(
-    bootstrapLayout.sidebarHidden,
+    () => readBootstrapLayoutPreferences().sidebarHidden,
   );
   const [revealSelectedThreadRequest, setRevealSelectedThreadRequest] =
     useState(0);
   const [contextRailPinned, setContextRailPinned] = useState(
-    bootstrapLayout.contextRailPinned,
+    () => readBootstrapLayoutPreferences().contextRailPinned,
   );
   const [activeContextTab, setActiveContextTab] =
     useState<ContextTabId>(DEFAULT_CONTEXT_TAB);

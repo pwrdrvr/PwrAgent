@@ -279,6 +279,29 @@ export function resolveDesktopUpdateSelection(
 
 export const DESKTOP_APPEARANCE_THEMES = ["system", "dark", "light"] as const;
 export type DesktopAppearanceTheme = (typeof DESKTOP_APPEARANCE_THEMES)[number];
+/**
+ * Window layout defaults, shared by everything that has to agree on them
+ * before the settings snapshot exists.
+ *
+ * Four places decide these: `DesktopSettingsService` when it resolves the
+ * snapshot, `main/layout-prefs-bootstrap.ts` when it reads the profile
+ * config synchronously for the window's `additionalArguments`, the
+ * preload's argv decoder, and the renderer's fallback when the hint is
+ * missing. They exist to remove a first-paint reflow, so the moment any two
+ * disagree the reflow comes back — silently, because each of them is
+ * individually correct. Import this rather than restating the value, the
+ * way the preload already imports `DEFAULT_NAVIGATION_BROWSE_MODE`.
+ *
+ * The rail defaults to pinned-open so a fresh operator discovers it exists.
+ */
+export const DESKTOP_UI_LAYOUT_DEFAULTS: {
+  readonly contextRailPinned: boolean;
+  readonly sidebarHidden: boolean;
+} = {
+  contextRailPinned: true,
+  sidebarHidden: false,
+};
+
 export const DESKTOP_APPEARANCE_THEME_DEFAULT: DesktopAppearanceTheme = "system";
 
 export const DESKTOP_APPEARANCE_DENSITIES = [

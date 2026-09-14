@@ -39,6 +39,7 @@
  * store the browse-mode bootstrap reads.
  */
 
+import { DESKTOP_UI_LAYOUT_DEFAULTS } from "@pwragent/shared";
 import { resolveDesktopConfigPath } from "./settings/desktop-config";
 import { readProfileConfigFile } from "./settings/config-store/profile-config-file";
 import { getExistingDesktopConfigStore } from "./settings/config-store/desktop-config-store-singleton";
@@ -48,11 +49,13 @@ export type BootstrapLayoutPreferences = {
   sidebarHidden: boolean;
 };
 
-/** Matches `App.tsx`'s own initial state before this bootstrap existed. */
-export const BOOTSTRAP_LAYOUT_DEFAULTS: BootstrapLayoutPreferences = {
-  contextRailPinned: true,
-  sidebarHidden: false,
-};
+/**
+ * One source for the defaults. `DesktopSettingsService` resolves the
+ * snapshot from the same constant, so this read and the snapshot that later
+ * confirms it cannot drift apart and reintroduce the reflow.
+ */
+export const BOOTSTRAP_LAYOUT_DEFAULTS: BootstrapLayoutPreferences =
+  DESKTOP_UI_LAYOUT_DEFAULTS;
 
 export const BOOTSTRAP_LAYOUT_ARG_PREFIX = "--pwragent-layout-preferences=";
 

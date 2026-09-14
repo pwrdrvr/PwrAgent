@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { expect, test, type Page } from "@playwright/test";
 import { launchElectronApp } from "./fixtures/electron-app";
+import { probeReport } from "./fixtures/probe-report";
 
 async function createQueuedReviewReleaseFixture(): Promise<{
   cleanup: () => Promise<void>;
@@ -336,7 +337,7 @@ test("background queued review releases after active turn branch adoption", asyn
         throw new Error(
           [
             "Send stayed disabled after the composer accepted the keystroke.",
-            await describeDisabledSend(app.window),
+            await probeReport(async () => await describeDisabledSend(app.window)),
           ].join("\n"),
           { cause: error },
         );

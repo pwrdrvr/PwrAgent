@@ -223,13 +223,17 @@ test("sends pasted, dropped, and local-file attachments from a Star Map chat car
   const notesPath = path.join(fileRoot, "star-map-notes.txt");
   await writeFile(notesPath, "renderer preload attachment evidence\n", "utf8");
   const app = await launchElectronApp({ fixturePath });
+  // Hoisted so the `finally` can stop it on the failing path too. Left
+  // running, its 250ms backstop and its subtree observer keep sampling
+  // through teardown — while the report they produced is being read.
+  let trajectory: DomTrajectoryRecorder | undefined;
 
   try {
     const mapWindow = await openStarMapWindow(app);
     // Armed BEFORE the card opens: the composer's first `detail:none` is the
     // card's own opening state, and a report that cannot show that one has
     // no baseline to call a later `detail:none` a regression against.
-    const trajectory = await recordComposerTrajectory(mapWindow);
+    trajectory = await recordComposerTrajectory(mapWindow);
     const chatCard = await openChatCard(mapWindow, LOCAL_THREAD_TITLE);
     const messageInput = chatCard.getByRole("textbox", {
       name: `Message ${LOCAL_THREAD_TITLE}`,
@@ -289,7 +293,6 @@ test("sends pasted, dropped, and local-file attachments from a Star Map chat car
       "Inspect these Star Map attachments",
       trajectory,
     );
-    await trajectory.stop();
     await chatCard.getByRole("button", { name: "Send" }).click();
 
     // `.toBeDefined()`, not `.not.toBeNull()`: the replay driver returns
@@ -332,6 +335,7 @@ test("sends pasted, dropped, and local-file attachments from a Star Map chat car
       }),
     );
   } finally {
+    await trajectory?.stop();
     await app.close();
     await rm(fileRoot, { recursive: true, force: true });
   }

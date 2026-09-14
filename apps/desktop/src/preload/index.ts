@@ -6,6 +6,7 @@ import type { RemoveNavigationDirectoryRequest, RemoveNavigationDirectoryRespons
 import { contextBridge, ipcRenderer, webUtils } from "electron";
 import {
   DEFAULT_NAVIGATION_BROWSE_MODE,
+  DESKTOP_UI_LAYOUT_DEFAULTS,
   DESKTOP_TEXT_SIZE_DEFAULT,
   isDesktopTextSize,
   normalizeNavigationBrowseMode,
@@ -2778,15 +2779,16 @@ const bootstrapNavigationPreferences = readBootstrapNavigationPreferences();
 // them, so the shape is agreed by the argv contract rather than by a shared
 // import. `layout-prefs-bootstrap.test.ts` pins that contract.
 //
-// The defaults must match `BOOTSTRAP_LAYOUT_DEFAULTS`: a renderer that falls
-// back to a different rail state than the one main would have sent paints
-// the flicker this hint exists to remove.
+// The defaults come from the shared constant the main-process bootstrap
+// and the settings service also read: a decoder that fell back to a
+// different rail state than the one main would have sent would paint the
+// flicker this hint exists to remove.
 const LAYOUT_ARG_PREFIX = "--pwragent-layout-preferences=";
 function readBootstrapLayoutPreferences(): {
   contextRailPinned: boolean;
   sidebarHidden: boolean;
 } {
-  const defaults = { contextRailPinned: true, sidebarHidden: false };
+  const defaults = DESKTOP_UI_LAYOUT_DEFAULTS;
   for (const arg of process.argv) {
     if (!arg.startsWith(LAYOUT_ARG_PREFIX)) continue;
     try {

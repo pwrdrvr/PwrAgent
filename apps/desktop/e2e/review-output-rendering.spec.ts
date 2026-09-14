@@ -2,6 +2,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test, type Page } from "@playwright/test";
 import { launchElectronApp } from "./fixtures/electron-app";
+import { probeReport } from "./fixtures/probe-report";
 
 const specDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -177,11 +178,12 @@ test("renders captured Codex review findings once in the review card", async () 
             "The finding-title drag selected something else.",
             `  dragged (${dragFromX}, ${dragY}) -> (${dragToX}, ${dragY}),`
             + ` measured from a title box of ${JSON.stringify(findingTitleBox)}`,
-            await describeDragTarget(app.window, {
-              fromX: dragFromX,
-              toX: dragToX,
-              y: dragY,
-            }),
+            await probeReport(async () =>
+              await describeDragTarget(app.window, {
+                fromX: dragFromX,
+                toX: dragToX,
+                y: dragY,
+              })),
           ].join("\n"),
           { cause: error },
         );
@@ -244,14 +246,25 @@ test("wraps unstripped long review paths and strips paths inside the thread dire
       /\/Volumes\/ExternalReviewArchive\//
     );
 
-    const linkBox = await outsidePathLink.boundingBox();
-    const cardBox = await reviewCard.boundingBox();
-    expect(linkBox).not.toBeNull();
-    expect(cardBox).not.toBeNull();
-    expect(linkBox!.height).toBeGreaterThan(24);
-    expect(linkBox!.x + linkBox!.width).toBeLessThanOrEqual(
-      cardBox!.x + cardBox!.width + 1
-    );
+    // Both rects in one evaluate. Read as two `boundingBox()` round trips
+    // they can straddle a reflow, and then "does the link overflow its
+    // card" compares a link in one layout against a card in another — which
+    // is what this assertion did, failing under shard load with the link
+    // ~2px past a card bound that itself moved between runs (650.7, 652.0).
+    // The 1px tolerance is for subpixel text metrics, not for that.
+    const overflow = await outsidePathLink.evaluate((link, cardSelector) => {
+      const card = link.closest<HTMLElement>(cardSelector);
+      const linkRect = link.getBoundingClientRect();
+      const cardRect = card?.getBoundingClientRect();
+      return {
+        cardRight: cardRect ? cardRect.x + cardRect.width : undefined,
+        linkHeight: linkRect.height,
+        linkRight: linkRect.x + linkRect.width,
+      };
+    }, "[role='group'][aria-label='Code review']");
+    expect(overflow.cardRight).toBeDefined();
+    expect(overflow.linkHeight).toBeGreaterThan(24);
+    expect(overflow.linkRight).toBeLessThanOrEqual(overflow.cardRight! + 1);
   } finally {
     await app.close();
   }

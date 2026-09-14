@@ -76,9 +76,10 @@ export const STAR_MAP_PLACEHOLDER_INSTANCE_ID = "local";
  *
  * Reproduced by delaying `federation:get-health`: the card mounts, the
  * composer goes live, and when health lands `data-card-mount` steps 1 -> 2
- * with the composer dead for the width of the new read. Windows hits the
- * same ordering on its own, because its IPC is slow enough to put the
- * health read after the first chat card is opened.
+ * with the composer dead for the width of the new read. No platform has
+ * been observed producing that ordering unaided — `data-card-mount` held at
+ * 1 throughout the Windows failures this was first suspected of causing —
+ * so `star-map-late-federation-health.spec.ts` creates it deliberately.
  *
  * So the local owner normalizes to a stable token: the placeholder and the
  * durable id are the same instance, and which name it is currently going by

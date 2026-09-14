@@ -4,7 +4,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test, type Page } from "@playwright/test";
 import { launchElectronApp } from "./fixtures/electron-app";
-import { openStarMapWindow } from "./fixtures/star-map-window";
+import { probeReport } from "./fixtures/probe-report";
+import {
+  focusStarMapWindow,
+  openStarMapWindow,
+} from "./fixtures/star-map-window";
 
 /**
  * What the map looked like when a continuation did not arrive.
@@ -74,6 +78,11 @@ test("discovers all project clouds and continues one project's cards in Electron
   const app = await launchElectronApp({ fixturePath });
   try {
     const map = await openStarMapWindow(app);
+    // This spec paginates, and the map suspends every feed while it is not
+    // foreground — a `Load more` press that lands then is dropped in
+    // silence. That is intended behavior, so claim the foreground rather
+    // than press and hope.
+    await focusStarMapWindow(app, map);
     await expect(map.locator(".star-map__cluster-label")).toHaveCount(15);
     await expect(map.getByRole("button", { name: /^Load more project-\d+ threads$/ })).toHaveCount(15);
     const more = map.getByRole("button", { name: "Load more project-0 threads", exact: true });
@@ -86,8 +95,9 @@ test("discovers all project clouds and continues one project's cards in Electron
         throw new Error(
           [
             "The continuation never rendered project-0-card-19.",
-            await describeMissingContinuation(map, "project-0-card-19"),
-          ].join("\\n"),
+            await probeReport(async () =>
+              await describeMissingContinuation(map, "project-0-card-19")),
+          ].join("\n"),
           { cause: error },
         );
       });
@@ -98,8 +108,9 @@ test("discovers all project clouds and continues one project's cards in Electron
         throw new Error(
           [
             "The continuation never rendered project-0-card-22.",
-            await describeMissingContinuation(map, "project-0-card-22"),
-          ].join("\\n"),
+            await probeReport(async () =>
+              await describeMissingContinuation(map, "project-0-card-22")),
+          ].join("\n"),
           { cause: error },
         );
       });

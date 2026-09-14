@@ -10,13 +10,17 @@
 // the read completes again, and it discards card-local state (staged
 // attachments included).
 //
-// This is what `star-map-composer-attachments.spec.ts` was failing on in
-// `Windows Desktop E2E (lane 3 of 4)`: Windows IPC is slow enough to put
-// the health read AFTER the first card is opened, so the card was live at
-// that spec's composer barrier and dead ~250ms later at its
-// keystroke. macOS and Linux resolve health long before any spec clicks a
-// thread, which is why the ordering never appeared there — so this spec
-// creates it deliberately rather than waiting for a platform to supply it.
+// This is NOT what `star-map-composer-attachments.spec.ts` was failing on
+// in `Windows Desktop E2E (lane 3 of 4)`. That was first suspected and then
+// measured false: `data-card-mount` held at 1 across every Windows
+// trajectory, so no card remounted in any observed failure, and the real
+// cause was a composer barrier that asserted nothing (see that spec's
+// `waitForAuthorizedComposer`).
+//
+// The defect is real on its own terms — reproduced here by delaying the
+// health read past the card's opening, which is an ordering no platform has
+// been observed to produce by itself. This spec creates it deliberately so
+// the fix stays covered.
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
@@ -99,7 +103,12 @@ test("keeps an open Star Map chat card mounted when federation health lands late
     // trajectory rather than a final read, because the withdrawal this
     // guards against is transient: the card re-authorizes ~25ms later, so
     // reading the end state alone passes against the bug.
-    const withdrawals = (await trajectory.read()).filter(
+    // Read once: the message below quotes the same samples the filter ran
+    // over, and `expect`'s message argument is built whether or not the
+    // matcher fails — a second `read()` here is a page round trip and a
+    // full serialization on every passing run.
+    const samples = await trajectory.read();
+    const withdrawals = samples.filter(
       (sample) =>
         sample.includes("data-composer-block=detail:")
         || sample.includes("data-composer-block=queue:"),
@@ -107,7 +116,7 @@ test("keeps an open Star Map chat card mounted when federation health lands late
     expect(
       withdrawals,
       "the composer was withheld after it first went live; the trajectory is"
-      + ` ${JSON.stringify(await trajectory.read(), null, 2)}`,
+      + ` ${JSON.stringify(samples, null, 2)}`,
     ).toHaveLength(1);
     await trajectory.stop();
   } finally {

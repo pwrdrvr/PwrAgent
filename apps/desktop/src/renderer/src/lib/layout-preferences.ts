@@ -17,15 +17,15 @@
  * auxiliary window without the hint gets exactly the values `App.tsx`
  * hard-coded before, so nothing regresses if the argument is missing.
  */
+import { DESKTOP_UI_LAYOUT_DEFAULTS } from "@pwragent/shared";
+
 export type RendererLayoutPreferences = {
   contextRailPinned: boolean;
   sidebarHidden: boolean;
 };
 
-export const RENDERER_LAYOUT_FALLBACK: RendererLayoutPreferences = {
-  contextRailPinned: true,
-  sidebarHidden: false,
-};
+export const RENDERER_LAYOUT_FALLBACK: RendererLayoutPreferences =
+  DESKTOP_UI_LAYOUT_DEFAULTS;
 
 export function readBootstrapLayoutPreferences(): RendererLayoutPreferences {
   const bridged = (globalThis as typeof globalThis & {

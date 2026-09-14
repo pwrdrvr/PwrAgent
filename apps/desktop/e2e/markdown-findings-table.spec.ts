@@ -131,6 +131,11 @@ test("renders a wide assistant markdown findings table without crushing the colu
     // 1. A plain message is `min(100%, 760px)` capped at `max-width: 84%`; a
     // wide one is the full 100%. So the ratio is 1/0.84 = 1.19 on any
     // container under 904px and grows from there as 760px stops binding.
+    // A handle resolved before the evaluate can be detached by a re-render,
+    // and a detached node's rect is all zeros — which would turn the ratio
+    // below into `assistantWidth > 0` and pass against the very layout this
+    // spec exists to reject.
+    expect(dimensions.proseWidth).toBeGreaterThan(0);
     expect(dimensions.assistantWidth).toBeGreaterThan(dimensions.proseWidth * 1.15);
     // Content-aware profile for the canonical review-findings header
     expect(dimensions.headerKinds).toEqual(["tag", "tag", "label", "prose", "prose"]);
