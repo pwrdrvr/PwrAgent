@@ -381,7 +381,7 @@ const readNavigationQueryIndex = vi.fn((params: { backend: string; threads: Arra
 const rememberCompleteNavigationSnapshot = vi.fn();
 const listRemoteThreadPins = vi.fn(async (): Promise<unknown[]> => []);
 const readRemoteThreadPinNavigationRows = vi.fn(async (): Promise<NavigationThreadSummary[]> => []);
-const updateRemoteThreadPinSnapshots = vi.fn(async () => {});
+const updateRemoteThreadPinSnapshots = vi.fn(async () => false);
 const removeRemoteThreadPinStore = vi.fn(async () => true);
 const addRemoteThreadPinStore = vi.fn(
   async (params: { ref: unknown; instanceLabel: string }) => ({
@@ -2405,6 +2405,28 @@ describe("app server ipc", () => {
       expect.objectContaining({ ref, summary: saved }),
     ]);
     expect(updateRemoteThreadPinSnapshots).toHaveBeenLastCalledWith([{ ref, summary: idle, instanceLabel: "Peer" }]);
+  });
+
+  it("rescues an existing summaryless mount when its exact owner row loads", async () => {
+    const { buildFederatedThreadRef } = await import("@pwragent/shared");
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_QUERY_PAGE_CHANNEL } = await import("../../shared/ipc");
+    const ref = buildFederatedThreadRef({ backend: "codex", threadId: "child", instanceId: "peer" });
+    const row = { id: "child", source: "codex", title: "Child", titleSource: "explicit", linkedDirectories: [],
+      inbox: { inInbox: false }, ref: { backend: "codex", threadId: "child", ownerInstanceId: "peer" },
+      federation: { ref, instanceLabel: "Peer" }, parentThreadId: "local-parent", parentThreadInstanceId: "pwr_local" };
+    federationMock.runtime.remoteNavigationQueryPage.mockResolvedValueOnce({ protocol: 2, entries: [{ row }], complete: true,
+      coverage: { state: "complete" } });
+    updateRemoteThreadPinSnapshots.mockResolvedValueOnce(true);
+    registerAppServerIpcHandlers();
+    await handlers.get(NAVIGATION_QUERY_PAGE_CHANNEL)!({ sender: { id: 90203, once: vi.fn() } }, {
+      protocol: 2, consumer: "main-sidebar", inventory: "owner", federationTarget: { scope: "remote", instanceId: "peer" },
+      query: { kind: "exact", identities: [row.ref], includeAncestry: true },
+    });
+    expect(updateRemoteThreadPinSnapshots).toHaveBeenCalledWith([{ ref, summary: row, instanceLabel: "Peer" }], { onlyMissing: true });
+    expect(publishLocalEvent).toHaveBeenCalledWith(expect.objectContaining({ notification: {
+      method: "navigation/remoteThreadPins/changed", params: { instanceId: "peer" },
+    } }));
   });
 
   it("projects a mounted remote child beneath its local parent through viewer IPC", async () => {

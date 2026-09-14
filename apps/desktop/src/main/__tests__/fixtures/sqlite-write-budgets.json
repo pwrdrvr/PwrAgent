@@ -342,6 +342,13 @@
     "rowsChanged": 2,
     "statements": 2
   },
+  "navigation-summaryless-pin-hydration": {
+    "commits": 1,
+    "note": "One atomic fill per summaryless mount; 20 later exact reads add no commits. At 200 new mounts/day and 4 KiB/page: ~0.8 MB/day per dirty page. Existing mounts add 0 MB/day.",
+    "observedWalBytes": 0,
+    "rowsChanged": 1,
+    "statements": 1
+  },
   "navigation-unlink-relative-pin": {
     "commits": 3,
     "note": "One explicit unlink plus owner pin and relative placement: three commits; 100 children/day at ~4 KiB/commit is ~1.2 MB/day; no idle writes",

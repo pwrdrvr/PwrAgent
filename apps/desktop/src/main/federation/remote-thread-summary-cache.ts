@@ -174,6 +174,7 @@ export class RemoteThreadSummaryCache {
   private readonly peerGenerations = new Map<string, number>();
   /** Peers whose most recent background refresh failed while connected. */
   private readonly refreshFailures = new Set<string>();
+  private readonly missingPinSignatures = new Map<string, string>();
   /**
    * Thread keys a background pass proved archived on their owner, keyed by
    * instance, awaiting report to the caller that removes the pin.
@@ -237,6 +238,13 @@ export class RemoteThreadSummaryCache {
        * time (rows must dim).
        */
       onPinnedSummariesRefreshed?: (instanceId: string) => void;
+      onPinnedRefreshProblem?: (problem: {
+        instanceId: string;
+        requestedCount: number;
+        missingCount?: number;
+        threadKeys: string[];
+        error?: string;
+      }) => void;
       ttlMs?: number;
       peerTimeoutMs?: number;
       now?: () => number;
@@ -298,6 +306,7 @@ export class RemoteThreadSummaryCache {
     }
     this.peerInterests.clear();
     this.pinnedByInstanceId.clear();
+    this.missingPinSignatures.clear();
     if (hadPeerInterest) {
       this.options.onPeerInterestChanged?.([]);
     }
@@ -548,6 +557,9 @@ export class RemoteThreadSummaryCache {
       owner,
       group.map(({ summary: _summary, ...pin }) => pin),
     ]));
+    for (const owner of this.missingPinSignatures.keys()) {
+      if (!pinsByInstanceId.has(owner)) this.missingPinSignatures.delete(owner);
+    }
     if (previousOwners !== [...this.pinnedByInstanceId.keys()].sort().join("\n")) {
       this.notifyPeerInterestChanged();
     }
@@ -736,13 +748,25 @@ export class RemoteThreadSummaryCache {
         const changed =
           previous === undefined
           || JSON.stringify(previous) !== JSON.stringify(threads);
+        const returned = new Set(threads.map((thread) => buildThreadIdentityKey(thread.source, thread.id)));
+        const missing = pins.map((pin) => buildThreadIdentityKey(pin.ref.backend, pin.ref.threadId))
+          .filter((key) => !returned.has(key) && !this.provenArchived.get(instanceId)?.has(key)).sort();
+        const missingSignature = JSON.stringify(missing);
+        if (this.missingPinSignatures.get(instanceId) !== missingSignature) {
+          this.missingPinSignatures.set(instanceId, missingSignature);
+          if (missing.length) this.options.onPinnedRefreshProblem?.({ instanceId, requestedCount: pins.length,
+            missingCount: missing.length, threadKeys: missing.slice(0, 10).map((key) => key.slice(0, 200)) });
+        }
         if (failedBefore || changed || provedArchived) {
           this.options.onPinnedSummariesRefreshed?.(instanceId);
         }
       },
-      () => {
+      (error: unknown) => {
         this.refreshFailures.add(instanceId);
         if (!failedBefore) {
+          this.options.onPinnedRefreshProblem?.({ instanceId, requestedCount: pins.length,
+            threadKeys: pins.slice(0, 10).map((pin) => buildThreadIdentityKey(pin.ref.backend, pin.ref.threadId).slice(0, 200)),
+            error: (error instanceof Error ? error.message : String(error)).slice(0, 1000) });
           this.options.onPinnedSummariesRefreshed?.(instanceId);
         }
       },

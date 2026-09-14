@@ -2001,6 +2001,25 @@ class DesktopAppServerService {
         rpcOptions,
       );
       rpcOptions?.signal.throwIfAborted();
+      if (request.query.kind === "exact" && request.consumer === "main-sidebar" && !page.unchanged && !page.rangeUnchanged) {
+        const instanceId = request.federationTarget.instanceId;
+        const snapshots = page.entries.flatMap(({ row }) => {
+          const federation = row.federation;
+          if (federation?.ref.target.scope !== "remote" || federation.ref.target.instanceId !== instanceId) return [];
+          return [{ ref: federation.ref, summary: row, instanceLabel: federation.instanceLabel }];
+        });
+        const hydrated = await this.getOverlayStore().updateRemoteThreadPinSnapshots(snapshots, { onlyMissing: true });
+        if (hydrated) {
+          appServerLog.info("hydrated summaryless remote thread pins from exact owner rows", { instanceId,
+            candidates: snapshots.slice(0, 10).map(({ ref, summary }) => ({ backend: ref.backend,
+              threadId: ref.threadId.slice(0, 200), parentThreadId: summary.parentThreadId?.slice(0, 200),
+              parentInstanceId: summary.parentThreadInstanceId?.slice(0, 200), directoryCount: summary.linkedDirectories.length })) });
+          await getDesktopBackendRegistry().publishLocalEvent({
+            backend: snapshots[0]!.ref.backend,
+            notification: { method: "navigation/remoteThreadPins/changed", params: { instanceId } },
+          });
+        }
+      }
       const directoryKeys = [...new Set([...(page.directories ?? []).map((directory) => directory.key),
         ...(page.selectionDirectory ? [page.selectionDirectory.key] : [])])];
       if (!directoryKeys.length) return page;

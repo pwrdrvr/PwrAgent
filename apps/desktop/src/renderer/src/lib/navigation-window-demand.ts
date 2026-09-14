@@ -37,7 +37,7 @@ export function buildNavigationWindowDemand(params: {
       federationTarget: params.selectedRef.ownerInstanceId ? { scope: "remote", instanceId: params.selectedRef.ownerInstanceId } : params.target });
   }
   if (params.selectedRef?.ownerInstanceId && params.target?.scope !== "remote") {
-    demand.set("selected-viewer-mount", request({ kind: "exact", identities: [params.selectedRef] }, 1));
+    demand.set("selected-viewer-mount", request({ kind: "exact", identities: [params.selectedRef], includeAncestry: true }, 100));
   }
   const loadedDirectoryKeys = params.indexedDirectoryKeys ?? new Set(params.directories.map((directory) => directory.key));
   const missingSelectedDirectories = (params.selectedDirectoryKeys ?? []).filter((key) => !loadedDirectoryKeys.has(key) && !params.removedDirectoryKeys?.includes(key));
