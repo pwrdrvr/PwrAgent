@@ -88,6 +88,32 @@ async function attachPng(
   }, options);
 }
 
+/**
+ * Type into the card's composer, naming the gate if it is closed.
+ *
+ * `StarMapChatCard` publishes `data-composer-block` whenever it withholds the
+ * composer. Reading it at the instant the keystroke is refused turns "element
+ * is not editable" into the specific term — an unresolved exact identity, a
+ * failed read, a non-present thread, or a queue projection that is not ready.
+ */
+async function fillReportingComposerBlock(
+  chatCard: Locator,
+  messageInput: Locator,
+  text: string,
+): Promise<void> {
+  try {
+    await messageInput.fill(text);
+  } catch (error) {
+    const block = await chatCard.getAttribute("data-composer-block");
+    throw new Error(
+      `Composer refused the keystroke; card reported data-composer-block=${
+        block ?? "<absent, so it believed the composer was live>"
+      }`,
+      { cause: error },
+    );
+  }
+}
+
 async function attachFilesystemFile(
   mapWindow: Page,
   messageInput: Locator,
@@ -174,7 +200,15 @@ test("sends pasted, dropped, and local-file attachments from a Star Map chat car
       chatCard.locator('[aria-label="Attached files"]'),
     ).toContainText("star-map-notes.txt");
 
-    await messageInput.fill("Inspect these Star Map attachments");
+    // Not a retry: `fill` is attempted exactly once, and a failure is rethrown.
+    // It only names the term that withheld the composer, because the bare
+    // "element is not editable" this otherwise reports is undiagnosable from an
+    // Electron trace.
+    await fillReportingComposerBlock(
+      chatCard,
+      messageInput,
+      "Inspect these Star Map attachments",
+    );
     await chatCard.getByRole("button", { name: "Send" }).click();
 
     await expect.poll(async () => await app.getLastStartTurn()).not.toBeNull();

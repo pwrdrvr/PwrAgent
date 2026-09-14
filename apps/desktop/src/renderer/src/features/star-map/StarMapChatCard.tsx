@@ -341,6 +341,26 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
   composerReadinessRef.current = composerReady;
   const configurationRef = useRef(selectedConfiguration);
   configurationRef.current = selectedConfiguration;
+  // Which term is withholding the composer, published for the E2E lanes.
+  //
+  // By the time this reaches the editor it is one boolean, and the editor
+  // rejects a keystroke with nothing but "element is not editable". An
+  // Electron trace carries no DOM snapshots to reconstruct the cause from, and
+  // `readinessError` only surfaces the two terms that carry an error string —
+  // an unresolved identity and a still-loading queue are both silent. Naming
+  // the term costs one attribute and is the difference between a diagnosis and
+  // a guess, which this failure has already cost two CI cycles of.
+  const composerBlockReason = composerReady
+    ? undefined
+    : !selectedDetail.state
+      ? "detail:identity-unresolved"
+      : selectedDetail.state.readiness === "failed"
+        ? "detail:failed"
+        : selectedDetail.state.detail?.identity !== "present"
+          ? `detail:identity:${selectedDetail.state.detail?.identity ?? "unread"}`
+          : queueReadiness.readiness !== "ready"
+            ? `queue:${queueReadiness.readiness}`
+            : "review";
   const readinessError = selectedDetail.state?.error ?? queueReadiness.error
     ?? (selectedDetail.state?.detail && selectedDetail.state.detail.identity !== "present"
       ? `This thread is ${selectedDetail.state.detail.identity}.`
@@ -1435,6 +1455,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
     <section
       aria-label={`Chat: ${thread.title}`}
       className="star-map-chat-card"
+      data-composer-block={composerBlockReason}
       onPointerDown={() => onRaise(cardKey)}
       style={style}
     >
