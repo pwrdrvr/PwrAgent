@@ -92,7 +92,7 @@ it("keeps mounted pin navigation subscriptions until removal and refreshes on li
   const cache = new RemoteThreadSummaryCache({
     peers: () => [peer("peer-a")], fetchSnapshot: vi.fn(), fetchPinnedSnapshot,
     fetchArchivedThreads: noArchivedThreads, peerStatus: () => ({ status: "connected" }),
-    onPeerInterestChanged,
+    onPeerInterestChanged, hasNavigationSubscription: () => true,
   });
   try {
     await cache.resolvePinnedThreads([pin({ instanceId: "peer-a", threadId: "t1", summary })]);
@@ -101,6 +101,10 @@ it("keeps mounted pin navigation subscriptions until removal and refreshes on li
     expect(onPeerInterestChanged).toHaveBeenLastCalledWith([
       { instanceId: "peer-a", threadSelection: { kind: "all" } },
     ]);
+    // A local sidebar rebuild after the old TTL must reuse subscribed owner rows.
+    await cache.resolvePinnedThreads([pin({ instanceId: "peer-a", threadId: "t1", summary })]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetchPinnedSnapshot).toHaveBeenCalledTimes(1);
     cache.invalidate("peer-a");
     await vi.advanceTimersByTimeAsync(0);
     expect(fetchPinnedSnapshot).toHaveBeenCalledTimes(2);
@@ -109,6 +113,10 @@ it("keeps mounted pin navigation subscriptions until removal and refreshes on li
     cache.invalidate("peer-a");
     await vi.advanceTimersByTimeAsync(60_000);
     expect(fetchPinnedSnapshot).toHaveBeenCalledTimes(2);
+    // Remounting starts a new subscription lifetime and must revalidate its rows.
+    await cache.resolvePinnedThreads([pin({ instanceId: "peer-a", threadId: "t1", summary })]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetchPinnedSnapshot).toHaveBeenCalledTimes(3);
   } finally {
     cache.dispose();
     vi.useRealTimers();
@@ -1600,6 +1608,81 @@ it("reports bounded missing mount identities without repeating an unchanged abse
     cache.invalidate("peer-a");
     await settle();
     expect(onPinnedRefreshProblem).toHaveBeenCalledTimes(1);
+  } finally {
+    cache.dispose();
+  }
+});
+
+
+it("reuses subscribed pin owners after the TTL and revalidates only the invalidated owner", async () => {
+  let now = 1;
+  const subscribed = new Set(["peer-a", "peer-b"]);
+  const pins = ["peer-a", "peer-b"].map((instanceId) => pin({ instanceId, threadId: "mounted",
+    summary: stampedThread({ instanceId, threadId: "mounted", title: instanceId }) }));
+  const fetchPinnedSnapshot = vi.fn(async (target: { instanceId: string }) => snapshotOf([
+    stampedThread({ instanceId: target.instanceId, threadId: "mounted", title: `${target.instanceId}:${now}` }),
+  ]));
+  const cache = new RemoteThreadSummaryCache({
+    peers: () => [peer("peer-a"), peer("peer-b")], fetchSnapshot: vi.fn(), fetchPinnedSnapshot,
+    fetchArchivedThreads: noArchivedThreads, peerStatus: () => ({ status: "connected" }), now: () => now, ttlMs: 100,
+    hasNavigationSubscription: (instanceId) => subscribed.has(instanceId),
+  });
+  try {
+    await cache.resolvePinnedThreads(pins);
+    await settle();
+    expect(fetchPinnedSnapshot).toHaveBeenCalledTimes(2);
+    fetchPinnedSnapshot.mockClear();
+    for (let i = 0; i < 5; i++) {
+      now += 1000;
+      await cache.resolvePinnedThreads(pins);
+      await settle();
+    }
+    expect(fetchPinnedSnapshot).not.toHaveBeenCalled();
+    cache.invalidate("peer-a");
+    await settle();
+    expect(fetchPinnedSnapshot.mock.calls.map(([target]) => target.instanceId)).toEqual(["peer-a"]);
+    const resolved = await cache.resolvePinnedThreads(pins);
+    expect(resolved.threads.find((thread) => thread.federation?.ref.target.scope === "remote"
+      && thread.federation.ref.target.instanceId === "peer-a")?.title).toBe(`peer-a:${now}`);
+    // Losing subscription coverage restores TTL for that owner alone.
+    subscribed.delete("peer-a");
+    now += 1000;
+    fetchPinnedSnapshot.mockClear();
+    await cache.resolvePinnedThreads(pins);
+    await settle();
+    expect(fetchPinnedSnapshot.mock.calls.map(([target]) => target.instanceId)).toEqual(["peer-a"]);
+    // No owner invalidation arrives during a gap without mounted subscriptions.
+    await cache.resolvePinnedThreads([]);
+    now += 1000;
+    fetchPinnedSnapshot.mockClear();
+    await cache.resolvePinnedThreads(pins);
+    await settle();
+    expect(fetchPinnedSnapshot.mock.calls.map(([target]) => target.instanceId).sort()).toEqual(["peer-a", "peer-b"]);
+  } finally {
+    cache.dispose();
+  }
+});
+
+it("revalidates mounted pin summaries after TTL when navigation is not subscribed", async () => {
+  let now = 1;
+  const mounted = pin({ instanceId: "peer-a", threadId: "mounted" });
+  const fetchPinnedSnapshot = vi.fn(async () => snapshotOf([
+    stampedThread({ instanceId: "peer-a", threadId: "mounted", title: `Updated:${now}` }),
+  ]));
+  const cache = new RemoteThreadSummaryCache({
+    peers: () => [peer("peer-a")], fetchSnapshot: vi.fn(), fetchPinnedSnapshot,
+    fetchArchivedThreads: noArchivedThreads, peerStatus: () => ({ status: "connected" }),
+    now: () => now, ttlMs: 100,
+  });
+  try {
+    await cache.resolvePinnedThreads([mounted]);
+    await settle();
+    expect(fetchPinnedSnapshot).toHaveBeenCalledTimes(1);
+    now += 101;
+    await cache.resolvePinnedThreads([mounted]);
+    await settle();
+    expect(fetchPinnedSnapshot).toHaveBeenCalledTimes(2);
+    expect((await cache.resolvePinnedThreads([mounted])).threads[0]?.title).toBe(`Updated:${now}`);
   } finally {
     cache.dispose();
   }

@@ -1,6 +1,7 @@
 import { NAVIGATION_QUERY_MAX_RESULT_BYTES } from "@pwragent/shared";
-import type { NavigationQueryAnchor, NavigationQueryPage, NavigationQueryRequest } from "@pwragent/shared";
+import type { FederationTarget, NavigationQueryAnchor, NavigationQueryPage, NavigationQueryRequest } from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
+import { federationTargetsEqual } from "./federated-thread-events";
 import {
   applyNavigationPage, beginNavigationPageRead, createNavigationPageState,
   failNavigationPageRead, isNavigationCursorExpired, navigationRetainedRange, type NavigationPageState,
@@ -149,10 +150,11 @@ export class NavigationWindowQueries {
     this.publish();
   }
 
-  refresh(id?: string): Promise<void> {
+  refresh(id?: string, owners?: readonly FederationTarget[]): Promise<void> {
     if (!this.visible || this.disposed) return Promise.resolve();
     const resources = id ? [this.resources.get(id)].filter((value): value is Resource => Boolean(value)) : [...this.resources.values()];
-    return Promise.all(resources.map(async (resource) => {
+    return Promise.all(resources.filter((resource) => !owners || owners.some((owner) =>
+      federationTargetsEqual(owner, resource.value.state.request.federationTarget))).map(async (resource) => {
       if (resource.pending) resource.refreshAfterPending = true;
       await this.read(resource, false);
       // A caller awaiting refresh owns the coalesced replacement too, not
@@ -162,10 +164,11 @@ export class NavigationWindowQueries {
   }
 
   /** Invalidate transport baselines before canonical owner events can race a late page. */
-  invalidate(id?: string): void {
+  invalidate(id?: string, owners?: readonly FederationTarget[]): void {
     let changed = false;
     for (const resource of this.resources.values()) {
       if (id && resource.value.id !== id) continue;
+      if (owners && !owners.some((owner) => federationTargetsEqual(owner, resource.value.state.request.federationTarget))) continue;
       // Fence each physical read once. Further events before its replacement
       // carry no new presentation state and must not rerender every row.
       if (resource.invalidated) continue;

@@ -102,6 +102,8 @@ type RuntimeHarness = {
     status: "connected" | "disconnected",
     unavailableReason?: string,
   ) => void;
+  hasNavigationSubscription: (instanceId: FederationInstanceId) => boolean;
+  onRemoteBackendEvent: (listener: (event: AgentEvent) => void) => () => void;
   remoteThreadSummaryCache?: {
     invalidate: (instanceId?: string) => void;
   };
@@ -307,6 +309,10 @@ describe("DesktopFederationRuntime", () => {
       runtime.localInstanceId = id;
       runtime.router = new FederationRouter({ localInstanceId: id });
     }
+    const invalidate = vi.fn();
+    viewer.remoteThreadSummaryCache = { invalidate };
+    const navigationListener = vi.fn();
+    viewer.onRemoteBackendEvent(navigationListener);
     viewer.gatewayInstanceId = viaGateway ? "gateway_one" : undefined;
     owner.gatewayInstanceId = viaGateway ? "gateway_one" : undefined;
     const published: AgentEvent[] = [];
@@ -342,14 +348,24 @@ describe("DesktopFederationRuntime", () => {
     }]);
     const resets = () => published.filter((event) => event.notification.method === "federation/eventStream/changed");
     expect(resets()).toHaveLength(1);
+    expect(invalidate.mock.calls).toEqual([["owner_one"]]);
+    expect(navigationListener).toHaveBeenLastCalledWith(resets()[0]);
+    invalidate.mockClear();
     expect(viewer.rendererWantsRemoteEvent(7, "owner_one", "transcript", resets()[0])).toBe(true);
     expect(viewer.rendererWantsRemoteEvent(8, "owner_one", "transcript", resets()[0])).toBe(false);
+    viewer.setRendererEventSubscriptions(9, "remote-window", [{
+      sourceInstanceId: "owner_one", eventClasses: ["navigation"], threadSelection: { kind: "all" },
+    }]);
+    // The sidebar may subscribe to navigation while another window owns the
+    // transcript stream. Both must receive its recovery acknowledgement.
+    expect(viewer.rendererWantsRemoteEvent(9, "owner_one", "transcript", resets()[0])).toBe(true);
     expect(frames[0]).toMatchObject({ method: FEDERATION_EVENT_STREAM_METHOD });
     const delta = (text: string): AgentEvent => ({
       backend: "codex", notification: {
         method: "item/agentMessage/delta", params: { threadId: "thread-1", turnId: "turn-1", itemId: "item-1", delta: text },
       },
     });
+    expect(viewer.rendererWantsRemoteEvent(9, "owner_one", "transcript", delta("one"))).toBe(false);
     owner.forwardLocalBackendEvent(delta("one"));
     owner.forwardLocalBackendEvent(delta("two"));
     expect(resets()).toHaveLength(1);
@@ -376,9 +392,16 @@ describe("DesktopFederationRuntime", () => {
     viewer.publishRemoteBackendEvent(duplicate, viaGateway ? "gateway_one" : "owner_one");
     expect(published).toHaveLength(beforeDuplicate);
     dropNext = true;
-    owner.forwardLocalBackendEvent(delta("lost"));
+    owner.forwardLocalBackendEvent({ backend: "codex", notification: {
+      method: "navigation/invalidated", params: { sourceMethod: "thread/started" },
+    } });
     owner.forwardLocalBackendEvent(delta("after-gap"));
     expect(resets()).toHaveLength(2);
+    expect(invalidate.mock.calls).toEqual([["owner_one"]]);
+    expect(navigationListener).toHaveBeenLastCalledWith(resets()[1]);
+    // Replaying an acknowledged epoch must not create another refresh.
+    viewer.publishRemoteBackendEvent(frames.at(-1)!, viaGateway ? "gateway_one" : "owner_one");
+    expect(invalidate.mock.calls).toEqual([["owner_one"]]);
     expect(published.some((event) => "delta" in event.notification.params && event.notification.params.delta === "after-gap")).toBe(false);
     owner.forwardLocalBackendEvent(delta("recovered"));
     expect(published.at(-1)?.notification).toEqual(delta("recovered").notification);
@@ -2621,6 +2644,15 @@ describe("DesktopFederationRuntime", () => {
   });
 
   it.each([
+    "thread/archived",
+    "thread/unarchived",
+    "thread/started",
+    "navigation/thread/seen",
+    "navigation/directory/seen",
+    "navigation/threadDirectories/updated",
+    "navigation/providerThreads/refreshed",
+    "pullRequest/status/updated",
+    "thread/pin/added",
     "thread/status/changed",
     "thread/parent/cleared",
     "thread/parent/set",
@@ -2720,6 +2752,31 @@ describe("DesktopFederationRuntime", () => {
 
     expect(invalidated).toEqual([]);
   });
+  it.each([
+    { supportsEvents: false, sendFails: false, subscribed: false },
+    { supportsEvents: true, sendFails: true, subscribed: false },
+    { supportsEvents: true, sendFails: false, subscribed: true },
+  ])("requires a connected capable owner and sent navigation demand before disabling TTL: %j", ({ supportsEvents, sendFails, subscribed }) => {
+    const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    runtime.localInstanceId = "viewer_one";
+    let connected = true;
+    runtime.connectedPeerTargets = () => connected ? [{
+      target: { scope: "remote", instanceId: "owner_one" }, label: "Owner",
+      capabilities: supportsEvents ? ["thread_navigation", "event_subscriptions"] : ["thread_navigation"],
+    }] : [];
+    runtime.sendEnvelopeToTarget = () => { if (sendFails) throw new Error("disconnected"); };
+    expect(runtime.hasNavigationSubscription("owner_one")).toBe(false);
+    runtime.setEventSubscriptions("remote-thread-summary-cache", [{
+      sourceInstanceId: "owner_one", eventClasses: ["navigation"], threadSelection: { kind: "all" },
+    }]);
+    expect(runtime.hasNavigationSubscription("owner_one")).toBe(subscribed);
+    connected = false;
+    expect(runtime.hasNavigationSubscription("owner_one")).toBe(false);
+    connected = true;
+    runtime.setEventSubscriptions("remote-thread-summary-cache", []);
+    expect(runtime.hasNavigationSubscription("owner_one")).toBe(false);
+  });
+
   it("does not retain navigation subscriptions for bounded Cmd+K searches", async () => {
     const sent: FederationProtocolEnvelope[] = [];
     const router = new FederationRouter({ localInstanceId: "viewer_one" });
