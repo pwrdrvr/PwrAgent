@@ -119,6 +119,7 @@ jobs:
             patches/**
             pnpm-lock.yaml
             pnpm-workspace.yaml
+            scripts/linux-sandbox.mjs
             apps/desktop/scripts/ensure-electron-runtime.mjs
             apps/desktop/scripts/rebuild-native-for-electron.mjs
           sparse-checkout-cone-mode: false
@@ -262,6 +263,7 @@ jobs:
             patches/**
             pnpm-lock.yaml
             pnpm-workspace.yaml
+            scripts/linux-sandbox.mjs
             apps/desktop/scripts/ensure-electron-runtime.mjs
             apps/desktop/scripts/rebuild-native-for-electron.mjs
           sparse-checkout-cone-mode: false
@@ -532,6 +534,7 @@ jobs:
             patches/**
             pnpm-lock.yaml
             pnpm-workspace.yaml
+            scripts/linux-sandbox.mjs
             apps/desktop/scripts/ensure-electron-runtime.mjs
             apps/desktop/scripts/rebuild-native-for-electron.mjs
           sparse-checkout-cone-mode: false
