@@ -95,7 +95,12 @@ it.each(["orbit", "projects"].flatMap((layout) => ["local", "remote"].map((owner
     expect(restarted).toHaveLength(1);
     expect(restarted[0]!.anchor).toBeUndefined();
     expect(restarted[0]!.cursor).toBeUndefined();
-    expect(view.getByRole("button", { name: loadLabel })).toBeTruthy();
+    // `findByRole`, not `getByRole`: the restart clears the anchor and refetches,
+    // and the two halves of that land in separate commits. Waiting for the
+    // Restart button to disappear says the refetch started, not that its first
+    // page arrived, so a synchronous get here was asserting on whichever commit
+    // happened to be first.
+    expect(await view.findByRole("button", { name: loadLabel })).toBeTruthy();
     view.unmount();
   },
 );
