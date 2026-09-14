@@ -281,9 +281,14 @@ describe("Tangerine Terminal theme contract", () => {
     expect(
       extractRuleBody(css, ".thread-row__pin-button,\n.thread-row__overflow-button"),
     ).toMatch(/height:\s*24px;/);
+    // The add-reaction chip's explicit `width` is part of the contract, not
+    // decoration: `min-width` is only a floor, so the base chip's `0 8px`
+    // padding painted a 32px stadium, and the timestamp-lane reserve below
+    // is derived against a 24px square. Drop the width and the reserve
+    // silently stops clearing the cluster.
     expect(
       extractRuleBody(css, ".thread-row__actions .thread-row__chip--add-reaction"),
-    ).toMatch(/height:\s*24px;[\s\S]*min-width:\s*24px;/);
+    ).toMatch(/width:\s*24px;[\s\S]*height:\s*24px;[\s\S]*min-width:\s*24px;[\s\S]*padding:\s*0;/);
 
     // The in-title unpin control is a real 24x24 target too (axe's
     // target-size rule gives no inline exception to flex-item buttons);
@@ -294,20 +299,22 @@ describe("Tangerine Terminal theme contract", () => {
     );
 
     // A 24px target is worthless while something paints over it — the
-    // pinned-row hover reserve keeps the revealed cluster off the
-    // in-title unpin pin. Pinned (all four reveal arms + the value + the
-    // cluster-side literals it is derived from) so a cluster resize or a
-    // dropped keyboard arm revisits the derivation in the rule's comment
-    // in the same commit.
+    // pinned-row hover reserve widens the timestamp's lane (which the
+    // cluster paints over, and which is faded out in exactly these
+    // states) so the revealed cluster docks beside the in-title unpin pin
+    // instead of on top of it. Pinned (all four reveal arms + the value +
+    // the cluster-side literals it is derived from) so a cluster resize
+    // or a dropped keyboard arm revisits the derivation in the rule's
+    // comment in the same commit.
     expect(
       extractRuleBody(
         css,
-        ".thread-row-shell:hover .thread-row--pinned .thread-row__heading,\n"
-          + ".thread-row-shell:has(.thread-row__overflow-button:focus-visible) .thread-row--pinned .thread-row__heading,\n"
-          + ".thread-row-shell:has(.thread-row__chip--add-reaction:focus-visible) .thread-row--pinned .thread-row__heading,\n"
-          + ".thread-row-shell:has(.thread-row__chip--add-reaction.is-open) .thread-row--pinned .thread-row__heading",
+        ".thread-row-shell:hover .thread-row--pinned .thread-row__time,\n"
+          + ".thread-row-shell:has(.thread-row__overflow-button:focus-visible) .thread-row--pinned .thread-row__time,\n"
+          + ".thread-row-shell:has(.thread-row__chip--add-reaction:focus-visible) .thread-row--pinned .thread-row__time,\n"
+          + ".thread-row-shell:has(.thread-row__chip--add-reaction.is-open) .thread-row--pinned .thread-row__time",
       ),
-    ).toMatch(/padding-right:\s*46px;/);
+    ).toMatch(/min-width:\s*49px;/);
     expect(extractRuleBody(css, ".thread-row__actions")).toMatch(
       /right:\s*11px;[\s\S]*gap:\s*4px;/,
     );
@@ -972,7 +979,7 @@ describe("Tangerine Terminal theme contract", () => {
     // Pins the FULL five-selector fade list (it once silently grew a
     // pin-button arm this regex didn't describe, so the test matched a
     // suffix and stopped being the authoritative statement of the
-    // list). The pinned-row heading reserve mirrors this state set —
+    // list). The pinned-row lane reserve mirrors this state set —
     // its own pin lives with the target-size block above.
     expect(css).toMatch(
       /\.thread-row-shell:has\(\.thread-row__pin-button:focus-visible\) \.thread-row__time,\s*\.thread-row-shell:hover \.thread-row__time,\s*\.thread-row-shell:has\(\.thread-row__overflow-button:focus-visible\) \.thread-row__time,\s*\.thread-row-shell:has\(\.thread-row__chip--add-reaction:focus-visible\) \.thread-row__time,\s*\.thread-row-shell:has\(\.thread-row__chip--add-reaction\.is-open\) \.thread-row__time\s*\{[\s\S]*?opacity:\s*0;[\s\S]*?\}/
