@@ -107,7 +107,12 @@ async function attachPng(
  * samples cannot say which.
  *
  * `editable` is the composer's own answer rather than the card's, because
- * the two disagreeing is itself a finding.
+ * the two disagreeing is itself a finding — and measured locally they do
+ * NOT disagree: the gate opening, `contenteditable` flipping, and the
+ * `is-disabled` class clearing all land within 3ms of each other. So a
+ * barrier that passed against `contenteditable` saw a gate that was open
+ * at that moment, and a later `detail:none` is a withdrawal rather than a
+ * composer that was never authorized.
  */
 async function recordComposerTrajectory(
   mapWindow: Page,
@@ -151,7 +156,8 @@ async function fillReportingComposerBlock(
         `Composer refused the keystroke: block=${
           block ?? "<absent, so it believed the composer was live>"
         }`,
-        "  composer gate trajectory (25ms sampler, identical samples collapsed):",
+        "  composer gate trajectory (mutation-driven, identical snapshots"
+        + " collapsed):",
         await trajectory.report(),
       ].join("\n"),
       { cause: error },
@@ -216,12 +222,15 @@ test("sends pasted, dropped, and local-file attachments from a Star Map chat car
     // Playwright rejects a `contenteditable="false"` node as the wrong
     // element type outright instead of retrying until it becomes editable.
     //
-    // One wait is not enough on Windows: the composer is live here and dead by
-    // the keystroke below. `navigationSelectionAuthorizesComposer` removed one
-    // cause (a revalidating read withdrawing an authorization it held) and
-    // this still fails, reporting a card that holds no detail at all — which
-    // the card only publishes while no read has completed for the identity it
-    // is asking about. The recorder above is what says how it got back there.
+    // One wait is not enough on Windows: the composer is live here and dead
+    // by the keystroke below, and the Windows trace shows this barrier
+    // passing in 5ms — so the gate really was open here, and the card
+    // publishing `detail:none` 270ms later is a WITHDRAWAL, not a composer
+    // that was never authorized. `navigationSelectionAuthorizesComposer`
+    // removed one cause of that (a revalidating read withdrawing an
+    // authorization it held); `detail:none` is a different one, the state
+    // the card holds only while no read has completed for the identity it
+    // asks about. The recorder above is what says how it got back there.
     await expect(messageInput).toBeEditable();
 
     await attachPng(messageInput, {
