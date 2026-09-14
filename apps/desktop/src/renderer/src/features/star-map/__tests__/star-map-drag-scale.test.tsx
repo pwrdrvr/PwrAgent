@@ -1,6 +1,8 @@
 import "./foreground-fixture";
-import { describe, expect, it } from "vitest";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
 import { pointerDeltaToCanvas } from "../star-map-layout";
+import { StarMapScreen } from "../StarMapScreen";
 
 /**
  * Dragging a card while zoomed in moved the card further than the mouse,
@@ -52,13 +54,15 @@ describe("pointerDeltaToCanvas", () => {
 });
 
 describe("card drag under zoom", () => {
+  // Everything this test needs is imported at the top of the file, not with a
+  // dynamic `import()` in here. `StarMapScreen` pulls in the whole star-map
+  // tree, and Vite transforms it on first use: measured at 2.7-4.1s in this
+  // worktree. Awaited inside the test body that cost is billed to the 5s
+  // `testTimeout`, so the assertion below was sharing a budget with the
+  // compiler and lost 14 runs out of 25. At module scope the same work happens
+  // during collection, which testTimeout does not bound, and the test is left
+  // measuring the drag.
   it("moves the card by the pointer distance in canvas space", async () => {
-    const { render, screen, fireEvent, waitFor, act } = await import(
-      "@testing-library/react"
-    );
-    const { StarMapScreen } = await import("../StarMapScreen");
-    const { vi } = await import("vitest");
-
     window.localStorage.setItem(
       "pwragent.starMap.viewPreferences",
       JSON.stringify({ layout: "orbit" }),

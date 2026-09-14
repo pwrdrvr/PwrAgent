@@ -64,6 +64,16 @@ function ownerApi(value: object): DesktopApi {
   };
 }
 
+// `App` code-splits the thread detail tree behind `import()`. Vite transforms
+// that whole subtree the first time a test opens a thread, and awaited inside a
+// test body the cost lands in its 5s `testTimeout` — so the first test to reach
+// a transcript was sharing a budget with the compiler. Pay it here instead:
+// hookTimeout is separate from testTimeout, and `App` then resolves the same
+// module from cache.
+beforeAll(async () => {
+  await import("../features/thread-detail/ThreadView");
+});
+
 beforeAll(() => {
   const emptyRect = {
     bottom: 0,

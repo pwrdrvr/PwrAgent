@@ -31,6 +31,29 @@ afterEach(() => {
   });
 });
 
+/**
+ * Wait for the bar to be listening, not merely painted.
+ *
+ * `findByRole` is the wrong signal here. It resolves off the commit's own
+ * MutationObserver record — a microtask — while React schedules that commit's
+ * passive effects with `setImmediate`, and Testing Library's async wrapper ends
+ * on a `setTimeout(…, 0)` in the earlier timers phase. So the buttons can be on
+ * screen with the `useEffect` that adds the window-level Alt listeners still
+ * queued, and every key this file dispatches then lands on nothing. The trace
+ * from a failing run reads: dispatch:keydown, dispatch:keyup, add:keydown,
+ * add:keyup — the bar never opens, and the assertion a second later reports a
+ * DOM that never changed. It cost PR #2114 a red `Test` and `Windows renderer +
+ * packages` on a file that branch did not contain.
+ *
+ * `act` enqueues with `setImmediate` too, so an empty awaited scope queues
+ * strictly behind React's pending flush and drains it. It also settles the menu
+ * model's promise inside the act scope, so the render it causes is flushed here
+ * rather than whenever the scheduler gets to it.
+ */
+async function settleMenuBar(): Promise<void> {
+  await act(async () => {});
+}
+
 /** The bar plus a composer to steal focus from, the way the strip sits above one. */
 async function mountWithComposer(): Promise<HTMLTextAreaElement> {
   render(
@@ -39,7 +62,8 @@ async function mountWithComposer(): Promise<HTMLTextAreaElement> {
       <textarea aria-label="Reply" />
     </>,
   );
-  await screen.findByRole("menuitem", { name: "File" });
+  await settleMenuBar();
+  screen.getByRole("menuitem", { name: "File" });
   const composer = screen.getByRole("textbox", {
     name: "Reply",
   }) as HTMLTextAreaElement;
@@ -177,7 +201,8 @@ describe("Alt and the painted menu bar", () => {
     // stranding focus on <body> with no error.
     const { unmount } = render(<textarea aria-label="Scratch" />);
     render(<AppMenuBar />);
-    await screen.findByRole("menuitem", { name: "File" });
+    await settleMenuBar();
+    screen.getByRole("menuitem", { name: "File" });
     const scratch = screen.getByRole("textbox", { name: "Scratch" });
     scratch.focus();
 
