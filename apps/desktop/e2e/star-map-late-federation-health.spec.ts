@@ -13,7 +13,7 @@
 // This is what `star-map-composer-attachments.spec.ts` was failing on in
 // `Windows Desktop E2E (lane 3 of 4)`: Windows IPC is slow enough to put
 // the health read AFTER the first card is opened, so the card was live at
-// that spec's `toBeEditable()` barrier and dead ~250ms later at its
+// that spec's composer barrier and dead ~250ms later at its
 // keystroke. macOS and Linux resolve health long before any spec clicks a
 // thread, which is why the ordering never appeared there — so this spec
 // creates it deliberately rather than waiting for a platform to supply it.
@@ -82,10 +82,10 @@ test("keeps an open Star Map chat card mounted when federation health lands late
       name: `Chat: ${THREAD_TITLE}`,
     });
     await expect(chatCard).toBeVisible();
-    const messageInput = chatCard.getByRole("textbox", {
-      name: `Message ${THREAD_TITLE}`,
-    });
-    await expect(messageInput).toBeEditable();
+    // The card's own answer, not `toBeEditable()` — that passes against a
+    // `contenteditable="false"` div and would let this spec start its wait
+    // before the composer was ever authorized.
+    await expect(chatCard).not.toHaveAttribute("data-composer-block");
     const mountedAs = await chatCard.getAttribute("data-card-mount");
     expect(mountedAs).not.toBeNull();
 

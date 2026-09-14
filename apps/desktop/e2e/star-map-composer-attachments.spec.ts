@@ -129,6 +129,26 @@ async function recordComposerTrajectory(
 }
 
 /**
+ * Wait until the card itself says the composer is authorized.
+ *
+ * NOT `expect(messageInput).toBeEditable()`, which this spec used and which
+ * asserts nothing here: Playwright's editable check is "enabled and not
+ * read-only", and a `<div role="textbox">` has neither attribute, so it
+ * passes in 5ms against `contenteditable="false"` with
+ * `isContentEditable === false`. `contenteditable` only gates the FILL
+ * action's element-type check — which is why the keystroke below could
+ * refuse an element this barrier had just accepted.
+ *
+ * `data-composer-block` is the card's own answer and the thing that
+ * actually governs the editor: measured locally, the gate clearing,
+ * `contenteditable` flipping to `true` and the `is-disabled` class going
+ * away all land within 3ms of each other. Absent means authorized.
+ */
+async function waitForAuthorizedComposer(chatCard: Locator): Promise<void> {
+  await expect(chatCard).not.toHaveAttribute("data-composer-block");
+}
+
+/**
  * Type into the card's composer, reporting the whole gate history if it is
  * closed.
  *
@@ -222,16 +242,15 @@ test("sends pasted, dropped, and local-file attachments from a Star Map chat car
     // Playwright rejects a `contenteditable="false"` node as the wrong
     // element type outright instead of retrying until it becomes editable.
     //
-    // One wait is not enough on Windows: the composer is live here and dead
-    // by the keystroke below, and the Windows trace shows this barrier
-    // passing in 5ms — so the gate really was open here, and the card
-    // publishing `detail:none` 270ms later is a WITHDRAWAL, not a composer
-    // that was never authorized. `navigationSelectionAuthorizesComposer`
-    // removed one cause of that (a revalidating read withdrawing an
-    // authorization it held); `detail:none` is a different one, the state
-    // the card holds only while no read has completed for the identity it
-    // asks about. The recorder above is what says how it got back there.
-    await expect(messageInput).toBeEditable();
+    // This barrier is why the Windows failure looked impossible for four CI
+    // rounds. It was `expect(messageInput).toBeEditable()`, which passed in
+    // 5ms on every Windows run while the recorder above showed the composer
+    // blocked from mount to keystroke — so the composer appeared to be live
+    // here and dead 300ms later. It was never live: `toBeEditable()` asserts
+    // nothing against a `<div role="textbox">` (see the helper). Windows
+    // simply takes longer than macOS and Linux to complete the card's exact
+    // detail read, and this is the wait that was supposed to cover that.
+    await waitForAuthorizedComposer(chatCard);
 
     await attachPng(messageInput, {
       color: "#2255aa",
@@ -361,7 +380,7 @@ test("rejects a local file on a remote Star Map chat card", async () => {
     const messageInput = chatCard.getByRole("textbox", {
       name: `Message ${REMOTE_THREAD_TITLE}`,
     });
-    await expect(messageInput).toBeEditable();
+    await waitForAuthorizedComposer(chatCard);
     await attachFilesystemFile(mapWindow, messageInput, notesPath);
 
     await expect(chatCard.getByRole("alert")).toContainText(
