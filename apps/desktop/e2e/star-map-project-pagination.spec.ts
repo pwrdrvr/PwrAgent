@@ -2,9 +2,62 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import { launchElectronApp } from "./fixtures/electron-app";
 import { openStarMapWindow } from "./fixtures/star-map-window";
+
+/**
+ * What the map looked like when a continuation did not arrive.
+ *
+ * `Load more` routes to `NavigationWindowController.loadMore`, whose `read`
+ * returns immediately unless `isCurrent(resource)` — and that requires the
+ * controller to be visible. `useStarMapProjectPages` sets visibility from
+ * `useStarMapForeground`, which is
+ * `visibilityState === "visible" && document.hasFocus()`. So a press landing
+ * while this window is not foreground is dropped in silence: no error, no
+ * spinner, no state change. It is also unrecoverable inside one attempt —
+ * `setVisible(true)` re-reads each resource from the start rather than
+ * replaying the continuation that was lost.
+ *
+ * Playwright emulates focus, which is why this normally holds. These two
+ * readings say whether the emulation was in force at the moment the press
+ * was dropped, which is the difference between that explanation and a
+ * genuinely missing card.
+ */
+async function describeMissingContinuation(
+  map: Page,
+  threadKeySuffix: string,
+): Promise<string> {
+  const observed = await map.evaluate((suffix) => ({
+    hasFocus: document.hasFocus(),
+    visibilityState: document.visibilityState,
+    cards: document.querySelectorAll("[data-thread-key]").length,
+    projectZeroCards: [...document.querySelectorAll("[data-thread-key]")]
+      .map((card) => card.getAttribute("data-thread-key") ?? "")
+      .filter((key) => key.includes("project-0-card-")).length,
+    wanted: document.querySelectorAll(`[data-thread-key$="${suffix}"]`).length,
+    loadMoreButtons: [...document.querySelectorAll("button")]
+      .filter((button) => (button.textContent ?? "").includes("Load more"))
+      .map((button) => ({
+        label: (button.textContent ?? "").trim(),
+        disabled: (button as HTMLButtonElement).disabled,
+      })),
+    activeElement: document.activeElement
+      ? `${document.activeElement.tagName.toLowerCase()} ${JSON.stringify(
+        (document.activeElement.textContent ?? "").trim().slice(0, 40),
+      )}`
+      : "<none>",
+  }), threadKeySuffix);
+
+  return [
+    `  foreground: hasFocus=${observed.hasFocus}`
+    + ` visibilityState=${observed.visibilityState}`,
+    `  cards: total=${observed.cards} project-0=${observed.projectZeroCards}`
+    + ` matching "${threadKeySuffix}"=${observed.wanted}`,
+    `  load-more buttons: ${JSON.stringify(observed.loadMoreButtons)}`,
+    `  focus is on: ${observed.activeElement}`,
+  ].join("\n");
+}
 
 test("discovers all project clouds and continues one project's cards in Electron", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-map-project-pages-"));
@@ -28,10 +81,28 @@ test("discovers all project clouds and continues one project's cards in Electron
     // outside the initial camera rectangle in a fifteen-project sky.
     await more.focus();
     await more.press("Enter");
-    await expect(map.locator('[data-thread-key$="project-0-card-19"]')).toHaveCount(1);
+    await expect(map.locator('[data-thread-key$="project-0-card-19"]')).toHaveCount(1)
+      .catch(async (error: unknown) => {
+        throw new Error(
+          [
+            "The continuation never rendered project-0-card-19.",
+            await describeMissingContinuation(map, "project-0-card-19"),
+          ].join("\\n"),
+          { cause: error },
+        );
+      });
     await expect(more).toBeEnabled();
     await more.press("Enter");
-    await expect(map.locator('[data-thread-key$="project-0-card-22"]')).toHaveCount(1);
+    await expect(map.locator('[data-thread-key$="project-0-card-22"]')).toHaveCount(1)
+      .catch(async (error: unknown) => {
+        throw new Error(
+          [
+            "The continuation never rendered project-0-card-22.",
+            await describeMissingContinuation(map, "project-0-card-22"),
+          ].join("\\n"),
+          { cause: error },
+        );
+      });
     await expect(more).toHaveCount(0);
     await expect(map.locator(".star-map__cluster-label")).toHaveCount(15);
   } finally {
