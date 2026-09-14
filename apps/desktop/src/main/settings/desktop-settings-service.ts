@@ -2361,6 +2361,7 @@ export class DesktopSettingsService {
     const previousManagedCommand =
       this.managedCodexRuntime?.command
       ?? this.configStore.read("providers").codex.lastKnownGood?.selectedCommand;
+    const managedStartedAt = performance.now();
     try {
       this.managedCodexRuntime = await this.resolveManagedCodexRuntime(
         config,
@@ -2371,6 +2372,13 @@ export class DesktopSettingsService {
       this.managedCodexError = error instanceof Error
         ? error.message
         : String(error);
+    } finally {
+      settingsLog.info("Codex discovery managed runtime completed", {
+        checkMode,
+        durationMs: Math.round(performance.now() - managedStartedAt),
+        available: Boolean(this.managedCodexRuntime),
+        failed: Boolean(this.managedCodexError),
+      });
     }
     if (
       this.managedCodexRuntime
@@ -2385,6 +2393,7 @@ export class DesktopSettingsService {
       });
     }
     const configuredCommand = this.resolveActiveCodexCommand(config);
+    const executableStartedAt = performance.now();
     const discovery = await this.codexDiscoveryCoordinator.discover(
       configuredCommand,
       {
@@ -2392,6 +2401,11 @@ export class DesktopSettingsService {
         force: permit.intent !== "startup",
       },
     );
+    settingsLog.info("Codex discovery executable probes completed", {
+      durationMs: Math.round(performance.now() - executableStartedAt),
+      candidateCount: discovery.candidates.length,
+    });
+    const profilesStartedAt = performance.now();
     this.codexProfiles = normalizeCodexProfilesSnapshot(
       discoverCodexAuthProfiles({
         configuredProfile: config.models?.codex?.profile,
@@ -2416,6 +2430,9 @@ export class DesktopSettingsService {
         ? { selectedCommand: discovery.selectedCommand }
         : {}),
       ...(selected?.version ? { selectedVersion: selected.version } : {}),
+    });
+    settingsLog.info("Codex discovery profile snapshot completed", {
+      durationMs: Math.round(performance.now() - profilesStartedAt),
     });
   }
 

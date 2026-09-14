@@ -1226,6 +1226,7 @@ async function validateExtractedBundle(
   directory: string,
   options: BundleValidationOptions,
 ): Promise<{ platform: NodeJS.Platform }> {
+  const startedAt = performance.now();
   const executableNames = managedCodexExecutableNames(options.platform);
   const requiredFiles = [
     ...executableNames,
@@ -1258,11 +1259,18 @@ async function validateExtractedBundle(
       await chmod(command, 0o755),
     ));
   }
+  managedCodexLog.info("managed Codex bundle files checked", {
+    durationMs: Math.round(performance.now() - startedAt),
+  });
   if (options.platform === "darwin") {
+    const entitlementsStartedAt = performance.now();
     await (
       options.verifyMacosCodeModeHostEntitlements
       ?? verifyMacosCodeModeHostJitEntitlements
     )(path.join(directory, "codex-code-mode-host"));
+    managedCodexLog.info("managed Codex entitlements checked", {
+      durationMs: Math.round(performance.now() - entitlementsStartedAt),
+    });
   }
   if (
     options.requirePlatformSignature
@@ -1271,7 +1279,12 @@ async function validateExtractedBundle(
     const verify = options.verifyPlatformSignature
       ?? verifyMatchingPlatformSignature;
     for (const command of executablePaths) {
+      const signatureStartedAt = performance.now();
       await verify(command, options.applicationCommand, options.platform);
+      managedCodexLog.info("managed Codex signature checked", {
+        executable: path.basename(command),
+        durationMs: Math.round(performance.now() - signatureStartedAt),
+      });
     }
   }
 
@@ -1279,15 +1292,24 @@ async function validateExtractedBundle(
   const banners = expectedCodexVersionBanners(options.platform, expectedVersion);
   for (const [name, banner] of banners) {
     const command = path.join(directory, name);
+    const versionStartedAt = performance.now();
     const output = options.probeVersion
       ? await options.probeVersion(command)
       : await readVersionOutput(command);
+    managedCodexLog.info("managed Codex version probed", {
+      executable: name,
+      durationMs: Math.round(performance.now() - versionStartedAt),
+      matchesExpected: output.trim() === banner,
+    });
     if (output.trim() !== banner) {
       throw new Error(
         `Managed Codex executable ${name} reported ${JSON.stringify(output.trim())}; expected ${JSON.stringify(banner)}.`,
       );
     }
   }
+  managedCodexLog.info("managed Codex bundle validated", {
+    durationMs: Math.round(performance.now() - startedAt),
+  });
   return { platform: options.platform };
 }
 
@@ -1431,6 +1453,7 @@ async function activateRuntime(
   runtime: ManagedCodexRuntime,
   options: ManagedCodexRuntimeOptions,
 ): Promise<ManagedCodexRuntime> {
+  const startedAt = performance.now();
   try {
     await markRuntimeInUse(rootDir, runtime.command);
     await pruneSupersededVersions(
@@ -1442,6 +1465,10 @@ async function activateRuntime(
     managedCodexLog.warn("managed_codex_runtime_prune_failed", {
       error: error instanceof Error ? error.message : String(error),
       tag: runtime.metadata.tag,
+    });
+  } finally {
+    managedCodexLog.info("managed Codex runtime activation completed", {
+      durationMs: Math.round(performance.now() - startedAt),
     });
   }
   return runtime;
