@@ -36,6 +36,7 @@ import {
 } from "../composer/CompactComposer";
 import { useOwnedComposerDraftStore } from "../composer/useOwnedComposerDraftStore";
 import { useNavigationSelectedDetail } from "../../lib/useNavigationSelectedDetail";
+import { navigationSelectionAuthorizesComposer } from "../../lib/navigation-query-state";
 import { useIndependentQueueProjection } from "../../lib/useIndependentQueueProjection";
 import { useComposerMentionSources } from "../composer/useComposerMentionSources";
 import type { ComposerMentionSources } from "../composer/useComposerMentions";
@@ -331,8 +332,10 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
     federationTarget,
   });
   const selectedConfiguration = selectedDetail.state?.detail?.thread;
-  const composerReady = selectedDetail.state?.readiness === "ready"
-    && selectedDetail.state.detail?.identity === "present"
+  // The queue term also covers an inactive card: `useIndependentQueueProjection`
+  // is passed no thread when `props.active === false`, and reports `loading`
+  // for a selection key it holds no state for.
+  const composerReady = navigationSelectionAuthorizesComposer(selectedDetail.state)
     && queueReadiness.readiness === "ready";
   const composerReadinessRef = useRef(false);
   composerReadinessRef.current = composerReady;

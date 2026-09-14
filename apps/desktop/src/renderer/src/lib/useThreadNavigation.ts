@@ -58,7 +58,11 @@ import {
 import type { DesktopApi } from "./desktop-api";
 import { useNavigationDirectoryDisclosure, type NavigationDirectoryDisclosure } from "./useNavigationDirectoryDisclosure";
 import { useNavigationSelectedDetail } from "./useNavigationSelectedDetail";
-import { navigationIdentityFromThreadKey, navigationThreadSelectionKey } from "./navigation-query-state";
+import {
+  navigationIdentityFromThreadKey,
+  navigationSelectionAuthorizesComposer,
+  navigationThreadSelectionKey,
+} from "./navigation-query-state";
 import type { ThreadActionErrorKind } from "../features/notifications/thread-action-error-notice";
 import { fileLabelFromPath } from "./directory-references";
 import {
@@ -4635,8 +4639,8 @@ export function useThreadNavigation(
     [selectedThreadKey, threads]
   );
 
-  const selectedThreadConfigurationReady = selectedDetail.state?.readiness === "ready"
-    && selectedDetail.state.detail?.identity === "present";
+  const selectedThreadConfigurationReady =
+    navigationSelectionAuthorizesComposer(selectedDetail.state);
   const selectedThread = useMemo(() => {
     const detailThread = selectedDetail.state?.detail?.thread;
     if (!detailThread) return selectedRow;

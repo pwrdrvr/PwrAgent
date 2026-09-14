@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { NavigationQueryPage, NavigationQueryRequest } from "@pwragent/shared";
+import type { NavigationQueryPage, NavigationQueryRequest, NavigationSelectedDetailResponse } from "@pwragent/shared";
 import {
   applyNavigationPage,
   applyNavigationSelectedDetail,
@@ -8,8 +8,10 @@ import {
   failNavigationPageRead,
   navigationIdentityKey,
   navigationIdentityFromThreadKey,
+  navigationSelectionAuthorizesComposer,
   selectNavigationIdentity,
 } from "../navigation-query-state";
+import type { NavigationSelectionState } from "../navigation-query-state";
 
 const request: NavigationQueryRequest = {
   protocol: 2, consumer: "main-sidebar", query: { kind: "lens", lens: "inbox" },
@@ -150,4 +152,64 @@ it("retains disconnected child state through retries until a successful page arr
   const other = failNavigationPageRead(previous, previous.pendingSequence, new Error("Invalid query"));
   expect(other.error).toBe("Invalid query");
   expect(beginNavigationPageRead(other).error).toBeUndefined();
+});
+
+describe("composer authorization outlives revalidation", () => {
+  const selected = { backend: "codex" as const, threadId: "selected" };
+  function detailResponse(
+    patch: Partial<NavigationSelectedDetailResponse> = {},
+  ): NavigationSelectedDetailResponse {
+    return {
+      protocol: 2, ref: selected, revision: "r1", readiness: "ready", identity: "present",
+      thread: {
+        source: "codex", id: selected.threadId, title: "Selected", titleSource: "explicit",
+        linkedDirectories: [], inbox: { inInbox: true }, threadStatus: "idle",
+      },
+      ...patch,
+    };
+  }
+  function authorized(): NavigationSelectionState {
+    const started = selectNavigationIdentity(undefined, selected);
+    return applyNavigationSelectedDetail({
+      state: started, sequence: started.pendingSequence, detail: detailResponse(),
+    });
+  }
+
+  it("keeps the composer through a same-identity refresh and withdraws it exactly", () => {
+    const ready = authorized();
+    expect(ready.readiness).toBe("ready");
+    expect(navigationSelectionAuthorizesComposer(ready)).toBe(true);
+
+    // What `useNavigationSelectedDetail` publishes the moment an admitted event
+    // fences the current read: `loading`, marked stale, detail retained. The
+    // authorization is the completed read, so it must survive this.
+    const revalidating: NavigationSelectionState = {
+      ...selectNavigationIdentity(ready, selected), stale: true,
+    };
+    expect(revalidating.readiness).toBe("loading");
+    expect(revalidating.detail).toBe(ready.detail);
+    expect(navigationSelectionAuthorizesComposer(revalidating)).toBe(true);
+
+    // A read that completed and failed does withdraw it, detail and all.
+    expect(navigationSelectionAuthorizesComposer({
+      ...revalidating, readiness: "failed", error: "Owner unreachable",
+    })).toBe(false);
+
+    // So does a thread that stopped being present.
+    const archived = selectNavigationIdentity(ready, selected);
+    expect(navigationSelectionAuthorizesComposer(applyNavigationSelectedDetail({
+      state: archived, sequence: archived.pendingSequence,
+      detail: detailResponse({ revision: "r2", identity: "archived", thread: undefined }),
+    }))).toBe(false);
+  });
+
+  it("never authorizes before this identity's own exact read lands", () => {
+    expect(navigationSelectionAuthorizesComposer(undefined)).toBe(false);
+    expect(navigationSelectionAuthorizesComposer(selectNavigationIdentity(undefined, selected))).toBe(false);
+    // Selecting a different thread drops the previous detail rather than
+    // letting it authorize the newly selected thread's composer.
+    const moved = selectNavigationIdentity(authorized(), { backend: "codex", threadId: "other" });
+    expect(moved.detail).toBeUndefined();
+    expect(navigationSelectionAuthorizesComposer(moved)).toBe(false);
+  });
 });
