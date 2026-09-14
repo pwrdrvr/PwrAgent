@@ -1,7 +1,8 @@
+import { memo } from "react";
 import { resolveIconSvgProps, type IconProps } from "./icon-types";
 
 /** Calendar grid — matches the automations glyph used in the title bar. */
-export function AutomationsIcon(props: IconProps) {
+export const AutomationsIcon = memo(function AutomationsIcon(props: IconProps) {
   return (
     <svg {...resolveIconSvgProps(props)}>
       <path d="M8 2v4" />
@@ -15,4 +16,4 @@ export function AutomationsIcon(props: IconProps) {
       <path d="M12 18h.01" />
     </svg>
   );
-}
+});

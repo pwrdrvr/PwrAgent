@@ -1,9 +1,10 @@
+import { memo } from "react";
 import { resolveIconSvgProps, type IconProps } from "./icon-types";
 
-export function ChevronRightIcon(props: IconProps) {
+export const ChevronRightIcon = memo(function ChevronRightIcon(props: IconProps) {
   return (
     <svg {...resolveIconSvgProps(props)}>
       <path d="m9 18 6-6-6-6" />
     </svg>
   );
-}
+});

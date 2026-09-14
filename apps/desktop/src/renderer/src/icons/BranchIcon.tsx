@@ -1,6 +1,7 @@
+import { memo } from "react";
 import { resolveIconSvgProps, type IconProps } from "./icon-types";
 
-export function BranchIcon(props: IconProps) {
+export const BranchIcon = memo(function BranchIcon(props: IconProps) {
   return (
     <svg {...resolveIconSvgProps(props)}>
       <line x1="6" y1="3" x2="6" y2="15" />
@@ -9,4 +10,4 @@ export function BranchIcon(props: IconProps) {
       <path d="M18 9a9 9 0 0 1-9 9" />
     </svg>
   );
-}
+});

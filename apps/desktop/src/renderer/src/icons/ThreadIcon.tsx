@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { resolveIconSvgProps, type IconProps } from "./icon-types";
 
 /**
@@ -5,7 +6,7 @@ import { resolveIconSvgProps, type IconProps } from "./icon-types";
  * reference to another thread (see `ThreadChip`), where `NewThreadIcon`
  * would wrongly read as "create" and `SubAgentsIcon` as "delegated work".
  */
-export function ThreadIcon(props: IconProps) {
+export const ThreadIcon = memo(function ThreadIcon(props: IconProps) {
   return (
     <svg {...resolveIconSvgProps(props)}>
       <path d="M20 14a2 2 0 0 1-2 2H8l-4 3.5V6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2Z" />
@@ -13,4 +14,4 @@ export function ThreadIcon(props: IconProps) {
       <path d="M8 12h5" />
     </svg>
   );
-}
+});

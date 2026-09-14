@@ -1,7 +1,8 @@
+import { memo } from "react";
 import { resolveIconSvgProps, type IconProps } from "./icon-types";
 
 /** Tool calls: command prompt with captured output lines. */
-export function ToolCallsIcon(props: IconProps) {
+export const ToolCallsIcon = memo(function ToolCallsIcon(props: IconProps) {
   return (
     <svg {...resolveIconSvgProps(props)}>
       <polyline points="4 6.5 7 9.5 4 12.5" />
@@ -10,4 +11,4 @@ export function ToolCallsIcon(props: IconProps) {
       <line x1="4" y1="19.5" x2="16" y2="19.5" />
     </svg>
   );
-}
+});

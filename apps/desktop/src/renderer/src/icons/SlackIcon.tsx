@@ -1,4 +1,4 @@
-import type { ImgHTMLAttributes } from "react";
+import { memo, type ImgHTMLAttributes } from "react";
 import { DEFAULT_ICON_SIZE } from "./icon-types";
 import iconColorUrl from "../assets/slack/icon-color.svg";
 
@@ -9,7 +9,7 @@ export type SlackIconProps = Omit<
   size?: number;
 };
 
-export function SlackIcon({
+export const SlackIcon = memo(function SlackIcon({
   size = DEFAULT_ICON_SIZE,
   alt = "",
   ...rest
@@ -24,4 +24,4 @@ export function SlackIcon({
       {...rest}
     />
   );
-}
+});

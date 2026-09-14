@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { resolveFilledIconSvgProps, type IconProps } from "../icon-types";
 
 /**
@@ -7,7 +8,7 @@ import { resolveFilledIconSvgProps, type IconProps } from "../icon-types";
  * gentle-tilt planet — far half dimmed behind the disc, near half
  * crossing in front.
  */
-export function CelestialTiltedRingedPlanetIcon(props: IconProps) {
+export const CelestialTiltedRingedPlanetIcon = memo(function CelestialTiltedRingedPlanetIcon(props: IconProps) {
   return (
     <svg {...resolveFilledIconSvgProps(props)}>
       <g transform="rotate(-65 12 12)">
@@ -29,4 +30,4 @@ export function CelestialTiltedRingedPlanetIcon(props: IconProps) {
       </g>
     </svg>
   );
-}
+});

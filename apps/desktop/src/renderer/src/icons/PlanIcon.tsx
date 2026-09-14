@@ -1,6 +1,7 @@
+import { memo } from "react";
 import { resolveIconSvgProps, type IconProps } from "./icon-types";
 
-export function PlanIcon(props: IconProps) {
+export const PlanIcon = memo(function PlanIcon(props: IconProps) {
   return (
     <svg {...resolveIconSvgProps(props)}>
       <rect width="8" height="4" x="8" y="2" rx="1" ry="1" />
@@ -11,4 +12,4 @@ export function PlanIcon(props: IconProps) {
       <path d="M8 16h.01" />
     </svg>
   );
-}
+});

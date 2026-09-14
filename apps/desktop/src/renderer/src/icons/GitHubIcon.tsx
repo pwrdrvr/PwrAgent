@@ -1,4 +1,4 @@
-import type { ImgHTMLAttributes } from "react";
+import { memo, type ImgHTMLAttributes } from "react";
 import { useBrandTheme } from "./brand-theme";
 import { DEFAULT_ICON_SIZE } from "./icon-types";
 import invertocatBlackUrl from "../assets/github/invertocat-black.svg";
@@ -31,7 +31,7 @@ export type GitHubIconProps = Omit<
   variant?: GitHubIconVariant;
 };
 
-export function GitHubIcon({
+export const GitHubIcon = memo(function GitHubIcon({
   size = DEFAULT_ICON_SIZE,
   variant,
   alt = "",
@@ -49,4 +49,4 @@ export function GitHubIcon({
       {...rest}
     />
   );
-}
+});

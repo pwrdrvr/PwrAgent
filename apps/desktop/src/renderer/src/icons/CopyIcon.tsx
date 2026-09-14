@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { resolveIconSvgProps, type IconProps } from "./icon-types";
 
 /**
@@ -8,11 +9,11 @@ import { resolveIconSvgProps, type IconProps } from "./icon-types";
  * + glossy gradient that clashed with the Tangerine Terminal palette
  * and didn't follow theme.
  */
-export function CopyIcon(props: IconProps) {
+export const CopyIcon = memo(function CopyIcon(props: IconProps) {
   return (
     <svg {...resolveIconSvgProps(props)}>
       <rect x="9" y="9" width="11" height="11" rx="2" />
       <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
     </svg>
   );
-}
+});

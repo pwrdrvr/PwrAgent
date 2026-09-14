@@ -1,4 +1,4 @@
-import type { ImgHTMLAttributes } from "react";
+import { memo, type ImgHTMLAttributes } from "react";
 import { DEFAULT_ICON_SIZE } from "./icon-types";
 import iconColorUrl from "../assets/telegram/icon-color.svg";
 
@@ -21,7 +21,7 @@ export type TelegramIconProps = Omit<
  * distributes the current logo as the blue gradient circle with white
  * paper plane, so the component intentionally has no currentColor path.
  */
-export function TelegramIcon({
+export const TelegramIcon = memo(function TelegramIcon({
   size = DEFAULT_ICON_SIZE,
   variant = "color",
   alt = "",
@@ -37,4 +37,4 @@ export function TelegramIcon({
       {...rest}
     />
   );
-}
+});

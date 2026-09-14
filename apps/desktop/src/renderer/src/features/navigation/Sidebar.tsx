@@ -6,8 +6,8 @@ import type { NavigationDirectoryView as NavigationDirectorySummary } from "../.
 import type { PendingLaunchpadCreation } from "../../lib/useThreadNavigation";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type {
+  ComponentType,
   MouseEvent as ReactMouseEvent,
-  ReactElement,
   ReactNode,
 } from "react";
 import type {
@@ -397,12 +397,15 @@ const browseModeLabels = {
 } satisfies Record<BrowseMode, string>;
 
 // Attention is absent: it renders its two live indicators instead of an icon.
+// Typed as `ComponentType`, not `(props) => ReactElement`: every icon is a
+// `memo(...)` exotic component, which is a valid element type but not a
+// callable function.
 const browseModeIcons = {
   drafts: DraftIcon,
   inbox: HistoryIcon,
   recents: CalendarPlusIcon,
   directories: FolderIcon,
-} satisfies Record<Exclude<BrowseMode, "attention">, (props: IconProps) => ReactElement>;
+} satisfies Record<Exclude<BrowseMode, "attention">, ComponentType<IconProps>>;
 
 // Nothing on the tab spells out what the lens shows now that the labels are
 // gone, so the viewport tooltip carries both the name and the explanation.

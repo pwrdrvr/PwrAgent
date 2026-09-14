@@ -1,10 +1,11 @@
+import { memo } from "react";
 import { resolveIconSvgProps, type IconProps } from "./icon-types";
 
 /**
  * Two-branch git glyph used for the "worktree" linked-directory kind —
  * distinct from BranchIcon (single-branch) so the two read at a glance.
  */
-export function WorktreeIcon(props: IconProps) {
+export const WorktreeIcon = memo(function WorktreeIcon(props: IconProps) {
   return (
     <svg {...resolveIconSvgProps(props)}>
       <circle cx="6" cy="5" r="2.5" />
@@ -14,4 +15,4 @@ export function WorktreeIcon(props: IconProps) {
       <line x1="12" y1="13.5" x2="12" y2="16.5" />
     </svg>
   );
-}
+});
