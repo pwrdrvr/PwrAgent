@@ -1,16 +1,43 @@
-# PwrAgent
+<div align="center">
 
-**Your coding agent runs on your laptop. You drive it from your phone.**
+<img src="docs/assets/pwragent-icon.png" alt="" width="96" height="96">
 
-An open-source desktop coding agent. Pair it once with Telegram, Discord, Slack, Mattermost, Feishu / Lark, or LINE — then start, resume, steer, and approve from wherever you happen to be reading.
+<h1>PwrAgent</h1>
 
-**[Download for Mac — Apple Silicon](https://github.com/pwrdrvr/PwrAgent/releases/latest)**
+<strong>Run coding agents by the dozen.</strong>
 
-Choose the `arm64.dmg` asset when available. Not sure which Mac? Choose Universal.
+<p>
+  <a href="https://github.com/pwrdrvr/PwrAgent/releases/latest/download/PwrAgent.dmg"><img src="docs/assets/buttons/download-mac-universal.png" alt="Download for Mac — Universal, Intel and Apple Silicon" width="250"></a>
+  <a href="https://github.com/pwrdrvr/PwrAgent/releases/latest"><img src="docs/assets/buttons/download-mac-apple-silicon.png" alt="Download for Mac — Apple Silicon" width="250"></a>
+  <a href="https://github.com/pwrdrvr/PwrAgent/releases/latest/download/PwrAgent.Setup.exe"><img src="docs/assets/buttons/download-windows.png" alt="Download for Windows — x64 installer" width="250"></a>
+</p>
 
-[macOS Universal (Apple Silicon + Intel)](https://github.com/pwrdrvr/PwrAgent/releases/latest/download/PwrAgent.dmg) · [Windows (x64)](https://github.com/pwrdrvr/PwrAgent/releases/latest/download/PwrAgent.Setup.exe) · [Debian/Ubuntu installation](https://docs.pwragent.ai/linux/) · [Read the docs](https://docs.pwragent.ai)
+<p>
+  <a href="https://docs.pwragent.ai/linux/"><img src="docs/assets/buttons/link-linux.png" alt="Debian and Ubuntu installation" width="180"></a>
+  <a href="https://docs.pwragent.ai"><img src="docs/assets/buttons/link-docs.png" alt="Documentation" width="180"></a>
+  <a href="https://pwragent.ai"><img src="docs/assets/buttons/link-website.png" alt="pwragent.ai" width="180"></a>
+  <a href="https://pwrdrvr.com/about"><img src="docs/assets/buttons/link-about.png" alt="About PwrDrvr" width="180"></a>
+</p>
 
-![PwrAgent desktop in use — Directories lens grouping threads across two repos, a thread mid-conversation, four messenger status icons in the title bar, per-thread model / access / fast-mode / worktree controls above the composer.](https://docs.pwragent.ai/assets/screenshots/desktop-hero.png)
+<sub>macOS 12 or newer · Windows 10 or newer · Debian/Ubuntu · MIT · Developer ID-signed and Apple-notarized
+No cloud, no account, no telemetry. The agent and your credentials stay on your machine.</sub>
+
+<br>
+
+<img src="https://docs.pwragent.ai/assets/screenshots/desktop-hero.png" alt="PwrAgent desktop in use — Directories lens grouping threads across two repos, a thread mid-conversation, four messenger status icons in the title bar, per-thread model / access / fast-mode / worktree controls above the composer.">
+
+</div>
+
+**Universal** is the right Mac download today — it runs natively on both Apple Silicon (M1+)
+and Intel. A separate, smaller **Apple Silicon** build is built but has not ridden a release
+yet, so that chip points at the releases page until one carries it. Debian and Ubuntu get
+`.deb` packages for x64 and arm64.
+
+An open-source desktop for running coding agents on machines you own. Start threads across
+every repo you have, each in its own git worktree so they never collide, on **Codex, Gemini,
+Grok, Kimi Code, or Qwen Code** — whichever CLI you already pay for. Let one thread hand work
+off to another. Watch the diffs, track the PRs, and steer any of it from Telegram, Discord,
+Slack, Mattermost, Feishu / Lark, or LINE when you're nowhere near the keyboard.
 
 ## Why you might want it
 
@@ -36,7 +63,7 @@ Screenshots are produced by a Playwright spec that drives the real UI surfaces a
 
 ### Just want to use it
 
-1. **Download** the Apple Silicon (`arm64.dmg`) build from the [latest release](https://github.com/pwrdrvr/PwrAgent/releases/latest) when available, or [PwrAgent.dmg](https://github.com/pwrdrvr/PwrAgent/releases/latest/download/PwrAgent.dmg), the Universal build that runs natively on both Apple Silicon (M1+) and Intel Macs. Developer ID-signed and Apple-notarized, so first launch is a single Gatekeeper prompt (no right-click-open dance).
+1. **Download** [PwrAgent.dmg](https://github.com/pwrdrvr/PwrAgent/releases/latest/download/PwrAgent.dmg), the Universal build that runs natively on both Apple Silicon (M1+) and Intel Macs. Developer ID-signed and Apple-notarized, so first launch is a single Gatekeeper prompt (no right-click-open dance). On Windows, [PwrAgent.Setup.exe](https://github.com/pwrdrvr/PwrAgent/releases/latest/download/PwrAgent.Setup.exe); on Debian or Ubuntu, follow [the Linux install guide](https://docs.pwragent.ai/linux/).
 2. **Install** by opening the DMG and dragging PwrAgent into Applications.
 3. **(Optional) Pair a messenger** from **Settings → Messaging → \<your platform\>**. End-to-end walkthroughs at **[docs.pwragent.ai/providers/](https://docs.pwragent.ai/providers/)**; the usage guide (bound threads, slash commands, queue/steer, monitor cards, detach) lives at **[docs.pwragent.ai/using-codex/](https://docs.pwragent.ai/using-codex/)**.
 
