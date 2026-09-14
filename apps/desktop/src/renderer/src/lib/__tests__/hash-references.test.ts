@@ -219,6 +219,53 @@ describe("buildHashReferenceOptions", () => {
     } as Partial<NavigationThreadSummary>);
   }
 
+  it("offers the current thread's attached fork PR first without offering the thread", () => {
+    const attached = { ...pullRequest(2, "dugite"), org: "huntharo",
+      url: "https://github.com/huntharo/dugite/pull/2" };
+    const current = thread("current", "Dugite exec hangs", { prs: [attached] });
+    const options = buildHashReferenceOptions({
+      currentThreadKey: hashReferenceThreadIdentity(current),
+      localThreads: [thread("other", "Other PR", { prs: [pullRequest(2)] }), current],
+      query: "2",
+    });
+    expect(options[0]).toMatchObject({ kind: "pull-request", pullRequest: attached });
+    expect(options.some((option) => option.kind === "thread" && option.thread.id === current.id)).toBe(false);
+  });
+
+  it("keeps selected attachments outside the bounded search page and deduplicates them", () => {
+    const attached = pullRequest(2, "dugite");
+    const options = buildHashReferenceOptions({
+      currentThread: thread("current", "Dugite", { prs: [attached] }),
+      localThreads: Array.from({ length: 10 }, (_, index) =>
+        thread(`other-${index}`, "Other PR", { prs: [pullRequest(2, `repo-${index}`)] })),
+      remoteThreads: [{ ...remote("peer", "Peer"), prs: [attached] }],
+      query: "2",
+    });
+    expect(options[0]).toMatchObject({ kind: "pull-request", pullRequest: attached });
+    expect(options.filter((option) => option.kind === "pull-request"
+      && option.pullRequest.url === attached.url)).toHaveLength(1);
+  });
+
+  it("offers a remote current thread's PR once, ahead of local matches", () => {
+    const current = { ...remote("current", "Dugite"), prs: [pullRequest(2, "dugite")] };
+    const options = buildHashReferenceOptions({
+      currentThreadKey: hashReferenceThreadIdentity(current),
+      localThreads: [thread("other", "Other", { prs: current.prs })],
+      remoteThreads: [current],
+      query: "2",
+    });
+    expect(options[0]).toMatchObject({ kind: "pull-request", remote: true, pullRequest: current.prs[0] });
+    expect(options.filter((option) => option.kind === "pull-request")).toHaveLength(1);
+  });
+
+  it.each(["", "dugite", "3"])("does not promote unrelated attachments for %j", (query) => {
+    expect(buildHashReferenceOptions({
+      currentThread: thread("current", "Dugite", { prs: [pullRequest(2)] }),
+      localThreads: [],
+      query,
+    })).toEqual([]);
+  });
+
   it("lists local rows before peer rows", () => {
     const options = buildHashReferenceOptions({
       localThreads: [thread("t-1", "Parser rewrite")],

@@ -752,6 +752,25 @@ describe("CompactComposer markdown", () => {
       );
     });
 
+    it("selects the current thread's attached PR first even outside search results", () => {
+      const { onSend } = renderComposer({
+        mentionSources: {
+          currentThread: thread({ id: "current", title: "Dugite", prs: [{
+            provider: "github.com", org: "huntharo", repo: "dugite", number: 2,
+            state: "passing", url: "https://github.com/huntharo/dugite/pull/2",
+          }] }),
+          threads: [thread({ id: "other", title: "Other #2" })],
+        },
+      });
+      const input = openPicker("about #2");
+      expect(screen.getAllByRole("option")[0]?.textContent).toContain("#2");
+      fireEvent.keyDown(input, { key: "Enter" });
+      fireEvent.keyDown(input, { key: "Enter" });
+      expect(onSend).toHaveBeenCalledWith(
+        "about [#2](https://github.com/huntharo/dugite/pull/2)",
+      );
+    });
+
     it("offers a pull request on a numeric # and keeps its url", () => {
       const { onSend } = renderComposer({
         mentionSources: {

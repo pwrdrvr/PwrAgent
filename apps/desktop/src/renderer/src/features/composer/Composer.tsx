@@ -4474,6 +4474,7 @@ export function Composer(props: ComposerProps) {
       return [];
     }
     return buildHashReferenceOptions({
+      currentThread: props.thread,
       currentThreadKey: props.thread
         ? hashReferenceThreadIdentity(props.thread)
         : undefined,
