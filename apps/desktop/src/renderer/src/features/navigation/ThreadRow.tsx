@@ -1,4 +1,6 @@
 import {
+  memo,
+  useCallback,
   useEffect,
   useRef,
   useState,
@@ -19,6 +21,7 @@ import {
   formatMessagingPlatformName,
   MESSAGING_PLATFORM_ICONS,
 } from "../../lib/messaging-platform-branding";
+import { useEventCallback } from "../../lib/useEventCallback";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import { useThreadLinkHoverTarget } from "../../lib/thread-links";
 import { isNativeDragInteractionActive } from "../../lib/native-drag-interaction";
@@ -146,7 +149,9 @@ type ThreadRowProps = {
   onOpenPullRequest?: (url: string) => void;
 };
 
-export function ThreadRow(props: ThreadRowProps) {
+export const ThreadRow = memo(function ThreadRow(
+  props: ThreadRowProps,
+) {
   const threadKey = threadSummaryIdentityKey(props.thread);
   const selected = props.selectedThreadKeys
     ? props.selectedThreadKeys.has(threadKey)
@@ -193,6 +198,25 @@ export function ThreadRow(props: ThreadRowProps) {
   // renderer-side cache.
   const prs = props.thread.prs ?? [];
   const openPr = props.onOpenPullRequest ?? defaultOpenPullRequest;
+
+  // Stable identities for everything handed to a memoized chip below. These
+  // close over `props.thread` and the parent's handlers, both of which change
+  // on every render today, so a dependency list could not hold them still —
+  // and the chips are memoized precisely so they stop re-rendering when only
+  // a callback identity moved.
+  const openPrStable = useEventCallback((url: string) => openPr(url));
+  const openPrContextMenu = useEventCallback(
+    (
+      targetPr: PrSummary,
+      position: { x: number; y: number; anchorTop?: number },
+    ) => props.onOpenPullRequestContextMenu?.(props.thread, targetPr, position),
+  );
+  const detachPr = useEventCallback((targetPr: PrSummary) =>
+    props.onDetachPullRequest?.(props.thread, targetPr));
+  const toggleReactionPicker = useCallback(
+    () => setPickerOpen((open) => !open),
+    [],
+  );
   // Hover prefetch: 750ms intent timer — long enough that simply scrolling
   // past doesn't fire, short enough that a deliberate hover beats the
   // user's first click. Terminal-only PR sets still request a user
@@ -500,23 +524,13 @@ export function ThreadRow(props: ThreadRowProps) {
                 key={pr.url}
                 pr={pr}
                 showRepoPrefix={needsRepoPrefix(props.thread, pr, prs)}
-                onOpen={openPr}
+                onOpen={openPrStable}
                 onOpenContextMenu={
                   props.onOpenPullRequestContextMenu
-                    ? (targetPr, position) =>
-                        props.onOpenPullRequestContextMenu!(
-                          props.thread,
-                          targetPr,
-                          position,
-                        )
+                    ? openPrContextMenu
                     : undefined
                 }
-                onDetach={
-                  props.onDetachPullRequest
-                    ? (targetPr) =>
-                        props.onDetachPullRequest!(props.thread, targetPr)
-                    : undefined
-                }
+                onDetach={props.onDetachPullRequest ? detachPr : undefined}
               />
             ))}
             thread={props.thread}
@@ -580,7 +594,7 @@ export function ThreadRow(props: ThreadRowProps) {
           <AddReactionChip
             anchorRef={addReactionRef}
             open={pickerOpen}
-            onToggle={() => setPickerOpen((open) => !open)}
+            onToggle={toggleReactionPicker}
           />
         ) : null}
 
@@ -624,7 +638,7 @@ export function ThreadRow(props: ThreadRowProps) {
       ) : null}
     </div>
   );
-}
+});
 
 function ReactionChip(props: { emoji: string; onToggle: () => void }) {
   const { emoji, onToggle } = props;
@@ -653,7 +667,7 @@ function ReactionChip(props: { emoji: string; onToggle: () => void }) {
   );
 }
 
-function AddReactionChip(props: {
+const AddReactionChip = memo(function AddReactionChip(props: {
   open: boolean;
   anchorRef: React.RefObject<HTMLSpanElement | null>;
   onToggle: () => void;
@@ -689,7 +703,7 @@ function AddReactionChip(props: {
       <SmileyIcon size={14} aria-hidden="true" />
     </span>
   );
-}
+});
 
 function BindingChip(props: {
   binding: MessagingThreadBindingSummary;

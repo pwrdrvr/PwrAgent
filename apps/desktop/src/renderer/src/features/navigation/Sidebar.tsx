@@ -1,4 +1,4 @@
-import { readNavigationPresentationOrder, retainNavigationPresentationOrder, type NavigationPresentationOrder } from "./navigation-presentation-order";
+import { readNavigationPresentationOrder } from "./navigation-presentation-order";
 import type { useBoundedNavigationWindow } from "../../lib/useBoundedNavigationWindow";
 import { navigationThreadSelectionKey } from "../../lib/navigation-query-state";
 import { useLensScrollRestoration } from "../../lib/useLensScrollRestoration";
@@ -77,6 +77,7 @@ import {
 } from "../../lib/backend-status-format";
 import { DirectoriesList } from "./DirectoriesList";
 import { RecentsList } from "./RecentsList";
+import { createHoverStableSidebarHydrator } from "./hover-stable-sidebar-snapshot";
 import { useHoverStableSnapshot } from "./useHoverStableSnapshot";
 import {
   formatReviewThreadCount,
@@ -93,97 +94,6 @@ type ThreadContextMenuPosition = {
   y: number;
   anchorTop?: number;
 };
-
-type HoverStableSidebarSnapshot = {
-  order: NavigationPresentationOrder;
-  visibleKeys: string[];
-  directories: NavigationDirectorySummary[];
-  threads: NavigationThreadSummary[];
-};
-
-/**
- * Refresh row content without accepting structural fields that can move a row
- * while the pointer is resting on it. Live state such as federation health,
- * turn status, PRs, and unread markers still reaches the stationary card.
- */
-function hydrateHoverStableSidebarSnapshot(
-  frozen: HoverStableSidebarSnapshot,
-  latest: HoverStableSidebarSnapshot,
-  options?: {
-    refreshThreadPinRanks?: boolean;
-    removeMissingThreads?: boolean;
-  },
-): HoverStableSidebarSnapshot {
-  const latestDirectoriesByKey = new Map(
-    latest.directories.map((directory) => [directory.key, directory]),
-  );
-  const latestThreadsByKey = new Map(
-    latest.threads.map((thread) => [
-      threadSummaryIdentityKey(thread),
-      thread,
-    ]),
-  );
-  const frozenDirectoryKeys = new Set(
-    frozen.directories.map((directory) => directory.key),
-  );
-  const frozenThreadKeys = new Set(
-    frozen.threads.map((thread) =>
-      threadSummaryIdentityKey(thread),
-    ),
-  );
-
-  return {
-    order: retainNavigationPresentationOrder(frozen.order, latest.order),
-    visibleKeys: [...frozen.visibleKeys.filter((key) => !options?.removeMissingThreads || latest.visibleKeys.includes(key)),
-      ...latest.visibleKeys.filter((key) => !frozen.visibleKeys.includes(key))],
-    directories: [
-      ...frozen.directories.map((directory) => {
-        const latestDirectory = latestDirectoriesByKey.get(directory.key);
-        if (!latestDirectory) return directory;
-        return {
-          ...latestDirectory,
-          pinnedRank: directory.pinnedRank,
-
-        };
-      }),
-      ...latest.directories
-        .filter((directory) => !frozenDirectoryKeys.has(directory.key))
-        .map((directory) => ({ ...directory, pinnedRank: undefined })),
-    ],
-    threads: [
-      ...frozen.threads.flatMap((thread) => {
-        const latestThread = latestThreadsByKey.get(
-          threadSummaryIdentityKey(thread),
-        );
-        if (!latestThread) {
-          return options?.removeMissingThreads ? [] : [thread];
-        }
-        return [
-          {
-            ...latestThread,
-            createdAt: thread.createdAt,
-            parentThreadBackend: thread.parentThreadBackend,
-            parentThreadId: thread.parentThreadId,
-            parentThreadInstanceId: thread.parentThreadInstanceId,
-            pinnedRank: options?.refreshThreadPinRanks
-              ? latestThread.pinnedRank
-              : thread.pinnedRank,
-            codexNativeSubAgents: thread.codexNativeSubAgents,
-            subthreadsCollapsed: thread.subthreadsCollapsed,
-            subthreadOrder: thread.subthreadOrder,
-          },
-        ];
-      }),
-      // A newly admitted row has no previous position to freeze. Preserve its
-      // owner placement on first paint: clearing pin/parent fields renders a
-      // false unpinned root until hover ends. Retained presentation order
-      // already controls where new entries are appended within each resource.
-      ...latest.threads.filter((thread) => !frozenThreadKeys.has(
-        threadSummaryIdentityKey(thread),
-      )),
-    ],
-  };
-}
 
 function releaseBeforeListChange<Args extends unknown[], Result>(
   release: () => void,
@@ -571,9 +481,14 @@ export function Sidebar(props: SidebarProps) {
   const rowsByKey = useMemo(() => new Map(props.threads.map((thread) => [threadSummaryIdentityKey(thread), thread])), [props.threads]);
   const visibleThreads = [...new Map(lensResources.flatMap((resource) => resource.state.page?.entries ?? [])
     .map((entry) => [navigationThreadSelectionKey(entry.row.ref), rowsByKey.get(navigationThreadSelectionKey(entry.row.ref))])).values()].filter((thread): thread is NavigationThreadSummary => Boolean(thread));
+  // One hydrator per Sidebar instance: it holds the previous hydrated result
+  // so a render that changes nothing hands the rows back their existing
+  // object identities, which is what lets the memoized rows bail out while
+  // the pointer rests on one.
+  const hydrateHoverStable = useRef(createHoverStableSidebarHydrator()).current;
   const hoverStableSnapshot = useHoverStableSnapshot({
     hydrateFrozenValue: (frozen, latest) =>
-      hydrateHoverStableSidebarSnapshot(frozen, latest, {
+      hydrateHoverStable(frozen, latest, {
         refreshThreadPinRanks: props.browseMode !== "directories",
         removeMissingThreads: props.browseMode === "attention",
       }),
