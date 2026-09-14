@@ -12275,7 +12275,8 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
-  it("persists a thread workspace without resuming or starting a turn", async () => {
+  it("resumes an unloaded thread at the handoff destination before updating its workspace", async () => {
+    MockTransport.requireLoadedThreads = true;
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     const client = new CodexAppServerClient({
       command: "codex",
@@ -12301,10 +12302,40 @@ describe("CodexAppServerClient", () => {
         },
       }),
     );
-    expect(requests.map((request) => request.method)).not.toContain("thread/resume");
+    expect(requests.filter((request) =>
+      ["thread/resume", "thread/settings/update"].includes(request.method ?? ""),
+    ).map((request) => request.method)).toEqual(["thread/resume", "thread/settings/update"]);
+    expect(requests.find((request) => request.method === "thread/resume")?.params)
+      .toMatchObject({ threadId: "thread-workspace", cwd: "/Users/example/project/.worktrees/thread-workspace" });
     expect(requests.map((request) => request.method)).not.toContain("turn/start");
 
     await client.close();
+  });
+
+  it("does not update workspace settings or start a turn when handoff resume fails", async () => {
+    MockTransport.threadResumeError = {
+      code: -32600,
+      message: "thread not found: thread-workspace",
+    };
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+    try {
+      await expect(client.updateThreadWorkspace({
+        threadId: "thread-workspace",
+        cwd: "/repo/destination",
+      })).rejects.toThrow("thread not found: thread-workspace");
+      const methods = MockTransport.instances.at(-1)!.sentMessages.map(
+        (message) => (JSON.parse(message) as { method?: string }).method,
+      );
+      expect(methods).toContain("thread/resume");
+      expect(methods).not.toContain("thread/settings/update");
+      expect(methods).not.toContain("turn/start");
+    } finally {
+      await client.close();
+    }
   });
 
   it("best-effort resumes an existing thread before starting a review", async () => {
