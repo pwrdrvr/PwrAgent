@@ -83,12 +83,13 @@ describe("directory disclosure writes", () => {
         }) as typeof disclosure.setExpandedByKey,
       };
       const thread = fixture.threads[selected]!;
+      // The presentation fixture rebuilds its directory array on every render,
+      // which is the identity churn the hover-stable sidebar snapshot produces
+      // while the pointer rests on a row and a page arrival produces during a
+      // lens expansion. That is what makes the effect under test re-run here.
       return <DirectoriesList
         directoryDisclosure={observedDisclosure}
-        // A fresh array every render is what the hover-stable sidebar snapshot
-        // hands this list while the pointer rests on a row, and what a page
-        // arrival hands it during a lens expansion.
-        directories={[...fixture.directories]}
+        directories={fixture.directories}
         threads={fixture.threads}
         selectedItemKey={buildThreadIdentityKey(thread.source, thread.id)}
         onOpenLaunchpad={async () => {}}

@@ -1,62 +1,51 @@
 import { Component, type ReactNode } from "react";
 import { act, render, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import type {
-  NavigationDirectoryRow, NavigationQueryEntry, NavigationQueryPage, NavigationRow,
-} from "@pwragent/shared";
+import { buildThreadIdentityKey } from "@pwragent/shared";
+import type { NavigationDirectorySummary, NavigationThreadSummary } from "@pwragent/shared";
 import type { DesktopApi } from "../desktop-api";
+import { navigationQueryFixture } from "../../test/navigation-query-fixture";
 import { useThreadNavigation } from "../useThreadNavigation";
 import { Sidebar } from "../../features/navigation/Sidebar";
 
-// Enough directories that the Directories lens demands more collections than
-// React's fifty-nested-update limit. Each open directory demands a pinned and
-// an unpinned collection, and each page that lands is its own commit.
+/**
+ * Enough open directories that the Directories lens demands more collections
+ * than React's fifty-nested-update limit, with margin. Each open directory
+ * demands a pinned and an unpinned collection, and each page that lands is its
+ * own commit: measured against this fixture, 122 demanded collections tripped
+ * the limit on every run and 100 never did. Do not lower this below ~60
+ * directories without re-measuring — an undersized count passes whether or not
+ * the defect is present.
+ */
 const DIRECTORY_COUNT = 80;
-const directoryKeys = Array.from({ length: DIRECTORY_COUNT }, (_, index) => `/dir-${index}`);
-const counts = { total: 10, active: 1, unread: 1, review: 0 };
+const directoryPaths = Array.from({ length: DIRECTORY_COUNT }, (_, index) => `/dir-${index}`);
 
-const row = (id: string, directoryKey: string): NavigationRow => ({
-  id, source: "codex", title: id, titleSource: "fallback", ref: { backend: "codex", threadId: id },
-  rowRevision: "r", inbox: { inInbox: true }, ordinaryChildCount: 0, subthreadsCollapsed: false,
-  nativeSubAgentGroupPresent: false, queueCount: 0, queueState: "unknown",
-  linkedDirectories: [{ key: directoryKey, kind: "directory", label: directoryKey, path: directoryKey } as never],
+const thread = (path: string, ordinal: number): NavigationThreadSummary => ({
+  id: `thread-${path}-${ordinal}`, source: "codex", title: `Thread ${path} ${ordinal}`,
+  titleSource: "explicit", executionMode: "default", updatedAt: 1_800_000_000_000 - ordinal,
+  inbox: { inInbox: false },
+  linkedDirectories: [{ id: path, kind: "local", label: path, path }],
 });
-const directory = (key: string): NavigationDirectoryRow => ({
-  key, kind: "directory", label: key, path: key, counts,
-  pinnedRootCount: 0, unpinnedRootCount: 2, launchpadPresent: false,
-});
-const rootEntry = (value: NavigationRow): NavigationQueryEntry =>
-  ({ row: value, placement: { kind: "root" }, orderKey: value.id });
+const threadsByPath = new Map(directoryPaths.map((path) => [path, [thread(path, 1), thread(path, 2)]]));
+const population = {
+  directories: directoryPaths.map((path): NavigationDirectorySummary => ({
+    key: `directory:${path}`, kind: "directory", label: path, path,
+    needsAttentionCount: 0, directoryThreadsCollapsed: false,
+    threadKeys: threadsByPath.get(path)!.map((member) => buildThreadIdentityKey(member.source, member.id)),
+  })),
+  threads: [...threadsByPath.values()].flat(),
+};
 
 function fixture() {
-  const read = vi.fn<NonNullable<DesktopApi["getNavigationQueryPage"]>>(async (request): Promise<NavigationQueryPage> => {
-    const query = request.query;
-    let entries: NavigationQueryEntry[] = [];
-    let directories: NavigationDirectoryRow[] | undefined;
-    let selectionDirectory: NavigationDirectoryRow | undefined;
-    if (query.kind === "directory-index") directories = (query.keys ?? directoryKeys).map(directory);
-    else if (query.kind === "directory") {
-      entries = query.roots === "pinned" ? [] : [
-        rootEntry(row(`thread-${query.directoryKey}-1`, query.directoryKey)),
-        rootEntry(row(`thread-${query.directoryKey}-2`, query.directoryKey)),
-      ];
-    } else if (query.kind === "exact") {
-      entries = query.identities.map((ref) => rootEntry(row(ref.threadId, directoryKeys[0]!)));
-      selectionDirectory = directory(directoryKeys[0]!);
-    } else if (query.kind === "lens") {
-      entries = directoryKeys.map((key) => rootEntry(row(`thread-${key}-1`, key)));
-    }
+  const read = vi.fn<NonNullable<DesktopApi["getNavigationQueryPage"]>>(async (request) => {
     // Land each page in its own task, the way an IPC round trip does.
     await new Promise((resolve) => setTimeout(resolve, 1));
-    return {
-      protocol: 2, queryKey: JSON.stringify(query), generation: "g", ownerEpoch: "owner",
-      countsRevision: "r", coverage: { state: "complete" }, counts, entries, complete: true,
-      ...(directories ? { directories } : {}), ...(selectionDirectory ? { selectionDirectory } : {}),
-    };
+    return navigationQueryFixture(request, population);
   });
   const detail = vi.fn<NonNullable<DesktopApi["getNavigationSelectedDetail"]>>(async (request) => ({
     protocol: 2, ref: request.ref, revision: "detail", readiness: "ready", identity: "present",
-    thread: row(request.ref.threadId, directoryKeys[0]!),
+    thread: population.threads.find((candidate) => candidate.id === request.ref.threadId)
+      ?? population.threads[0]!,
   }));
   return { read, api: {
     getNavigationQueryPage: read, getNavigationSelectedDetail: detail,
@@ -84,7 +73,9 @@ afterEach(() => vi.restoreAllMocks());
 
 it("opens every directory in one lens without exceeding React's update depth", async () => {
   const f = fixture();
-  // React reports a caught boundary error through console.error.
+  // React reports a boundary error through console.error. Capture every line
+  // rather than filtering for one string: a render this size should produce no
+  // console.error at all, so anything here is a diagnostic worth failing on.
   const reported: string[] = [];
   vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => { reported.push(String(args[0])); });
   let boundary!: Boundary;
@@ -100,11 +91,17 @@ it("opens every directory in one lens without exceeding React's update depth", a
       onSelectThread={navigation.selectThread} onCreateThread={async () => undefined}
       onOpenLaunchpad={async () => undefined} />;
   }
+  // A renderer that died stops settling, so every wait below takes the boundary
+  // as an exit too — otherwise a throw that lands earlier than expected fails
+  // as an opaque timeout instead of naming itself.
+  const settled = async (ready: () => boolean, timeout?: number): Promise<void> => {
+    await waitFor(() => expect(Boolean(boundary.state.error) || ready()).toBe(true), { timeout });
+  };
   const mounted = render(<Boundary ref={(instance) => { if (instance) boundary = instance; }}><Window /></Boundary>);
   try {
-    await waitFor(() => expect(navigation.threads.length).toBeGreaterThan(0));
+    await settled(() => navigation.threads.length > 0);
     await act(async () => { navigation.setBrowseMode("directories"); });
-    await waitFor(() => expect(navigation.directories.length).toBe(DIRECTORY_COUNT));
+    await settled(() => navigation.directories.length === DIRECTORY_COUNT);
 
     // Opening every directory puts two collection reads per directory in
     // flight, and each page lands in its own commit. Before this was fixed,
@@ -112,20 +109,17 @@ it("opens every directory in one lens without exceeding React's update depth", a
     // of those commits, so React stopped the renderer at fifty.
     await act(async () => {
       navigation.directoryDisclosure.setExpandedByKey(
-        Object.fromEntries(directoryKeys.map((key) => [key, true])),
+        Object.fromEntries(population.directories.map((directory) => [directory.key, true])),
       );
     });
-    await waitFor(
-      () => expect(navigation.pagedNavigation.resources.size).toBeGreaterThan(2 * DIRECTORY_COUNT),
+    await settled(() => navigation.pagedNavigation.resources.size > 2 * DIRECTORY_COUNT);
+    await settled(
+      () => [...navigation.pagedNavigation.resources.values()].every((resource) => !resource.loading),
+      15_000,
     );
-    // A renderer that died stops settling, so stop waiting on either outcome
-    // and let the assertion below name the failure.
-    await waitFor(() => expect(Boolean(boundary.state.error)
-      || [...navigation.pagedNavigation.resources.values()].every((resource) => !resource.loading)).toBe(true),
-      { timeout: 15_000 });
 
     expect(boundary.state.error).toBeUndefined();
-    expect(reported.filter((entry) => entry.includes("Maximum update depth exceeded"))).toEqual([]);
+    expect(reported).toEqual([]);
   } finally {
     mounted.unmount();
   }

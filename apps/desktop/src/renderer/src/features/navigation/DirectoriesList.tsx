@@ -1043,47 +1043,33 @@ export function DirectoriesList(props: DirectoriesListProps) {
     // exists; showThread() can set selection before the refreshed directory
     // snapshot includes the thread.
     //
-    // Decide here, from the disclosure this render already holds, rather than
-    // inside the updater. This effect re-runs on EVERY render whenever
-    // `directories` arrives with a new identity — which is what the
-    // hover-stable sidebar snapshot produces while the pointer rests on a row,
-    // and what a lens expansion produces on every page that lands. An updater
-    // that answers "nothing to do" still has to be dispatched to say so, and
-    // React counts the dispatch, not the state it returns: once any other
-    // update is already pending on this window's fiber, the eager bail-out
-    // cannot apply and the no-op schedules a real update from inside the
-    // commit phase. Fifty consecutive commits carrying one is what React stops
-    // with "Maximum update depth exceeded", which took the whole sidebar down
-    // through its error boundary. `expandedByKey` can lag a dispatch made
-    // earlier in the same batch, so the updater keeps the same two guards as
-    // the authority over committed state; this pair only decides whether the
-    // dispatch is worth making.
-    if (expandedByKey[matchingDirectory.key] === true) {
-      return;
-    }
-    if (
-      expandedByKey[matchingDirectory.key] !== undefined &&
-      !selectedItemKeyChanged
-    ) {
+    // Ask this question of the disclosure the render already holds, before
+    // dispatching. The effect re-runs on EVERY render whenever `directories`
+    // arrives with a new identity — which is what the hover-stable sidebar
+    // snapshot produces while the pointer rests on a row, and what a lens
+    // expansion produces on every page that lands. An updater that answers
+    // "nothing to do" still has to be dispatched to say so, and React counts
+    // the dispatch, not the state it returns: once any other update is pending
+    // on this window's fiber the eager bail-out cannot apply, so the no-op
+    // schedules a real update from inside the commit phase. Fifty consecutive
+    // commits carrying one is what React stops with "Maximum update depth
+    // exceeded", which took the whole sidebar down through its error boundary.
+    //
+    // `expandedByKey` can lag a dispatch made earlier in the same batch, so
+    // the updater asks the same question of committed state and stays the
+    // authority; the pre-check only decides whether the dispatch is worth
+    // making.
+    const revealsDirectory = (disclosure: Readonly<Record<string, boolean>>): boolean =>
+      disclosure[matchingDirectory.key] !== true
+      && (disclosure[matchingDirectory.key] === undefined || selectedItemKeyChanged);
+
+    if (!revealsDirectory(expandedByKey)) {
       return;
     }
 
-    setExpandedByKey((current) => {
-      if (current[matchingDirectory.key] === true) {
-        return current;
-      }
-      if (
-        current[matchingDirectory.key] !== undefined &&
-        !selectedItemKeyChanged
-      ) {
-        return current;
-      }
-
-      return {
-        ...current,
-        [matchingDirectory.key]: true,
-      };
-    });
+    setExpandedByKey((current) => revealsDirectory(current)
+      ? { ...current, [matchingDirectory.key]: true }
+      : current);
   }, [expandedByKey, previousSelectedItemKeyRef, setExpandedByKey, visibleDirectories, props.selectedItemKey]);
 
   useEffect(() => {
