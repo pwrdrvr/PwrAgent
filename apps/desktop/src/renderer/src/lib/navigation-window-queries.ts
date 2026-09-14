@@ -15,6 +15,8 @@ export type NavigationWindowResource = {
   id: string;
   state: NavigationPageState;
   loading: boolean;
+  /** Cached membership awaiting a fresh owner read; existing row metadata wins. */
+  restoredFromCache?: boolean;
 };
 export type NavigationWindowQueriesState = {
   resources: ReadonlyMap<string, NavigationWindowResource>;
@@ -115,7 +117,8 @@ export class NavigationWindowQueries {
       this.retained.delete(retainedKey);
       const resource: Resource = {
         requestKey, token: `${this.prefix}:${++this.nextResource}`,
-        value: { id, state: retained ? { ...retained.state, stale: true, error: undefined } : createNavigationPageState(request), loading: false },
+        value: { id, state: retained ? { ...retained.state, stale: true, error: undefined } : createNavigationPageState(request),
+          loading: false, restoredFromCache: Boolean(retained) },
         refreshAfterPending: false, invalidated: false, released: !this.visible, anchor: retained?.anchor ?? request.anchor,
       };
       this.resources.set(id, resource);
@@ -305,7 +308,7 @@ export class NavigationWindowQueries {
           if (size(next.page) <= before) throw new Error("Navigation range refresh did not advance.");
           assertRetained(next);
         }
-        resource.value = { ...resource.value, state: next };
+        resource.value = { ...resource.value, state: next, restoredFromCache: false };
       } catch (error) {
         if (this.isCurrent(resource)) resource.value = { ...resource.value,
           state: failNavigationPageRead(resource.value.state, started.pendingSequence, error) };

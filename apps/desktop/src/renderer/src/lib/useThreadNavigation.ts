@@ -2497,7 +2497,8 @@ function mergeHydratedThreadWithOptimisticState(
     codexEnvironmentRuntime: thread.codexEnvironmentRuntime ?? optimistic.codexEnvironmentRuntime,
     optimisticActiveTurn: thread.optimisticActiveTurn ?? optimistic.optimisticActiveTurn,
     optimisticUserMessage: thread.optimisticUserMessage ?? optimistic.optimisticUserMessage,
-    pinnedRank: thread.pinnedRank ?? optimistic.pinnedRank,
+    // An admitted owner row with no rank is authoritatively unpinned.
+    pinnedRank: thread.pinnedRank,
     scheduledStart: thread.scheduledStart ?? optimistic.scheduledStart,
   };
 }
@@ -3184,6 +3185,10 @@ export function useThreadNavigation(
           const key = threadSummaryIdentityKey(row);
           const ownerPage = boundedNavigation.resources.get(id)?.state.request.federationTarget?.scope === "remote";
           const previous = threadRows.get(key);
+          // Restoring a selection or lens reuses its cached range while a
+          // fresh read runs. That range supplies membership, not newer row
+          // metadata: it must not roll a live PR chip back to an old status.
+          if (previous && boundedNavigation.resources.get(id)?.restoredFromCache) continue;
           let presentedRow = rendererFederationTarget?.scope !== "remote" && row.ref.ownerInstanceId
             ? ownerPage ? { ...row, pinnedRank: previous?.pinnedRank,
                 ownerOrdinaryChildCount: row.ordinaryChildCount, viewerChildCount: previous?.viewerChildCount,
@@ -7253,19 +7258,25 @@ export function useThreadNavigation(
         return;
       }
 
-      const pinnedRank = pinned ? thread.pinnedRank : undefined;
       const federationTarget = thread.federation?.ref.target
         ?? readRendererFederationTarget();
-
-      setState((current) => ({
-        ...current,
-        rows: updateThreadPinInLoadedRows(current.rows, {
-          backend: thread.source,
-          federationTarget,
-          threadId: thread.id,
-          pinnedRank,
-        }),
-      }));
+      const threadKey = threadSummaryIdentityKey(thread);
+      const applyPinRank = (pinnedRank: string | undefined): void => {
+        // A just-materialized thread may exist only in the optimistic row.
+        // Keep it in sync so it cannot restore a removed pin during hydration.
+        setOptimisticThread((current) => current && threadSummaryIdentityKey(current) === threadKey
+          ? { ...current, pinnedRank } : current);
+        setState((current) => ({
+          ...current,
+          rows: updateThreadPinInLoadedRows(current.rows, {
+            backend: thread.source,
+            federationTarget,
+            threadId: thread.id,
+            pinnedRank,
+          }),
+        }));
+      };
+      applyPinRank(pinned ? thread.pinnedRank : undefined);
 
       try {
         // A remote row pinned in the MAIN window takes a VIEWER-owned rank
@@ -7283,15 +7294,8 @@ export function useThreadNavigation(
             ref: thread.federation.ref,
             pinned,
           });
-          setState((current) => ({
-            ...current,
-            rows: updateThreadPinInLoadedRows(current.rows, {
-              backend: thread.source,
-              federationTarget,
-              threadId: thread.id,
-              pinnedRank: result.pinnedRank,
-            }),
-          }));
+          boundedNavigation.invalidate();
+          applyPinRank(result.pinnedRank);
           return;
         }
         const result = await setThreadPinRequest({
@@ -7300,15 +7304,8 @@ export function useThreadNavigation(
           threadId: thread.id,
           pinned,
         });
-        setState((current) => ({
-          ...current,
-          rows: updateThreadPinInLoadedRows(current.rows, {
-            backend: result.backend,
-            federationTarget,
-            threadId: result.threadId,
-            pinnedRank: result.pinnedRank,
-          }),
-        }));
+        boundedNavigation.invalidate();
+        applyPinRank(result.pinnedRank);
       } catch {
         await refresh(threadSummaryIdentityKey(thread));
       }
@@ -7317,6 +7314,7 @@ export function useThreadNavigation(
       refresh,
       setRemoteThreadLocalPinRequest,
       setThreadPinRequest,
+      boundedNavigation.invalidate,
     ],
   );
 
