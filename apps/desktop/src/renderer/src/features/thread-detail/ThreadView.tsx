@@ -1,3 +1,4 @@
+import { useEventCallback } from "../../lib/useEventCallback";
 import type { NavigationDirectoryView as NavigationDirectorySummary } from "../../lib/navigation-loaded-rows";
 import { applyLaunchpadEnvironmentSetupProgress, type LaunchpadEnvironmentSetupProgress } from "../../lib/launchpad-setup-progress";
 import {
@@ -3137,6 +3138,44 @@ export function ThreadView(props: ThreadViewProps) {
     }
   }
 
+  const handleMaterializeLaunchpad = useEventCallback<
+    Parameters<NonNullable<ThreadViewProps["onMaterializeLaunchpad"]>>,
+    Promise<void>
+  >(async (
+    directoryKey,
+    input,
+    collaborationMode,
+    reviewTarget,
+    extraDirectoryPaths,
+    scheduledFor,
+  ) => {
+    if (!props.onMaterializeLaunchpad) {
+      return;
+    }
+
+    setLaunchpadMaterializing(true);
+    setLaunchpadSubmittedInput(input ?? []);
+    setLaunchpadMaterializeError(undefined);
+    try {
+      await props.onMaterializeLaunchpad(
+        directoryKey,
+        input,
+        collaborationMode,
+        reviewTarget,
+        extraDirectoryPaths,
+        scheduledFor,
+      );
+    } catch (error) {
+      setLaunchpadMaterializeError(
+        error instanceof Error ? error.message : String(error)
+      );
+      throw error;
+    }
+  });
+
+  const showLaunchpadMcpAccess = useCallback(() => setLaunchpadMcpAccessOpen(true), []);
+  const showThreadMcpAccess = useCallback(() => setThreadMcpAccessOpen(true), []);
+
   if (pendingForkEnvironmentSetup) {
     return (
       <section
@@ -3278,39 +3317,6 @@ export function ThreadView(props: ThreadViewProps) {
     const launchpadRunningCodexEnvironmentSetup = Boolean(
       selectedLaunchpadCodexEnvironment?.setupScript,
     );
-    const handleMaterializeLaunchpad: NonNullable<
-      ThreadViewProps["onMaterializeLaunchpad"]
-    > = async (
-      directoryKey,
-      input,
-      collaborationMode,
-      reviewTarget,
-      extraDirectoryPaths,
-      scheduledFor,
-    ) => {
-      if (!props.onMaterializeLaunchpad) {
-        return;
-      }
-
-      setLaunchpadMaterializing(true);
-      setLaunchpadSubmittedInput(input ?? []);
-      setLaunchpadMaterializeError(undefined);
-      try {
-        await props.onMaterializeLaunchpad(
-          directoryKey,
-          input,
-          collaborationMode,
-          reviewTarget,
-          extraDirectoryPaths,
-          scheduledFor,
-        );
-      } catch (error) {
-        setLaunchpadMaterializeError(
-          error instanceof Error ? error.message : String(error)
-        );
-        throw error;
-      }
-    };
 
     return (
       <section
@@ -3510,7 +3516,7 @@ export function ThreadView(props: ThreadViewProps) {
                 onShowMcpAccess={
                   props.activeFederationTarget
                     ? undefined
-                    : () => setLaunchpadMcpAccessOpen(true)
+                    : showLaunchpadMcpAccess
                 }
                 providerModelDefaults={props.providerModelDefaults}
                 desktopApi={props.desktopApi}
@@ -3862,7 +3868,7 @@ export function ThreadView(props: ThreadViewProps) {
             onShowMcpAccess={
               props.activeFederationTarget
                 ? undefined
-                : () => setThreadMcpAccessOpen(true)
+                : showThreadMcpAccess
             }
             mcpConnectionCount={threadMcpConnectionCount}
             composerImplementation={props.composerImplementation}

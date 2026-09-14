@@ -1,3 +1,4 @@
+import * as composerMentionSources from "../useComposerMentionSources";
 import { buildThreadComposerScopeKey } from "../useComposerDraftStore";
 import { handoffLaunchpadComposer } from "../launchpad-composer-handoff";
 import "@testing-library/jest-dom/vitest";
@@ -602,6 +603,39 @@ function createScheduledActionApi(options?: {
 }
 
 describe("Composer", () => {
+  it("skips unchanged parent renders while keeping changed callbacks and inputs live", async () => {
+    const composerRenders = vi.spyOn(composerMentionSources, "useComposerMentionSources");
+    const firstCancel = vi.fn();
+    const nextCancel = vi.fn();
+    const props: ComponentProps<typeof Composer> = {
+      backends: [backendSummary("codex")],
+      directory: retargetingPwrSnap,
+      launchpad: createRetargetingLaunchpad(retargetingPwrSnap, ""),
+      skills: [],
+      onCancelLaunchpad: firstCancel,
+    };
+    try {
+      const view = render(<Composer {...props} />);
+      await act(async () => undefined);
+      const initialRenders = composerRenders.mock.calls.length;
+      expect(initialRenders).toBeGreaterThan(0);
+      view.rerender(<Composer {...props} />);
+      expect(composerRenders.mock.calls.length).toBe(initialRenders);
+
+      view.rerender(<Composer {...props} onCancelLaunchpad={nextCancel} />);
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      expect(firstCancel).not.toHaveBeenCalled();
+      expect(nextCancel).toHaveBeenCalledWith(retargetingPwrSnap.key);
+
+      fireEvent.change(screen.getByLabelText("New thread"), { target: { value: "Keep editing" } });
+      expect(screen.getByLabelText("New thread")).toHaveValue("Keep editing");
+      view.rerender(<Composer {...props} disabled />);
+      expect(screen.getByRole("button", { name: "Start thread" })).toBeDisabled();
+    } finally {
+      composerRenders.mockRestore();
+    }
+  });
+
   it.each([false, true])("preserves follow-up edits while the first launchpad payload is inspected (scheduled: %s)", async (scheduled) => {
     const inspection = createDeferred<{ filePaths: string[]; pdfPaths: string[] }>();
     const inspectPdfReferencePaths = vi.fn(() => inspection.promise);

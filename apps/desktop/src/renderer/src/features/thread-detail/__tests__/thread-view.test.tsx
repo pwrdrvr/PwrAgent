@@ -1,6 +1,7 @@
+import * as composerMentionSources from "../../composer/useComposerMentionSources";
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { useState, type ReactElement } from "react";
+import { cloneElement, useState, type ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   AgentEvent,
@@ -1961,6 +1962,7 @@ describe("ThreadView", () => {
   });
 
   it("renders launchpads with standard navigation chrome and no summary card", async () => {
+    const composerRenders = vi.spyOn(composerMentionSources, "useComposerMentionSources");
     const statuses = [
       {
         changedAt: 1000,
@@ -2000,7 +2002,7 @@ describe("ThreadView", () => {
       "Bob's Best Thread 3000",
     );
 
-    render(
+    const element = (
       <ThreadView
         addOptimisticUserMessage={(_text) => "optimistic-1"}
         backends={[
@@ -2069,6 +2071,7 @@ describe("ThreadView", () => {
         messageCount={2}
         selectedDirectory={selectedDirectory}
         selectedLaunchpad={selectedLaunchpad}
+        providerCommands={[]}
         skills={[]}
         threads={[referenceThread]}
         transcriptEntries={[]}
@@ -2076,6 +2079,15 @@ describe("ThreadView", () => {
         removeOptimisticMessage={(_id) => undefined}
       />
     );
+
+    const view = render(element);
+    await act(async () => undefined);
+    const initialRenders = composerRenders.mock.calls.length;
+    expect(initialRenders).toBeGreaterThan(0);
+    view.rerender(cloneElement(element, { sidebarHidden: true }));
+    view.rerender(cloneElement(element, { sidebarHidden: false }));
+    expect(composerRenders.mock.calls.length).toBe(initialRenders);
+    composerRenders.mockRestore();
 
     const header = document.querySelector(".thread-header--placeholder");
     expect(header).not.toBeNull();

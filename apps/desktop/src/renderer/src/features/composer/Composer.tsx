@@ -11,6 +11,7 @@ import { QueuedMessageInspector } from "./QueuedMessageInspector";
 import { notificationIncludesDraftContent, restoreQueuedMessage } from "./queued-message-content";
 import {
   Fragment,
+  memo,
   type ReactNode,
   type ClipboardEvent,
   type DragEvent,
@@ -2688,7 +2689,7 @@ function CopyableComposerError(props: {
   );
 }
 
-export function Composer(props: ComposerProps) {
+export const Composer = memo(function Composer(props: ComposerProps) {
   const threadLinks = useThreadLinks();
   const pullRequestLinks = usePullRequestLinks();
   const rendererFederationTarget = readRendererFederationTarget();
@@ -12502,7 +12503,7 @@ export function Composer(props: ComposerProps) {
       {pdfPreviewLightboxNode}
     </>
   );
-}
+});
 
 function AttachmentTooltip({
   children,
