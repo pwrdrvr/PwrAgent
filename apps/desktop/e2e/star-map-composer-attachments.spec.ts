@@ -88,6 +88,15 @@ async function attachPng(
   }, options);
 }
 
+async function readCardIdentity(
+  chatCard: Locator,
+): Promise<{ mount: string | null; identity: string | null }> {
+  return {
+    mount: await chatCard.getAttribute("data-card-mount"),
+    identity: await chatCard.getAttribute("data-detail-identity"),
+  };
+}
+
 /**
  * Type into the card's composer, naming the gate if it is closed.
  *
@@ -95,20 +104,30 @@ async function attachPng(
  * composer. Reading it at the instant the keystroke is refused turns "element
  * is not editable" into the specific term — an unresolved exact identity, a
  * failed read, a non-present thread, or a queue projection that is not ready.
+ * `data-card-mount` and `data-detail-identity` separate the two ways the card
+ * can end up holding no detail: it remounted, or the identity it asks for
+ * changed under it.
  */
 async function fillReportingComposerBlock(
   chatCard: Locator,
   messageInput: Locator,
   text: string,
+  before: { mount: string | null; identity: string | null },
 ): Promise<void> {
   try {
     await messageInput.fill(text);
   } catch (error) {
-    const block = await chatCard.getAttribute("data-composer-block");
+    const after = {
+      block: await chatCard.getAttribute("data-composer-block"),
+      mount: await chatCard.getAttribute("data-card-mount"),
+      identity: await chatCard.getAttribute("data-detail-identity"),
+    };
     throw new Error(
-      `Composer refused the keystroke; card reported data-composer-block=${
-        block ?? "<absent, so it believed the composer was live>"
-      }`,
+      `Composer refused the keystroke: block=${
+        after.block ?? "<absent, so it believed the composer was live>"
+      } mount=${before.mount}->${after.mount} identity=${
+        before.identity
+      }->${after.identity}`,
       { cause: error },
     );
   }
@@ -167,11 +186,16 @@ test("sends pasted, dropped, and local-file attachments from a Star Map chat car
     // Playwright rejects a `contenteditable="false"` node as the wrong
     // element type outright instead of retrying until it becomes editable.
     //
-    // One wait is now enough. A refresh used to drop the composer back to
-    // disabled part-way through, which killed this test on Windows between
-    // the attachments and the keystroke; `navigationSelectionAuthorizesComposer`
-    // keeps a completed read's authorization across its own revalidation.
+    // One wait is not enough on Windows: the composer is live here and dead by
+    // the keystroke below. `navigationSelectionAuthorizesComposer` removed one
+    // cause (a revalidating read withdrawing an authorization it held) and this
+    // still fails, reporting a card that holds no detail at all — so the report
+    // below names which of the two remaining causes it is.
     await expect(messageInput).toBeEditable();
+    // Baseline for the report below: taken while the composer is live, so a
+    // remount or an identity change during the attachments is visible as a
+    // difference rather than being read back after the fact.
+    const cardBaseline = await readCardIdentity(chatCard);
 
     await attachPng(messageInput, {
       color: "#2255aa",
@@ -208,6 +232,7 @@ test("sends pasted, dropped, and local-file attachments from a Star Map chat car
       chatCard,
       messageInput,
       "Inspect these Star Map attachments",
+      cardBaseline,
     );
     await chatCard.getByRole("button", { name: "Send" }).click();
 

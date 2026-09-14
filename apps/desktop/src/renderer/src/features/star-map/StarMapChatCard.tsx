@@ -176,6 +176,9 @@ const MemoizedActiveSubAgentsStrip = memo(ActiveSubAgentsStrip);
  * session hook derives the federation target from the thread summary it is
  * handed, so a card over a peer's thread reads and writes on that peer.
  */
+/** Monotonic across every card this renderer mounts; see `data-card-mount`. */
+let starMapCardMounts = 0;
+
 export function StarMapChatCard(props: StarMapChatCardProps) {
   const {
     bounds,
@@ -341,6 +344,15 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
   composerReadinessRef.current = composerReady;
   const configurationRef = useRef(selectedConfiguration);
   configurationRef.current = selectedConfiguration;
+  // `detail:identity:unread` means the state carries no detail at all, which
+  // `selectNavigationIdentity` produces in exactly two ways: this card
+  // remounted (so the hook's retained state went with it), or the exact
+  // identity it asks for changed. These two tell them apart — a mount counter
+  // that survives neither, and the identity actually being requested.
+  const cardMountRef = useRef(0);
+  if (cardMountRef.current === 0) cardMountRef.current = ++starMapCardMounts;
+  const requestedIdentity = `${thread.source}:${thread.id}:${remoteInstanceId ?? "local"}`;
+
   // Which term is withholding the composer, published for the E2E lanes.
   //
   // By the time this reaches the editor it is one boolean, and the editor
@@ -1455,7 +1467,9 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
     <section
       aria-label={`Chat: ${thread.title}`}
       className="star-map-chat-card"
+      data-card-mount={cardMountRef.current}
       data-composer-block={composerBlockReason}
+      data-detail-identity={requestedIdentity}
       onPointerDown={() => onRaise(cardKey)}
       style={style}
     >
