@@ -1191,6 +1191,7 @@ describe("RemoteThreadSummaryCache — resolvePinnedThreads", () => {
 
   it("dims rows as degraded once a connected owner fails the background fetch", async () => {
     const onPinnedSummariesRefreshed = vi.fn();
+    const onPinnedRefreshProblem = vi.fn();
     const cache = new RemoteThreadSummaryCache({
       peers: () => [peer("peer-a")],
       fetchSnapshot: async () => {
@@ -1199,6 +1200,7 @@ describe("RemoteThreadSummaryCache — resolvePinnedThreads", () => {
       fetchArchivedThreads: noArchivedThreads,
       peerStatus: () => ({ status: "connected" }),
       onPinnedSummariesRefreshed,
+      onPinnedRefreshProblem,
     });
 
     // First resolve is optimistic — the failure lands in the background
@@ -1208,6 +1210,8 @@ describe("RemoteThreadSummaryCache — resolvePinnedThreads", () => {
     ]);
     await settle();
     expect(onPinnedSummariesRefreshed).toHaveBeenCalledTimes(1);
+    expect(onPinnedRefreshProblem).toHaveBeenCalledExactlyOnceWith({ instanceId: "peer-a", requestedCount: 1,
+      threadKeys: ["codex:t1"], error: "boom" });
 
     const resolved = await cache.resolvePinnedThreads([
       pin({ instanceId: "peer-a", threadId: "t1" }),
@@ -1218,6 +1222,8 @@ describe("RemoteThreadSummaryCache — resolvePinnedThreads", () => {
     // refresh cycle against a peer that keeps failing.
     await settle();
     expect(onPinnedSummariesRefreshed).toHaveBeenCalledTimes(1);
+    expect(onPinnedRefreshProblem).toHaveBeenCalledExactlyOnceWith({ instanceId: "peer-a", requestedCount: 1,
+      threadKeys: ["codex:t1"], error: "boom" });
   });
 
   it("announces recovery so dimmed rows can un-dim", async () => {
@@ -1579,4 +1585,22 @@ describe("RemoteThreadSummaryCache — resolvePinnedThreads", () => {
     expect(resolved.threads[0].title).toBe("Cached title");
     expect(resolved.archived).toEqual([]);
   });
+});
+
+it("reports bounded missing mount identities without repeating an unchanged absence", async () => {
+  const onPinnedRefreshProblem = vi.fn();
+  const cache = new RemoteThreadSummaryCache({ peers: () => [peer("peer-a")], fetchSnapshot: async () => snapshotOf([]),
+    fetchArchivedThreads: noArchivedThreads, peerStatus: () => ({ status: "connected" }), onPinnedRefreshProblem });
+  const pins = Array.from({ length: 12 }, (_, i) => pin({ instanceId: "peer-a", threadId: `missing-${i}` }));
+  try {
+    await cache.resolvePinnedThreads(pins);
+    await settle();
+    expect(onPinnedRefreshProblem).toHaveBeenCalledExactlyOnceWith({ instanceId: "peer-a", requestedCount: 12,
+      missingCount: 12, threadKeys: pins.map((item) => `codex:${item.ref.threadId}`).sort().slice(0, 10) });
+    cache.invalidate("peer-a");
+    await settle();
+    expect(onPinnedRefreshProblem).toHaveBeenCalledTimes(1);
+  } finally {
+    cache.dispose();
+  }
 });

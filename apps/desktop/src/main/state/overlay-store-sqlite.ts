@@ -3759,12 +3759,13 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       summary: NavigationThreadSummary;
       instanceLabel: string;
     }>,
-  ): Promise<void> {
+    options?: { onlyMissing?: boolean },
+  ): Promise<boolean> {
     if (entries.length === 0) {
-      return;
+      return false;
     }
     const select = this.stateDb.raw.prepare(
-      `SELECT payload FROM remote_thread_pins
+      `SELECT payload, revoked_at FROM remote_thread_pins
        WHERE instance_id = ? AND backend = ? AND thread_id = ?`,
     );
     const update = this.stateDb.raw.prepare(
@@ -3776,22 +3777,27 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       // Patch, never replace: the payload also carries viewer-owned state
       // (localPinnedRank, pinnedVia) that a snapshot refresh must not wipe.
       const row = select.get(remotePinInstanceId(entry.ref), entry.ref.backend, entry.ref.threadId) as
-        | { payload: string }
+        | { payload: string; revoked_at: number | null }
         | undefined;
       if (!row) return undefined;
+      if (options?.onlyMissing && row.revoked_at !== null) return undefined;
       let parsed: Record<string, unknown>;
       try {
         parsed = JSON.parse(row.payload) as Record<string, unknown>;
       } catch {
         parsed = {};
       }
+      // Exact owner reads can rescue link-only pins while the background
+      // group refresh is unavailable. Never replace established snapshots.
+      if (options?.onlyMissing && parsed.summary !== undefined && parsed.summary !== null) return undefined;
       const nextPayload = JSON.stringify({ ...parsed, instanceLabel: entry.instanceLabel,
         summary: stripFederationStamp(entry.summary) });
       return row.payload === nextPayload ? undefined : nextPayload;
     };
     // Navigation re-serves cached rows frequently. Skip even the transaction
     // when unchanged; re-read inside it to preserve concurrent viewer edits.
-    if (!entries.some((entry) => changedPayload(entry) !== undefined)) return;
+    if (!entries.some((entry) => changedPayload(entry) !== undefined)) return false;
+    let changed = false;
     this.stateDb.raw.transaction(() => {
       for (const entry of entries) {
         const nextPayload = changedPayload(entry);
@@ -3804,8 +3810,10 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
           entry.ref.backend,
           entry.ref.threadId,
         );
+        changed = true;
       }
     })();
+    return changed;
   }
 
   /**

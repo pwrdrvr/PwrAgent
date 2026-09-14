@@ -440,3 +440,26 @@ it("loads and releases child pages for an unpinned selection retained above coll
   await waitFor(() => expect(result.current.resources.has(childId)).toBe(false));
   unmount();
 });
+
+it("reveals the viewer-local root of a remote child even when its owner cannot return that ancestor", async () => {
+  const fixture = api();
+  const parentRef = { backend: "codex" as const, threadId: "local-parent" };
+  const childRef = { backend: "codex" as const, threadId: "remote-child", ownerInstanceId: "peer" };
+  const row = (ref: typeof parentRef | typeof childRef): NavigationRow => ({ id: ref.threadId, source: "codex",
+    title: ref.threadId, titleSource: "explicit", ref, rowRevision: "r", linkedDirectories: [], inbox: { inInbox: false },
+    ordinaryChildCount: ref === parentRef ? 1 : 0, nativeSubAgentGroupPresent: false, queueCount: 0, queueState: "unknown" });
+  fixture.read.mockImplementation(async (request) => {
+    if (request.query.kind === "directory-index") return page({ directories: [directory] });
+    if (request.query.kind === "exact") return page({ selectionDirectory: directory,
+      entries: request.federationTarget ? [{ row: row(childRef), placement: { kind: "root" }, orderKey: "0" }]
+        : [{ row: row(parentRef), placement: { kind: "root" }, orderKey: "0" },
+          { row: row(childRef), placement: { kind: "child", parent: parentRef }, orderKey: "1" }] });
+    return page();
+  });
+  const { unmount } = renderHook(() => useBoundedNavigationWindow({ ...base, desktopApi: fixture.desktopApi, selectedRef: childRef }));
+  await waitFor(() => expect(fixture.read.mock.calls.some(([request]) => request.query.kind === "directory"
+    && request.anchor?.kind === "thread" && request.anchor.ref.threadId === parentRef.threadId)).toBe(true));
+  expect(fixture.read.mock.calls.some(([request]) => request.query.kind === "directory"
+    && request.anchor?.kind === "thread" && request.anchor.ref.threadId === childRef.threadId)).toBe(false);
+  unmount();
+});

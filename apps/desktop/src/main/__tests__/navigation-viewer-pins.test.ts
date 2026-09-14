@@ -175,3 +175,36 @@ it.each(["complete", "checking"] as const)("mounts a remote child under its owne
   expect(exact.entries.map(({ row }) => row.id)).toEqual(["parent", "child"]);
   expect(child.parentThreadInstanceId).toBe("viewer");
 });
+
+it("hydrates a summaryless link mount once from exact owner evidence without overwriting a later snapshot", async () => {
+  vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+  const db = openInMemoryStateDb();
+  const store = new SqliteOverlayStore(db);
+  const ref = buildFederatedThreadRef({ backend: "codex", threadId: "child", instanceId: "peer" });
+  const summary: NavigationThreadSummary = { id: "child", source: "codex", title: "Child", titleSource: "explicit",
+    parentThreadId: "parent", parentThreadBackend: "codex", parentThreadInstanceId: "viewer",
+    linkedDirectories: [{ id: "repo", kind: "local", label: "repo", path: "/peer/repo" }], inbox: { inInbox: false } };
+  try {
+    await store.addRemoteThreadPin({ ref, instanceLabel: "Peer", pinnedVia: "explicit" });
+    const entry = { ref, summary, instanceLabel: "Peer" };
+    const { writes } = await measureSqliteWrites(async () => {
+      await store.updateRemoteThreadPinSnapshots([entry], { onlyMissing: true });
+      for (let i = 0; i < 20; i++) {
+        await store.updateRemoteThreadPinSnapshots([{ ...entry, summary: { ...summary, title: "Later exact read" } }], { onlyMissing: true });
+      }
+    });
+    expect((await store.readRemoteThreadPinNavigationRows())[0]?.title).toBe("Child");
+    expect(writes.commits).toBe(1);
+    expectSqliteWriteBudget({ scenario: "navigation-summaryless-pin-hydration", writes,
+      note: "One atomic fill per summaryless mount; 20 later exact reads add no commits. At 200 new mounts/day and 4 KiB/page: ~0.8 MB/day per dirty page. Existing mounts add 0 MB/day." });
+    const unmounted = buildFederatedThreadRef({ backend: "codex", threadId: "unmounted", instanceId: "peer" });
+    expect(await store.updateRemoteThreadPinSnapshots([{ ...entry, ref: unmounted }], { onlyMissing: true })).toBe(false);
+    const revoked = buildFederatedThreadRef({ backend: "codex", threadId: "revoked", instanceId: "revoked-peer" });
+    await store.addRemoteThreadPin({ ref: revoked, instanceLabel: "Revoked peer" });
+    await store.tombstoneRemoteThreadPinsForInstance({ instanceId: "revoked-peer" });
+    expect(await store.updateRemoteThreadPinSnapshots([{ ...entry, ref: revoked }], { onlyMissing: true })).toBe(false);
+  } finally {
+    db.close();
+    vi.unstubAllEnvs();
+  }
+});

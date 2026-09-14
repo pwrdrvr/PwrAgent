@@ -51,18 +51,25 @@ export function useBoundedNavigationWindow(params: Demand & {
     && selectedQuery.identities.length === 1
     && navigationIdentityKey(selectedQuery.identities[0]!) === navigationIdentityKey(params.selectedRef)
     ? selectedResource?.state.page : undefined;
-  const selectedRoot = selectedContext?.entries.find((entry) => entry.placement.kind === "root");
   const remoteViewerSelection = Boolean(params.selectedRef?.ownerInstanceId) && params.target?.scope !== "remote";
-  const selectedHome = remoteViewerSelection
-    ? state.resources.get("selected-viewer-mount")?.state.page?.selectionDirectory
-    : selectedContext?.selectionDirectory;
+  const mountResource = state.resources.get("selected-viewer-mount");
+  const mountQuery = mountResource?.state.request.query;
+  const selectedMount = params.selectedRef && mountQuery?.kind === "exact"
+    && mountQuery.identities.length === 1
+    && navigationIdentityKey(mountQuery.identities[0]!) === navigationIdentityKey(params.selectedRef)
+    ? mountResource?.state.page : undefined;
+  // The owner's inventory cannot supply a root owned by this viewer. Reveal
+  // and range seeking must use the same ancestry as directory presentation.
+  const presentedSelection = remoteViewerSelection ? selectedMount : selectedContext;
+  const selectedRoot = presentedSelection?.entries.find((entry) => entry.placement.kind === "root");
+  const selectedHome = presentedSelection?.selectionDirectory;
   // While the viewer mount loads, neither owner-linked paths nor detail
   // fallback paths can identify a directory in the viewer inventory.
   const selectedDirectoryKeys = selectedHome ? [selectedHome.key] : remoteViewerSelection ? []
     : selectedRoot?.row.linkedDirectories.length
       ? selectedRoot.row.linkedDirectories.map((directory) => classifyDirectory(directory).key) : params.selectedDirectoryKeys;
   const demandParams = { ...params, directories, selectedDirectoryKeys,
-    selectedRootRef: selectedRoot?.row.ref, selectedContextReady: Boolean(selectedContext),
+    selectedRootRef: selectedRoot?.row.ref, selectedContextReady: Boolean(presentedSelection),
     indexedDirectoryKeys: new Set((state.resources.get("directory-index")?.state.page?.directories ?? []).map((directory) => directory.key)),
   };
   const collections = buildNavigationWindowDemand({ ...demandParams, disclosedParents: [] });

@@ -66,3 +66,10 @@ describe("owner-filtered navigation descendants", () => {
     await expect(readFederationPinnedSnapshot(backend, ["codex:a"])).rejects.toThrow("inconsistent");
   });
 });
+
+it("reports which provider coverage prevented pin refresh", async () => {
+  const backend = { getNavigationQueryPage: async () => ({ protocol: 2, entries: [], complete: true,
+    coverage: { state: "degraded", failedProviders: 1, pendingProviders: 2 } }) } as unknown as FederationBackendOperations;
+  await expect(readFederationPinnedSnapshot(backend, ["codex:child"]))
+    .rejects.toThrow("Pinned navigation owner coverage is degraded (pending providers: 2, failed providers: 1).");
+});

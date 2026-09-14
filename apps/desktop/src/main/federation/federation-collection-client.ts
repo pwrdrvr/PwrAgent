@@ -37,8 +37,10 @@ export async function readFederationPinnedSnapshot(
           }, rpcOptions);
           const pageBytes = Buffer.byteLength(JSON.stringify(page));
           bytes += pageBytes;
+          if (page.coverage.state !== "complete") {
+            throw new Error(`Pinned navigation owner coverage is ${page.coverage.state} (pending providers: ${page.coverage.pendingProviders ?? 0}, failed providers: ${page.coverage.failedProviders ?? 0}).`);
+          }
           if (page.protocol !== 2 || page.unchanged || page.rangeUnchanged
-            || page.coverage.state !== "complete"
             || pageBytes > FEDERATION_COLLECTION_PAGE_BYTES || page.entries.length > FEDERATION_COLLECTION_PAGE_ROWS
             || bytes > 16 * 1024 * 1024
             || (generation !== undefined && (generation !== page.generation || ownerEpoch !== page.ownerEpoch || queryKey !== page.queryKey))
