@@ -3327,15 +3327,12 @@ class DesktopAppServerService {
     }
 
     const registry = getDesktopBackendRegistry();
-    if (force) {
-      for (const directory of refreshableDirectories) {
-        registry.invalidateDirectoryStatus(directory.path);
-      }
-    }
     const directoryByKey = new Map(
       refreshableDirectories.map((directory) => [directory.key, directory]),
     );
-    for await (const entry of registry.readDirectoryStatusEntries(refreshableDirectories)) {
+    for await (const entry of registry.readDirectoryStatusEntries(refreshableDirectories, {
+      userAction: force, caller: "directory-status-ipc",
+    })) {
       const directory = directoryByKey.get(entry.directoryKey);
       const fetchedAt = Date.now();
       await this.writeDirectoryGitStatusEntry({
@@ -3412,6 +3409,7 @@ class DesktopAppServerService {
     for (const worktreePath of worktreePaths) {
       if (registry.scheduleWorktreeGitWorkingStateRefresh({
         worktreePath,
+        ...(params.force ? { userAction: true } : {}),
         acceptedPushedCommitShas:
           this.getMergedPrCommitShasForWorktree(worktreePath),
       })) {
@@ -3433,9 +3431,6 @@ class DesktopAppServerService {
 
     await this.loadThreadGitWorkingStateCache();
     const force = request.trigger === "user";
-    if (force) {
-      getDesktopBackendRegistry().invalidateWorktreeWorkingState(worktreePath);
-    }
     return {
       scheduled: this.startWorktreeWorkingStateRefresh({
         worktreePaths: [worktreePath],

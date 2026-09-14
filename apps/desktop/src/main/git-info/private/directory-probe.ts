@@ -4,16 +4,14 @@ import path from "node:path";
 import { promisify } from "node:util";
 import type { LinkedDirectorySummary } from "@pwragent/shared";
 import { isToolManagedWorktreePath } from "@pwragent/shared";
-import { buildPwrAgentChildProcessEnv } from "../child-process-env";
-import { getMainLogger } from "../log";
-import { getGitCommand } from "../git-command";
-import { createGitDirectoryObserver, type GitDirectoryObservation } from "./git-directory-observation";
+import { buildPwrAgentChildProcessEnv } from "../../child-process-env";
+import { getMainLogger } from "../../log";
+import { getGitCommand } from "../../git-command";
 
 import {
   directoryEnrichmentDiagnostics,
-  type DirectoryEnrichmentCaller,
   type DirectoryEnrichmentContext,
-} from "../diagnostics/directory-enrichment-diagnostics";
+} from "../../diagnostics/directory-enrichment-diagnostics";
 
 const execFile = promisify(execFileCallback);
 const threadDirectoryLog = getMainLogger("pwragent:thread-directory-enricher");
@@ -35,11 +33,6 @@ export type ThreadDirectoryEnrichment = {
   observedGitBranch?: string;
 };
 
-type CachedEnrichment = {
-  observation: GitDirectoryObservation;
-  value: ThreadDirectoryEnrichment;
-};
-
 type GitMetadataEvidence = {
   dotGitKind: "directory" | "file" | "missing" | "unreadable";
   dotGitPath?: string;
@@ -50,7 +43,7 @@ type GitMetadataEvidence = {
   error?: string;
 };
 
-async function runGit(
+export async function runGit(
   projectKey: string,
   args: string[],
   context: DirectoryEnrichmentContext,
@@ -70,7 +63,7 @@ async function runGit(
   }
 }
 
-function buildFallbackLinkedDirectory(currentPath: string): LinkedDirectorySummary {
+export function buildFallbackLinkedDirectory(currentPath: string): LinkedDirectorySummary {
   const directoryPath = path.resolve(currentPath);
   const isManagedWorktree = isToolManagedWorktreePath(directoryPath);
   return {
@@ -82,7 +75,7 @@ function buildFallbackLinkedDirectory(currentPath: string): LinkedDirectorySumma
   };
 }
 
-async function pathExists(targetPath: string): Promise<boolean> {
+export async function pathExists(targetPath: string): Promise<boolean> {
   try {
     await access(targetPath);
     return true;
@@ -205,7 +198,7 @@ export async function resolveWorktreeRepositoryDirectory(
   return directory;
 }
 
-function parseGitWorktrees(output: string): string[] {
+export function parseGitWorktrees(output: string): string[] {
   return output
     .split("\n")
     .filter((line) => line.startsWith("worktree "))
@@ -213,7 +206,7 @@ function parseGitWorktrees(output: string): string[] {
     .filter(Boolean);
 }
 
-async function loadThreadDirectoryEnrichment(
+export async function loadThreadDirectoryEnrichment(
   projectKey: string,
   context: DirectoryEnrichmentContext,
   readWorktrees: (repoRoot: string) => Promise<string[]>,
@@ -310,127 +303,3 @@ async function loadThreadDirectoryEnrichment(
   }
 }
 
-/**
- * Directory facts survive query invalidation and elapsed time. Filesystem
- * identity is the invalidation authority; HEAD changes only refresh the branch.
- * Failed/partial Git probes are returned as fallbacks but never memoized.
- */
-export function createThreadDirectoryEnricher(): (
-  projectKey?: string,
-  caller?: DirectoryEnrichmentCaller,
-) => Promise<ThreadDirectoryEnrichment> {
-  const enricherId = directoryEnrichmentDiagnostics.createEnricherId();
-  const cache = new Map<string, CachedEnrichment>();
-  const pending = new Map<string, Promise<ThreadDirectoryEnrichment>>();
-  const observe = createGitDirectoryObserver();
-  const repositoryWorktrees = new Map<string, { version: string; paths: string[]; roots: Set<string> }>();
-  const pendingWorktrees = new Map<string, Promise<string[]>>();
-
-  async function readWorktrees(
-    key: string,
-    repoRoot: string,
-    before: GitDirectoryObservation | undefined,
-    context: DirectoryEnrichmentContext,
-  ): Promise<string[]> {
-    if (!before?.commonDirectory || !before.commonVersion) {
-      return parseGitWorktrees(await runGit(key, ["worktree", "list", "--porcelain"], context));
-    }
-    const common = before.commonDirectory;
-    const cached = repositoryWorktrees.get(common);
-    if (cached?.version === before.commonVersion) {
-      const paths = cached.paths;
-      // A newly added/moved checkout must refresh the inventory. Deleted
-      // siblings do not affect this lookup; a moved primary must refresh too.
-      if (cached.roots.has(path.resolve(repoRoot)) && paths[0] && await pathExists(paths[0])) {
-        return cached.paths;
-      }
-    }
-    const pendingKey = JSON.stringify([common, before.commonVersion]);
-    const existing = pendingWorktrees.get(pendingKey);
-    if (existing) return existing;
-    const pending = runGit(key, ["worktree", "list", "--porcelain"], context).then((output) => {
-      const paths = parseGitWorktrees(output);
-      repositoryWorktrees.set(common, { version: before.commonVersion!, paths, roots: new Set(paths) });
-      return paths;
-    });
-    pendingWorktrees.set(pendingKey, pending);
-    try {
-      return await pending;
-    } finally {
-      if (pendingWorktrees.get(pendingKey) === pending) pendingWorktrees.delete(pendingKey);
-    }
-  }
-
-  async function refresh(key: string, caller: DirectoryEnrichmentCaller): Promise<ThreadDirectoryEnrichment> {
-    let observationErrors = 0;
-    const before = await observe(key).catch(() => {
-      observationErrors += 1;
-      return undefined;
-    });
-    const cached = cache.get(key);
-    const sameRelationship = before
-      && cached?.observation.relationship === before.relationship;
-    const context: DirectoryEnrichmentContext = {
-      directory: key,
-      enricherId,
-      caller,
-      reason: !before ? "observation-unavailable"
-        : sameRelationship && cached.observation.head === before.head ? "cache-hit"
-        : !before.repository ? "unversioned"
-        : !cached ? "cold"
-        : sameRelationship ? "head-changed" : "relationship-changed",
-    };
-    directoryEnrichmentDiagnostics.record(context, { requests: 1, observationErrors });
-    if (sameRelationship && cached.observation.head === before.head) {
-      return cached.value;
-    }
-    cache.delete(key);
-    let value: ThreadDirectoryEnrichment;
-    if (before && !before.repository) {
-      value = { linkedDirectories: [buildFallbackLinkedDirectory(key)] };
-    } else if (sameRelationship) {
-      const branch = await runGit(key, ["rev-parse", "--abbrev-ref", "HEAD"], context)
-        .catch(() => undefined);
-      value = { ...cached.value, observedGitBranch: branch || undefined };
-    } else {
-      value = await loadThreadDirectoryEnrichment(key, context, (repoRoot) => readWorktrees(key, repoRoot, before, context));
-    }
-    // The branch is present only when the complete probe succeeded. Retaining
-    // a fallback would hide recovery after a failed executable/filesystem read.
-    if (before && (!before.repository || value.observedGitBranch)) {
-      const after = await observe(key).catch(() => {
-        directoryEnrichmentDiagnostics.record(context, { observationErrors: 1 });
-        return undefined;
-      });
-      if (after?.relationship === before.relationship && after.head === before.head) {
-        cache.set(key, { observation: after, value });
-        directoryEnrichmentDiagnostics.record(context, { cacheStored: 1 });
-      } else {
-        directoryEnrichmentDiagnostics.record(context, { observationChangedDuringProbe: 1 });
-      }
-    } else {
-      directoryEnrichmentDiagnostics.record(context, { resultNotCached: 1 });
-    }
-    return value;
-  }
-
-  return async (projectKey, caller = "direct") => {
-    if (!projectKey?.trim()) {
-      directoryEnrichmentDiagnostics.record(
-        { directory: "", enricherId, caller, reason: "empty-path" }, { requests: 1 },
-      );
-      return { linkedDirectories: [] };
-    }
-    const key = path.resolve(projectKey.trim());
-    let inFlight = pending.get(key);
-    if (!inFlight) {
-      inFlight = refresh(key, caller).finally(() => pending.delete(key));
-      pending.set(key, inFlight);
-    } else {
-      directoryEnrichmentDiagnostics.record(
-        { directory: key, enricherId, caller, reason: "pending-reuse" }, { requests: 1 },
-      );
-    }
-    return await inFlight;
-  };
-}

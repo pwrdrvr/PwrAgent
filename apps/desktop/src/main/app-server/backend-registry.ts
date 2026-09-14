@@ -541,6 +541,7 @@ import {
   ProviderThreadSnapshotStore,
   type ProviderThreadSnapshotStoreLike,
 } from "./provider-thread-snapshot-store";
+import type { GitReadRequest } from "../git-info/read-cache";
 import {
   resolveWorktreeRepositoryDirectory,
   type DirectoryEnrichmentCaller,
@@ -8638,6 +8639,7 @@ export class DesktopBackendRegistry {
   private readonly focusedThreadGitWorkingStateRefreshByPath = new Map<
     string,
     {
+      userAction?: boolean;
       acceptedPushedCommitShas: string[] | undefined;
       rerunRequested: boolean;
       running: boolean;
@@ -13301,12 +13303,9 @@ export class DesktopBackendRegistry {
 
   readDirectoryStatusEntries<T extends Pick<NavigationDirectorySummary, "key" | "path">>(
     directories: T[],
+    request: GitReadRequest = {},
   ): AsyncIterable<DirectoryGitStatusEntry> {
-    return this.gitDirectoryService.readDirectoryStatusEntries(directories);
-  }
-
-  invalidateDirectoryStatus(directoryPath?: string): void {
-    this.gitDirectoryService.invalidateDirectoryStatus(directoryPath);
+    return this.gitDirectoryService.readDirectoryStatusEntries(directories, request);
   }
 
   async refreshDirectoryGitStatuses(
@@ -13324,21 +13323,20 @@ export class DesktopBackendRegistry {
     for (const directory of directories) {
       this.pendingDirectoryGitStatusKeys.add(directory.key);
     }
-    if (request.force !== false) {
-      for (const directory of directories) {
-        this.gitDirectoryService.invalidateDirectoryStatus(directory.path);
-      }
-    }
-    void this.refreshDirectoryGitStatusesInBackground(directories);
+    void this.refreshDirectoryGitStatusesInBackground(directories, {
+      userAction: request.force !== false, caller: "directory-status-rpc",
+    });
     return { scheduledCount: directories.length };
   }
 
   private async refreshDirectoryGitStatusesInBackground(
     directories: NavigationDirectorySummary[],
+    request: GitReadRequest,
   ): Promise<void> {
     try {
       for await (const entry of this.gitDirectoryService.readDirectoryStatusEntries(
         directories,
+        request,
       )) {
         const fetchedAt = Date.now();
         const directory = this.navigationDirectoriesByKey.get(entry.directoryKey);
@@ -13518,6 +13516,7 @@ export class DesktopBackendRegistry {
    * when the focused probe has already started.
    */
   scheduleWorktreeGitWorkingStateRefresh(params: {
+    userAction?: boolean;
     acceptedPushedCommitShas?: string[];
     worktreePath: string;
   }): boolean {
@@ -13530,6 +13529,7 @@ export class DesktopBackendRegistry {
     if (existingFocused) {
       existingFocused.acceptedPushedCommitShas =
         params.acceptedPushedCommitShas;
+      existingFocused.userAction ||= params.userAction;
       if (existingFocused.running) {
         existingFocused.rerunRequested = true;
       }
@@ -13538,6 +13538,7 @@ export class DesktopBackendRegistry {
 
     const previous = this.pendingThreadGitWorkingStateByPath.get(worktreePath);
     const focused = {
+      userAction: params.userAction,
       acceptedPushedCommitShas: params.acceptedPushedCommitShas,
       rerunRequested: false,
       running: false,
@@ -13554,10 +13555,13 @@ export class DesktopBackendRegistry {
         }
         focused.rerunRequested = false;
         focused.running = true;
+        const userAction = focused.userAction;
+        focused.userAction = false;
         try {
           await this.probeFocusedWorktreeGitWorkingState(
             worktreePath,
             focused.acceptedPushedCommitShas,
+            userAction,
           );
         } catch (error) {
           backendRegistryLog.warn("focused working-state refresh failed", {
@@ -13588,10 +13592,12 @@ export class DesktopBackendRegistry {
   private async probeFocusedWorktreeGitWorkingState(
     worktreePath: string,
     acceptedPushedCommitShas: string[] | undefined,
+    userAction?: boolean,
   ): Promise<void> {
     for await (const entry of this.gitWorkingStateService.readWorkingStateEntries(
       [worktreePath],
       {
+        ...(userAction ? { userAction: true, caller: "working-state-refresh" } : {}),
         acceptedPushedCommitShasByWorktreePath: {
           [worktreePath]: acceptedPushedCommitShas,
         },

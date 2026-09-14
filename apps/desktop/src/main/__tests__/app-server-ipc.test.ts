@@ -7539,8 +7539,9 @@ describe("app server ipc", () => {
     await vi.waitFor(() => {
       expect(readDirectoryStatusEntries).toHaveBeenCalled();
     });
-    expect(invalidateDirectoryStatus).toHaveBeenCalledExactlyOnceWith(
-      "/repo/app",
+    expect(invalidateDirectoryStatus).not.toHaveBeenCalled();
+    expect(readDirectoryStatusEntries).toHaveBeenCalledWith(
+      expect.any(Array), { userAction: true, caller: "directory-status-ipc" },
     );
     expect(readDirectoryStatusEntries.mock.calls[0]?.[0]).toEqual([
       expect.objectContaining({ key: "directory:/repo/app" }),
@@ -7934,8 +7935,9 @@ describe("app server ipc", () => {
         { backend: "codex", threadId: "thread-1", trigger: "user" },
       ),
     ).resolves.toEqual({ scheduled: true });
-    expect(invalidateWorktreeWorkingState).toHaveBeenCalledExactlyOnceWith(
-      worktreePath,
+    expect(invalidateWorktreeWorkingState).not.toHaveBeenCalled();
+    expect(scheduleWorktreeGitWorkingStateRefresh).toHaveBeenCalledWith(
+      expect.objectContaining({ worktreePath, userAction: true }),
     );
     await vi.waitFor(() => {
       expect(readWorktreeWorkingStateEntries).toHaveBeenCalledWith(
