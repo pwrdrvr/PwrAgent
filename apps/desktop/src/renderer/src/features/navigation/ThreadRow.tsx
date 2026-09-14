@@ -153,11 +153,13 @@ type ThreadRowProps = {
     row: ThreadRowRef,
   ) => void;
   onRevealSelectedThreadComplete?: (request: number) => void;
-  /** Receives the state the toggle asks for, not the one it is leaving. */
-  onToggleSubthreads?: (
-    thread: NavigationThreadSummary,
-    collapsed: boolean,
-  ) => void;
+  /**
+   * Fired by the row's disclosure control. The list decides what state to
+   * move to — it already owns that, and deriving it here from the optional
+   * `subthreadsCollapsed` prop would make a caller that omits the pair ask
+   * to collapse an already-collapsed section forever.
+   */
+  onToggleSubthreads?: (thread: NavigationThreadSummary) => void;
   onDragStartThread?: (event: DragEvent<HTMLDivElement>) => void;
   onDragOverThread?: (event: DragEvent<HTMLDivElement>) => void;
   onDragLeaveThread?: (event: DragEvent<HTMLDivElement>) => void;
@@ -388,10 +390,7 @@ export const ThreadRow = memo(function ThreadRow(
           type="button"
           onClick={(event) => {
             event.stopPropagation();
-            props.onToggleSubthreads?.(
-              props.thread,
-              !props.subthreadsCollapsed,
-            );
+            props.onToggleSubthreads?.(props.thread);
           }}
         />
       ) : null}

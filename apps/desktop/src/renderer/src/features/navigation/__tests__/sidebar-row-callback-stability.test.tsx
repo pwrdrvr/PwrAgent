@@ -81,20 +81,6 @@ const DIRECTORY: NavigationDirectorySummary = {
   latestUpdatedAt: THREADS.length,
 };
 
-/**
- * The props `Sidebar` forwards to a row untouched are its CALLER's contract,
- * so they are held stable here rather than rebuilt per render — that is what
- * `App` supplies today, and the Profiler confirmed none of them was among the
- * unstable seven. Everything `Sidebar` itself builds or wraps is deliberately
- * a brand new function on every call below.
- */
-const stableForwarded = {
-  onPrefetchPullRequests: () => undefined,
-  onPrefetchGitWorkingState: () => undefined,
-  onRevealSelectedThreadComplete: () => undefined,
-  onSetThreadReaction: async () => undefined,
-};
-
 type SidebarOverrides = {
   browseMode?: "directories" | "inbox";
   onDetachPullRequest?: (
@@ -106,6 +92,10 @@ type SidebarOverrides = {
   onSetThreadPin?: (
     thread: NavigationThreadSummary,
     pinned: boolean,
+  ) => Promise<void>;
+  onSetSubthreadsCollapsed?: (
+    parent: NavigationThreadSummary,
+    collapsed: boolean,
   ) => Promise<void>;
   onUnbindMessagingBinding?: (
     thread: NavigationThreadSummary,
@@ -138,11 +128,19 @@ function sidebar(overrides: SidebarOverrides = {}) {
       onSetThreadPin={async (target, pinned) =>
         overrides.onSetThreadPin?.(target, pinned)
       }
-      onSetSubthreadsCollapsed={async () => undefined}
+      onSetSubthreadsCollapsed={async (parent, collapsed) => {
+        await overrides.onSetSubthreadsCollapsed?.(parent, collapsed);
+      }}
       onUnbindMessagingBinding={async (target, binding) =>
         overrides.onUnbindMessagingBinding?.(target, binding)
       }
-      {...stableForwarded}
+      // Forwarded straight through to the rows, and deliberately rebuilt here
+      // too: the row's bail-out has to hold whatever an ancestor does with
+      // its own arrows, not only when `App` happens to supply stable ones.
+      onPrefetchPullRequests={() => undefined}
+      onPrefetchGitWorkingState={() => undefined}
+      onRevealSelectedThreadComplete={() => undefined}
+      onSetThreadReaction={async () => undefined}
     />
   );
 }
@@ -168,9 +166,13 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-/** Anchored at both ends: "Thread 1" is a prefix of "Thread 10". */
+/**
+ * Anchored at both ends, because "Thread 1" is a prefix of "Thread 10"; the
+ * suffix covers the ", pinned" and ", shown while open" forms of the label.
+ * Titles come back out of the DOM, so they are escaped rather than trusted.
+ */
 function rowButtonName(title: string): RegExp {
-  return new RegExp(`^${title}(,|$)`);
+  return new RegExp(`^${title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(,|$)`);
 }
 
 function row(title: string): HTMLElement {
@@ -181,6 +183,10 @@ function row(title: string): HTMLElement {
     throw new Error(`Expected a hover-stable row for ${title}`);
   }
   return shell;
+}
+
+function threadRowCount(): number {
+  return document.querySelectorAll('[data-hover-stable-row="thread"]').length;
 }
 
 function renderedTitles(): string[] {
@@ -201,6 +207,7 @@ describe("sidebar thread row callback stability", () => {
     fireEvent.pointerOver(row("Thread 1"), { pointerType: "mouse" });
     view.rerender(sidebar());
     const settled = rowRenders;
+    expect(settled).toBeGreaterThan(0);
 
     // Ten more parent renders. Nothing about the threads changed; every
     // handler the sidebar owns is a brand new function, which is what the
@@ -219,17 +226,68 @@ describe("sidebar thread row callback stability", () => {
       inbox: { inInbox: true, reason: "new-thread" },
     })) as NavigationThreadSummary[];
     view.rerender(sidebar({ browseMode: "inbox", threads: inboxThreads }));
-    expect(screen.getAllByRole("listitem").length).toBeGreaterThan(0);
+    // The row count, not `getAllByRole("listitem")` — the lens wraps its
+    // disclosures and boundaries in list items too, so a lens rendering no
+    // rows at all would satisfy that and leave the assertion below comparing
+    // zero to zero.
+    expect(threadRowCount()).toBe(THREADS.length);
 
     fireEvent.pointerOver(row("Thread 1"), { pointerType: "mouse" });
     view.rerender(sidebar({ browseMode: "inbox", threads: inboxThreads }));
     const settled = rowRenders;
+    expect(settled).toBeGreaterThan(0);
 
     for (let round = 0; round < 10; round += 1) {
       view.rerender(sidebar({ browseMode: "inbox", threads: inboxThreads }));
     }
 
     expect(rowRenders).toBe(settled);
+  });
+
+  it("hands every row callback an identity that survives a re-render", () => {
+    // The render-cost tests above say the rows stopped re-rendering; this one
+    // says WHICH prop would be to blame if they started again, and covers the
+    // props the sidebar only forwards as well as the ones it builds. A
+    // per-prop fix plus a fixture that holds the forwarded ones stable would
+    // let an ancestor's inline arrow re-break the memo with nothing failing.
+    // Keyed by thread, so the comparison is one row against ITSELF: rows in
+    // different groups carry different prop sets, and a missing prop would
+    // otherwise read as a moved one.
+    const seen = new Map<string, Record<string, unknown>[]>();
+    memoized.type = (props: never) => {
+      const row = props as unknown as { thread: { id: string } };
+      const history = seen.get(row.thread.id) ?? [];
+      history.push(props as unknown as Record<string, unknown>);
+      seen.set(row.thread.id, history);
+      return inner(props);
+    };
+    const view = render(sidebar());
+    view.rerender(sidebar());
+    // A row that bails out hands back no props at all, so the identities have
+    // to be compared across a render its own data forced.
+    view.rerender(
+      sidebar({
+        threads: THREADS.map((entry) => ({
+          ...entry,
+          updatedAt: (entry.updatedAt ?? 0) + 1,
+        })),
+      }),
+    );
+
+    const compared: string[] = [];
+    const moved = new Set<string>();
+    for (const [id, history] of seen) {
+      if (history.length < 2) continue;
+      compared.push(id);
+      const [first] = history;
+      const latest = history.at(-1)!;
+      for (const key of Object.keys(first!)) {
+        if (!key.startsWith("on") || typeof first![key] !== "function") continue;
+        if (first![key] !== latest[key]) moved.add(key);
+      }
+    }
+    expect(compared).toHaveLength(THREADS.length);
+    expect([...moved]).toEqual([]);
   });
 
   it("still re-renders a row when its own thread changes", () => {
@@ -322,6 +380,35 @@ describe("sidebar thread row callback stability", () => {
           .getAttribute("aria-pressed") === "true",
     );
     expect(pressed).toEqual(titles.slice(0, 3));
+  });
+
+  it("collapses a directory row's sub-threads the way the list decides", () => {
+    // The row names the thread and nothing else, so the list is what turns a
+    // click into a target state. Nothing covered the Directories lens here —
+    // the existing hover-freeze test drives the same control through
+    // `RecentsList` — so this is the half that reverting `DirectoriesList`
+    // used to leave green.
+    const parent = THREADS[0]!;
+    const child = {
+      ...THREADS[1]!,
+      parentThreadId: parent.id,
+    } as NavigationThreadSummary;
+    const threads = [parent, child, ...THREADS.slice(2)];
+    const onSetSubthreadsCollapsed = vi.fn<
+      (parent: NavigationThreadSummary, collapsed: boolean) => Promise<void>
+    >(async () => undefined);
+    const view = render(sidebar({ threads, onSetSubthreadsCollapsed }));
+    for (let round = 0; round < 3; round += 1) {
+      view.rerender(sidebar({ threads, onSetSubthreadsCollapsed }));
+    }
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: `Collapse sub-threads for ${parent.title}`,
+      }),
+    );
+
+    expect(onSetSubthreadsCollapsed).toHaveBeenCalledWith(parent, true);
   });
 
   it("keeps the pin action wired to the newest onSetThreadPin", () => {
@@ -586,8 +673,12 @@ describe("thread row identity contract", () => {
     });
   });
 
-  it("asks the subthread toggle for the state it wants, not the one it has", () => {
-    const onToggleSubthreads = vi.fn();
+  it("names the thread on the subthread toggle and decides nothing else", () => {
+    // The list owns which way the section moves — it already computes that
+    // from the thread. The row reporting a state derived from its own
+    // OPTIONAL `subthreadsCollapsed` prop would make a caller that omits the
+    // pair ask to collapse an already-collapsed section forever.
+    const onToggleSubthreads = vi.fn<(thread: NavigationThreadSummary) => void>();
     const { rerender } = render(
       <ThreadRow
         thread={solo}
@@ -599,7 +690,7 @@ describe("thread row identity contract", () => {
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: /^Collapse sub-threads/ }));
-    expect(onToggleSubthreads).toHaveBeenLastCalledWith(solo, true);
+    expect(onToggleSubthreads).toHaveBeenLastCalledWith(solo);
 
     rerender(
       <ThreadRow
@@ -612,6 +703,7 @@ describe("thread row identity contract", () => {
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: /^Expand sub-threads/ }));
-    expect(onToggleSubthreads).toHaveBeenLastCalledWith(solo, false);
+    expect(onToggleSubthreads).toHaveBeenLastCalledWith(solo);
+    expect(onToggleSubthreads.mock.calls.every((call) => call.length === 1)).toBe(true);
   });
 });

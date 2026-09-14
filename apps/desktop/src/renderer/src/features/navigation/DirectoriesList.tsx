@@ -1190,11 +1190,12 @@ export function DirectoriesList(props: DirectoriesListProps) {
       movePinnedThreadByKeyboard(context.directory, thread, direction);
     },
   );
-  const toggleSubthreads = useEventCallback(
-    (thread: NavigationThreadSummary, collapsed: boolean) => {
-      void props.onSetSubthreadsCollapsed?.(thread, collapsed);
-    },
-  );
+  const toggleSubthreads = useEventCallback((thread: NavigationThreadSummary) => {
+    void props.onSetSubthreadsCollapsed?.(
+      thread,
+      !isSubthreadSectionCollapsed(thread),
+    );
+  });
 
   if (visibleDirectories.length === 0) {
     return <p className="sidebar-empty">No directory-linked threads.</p>;

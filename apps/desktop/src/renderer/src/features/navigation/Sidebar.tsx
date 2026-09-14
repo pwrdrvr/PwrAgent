@@ -97,23 +97,60 @@ type ThreadContextMenuPosition = {
 };
 
 /**
+ * A callback forwarded to a thread row, with a permanently stable identity.
+ *
+ * Every row callback this component builds itself is already stable; these
+ * are the ones it only passes through. A memoized row must not depend on an
+ * ancestor several levels up remembering to memoize an arrow — that is the
+ * same class of bug the rows' `memo` exists to stop.
+ *
+ * Absence is preserved rather than papered over: the lists read presence to
+ * decide whether to render the affordance at all, and a wrapper whose backing
+ * prop has gone away must no-op rather than call `undefined`.
+ */
+function useStableRowCallback<Args extends unknown[], Result>(
+  operation: ((...args: Args) => Result) | undefined,
+): ((...args: Args) => Result) | undefined {
+  const stable = useEventCallback(
+    (...args: Args): Result => operation?.(...args) as Result,
+  );
+  return operation ? stable : undefined;
+}
+
+/**
  * Drop the hover freeze, then run a list-changing operation — with a
  * permanently stable identity, because these reach memoized thread rows.
  *
  * The wrapped operation is a prop of this component and so is a new function
  * on most renders; a dependency list naming it would move the wrapper's
- * identity with it, which is the churn the rows' `memo` exists to stop. The
- * caller decides whether to expose the wrapper at all, so `operation` is
- * present whenever this actually runs.
+ * identity with it, which is the churn the rows' `memo` exists to stop.
+ *
+ * Presence is decided here rather than by each call site: a caller that
+ * forgot its own `props.onX ? … : undefined` would otherwise ship a handler
+ * that releases the freeze and then throws on the user's first click.
  */
 function useReleaseBeforeListChange<Args extends unknown[], Result>(
   release: () => void,
+  operation: (...args: Args) => Result,
+): (...args: Args) => Result;
+function useReleaseBeforeListChange<Args extends unknown[], Result>(
+  release: () => void,
   operation: ((...args: Args) => Result) | undefined,
-): (...args: Args) => Result {
-  return useEventCallback((...args: Args): Result => {
+): ((...args: Args) => Result) | undefined;
+function useReleaseBeforeListChange<Args extends unknown[], Result>(
+  release: () => void,
+  operation: ((...args: Args) => Result) | undefined,
+): ((...args: Args) => Result) | undefined {
+  const released = useEventCallback((...args: Args): Result => {
+    // Read at call time, not captured: this identity is permanent, so it can
+    // outlive the prop that backed the render which handed it out.
+    if (!operation) {
+      return undefined as Result;
+    }
     release();
-    return operation!(...args);
+    return operation(...args);
   });
+  return operation ? released : undefined;
 }
 
 import type { NavigationDirectoryDisclosure } from "../../lib/useNavigationDirectoryDisclosure";
@@ -559,43 +596,54 @@ export function Sidebar(props: SidebarProps) {
   // place and the freeze must survive the write. One stable wrapper spanning
   // both, rather than a lens-dependent identity: a row's `memo` cannot bail
   // out past a handler that changes when the lens does.
-  const setThreadPin = useEventCallback(
-    (thread: NavigationThreadSummary, pinned: boolean): Promise<void> => {
-      if (props.browseMode === "directories") {
-        releaseHoverStableSnapshot();
-      }
-      return props.onSetThreadPin!(thread, pinned);
-    },
+  const setThreadPin = useStableRowCallback(
+    props.onSetThreadPin
+      ? (thread: NavigationThreadSummary, pinned: boolean): Promise<void> => {
+          if (props.browseMode === "directories") {
+            releaseHoverStableSnapshot();
+          }
+          return props.onSetThreadPin!(thread, pinned);
+        }
+      : undefined,
   );
   const releasedUpdateSubthreadOrder = useReleaseBeforeListChange(
     releaseHoverStableSnapshot,
     props.onUpdateSubthreadOrder,
   );
+  // The row callbacks this component only forwards. (`onDetachPullRequest`
+  // is absent: the rows get this component's own `detachPullRequest`, which
+  // owns the confirmation dialog and is already stable.) They are stable in the
+  // app today because `App` happens to supply stable references, and that is
+  // not a contract a memoized row should rest on — the row's bail-out must
+  // hold whatever an ancestor does with its own arrows.
+  const forwardedPrefetchPullRequests = useStableRowCallback(
+    props.onPrefetchPullRequests,
+  );
+  const forwardedPrefetchGitWorkingState = useStableRowCallback(
+    props.onPrefetchGitWorkingState,
+  );
+  const forwardedRevealSelectedThreadComplete = useStableRowCallback(
+    props.onRevealSelectedThreadComplete,
+  );
+  const forwardedSetThreadReaction = useStableRowCallback(
+    props.onSetThreadReaction,
+  );
+  const forwardedUnbindMessagingBinding = useStableRowCallback(
+    props.onUnbindMessagingBinding,
+  );
   // Every member is permanently stable, so the object itself needs no memo —
-  // nothing reads its identity, only the handlers it carries. An absent
-  // operation stays absent: presence is what the lists read to decide whether
-  // to render the affordance at all.
+  // nothing reads its identity, only the handlers it carries. Each one is
+  // `undefined` exactly when its operation is, because presence is what the
+  // lists read to decide whether to render the affordance at all.
   const hoverReleasedListHandlers = {
     openLaunchpad: releasedOpenLaunchpad,
-    reorderDirectoryPins: props.onReorderDirectoryPins
-      ? releasedReorderDirectoryPins
-      : undefined,
-    reorderThreadPins: props.onReorderThreadPins
-      ? releasedReorderThreadPins
-      : undefined,
-    setDirectoryPin: props.onSetDirectoryPin
-      ? releasedSetDirectoryPin
-      : undefined,
-    setDirectoryThreadsCollapsed: props.onSetDirectoryThreadsCollapsed
-      ? releasedSetDirectoryThreadsCollapsed
-      : undefined,
-    setSubthreadsCollapsed: props.onSetSubthreadsCollapsed
-      ? releasedSetSubthreadsCollapsed
-      : undefined,
-    setThreadPin: props.onSetThreadPin ? setThreadPin : undefined,
-    updateSubthreadOrder: props.onUpdateSubthreadOrder
-      ? releasedUpdateSubthreadOrder
-      : undefined,
+    reorderDirectoryPins: releasedReorderDirectoryPins,
+    reorderThreadPins: releasedReorderThreadPins,
+    setDirectoryPin: releasedSetDirectoryPin,
+    setDirectoryThreadsCollapsed: releasedSetDirectoryThreadsCollapsed,
+    setSubthreadsCollapsed: releasedSetSubthreadsCollapsed,
+    setThreadPin,
+    updateSubthreadOrder: releasedUpdateSubthreadOrder,
   };
   // Counts cover the owner's full population, independently of the visible lens range.
   const ownerCountPage = props.pagedNavigation?.resources.get("directory-index")?.state.page;
@@ -1404,20 +1452,6 @@ export function Sidebar(props: SidebarProps) {
     void copyText(value);
   };
 
-  /**
-   * Forwarded straight to the rows, so its identity is wrapped here rather
-   * than trusted from above. Every other row callback this component hands
-   * down is one it builds itself; a memoized row must not depend on an
-   * ancestor several levels up remembering to memoize an arrow.
-   */
-  const unbindMessagingBinding = useEventCallback((
-    thread: NavigationThreadSummary,
-    binding: MessagingThreadBindingSummary,
-  ): Promise<void> => props.onUnbindMessagingBinding!(thread, binding));
-  const unbindMessagingBindingHandler = props.onUnbindMessagingBinding
-    ? unbindMessagingBinding
-    : undefined;
-
   const detachPullRequest = useEventCallback((
     thread: NavigationThreadSummary,
     pr: PrSummary,
@@ -1962,10 +1996,10 @@ export function Sidebar(props: SidebarProps) {
               openFederationTargetMenuDirectoryKey={
                 directoryTargetMenu?.directoryKey
               }
-              onPrefetchPullRequests={props.onPrefetchPullRequests}
-              onPrefetchGitWorkingState={props.onPrefetchGitWorkingState}
+              onPrefetchPullRequests={forwardedPrefetchPullRequests}
+              onPrefetchGitWorkingState={forwardedPrefetchGitWorkingState}
               onRevealSelectedThreadComplete={
-                props.onRevealSelectedThreadComplete
+                forwardedRevealSelectedThreadComplete
               }
               onDetachPullRequest={detachPullRequest}
               onReorderThreadPins={
@@ -1992,9 +2026,9 @@ export function Sidebar(props: SidebarProps) {
               onOpenPullRequestContextMenu={openPullRequestContextMenu}
               onSelectDirectory={selectDirectoryFromList}
               onSelectThread={selectThreadFromList}
-              onSetReaction={props.onSetThreadReaction}
+              onSetReaction={forwardedSetThreadReaction}
               onSetThreadPin={hoverReleasedListHandlers.setThreadPin}
-              onUnbindMessagingBinding={unbindMessagingBindingHandler}
+              onUnbindMessagingBinding={forwardedUnbindMessagingBinding}
             />
           ) : (
             renderedThreads.length === 0 ? (
@@ -2030,10 +2064,10 @@ export function Sidebar(props: SidebarProps) {
                 threads={renderedThreads}
                 onOpenThreadContextMenu={openThreadContextMenu}
                 onOpenPullRequestContextMenu={openPullRequestContextMenu}
-                onPrefetchPullRequests={props.onPrefetchPullRequests}
-                onPrefetchGitWorkingState={props.onPrefetchGitWorkingState}
+                onPrefetchPullRequests={forwardedPrefetchPullRequests}
+                onPrefetchGitWorkingState={forwardedPrefetchGitWorkingState}
                 onRevealSelectedThreadComplete={
-                  props.onRevealSelectedThreadComplete
+                  forwardedRevealSelectedThreadComplete
                 }
                 onDetachPullRequest={detachPullRequest}
                 onUpdateSubthreadOrder={
@@ -2043,9 +2077,9 @@ export function Sidebar(props: SidebarProps) {
                   hoverReleasedListHandlers.setSubthreadsCollapsed
                 }
                 onSelectThread={selectThreadFromList}
-                onSetReaction={props.onSetThreadReaction}
+                onSetReaction={forwardedSetThreadReaction}
                 onSetThreadPin={hoverReleasedListHandlers.setThreadPin}
-                onUnbindMessagingBinding={unbindMessagingBindingHandler}
+                onUnbindMessagingBinding={forwardedUnbindMessagingBinding}
               />
             )
           )}

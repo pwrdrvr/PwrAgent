@@ -324,11 +324,12 @@ export function RecentsList(props: RecentsListProps) {
       props.onSelectThread(thread, event, selectionOrder);
     },
   );
-  const toggleSubthreads = useEventCallback(
-    (thread: NavigationThreadSummary, collapsed: boolean) => {
-      void props.onSetSubthreadsCollapsed?.(thread, collapsed);
-    },
-  );
+  const toggleSubthreads = useEventCallback((thread: NavigationThreadSummary) => {
+    void props.onSetSubthreadsCollapsed?.(
+      thread,
+      !isSubthreadSectionCollapsed(thread),
+    );
+  });
 
   const renderThreadGroup = (thread: NavigationThreadSummary) => {
     const key = threadSummaryIdentityKey(thread);
