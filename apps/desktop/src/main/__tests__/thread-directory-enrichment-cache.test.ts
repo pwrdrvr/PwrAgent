@@ -9,11 +9,15 @@ import budgets from "./fixtures/git-subprocess-budgets.json";
 const git = vi.hoisted(() => vi.fn());
 const readPointer = vi.hoisted(() => vi.fn());
 const observeStat = vi.hoisted(() => vi.fn());
+const observeRealpath = vi.hoisted(() => vi.fn());
+const observeAccess = vi.hoisted(() => vi.fn());
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
   readPointer.mockImplementation(actual.readFile);
   observeStat.mockImplementation(actual.stat);
-  return { ...actual, readFile: readPointer, stat: observeStat };
+  observeRealpath.mockImplementation(actual.realpath);
+  observeAccess.mockImplementation(actual.access);
+  return { ...actual, readFile: readPointer, stat: observeStat, realpath: observeRealpath, access: observeAccess };
 });
 vi.mock("node:child_process", () => ({ execFile: git }));
 vi.mock("../git-command", () => ({ getGitCommand: () => "git" }));
@@ -76,10 +80,50 @@ async function initializeRealGit(initOptions: string[] = []) {
   return run;
 }
 
+// Identity invalidation tests advance past the service-owned admission window.
+// The burst tests below deliberately use a stationary clock instead.
+function createExpiredEnricher() {
+  let now = 0;
+  const enrich = createThreadDirectoryEnricher({ now: () => now });
+  return (...args: Parameters<typeof enrich>) => {
+    now += 5_001;
+    return enrich(...args);
+  };
+}
+
 describe("directory enrichment invalidation", () => {
+  it.each(["repository", "missing", "failed-git"])(
+    "serves 120 sequential %s reads without filesystem probes or Git after the first read",
+    async (kind) => {
+      const enrich = createThreadDirectoryEnricher({ now: () => 0 });
+      const cwd = kind === "missing" ? path.join(root, "missing") : repo;
+      fail = kind === "failed-git";
+      const first = await enrich(cwd, "thread-list");
+      observeStat.mockClear();
+      observeRealpath.mockClear();
+      observeAccess.mockClear();
+      readPointer.mockClear();
+      git.mockClear();
+      for (let index = 0; index < budgets.directoryEnrichment.burstReads; index += 1) {
+        expect(await enrich(cwd, "thread-list")).toEqual(first);
+      }
+      expect({
+        stat: observeStat.mock.calls.length,
+        realpath: observeRealpath.mock.calls.length,
+        access: observeAccess.mock.calls.length,
+        readFile: readPointer.mock.calls.length,
+        git: git.mock.calls.length,
+      }).toEqual({
+        stat: budgets.directoryEnrichment.warmFilesystemProbes,
+        realpath: 0, access: 0, readFile: 0,
+        git: budgets.directoryEnrichment.warmGitCommands,
+      });
+    },
+  );
+
   it("records the cache decision and Git budget for each caller", async () => {
     const record = vi.spyOn(directoryEnrichmentDiagnostics, "record");
-    const enrich = createThreadDirectoryEnricher();
+    const enrich = createExpiredEnricher();
     await enrich(repo, "thread-list");
     await enrich(repo, "selected-thread");
     branch = "feature/diagnostics";
@@ -103,7 +147,7 @@ describe("directory enrichment invalidation", () => {
 
   it("counts pending reuse separately from the caller that owns Git", async () => {
     const record = vi.spyOn(directoryEnrichmentDiagnostics, "record");
-    const enrich = createThreadDirectoryEnricher();
+    const enrich = createExpiredEnricher();
     await Promise.all([enrich(repo, "thread-list"), enrich(repo, "selected-thread")]);
     expect(record).toHaveBeenCalledWith(
       expect.objectContaining({ caller: "selected-thread", reason: "pending-reuse" }),
@@ -116,7 +160,7 @@ describe("directory enrichment invalidation", () => {
 
   it("records failed probes and missing paths without retaining a fallback", async () => {
     const record = vi.spyOn(directoryEnrichmentDiagnostics, "record");
-    const enrich = createThreadDirectoryEnricher();
+    const enrich = createExpiredEnricher();
     fail = true;
     await enrich(repo);
     expect(record.mock.calls.filter(([, delta]) => delta.gitFailed)).toHaveLength(2);
@@ -132,7 +176,7 @@ describe("directory enrichment invalidation", () => {
 
   it("distinguishes observation errors from a cold cache and records rejected publication", async () => {
     const record = vi.spyOn(directoryEnrichmentDiagnostics, "record");
-    const enrich = createThreadDirectoryEnricher();
+    const enrich = createExpiredEnricher();
     observeStat.mockRejectedValueOnce(new Error("fixture observation error"));
     expect((await enrich(repo)).observedGitBranch).toBe("main");
     expect(record).toHaveBeenCalledWith(
@@ -152,7 +196,7 @@ describe("directory enrichment invalidation", () => {
 
   it("keeps a confirmed mapping across a day of repeated reads without Git", async () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
-    const enrich = createThreadDirectoryEnricher();
+    const enrich = createThreadDirectoryEnricher({ now: Date.now });
     const first = await enrich(repo);
     git.mockClear();
     for (let round = 1; round <= budgets.directoryEnrichment.repeatedListings; round += 1) {
@@ -162,8 +206,8 @@ describe("directory enrichment invalidation", () => {
     expect(git).toHaveBeenCalledTimes(budgets.directoryEnrichment.warmGitCommands);
   });
 
-  it("refreshes only branch data immediately after an external checkout", async () => {
-    const enrich = createThreadDirectoryEnricher();
+  it("refreshes only branch data after the admission window after an external checkout", async () => {
+    const enrich = createExpiredEnricher();
     const first = await enrich(repo);
     git.mockClear();
     branch = "feature/changed";
@@ -174,8 +218,8 @@ describe("directory enrichment invalidation", () => {
     expect(git).toHaveBeenCalledTimes(budgets.directoryEnrichment.branchChangeGitCommands);
   });
 
-  it("forgets a removed directory immediately and resolves its replacement", async () => {
-    const enrich = createThreadDirectoryEnricher();
+  it("forgets a removed directory after the admission window and resolves its replacement", async () => {
+    const enrich = createExpiredEnricher();
     await enrich(repo);
     await fs.rm(repo, { recursive: true });
     expect(await enrich(repo)).toEqual({ linkedDirectories: [] });
@@ -185,8 +229,8 @@ describe("directory enrichment invalidation", () => {
     expect((await enrich(repo)).observedGitBranch).toBe(branch);
   });
 
-  it("retries failed probes immediately instead of retaining a fallback", async () => {
-    const enrich = createThreadDirectoryEnricher();
+  it("retries failed probes after the negative cache expires", async () => {
+    const enrich = createExpiredEnricher();
     fail = true;
     expect((await enrich(repo)).observedGitBranch).toBeUndefined();
     fail = false;
@@ -196,7 +240,7 @@ describe("directory enrichment invalidation", () => {
   it("discovers a new nested repository without expiring the outer mapping", async () => {
     const nested = path.join(repo, "nested");
     await fs.mkdir(nested);
-    const enrich = createThreadDirectoryEnricher();
+    const enrich = createExpiredEnricher();
     await enrich(nested);
     git.mockClear();
     await fs.mkdir(path.join(nested, ".git"));
@@ -207,7 +251,7 @@ describe("directory enrichment invalidation", () => {
   });
 
   it("shares aliases and simultaneous validations for the same directory", async () => {
-    const enrich = createThreadDirectoryEnricher();
+    const enrich = createExpiredEnricher();
     await Promise.all([enrich(repo), enrich(`${repo}${path.sep}.`), enrich(` ${repo} `)]);
     expect(git).toHaveBeenCalledTimes(3);
   });
@@ -220,7 +264,7 @@ describe("directory enrichment invalidation", () => {
     await fs.writeFile(path.join(worktree, ".git"), `gitdir: ${admin}\n`);
     await fs.writeFile(path.join(admin, "commondir"), "../..\n");
     await fs.writeFile(path.join(admin, "HEAD"), "ref: refs/heads/main\n");
-    const enrich = createThreadDirectoryEnricher();
+    const enrich = createExpiredEnricher();
     await enrich(worktree);
     git.mockClear();
     const nextAdmin = path.join(repo, ".git", "worktrees", "second");
@@ -234,7 +278,7 @@ describe("directory enrichment invalidation", () => {
   });
 
   it("does not rediscover topology for ordinary edits, commits or sibling worktrees", async () => {
-    const enrich = createThreadDirectoryEnricher();
+    const enrich = createExpiredEnricher();
     const first = await enrich(repo);
     git.mockClear();
     await fs.writeFile(path.join(repo, "edited.txt"), "edited\n");
@@ -254,7 +298,7 @@ describe("directory enrichment invalidation", () => {
     await fs.writeFile(path.join(worktree, ".git"), `gitdir: ${admin}\n`);
     await fs.writeFile(path.join(admin, "commondir"), "../..\n");
     await fs.writeFile(path.join(admin, "HEAD"), "ref: refs/heads/main\n");
-    const enrich = createThreadDirectoryEnricher();
+    const enrich = createThreadDirectoryEnricher({ now: Date.now });
     await enrich(worktree);
     readPointer.mockClear();
     now.mockReturnValue(86_400_000);
@@ -263,7 +307,7 @@ describe("directory enrichment invalidation", () => {
   });
 
   it("invalidates topology when per-worktree configuration appears", async () => {
-    const enrich = createThreadDirectoryEnricher();
+    const enrich = createExpiredEnricher();
     await enrich(repo);
     git.mockClear();
     await fs.writeFile(path.join(repo, ".git", "config.worktree"), "[core]\n bare = false\n");
@@ -274,7 +318,7 @@ describe("directory enrichment invalidation", () => {
   it("invalidates a directory symlink when its target changes", async () => {
     const alias = path.join(root, "alias");
     await fs.symlink(repo, alias, "junction");
-    const enrich = createThreadDirectoryEnricher();
+    const enrich = createExpiredEnricher();
     await enrich(alias);
     const other = path.join(root, "other");
     await fs.mkdir(path.join(other, ".git"), { recursive: true });
@@ -286,7 +330,7 @@ describe("directory enrichment invalidation", () => {
   });
 
   it("does not retain a failed branch refresh", async () => {
-    const enrich = createThreadDirectoryEnricher();
+    const enrich = createExpiredEnricher();
     await enrich(repo);
     branch = "after-failure";
     await fs.writeFile(path.join(repo, ".git", "HEAD"), `ref: refs/heads/${branch}\n`);
@@ -296,10 +340,10 @@ describe("directory enrichment invalidation", () => {
     expect((await enrich(repo)).observedGitBranch).toBe(branch);
   });
 
-  it("does not spawn Git for an unversioned directory and detects git init immediately", async () => {
+  it("does not spawn Git for an unversioned directory and detects git init after the admission window", async () => {
     const plain = path.join(root, "plain");
     await fs.mkdir(plain);
-    const enrich = createThreadDirectoryEnricher();
+    const enrich = createExpiredEnricher();
     expect((await enrich(plain)).linkedDirectories[0]?.kind).toBe("local");
     await enrich(plain);
     expect(git).not.toHaveBeenCalled();
@@ -311,7 +355,7 @@ describe("directory enrichment invalidation", () => {
 
   it("does not publish a cache entry if HEAD changes while Git is running", async () => {
     const record = vi.spyOn(directoryEnrichmentDiagnostics, "record");
-    const enrich = createThreadDirectoryEnricher();
+    const enrich = createExpiredEnricher();
     const invoke = git.getMockImplementation()!;
     let release: () => void = () => {};
     let started: () => void = () => {};
@@ -350,7 +394,7 @@ describe("directory enrichment invalidation", () => {
         ? args.includes("--abbrev-ref") ? `${args[1]}\nmain` : args[1]
         : args.includes("--abbrev-ref") ? "main" : [repo, ...worktrees].map((cwd) => `worktree ${cwd}`).join("\n"), stderr: "" });
     });
-    const enrich = createThreadDirectoryEnricher();
+    const enrich = createExpiredEnricher();
     // Separate batches exercise both pending coalescing and settled reuse.
     for (let offset = 0; offset < worktrees.length; offset += 8) {
       const batch = worktrees.slice(offset, offset + 8);
@@ -371,7 +415,7 @@ describe("directory enrichment invalidation", () => {
     await fs.mkdir(cwd);
     vi.stubEnv("GIT_CEILING_DIRECTORIES", repo);
     try {
-      expect(await createThreadDirectoryEnricher()(cwd)).toMatchObject({
+      expect(await createExpiredEnricher()(cwd)).toMatchObject({
         linkedDirectories: [{ path: cwd.replace(/\\/g, "/"), kind: "local" }],
       });
       expect(git.mock.calls.every(([, args]) => args.includes("--show-toplevel"))).toBe(true);
@@ -384,7 +428,7 @@ describe("directory enrichment invalidation", () => {
     const run = await initializeRealGit();
     const worktree = path.join(root, "linked");
     await run(["-C", repo, "worktree", "add", "-b", "feature/fixture", worktree]);
-    const enrich = createThreadDirectoryEnricher();
+    const enrich = createExpiredEnricher();
     const first = await enrich(worktree);
     const normalized = (value: string) => value.replace(/\\/g, "/");
     expect(first).toMatchObject({
@@ -409,7 +453,7 @@ describe("directory enrichment invalidation", () => {
     const alias = path.join(root, "alias-to-subdirectory");
     await fs.mkdir(subdirectory);
     await fs.symlink(subdirectory, alias, "junction");
-    const enrich = createThreadDirectoryEnricher();
+    const enrich = createExpiredEnricher();
     const first = await enrich(alias);
     expect(first).toMatchObject({
       observedGitBranch: "main",
@@ -431,7 +475,7 @@ describe("directory enrichment invalidation", () => {
     const tables = path.join(stack === "worktree" ? admin : path.join(repo, ".git"), "reftable");
     await fs.mkdir(tables);
     await fs.writeFile(path.join(tables, "tables.list"), "first.ref\n");
-    const enrich = createThreadDirectoryEnricher();
+    const enrich = createExpiredEnricher();
     const first = await enrich(worktree);
     git.mockClear();
     branch = "changed-stack";
@@ -452,7 +496,7 @@ describe("directory enrichment invalidation", () => {
     });
     const cwd = linked ? path.join(root, "reftable-linked") : repo;
     if (linked) await run(["-C", repo, "worktree", "add", "-b", "feature/linked", cwd]);
-    const enrich = createThreadDirectoryEnricher();
+    const enrich = createExpiredEnricher();
     const first = await enrich(cwd);
     expect(first.observedGitBranch).toBe(linked ? "feature/linked" : "main");
     const headPath = (await run([

@@ -3058,15 +3058,13 @@ describe("DesktopBackendRegistry", () => {
         force: true,
       })).resolves.toEqual({ scheduledCount: 1 });
 
-      expect(invalidateDirectoryStatus).toHaveBeenCalledExactlyOnceWith(
-        "/owner/repo",
-      );
+      expect(invalidateDirectoryStatus).not.toHaveBeenCalled();
       expect(readDirectoryStatusEntries).toHaveBeenCalledExactlyOnceWith([
         expect.objectContaining({
           key: "directory:/owner/repo",
           path: "/owner/repo",
         }),
-      ]);
+      ], { userAction: true, caller: "directory-status-rpc" });
       expect(writeDirectoryGitStatus).toHaveBeenCalledExactlyOnceWith({
         directory: expect.objectContaining({
           key: "directory:/owner/repo",

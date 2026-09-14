@@ -13,6 +13,7 @@ import type {
   WorktreeOtherChangeStatus,
 } from "@pwragent/shared";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
+import { GitReadCache, type GitReadRequest } from "../git-info/read-cache";
 import { resolveGitExecutable, runGitCommand } from "./git-executable";
 
 function normalizeAbsolutePath(value: string): string {
@@ -1101,17 +1102,11 @@ export type WorktreeWorkingStateEntry = {
   gitWorkingState?: ThreadGitWorkingState;
 };
 
-export type GitWorkingStateEntryOptions = {
+export type GitWorkingStateEntryOptions = GitReadRequest & {
   acceptedPushedCommitShasByWorktreePath?: Record<string, string[] | undefined>;
 };
 
 export type ResolveEditCommitStatesOptions = AcceptedPushedCommitOptions;
-
-type CachedWorkingState = {
-  expiresAt: number;
-  inFlight?: Promise<ThreadGitWorkingState | undefined>;
-  value?: ThreadGitWorkingState;
-};
 
 type GitWorkingStateServiceOptions = {
   cacheTtlMs?: number;
@@ -1131,15 +1126,14 @@ type GitWorkingStateServiceOptions = {
  * status is wired.
  */
 export class GitWorkingStateService {
-  private readonly cache = new Map<string, CachedWorkingState>();
-  private readonly cacheTtlMs: number;
+  private readonly cache: GitReadCache<ThreadGitWorkingState | undefined>;
   private readonly concurrency: number;
   private readonly maxUnread: number;
   private readonly gitEnv?: NodeJS.ProcessEnv;
   private readonly runGit: GitCommandRunner;
 
   constructor(options: GitWorkingStateServiceOptions = {}) {
-    this.cacheTtlMs = options.cacheTtlMs ?? 3_000;
+    this.cache = new GitReadCache({ ttlMs: options.cacheTtlMs ?? 3_000 });
     this.concurrency = options.concurrency ?? 4;
     this.maxUnread = Math.max(options.maxUnread ?? 8, this.concurrency);
     this.gitEnv = options.gitEnv;
@@ -1155,6 +1149,7 @@ export class GitWorkingStateService {
       async (worktreePath): Promise<WorktreeWorkingStateEntry> => ({
         worktreePath,
         gitWorkingState: await this.readWorkingState(worktreePath, {
+          userAction: options.userAction, caller: options.caller,
           acceptedPushedCommitShas:
             options.acceptedPushedCommitShasByWorktreePath?.[worktreePath],
         }),
@@ -1168,7 +1163,7 @@ export class GitWorkingStateService {
 
   async readWorkingState(
     worktreePath: string,
-    options: AcceptedPushedCommitOptions = {},
+    options: AcceptedPushedCommitOptions & GitReadRequest = {},
   ): Promise<ThreadGitWorkingState | undefined> {
     const key = worktreePath?.trim();
     if (!key) {
@@ -1176,48 +1171,16 @@ export class GitWorkingStateService {
     }
     const cacheKey = buildWorkingStateCacheKey(key, options.acceptedPushedCommitShas);
 
-    const now = Date.now();
-    const cached = this.cache.get(cacheKey);
-    if (cached?.inFlight) {
-      return await cached.inFlight;
-    }
-    if (cached && cached.expiresAt > now) {
-      return cached.value;
-    }
-
-    const inFlight = probeWorktreeWorkingState(key, {
+    return this.cache.read(cacheKey, () => probeWorktreeWorkingState(key, {
       runGit: this.runGit,
       gitEnv: this.gitEnv,
       acceptedPushedCommitShas: options.acceptedPushedCommitShas,
-    })
-      .then((value) => {
-        this.cache.set(cacheKey, { expiresAt: Date.now() + this.cacheTtlMs, value });
-        return value;
-      })
-      .catch((error) => {
-        this.cache.delete(cacheKey);
-        throw error;
-      });
-
-    this.cache.set(cacheKey, {
-      expiresAt: cached?.expiresAt ?? 0,
-      inFlight,
-      value: cached?.value,
-    });
-
-    return await inFlight;
+    }), options);
   }
 
   invalidate(worktreePath?: string): void {
     const key = worktreePath?.trim();
-    if (!key) {
-      return;
-    }
-    for (const cacheKey of this.cache.keys()) {
-      if (cacheKey === key || cacheKey.startsWith(`${key}\0`)) {
-        this.cache.delete(cacheKey);
-      }
-    }
+    if (key) this.cache.invalidateWhere((cached) => cached === key || cached.startsWith(`${key}\0`));
   }
 
   /**

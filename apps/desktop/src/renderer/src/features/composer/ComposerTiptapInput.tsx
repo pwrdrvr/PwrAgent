@@ -2505,6 +2505,10 @@ export const ComposerTiptapInput = forwardRef<
     [],
   );
   const editor = useEditor({
+    // The mounted editor must never authorize input before the parent does.
+    // Applying disabled only in the layout effect exposes Tiptap's default
+    // editable DOM during initial attachment.
+    editable: !props.disabled,
     content: initialContent,
     editorProps: {
       attributes: {

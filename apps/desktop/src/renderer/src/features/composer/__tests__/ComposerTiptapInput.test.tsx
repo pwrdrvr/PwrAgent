@@ -176,6 +176,32 @@ const pastedCatalogSql = [
 ].join("\n");
 
 describe("ComposerTiptapInput", () => {
+  it("never mounts a writable editor while the composer is disabled", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const writableTransitions: MutationRecord[] = [];
+    const observer = new MutationObserver((records) => {
+      // A true -> false mutation means the mounted DOM exposed editability
+      // before the parent authorized input, even if render() now sees false.
+      writableTransitions.push(...records.filter((record) => record.oldValue === "true"));
+    });
+    observer.observe(container, {
+      subtree: true, attributes: true, attributeOldValue: true,
+      attributeFilter: ["contenteditable"],
+    });
+    try {
+      render(<ComposerTiptapInput
+        id="disabled-reply" label="Disabled reply" disabled
+        onChange={vi.fn()} placeholder="Reply" skillTokens={[]} value=""
+      />, { container });
+      await waitFor(() => expect(screen.getByRole("textbox", { name: "Disabled reply" }))
+        .toHaveAttribute("contenteditable", "false"));
+      expect(writableTransitions).toHaveLength(0);
+    } finally {
+      observer.disconnect();
+    }
+  });
+
   it("recovers a persisted mention mismatch from the visible editor document", async () => {
     const editorValue = [
       "> 1. Notarize the custom Codex release.",

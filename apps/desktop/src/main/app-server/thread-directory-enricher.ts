@@ -1,6 +1,7 @@
 export {
   createThreadDirectoryEnricher,
-  resolveWorktreeRepositoryDirectory,
+  enrichThreadDirectory,
   type ThreadDirectoryEnrichment,
-} from "../codex-app-server/thread-directory-enricher";
+} from "../git-info/directory-store";
+export { resolveWorktreeRepositoryDirectory } from "../git-info/worktree-store";
 export type { DirectoryEnrichmentCaller } from "../diagnostics/directory-enrichment-diagnostics";

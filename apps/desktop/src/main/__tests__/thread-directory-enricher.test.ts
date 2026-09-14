@@ -12,7 +12,7 @@ describe("createThreadDirectoryEnricher", () => {
     vi.resetModules();
     // This suite isolates Git discovery and fallback behavior. The companion
     // enrichment-cache suite validates real filesystem invalidation.
-    vi.doMock("../codex-app-server/git-directory-observation", () => ({
+    vi.doMock("../git-info/private/directory-observation", () => ({
       createGitDirectoryObserver: () => async () => ({
         relationship: "fixture",
         head: "fixture-head",
@@ -293,7 +293,7 @@ describe("createThreadDirectoryEnricher", () => {
     });
   });
 
-  it("does not cache a miss, so a directory created later resolves immediately", async () => {
+  it("retries a missing directory after the negative cache expires", async () => {
     const projectPath = "/Users/fixture-user/.pwragent/profiles/default/projects";
     let directoryExists = false;
     vi.doMock("node:fs/promises", () => ({
@@ -322,16 +322,17 @@ describe("createThreadDirectoryEnricher", () => {
     const { createThreadDirectoryEnricher } = await import(
       "../app-server/thread-directory-enricher"
     );
-    const enricher = createThreadDirectoryEnricher();
+    let now = 0;
+    const enricher = createThreadDirectoryEnricher({ now: () => now });
 
     await expect(enricher(projectPath)).resolves.toEqual({
       linkedDirectories: [],
     });
 
     directoryExists = true;
+    now = 5_000;
 
-    // A cached miss would serve the empty result for the full 60s TTL and keep
-    // the thread reading as unlinked long after the directory appeared.
+    // Failed discovery is retried after the short negative-cache window.
     await expect(enricher(projectPath)).resolves.toEqual({
       linkedDirectories: [
         {

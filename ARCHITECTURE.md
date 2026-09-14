@@ -43,6 +43,36 @@ conversation storage remain owned by the installed CLI. PwrAgent persists the
 session metadata and desktop overlay state needed to locate and present those
 threads without duplicating full provider transcripts in sqlite.
 
+## Git information reads
+
+Navigation Git information goes through main-process stores. Directory enrichment
+is owned by `main/git-info/directory-store.ts`, shared by production Codex clients.
+Its filesystem observation and Git subprocess implementation live under
+`git-info/private/`; dependency-cruiser rejects imports of those probes from
+outside the store layer. Renderer imports of main-process implementations,
+`child_process`, Dugite, simple-git, and isomorphic-git are forbidden too.
+
+`GitReadCache` owns admission before any I/O. Directory enrichment reuses confirmed
+results for one second and negative or unconfirmed results for five seconds.
+After that window, filesystem identity decides whether Git needs to run. External
+branch changes therefore become visible on the next admitted read; missing paths
+and failed probes retry after the negative window. No watcher or timer is required.
+`GitDirectoryService` and `GitWorkingStateService` use the same admission primitive
+for their status reads, retaining their three-second default freshness windows.
+
+Callers may report `userAction`, but cannot demand a bypass by deleting cached
+status. The stores share one process-wide allowance of ten user refreshes,
+refilling at one per second on a monotonic clock. In-flight reads coalesce before
+spending a token. An exhausted allowance falls back to normal cache freshness;
+cold or expired entries still load normally. Errors identify the caller and path,
+rate-limited to one log per ten seconds with suppressed denials counted. Actual
+mutation events may invalidate affected working state. Admission state is entirely
+in memory and adds no SQLite writes.
+
+An admitted user refresh also refreshes branch/worktree inventory beneath the
+directory status cache. Automatic forced scheduling carries no user intent and
+does not spend the user allowance.
+
 ## Thread state and lifecycle
 
 ### Runtime and refresh
