@@ -45,13 +45,24 @@ afterEach(() => {
  * DOM that never changed. It cost PR #2114 a red `Test` and `Windows renderer +
  * packages` on a file that branch did not contain.
  *
- * `act` enqueues with `setImmediate` too, so an empty awaited scope queues
- * strictly behind React's pending flush and drains it. It also settles the menu
- * model's promise inside the act scope, so the render it causes is flushed here
+ * `act` enqueues with `setImmediate` too, so an awaited scope queues strictly
+ * behind React's pending flush and drains it. It also settles the menu model's
+ * promise inside the scope, so the render that promise causes is flushed here
  * rather than whenever the scheduler gets to it.
  */
 async function settleMenuBar(): Promise<void> {
-  await act(async () => {});
+  // Same body as the `flushReactUpdates` helpers in `app-shell.test.tsx`,
+  // `composer.test.tsx`, and `useThreadSessionState.test.tsx` — worth
+  // consolidating one day. The macrotask hop inside the scope is what keeps
+  // this honest if `getAppMenuModel` ever resolves over more than one tick.
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+  // Not a stray query: `getByRole` throws when the model never landed, so this
+  // is the assertion that the bar is on screen before any key is dispatched.
+  screen.getByRole("menuitem", { name: "File" });
 }
 
 /** The bar plus a composer to steal focus from, the way the strip sits above one. */
@@ -63,7 +74,6 @@ async function mountWithComposer(): Promise<HTMLTextAreaElement> {
     </>,
   );
   await settleMenuBar();
-  screen.getByRole("menuitem", { name: "File" });
   const composer = screen.getByRole("textbox", {
     name: "Reply",
   }) as HTMLTextAreaElement;
@@ -202,7 +212,6 @@ describe("Alt and the painted menu bar", () => {
     const { unmount } = render(<textarea aria-label="Scratch" />);
     render(<AppMenuBar />);
     await settleMenuBar();
-    screen.getByRole("menuitem", { name: "File" });
     const scratch = screen.getByRole("textbox", { name: "Scratch" });
     scratch.focus();
 
