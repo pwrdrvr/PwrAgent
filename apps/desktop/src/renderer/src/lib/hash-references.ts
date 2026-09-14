@@ -275,12 +275,14 @@ export type HashReferenceOption =
 
 /**
  * Assemble the `#` popover's rows from the local thread population and
- * whatever a federated search turned up, local rows first.
+ * whatever a federated search turned up. Matching attachments on the current
+ * thread come first, independently of the bounded search page.
  *
  * Shared by every composer surface so the two never disagree about what a
  * `#` offers. Three things are filtered out, in this order:
- *   - the thread being written in — referencing it tells the agent nothing
- *     it does not already have, and on a bare `#` it is the most recently
+ *   - the thread row being written in (but not its PRs) — referencing it
+ *     tells the agent nothing it does not already have, and on a bare `#`
+ *     it is the most recently
  *     updated thread, so it would otherwise take the first row;
  *   - remote threads the local snapshot already carries, which would
  *     otherwise appear twice once a peer answers;
@@ -293,16 +295,28 @@ export function hashReferenceThreadIdentity(thread: ThreadJumpCandidate): string
 
 export function buildHashReferenceOptions(params: {
   currentThreadKey?: string;
+  currentThread?: ThreadJumpCandidate;
   localThreads: readonly ThreadJumpCandidate[];
   localOwnerMatched?: boolean;
   remoteOwnerMatched?: boolean;
   query: string;
   remoteThreads?: readonly ThreadJumpCandidate[];
 }): HashReferenceOption[] {
-  const { currentThreadKey, localThreads, query } = params;
+  const { currentThread, localThreads, query } = params;
+  const currentThreadKey = currentThread
+    ? hashReferenceThreadIdentity(currentThread)
+    : params.currentThreadKey;
   const isCurrentThread = (thread: ThreadJumpCandidate): boolean =>
     currentThreadKey !== undefined
     && hashReferenceThreadIdentity(thread) === currentThreadKey;
+  const selectedThread = currentThread
+    ?? localThreads.find(isCurrentThread)
+    ?? params.remoteThreads?.find(isCurrentThread);
+  const attachedPullRequests = filterHashReferenceCandidates(
+    selectedThread ? [selectedThread] : [],
+    query,
+  ).pullRequests;
+  const attachedKeys = new Set(attachedPullRequests.map(buildPullRequestStatusKey));
   const localCandidates = filterHashReferenceCandidates(
     localThreads.filter((thread) => !isCurrentThread(thread)),
     query,
@@ -326,19 +340,26 @@ export function buildHashReferenceOptions(params: {
     params.remoteOwnerMatched,
   );
   const localPullRequestKeys = new Set(
-    localCandidates.pullRequests.map(buildPullRequestStatusKey),
+    [...attachedKeys, ...localCandidates.pullRequests.map(buildPullRequestStatusKey)],
   );
   return [
+    ...attachedPullRequests.map((pullRequest) => ({
+      kind: "pull-request" as const,
+      pullRequest,
+      remote: selectedThread?.federation?.ref.target.scope === "remote",
+    })),
     ...localCandidates.threads.map((thread) => ({
       kind: "thread" as const,
       remote: false,
       thread,
     })),
-    ...localCandidates.pullRequests.map((pullRequest) => ({
-      kind: "pull-request" as const,
-      pullRequest,
-      remote: false,
-    })),
+    ...localCandidates.pullRequests
+      .filter((pullRequest) => !attachedKeys.has(buildPullRequestStatusKey(pullRequest)))
+      .map((pullRequest) => ({
+        kind: "pull-request" as const,
+        pullRequest,
+        remote: false,
+      })),
     ...remoteCandidates.threads.map((thread) => ({
       kind: "thread" as const,
       remote: true,

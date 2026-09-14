@@ -606,6 +606,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
         }),
       ],
       currentThreadKey: hashReferenceThreadIdentity(thread),
+      currentThread: thread,
       directories: navigationSources.directories,
       ensureNavigationLoaded,
       releaseNavigationLoaded: navigationSources.release,
