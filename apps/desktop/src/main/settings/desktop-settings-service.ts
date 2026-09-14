@@ -2263,22 +2263,48 @@ export class DesktopSettingsService {
     permit: ProviderDiscoveryPermit,
   ): Promise<DesktopSettingsSnapshot> {
     assertProviderDiscoveryPermit(permit, ["startup"]);
+    const startedAt = performance.now();
+    // Keep startup timings at info level without logging probe results or
+    // settings values. Failures still flow to the existing allSettled boundary.
+    const measure = async <T>(stage: string, run: () => Promise<T>): Promise<T> => {
+      const stageStartedAt = performance.now();
+      let outcome = "rejected";
+      try {
+        const result = await run();
+        outcome = "fulfilled";
+        return result;
+      } finally {
+        settingsLog.info("startup settings discovery stage completed", {
+          stage,
+          outcome,
+          durationMs: Math.round(performance.now() - stageStartedAt),
+        });
+      }
+    };
     if (!this.startupDiscoveryAttempted) {
       this.startupDiscoveryAttempted = true;
       const applications = this.configStore.read("applications");
       const configuredGhCommand = applications.gh?.path;
       this.startupDiscoveryPromise = Promise.allSettled([
-        this.runCodexDiscovery(permit),
-        this.discoverGhCommandsCached(configuredGhCommand),
-        this.discoverGlabCommandsCached(applications.glab?.path),
-        this.discoverGitCommandsCached(applications.git?.path),
-        this.discoverDesktopApplicationsCached(),
+        measure("codex", () => this.runCodexDiscovery(permit)),
+        measure("gh", () => this.discoverGhCommandsCached(configuredGhCommand)),
+        measure("glab", () => this.discoverGlabCommandsCached(applications.glab?.path)),
+        measure("git", () => this.discoverGitCommandsCached(applications.git?.path)),
+        measure("desktop-applications", () => this.discoverDesktopApplicationsCached()),
       ]).then(() => undefined).finally(() => {
         this.startupDiscoveryPromise = undefined;
       });
     }
     await this.startupDiscoveryPromise;
-    return await this.readSettingsProjection();
+    const discoveryDurationMs = Math.round(performance.now() - startedAt);
+    try {
+      return await measure("projection", () => this.readSettingsProjection());
+    } finally {
+      settingsLog.info("startup settings discovery completed", {
+        discoveryDurationMs,
+        durationMs: Math.round(performance.now() - startedAt),
+      });
+    }
   }
 
   /**
