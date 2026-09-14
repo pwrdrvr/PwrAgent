@@ -105,7 +105,7 @@
 - Do not substitute retries, longer timeouts, fewer workers, or serial lanes for an ownership fix.
 - Do not substitute those workarounds for an evidence-based readiness fix.
 - The macOS CI lane uses the selected-repository **PwrDrvr macOS** runner group.
-- Only PwrAgent and PwrSnap share this group.
+- Only PwrAgent, PwrGit, and PwrSnap share this group.
 - Do not add a repository-scoped runner.
 - Do not give the full organization access to this group.
 - For branch-drift dialog screenshots, run `pnpm --filter @pwragent/desktop inspect:e2e:branch-drift`.

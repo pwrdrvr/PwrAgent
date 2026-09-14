@@ -90,7 +90,7 @@ not lab inventory:
   [CONTRIBUTING.md](../../../CONTRIBUTING.md).
 - The CI lane uses `runs-on: [self-hosted, macOS, ARM64, pwrdrvr-macos]`.
 - The `PwrDrvr macOS` runner group is selected-repository only for
-  PwrAgent and PwrSnap. Do not add a repository-scoped runner. Do not
-  grant the rest of the organization access.
+  PwrAgent, PwrGit, and PwrSnap. Do not add a repository-scoped runner.
+  Do not grant the rest of the organization access.
 - Fork-head pull requests must not run on those machines.
 - VM E2E sets `PWRAGENT_E2E_DISABLE_GPU=1`. Ordinary host E2E does not.
