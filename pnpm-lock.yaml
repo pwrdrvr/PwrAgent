@@ -163,7 +163,7 @@ importers:
         version: 6.8.9
       katex:
         specifier: ^0.18.1
-        version: 0.18.4
+        version: 0.18.7
       mdast-util-from-markdown:
         specifier: ^2.0.3
         version: 2.0.3
@@ -294,8 +294,8 @@ importers:
   packages/messaging/providers/feishu:
     dependencies:
       '@larksuiteoapi/node-sdk':
-        specifier: 1.73.0
-        version: 1.73.0
+        specifier: 1.73.3
+        version: 1.73.3
       '@pwragent/messaging-interface':
         specifier: workspace:*
         version: link:../../interface
@@ -337,7 +337,7 @@ importers:
         version: link:../../interface
       '@slack/socket-mode':
         specifier: ^3.0.0
-        version: 3.0.1(undici@8.10.0)
+        version: 3.0.1(undici@8.10.2)
       '@slack/types':
         specifier: ^3.1.0
         version: 3.1.0
@@ -346,7 +346,7 @@ importers:
         version: 8.1.1
       undici:
         specifier: ^8.10.0
-        version: 8.10.0
+        version: 8.10.2
     devDependencies:
       vitest:
         specifier: ^4.1.4
@@ -877,8 +877,8 @@ packages:
   '@jridgewell/trace-mapping@0.3.31':
     resolution: {integrity: sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw==}
 
-  '@larksuiteoapi/node-sdk@1.73.0':
-    resolution: {integrity: sha512-gs4EiupJ6RdYAEJGtuYrCVsB7wSMBwtUDK+ilpmOHD6RTvbtciW6AWciQO9coOQVuBZfh7hvAi25dPfCsny/nA==}
+  '@larksuiteoapi/node-sdk@1.73.3':
+    resolution: {integrity: sha512-14Zj8r3f5CEIvpRuzb5HSYyp6O092N1kQkGHg6Kwi/c7B0CmXeCHBVM3Pmn0ozP5JvvAQd/PXBzW48rMH6cj4Q==}
 
   '@line/bot-sdk@11.2.0':
     resolution: {integrity: sha512-JKYFa3jaPYWqgI4hnc0ls+7tMmUEgnFF0Jb48kscKcGOO8qh4hddJyiq8/TFqaTWWxXQeSgYd1o5zrHjt6FrpQ==}
@@ -1961,8 +1961,8 @@ packages:
     resolution: {integrity: sha512-UzGt8zg7Ny8djbYMhxl2zuEevVa7r2gJjYY5Lwr1xM7+XU2nd6CkIWFTVcCIbAP63vSz71NaVyyuSk9lHKcy0A==}
     engines: {node: '>=4'}
 
-  axios@1.19.0:
-    resolution: {integrity: sha512-ht/iuYZXEjFxLH/Hkezgd7m6JKlHHXEUSneaDz8uZe1Gj5QZtCnpyDsckvAiEnT89OEbCLmnte4R4sn7P0EKFw==}
+  axios@1.20.0:
+    resolution: {integrity: sha512-r8aOh8j9cGKpgQAqpzrUHnSIc6a59Y3Xf/cv8sy1DrHCkZHzQGEuoq1tARk6qSyDdtQGSDgpb9kFlruzPvrgwg==}
 
   bail@2.0.2:
     resolution: {integrity: sha512-0xO6mYd7JB2YesxDKplafRpsiOzPt9V02ddPCLbY1xYGPOX24NTyN50qnUxgCPcSoYMhKpAuBTjQoRZCAkUDRw==}
@@ -3022,8 +3022,8 @@ packages:
     resolution: {integrity: sha512-Eeo8Ys1doU1z+x8AZsPpQu+p/QcZBI5PeOo7QGQdy2x2m0MU/hYagBbGOmXwr5KVbEfVuWv9LpnQWeehogurjg==}
     hasBin: true
 
-  katex@0.18.4:
-    resolution: {integrity: sha512-IMPntbRLOU+eu88XDiFKqQ8Akhr9Tv7jDMXqPhjG9SI1JMA4DIgXk4x9k4skJz2NZJXBRbC+2pYBLj9olqcZow==}
+  katex@0.18.7:
+    resolution: {integrity: sha512-h+UCwkZ+4Jz8WQ7MLGfj7UVFrRCizGb912fwF4luGdYsC5paYG1vx+jy+KRcC/XkpjGva/P7nAWuxNnPzRvzHw==}
     hasBin: true
 
   keyv@4.5.4:
@@ -4264,8 +4264,8 @@ packages:
     resolution: {integrity: sha512-IDxfleLmmbSskfWSUATiN1nfn2rDuvnMOqb5CWR92iIfojA0Ud+ulOAAEQ57LPr9rWmsreUyf5lwyao+7GNNVw==}
     engines: {node: '>=20.18.1'}
 
-  undici@8.10.0:
-    resolution: {integrity: sha512-HvltHd7avK13QIw/oLe4qoOLyoVSoafqJ2jYOrtMRBkbYT31eiBQ8O0ehRKZiEZCMEyLFQNIADpgCWC5fALvYQ==}
+  undici@8.10.2:
+    resolution: {integrity: sha512-/y4/bH9YNU5hi9NIrpOuvGXFcxrj3CMrV+/AYpowAYTpHn8gX/XPFjNy766FPoYY0miQhdW977JFWKGNhBdwyQ==}
     engines: {node: '>=22.19.0'}
 
   unified@11.0.5:
@@ -5120,9 +5120,9 @@ snapshots:
       '@jridgewell/resolve-uri': 3.1.2
       '@jridgewell/sourcemap-codec': 1.6.0
 
-  '@larksuiteoapi/node-sdk@1.73.0':
+  '@larksuiteoapi/node-sdk@1.73.3':
     dependencies:
-      axios: 1.19.0
+      axios: 1.20.0
       lodash.identity: 3.0.0
       lodash.merge: 4.6.2
       lodash.pickby: 4.6.0
@@ -5552,13 +5552,13 @@ snapshots:
     dependencies:
       '@types/node': 24.13.3
 
-  '@slack/socket-mode@3.0.1(undici@8.10.0)':
+  '@slack/socket-mode@3.0.1(undici@8.10.2)':
     dependencies:
       '@slack/logger': 5.0.0
       '@slack/web-api': 8.1.1
       '@types/node': 24.13.3
       eventemitter3: 5.0.4
-      undici: 8.10.0
+      undici: 8.10.2
 
   '@slack/types@3.1.0': {}
 
@@ -6223,7 +6223,7 @@ snapshots:
 
   axe-core@4.13.0: {}
 
-  axios@1.19.0:
+  axios@1.20.0:
     dependencies:
       follow-redirects: 1.16.0
       form-data: 4.0.6
@@ -7446,7 +7446,7 @@ snapshots:
       saxes: 6.0.0
       symbol-tree: 3.2.4
       tough-cookie: 6.0.2
-      undici: 8.10.0
+      undici: 8.10.2
       w3c-xmlserializer: 5.0.0
       webidl-conversions: 8.0.1
       whatwg-mimetype: 5.0.0
@@ -7488,9 +7488,9 @@ snapshots:
     dependencies:
       commander: 8.3.0
 
-  katex@0.18.4:
+  katex@0.18.7:
     dependencies:
-      commander: 8.3.0
+      commander: 15.0.0
 
   keyv@4.5.4:
     dependencies:
@@ -9069,7 +9069,7 @@ snapshots:
   undici@7.29.0:
     optional: true
 
-  undici@8.10.0: {}
+  undici@8.10.2: {}
 
   unified@11.0.5:
     dependencies:

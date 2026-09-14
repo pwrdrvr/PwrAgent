@@ -124,7 +124,7 @@ MIT
 - @gar/promise-retry@1.0.3 | https://github.com/wraithgar/node-promise-retry
 - @grammyjs/types@5.0.0 | https://github.com/grammyjs/types
 - @hono/node-server@2.0.10 | https://github.com/honojs/node-server
-- @larksuiteoapi/node-sdk@1.73.0 | https://github.com/larksuite/node-sdk
+- @larksuiteoapi/node-sdk@1.73.3 | https://github.com/larksuite/node-sdk
 - @mattermost/client@11.9.0 | https://github.com/mattermost/mattermost
 - @mattermost/types@11.9.0 | https://github.com/mattermost/mattermost
 - @modelcontextprotocol/sdk@1.30.0 | https://github.com/modelcontextprotocol/typescript-sdk
@@ -219,7 +219,7 @@ MIT
 - ajv@8.20.0 | ajv-validator/ajv
 - ajv-formats@3.0.1 | https://github.com/ajv-validator/ajv-formats
 - asynckit@0.4.0 | https://github.com/alexindigo/asynckit
-- axios@1.19.0 | https://github.com/axios/axios
+- axios@1.20.0 | https://github.com/axios/axios
 - bail@2.0.2 | wooorm/bail
 - balanced-match@4.0.4 | https://github.com/juliangruber/balanced-match
 - base64-js@1.5.1 | https://github.com/beatgammit/base64-js
@@ -241,6 +241,7 @@ MIT
 - clean-stack@2.2.0 | sindresorhus/clean-stack
 - combined-stream@1.0.8 | https://github.com/felixge/node-combined-stream
 - comma-separated-tokens@2.0.3 | wooorm/comma-separated-tokens
+- commander@15.0.0 | https://github.com/tj/commander.js
 - commander@8.3.0 | https://github.com/tj/commander.js
 - content-disposition@1.1.0 | jshttp/content-disposition
 - content-type@1.0.5 | jshttp/content-type
@@ -336,7 +337,7 @@ MIT
 - json-with-bigint@3.5.12 | https://github.com/Ivan-Korolenko/json-with-bigint
 - jsonfile@6.2.1 | https://github.com/jprichardson/node-jsonfile
 - katex@0.16.47 | https://github.com/KaTeX/KaTeX
-- katex@0.18.4 | https://github.com/KaTeX/KaTeX
+- katex@0.18.7 | https://github.com/KaTeX/KaTeX
 - lazy-val@1.0.5 | develar/lazy-val
 - linkifyjs@4.3.3 | https://github.com/nfrasser/linkifyjs
 - lodash@4.18.1 | lodash/lodash
@@ -500,7 +501,7 @@ MIT
 - tuf-js@6.0.0 | https://github.com/theupdateframework/tuf-js
 - type-is@2.1.0 | jshttp/type-is
 - undici@6.28.0 | https://github.com/nodejs/undici
-- undici@8.10.0 | https://github.com/nodejs/undici
+- undici@8.10.2 | https://github.com/nodejs/undici
 - undici-types@7.18.2 | https://github.com/nodejs/undici
 - unified@11.0.5 | unifiedjs/unified
 - unist-util-find-after@5.0.0 | syntax-tree/unist-util-find-after
@@ -2054,13 +2055,13 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-@larksuiteoapi/node-sdk@1.73.0 (MIT)
+@larksuiteoapi/node-sdk@1.73.3 (MIT)
 ------------------------------------
 
 Applies to:
-- @larksuiteoapi/node-sdk@1.73.0 (MIT)
+- @larksuiteoapi/node-sdk@1.73.3 (MIT)
 
-Representative file: @larksuiteoapi/node-sdk@1.73.0/LICENSE
+Representative file: @larksuiteoapi/node-sdk@1.73.3/LICENSE
 
 MIT License
 
@@ -3804,13 +3805,13 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-axios@1.19.0 (MIT)
+axios@1.20.0 (MIT)
 ------------------
 
 Applies to:
-- axios@1.19.0 (MIT)
+- axios@1.20.0 (MIT)
 
-Representative file: axios@1.19.0/LICENSE
+Representative file: axios@1.20.0/LICENSE
 
 # Copyright (c) 2014-present Matt Zabriskie & Collaborators
 
@@ -4334,13 +4335,14 @@ CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
 TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-commander@8.3.0 (MIT)
----------------------
+commander@15.0.0 (MIT)
+----------------------
 
 Applies to:
+- commander@15.0.0 (MIT)
 - commander@8.3.0 (MIT)
 
-Representative file: commander@8.3.0/LICENSE
+Representative file: commander@15.0.0/LICENSE
 
 (The MIT License)
 
@@ -6896,7 +6898,7 @@ katex@0.16.47 (MIT)
 
 Applies to:
 - katex@0.16.47 (MIT)
-- katex@0.18.4 (MIT)
+- katex@0.18.7 (MIT)
 
 Representative file: katex@0.16.47/LICENSE
 
@@ -9985,7 +9987,7 @@ undici@6.28.0 (MIT)
 
 Applies to:
 - undici@6.28.0 (MIT)
-- undici@8.10.0 (MIT)
+- undici@8.10.2 (MIT)
 - undici-types@7.18.2 (MIT)
 
 Representative file: undici@6.28.0/LICENSE
