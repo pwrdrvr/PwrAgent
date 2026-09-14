@@ -47,6 +47,26 @@ function renderTiptapInput(props?: {
   return { ...result, onChange };
 }
 
+it("never exposes an editable DOM while mounting a disabled composer", () => {
+  const editableValues: string[] = [];
+  const setAttribute = HTMLElement.prototype.setAttribute;
+  const spy = vi.spyOn(HTMLElement.prototype, "setAttribute").mockImplementation(function (this: HTMLElement, name, value) {
+    if (name === "contenteditable") editableValues.push(value);
+    return setAttribute.call(this, name, value);
+  });
+  try {
+    const { rerender } = render(<ComposerTiptapInput id="disabled-reply" label="Disabled reply"
+      disabled value="" skillTokens={[]} placeholder="Ask anything" onChange={() => undefined} />);
+    expect(screen.getByRole("textbox", { name: "Disabled reply" })).toHaveAttribute("contenteditable", "false");
+    expect(editableValues).not.toContain("true");
+    rerender(<ComposerTiptapInput id="disabled-reply" label="Disabled reply"
+      disabled={false} value="" skillTokens={[]} placeholder="Ask anything" onChange={() => undefined} />);
+    expect(screen.getByRole("textbox", { name: "Disabled reply" })).toHaveAttribute("contenteditable", "true");
+  } finally {
+    spy.mockRestore();
+  }
+});
+
 function setComposerSelection(textbox: HTMLElement, index: number): void {
   (
     textbox as HTMLElement & {

@@ -178,23 +178,11 @@ test("sends pasted, dropped, and local-file attachments from a Star Map chat car
     const messageInput = chatCard.getByRole("textbox", {
       name: `Message ${LOCAL_THREAD_TITLE}`,
     });
-    // The card enables its composer once the exact detail read and the queue
-    // both report ready, and attaching never consults that state, so without
-    // this the attachment steps below run against a dead composer.
-    //
-    // It has to be an explicit wait rather than letting `fill` handle it:
-    // Playwright rejects a `contenteditable="false"` node as the wrong
-    // element type outright instead of retrying until it becomes editable.
-    //
-    // One wait is not enough on Windows: the composer is live here and dead by
-    // the keystroke below. `navigationSelectionAuthorizesComposer` removed one
-    // cause (a revalidating read withdrawing an authorization it held) and this
-    // still fails, reporting a card that holds no detail at all — so the report
-    // below names which of the two remaining causes it is.
+    // Wait for the exact-detail and queue authorization owned by the card.
+    // DOM editability alone can observe an editor's initial state before its
+    // disabled option is applied; it cannot prove that owner detail arrived.
+    await expect(chatCard).not.toHaveAttribute("data-composer-block", /.+/);
     await expect(messageInput).toBeEditable();
-    // Baseline for the report below: taken while the composer is live, so a
-    // remount or an identity change during the attachments is visible as a
-    // difference rather than being read back after the fact.
     const cardBaseline = await readCardIdentity(chatCard);
 
     await attachPng(messageInput, {

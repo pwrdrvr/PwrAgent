@@ -2505,8 +2505,14 @@ export const ComposerTiptapInput = forwardRef<
     [],
   );
   const editor = useEditor({
+    // Match authorization at construction; the later layout effect must not
+    // be the first thing that withdraws TipTap's default editable state.
+    editable: !props.disabled,
     content: initialContent,
     editorProps: {
+      // TipTap installs its editable plugin after constructing the DOM view.
+      // Guard that first view too, before any layout effect or plugin runs.
+      editable: () => !propsRef.current.disabled,
       attributes: {
         // ARIA 1.2 textbox + listbox autocomplete pattern. We
         // deliberately do NOT set aria-expanded here — that attribute
