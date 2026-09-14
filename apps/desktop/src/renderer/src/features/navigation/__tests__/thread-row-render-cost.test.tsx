@@ -44,6 +44,8 @@ function thread(prs: PrSummary[]): NavigationThreadSummary {
 
 type MemoComponent = { type: (props: never) => unknown };
 
+const REACT_MEMO = Symbol.for("react.memo");
+
 let renders = 0;
 /** The `onDetach` the row most recently handed its chip. */
 let lastDetach: ((target: PrSummary) => void) | undefined;
@@ -51,6 +53,10 @@ const memoized = PrChip as unknown as MemoComponent;
 const inner = memoized.type;
 
 beforeEach(() => {
+  // Without this the counter simply never fires on a plain function and every
+  // assertion below reports "expected 0 to be 1", which does not name the
+  // actual problem.
+  expect((PrChip as unknown as { $$typeof?: symbol }).$$typeof).toBe(REACT_MEMO);
   renders = 0;
   lastDetach = undefined;
   memoized.type = (props: never) => {

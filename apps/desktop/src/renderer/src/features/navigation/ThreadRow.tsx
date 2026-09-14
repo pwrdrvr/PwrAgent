@@ -186,9 +186,7 @@ type ThreadRowProps = {
   onOpenPullRequest?: (url: string) => void;
 };
 
-export const ThreadRow = memo(function ThreadRow(
-  props: ThreadRowProps,
-) {
+export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
   const threadKey = threadSummaryIdentityKey(props.thread);
   const selected = props.selectedThreadKeys
     ? props.selectedThreadKeys.has(threadKey)
@@ -234,7 +232,6 @@ export const ThreadRow = memo(function ThreadRow(
   // chips render instantly on app launch and stay in sync without any
   // renderer-side cache.
   const prs = props.thread.prs ?? [];
-  const openPr = props.onOpenPullRequest ?? defaultOpenPullRequest;
   // What this row reports back to the list that owns it, so the list can keep
   // one handler for every row instead of a closure per row. See `ThreadRowRef`.
   const rowIdentity: ThreadRowRef = {
@@ -249,7 +246,8 @@ export const ThreadRow = memo(function ThreadRow(
   // on every render today, so a dependency list could not hold them still —
   // and the chips are memoized precisely so they stop re-rendering when only
   // a callback identity moved.
-  const openPrStable = useEventCallback((url: string) => openPr(url));
+  const openPrStable = useEventCallback((url: string) =>
+    (props.onOpenPullRequest ?? defaultOpenPullRequest)(url));
   const openPrContextMenu = useEventCallback(
     (
       targetPr: PrSummary,
