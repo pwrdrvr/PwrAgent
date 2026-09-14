@@ -265,17 +265,19 @@ function toMcpContentItems(
       return { type: "text", text: item.text };
     }
     const dataUrlMatch = /^data:([^;,]+);base64,([A-Za-z0-9+/=]+)$/u.exec(
-      item.imageUrl,
+      item.type === "inputImage" ? item.imageUrl : item.audioUrl,
     );
     return dataUrlMatch
       ? {
-          type: "image",
+          type: item.type === "inputImage" ? "image" : "audio",
           data: dataUrlMatch[2]!,
           mimeType: dataUrlMatch[1]!,
         }
       : {
           type: "text",
-          text: "PwrAgent returned an image with an unsupported data URL.",
+          text: item.type === "inputImage"
+            ? "PwrAgent returned an image with an unsupported data URL."
+            : "PwrAgent returned audio with an unsupported data URL.",
         };
   });
 }

@@ -49,7 +49,12 @@ vi.mock("../log", () => ({
 function createCodexModel(
   overrides: Pick<Model, "id"> & Partial<Model>,
 ): Model {
-  const { id, ...modelOverrides } = overrides;
+  const {
+    id,
+    modelSpecialty = null,
+    multiAgentVersion = null,
+    ...modelOverrides
+  } = overrides;
   return {
     id,
     model: id,
@@ -58,6 +63,7 @@ function createCodexModel(
     availabilityNux: null,
     displayName: overrides.id,
     description: "",
+    modelSpecialty,
     hidden: false,
     supportedReasoningEfforts: [
       { reasoningEffort: "medium", description: "Balanced" },
@@ -65,6 +71,7 @@ function createCodexModel(
     defaultReasoningEffort: "medium",
     inputModalities: ["text", "image"],
     supportsPersonality: false,
+    multiAgentVersion,
     additionalSpeedTiers: [],
     serviceTiers: [],
     defaultServiceTier: null,
