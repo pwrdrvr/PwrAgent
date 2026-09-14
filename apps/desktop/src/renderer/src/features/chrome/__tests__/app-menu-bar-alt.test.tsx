@@ -33,12 +33,16 @@ afterEach(() => {
 
 /** The bar plus a composer to steal focus from, the way the strip sits above one. */
 async function mountWithComposer(): Promise<HTMLTextAreaElement> {
-  render(
-    <>
-      <AppMenuBar />
-      <textarea aria-label="Reply" />
-    </>,
-  );
+  // The model loads asynchronously, then a passive effect subscribes to Alt.
+  // Seeing File in the DOM alone does not establish keyboard readiness.
+  await act(async () => {
+    render(
+      <>
+        <AppMenuBar />
+        <textarea aria-label="Reply" />
+      </>,
+    );
+  });
   await screen.findByRole("menuitem", { name: "File" });
   const composer = screen.getByRole("textbox", {
     name: "Reply",
