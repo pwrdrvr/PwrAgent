@@ -145,7 +145,11 @@ test("pasted WebP image is uploaded as bounded JPEG or PNG", async () => {
     await app.window.getByLabel("Reply").fill("Describe the pasted image");
     await app.window.getByRole("button", { name: "Send" }).click();
 
-    await expect.poll(async () => await app.getLastStartTurn()).not.toBeNull();
+    // `.toBeDefined()`, not `.not.toBeNull()`: the replay driver returns
+    // `undefined` when no turn has been recorded and never `null`, so the
+    // null form passes on the first poll and gates nothing — the read below
+    // then races the turn it is meant to wait for.
+    await expect.poll(async () => await app.getLastStartTurn()).toBeDefined();
     const request = await app.getLastStartTurn();
     const imageItem = (request as { input: Array<{ type: string; path?: string }> }).input.find(
       (item) => item.type === "localImage",
@@ -229,7 +233,11 @@ test("dropped GIF image is uploaded as GIF and previewed without normalization",
     await app.window.getByLabel("Reply").fill("Describe the dropped gif");
     await app.window.getByRole("button", { name: "Send" }).click();
 
-    await expect.poll(async () => await app.getLastStartTurn()).not.toBeNull();
+    // `.toBeDefined()`, not `.not.toBeNull()`: the replay driver returns
+    // `undefined` when no turn has been recorded and never `null`, so the
+    // null form passes on the first poll and gates nothing — the read below
+    // then races the turn it is meant to wait for.
+    await expect.poll(async () => await app.getLastStartTurn()).toBeDefined();
     const request = await app.getLastStartTurn();
     const imageItem = (request as { input: Array<{ type: string; url?: string }> }).input.find(
       (item) => item.type === "image",

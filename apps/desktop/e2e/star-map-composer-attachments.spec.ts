@@ -236,7 +236,11 @@ test("sends pasted, dropped, and local-file attachments from a Star Map chat car
     );
     await chatCard.getByRole("button", { name: "Send" }).click();
 
-    await expect.poll(async () => await app.getLastStartTurn()).not.toBeNull();
+    // `.toBeDefined()`, not `.not.toBeNull()`: the replay driver returns
+    // `undefined` when no turn has been recorded and never `null`, so the
+    // null form passes on the first poll and gates nothing — the read below
+    // then races the turn it is meant to wait for.
+    await expect.poll(async () => await app.getLastStartTurn()).toBeDefined();
     const request = await app.getLastStartTurn() as StartTurnRequest;
     expect(request.threadId).toBe("thread-star-map-attachments");
 
