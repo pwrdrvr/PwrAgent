@@ -1,6 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ThreadRowStatus } from "../ThreadRowStatus";
 
 /**
@@ -24,14 +24,23 @@ const REACT_MEMO = Symbol.for("react.memo");
 let renders = 0;
 const memoized = ThreadRowStatus as unknown as MemoComponent;
 const inner = memoized.type;
-memoized.type = (props: never) => {
-  renders += 1;
-  return inner(props);
-};
+
+// Installed and removed per test rather than once at module scope. Vitest
+// isolates module registries per file today, so a permanent swap would be
+// invisible — until `isolate` is turned off for suite speed, at which point
+// every other file importing ThreadRowStatus would be rendering through this
+// file's counting closure.
+beforeEach(() => {
+  renders = 0;
+  memoized.type = (props: never) => {
+    renders += 1;
+    return inner(props);
+  };
+});
 
 afterEach(() => {
   cleanup();
-  renders = 0;
+  memoized.type = inner;
 });
 
 describe("thread row status render cost", () => {
@@ -69,6 +78,19 @@ describe("thread row status render cost", () => {
 
     expect(renders).toBe(2);
     expect(screen.getByLabelText("Thinking")).toBeInTheDocument();
+  });
+
+  it("still renders a mark when status arrives from undefined", () => {
+    // The transition a row actually makes when its thread goes unread or
+    // starts a turn, and the one that crosses the component's early return.
+    const { rerender } = render(<ThreadRowStatus />);
+    expect(renders).toBe(1);
+    expect(screen.queryByLabelText("Unread update")).not.toBeInTheDocument();
+
+    rerender(<ThreadRowStatus status="unread" />);
+
+    expect(renders).toBe(2);
+    expect(screen.getByLabelText("Unread update")).toBeInTheDocument();
   });
 
   it("still follows a change to remoteWork alone", () => {
