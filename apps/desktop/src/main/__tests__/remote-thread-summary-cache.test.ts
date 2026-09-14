@@ -1059,6 +1059,7 @@ describe("RemoteThreadSummaryCache — resolvePinnedThreads", () => {
         { scope: "remote", instanceId: "peer-a" },
         [buildThreadIdentityKey("codex", "parent")],
         { deadlineAt: expect.any(Number) },
+        expect.any(Map),
       );
     }
   });
@@ -1686,4 +1687,168 @@ it("revalidates mounted pin summaries after TTL when navigation is not subscribe
   } finally {
     cache.dispose();
   }
+});
+
+it("ignores unrelated same-owner row changes but discovers new group members", async () => {
+  const root = stampedThread({ instanceId: "peer-a", threadId: "root", title: "Root" });
+  const child = { ...stampedThread({ instanceId: "peer-a", threadId: "child", title: "Child" }), parentThreadId: "root" };
+  let rows = [root, child];
+  const fetchPinnedSnapshot = vi.fn(async () => snapshotOf(rows));
+  const onPeerInterestChanged = vi.fn();
+  const cache = new RemoteThreadSummaryCache({ peers: () => [{ ...peer("peer-a"), capabilities: ["thread_navigation", "navigation_group_invalidations"] }], fetchSnapshot: vi.fn(), fetchPinnedSnapshot,
+    fetchArchivedThreads: noArchivedThreads, peerStatus: () => ({ status: "connected" }),
+    hasNavigationSubscription: () => true, onPeerInterestChanged });
+  const event = (threadId: string, sourceMethod = "thread/status/changed") => ({ backend: "codex" as const,
+    notification: { method: "navigation/invalidated" as const, params: { threadId, sourceMethod } } });
+  try {
+    await cache.resolvePinnedThreads([pin({ instanceId: "peer-a", threadId: "root", summary: root })]);
+    await settle();
+    fetchPinnedSnapshot.mockClear();
+    for (let i = 0; i < 27; i++) { cache.invalidate("peer-a", event("unrelated")); await settle(); }
+    expect(fetchPinnedSnapshot).not.toHaveBeenCalled();
+    expect(onPeerInterestChanged).toHaveBeenLastCalledWith([{ instanceId: "peer-a", threadSelection: {
+      kind: "threads", threads: [{ backend: "codex", threadId: "child" }, { backend: "codex", threadId: "root" }],
+    } }]);
+    rows = [...rows, { ...stampedThread({ instanceId: "peer-a", threadId: "grandchild", title: "Grandchild" }), parentThreadId: "child" }];
+    cache.invalidate("peer-a", event("grandchild", "thread/parent/set"));
+    await settle();
+    expect(fetchPinnedSnapshot).toHaveBeenCalledTimes(2);
+    expect(onPeerInterestChanged).toHaveBeenLastCalledWith([{ instanceId: "peer-a", threadSelection: {
+      kind: "threads", threads: expect.arrayContaining([{ backend: "codex", threadId: "grandchild" }]),
+    } }]);
+    cache.invalidate("peer-a", event("child"));
+    await settle();
+    expect(fetchPinnedSnapshot).toHaveBeenCalledTimes(3);
+  } finally { cache.dispose(); }
+});
+
+it("coalesces invalidations during a pinned read into one non-overlapping follow-up", async () => {
+  const root = stampedThread({ instanceId: "peer-a", threadId: "root", title: "Root" });
+  const reads: Array<(value: NavigationSnapshot) => void> = [];
+  const fetchPinnedSnapshot = vi.fn(() => new Promise<NavigationSnapshot>((resolve) => reads.push(resolve)));
+  const refreshed = vi.fn();
+  const cache = new RemoteThreadSummaryCache({ peers: () => [peer("peer-a")], fetchSnapshot: vi.fn(), fetchPinnedSnapshot,
+    fetchArchivedThreads: noArchivedThreads, peerStatus: () => ({ status: "connected" }), onPinnedSummariesRefreshed: refreshed });
+  try {
+    await cache.resolvePinnedThreads([pin({ instanceId: "peer-a", threadId: "root", summary: root })]);
+    for (let i = 0; i < 27; i++) cache.invalidate("peer-a");
+    expect(fetchPinnedSnapshot).toHaveBeenCalledTimes(1);
+    reads[0]!(snapshotOf([{ ...root, title: "Stale" }]));
+    await settle();
+    expect(fetchPinnedSnapshot).toHaveBeenCalledTimes(2);
+    expect(refreshed).not.toHaveBeenCalled();
+    reads[1]!(snapshotOf([{ ...root, title: "Fresh" }]));
+    await settle();
+    expect(refreshed).toHaveBeenCalledTimes(1);
+    expect((await cache.resolvePinnedThreads([pin({ instanceId: "peer-a", threadId: "root" })])).threads[0]?.title).toBe("Fresh");
+  } finally { cache.dispose(); }
+});
+
+it("releases removed groups from same-owner navigation demand", async () => {
+  const roots = ["a", "b"].map((threadId) => stampedThread({ instanceId: "peer", threadId, title: threadId }));
+  const fetchPinnedSnapshot = vi.fn(async (_target: FederationRemoteTarget, keys: string[]) => snapshotOf([
+    ...roots.filter((root) => keys.includes(`codex:${root.id}`)),
+    ...(keys.includes("codex:b") ? [{ ...stampedThread({ instanceId: "peer", threadId: "b-child", title: "Child" }), parentThreadId: "b" }] : []),
+  ]));
+  const onPeerInterestChanged = vi.fn();
+  const cache = new RemoteThreadSummaryCache({ peers: () => [{ ...peer("peer"), capabilities: ["thread_navigation", "navigation_group_invalidations"] }],
+    fetchSnapshot: vi.fn(), fetchPinnedSnapshot, fetchArchivedThreads: noArchivedThreads,
+    peerStatus: () => ({ status: "connected" }), hasNavigationSubscription: () => true, onPeerInterestChanged });
+  try {
+    await cache.resolvePinnedThreads(roots.map((root) => pin({ instanceId: "peer", threadId: root.id })));
+    await settle();
+    await cache.resolvePinnedThreads([pin({ instanceId: "peer", threadId: "a" })]);
+    await settle();
+    expect(onPeerInterestChanged).toHaveBeenLastCalledWith([{ instanceId: "peer", threadSelection: {
+      kind: "threads", threads: [{ backend: "codex", threadId: "a" }],
+    } }]);
+    fetchPinnedSnapshot.mockClear();
+    cache.invalidate("peer", { backend: "codex", notification: { method: "navigation/invalidated", params: {
+      sourceMethod: "thread/status/changed", threadId: "b-child",
+    } } });
+    await settle();
+    expect(fetchPinnedSnapshot).not.toHaveBeenCalled();
+  } finally { cache.dispose(); }
+});
+
+it("does not follow an invalidated pinned read after its mount is removed", async () => {
+  let resolve!: (snapshot: NavigationSnapshot) => void;
+  const fetchPinnedSnapshot = vi.fn(() => new Promise<NavigationSnapshot>((done) => { resolve = done; }));
+  const refreshed = vi.fn();
+  const cache = new RemoteThreadSummaryCache({ peers: () => [peer("peer")], fetchSnapshot: vi.fn(), fetchPinnedSnapshot,
+    fetchArchivedThreads: noArchivedThreads, peerStatus: () => ({ status: "connected" }), onPinnedSummariesRefreshed: refreshed });
+  try {
+    await cache.resolvePinnedThreads([pin({ instanceId: "peer", threadId: "root" })]);
+    cache.invalidate("peer");
+    await cache.resolvePinnedThreads([]);
+    resolve(snapshotOf([]));
+    await settle();
+    expect(fetchPinnedSnapshot).toHaveBeenCalledTimes(1);
+    expect(refreshed).not.toHaveBeenCalled();
+  } finally { cache.dispose(); }
+});
+
+it("retains broad discovery until the cold pinned closure is current", async () => {
+  const root = stampedThread({ instanceId: "peer", threadId: "root", title: "Root" });
+  const child = { ...stampedThread({ instanceId: "peer", threadId: "child", title: "Child" }), parentThreadId: "root" };
+  const reads: Array<(snapshot: NavigationSnapshot) => void> = [];
+  const fetchPinnedSnapshot = vi.fn(() => new Promise<NavigationSnapshot>((resolve) => reads.push(resolve)));
+  const onPeerInterestChanged = vi.fn();
+  const cache = new RemoteThreadSummaryCache({ peers: () => [{ ...peer("peer"), capabilities: ["thread_navigation", "navigation_group_invalidations"] }],
+    fetchSnapshot: vi.fn(), fetchPinnedSnapshot, fetchArchivedThreads: noArchivedThreads,
+    peerStatus: () => ({ status: "connected" }), onPeerInterestChanged });
+  try {
+    await cache.resolvePinnedThreads([pin({ instanceId: "peer", threadId: "root", summary: root })]);
+    expect(onPeerInterestChanged).toHaveBeenLastCalledWith([{ instanceId: "peer", threadSelection: { kind: "all" } }]);
+    // This child already exists, but its identity has not arrived in the first
+    // page yet. Its row update must fence that page instead of being ignored.
+    cache.invalidate("peer", { backend: "codex", notification: { method: "navigation/invalidated", params: {
+      sourceMethod: "thread/name/updated", threadId: "child",
+    } } });
+    expect(fetchPinnedSnapshot).toHaveBeenCalledTimes(1);
+    reads[0]!(snapshotOf([root, child]));
+    await settle();
+    expect(fetchPinnedSnapshot).toHaveBeenCalledTimes(2);
+    expect(onPeerInterestChanged).toHaveBeenLastCalledWith([{ instanceId: "peer", threadSelection: { kind: "all" } }]);
+    reads[1]!(snapshotOf([root, { ...child, title: "Updated" }]));
+    await settle();
+    expect(onPeerInterestChanged).toHaveBeenLastCalledWith([{ instanceId: "peer", threadSelection: {
+      kind: "threads", threads: [{ backend: "codex", threadId: "child" }, { backend: "codex", threadId: "root" }],
+    } }]);
+  } finally { cache.dispose(); }
+});
+
+it("revalidates a discovered child after expanding its subscription", async () => {
+  const root = stampedThread({ instanceId: "peer", threadId: "root", title: "Root" });
+  const child = { ...stampedThread({ instanceId: "peer", threadId: "child", title: "Before subscription" }), parentThreadId: "root" };
+  let rows = [root];
+  const fetchPinnedSnapshot = vi.fn(async () => snapshotOf(rows));
+  const published: Array<string | undefined> = [];
+  const cache = new RemoteThreadSummaryCache({ peers: () => [{ ...peer("peer"), capabilities: ["thread_navigation", "navigation_group_invalidations"] }],
+    fetchSnapshot: vi.fn(), fetchPinnedSnapshot, fetchArchivedThreads: noArchivedThreads,
+    peerStatus: () => ({ status: "connected" }), hasNavigationSubscription: () => true,
+    onPeerInterestChanged: (interests) => {
+      if (interests.some((interest) => interest.threadSelection.kind === "threads"
+        && interest.threadSelection.threads.some((ref) => ref.threadId === "child"))) {
+        // The owner changed this newly discovered row before receiving the
+        // expanded subscription; no live notification reached this viewer.
+        rows = [root, { ...child, title: "After subscription" }];
+      }
+    },
+    onPinnedSummariesRefreshed: () => published.push(cache.cachedThreadNameFromPeer({
+      target: { scope: "remote", instanceId: "peer" }, backend: "codex", threadId: "child",
+    })?.title),
+  });
+  try {
+    await cache.resolvePinnedThreads([pin({ instanceId: "peer", threadId: "root", summary: root })]);
+    await settle();
+    published.length = 0;
+    rows = [root, child];
+    cache.invalidate("peer", { backend: "codex", notification: { method: "navigation/invalidated", params: {
+      sourceMethod: "thread/parent/set", threadId: "child",
+    } } });
+    for (let i = 0; i < 3; i++) await settle();
+    expect(fetchPinnedSnapshot).toHaveBeenCalledTimes(3);
+    expect(published).toEqual(["After subscription"]);
+  } finally { cache.dispose(); }
 });

@@ -155,3 +155,16 @@ describe("federation envelope diagnostics", () => {
     });
   });
 });
+
+it("records bounded navigation source methods without source payloads", () => {
+  const diagnostics = new FederationEnvelopeDiagnostics();
+  const envelope = { ...request, kind: "notification" as const, method: "backend.event", params: {
+    backend: "codex", notification: { method: "navigation/invalidated", params: {
+      sourceMethod: "navigation/providerThreads/refreshed", secret: "private content",
+    } },
+  } };
+  expect(diagnostics.describe(envelope)).toMatchObject({ sourceMethod: "navigation/providerThreads/refreshed" });
+  expect(JSON.stringify(diagnostics.describe(envelope))).not.toContain("private content");
+  envelope.params.notification.params.sourceMethod = "x".repeat(201);
+  expect(diagnostics.describe(envelope).sourceMethod).toBeUndefined();
+});

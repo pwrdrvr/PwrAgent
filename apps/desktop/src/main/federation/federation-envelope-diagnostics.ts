@@ -148,6 +148,11 @@ export class FederationEnvelopeDiagnostics {
       ...(notificationParams && "threadId" in notificationParams
         && typeof notificationParams.threadId === "string" && notificationParams.threadId.length <= 256
         ? { threadId: notificationParams.threadId } : {}),
+      ...(notification && typeof notification === "object" && "method" in notification
+        && notification.method === "navigation/invalidated" && notificationParams
+        && "sourceMethod" in notificationParams && typeof notificationParams.sourceMethod === "string"
+        && /^[A-Za-z][A-Za-z0-9/_.-]{0,199}$/.test(notificationParams.sourceMethod)
+        ? { sourceMethod: notificationParams.sourceMethod } : {}),
       errorCode: envelope.kind === "error" ? envelope.error.code : undefined,
       notificationMethod: notification && typeof notification === "object"
         && "method" in notification && typeof notification.method === "string"

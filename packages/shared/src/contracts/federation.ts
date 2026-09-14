@@ -14,6 +14,7 @@ export const FEDERATION_CAPABILITIES = [
   "remote_window",
   "thread_navigation",
   "navigation_snapshot_deltas",
+  "navigation_group_invalidations",
   "thread_grouping",
   "thread_detail",
   "turn_control",

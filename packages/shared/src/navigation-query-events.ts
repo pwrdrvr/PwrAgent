@@ -21,3 +21,19 @@ const ROW_CHANGE_METHODS = new Set([
 export function navigationQueryEventRequiresRefresh(method: string): boolean {
   return ROW_CHANGE_METHODS.has(method) || method.endsWith("/requestApproval");
 }
+
+// Only these events are known to leave group membership unchanged. Creation,
+// archive, reparenting, provider refreshes and unknown future events retain
+// discovery coverage even when the new child's identity is not subscribed yet.
+const THREAD_ROW_ONLY_METHODS = new Set([
+  "thread/status/changed", "thread/name/updated", "navigation/thread/seen",
+  "thread/pullRequests/updated", "thread/reactions/updated", "thread/agent/updated",
+  "thread/modelSettings/updated", "thread/executionMode/updated", "thread/executionMode/queued",
+  "thread/executionMode/queueCleared", "thread/prAutoDispatch/updated", "thread/prAutoDispatch/pendingUpdated",
+  "thread/turnQueue/updated", "navigation/threadGitWorkingState/updated",
+  "turn/started", "turn/completed", "turn/failed", "turn/cancelled",
+]);
+
+export function navigationInvalidationMayChangeMembership(sourceMethod: unknown): boolean {
+  return typeof sourceMethod !== "string" || !THREAD_ROW_ONLY_METHODS.has(sourceMethod);
+}
