@@ -1866,19 +1866,30 @@ describe("SettingsScreen", () => {
       />,
     );
 
-    fireEvent.click(
-      await screen.findByRole("button", {
-        name: "Copy local diagnostics info",
-      }),
-    );
+    const copyButton = await screen.findByRole("button", {
+      name: "Copy local diagnostics info",
+    });
+    const timestamp = vi.spyOn(Date.prototype, "toISOString");
+    timestamp.mockReturnValue("2026-09-14T04:30:45.123Z");
+    fireEvent.click(copyButton);
 
     await waitFor(() => {
-      expect(copyText).toHaveBeenCalledWith([
+      expect(copyText).toHaveBeenLastCalledWith([
+        "Collected at (UTC): 2026-09-14T04:30:45.123Z",
         "PwrAgent profile: work",
         "Main process PID: 4100",
         "Renderer process PID: 4101",
         "PwrAgent log path: /Users/operator/Library/Logs/PwrAgent/profile-work.main.log",
       ].join("\n"));
+    });
+
+    timestamp.mockReturnValue("2026-09-14T04:35:00.000Z");
+    fireEvent.click(copyButton);
+
+    await waitFor(() => {
+      expect(copyText).toHaveBeenLastCalledWith(expect.stringContaining(
+        "Collected at (UTC): 2026-09-14T04:35:00.000Z",
+      ));
     });
   });
 

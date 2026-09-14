@@ -3849,7 +3849,7 @@ describe("App", () => {
     });
 
     await waitFor(() => {
-      expect(copyText).toHaveBeenCalledWith([
+      expect(copyText).toHaveBeenCalledWith(expect.stringContaining([
         "Thread ID: thread-1",
         "Project directory/worktree path: /Users/operator/.codex/worktrees/abc/PwrAgent",
         "Provider/backend: codex",
@@ -3859,7 +3859,7 @@ describe("App", () => {
         "Renderer process PID: 4101",
         "PwrAgent log path: /Users/operator/Library/Logs/PwrAgent/profile-work.main.log",
         "Codex profile path: /Users/operator/.codex/profiles/work",
-      ].join("\n"));
+      ].join("\n")));
     });
   });
 

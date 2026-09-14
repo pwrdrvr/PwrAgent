@@ -5,8 +5,8 @@ import type { DesktopApi } from "../../lib/desktop-api";
 type SettingsCopyValueProps = {
   /** Rendered in the code pill. */
   value: string;
-  /** Copied to the clipboard; defaults to `value`. */
-  copyValue?: string;
+  /** Copied to the clipboard; callbacks run at click time. Defaults to `value`. */
+  copyValue?: string | (() => string);
   desktopApi?: DesktopApi;
   label?: string;
 };
@@ -35,7 +35,10 @@ export function SettingsCopyValue(props: SettingsCopyValueProps) {
         className="button button--ghost"
         aria-label={props.label ? `Copy ${props.label}` : undefined}
         onClick={() => {
-          void copyText(props.copyValue ?? props.value, props.desktopApi).then(
+          const copyValue = typeof props.copyValue === "function"
+            ? props.copyValue()
+            : props.copyValue ?? props.value;
+          void copyText(copyValue, props.desktopApi).then(
             () => {
               setCopied(true);
               window.clearTimeout(resetTimer.current);
