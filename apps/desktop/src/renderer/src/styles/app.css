@@ -4782,15 +4782,18 @@ a.button {
    fade, and that rule's `text-align: right` keeps the fading timestamp
    still while its lane grows.
 
-   49px derivation, all border-box, measured from the card's right
+   53px derivation, all border-box, measured from the card's right
    content edge — where the cluster's `right: 11px` offset lands it
    (10px card padding + 1px border). The cluster spans 54px back from
    there: 26px kebab + 4px gap + 24px add-reaction chip. The pin's
    border box must clear that by 4px of air, and it ends one header gap
-   plus the pin's own 3px `margin-right: -3px` overhang inside the
-   lane's left edge: lane + 12 − 3 ≥ 54 + 4. The cluster-side literals
-   in this arithmetic are pinned by theme-contract next to this rule's
-   own pin, so a cluster resize fails a test instead of silently
+   inside the lane's left edge less its own `margin-right: -7px`
+   overhang: lane + 12 − 7 ≥ 54 + 4. Note what that last term means —
+   the reserve IS the hover shift (jump = lane − timestamp width), so
+   tightening the pin's resting position against the timestamp by
+   widening that overhang is paid for one-for-one here. The cluster-side
+   literals in this arithmetic are pinned by theme-contract next to this
+   rule's own pin, so a cluster resize fails a test instead of silently
    re-covering the pin.
 
    Scoped by the row's `--pinned` or `--retained` modifier (set by
@@ -4812,7 +4815,7 @@ a.button {
 .thread-row-shell:has(.thread-row__overflow-button:focus-visible) .thread-row--pinned .thread-row__time,
 .thread-row-shell:has(.thread-row__chip--add-reaction:focus-visible) .thread-row--pinned .thread-row__time,
 .thread-row-shell:has(.thread-row__chip--add-reaction.is-open) .thread-row--pinned .thread-row__time {
-  min-width: 49px;
+  min-width: 53px;
 }
 
 .thread-row__pin-button:hover,
@@ -5147,7 +5150,7 @@ a.button {
    18px box would fail the a11y gate the first time an audited fixture
    pins a thread. The negative margins collapse the layout footprint
    back under the 18px line slot the title line was tuned around
-   (footprint: -4 + 24 - 3 = 17px wide, 24 - 3 - 3 = 18px tall, icon
+   (footprint: -4 + 24 - 7 = 13px wide, 24 - 3 - 3 = 18px tall, icon
    center unchanged), so the heading's height and spacing don't move. */
 .thread-row__heading-pin {
   display: inline-flex;
@@ -5156,17 +5159,31 @@ a.button {
   flex: 0 0 auto;
   align-items: center;
   justify-content: center;
-  /* The heading gap is tuned for the status-indicator lane's slack;
-     this control has none of its own, but the 24px box carries 6.5px of
-     centering slack around its 11px glyph — so the LEFT margin is what
-     sets the visible title→pin air, not the gap. At -1px that air
-     painted 7.5px (2px gap − 1 + 6.5), wider than the ~5px the cookie
-     sits from the title on the same line and wide enough that a
-     truncated title, which also leaves up to a character of its own
-     slack before the ellipsis, read as a detached pin. -4px lands the
-     painted air at 4.5px; the 2px the box then overlaps the title's
-     (non-interactive, overflow-hidden) box costs nothing. */
-  margin: -3px -3px -3px -4px;
+  /* The 24px target box carries 6.5px of centering slack around its 11px
+     glyph on EACH side, and the box is invisible — so both horizontal
+     margins exist to cancel slack the design never asked for, not to
+     add air.
+
+     Left (-4px): the heading's own 2px gap plus 6.5px of slack painted
+     7.5px of title→pin air, wider than the ~5px the cookie sits from
+     the same title, and wide enough that a truncated title — which
+     leaves up to a character of its own slack before the ellipsis —
+     read as a detached pin. -4px lands it at 4.5px; the 2px the box
+     then overlaps the title's (non-interactive, overflow-hidden) box
+     costs nothing.
+
+     Right (-7px): the pin ends the title group, so the air after it
+     should be the header's 12px gap and nothing else — what an UNPINNED
+     row already puts between its title and its timestamp. At -3px the
+     leftover slack added 3.5px on top (15.5px painted, against 4.5px on
+     the pin's other side), which read as the pin floating off the title
+     toward the clock. -7px puts the glyph's right edge on the heading's
+     content edge, so the painted gap is the 12px one (11.5px measured).
+     This is the one margin the hover reserve pays for: it moves the pin
+     right at rest, and the pin's hover dock is fixed by the cluster, so
+     every pixel here is a pixel further to travel — see the `min-width`
+     reserve's derivation, which carries this literal. */
+  margin: -3px -7px -3px -4px;
   padding: 0;
   border: 0;
   border-radius: 4px;

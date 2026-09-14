@@ -314,7 +314,7 @@ describe("Tangerine Terminal theme contract", () => {
           + ".thread-row-shell:has(.thread-row__chip--add-reaction:focus-visible) .thread-row--pinned .thread-row__time,\n"
           + ".thread-row-shell:has(.thread-row__chip--add-reaction.is-open) .thread-row--pinned .thread-row__time",
       ),
-    ).toMatch(/min-width:\s*49px;/);
+    ).toMatch(/min-width:\s*53px;/);
     expect(extractRuleBody(css, ".thread-row__actions")).toMatch(
       /right:\s*11px;[\s\S]*gap:\s*4px;/,
     );
