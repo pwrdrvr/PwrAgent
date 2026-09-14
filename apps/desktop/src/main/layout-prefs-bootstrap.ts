@@ -20,13 +20,18 @@
  *     +70ms  class=context-rail is-open is-pinned
  *     +111ms class=context-rail is-collapsed
  *
- * Both specs that measure transcript geometry — `markdown-findings-table`
- * and `review-output-rendering` — are exactly the two that launch with
- * `contextRailPinned: false`, which is the case the race exists in, and both
- * have produced Windows-only geometry failures this shard. That is a motive,
- * not a diagnosis: nothing here proves the rail was pinned in those runs.
- * The point of reading the preference before first paint is that the window
- * stops depending on which side wins.
+ * `markdown-findings-table.spec.ts` is what made it visible. It failed that
+ * lane twice with `assistantWidth=566` against `proseWidth=760`, and those
+ * two numbers cannot describe one layout: `.transcript-message` is
+ * `width: min(100%, 760px)` capped at `max-width: 84%` while
+ * `.transcript-message--table-wide` is `width: 100%`, so a wide message is
+ * the container and a prose message is at most 84% of it. 760px of prose
+ * needs a container of at least 905px; the table measured 566. The
+ * transcript grew by ~340px between the spec's two reads, and the rail is
+ * the only thing in the thread view that size. The spec asks for
+ * `contextRailPinned: false`, which used to arrive with the settings
+ * snapshot; it now measures both widths in one evaluate as well, so it can
+ * no longer straddle a reflow of any origin.
  *
  * Reads the config store when this process has one and the profile's
  * `config.toml` otherwise, which is exactly how `readBootstrapAppearance`

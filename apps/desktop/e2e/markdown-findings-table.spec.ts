@@ -82,7 +82,25 @@ test("renders a wide assistant markdown findings table without crushing the colu
     await expect(table).toContainText("Retry suppressed");
     await expect(table).toContainText("failure-heavy behavior explicitly");
 
-    const dimensions = await tableScroll.evaluate((node) => {
+    // One evaluate for both widths, because the assertion below compares
+    // them to each other. Read separately they can straddle a reflow, and
+    // then the comparison is between two different layouts rather than
+    // between two columns.
+    //
+    // That is not hypothetical. `Windows Desktop E2E (lane 3 of 4)` failed
+    // twice with `assistantWidth=566` against `proseWidth=760` — and a wide
+    // message cannot be narrower than a prose one in any single layout:
+    // `.transcript-message` is `width: min(100%, 760px)` capped at
+    // `max-width: 84%`, `.transcript-message--table-wide` is `width: 100%`,
+    // so the wide one is the container and the prose one is at most 84% of
+    // it. 760px of prose needs a container of at least 905px; the table saw
+    // 566. The transcript column therefore grew by ~340px between the two
+    // reads, which is the context rail unpinning — this spec asks for
+    // `contextRailPinned: false`, and that used to arrive with the settings
+    // snapshot rather than at first paint.
+    const proseHandle = await proseMessage.elementHandle();
+    expect(proseHandle).not.toBeNull();
+    const dimensions = await tableScroll.evaluate((node, prose) => {
       const tableNode = node.querySelector("table");
       const headerKinds = Array.from(node.querySelectorAll("thead th")).map((th) =>
         th.getAttribute("data-col-kind")
@@ -98,9 +116,10 @@ test("renders a wide assistant markdown findings table without crushing the colu
         fileCellWidth: fileCell?.getBoundingClientRect().width ?? 0,
         fileLinkWidth: linkNode?.getBoundingClientRect().width ?? 0,
         issueCellWidth: issueCell?.getBoundingClientRect().width ?? 0,
+        proseWidth: (prose as HTMLElement).getBoundingClientRect().width,
         headerKinds,
       };
-    });
+    }, proseHandle);
 
     // The breakout is the feature: a wide table escapes the column every
     // other assistant message sits in. Measured against that column rather
@@ -112,10 +131,7 @@ test("renders a wide assistant markdown findings table without crushing the colu
     // 1. A plain message is `min(100%, 760px)` capped at `max-width: 84%`; a
     // wide one is the full 100%. So the ratio is 1/0.84 = 1.19 on any
     // container under 904px and grows from there as 760px stops binding.
-    const proseWidth = await proseMessage.evaluate(
-      (node) => node.getBoundingClientRect().width,
-    );
-    expect(dimensions.assistantWidth).toBeGreaterThan(proseWidth * 1.15);
+    expect(dimensions.assistantWidth).toBeGreaterThan(dimensions.proseWidth * 1.15);
     // Content-aware profile for the canonical review-findings header
     expect(dimensions.headerKinds).toEqual(["tag", "tag", "label", "prose", "prose"]);
     // File column is profiled as `label` and should host the full filename
