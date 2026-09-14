@@ -153,7 +153,10 @@ it.each(["complete", "checking"] as const)("mounts a remote child under its owne
   const remote = (id: string, owner: string): NavigationThreadSummary => ({ ...parent, id,
     federation: { ref: buildFederatedThreadRef({ backend: "codex", threadId: id, instanceId: owner }), instanceLabel: owner } });
   const child = { ...remote("child", "peer"), parentThreadId: "parent", parentThreadBackend: "codex" as const,
-    parentThreadInstanceId: "viewer" };
+    parentThreadInstanceId: "viewer",
+    projectKey: "/peer/.pwragent/projects/2026-09-13-35e549",
+    linkedDirectories: [{ id: "scratch", kind: "local" as const, label: "2026-09-13-35e549",
+      path: "/peer/.pwragent/projects/2026-09-13-35e549" }] };
   const otherParent = remote("parent", "other");
   const otherChild = { ...remote("other-child", "peer"), parentThreadId: "parent", parentThreadBackend: "codex" as const,
     parentThreadInstanceId: "other" };
@@ -174,6 +177,7 @@ it.each(["complete", "checking"] as const)("mounts a remote child under its owne
   const exact = project({ kind: "exact", identities: [{ backend: "codex", threadId: "child", ownerInstanceId: "peer" }], includeAncestry: true });
   expect(exact.entries.map(({ row }) => row.id)).toEqual(["parent", "child"]);
   expect(child.parentThreadInstanceId).toBe("viewer");
+  expect(exact.selectionDirectory?.key).toBe("repo");
 });
 
 it("hydrates a summaryless link mount once from exact owner evidence without overwriting a later snapshot", async () => {
@@ -206,5 +210,47 @@ it("hydrates a summaryless link mount once from exact owner evidence without ove
   } finally {
     db.close();
     vi.unstubAllEnvs();
+  }
+});
+
+
+it.each([
+  "/peer/.pwragent/profiles/dev/projects/2026-09-13-35e549",
+  "/peer/.pwragnt/projects/2026-09-13-35e549",
+  "C:\\Users\\peer\\.pwragent\\profiles\\dev\\projects\\2026-09-13-35e549",
+])("keeps remote scratch threads inside Workspaces for %s", (scratchPath) => {
+  const remote: NavigationThreadSummary = { id: "scratch", source: "codex", title: "Remote scratch", titleSource: "explicit",
+    projectKey: scratchPath,
+    linkedDirectories: [{ id: "scratch", kind: "local", label: "2026-09-13-35e549", path: scratchPath }],
+    inbox: { inInbox: true },
+    federation: { ref: buildFederatedThreadRef({ backend: "codex", threadId: "scratch", instanceId: "peer" }), instanceLabel: "Peer" } };
+  const workspace = { key: "workspace:/viewer/.pwragent/projects", kind: "workspace" as const, label: "Workspaces",
+    path: "/viewer/.pwragent/projects", threadKeys: [], needsAttentionCount: 0 };
+  // A real checkout with the scratch folder's basename must never capture it.
+  const collision = { key: "directory:/viewer/2026-09-13-35e549", kind: "directory" as const,
+    label: "2026-09-13-35e549", threadKeys: [], needsAttentionCount: 0 };
+  for (const directories of [[collision, workspace], []]) {
+    const viewer = appendViewerNavigationPins({ threads: [], directories }, [remote, { ...remote, id: "second",
+      federation: { ...remote.federation!, ref: buildFederatedThreadRef({ backend: "codex", threadId: "second", instanceId: "other" }) } }]);
+    const project = (query: import("@pwragent/shared").NavigationQuery) => projectNavigationQuery({ index: viewer,
+      request: { protocol: 2, consumer: "main-sidebar", inventory: "viewer", query } });
+    const groups = project({ kind: "directory-index" }).directories;
+    const workspaces = groups.filter((directory) => directory.kind === "workspace");
+    expect(workspaces).toHaveLength(1);
+    expect(workspaces[0]).toMatchObject({ label: "Workspaces", counts: { total: 2 } });
+    expect(viewer.directories).toHaveLength(directories.length || 1);
+    expect(project({ kind: "directory", directoryKey: workspaces[0]!.key }).entries.map(({ row }) => row.id).sort())
+      .toEqual(["scratch", "second"]);
+    expect(project({ kind: "exact", identities: [{ backend: "codex", threadId: "scratch", ownerInstanceId: "peer" }], includeAncestry: true })
+      .selectionDirectory?.key).toBe(workspaces[0]!.key);
+    if (directories.length) {
+      expect(workspaces[0]!.key).toBe(workspace.key);
+      expect(viewer.directories.find((directory) => directory.key === collision.key)?.threadKeys).toEqual([]);
+    } else {
+      expect(workspaces[0]).toMatchObject({ localAvailability: "unconfigured" });
+      expect(workspaces[0]!.path).toBeUndefined();
+    }
+    expect(collision.threadKeys).toEqual([]);
+    expect(workspace.threadKeys).toEqual([]);
   }
 });
