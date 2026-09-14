@@ -77,6 +77,7 @@ import { ThreadPlaceholderHeader } from "./features/thread-detail/ThreadPlacehol
 import { handoffLaunchpadComposer } from "./features/composer/launchpad-composer-handoff";
 import { useComposerDraftStore } from "./features/composer/useComposerDraftStore";
 import { useDurableComposerDraftStore } from "./features/composer/useDurableComposerDraftStore";
+import { readBootstrapLayoutPreferences } from "./lib/layout-preferences";
 import { useAppearance, type AppearanceController } from "./lib/useAppearance";
 import { useBackendSummaries } from "./lib/useBackendSummaries";
 import { useDesktopApi, type DesktopApi } from "./lib/desktop-api";
@@ -313,13 +314,23 @@ function DesktopAppShell(props: {
   // Window-level layout preferences (persisted to config — see the
   // `ui` settings section). The left sidebar can be hidden entirely and
   // the right context rail pinned open; the active rail tab is also
-  // remembered. Seeded from the settings snapshot once it arrives.
-  // The rail defaults to pinned-open (matches the persisted default) so a
-  // fresh user discovers it without a collapse→expand flash on first paint.
-  const [sidebarHidden, setSidebarHidden] = useState(false);
+  // remembered.
+  //
+  // Seeded from the main-process bootstrap hint rather than from a
+  // hard-coded default corrected by the settings snapshot below. Both of
+  // these move layout: the rail reserves 428px when pinned, so correcting
+  // it after first paint reflows the whole transcript under the operator.
+  // `activeContextTab` and the dock prefs keep adopting from the snapshot,
+  // because none of them change the transcript's width.
+  const bootstrapLayout = useMemo(readBootstrapLayoutPreferences, []);
+  const [sidebarHidden, setSidebarHidden] = useState(
+    bootstrapLayout.sidebarHidden,
+  );
   const [revealSelectedThreadRequest, setRevealSelectedThreadRequest] =
     useState(0);
-  const [contextRailPinned, setContextRailPinned] = useState(true);
+  const [contextRailPinned, setContextRailPinned] = useState(
+    bootstrapLayout.contextRailPinned,
+  );
   const [activeContextTab, setActiveContextTab] =
     useState<ContextTabId>(DEFAULT_CONTEXT_TAB);
   const [editedFilesDock, setEditedFilesDock] = useState<EditedFilesDock>(
@@ -1348,6 +1359,10 @@ function DesktopAppShell(props: {
 
   // Adopt the persisted layout prefs once the settings snapshot arrives.
   // Guarded so later snapshot refreshes never clobber an in-session toggle.
+  // `sidebarHidden` and `contextRailPinned` are normally already correct here
+  // — the bootstrap hint read the same file before first paint — so these two
+  // set what they already hold. They stay because a window that somehow got
+  // no hint would otherwise never see the operator's stored layout.
   const uiPrefsSeededRef = useRef(false);
   const uiPrefs = settings.snapshot?.ui;
   useEffect(() => {
