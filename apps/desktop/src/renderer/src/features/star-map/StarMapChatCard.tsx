@@ -349,8 +349,11 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
   // remounted (so the hook's retained state went with it), or the exact
   // identity it asks for changed. These two tell them apart — a mount counter
   // that survives neither, and the identity actually being requested.
-  const cardMountRef = useRef(0);
-  if (cardMountRef.current === 0) cardMountRef.current = ++starMapCardMounts;
+  // A lazy `useState` initializer, not a ref assigned during render: the ref
+  // form mutates module state from the render path, which React does not
+  // permit. Only distinctness between mounts matters, so StrictMode's double
+  // invocation is harmless.
+  const [cardMount] = useState(() => ++starMapCardMounts);
   const requestedIdentity = `${thread.source}:${thread.id}:${remoteInstanceId ?? "local"}`;
 
   // Which term is withholding the composer, published for the E2E lanes.
@@ -1467,7 +1470,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
     <section
       aria-label={`Chat: ${thread.title}`}
       className="star-map-chat-card"
-      data-card-mount={cardMountRef.current}
+      data-card-mount={cardMount}
       data-composer-block={composerBlockReason}
       data-detail-identity={requestedIdentity}
       onPointerDown={() => onRaise(cardKey)}
