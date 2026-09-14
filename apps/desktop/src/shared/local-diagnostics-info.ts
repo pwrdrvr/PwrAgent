@@ -136,6 +136,7 @@ export function buildTroubleshootingDiagnosticsInfo(
   metadata: AppMetadata,
 ): string {
   return [
+    `Collected at (UTC): ${new Date().toISOString()}`,
     `PwrAgent profile: ${metadata.activeProfileName}`,
     ...processIdLines(metadata),
     `PwrAgent log path: ${available(metadata.logFilePath)}`,
@@ -153,6 +154,7 @@ export function buildStarMapDiagnosticsInfo(
       ? `local:${intakeTarget.instanceId}`
       : undefined;
   return [
+    `Collected at (UTC): ${new Date().toISOString()}`,
     "Surface: Federation Star Map",
     ...(intakeTarget
       ? [
@@ -175,6 +177,7 @@ export function buildLocalThreadDiagnosticsInfo(
 ): string {
   const remoteThreadContext = hasRemoteThreadContext(context);
   return [
+    `Collected at (UTC): ${new Date().toISOString()}`,
     `Thread ID: ${available(context.threadId)}`,
     `Project directory/worktree path: ${available(context.projectPath)}`,
     `Provider/backend: ${available(context.backend)}`,
