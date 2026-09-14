@@ -122,7 +122,10 @@ import {
   type ChatCardRect,
 } from "./star-map-chat-card-geometry";
 import type { StarMapCardMenuAction } from "./StarMapCardMenu";
-import { useStarMapChatCards } from "./useStarMapChatCards";
+import {
+  starMapChatCardReactKey,
+  useStarMapChatCards,
+} from "./useStarMapChatCards";
 import { IntakeDialog, type IntakeDialogTarget } from "./IntakeDialog";
 import {
   findStarMapIntakeRevealTarget,
@@ -5544,7 +5547,12 @@ export function StarMapScreen(props: StarMapScreenProps) {
           return (
             <StarMapChatCard
               active={active}
-              key={card.key}
+              // NOT `card.key`: that embeds the owner instance id, which is
+              // the `"local"` placeholder until federation health resolves
+              // and `remapOwner` rewrites it. Keying on it remounts every
+              // open card at that moment. `cardKey` below stays the real
+              // key — only React's identity is normalized.
+              key={starMapChatCardReactKey(card, localInstanceId)}
               cardKey={card.key}
               composerDraftStore={props.composerDraftStore}
               desktopApi={props.desktopApi}
