@@ -16,6 +16,7 @@ import type {
 } from "@pwragent/shared";
 import { threadSummaryIdentityKey } from "../../../lib/federated-thread-events";
 import { FixtureSidebar as Sidebar } from "../../../test/navigation-presentation-fixture";
+import { memoRenderObserver } from "../../../test/memo-render-observer";
 import { ThreadRow, type ThreadRowRef } from "../ThreadRow";
 
 /**
@@ -145,22 +146,20 @@ function sidebar(overrides: SidebarOverrides = {}) {
   );
 }
 
-type MemoComponent = { type: (props: never) => unknown };
-
-const memoized = ThreadRow as unknown as MemoComponent;
-const inner = memoized.type;
+const rowObserver = memoRenderObserver<
+  Record<string, unknown> & { thread: { id: string } }
+>(ThreadRow, "ThreadRow");
 let rowRenders = 0;
 
 beforeEach(() => {
   rowRenders = 0;
-  memoized.type = (props: never) => {
+  rowObserver.install(() => {
     rowRenders += 1;
-    return inner(props);
-  };
+  });
 });
 
 afterEach(() => {
-  memoized.type = inner;
+  rowObserver.restore();
   cleanup();
   window.localStorage.clear();
   vi.restoreAllMocks();
@@ -254,13 +253,11 @@ describe("sidebar thread row callback stability", () => {
     // different groups carry different prop sets, and a missing prop would
     // otherwise read as a moved one.
     const seen = new Map<string, Record<string, unknown>[]>();
-    memoized.type = (props: never) => {
-      const row = props as unknown as { thread: { id: string } };
-      const history = seen.get(row.thread.id) ?? [];
-      history.push(props as unknown as Record<string, unknown>);
-      seen.set(row.thread.id, history);
-      return inner(props);
-    };
+    rowObserver.install((props) => {
+      const history = seen.get(props.thread.id) ?? [];
+      history.push(props);
+      seen.set(props.thread.id, history);
+    });
     const view = render(sidebar());
     view.rerender(sidebar());
     // A row that bails out hands back no props at all, so the identities have
