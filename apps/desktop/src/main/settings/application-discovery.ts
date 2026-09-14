@@ -3,7 +3,7 @@ import {
   spawn as spawnProcess,
 } from "node:child_process";
 import fs from "node:fs";
-import { access, readFile, writeFile } from "node:fs/promises";
+import { access, readFile, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -306,16 +306,23 @@ async function findOnWindowsPath(
   binaryName: string,
   env: NodeJS.ProcessEnv,
 ): Promise<string | undefined> {
-  const searchPath = readEnvIgnoringCase(env, "PATH");
+  const resolved = readEnvIgnoringCase(env, ["PATH", "PATHEXT"]);
+  const searchPath = resolved.get("PATH");
   if (!searchPath) {
     return undefined;
   }
+  // PATHEXT first, bare name last, which is the order Windows itself resolves
+  // in. The other way round, an extensionless MSYS script named `code` beats
+  // the `code.cmd` sitting beside it — and `CreateProcess` cannot start the
+  // one it picked, so discovery would report an editor that never launches.
+  // The bare name still gets a turn, for a `binaryName` that already carries
+  // its own extension.
   const extensions = [
-    "",
-    ...(readEnvIgnoringCase(env, "PATHEXT") ?? ".COM;.EXE;.BAT;.CMD")
+    ...(resolved.get("PATHEXT") ?? ".COM;.EXE;.BAT;.CMD")
       .split(";")
       .map((extension) => extension.trim())
       .filter(Boolean),
+    "",
   ];
   for (const entry of searchPath.split(path.delimiter)) {
     // A quoted PATH entry is legal on Windows and the quotes are not part of
@@ -326,7 +333,7 @@ async function findOnWindowsPath(
     }
     for (const extension of extensions) {
       const candidate = path.join(directory, `${binaryName}${extension}`);
-      if (await pathExists(candidate)) {
+      if (await isExistingFile(candidate)) {
         return candidate;
       }
     }
@@ -334,17 +341,41 @@ async function findOnWindowsPath(
   return undefined;
 }
 
+/**
+ * Existence is not enough here: a directory named like the binary would
+ * otherwise resolve as the editor and fail at every later spawn.
+ * `pathExists` is `access(F_OK)`, which answers for directories too.
+ */
+async function isExistingFile(candidatePath: string): Promise<boolean> {
+  try {
+    return (await stat(candidatePath)).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Read several environment variables case-insensitively in one pass.
+ *
+ * One walk rather than one per name: `findOnWindowsPath` runs once per
+ * candidate binary name, and the environment cannot change underneath it.
+ * Later keys win, so the conventional `Path` spelling is not preferred over
+ * `PATH` by `Object.entries` order alone — the result is at least stable
+ * rather than dependent on insertion order.
+ */
 function readEnvIgnoringCase(
   env: NodeJS.ProcessEnv,
-  name: string,
-): string | undefined {
-  const lowered = name.toLowerCase();
+  names: readonly string[],
+): Map<string, string> {
+  const wanted = new Map(names.map((name) => [name.toLowerCase(), name]));
+  const found = new Map<string, string>();
   for (const [key, value] of Object.entries(env)) {
-    if (key.toLowerCase() === lowered && value) {
-      return value;
+    const name = wanted.get(key.toLowerCase());
+    if (name && value) {
+      found.set(name, value);
     }
   }
-  return undefined;
+  return found;
 }
 
 export async function resolveBundledApplicationCliPath(

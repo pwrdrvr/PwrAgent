@@ -62,6 +62,14 @@ async function writeWindowsSpawnableShim(targetPath: string): Promise<string> {
   if (process.platform !== "win32") {
     return targetPath;
   }
+  // Extensionless targets only. The npm layout this mirrors is `kimi` beside
+  // `kimi.cmd`; a target that already names its own extension is spawnable as
+  // written, and appending here would drop a stray `codex.js.cmd` into a
+  // fixture whose whole subject is which file PATH discovery picks
+  // (`windows-codex-discovery.spec.ts` writes its own `codex.cmd`).
+  if (path.extname(targetPath)) {
+    return targetPath;
+  }
   await writeFile(
     `${targetPath}.cmd`,
     [

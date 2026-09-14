@@ -36,7 +36,10 @@ import {
 } from "../composer/CompactComposer";
 import { useOwnedComposerDraftStore } from "../composer/useOwnedComposerDraftStore";
 import { useNavigationSelectedDetail } from "../../lib/useNavigationSelectedDetail";
-import { navigationSelectionAuthorizesComposer } from "../../lib/navigation-query-state";
+import {
+  navigationIdentityKey,
+  navigationSelectionAuthorizesComposer,
+} from "../../lib/navigation-query-state";
 import { useIndependentQueueProjection } from "../../lib/useIndependentQueueProjection";
 import { useComposerMentionSources } from "../composer/useComposerMentionSources";
 import type { ComposerMentionSources } from "../composer/useComposerMentions";
@@ -167,6 +170,9 @@ function queuedTurnPreview(queued: ComposerQueuedTurnSnapshot): string {
 const MemoizedCompactComposer = memo(CompactComposer);
 const MemoizedActiveSubAgentsStrip = memo(ActiveSubAgentsStrip);
 
+/** Monotonic across every card this renderer mounts; see `data-card-mount`. */
+let starMapCardMounts = 0;
+
 /**
  * One chat card, anchored in the star map.
  *
@@ -176,9 +182,6 @@ const MemoizedActiveSubAgentsStrip = memo(ActiveSubAgentsStrip);
  * session hook derives the federation target from the thread summary it is
  * handed, so a card over a peer's thread reads and writes on that peer.
  */
-/** Monotonic across every card this renderer mounts; see `data-card-mount`. */
-let starMapCardMounts = 0;
-
 export function StarMapChatCard(props: StarMapChatCardProps) {
   const {
     bounds,
@@ -354,7 +357,21 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
   // permit. Only distinctness between mounts matters, so StrictMode's double
   // invocation is harmless.
   const [cardMount] = useState(() => ++starMapCardMounts);
-  const requestedIdentity = `${thread.source}:${thread.id}:${remoteInstanceId ?? "local"}`;
+  // The same key `selectNavigationIdentity` compares, not a restatement of
+  // it: that comparison is what decides whether `detail` is carried across
+  // a refresh, so a hand-rolled spelling could report "identity unchanged"
+  // for a pair the hook treats as different (ACP thread ids contain colons).
+  const requestedIdentity = navigationIdentityKey({
+    backend: thread.source,
+    threadId: thread.id,
+    ownerInstanceId: remoteInstanceId,
+  });
+
+  // One expression for both the editor's `disabled` prop and the report
+  // below. Computed separately, the report said nothing whenever review
+  // state was the cause — the composer was dead and `data-composer-block`
+  // was absent, which reads as "it believed the composer was live".
+  const composerDisabled = !composerReady || reviewSetupOpen || reviewSubmitting;
 
   // Which term is withholding the composer, published for the E2E lanes.
   //
@@ -365,17 +382,21 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
   // an unresolved identity and a still-loading queue are both silent. Naming
   // the term costs one attribute and is the difference between a diagnosis and
   // a guess, which this failure has already cost two CI cycles of.
-  const composerBlockReason = composerReady
+  const composerBlockReason = !composerDisabled
     ? undefined
     : !selectedDetail.state
       ? "detail:identity-unresolved"
       : selectedDetail.state.readiness === "failed"
         ? "detail:failed"
-        : selectedDetail.state.detail?.identity !== "present"
-          ? `detail:identity:${selectedDetail.state.detail?.identity ?? "unread"}`
-          : queueReadiness.readiness !== "ready"
-            ? `queue:${queueReadiness.readiness}`
-            : "review";
+        : !selectedDetail.state.detail
+          ? "detail:none"
+          : selectedDetail.state.detail.identity !== "present"
+            ? `detail:identity:${selectedDetail.state.detail.identity}`
+            : queueReadiness.readiness !== "ready"
+              ? `queue:${queueReadiness.readiness}`
+              : reviewSetupOpen
+                ? "review:setup-open"
+                : "review:submitting";
   const readinessError = selectedDetail.state?.error ?? queueReadiness.error
     ?? (selectedDetail.state?.detail && selectedDetail.state.detail.identity !== "present"
       ? `This thread is ${selectedDetail.state.detail.identity}.`
@@ -1727,7 +1748,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
             !federationTarget || !isRemoteFederationTarget(federationTarget)
           }
           canSteer={canSteer}
-          disabled={!composerReady || reviewSetupOpen || reviewSubmitting}
+          disabled={composerDisabled}
           draftScopeKey={composerScopeKey}
           draftStore={ownedComposerDraftStore}
           executionMode={threadExecutionMode}

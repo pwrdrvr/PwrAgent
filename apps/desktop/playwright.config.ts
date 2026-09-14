@@ -42,9 +42,17 @@ if (process.env.PWRAGENT_DEV_SQLITE_WRITE_METRICS !== "0") {
 //
 // Repo-local `.gitattributes` still wins over `core.autocrlf`, so this cannot
 // change how this repository's own checkout is treated.
-process.env.GIT_CONFIG_COUNT = "1";
-process.env.GIT_CONFIG_KEY_0 = "core.autocrlf";
-process.env.GIT_CONFIG_VALUE_0 = "false";
+// Appended, not assigned. `GIT_CONFIG_COUNT` is a count over `KEY_0..KEY_N-1`,
+// so writing `1` and `KEY_0` would drop every entry an image, container or
+// shell had already put there (a `safe.directory`, a credential helper) and
+// overwrite the first — silently, since git just stops reading at the count.
+const gitConfigCount = Number.parseInt(process.env.GIT_CONFIG_COUNT ?? "", 10);
+const gitConfigIndex = Number.isInteger(gitConfigCount) && gitConfigCount > 0
+  ? gitConfigCount
+  : 0;
+process.env[`GIT_CONFIG_KEY_${gitConfigIndex}`] = "core.autocrlf";
+process.env[`GIT_CONFIG_VALUE_${gitConfigIndex}`] = "false";
+process.env.GIT_CONFIG_COUNT = String(gitConfigIndex + 1);
 
 process.env[E2E_SHUTDOWN_DIAGNOSTICS_FILE_ENV] ??= path.join(
   import.meta.dirname,

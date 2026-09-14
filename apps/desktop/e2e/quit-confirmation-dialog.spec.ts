@@ -256,7 +256,11 @@ test("keeps running work reachable after cancelling and following a blocker", as
   }
 });
 
-test("does not confirm quit for a terminal sitting at its prompt", async () => {
+// Named for what it pins on BOTH platforms, not for the POSIX half: on
+// Windows `terminalHasForegroundCommand` cannot see an idle prompt and
+// always blocks, so this asserts the dialog there. Titling it "does not
+// confirm quit" made a passing Windows contract read as a regression.
+test("confirms quit for an idle terminal only where idleness is detectable", async () => {
   test.setTimeout(90_000);
 
   const app = await launchElectronApp({

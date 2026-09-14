@@ -67,7 +67,13 @@ export async function killGraduatedProfileInstances(
 async function waitForProfileInstancesToExit(profile: string): Promise<void> {
   const deadline = Date.now() + 10_000;
   while (Date.now() < deadline) {
-    if ((await listGraduatedProfilePids(profile)).length === 0) {
+    // A read that FAILED must not end the wait. `readProcessTable` answers
+    // `undefined` for "I could not look", which is the one state that is
+    // otherwise indistinguishable from "nothing is running" — and taking the
+    // empty list at face value would return straight into the `EBUSY: unlink`
+    // this wait exists to prevent, now with the wait hiding it.
+    const rows = await readProcessTable();
+    if (rows && selectGraduatedProfilePids(rows, profile).length === 0) {
       return;
     }
     await new Promise((resolve) => setTimeout(resolve, 100));
@@ -75,7 +81,16 @@ async function waitForProfileInstancesToExit(profile: string): Promise<void> {
 }
 
 async function listGraduatedProfilePids(profile: string): Promise<number[]> {
-  const rows = await readProcessTable();
+  // Best-effort for the kill path: a failed read there costs one skipped
+  // signal, which the caller already tolerates. The WAIT uses
+  // `selectGraduatedProfilePids` directly so it can tell a failed read apart.
+  return selectGraduatedProfilePids(await readProcessTable() ?? [], profile);
+}
+
+function selectGraduatedProfilePids(
+  rows: ReadonlyArray<{ pid: number; commandLine: string }>,
+  profile: string,
+): number[] {
   const pids: number[] = [];
   for (const { pid, commandLine } of rows) {
     if (pid === process.pid || !commandLine.includes(DESKTOP_MAIN_ENTRY)) {
@@ -92,8 +107,9 @@ async function listGraduatedProfilePids(profile: string): Promise<number[]> {
   return pids;
 }
 
+/** `undefined` means the table could not be read, never "nothing is running". */
 async function readProcessTable(): Promise<
-  Array<{ pid: number; commandLine: string }>
+  Array<{ pid: number; commandLine: string }> | undefined
 > {
   try {
     if (process.platform === "win32") {
@@ -112,7 +128,7 @@ async function readProcessTable(): Promise<
     const stdout = await run("ps", ["-axo", "pid=,command="]);
     return parseProcessTable(stdout, " ");
   } catch {
-    return [];
+    return undefined;
   }
 }
 

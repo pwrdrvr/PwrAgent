@@ -236,10 +236,17 @@ async function describeObscurers(
       for (let column = 1; column <= 5; column += 1) {
         const x = rect.left + (rect.width * column) / 6;
         const y = rect.top + (rect.height * row) / 4;
-        for (const element of document.elementsFromPoint(x, y)) {
-          if (element === node) {
-            break;
-          }
+        const stack = document.elementsFromPoint(x, y);
+        // Only elements painted ABOVE the target obscure it. When the target
+        // is not in the stack at all — fully covered, or `pointer-events:
+        // none` itself — there is no "above", and taking the whole stack
+        // would name the target's own ancestors, `body` and `html` as
+        // obscurers and send the reader after elements that obscure nothing.
+        const depth = stack.indexOf(node);
+        if (depth < 0) {
+          continue;
+        }
+        for (const element of stack.slice(0, depth)) {
           if (node.contains(element)) {
             continue;
           }
