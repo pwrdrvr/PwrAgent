@@ -226,6 +226,8 @@ export class RemoteThreadSummaryCache {
         celestialIcon?: CelestialIconId;
         capabilities?: FederationCapability[];
       };
+      /** True only while owner navigation invalidations can reach this cache. */
+      hasNavigationSubscription?: (instanceId: string) => boolean;
       /** Exact navigation collections currently retained by cache consumers. */
       onPeerInterestChanged?: (interests: Array<{
         instanceId: string;
@@ -594,7 +596,8 @@ export class RemoteThreadSummaryCache {
         if (
           !cacheSatisfies
           || (cached && (cached.fetchedAt === Number.NEGATIVE_INFINITY
-            || (!cached.descendants && now - cached.fetchedAt >= ttlMs)))
+            || ((!cached.descendants || !this.options.hasNavigationSubscription?.(instanceId))
+              && now - cached.fetchedAt >= ttlMs)))
         ) {
           this.refreshPeerSummariesInBackground(peer.target, group);
         }
@@ -959,6 +962,7 @@ export class RemoteThreadSummaryCache {
       && (!descendants || cached.selection.kind === "all" || cached.descendants)
       && selectionIncludes(cached.selection, selection)
       && (cached.fetchedAt !== Number.NEGATIVE_INFINITY && descendants && cached.descendants
+        && this.options.hasNavigationSubscription?.(target.instanceId)
         || now - cached.fetchedAt < ttlMs)
     ) {
       return cached.threads;

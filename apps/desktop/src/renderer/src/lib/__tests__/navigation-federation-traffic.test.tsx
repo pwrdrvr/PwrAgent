@@ -152,6 +152,20 @@ it.each([["main sidebar", useSidebarTraffic], ["bounded window", useWindowTraffi
     expect(remoteCalls().map(([request]) => request.federationTarget)).toEqual([{ scope: "remote", instanceId: "peer-a" }]);
     expect(result.current.resources.get('visible-owner:"peer-a":0')?.state.page?.entries[0]?.row.title).toBe("Peer A changed");
 
+    // A replacement stream must repair a missed owner invalidation even if
+    // that owner is now idle and emits no further navigation events.
+    read.mockClear();
+    rows[1]!.title = "Peer A recovered";
+    await act(async () => {
+      for (const listener of listeners) listener({ backend: "codex",
+        federationTarget: { scope: "remote", instanceId: "peer-a" },
+        notification: { method: "federation/eventStream/changed", params: { instanceId: "peer-a", epoch: "recovered" } },
+      });
+      await vi.advanceTimersByTimeAsync(500);
+    });
+    expect(remoteCalls().map(([request]) => request.federationTarget)).toEqual([{ scope: "remote", instanceId: "peer-a" }]);
+    expect(result.current.resources.get('visible-owner:"peer-a":0')?.state.page?.entries[0]?.row.title).toBe("Peer A recovered");
+
     // Coalescing must retain both origins instead of letting the last event win.
     read.mockClear();
     await act(async () => {

@@ -3592,6 +3592,7 @@ export function useThreadNavigation(
         !windowTarget
         && Boolean(event.federationTarget)
         && (method === "navigation/invalidated"
+          || method === "federation/eventStream/changed"
           || method === "pullRequest/status/updated"
           || method === "thread/name/updated"
           || method === "thread/pullRequests/updated"
