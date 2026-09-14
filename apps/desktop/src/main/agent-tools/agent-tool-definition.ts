@@ -24,6 +24,11 @@ export type AgentToolMcpContentItem =
       type: "image";
       data: string;
       mimeType: string;
+    }
+  | {
+      type: "audio";
+      data: string;
+      mimeType: string;
     };
 
 export type AgentToolDispatchSuccess = {

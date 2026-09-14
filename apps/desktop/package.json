@@ -70,7 +70,7 @@
     "@pwrdrvr/agent-client": "^0.8.2",
     "@pwrdrvr/agent-core": "^0.2.0",
     "@pwrdrvr/agent-transport": "^0.1.7",
-    "@pwrdrvr/codex-app-server-protocol": "0.144.0",
+    "@pwrdrvr/codex-app-server-protocol": "0.153.4",
     "@pwrdrvr/codex-discovery": "^0.4.0",
     "@shutterstock/p-map-iterable": "^1.1.2",
     "@tiptap/extension-mention": "^3.22.5",
