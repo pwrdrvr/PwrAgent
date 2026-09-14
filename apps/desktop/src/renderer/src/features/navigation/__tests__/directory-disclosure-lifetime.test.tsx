@@ -64,4 +64,46 @@ describe("directory disclosure writes", () => {
     expect(observed.at(-1)).toBe(opened);
     expect(new Set(observed).size).toBe(2);
   });
+
+  it("dispatches nothing once the selected directory is open", () => {
+    // An updater that returns `current` still had to be dispatched to say so,
+    // and React counts the dispatch. While another update is pending on this
+    // window's fiber — which is the normal state during a lens expansion — the
+    // eager bail-out cannot apply, so the no-op schedules a real update from
+    // inside the commit phase. Fifty consecutive commits carrying one is what
+    // React stops with "Maximum update depth exceeded".
+    const dispatched: unknown[] = [];
+    function ObservedWindow({ selected }: { selected: number }) {
+      const disclosure = useNavigationDirectoryDisclosure();
+      const observedDisclosure = {
+        ...disclosure,
+        setExpandedByKey: ((value) => {
+          dispatched.push(value);
+          disclosure.setExpandedByKey(value);
+        }) as typeof disclosure.setExpandedByKey,
+      };
+      const thread = fixture.threads[selected]!;
+      return <DirectoriesList
+        directoryDisclosure={observedDisclosure}
+        // A fresh array every render is what the hover-stable sidebar snapshot
+        // hands this list while the pointer rests on a row, and what a page
+        // arrival hands it during a lens expansion.
+        directories={[...fixture.directories]}
+        threads={fixture.threads}
+        selectedItemKey={buildThreadIdentityKey(thread.source, thread.id)}
+        onOpenLaunchpad={async () => {}}
+        onOpenThreadContextMenu={() => {}}
+        onSelectThread={() => {}}
+      />;
+    }
+
+    const view = render(<ObservedWindow selected={0} />);
+    expect(dispatched).toHaveLength(1);
+
+    dispatched.length = 0;
+    view.rerender(<ObservedWindow selected={0} />);
+    view.rerender(<ObservedWindow selected={1} />);
+    view.rerender(<ObservedWindow selected={1} />);
+    expect(dispatched).toEqual([]);
+  });
 });
