@@ -485,25 +485,69 @@ jobs:
           retention-days: 30
 
   desktop-e2e-result:
-    # Preserve the required status-check context while the work runs as two
-    # independently named matrix jobs. `always()` is required so a failed
-    # lane reaches this job and cannot turn the aggregate check into a skip.
+    # Preserve the required status-check context while the work runs as
+    # independently named matrix jobs across more than one platform.
+    # `always()` is required so a failed lane reaches this job and cannot turn
+    # the aggregate check into a skip. That reasoning is unchanged by the
+    # second matrix: `always()` is what makes this job run at all once any
+    # `needs` entry is not successful, and each entry is then read from
+    # `needs.*.result` below rather than gating entry to the job.
+    #
+    # `windows-e2e` is deliberately absent. It landed 2026-09-14 as an
+    # explicitly advisory lane, and gating merges on a one-day-old lane would
+    # strand PRs on its flakes rather than on real regressions. Promote it
+    # here once it has held a green baseline on `main` for long enough to
+    # trust, and drop the matching note on that job in the same commit.
     name: Desktop E2E
     runs-on: ubuntu-latest
-    needs: [changes, desktop-e2e]
+    needs: [changes, desktop-e2e, desktop-e2e-macos]
     if: >-
       always() &&
       needs.changes.outputs.code_impacting == 'true'
     timeout-minutes: 5
     steps:
-      - name: Require both Linux Desktop E2E lanes
+      - name: Require the Linux and macOS Desktop E2E lanes
         env:
           LINUX_E2E_RESULT: ${{ needs.desktop-e2e.result }}
+          MACOS_E2E_RESULT: ${{ needs.desktop-e2e-macos.result }}
+          # `desktop-e2e-macos` carries a fork guard, so a PR from a public
+          # fork skips it rather than running arbitrary code on a self-hosted
+          # runner. Mirror that guard here instead of accepting `skipped`
+          # outright: a blanket skip-accept would also swallow the skip that
+          # `macos-install-deps` failing produces, which is a real failure.
+          # GitHub Actions does not support YAML anchors, so this condition is
+          # necessarily a copy of the one on `desktop-e2e-macos`. Change both.
+          MACOS_E2E_EXPECTED: >-
+            ${{ github.event_name == 'push'
+            || (github.event_name == 'pull_request'
+            && github.event.pull_request.head.repo.full_name == github.repository) }}
         run: |
+          echo "Linux Desktop E2E matrix result: $LINUX_E2E_RESULT"
+          echo "macOS Desktop E2E matrix result: $MACOS_E2E_RESULT" \
+            "(expected to run: $MACOS_E2E_EXPECTED)"
+
+          # Evaluate every platform before exiting, so a red gate names the
+          # platform that broke instead of stopping at the first check and
+          # hiding whether the other one was healthy.
+          failed=0
+
           if [[ "$LINUX_E2E_RESULT" != "success" ]]; then
-            echo "Linux Desktop E2E matrix result: $LINUX_E2E_RESULT"
-            exit 1
+            echo "::error::Linux Desktop E2E did not succeed: $LINUX_E2E_RESULT"
+            failed=1
           fi
+
+          if [[ "$MACOS_E2E_EXPECTED" == "true" ]]; then
+            if [[ "$MACOS_E2E_RESULT" != "success" ]]; then
+              echo "::error::macOS Desktop E2E did not succeed: $MACOS_E2E_RESULT"
+              failed=1
+            fi
+          elif [[ "$MACOS_E2E_RESULT" != "skipped" ]]; then
+            echo "::error::macOS Desktop E2E was fork-guarded off but reported:" \
+              "$MACOS_E2E_RESULT"
+            failed=1
+          fi
+
+          exit "$failed"
 
   macos-install-deps:
     name: Setup macOS Dependencies
