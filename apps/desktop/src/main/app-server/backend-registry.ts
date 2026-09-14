@@ -11138,20 +11138,31 @@ export class DesktopBackendRegistry {
   private async refreshCodexProviderAtStartup(
     permit: ProviderDiscoveryPermit,
   ): Promise<StartupProviderThreadRefresh> {
+    const startedAt = performance.now();
     const threads = await this.listThreads({
       backend: "codex",
       callerReason: "startup-provider-refresh",
       enrichDirectories: false,
       forceRefresh: true,
     });
+    backendRegistryLog.info("startup Codex thread refresh completed", {
+      durationMs: Math.round(performance.now() - startedAt),
+      threadCount: threads.length,
+    });
+    const discoveryStartedAt = performance.now();
     await this.discoverCodexBackend(permit);
+    backendRegistryLog.info("startup Codex backend discovery completed", {
+      durationMs: Math.round(performance.now() - discoveryStartedAt),
+    });
     return { backends: ["codex"], threads };
   }
 
   private async refreshAcpProviderThreadsAtStartup(
     permit: ProviderDiscoveryPermit,
   ): Promise<StartupProviderThreadRefresh> {
+    const startedAt = performance.now();
     const agents = await this.acpBackend.discoverAvailableAgents(permit);
+    const discoveryDurationMs = Math.round(performance.now() - startedAt);
     const threads = (await Promise.all(
       agents.map(async (agent) => {
         return await this.listThreads({
@@ -11161,6 +11172,12 @@ export class DesktopBackendRegistry {
         });
       }),
     )).flat();
+    backendRegistryLog.info("startup ACP provider refresh completed", {
+      durationMs: Math.round(performance.now() - startedAt),
+      discoveryDurationMs,
+      providerCount: agents.length,
+      threadCount: threads.length,
+    });
     return {
       backends: agents.map((agent) => agent.backendId),
       threads,

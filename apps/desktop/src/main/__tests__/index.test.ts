@@ -207,11 +207,13 @@ const isCodexBootstrapDeferredMock = vi.fn(() => false);
 const refreshStartupDiscoveryMock = vi.fn<() => Promise<void>>(
   async () => undefined,
 );
+const resolveCodexCommandMock = vi.fn(async () => ({ command: "/cached/codex", source: "config" as const }));
 const resolveMcpGatewayEnabledMock = vi.fn(() => true);
 const getDesktopSettingsServiceMock = vi.fn(() => ({
   resolveDeveloperMode: resolveDeveloperModeMock,
   isCodexBootstrapDeferred: isCodexBootstrapDeferredMock,
   refreshStartupDiscovery: refreshStartupDiscoveryMock,
+  resolveCodexCommand: resolveCodexCommandMock,
   resolveMcpGatewayEnabled: resolveMcpGatewayEnabledMock,
 }));
 const profileFocusRequestWatcherStopMock = vi.fn();
@@ -796,6 +798,8 @@ describe("bootstrapApp", () => {
     listThreadsMock.mockResolvedValue([]);
     refreshProvidersAtStartupMock.mockReset();
     refreshProvidersAtStartupMock.mockResolvedValue(undefined);
+    resolveCodexCommandMock.mockReset();
+    resolveCodexCommandMock.mockResolvedValue({ command: "/cached/codex", source: "config" });
     refreshStartupDiscoveryMock.mockReset();
     refreshStartupDiscoveryMock.mockResolvedValue(undefined);
     disposeDesktopMessagingRuntimeMock.mockReset();
@@ -1343,6 +1347,7 @@ describe("bootstrapApp", () => {
 
   it("prewarms the initial thread list after starting the first window", async () => {
     startupProfilerInstance.start.mockResolvedValue();
+    refreshStartupDiscoveryMock.mockReturnValue(new Promise(() => {}));
     listThreadsMock.mockReturnValue(new Promise(() => {}));
 
     await import("../index");
@@ -1358,13 +1363,15 @@ describe("bootstrapApp", () => {
       maxPages: 1,
       skipArchivedMetadataRefresh: true,
     });
+    expect(refreshProvidersAtStartupMock).toHaveBeenCalledOnce();
   });
 
-  it("waits for startup discovery before refreshing live provider threads", async () => {
+  it("waits for a Codex selection without waiting for unrelated startup discovery", async () => {
     startupProfilerInstance.start.mockResolvedValue();
     let finishDiscovery: (() => void) | undefined;
-    refreshStartupDiscoveryMock.mockReturnValue(new Promise<void>((resolve) => {
-      finishDiscovery = () => resolve();
+    refreshStartupDiscoveryMock.mockReturnValue(new Promise(() => {}));
+    resolveCodexCommandMock.mockReturnValue(new Promise((resolve) => {
+      finishDiscovery = () => resolve({ command: "/discovered/codex", source: "config" });
     }));
     listThreadsMock.mockResolvedValue([]);
 
@@ -1386,6 +1393,14 @@ describe("bootstrapApp", () => {
     expect(refreshProvidersAtStartupMock).toHaveBeenCalledWith(
       expect.objectContaining({ intent: "startup" }),
     );
+  });
+
+  it("refreshes degraded provider state when Codex selection fails", async () => {
+    startupProfilerInstance.start.mockResolvedValue();
+    resolveCodexCommandMock.mockRejectedValue(new Error("No Codex executable"));
+    await import("../index");
+    await flushMicrotasks();
+    expect(refreshProvidersAtStartupMock).toHaveBeenCalledOnce();
   });
 
   it("skips the prewarm when the Codex bootstrap is deferred for onboarding", async () => {

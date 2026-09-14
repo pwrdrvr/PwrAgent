@@ -9,7 +9,7 @@ import {
   isE2eMemorySecretStorageEnabled,
   MemoryDesktopSecretStore,
 } from "./desktop-secret-store";
-import { ensureManagedCodexRuntime } from "../codex-managed-runtime";
+import { ensureManagedCodexRuntime, retainManagedCodexCommand } from "../codex-managed-runtime";
 import { resolveActiveManagedGrokCommand } from "../acp/grok-managed-runtime";
 import { SETTINGS_RUNTIME_CHANGED_EVENT_CHANNEL } from "../../shared/ipc";
 import { subscribersForChannel } from "../window-channels";
@@ -54,6 +54,9 @@ export function getDesktopSettingsService(): DesktopSettingsService {
       // keep managed downloads opt-in until the downstream signing lane is
       // configured and publishing signed Apple/Windows assets.
       defaultManagedGrokBuilds: app.isPackaged !== true,
+      retainCachedCodexCommand: async (command) => await retainManagedCodexCommand(command, {
+        requirePlatformSignature: app.isPackaged === true,
+      }),
       ensureManagedCodexRuntime: async ({
         checkMode,
         signal,
