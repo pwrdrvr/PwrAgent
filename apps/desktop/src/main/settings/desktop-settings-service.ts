@@ -42,6 +42,8 @@ import type {
 } from "@pwragent/shared";
 import { execFile } from "node:child_process";
 import { readFile } from "node:fs/promises";
+import { accessSync, constants, statSync } from "node:fs";
+import { retainManagedCodexCommand } from "../codex-managed-runtime";
 import path from "node:path";
 import {
   DEFAULT_BACKGROUND_PR_POLLING,
@@ -574,6 +576,9 @@ export class DesktopSettingsService {
   private terminalSpawnEnv?: NodeJS.ProcessEnv;
   private terminalSpawnEnvHydrationPromise?: Promise<NodeJS.ProcessEnv>;
   private managedCodexRuntime?: ManagedCodexRuntime;
+  private sessionCodexCommand?: ResolvedCodexCommandCandidate;
+  private sessionCodexRetention: Promise<void> = Promise.resolve();
+  private rejectedStartupCachedCommand = false;
   private readonly managedCodexSelectionListeners = new Set<(
     change: ManagedCodexSelectionChange,
   ) => Promise<unknown> | unknown>();
@@ -2283,6 +2288,20 @@ export class DesktopSettingsService {
     };
     if (!this.startupDiscoveryAttempted) {
       this.startupDiscoveryAttempted = true;
+      const cached = this.readSelectedCodexCommand();
+      if (cached) {
+        try {
+          if (!path.isAbsolute(cached.command) || !statSync(cached.command).isFile()) {
+            throw new Error("Cached executable is missing");
+          }
+          accessSync(cached.command, process.platform === "win32" ? constants.F_OK : constants.X_OK);
+          this.sessionCodexCommand = cached;
+          this.sessionCodexRetention = retainManagedCodexCommand(cached.command);
+          settingsLog.info("startup Codex selection reused", { source: cached.source });
+        } catch {
+          this.rejectedStartupCachedCommand = true;
+        }
+      }
       const applications = this.configStore.read("applications");
       const configuredGhCommand = applications.gh?.path;
       this.startupDiscoveryPromise = Promise.allSettled([
@@ -2331,6 +2350,9 @@ export class DesktopSettingsService {
       "settings-user-action",
       "setup-user-action",
     ]);
+    // Explicit Settings/setup discovery retains its existing opt-in switch
+    // behavior; only automatic background startup discovery is pinned.
+    this.sessionCodexCommand = undefined;
     await this.runCodexDiscovery(permit);
     return await this.readSettingsProjection();
   }
@@ -2355,6 +2377,7 @@ export class DesktopSettingsService {
   private async runCodexDiscoveryAttempt(
     permit: ProviderDiscoveryPermit,
   ): Promise<void> {
+    await this.sessionCodexRetention;
     this.codexSpawnEnvHydratedAt = undefined;
     const config = this.readConfig().config;
     const checkMode = permit.intent === "startup" ? "ttl" : "force";
@@ -2384,6 +2407,7 @@ export class DesktopSettingsService {
       this.managedCodexRuntime
       && this.resolveTokenMiserEnabled()
       && this.managedCodexRuntime.command !== previousManagedCommand
+      && !this.sessionCodexCommand
     ) {
       this.managedCodexRuntimeSwitchPending = true;
       await this.publishManagedCodexSelectionChange({
@@ -2431,15 +2455,18 @@ export class DesktopSettingsService {
         : {}),
       ...(selected?.version ? { selectedVersion: selected.version } : {}),
     });
+    if (discovery.selectedCommand) this.rejectedStartupCachedCommand = false;
     settingsLog.info("Codex discovery profile snapshot completed", {
       durationMs: Math.round(performance.now() - profilesStartedAt),
     });
   }
 
   async resolveCodexCommand(): Promise<ResolvedCodexCommandCandidate> {
+    await this.sessionCodexRetention;
     const resolved = this.readSelectedCodexCommand();
     if (resolved) {
-      return resolved;
+      this.sessionCodexCommand ??= resolved;
+      return this.sessionCodexCommand;
     }
     // A Codex discovery is already running and is the authority for this
     // profile's selection. Waiting for the answer in flight is not a retry:
@@ -2466,7 +2493,8 @@ export class DesktopSettingsService {
       await codexDiscovery;
       const discovered = this.readSelectedCodexCommand();
       if (discovered) {
-        return discovered;
+        this.sessionCodexCommand ??= discovered;
+        return this.sessionCodexCommand;
       }
     }
     throw new Error(
@@ -2481,6 +2509,7 @@ export class DesktopSettingsService {
   private readSelectedCodexCommand():
     | ResolvedCodexCommandCandidate
     | undefined {
+    if (this.sessionCodexCommand) return this.sessionCodexCommand;
     const managedRuntime = this.managedCodexRuntime;
     if (managedRuntime) {
       return {
@@ -2491,8 +2520,9 @@ export class DesktopSettingsService {
     }
     const configuredCommand = this.resolveCodexCommandPreference();
     const cached = this.codexDiscoveryCoordinator.peek?.(configuredCommand)
-      ?? codexDiscoveryFromProvider(this.configStore.read("providers").codex);
-    const selected = cached.candidates.find((candidate) => candidate.selected);
+      ?? (this.rejectedStartupCachedCommand ? undefined
+        : codexDiscoveryFromProvider(this.configStore.read("providers").codex));
+    const selected = cached?.candidates.find((candidate) => candidate.selected);
     if (!selected) {
       return undefined;
     }
@@ -2503,21 +2533,9 @@ export class DesktopSettingsService {
     };
   }
 
-  /**
-   * Whether a Codex discovery still owes this profile an answer. The desktop
-   * uses it to keep a startup surface pending rather than reporting a
-   * configured profile as having no provider.
-   *
-   * Deliberately keyed on discovery state alone, never on
-   * `readSelectedCodexCommand()`. That resolver answers from the managed
-   * runtime and the coordinator cache, which `runCodexDiscoveryAttempt`
-   * populates seconds before it publishes `lastKnownGood` — and
-   * `lastKnownGood` is what `readCodexBackendSummary` derives `available`
-   * from. Consulting the resolver here made the two disagree for the length
-   * of a version probe, dropping the pending flag while the summary was still
-   * unavailable: exactly the window this flag exists to cover.
-   */
+  /** A retained executable can serve this process while discovery checks the next launch. */
   isCodexDiscoveryPending(): boolean {
+    if (this.sessionCodexCommand) return false;
     return this.codexDiscoveryPromise !== undefined
       || !this.codexDiscoverySettled;
   }

@@ -1320,6 +1320,46 @@ describe("DesktopSettingsService", () => {
     expect(resolve).not.toHaveBeenCalled();
   });
 
+  it("uses last-known-good while discovery is pending and saves its replacement for the next process", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    const previous = path.join(root, "previous-codex");
+    const replacement = path.join(root, "replacement-codex");
+    fs.writeFileSync(previous, "fixture", { mode: 0o755 });
+    fs.writeFileSync(replacement, "fixture", { mode: 0o755 });
+    const configStore = new DesktopConfigStore({ configPath });
+    configStore.recordProviderDiscovery("codex", {
+      candidates: [{ command: previous, source: "config", version: "0.200.0" }],
+      selectedCommand: previous,
+      selectedVersion: "0.200.0",
+    });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const discover = vi.fn(async () => {
+      await gate;
+      return { candidates: [{ command: replacement, source: "config" as const,
+        executable: true, selected: true, version: "0.201.0" }],
+        selectedCommand: replacement, selectedSource: "config" as const };
+    });
+    const options = {
+      configPath, configStore, env: {}, secretStore: new MemoryDesktopSecretStore(),
+      codexDiscoveryCoordinator: { discover, invalidate: vi.fn(), resolve: vi.fn() },
+    };
+    const service = new DesktopSettingsService(options);
+    const startup = service.refreshStartupDiscovery(issueProviderDiscoveryPermit("startup"));
+    await expect(service.resolveCodexCommand()).resolves.toMatchObject({ command: previous });
+    expect(service.isCodexDiscoveryPending()).toBe(false);
+    release();
+    await startup;
+    await expect(service.resolveCodexCommand()).resolves.toMatchObject({ command: previous });
+    expect(configStore.read("providers").codex.lastKnownGood?.selectedCommand).toBe(replacement);
+    const nextService = new DesktopSettingsService(options);
+    const nextStartup = nextService.refreshStartupDiscovery(issueProviderDiscoveryPermit("startup"));
+    await expect(nextService.resolveCodexCommand()).resolves.toMatchObject({ command: replacement });
+    await nextStartup;
+    configStore.dispose();
+  });
+
   it("waits for the in-flight startup discovery instead of reporting no executable", async () => {
     const configPath = path.join(createTempRoot(), "config.toml");
     fs.writeFileSync(configPath, [

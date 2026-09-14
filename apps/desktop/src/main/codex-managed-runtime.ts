@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { execFile as execFileCallback } from "node:child_process";
 import {
   createReadStream,
@@ -173,6 +173,7 @@ type ManagedCodexSigstoreVerification = {
 };
 
 type BundleValidationOptions = {
+  reuseVersionValidation?: boolean;
   applicationCommand: string;
   platform: NodeJS.Platform;
   probeVersion?: ManagedCodexRuntimeOptions["probeVersion"];
@@ -1255,9 +1256,11 @@ async function validateExtractedBundle(
     path.join(directory, entry),
   );
   if (options.platform !== "win32") {
-    await Promise.all(executablePaths.map(async (command) =>
-      await chmod(command, 0o755),
-    ));
+    await Promise.all(executablePaths.map(async (command) => {
+      if (((await stat(command)).mode & 0o7777) !== 0o755) {
+        await chmod(command, 0o755);
+      }
+    }));
   }
   managedCodexLog.info("managed Codex bundle files checked", {
     durationMs: Math.round(performance.now() - startedAt),
@@ -1290,7 +1293,24 @@ async function validateExtractedBundle(
 
   const expectedVersion = versionForTag(options.tag);
   const banners = expectedCodexVersionBanners(options.platform, expectedVersion);
-  for (const [name, banner] of banners) {
+  // Persist only version-probe results. File containment, entitlements and
+  // required platform signatures are still checked on every cache read.
+  const validationPath = path.join(directory, ".pwragent-version-validation.json");
+  const fingerprint = JSON.stringify({
+    schemaVersion: 1,
+    tag: options.tag,
+    platform: options.platform,
+    files: await Promise.all(requiredFiles.map(async (file) => {
+      const entry = await stat(file, { bigint: true });
+      return [path.basename(file), entry.dev, entry.ino, entry.size,
+        entry.mtimeNs, entry.ctimeNs, entry.mode].map(String);
+    })),
+  });
+  const cachedFingerprint = options.reuseVersionValidation
+    ? await readFile(validationPath, "utf8").catch(() => undefined)
+    : undefined;
+  const reusedVersions = cachedFingerprint === fingerprint;
+  for (const [name, banner] of reusedVersions ? [] : banners) {
     const command = path.join(directory, name);
     const versionStartedAt = performance.now();
     const output = options.probeVersion
@@ -1307,7 +1327,18 @@ async function validateExtractedBundle(
       );
     }
   }
+  if (!reusedVersions) {
+    const temporaryPath = `${validationPath}.${randomUUID()}.tmp`;
+    try {
+      await writeFile(temporaryPath, fingerprint, { flag: "wx" });
+      await rename(temporaryPath, validationPath);
+    } catch {
+      // A read-only bundle is usable; it simply cannot retain this optimization.
+      await rm(temporaryPath, { force: true }).catch(() => undefined);
+    }
+  }
   managedCodexLog.info("managed Codex bundle validated", {
+    reusedVersions,
     durationMs: Math.round(performance.now() - startedAt),
   });
   return { platform: options.platform };
@@ -1435,6 +1466,7 @@ async function readCachedRuntime(
     }
     const versionRoot = path.join(rootDir, "versions", metadata.tag);
     await validateExtractedBundle(versionRoot, {
+      reuseVersionValidation: true,
       ...bundleValidationOptions(options),
       tag: metadata.tag,
     });
@@ -1472,6 +1504,13 @@ async function activateRuntime(
     });
   }
   return runtime;
+}
+
+export async function retainManagedCodexCommand(command: string): Promise<void> {
+  const rootDir = managedCodexRoot();
+  const versionRoot = path.dirname(command);
+  if (path.dirname(versionRoot) !== path.join(rootDir, "versions")) return;
+  await markRuntimeInUse(rootDir, command);
 }
 
 async function markRuntimeInUse(

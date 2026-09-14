@@ -174,7 +174,33 @@ describe("ensureManagedCodexRuntime", () => {
     expect(existsSync(path.join(rootDir, "tuf"))).toBe(true);
     const callsAfterInstall = fetchMock.mock.calls.length;
 
-    const cached = await ensureManagedCodexRuntime({
+    const cachedProbe = vi.fn(versionProbe(version));
+    const cachedOptions = {
+      arch: "x64" as const,
+      checkMode: "ttl" as const,
+      fetch: fetchMock as typeof globalThis.fetch,
+      now: () => 1_001,
+      platform: "linux" as const,
+      probeVersion: cachedProbe,
+      rootDir,
+    };
+    const cached = await ensureManagedCodexRuntime(cachedOptions);
+    expect(cachedProbe).not.toHaveBeenCalled();
+
+    // A later process uses the same on-disk proof; no memory cache is needed.
+    await ensureManagedCodexRuntime(cachedOptions);
+    expect(cachedProbe).not.toHaveBeenCalled();
+    await writeFile(installed.command, "replaced executable bytes");
+    await ensureManagedCodexRuntime(cachedOptions);
+    expect(cachedProbe).toHaveBeenCalledTimes(3);
+    cachedProbe.mockClear();
+    await ensureManagedCodexRuntime(cachedOptions);
+    expect(cachedProbe).not.toHaveBeenCalled();
+    await rm(path.join(path.dirname(installed.command), ".pwragent-version-validation.json"));
+    await ensureManagedCodexRuntime(cachedOptions);
+    expect(cachedProbe).toHaveBeenCalledTimes(3);
+
+    const reused = await ensureManagedCodexRuntime({
       arch: "x64",
       checkMode: "ttl",
       fetch: fetchMock as typeof globalThis.fetch,
@@ -185,6 +211,7 @@ describe("ensureManagedCodexRuntime", () => {
     });
 
     expect(cached.command).toBe(installed.command);
+    expect(reused.command).toBe(installed.command);
     expect(fetchMock).toHaveBeenCalledTimes(callsAfterInstall);
     expect(JSON.parse(
       await readFile(path.join(rootDir, "managed-release.json"), "utf8"),

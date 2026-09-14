@@ -423,7 +423,7 @@ function prewarmInitialThreadList(permit: ProviderDiscoveryPermit): void {
     return;
   }
   const startedAt = Date.now();
-  const startupSettingsDiscovery = getDesktopSettingsService()
+  void getDesktopSettingsService()
     .refreshStartupDiscovery(permit)
     .catch((error) => {
       mainLog.warn("startup settings discovery failed", {
@@ -432,9 +432,9 @@ function prewarmInitialThreadList(permit: ProviderDiscoveryPermit): void {
     });
   // The durable thread snapshot painted below is allowed to appear
   // immediately. A cold profile has no executable selection yet, though, so
-  // this live provider refresh must wait for the one permitted startup
-  // discovery to publish that selection. Keeping the dependency in the
-  // background preserves fast startup without racing the Codex transport.
+  // this live provider refresh waits only until Codex has a usable selection.
+  // A warm profile uses its pinned last-known-good executable immediately;
+  // discovery updates the next launch in the background.
   //
   // It must NOT hang off the prewarm `listThreads` result. This chain owns the
   // only `navigation/providerThreads/refreshed` emit, which is the renderer's
@@ -442,7 +442,9 @@ function prewarmInitialThreadList(permit: ProviderDiscoveryPermit): void {
   // a broken Codex being exactly when that happens — would otherwise leave the
   // renderer holding a stale `discoveryPending` summary with nothing left to
   // clear it.
-  const startupProviderRefresh = startupSettingsDiscovery
+  const startupProviderRefresh = getDesktopSettingsService().resolveCodexCommand()
+    // A missing executable must still publish the provider's degraded state.
+    .catch(() => undefined)
     .then(async () =>
       await getDesktopBackendRegistry().refreshProvidersAtStartup(permit),
     )
