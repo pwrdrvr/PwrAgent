@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { NavigationSnapshot, NavigationThreadSummary, NavigationQueryRequest } from "@pwragent/shared";
+import { NAVIGATION_QUERY_MAX_RESULT_BYTES } from "@pwragent/shared";
 import { NavigationQueryStore } from "../app-server/navigation-query-store";
 import { readFederationPinnedSnapshot } from "../federation/federation-collection-client";
 import type { FederationBackendOperations } from "../federation/federation-backend-bridge";
@@ -37,7 +38,7 @@ describe("owner-filtered navigation descendants", () => {
     const getNavigationQueryPage = vi.fn(async (request: NavigationQueryRequest) => {
       const page = await store.readPage({ scopeKey: "viewer", loadIndex: async () => value, request });
       expect(page.entries.length).toBeLessThanOrEqual(100);
-      expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(256 * 1024);
+      expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(NAVIGATION_QUERY_MAX_RESULT_BYTES);
       return page;
     });
     const result = await readFederationPinnedSnapshot({ getNavigationQueryPage, getNavigationDescendantPage, getNavigationSnapshot } as unknown as FederationBackendOperations,
@@ -48,6 +49,28 @@ describe("owner-filtered navigation descendants", () => {
     expect(getNavigationDescendantPage).not.toHaveBeenCalled();
     expect(getNavigationQueryPage.mock.calls[0]?.[0].query).toEqual({ kind: "group-members", roots: [{ backend: "codex", threadId: "root" }] });
     expect(getNavigationSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("batches more than 100 roots and deduplicates overlapping descendant groups", async () => {
+    const value = snapshot(Array.from({ length: 101 }, (_, i) => thread(`root-${i}`)));
+    value.threads.push(thread("child", { parentThreadId: "root-0" }));
+    const store = new NavigationQueryStore();
+    const getNavigationQueryPage = vi.fn((request: NavigationQueryRequest) =>
+      store.readPage({ request, scopeKey: "viewer", loadIndex: async () => value }));
+    const result = await readFederationPinnedSnapshot({ getNavigationQueryPage } as unknown as FederationBackendOperations,
+      [...value.threads.map((row) => `codex:${row.id}`), "codex:root-0"]);
+    expect(result.threads).toHaveLength(102);
+    expect(getNavigationQueryPage.mock.calls.every(([request]) =>
+      request.query.kind === "group-members" && request.query.roots.length <= 100)).toBe(true);
+  });
+
+  it.each(["generation", "ownerEpoch", "queryKey"] as const)("rejects %s drift between pages", async (field) => {
+    const page = { protocol: 2, ownerEpoch: "owner", generation: "1", queryKey: "pins",
+      coverage: { state: "complete" }, entries: [], complete: false, nextCursor: "next" };
+    const getNavigationQueryPage = vi.fn().mockResolvedValueOnce(page)
+      .mockResolvedValueOnce({ ...page, [field]: "changed", complete: true, nextCursor: undefined });
+    await expect(readFederationPinnedSnapshot({ getNavigationQueryPage } as unknown as FederationBackendOperations,
+      ["codex:root"])).rejects.toThrow("inconsistent");
   });
 
   it("requires an upgrade for a missing bounded method and never falls back after a timeout", async () => {
