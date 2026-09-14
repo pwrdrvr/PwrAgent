@@ -8,6 +8,8 @@
     "repeatedListings": 20,
     "baselineWarmGitCommands": 60,
     "warmGitCommands": 0,
+    "burstReads": 120,
+    "warmFilesystemProbes": 0,
     "branchChangeGitCommands": 1,
     "threadsPerListing": 100,
     "uniqueDirectories": 2

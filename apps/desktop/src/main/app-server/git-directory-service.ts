@@ -20,6 +20,7 @@ import {
 } from "@pwragent/shared";
 import { userHomeWorktreesRoot } from "../settings/desktop-config";
 import { PerKeyAsyncLock } from "../util/per-key-async-lock";
+import { GitReadCache, type GitReadRequest } from "../git-info/read-cache";
 import { runGitCommand } from "./git-executable";
 
 type GitCommandRunner = (
@@ -730,12 +731,6 @@ async function restoreDetachedWorktreeBranch(params: {
   );
 }
 
-type CachedDirectoryStatus = {
-  expiresAt: number;
-  inFlight?: Promise<NavigationDirectoryGitStatus | undefined>;
-  status?: NavigationDirectoryGitStatus;
-};
-
 type BranchInventory = {
   branchesOutput: string;
   baseBranchesOutput: string;
@@ -768,7 +763,7 @@ type GitDirectoryServiceOptions = {
 };
 
 export class GitDirectoryService {
-  private readonly statusCache = new Map<string, CachedDirectoryStatus>();
+  private readonly statusCache: GitReadCache<NavigationDirectoryGitStatus | undefined>;
   private readonly branchInventoryCache = new Map<string, CachedBranchInventory>();
   private readonly commonGitDirByCwd = new Map<string, string>();
   // Git worktree commands update the shared common Git directory. Git for
@@ -789,6 +784,7 @@ export class GitDirectoryService {
     const normalized: GitDirectoryServiceOptions =
       typeof options === "number" ? { cacheTtlMs: options } : options;
     this.cacheTtlMs = normalized.cacheTtlMs ?? 3_000;
+    this.statusCache = new GitReadCache({ ttlMs: this.cacheTtlMs });
     this.statusConcurrency = normalized.statusConcurrency ?? 4;
     this.statusMaxUnread = Math.max(
       normalized.statusMaxUnread ?? 8,
@@ -822,12 +818,13 @@ export class GitDirectoryService {
 
   readDirectoryStatusEntries<T extends Pick<NavigationDirectorySummary, "key" | "path">>(
     directories: T[],
+    request: GitReadRequest = {},
   ): AsyncIterable<DirectoryGitStatusEntry> {
     return new IterableMapper(
       directories,
       async (directory): Promise<DirectoryGitStatusEntry> => ({
         directoryKey: directory.key,
-        gitStatus: await this.readDirectoryStatus(directory),
+        gitStatus: await this.readDirectoryStatus(directory, request),
       }),
       {
         concurrency: this.statusConcurrency,
@@ -838,58 +835,32 @@ export class GitDirectoryService {
 
   async readDirectoryStatus(
     directory: Pick<NavigationDirectorySummary, "path">,
+    request: GitReadRequest = {},
   ): Promise<NavigationDirectoryGitStatus | undefined> {
-    const cwd = directory.path?.trim();
+    const cwd = directory.path?.trim() ? path.resolve(directory.path.trim()) : undefined;
     if (!cwd) {
       return undefined;
     }
 
-    const cached = this.statusCache.get(cwd);
-    const now = Date.now();
-    if (cached?.inFlight) {
-      return await cached.inFlight;
-    }
-
-    if (cached && cached.expiresAt > now) {
-      return cached.status;
-    }
-
-    const inFlight = this.loadDirectoryStatus(cwd)
-      .then((status) => {
-        this.statusCache.set(cwd, {
-          expiresAt: Date.now() + this.cacheTtlMs,
-          status,
-        });
-        return status;
-      })
-      .catch((error) => {
-        const status: NavigationDirectoryGitStatus = {
+    return this.statusCache.read(cwd, async ({ userRefresh }) => {
+      try {
+        return await this.loadDirectoryStatus(cwd, userRefresh);
+      } catch (error) {
+        return {
           syncState: "status-unavailable",
           statusUnavailableReason: error instanceof Error ? error.message : String(error),
         };
-        this.statusCache.set(cwd, {
-          expiresAt: Date.now() + this.cacheTtlMs,
-          status,
-        });
-        return status;
-      });
-
-    this.statusCache.set(cwd, {
-      expiresAt: cached?.expiresAt ?? 0,
-      inFlight,
-      status: cached?.status,
-    });
-
-    return await inFlight;
+      }
+    }, request);
   }
 
   invalidateDirectoryStatus(directoryPath?: string): void {
-    const normalizedPath = directoryPath?.trim();
+    const normalizedPath = directoryPath?.trim() ? path.resolve(directoryPath.trim()) : undefined;
     if (!normalizedPath) {
       return;
     }
 
-    this.statusCache.delete(normalizedPath);
+    this.statusCache.invalidate(normalizedPath);
     const commonGitDir = this.commonGitDirByCwd.get(normalizedPath);
     if (commonGitDir) {
       this.branchInventoryCache.delete(commonGitDir);
@@ -899,6 +870,7 @@ export class GitDirectoryService {
 
   private async loadDirectoryStatus(
     cwd: string,
+    userRefresh: boolean,
   ): Promise<NavigationDirectoryGitStatus | undefined> {
     const runGit = this.runGitCommand;
     const gitEnv = this.gitEnv;
@@ -924,7 +896,7 @@ export class GitDirectoryService {
       runGit(repoRoot, ["rev-parse", "--abbrev-ref", "HEAD"], gitEnv).catch(
         () => "",
       ),
-      this.readBranchInventory({ commonGitDir, repoRoot }),
+      this.readBranchInventory({ commonGitDir, repoRoot, userRefresh }),
       runGit(
         repoRoot,
         [
@@ -1094,6 +1066,7 @@ export class GitDirectoryService {
   private async readBranchInventory(params: {
     commonGitDir: string;
     repoRoot: string;
+    userRefresh: boolean;
   }): Promise<BranchInventory> {
     const cached = this.branchInventoryCache.get(params.commonGitDir);
     const now = Date.now();
@@ -1101,7 +1074,7 @@ export class GitDirectoryService {
       return await cached.inFlight;
     }
 
-    if (cached?.inventory && cached.expiresAt > now) {
+    if (!params.userRefresh && cached?.inventory && cached.expiresAt > now) {
       return cached.inventory;
     }
 

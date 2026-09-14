@@ -533,7 +533,14 @@ export function Sidebar(props: SidebarProps) {
   // so a render that changes nothing hands the rows back their existing
   // object identities, which is what lets the memoized rows bail out while
   // the pointer rests on one.
-  const hydrateHoverStable = useRef(createHoverStableSidebarHydrator()).current;
+  //
+  // Built lazily. `useRef(createHoverStableSidebarHydrator())` would keep the
+  // first hydrator but still evaluate the factory on every render and discard
+  // the result, which is the per-render allocation this whole seam exists to
+  // remove.
+  const hydratorRef = useRef<ReturnType<typeof createHoverStableSidebarHydrator>>(undefined);
+  hydratorRef.current ??= createHoverStableSidebarHydrator();
+  const hydrateHoverStable = hydratorRef.current;
   const hoverStableSnapshot = useHoverStableSnapshot({
     hydrateFrozenValue: (frozen, latest) =>
       hydrateHoverStable(frozen, latest, {

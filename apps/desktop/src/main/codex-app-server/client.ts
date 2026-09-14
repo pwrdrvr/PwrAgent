@@ -108,7 +108,7 @@ import {
   type JsonRpcObserverEvent,
 } from "@pwrdrvr/agent-transport";
 import {
-  createThreadDirectoryEnricher,
+  enrichThreadDirectory,
   type ThreadDirectoryEnrichment,
   type DirectoryEnrichmentCaller,
 } from "../app-server/thread-directory-enricher";
@@ -7533,7 +7533,7 @@ export class CodexAppServerClient {
         ? async (projectKey?: string) => ({
             linkedDirectories: await directoryResolver(projectKey),
           })
-        : createThreadDirectoryEnricher());
+        : enrichThreadDirectory);
     this.rawConnection.setNotificationHandler(async (method, params) => {
       if (navigationQueryEventRequiresRefresh(method)) this.pendingThreadListings.clear();
       const isKnownCodexMethod = isKnownCodexNotificationMethod(method);

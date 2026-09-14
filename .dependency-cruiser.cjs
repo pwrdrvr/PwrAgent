@@ -1,6 +1,27 @@
 module.exports = {
   forbidden: [
     {
+      name: "desktop-ui-has-no-native-git-access",
+      severity: "error",
+      comment: "UI Git reads must use IPC and the main-process stores; no native process or Git implementation access.",
+      from: { path: "^apps/desktop/src/renderer/" },
+      to: { reachable: true, path: "^(apps/desktop/src/main/|(?:node:)?child_process(?:/|$)|(dugite|simple-git|isomorphic-git)(/|$)|node_modules/.*/(dugite|simple-git|isomorphic-git)/|node_modules/(dugite|simple-git|isomorphic-git)/)" },
+    },
+    {
+      name: "desktop-git-probes-are-store-private",
+      severity: "error",
+      comment: "Only the Git info stores may reach raw directory probes. Consumers request facts; stores decide when to perform I/O.",
+      from: { path: "^apps/desktop/src/", pathNot: "^apps/desktop/src/main/git-info/" },
+      to: { path: "^apps/desktop/src/main/git-info/private/" },
+    },
+    {
+      name: "desktop-git-cache-policy-has-no-io",
+      severity: "error",
+      comment: "Cache admission must stay free of filesystem and subprocess probes.",
+      from: { path: "^apps/desktop/src/main/git-info/read-cache\\.ts$" },
+      to: { path: "^(apps/desktop/src/main/git-info/private/|(?:node:)?(?:child_process|fs)(?:/|$))" },
+    },
+    {
       name: "no-circular",
       severity: "error",
       comment:
