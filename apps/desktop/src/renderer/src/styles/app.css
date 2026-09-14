@@ -4727,11 +4727,19 @@ a.button {
    `min-width` is only a floor, so the base chip's `0 8px` padding around
    the 14px glyph kept painting a 32px stadium — 8px wider than the
    "square 24px chip" the kebab's width was chosen against, and 8px more
-   of the title line the revealed cluster covers. */
+   of the title line the revealed cluster covers.
+
+   `justify-content` comes with the square, not as decoration: the base
+   chip is a flex container with no justification, so its `0 8px` padding
+   was what centered the 14px glyph. Take the padding away and the glyph
+   falls to flex-start — 1px from the left border, 9px from the right —
+   beside a kebab whose dots ARE centered. `.thread-row__chip--reaction`
+   centers itself for the same reason. */
 .thread-row__actions .thread-row__chip--add-reaction {
   width: 24px;
   height: 24px;
   min-width: 24px;
+  justify-content: center;
   padding: 0;
 }
 
@@ -4803,10 +4811,14 @@ a.button {
    cluster's reveal states in the fade rule above (the cluster pin's
    states are absent because pinned rows never render it). Deliberate
    over-reserve: on a surface without a reaction handler the revealed
-   cluster is kebab-only and the rest-state gap already clears it, so
-   the reserve protects nothing there — accepted, since every production
+   cluster is kebab-only, 26px instead of 54px, so this lane hands back
+   28px more than that surface needs — accepted, since every production
    surface wires reactions and a narrower conditional would re-add the
-   `:has()` scan this class avoids. */
+   `:has()` scan this class avoids. (Do not read that as "a kebab-only
+   cluster needs no reserve at all": the rest-state pin ends only
+   `timestamp + 5px` inside the content edge, so it clears even a 26px
+   kebab only once the timestamp measures ≥21px, and "1h"/"2d" measure
+   ~13px.) */
 .thread-row-shell:hover .thread-row--retained .thread-row__time,
 .thread-row-shell:has(.thread-row__overflow-button:focus-visible) .thread-row--retained .thread-row__time,
 .thread-row-shell:has(.thread-row__chip--add-reaction:focus-visible) .thread-row--retained .thread-row__time,

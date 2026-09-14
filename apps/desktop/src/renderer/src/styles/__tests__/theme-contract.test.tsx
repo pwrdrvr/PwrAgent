@@ -285,17 +285,30 @@ describe("Tangerine Terminal theme contract", () => {
     // decoration: `min-width` is only a floor, so the base chip's `0 8px`
     // padding painted a 32px stadium, and the timestamp-lane reserve below
     // is derived against a 24px square. Drop the width and the reserve
-    // silently stops clearing the cluster.
+    // silently stops clearing the cluster. `justify-content` rides with it
+    // because that same padding was what centered the glyph — without it
+    // the smiley renders 1px from the left border and 9px from the right.
     expect(
       extractRuleBody(css, ".thread-row__actions .thread-row__chip--add-reaction"),
-    ).toMatch(/width:\s*24px;[\s\S]*height:\s*24px;[\s\S]*min-width:\s*24px;[\s\S]*padding:\s*0;/);
+    ).toMatch(
+      /width:\s*24px;[\s\S]*height:\s*24px;[\s\S]*min-width:\s*24px;[\s\S]*justify-content:\s*center;[\s\S]*padding:\s*0;/,
+    );
 
     // The in-title unpin control is a real 24x24 target too (axe's
     // target-size rule gives no inline exception to flex-item buttons);
-    // its negative margins collapse the layout footprint back to the
-    // 18px line slot, so the heading's geometry doesn't move.
+    // its negative margins collapse the layout footprint back under the
+    // 18px line slot, so the heading's geometry doesn't move. The margins
+    // are pinned with the box because the RIGHT one is a term in the lane
+    // reserve's inequality below (`lane + 12 - 7 >= 54 + 4`) — widen that
+    // overhang to tuck the pin closer to the timestamp and the revealed
+    // cluster paints back over the unpin button with every assertion here
+    // still green. The header gap that carries the other non-cluster term
+    // is pinned on the same grounds.
     expect(extractRuleBody(css, ".thread-row__heading-pin")).toMatch(
-      /width:\s*24px;[\s\S]*height:\s*24px;/,
+      /width:\s*24px;[\s\S]*height:\s*24px;[\s\S]*margin:\s*-3px -7px -3px -4px;/,
+    );
+    expect(extractRuleBody(css, ".thread-row__header")).toMatch(
+      /gap:\s*12px;/,
     );
 
     // A 24px target is worthless while something paints over it — the
