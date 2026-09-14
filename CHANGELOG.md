@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.0.6 - 2026-09-13
+
+- Windows Download - Releases now carry a stable `PwrAgent.Setup.exe` installer beside the versioned one, so a download link keeps working from one release to the next instead of naming a version that has moved on. The versioned installer is unchanged, and automatic updates still use it.
+
 ## v1.0.5 - 2026-09-09
 
 - GPT-5.6 Sol Usage - Corrected Sol usage prices for activity from August 21 onward to the current lower Standard and Fast rates. Earlier activity retains the historical prices that applied at the time.
