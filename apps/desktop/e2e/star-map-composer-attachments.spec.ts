@@ -3,6 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test, type Locator, type Page } from "@playwright/test";
+import {
+  recordDomTrajectory,
+  type DomTrajectoryRecorder,
+} from "./fixtures/dom-trajectory";
 import { launchElectronApp } from "./fixtures/electron-app";
 import { startInProcessFederationGateway } from "./fixtures/federation-gateway";
 import { openStarMapWindow } from "./fixtures/star-map-window";
@@ -88,46 +92,68 @@ async function attachPng(
   }, options);
 }
 
-async function readCardIdentity(
-  chatCard: Locator,
-): Promise<{ mount: string | null; identity: string | null }> {
-  return {
-    mount: await chatCard.getAttribute("data-card-mount"),
-    identity: await chatCard.getAttribute("data-detail-identity"),
-  };
+/**
+ * Watch every attribute the card publishes about its composer gate.
+ *
+ * `StarMapChatCard` publishes `data-composer-block` whenever it withholds
+ * the composer, plus `data-card-mount` and `data-detail-identity` to say
+ * WHY it holds no detail — it remounted, or the identity it asks for
+ * changed. Those were previously read twice, once before the attachments
+ * and once after the keystroke was refused, which cannot see a value that
+ * changed and changed back; Windows reported `mount=1->1
+ * identity=[...]->[...]` while the block reason was `detail:none`, a state
+ * the card only reaches with no completed read for that identity. Exactly
+ * one of the two named causes must therefore have round-tripped, and two
+ * samples cannot say which.
+ *
+ * `editable` is the composer's own answer rather than the card's, because
+ * the two disagreeing is itself a finding.
+ */
+async function recordComposerTrajectory(
+  mapWindow: Page,
+): Promise<DomTrajectoryRecorder> {
+  return await recordDomTrajectory(mapWindow, {
+    attributes: [
+      "data-composer-block",
+      "data-card-mount",
+      "data-detail-identity",
+    ],
+    editableSelector: ".composer-tiptap-input__editor",
+    selector: ".star-map-chat-card",
+  });
 }
 
 /**
- * Type into the card's composer, naming the gate if it is closed.
+ * Type into the card's composer, reporting the whole gate history if it is
+ * closed.
  *
- * `StarMapChatCard` publishes `data-composer-block` whenever it withholds the
- * composer. Reading it at the instant the keystroke is refused turns "element
- * is not editable" into the specific term — an unresolved exact identity, a
- * failed read, a non-present thread, or a queue projection that is not ready.
- * `data-card-mount` and `data-detail-identity` separate the two ways the card
- * can end up holding no detail: it remounted, or the identity it asks for
- * changed under it.
+ * Reading `data-composer-block` at the instant the keystroke is refused
+ * turns "element is not editable" into the specific term — an unresolved
+ * exact identity, a failed read, a non-present thread, or a queue
+ * projection that is not ready. The trajectory then says whether that term
+ * held the whole time or the composer was withdrawn after this spec had
+ * already seen it live, and `RECORDER_LOST` separates both from a renderer
+ * that reloaded underneath the spec (which resets the module-scoped mount
+ * counter, and so forges `mount=1` for a card that is not the first one).
  */
 async function fillReportingComposerBlock(
   chatCard: Locator,
   messageInput: Locator,
   text: string,
-  before: { mount: string | null; identity: string | null },
+  trajectory: DomTrajectoryRecorder,
 ): Promise<void> {
   try {
     await messageInput.fill(text);
   } catch (error) {
-    const after = {
-      block: await chatCard.getAttribute("data-composer-block"),
-      mount: await chatCard.getAttribute("data-card-mount"),
-      identity: await chatCard.getAttribute("data-detail-identity"),
-    };
+    const block = await chatCard.getAttribute("data-composer-block");
     throw new Error(
-      `Composer refused the keystroke: block=${
-        after.block ?? "<absent, so it believed the composer was live>"
-      } mount=${before.mount}->${after.mount} identity=${
-        before.identity
-      }->${after.identity}`,
+      [
+        `Composer refused the keystroke: block=${
+          block ?? "<absent, so it believed the composer was live>"
+        }`,
+        "  composer gate trajectory (25ms sampler, identical samples collapsed):",
+        await trajectory.report(),
+      ].join("\n"),
       { cause: error },
     );
   }
@@ -174,6 +200,10 @@ test("sends pasted, dropped, and local-file attachments from a Star Map chat car
 
   try {
     const mapWindow = await openStarMapWindow(app);
+    // Armed BEFORE the card opens: the composer's first `detail:none` is the
+    // card's own opening state, and a report that cannot show that one has
+    // no baseline to call a later `detail:none` a regression against.
+    const trajectory = await recordComposerTrajectory(mapWindow);
     const chatCard = await openChatCard(mapWindow, LOCAL_THREAD_TITLE);
     const messageInput = chatCard.getByRole("textbox", {
       name: `Message ${LOCAL_THREAD_TITLE}`,
@@ -188,14 +218,11 @@ test("sends pasted, dropped, and local-file attachments from a Star Map chat car
     //
     // One wait is not enough on Windows: the composer is live here and dead by
     // the keystroke below. `navigationSelectionAuthorizesComposer` removed one
-    // cause (a revalidating read withdrawing an authorization it held) and this
-    // still fails, reporting a card that holds no detail at all — so the report
-    // below names which of the two remaining causes it is.
+    // cause (a revalidating read withdrawing an authorization it held) and
+    // this still fails, reporting a card that holds no detail at all — which
+    // the card only publishes while no read has completed for the identity it
+    // is asking about. The recorder above is what says how it got back there.
     await expect(messageInput).toBeEditable();
-    // Baseline for the report below: taken while the composer is live, so a
-    // remount or an identity change during the attachments is visible as a
-    // difference rather than being read back after the fact.
-    const cardBaseline = await readCardIdentity(chatCard);
 
     await attachPng(messageInput, {
       color: "#2255aa",
@@ -232,8 +259,9 @@ test("sends pasted, dropped, and local-file attachments from a Star Map chat car
       chatCard,
       messageInput,
       "Inspect these Star Map attachments",
-      cardBaseline,
+      trajectory,
     );
+    await trajectory.stop();
     await chatCard.getByRole("button", { name: "Send" }).click();
 
     // `.toBeDefined()`, not `.not.toBeNull()`: the replay driver returns
