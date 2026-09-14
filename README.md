@@ -4,7 +4,7 @@
 
 <h1>PwrAgent</h1>
 
-<strong>Your coding agent runs on your laptop. You drive it from your phone.</strong>
+<strong>Run coding agents by the dozen.</strong>
 
 <p>
   <a href="https://github.com/pwrdrvr/PwrAgent/releases/latest/download/PwrAgent.dmg"><img src="docs/assets/buttons/download-mac-universal.png" alt="Download for Mac — Universal, Intel and Apple Silicon" width="250"></a>
@@ -33,7 +33,11 @@ and Intel. A separate, smaller **Apple Silicon** build is built but has not ridd
 yet, so that chip points at the releases page until one carries it. Debian and Ubuntu get
 `.deb` packages for x64 and arm64.
 
-An open-source desktop coding agent. Pair it once with Telegram, Discord, Slack, Mattermost, Feishu / Lark, or LINE — then start, resume, steer, and approve from wherever you happen to be reading.
+An open-source desktop for running coding agents on machines you own. Start threads across
+every repo you have, each in its own git worktree so they never collide, on **Codex, Gemini,
+Grok, Kimi Code, or Qwen Code** — whichever CLI you already pay for. Let one thread hand work
+off to another. Watch the diffs, track the PRs, and steer any of it from Telegram, Discord,
+Slack, Mattermost, Feishu / Lark, or LINE when you're nowhere near the keyboard.
 
 ## Why you might want it
 
