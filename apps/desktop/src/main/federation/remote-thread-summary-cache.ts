@@ -524,8 +524,10 @@ export class RemoteThreadSummaryCache {
    * of peer responsiveness (a connected-but-slow owner used to stall every
    * snapshot merge by up to the per-peer timeout). Serves the cached
    * snapshot — stale or fresh — immediately, kicks a background refetch
-   * when the TTL has lapsed, and reports fresh data via
-   * `onPinnedSummariesRefreshed` so the owner can re-merge.
+   * on owner invalidation or new pin demand, and reports fresh data via
+   * `onPinnedSummariesRefreshed`. Protocol-2 mounted pins keep navigation
+   * subscriptions for their lifetime; local rebuilds must not poll healthy
+   * owners after a TTL. Legacy snapshots still use TTL revalidation.
    *
    * Archive detection rides the same background pass: proving a pin
    * archived needs a fresh snapshot AND an owner lookup, so it cannot
@@ -550,6 +552,12 @@ export class RemoteThreadSummaryCache {
       const group = pinsByInstanceId.get(pin.ref.target.instanceId) ?? [];
       group.push(pin);
       pinsByInstanceId.set(pin.ref.target.instanceId, group);
+    }
+    // A new mounted lifetime cannot trust rows observed before its subscription.
+    // Fence an old in-flight fetch too: it may have missed events while unmounted.
+    for (const owner of pinsByInstanceId.keys()) {
+      if (!this.pinnedByInstanceId.has(owner)
+        && (this.cache.get(owner)?.descendants || this.inFlight.get(owner)?.descendants)) this.invalidate(owner);
     }
     const previousOwners = [...this.pinnedByInstanceId.keys()].sort().join("\n");
     // Retain identities only; persisted payloads must not become another long-lived detail cache.
@@ -585,7 +593,8 @@ export class RemoteThreadSummaryCache {
           && selectionIncludes(cached.selection, requestedSelection);
         if (
           !cacheSatisfies
-          || (cached && now - cached.fetchedAt >= ttlMs)
+          || (cached && (cached.fetchedAt === Number.NEGATIVE_INFINITY
+            || (!cached.descendants && now - cached.fetchedAt >= ttlMs)))
         ) {
           this.refreshPeerSummariesInBackground(peer.target, group);
         }
@@ -949,7 +958,8 @@ export class RemoteThreadSummaryCache {
       cached
       && (!descendants || cached.selection.kind === "all" || cached.descendants)
       && selectionIncludes(cached.selection, selection)
-      && now - cached.fetchedAt < ttlMs
+      && (cached.fetchedAt !== Number.NEGATIVE_INFINITY && descendants && cached.descendants
+        || now - cached.fetchedAt < ttlMs)
     ) {
       return cached.threads;
     }

@@ -2621,6 +2621,15 @@ describe("DesktopFederationRuntime", () => {
   });
 
   it.each([
+    "thread/archived",
+    "thread/unarchived",
+    "thread/started",
+    "navigation/thread/seen",
+    "navigation/directory/seen",
+    "navigation/threadDirectories/updated",
+    "navigation/providerThreads/refreshed",
+    "pullRequest/status/updated",
+    "thread/pin/added",
     "thread/status/changed",
     "thread/parent/cleared",
     "thread/parent/set",

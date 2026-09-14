@@ -1,8 +1,9 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { expect, it, vi } from "vitest";
-import type { NavigationIdentity, NavigationQueryPage, NavigationRow } from "@pwragent/shared";
+import type { AgentEvent, NavigationIdentity, NavigationQueryPage, NavigationRow } from "@pwragent/shared";
 import type { DesktopApi } from "../desktop-api";
 import { useBoundedNavigationWindow } from "../useBoundedNavigationWindow";
+import { useThreadNavigation } from "../useThreadNavigation";
 
 // Measures uncompressed query request/response JSON at the desktop API boundary.
 // Excludes transport envelopes, TLS, selected configuration, and history pages.
@@ -84,4 +85,91 @@ it.each([1, 10, 101])("budgets federation navigation traffic for %s visible moun
   // Exact counts catch repeated requests even if small payloads fit a byte cap.
   // Snapshots make every change to the traffic budget reviewable.
   expect({ cold, selection, refresh }).toMatchSnapshot();
+});
+
+function useSidebarTraffic(api: DesktopApi) {
+  return useThreadNavigation(api).pagedNavigation;
+}
+function useWindowTraffic(api: DesktopApi) {
+  return useBoundedNavigationWindow({ desktopApi: api, browseMode: "inbox",
+    attentionView: { id: "events", promoteOnTurnEnd: true }, expandedByKey: {}, unpinnedExpandedByKey: {},
+    enabled: true, visible: true });
+}
+
+it.each([["main sidebar", useSidebarTraffic], ["bounded window", useWindowTraffic]] as const)("isolates event-driven owner reads in %s", async (_name, useWindow) => {
+  const listeners = new Set<(event: AgentEvent) => void>();
+  const rows: NavigationRow[] = [undefined, "peer-a", "peer-b"].map((ownerInstanceId, index) => ({
+    ref: { backend: "codex", threadId: `thread-${index}`, ownerInstanceId },
+    id: `thread-${index}`, source: "codex", title: `Thread ${index}`, titleSource: "explicit", rowRevision: "r",
+    linkedDirectories: [], inbox: { inInbox: true }, ordinaryChildCount: 0,
+    nativeSubAgentGroupPresent: false, queueCount: 0, queueState: "unknown",
+  }));
+  const read = vi.fn<NonNullable<DesktopApi["getNavigationQueryPage"]>>(async (request) => {
+    const query = request.query;
+    const selected = query.kind === "directory-index" ? [] : query.kind === "exact"
+      ? rows.filter((row) => query.identities.some((ref) => ref.threadId === row.id)) : rows;
+    return { protocol: 2, queryKey: JSON.stringify(query), generation: "g", ownerEpoch: "o", countsRevision: "c",
+      counts: { total: 3, active: 0, unread: 0, review: 0 }, coverage: { state: "complete" }, complete: true,
+      entries: selected.map((row) => ({ row: { ...row }, placement: { kind: "root" }, orderKey: row.id })),
+    };
+  });
+  const api: DesktopApi = { getNavigationQueryPage: read,
+    getNavigationSelectedDetail: async (request) => ({ protocol: 2, ref: request.ref, revision: "detail",
+      readiness: "ready", identity: "present", thread: rows.find((row) => row.id === request.ref.threadId)! }),
+    onAgentEvent: (callback) => { listeners.add(callback); return () => { listeners.delete(callback); }; },
+  };
+  const { result, unmount } = renderHook(() => useWindow(api));
+  try {
+    await waitFor(() => {
+      expect(result.current.resources.has('visible-owner:"peer-a":0')).toBe(true);
+      expect(result.current.resources.has('visible-owner:"peer-b":0')).toBe(true);
+      expect([...result.current.resources.values()].every((resource) => resource.state.page && !resource.loading)).toBe(true);
+    });
+    await act(async () => {});
+    vi.useFakeTimers();
+    const emit = async (ownerInstanceId?: string) => {
+      await act(async () => {
+        for (const listener of listeners) listener({ backend: "codex",
+          federationTarget: ownerInstanceId ? { scope: "remote", instanceId: ownerInstanceId } : undefined,
+          notification: ownerInstanceId
+            ? { method: "navigation/invalidated", params: { sourceMethod: "thread/status/changed", threadId: "thread-1" } }
+            : { method: "thread/status/changed", params: { threadId: "thread-0", status: { type: "active" } } },
+        });
+        await vi.advanceTimersByTimeAsync(500);
+      });
+    };
+    const remoteCalls = () => read.mock.calls.filter(([request]) => request.federationTarget?.scope === "remote");
+    read.mockClear();
+    rows[0]!.title = "Local changed";
+    await emit();
+    expect(read).toHaveBeenCalled();
+    expect(remoteCalls()).toEqual([]);
+    expect(result.current.resources.get("lens")?.state.page?.entries[0]?.row.title).toBe("Local changed");
+
+    read.mockClear();
+    rows[1]!.title = "Peer A changed";
+    await emit("peer-a");
+    expect(remoteCalls().map(([request]) => request.federationTarget)).toEqual([{ scope: "remote", instanceId: "peer-a" }]);
+    expect(result.current.resources.get('visible-owner:"peer-a":0')?.state.page?.entries[0]?.row.title).toBe("Peer A changed");
+
+    // Coalescing must retain both origins instead of letting the last event win.
+    read.mockClear();
+    await act(async () => {
+      for (const ownerInstanceId of ["peer-a", "peer-b"]) for (const listener of listeners) listener({ backend: "codex",
+        federationTarget: { scope: "remote", instanceId: ownerInstanceId },
+        notification: { method: "navigation/invalidated", params: { sourceMethod: "thread/status/changed" } },
+      });
+      await vi.advanceTimersByTimeAsync(500);
+    });
+    expect(remoteCalls().map(([request]) => request.federationTarget?.scope === "remote" && request.federationTarget.instanceId).sort())
+      .toEqual(["peer-a", "peer-b"]);
+
+    // Explicit refresh still revalidates all displayed owners.
+    read.mockClear();
+    await act(() => result.current.refresh());
+    expect(remoteCalls()).toHaveLength(2);
+  } finally {
+    unmount();
+    vi.useRealTimers();
+  }
 });
