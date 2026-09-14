@@ -1,5 +1,5 @@
 import type { AppServerBackendKind, NavigationSnapshot } from "@pwragent/shared";
-import { buildThreadIdentityKey, federatedThreadIdentityKey, normalizeNavigationSnapshotThreadKeys } from "@pwragent/shared";
+import { buildThreadIdentityKey, federatedThreadIdentityKey, parseThreadIdentityKey } from "@pwragent/shared";
 import type { FederationBackendOperations } from "./federation-backend-bridge";
 import { FEDERATION_COLLECTION_PAGE_BYTES, FEDERATION_COLLECTION_PAGE_ROWS } from "./federation-collection-reads";
 import { hasFederationErrorCode, type FederationRpcRequestOptions } from "./federation-rpc";
@@ -9,50 +9,65 @@ export async function readFederationPinnedSnapshot(
   threadKeys: string[],
   rpcOptions: FederationRpcRequestOptions = { deadlineAt: Date.now() + 10_000 },
 ): Promise<NavigationSnapshot> {
-  if (backend.getNavigationDescendantPage) {
+  if (backend.getNavigationQueryPage) {
     try {
-      let result: NavigationSnapshot | undefined;
-      let revision: string | undefined;
+      const selected = [...new Set(threadKeys)].map((key) => {
+        const identity = parseThreadIdentityKey(key);
+        if (!identity || !identity.threadId) throw new Error("Invalid pinned thread identity.");
+        return identity;
+      });
+      if (!selected.length) throw new Error("Pinned navigation requires at least one root.");
+      const threads: NavigationSnapshot["threads"] = [];
       let bytes = 0;
       let pages = 0;
-      const selected = [...new Set(threadKeys)];
       for (let offset = 0; offset < selected.length; offset += FEDERATION_COLLECTION_PAGE_ROWS) {
-        let afterKey: string | undefined;
+        let cursor: string | undefined;
+        let generation: string | undefined;
+        let ownerEpoch: string | undefined;
+        let queryKey: string | undefined;
+        const cursors = new Set<string>();
         do {
           if (++pages > 256 || (rpcOptions.deadlineAt !== undefined && Date.now() >= rpcOptions.deadlineAt)) {
             throw new Error("Pinned navigation pagination exceeded its page/deadline budget.");
           }
-          const page = await backend.getNavigationDescendantPage({
-            threadKeys: selected.slice(offset, offset + FEDERATION_COLLECTION_PAGE_ROWS),
-            afterKey,
-            revision,
+          const page = await backend.getNavigationQueryPage({
+            protocol: 2, consumer: "main-sidebar", inventory: "owner",
+            query: { kind: "group-members", roots: selected.slice(offset, offset + FEDERATION_COLLECTION_PAGE_ROWS) },
+            pageSize: FEDERATION_COLLECTION_PAGE_ROWS, cursor,
           }, rpcOptions);
           const pageBytes = Buffer.byteLength(JSON.stringify(page));
           bytes += pageBytes;
-          if (pageBytes > FEDERATION_COLLECTION_PAGE_BYTES || page.snapshot.threads.length > FEDERATION_COLLECTION_PAGE_ROWS
-            || bytes > 16 * 1024 * 1024 || (revision !== undefined && revision !== page.revision)
-            || (page.nextAfterKey !== undefined && afterKey !== undefined && page.nextAfterKey <= afterKey)) {
-            throw new Error("Pinned navigation returned an oversized or inconsistent collection.");
+          if (page.protocol !== 2 || page.unchanged || page.rangeUnchanged
+            || page.coverage.state !== "complete"
+            || pageBytes > FEDERATION_COLLECTION_PAGE_BYTES || page.entries.length > FEDERATION_COLLECTION_PAGE_ROWS
+            || bytes > 16 * 1024 * 1024
+            || (generation !== undefined && (generation !== page.generation || ownerEpoch !== page.ownerEpoch || queryKey !== page.queryKey))
+            || page.complete === Boolean(page.nextCursor)
+            || (page.nextCursor !== undefined && cursors.has(page.nextCursor))) {
+            throw new Error("Pinned navigation returned an oversized, incomplete or inconsistent collection.");
           }
-          revision = page.revision;
-          const snapshot = normalizeNavigationSnapshotThreadKeys(page.snapshot);
-          result = result ? {
-            ...result,
-            threads: [...result.threads, ...snapshot.threads],
-            inboxThreadKeys: [...result.inboxThreadKeys, ...snapshot.inboxThreadKeys],
-          } : snapshot;
-          afterKey = page.nextAfterKey;
-        } while (afterKey !== undefined);
+          generation = page.generation;
+          ownerEpoch = page.ownerEpoch;
+          queryKey = page.queryKey;
+          threads.push(...page.entries.map((entry) => entry.row));
+          cursor = page.nextCursor;
+          if (cursor !== undefined) cursors.add(cursor);
+        } while (cursor !== undefined);
       }
-      if (result) return {
-        ...result,
-        threads: [...new Map(result.threads.map((thread) => [
+      const unique = [...new Map(threads.map((thread) => [
+        thread.federation?.ref ? federatedThreadIdentityKey(thread.federation.ref)
+          : buildThreadIdentityKey(thread.source, thread.id), thread,
+      ])).values()];
+      return {
+        backend: "all", fetchedAt: Date.now(), unchanged: false,
+        threads: unique, directories: [],
+        // This adapter feeds the pin-summary cache only; no launchpad is read
+        // or authorized by a collection query.
+        launchpadDefaults: { backend: "codex", executionMode: "default" },
+        inboxThreadKeys: unique.filter((thread) => thread.inbox.inInbox).map((thread) =>
           thread.federation?.ref ? federatedThreadIdentityKey(thread.federation.ref)
-            : buildThreadIdentityKey(thread.source, thread.id), thread,
-        ])).values()],
-        inboxThreadKeys: [...new Set(result.inboxThreadKeys)],
+            : buildThreadIdentityKey(thread.source, thread.id)),
       };
-      throw new Error("Pinned navigation requires at least one root.");
     } catch (error) {
       if (!hasFederationErrorCode(error, "method_not_found")) throw error;
     }

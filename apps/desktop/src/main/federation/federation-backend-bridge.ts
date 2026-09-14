@@ -4,10 +4,6 @@ import type { MarkNavigationDirectorySeenRequest, MarkNavigationDirectorySeenRes
 import type { RemoveNavigationDirectoryRequest, RemoveNavigationDirectoryResponse } from "@pwragent/shared";
 import { conditionalThreadRead } from "../app-server/conditional-thread-read";
 import {
-  type FederationNavigationSelectionPage,
-  type FederationNavigationSelectionRequest,
-} from "./federation-navigation-selection";
-import {
   validateArchivedThreadLookup,
   type FederationArchivedThreadLookupRequest,
   type FederationProjectPage,
@@ -640,10 +636,6 @@ export type FederationBackendOperations = {
     request: NavigationQueueProjectionRequest,
     rpcOptions?: FederationRpcRequestOptions,
   ): Promise<NavigationQueueProjection>;
-  getNavigationDescendantPage?(
-    request: FederationNavigationSelectionRequest,
-    rpcOptions?: FederationRpcRequestOptions,
-  ): Promise<FederationNavigationSelectionPage>;
   getProjectPage?(
     request: FederationProjectPageRequest,
     rpcOptions?: FederationRpcRequestOptions,
@@ -1792,17 +1784,6 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
   ): Promise<FederationProjectPage> {
     return await this.rpc.request({
       method: FEDERATION_BACKEND_METHODS.getProjectPage,
-      params: request,
-      ...rpcOptions,
-    });
-  }
-
-  async getNavigationDescendantPage(
-    request: FederationNavigationSelectionRequest,
-    rpcOptions?: FederationRpcRequestOptions,
-  ): Promise<FederationNavigationSelectionPage> {
-    return await this.rpc.request({
-      method: FEDERATION_BACKEND_METHODS.getNavigationDescendantPage,
       params: request,
       ...rpcOptions,
     });

@@ -1,5 +1,5 @@
 import { projectThreadDisplayEvent } from "../app-server/thread-display-events";
-import { federationTrafficCaptureUntil, setFederationTrafficCapture } from "./federation-traffic-capture";
+import { federationTrafficCaptureUntil, setFederationTrafficCapture, saveFederationTrafficHistory } from "./federation-traffic-capture";
 import type { NavigationAttentionViewReleaseRequest } from "@pwragent/shared";
 import type { MarkNavigationDirectorySeenRequest, MarkNavigationDirectorySeenResponse } from "@pwragent/shared";
 import type { RemoveNavigationDirectoryRequest, RemoveNavigationDirectoryResponse } from "@pwragent/shared";
@@ -1243,6 +1243,11 @@ export class DesktopFederationRuntime {
 
   async setDetailedTrafficCapture(enabled: boolean): Promise<ReadFederationActivityResponse> {
     setFederationTrafficCapture(enabled);
+    if (enabled) {
+      const { resolveActiveProfilePath } = await import("../profile");
+      const file = await saveFederationTrafficHistory(resolveActiveProfilePath("state/diagnostics"));
+      log.info("federation preceding traffic captured", { file });
+    }
     return this.activity();
   }
 
