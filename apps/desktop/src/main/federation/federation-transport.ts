@@ -56,22 +56,35 @@ type EnvelopeDiagnosticsContext = {
   instanceLabel?: (id: string) => string | undefined;
 };
 
-function envelopeLogFields(envelope: FederationProtocolEnvelope, context?: EnvelopeDiagnosticsContext) {
+/** Always-on history must not invoke the runtime's database-backed label resolver. */
+function envelopeMetadataFields(envelope: FederationProtocolEnvelope, context?: EnvelopeDiagnosticsContext) {
   return {
-    ...(context?.diagnostics ?? new FederationEnvelopeDiagnostics()).describe(envelope, context?.instanceLabel),
+    ...(context?.diagnostics ?? new FederationEnvelopeDiagnostics()).describe(envelope),
     peerId: context?.peerId,
+  };
+}
+
+function envelopeLabelFields(envelope: FederationProtocolEnvelope, context?: EnvelopeDiagnosticsContext) {
+  return {
+    sourceInstanceLabel: context?.instanceLabel?.(envelope.sourceInstanceId),
+    targetInstanceLabel: envelope.targetInstanceId ? context?.instanceLabel?.(envelope.targetInstanceId) : undefined,
     peerLabel: context?.instanceLabel?.(context.peerId),
   };
 }
 
+function envelopeLogFields(envelope: FederationProtocolEnvelope, context?: EnvelopeDiagnosticsContext) {
+  return { ...envelopeMetadataFields(envelope, context), ...envelopeLabelFields(envelope, context) };
+}
+
 function observeReceivedEnvelope(envelope: FederationProtocolEnvelope, byteCount: number, context: EnvelopeDiagnosticsContext) {
   context.diagnostics.observe(envelope);
-  const fields = { byteCount, dataByteCount: envelopeDataBytes.get(envelope), ...envelopeLogFields(envelope, context) };
+  const fields = { byteCount, dataByteCount: envelopeDataBytes.get(envelope), ...envelopeMetadataFields(envelope, context) };
   recordFederationTraffic("received", fields);
   const captureUntil = federationTrafficCaptureUntil();
   if (captureUntil || byteCount >= FEDERATION_LARGE_FRAME_LOG_BYTES) {
     log.info(captureUntil ? "federation captured frame received" : "large federation frame received", {
       ...fields,
+      ...envelopeLabelFields(envelope, context),
       ...describeLargeThreadReadResult(envelope),
       ...describeLargeBackendEvent(envelope),
     });
@@ -1488,12 +1501,13 @@ function sendFrame(
   }
   const envelope = message.kind === "envelope" ? message.envelope : undefined;
   const fields = { byteCount: wireByteLength, dataByteCount: envelope ? envelopeDataBytes.get(envelope) : undefined,
-    messageKind: message.kind, ...(envelope ? envelopeLogFields(envelope, context) : {}) };
+    messageKind: message.kind, ...(envelope ? envelopeMetadataFields(envelope, context) : {}) };
   recordFederationTraffic("sent", fields);
   const captureUntil = federationTrafficCaptureUntil();
   if (captureUntil || wireByteLength >= FEDERATION_LARGE_FRAME_LOG_BYTES) {
     log.info(captureUntil ? "federation captured frame queued for send" : "large federation frame queued for send", {
       ...fields,
+      ...(envelope ? envelopeLabelFields(envelope, context) : {}),
       ...(envelope ? describeLargeThreadReadResult(envelope) : {}),
       ...(envelope ? describeLargeBackendEvent(envelope) : {}),
     });
