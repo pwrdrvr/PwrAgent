@@ -1,3 +1,4 @@
+import { memo } from "react";
 import {
   useEffect,
   useRef,
@@ -37,7 +38,9 @@ type PrChipProps = {
   onDetach?: (pr: PrSummary) => void;
 };
 
-export function PrChip(props: PrChipProps) {
+export const PrChip = memo(function PrChip(
+  props: PrChipProps,
+) {
   const { pr } = props;
   const contextMenuInvokerRef = useRef<HTMLSpanElement>(null);
   const [contextMenuPosition, setContextMenuPosition] = useState<{
@@ -215,4 +218,4 @@ export function PrChip(props: PrChipProps) {
       ) : null}
     </>
   );
-}
+});

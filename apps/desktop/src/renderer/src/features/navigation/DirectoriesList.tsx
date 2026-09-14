@@ -38,6 +38,7 @@ import {
   NewThreadIcon,
   UnlinkedDotIcon,
 } from "../../icons";
+import { useEventCallback } from "../../lib/useEventCallback";
 import {
   didDragLeaveCurrentTarget,
   getDropIndicatorPosition,
@@ -66,7 +67,7 @@ import {
   isSubthreadSectionCollapsed,
   NativeSubAgentsDisclosure,
 } from "./NativeSubAgentsDisclosure";
-import { ThreadRow } from "./ThreadRow";
+import { ThreadRow, type ThreadRowRef } from "./ThreadRow";
 import {
   createThreadRowPointerDragPreview,
   type ThreadRowPointerDragPreview,
@@ -254,6 +255,19 @@ function hasPendingLaunchpadState(directory: NavigationDirectorySummary): boolea
     (launchpad.imageAttachments?.length ?? 0) > 0
   );
 }
+
+/**
+ * What a thread row's handlers need from the directory section it renders
+ * under. `renderDirectoryRow` fills one of these per directory during render;
+ * the row reports its `ThreadRowRef` back and the handler looks the entry up,
+ * which is what lets this list hand every row the SAME handler instead of a
+ * closure built per row. A closure per row is a new function on every render,
+ * and the row's `memo` cannot bail out past one.
+ */
+type DirectoryRowContext = {
+  directory: NavigationDirectorySummary;
+  selectionOrder: string[];
+};
 
 type ThreadPinDragSession = {
   activated: boolean;
@@ -1128,6 +1142,61 @@ export function DirectoriesList(props: DirectoriesListProps) {
     visibleDirectories,
   ]);
 
+  /**
+   * Filled by `renderDirectoryRow` below, during this render, and read by the
+   * four stable row handlers under it — which run from events, so they always
+   * see the map the last committed render finished filling.
+   */
+  const rowContextByDirectoryKey = new Map<string, DirectoryRowContext>();
+  const rowContext = (row: ThreadRowRef): DirectoryRowContext | undefined =>
+    row.directoryKey
+      ? rowContextByDirectoryKey.get(row.directoryKey)
+      : undefined;
+  const selectThread = useEventCallback(
+    (
+      thread: NavigationThreadSummary,
+      event: MouseEvent<HTMLElement>,
+      row: ThreadRowRef,
+    ) => {
+      // An unknown directory still selects; only shift-ranging needs the
+      // order, and an empty one degrades to a plain single selection.
+      props.onSelectThread(thread, event, rowContext(row)?.selectionOrder ?? []);
+    },
+  );
+  const pointerDownThread = useEventCallback(
+    (event: ReactPointerEvent<HTMLDivElement>, row: ThreadRowRef) => {
+      const context = rowContext(row);
+      if (!context) {
+        return;
+      }
+      beginThreadPinPointerDrag(
+        event,
+        context.directory,
+        row.threadKey,
+        row.pinned,
+      );
+    },
+  );
+  const movePinnedThread = useEventCallback(
+    (
+      thread: NavigationThreadSummary,
+      direction: "up" | "down",
+      row: ThreadRowRef,
+    ) => {
+      const context = rowContext(row);
+      if (!context) {
+        return;
+      }
+      movePinnedThreadByKeyboard(context.directory, thread, direction);
+    },
+  );
+  const toggleSubthreads = useEventCallback((thread: NavigationThreadSummary) => {
+    void props.onSetSubthreadsCollapsed?.(
+      thread,
+      !isSubthreadSectionCollapsed(thread),
+    );
+  });
+
   if (visibleDirectories.length === 0) {
     return <p className="sidebar-empty">No directory-linked threads.</p>;
   }
@@ -1254,6 +1323,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                 draftThreadKeys={props.draftThreadKeys}
                 composerSourceThreadKey={props.composerSourceThreadKey}
                 compact
+                directoryKey={directory.key}
                 draggable={reorderable && directChildKeySet.has(childKey)}
                 includeLinkedDirectories
                 linkedDirectoryMode={getDirectoryRowLinkedDirectoryMode(child)}
@@ -1338,9 +1408,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                 onRevealSelectedThreadComplete={
                   props.onRevealSelectedThreadComplete
                 }
-                onSelectThread={(thread, event) =>
-                  props.onSelectThread(thread, event, selectionOrder)
-                }
+                onSelectThread={selectThread}
                 onSetReaction={props.onSetReaction}
                 onSetThreadPin={props.onSetThreadPin}
                 onUnbindMessagingBinding={props.onUnbindMessagingBinding}
@@ -1377,6 +1445,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
       directoryUnpinnedThreadCount,
       selectionOrder,
     } = expandedThreadModel;
+    rowContextByDirectoryKey.set(directory.key, { directory, selectionOrder });
     const renderPinnedAppendTarget = Boolean(
       props.onReorderThreadPins
       && directoryUnpinnedThreadCount > 0
@@ -1402,6 +1471,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
             draftThreadKeys={props.draftThreadKeys}
             composerSourceThreadKey={props.composerSourceThreadKey}
             compact
+            directoryKey={directory.key}
             pointerDraggable={Boolean(props.onReorderThreadPins)}
             includeLinkedDirectories
             linkedDirectoryMode={getDirectoryRowLinkedDirectoryMode(thread)}
@@ -1418,25 +1488,17 @@ export function DirectoriesList(props: DirectoriesListProps) {
               subthreadCount > 0
                 && threadSupportsFederationCapability(thread, "thread_grouping")
                 && props.onSetSubthreadsCollapsed
-                ? () =>
-                    void props.onSetSubthreadsCollapsed!(
-                      thread,
-                      !subthreadsCollapsed,
-                    )
+                ? toggleSubthreads
                 : undefined
             }
-            onPointerDownThread={(event) => {
-              beginThreadPinPointerDrag(event, directory, threadKey, false);
-            }}
+            onPointerDownThread={pointerDownThread}
             onOpenContextMenu={props.onOpenThreadContextMenu}
             onOpenPullRequestContextMenu={props.onOpenPullRequestContextMenu}
             onDetachPullRequest={props.onDetachPullRequest}
             onPrefetchPullRequests={props.onPrefetchPullRequests}
             onPrefetchGitWorkingState={props.onPrefetchGitWorkingState}
             onRevealSelectedThreadComplete={props.onRevealSelectedThreadComplete}
-            onSelectThread={(target, event) =>
-              props.onSelectThread(target, event, selectionOrder)
-            }
+            onSelectThread={selectThread}
             onSetReaction={props.onSetReaction}
             onSetThreadPin={props.onSetThreadPin}
             onUnbindMessagingBinding={props.onUnbindMessagingBinding}
@@ -1839,6 +1901,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                           draftThreadKeys={props.draftThreadKeys}
                           composerSourceThreadKey={props.composerSourceThreadKey}
                           compact
+                          directoryKey={directory.key}
                           pointerDraggable={Boolean(props.onReorderThreadPins)}
                           includeLinkedDirectories
                           linkedDirectoryMode={getDirectoryRowLinkedDirectoryMode(thread)}
@@ -1859,28 +1922,11 @@ export function DirectoriesList(props: DirectoriesListProps) {
                                     "thread_grouping",
                                   )
                                   && props.onSetSubthreadsCollapsed
-                                  ? () =>
-                                      void props.onSetSubthreadsCollapsed!(
-                                        thread,
-                                        !subthreadsCollapsed,
-                                      )
+                                  ? toggleSubthreads
                                   : undefined
                               }
-                          onPointerDownThread={(event) => {
-                            beginThreadPinPointerDrag(
-                              event,
-                              directory,
-                              threadKey,
-                              true,
-                            );
-                          }}
-                          onMovePinnedThread={(pinnedThread, direction) => {
-                            movePinnedThreadByKeyboard(
-                              directory,
-                              pinnedThread,
-                              direction,
-                            );
-                          }}
+                          onPointerDownThread={pointerDownThread}
+                          onMovePinnedThread={movePinnedThread}
                           onOpenContextMenu={props.onOpenThreadContextMenu}
                           onOpenPullRequestContextMenu={props.onOpenPullRequestContextMenu}
                           onDetachPullRequest={props.onDetachPullRequest}
@@ -1889,9 +1935,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                           onRevealSelectedThreadComplete={
                             props.onRevealSelectedThreadComplete
                           }
-                          onSelectThread={(target, event) =>
-                            props.onSelectThread(target, event, selectionOrder)
-                          }
+                          onSelectThread={selectThread}
                           onSetReaction={props.onSetReaction}
                           onSetThreadPin={props.onSetThreadPin}
 	                          onUnbindMessagingBinding={props.onUnbindMessagingBinding}

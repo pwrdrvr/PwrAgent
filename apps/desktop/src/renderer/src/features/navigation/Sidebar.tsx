@@ -1,6 +1,7 @@
-import { readNavigationPresentationOrder, retainNavigationPresentationOrder, type NavigationPresentationOrder } from "./navigation-presentation-order";
+import { readNavigationPresentationOrder } from "./navigation-presentation-order";
 import type { useBoundedNavigationWindow } from "../../lib/useBoundedNavigationWindow";
 import { navigationThreadSelectionKey } from "../../lib/navigation-query-state";
+import { useEventCallback } from "../../lib/useEventCallback";
 import { useLensScrollRestoration } from "../../lib/useLensScrollRestoration";
 import type { NavigationDirectoryView as NavigationDirectorySummary } from "../../lib/navigation-loaded-rows";
 import type { PendingLaunchpadCreation } from "../../lib/useThreadNavigation";
@@ -77,6 +78,7 @@ import {
 } from "../../lib/backend-status-format";
 import { DirectoriesList } from "./DirectoriesList";
 import { RecentsList } from "./RecentsList";
+import { createHoverStableSidebarHydrator } from "./hover-stable-sidebar-snapshot";
 import { useHoverStableSnapshot } from "./useHoverStableSnapshot";
 import {
   formatReviewThreadCount,
@@ -94,105 +96,61 @@ type ThreadContextMenuPosition = {
   anchorTop?: number;
 };
 
-type HoverStableSidebarSnapshot = {
-  order: NavigationPresentationOrder;
-  visibleKeys: string[];
-  directories: NavigationDirectorySummary[];
-  threads: NavigationThreadSummary[];
-};
-
 /**
- * Refresh row content without accepting structural fields that can move a row
- * while the pointer is resting on it. Live state such as federation health,
- * turn status, PRs, and unread markers still reaches the stationary card.
+ * A callback forwarded to a thread row, with a permanently stable identity.
+ *
+ * Every row callback this component builds itself is already stable; these
+ * are the ones it only passes through. A memoized row must not depend on an
+ * ancestor several levels up remembering to memoize an arrow — that is the
+ * same class of bug the rows' `memo` exists to stop.
+ *
+ * Absence is preserved rather than papered over: the lists read presence to
+ * decide whether to render the affordance at all, and a wrapper whose backing
+ * prop has gone away must no-op rather than call `undefined`.
  */
-function hydrateHoverStableSidebarSnapshot(
-  frozen: HoverStableSidebarSnapshot,
-  latest: HoverStableSidebarSnapshot,
-  options?: {
-    refreshThreadPinRanks?: boolean;
-    removeMissingThreads?: boolean;
-  },
-): HoverStableSidebarSnapshot {
-  const latestDirectoriesByKey = new Map(
-    latest.directories.map((directory) => [directory.key, directory]),
+function useStableRowCallback<Args extends unknown[], Result>(
+  operation: ((...args: Args) => Result) | undefined,
+): ((...args: Args) => Result) | undefined {
+  const stable = useEventCallback(
+    (...args: Args): Result => operation?.(...args) as Result,
   );
-  const latestThreadsByKey = new Map(
-    latest.threads.map((thread) => [
-      threadSummaryIdentityKey(thread),
-      thread,
-    ]),
-  );
-  const frozenDirectoryKeys = new Set(
-    frozen.directories.map((directory) => directory.key),
-  );
-  const frozenThreadKeys = new Set(
-    frozen.threads.map((thread) =>
-      threadSummaryIdentityKey(thread),
-    ),
-  );
-
-  return {
-    order: retainNavigationPresentationOrder(frozen.order, latest.order),
-    visibleKeys: [...frozen.visibleKeys.filter((key) => !options?.removeMissingThreads || latest.visibleKeys.includes(key)),
-      ...latest.visibleKeys.filter((key) => !frozen.visibleKeys.includes(key))],
-    directories: [
-      ...frozen.directories.map((directory) => {
-        const latestDirectory = latestDirectoriesByKey.get(directory.key);
-        if (!latestDirectory) return directory;
-        return {
-          ...latestDirectory,
-          pinnedRank: directory.pinnedRank,
-
-        };
-      }),
-      ...latest.directories
-        .filter((directory) => !frozenDirectoryKeys.has(directory.key))
-        .map((directory) => ({ ...directory, pinnedRank: undefined })),
-    ],
-    threads: [
-      ...frozen.threads.flatMap((thread) => {
-        const latestThread = latestThreadsByKey.get(
-          threadSummaryIdentityKey(thread),
-        );
-        if (!latestThread) {
-          return options?.removeMissingThreads ? [] : [thread];
-        }
-        return [
-          {
-            ...latestThread,
-            createdAt: thread.createdAt,
-            parentThreadBackend: thread.parentThreadBackend,
-            parentThreadId: thread.parentThreadId,
-            parentThreadInstanceId: thread.parentThreadInstanceId,
-            pinnedRank: options?.refreshThreadPinRanks
-              ? latestThread.pinnedRank
-              : thread.pinnedRank,
-            codexNativeSubAgents: thread.codexNativeSubAgents,
-            subthreadsCollapsed: thread.subthreadsCollapsed,
-            subthreadOrder: thread.subthreadOrder,
-          },
-        ];
-      }),
-      // A newly admitted row has no previous position to freeze. Preserve its
-      // owner placement on first paint: clearing pin/parent fields renders a
-      // false unpinned root until hover ends. Retained presentation order
-      // already controls where new entries are appended within each resource.
-      ...latest.threads.filter((thread) => !frozenThreadKeys.has(
-        threadSummaryIdentityKey(thread),
-      )),
-    ],
-  };
+  return operation ? stable : undefined;
 }
 
-function releaseBeforeListChange<Args extends unknown[], Result>(
+/**
+ * Drop the hover freeze, then run a list-changing operation — with a
+ * permanently stable identity, because these reach memoized thread rows.
+ *
+ * The wrapped operation is a prop of this component and so is a new function
+ * on most renders; a dependency list naming it would move the wrapper's
+ * identity with it, which is the churn the rows' `memo` exists to stop.
+ *
+ * Presence is decided here rather than by each call site: a caller that
+ * forgot its own `props.onX ? … : undefined` would otherwise ship a handler
+ * that releases the freeze and then throws on the user's first click.
+ */
+function useReleaseBeforeListChange<Args extends unknown[], Result>(
   release: () => void,
   operation: (...args: Args) => Result,
-): (...args: Args) => Result {
-  return (...args) => {
+): (...args: Args) => Result;
+function useReleaseBeforeListChange<Args extends unknown[], Result>(
+  release: () => void,
+  operation: ((...args: Args) => Result) | undefined,
+): ((...args: Args) => Result) | undefined;
+function useReleaseBeforeListChange<Args extends unknown[], Result>(
+  release: () => void,
+  operation: ((...args: Args) => Result) | undefined,
+): ((...args: Args) => Result) | undefined {
+  const released = useEventCallback((...args: Args): Result => {
+    // Read at call time, not captured: this identity is permanent, so it can
+    // outlive the prop that backed the render which handed it out.
+    if (!operation) {
+      return undefined as Result;
+    }
     release();
     return operation(...args);
-  };
+  });
+  return operation ? released : undefined;
 }
 
 import type { NavigationDirectoryDisclosure } from "../../lib/useNavigationDirectoryDisclosure";
@@ -571,9 +529,14 @@ export function Sidebar(props: SidebarProps) {
   const rowsByKey = useMemo(() => new Map(props.threads.map((thread) => [threadSummaryIdentityKey(thread), thread])), [props.threads]);
   const visibleThreads = [...new Map(lensResources.flatMap((resource) => resource.state.page?.entries ?? [])
     .map((entry) => [navigationThreadSelectionKey(entry.row.ref), rowsByKey.get(navigationThreadSelectionKey(entry.row.ref))])).values()].filter((thread): thread is NavigationThreadSummary => Boolean(thread));
+  // One hydrator per Sidebar instance: it holds the previous hydrated result
+  // so a render that changes nothing hands the rows back their existing
+  // object identities, which is what lets the memoized rows bail out while
+  // the pointer rests on one.
+  const hydrateHoverStable = useRef(createHoverStableSidebarHydrator()).current;
   const hoverStableSnapshot = useHoverStableSnapshot({
     hydrateFrozenValue: (frozen, latest) =>
-      hydrateHoverStableSidebarSnapshot(frozen, latest, {
+      hydrateHoverStable(frozen, latest, {
         refreshThreadPinRanks: props.browseMode !== "directories",
         removeMissingThreads: props.browseMode === "attention",
       }),
@@ -604,69 +567,84 @@ export function Sidebar(props: SidebarProps) {
    * the operator chose must instead reveal its resulting snapshot immediately.
    */
   const releaseHoverStableSnapshot = hoverStableSnapshot.release;
-  const hoverReleasedListHandlers = useMemo(
-    () => ({
-      openLaunchpad: releaseBeforeListChange(
-        releaseHoverStableSnapshot,
-        props.onOpenLaunchpad,
-      ),
-      reorderDirectoryPins: props.onReorderDirectoryPins
-        ? releaseBeforeListChange(
-            releaseHoverStableSnapshot,
-            props.onReorderDirectoryPins,
-          )
-        : undefined,
-      reorderThreadPins: props.onReorderThreadPins
-        ? releaseBeforeListChange(
-            releaseHoverStableSnapshot,
-            props.onReorderThreadPins,
-          )
-        : undefined,
-      setDirectoryPin: props.onSetDirectoryPin
-        ? releaseBeforeListChange(
-            releaseHoverStableSnapshot,
-            props.onSetDirectoryPin,
-          )
-        : undefined,
-      setDirectoryThreadsCollapsed: props.onSetDirectoryThreadsCollapsed
-        ? releaseBeforeListChange(
-            releaseHoverStableSnapshot,
-            props.onSetDirectoryThreadsCollapsed,
-          )
-        : undefined,
-      setSubthreadsCollapsed: props.onSetSubthreadsCollapsed
-        ? releaseBeforeListChange(
-            releaseHoverStableSnapshot,
-            props.onSetSubthreadsCollapsed,
-          )
-        : undefined,
-      setThreadPin:
-        props.onSetThreadPin && props.browseMode === "directories"
-          ? releaseBeforeListChange(
-              releaseHoverStableSnapshot,
-              props.onSetThreadPin,
-            )
-          : props.onSetThreadPin,
-      updateSubthreadOrder: props.onUpdateSubthreadOrder
-        ? releaseBeforeListChange(
-            releaseHoverStableSnapshot,
-            props.onUpdateSubthreadOrder,
-          )
-        : undefined,
-    }),
-    [
-      props.onOpenLaunchpad,
-      props.onReorderDirectoryPins,
-      props.onReorderThreadPins,
-      props.onSetDirectoryPin,
-      props.onSetDirectoryThreadsCollapsed,
-      props.onSetSubthreadsCollapsed,
-      props.onSetThreadPin,
-      props.onUpdateSubthreadOrder,
-      props.browseMode,
-      releaseHoverStableSnapshot,
-    ],
+  const releasedOpenLaunchpad = useReleaseBeforeListChange(
+    releaseHoverStableSnapshot,
+    props.onOpenLaunchpad,
   );
+  const releasedReorderDirectoryPins = useReleaseBeforeListChange(
+    releaseHoverStableSnapshot,
+    props.onReorderDirectoryPins,
+  );
+  const releasedReorderThreadPins = useReleaseBeforeListChange(
+    releaseHoverStableSnapshot,
+    props.onReorderThreadPins,
+  );
+  const releasedSetDirectoryPin = useReleaseBeforeListChange(
+    releaseHoverStableSnapshot,
+    props.onSetDirectoryPin,
+  );
+  const releasedSetDirectoryThreadsCollapsed = useReleaseBeforeListChange(
+    releaseHoverStableSnapshot,
+    props.onSetDirectoryThreadsCollapsed,
+  );
+  const releasedSetSubthreadsCollapsed = useReleaseBeforeListChange(
+    releaseHoverStableSnapshot,
+    props.onSetSubthreadsCollapsed,
+  );
+  // Directories is the only lens whose pin action reorders the list, so it is
+  // the only one that has to drop the freeze first. Elsewhere pins render in
+  // place and the freeze must survive the write. One stable wrapper spanning
+  // both, rather than a lens-dependent identity: a row's `memo` cannot bail
+  // out past a handler that changes when the lens does.
+  const setThreadPin = useStableRowCallback(
+    props.onSetThreadPin
+      ? (thread: NavigationThreadSummary, pinned: boolean): Promise<void> => {
+          if (props.browseMode === "directories") {
+            releaseHoverStableSnapshot();
+          }
+          return props.onSetThreadPin!(thread, pinned);
+        }
+      : undefined,
+  );
+  const releasedUpdateSubthreadOrder = useReleaseBeforeListChange(
+    releaseHoverStableSnapshot,
+    props.onUpdateSubthreadOrder,
+  );
+  // The row callbacks this component only forwards. (`onDetachPullRequest`
+  // is absent: the rows get this component's own `detachPullRequest`, which
+  // owns the confirmation dialog and is already stable.) They are stable in the
+  // app today because `App` happens to supply stable references, and that is
+  // not a contract a memoized row should rest on — the row's bail-out must
+  // hold whatever an ancestor does with its own arrows.
+  const forwardedPrefetchPullRequests = useStableRowCallback(
+    props.onPrefetchPullRequests,
+  );
+  const forwardedPrefetchGitWorkingState = useStableRowCallback(
+    props.onPrefetchGitWorkingState,
+  );
+  const forwardedRevealSelectedThreadComplete = useStableRowCallback(
+    props.onRevealSelectedThreadComplete,
+  );
+  const forwardedSetThreadReaction = useStableRowCallback(
+    props.onSetThreadReaction,
+  );
+  const forwardedUnbindMessagingBinding = useStableRowCallback(
+    props.onUnbindMessagingBinding,
+  );
+  // Every member is permanently stable, so the object itself needs no memo —
+  // nothing reads its identity, only the handlers it carries. Each one is
+  // `undefined` exactly when its operation is, because presence is what the
+  // lists read to decide whether to render the affordance at all.
+  const hoverReleasedListHandlers = {
+    openLaunchpad: releasedOpenLaunchpad,
+    reorderDirectoryPins: releasedReorderDirectoryPins,
+    reorderThreadPins: releasedReorderThreadPins,
+    setDirectoryPin: releasedSetDirectoryPin,
+    setDirectoryThreadsCollapsed: releasedSetDirectoryThreadsCollapsed,
+    setSubthreadsCollapsed: releasedSetSubthreadsCollapsed,
+    setThreadPin,
+    updateSubthreadOrder: releasedUpdateSubthreadOrder,
+  };
   // Counts cover the owner's full population, independently of the visible lens range.
   const ownerCountPage = props.pagedNavigation?.resources.get("directory-index")?.state.page;
   // Coverage reports discovery progress separately. Suppressing the owner's
@@ -729,7 +707,11 @@ export function Sidebar(props: SidebarProps) {
     );
   }, [browseMode]);
 
-  const selectThreadFromList = (
+  // The four handlers a thread row receives are wrapped in `useEventCallback`
+  // rather than declared plainly, because a memoized row cannot bail out past
+  // a prop that is a new function on every render of this component — and it
+  // renders on every navigation snapshot, which arrives per streamed item.
+  const selectThreadFromList = useEventCallback((
     thread: NavigationThreadSummary,
     event: ReactMouseEvent<HTMLElement>,
     selectionOrder: string[],
@@ -780,7 +762,7 @@ export function Sidebar(props: SidebarProps) {
       }
       return next;
     });
-  };
+  });
 
   const selectDirectoryFromList = (
     directory: NavigationDirectorySummary,
@@ -1161,7 +1143,7 @@ export function Sidebar(props: SidebarProps) {
     return selectedDirectories.length > 0 ? selectedDirectories : [directory];
   };
 
-  const openThreadContextMenu = (
+  const openThreadContextMenu = useEventCallback((
     thread: NavigationThreadSummary,
     position: ThreadContextMenuPosition
   ): void => {
@@ -1178,9 +1160,9 @@ export function Sidebar(props: SidebarProps) {
       thread,
       threads: resolveContextMenuThreads(thread),
     });
-  };
+  });
 
-  const openPullRequestContextMenu = (
+  const openPullRequestContextMenu = useEventCallback((
     thread: NavigationThreadSummary,
     pullRequest: PrSummary,
     position: ThreadContextMenuPosition,
@@ -1193,7 +1175,7 @@ export function Sidebar(props: SidebarProps) {
       thread,
       threads: [thread],
     });
-  };
+  });
 
   const requestRenameFromContextMenu = (thread: NavigationThreadSummary): void => {
     setContextMenu(undefined);
@@ -1470,7 +1452,7 @@ export function Sidebar(props: SidebarProps) {
     void copyText(value);
   };
 
-  const detachPullRequest = (
+  const detachPullRequest = useEventCallback((
     thread: NavigationThreadSummary,
     pr: PrSummary,
   ): void => {
@@ -1483,7 +1465,7 @@ export function Sidebar(props: SidebarProps) {
       return;
     }
     void props.onDetachPullRequest(thread, pr);
-  };
+  });
 
   const submitRename = (): void => {
     if (!renameThread) {
@@ -2014,10 +1996,10 @@ export function Sidebar(props: SidebarProps) {
               openFederationTargetMenuDirectoryKey={
                 directoryTargetMenu?.directoryKey
               }
-              onPrefetchPullRequests={props.onPrefetchPullRequests}
-              onPrefetchGitWorkingState={props.onPrefetchGitWorkingState}
+              onPrefetchPullRequests={forwardedPrefetchPullRequests}
+              onPrefetchGitWorkingState={forwardedPrefetchGitWorkingState}
               onRevealSelectedThreadComplete={
-                props.onRevealSelectedThreadComplete
+                forwardedRevealSelectedThreadComplete
               }
               onDetachPullRequest={detachPullRequest}
               onReorderThreadPins={
@@ -2044,9 +2026,9 @@ export function Sidebar(props: SidebarProps) {
               onOpenPullRequestContextMenu={openPullRequestContextMenu}
               onSelectDirectory={selectDirectoryFromList}
               onSelectThread={selectThreadFromList}
-              onSetReaction={props.onSetThreadReaction}
+              onSetReaction={forwardedSetThreadReaction}
               onSetThreadPin={hoverReleasedListHandlers.setThreadPin}
-              onUnbindMessagingBinding={props.onUnbindMessagingBinding}
+              onUnbindMessagingBinding={forwardedUnbindMessagingBinding}
             />
           ) : (
             renderedThreads.length === 0 ? (
@@ -2082,10 +2064,10 @@ export function Sidebar(props: SidebarProps) {
                 threads={renderedThreads}
                 onOpenThreadContextMenu={openThreadContextMenu}
                 onOpenPullRequestContextMenu={openPullRequestContextMenu}
-                onPrefetchPullRequests={props.onPrefetchPullRequests}
-                onPrefetchGitWorkingState={props.onPrefetchGitWorkingState}
+                onPrefetchPullRequests={forwardedPrefetchPullRequests}
+                onPrefetchGitWorkingState={forwardedPrefetchGitWorkingState}
                 onRevealSelectedThreadComplete={
-                  props.onRevealSelectedThreadComplete
+                  forwardedRevealSelectedThreadComplete
                 }
                 onDetachPullRequest={detachPullRequest}
                 onUpdateSubthreadOrder={
@@ -2095,9 +2077,9 @@ export function Sidebar(props: SidebarProps) {
                   hoverReleasedListHandlers.setSubthreadsCollapsed
                 }
                 onSelectThread={selectThreadFromList}
-                onSetReaction={props.onSetThreadReaction}
+                onSetReaction={forwardedSetThreadReaction}
                 onSetThreadPin={hoverReleasedListHandlers.setThreadPin}
-                onUnbindMessagingBinding={props.onUnbindMessagingBinding}
+                onUnbindMessagingBinding={forwardedUnbindMessagingBinding}
               />
             )
           )}

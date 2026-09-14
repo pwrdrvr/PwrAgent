@@ -30,8 +30,10 @@ import {
   type FederationInstanceId,
   type FederationTarget,
   type MessagingChannelKind,
+  type MessagingThreadBindingSummary,
   type NavigationThreadSummary,
   type PrAutoDispatchBudgetStatus,
+  type PrSummary,
   type ThreadToolAccounting,
   type ThreadToolIncidentNoticeState,
   type ThreadToolInvocationAlert,
@@ -79,6 +81,7 @@ import { useAppearance, type AppearanceController } from "./lib/useAppearance";
 import { useBackendSummaries } from "./lib/useBackendSummaries";
 import { useDesktopApi, type DesktopApi } from "./lib/desktop-api";
 import { useDesktopApplications } from "./lib/useDesktopApplications";
+import { useEventCallback } from "./lib/useEventCallback";
 import {
   readRendererFederationLabel,
   readRendererFederationTarget,
@@ -1395,6 +1398,35 @@ function DesktopAppShell(props: {
     progressiveInitialRefresh: true,
     threadViewVisible: mainView === "thread",
   });
+  // Handed to the sidebar, which hands them to memoized thread rows. Inline
+  // arrows here were a new function on every render of this component, and a
+  // row's `memo` cannot bail out past one.
+  const detachThreadPullRequest = useEventCallback(
+    async (thread: NavigationThreadSummary, pr: PrSummary) => {
+      if (!desktopApi?.detachThreadPullRequest) return;
+      await desktopApi.detachThreadPullRequest({
+        backend: thread.source,
+        // Remote threads detach on their owning instance; without
+        // the target the write lands in the viewer's overlay store
+        // and reverts on the next remote snapshot.
+        federationTarget: thread.federation?.ref.target ??
+          readRendererFederationTarget(),
+        threadId: thread.id,
+        pr,
+      });
+      await navigation.refresh?.();
+    },
+  );
+  const unbindMessagingBinding = useEventCallback(
+    async (
+      _thread: NavigationThreadSummary,
+      binding: MessagingThreadBindingSummary,
+    ) => {
+      if (!desktopApi?.unbindMessagingThread) return;
+      await desktopApi.unbindMessagingThread({ bindingId: binding.bindingId });
+      await navigation.refresh?.();
+    },
+  );
   const pendingSpendAlertCapacity = Math.max(0, 10 - appNotices.durable.filter((notice) =>
     notice.id.startsWith("spend-alert:thread:")).length);
   useEffect(() => {
@@ -2867,25 +2899,8 @@ function DesktopAppShell(props: {
           }}
           onPrefetchPullRequests={pullRequests.prefetch}
           onPrefetchGitWorkingState={gitWorkingState.prefetch}
-          onDetachPullRequest={async (thread, pr) => {
-            if (!desktopApi?.detachThreadPullRequest) return;
-            await desktopApi.detachThreadPullRequest({
-              backend: thread.source,
-              // Remote threads detach on their owning instance; without
-              // the target the write lands in the viewer's overlay store
-              // and reverts on the next remote snapshot.
-              federationTarget: thread.federation?.ref.target ??
-                readRendererFederationTarget(),
-              threadId: thread.id,
-              pr,
-            });
-            await navigation.refresh?.();
-          }}
-          onUnbindMessagingBinding={async (_thread, binding) => {
-            if (!desktopApi?.unbindMessagingThread) return;
-            await desktopApi.unbindMessagingThread({ bindingId: binding.bindingId });
-            await navigation.refresh?.();
-          }}
+          onDetachPullRequest={detachThreadPullRequest}
+          onUnbindMessagingBinding={unbindMessagingBinding}
         />
         {/* Sibling of the sidebar, not a child: the seam straddles the
             sidebar's border, which the aside's overflow clip would cut off. */}

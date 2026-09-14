@@ -1,4 +1,6 @@
 import {
+  memo,
+  useCallback,
   useEffect,
   useRef,
   useState,
@@ -19,6 +21,7 @@ import {
   formatMessagingPlatformName,
   MESSAGING_PLATFORM_ICONS,
 } from "../../lib/messaging-platform-branding";
+import { useEventCallback } from "../../lib/useEventCallback";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import { useThreadLinkHoverTarget } from "../../lib/thread-links";
 import { isNativeDragInteractionActive } from "../../lib/native-drag-interaction";
@@ -40,6 +43,30 @@ const absoluteDateFormatter = new Intl.DateTimeFormat(undefined, {
   day: "numeric",
 });
 
+/**
+ * Which row of a list a callback is about.
+ *
+ * A row's handlers used to be closures the list built per row, because the
+ * list knows things the row does not: which directory section it renders
+ * under, and the shift-selection order that section is in. Those closures are
+ * a new function on every parent render, so they defeated this file's `memo`
+ * no matter how stable the row's data was. Handing the identity back instead
+ * lets a list hold ONE handler for all of its rows.
+ */
+export type ThreadRowRef = {
+  /**
+   * The directory section this row renders under. The Directories lens shows
+   * a thread once per directory it is linked to, so the thread alone does not
+   * say which row was acted on. Absent in the lenses with no directory
+   * sections.
+   */
+  directoryKey?: string;
+  /** `threadSummaryIdentityKey(thread)`, so the list need not recompute it. */
+  threadKey: string;
+  /** Whether this row renders in its directory's pinned group. */
+  pinned: boolean;
+};
+
 type ThreadRowProps = {
   approvalRequestThreadKeys?: Record<string, boolean>;
   /** Thread keys with a live integrated terminal in the main process. */
@@ -58,6 +85,8 @@ type ThreadRowProps = {
    */
   composerSourceThreadKey?: string;
   compact?: boolean;
+  /** Reported back through the row's callbacks as `ThreadRowRef`. */
+  directoryKey?: string;
   dropIndicator?: DropIndicatorPosition;
   draggable?: boolean;
   pointerDraggable?: boolean;
@@ -121,18 +150,29 @@ type ThreadRowProps = {
     // overlay button AND from the header's status-indicator forwarder
     // (a span). Consumers only read modifier keys.
     event: MouseEvent<HTMLElement>,
+    row: ThreadRowRef,
   ) => void;
   onRevealSelectedThreadComplete?: (request: number) => void;
-  onToggleSubthreads?: () => void;
+  /**
+   * Fired by the row's disclosure control. The list decides what state to
+   * move to — it already owns that, and deriving it here from the optional
+   * `subthreadsCollapsed` prop would make a caller that omits the pair ask
+   * to collapse an already-collapsed section forever.
+   */
+  onToggleSubthreads?: (thread: NavigationThreadSummary) => void;
   onDragStartThread?: (event: DragEvent<HTMLDivElement>) => void;
   onDragOverThread?: (event: DragEvent<HTMLDivElement>) => void;
   onDragLeaveThread?: (event: DragEvent<HTMLDivElement>) => void;
   onDragEndThread?: (event: DragEvent<HTMLDivElement>) => void;
   onDropOnThread?: (event: DragEvent<HTMLDivElement>) => void;
-  onPointerDownThread?: (event: PointerEvent<HTMLDivElement>) => void;
+  onPointerDownThread?: (
+    event: PointerEvent<HTMLDivElement>,
+    row: ThreadRowRef,
+  ) => void;
   onMovePinnedThread?: (
     thread: NavigationThreadSummary,
     direction: "up" | "down",
+    row: ThreadRowRef,
   ) => void;
   onSetReaction?: (
     thread: NavigationThreadSummary,
@@ -146,7 +186,9 @@ type ThreadRowProps = {
   onOpenPullRequest?: (url: string) => void;
 };
 
-export function ThreadRow(props: ThreadRowProps) {
+export const ThreadRow = memo(function ThreadRow(
+  props: ThreadRowProps,
+) {
   const threadKey = threadSummaryIdentityKey(props.thread);
   const selected = props.selectedThreadKeys
     ? props.selectedThreadKeys.has(threadKey)
@@ -193,6 +235,33 @@ export function ThreadRow(props: ThreadRowProps) {
   // renderer-side cache.
   const prs = props.thread.prs ?? [];
   const openPr = props.onOpenPullRequest ?? defaultOpenPullRequest;
+  // What this row reports back to the list that owns it, so the list can keep
+  // one handler for every row instead of a closure per row. See `ThreadRowRef`.
+  const rowIdentity: ThreadRowRef = {
+    directoryKey: props.directoryKey,
+    threadKey,
+    pinned: props.threadPinState === "pinned",
+  };
+  const onPointerDownThreadProp = props.onPointerDownThread;
+
+  // Stable identities for everything handed to a memoized chip below. These
+  // close over `props.thread` and the parent's handlers, both of which change
+  // on every render today, so a dependency list could not hold them still —
+  // and the chips are memoized precisely so they stop re-rendering when only
+  // a callback identity moved.
+  const openPrStable = useEventCallback((url: string) => openPr(url));
+  const openPrContextMenu = useEventCallback(
+    (
+      targetPr: PrSummary,
+      position: { x: number; y: number; anchorTop?: number },
+    ) => props.onOpenPullRequestContextMenu?.(props.thread, targetPr, position),
+  );
+  const detachPr = useEventCallback((targetPr: PrSummary) =>
+    props.onDetachPullRequest?.(props.thread, targetPr));
+  const toggleReactionPicker = useCallback(
+    () => setPickerOpen((open) => !open),
+    [],
+  );
   // Hover prefetch: 750ms intent timer — long enough that simply scrolling
   // past doesn't fire, short enough that a deliberate hover beats the
   // user's first click. Terminal-only PR sets still request a user
@@ -297,7 +366,11 @@ export function ThreadRow(props: ThreadRowProps) {
       onDragLeave={props.onDragLeaveThread}
       onDragEnd={props.onDragEndThread}
       onDrop={props.onDropOnThread}
-      onPointerDown={props.onPointerDownThread}
+      onPointerDown={
+        onPointerDownThreadProp
+          ? (event) => onPointerDownThreadProp(event, rowIdentity)
+          : undefined
+      }
       onContextMenu={(event) => {
         event.preventDefault();
         props.onOpenContextMenu(props.thread, {
@@ -317,7 +390,7 @@ export function ThreadRow(props: ThreadRowProps) {
           type="button"
           onClick={(event) => {
             event.stopPropagation();
-            props.onToggleSubthreads?.();
+            props.onToggleSubthreads?.(props.thread);
           }}
         />
       ) : null}
@@ -346,7 +419,7 @@ export function ThreadRow(props: ThreadRowProps) {
           if (target.closest("button, [role='button'], a")) {
             return;
           }
-          props.onSelectThread(props.thread, event);
+          props.onSelectThread(props.thread, event, rowIdentity);
         }}
       >
         {/* The card's primary action: an EMPTY button absolutely
@@ -393,10 +466,13 @@ export function ThreadRow(props: ThreadRowProps) {
               props.onMovePinnedThread(
                 props.thread,
                 event.key === "ArrowUp" ? "up" : "down",
+                rowIdentity,
               );
             }
           }}
-          onClick={(event) => props.onSelectThread(props.thread, event)}
+          onClick={(event) =>
+            props.onSelectThread(props.thread, event, rowIdentity)
+          }
         />
 
         {/* Title line — a SIBLING of the open-thread overlay (pointer
@@ -500,23 +576,13 @@ export function ThreadRow(props: ThreadRowProps) {
                 key={pr.url}
                 pr={pr}
                 showRepoPrefix={needsRepoPrefix(props.thread, pr, prs)}
-                onOpen={openPr}
+                onOpen={openPrStable}
                 onOpenContextMenu={
                   props.onOpenPullRequestContextMenu
-                    ? (targetPr, position) =>
-                        props.onOpenPullRequestContextMenu!(
-                          props.thread,
-                          targetPr,
-                          position,
-                        )
+                    ? openPrContextMenu
                     : undefined
                 }
-                onDetach={
-                  props.onDetachPullRequest
-                    ? (targetPr) =>
-                        props.onDetachPullRequest!(props.thread, targetPr)
-                    : undefined
-                }
+                onDetach={props.onDetachPullRequest ? detachPr : undefined}
               />
             ))}
             thread={props.thread}
@@ -580,7 +646,7 @@ export function ThreadRow(props: ThreadRowProps) {
           <AddReactionChip
             anchorRef={addReactionRef}
             open={pickerOpen}
-            onToggle={() => setPickerOpen((open) => !open)}
+            onToggle={toggleReactionPicker}
           />
         ) : null}
 
@@ -624,7 +690,7 @@ export function ThreadRow(props: ThreadRowProps) {
       ) : null}
     </div>
   );
-}
+});
 
 function ReactionChip(props: { emoji: string; onToggle: () => void }) {
   const { emoji, onToggle } = props;
@@ -653,7 +719,7 @@ function ReactionChip(props: { emoji: string; onToggle: () => void }) {
   );
 }
 
-function AddReactionChip(props: {
+const AddReactionChip = memo(function AddReactionChip(props: {
   open: boolean;
   anchorRef: React.RefObject<HTMLSpanElement | null>;
   onToggle: () => void;
@@ -689,7 +755,7 @@ function AddReactionChip(props: {
       <SmileyIcon size={14} aria-hidden="true" />
     </span>
   );
-}
+});
 
 function BindingChip(props: {
   binding: MessagingThreadBindingSummary;
