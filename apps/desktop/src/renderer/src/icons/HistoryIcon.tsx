@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { resolveIconSvgProps, type IconProps } from "./icon-types";
 
 /**
@@ -6,7 +7,7 @@ import { resolveIconSvgProps, type IconProps } from "./icon-types";
  * created") so the two time-ordered thread lenses never read as the same
  * glyph.
  */
-export function HistoryIcon(props: IconProps) {
+export const HistoryIcon = memo(function HistoryIcon(props: IconProps) {
   return (
     <svg {...resolveIconSvgProps(props)}>
       <path d="M3.5 9.5A9 9 0 1 1 3 12" />
@@ -14,4 +15,4 @@ export function HistoryIcon(props: IconProps) {
       <path d="M12 7.5V12l3 1.75" />
     </svg>
   );
-}
+});

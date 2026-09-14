@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { resolveIconSvgProps, type IconProps } from "./icon-types";
 
 /**
@@ -13,11 +14,11 @@ import { resolveIconSvgProps, type IconProps } from "./icon-types";
  * this, render it at 12–13px before trusting how it looks in a design
  * tool.
  */
-export function SkillIcon(props: IconProps) {
+export const SkillIcon = memo(function SkillIcon(props: IconProps) {
   return (
     <svg {...resolveIconSvgProps(props)}>
       <path d="M15.6 4.4A3.6 3.6 0 1 0 19.6 8.4" />
       <path d="M13.6 10.4 5.2 18.8" />
     </svg>
   );
-}
+});

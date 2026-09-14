@@ -116,4 +116,6 @@ it("resolves only visible mounted rows from each explicit owner and keeps select
   expect(selected.has('visible-owner:"peer":0')).toBe(false);
   expect(selected.get("selected-context")?.inventory).toBe("owner");
   expect(selected.get("selected-viewer-mount")?.inventory).toBe("viewer");
+  expect(selected.get("selected-viewer-mount")?.query).toEqual({ kind: "exact", identities: [remote], includeAncestry: true });
+  expect(selected.get("selected-viewer-mount")?.pageSize).toBe(100);
 });

@@ -2401,6 +2401,9 @@ export class DesktopFederationRuntime {
       fetchPinnedSnapshot: async (target, threadKeys, rpcOptions) =>
         await this.stampRemotePinnedSummaryPage(target,
           await readFederationPinnedSnapshot(this.remoteBackend(target), threadKeys, rpcOptions)),
+      onPinnedRefreshProblem: (problem) => {
+        log.warn("remote thread pin navigation refresh could not supply mounted rows", problem);
+      },
       searchPeer: async (target, request, rpcOptions) => {
         const startedAt = Date.now();
         const backend = this.remoteBackend(target);

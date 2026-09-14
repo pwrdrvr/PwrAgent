@@ -1,6 +1,7 @@
+import { memo } from "react";
 import { resolveIconSvgProps, type IconProps } from "./icon-types";
 
-export function HelpCircleIcon(props: IconProps) {
+export const HelpCircleIcon = memo(function HelpCircleIcon(props: IconProps) {
   return (
     <svg {...resolveIconSvgProps(props)}>
       <circle cx="12" cy="12" r="9" />
@@ -8,4 +9,4 @@ export function HelpCircleIcon(props: IconProps) {
       <path d="M12 17h.01" />
     </svg>
   );
-}
+});

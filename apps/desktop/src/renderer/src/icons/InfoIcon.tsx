@@ -1,6 +1,7 @@
+import { memo } from "react";
 import { resolveIconSvgProps, type IconProps } from "./icon-types";
 
-export function InfoIcon(props: IconProps) {
+export const InfoIcon = memo(function InfoIcon(props: IconProps) {
   return (
     <svg {...resolveIconSvgProps(props)}>
       <circle cx="12" cy="12" r="9" />
@@ -8,4 +9,4 @@ export function InfoIcon(props: IconProps) {
       <path d="M12 7.5h.01" />
     </svg>
   );
-}
+});

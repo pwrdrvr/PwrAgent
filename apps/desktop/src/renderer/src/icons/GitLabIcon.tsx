@@ -1,9 +1,9 @@
-import type { ImgHTMLAttributes } from "react";
+import { memo, type ImgHTMLAttributes } from "react";
 import { DEFAULT_ICON_SIZE } from "./icon-types";
 import tanukiUrl from "../assets/gitlab/tanuki.svg";
 
 /** Official, unaltered GitLab mark identifying the glab CLI. */
-export function GitLabIcon({
+export const GitLabIcon = memo(function GitLabIcon({
   size = DEFAULT_ICON_SIZE,
   alt = "",
   ...rest
@@ -20,4 +20,4 @@ export function GitLabIcon({
       {...rest}
     />
   );
-}
+});

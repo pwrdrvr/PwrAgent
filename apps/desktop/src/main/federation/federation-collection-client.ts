@@ -45,9 +45,11 @@ export async function readFederationPinnedSnapshot(
           rpcOptions.signal?.throwIfAborted();
           const pageBytes = Buffer.byteLength(JSON.stringify(page), "utf8");
           bytes += pageBytes;
+          if (page.coverage.state !== "complete") {
+            throw new Error(`Pinned navigation owner coverage is ${page.coverage.state} (pending providers: ${page.coverage.pendingProviders ?? 0}, failed providers: ${page.coverage.failedProviders ?? 0}).`);
+          }
           const pageRevision = JSON.stringify([page.ownerEpoch, page.generation, page.queryKey]);
           if (page.protocol !== 2 || page.unchanged || page.rangeUnchanged
-            || page.coverage.state !== "complete"
             || pageBytes > NAVIGATION_QUERY_MAX_RESULT_BYTES || page.entries.length > NAVIGATION_QUERY_MAX_PAGE_ROWS
             || bytes > 16 * 1024 * 1024 || (revision !== undefined && revision !== pageRevision)
             || (!page.complete && (!page.nextCursor || cursors.has(page.nextCursor)))

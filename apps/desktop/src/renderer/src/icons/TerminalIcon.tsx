@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { resolveIconSvgProps, type IconProps } from "./icon-types";
 
 /**
@@ -5,11 +6,11 @@ import { resolveIconSvgProps, type IconProps } from "./icon-types";
  * OS-extracted icon for a terminal application. Same rationale as
  * EditorIcon — generic mark, not a specific terminal's brand.
  */
-export function TerminalIcon(props: IconProps) {
+export const TerminalIcon = memo(function TerminalIcon(props: IconProps) {
   return (
     <svg {...resolveIconSvgProps(props)}>
       <polyline points="5 8 9 12 5 16" />
       <line x1="13" y1="16" x2="19" y2="16" />
     </svg>
   );
-}
+});

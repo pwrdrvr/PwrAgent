@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { resolveIconSvgProps, type IconProps } from "./icon-types";
 
 /**
@@ -6,7 +7,7 @@ import { resolveIconSvgProps, type IconProps } from "./icon-types";
  * filled celestial set) so it matches the other chrome glyphs at
  * header-button sizes.
  */
-export function StarMapIcon(props: IconProps) {
+export const StarMapIcon = memo(function StarMapIcon(props: IconProps) {
   return (
     <svg {...resolveIconSvgProps(props)}>
       <g transform="rotate(-20 12 12)">
@@ -16,4 +17,4 @@ export function StarMapIcon(props: IconProps) {
       <circle cx="12" cy="12" r="3.5" />
     </svg>
   );
-}
+});

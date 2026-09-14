@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { resolveIconSvgProps, type IconProps } from "./icon-types";
 
 /**
@@ -7,7 +8,7 @@ import { resolveIconSvgProps, type IconProps } from "./icon-types";
  * brought a yellow OS-rendered face that fought the dark theme — this
  * version inherits the chip's foreground color.
  */
-export function SmileyIcon(props: IconProps) {
+export const SmileyIcon = memo(function SmileyIcon(props: IconProps) {
   return (
     <svg {...resolveIconSvgProps(props)}>
       <circle cx="12" cy="12" r="9" />
@@ -16,4 +17,4 @@ export function SmileyIcon(props: IconProps) {
       <path d="M8.5 14.5c1 1.4 2.2 2.1 3.5 2.1s2.5-.7 3.5-2.1" />
     </svg>
   );
-}
+});

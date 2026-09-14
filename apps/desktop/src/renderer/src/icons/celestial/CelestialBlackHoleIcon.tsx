@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { resolveFilledIconSvgProps, type IconProps } from "../icon-types";
 
 /**
@@ -6,7 +7,7 @@ import { resolveFilledIconSvgProps, type IconProps } from "../icon-types";
  * suggesting the gravitationally lensed far side of the ring.
  * Original geometry — shape language only.
  */
-export function CelestialBlackHoleIcon(props: IconProps) {
+export const CelestialBlackHoleIcon = memo(function CelestialBlackHoleIcon(props: IconProps) {
   return (
     <svg {...resolveFilledIconSvgProps(props)}>
       <circle cx="12" cy="12.5" r="6" fill="currentColor" />
@@ -30,4 +31,4 @@ export function CelestialBlackHoleIcon(props: IconProps) {
       />
     </svg>
   );
-}
+});
