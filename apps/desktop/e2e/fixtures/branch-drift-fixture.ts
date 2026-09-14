@@ -4,11 +4,13 @@ import os from "node:os";
 import path from "node:path";
 import { expect } from "@playwright/test";
 import Database from "better-sqlite3";
+import { legacyStateHomeEnv } from "./legacy-state-home";
 
 export async function createBranchDriftFixture(options: {
   expectedBranch?: string;
 } = {}): Promise<{
   cleanup: () => Promise<void>;
+  env: Record<string, string>;
   fixturePath: string;
   homeDir: string;
 }> {
@@ -159,6 +161,10 @@ export async function createBranchDriftFixture(options: {
     cleanup: async () => {
       await rm(rootDir, { force: true, recursive: true });
     },
+    // The whole scenario rides on the legacy import above being found, so the
+    // launch environment belongs to the fixture that wrote those files rather
+    // than to each spec that uses it.
+    env: legacyStateHomeEnv(rootDir),
     fixturePath,
     homeDir: rootDir,
   };

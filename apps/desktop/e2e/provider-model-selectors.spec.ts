@@ -4,6 +4,7 @@ import path from "node:path";
 import { expect, test, type Locator } from "@playwright/test";
 import type { NavigationLaunchpadDefaults } from "@pwragent/shared";
 import { launchElectronApp } from "./fixtures/electron-app";
+import { legacyStateHomeEnv } from "./fixtures/legacy-state-home";
 
 async function assertTangerineFocusRing(locator: Locator) {
   await expect
@@ -95,7 +96,7 @@ async function createProviderSelectorFixture(params: {
 
   return {
     fixturePath,
-    env: params.launchpadDefaults ? { HOME: rootDir } : undefined,
+    env: params.launchpadDefaults ? legacyStateHomeEnv(rootDir) : undefined,
     cleanup: async () => {
       await rm(rootDir, { recursive: true, force: true });
     },

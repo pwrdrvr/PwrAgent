@@ -36,6 +36,10 @@ import {
 } from "../composer/CompactComposer";
 import { useOwnedComposerDraftStore } from "../composer/useOwnedComposerDraftStore";
 import { useNavigationSelectedDetail } from "../../lib/useNavigationSelectedDetail";
+import {
+  navigationIdentityKey,
+  navigationSelectionAuthorizesComposer,
+} from "../../lib/navigation-query-state";
 import { useIndependentQueueProjection } from "../../lib/useIndependentQueueProjection";
 import { useComposerMentionSources } from "../composer/useComposerMentionSources";
 import type { ComposerMentionSources } from "../composer/useComposerMentions";
@@ -165,6 +169,9 @@ function queuedTurnPreview(queued: ComposerQueuedTurnSnapshot): string {
  */
 const MemoizedCompactComposer = memo(CompactComposer);
 const MemoizedActiveSubAgentsStrip = memo(ActiveSubAgentsStrip);
+
+/** Monotonic across every card this renderer mounts; see `data-card-mount`. */
+let starMapCardMounts = 0;
 
 /**
  * One chat card, anchored in the star map.
@@ -331,13 +338,65 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
     federationTarget,
   });
   const selectedConfiguration = selectedDetail.state?.detail?.thread;
-  const composerReady = selectedDetail.state?.readiness === "ready"
-    && selectedDetail.state.detail?.identity === "present"
+  // The queue term also covers an inactive card: `useIndependentQueueProjection`
+  // is passed no thread when `props.active === false`, and reports `loading`
+  // for a selection key it holds no state for.
+  const composerReady = navigationSelectionAuthorizesComposer(selectedDetail.state)
     && queueReadiness.readiness === "ready";
   const composerReadinessRef = useRef(false);
   composerReadinessRef.current = composerReady;
   const configurationRef = useRef(selectedConfiguration);
   configurationRef.current = selectedConfiguration;
+  // `detail:identity:unread` means the state carries no detail at all, which
+  // `selectNavigationIdentity` produces in exactly two ways: this card
+  // remounted (so the hook's retained state went with it), or the exact
+  // identity it asks for changed. These two tell them apart — a mount counter
+  // that survives neither, and the identity actually being requested.
+  // A lazy `useState` initializer, not a ref assigned during render: the ref
+  // form mutates module state from the render path, which React does not
+  // permit. Only distinctness between mounts matters, so StrictMode's double
+  // invocation is harmless.
+  const [cardMount] = useState(() => ++starMapCardMounts);
+  // The same key `selectNavigationIdentity` compares, not a restatement of
+  // it: that comparison is what decides whether `detail` is carried across
+  // a refresh, so a hand-rolled spelling could report "identity unchanged"
+  // for a pair the hook treats as different (ACP thread ids contain colons).
+  const requestedIdentity = navigationIdentityKey({
+    backend: thread.source,
+    threadId: thread.id,
+    ownerInstanceId: remoteInstanceId,
+  });
+
+  // One expression for both the editor's `disabled` prop and the report
+  // below. Computed separately, the report said nothing whenever review
+  // state was the cause — the composer was dead and `data-composer-block`
+  // was absent, which reads as "it believed the composer was live".
+  const composerDisabled = !composerReady || reviewSetupOpen || reviewSubmitting;
+
+  // Which term is withholding the composer, published for the E2E lanes.
+  //
+  // By the time this reaches the editor it is one boolean, and the editor
+  // rejects a keystroke with nothing but "element is not editable". An
+  // Electron trace carries no DOM snapshots to reconstruct the cause from, and
+  // `readinessError` only surfaces the two terms that carry an error string —
+  // an unresolved identity and a still-loading queue are both silent. Naming
+  // the term costs one attribute and is the difference between a diagnosis and
+  // a guess, which this failure has already cost two CI cycles of.
+  const composerBlockReason = !composerDisabled
+    ? undefined
+    : !selectedDetail.state
+      ? "detail:identity-unresolved"
+      : selectedDetail.state.readiness === "failed"
+        ? "detail:failed"
+        : !selectedDetail.state.detail
+          ? "detail:none"
+          : selectedDetail.state.detail.identity !== "present"
+            ? `detail:identity:${selectedDetail.state.detail.identity}`
+            : queueReadiness.readiness !== "ready"
+              ? `queue:${queueReadiness.readiness}`
+              : reviewSetupOpen
+                ? "review:setup-open"
+                : "review:submitting";
   const readinessError = selectedDetail.state?.error ?? queueReadiness.error
     ?? (selectedDetail.state?.detail && selectedDetail.state.detail.identity !== "present"
       ? `This thread is ${selectedDetail.state.detail.identity}.`
@@ -1432,6 +1491,9 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
     <section
       aria-label={`Chat: ${thread.title}`}
       className="star-map-chat-card"
+      data-card-mount={cardMount}
+      data-composer-block={composerBlockReason}
+      data-detail-identity={requestedIdentity}
       onPointerDown={() => onRaise(cardKey)}
       style={style}
     >
@@ -1686,7 +1748,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
             !federationTarget || !isRemoteFederationTarget(federationTarget)
           }
           canSteer={canSteer}
-          disabled={!composerReady || reviewSetupOpen || reviewSubmitting}
+          disabled={composerDisabled}
           draftScopeKey={composerScopeKey}
           draftStore={ownedComposerDraftStore}
           executionMode={threadExecutionMode}

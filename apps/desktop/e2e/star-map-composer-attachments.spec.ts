@@ -88,6 +88,51 @@ async function attachPng(
   }, options);
 }
 
+async function readCardIdentity(
+  chatCard: Locator,
+): Promise<{ mount: string | null; identity: string | null }> {
+  return {
+    mount: await chatCard.getAttribute("data-card-mount"),
+    identity: await chatCard.getAttribute("data-detail-identity"),
+  };
+}
+
+/**
+ * Type into the card's composer, naming the gate if it is closed.
+ *
+ * `StarMapChatCard` publishes `data-composer-block` whenever it withholds the
+ * composer. Reading it at the instant the keystroke is refused turns "element
+ * is not editable" into the specific term — an unresolved exact identity, a
+ * failed read, a non-present thread, or a queue projection that is not ready.
+ * `data-card-mount` and `data-detail-identity` separate the two ways the card
+ * can end up holding no detail: it remounted, or the identity it asks for
+ * changed under it.
+ */
+async function fillReportingComposerBlock(
+  chatCard: Locator,
+  messageInput: Locator,
+  text: string,
+  before: { mount: string | null; identity: string | null },
+): Promise<void> {
+  try {
+    await messageInput.fill(text);
+  } catch (error) {
+    const after = {
+      block: await chatCard.getAttribute("data-composer-block"),
+      mount: await chatCard.getAttribute("data-card-mount"),
+      identity: await chatCard.getAttribute("data-detail-identity"),
+    };
+    throw new Error(
+      `Composer refused the keystroke: block=${
+        after.block ?? "<absent, so it believed the composer was live>"
+      } mount=${before.mount}->${after.mount} identity=${
+        before.identity
+      }->${after.identity}`,
+      { cause: error },
+    );
+  }
+}
+
 async function attachFilesystemFile(
   mapWindow: Page,
   messageInput: Locator,
@@ -133,6 +178,24 @@ test("sends pasted, dropped, and local-file attachments from a Star Map chat car
     const messageInput = chatCard.getByRole("textbox", {
       name: `Message ${LOCAL_THREAD_TITLE}`,
     });
+    // The card enables its composer once the exact detail read and the queue
+    // both report ready, and attaching never consults that state, so without
+    // this the attachment steps below run against a dead composer.
+    //
+    // It has to be an explicit wait rather than letting `fill` handle it:
+    // Playwright rejects a `contenteditable="false"` node as the wrong
+    // element type outright instead of retrying until it becomes editable.
+    //
+    // One wait is not enough on Windows: the composer is live here and dead by
+    // the keystroke below. `navigationSelectionAuthorizesComposer` removed one
+    // cause (a revalidating read withdrawing an authorization it held) and this
+    // still fails, reporting a card that holds no detail at all — so the report
+    // below names which of the two remaining causes it is.
+    await expect(messageInput).toBeEditable();
+    // Baseline for the report below: taken while the composer is live, so a
+    // remount or an identity change during the attachments is visible as a
+    // difference rather than being read back after the fact.
+    const cardBaseline = await readCardIdentity(chatCard);
 
     await attachPng(messageInput, {
       color: "#2255aa",
@@ -161,10 +224,23 @@ test("sends pasted, dropped, and local-file attachments from a Star Map chat car
       chatCard.locator('[aria-label="Attached files"]'),
     ).toContainText("star-map-notes.txt");
 
-    await messageInput.fill("Inspect these Star Map attachments");
+    // Not a retry: `fill` is attempted exactly once, and a failure is rethrown.
+    // It only names the term that withheld the composer, because the bare
+    // "element is not editable" this otherwise reports is undiagnosable from an
+    // Electron trace.
+    await fillReportingComposerBlock(
+      chatCard,
+      messageInput,
+      "Inspect these Star Map attachments",
+      cardBaseline,
+    );
     await chatCard.getByRole("button", { name: "Send" }).click();
 
-    await expect.poll(async () => await app.getLastStartTurn()).not.toBeNull();
+    // `.toBeDefined()`, not `.not.toBeNull()`: the replay driver returns
+    // `undefined` when no turn has been recorded and never `null`, so the
+    // null form passes on the first poll and gates nothing — the read below
+    // then races the turn it is meant to wait for.
+    await expect.poll(async () => await app.getLastStartTurn()).toBeDefined();
     const request = await app.getLastStartTurn() as StartTurnRequest;
     expect(request.threadId).toBe("thread-star-map-attachments");
 
@@ -248,6 +324,7 @@ test("rejects a local file on a remote Star Map chat card", async () => {
     const messageInput = chatCard.getByRole("textbox", {
       name: `Message ${REMOTE_THREAD_TITLE}`,
     });
+    await expect(messageInput).toBeEditable();
     await attachFilesystemFile(mapWindow, messageInput, notesPath);
 
     await expect(chatCard.getByRole("alert")).toContainText(

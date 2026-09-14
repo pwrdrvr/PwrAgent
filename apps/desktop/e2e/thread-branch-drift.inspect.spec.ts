@@ -13,9 +13,7 @@ test("opens the branch drift dialog until Electron is closed manually", async ()
   const fixture = await createBranchDriftFixture();
   const app = await launchElectronApp({
     fixturePath: fixture.fixturePath,
-    env: {
-      HOME: fixture.homeDir,
-    },
+    env: fixture.env,
     windowSize: {
       height: 900,
       width: 1440,

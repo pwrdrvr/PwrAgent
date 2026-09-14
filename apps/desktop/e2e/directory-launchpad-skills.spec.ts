@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { expect, test } from "@playwright/test";
 import { launchElectronApp } from "./fixtures/electron-app";
+import { legacyStateHomeEnv } from "./fixtures/legacy-state-home";
+import { canonicalizeNavigationPath } from "@pwragent/shared";
 
 async function createDirectoryLaunchpadSkillsFixture(): Promise<{
   cleanup: () => Promise<void>;
@@ -184,7 +186,13 @@ async function seedPersistedDirectoryLaunchpad(params: {
   stateRoot: string;
 }): Promise<void> {
   await mkdir(params.stateRoot, { recursive: true });
-  const directoryKey = `directory:${params.repoDir}`;
+  // Forward slashes, no trailing separator — the one navigation-path form, and
+  // the reason `canonicalizeNavigationPath` exists. Seeding the native spelling
+  // registered a SECOND directory beside the app's own on Windows: two rows,
+  // both labelled `FixtureRepo` (a basename), which surfaced as a strict-mode
+  // violation on a locator that had been unique everywhere else.
+  const directoryPath = canonicalizeNavigationPath(params.repoDir);
+  const directoryKey = `directory:${directoryPath}`;
   await writeFile(
     path.join(params.stateRoot, "overlay-state.json"),
     JSON.stringify(
@@ -202,7 +210,7 @@ async function seedPersistedDirectoryLaunchpad(params: {
             directoryKey,
             directoryKind: "directory",
             directoryLabel: "FixtureRepo",
-            directoryPath: params.repoDir,
+            directoryPath,
             backend: "codex",
             executionMode: "full-access",
             prompt: "[$ce:brainstorm](/Users/fixture-user/.codex/skills/ce-brainstorm/SKILL.md) ",
@@ -594,14 +602,20 @@ test("directory launchpad Tiptap WYSIWYG composer serializes markdown blocks", a
     await app.window.keyboard.press("Alt+Enter");
     await app.window.keyboard.type("continued");
 
-    await expect(tiptapInput.locator("li")).toHaveCount(2);
-    await expect(
-      tiptapInput.locator("li", { hasText: /Second item\s*continued/ }),
-    ).toBeVisible();
+    // `data-value` first, deliberately. It is the serialization contract this
+    // test is about, and it fails with a diff naming what the editor actually
+    // holds. The DOM assertions below fail with "element not found", which
+    // says nothing about whether the soft break was inserted, swallowed, or
+    // typed somewhere else entirely — and on Windows that is the open
+    // question, since `Alt` there is also the menu-bar activation key.
     await expect(tiptapInput).toHaveAttribute(
       "data-value",
       "- Some item\n- Second item\ncontinued",
     );
+    await expect(tiptapInput.locator("li")).toHaveCount(2);
+    await expect(
+      tiptapInput.locator("li", { hasText: /Second item\s*continued/ }),
+    ).toBeVisible();
   } finally {
     await app.close();
     await fixture.cleanup();
@@ -837,8 +851,7 @@ test("directory launchpad Tiptap composer deletes a persisted skill chip with re
   });
   const app = await launchElectronApp({
     fixturePath: fixture.fixturePath,
-    env: {      HOME: homeDir,
-    },
+    env: legacyStateHomeEnv(homeDir),
   });
 
   try {

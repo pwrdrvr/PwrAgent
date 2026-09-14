@@ -3,7 +3,7 @@ import {
   spawn as spawnProcess,
 } from "node:child_process";
 import fs from "node:fs";
-import { access, readFile, writeFile } from "node:fs/promises";
+import { access, readFile, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -257,6 +257,18 @@ async function resolveBinary(
   }
 
   for (const binaryName of application.binaryNames ?? []) {
+    if (process.platform === "win32") {
+      // `/usr/bin/which` does not exist on Windows, so this loop used to throw
+      // for every candidate and discovery found NO editor at all — the
+      // Applications surface came up empty and a transcript source link had
+      // nothing to open. Walk PATH here instead of handing off to `where.exe`:
+      // one less process, and no Git-for-Windows launcher in the path.
+      const resolvedPath = await findOnWindowsPath(binaryName, env);
+      if (resolvedPath) {
+        return resolvedPath;
+      }
+      continue;
+    }
     try {
       const result = await execFile("/usr/bin/which", [binaryName], {
         env,
@@ -279,6 +291,91 @@ async function resolveBinary(
   }
 
   return undefined;
+}
+
+/**
+ * Resolve `binaryName` against PATH the way Windows itself does: each PATH
+ * entry, each PATHEXT extension in order, plus the bare name for something
+ * already carrying its own extension.
+ *
+ * Environment names are case-insensitive on Windows and the real spelling is
+ * usually `Path`, so both variables are read case-insensitively rather than by
+ * the POSIX spelling.
+ */
+async function findOnWindowsPath(
+  binaryName: string,
+  env: NodeJS.ProcessEnv,
+): Promise<string | undefined> {
+  const resolved = readEnvIgnoringCase(env, ["PATH", "PATHEXT"]);
+  const searchPath = resolved.get("PATH");
+  if (!searchPath) {
+    return undefined;
+  }
+  // PATHEXT first, bare name last, which is the order Windows itself resolves
+  // in. The other way round, an extensionless MSYS script named `code` beats
+  // the `code.cmd` sitting beside it — and `CreateProcess` cannot start the
+  // one it picked, so discovery would report an editor that never launches.
+  // The bare name still gets a turn, for a `binaryName` that already carries
+  // its own extension.
+  const extensions = [
+    ...(resolved.get("PATHEXT") ?? ".COM;.EXE;.BAT;.CMD")
+      .split(";")
+      .map((extension) => extension.trim())
+      .filter(Boolean),
+    "",
+  ];
+  for (const entry of searchPath.split(path.delimiter)) {
+    // A quoted PATH entry is legal on Windows and the quotes are not part of
+    // the directory name.
+    const directory = entry.trim().replace(/^"(.*)"$/, "$1");
+    if (!directory) {
+      continue;
+    }
+    for (const extension of extensions) {
+      const candidate = path.join(directory, `${binaryName}${extension}`);
+      if (await isExistingFile(candidate)) {
+        return candidate;
+      }
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Existence is not enough here: a directory named like the binary would
+ * otherwise resolve as the editor and fail at every later spawn.
+ * `pathExists` is `access(F_OK)`, which answers for directories too.
+ */
+async function isExistingFile(candidatePath: string): Promise<boolean> {
+  try {
+    return (await stat(candidatePath)).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Read several environment variables case-insensitively in one pass.
+ *
+ * One walk rather than one per name: `findOnWindowsPath` runs once per
+ * candidate binary name, and the environment cannot change underneath it.
+ * Later keys win, so the conventional `Path` spelling is not preferred over
+ * `PATH` by `Object.entries` order alone — the result is at least stable
+ * rather than dependent on insertion order.
+ */
+function readEnvIgnoringCase(
+  env: NodeJS.ProcessEnv,
+  names: readonly string[],
+): Map<string, string> {
+  const wanted = new Map(names.map((name) => [name.toLowerCase(), name]));
+  const found = new Map<string, string>();
+  for (const [key, value] of Object.entries(env)) {
+    const name = wanted.get(key.toLowerCase());
+    if (name && value) {
+      found.set(name, value);
+    }
+  }
+  return found;
 }
 
 export async function resolveBundledApplicationCliPath(

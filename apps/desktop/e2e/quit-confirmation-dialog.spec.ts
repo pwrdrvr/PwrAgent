@@ -3,6 +3,22 @@ import { fileURLToPath } from "node:url";
 import { expect, test, type Page } from "@playwright/test";
 import { launchElectronApp } from "./fixtures/electron-app";
 
+/**
+ * Whether this platform can tell an idle prompt from a running command.
+ *
+ * `terminalHasForegroundCommand` reads node-pty's foreground process name on
+ * macOS and `tpgid` from `/proc` on Linux. ConPTY exposes neither, so that
+ * module deliberately answers `true` on Windows and says why: warning about a
+ * shell that turns out to be idle costs a dialog, skipping one that is
+ * mid-build costs the build.
+ *
+ * An integrated terminal therefore always blocks a quit on Windows. The two
+ * assertions guarded by this are the ones that watch a blocker CLEAR — they
+ * are statements about the POSIX signal, not about the quit flow, and the
+ * Windows branches below pin the conservative contract instead of skipping it.
+ */
+const TERMINAL_IDLE_IS_DETECTABLE = process.platform !== "win32";
+
 const specDir = path.dirname(fileURLToPath(import.meta.url));
 
 async function openSmokeThread(page: Page) {
@@ -215,6 +231,13 @@ test("keeps running work reachable after cancelling and following a blocker", as
         }
       ).pwragent.writeIntegratedTerminal(request);
     }, { sessionId, data: "\u0003" });
+    if (!TERMINAL_IDLE_IS_DETECTABLE) {
+      // The interrupt still lands; the blocker cannot observe that it did.
+      // Pin that rather than skipping, so the row is at least known to stay
+      // put instead of disappearing for some unrelated reason.
+      await expect(queue.locator(".quit-blocker-queue__row")).toHaveCount(1);
+      return;
+    }
     await expect(queue.locator(".quit-blocker-queue__row")).toHaveCount(0, {
       timeout: 15_000,
     });
@@ -233,7 +256,11 @@ test("keeps running work reachable after cancelling and following a blocker", as
   }
 });
 
-test("does not confirm quit for a terminal sitting at its prompt", async () => {
+// Named for what it pins on BOTH platforms, not for the POSIX half: on
+// Windows `terminalHasForegroundCommand` cannot see an idle prompt and
+// always blocks, so this asserts the dialog there. Titling it "does not
+// confirm quit" made a passing Windows contract read as a regression.
+test("confirms quit for an idle terminal only where idleness is detectable", async () => {
   test.setTimeout(90_000);
 
   const app = await launchElectronApp({
@@ -262,11 +289,14 @@ test("does not confirm quit for a terminal sitting at its prompt", async () => {
 
     const outcome = await Promise.race([closedPromise, dialogPromise]);
     if (outcome.kind === "dialog") {
-      // Clean up a regressed run before surfacing the assertion failure.
+      // Either a regressed run on POSIX or the expected Windows path. Close
+      // the dialog first so teardown is clean before anything is asserted.
       await outcome.dialog.locator("#quit").dispatchEvent("click");
       await closedPromise;
     }
-    expect(outcome.kind).toBe("closed");
+    expect(outcome.kind).toBe(
+      TERMINAL_IDLE_IS_DETECTABLE ? "closed" : "dialog",
+    );
   } finally {
     await app.close().catch(() => undefined);
   }

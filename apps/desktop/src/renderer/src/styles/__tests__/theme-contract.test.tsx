@@ -414,6 +414,11 @@ describe("Tangerine Terminal theme contract", () => {
       // How far the 11px hit band reaches over the scrolling neighbour's
       // edge; both seams read it so their geometry cannot drift apart.
       "pane-seam-scroll-side",
+      // Sidebar width under the 1100px cap — defined on `.app-shell` inside
+      // that media query, not `:root`. The painted grid track and
+      // `--sidebar-reserve` both derive from it so the resize grip cannot
+      // detach from the wall it straddles. Layout, not theme.
+      "sidebar-capped-width",
       // Live run strip row height — defined on `.live-strip`, not `:root`.
       // The four-row scroll cap is derived from it, so the two cannot drift.
       "live-strip-row-h",

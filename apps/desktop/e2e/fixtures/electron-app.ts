@@ -343,6 +343,7 @@ export async function launchElectronApp(
       env[key] = value;
     }
   }
+  anchorWindowsPwragentRoot(env);
   env[E2E_SHUTDOWN_LAUNCH_ID_ENV] = launchId;
   if (diagnosticsFile) {
     env[E2E_SHUTDOWN_DIAGNOSTICS_FILE_ENV] = diagnosticsFile;
@@ -482,6 +483,28 @@ async function finishElectronLaunch(args: {
       launchId,
     }),
   );
+  // Bound every action on every window this app opens.
+  //
+  // Playwright leaves actions unbounded by default, so a click that never
+  // becomes actionable waits out the whole test budget and reports a bare
+  // "Test timeout of 30000ms exceeded" — no call log, no "resolved to N
+  // elements", no "intercepts pointer events", and Electron traces carry no
+  // DOM snapshots to fall back on. Two Windows transcript hangs cost three
+  // CI cycles between them and produced no evidence at all.
+  //
+  // It has to be set HERE and not as `actionTimeout` in `playwright.config.ts`.
+  // That option is applied by the fixtures that build a browser context;
+  // `_electron.launch()` makes its own, so the config value silently reaches
+  // nothing — which is exactly how those two hangs survived a config that
+  // claimed to bound them. Setting it on the context rather than the first
+  // page also covers the Star Map and federation windows opened later.
+  //
+  // This shortens an unbounded wait; it extends nothing. No action in this
+  // suite legitimately runs for twenty seconds, every `waitFor*` call here
+  // already passes its own explicit timeout (which overrides this), and
+  // `expect` polling has its own budget entirely.
+  electronApp.context().setDefaultTimeout(20_000);
+
   const window = await electronApp.firstWindow();
 
   await waitForRendererReady({
@@ -596,6 +619,43 @@ async function finishElectronLaunch(args: {
       },
     });
   }
+}
+
+/**
+ * Anchor the PwrAgent root to the per-test home on Windows.
+ *
+ * Everywhere else the harness relies on `HOME`: `resolvePwragentRoot` falls
+ * back to `os.homedir()`, which on POSIX honors `HOME`, so the app lands in
+ * the same `<homeRoot>/.pwragent` that `resolveSeedConfigPath` seeds. On
+ * Windows `os.homedir()` reads `USERPROFILE` and ignores `HOME` outright, so
+ * the launched app read `C:\Users\<runner>\.pwragent` instead, found no
+ * profile, and dropped into the first-run wizard — whose modal scrim then
+ * swallowed the spec's first click. Playwright reports that as a bare test
+ * timeout with no call log: 73 of them on this suite's first Windows run,
+ * against zero on Linux and macOS.
+ *
+ * `PWRAGENT_HOME` rather than a mirrored `USERPROFILE`. The env var is the
+ * root override this project documents for exactly this case, it outranks
+ * `os.homedir()` in `resolvePwragentRoot` instead of racing it, and it moves
+ * only PwrAgent's own root. Repointing `USERPROFILE` moves the home every
+ * Windows library derives paths from, and the desktop app died on the runner
+ * before it wrote a line of stderr when this harness tried it.
+ *
+ * Scoped to win32 so POSIX keeps resolving through `HOME` exactly as before,
+ * and skipped when a spec set its own — `onboarding-wizard.spec.ts` drives
+ * these resolvers deliberately. The seed follows along on its own:
+ * `resolveSeedConfigPath` reads `PWRAGENT_HOME` from this same environment
+ * first, so it and the app agree, which is what the pre-flight
+ * `assertOnboardingSeedTook` could not otherwise prove.
+ */
+function anchorWindowsPwragentRoot(env: Record<string, string>): void {
+  if (process.platform !== "win32") {
+    return;
+  }
+  if (env[PWRAGENT_HOME_ENV] || !env.HOME) {
+    return;
+  }
+  env[PWRAGENT_HOME_ENV] = path.join(env.HOME, ".pwragent");
 }
 
 /**

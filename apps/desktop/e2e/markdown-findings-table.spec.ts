@@ -102,7 +102,20 @@ test("renders a wide assistant markdown findings table without crushing the colu
       };
     });
 
-    expect(dimensions.assistantWidth).toBeGreaterThan(880);
+    // The breakout is the feature: a wide table escapes the column every
+    // other assistant message sits in. Measured against that column rather
+    // than a pixel constant, because the constant encoded one runner's window
+    // size — 880 passed on macOS and reported 566 on the 1024px-wide Windows
+    // runner, where the breakout was working exactly as designed.
+    //
+    // 1.15 is below the narrowest ratio the stylesheet can produce and above
+    // 1. A plain message is `min(100%, 760px)` capped at `max-width: 84%`; a
+    // wide one is the full 100%. So the ratio is 1/0.84 = 1.19 on any
+    // container under 904px and grows from there as 760px stops binding.
+    const proseWidth = await proseMessage.evaluate(
+      (node) => node.getBoundingClientRect().width,
+    );
+    expect(dimensions.assistantWidth).toBeGreaterThan(proseWidth * 1.15);
     // Content-aware profile for the canonical review-findings header
     expect(dimensions.headerKinds).toEqual(["tag", "tag", "label", "prose", "prose"]);
     // File column is profiled as `label` and should host the full filename

@@ -644,3 +644,74 @@ jobs:
             apps/desktop/playwright-report/
             apps/desktop/test-results/
           retention-days: 30
+
+  windows-e2e:
+    name: Windows Desktop E2E (lane ${{ matrix.lane }} of 4)
+    # Advisory while the lane establishes a baseline: it is deliberately absent
+    # from `desktop-e2e-result`, so a Windows-only failure cannot block a merge
+    # yet. Promote it into that aggregate once it has been green for a while.
+    #
+    # Until this job existed, `e2e/windows-codex-discovery.spec.ts` and
+    # `e2e/windows-titlebar-hover.spec.ts` had never executed on any runner:
+    # both are ordinary members of the suite that self-skip off win32, and no
+    # lane ran Playwright on Windows. The first guards native `.cmd` discovery
+    # and launch, which is exactly the Git-for-Windows launcher-handoff class
+    # that CLAUDE.md records as expensive.
+    runs-on: windows-latest
+    needs: [changes, windows-install-deps]
+    if: needs.changes.outputs.code_impacting == 'true'
+    strategy:
+      # Keep the other lanes running after a failure so their artifacts show
+      # whether a failure is isolated or suite-wide, exactly as the Linux and
+      # macOS matrices do. Hosted Windows capacity runs all four concurrently,
+      # so no max-parallel cap is needed.
+      fail-fast: false
+      matrix:
+        lane: [1, 2, 3, 4]
+    timeout-minutes: 40
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        timeout-minutes: 10
+        # No `lfs: true` here, unlike the Linux and macOS lanes. The only LFS
+        # objects in the tree are the two darwin visual baselines, and
+        # `visual-regression.spec.ts` skips off darwin/arm64.
+
+      - name: Install Node.js and dependencies
+        uses: pwrdrvr/configure-nodejs@v1
+        timeout-minutes: 15
+        with:
+          node-version: 24.18.0
+          working-directory: .
+          cache-electron: "true"
+
+      - name: Run desktop replay-backed Electron tests
+        # 30, not the macOS lane's 20. This budget is for the lane to finish
+        # REPORTING, not for any individual test to pass: a failing spec costs
+        # its 30s timeout twice (CI retries once), so a lane with real failures
+        # runs far longer than a green one. The first run truncated lanes 1, 2
+        # and 4 mid-suite and never reached `windows-codex-discovery.spec.ts`
+        # at all. No test-level timeout is raised anywhere.
+        timeout-minutes: 30
+        # windows-latest provides an interactive desktop session, so unlike the
+        # Linux lane this needs neither xvfb nor a window manager.
+        #
+        # Sharding stays file-level, matching the macOS lane: the suite has no
+        # `beforeAll` and no serial describes, so `--fully-parallel` would be
+        # safe, but keeping both 4-lane matrices on identical semantics means a
+        # Windows-only failure is attributable to Windows and not to a
+        # different sharding mode.
+        run: >-
+          pnpm --filter @pwragent/desktop test:e2e
+          --shard=${{ matrix.lane }}/4
+
+      - name: Upload desktop Playwright artifacts
+        uses: actions/upload-artifact@v7
+        if: ${{ !cancelled() }}
+        timeout-minutes: 10
+        with:
+          name: desktop-e2e-windows-lane-${{ matrix.lane }}-artifacts
+          path: |
+            apps/desktop/playwright-report/
+            apps/desktop/test-results/
+          retention-days: 30

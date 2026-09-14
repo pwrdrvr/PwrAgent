@@ -37,7 +37,13 @@ function pathBaseName(value?: string): string {
 // `C:/…` (the forward slashes we normalize codex/git paths to elsewhere), and
 // without this they produce two `directory:` keys → duplicate folders. No-op on
 // already-POSIX paths (no backslashes, no trailing slash).
-function canonicalizeNavigationPath(value: string): string {
+// Exported because a test that builds a `directory:` key or compares a stored
+// directory path by hand has to build it the way this module does. Desktop E2E
+// specs spelled several of these with `path.join` / `path.sep`, which is native
+// on Windows — so the key they wrote never matched the one the app stored, and
+// one spec's hand-written key registered a SECOND row for a directory that was
+// already listed. Assert against the contract, not against a restatement of it.
+export function canonicalizeNavigationPath(value: string): string {
   return value.replace(/\\/g, "/").replace(/\/+$/, "");
 }
 

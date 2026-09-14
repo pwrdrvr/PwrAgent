@@ -31716,7 +31716,23 @@ button.pricing-token-miser__folded:focus-visible {
 
 @media (max-width: 1100px) {
   .app-shell {
-    grid-template-columns: minmax(280px, min(var(--sidebar-width, 360px), 360px)) minmax(0, 1fr);
+    /* The capped sidebar width, named once so the painted track and the
+       reserve cannot say different things. The base rule sets the reserve
+       from `--sidebar-width`, which this block no longer honours — so below
+       1100px the sidebar painted at 360 while the reserve still read 408,
+       and `.sidebar__resize-handle` (absolute, 11px wide, full height,
+       z-index 12, its only visible part a 1px `::after`) sat 45px INSIDE
+       the content pane. Anything whose click point landed in that invisible
+       band was unclickable: the Windows E2E lane, whose runner window is
+       1024px, could not open a transcript work group, and Playwright named
+       the handle as intercepting the click.
+       `minmax()` floors the track at 280px and `max()` floors the reserve at
+       the same value, so the two agree at every width.
+       The `[data-sidebar-hidden="true"]` override still wins on
+       specificity, so a hidden sidebar still reserves 0. */
+    --sidebar-capped-width: min(var(--sidebar-width, 360px), 360px);
+    grid-template-columns: minmax(280px, var(--sidebar-capped-width)) minmax(0, 1fr);
+    --sidebar-reserve: max(280px, var(--sidebar-capped-width));
   }
 
   /* No rail-gutter override here. The context rail is anchored to

@@ -173,6 +173,99 @@ function listItems(list: Locator): Locator {
   return list.locator("> [role=listitem]");
 }
 
+/** One violating node, as `AxeBuilder.analyze()` reports it. */
+type AxeViolationNode =
+  Awaited<ReturnType<AxeBuilder["analyze"]>>["violations"][number]["nodes"][number];
+
+/**
+ * The measurement behind one violating node, for the CI log.
+ *
+ * A rule's `help` states the requirement; only the node's own check results
+ * carry the value that failed it, and for several rules the requirement alone
+ * cannot be acted on. `target-size` is the worked example: "24px by 20px,
+ * should be at least 24px by 24px" is a box to grow, while "insufficient space
+ * to its closest neighbors" is a margin to add and "partially obscured" is a
+ * z-order overlap — three different fixes behind one sentence of help text.
+ * The Windows lane spent a cycle guessing between them.
+ *
+ * `html` comes along because a `target` selector is built from whatever
+ * attributes make the node unique, so it is often an `aria-label` with no hint
+ * of which component drew the element. Truncated: axe returns the full outer
+ * HTML, and a row with children can run for thousands of characters.
+ */
+function describeNode(node: AxeViolationNode): string {
+  const reasons = [...node.any, ...node.all, ...node.none].map(
+    (check) => check.message,
+  );
+  const lines = [...new Set(reasons)].map((reason) => `        ${reason}`);
+  const html = node.html.replace(/\s+/g, " ").trim();
+  lines.push(`        html: ${html.length > 200 ? `${html.slice(0, 200)}…` : html}`);
+  return lines.join("\n");
+}
+
+/**
+ * Name the elements sitting on top of a target, for an obscured `target-size`.
+ *
+ * axe reports the measurement ("315px by 8.8px") but never what took the rest.
+ * Without this you are reduced to reading the stylesheet and guessing, which
+ * costs a CI cycle per guess — and two of those guesses were wrong here,
+ * because `pointer-events` INHERITS and a rule that looks like it silences an
+ * overlapper may be a no-op on an already-silenced subtree.
+ *
+ * `elementsFromPoint` is the right probe because it applies the same rule axe
+ * does: it omits anything with `pointer-events: none`, which is exactly the
+ * filter in axe's `getTargetRects`. Everything it returns above the target is
+ * therefore a real obscurer, and each one either has to stop taking the
+ * pointer or stop covering the band.
+ *
+ * Sampled on a grid rather than at the centre: an overlapper that covers only
+ * one end is what splits the rect, and the centre alone would miss it.
+ */
+async function describeObscurers(
+  window: Page,
+  selector: string,
+): Promise<string> {
+  const names = await window.evaluate((target) => {
+    const node = document.querySelector(target);
+    if (!node) {
+      return [];
+    }
+    const rect = node.getBoundingClientRect();
+    const found = new Set<string>();
+    for (let row = 1; row <= 3; row += 1) {
+      for (let column = 1; column <= 5; column += 1) {
+        const x = rect.left + (rect.width * column) / 6;
+        const y = rect.top + (rect.height * row) / 4;
+        const stack = document.elementsFromPoint(x, y);
+        // Only elements painted ABOVE the target obscure it. When the target
+        // is not in the stack at all — fully covered, or `pointer-events:
+        // none` itself — there is no "above", and taking the whole stack
+        // would name the target's own ancestors, `body` and `html` as
+        // obscurers and send the reader after elements that obscure nothing.
+        const depth = stack.indexOf(node);
+        if (depth < 0) {
+          continue;
+        }
+        for (const element of stack.slice(0, depth)) {
+          if (node.contains(element)) {
+            continue;
+          }
+          const classes = typeof element.className === "string"
+            ? element.className.trim().split(/\s+/).filter(Boolean)
+            : [];
+          found.add(
+            `${element.tagName.toLowerCase()}${classes.map((name) => `.${name}`).join("")}`,
+          );
+        }
+      }
+    }
+    return [...found];
+  }, selector);
+  return names.length > 0
+    ? `\n        obscured by: ${names.join(", ")}`
+    : "";
+}
+
 async function runAxe(
   window: Page,
   surface: string,
@@ -229,14 +322,29 @@ async function runAxe(
   // you which rules + selectors failed without having to download the
   // Playwright trace artifact.
   if (results.violations.length > 0) {
-    const summary = results.violations
-      .map((violation) => {
-        const nodes = violation.nodes
-          .map((node) => `    - ${node.target.join(" ")}`)
-          .join("\n");
-        return `  ${violation.id} (${violation.impact ?? "n/a"}): ${violation.help}\n${nodes}\n    ${violation.helpUrl}`;
-      })
-      .join("\n");
+    const summary = (
+      await Promise.all(
+        results.violations.map(async (violation) => {
+          const nodes = (
+            await Promise.all(
+              violation.nodes.map(async (node) => {
+                const selector = node.target.join(" ");
+                // Only the obscured case needs the extra probe, and only a
+                // string selector can be re-queried in the page.
+                const obscurers =
+                  violation.id === "target-size"
+                  && typeof node.target[0] === "string"
+                  && node.target.length === 1
+                    ? await describeObscurers(window, selector)
+                    : "";
+                return `    - ${selector}\n${describeNode(node)}${obscurers}`;
+              }),
+            )
+          ).join("\n");
+          return `  ${violation.id} (${violation.impact ?? "n/a"}): ${violation.help}\n${nodes}\n    ${violation.helpUrl}`;
+        }),
+      )
+    ).join("\n");
     throw new Error(
       `axe-core found ${results.violations.length} WCAG2 AA violation(s) on ${surface}:\n${summary}`,
     );
@@ -620,8 +728,51 @@ for (const theme of AUDIT_THEMES) {
         // mystery: the cluster's split-button chevron is 16x24, under the
         // `target-size` floor, and is absent here only because an isolated
         // E2E profile has no federation peers to offer.
+        //
+        // Scroll is the same kind of leftover. `.directory-row__header` is
+        // `position: sticky; top: 0` with an opaque background, so once the
+        // list is scrolled it covers whichever row is passing under it, and
+        // axe measures a target's largest UNOBSCURED rect. The paging step
+        // below calls `scrollIntoViewIfNeeded` to reach "Load more threads"
+        // and leaves the list at an offset that bisected exactly one row —
+        // `.thread-row__open` reported at 315x8.8px against the 24x24 floor,
+        // on the narrower Windows window where that row happened to land
+        // under the header. Nothing is design-wrong there: the row is whole
+        // and clickable once scrolled to. So return the list to a defined
+        // offset, the same way the pointer is returned to a defined corner.
         const settle = async () => {
           await app.window.mouse.move(0, 0);
+          // Anchored on the directory row, not its thread list: the list is
+          // unmounted for the collapsed scan, and a locator that resolves to
+          // nothing does not no-op, it waits and then throws.
+          await directoryRow.evaluate((row) => {
+            for (
+              let node = row.parentElement;
+              node;
+              node = node.parentElement
+            ) {
+              // Both halves matter. An element with `overflow: visible`
+              // whose content is simply taller than its box also reports
+              // `scrollHeight > clientHeight`, and assigning `scrollTop`
+              // there does nothing — the walk would stop on it and leave the
+              // real container scrolled.
+              const overflowY = getComputedStyle(node).overflowY;
+              if (
+                (overflowY === "auto" || overflowY === "scroll")
+                && node.scrollHeight > node.clientHeight + 1
+              ) {
+                node.scrollTop = 0;
+                return;
+              }
+            }
+          });
+          // One frame, so sticky offsets settle before anything is measured.
+          await app.window.evaluate(
+            async () =>
+              await new Promise((resolve) =>
+                requestAnimationFrame(() => resolve(null)),
+              ),
+          );
         };
 
         // Establish an explicit user disclosure before paging and selection.

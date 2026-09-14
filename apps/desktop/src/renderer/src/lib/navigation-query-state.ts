@@ -31,6 +31,39 @@ export type NavigationSelectionState = {
   collectionError?: string;
 };
 
+/**
+ * Does a completed exact read still authorize this thread's composer?
+ *
+ * `readiness` describes the read that is in flight, not the authorization the
+ * last one produced. A refresh republishes the state as `loading` while
+ * retaining `detail` for the same identity, so a predicate written as
+ * `readiness === "ready"` withdraws the composer for the width of every
+ * revalidation. `ROW_CHANGE_METHODS` admits `turn/started`, `turn/completed`
+ * and `navigation/thread/seen`, each of which lands exactly while an operator
+ * is typing, and each admission holds the composer disabled for the 250ms
+ * coalescing window plus a round trip. The symptom is a composer that flips to
+ * `contenteditable="false"` mid-keystroke.
+ *
+ * `detail` is the authorization, not `readiness`. `selectNavigationIdentity`
+ * carries `detail` forward only when the identity key matches, and
+ * `useNavigationSelectedDetail` hides a state whose `ref` is not the requested
+ * one, so a defined `detail` here always means an exact read completed for
+ * exactly this thread. That is the invariant the composer needs — a row can
+ * select a thread, but only this exact read can authorize its composer — and
+ * revalidating an authorization does not revoke it.
+ *
+ * Withdrawal stays exact. The owner reports only `ready` or `failed`, so
+ * `failed` here is always a completed read that failed, never an in-flight
+ * one; a non-`present` identity is the archived, deleted, denied and
+ * unresolved cases; and an identity change drops `detail` outright.
+ */
+export function navigationSelectionAuthorizesComposer(
+  state: NavigationSelectionState | undefined,
+): boolean {
+  return state?.readiness !== "failed"
+    && state?.detail?.identity === "present";
+}
+
 export function navigationIdentityKey(ref: NavigationIdentity): string {
   return JSON.stringify([ref.ownerInstanceId ?? null, ref.backend, ref.threadId]);
 }

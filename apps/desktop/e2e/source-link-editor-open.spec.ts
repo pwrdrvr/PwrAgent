@@ -5,8 +5,31 @@ import { expect, test } from "@playwright/test";
 import { launchElectronApp } from "./fixtures/electron-app";
 
 const specDir = path.dirname(fileURLToPath(import.meta.url));
-const sourceRoot = "/tmp/pwragent-source-link-e2e";
-const sourcePath = path.join(sourceRoot, "source.ts");
+// The replay fixture hard-codes this exact string in the transcript's source
+// link, so it is what the renderer sends, what the main process stats, and
+// what the capture file echoes back. The spec cannot pick its own temp
+// directory: substituting `os.tmpdir()` here left the app resolving the
+// fixture's `/tmp/...` while the file sat under `/var/folders/...`, and the
+// open silently produced no capture.
+const FIXTURE_SOURCE_PATH = "/tmp/pwragent-source-link-e2e/source.ts";
+// Where that string lands on this OS. Windows has no `/tmp`, but it does
+// resolve a root-relative path against the current drive — and the harness
+// launches Electron with a cwd inside this checkout, so the app and this
+// process resolve it to the same place. On POSIX the two are identical.
+const sourcePath = path.resolve(FIXTURE_SOURCE_PATH);
+const sourceRoot = path.dirname(sourcePath);
+const isWindows = process.platform === "win32";
+
+/** The env var's real spelling is usually `Path` on Windows, and Windows
+ *  compares environment names case-insensitively — so write back whichever
+ *  spelling this process already carries rather than adding a second key. */
+function envKey(name: string): string {
+  return (
+    Object.keys(process.env).find(
+      (candidate) => candidate.toLowerCase() === name.toLowerCase(),
+    ) ?? name
+  );
+}
 
 test("opens transcript source links with VS Code line metadata", async () => {
   const capturePath = path.join(sourceRoot, "application-open.json");
@@ -19,18 +42,26 @@ test("opens transcript source links with VS Code line metadata", async () => {
     Array.from({ length: 20 }, (_, index) => `line ${index + 1}`).join("\n"),
     "utf8"
   );
-  await writeFile(path.join(fakeBinDir, "code"), "#!/bin/sh\nexit 0\n", {
-    encoding: "utf8",
-    mode: 0o755,
-  });
+  // A shebang is not executable on Windows; a `.cmd` that exits 0 is the
+  // equivalent stub, and PATHEXT is what makes discovery find it by bare name.
+  if (isWindows) {
+    await writeFile(path.join(fakeBinDir, "code.cmd"), "@echo off\r\nexit /b 0\r\n", "utf8");
+  } else {
+    await writeFile(path.join(fakeBinDir, "code"), "#!/bin/sh\nexit 0\n", {
+      encoding: "utf8",
+      mode: 0o755,
+    });
+  }
 
+  const pathKey = envKey("PATH");
   const app = await launchElectronApp({
     fixturePath: path.resolve(
       specDir,
       "fixtures/source-link-editor-open/replay.fixture.json"
     ),
     env: {
-      PATH: `${fakeBinDir}:${process.env.PATH ?? ""}`,
+      [pathKey]: `${fakeBinDir}${path.delimiter}${process.env[pathKey] ?? ""}`,
+      ...(isWindows ? { [envKey("PATHEXT")]: ".COM;.EXE;.BAT;.CMD" } : {}),
       PWRAGENT_E2E_APPLICATION_OPEN_CAPTURE_PATH: capturePath,
     },
   });
@@ -85,11 +116,11 @@ test("opens transcript source links with VS Code line metadata", async () => {
         request: {
           applicationId: "vscode",
           kind: "editor",
-          targetPath: sourcePath,
+          targetPath: FIXTURE_SOURCE_PATH,
           targetLine: 12,
         },
         invocation: {
-          args: ["--goto", `${sourcePath}:12`],
+          args: ["--goto", `${FIXTURE_SOURCE_PATH}:12`],
         },
       });
   } finally {

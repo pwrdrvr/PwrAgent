@@ -36,6 +36,53 @@ export type FakeCodexProtocolRequest = {
   setupMarkerPath?: string;
 };
 
+/**
+ * Give a POSIX-style fake agent a form Windows can actually start.
+ *
+ * These fakes are written as extensionless files with a `#!/usr/bin/env node`
+ * shebang and `chmod 0o755`. Both are no-ops on Windows: the shebang means
+ * nothing to CreateProcess and the mode bit does not exist, so a `cli_path`
+ * pointing at one names a file that cannot be spawned and the agent never
+ * reports available.
+ *
+ * Written beside the original as a `.cmd`, which is the layout npm produces
+ * (`kimi`, `kimi.cmd`, `kimi.ps1` next to each other) — but the shim is also
+ * what callers must USE. `resolveWindowsCodexSibling` finds a spawnable
+ * sibling for an extensionless command, and only the Codex transport consults
+ * it; `acp-stdio-transport.ts` passes the configured path to
+ * `createCommandInvocation`, which builds for a `.cmd` it is handed and does
+ * not go looking for one. So this returns the path to seed into `cli_path`.
+ *
+ * Node runs the extensionless original directly (it ignores the shebang
+ * line), so the body stays single-sourced. `exit /b` is required: without it
+ * a `.cmd` reports its own success rather than node's, and a fake that failed
+ * to start would read as a clean `--version` probe.
+ */
+async function writeWindowsSpawnableShim(targetPath: string): Promise<string> {
+  if (process.platform !== "win32") {
+    return targetPath;
+  }
+  // Extensionless targets only. The npm layout this mirrors is `kimi` beside
+  // `kimi.cmd`; a target that already names its own extension is spawnable as
+  // written, and appending here would drop a stray `codex.js.cmd` into a
+  // fixture whose whole subject is which file PATH discovery picks
+  // (`windows-codex-discovery.spec.ts` writes its own `codex.cmd`).
+  if (path.extname(targetPath)) {
+    return targetPath;
+  }
+  await writeFile(
+    `${targetPath}.cmd`,
+    [
+      "@echo off",
+      `node "%~dp0${path.basename(targetPath)}" %*`,
+      "exit /b %ERRORLEVEL%",
+      "",
+    ].join("\r\n"),
+    "utf8",
+  );
+  return `${targetPath}.cmd`;
+}
+
 export async function writeFakeKimiExecutable(
   targetPath: string,
 ): Promise<string> {
@@ -87,7 +134,7 @@ input.on("line", (line) => {
     "utf8",
   );
   await chmod(targetPath, 0o755);
-  return targetPath;
+  return await writeWindowsSpawnableShim(targetPath);
 }
 
 export async function writeFakeCodexExecutable(params: {
@@ -404,7 +451,7 @@ input.on("line", (line) => {
     "utf8",
   );
   await chmod(params.targetPath, 0o755);
-  return params.targetPath;
+  return await writeWindowsSpawnableShim(params.targetPath);
 }
 
 export async function readFakeCodexProtocolLog(
@@ -555,13 +602,15 @@ export async function installOwnerFakeAgents(params: {
   launchMarkerPath: string;
 }> {
   const binDir = params.binDir ?? path.join(params.homeRoot, "bin");
-  const fakeKimiPath = path.join(binDir, "fake-kimi");
-  const fakeCodexPath = path.join(binDir, "fake-codex");
   const protocolLogPath = path.join(binDir, "fake-codex.protocol.jsonl");
   const launchMarkerPath = path.join(binDir, "fake-codex.launched");
-  await writeFakeKimiExecutable(fakeKimiPath);
-  await writeFakeCodexExecutable({
-    targetPath: fakeCodexPath,
+  // Both writers return the path to LAUNCH, which on Windows is the `.cmd`
+  // shim rather than the extensionless file they also write.
+  const fakeKimiPath = await writeFakeKimiExecutable(
+    path.join(binDir, "fake-kimi"),
+  );
+  const fakeCodexPath = await writeFakeCodexExecutable({
+    targetPath: path.join(binDir, "fake-codex"),
     protocolLogPath,
     launchMarkerPath,
   });
@@ -590,9 +639,8 @@ export async function seedFakeCodexExecutable(params: {
   requestLogPath: string;
   launchMarkerPath: string;
 }): Promise<{ executablePath: string }> {
-  const executablePath = path.join(params.homeRoot, "bin", "fake-codex");
-  await writeFakeCodexExecutable({
-    targetPath: executablePath,
+  const executablePath = await writeFakeCodexExecutable({
+    targetPath: path.join(params.homeRoot, "bin", "fake-codex"),
     protocolLogPath: params.requestLogPath,
     launchMarkerPath: params.launchMarkerPath,
   });
