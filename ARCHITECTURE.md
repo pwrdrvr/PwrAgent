@@ -69,6 +69,10 @@ rate-limited to one log per ten seconds with suppressed denials counted. Actual
 mutation events may invalidate affected working state. Admission state is entirely
 in memory and adds no SQLite writes.
 
+An admitted user refresh also refreshes branch/worktree inventory beneath the
+directory status cache. Automatic forced scheduling carries no user intent and
+does not spend the user allowance.
+
 ## Thread state and lifecycle
 
 ### Runtime and refresh

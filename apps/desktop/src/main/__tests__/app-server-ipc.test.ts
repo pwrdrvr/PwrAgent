@@ -8338,6 +8338,10 @@ describe("app server ipc", () => {
     expect(readWorktreeWorkingStateEntries.mock.calls.at(-1)?.[0]).toEqual([
       "/repo/wt",
     ]);
+    expect(scheduleWorktreeGitWorkingStateRefresh).toHaveBeenCalledWith(
+      expect.objectContaining({ worktreePath: "/repo/wt" }),
+    );
+    expect(scheduleWorktreeGitWorkingStateRefresh.mock.calls.at(-1)![0]).not.toHaveProperty("userAction", true);
   });
 
   it("refreshes a thread's working state after its expected branch changes", async () => {

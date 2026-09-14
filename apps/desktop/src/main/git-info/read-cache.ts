@@ -64,7 +64,8 @@ export class GitReadCache<T> {
 
   read(
     key: string,
-    load: () => Promise<T>,
+    // Nested caches receive the admitted decision, never the caller's claim.
+    load: (admission: { userRefresh: boolean }) => Promise<T>,
     request: GitReadRequest = {},
     reused?: (reason: "cache-hit" | "pending-reuse") => void,
   ): Promise<T> {
@@ -81,7 +82,7 @@ export class GitReadCache<T> {
       return cached.failed ? Promise.reject(cached.error) : Promise.resolve(cached.value);
     }
     // Defer the loader until pending is installed, including synchronous failures.
-    const result = Promise.resolve().then(load).then((value) => {
+    const result = Promise.resolve().then(() => load({ userRefresh: bypass })).then((value) => {
       // A mutation during the read must not publish pre-mutation facts.
       if (this.pending.get(key) === result) {
         this.remember(key, {

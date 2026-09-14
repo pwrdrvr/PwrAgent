@@ -842,9 +842,9 @@ export class GitDirectoryService {
       return undefined;
     }
 
-    return this.statusCache.read(cwd, async () => {
+    return this.statusCache.read(cwd, async ({ userRefresh }) => {
       try {
-        return await this.loadDirectoryStatus(cwd);
+        return await this.loadDirectoryStatus(cwd, userRefresh);
       } catch (error) {
         return {
           syncState: "status-unavailable",
@@ -870,6 +870,7 @@ export class GitDirectoryService {
 
   private async loadDirectoryStatus(
     cwd: string,
+    userRefresh: boolean,
   ): Promise<NavigationDirectoryGitStatus | undefined> {
     const runGit = this.runGitCommand;
     const gitEnv = this.gitEnv;
@@ -895,7 +896,7 @@ export class GitDirectoryService {
       runGit(repoRoot, ["rev-parse", "--abbrev-ref", "HEAD"], gitEnv).catch(
         () => "",
       ),
-      this.readBranchInventory({ commonGitDir, repoRoot }),
+      this.readBranchInventory({ commonGitDir, repoRoot, userRefresh }),
       runGit(
         repoRoot,
         [
@@ -1065,6 +1066,7 @@ export class GitDirectoryService {
   private async readBranchInventory(params: {
     commonGitDir: string;
     repoRoot: string;
+    userRefresh: boolean;
   }): Promise<BranchInventory> {
     const cached = this.branchInventoryCache.get(params.commonGitDir);
     const now = Date.now();
@@ -1072,7 +1074,7 @@ export class GitDirectoryService {
       return await cached.inFlight;
     }
 
-    if (cached?.inventory && cached.expiresAt > now) {
+    if (!params.userRefresh && cached?.inventory && cached.expiresAt > now) {
       return cached.inventory;
     }
 

@@ -3397,6 +3397,7 @@ class DesktopAppServerService {
   private startWorktreeWorkingStateRefresh(params: {
     worktreePaths: string[];
     force?: boolean;
+    userAction?: boolean;
   }): number {
     const worktreePaths =
       this.selectWorktreeWorkingStateRefreshCandidates(params);
@@ -3409,7 +3410,7 @@ class DesktopAppServerService {
     for (const worktreePath of worktreePaths) {
       if (registry.scheduleWorktreeGitWorkingStateRefresh({
         worktreePath,
-        ...(params.force ? { userAction: true } : {}),
+        ...(params.userAction ? { userAction: true } : {}),
         acceptedPushedCommitShas:
           this.getMergedPrCommitShasForWorktree(worktreePath),
       })) {
@@ -3435,6 +3436,7 @@ class DesktopAppServerService {
       scheduled: this.startWorktreeWorkingStateRefresh({
         worktreePaths: [worktreePath],
         force,
+        userAction: request.trigger === "user",
       }) > 0,
     };
   }
