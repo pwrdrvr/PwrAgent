@@ -13936,7 +13936,11 @@ export class DesktopBackendRegistry {
     }
     const overlay = await this.overlayStore.getThreadOverlayState({ backend, threadId: request.threadId });
     if (request.display.resource === "transcript") {
-      return projectThreadDisplay(await this.readThreadData(request), request, { ...overlay, activeTurnId: this.getActiveTurnForThread({ backend, threadId: request.threadId })?.turnId });
+      return projectThreadDisplay(await this.readThreadData(request), request, {
+        ...overlay,
+        subAgents: backend === "codex" ? this.mergeLiveTokenMiserSubAgents(request.threadId, overlay?.subAgents) : overlay?.subAgents,
+        activeTurnId: this.getActiveTurnForThread({ backend, threadId: request.threadId })?.turnId,
+      });
     }
     this.assertNotBootstrap("readThread");
     const pricing = await this.readThreadPricingWithLiveTokenMiser({ backend, threadId: request.threadId });
@@ -13948,7 +13952,13 @@ export class DesktopBackendRegistry {
     return projectThreadDisplay({
       backend, threadId: request.threadId, fetchedAt: Date.now(), pricing, toolAccounting,
       replay: { entries: [], messages: [], pagination: { supportsPagination: true, hasPreviousPage: false } },
-    }, request, { ...overlay, activeTurnId: this.getActiveTurnForThread({ backend, threadId: request.threadId })?.turnId });
+    }, request, {
+      ...overlay,
+      // Pricing includes in-memory gates; their parent links and accounting
+      // must come from the same live view before grouping and pagination.
+      subAgents: backend === "codex" ? this.mergeLiveTokenMiserSubAgents(request.threadId, overlay?.subAgents) : overlay?.subAgents,
+      activeTurnId: this.getActiveTurnForThread({ backend, threadId: request.threadId })?.turnId,
+    });
   }
 
   private async readThreadData(

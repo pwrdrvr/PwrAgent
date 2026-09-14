@@ -1539,7 +1539,7 @@ describe("ThreadContextPanel", () => {
     expect(cardRowValue(miser, "Luna evaluations")).toBe("0");
   });
 
-  it("pages enormous pricing histories instead of rendering every row at once", () => {
+  it.each([false, true])("pages visible pricing cards even with hidden orphan gates (%s)", (includeHiddenGates) => {
     const lines = Array.from({ length: 45 }, (_, index) =>
       buildMonitorLine({
         createdAt: 1_800_000_000_000 + index,
@@ -1547,6 +1547,14 @@ describe("ThreadContextPanel", () => {
         usageLineId: `line-${index}`,
       }),
     );
+
+    if (includeHiddenGates) {
+      lines.push(...Array.from({ length: 30 }, (_, index) => buildMonitorLine({
+        createdAt: 1_800_000_100_000 + index,
+        sourceItemId: `system:token-miser:orphan-${index}`,
+        usageLineId: `orphan-${index}`,
+      })));
+    }
 
     const { container } = renderPanel({
       activeTab: "pricing",

@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import type { AppServerReadThreadResponse, ThreadUsageLineRecord, ThreadSubAgentSummary, AgentEvent } from "@pwragent/shared";
+import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { projectThreadDisplay } from "../app-server/thread-display";
 import { projectThreadDisplayEvent } from "../app-server/thread-display-events";
 import { conditionalThreadRead } from "../app-server/conditional-thread-read";
@@ -285,4 +286,60 @@ it("bounds Pricing reads with thousands of folded gates and keeps all group tota
   } }, { subAgents: smallAgents });
   expect(expanded.display!.pricingPage!.rows).toHaveLength(20);
   expect(expanded.display!.pricingPage!.rows.every((row) => row.nested && !row.orphan)).toBe(true);
+});
+
+
+it.each([false, true])("joins live gate metadata before pricing pagination (deferred=%s)", async (deferPricingGates) => {
+  const data = snapshot(25);
+  const parent = data.pricing!.lines[24]!;
+  const gates = Array.from({ length: 30 }, (_, index) => ({
+    ...line(100 + index), scope: "monitor" as const, source: "monitor" as const,
+    usageLineId: `live-gate-${index}`, sourceItemId: `system:token-miser:live-${index}`,
+  }));
+  const agents: ThreadSubAgentSummary[] = gates.map((gate) => ({
+    monitorId: gate.sourceItemId, parentTurnId: parent.turnId,
+    task: "Evaluate fixture output", status: "success", createdAt: gate.createdAt, updatedAt: gate.createdAt,
+    tokenMiserAccounting: {
+      currency: "USD", originalModel: "gpt-5.5", baselineParentTokens: 1000, baselineParentCostMicros: 500_000,
+      gateModel: "gpt-5.6-luna", gateTotalTokens: 110, gateCostMicros: 600,
+      revealedParentTokens: 100, revealedParentCostMicros: 1000, savingsMicros: 498_400,
+    },
+  }));
+  // The owner deliberately keeps these live helpers in memory, not the overlay.
+  const registry = Object.assign(Object.create(DesktopBackendRegistry.prototype), {
+    overlayStore: {
+      getThreadOverlayState: async () => ({ subAgents: [] }),
+      readThreadPricing: async () => data.pricing,
+      readThreadToolAccounting: async () => undefined,
+    },
+    assertNotBootstrap: () => {},
+    getActiveTurnForThread: () => ({ turnId: parent.turnId }),
+    liveTokenMiserUsageLines: new Map([["fixture", new Map(gates.map((gate) => [gate.usageLineId, gate]))]]),
+    liveTokenMiserSubAgents: new Map([["fixture", new Map(agents.map((agent) => [agent.monitorId, agent]))]]),
+  }) as DesktopBackendRegistry;
+  const display = { resource: "pricing" as const, limit: 20, deferPricingGates };
+  const first = await registry.readThread({ threadId: "fixture", display });
+  expect(first.display!.pricingPage!.totalRows).toBe(25);
+  expect(first.display!.pricingPage!.rows).toHaveLength(20);
+  expect(first.display!.pricingPage!.rows[0]).toMatchObject({
+    orphan: false, line: { usageLineId: parent.usageLineId },
+    gateSummary: { gateCount: 30, unpricedCount: 0 },
+  });
+  const second = await registry.readThread({ threadId: "fixture", display: { ...display, cursor: first.display!.nextCursor } });
+  expect(second.display!.pricingPage!.rows).toHaveLength(5);
+  expect(second.display!.nextCursor).toBeUndefined();
+});
+
+it("excludes hidden orphan gates before paging without removing their charges", () => {
+  const data = snapshot(25);
+  data.pricing!.lines.push(...Array.from({ length: 30 }, (_, index) => ({
+    ...line(100 + index), scope: "monitor" as const, source: "monitor" as const,
+    usageLineId: `orphan-${index}`, sourceItemId: `system:token-miser:orphan-${index}`,
+  })));
+  const first = projectThreadDisplay(data, { threadId: "fixture", display: { resource: "pricing", limit: 20 } });
+  expect(first.display!.pricingPage!.totalRows).toBe(25);
+  expect(first.display!.pricingPage!.rows).toHaveLength(20);
+  expect(first.display!.pricingPage!.rows.every((row) => !row.orphan)).toBe(true);
+  expect(first.display!.pricingPage!.summary).toMatchObject({ usageLineCount: 55, totalCostMicros: 33_000 });
+  expect(first.display!.pricingPage!.totals.totalCreditMicros).toBeGreaterThan(0);
 });

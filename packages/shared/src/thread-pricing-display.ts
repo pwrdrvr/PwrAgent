@@ -535,7 +535,15 @@ export function buildThreadPricingDisplay(params: {
       gates: params.deferGates ? [] : gates.map((gate) => buildRow(gate, true)),
     };
   };
-  let pageLines = displayLines;
+  // Orphan groups without savings accounting render no card. Exclude them
+  // before counting/slicing pages so hidden gates cannot crowd out turn rows.
+  // The full ledger above still supplies every charge to summaries and totals.
+  let pageLines = displayLines.filter((line) => {
+    const orphanGates = orphanGroupsByAnchor.get(line.usageLineId);
+    return !orphanGates || orphanGates.some((gate) =>
+      gate.sourceItemId && subAgentsById.get(gate.sourceItemId)?.tokenMiserAccounting !== undefined,
+    );
+  });
   if (params.gateSelection) {
     const anchor = displayLines.find((line) => line.usageLineId === params.gateSelection!.usageLineId);
     // A live owner can remove an orphan anchor after its parent usage arrives.
