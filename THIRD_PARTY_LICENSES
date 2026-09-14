@@ -571,7 +571,7 @@ MIT
 - proxy-from-env@2.1.0 | https://github.com/Rob--W/proxy-from-env
 - pump@3.0.4 | https://github.com/mafintosh/pump
 - pvtsutils@1.3.6 | https://github.com/PeculiarVentures/pvtsutils
-- pvutils@1.1.5 | https://github.com/PeculiarVentures/pvutils
+- pvutils@1.2.0 | https://github.com/PeculiarVentures/pvutils
 - range-parser@1.3.0 | jshttp/range-parser
 - raw-body@3.0.2 | stream-utils/raw-body
 - react@19.2.8 | https://github.com/react/react
@@ -10479,13 +10479,13 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-pvutils@1.1.5 (MIT)
+pvutils@1.2.0 (MIT)
 -------------------
 
 Applies to:
-- pvutils@1.1.5 (MIT)
+- pvutils@1.2.0 (MIT)
 
-Representative file: pvutils@1.1.5/LICENSE
+Representative file: pvutils@1.2.0/LICENSE
 
 MIT License
 
