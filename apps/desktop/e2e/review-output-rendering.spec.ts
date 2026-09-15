@@ -137,11 +137,6 @@ test("renders captured Codex review findings once in the review card", async () 
 
     const reviewCard = transcript.getByRole("group", { name: "Code review" }).last();
     await expect(reviewCard).toBeVisible();
-    const reviewTime = reviewCard.locator("time").first();
-    await expect(reviewTime).toBeVisible();
-    const reviewTimeBox = await reviewTime.boundingBox();
-    expect(reviewTimeBox).not.toBeNull();
-    expect(reviewTimeBox!.height).toBeLessThanOrEqual(18);
     await expect(reviewCard).toContainText(
       "The thread draft preservation path fixes the covered scenario"
     );
@@ -154,6 +149,27 @@ test("renders captured Codex review findings once in the review card", async () 
       "/Users/fixture-user/github/PwrAgent/.worktrees/launchpad-pwragent-main-moja6ucz"
     );
     await expect(reviewCard).toContainText("Lines 971-979");
+    await expect(app.window.getByTestId("composer-stop-turn")).toBeHidden();
+
+    // Replay advancement acknowledges main-process events, not renderer commits.
+    // Wait for the finished review above, then observe visibility and geometry
+    // together: a separate toBeVisible()/boundingBox() can straddle replacement
+    // of the time element and return null even after visibility passed.
+    const reviewTime = reviewCard.locator("time").first();
+    await expect(async () => {
+      const layout = await reviewTime.evaluate((time) => {
+        const rect = time.getBoundingClientRect();
+        return {
+          visible: time.checkVisibility({ checkVisibilityCSS: true }),
+          width: rect.width,
+          height: rect.height,
+        };
+      });
+      expect(layout.visible).toBe(true);
+      expect(layout.width).toBeGreaterThan(0);
+      expect(layout.height).toBeGreaterThan(0);
+      expect(layout.height).toBeLessThanOrEqual(18);
+    }).toPass({ timeout: 5_000 });
 
     const findingTitle = reviewCard.getByText(
       "Preserve async pasted images for launchpad scopes"
