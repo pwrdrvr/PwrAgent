@@ -219,7 +219,7 @@ export class DesktopConfigStore {
     listener: (event: ConfigDomainChange<K>) => void,
   ): () => void {
     const subscription: Subscription = {
-      domains: new Set(domains),
+      domains: new Set<keyof ConfigDomainMap>(domains),
       listener: listener as unknown as Subscription["listener"],
     };
     this.subscriptions.add(subscription);

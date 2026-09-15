@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useRef } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { ChevronLeftIcon, ChevronRightIcon, CloseIcon } from "../../icons";
 import { TranscriptImage } from "./TranscriptImage";
@@ -11,6 +11,8 @@ type ImageLightboxProps = {
   caption?: ReactNode;
   /** More specific accessible name for callers that expand a non-photo image. */
   dialogLabel?: string;
+  /** Diagram previews can expand beyond the fitted size for readable labels. */
+  allowZoom?: boolean;
   /** One-based position within an optional image gallery. */
   position?: number;
   /** Total number of images in an optional gallery. */
@@ -33,6 +35,7 @@ export function ImageLightbox({
   alt,
   caption,
   dialogLabel = "Expanded image",
+  allowZoom = false,
   position,
   total,
   onClose,
@@ -40,6 +43,7 @@ export function ImageLightbox({
   onPrevious,
 }: ImageLightboxProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
+  const [zoomed, setZoomed] = useState(false);
   useEffect(() => {
     const previousFocus = document.activeElement;
     dialogRef.current?.focus();
@@ -121,7 +125,18 @@ export function ImageLightbox({
         >
           <CloseIcon size={18} aria-hidden="true" />
         </button>
-        <TranscriptImage className="image-lightbox__image" src={src} alt={alt} />
+        {allowZoom ? (
+          <>
+            <button type="button" className="mermaid-diagram__toggle image-lightbox__zoom"
+              aria-pressed={zoomed} onClick={() => setZoomed(!zoomed)}>
+              {zoomed ? "Fit to window" : "Zoom in"}
+            </button>
+            <div className="image-lightbox__viewport" data-zoomed={zoomed}
+              tabIndex={0} aria-label="Diagram image">
+              <TranscriptImage className="image-lightbox__image" src={src} alt={alt} />
+            </div>
+          </>
+        ) : <TranscriptImage className="image-lightbox__image" src={src} alt={alt} />}
         {typeof position === "number" && typeof total === "number" && total > 1 ? (
           <p className="image-lightbox__position" aria-live="polite">
             <b>{position}</b> / {total}

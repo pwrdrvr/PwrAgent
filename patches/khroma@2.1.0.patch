@@ -1,0 +1,11 @@
+diff --git a/package.json b/package.json
+index 6151686952b6aefe188205ebcd4fd452f7f36211..e2324b1402d753d454f3c10727f2cc42cfacba7b 100755
+--- a/package.json
++++ b/package.json
+@@ -1,5 +1,6 @@
+ {
+   "name": "khroma",
++  "license": "MIT",
+   "repository": "github:fabiospampinato/khroma",
+   "description": "A collection of functions for manipulating CSS colors, inspired by SASS.",
+   "version": "2.1.0",
