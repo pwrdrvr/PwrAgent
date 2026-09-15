@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -468,8 +469,6 @@ for (const expected of [
 for (const expected of [
   "stage-grok-bundle.mjs --platform macos-aarch64",
   "--prepare-only --mac-arch=arm64",
-  "apps/desktop/release-stage-arm64 \\",
-  "apps/desktop/scripts/assemble-mac-release.mjs \\",
 ]) {
   assertWorkflowJobContainsText(releaseWorkflow, ".github/workflows/release.yml", "prepare", expected);
 }
@@ -608,9 +607,6 @@ for (const expected of [
 }
 for (const expected of [
   "apps/desktop/release-stage/node_modules/.pnpm/node_modules",
-  "apps/desktop/release-stage",
-  "apps/desktop/scripts/release.mjs",
-  "scripts/release/install-trusted-signing.ps1",
   "tar.exe -czf",
 ]) {
   if (!windowsArchiveScript.includes(expected)) {
@@ -620,24 +616,25 @@ for (const expected of [
 if (!asarVerifier.includes("PWRAGENT_ASAR_MODULE_ROOT")) {
   fail("apps/desktop/scripts/verify-asar-contents.mjs must accept the staged ASAR module root");
 }
-// Both signing jobs run without a checkout, from an allowlisted archive. A
-// module missing from either list fails at require time on a release runner,
-// and no CI job exercises the signing path (ci.yml is asserted above not to
-// define one), so the allowlists are pinned here instead.
-for (const expected of [
-  "apps/desktop/scripts/windows-release-artifacts.mjs",
-]) {
-  if (!windowsArchiveScript.includes(expected)) {
-    fail(
-      `scripts/release/archive-windows-signing-input.ps1 must archive ${JSON.stringify(expected)}`,
-    );
+// Use the same manifest and import-closure check as both archive producers.
+for (const platform of ["macos", "windows"]) {
+  const result = spawnSync(process.execPath, [
+    "--experimental-vm-modules",
+    resolve(repoRoot, "scripts/release/check-signing-input.mjs"),
+    platform,
+  ], { encoding: "utf8" });
+  if (result.error || result.status !== 0) {
+    fail(`${platform} signing input: ${result.error?.message || result.stderr}`);
   }
-  assertWorkflowJobContainsText(
-    releaseWorkflow,
-    ".github/workflows/release.yml",
-    "prepare",
-    expected,
-  );
+}
+assertWorkflowJobContainsText(
+  releaseWorkflow,
+  ".github/workflows/release.yml",
+  "prepare",
+  "check-signing-input.mjs macos",
+);
+if (!windowsArchiveScript.includes("check-signing-input.mjs windows")) {
+  fail("Windows archive must use the checked signing input manifest");
 }
 for (const expected of [
   "Install-Module",

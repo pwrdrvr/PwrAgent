@@ -1,0 +1,31 @@
+{
+  "macos": [
+    "package.json",
+    "pnpm-lock.yaml",
+    "pnpm-workspace.yaml",
+    "apps/desktop/release-stage",
+    "apps/desktop/release-stage-arm64",
+    ".github/actions/select-xcode-for-actool",
+    "apps/desktop/scripts/release.mjs",
+    "apps/desktop/scripts/assemble-mac-release.mjs",
+    "apps/desktop/scripts/release-signing-environment.mjs",
+    "apps/desktop/scripts/windows-release-artifacts.mjs",
+    "apps/desktop/scripts/update-channel-files.mjs",
+    "apps/desktop/scripts/verify-asar-contents.mjs",
+    "apps/desktop/scripts/packaged-html-rules.mjs",
+    "apps/desktop/scripts/asar-entry-paths.mjs",
+    "apps/desktop/node_modules",
+    "node_modules"
+  ],
+  "windows": [
+    "apps/desktop/release-stage",
+    "apps/desktop/scripts/release.mjs",
+    "apps/desktop/scripts/release-signing-environment.mjs",
+    "apps/desktop/scripts/update-channel-files.mjs",
+    "apps/desktop/scripts/verify-asar-contents.mjs",
+    "apps/desktop/scripts/packaged-html-rules.mjs",
+    "apps/desktop/scripts/asar-entry-paths.mjs",
+    "apps/desktop/scripts/windows-release-artifacts.mjs",
+    "scripts/release/install-trusted-signing.ps1"
+  ]
+}

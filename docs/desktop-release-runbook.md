@@ -471,8 +471,9 @@ the installed builds ask for.
 holds the names. `release.mjs` imports them for its packaging checks and the
 release workflow runs the same file as a CLI for its publication checks, so the
 two cannot drift. Neither signing job checks out the repository — each gets an
-explicit allowlist of scripts — so that module is listed in the macOS `Archive
-signing input` step and in `scripts/release/archive-windows-signing-input.ps1`.
+explicit allowlist of scripts in `scripts/release/signing-input-paths.json`.
+Both archive producers validate local module imports against that manifest
+before archiving; add any new helper to each platform that needs it.
 
 Three checks guard this, so a dropped asset fails the release instead of
 shipping a broken updater:
