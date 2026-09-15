@@ -13,7 +13,7 @@ let tempDir: string;
 
 beforeEach(() => {
   tempDir = mkdtempSync(path.join(os.tmpdir(), "pwragent-recent-file-refs-"));
-  stateDb = StateDb.open(path.join(tempDir, "state.db"), {
+  stateDb = StateDb.open(":memory:", {
     profileName: "dev",
   });
 });

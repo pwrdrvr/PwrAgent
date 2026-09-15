@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { AppServerAvailableCommandSummary } from "@pwragent/shared";
 import { AcpAvailableCommandsStore } from "../acp/acp-available-commands-store";
 import { CURRENT_STATE_DB_USER_VERSION, StateDb } from "../state/state-db";
+import { openInMemoryStateDb } from "./sqlite-test-utils";
 
 let stateDb: StateDb;
 let tempDir: string;
@@ -22,7 +23,7 @@ const COMMANDS: AppServerAvailableCommandSummary[] = [
 
 beforeEach(() => {
   tempDir = mkdtempSync(path.join(os.tmpdir(), "pwragent-acp-commands-"));
-  stateDb = StateDb.open(path.join(tempDir, "state.db"));
+  stateDb = openInMemoryStateDb();
   store = new AcpAvailableCommandsStore(stateDb);
 });
 
@@ -119,6 +120,8 @@ describe("AcpAvailableCommandsStore", () => {
   });
 
   it("converges an older profile database onto the current schema", () => {
+    // Reopening the same file is the whole point: the assertion below is
+    // vacuous against a second in-memory database, which is always empty.
     const dbPath = path.join(tempDir, "migrated.db");
     const seeded = StateDb.open(dbPath);
     seeded.raw.exec("DROP TABLE acp_available_commands");

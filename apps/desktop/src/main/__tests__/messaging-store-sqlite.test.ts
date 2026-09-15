@@ -14,6 +14,7 @@ import type {
 } from "@pwragent/messaging-interface";
 import { SqliteMessagingStore } from "../state/messaging-store-sqlite";
 import { StateDb } from "../state/state-db";
+import { openInMemoryStateDb } from "./sqlite-test-utils";
 
 const tempDirs: string[] = [];
 const stateDbs: StateDb[] = [];
@@ -21,7 +22,7 @@ const stateDbs: StateDb[] = [];
 async function createStore(): Promise<SqliteMessagingStore> {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-sqlite-msg-"));
   tempDirs.push(tempDir);
-  const stateDb = StateDb.open(path.join(tempDir, "state.db"));
+  const stateDb = openInMemoryStateDb();
   stateDbs.push(stateDb);
   return new SqliteMessagingStore(stateDb);
 }
@@ -1075,6 +1076,8 @@ describe("SqliteMessagingStore", () => {
   it("repairs a missing monitor subscription table on reopen", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-sqlite-msg-"));
     tempDirs.push(tempDir);
+    // Reopening the same file is the whole point: the assertions below are
+    // vacuous against a second in-memory database, which is always empty.
     const dbPath = path.join(tempDir, "state.db");
     const initialDb = StateDb.open(dbPath);
     stateDbs.push(initialDb);

@@ -1,23 +1,18 @@
-import { mkdtempSync, rmSync } from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
+import { openInMemoryStateDb } from "./sqlite-test-utils";
 
 let stateDb: StateDb;
 let store: SqliteOverlayStore;
-let tempDir: string;
 
 beforeEach(() => {
-  tempDir = mkdtempSync(path.join(os.tmpdir(), "pwragent-linked-dirs-test-"));
-  stateDb = StateDb.open(path.join(tempDir, "state.db"));
+  stateDb = openInMemoryStateDb();
   store = new SqliteOverlayStore(stateDb);
 });
 
 afterEach(() => {
   stateDb.close();
-  rmSync(tempDir, { recursive: true, force: true });
 });
 
 describe("SqliteOverlayStore — linked directories", () => {

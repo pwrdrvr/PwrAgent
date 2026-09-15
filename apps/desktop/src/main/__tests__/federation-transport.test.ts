@@ -1,8 +1,5 @@
 import { setFederationTrafficCapture, snapshotFederationTrafficHistory } from "../federation/federation-traffic-capture";
-import { mkdtempSync, rmSync } from "node:fs";
 import net from "node:net";
-import os from "node:os";
-import path from "node:path";
 import WebSocket, { WebSocketServer } from "ws";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -37,21 +34,20 @@ import {
   type FederationKeepaliveSocket,
 } from "../federation/federation-transport";
 import { StateDb } from "../state/state-db";
+import { openInMemoryStateDb } from "./sqlite-test-utils";
 
 const transportLog = vi.hoisted(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }));
 vi.mock("../log", () => ({ getMainLogger: () => transportLog }));
 
 let stateDb: StateDb;
 let store: FederationStore;
-let tempDir: string;
 let server: FederationGatewayWebSocketServer | undefined;
 let rawServer: WebSocketServer | undefined;
 let gatewayKeyPair: ReturnType<typeof generateFederationIdentityKeyPair>;
 
 beforeEach(() => {
   vi.clearAllMocks();
-  tempDir = mkdtempSync(path.join(os.tmpdir(), "pwragent-federation-transport-"));
-  stateDb = StateDb.open(path.join(tempDir, "state.db"));
+  stateDb = openInMemoryStateDb();
   store = new FederationStore(stateDb);
   gatewayKeyPair = generateFederationIdentityKeyPair();
 });
@@ -66,7 +62,6 @@ afterEach(async () => {
   await new Promise<void>((resolve) => rawServer?.close(() => resolve()) ?? resolve());
   rawServer = undefined;
   stateDb.close();
-  rmSync(tempDir, { recursive: true, force: true });
 });
 
 describe("federation transport", () => {

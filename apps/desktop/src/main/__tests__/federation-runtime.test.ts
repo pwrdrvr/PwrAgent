@@ -1,7 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type {
   AgentEvent,
@@ -45,7 +42,6 @@ import {
   setDesktopOverlayStoreForTests,
 } from "../app-server/desktop-overlay-store";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
-import { StateDb } from "../state/state-db";
 import {
   measureSqliteWrites,
   resetSqliteWriteMetrics,
@@ -519,8 +515,7 @@ describe("DesktopFederationRuntime", () => {
 
   it("serves owner project pages without full navigation reconciliation or SQLite writes", async () => {
     process.env[SQLITE_WRITE_METRICS_ENV] = "1";
-    const tempDir = mkdtempSync(path.join(os.tmpdir(), "pwragent-project-pages-"));
-    const stateDb = StateDb.open(path.join(tempDir, "state.db"));
+    const stateDb = openInMemoryStateDb();
     const overlayStore = new SqliteOverlayStore(stateDb);
     setDesktopOverlayStoreForTests(overlayStore);
     const settings = vi.spyOn(desktopSettingsSingleton, "getDesktopSettingsService")
@@ -564,7 +559,6 @@ describe("DesktopFederationRuntime", () => {
       configStore.mockRestore();
       resetDesktopOverlayStoreForTests();
       stateDb.close();
-      rmSync(tempDir, { recursive: true, force: true });
       delete process.env[SQLITE_WRITE_METRICS_ENV];
     }
   });
@@ -630,11 +624,7 @@ describe("DesktopFederationRuntime", () => {
   it.each(["complete", "checking"] as const)("mounts a remote parent when accepting a cross-instance child with %s coverage", async (coverageState) => {
     await disposeDesktopFederationRuntime();
     process.env[SQLITE_WRITE_METRICS_ENV] = "1";
-    const tempDir = mkdtempSync(path.join(
-      os.tmpdir(),
-      "pwragent-federated-parent-mount-",
-    ));
-    const stateDb = StateDb.open(path.join(tempDir, "state.db"));
+    const stateDb = openInMemoryStateDb();
     const overlayStore = new SqliteOverlayStore(stateDb);
     setDesktopOverlayStoreForTests(overlayStore);
     const runtime = getDesktopFederationRuntime();
@@ -863,7 +853,6 @@ describe("DesktopFederationRuntime", () => {
       configStore.mockRestore();
       resetDesktopOverlayStoreForTests();
       stateDb.close();
-      rmSync(tempDir, { recursive: true, force: true });
       delete process.env[SQLITE_WRITE_METRICS_ENV];
       await disposeDesktopFederationRuntime();
     }

@@ -1,24 +1,19 @@
-import { mkdtempSync, rmSync } from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppServerReadThreadResponse, AppServerThreadSummary } from "@pwragent/shared";
 import { StateDb } from "../state/state-db";
 import { ProviderTranscriptThreadSearchAdapter } from "../thread-search/thread-search-provider-adapters";
 import { ThreadSearchService } from "../thread-search/thread-search-service";
 import { ThreadSearchStore } from "../thread-search/thread-search-store";
+import { openInMemoryStateDb } from "./sqlite-test-utils";
 
 let stateDb: StateDb;
-let tempDir: string;
 
 beforeEach(() => {
-  tempDir = mkdtempSync(path.join(os.tmpdir(), "pwragent-thread-search-service-"));
-  stateDb = StateDb.open(path.join(tempDir, "state.db"));
+  stateDb = openInMemoryStateDb();
 });
 
 afterEach(() => {
   stateDb.close();
-  rmSync(tempDir, { recursive: true, force: true });
 });
 
 describe("ThreadSearchService", () => {

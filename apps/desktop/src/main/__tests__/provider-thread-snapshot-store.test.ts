@@ -10,6 +10,7 @@ import {
   SQLITE_WRITE_METRICS_ENV,
 } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
+import { openInMemoryStateDb } from "./sqlite-test-utils";
 
 const cleanups: Array<() => void> = [];
 
@@ -122,7 +123,7 @@ describe("ProviderThreadSnapshotStore write cost", () => {
   it("writes one row per successful provider list boundary", async () => {
     process.env[SQLITE_WRITE_METRICS_ENV] = "1";
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-thread-budget-"));
-    const db = StateDb.open(path.join(root, "state.db"));
+    const db = openInMemoryStateDb();
     const store = new ProviderThreadSnapshotStore(db);
     try {
       resetSqliteWriteMetrics();
@@ -153,7 +154,7 @@ function createStore(): {
   store: ProviderThreadSnapshotStore;
 } {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-thread-snapshot-"));
-  const db = StateDb.open(path.join(root, "state.db"));
+  const db = openInMemoryStateDb();
   cleanups.push(() => {
     db.close();
     fs.rmSync(root, { recursive: true, force: true });

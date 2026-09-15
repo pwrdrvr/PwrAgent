@@ -39,7 +39,7 @@ describe("MCP connection owner broker", () => {
     const directory = fs.mkdtempSync(
       path.join(os.tmpdir(), "pwragent-mcp-owner-broker-"),
     );
-    const stateDb = StateDb.open(path.join(directory, "state.db"), {
+    const stateDb = StateDb.open(":memory:", {
       profileName: "dev",
     });
     const store = new AppRuntimeInstanceStore(stateDb);

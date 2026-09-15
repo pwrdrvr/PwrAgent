@@ -6,12 +6,13 @@ import { ScheduledThreadActionStore } from "../scheduled-actions/scheduled-threa
 import { StateDb } from "../state/state-db";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
+import { openInMemoryStateDb } from "./sqlite-test-utils";
 
 let stateDb: StateDb;
 let store: ScheduledThreadActionStore;
 
 beforeEach(() => {
-  stateDb = StateDb.open(":memory:");
+  stateDb = openInMemoryStateDb();
   store = new ScheduledThreadActionStore(stateDb);
 });
 
@@ -356,7 +357,7 @@ describe("ScheduledThreadActionStore", () => {
 
 it("pages scheduled inputs under the wire budget and rejects stale cursors with zero read writes", async () => {
   vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
-  const db = StateDb.open(":memory:");
+  const db = openInMemoryStateDb();
   const paged = new ScheduledThreadActionStore(db);
   try {
     for (let i = 0; i < 205; i += 1) paged.create({

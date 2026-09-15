@@ -51,7 +51,7 @@ function createManager(params: {
 beforeEach(() => {
   liveRuntimeIdentities = new Map<number, string>();
   tempDir = mkdtempSync(path.join(os.tmpdir(), "pwragent-runtime-leases-"));
-  stateDb = StateDb.open(path.join(tempDir, "state.db"), {
+  stateDb = StateDb.open(":memory:", {
     profileName: "dev",
   });
   store = new AppRuntimeInstanceStore(stateDb);

@@ -64,7 +64,6 @@ import {
   resetSqliteWriteMetrics,
   SQLITE_WRITE_METRICS_ENV,
 } from "../state/sqlite-write-metrics";
-import { StateDb } from "../state/state-db";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import type { MessagingOutboundFileAccess } from "../messaging/core/messaging-outbound-file";
 import type { MessagingRbacPolicyProvider } from "../messaging/rbac-policy-service";
@@ -72,6 +71,7 @@ import type { MessagingPermissionId } from "@pwragent/shared";
 import type { MessagingAdapter, MessagingBackendBridge } from "../messaging/core/messaging-adapter";
 import { MessagingDeliveryBudget } from "../messaging/core/messaging-delivery-budget";
 import { MessagingStore } from "../messaging/core/messaging-store";
+import { openInMemoryStateDb } from "./sqlite-test-utils";
 import {
   inspectPdfDocument,
   renderPdfPages,
@@ -1862,7 +1862,7 @@ describe("MessagingController", () => {
     process.env[SQLITE_WRITE_METRICS_ENV] = "1";
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-browse-writes-"));
     tempDirs.push(tempDir);
-    const db = StateDb.open(path.join(tempDir, "state.db"));
+    const db = openInMemoryStateDb();
     try {
       const navigation = buildNavigationSnapshot();
       const harness = await createHarness({
@@ -5054,7 +5054,7 @@ describe("MessagingController", () => {
     process.env[SQLITE_WRITE_METRICS_ENV] = "1";
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-rename-writes-"));
     tempDirs.push(tempDir);
-    const stateDb = StateDb.open(path.join(tempDir, "state.db"));
+    const stateDb = openInMemoryStateDb();
     try {
       const store = new SqliteMessagingStore(stateDb);
       const harness = await createHarness({
@@ -11157,7 +11157,7 @@ describe("MessagingController", () => {
     process.env[SQLITE_WRITE_METRICS_ENV] = "1";
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-detach-writes-"));
     tempDirs.push(tempDir);
-    const stateDb = StateDb.open(path.join(tempDir, "state.db"));
+    const stateDb = openInMemoryStateDb();
     try {
       const store = new SqliteMessagingStore(stateDb);
       const harness = await createHarness({ channel: "slack", store });

@@ -15,7 +15,7 @@ describe("model settings recents store", () => {
 
   beforeEach(() => {
     root = mkdtempSync(path.join(tmpdir(), "pwragent-recents-"));
-    stateDb = StateDb.open(path.join(root, "state.db"), {
+    stateDb = StateDb.open(":memory:", {
       profileName: "dev",
     });
   });

@@ -4,10 +4,7 @@
 // use a plain TCP socket, so neither exercises this combination — which is
 // exactly how a bug in the child-exit path stayed invisible.
 import { EventEmitter } from "node:events";
-import { mkdtempSync, rmSync } from "node:fs";
 import net from "node:net";
-import os from "node:os";
-import path from "node:path";
 import { PassThrough } from "node:stream";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -25,16 +22,15 @@ import {
   FederationGatewayWebSocketServer,
 } from "../federation/federation-transport";
 import { StateDb } from "../state/state-db";
+import { openInMemoryStateDb } from "./sqlite-test-utils";
 
 let stateDb: StateDb;
 let store: FederationStore;
-let tempDir: string;
 let server: FederationGatewayWebSocketServer | undefined;
 let gatewayKeyPair: ReturnType<typeof generateFederationIdentityKeyPair>;
 
 beforeEach(() => {
-  tempDir = mkdtempSync(path.join(os.tmpdir(), "pwragent-federation-ssh-"));
-  stateDb = StateDb.open(path.join(tempDir, "state.db"));
+  stateDb = openInMemoryStateDb();
   store = new FederationStore(stateDb);
   gatewayKeyPair = generateFederationIdentityKeyPair();
 });
@@ -43,7 +39,6 @@ afterEach(async () => {
   await server?.stop();
   server = undefined;
   stateDb.close();
-  rmSync(tempDir, { recursive: true, force: true });
 });
 
 /** Stands in for `ssh -W`: relays its stdio over a real TCP connection. */

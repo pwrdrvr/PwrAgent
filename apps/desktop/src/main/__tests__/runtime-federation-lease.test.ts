@@ -67,7 +67,7 @@ function recordInstance(
 beforeEach(() => {
   liveProcessIds = new Set<number>();
   tempDir = mkdtempSync(path.join(os.tmpdir(), "pwragent-federation-lease-"));
-  stateDb = StateDb.open(path.join(tempDir, "state.db"), {
+  stateDb = StateDb.open(":memory:", {
     profileName: "dev",
   });
   store = new AppRuntimeInstanceStore(stateDb);

@@ -49,7 +49,7 @@ beforeEach(() => {
   vi.setSystemTime(1_800_000_000_000);
   vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
   directory = mkdtempSync(path.join(os.tmpdir(), "pwragent-lease-recovery-"));
-  db = StateDb.open(path.join(directory, "state.db"), { profileName: "dev" });
+  db = StateDb.open(":memory:", { profileName: "dev" });
   store = new AppRuntimeInstanceStore(db);
   ownerAlive = true;
   messagingEnabled = false;

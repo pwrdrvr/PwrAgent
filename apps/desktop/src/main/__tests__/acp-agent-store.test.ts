@@ -1,6 +1,3 @@
-import { mkdtempSync, rmSync } from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AcpAgentStore } from "../acp/acp-agent-store";
 import type {
@@ -8,20 +5,18 @@ import type {
   AcpRegistrySnapshot,
 } from "../acp/acp-registry-types";
 import { StateDb } from "../state/state-db";
+import { openInMemoryStateDb } from "./sqlite-test-utils";
 
 let stateDb: StateDb;
-let tempDir: string;
 let store: AcpAgentStore;
 
 beforeEach(() => {
-  tempDir = mkdtempSync(path.join(os.tmpdir(), "pwragent-acp-store-"));
-  stateDb = StateDb.open(path.join(tempDir, "state.db"));
+  stateDb = openInMemoryStateDb();
   store = new AcpAgentStore(stateDb);
 });
 
 afterEach(() => {
   stateDb.close();
-  rmSync(tempDir, { recursive: true, force: true });
 });
 
 describe("AcpAgentStore", () => {

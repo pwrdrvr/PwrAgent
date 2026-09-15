@@ -1,25 +1,20 @@
-import { mkdtempSync, rmSync } from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { MessagingBindingRecord } from "@pwragent/messaging-interface";
 import { buildFederatedThreadRef } from "@pwragent/shared";
 import { SqliteMessagingStore } from "../state/messaging-store-sqlite";
 import { StateDb } from "../state/state-db";
+import { openInMemoryStateDb } from "./sqlite-test-utils";
 
 let stateDb: StateDb;
 let store: SqliteMessagingStore;
-let tempDir: string;
 
 beforeEach(() => {
-  tempDir = mkdtempSync(path.join(os.tmpdir(), "pwragent-msg-federation-"));
-  stateDb = StateDb.open(path.join(tempDir, "state.db"));
+  stateDb = openInMemoryStateDb();
   store = new SqliteMessagingStore(stateDb);
 });
 
 afterEach(() => {
   stateDb.close();
-  rmSync(tempDir, { recursive: true, force: true });
 });
 
 describe("messaging federated bindings", () => {
