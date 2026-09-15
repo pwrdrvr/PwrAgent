@@ -1,5 +1,6 @@
 import { isCodexAuthenticationFailure } from "@pwragent/shared";
 import type {
+  AgentEvent,
   AppServerBackendKind,
   FederationInstanceId,
 } from "@pwragent/shared";
@@ -12,7 +13,7 @@ import type { AppNoticeToastNotice } from "./AppNoticeToast";
  * human-readable name for the originating thread (its title, or a backend
  * fallback) so a mid-outage toast says *which* thread broke.
  */
-export type BackendErrorSignal =
+export type BackendErrorSignal = (
   | {
       kind: "codex-invalid-id-recovery";
       status: "repairing" | "succeeded" | "failed";
@@ -39,7 +40,11 @@ export type BackendErrorSignal =
       instanceId?: FederationInstanceId;
       threadId: string;
       threadLabel: string;
-    };
+    }
+) & {
+  errorNoticeContext?: AgentEvent["errorNoticeContext"];
+  originLabel?: string;
+};
 
 /**
  * Compute the next sticky backend-error notice from a signal and the
@@ -109,10 +114,14 @@ export function resolveBackendErrorNotice(
   }
 
   if (signal.kind === "turn-failed") {
+    const context = signal.errorNoticeContext;
     return {
       autoDismiss: false,
       id: `turn-failed:${signal.backend}:${signal.threadId}:${signal.turnId}`,
-      title: "Turn failed",
+      title: context?.taskMonitor ? "Task monitor failed" : "Turn failed",
+      ...(signal.originLabel
+        ? { status: { label: signal.originLabel, state: "error" as const } }
+        : {}),
       ...(signal.backend === "codex" && !signal.instanceId
         && signal.onCodexLogin && isCodexAuthenticationFailure(signal.errorMessage)
         ? { actions: [{ label: "Login", onClick: signal.onCodexLogin }] }
@@ -120,9 +129,9 @@ export function resolveBackendErrorNotice(
       message: signal.errorMessage,
       detail: signal.threadLabel,
       threadLink: {
-        backend: signal.backend,
+        backend: context?.backend ?? signal.backend,
         ...(signal.instanceId ? { instanceId: signal.instanceId } : {}),
-        threadId: signal.threadId,
+        threadId: context?.threadId ?? signal.threadId,
         title: signal.threadLabel,
       },
       copyText: signal.errorMessage,
@@ -151,13 +160,16 @@ export function resolveBackendErrorNotice(
     autoDismiss: false,
     id: `system-error:${signal.backend}:${signal.threadId}`,
     title: "Agent backend error",
+    ...(signal.originLabel
+      ? { status: { label: signal.originLabel, state: "error" as const } }
+      : {}),
     message:
       "The agent backend reported a system error. The active turn may have stopped.",
     detail: signal.threadLabel,
     threadLink: {
-      backend: signal.backend,
+      backend: signal.errorNoticeContext?.backend ?? signal.backend,
       ...(signal.instanceId ? { instanceId: signal.instanceId } : {}),
-      threadId: signal.threadId,
+      threadId: signal.errorNoticeContext?.threadId ?? signal.threadId,
       title: signal.threadLabel,
     },
   };

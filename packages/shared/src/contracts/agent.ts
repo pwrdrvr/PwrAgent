@@ -1250,6 +1250,13 @@ export type AgentEvent = {
   backend: AppServerBackendKind;
   federationTarget?: FederationTarget;
   notification: AppServerNotification;
+  /** Navigable owner of a failure, captured before a private helper is finalized. */
+  errorNoticeContext?: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    title?: string;
+    taskMonitor?: boolean;
+  };
   /**
    * Optional main-process display model for live protocol notifications whose
    * raw params are expensive for React to parse on every update.
