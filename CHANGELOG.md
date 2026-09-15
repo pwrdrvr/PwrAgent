@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.1.0-beta.2 - 2026-09-15
+
+- Managed MCP Gateway - Added a PwrAgent-managed gateway for operator-authorized MCP connections.
+- Apple Silicon Updates - Added signed Apple Silicon macOS packages and native updater routing alongside the existing universal download. Added a stable signed Windows installer alias.
+- Federation and Remote Work - Compressed federation protocol frames, clarified endpoint setup, reduced refresh traffic, and made remote browsing retain mounts, relationships, unread state, and viewer ancestry more reliably.
+- Star Map - Made Star Map intake an agent turn, ranked relevant projects, and revealed the new thread directly in the selected workspace.
+- Reviews and Forge Support - Added GitLab merge-request status and CLI settings, local pull-request branch reviews, copyable review findings, and attached-PR priority in thread references.
+- Transcript and Composer - Added on-demand Mermaid diagrams, shared image lightbox gestures and copy actions, selectable/copyable thread errors, and visible steer-when-ready delivery progress.
+- Updates and Recovery - Added a live menu update check with progress and cancel controls, retained a last-known-good Codex runtime at startup, and improved rejected-authentication recovery by profile.
+- Navigation Performance - Eliminated several sidebar, composer, federation, and thread-row render or refresh loops while keeping remote navigation bounded and responsive.
+- Linux Desktop - Added native Linux window chrome and explicit Electron sandbox setup guidance.
+- Minor - Improved directory selection, launch error visibility, diagnostics timestamps, GitHub CLI notice handling, PwrGit OAuth presentation, and provider branding.
+
 ## v1.1.0-beta.1 - 2026-09-11
 
 This promotes the 1.1 train to the Beta Latest track after the alpha releases.
