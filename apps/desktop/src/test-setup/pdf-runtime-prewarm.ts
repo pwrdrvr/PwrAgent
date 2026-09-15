@@ -21,8 +21,8 @@
 // module initialization -- and `vitest.workspace.ts` puts `desktop-main` on
 // `pool: "forks"` precisely to keep native bindings out of the process Vitest
 // itself runs in. A child pays the same page-cache and antivirus cost for the
-// same files and exits, so every fork afterwards gets the 111 ms path while the
-// Vitest host loads no native code at all.
+// same files and exits, so every fork afterwards gets the 111 ms path without
+// this warm loading any native code into the Vitest host.
 //
 // This warms the machine, not the assertion. Every test still imports the real
 // PDF.js and renders through the real canvas, and `pdf-canvas-lazy-loading`
@@ -54,7 +54,16 @@ export default async function setup(): Promise<void> {
       ],
       { timeout: 120_000 },
     );
-  } catch {
-    return;
+  } catch (error) {
+    // Say so. A prewarm that silently stopped working is indistinguishable
+    // from one that never ran, and the only other symptom is an intermittent
+    // 30s timeout in whichever test renders first -- the failure this exists
+    // to prevent. `pdf-runtime-prewarm.test.ts` pins the two ways it can
+    // break; this covers the rest.
+    console.warn(
+      `[pdf-runtime-prewarm] skipped; PDF tests will pay the cold read: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
   }
 }

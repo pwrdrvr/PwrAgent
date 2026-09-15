@@ -87,9 +87,9 @@ export default defineConfig({
           // Machine-level cold starts, paid once per run so neither is billed
           // to whichever test file happens to reach it first.
           globalSetup: [
-            // Windows only in effect: the Job-object wrapper that owns
-            // `git worktree remove`, whose one-time PowerShell + helper-compile
-            // cold start ran into the 30s contract.
+            // Windows only in effect: warms the Job-object wrapper that owns
+            // `git worktree remove` so its one-time PowerShell + helper-compile
+            // cold start is not billed to whichever test reaches it first.
             "apps/desktop/src/test-setup/windows-job-wrapper-prewarm.ts",
             // PDF.js's 1 MB first read: 3,943ms in the first process on a
             // Windows runner against 111ms in every process after it.
