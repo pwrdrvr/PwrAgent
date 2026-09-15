@@ -23,13 +23,11 @@ through the desktop messaging runtime and the persistence interfaces.
 ## Interpolation Review
 
 All audited messaging write paths use prepared-statement parameter binding.
-The two current interpolated SQL strings are not user-data interpolation:
+The one current interpolated SQL string is not user-data interpolation:
 
 - `apps/desktop/src/main/state/messaging-store-sqlite.ts:263` builds a
   generated `?, ?, ?` placeholder list for a bounded `IN (...)` delete, then
   binds the actual ids through `.run(...removed)`.
-- `apps/desktop/src/main/state/migration.ts:534` checks counts for hardcoded
-  migration table names selected from a fixed array.
 
 `pnpm lint:sql` fails on new interpolated SQL template strings in the desktop
 main-process messaging/state persistence surface unless the location is

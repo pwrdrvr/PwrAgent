@@ -966,6 +966,16 @@ it. The one root path it does not cover is `userHomeWorktreesRoot`, which is
 deliberately `os.homedir()`-anchored; no test has ever created it, and
 `git-directory-service` takes an injected `homeDir`.
 
+`XDG_CONFIG_HOME` and `XDG_STATE_HOME` travel with it, pinned to
+`<os.tmpdir()>/pwragent-vitest-xdg-<pid>/{config,state}` on both projects and
+guarded by the same test. Nothing in the app reads them today; the pre-profile
+migration that searched them for `pwragnt/` state is gone. They stay because
+`PWRAGENT_HOME` never covered them: those roots came from `os.homedir()` and
+the ambient XDG variables, so a test that stubbed only the PwrAgent root still
+read the operator's real `~/.config` and `~/.local/state` — and a developer
+carrying pre-1.0 files then ran a different code path than CI on every
+`initializeAppState`. Set all three together when a suite needs its own roots.
+
 **Whether.** [`src/test-setup/outbound-fetch-guard.ts`](src/test-setup/outbound-fetch-guard.ts)
 replaces `globalThis.fetch` and fails any test that makes a real outbound
 request. It hooks the global rather than taking an injected `fetch` per caller

@@ -13,18 +13,15 @@
 // with, a thread whose recorded branch the drift check compares against.
 // `StateDb.open` creates the profile directory and the schema, which is what
 // makes seeding before first boot possible at all.
-import path from "node:path";
-import type {
-  DirectoryLaunchpadOverlayState,
-  NavigationLaunchpadDefaults,
-  ThreadOverlayState,
+import {
+  buildLegacyEncodedThreadIdentityKey,
+  type DirectoryLaunchpadOverlayState,
+  type NavigationLaunchpadDefaults,
+  type ThreadOverlayState,
 } from "@pwragent/shared";
 import { SqliteOverlayStore } from "../../src/main/state/overlay-store-sqlite";
 import { StateDb } from "../../src/main/state/state-db";
-
-export function stateDbPathForHomeRoot(homeRoot: string): string {
-  return path.join(homeRoot, ".pwragent/profiles/default/state/state.db");
-}
+import { stateDbPathForHomeRoot } from "./readme-state-seeding";
 
 /**
  * Writes the given overlay state into `<homeRoot>`'s default profile,
@@ -38,6 +35,7 @@ export function stateDbPathForHomeRoot(homeRoot: string): string {
  * `gitBranch`, which a drift fixture must leave unset) — so the row is
  * written directly, typed as `ThreadOverlayState` so a shape change breaks
  * here at the type level rather than silently seeding a stale payload.
+ * `src/main/__tests__/overlay-state-seeding.test.ts` pins that round-trip.
  */
 export async function seedProfileOverlayState(
   homeRoot: string,
@@ -67,11 +65,10 @@ export async function seedProfileOverlayState(
     );
     for (const thread of params.threads ?? []) {
       insertThread.run(
-        // Matches `buildLegacyEncodedThreadIdentityKey`, which is what
-        // `encodeThreadIdentityKeyForStorage` resolves a well-formed key to.
-        // Same note as `sub-agent-state-seeding.ts`: recomputing the private
-        // transform here would be a second source of truth.
-        `${encodeURIComponent(thread.backend)}:${thread.threadId}`,
+        // `encodeThreadIdentityKeyForStorage` (private to the store) resolves
+        // a well-formed key to this one, so call the shared builder rather
+        // than restating its format as a second source of truth.
+        buildLegacyEncodedThreadIdentityKey(thread.backend, thread.threadId),
         // `directoryPath` is not on `ThreadOverlayState`; `putThread` reads it
         // off the payload through the same cast, so mirror it rather than
         // dropping the column for an overlay that happens to carry one.
