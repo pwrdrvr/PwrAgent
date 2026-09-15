@@ -1237,7 +1237,9 @@ function recordElectronCloseSummary(
     launchId,
   });
   appendElectronShutdownSummary(diagnosticsFile, summary);
-  console.log(`[pwragent-e2e-shutdown] ${JSON.stringify(summary)}`);
+  if (classification !== "healthy") {
+    console.log(`[pwragent-e2e-shutdown] ${JSON.stringify(summary)}`);
+  }
   return summary;
 }
 
