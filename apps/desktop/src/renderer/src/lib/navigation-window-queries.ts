@@ -269,7 +269,9 @@ export class NavigationWindowQueries {
           if (retainedBytes > MAX_RETAINED_BYTES) throw new Error("Navigation retained-page budget reached. Collapse a directory or change lens to release pages.");
         };
         const readPage = async (request: NavigationQueryRequest) => {
-          const page = await this.api.getNavigationQueryPage!(request, resource.token);
+          const page = await this.api.getNavigationQueryPage!({ ...request,
+            readReason: continuation ? "continuation" : explicitAnchor || fromStart ? "rebaseline" : started.page ? "refresh" : "demand",
+          }, resource.token);
           if (new TextEncoder().encode(JSON.stringify(page)).byteLength > NAVIGATION_QUERY_MAX_RESULT_BYTES) {
             throw new Error("Navigation page exceeds the bounded response size.");
           }

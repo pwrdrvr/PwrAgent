@@ -52,7 +52,7 @@ export async function readFederationPinnedSnapshot(
             throw new Error("Pinned navigation pagination exceeded its page/deadline budget.");
           }
           const page = await backend.getNavigationQueryPage({
-            protocol: 2, consumer: "main-sidebar", inventory: "owner",
+            protocol: 2, consumer: "main-sidebar", inventory: "owner", readReason: "pins",
             query: { kind: "group-members", roots: batch },
             pageSize: NAVIGATION_QUERY_MAX_PAGE_ROWS,
             ...(cursor ? { cursor } : baseline ? { completeBaselineRevision: baseline.revision } : {}),
@@ -61,7 +61,7 @@ export async function readFederationPinnedSnapshot(
           const pageBytes = Buffer.byteLength(JSON.stringify(page), "utf8");
           bytes += pageBytes;
           if (page.coverage.state !== "complete") {
-            throw new Error(`Pinned navigation owner coverage is ${page.coverage.state} (pending providers: ${page.coverage.pendingProviders ?? 0}, failed providers: ${page.coverage.failedProviders ?? 0}).`);
+            throw new Error(`Pinned navigation owner coverage is ${page.coverage.state} (pending providers: ${page.coverage.pendingProviders ?? "unknown"}, failed providers: ${page.coverage.failedProviders ?? "unknown"}).`);
           }
           const pageRevision = JSON.stringify([page.ownerEpoch, page.generation, page.queryKey, page.countsRevision]);
           if (page.unchanged) {
