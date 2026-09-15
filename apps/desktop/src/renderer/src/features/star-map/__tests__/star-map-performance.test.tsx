@@ -2,7 +2,7 @@ import "./foreground-fixture";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { act, render, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { NavigationThreadSummary } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
@@ -60,6 +60,7 @@ describe("star map idle performance", () => {
   const OriginalResizeObserver = globalThis.ResizeObserver;
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
     Object.defineProperty(globalThis, "ResizeObserver", {
       configurable: true,
@@ -117,6 +118,43 @@ describe("star map idle performance", () => {
       (delay, index) => index === 0 || delay >= ms[index - 1],
     );
     expect(monotonic).toBe(false);
+  });
+
+  it("pans a wheel sequence without reconciling every card on every event", async () => {
+    Object.defineProperty(globalThis, "ResizeObserver", {
+      configurable: true,
+      value: class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    });
+    const { container } = render(screen(
+      Array.from({ length: 24 }, (_, index) => thread(`t${index}`)),
+    ));
+    await waitFor(() => {
+      expect(container.querySelector("[data-thread-key]")).toBeTruthy();
+    });
+    const viewport = container.querySelector<HTMLElement>(".star-map__viewport")!;
+    const canvas = container.querySelector<HTMLElement>(".star-map__canvas")!;
+    const initialTransform = canvas.style.transform;
+    // Card observer reconciliation runs after each map render. A translation
+    // changes no card membership, so it should only run at gesture commit.
+    const query = vi.spyOn(viewport, "querySelectorAll");
+    const cardScans = () => query.mock.calls.filter(
+      ([selector]) => selector === "[data-thread-key]",
+    ).length;
+    vi.useFakeTimers();
+    for (let index = 0; index < 12; index += 1) {
+      fireEvent.wheel(viewport, { deltaX: 5, deltaY: 3 });
+      act(() => vi.advanceTimersByTime(16));
+    }
+    expect(canvas.style.transform).not.toBe(initialTransform);
+    const pannedTransform = canvas.style.transform;
+    expect(cardScans()).toBe(0);
+    act(() => vi.advanceTimersByTime(120));
+    expect(cardScans()).toBeGreaterThan(0);
+    expect(canvas.style.transform).toBe(pannedTransform);
   });
 
   it("updates card layout from ResizeObserver without reading offsetHeight", async () => {
