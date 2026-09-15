@@ -4699,13 +4699,16 @@ export function useThreadNavigation(
       ...(detailThread ? [detailThread] : []),
     ].filter((thread) => thread.codexEnvironmentRuntime?.setupFailureAcknowledgedAt !== undefined)
       .map(threadSummaryIdentityKey);
+    // Do not dispatch a no-op for every arriving navigation page. Even an
+    // updater that returns the same state consumes React's nested-update budget.
+    if (!acknowledgedKeys.some((key) => pendingEnvironmentFailures[key])) return;
     setPendingEnvironmentFailures((current) => {
       if (!acknowledgedKeys.some((key) => current[key])) return current;
       const next = { ...current };
       for (const key of acknowledgedKeys) delete next[key];
       return next;
     });
-  }, [selectedDetail.state?.detail?.thread, state.rows]);
+  }, [pendingEnvironmentFailures, selectedDetail.state?.detail?.thread, state.rows]);
 
   const selectedThreadConfigurationReady =
     navigationSelectionAuthorizesComposer(selectedDetail.state);
