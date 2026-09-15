@@ -26,6 +26,11 @@ import { launchElectronApp } from "./fixtures/electron-app";
  * observed spread in the passing state, and roughly a third of the
  * regression they exist to catch.
  *
+ * The chip height has since gone 1.35em -> 1.45em, which lowers both of
+ * those `fixed` offsets by half the growth (~0.7px). It moves them
+ * together, so the SPREAD — the only thing asserted here — is unchanged,
+ * and the paragraph is still exactly two line-units tall.
+ *
  * Coverage note: this drives the two autocompletes that need no fixture
  * work, which is also the pair that was furthest apart. The PR pill (a
  * third structure, leading with an 8px dot) is not covered — its `#`

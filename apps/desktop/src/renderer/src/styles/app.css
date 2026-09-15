@@ -27904,20 +27904,45 @@ button.pricing-token-miser__folded:focus-visible {
 
 /* Inline mention chips inside the composer: `$skill`, `@file`, `@directory`,
    `#thread`, PR pills. They interrupt running prose, so they are sized in `em`
-   off the paragraph rather than off `.chip` (24px / 12px) and `.pr-chip`
-   (22px / 11px), which are row and header geometry. Qualified by the editor so
-   that sizing wins on specificity rather than on this block happening to sit
-   below those two. Height stays under the 22.4px line box so a chip never
-   pushes its line taller than a plain one. */
+   off the paragraph rather than off `.chip` (24px / 12px), which is row and
+   header geometry. Qualified by the editor so that sizing wins on specificity
+   rather than on this block happening to sit below that one.
+
+   The PR pill is the exception and takes `.pr-chip`'s own 11px / 6px / 8px
+   back; only its HEIGHT is em-based here. Its rule, and why, is below.
+
+   Height is ~0.9 of the line box the chip interrupts, so a chip never pushes
+   its line taller than a plain one. That ceiling is a FRACTION of the line
+   box, not a fixed `em`: the strut below sits at the paragraph's own font
+   size and is centered, so the chip fills its line exactly when its height
+   reaches `line-height`, and the same `em` value is a larger share of the
+   shorter line box in `.compact-composer`. Measured in headless Chromium
+   against this stylesheet: at 14/1.6 a chip grows the line at 1.55em and
+   does not at 1.50em; at 12/1.5 it grows at 1.45em and does not at 1.40em.
+   Both values below sit a full step under their own threshold so a font
+   substitution on another platform cannot tip them.
+
+   1.35em was the previous value in both densities. It left a 14px label in
+   an 18.9px box — 1.45px of air per side against the 3.5px the sidebar's
+   chip carries — which read as squished on the one chip that draws a
+   border, the PR pill. See its rule below. */
 .composer-tiptap-input__editor .composer-tiptap-input__mention {
   display: inline-flex;
-  height: 1.35em;
+  height: 1.45em;
   gap: 0.35em;
   margin: 0 3px;
   padding: 0 0.5em;
   font-size: inherit;
   line-height: normal;
   vertical-align: baseline;
+}
+
+/* The card composer runs 12px/1.5, so 1.45em (17.4px of an 18px line box)
+   pushes every line it appears on. Step back to the same ~0.9 share. */
+.compact-composer
+  .composer-tiptap-input__editor
+  .composer-tiptap-input__mention {
+  height: 1.35em;
 }
 
 /* Zero-width baseline strut — load-bearing, not decoration. An inline-flex box
@@ -27942,6 +27967,43 @@ button.pricing-token-miser__folded:focus-visible {
 
 .composer-tiptap-input__mention.composer-pr-chip {
   cursor: default;
+}
+
+/* The PR pill is the one mention chip with a border, so it is the one whose
+   padding is visible — the others read as a tint behind the text and hide
+   however tight they are. Sizing its label off the paragraph (14px) put
+   chip-scale internals around prose-scale text: a 14px label in an 18.9px
+   pill (1.45px of air per side), an 8px dot at 0.57x the label instead of
+   the 0.73x it was drawn for, and a 4.9px gap. Beside the same PR in the
+   sidebar it read as squished.
+
+   So the label keeps `.pr-chip`'s own 11px and the pill keeps `.pr-chip`'s
+   own absolute internals, which puts the composer's dot, gap, and padding on
+   the same pixels as the sidebar row and the transcript. Only the HEIGHT
+   stays em-based, because only the height has to fit the line box.
+
+   The font-size lands on the LABEL, not on the chip: the strut above is
+   sized in `em` too, and shrinking it would move the chip's baseline out
+   from under its 14px siblings on the same line (1.1px, measured). The
+   label is centered by `align-items`, so its own size does not.
+
+   `.pr-chip.composer-pr-chip` doubles the qualifier to (0,3,0) so these beat
+   the shared mention rule on specificity rather than on source order. */
+.composer-tiptap-input__editor .pr-chip.composer-pr-chip {
+  gap: 6px;
+  padding: 0 8px;
+}
+
+/* Restates the strut's cancel against the `gap` above, which is the one this
+   chip actually opens. Left at the shared `-0.35em` the uncancelled 1.1px
+   pushed the dot off the padding and the chip stopped matching the sidebar
+   (measured: dot at 10.11px from the chip edge instead of 9px). */
+.composer-tiptap-input__editor .pr-chip.composer-pr-chip::before {
+  margin-inline-end: -6px;
+}
+
+.composer-tiptap-input__editor .pr-chip.composer-pr-chip .pr-chip__label {
+  font-size: 11px;
 }
 
 .composer__mentioned-skills {
