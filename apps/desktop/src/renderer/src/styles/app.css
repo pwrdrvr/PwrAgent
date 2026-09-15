@@ -5663,7 +5663,28 @@ a.button {
 .pr-chip__draft-bar {
   position: absolute;
   left: 50%;
-  bottom: 2px;
+  /* Anchored to the pill's CENTERLINE, not its bottom edge, because the thing
+     the bar has to clear — the label — is centered too. `bottom: 2px` was
+     calibrated against the 22px base pill, so every context that shrinks the
+     chip drove the bar up into the digits by exactly the height it removed.
+     Measured in headless Chromium against this stylesheet, label box bottom
+     -> bar top, where the base pill carries +0.5px: the sidebar row (20px)
+     was -0.5px, the ⌘K palette row (19px) -0.5px, the composer (20.3px)
+     -0.34px, and the card composer (16.19px) -2.41px, which drew the bar
+     through the number and read as a strikethrough rather than a marker.
+
+     From the centerline that gap is the base pill's own at every height, with
+     no per-context offsets: 6px = half the 13px label line box (11px text at
+     `line-height: normal`), less the 1px draft lift below, plus the 0.5px gap.
+     What varies instead is the room left UNDER the bar, and that is the
+     constraint a new chip size has to clear — 2px on the base pill, 1.16px in
+     the composer, 1px in the sidebar, 0.5px in the palette row. 19px is the
+     shortest pill that can hold a 2px bar — 18px fits it with zero room left,
+     which the contract test rejects, since a bar flush against the border
+     reads as part of the border. The card composer's pill is 16.19px and
+     takes the override below. */
+  top: 50%;
+  margin-top: 6px;
   transform: translateX(-50%);
   width: 16px;
   height: 2px;
@@ -5672,9 +5693,33 @@ a.button {
   pointer-events: none;
 }
 
+/* The card composer's pill is 1.35em of a 12px line box — 16.19px, which
+   leaves 4.16px under the digits against the base pill's 7.07px, and cannot
+   carry the full affordance. A 2px bar at the shared offset hangs 0.91px past
+   the pill's bottom edge and is clipped by the radius; pushed back inside, its
+   gap to the text collapses to 0.66px and it reads as an underline again;
+   lifting the label instead buys that gap out of the 2.08px above the digits
+   and puts them on the top border. So the bar scales with the pill — 1px,
+   centered in the space it has (1.57px of daylight above it, 1.59px below),
+   which is the base pill's own 3.07/2.0 proportions at this size.
+
+   Not the shared 6px offset with a 1px bar: that reproduces the base gap
+   exactly but leaves 0.09px under the bar, and a font substitution widening
+   the label line box by a fifth of a pixel would push it through the border.
+   Verified at DPR 2, where 0.5px is the smallest gap that still survives
+   compositing as a gap. */
+.compact-composer
+  .composer-tiptap-input__editor
+  .pr-chip.composer-pr-chip
+  .pr-chip__draft-bar {
+  margin-top: 4.5px;
+  height: 1px;
+}
+
 .pr-chip--draft .pr-chip__label {
   /* Lift the content a hair so the bar has breathing room under the text
-     without growing the pill. */
+     without growing the pill. The bar's offset above takes this 1px back, so
+     the two must move together. */
   transform: translateY(-1px);
 }
 
