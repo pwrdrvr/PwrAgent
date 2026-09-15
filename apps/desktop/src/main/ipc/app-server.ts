@@ -1998,12 +1998,14 @@ class DesktopAppServerService {
   ): Promise<NavigationQueryPage> {
     if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
       const target = request.federationTarget;
-      const page = await this.remoteNavigationPageBaselines.read(request, async (ownerRequest) => {
-        const result = await getDesktopFederationRuntime().remoteNavigationQueryPage(target, ownerRequest, rpcOptions);
+      const runtime = getDesktopFederationRuntime();
+      const ownerPage = await this.remoteNavigationPageBaselines.read(request, async (ownerRequest) => {
+        const result = await runtime.remoteNavigationQueryPage(target, ownerRequest, rpcOptions);
         rpcOptions?.signal.throwIfAborted();
         return result;
       });
       rpcOptions?.signal.throwIfAborted();
+      const page = runtime.stampRemoteNavigationQueryPage(target, ownerPage);
       if (request.query.kind === "exact" && request.consumer === "main-sidebar" && !page.unchanged && !page.rangeUnchanged) {
         const instanceId = request.federationTarget.instanceId;
         const snapshots = page.entries.flatMap(({ row }) => {

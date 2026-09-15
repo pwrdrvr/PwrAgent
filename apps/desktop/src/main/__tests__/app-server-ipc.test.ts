@@ -15,6 +15,10 @@ import type {
   HandoffThreadWorkspaceRequest,
   MarkThreadSeenRequest,
   NavigationThreadSummary,
+  NavigationQueryPage,
+  FederationRemoteTarget,
+  FederationCapability,
+  FederationPeerSummary,
   PrSummary,
   RefreshThreadPullRequestsRequest,
   RenameThreadRequest,
@@ -142,6 +146,7 @@ const federationMock = vi.hoisted(() => {
       remoteTargetSupportsCapability: vi.fn(() => true),
       remoteNavigationSnapshot: vi.fn(),
       remoteNavigationQueryPage: vi.fn(),
+      stampRemoteNavigationQueryPage: vi.fn((_target: FederationRemoteTarget, page: NavigationQueryPage) => page),
       remoteNavigationSelectedDetail: vi.fn(),
       onRemoteBackendEvent: vi.fn(() => () => {}),
       remoteThreadSummaries: vi.fn(() => remoteThreadSummaries),
@@ -1228,6 +1233,7 @@ describe("app server ipc", () => {
   });
 
   beforeEach(() => {
+    federationMock.runtime.stampRemoteNavigationQueryPage.mockReset().mockImplementation((_target, page) => page);
     isProviderEnabled.mockReturnValue(true);
     backendRegistryLifecycle.existing = true;
     backendRegistryLifecycle.get.mockClear();
@@ -2528,6 +2534,55 @@ describe("app server ipc", () => {
     expect(refreshed.directories[0]?.directoryThreadsCollapsed).toBe(false);
     expect(refreshed.selectionDirectory.directoryThreadsCollapsed).toBe(false);
 
+  });
+
+  it("refreshes viewer federation metadata when unchanged owner pages are expanded", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_QUERY_PAGE_CHANNEL } = await import("../../shared/ipc");
+    const { stampRemoteNavigationQueryPage } = await import("../federation/federation-navigation-query");
+    const target: FederationRemoteTarget = { scope: "remote", instanceId: "peer-metadata" };
+    let metadata: { instanceLabel: string; capabilities: FederationCapability[];
+      peerStatus: FederationPeerSummary["status"]; celestialIcon?: FederationPeerSummary["celestialIcon"] } = {
+      instanceLabel: "Old label", capabilities: ["thread_navigation"], peerStatus: "connected", celestialIcon: "moon",
+    };
+    const stamp = (page: NavigationQueryPage) => stampRemoteNavigationQueryPage({ page, target, ...metadata });
+    federationMock.runtime.stampRemoteNavigationQueryPage.mockImplementation((_target, page) => stamp(page));
+    const ownerPage: NavigationQueryPage = {
+      protocol: 2, queryKey: "metadata", generation: "g", ownerEpoch: "owner", countsRevision: "stable",
+      counts: { total: 1, active: 0, unread: 0, review: 0 }, coverage: { state: "complete" }, complete: true,
+      entries: [{ orderKey: "one", placement: { kind: "root" }, row: {
+        id: "one", source: "codex", title: "One", titleSource: "explicit", linkedDirectories: [],
+        ref: { backend: "codex", threadId: "one" }, inbox: { inInbox: false },
+        rowRevision: "row-stable", ordinaryChildCount: 0, nativeSubAgentGroupPresent: false,
+        queueCount: 0, queueState: "ready",
+      } }],
+    };
+    const unchanged = { ...ownerPage, entries: [], unchanged: true };
+    federationMock.runtime.remoteNavigationQueryPage.mockClear()
+      .mockResolvedValueOnce(stamp(ownerPage))
+      .mockResolvedValueOnce(unchanged)
+      .mockResolvedValueOnce(unchanged);
+    registerAppServerIpcHandlers();
+    const read = async () => handlers.get(NAVIGATION_QUERY_PAGE_CHANNEL)!({ sender: { id: 90205, once: vi.fn() } }, {
+      protocol: 2, consumer: "main-sidebar", federationTarget: target, query: { kind: "lens", lens: "inbox" },
+    }) as Promise<NavigationQueryPage>;
+    const first = await read();
+    expect(first.entries[0]?.row.federation).toMatchObject(metadata);
+    metadata = { instanceLabel: "Renamed peer", capabilities: ["thread_navigation", "turn_control"],
+      peerStatus: "connected", celestialIcon: "black-hole" };
+    const granted = await read();
+    expect(granted.entries[0]?.row.federation).toMatchObject(metadata);
+    metadata = { instanceLabel: "Renamed again", capabilities: [], peerStatus: "disconnected" };
+    const revoked = await read();
+    expect(revoked.entries[0]?.row.federation).toMatchObject(metadata);
+    expect(revoked.entries[0]?.row.federation?.celestialIcon).toBeUndefined();
+    expect(first.entries[0]?.row.federation?.instanceLabel).toBe("Old label");
+    expect(federationMock.runtime.remoteNavigationQueryPage).toHaveBeenCalledTimes(3);
+    for (const call of federationMock.runtime.remoteNavigationQueryPage.mock.calls.slice(1)) {
+      expect(call[1].completeBaselineRevision).toBe("stable");
+    }
+    expect(granted.unchanged).toBe(false);
+    expect(revoked.unchanged).toBe(false);
   });
 
   it("shares exact owner reads across native windows and aborts only after the last window releases", async () => {

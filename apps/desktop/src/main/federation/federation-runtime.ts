@@ -2053,6 +2053,11 @@ export class DesktopFederationRuntime {
       }
       throw error;
     }
+    return this.stampRemoteNavigationQueryPage(target, page);
+  }
+
+  /** Reapply viewer metadata after expanding an unchanged owner baseline. */
+  stampRemoteNavigationQueryPage(target: FederationRemoteTarget, page: NavigationQueryPage): NavigationQueryPage {
     const instanceLabel = this.connectedPeerTargets().find(
       (peer) => peer.target.instanceId === target.instanceId,
     )?.label ?? target.instanceId;
