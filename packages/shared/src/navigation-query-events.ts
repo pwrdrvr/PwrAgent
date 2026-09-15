@@ -18,7 +18,9 @@ const ROW_CHANGE_METHODS = new Set([
 ]);
 
 /** Streamed text, token accounting and tool deltas do not refresh collection queries. */
-export function navigationQueryEventRequiresRefresh(method: string): boolean {
+export function navigationQueryEventRequiresRefresh(method: string, params?: unknown): boolean {
+  if (method === "thread/subAgents/updated" && params && typeof params === "object"
+    && "navigationChanged" in params && params.navigationChanged === false) return false;
   return ROW_CHANGE_METHODS.has(method) || method.endsWith("/requestApproval");
 }
 
@@ -30,10 +32,23 @@ const THREAD_ROW_ONLY_METHODS = new Set([
   "thread/pullRequests/updated", "thread/reactions/updated", "thread/agent/updated",
   "thread/modelSettings/updated", "thread/executionMode/updated", "thread/executionMode/queued",
   "thread/executionMode/queueCleared", "thread/prAutoDispatch/updated", "thread/prAutoDispatch/pendingUpdated",
-  "thread/turnQueue/updated", "navigation/threadGitWorkingState/updated",
+  "thread/turnQueue/updated", "navigation/threadGitWorkingState/updated", "navigation/directoryGitStatus/updated",
+  // Subagent detail and native-group presence belong to the named parent.
+  // Ordinary child discovery uses thread/started and thread/parent/set.
+  "thread/subAgents/updated",
   "turn/started", "turn/completed", "turn/failed", "turn/cancelled",
 ]);
 
 export function navigationInvalidationMayChangeMembership(sourceMethod: unknown): boolean {
   return typeof sourceMethod !== "string" || !THREAD_ROW_ONLY_METHODS.has(sourceMethod);
+}
+
+/** Same path precedence used by owner working-state probes and visible rows. */
+export function navigationWorkingStatePath(thread: {
+  projectKey?: string;
+  linkedDirectories: readonly { kind?: string; path?: string; worktreePath?: string }[];
+}): string | undefined {
+  return thread.projectKey?.trim()
+    || thread.linkedDirectories.find((directory) => directory.worktreePath?.trim())?.worktreePath?.trim()
+    || thread.linkedDirectories.find((directory) => directory.kind === "local" && directory.path?.trim())?.path?.trim();
 }

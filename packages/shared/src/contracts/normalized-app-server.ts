@@ -2125,6 +2125,8 @@ export type AppServerNotification =
       method: "thread/subAgents/updated";
       params: {
         threadId: string;
+        /** False only for producer-proven detail/accounting changes. */
+        navigationChanged?: false;
         subAgents?: ThreadSubAgentSummary[];
       };
     }

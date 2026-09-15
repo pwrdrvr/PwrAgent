@@ -88,6 +88,7 @@ import type {
 import {
   FEDERATION_INVITE_VERSION,
   navigationInvalidationMayChangeMembership,
+  navigationQueryEventRequiresRefresh,
   FEDERATION_PROTOCOL_VERSION,
   MAX_CELESTIAL_ASSIGNMENTS,
   buildAppendPinRank,
@@ -4991,7 +4992,9 @@ export class DesktopFederationRuntime {
 
   private forwardLocalBackendEvent(event: AgentEvent): void {
     if (!this.router) return;
-    if (NAVIGATION_EVENT_METHODS.has(event.notification.method)) {
+    if (NAVIGATION_EVENT_METHODS.has(event.notification.method)
+      && (event.notification.method !== "thread/subAgents/updated"
+        || navigationQueryEventRequiresRefresh(event.notification.method, event.notification.params))) {
       // Never broadcast the source payload: turn output, queue input, agent
       // configuration and complete child orders belong to exact detail demand.
       // Identity fields are bounded independently of the provider's payload.
@@ -5006,7 +5009,11 @@ export class DesktopFederationRuntime {
           method: "navigation/invalidated",
           params: {
             sourceMethod: event.notification.method,
+            ...(event.notification.method === "navigation/threadGitWorkingState/updated"
+              ? { worktreePath: identity(params.worktreePath) } : {}),
             threadId: identity(params.threadId ?? thread?.id ?? action?.threadId),
+            ...(event.notification.method === "navigation/directoryGitStatus/updated"
+              ? { directoryKey: identity(params.directoryKey) } : {}),
             automationId: identity(params.automationId),
             runId: identity(params.runId),
           },

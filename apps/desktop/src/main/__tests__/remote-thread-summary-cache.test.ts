@@ -1903,3 +1903,66 @@ it("revalidates a discovered child after expanding its subscription", async () =
     expect(published).toEqual(["After subscription"]);
   } finally { cache.dispose(); }
 });
+
+it("scopes subagent metadata and worktree invalidations to mounted rows", async () => {
+  const root = { ...stampedThread({ instanceId: "peer", threadId: "root", title: "Root" }), projectKey: "/mounted" };
+  const fetchPinnedSnapshot = vi.fn(async () => snapshotOf([root]));
+  const cache = new RemoteThreadSummaryCache({ peers: () => [peer("peer")], fetchSnapshot: vi.fn(), fetchPinnedSnapshot,
+    fetchArchivedThreads: noArchivedThreads, peerStatus: () => ({ status: "connected" }), hasNavigationSubscription: () => true });
+  try {
+    await cache.resolvePinnedThreads([pin({ instanceId: "peer", threadId: "root" })]);
+    await settle();
+    fetchPinnedSnapshot.mockClear();
+    for (let i = 0; i < 27; i++) {
+      cache.invalidate("peer", { backend: "codex", notification: { method: "navigation/invalidated", params: {
+        sourceMethod: "thread/subAgents/updated", threadId: "unrelated",
+      } } });
+      cache.invalidate("peer", { backend: "codex", notification: { method: "navigation/invalidated", params: {
+        sourceMethod: "navigation/threadGitWorkingState/updated", worktreePath: "/other",
+      } } });
+    }
+    await settle();
+    cache.invalidate("peer", { backend: "codex", notification: { method: "navigation/invalidated", params: {
+      sourceMethod: "navigation/directoryGitStatus/updated", directoryKey: "directory:/mounted",
+    } } });
+    await settle();
+    expect(fetchPinnedSnapshot).not.toHaveBeenCalled();
+    cache.invalidate("peer", { backend: "codex", notification: { method: "navigation/invalidated", params: {
+      sourceMethod: "navigation/threadGitWorkingState/updated", worktreePath: "/mounted",
+    } } });
+    await settle();
+    expect(fetchPinnedSnapshot).toHaveBeenCalledTimes(1);
+  } finally { cache.dispose(); }
+});
+
+it("retains pins through repeated incomplete coverage and publishes recovery once", async () => {
+  const root = stampedThread({ instanceId: "peer", threadId: "root", title: "Last known" });
+  let incomplete = false;
+  const fetchPinnedSnapshot = vi.fn(async () => {
+    if (incomplete) throw new Error("Pinned navigation owner coverage is checking (pending providers: unknown, failed providers: unknown).");
+    return snapshotOf([root]);
+  });
+  const problem = vi.fn();
+  const refreshed = vi.fn();
+  const cache = new RemoteThreadSummaryCache({ peers: () => [peer("peer")], fetchSnapshot: vi.fn(), fetchPinnedSnapshot,
+    fetchArchivedThreads: noArchivedThreads, peerStatus: () => ({ status: "connected" }), hasNavigationSubscription: () => true,
+    onPinnedRefreshProblem: problem, onPinnedSummariesRefreshed: refreshed });
+  const pins = [pin({ instanceId: "peer", threadId: "root", summary: root })];
+  try {
+    await cache.resolvePinnedThreads(pins);
+    await settle();
+    incomplete = true;
+    for (let i = 0; i < 3; i++) { cache.invalidate("peer"); for (let j = 0; j < 3; j++) await settle(); }
+    expect(problem).toHaveBeenCalledTimes(1);
+    const retained = await cache.resolvePinnedThreads(pins);
+    expect(retained.threads[0]?.title).toBe("Last known");
+    expect(retained.archived).toEqual([]);
+    for (let i = 0; i < 3; i++) await settle();
+    refreshed.mockClear();
+    incomplete = false;
+    cache.invalidate("peer");
+    for (let i = 0; i < 3; i++) await settle();
+    expect(refreshed).toHaveBeenCalledTimes(1);
+    expect(problem).toHaveBeenCalledTimes(1);
+  } finally { cache.dispose(); }
+});

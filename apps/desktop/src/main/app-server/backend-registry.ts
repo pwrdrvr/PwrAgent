@@ -1,3 +1,4 @@
+import { navigationWorkingStatePath as resolveThreadWorkingStatePath } from "@pwragent/shared";
 import {
   buildPullRequestReferenceUrl,
   parsePullRequestReferenceUrl,
@@ -1008,30 +1009,6 @@ function resolveThreadWorkspaceCwd(
     resolveLinkedDirectoryWorkspaceCwd(overlayDirectories) ??
     thread.projectKey
   );
-}
-
-function resolveThreadWorkingStatePath(
-  thread: Pick<AppServerThreadSummary, "projectKey" | "linkedDirectories">,
-): string | undefined {
-  const projectKey = thread.projectKey?.trim();
-  if (projectKey) {
-    return projectKey;
-  }
-
-  for (const directory of thread.linkedDirectories) {
-    const worktreePath = directory.worktreePath?.trim();
-    if (worktreePath) {
-      return worktreePath;
-    }
-  }
-
-  for (const directory of thread.linkedDirectories) {
-    if (directory.kind === "local" && directory.path.trim()) {
-      return directory.path.trim();
-    }
-  }
-
-  return undefined;
 }
 
 function mergedPrCommitShas(prs: PrSummary[]): string[] {
@@ -10965,7 +10942,7 @@ export class DesktopBackendRegistry {
 
     this.durableStartupThreadHydrationAttempted = true;
     const snapshots = this.providerThreadSnapshotStore.list();
-    this.startupProviderRefreshStatus = { state: "checking" };
+    this.startupProviderRefreshStatus ??= { state: "checking" };
     const threads = snapshots.flatMap((snapshot) =>
       snapshot.backend === "codex" && params.limit !== undefined
         ? snapshot.threads.slice(0, params.limit)
@@ -11021,6 +10998,7 @@ export class DesktopBackendRegistry {
       return Promise.resolve();
     }
     this.startupProviderRefreshAttempted = true;
+    this.startupProviderRefreshStatus = { state: "checking" };
     this.startupProviderRefreshPromise = Promise.resolve().then(async () => {
       const startedAt = Date.now();
       const results = await Promise.allSettled([
@@ -13712,8 +13690,8 @@ export class DesktopBackendRegistry {
   /**
    * The one write seam for the working-state cache, for both lanes. Keeping it
    * single is what makes the shared cache safe: the monotonic stamp and the
-   * notification below have to happen on every write, and a lane that set the
-   * map itself would skip them.
+   * notification below share one seam. Only a meaningful state change emits
+   * an event; advancing probe freshness alone must not refresh navigation.
    */
   async rememberThreadGitWorkingStateCacheEntry(
     entry: WorktreeGitWorkingStateCacheEntry,
@@ -13730,6 +13708,8 @@ export class DesktopBackendRegistry {
     const stored: WorktreeGitWorkingStateCacheEntry = { ...entry, fetchedAt };
     this.workingStateByWorktree.set(stored.worktreePath, stored);
     await this.overlayStore.writeThreadGitWorkingStateCacheEntry?.(stored);
+
+    if (isDeepStrictEqual(previous?.gitWorkingState ?? null, stored.gitWorkingState ?? null)) return;
 
     // Reaches already-open surfaces. Without it a background round only landed
     // in the durable cache, so the window that scheduled it kept showing the
@@ -26987,6 +26967,7 @@ export class DesktopBackendRegistry {
       notification: {
         method: "thread/subAgents/updated",
         params: {
+          navigationChanged: false,
           threadId: parentThreadId,
         },
       },
@@ -31211,6 +31192,7 @@ export class DesktopBackendRegistry {
       notification: {
         method: "thread/subAgents/updated",
         params: {
+          navigationChanged: false,
           threadId: entry.threadId,
           subAgents: this.mergeLiveTokenMiserSubAgents(
             entry.threadId,
@@ -31272,6 +31254,7 @@ export class DesktopBackendRegistry {
       notification: {
         method: "thread/subAgents/updated",
         params: {
+          navigationChanged: false,
           threadId,
           subAgents: this.mergeLiveTokenMiserSubAgents(
             threadId,
@@ -31439,6 +31422,7 @@ export class DesktopBackendRegistry {
           notification: {
             method: "thread/subAgents/updated",
             params: {
+              navigationChanged: false,
               threadId,
               subAgents: this.mergeLiveTokenMiserSubAgents(
                 threadId,

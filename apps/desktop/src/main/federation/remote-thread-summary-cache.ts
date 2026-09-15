@@ -14,6 +14,7 @@ import type {
 } from "@pwragent/shared";
 import {
   navigationInvalidationMayChangeMembership,
+  navigationWorkingStatePath,
   parseThreadIdentityKey,
   buildThreadIdentityKey,
   federatedThreadIdentityKey,
@@ -264,9 +265,14 @@ export class RemoteThreadSummaryCache {
 
   invalidate(instanceId?: string, event?: AgentEvent): void {
     if (instanceId && event) {
-      const params = event.notification.params as { sourceMethod?: unknown; threadId?: unknown };
+      const params = event.notification.params as { sourceMethod?: unknown; threadId?: unknown; worktreePath?: unknown };
       const sourceMethod = event.notification.method === "navigation/invalidated"
         ? params?.sourceMethod : event.notification.method;
+      // Directory Git chips are not part of pinned thread rows or membership.
+      if (sourceMethod === "navigation/directoryGitStatus/updated") return;
+      if (sourceMethod === "navigation/threadGitWorkingState/updated" && typeof params?.worktreePath === "string"
+        && this.hasCompletePinnedMembership(instanceId)
+        && !this.cache.get(instanceId)?.threads.some((thread) => navigationWorkingStatePath(thread) === params.worktreePath)) return;
       // A broader consumer (for example a remote window) can cause delivery of
       // events outside the mounted groups. Do not turn those into pin reads.
       if (!navigationInvalidationMayChangeMembership(sourceMethod) && typeof params?.threadId === "string"
@@ -284,7 +290,6 @@ export class RemoteThreadSummaryCache {
       this.globalGeneration += 1;
       for (const id of this.cache.keys()) this.expirePeerSnapshot(id);
       this.archivedCache.clear();
-      this.refreshFailures.clear();
       this.provenArchived.clear();
       this.refreshMountedPins();
       return;
@@ -294,7 +299,6 @@ export class RemoteThreadSummaryCache {
       (this.peerGenerations.get(instanceId) ?? 0) + 1,
     );
     this.expirePeerSnapshot(instanceId);
-    this.refreshFailures.delete(instanceId);
     this.provenArchived.delete(instanceId);
     for (const key of this.archivedCache.keys()) {
       if (key.startsWith(`${instanceId}:`)) {
