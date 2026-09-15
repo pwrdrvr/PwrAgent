@@ -653,8 +653,9 @@ export type SelectedUpdateReleases = {
 //   - stable prerelease  → max(stable latest, 1.0 `-prerelease` / legacy `-beta`)
 //   - beta latest        → highest `-beta` whose core is ahead of Stable Latest
 //   - beta prerelease    → max(beta latest, highest `-alpha` on a newer core)
-// Empty Beta slots stay empty. The Settings Beta control remains selectable
-// so an operator can follow the next `main` tag after a Stable promotion.
+// Both Beta slots fall back to Stable Latest so installed alphas and betas
+// can upgrade to their final release. The saved selection stays on Beta to
+// follow the next eligible `main` tag after a Stable promotion.
 export function selectChannelReleases(
   releases: GitHubRelease[],
 ): SelectedUpdateReleases {
@@ -675,7 +676,7 @@ export function selectChannelReleases(
     ?? byPrecedenceDesc.find((release) => release.prerelease !== true);
   const betaLatest = byPrecedenceDesc.find((release) =>
     isBetaLatestRelease(release, stableLatest, publicReleases),
-  );
+  ) ?? stableLatest;
   const stablePrerelease = byPrecedenceDesc.find((release) => {
     if (release === stableLatest) {
       return true;
@@ -690,7 +691,7 @@ export function selectChannelReleases(
   });
   const betaPrerelease = byPrecedenceDesc.find((release) =>
     isBetaTrainRelease(release, stableLatest, publicReleases),
-  );
+  ) ?? stableLatest;
   return {
     latest: stableLatest,
     prerelease: stablePrerelease,
