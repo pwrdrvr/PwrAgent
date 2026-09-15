@@ -4,7 +4,7 @@ import { threadSummaryIdentityKey } from "./federated-thread-events";
 
 export const MAX_RECENT_REMOTE_THREADS = 5;
 
-/** Window-local LRU. Background activity must not promote or retain a thread. */
+/** Window-local snapshot LRU, not streaming demand. Background activity must not retain a thread. */
 export function useRecentRemoteThreads(params: {
   selectedThread?: NavigationThreadSummary;
   threads: NavigationThreadSummary[];
