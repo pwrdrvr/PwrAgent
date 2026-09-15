@@ -148,6 +148,7 @@ const federationMock = vi.hoisted(() => {
       remoteNavigationQueryPage: vi.fn(),
       stampRemoteNavigationQueryPage: vi.fn((_target: FederationRemoteTarget, page: NavigationQueryPage) => page),
       remoteNavigationSelectedDetail: vi.fn(),
+      remoteNavigationQueueProjection: vi.fn(),
       onRemoteBackendEvent: vi.fn(() => () => {}),
       remoteThreadSummaries: vi.fn(() => remoteThreadSummaries),
       ungroupRemoteChildrenOfArchivedThread: vi.fn(async () => undefined),
@@ -2611,6 +2612,36 @@ describe("app server ipc", () => {
       expect.objectContaining({ status: "fulfilled", value: expect.objectContaining({ navigationReadFailure: true, code: "navigation_busy" }) }),
     ]);
     finish({ protocol: 2, ref: request.ref, revision: "late", readiness: "ready", identity: "unresolved" });
+  });
+
+  it.each(["detail", "queue"])("quietly cancels a Star Map %s waiting for owner read capacity", async (kind) => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_SELECTED_DETAIL_CHANNEL, NAVIGATION_QUEUE_PROJECTION_CHANNEL,
+      NAVIGATION_QUERY_RELEASE_CHANNEL } = await import("../../shared/ipc");
+    const finish: Array<() => void> = [];
+    federationMock.runtime.remoteNavigationSelectedDetail.mockReset().mockImplementation((_target, request) =>
+      new Promise((resolve) => finish.push(() => resolve({ protocol: 2, ref: request.ref,
+        revision: "ready", readiness: "ready", identity: "unresolved" }))));
+    federationMock.runtime.remoteNavigationQueueProjection.mockClear();
+    registerAppServerIpcHandlers();
+    const event = { sender: { id: kind === "detail" ? 90013 : 90014, once: vi.fn() } };
+    const request = { protocol: 2, federationTarget: { scope: "remote", instanceId: "busy-map-owner" },
+      ref: { backend: "codex", threadId: "waiting" } };
+    const detail = handlers.get(NAVIGATION_SELECTED_DETAIL_CHANNEL)!;
+    const release = handlers.get(NAVIGATION_QUERY_RELEASE_CHANNEL)!;
+    const active = Array.from({ length: 8 }, (_, index) => detail(event,
+      { ...request, ref: { ...request.ref, threadId: `active-${index}` } }, `active-${index}`));
+    const handler = handlers.get(kind === "detail" ? NAVIGATION_SELECTED_DETAIL_CHANNEL : NAVIGATION_QUEUE_PROJECTION_CHANNEL)!;
+    const waiting = handler(event, request, "unmounted-card");
+    const settled = Promise.allSettled([waiting]);
+    await release(event, "unmounted-card");
+    const [result] = await settled;
+    expect(federationMock.runtime.remoteNavigationSelectedDetail).toHaveBeenCalledTimes(8);
+    expect(federationMock.runtime.remoteNavigationQueueProjection).not.toHaveBeenCalled();
+    for (const done of finish) done();
+    await Promise.all(active);
+    for (let index = 0; index < 8; index += 1) await release(event, `active-${index}`);
+    expect(result).toMatchObject({ status: "fulfilled", value: { navigationReadFailure: true, code: "navigation_busy" } });
   });
 
   it("overlays viewer-owned directory disclosure state on remote snapshots", async () => {
