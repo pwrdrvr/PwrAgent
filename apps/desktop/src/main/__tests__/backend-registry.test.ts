@@ -47765,7 +47765,10 @@ script = "printf setup"
     await registry.close();
   });
 
-  it("finishes committed handoff bookkeeping when Codex CWD synchronization fails", async () => {
+  it.each([
+    "Codex connection dropped",
+    "json-rpc error (-32600): thread not found: thread-1",
+  ])("finishes committed handoff bookkeeping when CWD synchronization fails: %s", async (error) => {
     const worktreePath = "/repo/app/.worktrees/app-feature-handoff";
     const thread: AppServerThreadSummary = {
       id: "thread-1",
@@ -47820,7 +47823,7 @@ script = "printf setup"
     }));
     const codexClient = new MockBackendClient({
       threads: [thread],
-      updateThreadWorkspaceError: new Error("Codex connection dropped"),
+      updateThreadWorkspaceError: new Error(error),
     });
     const overlayStore = createOverlayStoreMock();
     const registry = new DesktopBackendRegistry({
@@ -52464,7 +52467,7 @@ describe("DesktopBackendRegistry — ACP worktree directory grouping", () => {
     }
   });
 
-  it("includes the thread and cleanup error when automatic missing-thread archive fails", async () => {
+  it("reports the failed thread when an approved missing-thread archive fails", async () => {
     vi.useFakeTimers();
     const fixture = buildMissingThreadFixture({
       missingThreadIds: ["thread-missing"],
@@ -52480,24 +52483,22 @@ describe("DesktopBackendRegistry — ACP worktree directory grouping", () => {
       new Error("archive storage unavailable"),
     );
     const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
-    const events: AgentEvent[] = [];
-    registry.onEvent((event) => { events.push(event); });
     try {
       await registry.listThreads({ backend: "codex", forceRefresh: true });
       await settleMissingCodexThreadAudit(registry);
-      expect(events.find((event) =>
-        event.notification.method === "codex/missingThreads/updated",
-      )?.notification.params).toMatchObject({
-        failedCount: 1,
-        failures: [{ threadId: "thread-missing", error: "archive storage unavailable" }],
+      expect(codexClient.archivedThreadIds).toEqual([]);
+      const result = await registry.resolveMissingCodexThreads({
+        action: "archive",
+        threadIds: ["thread-missing"],
       });
+      expect(result.failedThreadIds).toEqual(["thread-missing"]);
     } finally {
       await registry.close();
       vi.useRealTimers();
     }
   });
 
-  it("archives Codex threads reported missing when they are a small share of the profile", async () => {
+  it("preserves a handed-off thread when workspace synchronization reports it missing in a large profile", async () => {
     vi.useFakeTimers();
     try {
       const missingThreadIds = new Set(["thread-missing"]);
@@ -52519,32 +52520,18 @@ describe("DesktopBackendRegistry — ACP worktree directory grouping", () => {
       await registry.listThreads({ backend: "codex", forceRefresh: true });
       await settleMissingCodexThreadAudit(registry);
 
-      // Assert the decision before its effect. A bare empty-archive failure
-      // cannot tell "the audit never ran" from "the audit ran and asked
-      // instead", and those have completely different causes.
-      const update = events.find(
-        (event) =>
-          event.notification.method === "codex/missingThreads/updated",
-      );
-      expect(update?.notification.params).toMatchObject({
-        status: "archived",
+      expect(codexClient.archivedThreadIds).toEqual([]);
+      expect(events.find((event) =>
+        event.notification.method === "codex/missingThreads/updated",
+      )?.notification.params).toMatchObject({
+        status: "confirmationRequired",
         totalCount: 10,
-      });
-      expect(codexClient.archivedThreadIds).toEqual(["thread-missing"]);
-      expect(update?.notification.params).toMatchObject({
-        archivedCount: 1,
-        failedCount: 0,
-        missingCount: 1,
-        status: "archived",
         threadIds: ["thread-missing"],
-        totalCount: 10,
       });
-      await expect(
-        overlayStore.getThreadOverlayState({
-          backend: "codex",
-          threadId: "thread-missing",
-        }),
-      ).resolves.toMatchObject({ archiveTombstonedAt: expect.any(Number) });
+      expect((await overlayStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: "thread-missing",
+      }))?.archiveTombstonedAt).toBeUndefined();
 
       await registry.close();
     } finally {
@@ -52744,7 +52731,7 @@ describe("DesktopBackendRegistry — ACP worktree directory grouping", () => {
     }
   });
 
-  it("never auto-archives again once the operator has kept missing threads", async () => {
+  it("requires a new decision for later missing threads after the operator chose keep", async () => {
     vi.useFakeTimers();
     try {
       const missingThreadIds = new Set(["thread-missing-1", "thread-missing-2"]);
@@ -52765,7 +52752,7 @@ describe("DesktopBackendRegistry — ACP worktree directory grouping", () => {
 
       await registry.listThreads({ backend: "codex", forceRefresh: true });
       await settleMissingCodexThreadAudit(registry);
-      // 2 of 5 is above the threshold, so this round asks.
+      // The initial failures require an operator decision.
       expect(codexClient.archivedThreadIds).toEqual([]);
 
       await registry.resolveMissingCodexThreads({
@@ -52798,10 +52785,8 @@ describe("DesktopBackendRegistry — ACP worktree directory grouping", () => {
       await registry.listThreads({ backend: "codex", forceRefresh: true });
       await settleMissingCodexThreadAudit(registry);
 
-      // 1 of 5 is at or under the threshold, so the ratio alone would archive
-      // it. The operator already said the Codex profile may be wrong, and
-      // deciding for them now would archive a thread from the very profile
-      // they asked us to leave alone.
+      // A later failure still requires a decision, even when it affects
+      // only one thread in the profile.
       expect(codexClient.archivedThreadIds).toEqual([]);
       const updates = events.filter(
         (event) => event.notification.method === "codex/missingThreads/updated",
