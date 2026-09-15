@@ -1,4 +1,4 @@
-// Pins the `PWRAGENT_HOME` redirect in `vitest.workspace.ts`.
+// Pins the disposable-root redirects in `vitest.workspace.ts`.
 //
 // Without it, `resolvePwragentRoot` falls back to `~/.pwragent` and every test
 // that touches a root-relative path reads and writes the operator's live
@@ -11,6 +11,13 @@
 // Two halves, and both are needed: the declared config value proves the
 // redirect is still written down for each desktop project, and the runtime
 // value proves it actually reached a forked worker.
+//
+// `XDG_CONFIG_HOME` / `XDG_STATE_HOME` are pinned the same way and for the
+// same reason. Nothing in the app reads them today — the pre-profile
+// migration that searched them for `pwragnt/` state is gone — so they are a
+// guard against a future reader resolving into `~/.config` and
+// `~/.local/state`. A guard nothing asserts on is one config edit from being
+// dropped, which is the case this file exists for.
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -19,6 +26,11 @@ import { isPathWithin } from "../../shared/path-within";
 import { PWRAGENT_HOME_ENV, resolvePwragentRoot } from "../profile";
 
 const GUARDED_PROJECTS = ["desktop-main", "desktop-renderer"];
+const GUARDED_ENV_VARS = [
+  PWRAGENT_HOME_ENV,
+  "XDG_CONFIG_HOME",
+  "XDG_STATE_HOME",
+];
 
 type ConfiguredProject = {
   test?: { env?: Record<string, string>; name?: string };
@@ -50,14 +62,21 @@ describe("disposable PWRAGENT_HOME", () => {
   });
 
   it.each(GUARDED_PROJECTS)(
-    "declares a disposable root for the %s project",
+    "declares disposable roots for the %s project",
     (name) => {
       const project = findProject(name);
 
-      expect(project?.test?.env?.[PWRAGENT_HOME_ENV]).toBeTruthy();
-      expect(isDisposable(project?.test?.env?.[PWRAGENT_HOME_ENV] ?? "")).toBe(
-        true,
-      );
+      for (const variable of GUARDED_ENV_VARS) {
+        expect(project?.test?.env?.[variable]).toBeTruthy();
+        expect(isDisposable(project?.test?.env?.[variable] ?? "")).toBe(true);
+      }
+    },
+  );
+
+  it.each(["XDG_CONFIG_HOME", "XDG_STATE_HOME"])(
+    "points this worker's %s at a disposable directory",
+    (variable) => {
+      expect(isDisposable(process.env[variable] ?? "")).toBe(true);
     },
   );
 });

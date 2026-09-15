@@ -38,6 +38,32 @@ const DISPOSABLE_PWRAGENT_HOME = path.join(
   `pwragent-vitest-home-${process.pid}`,
 );
 
+// The XDG roots, pinned beside it. Nothing in the app reads these today —
+// the pre-profile migration that searched `XDG_CONFIG_HOME` /
+// `XDG_STATE_HOME` for `pwragnt/` state is deleted in this same change — so
+// this is a guard, not a fix: it keeps a future reader of those variables
+// from resolving into the operator's real `~/.config` and `~/.local/state`
+// the way `findLegacyPaths` did, which made a developer carrying pre-1.0
+// files run a different code path than CI on every `initializeAppState`.
+//
+// Pointed at a directory nothing creates, for the same reason as the root
+// above: a run that reads them leaves evidence in the OS temp dir.
+const DISPOSABLE_XDG_ROOT = path.join(
+  os.tmpdir(),
+  `pwragent-vitest-xdg-${process.pid}`,
+);
+const DISPOSABLE_XDG_CONFIG_HOME = path.join(DISPOSABLE_XDG_ROOT, "config");
+const DISPOSABLE_XDG_STATE_HOME = path.join(DISPOSABLE_XDG_ROOT, "state");
+
+// Seeded on every desktop project so the root and the XDG homes always move
+// together; a test that overrides one and forgets the others is the bug this
+// pairing exists to prevent.
+const DISPOSABLE_DESKTOP_ENV = {
+  PWRAGENT_HOME: DISPOSABLE_PWRAGENT_HOME,
+  XDG_CONFIG_HOME: DISPOSABLE_XDG_CONFIG_HOME,
+  XDG_STATE_HOME: DISPOSABLE_XDG_STATE_HOME,
+};
+
 export default defineConfig({
   test: {
     projects: [
@@ -74,7 +100,7 @@ export default defineConfig({
           testTimeout: TEST_TIMEOUT_MS,
           hookTimeout: HOOK_TIMEOUT_MS,
           environment: "node",
-          env: { PWRAGENT_HOME: DISPOSABLE_PWRAGENT_HOME },
+          env: DISPOSABLE_DESKTOP_ENV,
           include: [
             "scripts/**/*.test.mjs",
             ".agents/skills/codex-rollout-forensics/tests/**/*.test.mjs",
@@ -114,7 +140,7 @@ export default defineConfig({
           globals: true,
           testTimeout: TEST_TIMEOUT_MS,
           environment: "jsdom",
-          env: { PWRAGENT_HOME: DISPOSABLE_PWRAGENT_HOME },
+          env: DISPOSABLE_DESKTOP_ENV,
           include: ["apps/desktop/src/renderer/src/**/*.test.{ts,tsx}"],
           // The renderer reaches the network through IPC, so it has no `fetch`
           // call site today — but `lint:boundaries` reads imports and cannot

@@ -1,10 +1,10 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expect, test, type Locator } from "@playwright/test";
 import type { NavigationLaunchpadDefaults } from "@pwragent/shared";
 import { launchElectronApp } from "./fixtures/electron-app";
-import { legacyStateHomeEnv } from "./fixtures/legacy-state-home";
+import { seedProfileOverlayState } from "./fixtures/overlay-state-seeding";
 
 async function assertTangerineFocusRing(locator: Locator) {
   await expect
@@ -36,27 +36,11 @@ async function createProviderSelectorFixture(params: {
 }> {
   const rootDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-provider-model-selectors-"));
   const fixturePath = path.join(rootDir, "provider-model-selectors.fixture.json");
-  // Use the legacy "pwragnt" directory name because the migration code in
-  // migration.ts intentionally looks for legacy files at this path.
-  const stateRoot = path.join(rootDir, ".local", "state", "pwragnt");
 
   if (params.launchpadDefaults) {
-    await mkdir(stateRoot, { recursive: true });
-    await writeFile(
-      path.join(stateRoot, "overlay-state.json"),
-      JSON.stringify(
-        {
-          version: 4,
-          backends: {},
-          launchpadDefaults: params.launchpadDefaults,
-          directoryLaunchpads: {},
-          threads: {},
-        },
-        null,
-        2,
-      ),
-      "utf8",
-    );
+    await seedProfileOverlayState(rootDir, {
+      launchpadDefaults: params.launchpadDefaults,
+    });
   }
 
   await writeFile(
@@ -96,7 +80,7 @@ async function createProviderSelectorFixture(params: {
 
   return {
     fixturePath,
-    env: params.launchpadDefaults ? legacyStateHomeEnv(rootDir) : undefined,
+    env: params.launchpadDefaults ? { HOME: rootDir } : undefined,
     cleanup: async () => {
       await rm(rootDir, { recursive: true, force: true });
     },

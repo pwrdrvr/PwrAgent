@@ -12,7 +12,6 @@ import {
 import { AppRuntimeInstanceStore } from "./app-runtime-instance-store.js";
 import { AutomationStore } from "../automations/automation-store.js";
 import { ScheduledThreadActionStore } from "../scheduled-actions/scheduled-thread-action-store.js";
-import { migrateIfNeeded } from "./migration.js";
 import { SqliteMessagingStore } from "./messaging-store-sqlite.js";
 import { SqliteOverlayStore } from "./overlay-store-sqlite.js";
 import { type AutoVacuumConversion, StateDb } from "./state-db.js";
@@ -102,10 +101,6 @@ export function initializeAppState(
 
   if (mode === "bootstrap") {
     ensureBootstrapProfileDir();
-    // Intentionally skip `migrateIfNeeded` — the bootstrap profile
-    // is freshly minted each onboarding session and has no legacy
-    // XDG paths to migrate from. Real-profile migration runs when
-    // the operator's chosen profile gets initialized on graduation.
     const dbPath = resolveBootstrapProfilePath("state/state.db");
     stateDb = StateDb.open(dbPath, { profileName: "__bootstrap__" });
     autoVacuumConversion = stateDb.startGc();
@@ -114,8 +109,6 @@ export function initializeAppState(
     // profile listing.
   } else {
     const { profileName } = ensureProfileExists();
-    migrateIfNeeded();
-
     const dbPath = resolveActiveProfilePath("state/state.db");
     stateDb = StateDb.open(dbPath, { profileName });
     autoVacuumConversion = stateDb.startGc();
