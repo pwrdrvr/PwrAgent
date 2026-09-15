@@ -1,4 +1,4 @@
-import { useCallback, useLayoutEffect, useRef, useState, type PointerEvent } from "react";
+import { useCallback, useLayoutEffect, useRef, useState, type PointerEvent, type KeyboardEvent } from "react";
 
 const FIT = { scale: 1, x: 0, y: 0 };
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
@@ -106,6 +106,15 @@ export function useLightboxGestures() {
     panning,
     zoom,
     reset: () => { setView(FIT); },
+    onKeyDown: (event: KeyboardEvent<HTMLDivElement>) => {
+      if (event.altKey || event.ctrlKey || event.metaKey) return;
+      const x = event.key === "ArrowLeft" ? 40 : event.key === "ArrowRight" ? -40 : 0;
+      const y = event.key === "ArrowUp" ? 40 : event.key === "ArrowDown" ? -40 : 0;
+      if (!x && !y) return;
+      event.preventDefault();
+      event.stopPropagation();
+      setView((previous) => bound({ ...previous, x: previous.x + x, y: previous.y + y }));
+    },
     onLoad: (image: HTMLImageElement) => setNatural({ width: image.naturalWidth, height: image.naturalHeight }),
     imageStyle: width && height ? { width: width * view.scale, height: height * view.scale, transform: `translate(${view.x}px, ${view.y}px)` } : undefined,
     pointerHandlers: {

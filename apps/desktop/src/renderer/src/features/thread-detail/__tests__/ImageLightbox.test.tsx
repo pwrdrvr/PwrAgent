@@ -192,6 +192,34 @@ describe("shared lightbox gestures", () => {
     expect(screen.getByRole("img").style.width).toBe("800px");
   });
 
+  it("pans with focused viewport arrows while preserving gallery navigation and Escape", () => {
+    const resize = installResizeObserver();
+    const onPrevious = vi.fn();
+    const onNext = vi.fn();
+    const onClose = vi.fn();
+    render(<ImageLightbox src="first.png" alt="First" onClose={onClose}
+      onPrevious={onPrevious} onNext={onNext} position={2} total={3} />);
+    const { viewport, image } = measureImage();
+    resize();
+    fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+    viewport.focus();
+    fireEvent.keyDown(viewport, { key: "ArrowRight" });
+    fireEvent.keyDown(viewport, { key: "ArrowDown" });
+    expect(image.style.transform).toBe("translate(-40px, -40px)");
+    fireEvent.keyDown(viewport, { key: "ArrowLeft" });
+    fireEvent.keyDown(viewport, { key: "ArrowUp" });
+    expect(image.style.transform).toBe("translate(0px, 0px)");
+    for (let index = 0; index < 50; index++) fireEvent.keyDown(viewport, { key: "ArrowRight" });
+    expect(image.style.transform).toBe("translate(-936px, 0px)");
+    expect(onNext).not.toHaveBeenCalled();
+    expect(onPrevious).not.toHaveBeenCalled();
+    fireEvent.keyDown(viewport, { key: "Escape" });
+    expect(onClose).toHaveBeenCalledOnce();
+    screen.getByRole("button", { name: "Fit to window" }).focus();
+    fireEvent.keyDown(document.activeElement!, { key: "ArrowRight" });
+    expect(onNext).toHaveBeenCalledOnce();
+  });
+
   it("uses cumulative native gesture scales once and bounds zoom and pan", () => {
     const resize = installResizeObserver();
     render(<ImageLightbox src="first.png" alt="First" onClose={() => {}} />);

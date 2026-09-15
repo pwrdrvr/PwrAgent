@@ -69,6 +69,9 @@ export function ImageLightbox({
         onClose();
         return;
       }
+      // The focused image viewport owns arrows for panning; the rest of
+      // the dialog retains gallery navigation.
+      if (event.target instanceof HTMLElement && event.target.matches(".image-lightbox__viewport")) return;
       if (event.key === "ArrowLeft" && onPrevious) {
         event.stopPropagation();
         event.preventDefault();
@@ -173,7 +176,8 @@ function LightboxImage({ src, alt }: { src: string; alt: string }) {
       <ImageCopyButton src={src} />
     </div>
     <div ref={gestures.viewport} className="image-lightbox__viewport" data-panning={gestures.panning}
-      tabIndex={0} aria-label="Image pan and zoom" {...gestures.pointerHandlers}>
+      tabIndex={0} aria-label="Image pan and zoom" title="Use arrow keys to pan"
+      onKeyDown={gestures.onKeyDown} {...gestures.pointerHandlers}>
       <TranscriptImage className="image-lightbox__image" src={src} alt={alt}
         draggable={false} onDragStart={(event) => event.preventDefault()}
         onLoad={(event) => gestures.onLoad(event.currentTarget)} style={gestures.imageStyle} />
