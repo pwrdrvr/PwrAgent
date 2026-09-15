@@ -488,16 +488,22 @@ jobs:
     # Preserve the required status-check context while the work runs as
     # independently named matrix jobs across more than one platform.
     # `always()` is required so a failed lane reaches this job and cannot turn
-    # the aggregate check into a skip. That reasoning is unchanged by the
-    # second matrix: `always()` is what makes this job run at all once any
-    # `needs` entry is not successful, and each entry is then read from
-    # `needs.*.result` below rather than gating entry to the job.
+    # the aggregate check into a skip — branch protection counts a skipped
+    # required check as satisfied, so without it the gate would stop gating in
+    # exactly the case it exists for. Each lane is read from `needs.*.result`
+    # in the step below rather than gating entry to the job.
     #
     # `windows-e2e` is deliberately absent. It landed 2026-09-14 as an
-    # explicitly advisory lane, and gating merges on a one-day-old lane would
-    # strand PRs on its flakes rather than on real regressions. Promote it
-    # here once it has held a green baseline on `main` for long enough to
-    # trust, and drop the matching note on that job in the same commit.
+    # explicitly advisory lane and is not yet stable enough to gate merges: on
+    # the 20 `main` runs after it landed, 7 had at least one Windows lane fail
+    # (lane 3 alone failed 6 times), so gating would have reddened roughly one
+    # main run in three for reasons unrelated to the change under test.
+    #
+    # Promote it once #2139 — which fixes the Star Map readiness failures those
+    # lanes actually hit — has merged and `main` has held a green Windows
+    # baseline. Adding it is then one entry in `needs` plus one `require` call.
+    # pwrdrvr/PwrGit and pwrdrvr/PwrSnap already gate their Windows lanes;
+    # keep this job's shape identical to theirs so the three cannot drift.
     name: Desktop E2E
     runs-on: ubuntu-latest
     needs: [changes, desktop-e2e, desktop-e2e-macos]
@@ -506,7 +512,7 @@ jobs:
       needs.changes.outputs.code_impacting == 'true'
     timeout-minutes: 5
     steps:
-      - name: Require the Linux and macOS Desktop E2E lanes
+      - name: Require the Linux and eligible macOS Desktop E2E lanes
         env:
           LINUX_E2E_RESULT: ${{ needs.desktop-e2e.result }}
           MACOS_E2E_RESULT: ${{ needs.desktop-e2e-macos.result }}
@@ -516,40 +522,49 @@ jobs:
           # leave fork PRs blocked on a lane that can never run.
           #
           # Test only for the fork and let every OTHER missing macOS result
-          # fail the gate. Re-stating that job's whole scheduling expression
-          # here would be a second copy of it that can drift; once the two
-          # disagree the gate either blocks fork PRs or passes with no macOS
-          # coverage. This way an event neither job anticipated (a
-          # `merge_group` or `workflow_dispatch` trigger added later) fails
-          # closed instead of silently dropping macOS from the gate.
-          MACOS_E2E_IS_FORK_PR: >-
+          # fail. Restating that job's whole scheduling expression here would
+          # be a second copy that can drift, and it would enumerate the events
+          # on which macOS *should* run: an event neither job anticipated (a
+          # `merge_group` trigger once a merge queue is enabled, say) would
+          # make it false and drop macOS from the gate silently. This way such
+          # an event fails closed instead.
+          MACOS_IS_FORK_PR: >-
             ${{ github.event_name == 'pull_request'
             && github.event.pull_request.head.repo.full_name != github.repository }}
         run: |
-          echo "Linux Desktop E2E matrix result: $LINUX_E2E_RESULT"
-          echo "macOS Desktop E2E matrix result: $MACOS_E2E_RESULT" \
-            "(fork PR: $MACOS_E2E_IS_FORK_PR)"
+          set -euo pipefail
 
-          # Evaluate every platform before exiting, so a red gate names the
+          # Mirror each line into the job summary so the PR checks page names
+          # the platform that broke without anyone opening the job log.
+          say() {
+            echo "$1"
+            echo "$1" >> "$GITHUB_STEP_SUMMARY"
+          }
+
+          # Report every platform before exiting, so a red gate names the
           # platform that broke instead of stopping at the first check and
-          # hiding whether the other one was healthy.
-          failed=0
+          # hiding whether the others were healthy.
+          status=0
+          require() {
+            if [[ "$2" == "success" ]]; then
+              say "- PASS \`$1\` ($2)"
+            else
+              say "- FAIL \`$1\` ($2)"
+              echo "::error::$1 Desktop E2E did not succeed ($2)."
+              status=1
+            fi
+          }
 
-          if [[ "$LINUX_E2E_RESULT" != "success" ]]; then
-            echo "::error::Linux Desktop E2E did not succeed: $LINUX_E2E_RESULT"
-            failed=1
+          say "### Desktop E2E platform results"
+          require "Linux" "$LINUX_E2E_RESULT"
+          if [[ "$MACOS_IS_FORK_PR" == "true" && "$MACOS_E2E_RESULT" == "skipped" ]]; then
+            say "- SKIP \`macOS\` (skipped) — fork PR; self-hosted lane not scheduled"
+            echo "::warning::macOS Desktop E2E did not run for this fork PR; macOS-only coverage is unverified."
+          else
+            require "macOS" "$MACOS_E2E_RESULT"
           fi
 
-          if [[ "$MACOS_E2E_IS_FORK_PR" == "true" && "$MACOS_E2E_RESULT" == "skipped" ]]; then
-            echo "::warning::macOS Desktop E2E did not run for this fork PR;" \
-              "macOS-only coverage is unverified."
-          elif [[ "$MACOS_E2E_RESULT" != "success" ]]; then
-            echo "::error::macOS Desktop E2E did not succeed: $MACOS_E2E_RESULT"
-            failed=1
-          fi
-
-          exit "$failed"
-
+          exit "$status"
   macos-install-deps:
     name: Setup macOS Dependencies
     # GitHub-hosted Apple Silicon, matching the self-hosted Tart runners
