@@ -10,11 +10,6 @@ import {
   type ThreadPrAutoDispatchPending,
 } from "@pwragent/shared";
 import { StateDb } from "../state/state-db";
-import {
-  createTempStateDb,
-  openInMemoryStateDb,
-  removeTempStateDbDir,
-} from "./sqlite-test-utils";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import {
   MAX_PR_AUTO_DISPATCH_ATTEMPTS_PER_INCIDENT,
@@ -24,6 +19,11 @@ import {
   buildPrRepositoryKey,
   pullRequestMatchesRepositoryKey,
 } from "../pr-status/pr-auto-dispatch";
+import {
+  createTempStateDb,
+  openInMemoryStateDb,
+  removeTempStateDbDir,
+} from "./sqlite-test-utils";
 
 let stateDb: StateDb;
 let store: SqliteOverlayStore;

@@ -13,7 +13,6 @@ import {
   removeTempStateDbDir,
 } from "./sqlite-test-utils";
 
-let dbPath: string;
 let tempDir: string | undefined;
 let stateDb: StateDb;
 let store: SqliteOverlayStore;
@@ -34,18 +33,21 @@ function keys(target = store): string[] {
 }
 
 /**
- * Move this test onto a real database file, published as `dbPath`. Two kinds
- * of test here need one: those opening a second connection — another
- * `Database`, or another process — which `:memory:` cannot have, and those
- * asserting a write budget, whose WAL byte figure is only measurable against
- * a file.
+ * Move this test onto a real database file and return its path. Two kinds of
+ * test here need one: those opening a second connection — another `Database`,
+ * or another process — which `:memory:` cannot have, and those asserting a
+ * write budget, whose WAL byte figure is only measurable against a file.
+ *
+ * The path is returned rather than published module-wide so a test cannot
+ * reach for it without first claiming a file.
  */
-function useFileStateDb(): void {
+function useFileStateDb(): string {
   stateDb.close();
   const temp = createTempStateDb("pwragent-managed-scan-");
-  ({ dbPath, tempDir } = temp);
-  stateDb = StateDb.open(dbPath);
+  tempDir = temp.tempDir;
+  stateDb = StateDb.open(temp.dbPath);
   store = new SqliteOverlayStore(stateDb);
+  return temp.dbPath;
 }
 
 beforeEach(() => {
@@ -134,6 +136,7 @@ describe("managed subagent navigation reads", () => {
   });
 
   it("keeps the same in-memory set across ordinary overlay and worker metadata writes", async () => {
+    // A real file: this scenario's WAL byte figure is only measurable there.
     useFileStateDb();
     seed("parent", { subAgents: [{ monitorThreadId: "child" }, { monitorThreadId: "grouped" }] });
     seed("grouped", { handoffOrigin: { groupingMode: "subthread" } });
@@ -204,7 +207,7 @@ describe("managed subagent navigation reads", () => {
   });
 
   it("does not hide earlier raw or external changes behind a later known metadata write", () => {
-    useFileStateDb();
+    const dbPath = useFileStateDb();
     seed("parent", { subAgents: [{ monitorThreadId: "child" }] });
     expect(keys()).toEqual(["codex:child"]);
     seed("unknown-parent", { subAgents: [{ monitorThreadId: "raw-child" }] });
@@ -273,7 +276,7 @@ describe("managed subagent navigation reads", () => {
   });
 
   it("sees shared-profile parent and child changes from another connection", () => {
-    useFileStateDb();
+    const dbPath = useFileStateDb();
     const other = new Database(dbPath);
     try {
       expect(keys()).toEqual([]);
@@ -291,7 +294,7 @@ describe("managed subagent navigation reads", () => {
   });
 
   it("sees a commit from an independent profile process on the very next read", () => {
-    useFileStateDb();
+    const dbPath = useFileStateDb();
     expect(keys()).toEqual([]);
     const require = createRequire(import.meta.url);
     execFileSync(process.execPath, ["-e", `
@@ -334,7 +337,7 @@ describe("managed subagent navigation reads", () => {
   });
 
   it("does not certify a scan with a concurrent commit's newer generation", () => {
-    useFileStateDb();
+    const dbPath = useFileStateDb();
     seed("parent", { subAgents: [{ monitorThreadId: "first" }] });
     const other = new Database(dbPath);
     const prepare = stateDb.raw.prepare.bind(stateDb.raw);
@@ -357,6 +360,7 @@ describe("managed subagent navigation reads", () => {
   });
 
   it("bounds materialization for both parent and candidate queries and adds no writes", async () => {
+    // A real file: this scenario's WAL byte figure is only measurable there.
     useFileStateDb();
     const largeHistory = Array.from({ length: 2_000 }, (_, id) => ({ id, text: "fixture".repeat(40) }));
     seed("parent", {
@@ -405,7 +409,7 @@ describe("managed subagent navigation reads", () => {
   });
 
   it("normalizes backend keys once per identical payload while observing replacements and deletion", () => {
-    useFileStateDb();
+    const dbPath = useFileStateDb();
     const other = new Database(dbPath);
     const write = (scope: string, key: string) => other.prepare(
       "INSERT OR REPLACE INTO backends(scope, payload) VALUES (?, ?)",

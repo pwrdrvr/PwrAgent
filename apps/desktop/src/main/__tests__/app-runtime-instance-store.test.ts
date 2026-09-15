@@ -108,9 +108,10 @@ describe("AppRuntimeInstanceStore", () => {
       desiredMessagingEnabled: true,
     });
 
-    expect(store.getInstance("instance-a")?.cwdHash).toBe(
-      store.getInstance("instance-b")?.cwdHash,
-    );
+    // Pinned to the value, not to each other: `a?.cwdHash === b?.cwdHash`
+    // also holds when both rows are missing.
+    expect(store.getInstance("instance-a")?.cwdHash).toBe(PWRAGNT_CWD_HASH);
+    expect(store.getInstance("instance-b")?.cwdHash).toBe(PWRAGNT_CWD_HASH);
   });
 
   it("keeps the current holder lease without rewriting its acquisition", () => {

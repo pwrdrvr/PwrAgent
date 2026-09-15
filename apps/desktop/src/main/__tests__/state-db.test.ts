@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import Database from "better-sqlite3";
@@ -14,33 +14,49 @@ import {
   StateDb,
 } from "../state/state-db";
 import { ThreadSearchStore } from "../thread-search/thread-search-store";
-import { openInMemoryStateDb } from "./sqlite-test-utils";
+import {
+  openInMemoryStateDb,
+  removeTempStateDbDir,
+} from "./sqlite-test-utils";
 
 let stateDb: StateDb;
-let tempDir: string;
+let tempDir: string | undefined;
 
 /**
- * Move this test's shared database onto a real file at `tempDir/state.db` and
- * return that path. Most of this suite either opens its own fixture file
- * under `tempDir` or only reads the schema back, so the shared database is
+ * The directory this suite's fixture databases live in, created on first ask.
+ * Around a dozen of these tests only read the schema back and never place a
+ * file, so creating one per test would keep them in a disk-touching cohort
+ * for nothing.
+ */
+function profileTempDir(): string {
+  tempDir ??= mkdtempSync(path.join(os.tmpdir(), "pwragent-state-db-"));
+  return tempDir;
+}
+
+/**
+ * Move this test's shared database onto a real file in the suite's temp
+ * directory and return that path. Most of this suite either opens its own
+ * fixture file there or only reads the schema back, so it is
  * in memory by default; the tests that reopen it, or that assert on WAL,
  * `auto_vacuum` or the file's page count, need a real one.
  */
 function useFileStateDb(): string {
   stateDb.close();
-  const dbPath = path.join(tempDir, "state.db");
+  const dbPath = path.join(profileTempDir(), "state.db");
   stateDb = StateDb.open(dbPath);
   return dbPath;
 }
 
 beforeEach(() => {
-  tempDir = mkdtempSync(path.join(os.tmpdir(), "pwragent-state-db-"));
+  tempDir = undefined;
   stateDb = openInMemoryStateDb();
 });
 
 afterEach(() => {
   stateDb.close();
-  rmSync(tempDir, { recursive: true, force: true });
+  if (tempDir !== undefined) {
+    removeTempStateDbDir(tempDir);
+  }
 });
 
 describe("StateDb", () => {
@@ -651,7 +667,7 @@ describe("StateDb", () => {
   });
 
   it("keeps incremental auto-vacuum across a close and reopen", () => {
-    const dbPath = path.join(tempDir, "reopened.db");
+    const dbPath = path.join(profileTempDir(), "reopened.db");
     const first = StateDb.open(dbPath);
     first.close();
     const second = StateDb.open(dbPath);
@@ -731,7 +747,7 @@ describe("StateDb", () => {
     };
 
     it("reproduces the pre-fix state it has to repair", () => {
-      const dbPath = path.join(tempDir, "legacy.db");
+      const dbPath = path.join(profileTempDir(), "legacy.db");
       const legacy = openLegacyDatabase(dbPath);
       try {
         expect(legacy.pragma("auto_vacuum", { simple: true })).toBe(
@@ -750,7 +766,7 @@ describe("StateDb", () => {
     });
 
     it("converts a pre-fix database and shrinks the file", () => {
-      const dbPath = path.join(tempDir, "convert.db");
+      const dbPath = path.join(profileTempDir(), "convert.db");
       openLegacyDatabase(dbPath).close();
 
       const legacyDb = StateDb.open(dbPath);
@@ -806,7 +822,7 @@ describe("StateDb", () => {
     });
 
     it("reports failure when the rewrite leaves the mode unchanged", () => {
-      const dbPath = path.join(tempDir, "stubborn.db");
+      const dbPath = path.join(profileTempDir(), "stubborn.db");
       // This case tests mode verification, not reclaiming fragmented pages.
       // Keep the legacy header without copying the shrink test's large payload.
       openLegacyDatabase(dbPath, false).close();
@@ -842,7 +858,7 @@ describe("StateDb", () => {
     });
 
     it("runs from startGc", () => {
-      const dbPath = path.join(tempDir, "gc.db");
+      const dbPath = path.join(profileTempDir(), "gc.db");
       // Asserts the status transitions only, so it needs the legacy header
       // and nothing else. Fragmenting the file here bought no assertion and
       // cost a second full fixture build.
@@ -988,7 +1004,7 @@ describe("StateDb", () => {
   it("migrates legacy thread usage pricing rows into provider-scoped usage turns", () => {
     stateDb.close();
 
-    const dbPath = path.join(tempDir, "legacy-thread-usage-pricing-state.db");
+    const dbPath = path.join(profileTempDir(), "legacy-thread-usage-pricing-state.db");
     const raw = openRawDb(dbPath);
     raw.exec(`
       PRAGMA user_version = 17;
@@ -1198,7 +1214,7 @@ describe("StateDb", () => {
   it("repairs live usage line timestamps that were overwritten by streaming updates", () => {
     stateDb.close();
 
-    const dbPath = path.join(tempDir, "live-usage-created-at-repair-state.db");
+    const dbPath = path.join(profileTempDir(), "live-usage-created-at-repair-state.db");
     stateDb = StateDb.open(dbPath);
     stateDb.raw
       .prepare(
@@ -1306,7 +1322,7 @@ describe("StateDb", () => {
   it("repairs OpenAI usage pricing after embedded catalog date changes", () => {
     stateDb.close();
 
-    const dbPath = path.join(tempDir, "usage-pricing-repair-state.db");
+    const dbPath = path.join(profileTempDir(), "usage-pricing-repair-state.db");
     stateDb = StateDb.open(dbPath);
     stateDb.raw
       .prepare(
@@ -1463,7 +1479,7 @@ describe("StateDb", () => {
   });
 
   it("repairs a late Codex turn snapshot from its fresh cumulative opening balance", () => {
-    const dbPath = path.join(tempDir, "codex-turn-usage-repair-state.db");
+    const dbPath = path.join(profileTempDir(), "codex-turn-usage-repair-state.db");
     stateDb.close();
     stateDb = StateDb.open(dbPath);
     const insert = stateDb.raw.prepare(
@@ -1588,7 +1604,7 @@ describe("StateDb", () => {
   it("migrates legacy Grok pricing without billing fork baselines", () => {
     stateDb.close();
 
-    const dbPath = path.join(tempDir, "grok-pricing-provider-repair-state.db");
+    const dbPath = path.join(profileTempDir(), "grok-pricing-provider-repair-state.db");
     stateDb = StateDb.open(dbPath);
     stateDb.raw
       .prepare(
@@ -1802,7 +1818,7 @@ describe("StateDb", () => {
     stateDb.close();
 
     const dbPath = path.join(
-      tempDir,
+      profileTempDir(),
       "astra-context-window-pricing-repair-state.db",
     );
     stateDb = StateDb.open(dbPath);
@@ -1942,7 +1958,7 @@ describe("StateDb", () => {
   it("reprices existing GPT-5.6 usage rows after the July 30 price reduction", () => {
     stateDb.close();
 
-    const dbPath = path.join(tempDir, "gpt-5-6-pricing-repair-state.db");
+    const dbPath = path.join(profileTempDir(), "gpt-5-6-pricing-repair-state.db");
     stateDb = StateDb.open(dbPath);
     stateDb.raw
       .prepare(
@@ -2057,7 +2073,7 @@ describe("StateDb", () => {
   it("rebuilds pricing summaries for parented usage lines only on the parent thread", () => {
     stateDb.close();
 
-    const dbPath = path.join(tempDir, "parented-usage-pricing-repair-state.db");
+    const dbPath = path.join(profileTempDir(), "parented-usage-pricing-repair-state.db");
     stateDb = StateDb.open(dbPath);
     stateDb.raw
       .prepare(
@@ -2162,7 +2178,7 @@ describe("StateDb", () => {
   it("repairs databases that used version 13 for the old PR cache migration", () => {
     stateDb.close();
 
-    const dbPath = path.join(tempDir, "legacy-pr-cache-state.db");
+    const dbPath = path.join(profileTempDir(), "legacy-pr-cache-state.db");
     const raw = openRawDb(dbPath);
     raw.exec(`
       PRAGMA user_version = 13;
@@ -2198,7 +2214,7 @@ describe("StateDb", () => {
   it("repairs version 13 databases that only have thread search", () => {
     stateDb.close();
 
-    const dbPath = path.join(tempDir, "legacy-thread-search-state.db");
+    const dbPath = path.join(profileTempDir(), "legacy-thread-search-state.db");
     const raw = openRawDb(dbPath);
     raw.exec(`
       PRAGMA user_version = 13;
@@ -2261,7 +2277,7 @@ describe("StateDb", () => {
   it("migrates thread search FTS rows to include thread ids", () => {
     stateDb.close();
 
-    const dbPath = path.join(tempDir, "legacy-thread-search-fts-state.db");
+    const dbPath = path.join(profileTempDir(), "legacy-thread-search-fts-state.db");
     createLegacyThreadSearchFtsDb(dbPath, 22);
 
     stateDb = StateDb.open(dbPath);
@@ -2282,7 +2298,7 @@ describe("StateDb", () => {
   it("repairs stale thread search FTS tables even at current user_version", () => {
     stateDb.close();
 
-    const dbPath = path.join(tempDir, "current-version-stale-thread-search-fts.db");
+    const dbPath = path.join(profileTempDir(), "current-version-stale-thread-search-fts.db");
     createLegacyThreadSearchFtsDb(dbPath, CURRENT_STATE_DB_USER_VERSION);
 
     stateDb = StateDb.open(dbPath);
@@ -2298,7 +2314,7 @@ describe("StateDb", () => {
   it("repairs stale thread search FTS tables without downgrading newer versions", () => {
     stateDb.close();
 
-    const dbPath = path.join(tempDir, "newer-version-thread-search-fts.db");
+    const dbPath = path.join(profileTempDir(), "newer-version-thread-search-fts.db");
     const newerVersion = CURRENT_STATE_DB_USER_VERSION + 1;
     createLegacyThreadSearchFtsDb(dbPath, newerVersion);
 

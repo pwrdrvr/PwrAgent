@@ -15,9 +15,10 @@ const PRICING_CATALOG_TIME = Date.UTC(2026, 3, 23);
 
 /**
  * Move this test onto a real database file and return its path. Only the
- * tests that drop a trigger or rewind `user_version` and then reopen the same
- * path need one: a second `:memory:` open is a second empty database, so the
- * migration they mean to exercise would run against no rows.
+ * tests that close the database and reopen the same path need one — whether
+ * they rewind `user_version` first to force a migration, or simply read the
+ * rows back. A second `:memory:` open is a second empty database, so both
+ * would hold while testing nothing.
  */
 function useFileStateDb(): string {
   stateDb.close();

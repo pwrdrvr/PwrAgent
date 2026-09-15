@@ -309,8 +309,9 @@ describe("MessagingActivityLog write cost", () => {
     // A real file on purpose: `attachSqliteWriteMetrics` resolves no WAL path
     // for `:memory:`, so the budget's MB/day figure would record as zero.
     const budget = createTempStateDb("pwragent-activity-writes-");
-    const budgetDb = StateDb.open(budget.dbPath);
+    let budgetDb: StateDb | undefined;
     try {
+      budgetDb = StateDb.open(budget.dbPath);
       const budgetLog = new MessagingActivityLog(budgetDb);
       resetSqliteWriteMetrics();
       const { writes } = await measureSqliteWrites(async () => {
@@ -333,7 +334,7 @@ describe("MessagingActivityLog write cost", () => {
       });
     } finally {
       delete process.env[SQLITE_WRITE_METRICS_ENV];
-      budgetDb.close();
+      budgetDb?.close();
       removeTempStateDbDir(budget.tempDir);
     }
   });
