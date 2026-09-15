@@ -54,12 +54,20 @@ vi.mock("../log", () => ({
 // and the two mocks below take all 148 of those file opens out of the run.
 //
 // Migration can only ever report `fresh-install` against the throwaway
-// `PWRAGENT_HOME` each test stubs, so nothing is lost by skipping it — and
-// `state-migration.test.ts` owns that behaviour. It is skipped rather than
-// redirected because it resolves its legacy search roots from the real home
-// directory instead of the stub, so on a machine still carrying pre-1.0
-// PwrAgent state it re-migrates the operator's own messaging and overlay
-// JSON on every one of these tests.
+// `PWRAGENT_HOME` each test stubs, so nothing is lost by skipping it, and
+// `state-migration.test.ts` owns that behaviour. Note that `fresh-install`
+// still opens the database file before handing back its path: skipping
+// migration is what removes those 74 opens, so this mock keeps earning its
+// place no matter where the legacy search roots point.
+//
+// It is skipped rather than redirected for a second reason, historical now:
+// `findLegacyPaths` resolved its legacy search roots from the real home
+// directory rather than the stub, so on a machine carrying pre-1.0 PwrAgent
+// state these tests re-migrated the operator's own messaging and overlay
+// JSON 74 times a run. #2171 fixed that for every desktop suite by seeding
+// the XDG variables in `vitest.workspace.ts`; redirecting migration at a
+// `:memory:` path here would have written a file literally named
+// `:memory:.tmp`, which is why this mock does not try.
 vi.mock("../state/migration", () => ({
   migrateIfNeeded: () => ({ status: "already-migrated" }),
 }));
@@ -72,7 +80,7 @@ vi.mock("../profile", async (importOriginal) => {
   return {
     ...actual,
     resolveActiveProfilePath: (
-      relativePath: string,
+      relativePath: Parameters<typeof actual.resolveActiveProfilePath>[0],
       options?: Parameters<typeof actual.resolveActiveProfilePath>[1],
     ) =>
       relativePath === "state/state.db"
