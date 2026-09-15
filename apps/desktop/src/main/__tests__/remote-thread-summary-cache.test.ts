@@ -1744,6 +1744,57 @@ it("coalesces invalidations during a pinned read into one non-overlapping follow
   } finally { cache.dispose(); }
 });
 
+it.each(["initial", "updated"])("publishes %s rows after invalidation overlaps archive verification", async (phase) => {
+  const root = stampedThread({ instanceId: "peer", threadId: "root", title: "Before" });
+  let rows = [root];
+  const fetchPinnedSnapshot = vi.fn(async () => snapshotOf(rows));
+  const archiveReads: Array<(threads: NavigationThreadSummary[]) => void> = [];
+  const fetchArchivedThreads = vi.fn(() => new Promise<NavigationThreadSummary[]>((resolve) => archiveReads.push(resolve)));
+  const refreshed = vi.fn();
+  const cache = new RemoteThreadSummaryCache({ peers: () => [peer("peer")], fetchSnapshot: vi.fn(), fetchPinnedSnapshot,
+    fetchArchivedThreads, peerStatus: () => ({ status: "connected" }), hasNavigationSubscription: () => true,
+    onPinnedSummariesRefreshed: refreshed });
+  const pins = [pin({ instanceId: "peer", threadId: "root" }), pin({ instanceId: "peer", threadId: "missing" })];
+  try {
+    if (phase === "updated") {
+      await cache.resolvePinnedThreads(pins);
+      await settle();
+      archiveReads.shift()!([]);
+      for (let i = 0; i < 3; i++) await settle();
+      expect(refreshed).toHaveBeenCalledTimes(1);
+      refreshed.mockClear();
+      fetchPinnedSnapshot.mockClear();
+    }
+    rows = [{ ...root, title: "After" }];
+    if (phase === "initial") await cache.resolvePinnedThreads(pins);
+    else cache.invalidate("peer");
+    await settle();
+    expect(archiveReads).toHaveLength(1);
+    // The rows have been committed, but their publication awaits archive
+    // verification. Fence that proof and return the same rows on the retry.
+    cache.invalidate("peer");
+    expect(fetchPinnedSnapshot).toHaveBeenCalledTimes(1);
+    archiveReads.shift()!([]);
+    for (let i = 0; i < 3; i++) await settle();
+    expect(fetchPinnedSnapshot).toHaveBeenCalledTimes(2);
+    expect(archiveReads).toHaveLength(1);
+    expect(refreshed).not.toHaveBeenCalled();
+    archiveReads.shift()!([]);
+    for (let i = 0; i < 3; i++) await settle();
+    expect(refreshed).toHaveBeenCalledTimes(1);
+    const resolved = await cache.resolvePinnedThreads(pins);
+    expect(resolved.threads.find((thread) => thread.id === "root")?.title).toBe("After");
+    expect(resolved.archived).toEqual([]);
+
+    // Once published, another unchanged refresh must stay silent.
+    cache.invalidate("peer");
+    await settle();
+    archiveReads.shift()!([]);
+    for (let i = 0; i < 3; i++) await settle();
+    expect(refreshed).toHaveBeenCalledTimes(1);
+  } finally { cache.dispose(); }
+});
+
 it("releases removed groups from same-owner navigation demand", async () => {
   const roots = ["a", "b"].map((threadId) => stampedThread({ instanceId: "peer", threadId, title: threadId }));
   const fetchPinnedSnapshot = vi.fn(async (_target: FederationRemoteTarget, keys: string[]) => snapshotOf([

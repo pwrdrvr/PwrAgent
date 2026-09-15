@@ -1063,6 +1063,16 @@ export class RemoteThreadSummaryCache {
         );
       }
       const threads = snapshot.threads;
+      if (interestKey === "pins") {
+        const previous = this.cache.get(target.instanceId)?.threads;
+        // Cache commitment precedes archive verification and publication. Keep
+        // this obligation across invalidation so an identical follow-up still
+        // publishes rows whose earlier archive check was superseded.
+        if (previous === undefined || JSON.stringify(previous) !== JSON.stringify(threads)
+          || this.refreshFailures.has(target.instanceId)) {
+          this.unpublishedPinnedRows.add(target.instanceId);
+        }
+      }
       const knownMembers = this.hasRetainedPinnedMembership(target.instanceId) ? this.pinnedThreadKeys(target.instanceId) : undefined;
       this.cache.set(target.instanceId, {
         descendants,
