@@ -151,30 +151,37 @@ since it is not a secret.
 
 ## Release trains and maintenance branches
 
-`main` carries the active next-version train. Long-lived maintenance branches
-carry patch releases for prior major/minor trains and are named
-`releases/<major>.<minor>`, for example `releases/1.0` or `releases/1.1`.
-Do not include the patch component in the branch name.
+`main` remains the active `N.N` release train through alpha and beta candidates,
+the first `vN.N.0` stable release, and follow-up `vN.N.P` releases. Long-lived
+maintenance branches are named `releases/<major>.<minor>`, for example
+`releases/1.0` or `releases/1.1`; do not include the patch component in the
+branch name.
 
-Before `main` moves to a new major/minor train, leave behind, or ask whether to
-leave behind, a maintenance branch for the previous train. For example, when
-cutting the first `1.1.0-beta.1` or `1.1.0` release from a current `1.0.*`
-`main`, verify that `origin/releases/1.0` exists. If it does not, create it from
-the current `1.0` release tag before committing the `1.1` version bump.
+Cut `releases/N.N` only when the product owner explicitly decides to start the
+next major/minor train on `main`. Do not create a release branch merely to
+promote an accepted beta to its suffix-free stable release. At the time of that
+decision, branch from the then-current `main` commit: it may deliberately
+include post-release fixes or enhancements beyond the first stable tag. Then
+bump `main` to the next alpha train.
 
-Patch releases land only on their train branch:
+After the cut, maintenance candidates and patch releases land on their train
+branch:
 
 ```bash
 # v1.0.1 and v1.0.2 land on releases/1.0.
 git switch releases/1.0
 ```
 
-New major/minor releases land on `main`:
+Until that cut, the current train's prerelease, first stable, and follow-up
+patch releases all land on `main`:
 
 ```bash
-# v1.1.0-beta.1, v1.1.0, and v1.2.0-beta.1 land on main.
+# v1.1.0-beta.1, v1.1.0, and v1.1.1 land on main.
 git switch main
 ```
+
+For example, only after the owner directs the `1.2` transition should you cut
+`releases/1.1` from current `main`, then bump `main` to `1.2.0-alpha.1`.
 
 CI runs for pushes to `main` and `releases/**`, and pull requests targeting
 maintenance branches use the same PR workflow as `main`. Release workflow fixes
