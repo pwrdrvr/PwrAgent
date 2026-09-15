@@ -19,10 +19,12 @@ Read these files before changing release metadata:
 
 ## Guardrails
 
-- Release from `main` for the active next-version train, or from a long-lived
-  maintenance branch named `releases/<major>.<minor>` for patch releases on a
-  prior train. Do not include the patch component in maintenance branch names:
-  use `releases/1.0`, not `releases/1.0.x` or `releases/1.0.1`.
+- `main` remains the active `N.N` release train through its alpha and beta
+  candidates, first stable release, and follow-up `N.N.P` releases. Cut a
+  long-lived maintenance branch named `releases/<major>.<minor>` only after the
+  product owner explicitly decides to begin the next major/minor train on
+  `main`. Do not include the patch component in maintenance branch names: use
+  `releases/1.0`, not `releases/1.0.x` or `releases/1.0.1`.
 - Start from a clean working tree. If tracked files are dirty, stop and ask
   before changing release metadata.
 - Fetch tags before planning:
@@ -58,13 +60,13 @@ Read these files before changing release metadata:
   and tag that commit. The tree can otherwise match the alpha. Do not add
   a second tag to the alpha SHA: the metadata gate and the baked app
   version both come from `package.json`.
-- Before moving `main` to a new major/minor train, verify that the prior train's
-  maintenance branch exists. For example, before preparing `1.1.0-beta.1` from a
-  current `1.0.*` `main`, check for `origin/releases/1.0`. If it is missing,
-  stop and ask whether to create it from the current prior-train release commit
-  before bumping version metadata.
-- Patch releases for an existing train must land on that train's branch. For
-  example, prepare `v1.0.1` on `releases/1.0`, not on `main`.
+- Never create a maintenance branch merely to promote an accepted beta to its
+  suffix-free stable release. When the owner directs the next-train transition,
+  cut the maintenance branch from the then-current `main` commit; that commit
+  may intentionally include post-release fixes or enhancements beyond the first
+  stable tag. Then bump `main` to the next alpha train.
+- After that cut, release maintenance candidates and patches for the prior train
+  from its `releases/<major>.<minor>` branch.
 - Before pushing a release tag, verify the `apple-signing` GitHub Environment
   exists, requires reviewer approval, is scoped to release tags, and has the
   Apple signing/notarization secrets required by the workflow.
@@ -87,41 +89,37 @@ Read these files before changing release metadata:
 
 For every release, identify `RELEASE_BRANCH` before editing files:
 
-- Active-train beta or stable release: `main`.
-- Prior-train patch release: `releases/<major>.<minor>`.
+- Active-train alpha, beta, first stable, or follow-up patch release: `main`.
+- Maintenance candidates and patches after a train has been cut:
+  `releases/<major>.<minor>`.
 
-If the user asks to cut a new major/minor version from `main`, compare the
-current desktop version's major/minor with the requested version's major/minor.
-When they differ, check for the current train's maintenance branch:
+If the product owner explicitly decides to start a new major/minor train on
+`main`, compare the current desktop version's major/minor with the requested
+version's major/minor. The decision authorizes cutting the current train's
+maintenance branch; do not infer it from a beta promotion or stable release.
+Check whether the branch already exists:
 
 ```bash
 git ls-remote --heads origin releases/<current-major>.<current-minor>
 ```
 
-If it is missing, ask before proceeding:
-
-```text
-We are about to move main from the <old-train> train to the <new-train> train,
-but there is no releases/<old-train> maintenance branch. Guidance is to create
-it before bumping main so future <old-train>.x security patches can be cut
-cleanly. Create releases/<old-train> from the current <old-train> release commit
-now?
-```
-
-Create that branch before the version-bump commit that starts the new train:
+If it is missing, cut it from the current `main` commit after syncing `main`.
+That branch point may contain post-release fixes or enhancements, and must not
+be replaced with the first stable tag just because it exists. Then switch back
+to `main` and commit the next alpha-version metadata:
 
 ```bash
 git switch main
 git fetch origin main --tags
 git pull --ff-only
-git switch -c releases/<old-train> v<old-train>.<patch>
+git switch -c releases/<old-train>
 git push origin releases/<old-train>
 git switch main
 ```
 
-Use the exact prior-train release tag as the branch point. For the first stable
-1.0 release, cut and tag `v1.0.0`, create `releases/1.0` at `v1.0.0`, then bump
-`main` to `1.1.0-beta.1`.
+For example, keep `1.0.0-alpha.N`, `1.0.0-beta.N`, `1.0.0`, and any `1.0.P`
+releases on `main`. Only after the owner directs the `1.1` transition do you cut
+`releases/1.0` from the current `main`, then bump `main` to `1.1.0-alpha.1`.
 
 ## Prepare Release Metadata
 
