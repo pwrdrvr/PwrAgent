@@ -44393,6 +44393,77 @@ script = "printf setup"
     await registry.close();
   });
 
+  it("keeps monitor failure navigation on the parent when recovery cannot read the helper", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start", "turn/interrupt"] },
+      models: TEST_TASK_MONITOR_MODELS,
+      startThreadResult: { threadId: "monitor-thread" },
+      startTurnResults: [{ threadId: "monitor-thread", turnId: "monitor-turn" }],
+      startTurnErrors: [undefined, new Error("no rollout found for thread id monitor-thread")],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+    });
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => { events.push(event); });
+    try {
+      await registry.publishLocalEvent({
+        backend: "codex",
+        notification: {
+          method: "turn/started",
+          params: { threadId: "thread-1", turnId: "parent-turn", turn: { id: "parent-turn" } },
+        },
+      });
+      const response = await codexClient.emitRequest({
+        method: "item/tool/call",
+        params: {
+          threadId: "thread-1",
+          turnId: "parent-turn",
+          callId: "call-monitor",
+          requestId: "call-monitor",
+          namespace: "pwragent_task_monitors",
+          tool: "create_monitor_delegation",
+          arguments: { task: "Watch the fixture task.", pollIntervalSeconds: 20 },
+        },
+      } as AppServerPendingRequestNotification);
+      expect(response).toMatchObject({ success: true });
+      await registry.publishLocalEvent({
+        backend: "codex",
+        notification: {
+          method: "thread/status/changed",
+          params: { threadId: "monitor-thread", status: { type: "systemError" } },
+        },
+      });
+      await registry.publishLocalEvent({
+        backend: "codex",
+        notification: {
+          method: "turn/failed",
+          params: {
+            threadId: "monitor-thread",
+            turnId: "monitor-turn",
+            turn: {
+              id: "monitor-turn",
+              status: "failed",
+              output: [],
+              error: { message: "Selected model is at capacity. Please try a different model." },
+            },
+          },
+        },
+      });
+      for (const method of ["thread/status/changed", "turn/failed"]) {
+        expect(events.find((event) => event.notification.method === method
+          && "threadId" in event.notification.params
+          && event.notification.params.threadId === "monitor-thread")).toMatchObject({
+          errorNoticeContext: { backend: "codex", threadId: "thread-1", taskMonitor: true },
+          notification: { params: { threadId: "monitor-thread" } },
+        });
+      }
+    } finally {
+      await registry.close();
+    }
+  });
+
   it("stops a task monitor on its live recovery turn", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start", "turn/interrupt"] },

@@ -900,8 +900,8 @@ function DesktopAppShell(props: {
         return title;
       }
       return backend === "codex"
-        ? "Codex thread"
-        : `${backend} thread`;
+        ? `Codex thread${threadId ? ` ${threadId}` : ""}`
+        : `${backend} thread${threadId ? ` ${threadId}` : ""}`;
     };
     return desktopApi?.onAgentEvent?.(async (event) => {
       if (
@@ -1206,13 +1206,18 @@ function DesktopAppShell(props: {
           type: "backend-error",
           signal: {
             kind: "turn-failed",
+            errorNoticeContext: event.errorNoticeContext,
+            originLabel: instanceId ? `Remote instance: ${instanceId}` : "This machine",
             onCodexLogin: openCodexLogin,
             backend: event.backend,
             threadId: params.threadId ?? "unknown",
             turnId: params.turnId ?? "unknown",
             errorMessage,
             ...(instanceId ? { instanceId } : {}),
-            threadLabel: labelForThread(event.backend, params.threadId),
+            threadLabel: event.errorNoticeContext?.title?.trim() || labelForThread(
+              event.errorNoticeContext?.backend ?? event.backend,
+              event.errorNoticeContext?.threadId ?? params.threadId,
+            ),
           },
         });
         return;
@@ -1255,10 +1260,15 @@ function DesktopAppShell(props: {
           type: "backend-error",
           signal: {
             kind: "system-error",
+            errorNoticeContext: event.errorNoticeContext,
+            originLabel: instanceId ? `Remote instance: ${instanceId}` : "This machine",
             backend: event.backend,
             ...(instanceId ? { instanceId } : {}),
             threadId: params.threadId ?? "unknown",
-            threadLabel: labelForThread(event.backend, params.threadId),
+            threadLabel: event.errorNoticeContext?.title?.trim() || labelForThread(
+              event.errorNoticeContext?.backend ?? event.backend,
+              event.errorNoticeContext?.threadId ?? params.threadId,
+            ),
           },
         });
         return;

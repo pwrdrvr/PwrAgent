@@ -38685,6 +38685,30 @@ export class DesktopBackendRegistry {
   }
 
   private emit(event: AgentEvent): Promise<void> {
+    // Capture ownership before terminal handling removes the monitor record.
+    // Keep protocol IDs intact for accounting, recovery, and lifecycle consumers.
+    if (
+      event.notification.method === "turn/failed"
+      || (event.notification.method === "thread/status/changed"
+        && readStatusType(event.notification.params.status) === "systemError")
+    ) {
+      const threadId = event.notification.params.threadId;
+      const monitor = Array.from(this.taskMonitorDelegations.values()).find(
+        (record) => record.backend === event.backend && record.monitorThreadId === threadId,
+      ) ?? this.completedTaskMonitorsByThread.get(taskMonitorThreadKey(event.backend, threadId));
+      const backend = monitor?.parentBackend ?? event.backend;
+      const ownerThreadId = monitor?.parentThreadId ?? threadId;
+      const title = this.getCachedThreadSummary({ backend, threadId: ownerThreadId })?.title;
+      event = {
+        ...event,
+        errorNoticeContext: {
+          backend,
+          threadId: ownerThreadId,
+          ...(title ? { title } : {}),
+          ...(monitor ? { taskMonitor: true } : {}),
+        },
+      };
+    }
     this.trackRecentThreadUsageTurn(event);
     const isLiveThreadUsage =
       event.notification.method === "thread/tokenUsage/updated";

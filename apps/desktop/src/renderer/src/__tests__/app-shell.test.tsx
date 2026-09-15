@@ -1034,7 +1034,15 @@ describe("App", () => {
           fetchedAt: Date.now(),
           unchanged: false,
           inboxThreadKeys: [],
-          threads: [],
+          threads: [{
+            id: "monitor-parent",
+            title: "Release fixture",
+            titleSource: "explicit" as const,
+            source: "codex" as const,
+            linkedDirectories: [],
+            inbox: { inInbox: false },
+            updatedAt: 2_000,
+          }],
           directories: [],
           launchpadDefaults: {
             backend: "codex" as const,
@@ -1048,13 +1056,13 @@ describe("App", () => {
             agentEventListeners.delete(listener);
           };
         },
-        readSettings: async () =>
-          await new Promise<never>(() => {
-            // Keep the shell mounted without needing a full settings fixture.
-          }),
       }),
     });
 
+    const selectedDetail = vi.spyOn(
+      (window as typeof window & { pwragent: DesktopApi }).pwragent,
+      "getNavigationSelectedDetail",
+    );
     render(<App />);
     await waitFor(() => expect(agentEventListeners.size).toBeGreaterThan(0));
 
@@ -1075,7 +1083,7 @@ describe("App", () => {
     expect(screen.getByText("1 of 3")).toBeInTheDocument();
     if (rendererTarget?.scope === "remote") {
       fireEvent.contextMenu(screen.getByRole("button", {
-        name: "Open thread Codex thread",
+        name: "Open thread Codex thread turn-failure-thread",
       }));
       fireEvent.click(screen.getByRole("menuitem", {
         name: "Copy Thread Link",
@@ -1090,6 +1098,29 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("button", { name: "Next notice" }));
     expect(screen.getByText("Agent backend error")).toBeInTheDocument();
     expect(screen.getByText("3 of 3")).toBeInTheDocument();
+    act(() => {
+      for (const listener of agentEventListeners) {
+        listener({
+          ...backendToastEvents(eventTarget)[0]!,
+          errorNoticeContext: {
+            backend: "codex",
+            threadId: "monitor-parent",
+            title: "Release fixture",
+            taskMonitor: true,
+          },
+        });
+      }
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Previous notice" }));
+    fireEvent.click(screen.getByRole("button", { name: "Previous notice" }));
+    expect(screen.getByText("Task monitor failed")).toBeInTheDocument();
+    expect(screen.getByText(rendererTarget
+      ? "Remote instance: remote-gateway" : "This machine")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Open thread Release fixture" }));
+    await waitFor(() => expect(selectedDetail).toHaveBeenCalledWith(expect.objectContaining({
+      ref: expect.objectContaining({ threadId: "monitor-parent" }),
+      ...(rendererTarget ? { federationTarget: rendererTarget } : {}),
+    }), expect.anything()));
   });
 
   it("shows Codex retries for background threads and reports recovery", async () => {
@@ -1239,7 +1270,7 @@ describe("App", () => {
       expect(openToolOutputIncidentExplorerWindow).toHaveBeenCalledWith({
         backend: "codex",
         threadId: "thread-1",
-        title: "Codex thread",
+        title: "Codex thread thread-1",
       });
     });
   });

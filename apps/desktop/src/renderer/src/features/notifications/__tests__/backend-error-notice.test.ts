@@ -6,6 +6,40 @@ import {
 } from "../backend-error-notice";
 
 describe("resolveBackendErrorNotice", () => {
+  it.each([undefined, "peer-fixture"])("links a failed monitor to its parent on instance %s", (instanceId) => {
+    const signal: BackendErrorSignal = {
+      kind: "turn-failed",
+      backend: "codex",
+      threadId: "private-monitor",
+      turnId: "monitor-turn",
+      threadLabel: "Release fixture",
+      errorMessage: "Selected model is at capacity.",
+      instanceId,
+      originLabel: instanceId ? `Remote instance: ${instanceId}` : "This machine",
+      errorNoticeContext: {
+        backend: "codex",
+        threadId: "parent-thread",
+        title: "Release fixture",
+        taskMonitor: true,
+      },
+    };
+    const failed = resolveBackendErrorNotice(signal, undefined);
+    expect(failed).toMatchObject({
+      id: "turn-failed:codex:private-monitor:monitor-turn",
+      title: "Task monitor failed",
+      status: { label: signal.originLabel },
+      threadLink: {
+        backend: "codex",
+        threadId: "parent-thread",
+        title: "Release fixture",
+        ...(instanceId ? { instanceId } : {}),
+      },
+    });
+    const systemError: BackendErrorSignal = { ...signal, kind: "system-error" };
+    expect(resolveBackendErrorNotice(systemError, undefined)?.threadLink).toEqual(failed?.threadLink);
+    expect(resolveBackendErrorNotice(systemError, failed)).toBe(failed);
+  });
+
   it("offers local Codex login for a rejected token, without logging in to a peer's profile", () => {
     const onCodexLogin = vi.fn();
     const signal = {
