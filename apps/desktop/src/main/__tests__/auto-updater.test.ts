@@ -626,6 +626,45 @@ describe("auto updater", () => {
     expect(checkForUpdatesMock).toHaveBeenCalledTimes(1);
   });
 
+  describe("stable promotion", () => {
+    for (const installed of ["1.0.0", "1.1.0-alpha.7", "1.1.0-beta.5"]) {
+      for (const train of ["stable", "beta"]) {
+        for (const channel of ["latest", "prerelease"]) {
+          it.each(["manual", "menu", "startup", "periodic"] as const)(
+            `offers the final to ${installed} on ${train}/${channel} during %s`,
+            async (trigger) => {
+              autoUpdaterMock.currentVersion = { version: installed };
+              resolveUpdateTrainMock.mockReturnValue(train);
+              resolveUpdateChannelMock.mockReturnValue(channel);
+              mockGitHubReleases([
+                githubRelease("v1.1.0-beta.5", { prerelease: true }),
+                githubRelease("v1.1.0"),
+                githubRelease("v1.1.0-alpha.7", { prerelease: true }),
+              ]);
+              checkForUpdatesMock.mockResolvedValue({ updateInfo: { version: "1.1.0" } });
+              const updater = await importAutoUpdater();
+
+              await expect(updater.checkForAppUpdatesNow(trigger)).resolves.toEqual({
+                status: "available",
+                version: "1.1.0",
+              });
+              expect(checkForUpdatesMock).toHaveBeenCalledTimes(1);
+              expect(setFeedURLMock).toHaveBeenCalledWith({
+                provider: "generic",
+                url: "https://github.com/pwrdrvr/PwrAgent/releases/download/v1.1.0/",
+              });
+              const versions = await updater.readAppUpdateReleaseVersions();
+              expect(versions.beta.latest.version).toBe("v1.1.0");
+              expect(versions.beta.prerelease.version).toBe("v1.1.0");
+              expect(resolveUpdateTrainMock()).toBe(train);
+              expect(resolveUpdateChannelMock()).toBe(channel);
+            },
+          );
+        }
+      }
+    }
+  });
+
   it("pins the beta train to the smoke-checked main-train tag", async () => {
     resolveUpdateTrainMock.mockReturnValue("beta");
     resolveUpdateChannelMock.mockReturnValue("latest");
@@ -1032,8 +1071,8 @@ describe("selectChannelReleases", () => {
     const selected = selectChannelReleases(releases);
     expect(selected.stableLatest?.tag_name).toBe("v1.0.0-beta.8");
     expect(selected.stablePrerelease?.tag_name).toBe("v1.0.0-beta.41");
-    expect(selected.betaLatest).toBeUndefined();
-    expect(selected.betaPrerelease).toBeUndefined();
+    expect(selected.betaLatest).toBe(selected.stableLatest);
+    expect(selected.betaPrerelease).toBe(selected.stableLatest);
   });
 
   it("promotes a same-core alpha to beta latest once the beta tag exists", async () => {
@@ -1060,8 +1099,8 @@ describe("selectChannelReleases", () => {
     const selected = selectChannelReleases(releases);
     expect(selected.stableLatest?.tag_name).toBe("v1.0.1");
     expect(selected.stablePrerelease?.tag_name).toBe("v1.0.1");
-    expect(selected.betaLatest).toBeUndefined();
-    expect(selected.betaPrerelease).toBeUndefined();
+    expect(selected.betaLatest).toBe(selected.stableLatest);
+    expect(selected.betaPrerelease).toBe(selected.stableLatest);
   });
 
   it("does not advertise leftover same-core betas after that train becomes Latest", async () => {
@@ -1074,8 +1113,8 @@ describe("selectChannelReleases", () => {
     ];
     const selected = selectChannelReleases(releases);
     expect(selected.stableLatest?.tag_name).toBe("v1.1.0");
-    expect(selected.betaLatest).toBeUndefined();
-    expect(selected.betaPrerelease).toBeUndefined();
+    expect(selected.betaLatest).toBe(selected.stableLatest);
+    expect(selected.betaPrerelease).toBe(selected.stableLatest);
   });
 
   it("keeps a newer main-train alpha on Beta after Stable is promoted", async () => {
@@ -1087,7 +1126,7 @@ describe("selectChannelReleases", () => {
     ];
     const selected = selectChannelReleases(releases);
     expect(selected.stableLatest?.tag_name).toBe("v1.1.0");
-    expect(selected.betaLatest).toBeUndefined();
+    expect(selected.betaLatest).toBe(selected.stableLatest);
     expect(selected.betaPrerelease?.tag_name).toBe("v1.2.0-alpha.1");
   });
 
@@ -1098,7 +1137,7 @@ describe("selectChannelReleases", () => {
       { tag_name: "v1.0.0", prerelease: false, draft: false },
     ];
     const selected = selectChannelReleases(releases);
-    expect(selected.betaLatest).toBeUndefined();
+    expect(selected.betaLatest).toBe(selected.stableLatest);
     expect(selected.betaPrerelease?.tag_name).toBe("v1.1.0-alpha.7");
   });
 
@@ -1168,6 +1207,38 @@ describe("selectChannelReleases", () => {
 });
 
 describe("selectAppUpdateReleases", () => {
+  it("prefers newer eligible alpha and beta releases over the stable fallback", async () => {
+    const { selectAppUpdateReleases } = await import("../auto-updater");
+    const selected = selectAppUpdateReleases([
+      githubRelease("v1.2.0-beta.1", { prerelease: true }),
+      githubRelease("v1.3.0-alpha.1", { prerelease: true }),
+      githubRelease("v1.1.0"),
+    ]);
+    expect(selected.betaLatest?.tag_name).toBe("v1.2.0-beta.1");
+    expect(selected.betaPrerelease?.tag_name).toBe("v1.3.0-alpha.1");
+  });
+
+  it.each([
+    [],
+    [{ name: "latest-mac.yml", state: "uploaded" }],
+    [{ name: "PwrAgent.zip", state: "uploaded" }],
+    [{ name: "latest-mac.yml", state: "deleted" }, { name: "PwrAgent.zip" }],
+    [{ name: "latest.yml" }, { name: "PwrAgent.exe" }],
+  ].map((assets) => ({ assets })))("requires eligible macOS assets for the stable fallback (%j)", async ({ assets }) => {
+    const { selectAppUpdateReleases } = await import("../auto-updater");
+    const selected = selectAppUpdateReleases([
+      githubRelease("v1.1.0", { assets }),
+      githubRelease("v1.0.0"),
+      githubRelease("v1.2.0-alpha.1", { prerelease: true, assets: [] }),
+      githubRelease("v1.2.0-beta.1", { prerelease: true, assets: [] }),
+    ]);
+    expect(selected.betaLatest?.tag_name).toBe("v1.0.0");
+    expect(selected.betaPrerelease?.tag_name).toBe("v1.0.0");
+    const unavailable = selectAppUpdateReleases([githubRelease("v1.1.0", { assets })]);
+    expect(unavailable.betaLatest).toBeUndefined();
+    expect(unavailable.betaPrerelease).toBeUndefined();
+  });
+
   it("requires macOS updater metadata and zip assets", async () => {
     const { selectAppUpdateReleases } = await import("../auto-updater");
     const releases = [
