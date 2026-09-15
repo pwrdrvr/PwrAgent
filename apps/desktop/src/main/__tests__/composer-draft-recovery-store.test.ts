@@ -14,6 +14,8 @@ let store: ComposerDraftRecoveryStore;
 let tempDir: string;
 
 beforeEach(() => {
+  // Both tests below reopen this database to measure a write budget:
+  // the budget needs a WAL file, and the reopen needs a path that persists.
   tempDir = mkdtempSync(path.join(os.tmpdir(), "pwragent-composer-drafts-"));
   stateDb = StateDb.open(path.join(tempDir, "state.db"));
   store = new ComposerDraftRecoveryStore(stateDb);

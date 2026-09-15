@@ -16,6 +16,7 @@ import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
 import { TokenMiserStore } from "../token-miser/token-miser-store";
+import { openInMemoryStateDb } from "./sqlite-test-utils";
 
 describe("DesktopBackendRegistry Token Miser ledger", () => {
   let directory: string;
@@ -25,7 +26,7 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
 
   beforeEach(() => {
     directory = mkdtempSync(path.join(os.tmpdir(), "pwragent-token-miser-ledger-"));
-    stateDb = StateDb.open(path.join(directory, "state.db"));
+    stateDb = openInMemoryStateDb();
     store = new SqliteOverlayStore(stateDb);
     registry = new DesktopBackendRegistry({
       codexClient: {

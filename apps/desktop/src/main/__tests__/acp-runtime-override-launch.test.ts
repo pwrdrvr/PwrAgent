@@ -15,8 +15,8 @@ import {
 import { AcpBackendAdapter } from "../app-server/acp-backend-adapter";
 import { installedAcpAgentSettingsEntry } from "../ipc/settings";
 import { isPathWithin } from "../../shared/path-within";
-import { StateDb } from "../state/state-db";
 import { issueProviderDiscoveryPermit } from "../settings/provider-discovery-permit";
+import { openInMemoryStateDb } from "./sqlite-test-utils";
 
 type ProviderCase = {
   expectedArgs: string[];
@@ -57,7 +57,7 @@ describeExecutableAcp("ACP runtime path overrides", () => {
         registryId,
       });
       const env = fixtureDiscoveryEnv(fixture);
-      const stateDb = StateDb.open(path.join(tempDir, "state.db"));
+      const stateDb = openInMemoryStateDb();
       const agentStore = new AcpAgentStore(stateDb);
       const sessionStore = new AcpSessionStore(stateDb);
       let adapter: AcpBackendAdapter | undefined;
@@ -186,7 +186,7 @@ describeExecutableAcp("ACP runtime path overrides", () => {
       suffix: "second",
     });
     const env = fixtureDiscoveryEnv(first);
-    const stateDb = StateDb.open(path.join(tempDir, "state.db"));
+    const stateDb = openInMemoryStateDb();
     const agentStore = new AcpAgentStore(stateDb);
     const sessionStore = new AcpSessionStore(stateDb);
     let overridePath = first.overrideCommand;

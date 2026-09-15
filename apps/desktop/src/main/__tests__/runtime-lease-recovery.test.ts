@@ -49,6 +49,7 @@ beforeEach(() => {
   vi.setSystemTime(1_800_000_000_000);
   vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
   directory = mkdtempSync(path.join(os.tmpdir(), "pwragent-lease-recovery-"));
+  // A write budget records WAL growth, which only a real file has.
   db = StateDb.open(path.join(directory, "state.db"), { profileName: "dev" });
   store = new AppRuntimeInstanceStore(db);
   ownerAlive = true;

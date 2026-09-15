@@ -1,27 +1,22 @@
-import { mkdtempSync, rmSync } from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { AutomationInspectionBus } from "../automations/automation-inspection-bus";
 import { AutomationStore } from "../automations/automation-store";
 import { StateDb } from "../state/state-db";
+import { openInMemoryStateDb } from "./sqlite-test-utils";
 
-let tempDir: string;
 let stateDb: StateDb;
 let store: AutomationStore;
 let bus: AutomationInspectionBus;
 
 beforeEach(() => {
-  tempDir = mkdtempSync(path.join(os.tmpdir(), "pwragent-automation-tools-"));
-  stateDb = StateDb.open(path.join(tempDir, "state.db"));
+  stateDb = openInMemoryStateDb();
   store = new AutomationStore(stateDb);
   bus = new AutomationInspectionBus(store);
 });
 
 afterEach(() => {
   stateDb.close();
-  rmSync(tempDir, { recursive: true, force: true });
 });
 
 describe("AutomationInspectionBus", () => {

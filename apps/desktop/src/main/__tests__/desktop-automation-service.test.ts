@@ -1,12 +1,10 @@
-import { mkdtempSync, rmSync } from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentEvent } from "@pwragent/shared";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { DesktopAutomationService } from "../automations/desktop-automation-service";
 import { AutomationStore } from "../automations/automation-store";
 import { StateDb } from "../state/state-db";
+import { openInMemoryStateDb } from "./sqlite-test-utils";
 
 const automationLoggerMock = vi.hoisted(() => ({
   debug: vi.fn(),
@@ -19,7 +17,6 @@ vi.mock("../log", () => ({
   getMainLogger: vi.fn(() => automationLoggerMock),
 }));
 
-let tempDir: string;
 let stateDb: StateDb;
 let store: AutomationStore;
 let publishedEvents: AgentEvent[];
@@ -27,8 +24,7 @@ let registryListeners: Array<(event: AgentEvent) => void | Promise<void>>;
 let registry: DesktopBackendRegistry;
 
 beforeEach(() => {
-  tempDir = mkdtempSync(path.join(os.tmpdir(), "pwragent-automation-service-"));
-  stateDb = StateDb.open(path.join(tempDir, "state.db"));
+  stateDb = openInMemoryStateDb();
   store = new AutomationStore(stateDb);
   publishedEvents = [];
   registryListeners = [];
@@ -99,7 +95,6 @@ beforeEach(() => {
 
 afterEach(() => {
   stateDb.close();
-  rmSync(tempDir, { recursive: true, force: true });
 });
 
 describe("DesktopAutomationService", () => {

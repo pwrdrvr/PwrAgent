@@ -1,6 +1,3 @@
-import { mkdtempSync, rmSync } from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   PWRAGENT_INSTANCE_ROOT_ENV,
@@ -14,6 +11,7 @@ import {
 import { StateDb } from "../state/state-db";
 import type { DesktopMessagingConfig } from "../messaging/messaging-config";
 import type { DesktopMessagingRuntime } from "../messaging/messaging-runtime";
+import { openInMemoryStateDb } from "./sqlite-test-utils";
 
 type RuntimeStub = DesktopMessagingRuntime & {
   failClosedFullAccessPolicy: ReturnType<typeof vi.fn>;
@@ -21,7 +19,6 @@ type RuntimeStub = DesktopMessagingRuntime & {
 
 let stateDb: StateDb;
 let store: AppRuntimeInstanceStore;
-let tempDir: string;
 let liveProcessIds: Set<number>;
 
 function createRuntime(options: { failApply?: boolean } = {}): RuntimeStub {
@@ -54,10 +51,7 @@ function createCoordinator(
 }
 
 beforeEach(() => {
-  tempDir = mkdtempSync(path.join(os.tmpdir(), "pwragent-lease-coordinator-"));
-  stateDb = StateDb.open(path.join(tempDir, "state.db"), {
-    profileName: "dev",
-  });
+  stateDb = openInMemoryStateDb({ profileName: "dev" });
   store = new AppRuntimeInstanceStore(stateDb);
   liveProcessIds = new Set();
 });
@@ -65,7 +59,6 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   stateDb.close();
-  rmSync(tempDir, { recursive: true, force: true });
 });
 
 describe("RuntimeMessagingLeaseCoordinator", () => {

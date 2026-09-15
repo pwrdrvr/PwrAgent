@@ -4,12 +4,13 @@ import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { ScheduledThreadActionService } from "../scheduled-actions/scheduled-thread-action-service";
 import { ScheduledThreadActionStore } from "../scheduled-actions/scheduled-thread-action-store";
 import { StateDb } from "../state/state-db";
+import { openInMemoryStateDb } from "./sqlite-test-utils";
 
 let stateDb: StateDb;
 let store: ScheduledThreadActionStore;
 
 beforeEach(() => {
-  stateDb = StateDb.open(":memory:");
+  stateDb = openInMemoryStateDb();
   store = new ScheduledThreadActionStore(stateDb);
 });
 

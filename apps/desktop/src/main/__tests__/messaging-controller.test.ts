@@ -64,7 +64,6 @@ import {
   resetSqliteWriteMetrics,
   SQLITE_WRITE_METRICS_ENV,
 } from "../state/sqlite-write-metrics";
-import { StateDb } from "../state/state-db";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import type { MessagingOutboundFileAccess } from "../messaging/core/messaging-outbound-file";
 import type { MessagingRbacPolicyProvider } from "../messaging/rbac-policy-service";
@@ -72,6 +71,7 @@ import type { MessagingPermissionId } from "@pwragent/shared";
 import type { MessagingAdapter, MessagingBackendBridge } from "../messaging/core/messaging-adapter";
 import { MessagingDeliveryBudget } from "../messaging/core/messaging-delivery-budget";
 import { MessagingStore } from "../messaging/core/messaging-store";
+import { StateDb } from "../state/state-db";
 import {
   inspectPdfDocument,
   renderPdfPages,
@@ -1862,6 +1862,7 @@ describe("MessagingController", () => {
     process.env[SQLITE_WRITE_METRICS_ENV] = "1";
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-browse-writes-"));
     tempDirs.push(tempDir);
+    // A write budget records WAL growth, which only a real file has.
     const db = StateDb.open(path.join(tempDir, "state.db"));
     try {
       const navigation = buildNavigationSnapshot();
@@ -5054,6 +5055,7 @@ describe("MessagingController", () => {
     process.env[SQLITE_WRITE_METRICS_ENV] = "1";
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-rename-writes-"));
     tempDirs.push(tempDir);
+    // A write budget records WAL growth, which only a real file has.
     const stateDb = StateDb.open(path.join(tempDir, "state.db"));
     try {
       const store = new SqliteMessagingStore(stateDb);
@@ -11157,6 +11159,7 @@ describe("MessagingController", () => {
     process.env[SQLITE_WRITE_METRICS_ENV] = "1";
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-detach-writes-"));
     tempDirs.push(tempDir);
+    // A write budget records WAL growth, which only a real file has.
     const stateDb = StateDb.open(path.join(tempDir, "state.db"));
     try {
       const store = new SqliteMessagingStore(stateDb);

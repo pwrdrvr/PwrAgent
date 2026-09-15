@@ -4,11 +4,11 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { RuntimeLeaseManager } from "../runtime-lease-manager";
 import { AppRuntimeInstanceStore } from "../state/app-runtime-instance-store";
-import { StateDb } from "../state/state-db";
 import {
   McpConnectionBrokerDiscovery,
 } from "../mcp-connections/mcp-connection-broker-discovery";
 import { McpConnectionRegistry } from "../mcp-connections/mcp-connection-registry";
+import { openInMemoryStateDb } from "./sqlite-test-utils";
 import {
   McpConnectionGatewayService,
 } from "../mcp-connections/mcp-connection-gateway-service";
@@ -39,9 +39,7 @@ describe("MCP connection owner broker", () => {
     const directory = fs.mkdtempSync(
       path.join(os.tmpdir(), "pwragent-mcp-owner-broker-"),
     );
-    const stateDb = StateDb.open(path.join(directory, "state.db"), {
-      profileName: "dev",
-    });
+    const stateDb = openInMemoryStateDb({ profileName: "dev" });
     const store = new AppRuntimeInstanceStore(stateDb);
     const discovery = new McpConnectionBrokerDiscovery({
       filePath: path.join(directory, "broker.json"),

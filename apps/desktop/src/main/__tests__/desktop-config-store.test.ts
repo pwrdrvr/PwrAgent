@@ -17,6 +17,7 @@ import {
   SQLITE_WRITE_METRICS_ENV,
 } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
+import { openInMemoryStateDb } from "./sqlite-test-utils";
 
 const cleanups: Array<() => void> = [];
 
@@ -596,6 +597,7 @@ describe("DesktopConfigStore write cost", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-config-budget-"));
     const configPath = path.join(root, "config.toml");
     fs.writeFileSync(configPath, "[messaging]\nenabled = false\n", "utf8");
+    // A write budget records WAL growth, which only a real file has.
     const db = StateDb.open(path.join(root, "state.db"));
     const store = new DesktopConfigStore({ configPath, stateDb: db });
     try {
@@ -623,6 +625,7 @@ describe("DesktopConfigStore write cost", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-provider-budget-"));
     const configPath = path.join(root, "config.toml");
     fs.writeFileSync(configPath, "", "utf8");
+    // A write budget records WAL growth, which only a real file has.
     const db = StateDb.open(path.join(root, "state.db"));
     const store = new DesktopConfigStore({
       configPath,
@@ -678,7 +681,7 @@ function createFixture(initialConfig: string): {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-config-store-"));
   const configPath = path.join(root, "config.toml");
   fs.writeFileSync(configPath, initialConfig, "utf8");
-  const db = StateDb.open(path.join(root, "state.db"));
+  const db = openInMemoryStateDb();
   const stores: DesktopConfigStore[] = [];
   cleanups.push(() => {
     for (const store of stores) {

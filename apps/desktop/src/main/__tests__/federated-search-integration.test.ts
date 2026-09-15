@@ -52,6 +52,7 @@ describe("generic search through the owner adapter, registry and real SQLite", (
   beforeEach(() => {
     vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
     root = mkdtempSync(path.join(os.tmpdir(), "pwragent-search-integration-"));
+    // A write budget records WAL growth, which only a real file has.
     db = StateDb.open(path.join(root, "state.db"));
     store = new SqliteOverlayStore(db);
     sessions = new AcpSessionStore(db);

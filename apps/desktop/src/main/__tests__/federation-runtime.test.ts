@@ -519,7 +519,8 @@ describe("DesktopFederationRuntime", () => {
 
   it("serves owner project pages without full navigation reconciliation or SQLite writes", async () => {
     process.env[SQLITE_WRITE_METRICS_ENV] = "1";
-    const tempDir = mkdtempSync(path.join(os.tmpdir(), "pwragent-project-pages-"));
+    // A write budget records WAL growth, which only a real file has.
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "pwragent-federation-budget-"));
     const stateDb = StateDb.open(path.join(tempDir, "state.db"));
     const overlayStore = new SqliteOverlayStore(stateDb);
     setDesktopOverlayStoreForTests(overlayStore);
@@ -630,10 +631,8 @@ describe("DesktopFederationRuntime", () => {
   it.each(["complete", "checking"] as const)("mounts a remote parent when accepting a cross-instance child with %s coverage", async (coverageState) => {
     await disposeDesktopFederationRuntime();
     process.env[SQLITE_WRITE_METRICS_ENV] = "1";
-    const tempDir = mkdtempSync(path.join(
-      os.tmpdir(),
-      "pwragent-federated-parent-mount-",
-    ));
+    // A write budget records WAL growth, which only a real file has.
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "pwragent-federation-budget-"));
     const stateDb = StateDb.open(path.join(tempDir, "state.db"));
     const overlayStore = new SqliteOverlayStore(stateDb);
     setDesktopOverlayStoreForTests(overlayStore);
