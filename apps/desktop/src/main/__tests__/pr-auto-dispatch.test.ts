@@ -1,6 +1,3 @@
-import { mkdtempSync, rmSync } from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildPullRequestStatusKey,
@@ -22,30 +19,58 @@ import {
   buildPrRepositoryKey,
   pullRequestMatchesRepositoryKey,
 } from "../pr-status/pr-auto-dispatch";
+import {
+  createTempStateDb,
+  openInMemoryStateDb,
+  removeTempStateDbDir,
+} from "./sqlite-test-utils";
 
 let stateDb: StateDb;
 let store: SqliteOverlayStore;
-let tempDir: string;
+let tempDir: string | undefined;
 let clock: number;
 const extraDbs: StateDb[] = [];
 
-beforeEach(async () => {
-  vi.useFakeTimers();
-  clock = 1_000;
-  tempDir = mkdtempSync(path.join(os.tmpdir(), "pwragent-pr-auto-dispatch-"));
-  stateDb = StateDb.open(path.join(tempDir, "state.db"));
-  store = new SqliteOverlayStore(stateDb);
+async function seedEnabledThread(): Promise<void> {
   await store.setThreadPrAutoDispatchEnabled({
     backend: "codex",
     threadId: "thread-1",
     enabled: true,
   });
+}
+
+/**
+ * Move this test onto a real database file and return its path. Only the
+ * tests that reopen the same path, or open a second connection to it, need
+ * one: a second `:memory:` open is a second empty database, so those
+ * assertions would hold while testing nothing. Call it before the test's own
+ * setup — it restarts from the same seed `beforeEach` laid down.
+ */
+async function useFileStateDb(): Promise<string> {
+  stateDb.close();
+  const temp = createTempStateDb("pwragent-pr-auto-dispatch-");
+  tempDir = temp.tempDir;
+  stateDb = StateDb.open(temp.dbPath);
+  store = new SqliteOverlayStore(stateDb);
+  await seedEnabledThread();
+  return temp.dbPath;
+}
+
+beforeEach(async () => {
+  vi.useFakeTimers();
+  clock = 1_000;
+  tempDir = undefined;
+  stateDb = openInMemoryStateDb();
+  store = new SqliteOverlayStore(stateDb);
+  await seedEnabledThread();
 });
 
 afterEach(() => {
   for (const db of extraDbs.splice(0)) db.close();
   stateDb.close();
-  rmSync(tempDir, { recursive: true, force: true });
+  if (tempDir !== undefined) {
+    removeTempStateDbDir(tempDir);
+  }
   vi.useRealTimers();
 });
 
@@ -222,6 +247,7 @@ describe("PrAutoDispatchCoordinator", () => {
   });
 
   it("elects the oldest enabled primary attachment and reorders after detach", async () => {
+    const dbPath = await useFileStateDb();
     const prKey = buildPullRequestStatusKey(pr());
     await store.setThreadPrAutoDispatchEnabled({
       backend: "codex",
@@ -246,7 +272,7 @@ describe("PrAutoDispatchCoordinator", () => {
     });
 
     stateDb.close();
-    stateDb = StateDb.open(path.join(tempDir, "state.db"));
+    stateDb = StateDb.open(dbPath);
     store = new SqliteOverlayStore(stateDb);
     expect(await store.getPrAutoDispatchCandidateWinner({ prKey })).toMatchObject({
       threadId: "thread-1",
@@ -582,11 +608,11 @@ describe("PrAutoDispatchCoordinator", () => {
   });
 
   it("survives restart without replaying or losing a pending repair", async () => {
+    const dbPath = await useFileStateDb();
     const first = createHarness();
     await observe(first.coordinator);
     first.coordinator.close();
 
-    const dbPath = path.join(tempDir, "state.db");
     stateDb.close();
     stateDb = StateDb.open(dbPath);
     store = new SqliteOverlayStore(stateDb);
@@ -623,6 +649,7 @@ describe("PrAutoDispatchCoordinator", () => {
   });
 
   it("reclaims an orphaned dispatch lease after restart without double-spending", async () => {
+    const dbPath = await useFileStateDb();
     const first = createHarness();
     await observe(first.coordinator);
     first.coordinator.close();
@@ -640,7 +667,6 @@ describe("PrAutoDispatchCoordinator", () => {
       ownerId: "dead-process",
     })).toMatchObject({ status: "ready", attemptCount: 1 });
 
-    const dbPath = path.join(tempDir, "state.db");
     stateDb.close();
     stateDb = StateDb.open(dbPath);
     store = new SqliteOverlayStore(stateDb);
@@ -739,7 +765,8 @@ describe("PrAutoDispatchCoordinator", () => {
   });
 
   it("serializes budget consumption across app instances", async () => {
-    const secondDb = StateDb.open(path.join(tempDir, "state.db"));
+    const dbPath = await useFileStateDb();
+    const secondDb = StateDb.open(dbPath);
     extraDbs.push(secondDb);
     const secondStore = new SqliteOverlayStore(secondDb);
     await store.setThreadPrAutoDispatchEnabled({
@@ -796,6 +823,7 @@ describe("PrAutoDispatchCoordinator", () => {
   });
 
   it("pauses automatic repair globally when an accepted dispatch exhausts the profile budget", async () => {
+    const dbPath = await useFileStateDb();
     const harness = createHarness({
       budget: { capacity: 1, pauseWhenEmpty: true, refillPerMinute: 1 },
       pauseGateWhenBudgetPaused: true,
@@ -823,7 +851,6 @@ describe("PrAutoDispatchCoordinator", () => {
       { threadKey: "codex:thread-1", status: "gate-off" },
     ]);
 
-    const dbPath = path.join(tempDir, "state.db");
     harness.coordinator.close();
     stateDb.close();
     stateDb = StateDb.open(dbPath);
@@ -921,7 +948,8 @@ describe("PrAutoDispatchCoordinator", () => {
   });
 
   it("uses a unique SQLite claim across two app instances", async () => {
-    const secondDb = StateDb.open(path.join(tempDir, "state.db"));
+    const dbPath = await useFileStateDb();
+    const secondDb = StateDb.open(dbPath);
     extraDbs.push(secondDb);
     const secondStore = new SqliteOverlayStore(secondDb);
     const first = createHarness();

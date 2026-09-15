@@ -1,6 +1,3 @@
-import { mkdtempSync, rmSync } from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   AppRuntimeInstanceStore,
@@ -8,6 +5,11 @@ import {
   RUNTIME_LEASE_DEAD_OWNER_GRACE_MS,
 } from "../state/app-runtime-instance-store";
 import { StateDb } from "../state/state-db";
+import {
+  createTempStateDb,
+  openInMemoryStateDb,
+  removeTempStateDbDir,
+} from "./sqlite-test-utils";
 
 // The product hashes `path.resolve(cwd)`, which on Windows gains a drive
 // prefix and backslash separators, so a hardcoded hex digest would only match
@@ -18,19 +20,34 @@ const PWRAGNT_CWD_HASH = hashCwd("/Users/example/PwrAgnt");
 
 let stateDb: StateDb;
 let store: AppRuntimeInstanceStore;
-let tempDir: string;
+let tempDir: string | undefined;
+
+/**
+ * Move this test onto a real database file and return its path. Only the
+ * tests that close the database and reopen the same path, or open a second
+ * connection to it, need one: a second `:memory:` open is a second empty
+ * database, so those assertions would hold while testing nothing.
+ */
+function useFileStateDb(): string {
+  stateDb.close();
+  const temp = createTempStateDb("pwragent-runtime-instance-");
+  tempDir = temp.tempDir;
+  stateDb = StateDb.open(temp.dbPath, { profileName: "dev" });
+  store = new AppRuntimeInstanceStore(stateDb);
+  return temp.dbPath;
+}
 
 beforeEach(() => {
-  tempDir = mkdtempSync(path.join(os.tmpdir(), "pwragent-runtime-instance-"));
-  stateDb = StateDb.open(path.join(tempDir, "state.db"), {
-    profileName: "dev",
-  });
+  tempDir = undefined;
+  stateDb = openInMemoryStateDb({ profileName: "dev" });
   store = new AppRuntimeInstanceStore(stateDb);
 });
 
 afterEach(() => {
   stateDb.close();
-  rmSync(tempDir, { recursive: true, force: true });
+  if (tempDir !== undefined) {
+    removeTempStateDbDir(tempDir);
+  }
 });
 
 describe("AppRuntimeInstanceStore", () => {
@@ -71,11 +88,14 @@ describe("AppRuntimeInstanceStore", () => {
   });
 
   it("stores the same cwd hash for equivalent absolute paths", () => {
+    // Two spellings of one absolute path. This asserted through the temp
+    // directory only because there used to be one; `path.resolve` collapses
+    // the `..` on POSIX and Windows alike.
     store.recordInstanceStart({
       instanceId: "instance-a",
       profileName: "dev",
       processId: 123,
-      cwd: path.join(tempDir, "..", path.basename(tempDir)),
+      cwd: "/Users/example/PwrAgnt/../PwrAgnt",
       startedAt: 1_000,
       desiredMessagingEnabled: true,
     });
@@ -83,14 +103,15 @@ describe("AppRuntimeInstanceStore", () => {
       instanceId: "instance-b",
       profileName: "dev",
       processId: 456,
-      cwd: tempDir,
+      cwd: "/Users/example/PwrAgnt",
       startedAt: 2_000,
       desiredMessagingEnabled: true,
     });
 
-    expect(store.getInstance("instance-a")?.cwdHash).toBe(
-      store.getInstance("instance-b")?.cwdHash,
-    );
+    // Pinned to the value, not to each other: `a?.cwdHash === b?.cwdHash`
+    // also holds when both rows are missing.
+    expect(store.getInstance("instance-a")?.cwdHash).toBe(PWRAGNT_CWD_HASH);
+    expect(store.getInstance("instance-b")?.cwdHash).toBe(PWRAGNT_CWD_HASH);
   });
 
   it("keeps the current holder lease without rewriting its acquisition", () => {
@@ -293,7 +314,7 @@ describe("AppRuntimeInstanceStore", () => {
   });
 
   it("persists dead-owner observation across database reopen", () => {
-    const dbPath = path.join(tempDir, "state.db");
+    const dbPath = useFileStateDb();
     store.recordInstanceStart({
       instanceId: "instance-a",
       profileName: "dev",
@@ -341,7 +362,7 @@ describe("AppRuntimeInstanceStore", () => {
   });
 
   it("repairs missing runtime lease tables when user_version already advanced", () => {
-    const dbPath = path.join(tempDir, "state.db");
+    const dbPath = useFileStateDb();
     stateDb.raw.exec(`
       DROP TABLE IF EXISTS messaging_runtime_lease;
       DROP TABLE IF EXISTS app_runtime_instances;

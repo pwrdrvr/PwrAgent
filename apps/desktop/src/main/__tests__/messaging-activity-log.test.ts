@@ -1,6 +1,3 @@
-import { mkdtempSync, rmSync } from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { MessagingActivityLog } from "../messaging/messaging-activity-log";
 import { StateDb } from "../state/state-db";
@@ -10,20 +7,42 @@ import {
   SQLITE_WRITE_METRICS_ENV,
 } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
+import {
+  createTempStateDb,
+  openInMemoryStateDb,
+  removeTempStateDbDir,
+} from "./sqlite-test-utils";
 
 let stateDb: StateDb;
 let log: MessagingActivityLog;
-let tempDir: string;
+let tempDir: string | undefined;
+
+/**
+ * Move this test onto a real database file and return its path. Only the
+ * tests that close the database and reopen the same path need one: a second
+ * `:memory:` open is a second empty database, so those assertions would hold
+ * while testing nothing.
+ */
+function useFileStateDb(): string {
+  stateDb.close();
+  const temp = createTempStateDb("pwragent-activity-log-");
+  tempDir = temp.tempDir;
+  stateDb = StateDb.open(temp.dbPath);
+  log = new MessagingActivityLog(stateDb);
+  return temp.dbPath;
+}
 
 beforeEach(() => {
-  tempDir = mkdtempSync(path.join(os.tmpdir(), "pwragent-activity-log-"));
-  stateDb = StateDb.open(path.join(tempDir, "state.db"));
+  tempDir = undefined;
+  stateDb = openInMemoryStateDb();
   log = new MessagingActivityLog(stateDb);
 });
 
 afterEach(() => {
   stateDb.close();
-  rmSync(tempDir, { recursive: true, force: true });
+  if (tempDir !== undefined) {
+    removeTempStateDbDir(tempDir);
+  }
 });
 
 describe("MessagingActivityLog", () => {
@@ -254,6 +273,7 @@ describe("MessagingActivityLog", () => {
   });
 
   it("survives close + reopen of the DB", () => {
+    const dbPath = useFileStateDb();
     log.record({
       platform: "telegram",
       kind: "inbound-rejected",
@@ -261,7 +281,6 @@ describe("MessagingActivityLog", () => {
       actorDisplayName: "RandoBot",
       createdAt: 42,
     });
-    const dbPath = stateDb.raw.name;
     stateDb.close();
 
     const reopened = StateDb.open(dbPath);
@@ -287,9 +306,12 @@ describe("MessagingActivityLog", () => {
 describe("MessagingActivityLog write cost", () => {
   it("writes one row per agent-initiated outbound file send", async () => {
     process.env[SQLITE_WRITE_METRICS_ENV] = "1";
-    const budgetDir = mkdtempSync(path.join(os.tmpdir(), "pwragent-activity-writes-"));
-    const budgetDb = StateDb.open(path.join(budgetDir, "state.db"));
+    // A real file on purpose: `attachSqliteWriteMetrics` resolves no WAL path
+    // for `:memory:`, so the budget's MB/day figure would record as zero.
+    const budget = createTempStateDb("pwragent-activity-writes-");
+    let budgetDb: StateDb | undefined;
     try {
+      budgetDb = StateDb.open(budget.dbPath);
       const budgetLog = new MessagingActivityLog(budgetDb);
       resetSqliteWriteMetrics();
       const { writes } = await measureSqliteWrites(async () => {
@@ -312,8 +334,8 @@ describe("MessagingActivityLog write cost", () => {
       });
     } finally {
       delete process.env[SQLITE_WRITE_METRICS_ENV];
-      budgetDb.close();
-      rmSync(budgetDir, { recursive: true, force: true });
+      budgetDb?.close();
+      removeTempStateDbDir(budget.tempDir);
     }
   });
 });

@@ -1,31 +1,52 @@
-import { mkdtempSync, rmSync } from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import type { ThreadUsageLineRecord } from "@pwragent/shared";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
+import {
+  createTempStateDb,
+  openInMemoryStateDb,
+  removeTempStateDbDir,
+} from "./sqlite-test-utils";
 
 let stateDb: StateDb;
 let store: SqliteOverlayStore;
-let tempDir: string;
+let tempDir: string | undefined;
 const PRICING_CATALOG_TIME = Date.UTC(2026, 3, 23);
 
+/**
+ * Move this test onto a real database file and return its path. Only the
+ * tests that close the database and reopen the same path need one — whether
+ * they rewind `user_version` first to force a migration, or simply read the
+ * rows back. A second `:memory:` open is a second empty database, so both
+ * would hold while testing nothing.
+ */
+function useFileStateDb(): string {
+  stateDb.close();
+  const temp = createTempStateDb("pwragent-usage-pricing-");
+  tempDir = temp.tempDir;
+  stateDb = StateDb.open(temp.dbPath);
+  store = new SqliteOverlayStore(stateDb);
+  return temp.dbPath;
+}
+
 beforeEach(() => {
-  tempDir = mkdtempSync(path.join(os.tmpdir(), "pwragent-usage-pricing-"));
-  stateDb = StateDb.open(path.join(tempDir, "state.db"));
+  tempDir = undefined;
+  stateDb = openInMemoryStateDb();
   store = new SqliteOverlayStore(stateDb);
 });
 
 afterEach(() => {
   stateDb.close();
-  rmSync(tempDir, { recursive: true, force: true });
+  if (tempDir !== undefined) {
+    removeTempStateDbDir(tempDir);
+  }
 });
 
 describe("SqliteOverlayStore thread usage pricing ledger", () => {
   it.each(["live", "hydration", "backfill"] as const)(
     "preserves finalized turn accounting across restart and %s replacement",
     async (source) => {
+      const dbPath = useFileStateDb();
       const first = buildUsageLine({
         source: "live", status: "pending", turnUsageAttributed: true,
         cumulativeTotalTokens: 1_300,
@@ -55,7 +76,7 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
         PRAGMA user_version = 59;
       `);
       stateDb.close();
-      stateDb = StateDb.open(path.join(tempDir, "state.db"));
+      stateDb = StateDb.open(dbPath);
       store = new SqliteOverlayStore(stateDb);
       await store.upsertThreadUsageLine({
         line: buildUsageLine({
@@ -125,13 +146,14 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
   });
 
   it("accepts a missing final request within a durable successor boundary", async () => {
+    const dbPath = useFileStateDb();
     const first = buildUsageLine({ source: "live", cumulativeTotalTokens: 1_300 });
     await store.upsertThreadUsageLine({ line: first });
     await store.upsertThreadUsageLine({ line: buildUsageLine({
       source: "live", usageLineId: "line-2", turnId: "turn-2", cumulativeTotalTokens: 3_300,
     }) });
     stateDb.close();
-    stateDb = StateDb.open(path.join(tempDir, "state.db"));
+    stateDb = StateDb.open(dbPath);
     store = new SqliteOverlayStore(stateDb);
     // Even while the final request is missing, the persisted ceiling and
     // baseline reject a later turn's total or a freshly reset accumulator.
@@ -159,6 +181,7 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
   });
 
   it.each([false, true])("enriches protected metadata without accepting stale usage (priced=%s)", async (priced) => {
+    const dbPath = useFileStateDb();
     const first = buildUsageLine({
       source: "live", model: priced ? "gpt-5.5" : undefined,
       serviceTier: undefined, reasoningEffort: undefined,
@@ -181,7 +204,7 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
       PRAGMA user_version = 60;
     `);
     stateDb.close();
-    stateDb = StateDb.open(path.join(tempDir, "state.db"));
+    stateDb = StateDb.open(dbPath);
     store = new SqliteOverlayStore(stateDb);
     const hydration = buildUsageLine({
       source: "hydration", usageLineId: "hydrated-replacement", model: "gpt-5.5",
@@ -1720,6 +1743,7 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
   });
 
   it("backfills legacy live summary rows to turnUsageAttributed=false on migration", async () => {
+    const dbPath = useFileStateDb();
     // Legacy whole-thread summary masquerading as a turn (no cumulative
     // breakdown, >= 1M tokens), plus controls that must stay untouched.
     await store.upsertThreadUsageLine({
@@ -1756,7 +1780,6 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
 
     // Force the user_version 26 migration to run against the seeded rows, then
     // reassign the module handle so afterEach closes the reopened db.
-    const dbPath = path.join(tempDir, "state.db");
     stateDb.raw.pragma("user_version = 25");
     stateDb.close();
     stateDb = StateDb.open(dbPath);

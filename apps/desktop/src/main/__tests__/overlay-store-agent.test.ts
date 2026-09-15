@@ -1,6 +1,3 @@
-import { mkdtempSync, rmSync } from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import {
   AGENT_PERSONA_INSTRUCTIONS_LINE_GUIDANCE,
   type ThreadHandoffOrigin,
@@ -8,20 +5,42 @@ import {
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
+import {
+  createTempStateDb,
+  openInMemoryStateDb,
+  removeTempStateDbDir,
+} from "./sqlite-test-utils";
 
 let stateDb: StateDb;
 let store: SqliteOverlayStore;
-let tempDir: string;
+let tempDir: string | undefined;
+
+/**
+ * Move this test onto a real database file and return its path. Only the
+ * tests that close the database and reopen the same path need one: a second
+ * `:memory:` open is a second empty database, so those assertions would hold
+ * while testing nothing.
+ */
+function useFileStateDb(): string {
+  stateDb.close();
+  const temp = createTempStateDb("pwragent-agent-test-");
+  tempDir = temp.tempDir;
+  stateDb = StateDb.open(temp.dbPath);
+  store = new SqliteOverlayStore(stateDb);
+  return temp.dbPath;
+}
 
 beforeEach(() => {
-  tempDir = mkdtempSync(path.join(os.tmpdir(), "pwragent-agent-test-"));
-  stateDb = StateDb.open(path.join(tempDir, "state.db"));
+  tempDir = undefined;
+  stateDb = openInMemoryStateDb();
   store = new SqliteOverlayStore(stateDb);
 });
 
 afterEach(() => {
   stateDb.close();
-  rmSync(tempDir, { recursive: true, force: true });
+  if (tempDir !== undefined) {
+    removeTempStateDbDir(tempDir);
+  }
 });
 
 describe("SqliteOverlayStore - thread Agent metadata", () => {
@@ -75,6 +94,7 @@ describe("SqliteOverlayStore - thread Agent metadata", () => {
   });
 
   it("preserves Agent metadata across sqlite handles", async () => {
+    const dbPath = useFileStateDb();
     await store.setThreadAgent({
       backend: "codex",
       threadId: "thread-1",
@@ -85,7 +105,7 @@ describe("SqliteOverlayStore - thread Agent metadata", () => {
     });
     stateDb.close();
 
-    const reopenedDb = StateDb.open(path.join(tempDir, "state.db"));
+    const reopenedDb = StateDb.open(dbPath);
     const reopenedStore = new SqliteOverlayStore(reopenedDb);
     await expect(
       reopenedStore.getThreadOverlayState({ backend: "codex", threadId: "thread-1" }),
@@ -199,6 +219,7 @@ describe("SqliteOverlayStore - thread Agent metadata", () => {
   });
 
   it("persists handoff origin metadata across sqlite handles", async () => {
+    const dbPath = useFileStateDb();
     const handoffOrigin: ThreadHandoffOrigin = {
       sourceBackend: "codex",
       sourceThreadId: "parent-thread",
@@ -223,7 +244,7 @@ describe("SqliteOverlayStore - thread Agent metadata", () => {
     });
     stateDb.close();
 
-    const reopenedDb = StateDb.open(path.join(tempDir, "state.db"));
+    const reopenedDb = StateDb.open(dbPath);
     const reopenedStore = new SqliteOverlayStore(reopenedDb);
     await expect(
       reopenedStore.getThreadOverlayState({
@@ -235,6 +256,7 @@ describe("SqliteOverlayStore - thread Agent metadata", () => {
   });
 
   it("persists injected message origins by message across sqlite handles", async () => {
+    const dbPath = useFileStateDb();
     await store.upsertThreadMessageOrigin({
       backend: "codex",
       threadId: "child-thread",
@@ -251,7 +273,7 @@ describe("SqliteOverlayStore - thread Agent metadata", () => {
     });
     stateDb.close();
 
-    const reopenedDb = StateDb.open(path.join(tempDir, "state.db"));
+    const reopenedDb = StateDb.open(dbPath);
     const reopenedStore = new SqliteOverlayStore(reopenedDb);
     await expect(
       reopenedStore.readThreadMessageOrigins({
