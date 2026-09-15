@@ -17,6 +17,7 @@ const xtermState = vi.hoisted(() => ({
   deferWriteCallbacks: false,
   pendingWriteCallbacks: [] as Array<() => void>,
   replayDataEvents: new Map<string, string[]>(),
+  fit: vi.fn(),
 }));
 
 vi.mock("@xterm/xterm", () => ({
@@ -63,12 +64,16 @@ vi.mock("@xterm/xterm", () => ({
 
 vi.mock("@xterm/addon-fit", () => ({
   FitAddon: class {
-    fit = vi.fn();
+    fit = xtermState.fit;
     proposeDimensions = vi.fn(() => ({ cols: 100, rows: 22 }));
   },
 }));
 
 class MockResizeObserver {
+  static instances: MockResizeObserver[] = [];
+  constructor(readonly callback: () => void) {
+    MockResizeObserver.instances.push(this);
+  }
   observe = vi.fn();
   disconnect = vi.fn();
 }
@@ -79,6 +84,8 @@ describe("IntegratedTerminal", () => {
     xtermState.deferWriteCallbacks = false;
     xtermState.pendingWriteCallbacks.length = 0;
     xtermState.replayDataEvents.clear();
+    xtermState.fit.mockClear();
+    MockResizeObserver.instances = [];
     Object.defineProperty(window, "ResizeObserver", {
       configurable: true,
       value: MockResizeObserver,
@@ -405,7 +412,90 @@ describe("IntegratedTerminal", () => {
 
     expect(terminal.focus).not.toHaveBeenCalled();
   });
+
+  it("coalesces terminal fitting outside observer delivery", async () => {
+    const api = terminalApiStub();
+    render(<IntegratedTerminal desktopApi={api} threadKey="codex:resize" height={260}
+      onClose={() => undefined} onExit={() => undefined} />);
+    await waitFor(() => expect(api.resizeIntegratedTerminal).toHaveBeenCalled());
+    const frames = mockAnimationFrames();
+    const observer = MockResizeObserver.instances[0]!;
+    xtermState.fit.mockClear();
+    vi.mocked(api.resizeIntegratedTerminal!).mockClear();
+
+    act(() => { observer.callback(); observer.callback(); });
+    expect(xtermState.fit).not.toHaveBeenCalled();
+    expect(api.resizeIntegratedTerminal).not.toHaveBeenCalled();
+    act(() => frames.flush());
+    expect(xtermState.fit).toHaveBeenCalledTimes(1);
+    expect(api.resizeIntegratedTerminal).toHaveBeenCalledTimes(1);
+    vi.mocked(api.resizeIntegratedTerminal!).mockClear();
+
+    // Several pixel resizes can land in one frame; xterm's final grid is
+    // the one the shared PTY owner needs.
+    xtermState.instances[0]!.cols = 101;
+    xtermState.instances[0]!.rows = 25;
+    act(() => { observer.callback(); observer.callback(); });
+    act(() => frames.flush());
+    expect(api.resizeIntegratedTerminal).toHaveBeenCalledExactlyOnceWith({ sessionId: "session-1", cols: 101, rows: 25 });
+  });
+
+  it("cancels a queued fit when the terminal unmounts", async () => {
+    const api = terminalApiStub();
+    const { unmount } = render(<IntegratedTerminal desktopApi={api} threadKey="codex:resize" height={260}
+      onClose={() => undefined} onExit={() => undefined} />);
+    await waitFor(() => expect(api.resizeIntegratedTerminal).toHaveBeenCalled());
+    const frames = mockAnimationFrames();
+    const observer = MockResizeObserver.instances[0]!;
+    xtermState.fit.mockClear();
+    vi.mocked(api.resizeIntegratedTerminal!).mockClear();
+    act(() => observer.callback());
+    expect(frames.pending.size).toBe(1);
+    unmount();
+    expect(frames.pending.size).toBe(0);
+    // A delivered callback retained by the browser must not revive work.
+    act(() => { observer.callback(); frames.flush(); });
+    expect(xtermState.fit).not.toHaveBeenCalled();
+    expect(api.resizeIntegratedTerminal).not.toHaveBeenCalled();
+  });
+
+  it("skips a queued fit while hidden and fits the current grid when shown", async () => {
+    const api = terminalApiStub();
+    const view = (visible: boolean) => <IntegratedTerminal desktopApi={api} threadKey="codex:resize" height={260}
+      visible={visible} onClose={() => undefined} onExit={() => undefined} />;
+    const { rerender } = render(view(true));
+    await waitFor(() => expect(api.resizeIntegratedTerminal).toHaveBeenCalled());
+    const frames = mockAnimationFrames();
+    xtermState.fit.mockClear();
+    vi.mocked(api.resizeIntegratedTerminal!).mockClear();
+    act(() => MockResizeObserver.instances[0]!.callback());
+    rerender(view(false));
+    act(() => frames.flush());
+    expect(xtermState.fit).not.toHaveBeenCalled();
+    expect(api.resizeIntegratedTerminal).not.toHaveBeenCalled();
+
+    xtermState.instances[0]!.rows = 30;
+    rerender(view(true));
+    act(() => frames.flush());
+    expect(xtermState.fit).toHaveBeenCalledTimes(1);
+    expect(api.resizeIntegratedTerminal).toHaveBeenCalledExactlyOnceWith({ sessionId: "session-1", cols: 80, rows: 30 });
+  });
 });
+
+function mockAnimationFrames() {
+  let nextId = 0;
+  const pending = new Map<number, FrameRequestCallback>();
+  vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+    pending.set(++nextId, callback);
+    return nextId;
+  });
+  vi.spyOn(window, "cancelAnimationFrame").mockImplementation((id) => { pending.delete(id); });
+  return { pending, flush: () => {
+    const callbacks = [...pending.values()];
+    pending.clear();
+    for (const callback of callbacks) callback(0);
+  } };
+}
 
 function terminalApiStub(): DesktopApi {
   return {

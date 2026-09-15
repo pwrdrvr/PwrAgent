@@ -2362,7 +2362,10 @@ export function StarMapScreen(props: StarMapScreenProps) {
         );
         return;
       }
-      commitView(
+      // Translation changes no card geometry. Like pointer dragging, paint
+      // live frames and commit React state once the gesture goes idle. Pinch
+      // still commits above because zoom changes the cards' overview chrome.
+      paintView(
         clampStarMapView({
           view: {
             ...current,
@@ -2382,6 +2385,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
     abortFlight,
     commitView,
     commitViewAndPersist,
+    paintView,
     topAnchoredView,
     panZoomCanvas.width,
     panZoomCanvas.height,

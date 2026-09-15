@@ -181,6 +181,7 @@ function windowsPowerShellArgs(env: NodeJS.ProcessEnv): string[] {
 }
 
 type TerminalSession = {
+  lastResize?: { cols: number; rows: number };
   sessionId: string;
   threadKey: string;
   pty: IPty;
@@ -464,10 +465,14 @@ export class IntegratedTerminalService {
   resize(request: IntegratedTerminalResizeRequest): void {
     const session = this.sessionsById.get(request.sessionId);
     if (!session) return;
-    session.pty.resize(
-      clampInteger(request.cols, DEFAULT_COLUMNS, 2, MAX_COLUMNS),
-      clampInteger(request.rows, DEFAULT_ROWS, 2, MAX_ROWS),
-    );
+    const cols = clampInteger(request.cols, DEFAULT_COLUMNS, 2, MAX_COLUMNS);
+    const rows = clampInteger(request.rows, DEFAULT_ROWS, 2, MAX_ROWS);
+    // Viewers share this PTY. Deduplicate at its owner, not against a
+    // renderer's stale last size. Track accepted requests because node-pty
+    // can defer a Windows resize before its cols/rows getters change.
+    if (session.lastResize?.cols === cols && session.lastResize.rows === rows) return;
+    session.pty.resize(cols, rows);
+    session.lastResize = { cols, rows };
   }
 
   close(request: IntegratedTerminalCloseRequest): void {
