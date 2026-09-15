@@ -259,13 +259,16 @@ export function buildStarMapViewSnapshot(
       continue;
     }
     // No layout yet (the lens is opening): the project pool is the best
-    // grouping available, and is still better than no cloud at all.
+    // grouping available, and is still better than no cloud at all. The
+    // pool holds what has been hydrated, so the body's own count is what
+    // the operator is reading off it.
     pushProjectCloud({
       key: project.key,
       label: project.label,
       isProject: project.key !== STAR_MAP_NO_PROJECT_KEY,
       isParentGroup: false,
       expanded: false,
+      totalCount: project.totalThreadCount,
       threadKeys: project.threads.map((thread) =>
         buildThreadIdentityKey(thread.source, thread.id),
       ),
