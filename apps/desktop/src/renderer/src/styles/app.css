@@ -4714,10 +4714,10 @@ a.button {
 }
 
 .thread-row__overflow-button {
-  /* 26px is the pinned cluster-side literal the pinned-row heading
-     reserve derives from, and the 24px-tall button reads as a
-     slightly wider pill next to the square 24px add-reaction chip on
-     purpose. */
+  /* 26px is the pinned cluster-side literal the pinned-row
+     timestamp-lane reserve derives from, and the 24px-tall button
+     reads as a slightly wider pill next to the square 24px
+     add-reaction chip on purpose. */
   width: 26px;
 }
 
@@ -5271,6 +5271,17 @@ a.button {
      taller than every row beside it. The heading is a 1-1-auto flex item
      with an ellipsized title and absorbs the squeeze on its own. */
   flex: 0 0 auto;
+  /* Load-bearing for the transition below, not for layout: `flex-shrink: 0`
+     above is what keeps "Aug 8" from collapsing, so this floor moves
+     nothing at rest. It exists because `min-width`'s initial value is the
+     KEYWORD `auto` — `auto` and `53px` are not an interpolable pair, so
+     Chromium creates no transition for the reserve at all and the lane
+     (with the pin docked against it) jumps the full ~40px in one frame
+     while the cluster is still fading in. Measured on the real stylesheet:
+     without this line the element reports only an `opacity` animation and
+     reads `min-width: 53px` at the first sampled frame. Starting from a
+     length makes the pair interpolable. */
+  min-width: 0;
   white-space: nowrap;
   /* The lane widens under the pinned-row reserve above; right-aligning
      the label keeps it still while it fades instead of sliding left

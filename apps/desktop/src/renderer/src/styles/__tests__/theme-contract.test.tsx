@@ -315,19 +315,43 @@ describe("Tangerine Terminal theme contract", () => {
     // pinned-row hover reserve widens the timestamp's lane (which the
     // cluster paints over, and which is faded out in exactly these
     // states) so the revealed cluster docks beside the in-title unpin pin
-    // instead of on top of it. Pinned (all four reveal arms + the value +
-    // the cluster-side literals it is derived from) so a cluster resize
-    // or a dropped keyboard arm revisits the derivation in the rule's
-    // comment in the same commit.
+    // instead of on top of it. Pinned (the value + the cluster-side
+    // literals it is derived from) so a cluster resize or a dropped
+    // keyboard arm revisits the derivation in the rule's comment in the
+    // same commit.
+    //
+    // All EIGHT arms, not just the `--pinned` half this once matched: a
+    // `--retained` row renders the same in-title pin, so dropping its
+    // four arms leaves that pin under the revealed cluster with the
+    // suite green. `extractRuleBody` anchors on the whole selector list,
+    // so the four `--retained` arms cannot be asserted on their own —
+    // they do not end at a `{`.
     expect(
       extractRuleBody(
         css,
-        ".thread-row-shell:hover .thread-row--pinned .thread-row__time,\n"
+        ".thread-row-shell:hover .thread-row--retained .thread-row__time,\n"
+          + ".thread-row-shell:has(.thread-row__overflow-button:focus-visible) .thread-row--retained .thread-row__time,\n"
+          + ".thread-row-shell:has(.thread-row__chip--add-reaction:focus-visible) .thread-row--retained .thread-row__time,\n"
+          + ".thread-row-shell:has(.thread-row__chip--add-reaction.is-open) .thread-row--retained .thread-row__time,\n"
+          + ".thread-row-shell:hover .thread-row--pinned .thread-row__time,\n"
           + ".thread-row-shell:has(.thread-row__overflow-button:focus-visible) .thread-row--pinned .thread-row__time,\n"
           + ".thread-row-shell:has(.thread-row__chip--add-reaction:focus-visible) .thread-row--pinned .thread-row__time,\n"
           + ".thread-row-shell:has(.thread-row__chip--add-reaction.is-open) .thread-row--pinned .thread-row__time",
       ),
     ).toMatch(/min-width:\s*53px;/);
+
+    // Fix 2 of the reserve: the lane only ANIMATES by construction, so
+    // the pair that makes it animate is pinned with its value. `min-width`
+    // starts at the keyword `auto`, and `auto -> 53px` is not an
+    // interpolable pair — Chromium then creates no transition at all and
+    // the lane (with the pin docked against it) jumps ~40px in one frame
+    // under a cluster that is still fading in. Measured: drop the
+    // `min-width: 0` floor and the element reports only an `opacity`
+    // animation. `text-align: right` rides along because the lane grows
+    // leftward — without it the label slides the same ~40px while fading.
+    expect(extractRuleBody(css, ".thread-row__time")).toMatch(
+      /min-width:\s*0;[\s\S]*text-align:\s*right;[\s\S]*transition:\s*min-width 120ms ease,\s*opacity 120ms ease;/,
+    );
     expect(extractRuleBody(css, ".thread-row__actions")).toMatch(
       /right:\s*11px;[\s\S]*gap:\s*4px;/,
     );
