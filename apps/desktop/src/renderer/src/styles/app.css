@@ -28857,7 +28857,7 @@ button.pricing-token-miser__folded:focus-visible {
   position: relative;
   display: flex;
   flex-direction: column;
-  max-width: min(100%, 1100px);
+  width: min(100%, 1100px);
   cursor: default;
 }
 
@@ -34966,7 +34966,8 @@ details.launchpad-pending__output > summary .launchpad-pending__command-label {
 
 .mermaid-diagram__toolbar > span { margin-right: auto; }
 
-.mermaid-diagram__toggle {
+.mermaid-diagram__toggle,
+.image-viewer__button {
   padding: 4px 8px;
   border: 1px solid var(--border-subtle);
   border-radius: 4px;
@@ -34975,18 +34976,53 @@ details.launchpad-pending__output > summary .launchpad-pending__command-label {
   cursor: pointer;
 }
 
+.image-viewer__button:hover:not(:disabled),
 .mermaid-diagram__toggle:hover { background: var(--bg-panel-hover); }
+.image-viewer__button:focus-visible,
+.image-lightbox__viewport:focus-visible,
 .mermaid-diagram__toggle:focus-visible,
 .mermaid-diagram__viewport:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
 
 .mermaid-diagram__viewport { overflow: auto; max-height: 640px; padding: 12px; }
 .mermaid-diagram__viewport img { display: block; max-width: none; margin-inline: auto; }
 .mermaid-diagram .transcript-message__pre { margin: 0; border: 0; border-radius: 0; }
-.mermaid-diagram__copy { opacity: 1; }
 
 .mermaid-diagram__viewport img { cursor: zoom-in; }
 .mermaid-diagram__viewport img:focus-visible { outline: 2px solid var(--focus-ring); }
-.image-lightbox__zoom { align-self: flex-start; margin-bottom: 8px; }
-.image-lightbox__viewport { overflow: auto; max-width: min(100vw - 48px, 1100px); max-height: calc(100vh - 140px); }
-.image-lightbox__viewport .image-lightbox__image { max-height: calc(100vh - 140px); }
-.image-lightbox__viewport[data-zoomed="true"] .image-lightbox__image { max-width: none; max-height: none; }
+/* The viewport never scrolls: gestures own image movement. A scrollable,
+   overscroll-contained modal stops wheel chaining without cancelling plain
+   wheel events (which can suppress macOS pinch synthesis). */
+.image-lightbox { overflow: auto; overscroll-behavior: none; }
+.image-lightbox__toolbar { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 32px 8px 0; }
+.image-viewer__button:disabled { opacity: 0.5; cursor: default; }
+.mermaid-diagram__toolbar { flex-wrap: wrap; }
+.image-lightbox__viewport {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: min(900px, 100dvh - 180px);
+  min-height: 80px;
+  overflow: hidden;
+  overscroll-behavior: none;
+  touch-action: none;
+  user-select: none;
+  cursor: grab;
+}
+.image-lightbox__viewport[data-panning="true"] { cursor: grabbing; }
+.image-lightbox__viewport .image-lightbox__image {
+  flex: none;
+  max-width: 100%;
+  max-height: 100%;
+  border: 0;
+  border-radius: 0;
+}
+.image-lightbox__viewport .image-lightbox__image[style] { max-width: none; max-height: none; }
+.image-viewer__status {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}

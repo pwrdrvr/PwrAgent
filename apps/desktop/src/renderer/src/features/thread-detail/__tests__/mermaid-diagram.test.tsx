@@ -44,7 +44,7 @@ describe("Mermaid transcript rendering", () => {
     expect(screen.getByRole("button", { name: "Expand Mermaid diagram" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Show source" }));
     expect(screen.getByLabelText("Diagram source")).toHaveTextContent("A --> B");
-    fireEvent.click(screen.getByRole("button", { name: "Copy diagram source" }));
+    fireEvent.click(screen.getByRole("button", { name: "Copy source" }));
     expect(api.copyText).toHaveBeenCalledWith("flowchart LR\nA --> B\n");
   });
 
@@ -90,10 +90,48 @@ describe("Mermaid transcript rendering", () => {
     await enterViewport();
     fireEvent.keyDown(screen.getByRole("button", { name: "Expand Mermaid diagram" }), { key: "Enter" });
     expect(screen.getByRole("dialog", { name: "Expanded Mermaid diagram" })).toBeInTheDocument();
+    fireEvent.wheel(screen.getByLabelText("Image pan and zoom"), { ctrlKey: true, deltaY: 10000 });
+    expect(screen.getByRole("button", { name: "Zoom out" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Fit to window" }));
+    expect(screen.getByRole("button", { name: "Zoom out" })).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
-    expect(screen.getByRole("button", { name: "Fit to window" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Fit to window" })).toBeInTheDocument();
     fireEvent.keyDown(window, { key: "Escape" });
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
+});
+
+describe("Mermaid clipboard actions", () => {
+  it("copies the original image from toolbar and lightbox, and reports failures without success", async () => {
+    const write = vi.fn().mockResolvedValue(undefined);
+    const png = new Blob(["original high-resolution PNG"], { type: "image/png" });
+    const fetchImage = vi.fn().mockResolvedValue({ ok: true, blob: async () => png });
+    vi.stubGlobal("fetch", fetchImage);
+    vi.stubGlobal("ClipboardItem", class { constructor(public data: Record<string, Blob>) {} });
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { write } });
+    render(<MermaidDiagram source="flowchart LR\nA --> B" />);
+    await enterViewport();
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Copy image" })));
+    expect(fetchImage).toHaveBeenCalledWith("data:image/svg+xml,test");
+    expect(write.mock.calls[0][0][0].data["image/png"]).toBe(png);
+    expect(screen.getByText("Copy image succeeded")).toHaveAttribute("role", "status");
+    fireEvent.click(screen.getByRole("button", { name: "Expand Mermaid diagram" }));
+    write.mockRejectedValueOnce(new Error("denied"));
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Copy image" })));
+    expect(screen.getByRole("alert")).toHaveTextContent("Copy image failed");
+    expect(screen.getByRole("button", { name: "Copy image" })).toBeInTheDocument();
+    expect(write.mock.calls[1][0][0].data["image/png"]).toBe(png);
+    delete (navigator as { clipboard?: unknown }).clipboard;
+  });
+
+  it("does not claim success before the clipboard promise resolves", async () => {
+    let finish = () => {};
+    const api = { copyText: vi.fn(() => new Promise<void>((resolve) => { finish = resolve; })) };
+    render(<MermaidDiagram source="flowchart LR\nA --> B" desktopApi={api} />);
+    fireEvent.click(screen.getByRole("button", { name: "Copy source" }));
+    expect(screen.queryByRole("button", { name: "Copied" })).not.toBeInTheDocument();
+    await act(async () => finish());
+    expect(screen.getByRole("button", { name: "Copied" })).toBeInTheDocument();
+  });
 });
