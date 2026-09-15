@@ -133,6 +133,7 @@ export function IntegratedTerminal({
         terminal.focus();
         terminalRef.current = terminal;
 
+        let resizeFrame: number | undefined;
         const fitAndResize = () => {
           if (!visibleRef.current) return;
           if (disposed || !desktopApi.resizeIntegratedTerminal) return;
@@ -145,7 +146,16 @@ export function IntegratedTerminal({
             rows: terminal.rows,
           });
         };
-        fitAndResizeRef.current = fitAndResize;
+        const scheduleFitAndResize = () => {
+          if (disposed || resizeFrame !== undefined) return;
+          // Fitting changes xterm's layout. Leave ResizeObserver delivery
+          // before doing that work, and coalesce observer/prop/attach changes.
+          resizeFrame = window.requestAnimationFrame(() => {
+            resizeFrame = undefined;
+            fitAndResize();
+          });
+        };
+        fitAndResizeRef.current = scheduleFitAndResize;
 
         const dataDisposable = terminal.onData((data) => {
           if (replayingBufferedOutputRef.current) {
@@ -164,9 +174,7 @@ export function IntegratedTerminal({
           void desktopApi.writeIntegratedTerminal({ sessionId, data });
         });
 
-        const resizeObserver = new ResizeObserver(() => {
-          fitAndResize();
-        });
+        const resizeObserver = new ResizeObserver(scheduleFitAndResize);
         resizeObserver.observe(container);
 
         const dimensions = fitAddon.proposeDimensions();
@@ -191,7 +199,7 @@ export function IntegratedTerminal({
                   data: pendingInput,
                 });
               }
-              fitAndResize();
+              scheduleFitAndResize();
               if (visibleRef.current) {
                 terminal.focus();
               }
@@ -213,6 +221,7 @@ export function IntegratedTerminal({
 
         cleanupTerminal = () => {
           resizeObserver.disconnect();
+          if (resizeFrame !== undefined) window.cancelAnimationFrame(resizeFrame);
           dataDisposable.dispose();
           terminal.dispose();
           terminalRef.current = null;
