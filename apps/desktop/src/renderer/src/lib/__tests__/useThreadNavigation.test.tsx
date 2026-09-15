@@ -5431,7 +5431,7 @@ describe("useThreadNavigation", () => {
     expect(setThreadPin).not.toHaveBeenCalled();
   });
 
-  it("projects a centrally auto-pinned materialized thread without another pin write", async () => {
+  it.each([false, true])("unpins an auto-pinned materialized thread with hydrated owner row=%s", async (hydrated) => {
     const directoryKey = "directory:/Users/fixture-user/github/PwrAgent";
     const existingPinnedThread = {
       id: "thread-pinned",
@@ -5513,6 +5513,21 @@ describe("useThreadNavigation", () => {
     expect(result.current.selectedThread).toMatchObject({
       id: "thread-new",
       pinnedRank: "2048",
+    });
+    if (hydrated) {
+      const population = await readPopulation();
+      readPopulation.mockResolvedValue({ ...population,
+        threads: [...population.threads, { ...existingPinnedThread, id: "thread-new", pinnedRank: "2048" }],
+        inboxThreadKeys: [...population.inboxThreadKeys, "codex:thread-new"],
+        directories: population.directories.map((directory) => ({ ...directory,
+          threadKeys: [...directory.threadKeys, "codex:thread-new"] })),
+      });
+      await act(() => result.current.refresh());
+    }
+    await act(() => result.current.setThreadPin(result.current.threads.find((thread) => thread.id === "thread-new")!, false));
+    expect(result.current.threads.find((thread) => thread.id === "thread-new")).toMatchObject({
+      id: "thread-new",
+      pinnedRank: undefined,
     });
   });
 
