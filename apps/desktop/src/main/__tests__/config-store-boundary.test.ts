@@ -13,7 +13,19 @@ const RAW_CONFIG_EXPORTS = new Set([
   "readDesktopSettingsConfig",
 ]);
 
+// Every check below sweeps one of two whole source trees, and the trees do not
+// change while the file runs. Without these three caches the eight tests
+// re-walked the directories, re-read ~940 files and re-parsed them with the
+// TypeScript compiler eight times over — six full parses of `main/` and two of
+// `renderer/src/` — which was the entire runtime of this file (~10s on Linux
+// and macOS, ~8s on Windows) and none of its coverage.
+const sourceListCache = new Map<string, string[]>();
+const sourceTextCache = new Map<string, string>();
+const sourceFileCache = new Map<string, ts.SourceFile>();
+
 function productionSources(root: string): string[] {
+  const cached = sourceListCache.get(root);
+  if (cached) return cached;
   const files: string[] = [];
   const visit = (directory: string): void => {
     for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
@@ -34,6 +46,7 @@ function productionSources(root: string): string[] {
     }
   };
   visit(root);
+  sourceListCache.set(root, files);
   return files;
 }
 
@@ -41,14 +54,32 @@ function relative(filePath: string): string {
   return path.relative(DESKTOP_SRC, filePath).replaceAll(path.sep, "/");
 }
 
+// For the checks that only look for a symbol by name. `getFullText()` on a
+// SourceFile returns exactly this string, so parsing first bought nothing.
+function sourceText(filePath: string): string {
+  let text = sourceTextCache.get(filePath);
+  if (text === undefined) {
+    text = fs.readFileSync(filePath, "utf8");
+    sourceTextCache.set(filePath, text);
+  }
+  return text;
+}
+
+// For the checks that walk the tree. `ts.SourceFile` is immutable and nothing
+// here mutates one, so a single parse serves every test in the file.
 function sourceFile(filePath: string): ts.SourceFile {
-  return ts.createSourceFile(
-    filePath,
-    fs.readFileSync(filePath, "utf8"),
-    ts.ScriptTarget.Latest,
-    true,
-    filePath.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
-  );
+  let file = sourceFileCache.get(filePath);
+  if (!file) {
+    file = ts.createSourceFile(
+      filePath,
+      sourceText(filePath),
+      ts.ScriptTarget.Latest,
+      true,
+      filePath.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
+    );
+    sourceFileCache.set(filePath, file);
+  }
+  return file;
 }
 
 function calledMethodName(call: ts.CallExpression): string | undefined {
@@ -147,8 +178,7 @@ describe("desktop config/discovery source boundaries", () => {
     ]);
     const violations: string[] = [];
     for (const filePath of productionSources(MAIN_SRC)) {
-      const file = sourceFile(filePath);
-      const text = file.getFullText();
+      const text = sourceText(filePath);
       if (
         text.includes("issueProviderDiscoveryPermit")
         && !relative(filePath).endsWith("provider-discovery-permit.ts")
@@ -167,8 +197,7 @@ describe("desktop config/discovery source boundaries", () => {
     ]);
     const violations: string[] = [];
     for (const filePath of productionSources(MAIN_SRC)) {
-      const file = sourceFile(filePath);
-      const text = file.getFullText();
+      const text = sourceText(filePath);
       if (
         text.includes("discoverLocalAcpAgentRecords")
         && !relative(filePath).endsWith("acp/acp-instance-discovery.ts")
@@ -218,7 +247,7 @@ describe("desktop config/discovery source boundaries", () => {
     ]);
     const violations = productionSources(MAIN_SRC)
       .filter((filePath) =>
-        sourceFile(filePath).getFullText().includes("readSettingsProjection"),
+        sourceText(filePath).includes("readSettingsProjection"),
       )
       .map(relative)
       .filter((filePath) => !allowed.has(filePath));
@@ -228,7 +257,7 @@ describe("desktop config/discovery source boundaries", () => {
   it("allows startup provider refresh only from the startup coordinator", () => {
     const violations = productionSources(MAIN_SRC)
       .filter((filePath) =>
-        sourceFile(filePath).getFullText().includes("refreshProvidersAtStartup"),
+        sourceText(filePath).includes("refreshProvidersAtStartup"),
       )
       .map(relative)
       .filter((filePath) =>
@@ -259,7 +288,7 @@ describe("desktop config/discovery source boundaries", () => {
   it("keeps whole Settings reads inside the Settings feature", () => {
     const violations = productionSources(RENDERER_SRC)
       .filter((filePath) =>
-        sourceFile(filePath).getFullText().includes(".readSettings("),
+        sourceText(filePath).includes(".readSettings("),
       )
       .map(relative)
       .filter((filePath) =>
