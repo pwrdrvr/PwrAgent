@@ -292,6 +292,57 @@ describe("ThreadMarkdown", () => {
     expect(container.querySelector("li .katex")).not.toBeNull();
   });
 
+  it.each([
+    ["$$x$$", 1],
+    ["$$$x$$$", 1],
+    ["$$\nx", 1],
+    ["```math\nx\n```", 1],
+    ["~~~math\nx\n~~~", 1],
+    ["> ```math\n> x\n> ```", 1],
+    ["- ```math\n  x\n  ```", 1],
+    ["```m&#97;th\nx\n```", 1],
+    ["~~~&#109;ath\nx\n~~~", 1],
+    ["```math extra\nx\n```", 1],
+    ["`$$literal$$`", 0],
+    [String.raw`\\(literal\\)`, 0],
+    ["```txt\n$$literal$$\n```", 0],
+    ["    $$literal$$", 0],
+    ["```mathematica\nx\n```", 0],
+  ])("preserves supported syntax and code escaping: %s", async (text, count) => {
+    // Use the real parser on both sides: a source hint may be a false positive,
+    // but gating must not change the prior renderer's output.
+    const { markdownMathRuntime } = await import("../../../lib/markdown-math-runtime");
+    const { default: ReactMarkdown } = await import("react-markdown");
+    const baseline = render(<ReactMarkdown
+      remarkPlugins={markdownMathRuntime.remarkPlugins}
+      rehypePlugins={markdownMathRuntime.rehypePlugins}
+    >{markdownMathRuntime.normalize(text)}</ReactMarkdown>);
+    expect(baseline.container.querySelectorAll(".katex")).toHaveLength(count);
+    const view = render(<MarkdownRenderingOptionsProvider mathEnabled>
+      <ThreadMarkdown text={text} />
+    </MarkdownRenderingOptionsProvider>);
+    await waitFor(() => {
+      expect(view.container.querySelectorAll(".katex")).toHaveLength(count);
+    });
+    expect(view.container.querySelector(".katex-error")).toBeNull();
+  });
+
+  it.each([String.raw`\(x\)`, String.raw`\[x\]`, "$$x$$", "~~~math\nx\n~~~"])(
+    "renders math streamed one character at a time: %s", async (text) => {
+      const view = render(<MarkdownRenderingOptionsProvider mathEnabled>
+        <ThreadMarkdown text="" />
+      </MarkdownRenderingOptionsProvider>);
+      for (let end = 1; end <= text.length; end += 1) {
+        view.rerender(<MarkdownRenderingOptionsProvider mathEnabled>
+          <ThreadMarkdown text={text.slice(0, end)} />
+        </MarkdownRenderingOptionsProvider>);
+      }
+      await waitFor(() => {
+        expect(view.container.querySelectorAll(".katex")).toHaveLength(1);
+      });
+    },
+  );
+
   it("opens local file links in the configured editor", async () => {
     const openApplication = vi.fn(async () => ({ opened: true as const }));
 

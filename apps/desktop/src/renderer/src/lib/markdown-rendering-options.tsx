@@ -3,17 +3,17 @@ import {
   useEffect,
   useContext,
   useState,
+  useMemo,
   type ReactNode,
 } from "react";
 import type { MarkdownMathRuntime } from "./markdown-math-runtime";
+import { hasPotentialMarkdownMath } from "./markdown-math-detection";
 
-const MarkdownMathRuntimeContext = createContext<MarkdownMathRuntime | undefined>(
-  undefined,
-);
+const MarkdownMathEnabledContext = createContext(false);
 let loadedMarkdownMathRuntime: MarkdownMathRuntime | undefined;
-let markdownMathRuntimePromise: Promise<MarkdownMathRuntime> | undefined;
+let markdownMathRuntimePromise: Promise<MarkdownMathRuntime | undefined> | undefined;
 
-function loadMarkdownMathRuntime(): Promise<MarkdownMathRuntime> {
+function loadMarkdownMathRuntime(): Promise<MarkdownMathRuntime | undefined> {
   if (loadedMarkdownMathRuntime) {
     return Promise.resolve(loadedMarkdownMathRuntime);
   }
@@ -23,8 +23,11 @@ function loadMarkdownMathRuntime(): Promise<MarkdownMathRuntime> {
         loadedMarkdownMathRuntime = markdownMathRuntime;
         return markdownMathRuntime;
       })
-      .finally(() => {
-        markdownMathRuntimePromise = undefined;
+      .catch((error: unknown) => {
+        // Keep the settled promise after failure: streaming, remounts, and
+        // setting changes must not retry a broken import indefinitely.
+        console.error("Failed to load Markdown math rendering", error);
+        return undefined;
       });
   }
   return markdownMathRuntimePromise;
@@ -34,37 +37,38 @@ export function MarkdownRenderingOptionsProvider(props: {
   children: ReactNode;
   mathEnabled: boolean;
 }) {
+  return (
+    <MarkdownMathEnabledContext.Provider value={props.mathEnabled}>
+      {props.children}
+    </MarkdownMathEnabledContext.Provider>
+  );
+}
+
+export function useMarkdownMathRuntime(markdown: string): MarkdownMathRuntime | undefined {
+  const mathEnabled = useContext(MarkdownMathEnabledContext);
+  const needsMath = useMemo(
+    () => mathEnabled && hasPotentialMarkdownMath(markdown),
+    [mathEnabled, markdown],
+  );
   const [mathRuntime, setMathRuntime] = useState<MarkdownMathRuntime | undefined>(
     loadedMarkdownMathRuntime,
   );
   useEffect(() => {
-    if (!props.mathEnabled || mathRuntime) {
+    if (!needsMath || mathRuntime) {
       return;
     }
     let active = true;
-    void loadMarkdownMathRuntime()
-      .then((runtime) => {
-        if (active) {
-          setMathRuntime(runtime);
-        }
-      })
-      .catch((error: unknown) => {
-        console.error("Failed to load Markdown math rendering", error);
-      });
+    void loadMarkdownMathRuntime().then((runtime) => {
+      if (active && runtime) {
+        setMathRuntime(runtime);
+      }
+    });
     return () => {
       active = false;
     };
-  }, [mathRuntime, props.mathEnabled]);
+  }, [mathRuntime, needsMath]);
 
-  return (
-    <MarkdownMathRuntimeContext.Provider
-      value={props.mathEnabled ? mathRuntime : undefined}
-    >
-      {props.children}
-    </MarkdownMathRuntimeContext.Provider>
-  );
-}
-
-export function useMarkdownMathRuntime(): MarkdownMathRuntime | undefined {
-  return useContext(MarkdownMathRuntimeContext);
+  // Gate even a cached runtime per message. Loading another message must not
+  // enable normalization/plugins here or broadcast a context update.
+  return needsMath ? mathRuntime : undefined;
 }

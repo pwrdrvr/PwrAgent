@@ -266,11 +266,11 @@ type MarkdownViewerTarget = LocalFileTarget & {
 type SkillActionTarget = AppServerSkillSummary & LocalFileTarget;
 
 export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdownProps) {
-  const mathRuntime = useMarkdownMathRuntime();
   const sourceMarkdownText = useMemo(
     () => protectComposerHyphenListItems(repairNestedLanguageFences(props.text)),
     [props.text]
   );
+  const mathRuntime = useMarkdownMathRuntime(sourceMarkdownText);
   const markdownText = useMemo(
     () => mathRuntime?.normalize(sourceMarkdownText) ?? sourceMarkdownText,
     [mathRuntime, sourceMarkdownText]
