@@ -49,13 +49,19 @@ export function checkSigningInput(paths, readSource = (path) => readFileSync(res
   }
 }
 
+// Archive producers and release:check use this complete platform contract,
+// including roots that an import-closure check cannot discover.
+export function checkPlatformSigningInput(platform, paths = signingInputPaths[platform]) {
+  checkSigningInput(paths);
+  for (const path of requiredPaths[platform]) {
+    if (!paths.includes(path)) throw new Error(`Signing input omits required entry point ${path}`);
+  }
+}
+
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
     const paths = signingInputPaths[process.argv[2]];
-    checkSigningInput(paths);
-    for (const path of requiredPaths[process.argv[2]]) {
-      if (!paths.includes(path)) throw new Error(`Signing input omits required entry point ${path}`);
-    }
+    checkPlatformSigningInput(process.argv[2], paths);
     process.stdout.write(`${paths.join("\n")}\n`);
   } catch (error) {
     console.error(error.message);

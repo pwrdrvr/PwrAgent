@@ -9,7 +9,7 @@ const checker = fileURLToPath(new URL("./check-signing-input.mjs", import.meta.u
 function check(code) {
   return spawnSync(process.execPath, [
     "--experimental-vm-modules", "--input-type=module", "-e",
-    `import { checkSigningInput, signingInputPaths } from ${JSON.stringify(new URL("./check-signing-input.mjs", import.meta.url).href)};\n${code}`,
+    `import { checkSigningInput, checkPlatformSigningInput, signingInputPaths } from ${JSON.stringify(new URL("./check-signing-input.mjs", import.meta.url).href)};\n${code}`,
   ], { encoding: "utf8" });
 }
 
@@ -21,9 +21,22 @@ for (const platform of ["windows", "macos"]) {
   });
 
   it(`${platform} rejects the beta.2 missing-helper regression`, () => {
-    const result = check(`checkSigningInput(signingInputPaths.${platform}.filter(path => !path.endsWith("/packaged-html-rules.mjs")));`);
+    const result = check(`checkPlatformSigningInput("${platform}", signingInputPaths.${platform}.filter(path => !path.endsWith("/packaged-html-rules.mjs")));`);
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("verify-asar-contents.mjs imports ./packaged-html-rules.mjs");
+  });
+}
+
+// These replaced the old release.yml tar-list assertions. Neither is a
+// static import, so dropping either must still fail the platform contract.
+for (const path of [
+  "apps/desktop/release-stage-arm64",
+  "apps/desktop/scripts/assemble-mac-release.mjs",
+]) {
+  it(`rejects the macOS archive without ${path}`, () => {
+    const result = check(`checkPlatformSigningInput("macos", signingInputPaths.macos.filter(path => path !== ${JSON.stringify(path)}));`);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(`Signing input omits required entry point ${path}`);
   });
 }
 
