@@ -1583,6 +1583,16 @@ describe("app server ipc", () => {
     );
   });
 
+  it("does not publish unchanged directory Git probes", async () => {
+    registerAppServerIpcHandlers();
+    const writer = setDirectoryGitStatusWriter.mock.calls.at(-1)?.[0];
+    for (let i = 0; i < 27; i++) await writer?.({ directoryKey: "directory:/fixture/noop", fetchedAt: i,
+      gitStatus: i % 2 ? { syncState: "in-sync", currentBranch: "main" } : { currentBranch: "main", syncState: "in-sync" } });
+    expect(publishLocalEvent).toHaveBeenCalledTimes(1);
+    await writer?.({ directoryKey: "directory:/fixture/noop", fetchedAt: 28, gitStatus: { currentBranch: "changed", syncState: "in-sync" } });
+    expect(publishLocalEvent).toHaveBeenCalledTimes(2);
+  });
+
   it("persists owner-refreshed directory Git status before publishing it", async () => {
 
     registerAppServerIpcHandlers();
@@ -2506,6 +2516,18 @@ describe("app server ipc", () => {
     expect(page.directories[0]?.directoryThreadsCollapsed).toBe(true);
     expect(page.selectionDirectory.directoryThreadsCollapsed).toBe(true);
     expect(directory.directoryThreadsCollapsed).toBe(false);
+    // The owner is unchanged while the viewer changes disclosure locally.
+    readRemoteDirectoryOverlays.mockResolvedValueOnce({ [directoryKey]: { directoryKey, directoryThreadsCollapsed: false } });
+    federationMock.runtime.remoteNavigationQueryPage.mockResolvedValueOnce({ protocol: 2, queryKey: "directories", generation: "g",
+      ownerEpoch: "owner", countsRevision: "r", counts, coverage: { state: "complete" }, entries: [], complete: true, unchanged: true });
+    const refreshed = await handlers.get(NAVIGATION_QUERY_PAGE_CHANNEL)?.({ sender: { id: 90001, once: vi.fn() } }, {
+      protocol: 2, consumer: "main-sidebar", federationTarget, query: { kind: "directory-index" },
+    }) as typeof page;
+    expect(federationMock.runtime.remoteNavigationQueryPage).toHaveBeenLastCalledWith(federationTarget,
+      expect.objectContaining({ completeBaselineRevision: "r" }), expect.anything());
+    expect(refreshed.directories[0]?.directoryThreadsCollapsed).toBe(false);
+    expect(refreshed.selectionDirectory.directoryThreadsCollapsed).toBe(false);
+
   });
 
   it("shares exact owner reads across native windows and aborts only after the last window releases", async () => {

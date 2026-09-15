@@ -178,6 +178,15 @@ it.each([["main sidebar", useSidebarTraffic], ["bounded window", useWindowTraffi
     expect(remoteCalls().map(([request]) => request.federationTarget?.scope === "remote" && request.federationTarget.instanceId).sort())
       .toEqual(["peer-a", "peer-b"]);
 
+    read.mockClear();
+    await act(async () => {
+      for (const listener of listeners) listener({ backend: "codex", notification: {
+        method: "thread/subAgents/updated", params: { threadId: "thread-0", navigationChanged: false },
+      } });
+      await vi.advanceTimersByTimeAsync(500);
+    });
+    expect(read).not.toHaveBeenCalled();
+
     // Explicit refresh still revalidates all displayed owners.
     read.mockClear();
     await act(() => result.current.refresh());

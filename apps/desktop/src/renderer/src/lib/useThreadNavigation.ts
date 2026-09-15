@@ -165,6 +165,7 @@ type NavigationState = {
 };
 
 type NavigationRefreshOptions = {
+  invalidatedOnly?: boolean;
   owners?: FederationTarget[];
   forceRefresh?: boolean;
   refreshMode?: "active-recent" | "full";
@@ -3043,6 +3044,7 @@ export function useThreadNavigation(
         preferredSelectionKey?: string;
         refreshMode?: "active-recent" | "full";
         owners?: FederationTarget[];
+        invalidatedOnly?: boolean;
       }
     | undefined
   >(undefined);
@@ -3270,7 +3272,7 @@ export function useThreadNavigation(
   ): Promise<void> => {
     if (preferredOptimisticThread) setOptimisticThread(preferredOptimisticThread);
     if (preferredSelectionKey) setSelectedItemKey((current) => forcePreferredSelection || !current ? preferredSelectionKey : current);
-    await boundedNavigation.refresh(options?.owners);
+    await boundedNavigation.refresh(options?.owners, options?.invalidatedOnly === true);
   }, [boundedNavigation.refresh]);
 
   const refresh = useCallback(
@@ -3287,11 +3289,13 @@ export function useThreadNavigation(
         preferredSelectionKey,
         refreshMode: options?.refreshMode,
         owners: options?.owners,
+        invalidatedOnly: options?.invalidatedOnly === true,
       };
 
       if (refreshInFlightRef.current) {
         const queued = queuedRefreshRef.current;
-        queuedRefreshRef.current = { ...initialRequest, owners: queued
+        queuedRefreshRef.current = { ...initialRequest,
+          invalidatedOnly: initialRequest.invalidatedOnly && (!queued || queued.invalidatedOnly === true), owners: queued
           ? mergeNavigationRefreshOwners(queued.owners, initialRequest.owners) : initialRequest.owners };
         return;
       }
@@ -3310,6 +3314,7 @@ export function useThreadNavigation(
               forceRefresh: nextRequest.forceRefresh,
               refreshMode: nextRequest.refreshMode,
               owners: nextRequest.owners,
+              invalidatedOnly: nextRequest.invalidatedOnly,
             }
           );
           nextRequest = queuedRefreshRef.current;
@@ -3346,6 +3351,7 @@ export function useThreadNavigation(
     ): void => {
       const owners = options?.owners ?? [readRendererFederationTarget() ?? { scope: "local" }];
       queuedRefreshRef.current = {
+        invalidatedOnly: options?.invalidatedOnly === true && (!queuedRefreshRef.current || queuedRefreshRef.current.invalidatedOnly === true),
         owners: queuedRefreshRef.current ? mergeNavigationRefreshOwners(queuedRefreshRef.current.owners, owners) : owners,
         forceRefresh:
           options?.forceRefresh === true || queuedRefreshRef.current?.forceRefresh === true,
@@ -3379,6 +3385,7 @@ export function useThreadNavigation(
             forceRefresh: nextRequest.forceRefresh,
             refreshMode: nextRequest.refreshMode,
             owners: nextRequest.owners,
+            invalidatedOnly: nextRequest.invalidatedOnly,
           }
         );
       }, 0);
@@ -3581,9 +3588,10 @@ export function useThreadNavigation(
       const owners: FederationTarget[] = [event.federationTarget ?? { scope: "local" }];
       if (event.federationTarget?.scope === "remote" && windowTarget?.scope !== "remote") owners.push({ scope: "local" });
       const scheduleEventRefresh: typeof scheduleRefresh = (selection, optimistic, forceSelection, options) =>
-        scheduleRefresh(selection, optimistic, forceSelection, { ...options, owners });
-      if (federationTargetsEqual(event.federationTarget, windowTarget) && navigationQueryEventRequiresRefresh(method)) {
-        boundedNavigation.invalidate(owners);
+        scheduleRefresh(selection, optimistic, forceSelection, { ...options, owners,
+          invalidatedOnly: navigationQueryEventRequiresRefresh(method, event.notification.params) });
+      if (federationTargetsEqual(event.federationTarget, windowTarget) && navigationQueryEventRequiresRefresh(method, event.notification.params)) {
+        boundedNavigation.invalidate(owners, event);
         // These notifications contain the complete replacement for every
         // affected chip. Keep the patched baseline stale for the next query,
         // without reading a new page for each working-state probe.
@@ -3636,10 +3644,10 @@ export function useThreadNavigation(
           || method === "thread/parent/cleared"
           || method === "thread/subthreadOrder/updated"
           || method === "thread/subthreadsCollapsed/updated");
-      if (remoteThreadStatePassthrough && navigationQueryEventRequiresRefresh(method)) {
+      if (remoteThreadStatePassthrough && navigationQueryEventRequiresRefresh(method, event.notification.params)) {
         // Viewer pages also contain mounted remote identities. A peer event
         // invalidates their in-flight baseline before its canonical patch lands.
-        boundedNavigation.invalidate(owners);
+        boundedNavigation.invalidate(owners, event);
         scheduleEventRefresh();
       }
       if (
@@ -4241,9 +4249,11 @@ export function useThreadNavigation(
 
       if (method === "thread/subAgents/updated") {
         const params = event.notification.params as {
+          navigationChanged?: false;
           subAgents?: ThreadSubAgentSummary[];
           threadId: string;
         };
+        if (params.navigationChanged === false) return;
         if (!params.subAgents) {
           scheduleEventRefresh();
           return;

@@ -1,5 +1,5 @@
-import { NAVIGATION_QUERY_MAX_RESULT_BYTES } from "@pwragent/shared";
-import type { FederationTarget, NavigationQueryAnchor, NavigationQueryPage, NavigationQueryRequest } from "@pwragent/shared";
+import { NAVIGATION_QUERY_MAX_RESULT_BYTES, navigationInvalidationMayChangeMembership, navigationWorkingStatePath } from "@pwragent/shared";
+import type { AgentEvent, FederationTarget, NavigationQueryAnchor, NavigationQueryPage, NavigationQueryRequest } from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
 import { federationTargetsEqual } from "./federated-thread-events";
 import {
@@ -33,6 +33,18 @@ type Resource = {
   released: boolean;
   anchor?: NavigationQueryAnchor;
 };
+
+/** Semantic demand ignores object insertion order and identity-set ordering. */
+export function navigationDemandKey(request: NavigationQueryRequest): string {
+  return JSON.stringify(request, (key, value: unknown) => {
+    if (key === "readReason" || key === "deadlineAt") return undefined;
+    if (Array.isArray(value) && ["identities", "roots", "keys"].includes(key)) {
+      return [...value].sort((a, b) => JSON.stringify(a, Object.keys(a ?? {}).sort()).localeCompare(JSON.stringify(b, Object.keys(b ?? {}).sort())));
+    }
+    return value && typeof value === "object" && !Array.isArray(value)
+      ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b))) : value;
+  });
+}
 
 /** Window demand and loaded ranges only. All I/O shares the main-process query pool. */
 export class NavigationWindowQueries {
@@ -97,7 +109,7 @@ export class NavigationWindowQueries {
       ? "Navigation request metadata exceeds its memory budget." : undefined;
     for (const [id, resource] of this.resources) {
       const request = admitted.get(id);
-      if (!request || JSON.stringify(request) !== resource.requestKey) {
+      if (!request || navigationDemandKey(request) !== resource.requestKey) {
         if (resource.value.state.page) {
           const key = this.retainedKey(id, resource.requestKey);
           this.retained.delete(key);
@@ -112,7 +124,7 @@ export class NavigationWindowQueries {
     const added: Resource[] = [];
     for (const [id, request] of admitted) {
       if (this.resources.has(id)) continue;
-      const requestKey = JSON.stringify(request);
+      const requestKey = navigationDemandKey(request);
       const retainedKey = this.retainedKey(id, requestKey);
       const retained = this.retained.get(retainedKey);
       this.retained.delete(retainedKey);
@@ -132,7 +144,7 @@ export class NavigationWindowQueries {
       this.snapshot = { ...this.snapshot, admissionError };
       this.publish();
     }
-    if (this.visible) for (const resource of added) void this.read(resource, false);
+    if (this.visible) for (const resource of added) void this.read(resource, false, undefined, false, "demand");
   }
 
   setVisible(visible: boolean): void {
@@ -153,11 +165,11 @@ export class NavigationWindowQueries {
     this.publish();
   }
 
-  refresh(id?: string, owners?: readonly FederationTarget[]): Promise<void> {
+  refresh(id?: string, owners?: readonly FederationTarget[], invalidatedOnly = false): Promise<void> {
     if (!this.visible || this.disposed) return Promise.resolve();
     const resources = id ? [this.resources.get(id)].filter((value): value is Resource => Boolean(value)) : [...this.resources.values()];
-    return Promise.all(resources.filter((resource) => !owners || owners.some((owner) =>
-      federationTargetsEqual(owner, resource.value.state.request.federationTarget))).map(async (resource) => {
+    return Promise.all(resources.filter((resource) => (!invalidatedOnly || resource.invalidated)
+      && (!owners || owners.some((owner) => federationTargetsEqual(owner, resource.value.state.request.federationTarget)))).map(async (resource) => {
       if (resource.pending) resource.refreshAfterPending = true;
       await this.read(resource, false);
       // A caller awaiting refresh owns the coalesced replacement too, not
@@ -167,11 +179,12 @@ export class NavigationWindowQueries {
   }
 
   /** Invalidate transport baselines before canonical owner events can race a late page. */
-  invalidate(id?: string, owners?: readonly FederationTarget[]): void {
+  invalidate(id?: string, owners?: readonly FederationTarget[], event?: AgentEvent): void {
     let changed = false;
     for (const resource of this.resources.values()) {
       if (id && resource.value.id !== id) continue;
       if (owners && !owners.some((owner) => federationTargetsEqual(owner, resource.value.state.request.federationTarget))) continue;
+      if (event && !this.eventAffectsResource(resource, event)) continue;
       // Fence each physical read once. Further events before its replacement
       // carry no new presentation state and must not rerender every row.
       if (resource.invalidated) continue;
@@ -185,6 +198,29 @@ export class NavigationWindowQueries {
         pendingSequence: resource.value.state.pendingSequence + 1, stale: true } };
     }
     if (changed) this.publish();
+  }
+
+  private eventAffectsResource(resource: Resource, event: AgentEvent): boolean {
+    // A remote row event cannot change membership of an exact identity query.
+    // Collection queries retain conservative invalidation for counts/order.
+    const request = resource.value.state.request;
+    if (request.federationTarget?.scope !== "remote" || request.query.kind !== "exact") return true;
+    const params = event.notification.params as { sourceMethod?: unknown; threadId?: unknown; worktreePath?: unknown; directoryKey?: unknown };
+    const method = event.notification.method === "navigation/invalidated" ? params?.sourceMethod : event.notification.method;
+    if (navigationInvalidationMayChangeMembership(method)) return true;
+    const page = resource.value.state.page;
+    if (method === "navigation/directoryGitStatus/updated" && typeof params?.directoryKey === "string"
+      && page?.coverage.state === "complete" && page.complete) {
+      return page.selectionDirectory?.key === params.directoryKey || Boolean(page.directories?.some((directory) => directory.key === params.directoryKey));
+    }
+    const refs = [...request.query.identities, ...(page?.entries.map(({ row }) => row.ref) ?? [])];
+    if (typeof params?.threadId === "string") return refs.some((ref) => ref.backend === event.backend && ref.threadId === params.threadId);
+    if (method === "navigation/threadGitWorkingState/updated" && typeof params?.worktreePath === "string"
+      && page?.coverage.state === "complete" && page.complete
+      && request.query.identities.every((ref) => page.entries.some(({ row }) => row.ref.backend === ref.backend && row.ref.threadId === ref.threadId))) {
+      return page.entries.some(({ row }) => navigationWorkingStatePath(row) === params.worktreePath);
+    }
+    return true;
   }
 
   setVisibleAnchor(id: string, anchor: NavigationQueryAnchor | undefined): void {
@@ -237,7 +273,7 @@ export class NavigationWindowQueries {
     return true;
   }
 
-  private read(resource: Resource, continuation: boolean, anchor?: NavigationQueryAnchor, fromStart = false): Promise<void> {
+  private read(resource: Resource, continuation: boolean, anchor?: NavigationQueryAnchor, fromStart = false, reason: NavigationQueryRequest["readReason"] = "refresh"): Promise<void> {
     if (!this.isCurrent(resource)) return Promise.resolve();
     if (resource.pending) {
       if (anchor) resource.refreshAfterPending = true;
@@ -270,7 +306,7 @@ export class NavigationWindowQueries {
         };
         const readPage = async (request: NavigationQueryRequest) => {
           const page = await this.api.getNavigationQueryPage!({ ...request,
-            readReason: continuation ? "continuation" : explicitAnchor || fromStart ? "rebaseline" : started.page ? "refresh" : "demand",
+            readReason: continuation ? "continuation" : explicitAnchor || fromStart ? "rebaseline" : reason,
           }, resource.token);
           if (new TextEncoder().encode(JSON.stringify(page)).byteLength > NAVIGATION_QUERY_MAX_RESULT_BYTES) {
             throw new Error("Navigation page exceeds the bounded response size.");

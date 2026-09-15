@@ -463,3 +463,30 @@ it("reveals the viewer-local root of a remote child even when its owner cannot r
     && request.anchor?.kind === "thread" && request.anchor.ref.threadId === childRef.threadId)).toBe(false);
   unmount();
 });
+
+it("keeps remote reads owned by semantic demand across bridge-wrapper rerenders", async () => {
+  const fixture = api();
+  const releaseAttention = vi.fn(async () => undefined);
+  const bridge = { ...fixture.desktopApi, releaseNavigationAttentionView: releaseAttention };
+  const { result, rerender, unmount } = renderHook(({ desktopApi }) => useBoundedNavigationWindow({
+    ...base, desktopApi, target: { scope: "remote", instanceId: "owner" },
+  }), { initialProps: { desktopApi: bridge } });
+  try {
+    await waitFor(() => expect(result.current.presentationReady).toBe(true));
+    const initialReads = fixture.read.mock.calls.length;
+    fixture.read.mockClear();
+    for (let i = 0; i < 20; i++) {
+      rerender({ desktopApi: { ...bridge } });
+      await act(async () => {});
+    }
+    expect(fixture.read).not.toHaveBeenCalled();
+    expect(releaseAttention).not.toHaveBeenCalled();
+    vi.useFakeTimers();
+    fixture.emit({ backend: "codex", federationTarget: { scope: "remote", instanceId: "owner" },
+      notification: { method: "navigation/invalidated", params: { sourceMethod: "thread/started", threadId: "new" } } });
+    // Recreating a wrapper must not cancel the timer owning this invalidation.
+    rerender({ desktopApi: { ...bridge } });
+    await act(async () => { await vi.advanceTimersByTimeAsync(300); });
+    expect(fixture.read).toHaveBeenCalledTimes(initialReads);
+  } finally { unmount(); vi.useRealTimers(); }
+});

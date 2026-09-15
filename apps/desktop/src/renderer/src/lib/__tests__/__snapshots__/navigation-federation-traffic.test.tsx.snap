@@ -4,21 +4,21 @@ exports[`budgets federation navigation traffic for 1 visible mounts 1`] = `
 {
   "cold": {
     "duplicates": 0,
-    "requestBytes": 240,
+    "requestBytes": 262,
     "requests": 1,
     "responseBytes": 1044,
     "rows": 1,
   },
   "refresh": {
     "duplicates": 0,
-    "requestBytes": 351,
+    "requestBytes": 374,
     "requests": 1,
     "responseBytes": 1044,
     "rows": 1,
   },
   "selection": {
     "duplicates": 0,
-    "requestBytes": 320,
+    "requestBytes": 342,
     "requests": 1,
     "responseBytes": 1044,
     "rows": 1,
@@ -30,21 +30,21 @@ exports[`budgets federation navigation traffic for 10 visible mounts 1`] = `
 {
   "cold": {
     "duplicates": 0,
-    "requestBytes": 843,
+    "requestBytes": 865,
     "requests": 1,
     "responseBytes": 8659,
     "rows": 10,
   },
   "refresh": {
     "duplicates": 0,
-    "requestBytes": 1158,
+    "requestBytes": 1204,
     "requests": 2,
     "responseBytes": 8858,
     "rows": 10,
   },
   "selection": {
     "duplicates": 0,
-    "requestBytes": 1096,
+    "requestBytes": 1140,
     "requests": 2,
     "responseBytes": 8858,
     "rows": 10,
@@ -56,21 +56,21 @@ exports[`budgets federation navigation traffic for 101 visible mounts 1`] = `
 {
   "cold": {
     "duplicates": 550,
-    "requestBytes": 46235,
+    "requestBytes": 46499,
     "requests": 12,
     "responseBytes": 555314,
     "rows": 651,
   },
   "refresh": {
     "duplicates": 0,
-    "requestBytes": 7347,
+    "requestBytes": 7393,
     "requests": 2,
     "responseBytes": 86214,
     "rows": 101,
   },
   "selection": {
     "duplicates": 0,
-    "requestBytes": 7285,
+    "requestBytes": 7329,
     "requests": 2,
     "responseBytes": 86214,
     "rows": 101,
