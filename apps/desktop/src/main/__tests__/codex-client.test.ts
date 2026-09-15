@@ -1065,6 +1065,10 @@ class MockTransport implements JsonRpcTransport {
     }
 
     if (payload.method === "thread/start") {
+      const result = MockTransport.threadStartResult as { thread?: { id?: string } };
+      if (result.thread?.id) {
+        this.loadedThreads.add(result.thread.id);
+      }
       this.messageHandler(
         JSON.stringify({
           jsonrpc: "2.0",
@@ -12273,6 +12277,31 @@ describe("CodexAppServerClient", () => {
     expect(requests.map((request) => request.method)).not.toContain("turn/start");
 
     await client.close();
+  });
+
+  it("updates a newly created thread workspace before its first rollout exists", async () => {
+    MockTransport.requireLoadedThreads = true;
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+    try {
+      const { threadId } = await client.startThread({ cwd: "/repo/source" });
+      MockTransport.threadResumeError = { message: "no rollout before the first turn" };
+      await expect(client.updateThreadWorkspace({
+        threadId,
+        cwd: "/repo/destination",
+      })).resolves.toEqual({ threadId });
+      const requests = MockTransport.instances.flatMap((transport) => transport.sentMessages)
+        .map((message) => JSON.parse(message) as { method?: string; params?: unknown });
+      expect(requests.find((request) => request.method === "thread/settings/update")?.params)
+        .toEqual({ threadId, cwd: "/repo/destination" });
+      expect(requests.map((request) => request.method)).not.toContain("thread/resume");
+      expect(requests.map((request) => request.method)).not.toContain("turn/start");
+    } finally {
+      await client.close();
+    }
   });
 
   it("resumes an unloaded thread at the handoff destination before updating its workspace", async () => {

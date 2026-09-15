@@ -9752,18 +9752,21 @@ export class CodexAppServerClient {
       throw new Error("A non-empty workspace CWD is required.");
     }
 
-    // Settings updates require a loaded thread. A handoff can follow an app
-    // restart, and the source worktree may already be gone, so resume at the
-    // destination on the same connection before writing the settings.
-    await requestWithFallbacks({
-      client: this.connection,
-      methods: ["thread/resume"],
-      payloads: buildThreadResumePayloads(
-        { threadId: params.threadId, cwd: params.cwd.trim() },
-        this.getProtocolCompatibility(),
-      ),
-      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
-    });
+    // Settings updates require a loaded thread. Newly created threads are
+    // already loaded but cannot resume on stock Codex until their first turn
+    // creates a rollout. Existing threads must resume at the destination:
+    // handoff may have already removed the source worktree.
+    if (!this.pendingFirstTurnThreadResults.has(params.threadId)) {
+      await requestWithFallbacks({
+        client: this.connection,
+        methods: ["thread/resume"],
+        payloads: buildThreadResumePayloads(
+          { threadId: params.threadId, cwd: params.cwd.trim() },
+          this.getProtocolCompatibility(),
+        ),
+        timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+      });
+    }
 
     const result = await requestWithFallbacks({
       client: this.connection,
