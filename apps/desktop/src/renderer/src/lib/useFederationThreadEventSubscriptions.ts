@@ -20,9 +20,10 @@ const THREAD_VIEW_EVENT_CLASS_ORDER: FederationEventClass[] = [
 export function buildFederationThreadEventSubscriptions(params: {
   selectedThread?: NavigationThreadSummary;
   threads: NavigationThreadSummary[];
-  retainedRemoteThreads?: NavigationThreadSummary[];
+  // Additional transcript panes actually displayed by this consumer, never its cache.
+  visibleThreads?: NavigationThreadSummary[];
 }): FederationEventSubscription[] {
-  const retainedKeys = new Set(params.retainedRemoteThreads?.map(threadSummaryIdentityKey));
+  const visibleKeys = new Set(params.visibleThreads?.map(threadSummaryIdentityKey));
   const selectedTarget = params.selectedThread?.federation?.ref.target;
   const selectedInstanceId =
     selectedTarget && isRemoteFederationTarget(selectedTarget)
@@ -33,7 +34,7 @@ export function buildFederationThreadEventSubscriptions(params: {
     string,
     Map<FederationEventClass, ThreadRefs>
   >();
-  const threads = new Map([...params.threads, ...(params.retainedRemoteThreads ?? []),
+  const threads = new Map([...params.threads, ...(params.visibleThreads ?? []),
     ...(params.selectedThread ? [params.selectedThread] : [])]
     .map((thread) => [threadSummaryIdentityKey(thread), thread]));
 
@@ -64,7 +65,7 @@ export function buildFederationThreadEventSubscriptions(params: {
       && thread.source === params.selectedThread?.source
       && thread.id === params.selectedThread.id;
     if (selected && federation.capabilities.includes("scheduled_actions")) eventClasses.add("scheduled_actions");
-    if (selected || retainedKeys.has(threadSummaryIdentityKey(thread))) {
+    if (selected || visibleKeys.has(threadSummaryIdentityKey(thread))) {
       if (federation.capabilities.includes("thread_detail")) {
         eventClasses.add("transcript");
       }
@@ -112,7 +113,8 @@ export function useFederationThreadEventSubscriptions(params: {
   enabled: boolean;
   selectedThread?: NavigationThreadSummary;
   threads: NavigationThreadSummary[];
-  retainedRemoteThreads?: NavigationThreadSummary[];
+  // Additional transcript panes actually displayed by this consumer, never its cache.
+  visibleThreads?: NavigationThreadSummary[];
 }): FederationRemoteTarget[] {
   const subscriptionsJson = JSON.stringify(
     params.enabled
