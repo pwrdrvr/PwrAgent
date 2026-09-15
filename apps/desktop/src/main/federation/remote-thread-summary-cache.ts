@@ -1,4 +1,5 @@
 import type {
+  AgentEvent,
   CelestialIconId,
   FederationCapability,
   FederationJumpSearchProgress,
@@ -12,11 +13,15 @@ import type {
   RemoteThreadPin,
 } from "@pwragent/shared";
 import {
+  navigationInvalidationMayChangeMembership,
+  navigationWorkingStatePath,
+  parseThreadIdentityKey,
   buildThreadIdentityKey,
   federatedThreadIdentityKey,
   rankThreadJumpMatches,
   sortThreadJumpMatches,
 } from "@pwragent/shared";
+import type { PinnedNavigationReadState } from "./federation-collection-client";
 import { IterableMapper } from "@shutterstock/p-map-iterable";
 import { compactNavigationSearchResult } from "./navigation-search-result";
 import { ThreadInfoStore } from "../app-server/thread-info-store";
@@ -146,6 +151,10 @@ export class RemoteThreadSummaryCache {
       selection: FederationThreadSelection;
     }
   >();
+  private readonly pinnedRefreshes = new Set<string>();
+  private readonly uncertainPinnedMembership = new Set<string>();
+  private readonly unpublishedPinnedRows = new Set<string>();
+  private readonly pinnedReadStates = new Map<string, PinnedNavigationReadState>();
   private readonly archivedCache = new Map<
     string,
     { fetchedAt: number; threadKeys: Set<string>; queriedKeys: ReadonlySet<string> }
@@ -197,6 +206,7 @@ export class RemoteThreadSummaryCache {
         target: FederationRemoteTarget,
         threadKeys: string[],
         rpcOptions?: FederationRpcRequestOptions,
+        state?: PinnedNavigationReadState,
       ) => Promise<NavigationSnapshot>;
       /**
        * Bounded owner-side Cmd+K search. Older peers reject the new method;
@@ -253,12 +263,33 @@ export class RemoteThreadSummaryCache {
     },
   ) {}
 
-  invalidate(instanceId?: string): void {
+  invalidate(instanceId?: string, event?: AgentEvent): void {
+    if (instanceId && event) {
+      const params = event.notification.params as { sourceMethod?: unknown; threadId?: unknown; worktreePath?: unknown };
+      const sourceMethod = event.notification.method === "navigation/invalidated"
+        ? params?.sourceMethod : event.notification.method;
+      // Directory Git chips are not part of pinned thread rows or membership.
+      if (sourceMethod === "navigation/directoryGitStatus/updated") return;
+      if (sourceMethod === "navigation/threadGitWorkingState/updated" && typeof params?.worktreePath === "string"
+        && this.hasCompletePinnedMembership(instanceId)
+        && !this.cache.get(instanceId)?.threads.some((thread) => navigationWorkingStatePath(thread) === params.worktreePath)) return;
+      // A broader consumer (for example a remote window) can cause delivery of
+      // events outside the mounted groups. Do not turn those into pin reads.
+      if (!navigationInvalidationMayChangeMembership(sourceMethod) && typeof params?.threadId === "string"
+        && this.hasCompletePinnedMembership(instanceId)) {
+        const key = buildThreadIdentityKey(event.backend, params.threadId);
+        const keys = this.pinnedThreadKeys(instanceId);
+        if (keys.size && !keys.has(key)) return;
+      }
+    }
+    if (!event || navigationInvalidationMayChangeMembership(event.notification.method === "navigation/invalidated"
+      ? (event.notification.params as { sourceMethod?: unknown })?.sourceMethod : event.notification.method)) {
+      for (const owner of instanceId ? [instanceId] : this.pinnedByInstanceId.keys()) this.uncertainPinnedMembership.add(owner);
+    }
     if (instanceId === undefined) {
       this.globalGeneration += 1;
       for (const id of this.cache.keys()) this.expirePeerSnapshot(id);
       this.archivedCache.clear();
-      this.refreshFailures.clear();
       this.provenArchived.clear();
       this.refreshMountedPins();
       return;
@@ -268,7 +299,6 @@ export class RemoteThreadSummaryCache {
       (this.peerGenerations.get(instanceId) ?? 0) + 1,
     );
     this.expirePeerSnapshot(instanceId);
-    this.refreshFailures.delete(instanceId);
     this.provenArchived.delete(instanceId);
     for (const key of this.archivedCache.keys()) {
       if (key.startsWith(`${instanceId}:`)) {
@@ -308,6 +338,9 @@ export class RemoteThreadSummaryCache {
     }
     this.peerInterests.clear();
     this.pinnedByInstanceId.clear();
+    this.pinnedReadStates.clear();
+    this.uncertainPinnedMembership.clear();
+    this.unpublishedPinnedRows.clear();
     this.missingPinSignatures.clear();
     if (hadPeerInterest) {
       this.options.onPeerInterestChanged?.([]);
@@ -555,13 +588,14 @@ export class RemoteThreadSummaryCache {
       group.push(pin);
       pinsByInstanceId.set(pin.ref.target.instanceId, group);
     }
-    // A new mounted lifetime cannot trust rows observed before its subscription.
-    // Fence an old in-flight fetch too: it may have missed events while unmounted.
-    for (const owner of pinsByInstanceId.keys()) {
-      if (!this.pinnedByInstanceId.has(owner)
-        && (this.cache.get(owner)?.descendants || this.inFlight.get(owner)?.descendants)) this.invalidate(owner);
-    }
-    const previousOwners = [...this.pinnedByInstanceId.keys()].sort().join("\n");
+    // Fence membership changes and remounts, including pending reads from the
+    // old mount. Install the new demand before starting the replacement read.
+    const changedOwners = [...pinsByInstanceId].filter(([owner, group]) => {
+      const previous = this.pinnedByInstanceId.get(owner);
+      return previous
+        ? selectionKey(threadSelection(previous.map((pin) => pin.ref))) !== selectionKey(threadSelection(group.map((pin) => pin.ref)))
+        : this.cache.get(owner)?.descendants || this.inFlight.get(owner)?.descendants;
+    }).map(([owner]) => owner);
     // Retain identities only; persisted payloads must not become another long-lived detail cache.
     this.pinnedByInstanceId = new Map([...pinsByInstanceId].map(([owner, group]) => [
       owner,
@@ -570,9 +604,14 @@ export class RemoteThreadSummaryCache {
     for (const owner of this.missingPinSignatures.keys()) {
       if (!pinsByInstanceId.has(owner)) this.missingPinSignatures.delete(owner);
     }
-    if (previousOwners !== [...this.pinnedByInstanceId.keys()].sort().join("\n")) {
-      this.notifyPeerInterestChanged();
+    for (const owner of this.pinnedReadStates.keys()) {
+      if (!this.pinnedByInstanceId.has(owner)) {
+        this.pinnedReadStates.delete(owner);
+        this.uncertainPinnedMembership.delete(owner);
+      }
     }
+    for (const owner of changedOwners) this.invalidate(owner);
+    this.notifyPeerInterestChanged();
     const directPinKeys = new Set(
       pins.map((pin) =>
         buildThreadIdentityKey(pin.ref.backend, pin.ref.threadId)
@@ -733,15 +772,11 @@ export class RemoteThreadSummaryCache {
     pins: readonly RemoteThreadPin[],
   ): void {
     const instanceId = target.instanceId;
-    // Dedup against the CURRENT generation only: a fetch started before an
-    // invalidate is answering a question we no longer trust, so it must not
-    // suppress the fresh one.
-    if (
-      this.inFlight.get(instanceId)?.generation
-      === this.generationFor(instanceId)
-    ) {
-      return;
-    }
+    // Keep one complete refresh (including archive proof) per owner. A newer
+    // invalidation fences its result and is consumed by one follow-up below.
+    if (this.pinnedRefreshes.has(instanceId)) return;
+    this.pinnedRefreshes.add(instanceId);
+    const generation = this.generationFor(instanceId);
     const previous = this.cache.get(instanceId)?.threads;
     const failedBefore = this.refreshFailures.has(instanceId);
     this.threadsForPeer(
@@ -751,14 +786,17 @@ export class RemoteThreadSummaryCache {
       "pins",
     ).then(
       async (threads) => {
+        if (generation !== this.generationFor(instanceId) || !this.pinnedByInstanceId.has(instanceId)) return;
         this.refreshFailures.delete(instanceId);
         const provedArchived = await this.proveArchivedPins(
           target,
           pins,
           threads,
         );
-        const changed =
-          previous === undefined
+        if (generation !== this.generationFor(instanceId) || !this.pinnedByInstanceId.has(instanceId)) return;
+        const unpublished = this.unpublishedPinnedRows.delete(instanceId);
+        const changed = unpublished
+          || previous === undefined
           || JSON.stringify(previous) !== JSON.stringify(threads);
         const returned = new Set(threads.map((thread) => buildThreadIdentityKey(thread.source, thread.id)));
         const missing = pins.map((pin) => buildThreadIdentityKey(pin.ref.backend, pin.ref.threadId))
@@ -774,6 +812,7 @@ export class RemoteThreadSummaryCache {
         }
       },
       (error: unknown) => {
+        if (generation !== this.generationFor(instanceId) || !this.pinnedByInstanceId.has(instanceId)) return;
         this.refreshFailures.add(instanceId);
         if (!failedBefore) {
           this.options.onPinnedRefreshProblem?.({ instanceId, requestedCount: pins.length,
@@ -782,7 +821,14 @@ export class RemoteThreadSummaryCache {
           this.options.onPinnedSummariesRefreshed?.(instanceId);
         }
       },
-    );
+    ).finally(() => {
+      this.pinnedRefreshes.delete(instanceId);
+      const mounted = this.pinnedByInstanceId.get(instanceId);
+      if (mounted?.length && generation !== this.generationFor(instanceId)
+        && this.navigationPeers().some((peer) => peer.target.instanceId === instanceId)) {
+        this.refreshPeerSummariesInBackground(target, mounted);
+      }
+    });
   }
 
   /**
@@ -1000,16 +1046,19 @@ export class RemoteThreadSummaryCache {
     const promise = (async () => {
       const rpcOptions = deadlineAt !== undefined ? { deadlineAt }
         : descendants ? { deadlineAt: Date.now() + REMOTE_SNAPSHOT_PEER_TIMEOUT_MS } : undefined;
+      const pinState = this.pinnedReadStates.get(target.instanceId) ?? new Map();
+      if (descendants) this.pinnedReadStates.set(target.instanceId, pinState);
       const snapshot = await this.awaitPeerSnapshot(
         descendants && selection.kind === "threads"
           ? this.options.fetchPinnedSnapshot!(target, selection.threads.map((thread) =>
-              buildThreadIdentityKey(thread.backend, thread.threadId)), rpcOptions)
+              buildThreadIdentityKey(thread.backend, thread.threadId)), rpcOptions, pinState)
           : rpcOptions
           ? this.options.fetchSnapshot(target, selection, rpcOptions)
           : this.options.fetchSnapshot(target, selection),
         deadlineAt,
       );
       if (this.generationFor(target.instanceId) !== generation) {
+        if (interestKey === "pins") return snapshot.threads;
         return await this.threadsForPeer(
           target,
           selection,
@@ -1018,12 +1067,35 @@ export class RemoteThreadSummaryCache {
         );
       }
       const threads = snapshot.threads;
+      if (interestKey === "pins") {
+        const previous = this.cache.get(target.instanceId)?.threads;
+        // Cache commitment precedes archive verification and publication. Keep
+        // this obligation across invalidation so an identical follow-up still
+        // publishes rows whose earlier archive check was superseded.
+        if (previous === undefined || JSON.stringify(previous) !== JSON.stringify(threads)
+          || this.refreshFailures.has(target.instanceId)) {
+          this.unpublishedPinnedRows.add(target.instanceId);
+        }
+      }
+      const knownMembers = this.hasRetainedPinnedMembership(target.instanceId) ? this.pinnedThreadKeys(target.instanceId) : undefined;
       this.cache.set(target.instanceId, {
         descendants,
         fetchedAt: this.options.now?.() ?? Date.now(),
         selection,
         threads,
       });
+      if (interestKey === "pins") {
+        this.uncertainPinnedMembership.delete(target.instanceId);
+        this.notifyPeerInterestChanged();
+        if (knownMembers && threads.some((thread) => !knownMembers.has(buildThreadIdentityKey(thread.source, thread.id)))) {
+          // A new child may have changed between the owner snapshot and this
+          // expanded subscription. Revalidate after subscribing; do not toggle
+          // unchanged closures through broad subscriptions on every event.
+          this.unpublishedPinnedRows.add(target.instanceId);
+          this.invalidate(target.instanceId);
+          return threads;
+        }
+      }
       this.rememberThreadNames(
         target.instanceId,
         threads,
@@ -1148,15 +1220,44 @@ export class RemoteThreadSummaryCache {
     }
   }
 
+  private hasCompletePinnedMembership(instanceId: string): boolean {
+    return !this.uncertainPinnedMembership.has(instanceId) && this.hasRetainedPinnedMembership(instanceId);
+  }
+
+  private hasRetainedPinnedMembership(instanceId: string): boolean {
+    const cached = this.cache.get(instanceId);
+    return Boolean(cached?.descendants
+      && selectionKey(cached.selection) === selectionKey(threadSelection((this.pinnedByInstanceId.get(instanceId) ?? []).map((pin) => pin.ref))));
+  }
+
+  private pinnedThreadKeys(instanceId: string): Set<string> {
+    // The group-members projection is authoritative for ancestry, including
+    // legacy cross-backend parents. Do not reconstruct its graph from rows.
+    return new Set([
+      ...(this.pinnedByInstanceId.get(instanceId) ?? []).map((pin) => buildThreadIdentityKey(pin.ref.backend, pin.ref.threadId)),
+      ...(this.hasRetainedPinnedMembership(instanceId) ? this.cache.get(instanceId)?.threads ?? [] : [])
+        .map((thread) => buildThreadIdentityKey(thread.source, thread.id)),
+    ]);
+  }
+
   private notifyPeerInterestChanged(): void {
     const owners = new Set([...this.peerInterests.keys(), ...this.pinnedByInstanceId.keys()]);
     this.options.onPeerInterestChanged?.(
       [...owners].sort().map((instanceId) => ({
         instanceId,
-        // Navigation invalidations discover new mounted children too. This never requests transcript events.
-        threadSelection: this.pinnedByInstanceId.has(instanceId) ? { kind: "all" } : mergeSelections(
-          [...(this.peerInterests.get(instanceId)?.values() ?? [])].map((interest) => interest.selection),
-        ),
+        // Ordinary row changes need only the mounted closure. Membership
+        // invalidations bypass sparse filtering to discover unknown children.
+        // Older owners filter unknown children by exact ID. Keep their broad
+        // notifications and filter row relevance locally until they upgrade.
+        threadSelection: this.pinnedByInstanceId.has(instanceId)
+          && (!this.hasRetainedPinnedMembership(instanceId)
+            || !this.navigationPeers().find((peer) => peer.target.instanceId === instanceId)
+              ?.capabilities.includes("navigation_group_invalidations")) ? { kind: "all" } : mergeSelections([
+          ...[...(this.peerInterests.get(instanceId)?.values() ?? [])].map((interest) => interest.selection),
+          ...(this.pinnedByInstanceId.has(instanceId) ? [threadSelection(
+            [...this.pinnedThreadKeys(instanceId)].map((key) => parseThreadIdentityKey(key)!),
+          )] : []),
+        ]),
       })),
     );
   }

@@ -28,7 +28,9 @@ export function projectThreadDisplayEvent(event: AgentEvent): AgentEvent {
     } } };
   }
   if (notification.method === "thread/subAgents/updated") {
-    return { ...event, notification: { method: "thread/subAgents/updated", params: { threadId: notification.params.threadId } } };
+    return { ...event, notification: { method: "thread/subAgents/updated", params: { threadId: notification.params.threadId,
+      ...(notification.params.navigationChanged === false ? { navigationChanged: false } : {}),
+    } } };
   }
   return event;
 }

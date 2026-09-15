@@ -87,6 +87,8 @@ import type {
 } from "@pwragent/shared";
 import {
   FEDERATION_INVITE_VERSION,
+  navigationInvalidationMayChangeMembership,
+  navigationQueryEventRequiresRefresh,
   FEDERATION_PROTOCOL_VERSION,
   MAX_CELESTIAL_ASSIGNMENTS,
   buildAppendPinRank,
@@ -469,6 +471,7 @@ function rewriteLiveTranscriptImagesForFederation(
 }
 
 const DEFAULT_CAPABILITIES: FederationCapability[] = [
+  "navigation_group_invalidations",
   "remote_window",
   "thread_navigation",
   "thread_grouping",
@@ -798,6 +801,8 @@ function eventMatchesThreadSelection(
 ): boolean {
   if (selection.kind === "all") return true;
   const params = event.notification.params as Record<string, unknown> | undefined;
+  if (eventClass === "navigation" && event.notification.method === "navigation/invalidated"
+    && navigationInvalidationMayChangeMembership(params?.sourceMethod)) return true;
   const nestedThread = params?.thread as Record<string, unknown> | undefined;
   const scheduledAction =
     event.notification.method === "thread/scheduledAction/updated"
@@ -2048,6 +2053,11 @@ export class DesktopFederationRuntime {
       }
       throw error;
     }
+    return this.stampRemoteNavigationQueryPage(target, page);
+  }
+
+  /** Reapply viewer metadata after expanding an unchanged owner baseline. */
+  stampRemoteNavigationQueryPage(target: FederationRemoteTarget, page: NavigationQueryPage): NavigationQueryPage {
     const instanceLabel = this.connectedPeerTargets().find(
       (peer) => peer.target.instanceId === target.instanceId,
     )?.label ?? target.instanceId;
@@ -2384,9 +2394,9 @@ export class DesktopFederationRuntime {
       peers: () => this.connectedPeerTargets(),
       fetchSnapshot: (target, selection, rpcOptions) =>
         this.remoteNavigationSnapshot(target, {}, selection, rpcOptions),
-      fetchPinnedSnapshot: async (target, threadKeys, rpcOptions) =>
+      fetchPinnedSnapshot: async (target, threadKeys, rpcOptions, state) =>
         await this.stampRemotePinnedSummaryPage(target,
-          await readFederationPinnedSnapshot(this.remoteBackend(target), threadKeys, rpcOptions)),
+          await readFederationPinnedSnapshot(this.remoteBackend(target), threadKeys, rpcOptions, state)),
       onPinnedRefreshProblem: (problem) => {
         log.warn("remote thread pin navigation refresh could not supply mounted rows", problem);
       },
@@ -2493,7 +2503,11 @@ export class DesktopFederationRuntime {
               return {
                 sourceInstanceId: peer.target.instanceId,
                 eventClasses: ["navigation" as const],
-                threadSelection: interest.threadSelection,
+                // An older gateway also filters relayed notifications by ID;
+                // it must see broad demand until its discovery rules upgrade.
+                threadSelection: (this.router?.getConnection(peer.target.instanceId)
+                  ?? (this.gatewayInstanceId ? this.router?.getConnection(this.gatewayInstanceId) : undefined))
+                  ?.capabilities.includes("navigation_group_invalidations") ? interest.threadSelection : { kind: "all" as const },
               };
             }),
         );
@@ -4983,7 +4997,9 @@ export class DesktopFederationRuntime {
 
   private forwardLocalBackendEvent(event: AgentEvent): void {
     if (!this.router) return;
-    if (NAVIGATION_EVENT_METHODS.has(event.notification.method)) {
+    if (NAVIGATION_EVENT_METHODS.has(event.notification.method)
+      && (event.notification.method !== "thread/subAgents/updated"
+        || navigationQueryEventRequiresRefresh(event.notification.method, event.notification.params))) {
       // Never broadcast the source payload: turn output, queue input, agent
       // configuration and complete child orders belong to exact detail demand.
       // Identity fields are bounded independently of the provider's payload.
@@ -4998,7 +5014,11 @@ export class DesktopFederationRuntime {
           method: "navigation/invalidated",
           params: {
             sourceMethod: event.notification.method,
+            ...(event.notification.method === "navigation/threadGitWorkingState/updated"
+              ? { worktreePath: identity(params.worktreePath) } : {}),
             threadId: identity(params.threadId ?? thread?.id ?? action?.threadId),
+            ...(event.notification.method === "navigation/directoryGitStatus/updated"
+              ? { directoryKey: identity(params.directoryKey) } : {}),
             automationId: identity(params.automationId),
             runId: identity(params.runId),
           },
@@ -5148,7 +5168,7 @@ export class DesktopFederationRuntime {
     // transcript deltas still never trigger a collection fetch.
     if (event.notification.method === "navigation/invalidated"
       || NAVIGATION_EVENT_METHODS.has(event.notification.method)) {
-      this.remoteThreadSummaryCache?.invalidate(sourceInstanceId);
+      this.remoteThreadSummaryCache?.invalidate(sourceInstanceId, event);
     }
     this.publishReceivedBackendEvent(event);
     return true;

@@ -1,3 +1,5 @@
+import { isDeepStrictEqual } from "node:util";
+import { RemoteNavigationPageBaselines } from "../federation/remote-navigation-page-baselines";
 import { GithubPrAuthenticationNotice } from "../pr-status/github-pr-authentication-notice";
 import { expectedNavigationReadFailure, type NavigationReadFailure } from "../../shared/navigation-ipc-result";
 import { NavigationAttentionViewLeases } from "../app-server/navigation-attention-view-leases";
@@ -1988,19 +1990,22 @@ class DesktopAppServerService {
     return this.readNavigationQueryPage(request);
   }
 
+  private readonly remoteNavigationPageBaselines = new RemoteNavigationPageBaselines();
+
   private async readNavigationQueryPage(
     request: NavigationQueryRequest,
     rpcOptions?: { deadlineAt: number; signal: AbortSignal },
   ): Promise<NavigationQueryPage> {
     if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
-      const page = await getDesktopFederationRuntime().remoteNavigationQueryPage(
-        request.federationTarget,
-        // Owner revisions cannot certify viewer-owned directory disclosure.
-        // Always fetch the bounded page before applying that independent state.
-        { ...request, completeBaselineRevision: undefined },
-        rpcOptions,
-      );
+      const target = request.federationTarget;
+      const runtime = getDesktopFederationRuntime();
+      const ownerPage = await this.remoteNavigationPageBaselines.read(request, async (ownerRequest) => {
+        const result = await runtime.remoteNavigationQueryPage(target, ownerRequest, rpcOptions);
+        rpcOptions?.signal.throwIfAborted();
+        return result;
+      });
       rpcOptions?.signal.throwIfAborted();
+      const page = runtime.stampRemoteNavigationQueryPage(target, ownerPage);
       if (request.query.kind === "exact" && request.consumer === "main-sidebar" && !page.unchanged && !page.rangeUnchanged) {
         const instanceId = request.federationTarget.instanceId;
         const snapshots = page.entries.flatMap(({ row }) => {
@@ -3363,6 +3368,7 @@ class DesktopAppServerService {
     };
     this.directoryGitStatusByKey.set(params.directoryKey, cacheEntry);
     await this.getOverlayStore().writeDirectoryGitStatusCacheEntry(cacheEntry);
+    if (isDeepStrictEqual(current?.gitStatus ?? null, params.gitStatus ?? null)) return;
     const notification: NavigationDirectoryGitStatusUpdatedNotification = {
       method: "navigation/directoryGitStatus/updated",
       params: {

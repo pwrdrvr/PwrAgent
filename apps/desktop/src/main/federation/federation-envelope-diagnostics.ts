@@ -80,6 +80,7 @@ export function describeLargeThreadReadResult(envelope: FederationProtocolEnvelo
 export class FederationEnvelopeDiagnostics {
   private readonly requests = new Map<string, {
     method: string;
+    navigation?: FederationEnvelopeLogFields;
     queryFingerprint?: string;
     threadId?: string;
     readReason?: string;
@@ -108,6 +109,7 @@ export class FederationEnvelopeDiagnostics {
     }
     this.requests.set(key, {
       method: envelope.method,
+      navigation: navigationRequestLogFields(envelope),
       queryFingerprint: searchQueryFingerprint(envelope),
       ...threadReadLogFields(envelope),
       expiresAt: this.now() + this.ttlMs,
@@ -148,6 +150,14 @@ export class FederationEnvelopeDiagnostics {
       ...(notificationParams && "threadId" in notificationParams
         && typeof notificationParams.threadId === "string" && notificationParams.threadId.length <= 256
         ? { threadId: notificationParams.threadId } : {}),
+      ...(notification && typeof notification === "object" && "method" in notification
+        && notification.method === "navigation/invalidated" && notificationParams
+        && "sourceMethod" in notificationParams && typeof notificationParams.sourceMethod === "string"
+        && /^[A-Za-z][A-Za-z0-9/_.-]{0,199}$/.test(notificationParams.sourceMethod)
+        ? { sourceMethod: notificationParams.sourceMethod } : {}),
+      ...(envelope.kind === "request" ? navigationRequestLogFields(envelope)
+        : request && request.expiresAt > this.now() ? request.navigation : {}),
+      ...(method === "backend.getNavigationQueryPage" ? navigationResponseLogFields(envelope) : {}),
       errorCode: envelope.kind === "error" ? envelope.error.code : undefined,
       notificationMethod: notification && typeof notification === "object"
         && "method" in notification && typeof notification.method === "string"
@@ -196,4 +206,48 @@ function searchQueryFingerprint(envelope: FederationProtocolEnvelope): string | 
   const params = envelope.params;
   if (!params || typeof params !== "object" || !("query" in params) || typeof params.query !== "string") return undefined;
   return createHash("sha256").update(params.query.trim()).digest("hex").slice(0, 12);
+}
+
+// Fingerprints identify semantic requests and owner revisions without retaining
+// identities, directory paths, search text, cursors, or row payloads.
+function fingerprint(value: unknown): string {
+  const canonical = JSON.stringify(value, (_key, item: unknown) => item && typeof item === "object" && !Array.isArray(item)
+    ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a.localeCompare(b))) : item);
+  return createHash("sha256").update(canonical ?? "null").digest("hex").slice(0, 16);
+}
+function navigationRequestLogFields(envelope: FederationProtocolEnvelope): FederationEnvelopeLogFields {
+  if (envelope.kind !== "request" || envelope.method !== "backend.getNavigationQueryPage") return {};
+  const params = envelope.params as Record<string, unknown> | undefined;
+  if (!params || typeof params !== "object") return {};
+  const query = params.query as Record<string, unknown> | undefined;
+  const token = (value: unknown) => typeof value === "string" && /^[a-z][a-z-]{0,39}$/.test(value) ? value : undefined;
+  return {
+    navigationQuery: token(query?.kind), navigationConsumer: token(params.consumer),
+    navigationReadReason: ["demand", "refresh", "continuation", "rebaseline", "pins"].includes(String(params.readReason))
+      ? String(params.readReason) : undefined,
+    navigationQueryFingerprint: fingerprint({ query, backend: params.backend ?? "all", inventory: params.inventory ?? "owner", attentionView: params.attentionView }),
+    navigationBaseline: typeof params.completeBaselineRevision === "string" ? fingerprint(params.completeBaselineRevision) : undefined,
+    navigationConditional: String(Boolean(params.completeBaselineRevision)),
+    navigationCursorFingerprint: typeof params.cursor === "string" ? fingerprint(params.cursor) : undefined,
+    navigationCursor: String(Boolean(params.cursor)), navigationRetainedRange: String(Boolean(params.retainedRange)),
+    navigationPageSize: typeof params.pageSize === "number" ? String(params.pageSize) : undefined,
+  };
+}
+function navigationResponseLogFields(envelope: FederationProtocolEnvelope): FederationEnvelopeLogFields {
+  if (envelope.kind !== "response" || !envelope.result || typeof envelope.result !== "object") return {};
+  const page = envelope.result as Record<string, unknown>;
+  const coverage = page.coverage as Record<string, unknown> | undefined;
+  return {
+    navigationUnchanged: String(page.unchanged === true), navigationRangeUnchanged: String(Boolean(page.rangeUnchanged)),
+    navigationComplete: String(page.complete === true), navigationNextCursor: String(Boolean(page.nextCursor)),
+    navigationOwnerEpoch: typeof page.ownerEpoch === "string" ? fingerprint(page.ownerEpoch) : undefined,
+    navigationGeneration: typeof page.generation === "string" ? fingerprint(page.generation) : undefined,
+    navigationRangeStart: typeof page.rangeStart === "number" ? String(page.rangeStart) : undefined,
+    navigationRevision: typeof page.countsRevision === "string" ? fingerprint(page.countsRevision) : undefined,
+    navigationCoverage: ["complete", "checking", "degraded"].includes(String(coverage?.state)) ? String(coverage?.state) : undefined,
+    navigationPendingProviders: typeof coverage?.pendingProviders === "number" ? String(coverage.pendingProviders) : undefined,
+    navigationFailedProviders: typeof coverage?.failedProviders === "number" ? String(coverage.failedProviders) : undefined,
+    navigationRows: Array.isArray(page.entries) ? String(page.entries.length) : undefined,
+    navigationDirectories: Array.isArray(page.directories) ? String(page.directories.length) : undefined,
+  };
 }

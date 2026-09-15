@@ -155,3 +155,40 @@ describe("federation envelope diagnostics", () => {
     });
   });
 });
+
+it("records bounded navigation source methods without source payloads", () => {
+  const diagnostics = new FederationEnvelopeDiagnostics();
+  const envelope = { ...request, kind: "notification" as const, method: "backend.event", params: {
+    backend: "codex", notification: { method: "navigation/invalidated", params: {
+      sourceMethod: "navigation/providerThreads/refreshed", secret: "private content",
+    } },
+  } };
+  expect(diagnostics.describe(envelope)).toMatchObject({ sourceMethod: "navigation/providerThreads/refreshed" });
+  expect(JSON.stringify(diagnostics.describe(envelope))).not.toContain("private content");
+  envelope.params.notification.params.sourceMethod = "x".repeat(201);
+  expect(diagnostics.describe(envelope).sourceMethod).toBeUndefined();
+});
+
+it("correlates navigation identity, reason, baselines and coverage without payloads", () => {
+  const diagnostics = new FederationEnvelopeDiagnostics();
+  const read = { ...request, method: "backend.getNavigationQueryPage", params: {
+    protocol: 2, consumer: "main-sidebar", readReason: "refresh", inventory: "owner",
+    query: { kind: "exact", identities: [{ backend: "codex", threadId: "private-thread" }] },
+    completeBaselineRevision: "private-revision", pageSize: 100,
+  } };
+  diagnostics.observe(read);
+  const fields = diagnostics.describe(read);
+  expect(fields).toMatchObject({ navigationQuery: "exact", navigationConsumer: "main-sidebar",
+    navigationReadReason: "refresh", navigationConditional: "true", navigationCursor: "false" });
+  const reply = diagnostics.describe({ ...response, result: { unchanged: true, complete: true,
+    countsRevision: "private-revision", entries: [], coverage: { state: "checking" }, secret: "private-payload" } });
+  expect(reply).toMatchObject({ navigationQueryFingerprint: fields.navigationQueryFingerprint,
+    navigationBaseline: fields.navigationBaseline, navigationRevision: fields.navigationBaseline,
+    navigationUnchanged: "true", navigationRows: "0", navigationCoverage: "checking" });
+  expect(reply.navigationPendingProviders).toBeUndefined();
+  expect(JSON.stringify([fields, reply])).not.toContain("private");
+  expect(diagnostics.describe({ ...read, params: { ...read.params, completeBaselineRevision: "new" } }).navigationQueryFingerprint)
+    .toBe(fields.navigationQueryFingerprint);
+  expect(diagnostics.describe({ ...read, params: { ...read.params, query: { kind: "directory-index" } } }).navigationQueryFingerprint)
+    .not.toBe(fields.navigationQueryFingerprint);
+});

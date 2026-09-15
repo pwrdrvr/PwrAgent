@@ -396,3 +396,43 @@ it("keeps another owner's pending page and conditional baseline across a local i
     remote.resolve(page());
   }
 });
+
+it("does not recreate a remote resource for equivalent object and identity-set order", async () => {
+  const read = vi.fn(async () => page({ complete: true, nextCursor: undefined }));
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+  const target = { scope: "remote" as const, instanceId: "owner" };
+  const a = { backend: "codex" as const, threadId: "a", ownerInstanceId: "owner" };
+  const b = { backend: "codex" as const, threadId: "b", ownerInstanceId: "owner" };
+  try {
+    queries.setDemand(new Map([["exact", { ...request(), federationTarget: target, query: { kind: "exact", identities: [a, b] } }]]));
+    await vi.waitFor(() => expect(queries.getSnapshot().resources.get("exact")?.loading).toBe(false));
+    read.mockClear();
+    for (let i = 0; i < 20; i++) queries.setDemand(new Map([["exact", {
+      federationTarget: { instanceId: "owner", scope: "remote" }, ...request(),
+      query: { identities: [{ threadId: "b", ownerInstanceId: "owner", backend: "codex" }, a], kind: "exact" },
+    }]]));
+    await vi.waitFor(() => expect(queries.getSnapshot().resources.get("exact")?.loading).toBe(false));
+    expect(read).not.toHaveBeenCalled();
+  } finally { queries.dispose(); }
+});
+
+it("consumes an invalidation once when a scheduled refresh overlaps its replacement", async () => {
+  const first = deferred<NavigationQueryPage>();
+  const second = deferred<NavigationQueryPage>();
+  const read = vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+  const owners = [{ scope: "remote" as const, instanceId: "owner" }];
+  try {
+    queries.setDemand(new Map([["lens", { ...request(), federationTarget: owners[0] }]]));
+    await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(1));
+    for (let i = 0; i < 27; i++) queries.invalidate(undefined, owners);
+    first.resolve(page());
+    await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+    // The timer scheduled by those events fires after the replacement began.
+    const scheduled = queries.refresh(undefined, owners, true);
+    second.resolve(page());
+    await scheduled;
+    await vi.waitFor(() => expect(queries.getSnapshot().resources.get("lens")?.loading).toBe(false));
+    expect(read).toHaveBeenCalledTimes(2);
+  } finally { queries.dispose(); }
+});

@@ -96,3 +96,68 @@ it("reports which provider coverage prevented pin refresh", async () => {
   await expect(readFederationPinnedSnapshot(backend, ["codex:child"]))
     .rejects.toThrow("Pinned navigation owner coverage is degraded (pending providers: 2, failed providers: 1).");
 });
+
+it("conditionally revalidates complete pinned groups, including paginated descendants", async () => {
+  const rows = [thread("root"), ...Array.from({ length: 205 }, (_, i) => thread(`child-${i}`, { parentThreadId: "root" })), thread("unrelated")];
+  const store = new NavigationQueryStore();
+  const state = new Map();
+  const responses: Array<{ bytes: number; rows: number }> = [];
+  const getNavigationQueryPage = vi.fn(async (request: NavigationQueryRequest) => {
+    const page = await store.readPage({ request, scopeKey: "viewer", loadIndex: async () => snapshot(rows) });
+    responses.push({ bytes: Buffer.byteLength(JSON.stringify(page)), rows: page.entries.length });
+    return page;
+  });
+  const backend = { getNavigationQueryPage } as unknown as FederationBackendOperations;
+  const initial = await readFederationPinnedSnapshot(backend, ["codex:root"], {}, state);
+  expect(initial.threads).toHaveLength(206);
+  const initialBytes = responses.reduce((sum, response) => sum + response.bytes, 0);
+  responses.length = 0;
+  getNavigationQueryPage.mockClear();
+  rows[206]!.title = "Unrelated changed";
+  const unchanged = await readFederationPinnedSnapshot(backend, ["codex:root"], {}, state);
+  expect(unchanged.threads).toEqual(initial.threads);
+  expect(getNavigationQueryPage).toHaveBeenCalledTimes(1);
+  expect(getNavigationQueryPage.mock.calls[0]![0].completeBaselineRevision).toBeTruthy();
+  expect(responses.reduce((sum, response) => sum + response.rows, 0)).toBe(0);
+  expect(responses[0]!.bytes).toBeLessThan(initialBytes / 20);
+  rows.push(thread("new-child", { parentThreadId: "root" }));
+  const changed = await readFederationPinnedSnapshot(backend, ["codex:root"], {}, state);
+  expect(changed.threads).toHaveLength(207);
+  expect(changed.threads.some((row) => row.id === "new-child")).toBe(true);
+});
+
+it("does not commit a partial conditional baseline when a later page fails", async () => {
+  const rows = [thread("root"), ...Array.from({ length: 105 }, (_, i) => thread(`child-${i}`, { parentThreadId: "root" }))];
+  const store = new NavigationQueryStore();
+  const state = new Map();
+  let failContinuation = false;
+  const backend = { getNavigationQueryPage: async (request: NavigationQueryRequest) => {
+    if (failContinuation && request.cursor) throw new Error("lost continuation");
+    return store.readPage({ request, scopeKey: "viewer", loadIndex: async () => snapshot(rows) });
+  } } as FederationBackendOperations;
+  await readFederationPinnedSnapshot(backend, ["codex:root"], {}, state);
+  const baseline = [...state.entries()];
+  rows.push(thread("new-child", { parentThreadId: "root" }));
+  failContinuation = true;
+  await expect(readFederationPinnedSnapshot(backend, ["codex:root"], {}, state)).rejects.toThrow("lost continuation");
+  expect([...state.entries()]).toEqual(baseline);
+  failContinuation = false;
+  expect((await readFederationPinnedSnapshot(backend, ["codex:root"], {}, state)).threads).toHaveLength(107);
+  const remounted = await readFederationPinnedSnapshot(backend, ["codex:new-child"], {}, state);
+  expect(remounted.threads.map((row) => row.id)).toEqual(["new-child"]);
+  expect(state.size).toBe(1);
+});
+
+it("rejects unchanged responses without the exact retained complete-query baseline", async () => {
+  const store = new NavigationQueryStore();
+  const state = new Map();
+  let corrupt = false;
+  const backend = { getNavigationQueryPage: async (request: NavigationQueryRequest) => {
+    const page = await store.readPage({ request, scopeKey: "viewer", loadIndex: async () => snapshot([thread("root")]) });
+    return corrupt ? { ...page, unchanged: true, entries: [], countsRevision: "wrong" } : page;
+  } } as FederationBackendOperations;
+  await readFederationPinnedSnapshot(backend, ["codex:root"], {}, state);
+  corrupt = true;
+  await expect(readFederationPinnedSnapshot(backend, ["codex:root"], {}, state)).rejects.toThrow("invalid unchanged baseline");
+  await expect(readFederationPinnedSnapshot(backend, ["codex:root"], {})).rejects.toThrow("invalid unchanged baseline");
+});

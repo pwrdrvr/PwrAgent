@@ -3954,6 +3954,37 @@ describe("DesktopBackendRegistry", () => {
     }
   });
 
+  it("does not publish navigation for unchanged Git probes", async () => {
+    const registry = new DesktopBackendRegistry({ codexClient: new MockBackendClient({ threads: [] }), overlayStore: {
+      ...createOverlayStoreMock(), readThreadGitWorkingStateCache: vi.fn(async () => ({})),
+      writeThreadGitWorkingStateCacheEntry: vi.fn(async () => undefined),
+    } });
+    const events: AgentEvent[] = [];
+    const unsubscribe = registry.onEvent((event) => { events.push(event); });
+    try {
+      for (let i = 0; i < 27; i++) await registry.rememberThreadGitWorkingStateCacheEntry({
+        worktreePath: "/fixture/repo", fetchedAt: i, gitWorkingState: { ...sampleGitWorkingState },
+      });
+      expect(events.filter((event) => event.notification.method === "navigation/threadGitWorkingState/updated")).toHaveLength(1);
+      await registry.rememberThreadGitWorkingStateCacheEntry({ worktreePath: "/fixture/repo", fetchedAt: 28 });
+      expect(events.filter((event) => event.notification.method === "navigation/threadGitWorkingState/updated")).toHaveLength(2);
+    } finally { unsubscribe(); await registry.close(); }
+  });
+
+  it("does not regress completed provider coverage during late durable hydration", async () => {
+    const registry = new DesktopBackendRegistry({ codexClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock(), discoverLocalAcpAgents: async () => [],
+      providerThreadSnapshotStore: { list: () => [], replace: vi.fn() },
+    });
+    try {
+      await registry.refreshProvidersAtStartup(issueProviderDiscoveryPermit("startup"));
+      expect(registry.getStartupProviderRefreshStatus()).toEqual({ state: "ready" });
+      // A different enrichment key avoids the startup refresh's reused list.
+      await registry.listThreads({ callerReason: "startup-prewarm", enrichDirectories: true });
+      expect(registry.getStartupProviderRefreshStatus()).toEqual({ state: "ready" });
+    } finally { await registry.close(); }
+  });
+
   it("advances fetchedAt past the entry a probe replaces", async () => {
     // Both lanes write through this seam, so two probes of one worktree can
     // land in the same millisecond. The renderer ignores an update whose
@@ -29516,6 +29547,9 @@ command = "pnpm dev"
       },
     } as AppServerNotification);
 
+    const usageEvents: AgentEvent[] = [];
+    const unsubscribe = registry.onEvent((event) => { usageEvents.push(event); });
+
     // Two cache-served context replays on the agent's own thread.
     await codexClient.emit({
       method: "thread/tokenUsage/updated",
@@ -29560,6 +29594,10 @@ command = "pnpm dev"
         observedHotReplayCachedTokens: 124_000,
       });
 
+    const updates = usageEvents.filter((event) => event.notification.method === "thread/subAgents/updated");
+    expect(updates).toHaveLength(2);
+    expect(updates.every((event) => (event.notification.params as { navigationChanged?: false }).navigationChanged === false)).toBe(true);
+    unsubscribe();
     await registry.close();
   });
 

@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { classifyDirectory } from "@pwragent/shared";
-import type { FederationTarget, NavigationDirectoryRow, NavigationQueryAnchor } from "@pwragent/shared";
+import type { AgentEvent, FederationTarget, NavigationDirectoryRow, NavigationQueryAnchor } from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
 import { federationTargetsEqual } from "./federated-thread-events";
 import { addVisibleMountedOwnerDemand, buildNavigationWindowDemand, visibleDisclosedNavigationParents } from "./navigation-window-demand";
 import { navigationIdentityKey } from "./navigation-query-state";
 import { navigationQueryEventRequiresRefresh } from "./navigation-query-events";
-import { NavigationWindowQueries, type NavigationWindowQueriesState } from "./navigation-window-queries";
+import { navigationDemandKey, NavigationWindowQueries, type NavigationWindowQueriesState } from "./navigation-window-queries";
 
 type Demand = Omit<Parameters<typeof buildNavigationWindowDemand>[0], "directories">;
 const EMPTY: NavigationWindowQueriesState = { resources: new Map() };
@@ -79,21 +79,21 @@ export function useBoundedNavigationWindow(params: Demand & {
   });
   const demand = buildNavigationWindowDemand({ ...demandParams, disclosedParents });
   addVisibleMountedOwnerDemand({ demand, pages, target: params.target, selectedRef: params.selectedRef });
-  const demandKey = JSON.stringify([...demand]);
+  const demandKey = JSON.stringify([...demand].map(([id, request]) => [id, navigationDemandKey(request)]));
   // A previous lens can still own the snapshot during the render that changes
   // demand. Empty Drafts and collapsed Directories are ready only after that
   // transition, just like lenses with collection pages.
   const presentationReady = state.resources.size === demand.size
     && [...demand].every(([id, request]) => {
       const resource = state.resources.get(id);
-      return resource && JSON.stringify(resource.state.request) === JSON.stringify(request)
+      return resource && navigationDemandKey(resource.state.request) === navigationDemandKey(request)
         && Boolean(resource.state.page || resource.state.error);
     });
   const demandRef = useRef(demand);
   demandRef.current = demand;
 
   useEffect(() => {
-    const controller = new NavigationWindowQueries(desktopApi ?? {});
+    const controller = new NavigationWindowQueries(paramsRef.current.desktopApi ?? {});
     controllerRef.current = controller;
     selectedRangeCheckedRef.current.clear();
     const unsubscribe = controller.subscribe(() => setState(controller.getSnapshot()));
@@ -106,7 +106,7 @@ export function useBoundedNavigationWindow(params: Demand & {
       controller.dispose();
       if (controllerRef.current === controller) controllerRef.current = undefined;
     };
-  }, [desktopApi]);
+  }, [desktopApi?.getNavigationQueryPage, desktopApi?.releaseNavigationQuery]);
 
   useLayoutEffect(() => {
     const controller = controllerRef.current;
@@ -148,27 +148,29 @@ export function useBoundedNavigationWindow(params: Demand & {
   useEffect(() => {
     const viewId = params.attentionView.id;
     const federationTarget = paramsRef.current.target;
-    return () => { void desktopApi?.releaseNavigationAttentionView?.({ viewId, federationTarget }).catch(() => undefined); };
-  }, [desktopApi, params.attentionView.id, targetKey]);
+    const release = paramsRef.current.desktopApi?.releaseNavigationAttentionView;
+    return () => { void release?.({ viewId, federationTarget }).catch(() => undefined); };
+  }, [desktopApi?.releaseNavigationAttentionView, params.attentionView.id, targetKey]);
 
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const pendingOwners = new Map<string, FederationTarget>();
-    const schedule = (owner: FederationTarget = { scope: "local" }) => {
+    const schedule = (owner: FederationTarget = { scope: "local" }, event?: AgentEvent) => {
       // A peer change also affects viewer membership/counts, but never another peer.
       const owners: FederationTarget[] = [owner];
       if (owner.scope === "remote" && paramsRef.current.target?.scope !== "remote") owners.push({ scope: "local" });
       for (const target of owners) pendingOwners.set(JSON.stringify(target), target);
-      controllerRef.current?.invalidate(undefined, owners);
+      controllerRef.current?.invalidate(undefined, owners, event);
       if (timer || !paramsRef.current.enabled || !paramsRef.current.visible) return;
       timer = setTimeout(() => {
         timer = undefined;
         const owners = [...pendingOwners.values()];
         pendingOwners.clear();
-        void controllerRef.current?.refresh(undefined, owners);
+        void controllerRef.current?.refresh(undefined, owners, true);
       }, 250);
     };
-    const unsubscribe = desktopApi?.onAgentEvent?.((event) => {
+    const api = paramsRef.current.desktopApi;
+    const unsubscribe = api?.onAgentEvent?.((event) => {
       const target = paramsRef.current.target;
       if (event.notification.method === "federation/peerStatus/changed") {
         const peer = event.notification.params as { instanceId: string; status: string; unavailableReason?: string };
@@ -181,16 +183,16 @@ export function useBoundedNavigationWindow(params: Demand & {
       }
       if (paramsRef.current.observeEvents === false) return;
       if ((federationTargetsEqual(event.federationTarget, target) || target?.scope !== "remote")
-        && navigationQueryEventRequiresRefresh(event.notification.method)) schedule(event.federationTarget);
+        && navigationQueryEventRequiresRefresh(event.notification.method, event.notification.params)) schedule(event.federationTarget, event);
     });
-    const bindings = desktopApi?.onMessagingBindingsChanged?.(() => {
+    const bindings = api?.onMessagingBindingsChanged?.(() => {
       if (paramsRef.current.observeEvents !== false && (!paramsRef.current.target || paramsRef.current.target.scope === "local")) schedule();
     });
     return () => { unsubscribe?.(); bindings?.(); if (timer) clearTimeout(timer); };
-  }, [desktopApi]);
+  }, [desktopApi?.onAgentEvent, desktopApi?.onMessagingBindingsChanged]);
 
-  const invalidate = useCallback((owners?: readonly FederationTarget[]) => controllerRef.current?.invalidate(undefined, owners), []);
-  const refresh = useCallback((owners?: readonly FederationTarget[]) => controllerRef.current?.refresh(undefined, owners) ?? Promise.resolve(), []);
+  const invalidate = useCallback((owners?: readonly FederationTarget[], event?: AgentEvent) => controllerRef.current?.invalidate(undefined, owners, event), []);
+  const refresh = useCallback((owners?: readonly FederationTarget[], invalidatedOnly = false) => controllerRef.current?.refresh(undefined, owners, invalidatedOnly) ?? Promise.resolve(), []);
   const loadMore = useCallback((id: string) => controllerRef.current?.loadMore(id) ?? Promise.resolve(), []);
   const rebaseline = useCallback((id: string, anchor: NavigationQueryAnchor) => controllerRef.current?.rebaseline(id, anchor) ?? Promise.resolve(), []);
   const restart = useCallback((id: string) => controllerRef.current?.restart(id) ?? Promise.resolve(), []);

@@ -1,0 +1,41 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`budgets same-owner invalidation fan-out across four pinned viewers 1`] = `
+{
+  "changedMember": {
+    "notifications": 1,
+    "requests": 1,
+    "responseBytes": 26481,
+    "responseRows": 52,
+    "subscriptions": 0,
+  },
+  "cold": {
+    "notifications": 0,
+    "requests": 4,
+    "responseBytes": 103844,
+    "responseRows": 204,
+    "subscriptions": 8,
+  },
+  "discovery": {
+    "notifications": 4,
+    "requests": 5,
+    "responseBytes": 28036,
+    "responseRows": 52,
+    "subscriptions": 1,
+  },
+  "unchanged": {
+    "notifications": 108,
+    "requests": 108,
+    "responseBytes": 41904,
+    "responseRows": 0,
+    "subscriptions": 0,
+  },
+  "unrelated": {
+    "notifications": 0,
+    "requests": 0,
+    "responseBytes": 0,
+    "responseRows": 0,
+    "subscriptions": 0,
+  },
+}
+`;

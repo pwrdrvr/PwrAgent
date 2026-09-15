@@ -343,3 +343,9 @@ it("excludes hidden orphan gates before paging without removing their charges", 
   expect(first.display!.pricingPage!.summary).toMatchObject({ usageLineCount: 55, totalCostMicros: 33_000 });
   expect(first.display!.pricingPage!.totals.totalCreditMicros).toBeGreaterThan(0);
 });
+
+it("retains producer-proven navigation no-ops through subagent display projection", () => {
+  expect(projectThreadDisplayEvent({ backend: "codex", notification: { method: "thread/subAgents/updated",
+    params: { threadId: "parent", navigationChanged: false, subAgents: [] },
+  } }).notification.params).toEqual({ threadId: "parent", navigationChanged: false });
+});

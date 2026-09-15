@@ -49,7 +49,7 @@ export function stampRemoteNavigationQueryPage(params: {
             ref,
             ...(params.capabilities ? { capabilities: params.capabilities } : {}),
             ...(params.peerStatus ? { peerStatus: params.peerStatus } : {}),
-            ...(params.celestialIcon ? { celestialIcon: params.celestialIcon } : {}),
+            celestialIcon: params.celestialIcon,
           },
         },
       };

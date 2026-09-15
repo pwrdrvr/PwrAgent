@@ -1745,6 +1745,8 @@ export type NavigationQueryRequest = {
   /** Viewer inventory includes this machine's mounts; it is never served over Federation. Defaults to owner. */
   inventory?: "owner" | "viewer";
   consumer: NavigationQueryConsumerClass;
+  /** Bounded diagnostic attribution; never part of query identity. */
+  readReason?: "demand" | "refresh" | "continuation" | "rebaseline" | "pins";
   backend?: AppServerBackendScope;
   federationTarget?: FederationTarget;
   query: NavigationQuery;
