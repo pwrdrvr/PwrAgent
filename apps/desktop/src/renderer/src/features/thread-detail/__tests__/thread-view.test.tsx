@@ -6569,6 +6569,107 @@ describe("ThreadView", () => {
     expect(acknowledgeThreadEnvironmentFailure).toHaveBeenCalledTimes(1);
   });
 
+  it("does not acknowledge failed setup from a failed history read's local message", () => {
+    const acknowledgeThreadEnvironmentFailure = vi.fn(async () => ({
+      acknowledged: true, backend: "codex" as const, threadId: "failed-setup",
+    }));
+    render(
+      <ThreadView
+        addOptimisticUserMessage={() => "optimistic-1"}
+        backends={[]}
+        composerDisabled={false}
+        desktopApi={{ acknowledgeThreadEnvironmentFailure }}
+        loading={false}
+        loadingMore={false}
+        messageCount={1}
+        transcriptError="invalid paginated history lineage: missing source rollout"
+        selectedThread={{
+          id: "failed-setup",
+          source: "codex",
+          title: "Untitled thread",
+          titleSource: "fallback",
+          updatedAt: 1,
+          linkedDirectories: [],
+          inbox: { inInbox: true, reason: "new-thread" },
+          codexEnvironmentRuntime: {
+            environmentId: "environment",
+            environmentName: "Fixture",
+            executionTarget: "local",
+            setupStatus: "failed",
+          },
+        }}
+        skills={[]}
+        transcriptEntries={[{ type: "message", id: "local-prompt", role: "user", text: "Unsent prompt" }]}
+        clearPendingRequest={() => undefined}
+        onLoadOlder={async () => undefined}
+        removeOptimisticMessage={() => undefined}
+      />,
+    );
+    expect(acknowledgeThreadEnvironmentFailure).not.toHaveBeenCalled();
+  });
+
+  it("keeps Continue anyway available after a history error and retries the original input", async () => {
+    const acknowledgeThreadEnvironmentFailure = vi.fn(async () => ({
+      acknowledged: true, backend: "codex" as const, threadId: "failed-setup",
+    }));
+    const startTurn = vi.fn()
+      .mockRejectedValueOnce(new Error("Thread could not be resumed"))
+      .mockResolvedValueOnce({ backend: "codex", threadId: "failed-setup", turnId: "recovered-turn" });
+    render(
+      <ThreadView
+        addOptimisticUserMessage={() => "optimistic-1"}
+        backends={[]}
+        composerDisabled={false}
+        desktopApi={{ acknowledgeThreadEnvironmentFailure, startTurn }}
+        loading={false}
+        loadingMore={false}
+        messageCount={1}
+        transcriptError="invalid paginated history lineage: missing source rollout"
+        selectedThread={{
+          id: "failed-setup",
+          source: "codex",
+          title: "Untitled thread",
+          titleSource: "fallback",
+          updatedAt: 1,
+          linkedDirectories: [],
+          inbox: { inInbox: true, reason: "new-thread" },
+          optimisticUserMessage: {
+            text: "Original unsent prompt",
+            imageParts: [{ type: "image", url: "data:image/png;base64,fixture" }],
+          },
+          codexEnvironmentRuntime: {
+            environmentId: "environment",
+            environmentName: "Fixture",
+            executionTarget: "local",
+            setupStatus: "failed",
+          },
+        }}
+        skills={[]}
+        transcriptEntries={[{ type: "message", id: "local-prompt", role: "user", text: "Original unsent prompt" }]}
+        clearPendingRequest={() => undefined}
+        onLoadOlder={async () => undefined}
+        removeOptimisticMessage={() => undefined}
+      />,
+    );
+    // jsdom does not implement the browser's scrollTo method used to reveal
+    // a continuation error above the command output.
+    const failureBody = document.querySelector<HTMLElement>(".environment-setup-choice__body")!;
+    failureBody.scrollTo = vi.fn();
+    fireEvent.click(screen.getByRole("button", { name: "Continue anyway" }));
+    await screen.findByText("Thread could not be resumed");
+    expect(acknowledgeThreadEnvironmentFailure).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Continue anyway" }));
+    await waitFor(() => expect(acknowledgeThreadEnvironmentFailure).toHaveBeenCalledTimes(1));
+    expect(startTurn).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      threadId: "failed-setup",
+      input: [
+        { type: "text", text: "Original unsent prompt" },
+        { type: "image", url: "data:image/png;base64,fixture" },
+      ],
+    }));
+    expect(screen.queryByRole("button", { name: "Continue anyway" })).not.toBeInTheDocument();
+  });
+
   it("keeps the environment setup failure actions outside the panel's scroll container", () => {
     render(
       <ThreadView

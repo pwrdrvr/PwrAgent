@@ -2543,6 +2543,25 @@ function buildOptimisticUserMessage(
   };
 }
 
+type PendingEnvironmentFailure = Pick<
+  NavigationThreadSummary,
+  "codexEnvironmentRuntime" | "optimisticUserMessage"
+>;
+
+function restorePendingEnvironmentFailure(
+  thread: NavigationThreadSummary,
+  pending: PendingEnvironmentFailure | undefined,
+): NavigationThreadSummary {
+  if (!pending || thread.codexEnvironmentRuntime?.setupFailureAcknowledgedAt !== undefined) {
+    return thread;
+  }
+  return {
+    ...thread,
+    codexEnvironmentRuntime: thread.codexEnvironmentRuntime ?? pending.codexEnvironmentRuntime,
+    optimisticUserMessage: thread.optimisticUserMessage ?? pending.optimisticUserMessage,
+  };
+}
+
 function buildPendingForkEnvironmentSetup(params: {
   directoryLabel: string;
   directoryPath?: string | undefined;
@@ -2894,6 +2913,11 @@ export function useThreadNavigation(
   const [retainedUnreadThread, setRetainedUnreadThread] =
     useState<NavigationThreadSummary>();
   const [optimisticThread, setOptimisticThread] = useState<NavigationThreadSummary>();
+  // A failed launch still owns its unsent input after another thread starts.
+  // The single optimistic selection below is replaced on every materialization.
+  const [pendingEnvironmentFailures, setPendingEnvironmentFailures] = useState<
+    Record<string, PendingEnvironmentFailure>
+  >({});
   const [creatingThread, setCreatingThread] = useState<CreatingThreadState>();
   const [localLaunchpads, setLocalLaunchpads] = useState<
     Record<string, NavigationLaunchpadDraft>
@@ -3935,6 +3959,12 @@ export function useThreadNavigation(
         };
         const threadKey = agentEventThreadIdentityKey(event, threadId);
         suppressedArchivedThreadKeysRef.current.add(threadKey);
+        setPendingEnvironmentFailures((current) => {
+          if (!current[threadKey]) return current;
+          const next = { ...current };
+          delete next[threadKey];
+          return next;
+        });
 
         setState((current) => ({
           ...current,
@@ -4467,8 +4497,11 @@ export function useThreadNavigation(
 
   const threads = useMemo(() => {
     const retainedKey = browseMode !== "attention" && retainedUnreadThread ? threadSummaryIdentityKey(retainedUnreadThread) : undefined;
-    const currentThreads = loadedThreadRows(state.rows).map((thread) => threadSummaryIdentityKey(thread) === retainedKey
-      ? { ...thread, inbox: { ...thread.inbox, inInbox: true } } : thread);
+    const currentThreads = loadedThreadRows(state.rows).map((row) => {
+      const thread = restorePendingEnvironmentFailure(row, pendingEnvironmentFailures[threadSummaryIdentityKey(row)]);
+      return threadSummaryIdentityKey(thread) === retainedKey
+        ? { ...thread, inbox: { ...thread.inbox, inInbox: true } } : thread;
+    });
     if (!optimisticThread) {
       return currentThreads;
     }
@@ -4487,7 +4520,7 @@ export function useThreadNavigation(
     }
 
     return [optimisticThread, ...currentThreads];
-  }, [optimisticThread, state.rows, browseMode, retainedUnreadThread]);
+  }, [optimisticThread, pendingEnvironmentFailures, state.rows, browseMode, retainedUnreadThread]);
 
   const directories = useMemo(
     () => {
@@ -4664,16 +4697,38 @@ export function useThreadNavigation(
     [selectedThreadKey, threads]
   );
 
+  useEffect(() => {
+    const detailThread = selectedDetail.state?.detail?.thread;
+    const acknowledgedKeys = [
+      ...loadedThreadRows(state.rows),
+      ...(detailThread ? [detailThread] : []),
+    ].filter((thread) => thread.codexEnvironmentRuntime?.setupFailureAcknowledgedAt !== undefined)
+      .map(threadSummaryIdentityKey);
+    // Do not dispatch a no-op for every arriving navigation page. Even an
+    // updater that returns the same state consumes React's nested-update budget.
+    if (!acknowledgedKeys.some((key) => pendingEnvironmentFailures[key])) return;
+    setPendingEnvironmentFailures((current) => {
+      if (!acknowledgedKeys.some((key) => current[key])) return current;
+      const next = { ...current };
+      for (const key of acknowledgedKeys) delete next[key];
+      return next;
+    });
+  }, [pendingEnvironmentFailures, selectedDetail.state?.detail?.thread, state.rows]);
+
   const selectedThreadConfigurationReady =
     navigationSelectionAuthorizesComposer(selectedDetail.state);
   const selectedThread = useMemo(() => {
-    const detailThread = selectedDetail.state?.detail?.thread;
-    if (!detailThread) return selectedRow;
+    const authoritativeThread = selectedDetail.state?.detail?.thread;
+    if (!authoritativeThread) return selectedRow;
+    const detailThread = restorePendingEnvironmentFailure(
+      authoritativeThread,
+      pendingEnvironmentFailures[threadSummaryIdentityKey(authoritativeThread)],
+    );
     const configured = optimisticThread && threadSummaryIdentityKey(detailThread) === threadSummaryIdentityKey(optimisticThread)
       ? mergeHydratedThreadWithOptimisticState(detailThread, optimisticThread) : detailThread;
     return rendererFederationTarget?.scope !== "remote" && configured.federation?.ref.target.scope === "remote"
       ? { ...configured, pinnedRank: selectedRow?.pinnedRank } : configured;
-  }, [selectedDetail.state?.detail?.thread, selectedRow, optimisticThread, rendererFederationTarget]);
+  }, [selectedDetail.state?.detail?.thread, selectedRow, optimisticThread, pendingEnvironmentFailures, rendererFederationTarget]);
 
   const selectedDirectory = useMemo(() => {
     if (activeFederatedLaunchpad) {
@@ -6709,6 +6764,15 @@ export function useThreadNavigation(
             delete next[directoryKey];
             return next;
           });
+        }
+        if (response.codexEnvironmentStartupFailure) {
+          setPendingEnvironmentFailures((current) => ({
+            ...current,
+            [nextThreadKey]: {
+              codexEnvironmentRuntime: namedOptimisticMaterializedThread.codexEnvironmentRuntime,
+              optimisticUserMessage: namedOptimisticMaterializedThread.optimisticUserMessage,
+            },
+          }));
         }
         onMaterialized?.(namedOptimisticMaterializedThread);
         const shouldSelectMaterializedThread =

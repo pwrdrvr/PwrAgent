@@ -1924,6 +1924,9 @@ export function ThreadView(props: ThreadViewProps) {
       && (selectedThreadSetupFailed || selectedThreadActionFailed)
       && !selectedThreadEnvironmentFailureAcknowledged
       && !props.loading
+      // A failed read may leave only our locally displayed initial prompt.
+      // It is not evidence that the backend ever started a turn.
+      && !props.transcriptError
       && props.messageCount > 0
       && !hasOnlyOptimisticLaunchpadMessage,
   );
