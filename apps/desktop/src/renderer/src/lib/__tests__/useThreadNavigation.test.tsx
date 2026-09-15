@@ -6055,6 +6055,124 @@ describe("useThreadNavigation", () => {
     );
   });
 
+  it("preserves failed setup input when another launchpad starts a thread", async () => {
+    const directoryKey = "directory:/repo";
+    const runtime = {
+      environmentId: "environment",
+      environmentName: "Fixture",
+      executionTarget: "local" as const,
+      setupStatus: "failed" as const,
+      setupOutput: "Setup exited with code 1",
+    };
+    const failedThread: NavigationThreadSummary = {
+      id: "failed-setup",
+      source: "codex",
+      title: "Untitled thread",
+      titleSource: "fallback",
+      linkedDirectories: [],
+      inbox: { inInbox: true, reason: "new-thread" },
+      updatedAt: 2,
+      codexEnvironmentRuntime: runtime,
+    };
+    const launchpad: NavigationLaunchpadDraft = {
+      directoryKey,
+      directoryKind: "directory",
+      directoryLabel: "repo",
+      directoryPath: "/repo",
+      backend: "codex",
+      executionMode: "default",
+      workMode: "local",
+      prompt: "Original unsent prompt",
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    const snapshot: NavigationSnapshot = {
+      backend: "all",
+      fetchedAt: 1,
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [],
+      directories: [{
+        key: directoryKey,
+        kind: "directory",
+        label: "repo",
+        path: "/repo",
+        threadKeys: [],
+        needsAttentionCount: 0,
+        launchpad,
+      }],
+      launchpadDefaults: { backend: "codex", executionMode: "default" },
+    };
+    const materializeDirectoryLaunchpad = vi.fn()
+      .mockImplementationOnce(async () => {
+        snapshot.threads = [failedThread];
+        snapshot.directories[0]!.threadKeys = ["codex:failed-setup"];
+        return {
+          backend: "codex",
+          threadId: failedThread.id,
+          executionMode: "default",
+          workMode: "local",
+          codexEnvironmentRuntime: runtime,
+          codexEnvironmentStartupFailure: {
+            message: "setup failed",
+            phase: "setup",
+            worktreeCleanupAvailable: false,
+          },
+        };
+      })
+      .mockResolvedValueOnce({
+        backend: "codex",
+        threadId: "second-thread",
+        executionMode: "default",
+        workMode: "local",
+        turnId: "second-turn",
+      });
+    const desktopApi: DesktopApi = {
+      readPopulation: vi.fn(async () => snapshot),
+      ensureDirectoryLaunchpad: vi.fn(async () => ({
+        launchpad,
+        defaults: snapshot.launchpadDefaults!,
+      })),
+      ...actionDetailApi(failedThread),
+      materializeDirectoryLaunchpad,
+      onAgentEvent: () => () => undefined,
+    };
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+    await waitFor(() => expect(result.current.directories).toHaveLength(1));
+    await act(async () => {
+      await result.current.materializeDirectoryLaunchpad(directoryKey, [
+        { type: "text", text: "Original unsent prompt" },
+        { type: "image", url: "data:image/png;base64,fixture" },
+      ]);
+    });
+    const originalInput = result.current.selectedThread?.optimisticUserMessage;
+    expect(originalInput?.text).toBe("Original unsent prompt");
+
+    // Composing the next launchpad and navigating back already worked.
+    await act(async () => {
+      await result.current.openDirectoryLaunchpad(result.current.directories[0]!);
+    });
+    act(() => result.current.selectThread(failedThread));
+    await waitFor(() => expect(result.current.selectedThread?.optimisticUserMessage).toEqual(originalInput));
+    await act(async () => {
+      await result.current.openDirectoryLaunchpad(result.current.directories[0]!);
+    });
+    await act(async () => {
+      await result.current.materializeDirectoryLaunchpad(directoryKey, [
+        { type: "text", text: "Start the second thread" },
+      ]);
+    });
+    expect(result.current.selectedThread?.id).toBe("second-thread");
+
+    // Starting it must not steal the first thread's recovery input, including
+    // its attachments, when authoritative detail replaces the selected row.
+    act(() => result.current.selectThread(failedThread));
+    await waitFor(() => expect(result.current.selectedThread?.id).toBe(failedThread.id));
+    expect(result.current.selectedThread?.optimisticUserMessage).toEqual(originalInput);
+    expect(result.current.selectedThread?.codexEnvironmentRuntime).toEqual(runtime);
+    expect(result.current.selectedThread?.optimisticActiveTurn).toBeUndefined();
+  });
+
   it("selects a materialized thread without optimistic input when the first turn fails", async () => {
     const directoryKey = "directory:/Users/fixture-user/github/PwrAgent";
     const threadId = "thread-turn-failed";
