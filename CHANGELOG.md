@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.0.7 - 2026-09-15
+
+- Beta Updates - Beta Latest and Beta Prerelease now offer the final 1.1.0 release when no newer eligible prerelease is available. This prevents Beta installs from remaining on an older alpha or beta after a final release ships, while retaining newer prerelease updates whenever available.
+
 ## v1.0.6 - 2026-09-13
 
 - Windows Download - Releases now carry a stable `PwrAgent.Setup.exe` installer beside the versioned one, so a download link keeps working from one release to the next instead of naming a version that has moved on. The versioned installer is unchanged, and automatic updates still use it.
