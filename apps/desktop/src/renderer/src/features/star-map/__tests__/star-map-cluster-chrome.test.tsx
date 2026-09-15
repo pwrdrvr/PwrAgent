@@ -773,18 +773,19 @@ describe("star map chat cards in map space", () => {
     ) as HTMLElement;
 
     fireEvent.wheel(viewport, { deltaX: 120, deltaY: 40 });
-    await waitFor(() => {
-      expect(canvas.style.transform).not.toBe("");
-    });
+    // The native wheel handler paints the transform before it commits React
+    // state. Keep these two events adjacent: yielding here can let the
+    // 120 ms idle boundary end the gesture while a busy suite is scheduled,
+    // which would correctly classify the next event as transcript scrolling
+    // instead of testing the in-flight-pan contract.
+    expect(canvas.style.transform).not.toBe("");
     const afterFirstEvent = canvas.style.transform;
 
     // The cursor has not moved. The canvas did, placing the transcript under
     // it before the trackpad's next event. Gesture ownership must stay with
     // the canvas until this wheel sequence ends.
     fireEvent.wheel(transcript, { deltaX: 120, deltaY: 40 });
-    await waitFor(() => {
-      expect(canvas.style.transform).not.toBe(afterFirstEvent);
-    });
+    expect(canvas.style.transform).not.toBe(afterFirstEvent);
 
     // Ownership is symmetric: a new gesture that begins over a transcript
     // remains a transcript scroll if later events target the sky.
