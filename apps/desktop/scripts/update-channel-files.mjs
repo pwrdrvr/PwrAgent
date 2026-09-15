@@ -17,9 +17,8 @@
  * release.mjs imports these names for its per-platform packaging checks and the
  * release workflow runs this file as a CLI for its pre- and post-publish checks,
  * so the two cannot drift. Both signing jobs receive an explicit allowlist of
- * scripts rather than a checkout, so this file is listed in the macOS `Archive
- * signing input` step and in scripts/release/archive-windows-signing-input.ps1;
- * a new import from release.mjs has to be added to both.
+ * scripts rather than a checkout, from scripts/release/signing-input-paths.json;
+ * a new import from release.mjs has to be added to both platform lists.
  *
  * Usage:
  *   node update-channel-files.mjs verify-staged --version <version> <dir>...

@@ -16,21 +16,11 @@ if (Test-Path -LiteralPath $workspaceLinkRoot) {
   throw "Windows release-stage must not contain $workspaceLinkRoot; archive only the hoisted signing input."
 }
 
-# The signing job gets this allowlist instead of a checkout, so every module it
-# runs has to be listed here as well as in the macOS `Archive signing input`
-# step. verify-asar-contents.mjs imports asar-entry-paths.mjs; release.mjs
-# imports update-channel-files.mjs and release-signing-environment.mjs; the job
-# runs windows-release-artifacts.mjs itself once packaging has signed.
-$paths = @(
-  "apps/desktop/release-stage",
-  "apps/desktop/scripts/release.mjs",
-  "apps/desktop/scripts/release-signing-environment.mjs",
-  "apps/desktop/scripts/update-channel-files.mjs",
-  "apps/desktop/scripts/verify-asar-contents.mjs",
-  "apps/desktop/scripts/asar-entry-paths.mjs",
-  "apps/desktop/scripts/windows-release-artifacts.mjs",
-  "scripts/release/install-trusted-signing.ps1"
-)
+# Validate local module imports before archiving the explicit platform allowlist.
+$paths = @(node --experimental-vm-modules scripts/release/check-signing-input.mjs windows)
+if ($LASTEXITCODE -ne 0) {
+  throw "Windows signing input contract failed."
+}
 foreach ($path in $paths) {
   if (-not (Test-Path -LiteralPath $path)) {
     throw "Required Windows signing input is missing: $path"

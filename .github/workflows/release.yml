@@ -93,22 +93,8 @@ jobs:
         run: |
           set -euo pipefail
           tarball="$RUNNER_TEMP/desktop-release-signing-input.tgz"
-          tar -czf "$tarball" \
-            package.json \
-            pnpm-lock.yaml \
-            pnpm-workspace.yaml \
-            apps/desktop/release-stage \
-            apps/desktop/release-stage-arm64 \
-            .github/actions/select-xcode-for-actool \
-            apps/desktop/scripts/release.mjs \
-            apps/desktop/scripts/assemble-mac-release.mjs \
-            apps/desktop/scripts/release-signing-environment.mjs \
-            apps/desktop/scripts/windows-release-artifacts.mjs \
-            apps/desktop/scripts/update-channel-files.mjs \
-            apps/desktop/scripts/verify-asar-contents.mjs \
-            apps/desktop/scripts/asar-entry-paths.mjs \
-            apps/desktop/node_modules \
-            node_modules
+          node --experimental-vm-modules scripts/release/check-signing-input.mjs macos > "$RUNNER_TEMP/signing-input-paths.txt"
+          tar -czf "$tarball" -T "$RUNNER_TEMP/signing-input-paths.txt"
           sha256="$(shasum -a 256 "$tarball" | awk '{print $1}')"
           echo "sha256=$sha256" >> "$GITHUB_OUTPUT"
           printf "%s  desktop-release-signing-input.tgz\n" "$sha256" > "$RUNNER_TEMP/desktop-release-signing-input.tgz.sha256"

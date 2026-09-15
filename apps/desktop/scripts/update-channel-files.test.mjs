@@ -19,10 +19,10 @@ const releaseWorkflow = readFileSync(
   join(repoRoot, ".github", "workflows", "release.yml"),
   "utf8",
 );
-const windowsSigningInput = readFileSync(
-  join(repoRoot, "scripts", "release", "archive-windows-signing-input.ps1"),
+const signingInputPaths = JSON.parse(readFileSync(
+  join(repoRoot, "scripts", "release", "signing-input-paths.json"),
   "utf8",
-);
+));
 
 function channelFile(version, artifact) {
   return [
@@ -232,9 +232,10 @@ describe("release pipeline wiring", () => {
   // allowlist of scripts. A module release.mjs imports that is missing from
   // either list crashes that job on import.
   it("ships this module to both signing jobs", () => {
-    expect(releaseWorkflow).toContain("apps/desktop/scripts/update-channel-files.mjs \\");
-    expect(windowsSigningInput).toContain(
-      '"apps/desktop/scripts/update-channel-files.mjs"',
-    );
+    for (const platform of ["macos", "windows"]) {
+      expect(signingInputPaths[platform]).toContain(
+        "apps/desktop/scripts/update-channel-files.mjs",
+      );
+    }
   });
 });
