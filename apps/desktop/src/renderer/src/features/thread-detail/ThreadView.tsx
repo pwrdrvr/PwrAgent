@@ -101,6 +101,7 @@ import { ThreadWarnings } from "./ThreadWarnings";
 import { ThreadPlaceholderHeader } from "./ThreadPlaceholderHeader";
 import { ImageLightbox } from "./ImageLightbox";
 import { TranscriptCopyButton } from "./TranscriptCopyButton";
+import { TranscriptError } from "./TranscriptError";
 import { TranscriptList } from "./TranscriptList";
 import { TranscriptMessage } from "./TranscriptMessage";
 import { LiveWorkRail } from "./LiveWorkRail";
@@ -3809,7 +3810,7 @@ export function ThreadView(props: ThreadViewProps) {
               onViewportChange={props.onTranscriptViewportChange}
             />
             {pendingRequestError ? (
-              <p className="transcript-error">{pendingRequestError}</p>
+              <TranscriptError desktopApi={props.desktopApi} text={pendingRequestError} />
             ) : null}
           </section>
 

@@ -55,6 +55,7 @@ import { TranscriptPlan } from "./TranscriptPlan";
 import { TranscriptReview } from "./TranscriptReview";
 import { TranscriptWorkPhaseGroup } from "./TranscriptWorkPhaseGroup";
 import { TranscriptDiff } from "./TranscriptDiff";
+import { TranscriptError } from "./TranscriptError";
 import type { PendingQuestionnaireState } from "./questionnaire";
 import type { PendingMcpInteractionState } from "./mcp-elicitation";
 import {
@@ -1409,7 +1410,7 @@ export function TranscriptList(props: TranscriptListProps) {
   }
 
   if (props.error && !hasTranscriptContent && !hasPendingContent) {
-    return <p className="transcript-error">{props.error}</p>;
+    return <TranscriptError desktopApi={props.desktopApi} text={props.error} />;
   }
 
   if (!hasTranscriptContent && !hasPendingContent) {
@@ -1429,7 +1430,7 @@ export function TranscriptList(props: TranscriptListProps) {
       data-fade-top={isAtTop ? "hidden" : "visible"}
       data-fade-bottom={hasContentBelow ? "visible" : "hidden"}
     >
-      {props.error ? <p className="transcript-error">{props.error}</p> : null}
+      {props.error ? <TranscriptError desktopApi={props.desktopApi} text={props.error} /> : null}
 
       <div
         ref={scrollContainerRef}
