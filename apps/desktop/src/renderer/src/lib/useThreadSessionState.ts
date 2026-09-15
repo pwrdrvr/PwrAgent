@@ -4614,7 +4614,6 @@ export function useThreadSessionState(params: {
   const inFlightHydrationsRef = useRef(new Map<string, number>());
   const streamRecoveryVersionsRef = useRef(new Map<string, number>());
   const remoteDetailInterestRef = useRef<string | undefined>(undefined);
-  const continuousRemoteInterestsRef = useRef(new Set<string>());
   const retainedRemoteThreadsRef = useRef(params.retainedRemoteThreads ?? []);
   retainedRemoteThreadsRef.current = params.retainedRemoteThreads ?? [];
   const managesRemoteRetentionRef = useRef(false);
@@ -5170,11 +5169,11 @@ export function useThreadSessionState(params: {
     if (remoteDetailInterestRef.current !== remoteDetailInterest) {
       remoteDetailInterestRef.current = remoteDetailInterest;
       if (remoteDetailInterest
-        && !continuousRemoteInterestsRef.current.has(remoteDetailInterest)
         && (sessions[remoteDetailInterest] || inFlightHydrationsRef.current.has(remoteDetailInterest))) {
         // Another window can preserve the process-wide subscription while
         // this window misses events. Renewed local interest must catch up
         // independently of owner acknowledgements or navigation timestamps.
+        // Recent snapshots are cached without maintaining a transcript subscription.
         // Initial interest already gets an initial read. Giving it a recovery
         // version before its session exists lets Strict Mode's mount replay
         // prune that version and incorrectly invalidate the in-flight read.
@@ -5182,10 +5181,6 @@ export function useThreadSessionState(params: {
           (streamRecoveryVersionsRef.current.get(remoteDetailInterest) ?? 0) + 1);
       }
     }
-    // Read suspension also covers the health probe on every owner switch. It
-    // does not stop our retained subscriptions or the global event listener.
-    // Real disconnects/gaps invalidate these baselines through stream recovery.
-    continuousRemoteInterestsRef.current = new Set(JSON.parse(retainedRemoteKeysJson));
     if (!thread || !threadKey) {
       return;
     }
