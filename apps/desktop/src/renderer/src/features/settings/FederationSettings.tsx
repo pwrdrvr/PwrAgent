@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { CloudflareSetup } from "./CloudflareSetup";
 import { FederationConnections } from "../federation-activity/FederationConnections";
 import type {
   CelestialIconId,
@@ -1403,8 +1404,11 @@ export function FederationSettings(props: FederationSettingsProps) {
         </div>
       </SettingsSection>
 
+      <CloudflareSetup api={props.desktopApi} listenPort={listenPort} mode={mode}
+        onWriteConfig={props.onWriteConfig} onSettingsChanged={props.onSettingsChanged} />
+
       <SettingsSection
-        eyebrow="Edge Policy"
+        eyebrow="Manual client credentials"
         title="Cloudflare"
         chip={
           cloudflareMtlsEnabled ||
