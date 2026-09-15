@@ -2311,6 +2311,56 @@ function DesktopAppShell(props: {
     );
   }, [navigation.selectedThread, session.response?.pricing?.lines]);
 
+  // Keep composer event identities stable across unrelated shell updates.
+  const handleSelectDirectoryFromPicker = useEventCallback((directory: NavigationDirectorySummary) => {
+    const federationTarget = navigation.selectedLaunchpad?.federationTarget;
+    if (federationTarget && isRemoteFederationTarget(federationTarget)) {
+      void navigation.openFederatedDirectoryLaunchpad(
+        federationTarget,
+        directory,
+      );
+      return;
+    }
+    void navigation.openDirectoryLaunchpad(directory);
+  });
+
+  const handleSelectNoDirectoryFromPicker = useEventCallback(() => {
+    const federationTarget = navigation.selectedLaunchpad?.federationTarget;
+    if (federationTarget && isRemoteFederationTarget(federationTarget)) {
+      void navigation.openFederatedWorkspaceLaunchpad(federationTarget);
+      return;
+    }
+    void navigation.openWorkspaceLaunchpad();
+  });
+
+  const handlePickAndRegisterDirectory = useEventCallback(() => {
+    void navigation.pickAndRegisterDirectory();
+  });
+
+  const handlePickAndAttachDirectoryToThread = useEventCallback(() => {
+    void navigation.pickAndAttachDirectoryToSelectedThread();
+  });
+
+  const handlePickDirectoryForReference = useEventCallback(() => navigation.pickDirectoryForReference());
+
+  const handleDismissFullAccessRiskWarning = useEventCallback(async () => {
+    const saved = await settings.writeConfig({
+      experimental: {
+        fullAccessRiskWarningDismissed: true,
+      },
+    });
+    if (!saved) {
+      throw new Error("Could not save the Full Access warning preference.");
+    }
+  });
+
+  const handleCancelLaunchpad = useEventCallback((directoryKey: string) => {
+    const restoredSourceThread = navigation.discardLaunchpad(directoryKey);
+    if (!restoredSourceThread) {
+      history.goBack();
+    }
+  });
+
   const threadViewProps = {
     pendingLaunchpadCreation: navigation.pendingLaunchpadCreations.find(
       (creation) => creation.selectionKey === navigation.selectedItemKey,
@@ -2419,32 +2469,11 @@ function DesktopAppShell(props: {
         : false,
     pickDirectoryError: navigation.pickDirectoryError,
     pickingDirectory: navigation.pickingDirectory,
-    onSelectDirectoryFromPicker: (directory) => {
-      const federationTarget = navigation.selectedLaunchpad?.federationTarget;
-      if (federationTarget && isRemoteFederationTarget(federationTarget)) {
-        void navigation.openFederatedDirectoryLaunchpad(
-          federationTarget,
-          directory,
-        );
-        return;
-      }
-      void navigation.openDirectoryLaunchpad(directory);
-    },
-    onSelectNoDirectoryFromPicker: () => {
-      const federationTarget = navigation.selectedLaunchpad?.federationTarget;
-      if (federationTarget && isRemoteFederationTarget(federationTarget)) {
-        void navigation.openFederatedWorkspaceLaunchpad(federationTarget);
-        return;
-      }
-      void navigation.openWorkspaceLaunchpad();
-    },
-    onPickAndRegisterDirectory: () => {
-      void navigation.pickAndRegisterDirectory();
-    },
-    onPickAndAttachDirectoryToThread: () => {
-      void navigation.pickAndAttachDirectoryToSelectedThread();
-    },
-    onPickDirectoryForReference: () => navigation.pickDirectoryForReference(),
+    onSelectDirectoryFromPicker: handleSelectDirectoryFromPicker,
+    onSelectNoDirectoryFromPicker: handleSelectNoDirectoryFromPicker,
+    onPickAndRegisterDirectory: handlePickAndRegisterDirectory,
+    onPickAndAttachDirectoryToThread: handlePickAndAttachDirectoryToThread,
+    onPickDirectoryForReference: handlePickDirectoryForReference,
     onAttachDirectoryReferences: (
       paths: string[],
       target: {
@@ -2478,16 +2507,7 @@ function DesktopAppShell(props: {
     onArchiveThread: navigation.archiveThread,
     onArchiveWorktree: navigation.archiveWorktree,
     onEnsureSkillsLoaded: skills.ensureLoaded,
-    onDismissFullAccessRiskWarning: async () => {
-      const saved = await settings.writeConfig({
-        experimental: {
-          fullAccessRiskWarningDismissed: true,
-        },
-      });
-      if (!saved) {
-        throw new Error("Could not save the Full Access warning preference.");
-      }
-    },
+    onDismissFullAccessRiskWarning: handleDismissFullAccessRiskWarning,
     onOpenAutomations: () => {
       setMainView("automations");
     },
@@ -2540,12 +2560,7 @@ function DesktopAppShell(props: {
       : undefined,
     onLoadOlder: session.loadOlder,
     onLiveTranscriptEntry: session.upsertLiveTranscriptEntry,
-    onCancelLaunchpad: (directoryKey) => {
-      const restoredSourceThread = navigation.discardLaunchpad(directoryKey);
-      if (!restoredSourceThread) {
-        history.goBack();
-      }
-    },
+    onCancelLaunchpad: handleCancelLaunchpad,
     // The composer's 5th argument is `extraDirectoryPaths` (draft
     // `@`-references); the hook's 5th is `parentThreadId` (resolved from
     // the launchpad draft internally), so map positions explicitly.
