@@ -6,9 +6,11 @@
 - Apple Silicon Updates - Added signed Apple Silicon macOS packages and native updater routing alongside the existing universal download. Added a stable signed Windows installer alias.
 - Federation and Remote Work - Compressed federation protocol frames, clarified endpoint setup, reduced refresh traffic, and made remote browsing retain mounts, relationships, unread state, and viewer ancestry more reliably.
 - Star Map - Made Star Map intake an agent turn, ranked relevant projects, and revealed the new thread directly in the selected workspace.
+- Star Map Performance - Reduced work while panning the map and resizing remote terminals.
 - Reviews and Forge Support - Added GitLab merge-request status and CLI settings, local pull-request branch reviews, copyable review findings, and attached-PR priority in thread references.
 - Transcript and Composer - Added on-demand Mermaid diagrams, shared image lightbox gestures and copy actions, selectable/copyable thread errors, and visible steer-when-ready delivery progress.
 - Updates and Recovery - Added a live menu update check with progress and cancel controls, retained a last-known-good Codex runtime at startup, and improved rejected-authentication recovery by profile.
+- Update Channels - Let Beta installs upgrade to a newer Stable release when one is available.
 - Navigation Performance - Eliminated several sidebar, composer, federation, and thread-row render or refresh loops while keeping remote navigation bounded and responsive.
 - Linux Desktop - Added native Linux window chrome and explicit Electron sandbox setup guidance.
 - Minor - Improved directory selection, launch error visibility, diagnostics timestamps, GitHub CLI notice handling, PwrGit OAuth presentation, and provider branding.
