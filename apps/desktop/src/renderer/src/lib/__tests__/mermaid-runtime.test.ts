@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 const mermaid = vi.hoisted(() => ({
   initialize: vi.fn(),
-  render: vi.fn(async () => ({ svg: '<svg xmlns="http://www.w3.org/2000/svg" />' })),
+  render: vi.fn(async () => ({ svg: '<svg xmlns="http://www.w3.org/2000/svg" width="100%" style="max-width:4200px" viewBox="0 0 4200 64" />' })),
 }));
 vi.mock("mermaid", () => ({ default: mermaid }));
 import { renderMermaid } from "../mermaid-runtime";
@@ -18,6 +18,10 @@ describe("Mermaid runtime ownership", () => {
       renderMermaid(source, palette, () => true),
     ]);
     expect(first).toMatch(/^data:image\/svg\+xml/);
+    const svg = new DOMParser().parseFromString(decodeURIComponent(first!.split(",")[1]), "image/svg+xml").documentElement;
+    expect(svg.getAttribute("width")).toBe("4200");
+    expect(svg.getAttribute("height")).toBe("64");
+    expect(svg.style.maxWidth).toBe("");
     expect(second).toBe(first);
     expect(mermaid.render).toHaveBeenCalledTimes(1);
     expect(mermaid.initialize).toHaveBeenCalledWith(expect.objectContaining({

@@ -88,6 +88,48 @@ type EditorApplication = DesktopApplicationsSnapshot["editors"][number];
 const CodeBlockContext = createContext(false);
 const MarkdownLinkContext = createContext(false);
 
+const MarkdownCodeApiContext = createContext<Pick<DesktopApi, "copyText"> | undefined>(undefined);
+
+// Keep the component type stable as surrounding Markdown streams.
+const MarkdownPre: NonNullable<Components["pre"]> = (preProps) => {
+  const desktopApi = useContext(MarkdownCodeApiContext);
+  const copyText = extractTextContent(preProps.children);
+  const codeNode = preProps.node?.children[0];
+  if (codeNode?.type === "element"
+    && codeNode.tagName === "code"
+    && Array.isArray(codeNode.properties.className)
+    && codeNode.properties.className.includes("language-mermaid")) {
+    return <MermaidDiagram source={copyText} desktopApi={desktopApi} />;
+  }
+
+  return (
+    <div className="transcript-message__pre-wrap">
+      {copyText ? (
+        <TranscriptCopyButton
+          className="transcript-copy-button--section"
+          copiedLabel="Copied code"
+          desktopApi={desktopApi}
+          label="Copy code"
+          text={copyText}
+        />
+      ) : null}
+      <pre
+        className="transcript-message__pre"
+        aria-label="Code block"
+        tabIndex={0}
+      >
+        {/* Tells the nested `code` renderer it is block, not inline. A
+            fence with no language produces a `<code>` with no
+            `language-` class, so the class alone cannot tell them
+            apart — and block code must never become a thread chip. */}
+        <CodeBlockContext.Provider value={true}>
+          {preProps.children}
+        </CodeBlockContext.Provider>
+      </pre>
+    </div>
+  );
+};
+
 function clipboardTextFromFragment(fragment: DocumentFragment): string {
   const container = document.createElement("div");
   container.setAttribute("aria-hidden", "true");
@@ -605,43 +647,7 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
           </p>
         );
       },
-      pre(preProps) {
-        const copyText = extractTextContent(preProps.children);
-        const codeNode = preProps.node?.children[0];
-        if (codeNode?.type === "element"
-          && codeNode.tagName === "code"
-          && Array.isArray(codeNode.properties.className)
-          && codeNode.properties.className.includes("language-mermaid")) {
-          return <MermaidDiagram source={copyText} desktopApi={props.desktopApi} />;
-        }
-
-        return (
-          <div className="transcript-message__pre-wrap">
-            {copyText ? (
-              <TranscriptCopyButton
-                className="transcript-copy-button--section"
-                copiedLabel="Copied code"
-                desktopApi={props.desktopApi}
-                label="Copy code"
-                text={copyText}
-              />
-            ) : null}
-            <pre
-              className="transcript-message__pre"
-              aria-label="Code block"
-              tabIndex={0}
-            >
-              {/* Tells the nested `code` renderer it is block, not inline. A
-                  fence with no language produces a `<code>` with no
-                  `language-` class, so the class alone cannot tell them
-                  apart — and block code must never become a thread chip. */}
-              <CodeBlockContext.Provider value={true}>
-                {preProps.children}
-              </CodeBlockContext.Provider>
-            </pre>
-          </div>
-        );
-      },
+      pre: MarkdownPre,
       table(tableProps) {
         return (
           <div className="thread-markdown__table-scroll" tabIndex={0}>
@@ -710,20 +716,22 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
         .join(" ")}
       onCopy={copySelectedPullRequestLinks}
     >
-      <ReactMarkdown
-        components={components}
-        rehypePlugins={mathRuntime?.rehypePlugins}
-        remarkPlugins={[
-          ...(mathRuntime?.remarkPlugins ?? []),
-          remarkBreaks,
-          remarkGfm,
-          remarkPullRequestReferences,
-          remarkTableProfile,
-        ]}
-        urlTransform={normalizeMarkdownUrl}
-      >
-        {markdownText}
-      </ReactMarkdown>
+      <MarkdownCodeApiContext.Provider value={props.desktopApi}>
+        <ReactMarkdown
+          components={components}
+          rehypePlugins={mathRuntime?.rehypePlugins}
+          remarkPlugins={[
+            ...(mathRuntime?.remarkPlugins ?? []),
+            remarkBreaks,
+            remarkGfm,
+            remarkPullRequestReferences,
+            remarkTableProfile,
+          ]}
+          urlTransform={normalizeMarkdownUrl}
+        >
+          {markdownText}
+        </ReactMarkdown>
+      </MarkdownCodeApiContext.Provider>
       {markdownViewerTarget ? (
         <MarkdownDocumentModal
           applications={props.applications}

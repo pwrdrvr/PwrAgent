@@ -12,7 +12,7 @@ Unlabelled fences and other languages retain their normal code rendering.
 - Rendering is serialized because Mermaid owns global configuration and temporary DOM.
   Cancelled queued work is skipped; work already inside Mermaid finishes and its result
   is discarded if the component has changed or unmounted.
-- Successful images use a memory-only LRU cache: at most 32 entries and four million
+- Successful SVG layouts use a memory-only LRU cache: at most 32 entries and four million
   source/output characters (approximately 8 MB of UTF-16 character storage, excluding
   object overhead). Individual cached images are limited to one million characters.
 - Parsing and layout still run on the renderer thread. The 20,000-character and
@@ -23,7 +23,8 @@ A local production Vite harness in headless Chromium 153 on macOS measured the
 reported 10-node E2E flowchart at 15.8 ms to import the runtime and 47.7 ms for its
 first render, including diagram/layout imports. A cache hit was below the timer's
 resolution. These are single-run observations, exclude the intentional 300 ms
-settling delay, and are not Electron startup measurements.
+settling delay, and are not Electron startup measurements. They measure SVG layout
+only, before the PNG conversion added for high-resolution clipboard copying.
 
 The desktop production build's runtime chunk is approximately 624 KB minified
 (uncompressed). The flowchart and layout chunks add approximately 140 KB.
@@ -38,9 +39,20 @@ This feature does not change that setting or its loading behavior.
 ## Rendering boundaries
 
 Mermaid uses strict security, disabled HTML labels, and app theme colors. Its SVG
-is displayed through an image data URL, never inserted as live transcript HTML,
-and its event-binding function is never called. The source remains copyable and
-can be viewed with Show source. Parse failures retain source with a Diagram
+retains explicit dimensions from the viewBox and is rasterized to PNG, never
+inserted as live transcript HTML. Its event-binding function is never called. The source remains copyable and
+can be viewed with Show source. Clicking the image (or pressing Enter/Space) opens
+the shared lightbox, with Zoom in and Fit to window controls. Both the preview and
+lightbox use the PNG, so the existing native right-click Copy Image action copies
+its full pixel resolution. The PNG uses 2x layout dimensions, capped at 8,192 pixels
+on either axis and 16 million total pixels for large diagrams. Rasterization fills
+the theme background so text remains legible when pasted into another app, and
+releases the temporary canvas immediately. These limits cap its temporary RGBA
+backing store at approximately 64 MB; mounted images also retain decoded pixels.
+
+A stable Markdown pre component preserves the image and source toggle while prose
+after a completed diagram streams. The preview scrolls at layout size instead of
+shrinking wide diagrams. Parse failures retain source with a Diagram
 unavailable label. A theme change regenerates the diagram for the new palette.
 
 Front matter, initialization directives, custom style commands, image nodes, and

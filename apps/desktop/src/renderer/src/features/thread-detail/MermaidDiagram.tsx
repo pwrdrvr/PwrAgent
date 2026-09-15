@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { createDiagramImage, type DiagramImage } from "../../lib/diagram-image";
+import { ImageLightbox } from "./ImageLightbox";
 import { TranscriptCopyButton } from "./TranscriptCopyButton";
 
 export function MermaidDiagram(props: {
@@ -9,7 +11,8 @@ export function MermaidDiagram(props: {
   const root = useRef<HTMLDivElement>(null);
   const [visible, setVisible] = useState(false);
   const [theme, setTheme] = useState(() => document.documentElement.dataset.theme);
-  const [result, setResult] = useState<{ source: string; theme?: string; image?: string }>();
+  const [result, setResult] = useState<{ source: string; theme?: string; image?: DiagramImage }>();
+  const [expanded, setExpanded] = useState(false);
   const [showSource, setShowSource] = useState(false);
 
   useEffect(() => {
@@ -23,7 +26,7 @@ export function MermaidDiagram(props: {
   }, []);
 
   useEffect(() => {
-    if (!visible || showSource) return;
+    if (!visible || showSource || (result?.source === props.source && result.theme === theme)) return;
     let active = true;
     // Streaming text must settle before paying for parsing and layout.
     const timer = window.setTimeout(() => {
@@ -37,6 +40,7 @@ export function MermaidDiagram(props: {
           surface: color("--bg-panel"),
           accent: color("--accent"),
         }, () => active))
+        .then((svg) => active && svg ? createDiagramImage(svg, color("--bg-app")) : undefined)
         .then((image) => {
           if (active) setResult({ source: props.source, theme, image });
         })
@@ -45,7 +49,7 @@ export function MermaidDiagram(props: {
         });
     }, 300);
     return () => { active = false; window.clearTimeout(timer); };
-  }, [props.source, theme, visible, showSource]);
+  }, [props.source, theme, visible, showSource, result]);
 
   const current = result?.source === props.source && result.theme === theme;
   const image = current ? result.image : undefined;
@@ -62,13 +66,26 @@ export function MermaidDiagram(props: {
       </div>
       {image && !showSource ? (
         <div className="mermaid-diagram__viewport" tabIndex={0} aria-label="Mermaid diagram">
-          <img src={image} alt="Mermaid diagram; use Show source to read its definition" />
+          <img src={image.src} width={image.width} height={image.height}
+            style={{ width: image.width, height: image.height }}
+            role="button" tabIndex={0} aria-label="Expand Mermaid diagram"
+            onClick={() => setExpanded(true)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                setExpanded(true);
+              }
+            }}
+            alt="Mermaid diagram; use Show source to read its definition" />
         </div>
       ) : (
         <pre className="transcript-message__pre" aria-label="Diagram source" tabIndex={0}>
           <code>{props.source}</code>
         </pre>
       )}
+      {expanded && image ? <ImageLightbox src={image.src} alt="Mermaid diagram"
+        dialogLabel="Expanded Mermaid diagram" allowZoom={true}
+        caption="Right-click to copy image" onClose={() => setExpanded(false)} /> : null}
     </div>
   );
 }

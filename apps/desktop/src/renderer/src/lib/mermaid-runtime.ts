@@ -64,9 +64,19 @@ export function renderMermaid(
     document.body.append(container);
     try {
       const { svg } = await mermaid.render(`pwragent-mermaid-${++sequence}`, source, container);
+      const document = new DOMParser().parseFromString(svg, "image/svg+xml");
+      const root = document.documentElement;
+      const bounds = root.getAttribute("viewBox")?.trim().split(/[\s,]+/).map(Number);
+      if (!bounds || bounds.length !== 4 || !bounds.every(Number.isFinite)
+        || bounds[2] <= 0 || bounds[3] <= 0) {
+        throw new Error("Invalid diagram dimensions");
+      }
+      root.setAttribute("width", String(bounds[2]));
+      root.setAttribute("height", String(bounds[3]));
+      root.style.removeProperty("max-width");
       // An SVG image has no active links/scripts and cannot load external resources.
       // Never inject generated SVG into the transcript or call bindFunctions.
-      const image = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+      const image = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(new XMLSerializer().serializeToString(root))}`;
       if (image.length <= 1_000_000) {
         cache.set(key, image);
         cacheCharacters += key.length + image.length;

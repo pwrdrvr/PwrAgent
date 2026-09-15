@@ -34921,3 +34921,10 @@ details.launchpad-pending__output > summary .launchpad-pending__command-label {
 .mermaid-diagram__viewport img { display: block; max-width: none; margin-inline: auto; }
 .mermaid-diagram .transcript-message__pre { margin: 0; border: 0; border-radius: 0; }
 .mermaid-diagram__copy { opacity: 1; }
+
+.mermaid-diagram__viewport img { cursor: zoom-in; }
+.mermaid-diagram__viewport img:focus-visible { outline: 2px solid var(--focus-ring); }
+.image-lightbox__zoom { align-self: flex-start; margin-bottom: 8px; }
+.image-lightbox__viewport { overflow: auto; max-width: min(100vw - 48px, 1100px); max-height: calc(100vh - 140px); }
+.image-lightbox__viewport .image-lightbox__image { max-height: calc(100vh - 140px); }
+.image-lightbox__viewport[data-zoomed="true"] .image-lightbox__image { max-width: none; max-height: none; }
