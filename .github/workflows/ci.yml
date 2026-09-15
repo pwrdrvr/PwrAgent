@@ -305,11 +305,34 @@ jobs:
         run: pnpm run build
 
   windows-desktop-main:
-    name: Windows desktop-main
+    name: Windows desktop-main (shard ${{ matrix.shard }} of 2)
+    # Sharded to halve the cost of a rerun, not to shorten a green run. This
+    # lane sits on a ~6 minute plateau with `Test`, `Windows renderer +
+    # packages` and `Linux Desktop E2E`, so splitting it moves the critical
+    # path onto one of those and saves the run almost nothing. What it does
+    # change is the failure path: the lane goes red on timeouts that are not
+    # reproducible (the same test measured 8.5s on one run and 39.6s on the
+    # next), so reruns are routine, and GitHub reruns only the failed job.
+    # One shard is a cheaper gamble than the whole lane.
+    #
+    # Vitest shards by sorting files on sha1(path) and slicing equal counts,
+    # so the split is deterministic but duration-blind. Measured on
+    # 2026-09-15 it lands ~64/36: shard 1 carries `messaging-runtime` (178s)
+    # and `state-db` (141s) and ~783s of test time, shard 2 ~445s. Shard 1 is
+    # therefore the one to watch, and adding or renaming a test file can
+    # reshuffle both. Rebalancing means a custom sequencer, which is not worth
+    # it while the absolute costs are being cut separately.
     runs-on: windows-latest
     needs: [changes, windows-install-deps]
     if: needs.changes.outputs.code_impacting == 'true'
     timeout-minutes: 30
+    strategy:
+      # Keep the other shard running after a failure: with non-reproducible
+      # timeouts, whether the second shard also failed is the evidence that
+      # separates a bad commit from a slow runner.
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -327,7 +350,10 @@ jobs:
         timeout-minutes: 20
         # The deploy-isolation test launches pnpm's JS entry directly to avoid
         # Windows .cmd handoffs. pnpm run supplies npm_execpath; exec does not.
-        run: pnpm test --project desktop-main
+        #
+        # No standalone `--` before the flags: `pnpm test -- <args>` runs the
+        # full workspace suite instead of the filtered one.
+        run: pnpm test --project desktop-main --shard=${{ matrix.shard }}/2
 
   windows-renderer-packages:
     name: Windows renderer + packages
