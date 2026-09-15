@@ -5678,9 +5678,11 @@ a.button {
      `line-height: normal`), less the 1px draft lift below, plus the 0.5px gap.
      What varies instead is the room left UNDER the bar, and that is the
      constraint a new chip size has to clear — 2px on the base pill, 1.16px in
-     the composer, 1px in the sidebar, 0.5px in the palette row. 18px is the
-     shortest pill that can hold a 2px bar at all; the card composer's is
-     16.19px and takes the override below. */
+     the composer, 1px in the sidebar, 0.5px in the palette row. 19px is the
+     shortest pill that can hold a 2px bar — 18px fits it with zero room left,
+     which the contract test rejects, since a bar flush against the border
+     reads as part of the border. The card composer's pill is 16.19px and
+     takes the override below. */
   top: 50%;
   margin-top: 6px;
   transform: translateX(-50%);

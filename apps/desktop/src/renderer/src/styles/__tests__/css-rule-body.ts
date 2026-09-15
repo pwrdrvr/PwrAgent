@@ -20,7 +20,15 @@ export const appCss = readFileSync(path.resolve(testDir, "../app.css"), "utf8");
  * usually wants the standalone block rather than whichever came first.
  */
 export function cssRuleBodies(selector: string, css: string = appCss): string[] {
-  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  // Each run of whitespace in the selector matches any run in the file, so a
+  // selector app.css wrapped across lines still resolves. `\s+` matches the
+  // single space it replaced, so every caller that passed a one-line selector
+  // keeps matching exactly what it did before.
+  const escaped = selector
+    .trim()
+    .split(/\s+/)
+    .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .join("\\s+");
   const bodies = [
     ...css.matchAll(
       new RegExp(`(?:^|\\n)${escaped}\\s*\\{(?<body>[\\s\\S]*?)\\n\\}`, "g"),
