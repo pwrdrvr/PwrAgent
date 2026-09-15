@@ -7,6 +7,9 @@ const DESKTOP_SRC = path.resolve(import.meta.dirname, "../..");
 const MAIN_SRC = path.join(DESKTOP_SRC, "main");
 const RENDERER_SRC = path.join(DESKTOP_SRC, "renderer", "src");
 
+// The module the raw-config exports live in. Both the import check and its text
+// pre-filter read this one spelling.
+const RAW_CONFIG_MODULE = "desktop-config";
 const RAW_CONFIG_EXPORTS = new Set([
   "applyDesktopSettingsPatch",
   "parseDesktopSettingsToml",
@@ -65,6 +68,35 @@ function sourceText(filePath: string): string {
   return text;
 }
 
+// Parses only the files that could possibly violate the rule, which on these
+// trees is a handful out of ~940. A node the check looks for — an import
+// specifier, a called method name — cannot exist in the AST unless its spelling
+// exists in the text, so the filter drops nothing a full sweep would have
+// caught. Every caller derives its needles from the same constant the check
+// itself matches on, so the two cannot drift apart.
+function parsedSourcesContaining(
+  root: string,
+  needles: readonly string[],
+): ts.SourceFile[] {
+  const matched = productionSources(root)
+    .filter((filePath) => {
+      const text = sourceText(filePath);
+      return needles.some((needle) => text.includes(needle));
+    })
+    .map(sourceFile);
+  // The filter's failure mode is silence: a needle that stopped matching
+  // anything leaves the caller sweeping an empty list and passing. Every rule
+  // here names a symbol its own permitted owners use, so zero matches means
+  // the rule is no longer looking at anything, not that the tree is clean.
+  if (matched.length === 0) {
+    throw new Error(
+      `No source under ${relative(root)} contains any of ${needles.join(", ")}; `
+      + "the boundary check that filtered on them can no longer fail.",
+    );
+  }
+  return matched;
+}
+
 // For the checks that walk the tree. `ts.SourceFile` is immutable and nothing
 // here mutates one, so a single parse serves every test in the file.
 function sourceFile(filePath: string): ts.SourceFile {
@@ -117,6 +149,14 @@ function containsPotentiallyTruthyProperty(
   return found;
 }
 
+// The only method names `providerRefreshCalls` can match. Kept beside it so the
+// text pre-filter and the AST walk stay in step.
+const PROVIDER_REFRESH_METHODS = [
+  "refreshCodexDiscovery",
+  "listAcpAgents",
+  "listBackends",
+] as const;
+
 function providerRefreshCalls(file: ts.SourceFile): ts.CallExpression[] {
   const calls: ts.CallExpression[] = [];
   const visit = (node: ts.Node): void => {
@@ -144,13 +184,12 @@ function providerRefreshCalls(file: ts.SourceFile): ts.CallExpression[] {
 describe("desktop config/discovery source boundaries", () => {
   it("keeps raw config parsing and writing inside config-store", () => {
     const violations: string[] = [];
-    for (const filePath of productionSources(MAIN_SRC)) {
-      const file = sourceFile(filePath);
+    for (const file of parsedSourcesContaining(MAIN_SRC, [RAW_CONFIG_MODULE])) {
       for (const statement of file.statements) {
         if (
           !ts.isImportDeclaration(statement)
           || !ts.isStringLiteral(statement.moduleSpecifier)
-          || !statement.moduleSpecifier.text.endsWith("desktop-config")
+          || !statement.moduleSpecifier.text.endsWith(RAW_CONFIG_MODULE)
         ) {
           continue;
         }
@@ -160,9 +199,9 @@ describe("desktop config/discovery source boundaries", () => {
           const imported = element.propertyName?.text ?? element.name.text;
           if (
             RAW_CONFIG_EXPORTS.has(imported)
-            && !relative(filePath).startsWith("main/settings/config-store/")
+            && !relative(file.fileName).startsWith("main/settings/config-store/")
           ) {
-            violations.push(`${relative(filePath)} imports ${imported}`);
+            violations.push(`${relative(file.fileName)} imports ${imported}`);
           }
         }
       }
@@ -221,8 +260,7 @@ describe("desktop config/discovery source boundaries", () => {
       ])],
     ]);
     const violations: string[] = [];
-    for (const filePath of productionSources(MAIN_SRC)) {
-      const file = sourceFile(filePath);
+    for (const file of parsedSourcesContaining(MAIN_SRC, [...restrictedImports.keys()])) {
       for (const statement of file.statements) {
         if (
           !ts.isImportDeclaration(statement)
@@ -232,8 +270,8 @@ describe("desktop config/discovery source boundaries", () => {
         }
         const moduleName = statement.moduleSpecifier.text.split("/").at(-1);
         const allowed = moduleName ? restrictedImports.get(moduleName) : undefined;
-        if (allowed && !allowed.has(relative(filePath))) {
-          violations.push(`${relative(filePath)} imports ${moduleName}`);
+        if (allowed && !allowed.has(relative(file.fileName))) {
+          violations.push(`${relative(file.fileName)} imports ${moduleName}`);
         }
       }
     }
@@ -273,13 +311,17 @@ describe("desktop config/discovery source boundaries", () => {
       "renderer/src/features/settings/",
     ];
     const violations: string[] = [];
-    for (const filePath of productionSources(RENDERER_SRC)) {
-      const file = sourceFile(filePath);
+    for (const file of parsedSourcesContaining(
+      RENDERER_SRC,
+      PROVIDER_REFRESH_METHODS,
+    )) {
       if (
         providerRefreshCalls(file).length > 0
-        && !allowedPrefixes.some((prefix) => relative(filePath).startsWith(prefix))
+        && !allowedPrefixes.some((prefix) =>
+          relative(file.fileName).startsWith(prefix),
+        )
       ) {
-        violations.push(relative(filePath));
+        violations.push(relative(file.fileName));
       }
     }
     expect(violations).toEqual([]);
