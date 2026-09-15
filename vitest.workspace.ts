@@ -110,10 +110,17 @@ export default defineConfig({
             "apps/desktop/src/preload/__tests__/**/*.test.ts",
             "apps/desktop/src/shared/__tests__/**/*.test.ts"
           ],
-          // Windows only in effect: warms the Job-object wrapper that owns
-          // `git worktree remove` so its one-time PowerShell + helper-compile
-          // cold start is not billed to whichever test reaches it first.
-          globalSetup: ["apps/desktop/src/test-setup/windows-job-wrapper-prewarm.ts"],
+          // Machine-level cold starts, paid once per run so neither is billed
+          // to whichever test file happens to reach it first.
+          globalSetup: [
+            // Windows only in effect: warms the Job-object wrapper that owns
+            // `git worktree remove` so its one-time PowerShell + helper-compile
+            // cold start is not billed to whichever test reaches it first.
+            "apps/desktop/src/test-setup/windows-job-wrapper-prewarm.ts",
+            // PDF.js's 1 MB first read: 3,943ms in the first process on a
+            // Windows runner against 111ms in every process after it.
+            "apps/desktop/src/test-setup/pdf-runtime-prewarm.ts",
+          ],
           setupFiles: [
             // Inert unless PWRAGENT_DEV_SQLITE_WRITE_METRICS is set; see
             // `pnpm test:sqlite-writes`.
