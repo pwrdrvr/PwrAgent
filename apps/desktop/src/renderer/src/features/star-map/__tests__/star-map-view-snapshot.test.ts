@@ -273,6 +273,7 @@ describe("buildStarMapViewSnapshot", () => {
     const project = {
       key: "work",
       label: "work",
+      members: [{ instanceId: "local", directoryKey: "/repo/work" }],
       threads: [owned(alpha, "local"), owned(beta, "local")],
       mass: 2,
       lastActivityAt: NOW,
@@ -393,6 +394,38 @@ describe("buildStarMapViewSnapshot", () => {
     expect(cloud.omittedThreadKeyCount).toBe(38);
   });
 
+  it("counts an unlaid project body by its own total, not its pool", () => {
+    // Before the lens lays a project out there is no cluster to read a
+    // total from, so the pool stands in - and the pool is only what has
+    // been hydrated. The body already paints `totalThreadCount`, so an
+    // Agent told the pool size contradicts the number on screen.
+    const local = [thread("a1", { path: "/repo/alpha" })];
+    const snapshot = buildStarMapViewSnapshot(
+      baseInput({
+        layout: "projects",
+        threadsByInstance: new Map([["local", local]]),
+        projects: [
+          {
+            key: "alpha",
+            label: "alpha",
+            members: [{ instanceId: "local", directoryKey: "/repo/alpha" }],
+            threads: local.map((entry) => owned(entry, "local")),
+            mass: 1,
+            lastActivityAt: NOW,
+            totalThreadCount: 12,
+          },
+        ],
+        cardRects: drawn("local::codex:a1"),
+      }),
+    );
+    const alpha = snapshot.clouds[0];
+    expect(alpha.threadCount).toBe(12);
+    expect(alpha.visibleCount).toBe(1);
+    expect(alpha.hiddenCount).toBe(11);
+    expect(alpha.threadKeys).toEqual(["codex:a1"]);
+    expect(alpha.omittedThreadKeyCount).toBe(11);
+  });
+
   it("pools the projects lens into clouds that belong to no one instance", () => {
     const local = [thread("a1", { path: "/repo/alpha" })];
     const peer = [thread("a2", { path: "/repo/alpha" })];
@@ -411,6 +444,10 @@ describe("buildStarMapViewSnapshot", () => {
           {
             key: "alpha",
             label: "alpha",
+            members: [
+              { instanceId: "local", directoryKey: "/repo/alpha" },
+              { instanceId: "peer-7", directoryKey: "/repo/alpha" },
+            ],
             threads: [
               ...local.map((entry) => owned(entry, "local")),
               ...peer.map((entry) => owned(entry, "peer-7")),
