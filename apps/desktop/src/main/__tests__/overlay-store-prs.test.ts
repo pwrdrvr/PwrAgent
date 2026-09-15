@@ -1,24 +1,43 @@
-import { mkdtempSync, rmSync } from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { PrSummary } from "@pwragent/shared";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
+import {
+  createTempStateDb,
+  openInMemoryStateDb,
+  removeTempStateDbDir,
+} from "./sqlite-test-utils";
 
 let stateDb: StateDb;
 let store: SqliteOverlayStore;
-let tempDir: string;
+let tempDir: string | undefined;
+
+/**
+ * Move this test onto a real database file and return its path. Only the
+ * tests that close the database and reopen the same path need one: a second
+ * `:memory:` open is a second empty database, so those assertions would hold
+ * while testing nothing.
+ */
+function useFileStateDb(): string {
+  stateDb.close();
+  const temp = createTempStateDb("pwragent-prs-test-");
+  tempDir = temp.tempDir;
+  stateDb = StateDb.open(temp.dbPath);
+  store = new SqliteOverlayStore(stateDb);
+  return temp.dbPath;
+}
 
 beforeEach(() => {
-  tempDir = mkdtempSync(path.join(os.tmpdir(), "pwragent-prs-test-"));
-  stateDb = StateDb.open(path.join(tempDir, "state.db"));
+  tempDir = undefined;
+  stateDb = openInMemoryStateDb();
   store = new SqliteOverlayStore(stateDb);
 });
 
 afterEach(() => {
   stateDb.close();
-  rmSync(tempDir, { recursive: true, force: true });
+  if (tempDir !== undefined) {
+    removeTempStateDbDir(tempDir);
+  }
 });
 
 const prMerged: PrSummary = pr({
@@ -212,13 +231,13 @@ describe("SqliteOverlayStore — thread PRs", () => {
   });
 
   it("survives close + reopen so chips appear instantly on relaunch", async () => {
+    const dbPath = useFileStateDb();
     await store.setThreadPullRequests({
       backend: "codex",
       threadId: "thread-1",
       prs: [prMerged],
     });
 
-    const dbPath = path.join(tempDir, "state.db");
     stateDb.close();
 
     const reopened = StateDb.open(dbPath);
@@ -347,6 +366,7 @@ describe("SqliteOverlayStore — thread PRs", () => {
   });
 
   it("persists canonical PR status cache rows across reopen", async () => {
+    const dbPath = useFileStateDb();
     await store.writePrStatusCacheEntries([
       {
         provider: "github.com",
@@ -356,7 +376,6 @@ describe("SqliteOverlayStore — thread PRs", () => {
       },
     ]);
 
-    const dbPath = path.join(tempDir, "state.db");
     stateDb.close();
 
     const reopened = StateDb.open(dbPath);
@@ -408,6 +427,7 @@ describe("SqliteOverlayStore — thread PRs", () => {
   });
 
   it("persists branch lookup cache rows across reopen", async () => {
+    const dbPath = useFileStateDb();
     await store.writePrLookupCacheEntry({
       lookupKey: "{\"lookupVersion\":2,\"provider\":\"github.com\",\"branch\":\"feat/pr-chip\",\"directoryPaths\":[\"/repo\"]}",
       provider: "github.com",
@@ -417,7 +437,6 @@ describe("SqliteOverlayStore — thread PRs", () => {
       prs: [prPassing],
     });
 
-    const dbPath = path.join(tempDir, "state.db");
     stateDb.close();
 
     const reopened = StateDb.open(dbPath);

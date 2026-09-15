@@ -1,6 +1,3 @@
-import { mkdtempSync, rmSync } from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import type {
   AppServerThreadSummary,
   ThreadSubAgentSummary,
@@ -8,20 +5,42 @@ import type {
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
+import {
+  createTempStateDb,
+  openInMemoryStateDb,
+  removeTempStateDbDir,
+} from "./sqlite-test-utils";
 
 let stateDb: StateDb;
 let store: SqliteOverlayStore;
-let tempDir: string;
+let tempDir: string | undefined;
+
+/**
+ * Move this test onto a real database file and return its path. Only the
+ * tests that close the database and reopen the same path need one: a second
+ * `:memory:` open is a second empty database, so those assertions would hold
+ * while testing nothing.
+ */
+function useFileStateDb(): string {
+  stateDb.close();
+  const temp = createTempStateDb("pwragent-reactions-test-");
+  tempDir = temp.tempDir;
+  stateDb = StateDb.open(temp.dbPath);
+  store = new SqliteOverlayStore(stateDb);
+  return temp.dbPath;
+}
 
 beforeEach(() => {
-  tempDir = mkdtempSync(path.join(os.tmpdir(), "pwragent-reactions-test-"));
-  stateDb = StateDb.open(path.join(tempDir, "state.db"));
+  tempDir = undefined;
+  stateDb = openInMemoryStateDb();
   store = new SqliteOverlayStore(stateDb);
 });
 
 afterEach(() => {
   stateDb.close();
-  rmSync(tempDir, { recursive: true, force: true });
+  if (tempDir !== undefined) {
+    removeTempStateDbDir(tempDir);
+  }
 });
 
 function buildThreadSummary(
@@ -184,6 +203,7 @@ describe("SqliteOverlayStore — thread reactions", () => {
   });
 
   it("survives a database close + reopen", async () => {
+    const dbPath = useFileStateDb();
     await store.setThreadReaction({
       backend: "codex",
       threadId: "thread-1",
@@ -191,7 +211,6 @@ describe("SqliteOverlayStore — thread reactions", () => {
       present: true,
     });
 
-    const dbPath = path.join(tempDir, "state.db");
     stateDb.close();
 
     const reopened = StateDb.open(dbPath);
@@ -305,6 +324,7 @@ describe("SqliteOverlayStore — thread reactions", () => {
   });
 
   it("reloads sub-agent summaries with exact usage and list price data", async () => {
+    const dbPath = useFileStateDb();
     const subAgent: ThreadSubAgentSummary = {
       monitorId: "monitor-1",
       task: "Watch a long-running command.",
@@ -354,7 +374,6 @@ describe("SqliteOverlayStore — thread reactions", () => {
       threads: [buildThreadSummary({ updatedAt: 2000 })],
     });
 
-    const dbPath = path.join(tempDir, "state.db");
     stateDb.close();
 
     const reopened = StateDb.open(dbPath);
@@ -377,9 +396,10 @@ describe("SqliteOverlayStore — thread reactions", () => {
   });
 
   it("preserves reactions when another sqlite handle performs an unrelated overlay write", async () => {
+    const dbPath = useFileStateDb();
     await addTestReactions(store);
 
-    const secondDb = StateDb.open(path.join(tempDir, "state.db"));
+    const secondDb = StateDb.open(dbPath);
     const secondStore = new SqliteOverlayStore(secondDb);
     try {
       await secondStore.markThreadSeen({

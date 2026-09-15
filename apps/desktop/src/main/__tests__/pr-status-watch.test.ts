@@ -1,6 +1,3 @@
-import { mkdtempSync, rmSync } from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import {
   afterEach,
   beforeEach,
@@ -23,24 +20,46 @@ import {
 } from "../pr-status/pr-status-watch";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
+import {
+  createTempStateDb,
+  openInMemoryStateDb,
+  removeTempStateDbDir,
+} from "./sqlite-test-utils";
 
 let stateDb: StateDb;
 let store: SqliteOverlayStore;
-let tempDir: string;
+let tempDir: string | undefined;
 let now: number;
 const extraDbs: StateDb[] = [];
 
+/**
+ * Move this test onto a real database file and return its path. Only the
+ * tests that close the database and reopen the same path, or open a second
+ * connection to it, need one: a second `:memory:` open is a second empty
+ * database, so those assertions would hold while testing nothing.
+ */
+function useFileStateDb(): string {
+  stateDb.close();
+  const temp = createTempStateDb("pwragent-pr-status-watch-");
+  tempDir = temp.tempDir;
+  stateDb = StateDb.open(temp.dbPath);
+  store = new SqliteOverlayStore(stateDb);
+  return temp.dbPath;
+}
+
 beforeEach(() => {
   now = 1_000;
-  tempDir = mkdtempSync(path.join(os.tmpdir(), "pwragent-pr-status-watch-"));
-  stateDb = StateDb.open(path.join(tempDir, "state.db"));
+  tempDir = undefined;
+  stateDb = openInMemoryStateDb();
   store = new SqliteOverlayStore(stateDb);
 });
 
 afterEach(() => {
   for (const db of extraDbs.splice(0)) db.close();
   stateDb.close();
-  rmSync(tempDir, { recursive: true, force: true });
+  if (tempDir !== undefined) {
+    removeTempStateDbDir(tempDir);
+  }
 });
 
 function pr(overrides: Partial<PrSummary> = {}): PrSummary {
@@ -110,9 +129,10 @@ function createHarness(
 
 describe("PrStatusWatchCoordinator", () => {
   it("persists a one-shot watch across restart and dispatches success once", async () => {
+    const dbPath = useFileStateDb();
     const watch = await registerWatch();
     stateDb.close();
-    stateDb = StateDb.open(path.join(tempDir, "state.db"));
+    stateDb = StateDb.open(dbPath);
     store = new SqliteOverlayStore(stateDb);
 
     expect(await store.listActiveThreadPrStatusWatches({
@@ -244,8 +264,9 @@ describe("PrStatusWatchCoordinator", () => {
   });
 
   it("claims a watch atomically across app instances", async () => {
+    const dbPath = useFileStateDb();
     await registerWatch();
-    const secondDb = StateDb.open(path.join(tempDir, "state.db"));
+    const secondDb = StateDb.open(dbPath);
     extraDbs.push(secondDb);
     const secondStore = new SqliteOverlayStore(secondDb);
     const first = createHarness(store);

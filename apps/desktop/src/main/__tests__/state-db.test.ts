@@ -14,13 +14,28 @@ import {
   StateDb,
 } from "../state/state-db";
 import { ThreadSearchStore } from "../thread-search/thread-search-store";
+import { openInMemoryStateDb } from "./sqlite-test-utils";
 
 let stateDb: StateDb;
 let tempDir: string;
 
+/**
+ * Move this test's shared database onto a real file at `tempDir/state.db` and
+ * return that path. Most of this suite either opens its own fixture file
+ * under `tempDir` or only reads the schema back, so the shared database is
+ * in memory by default; the tests that reopen it, or that assert on WAL,
+ * `auto_vacuum` or the file's page count, need a real one.
+ */
+function useFileStateDb(): string {
+  stateDb.close();
+  const dbPath = path.join(tempDir, "state.db");
+  stateDb = StateDb.open(dbPath);
+  return dbPath;
+}
+
 beforeEach(() => {
   tempDir = mkdtempSync(path.join(os.tmpdir(), "pwragent-state-db-"));
-  stateDb = StateDb.open(path.join(tempDir, "state.db"));
+  stateDb = openInMemoryStateDb();
 });
 
 afterEach(() => {
@@ -64,7 +79,7 @@ describe("StateDb", () => {
   });
 
   it("repairs revocation state after a later verified federation enrollment", () => {
-    const dbPath = path.join(tempDir, "state.db");
+    const dbPath = useFileStateDb();
     const insertPeer = stateDb.raw.prepare(
       `INSERT INTO federation_peers(
          peer_id, label, role, status, created_at, updated_at, last_seen_at,
@@ -138,7 +153,7 @@ describe("StateDb", () => {
   });
 
   it("restores raw v48 ACP keys to rollback-compatible storage", () => {
-    const dbPath = path.join(tempDir, "state.db");
+    const dbPath = useFileStateDb();
     stateDb.raw.prepare(
       `INSERT INTO threads(thread_id, payload)
        VALUES (?, ?)`,
@@ -276,7 +291,7 @@ describe("StateDb", () => {
   });
 
   it("adds scheduled actions to federation-era version 38 databases", () => {
-    const dbPath = path.join(tempDir, "state.db");
+    const dbPath = useFileStateDb();
     stateDb.raw.exec(`
       DROP TABLE scheduled_thread_actions;
       PRAGMA user_version = 38;
@@ -297,7 +312,7 @@ describe("StateDb", () => {
   });
 
   it("invalidates working-state counts computed before squash-merge support", () => {
-    const dbPath = path.join(tempDir, "state.db");
+    const dbPath = useFileStateDb();
     stateDb.raw.prepare(
       `INSERT INTO thread_git_working_state(worktree_path, fetched_at, payload)
        VALUES (?, ?, ?)`,
@@ -389,7 +404,7 @@ describe("StateDb", () => {
   });
 
   it("deduplicates legacy PR claims before creating the global fingerprint index", () => {
-    const dbPath = path.join(tempDir, "state.db");
+    const dbPath = useFileStateDb();
     stateDb.close();
     const raw = openRawDb(dbPath);
     raw.exec(`
@@ -514,6 +529,7 @@ describe("StateDb", () => {
   });
 
   it("backfills observed surfaces from recent messaging activity", () => {
+    const dbPath = useFileStateDb();
     stateDb.raw.prepare(
       `INSERT INTO messaging_activity_log(
          platform, kind, conversation_id, conversation_title,
@@ -551,7 +567,7 @@ describe("StateDb", () => {
     stateDb.raw.exec("DROP TABLE messaging_observed_surfaces");
     stateDb.raw.pragma("user_version = 33");
     stateDb.close();
-    stateDb = StateDb.open(path.join(tempDir, "state.db"));
+    stateDb = StateDb.open(dbPath);
 
     const row = stateDb.raw
       .prepare(
@@ -611,6 +627,7 @@ describe("StateDb", () => {
   });
 
   it("sets explicit WAL checkpoint and journal size bounds", () => {
+    useFileStateDb();
     expect(stateDb.raw.pragma("journal_mode", { simple: true })).toBe("wal");
     expect(stateDb.raw.pragma("wal_autocheckpoint", { simple: true })).toBe(
       STATE_DB_WAL_AUTOCHECKPOINT_PAGES,
@@ -625,6 +642,7 @@ describe("StateDb", () => {
   // instead of asserting the call was made, because the call WAS being made
   // before the fix and SQLite ignored it in silence.
   it("enables incremental auto-vacuum on a new database", () => {
+    useFileStateDb();
     expect(stateDb.raw.pragma("auto_vacuum", { simple: true })).toBe(
       SQLITE_AUTO_VACUUM_INCREMENTAL,
     );
@@ -647,6 +665,7 @@ describe("StateDb", () => {
   });
 
   it("returns freed pages to the filesystem on incremental_vacuum", () => {
+    useFileStateDb();
     const pageSize = stateDb.raw.pragma("page_size", {
       simple: true,
     }) as number;
