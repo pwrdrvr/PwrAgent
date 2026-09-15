@@ -90,11 +90,27 @@ export function flattenLicenseReport(report) {
       const versions = entry.versions?.length ? entry.versions : [""];
       const paths = entry.paths?.length ? entry.paths : [undefined];
       for (let index = 0; index < versions.length; index += 1) {
+        const packagePath = paths[index] ?? paths[0];
+        let effectiveLicense = declaredLicense;
+        // pnpm reports its pre-patch metadata. Respect the installed manifest
+        // when a patch supplies a missing declaration (e.g. khroma's shipped
+        // MIT license). The allowlist still evaluates the resulting SPDX id.
+        if (declaredLicense === "Unknown" && packagePath) {
+          const manifestPath = join(packagePath, "package.json");
+          if (existsSync(manifestPath)) {
+            const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+            if (manifest.name === entry.name
+              && manifest.version === (versions[index] ?? versions[0])
+              && typeof manifest.license === "string") {
+              effectiveLicense = manifest.license;
+            }
+          }
+        }
         records.push({
           name: entry.name,
           version: versions[index] ?? versions[0] ?? "",
-          declaredLicense,
-          packagePath: paths[index] ?? paths[0],
+          declaredLicense: effectiveLicense,
+          packagePath,
           homepage: entry.homepage,
           author: entry.author,
           description: entry.description,

@@ -34884,3 +34884,40 @@ details.launchpad-pending__output > summary .launchpad-pending__command-label {
   flex: 1;
   margin-left: 8px;
 }
+
+.mermaid-diagram {
+  margin-block: 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-app);
+  overflow: hidden;
+}
+
+.mermaid-diagram__toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.mermaid-diagram__toolbar > span { margin-right: auto; }
+
+.mermaid-diagram__toggle {
+  padding: 4px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  background: var(--bg-panel);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.mermaid-diagram__toggle:hover { background: var(--bg-panel-hover); }
+.mermaid-diagram__toggle:focus-visible,
+.mermaid-diagram__viewport:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
+
+.mermaid-diagram__viewport { overflow: auto; max-height: 640px; padding: 12px; }
+.mermaid-diagram__viewport img { display: block; max-width: none; margin-inline: auto; }
+.mermaid-diagram .transcript-message__pre { margin: 0; border: 0; border-radius: 0; }
+.mermaid-diagram__copy { opacity: 1; }

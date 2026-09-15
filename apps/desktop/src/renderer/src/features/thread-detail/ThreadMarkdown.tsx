@@ -55,6 +55,7 @@ import {
 } from "./remark-pull-request-references";
 import { remarkTableProfile } from "./remark-table-profile";
 import { TranscriptCopyButton } from "./TranscriptCopyButton";
+import { MermaidDiagram } from "./MermaidDiagram";
 
 type ThreadMarkdownProps = {
   applications?: DesktopApplicationsSnapshot;
@@ -606,6 +607,13 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
       },
       pre(preProps) {
         const copyText = extractTextContent(preProps.children);
+        const codeNode = preProps.node?.children[0];
+        if (codeNode?.type === "element"
+          && codeNode.tagName === "code"
+          && Array.isArray(codeNode.properties.className)
+          && codeNode.properties.className.includes("language-mermaid")) {
+          return <MermaidDiagram source={copyText} desktopApi={props.desktopApi} />;
+        }
 
         return (
           <div className="transcript-message__pre-wrap">

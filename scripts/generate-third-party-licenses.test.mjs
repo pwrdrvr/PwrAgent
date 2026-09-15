@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   describeNoticeDrift,
+  flattenLicenseReport,
   expandOptionalPlatformVariants,
   enrichRecord,
   StaleInstallError,
@@ -202,5 +203,22 @@ describe("describeNoticeDrift", () => {
   it("reports a length-only difference when one notice is a prefix of the other", () => {
     const lines = describeNoticeDrift("same\n", "same\n\n\n");
     expect(lines).toEqual(["the package set is identical; the text differs only in length"]);
+  });
+});
+
+describe("installed license metadata", () => {
+  it("uses a patched declaration only for missing upstream metadata and matching identity", () => {
+    const packagePath = createTemporaryDirectory();
+    writeFileSync(join(packagePath, "package.json"), JSON.stringify({
+      name: "example-package", version: "1.2.3", license: "MIT",
+    }));
+    const entry = { name: "example-package", versions: ["1.2.3"], paths: [packagePath] };
+    expect(flattenLicenseReport({ Unknown: [entry] })[0].declaredLicense).toBe("MIT");
+    expect(flattenLicenseReport({ "GPL-3.0": [entry] })[0].declaredLicense).toBe("GPL-3.0");
+    expect(flattenLicenseReport({ Unknown: [{ ...entry, versions: ["2.0.0"] }] })[0].declaredLicense).toBe("Unknown");
+    writeFileSync(join(packagePath, "package.json"), JSON.stringify({
+      name: "example-package", version: "1.2.3", license: "GPL-3.0",
+    }));
+    expect(flattenLicenseReport({ Unknown: [entry] })[0].declaredLicense).toBe("GPL-3.0");
   });
 });
