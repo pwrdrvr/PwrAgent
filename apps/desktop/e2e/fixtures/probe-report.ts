@@ -24,3 +24,45 @@ export async function probeReport(
     }>`;
   }
 }
+
+/**
+ * Cap on one diagnostic probe.
+ *
+ * Neither `page.evaluate` nor `electronApp.evaluate` takes a timeout, so each
+ * is bounded only by Playwright's 30s test timeout — and these run precisely
+ * when something has already gone wrong, including the case where the process
+ * being probed is the wedged one. Uncapped, a hung probe swallows the report
+ * it was meant to produce and the run fails with a bare "Test timeout of
+ * 30000ms exceeded", which says strictly less than the message it replaced.
+ *
+ * Lives here rather than beside one caller: `probeReport` is already the
+ * shared answer to "a diagnostic must not replace the failure", and a
+ * time-boxed probe is the same rule for the case where the probe never
+ * answers at all.
+ */
+export const PROBE_TIMEOUT_MS = 2_000;
+
+/**
+ * Both probes answer with a string and never reject, so a probe that loses
+ * this race simply stays unsettled — there is no rejection left to go
+ * unhandled.
+ */
+export async function withProbeTimeout(
+  describe: () => Promise<string>,
+  label: string,
+): Promise<string> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      describe(),
+      new Promise<string>((resolve) => {
+        timer = setTimeout(
+          () => resolve(`${label} did not answer within ${PROBE_TIMEOUT_MS}ms`),
+          PROBE_TIMEOUT_MS,
+        );
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}

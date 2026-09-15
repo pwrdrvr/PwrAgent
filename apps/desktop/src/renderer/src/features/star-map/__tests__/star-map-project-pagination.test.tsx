@@ -104,3 +104,101 @@ it.each(["orbit", "projects"].flatMap((layout) => ["local", "remote"].map((owner
     view.unmount();
   },
 );
+
+it("marks a refreshing Load more chip busy without taking it out of the tab order", async () => {
+  // A project refresh sets `loading` for well under a tenth of a second —
+  // measured at 88ms on a Windows CI runner. While the chip carried the
+  // native `disabled` property for that window, a real engine blurred it:
+  // focus moved to `body` the moment the attribute landed and clearing it
+  // brought focus back nowhere. That cost a keyboard operator their place
+  // among hundreds of cards, and on CI it made
+  // `star-map-project-pagination.spec.ts` fail 12 times in 60 Windows
+  // attempts with `toBeFocused` reporting a bare "inactive".
+  //
+  // This test pins the CAUSE, not the symptom: jsdom does not implement
+  // blur-on-disable, so `document.activeElement` survives the native
+  // property here and asserting on it alone would pass against the
+  // regression. What actually distinguishes them is that the chip is never
+  // given the native property in the first place, which is the last
+  // assertion in the busy block. The blur itself is a real-engine behavior
+  // and is covered by the e2e spec named above.
+  window.localStorage.setItem("pwragent.starMap.viewPreferences", JSON.stringify({ layout: "orbit" }));
+  const threads: NavigationThreadSummary[] = Array.from({ length: 2 }, (_, project) =>
+    Array.from({ length: 23 }, (_, card) => ({
+      id: `p${project}-c${card}`, source: "codex" as const, title: `Project ${project} card ${card}`,
+      titleSource: "derived" as const, inbox: { inInbox: false }, updatedAt: 1000 - card,
+      linkedDirectories: [{ id: `d${project}`, kind: "local" as const, path: `/repos/project-${project}`, label: `project-${project}` }],
+    }))).flat();
+  const directories = Array.from({ length: 2 }, (_, index) => classifyDirectory(threads[index * 23]!.linkedDirectories[0]!));
+  // Held open so the refresh's `loading` window is observable rather than a
+  // race against a promise that resolves in the same microtask. A refresh
+  // fans out across every project resource, so the gate has to hold and
+  // release all of them, not just the last one to arrive.
+  let blockReads = false;
+  const heldReads: Array<() => void> = [];
+  const read = vi.fn(async (request: NavigationQueryRequest) => {
+    if (blockReads) await new Promise<void>((resolve) => heldReads.push(resolve));
+    return navigationQueryFixture(request, { threads, directories });
+  });
+  // Several hooks on this screen subscribe; keeping only the last listener
+  // silently delivered the event to the wrong one.
+  const listeners: Array<(event: AgentEvent) => void> = [];
+  const api = {
+    getNavigationQueryPage: read,
+    releaseNavigationQuery: vi.fn().mockResolvedValue(undefined),
+    readFederationHealth: vi.fn(async () => ({ health: {
+      enabled: true, role: "client", status: "connected", instanceId: "local", localLabel: "Local", peers: [],
+    } })),
+    onAgentEvent: vi.fn((listener: (event: AgentEvent) => void) => {
+      listeners.push(listener);
+      return () => { listeners.splice(listeners.indexOf(listener), 1); };
+    }),
+  } as unknown as DesktopApi;
+  const view = render(<StarMapScreen desktopApi={api} sessionKeys={{}} localInstanceLabel="Local"
+    onOpenLocalThread={() => undefined} onFocusLocalInstance={() => undefined} />);
+  // Unmounted in a `finally`: a failing assertion below would otherwise leave
+  // the screen mounted, and `useStarMapProjectPages` keeps a 60s refresh
+  // interval alive, so one real failure turns into unrelated noise in the
+  // tests that follow it in this file.
+  try {
+    const selector = 'button[aria-label="Load more project-0 threads"]';
+    await waitFor(() => expect(view.container.querySelector(selector)).not.toBeNull());
+    const chip = view.container.querySelector<HTMLButtonElement>(selector)!;
+    chip.focus();
+    expect(document.activeElement).toBe(chip);
+
+    blockReads = true;
+    act(() => {
+      for (const listener of [...listeners]) {
+        listener({ backend: "codex", notification: { method: "thread/status/changed", params: { threadId: "p0-c0" } } } as unknown as AgentEvent);
+      }
+    });
+    // Read the busy state through BOTH spellings, so this waits for the same
+    // moment whichever one the chip uses. Asserting `aria-disabled` here
+    // instead would make the regression fail on a missing attribute before it
+    // ever reached the focus check — passing for the wrong reason is how the
+    // `toBeEditable` barrier in the e2e suite went vacuous for four CI rounds.
+    const busy = () => {
+      const node = view.container.querySelector<HTMLButtonElement>(selector);
+      return node?.getAttribute("aria-disabled") === "true" || node?.hasAttribute("disabled") === true;
+    };
+    // The debounce inside `useStarMapProjectPages` batches the refresh.
+    await waitFor(() => expect(busy()).toBe(true));
+    // The whole point: busy, still the same node, still holding focus.
+    expect(view.container.querySelector(selector)).toBe(chip);
+    expect(document.activeElement).toBe(chip);
+    // And busy the accessible way, so the chip stays reachable by keyboard.
+    expect(chip.getAttribute("aria-disabled")).toBe("true");
+    expect(chip.hasAttribute("disabled")).toBe(false);
+
+    await act(async () => {
+      blockReads = false;
+      for (const release of heldReads.splice(0)) release();
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(busy()).toBe(false));
+    expect(document.activeElement).toBe(chip);
+  } finally {
+    view.unmount();
+  }
+});
