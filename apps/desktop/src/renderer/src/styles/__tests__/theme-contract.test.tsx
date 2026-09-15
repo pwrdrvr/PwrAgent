@@ -437,6 +437,13 @@ describe("Tangerine Terminal theme contract", () => {
       // by the overlay on every painted frame. Geometry, not theme.
       "star-map-edge-angle",
       "star-map-edge-shift",
+      // Image lightbox chrome bands — defined on `.image-lightbox`, not
+      // `:root`, and widened by the gallery variant and the narrow
+      // breakpoint. They set the viewport's insets, so the fit box is the
+      // window minus whatever the chrome occupies. Geometry, not theme.
+      "lightbox-band-top",
+      "lightbox-band-bottom",
+      "lightbox-band-side",
     ]);
     const tokenReferences = [...css.matchAll(/var\(--([a-z0-9-]+)\)/g)].map(
       ([, token]) => token

@@ -28902,45 +28902,165 @@ button.pricing-token-miser__folded:focus-visible {
 
 /* The single full-size local-raster viewer (`ImageLightbox`) — used for pasted
    Composer attachments, Composer PDF page previews, and sent transcript
-   images. Click the scrim, the close cookie, or Escape to dismiss. Transcript
-   galleries add edge controls and a compact position indicator. */
+   images. Click anywhere off the image, the close cookie, or Escape to
+   dismiss. Transcript galleries add edge controls and a position indicator.
+
+   Three boxes, and keeping them apart is the whole layout:
+
+   - The dialog is the window, and the dialog is what CLIPS. A zoomed image
+     runs off the edge of the screen — a boundary the operator can see.
+   - The viewport is the dialog inset by the chrome bands below, and it is
+     what the fit scale is measured against. An image at "Fit to window"
+     therefore never lands under the toolbar or the edge controls.
+   - The image is the only pan handle. Every other pixel of the dialog is
+     scrim, and scrim dismisses on click.
+
+   This replaced a single fixed 1100px × (100dvh - 180px) box that was all
+   three at once: it clipped a zoomed image at an edge nothing drew, it
+   swallowed the dismiss click across 66% of a 1440×900 window, and it left
+   its own letterbox — 34% of that window for a portrait image — reading as
+   scrim while acting as a pan handle.
+
+   The bands are declared as custom properties rather than written into the
+   viewport's insets so the arithmetic stays in one place: the gallery variant
+   widens one number to clear the edge controls, and the narrow breakpoint
+   shrinks the same number. */
 .image-lightbox {
+  --lightbox-band-top: 56px;
+  --lightbox-band-bottom: 80px;
+  --lightbox-band-side: 24px;
   position: fixed;
   inset: 0;
   z-index: 60;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 24px;
   background: var(--scrim-opaque);
   cursor: zoom-out;
-  /* Portaled to <body>, but assert no-drag explicitly so the close cookie can
-     never be swallowed by an OS window-drag region it floats over. */
+  /* `hidden` still establishes a scroll container, so `overscroll-behavior`
+     keeps a wheel that outruns the image from chaining into the transcript —
+     without cancelling plain wheel events, which can suppress macOS pinch
+     synthesis. */
+  overflow: hidden;
+  overscroll-behavior: none;
+  /* Portaled to <body>, but assert no-drag explicitly so the chrome can never
+     be swallowed by an OS window-drag region it floats over. */
   -webkit-app-region: no-drag;
 }
 
-.image-lightbox__content {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  width: min(100%, 1100px);
-  cursor: default;
+/* An edge control stands in the side band, so a gallery's band has to be wide
+   enough to hold one without overlapping the fitted image. */
+.image-lightbox[data-gallery="true"] {
+  --lightbox-band-side: 80px;
 }
 
-/* Close affordance: an accent "cookie" — same treatment as the scroll-to-bottom
-   CTA — floating just off the image's top-right corner, so it reads as an
-   unmistakable high-contrast control instead of blending into the scrim. The
-   content is `position: relative`, so this anchors to the image box. */
-.image-lightbox__close {
+.image-lightbox__viewport {
   position: absolute;
-  top: -14px;
-  right: -14px;
+  top: var(--lightbox-band-top);
+  right: var(--lightbox-band-side);
+  bottom: var(--lightbox-band-bottom);
+  left: var(--lightbox-band-side);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 80px;
+  /* A zoomed image is free to leave this box; the dialog is what clips it. */
+  overflow: visible;
+  overscroll-behavior: none;
+  touch-action: none;
+  user-select: none;
+}
+
+.image-lightbox__image {
+  flex: none;
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: 4px;
+  background: var(--bg-panel);
+  object-fit: contain;
+  cursor: grab;
+}
+
+/* Once the gestures own the size, the fit caps above would fight the explicit
+   dimensions they set. */
+.image-lightbox__image[style] {
+  max-width: none;
+  max-height: none;
+}
+
+.image-lightbox__image[data-panning="true"] {
+  cursor: grabbing;
+}
+
+/* The top band is scrim: it takes no pointer events of its own, so a click on
+   the empty stretch between the caption and the close cookie reaches the
+   dialog and dismisses, exactly like the scrim beside it. */
+.image-lightbox__band {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
   z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: var(--lightbox-band-top);
+  padding: 0 16px;
+  pointer-events: none;
+}
+
+.image-lightbox__band > * {
+  pointer-events: auto;
+}
+
+/* Caption and position ride on a plate rather than bare on the scrim: a
+   zoomed image reaches under this band, and unbacked text over arbitrary
+   image content has no contrast floor. */
+.image-lightbox__meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  margin: 0;
+  padding: 5px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg-panel-elevated) 88%, transparent);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.image-lightbox__position {
+  flex: none;
+  /* `--text-muted` measures 4.46:1 here in light theme — the plate is ~#eee
+     once the scrim is composited under it — so these two readouts take the
+     next step up rather than sitting just under the 4.5:1 floor. */
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.image-lightbox__position b {
+  color: var(--text-primary);
+  font-weight: 700;
+}
+
+.image-lightbox__caption {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Close affordance: an accent "cookie" — the same treatment as the
+   scroll-to-bottom CTA — so it reads as an unmistakable high-contrast control
+   instead of blending into the scrim. */
+.image-lightbox__close {
+  flex: none;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   width: 40px;
   height: 40px;
+  margin-left: auto;
   padding: 0;
   border: 1px solid var(--accent-border);
   border-radius: 50%;
@@ -28959,6 +29079,82 @@ button.pricing-token-miser__folded:focus-visible {
 .image-lightbox__close:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
+}
+
+/* Zoom, fit, and copy, as one floating pill in the bottom band. They were
+   four full-width text buttons stacked above the image, in a wrapping row
+   left-aligned to a box the operator could not see — the loudest thing in a
+   viewer whose whole job is to show one image. */
+.image-lightbox__toolbar {
+  position: absolute;
+  bottom: 20px;
+  left: 50%;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg-panel-elevated) 92%, transparent);
+  box-shadow: 0 6px 18px color-mix(in srgb, var(--shadow-base) 34%, transparent);
+  transform: translateX(-50%);
+  -webkit-app-region: no-drag;
+}
+
+.image-lightbox__tool {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.image-lightbox__tool:hover:not(:disabled) {
+  border-color: var(--accent-border);
+  background: var(--bg-panel-hover);
+  color: var(--accent);
+}
+
+.image-lightbox__tool:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.image-lightbox__tool:disabled {
+  opacity: 0.32;
+  cursor: default;
+}
+
+.image-lightbox__tool[data-status="copied"] {
+  color: var(--success-text);
+}
+
+.image-lightbox__tool-divider {
+  flex: none;
+  width: 1px;
+  height: 18px;
+  margin: 0 4px;
+  background: var(--border-subtle);
+}
+
+/* The readout is the discoverability the text labels used to carry: it names
+   the state the two magnifiers change, and it says "Fit" when the fit button
+   has nothing left to do. */
+.image-lightbox__zoom {
+  min-width: 46px;
+  padding: 0 2px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
 }
 
 .image-lightbox__nav {
@@ -28981,12 +29177,13 @@ button.pricing-token-miser__folded:focus-visible {
   -webkit-app-region: no-drag;
 }
 
+/* Centered in the 80px side band: (80 - 44) / 2. */
 .image-lightbox__nav--previous {
-  left: 24px;
+  left: 18px;
 }
 
 .image-lightbox__nav--next {
-  right: 24px;
+  right: 18px;
 }
 
 .image-lightbox__nav:hover:not(:disabled) {
@@ -29005,41 +29202,29 @@ button.pricing-token-miser__folded:focus-visible {
   cursor: default;
 }
 
-.image-lightbox__image {
-  display: block;
-  max-width: min(100vw - 48px, 1100px);
-  max-height: min(100vh - 48px, 900px);
-  border: 1px solid var(--border-strong);
-  border-radius: 8px;
-  background: var(--bg-panel);
-  object-fit: contain;
-}
-
-.image-lightbox__caption {
-  margin: 8px 0 0;
-  color: var(--text-secondary);
-  font-size: 13px;
-  text-align: center;
-}
-
-.image-lightbox__position {
-  align-self: center;
-  margin: 8px 0 0;
-  color: var(--text-muted);
-  font-family: var(--font-mono);
-  font-size: 12px;
-}
-
-.image-lightbox__position b {
-  color: var(--text-primary);
-  font-weight: 700;
-}
-
+/* Narrow: give the image back the side band rather than moving the edge
+   controls down onto the toolbar, which is where they used to go. */
 @media (max-width: 760px) {
+  .image-lightbox {
+    --lightbox-band-side: 16px;
+  }
+
+  .image-lightbox[data-gallery="true"] {
+    --lightbox-band-side: 56px;
+  }
+
   .image-lightbox__nav {
-    top: auto;
-    bottom: 24px;
-    transform: none;
+    width: 40px;
+    height: 40px;
+  }
+
+  /* (56 - 40) / 2. */
+  .image-lightbox__nav--previous {
+    left: 8px;
+  }
+
+  .image-lightbox__nav--next {
+    right: 8px;
   }
 }
 
@@ -35055,35 +35240,8 @@ details.launchpad-pending__output > summary .launchpad-pending__command-label {
 
 .mermaid-diagram__viewport img { cursor: zoom-in; }
 .mermaid-diagram__viewport img:focus-visible { outline: 2px solid var(--focus-ring); }
-/* The viewport never scrolls: gestures own image movement. A scrollable,
-   overscroll-contained modal stops wheel chaining without cancelling plain
-   wheel events (which can suppress macOS pinch synthesis). */
-.image-lightbox { overflow: auto; overscroll-behavior: none; }
-.image-lightbox__toolbar { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 32px 8px 0; }
 .image-viewer__button:disabled { opacity: 0.5; cursor: default; }
 .mermaid-diagram__toolbar { flex-wrap: wrap; }
-.image-lightbox__viewport {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 100%;
-  height: min(900px, 100dvh - 180px);
-  min-height: 80px;
-  overflow: hidden;
-  overscroll-behavior: none;
-  touch-action: none;
-  user-select: none;
-  cursor: grab;
-}
-.image-lightbox__viewport[data-panning="true"] { cursor: grabbing; }
-.image-lightbox__viewport .image-lightbox__image {
-  flex: none;
-  max-width: 100%;
-  max-height: 100%;
-  border: 0;
-  border-radius: 0;
-}
-.image-lightbox__viewport .image-lightbox__image[style] { max-width: none; max-height: none; }
 .image-viewer__status {
   position: absolute;
   width: 1px;
