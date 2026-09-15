@@ -63,6 +63,35 @@ function setQueued(
 }
 
 describe("useThreadQueuedMessageIndicators", () => {
+  it("preserves indicator identity until queue membership or classification changes", () => {
+    const thread = makeThread("a");
+    const other = makeThread("b");
+    const { result, rerender } = renderIndicators([thread, other]);
+    const empty = result.current.indicators;
+
+    rerender({ threads: [{ ...thread, title: "Refreshed title" }, other] });
+    expect(result.current.indicators).toBe(empty);
+
+    setQueued(result.current.store, thread, [makeQueuedTurn()]);
+    const queued = result.current.indicators;
+    expect(queued).toEqual({ "codex:a": "queued" });
+    expect(queued).not.toBe(empty);
+
+    rerender({ threads: [other, { ...thread, updatedAt: 100 }] });
+    expect(result.current.indicators).toBe(queued);
+    setQueued(result.current.store, thread, [makeQueuedTurn({ text: "Updated queued text" })]);
+    expect(result.current.indicators).toBe(queued);
+
+    setQueued(result.current.store, thread, [
+      makeQueuedTurn({ scheduledSendAt: Date.now() + 60_000 }),
+    ]);
+    expect(result.current.indicators).toEqual({ "codex:a": "scheduled" });
+    expect(result.current.indicators).not.toBe(queued);
+
+    rerender({ threads: [other] });
+    expect(result.current.indicators).toEqual({});
+  });
+
   it("returns an empty map when no thread has queued turns", () => {
     const { result } = renderIndicators([makeThread("a")]);
     expect(result.current.indicators).toEqual({});
