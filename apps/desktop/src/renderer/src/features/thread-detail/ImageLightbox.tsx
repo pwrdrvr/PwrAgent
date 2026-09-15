@@ -1,6 +1,8 @@
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import { type ReactNode, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { ChevronLeftIcon, ChevronRightIcon, CloseIcon } from "../../icons";
+import { ImageCopyButton } from "./ImageCopyButton";
+import { useLightboxGestures } from "./useLightboxGestures";
 import { TranscriptImage } from "./TranscriptImage";
 
 type ImageLightboxProps = {
@@ -11,8 +13,6 @@ type ImageLightboxProps = {
   caption?: ReactNode;
   /** More specific accessible name for callers that expand a non-photo image. */
   dialogLabel?: string;
-  /** Diagram previews can expand beyond the fitted size for readable labels. */
-  allowZoom?: boolean;
   /** One-based position within an optional image gallery. */
   position?: number;
   /** Total number of images in an optional gallery. */
@@ -35,7 +35,6 @@ export function ImageLightbox({
   alt,
   caption,
   dialogLabel = "Expanded image",
-  allowZoom = false,
   position,
   total,
   onClose,
@@ -43,11 +42,20 @@ export function ImageLightbox({
   onPrevious,
 }: ImageLightboxProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
-  const [zoomed, setZoomed] = useState(false);
   useEffect(() => {
     const previousFocus = document.activeElement;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
     dialogRef.current?.focus();
+    const dialog = dialogRef.current;
+    const wheel = (event: WheelEvent) => {
+      event.stopPropagation();
+      if (event.ctrlKey || event.metaKey) event.preventDefault();
+    };
+    dialog?.addEventListener("wheel", wheel, { passive: false });
     return () => {
+      dialog?.removeEventListener("wheel", wheel);
+      document.body.style.overflow = previousOverflow;
       if (previousFocus instanceof HTMLElement && previousFocus.isConnected) {
         previousFocus.focus();
       }
@@ -125,18 +133,7 @@ export function ImageLightbox({
         >
           <CloseIcon size={18} aria-hidden="true" />
         </button>
-        {allowZoom ? (
-          <>
-            <button type="button" className="mermaid-diagram__toggle image-lightbox__zoom"
-              aria-pressed={zoomed} onClick={() => setZoomed(!zoomed)}>
-              {zoomed ? "Fit to window" : "Zoom in"}
-            </button>
-            <div className="image-lightbox__viewport" data-zoomed={zoomed}
-              tabIndex={0} aria-label="Diagram image">
-              <TranscriptImage className="image-lightbox__image" src={src} alt={alt} />
-            </div>
-          </>
-        ) : <TranscriptImage className="image-lightbox__image" src={src} alt={alt} />}
+        <LightboxImage key={src} src={src} alt={alt} />
         {typeof position === "number" && typeof total === "number" && total > 1 ? (
           <p className="image-lightbox__position" aria-live="polite">
             <b>{position}</b> / {total}
@@ -162,4 +159,24 @@ export function ImageLightbox({
     </div>,
     document.body,
   );
+}
+
+function LightboxImage({ src, alt }: { src: string; alt: string }) {
+  const gestures = useLightboxGestures();
+  return <>
+    <div className="image-lightbox__toolbar">
+      <button type="button" className="image-viewer__button" onClick={() => gestures.zoom(1 / 1.5)}
+        disabled={gestures.view.scale <= 0.1}>Zoom out</button>
+      <button type="button" className="image-viewer__button" onClick={() => gestures.zoom(1.5)}
+        disabled={gestures.view.scale >= 8}>Zoom in</button>
+      <button type="button" className="image-viewer__button" onClick={gestures.reset}>Fit to window</button>
+      <ImageCopyButton src={src} />
+    </div>
+    <div ref={gestures.viewport} className="image-lightbox__viewport" data-panning={gestures.panning}
+      tabIndex={0} aria-label="Image pan and zoom" {...gestures.pointerHandlers}>
+      <TranscriptImage className="image-lightbox__image" src={src} alt={alt}
+        draggable={false} onDragStart={(event) => event.preventDefault()}
+        onLoad={(event) => gestures.onLoad(event.currentTarget)} style={gestures.imageStyle} />
+    </div>
+  </>;
 }

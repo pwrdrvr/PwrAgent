@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { createDiagramImage, type DiagramImage } from "../../lib/diagram-image";
 import { ImageLightbox } from "./ImageLightbox";
-import { TranscriptCopyButton } from "./TranscriptCopyButton";
+import { ClipboardActionButton, ImageCopyButton } from "./ImageCopyButton";
+import { getDesktopApi } from "../../lib/desktop-api";
 
 export function MermaidDiagram(props: {
   source: string;
@@ -61,8 +62,13 @@ export function MermaidDiagram(props: {
           aria-pressed={showSource} onClick={() => setShowSource(!showSource)}>
           {showSource ? "Show diagram" : "Show source"}
         </button>
-        <TranscriptCopyButton className="mermaid-diagram__copy" desktopApi={props.desktopApi}
-          label="Copy diagram source" copiedLabel="Copied diagram source" text={props.source} />
+        {image ? <ImageCopyButton src={image.src} /> : null}
+        <ClipboardActionButton key={props.source} label="Copy source" copy={async () => {
+          const api = props.desktopApi ?? getDesktopApi();
+          if (api?.copyText) await api.copyText(props.source);
+          else if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(props.source);
+          else throw new Error("Text clipboard is unavailable");
+        }} />
       </div>
       {image && !showSource ? (
         <div className="mermaid-diagram__viewport" tabIndex={0} aria-label="Mermaid diagram">
@@ -84,7 +90,7 @@ export function MermaidDiagram(props: {
         </pre>
       )}
       {expanded && image ? <ImageLightbox src={image.src} alt="Mermaid diagram"
-        dialogLabel="Expanded Mermaid diagram" allowZoom={true}
+        dialogLabel="Expanded Mermaid diagram"
         caption="Right-click to copy image" onClose={() => setExpanded(false)} /> : null}
     </div>
   );
