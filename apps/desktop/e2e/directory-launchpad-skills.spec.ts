@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { expect, test } from "@playwright/test";
 import { launchElectronApp } from "./fixtures/electron-app";
-import { legacyStateHomeEnv } from "./fixtures/legacy-state-home";
+import { seedProfileOverlayState } from "./fixtures/overlay-state-seeding";
 import { canonicalizeNavigationPath } from "@pwragent/shared";
 
 async function createDirectoryLaunchpadSkillsFixture(): Promise<{
@@ -182,10 +182,9 @@ async function createDirectoryLaunchpadSkillsFixture(): Promise<{
 }
 
 async function seedPersistedDirectoryLaunchpad(params: {
+  homeDir: string;
   repoDir: string;
-  stateRoot: string;
 }): Promise<void> {
-  await mkdir(params.stateRoot, { recursive: true });
   // Forward slashes, no trailing separator — the one navigation-path form, and
   // the reason `canonicalizeNavigationPath` exists. Seeding the native spelling
   // registered a SECOND directory beside the app's own on Windows: two rows,
@@ -193,41 +192,30 @@ async function seedPersistedDirectoryLaunchpad(params: {
   // violation on a locator that had been unique everywhere else.
   const directoryPath = canonicalizeNavigationPath(params.repoDir);
   const directoryKey = `directory:${directoryPath}`;
-  await writeFile(
-    path.join(params.stateRoot, "overlay-state.json"),
-    JSON.stringify(
+  await seedProfileOverlayState(params.homeDir, {
+    launchpadDefaults: {
+      backend: "codex",
+      executionMode: "full-access",
+      workMode: "worktree",
+      reasoningEffort: "high",
+    },
+    directoryLaunchpads: [
       {
-        version: 5,
-        backends: {},
-        launchpadDefaults: {
-          backend: "codex",
-          executionMode: "full-access",
-          workMode: "worktree",
-          reasoningEffort: "high",
-        },
-        directoryLaunchpads: {
-          [directoryKey]: {
-            directoryKey,
-            directoryKind: "directory",
-            directoryLabel: "FixtureRepo",
-            directoryPath,
-            backend: "codex",
-            executionMode: "full-access",
-            prompt: "[$ce:brainstorm](/Users/fixture-user/.codex/skills/ce-brainstorm/SKILL.md) ",
-            workMode: "worktree",
-            branchName: "main",
-            reasoningEffort: "high",
-            createdAt: 1760000000000,
-            updatedAt: 1760000000000,
-          },
-        },
-        threads: {},
+        directoryKey,
+        directoryKind: "directory",
+        directoryLabel: "FixtureRepo",
+        directoryPath,
+        backend: "codex",
+        executionMode: "full-access",
+        prompt: "[$ce:brainstorm](/Users/fixture-user/.codex/skills/ce-brainstorm/SKILL.md) ",
+        workMode: "worktree",
+        branchName: "main",
+        reasoningEffort: "high",
+        createdAt: 1760000000000,
+        updatedAt: 1760000000000,
       },
-      null,
-      2,
-    ),
-    "utf8",
-  );
+    ],
+  });
 }
 
 async function openDirectoryLaunchpad(app: Awaited<ReturnType<typeof launchElectronApp>>) {
@@ -842,16 +830,13 @@ test("directory launchpad Tiptap composer select all delete clears chips without
 test("directory launchpad Tiptap composer deletes a persisted skill chip with repeated backspace", async () => {
   const fixture = await createDirectoryLaunchpadSkillsFixture();
   const homeDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-tiptap-saved-"));
-  // Use the legacy "pwragnt" directory name because the migration code in
-  // migration.ts intentionally looks for legacy files at this path.
-  const stateRoot = path.join(homeDir, ".local", "state", "pwragnt");
   await seedPersistedDirectoryLaunchpad({
+    homeDir,
     repoDir: fixture.repoDir,
-    stateRoot,
   });
   const app = await launchElectronApp({
     fixturePath: fixture.fixturePath,
-    env: legacyStateHomeEnv(homeDir),
+    env: { HOME: homeDir },
   });
 
   try {

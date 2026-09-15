@@ -14,7 +14,6 @@ const sqlKeywordPattern =
 
 const allowedInterpolatedSql = new Set([
   "apps/desktop/src/main/state/messaging-store-sqlite.ts:263",
-  "apps/desktop/src/main/state/migration.ts:534",
 ]);
 
 runSelfTests();

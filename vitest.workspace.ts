@@ -38,36 +38,16 @@ const DISPOSABLE_PWRAGENT_HOME = path.join(
   `pwragent-vitest-home-${process.pid}`,
 );
 
-// Where those same suites look for PwrAgent's *pre-profile* state: the
-// XDG-shaped `pwragnt/` directories `findLegacyPaths` searches in
-// `apps/desktop/src/main/state/migration.ts`. `PWRAGENT_HOME` above does not
-// cover them. The legacy roots come from `os.homedir()` and the ambient
-// `XDG_CONFIG_HOME` / `XDG_STATE_HOME`, so a test that stubs `PWRAGENT_HOME`
-// to a temp dir still reads the operator's real `~/.config/pwragnt/` and
-// `~/.local/state/pwragnt/`, and `migrateIfNeeded` imports whatever it finds
-// into the temp profile.
+// The XDG roots, pinned beside it. Nothing in the app reads these today —
+// the pre-profile migration that searched `XDG_CONFIG_HOME` /
+// `XDG_STATE_HOME` for `pwragnt/` state is deleted in this same change — so
+// this is a guard, not a fix: it keeps a future reader of those variables
+// from resolving into the operator's real `~/.config` and `~/.local/state`
+// the way `findLegacyPaths` did, which made a developer carrying pre-1.0
+// files run a different code path than CI on every `initializeAppState`.
 //
-// That is a correctness problem before it is a cost one. A developer who has
-// run an older PwrAgent build takes the migration branch on every
-// `initializeAppState`; CI, where those files never exist, takes the
-// fresh-install branch. The path that ships green is the one nobody ran.
-// Measured on `messaging-runtime.test.ts` against a machine with ~855 KB of
-// legacy JSON: 74 tests, 74 migrations, 74 extra `state.db.tmp` opens, and
-// ~63 MB of the operator's own state parsed per run of that one file. Three
-// suites were exposed — messaging-runtime, settings-ipc and
-// desktop-messaging-store — for 82 unintended migrations across a full
-// desktop-main run. `state-migration.test.ts` is not one of them: it passes
-// `xdgConfigHome` / `xdgStateHome` explicitly, which outrank the environment,
-// so it stays the one suite that exercises the migration branch on purpose.
-//
-// Pointed at a directory nothing creates, so every suite takes CI's branch
-// regardless of what the developer has in their shell. Fixed here rather than
-// in `initializeAppState` because the app is right to migrate from the real
-// home, and because deriving the legacy roots from `PWRAGENT_HOME` would break
-// the E2E fixtures that seed legacy state: `legacyStateHomeEnv` points the XDG
-// vars at the harness root while `anchorWindowsPwragentRoot` points
-// `PWRAGENT_HOME` at `<root>/.pwragent`. A suite that wants the migration does
-// what those fixtures do — seed the files and override these two vars.
+// Pointed at a directory nothing creates, for the same reason as the root
+// above: a run that reads them leaves evidence in the OS temp dir.
 const DISPOSABLE_XDG_ROOT = path.join(
   os.tmpdir(),
   `pwragent-vitest-xdg-${process.pid}`,
@@ -75,9 +55,9 @@ const DISPOSABLE_XDG_ROOT = path.join(
 const DISPOSABLE_XDG_CONFIG_HOME = path.join(DISPOSABLE_XDG_ROOT, "config");
 const DISPOSABLE_XDG_STATE_HOME = path.join(DISPOSABLE_XDG_ROOT, "state");
 
-// Seeded on every desktop project so `PWRAGENT_HOME` and the legacy roots
-// always move together; a test that overrides one and forgets the others is
-// the bug this pairing exists to prevent.
+// Seeded on every desktop project so the root and the XDG homes always move
+// together; a test that overrides one and forgets the others is the bug this
+// pairing exists to prevent.
 const DISPOSABLE_DESKTOP_ENV = {
   PWRAGENT_HOME: DISPOSABLE_PWRAGENT_HOME,
   XDG_CONFIG_HOME: DISPOSABLE_XDG_CONFIG_HOME,

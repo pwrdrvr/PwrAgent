@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { expect } from "@playwright/test";
 import Database from "better-sqlite3";
-import { legacyStateHomeEnv } from "./legacy-state-home";
+import { seedProfileOverlayState } from "./overlay-state-seeding";
 
 export async function createBranchDriftFixture(options: {
   expectedBranch?: string;
@@ -17,11 +17,7 @@ export async function createBranchDriftFixture(options: {
   const expectedBranch = options.expectedBranch ?? "codex/expected-branch";
   const rootDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-branch-drift-"));
   const repoDir = path.join(rootDir, "FixtureRepo");
-  // Use the legacy "pwragnt" directory name because the migration code in
-  // migration.ts intentionally looks for legacy files at this path.
-  const stateRoot = path.join(rootDir, ".local", "state", "pwragnt");
   await mkdir(repoDir, { recursive: true });
-  await mkdir(stateRoot, { recursive: true });
 
   execFileSync("git", ["init"], { cwd: repoDir, stdio: "ignore" });
   execFileSync("git", ["checkout", "-B", "codex/expected-branch"], {
@@ -47,40 +43,30 @@ export async function createBranchDriftFixture(options: {
     stdio: "ignore",
   });
 
-  await writeFile(
-    path.join(stateRoot, "overlay-state.json"),
-    JSON.stringify(
+  await seedProfileOverlayState(rootDir, {
+    launchpadDefaults: {
+      backend: "codex",
+      executionMode: "default",
+      workMode: "local",
+    },
+    threads: [
       {
-        version: 5,
-        backends: {},
-        launchpadDefaults: {
-          backend: "codex",
-          executionMode: "default",
-          workMode: "local",
-        },
-        directoryLaunchpads: {},
-        threads: {
-          "codex:thread-branch-drift": {
-            backend: "codex",
-            threadId: "thread-branch-drift",
-            executionMode: "default",
-            observedGitBranch: expectedBranch,
-            extraLinkedDirectories: [
-              {
-                id: "pwragent-handoff:codex:thread-branch-drift",
-                kind: "worktree",
-                label: "FixtureRepo",
-                path: repoDir,
-                worktreePath: repoDir,
-              },
-            ],
+        backend: "codex",
+        threadId: "thread-branch-drift",
+        executionMode: "default",
+        observedGitBranch: expectedBranch,
+        extraLinkedDirectories: [
+          {
+            id: "pwragent-handoff:codex:thread-branch-drift",
+            kind: "worktree",
+            label: "FixtureRepo",
+            path: repoDir,
+            worktreePath: repoDir,
           },
-        },
+        ],
       },
-      null,
-      2,
-    ),
-  );
+    ],
+  });
 
   const fixturePath = path.join(rootDir, "thread-branch-drift.fixture.json");
   await writeFile(
@@ -161,10 +147,10 @@ export async function createBranchDriftFixture(options: {
     cleanup: async () => {
       await rm(rootDir, { force: true, recursive: true });
     },
-    // The whole scenario rides on the legacy import above being found, so the
-    // launch environment belongs to the fixture that wrote those files rather
-    // than to each spec that uses it.
-    env: legacyStateHomeEnv(rootDir),
+    // The whole scenario rides on the app booting into the profile seeded
+    // above, so the launch environment belongs to the fixture that wrote it
+    // rather than to each spec that uses it.
+    env: { HOME: rootDir },
     fixturePath,
     homeDir: rootDir,
   };

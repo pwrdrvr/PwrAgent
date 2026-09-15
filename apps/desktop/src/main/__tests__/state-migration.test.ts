@@ -4,11 +4,6 @@ import path from "node:path";
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  PWRAGENT_HOME_ENV,
-  PWRAGENT_PROFILE_ENV,
-} from "../profile";
-import { migrateIfNeeded } from "../state/migration";
-import {
   CURRENT_STATE_DB_USER_VERSION,
   SQLITE_AUTO_VACUUM_INCREMENTAL,
   StateDb,
@@ -26,25 +21,6 @@ function createTempRoot(): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-migration-"));
   tempRoots.push(root);
   return root;
-}
-
-function writeLegacyConfig(root: string): string {
-  const configPath = path.join(root, "xdg-config", "pwragnt", "config.toml");
-  fs.mkdirSync(path.dirname(configPath), { recursive: true });
-  fs.writeFileSync(
-    configPath,
-    [
-      "[messaging]",
-      "enabled = true",
-      "",
-      "[messaging.discord]",
-      "enabled = true",
-      'application_id = "1480556454498009352"',
-      "",
-    ].join("\n"),
-    "utf8",
-  );
-  return configPath;
 }
 
 function readAutoVacuum(dbPath: string): number {
@@ -236,99 +212,23 @@ VALUES ('codex', 'thread-1', 'turn-1', 1000, '{"kind":"messaging"}');
     }
   });
 
-  it("does not copy legacy default settings into a new named profile", () => {
+  it("records the profile name in a newly created profile database", () => {
     const root = createTempRoot();
-    const pwragentHome = path.join(root, "pwragent");
-    writeLegacyConfig(root);
+    const dbPath = path.join(root, "profiles", "dev", "state", "state.db");
 
-    const outcome = migrateIfNeeded({
-      env: {
-        [PWRAGENT_HOME_ENV]: pwragentHome,
-        [PWRAGENT_PROFILE_ENV]: "dev",
-      } as NodeJS.ProcessEnv,
-      xdgConfigHome: path.join(root, "xdg-config"),
-      xdgStateHome: path.join(root, "xdg-state"),
-    });
+    const stateDb = StateDb.open(dbPath, { profileName: "dev" });
+    stateDb.close();
 
-    const devConfigPath = path.join(
-      pwragentHome,
-      "profiles",
-      "dev",
-      "config.toml",
-    );
-
-    expect(outcome.status).toBe("fresh-install");
-    if (outcome.status !== "fresh-install") throw new Error("expected fresh install");
-    expect(fs.existsSync(devConfigPath)).toBe(false);
-    expect(readProfileName(outcome.dbPath)).toBe("dev");
+    expect(readProfileName(dbPath)).toBe("dev");
   });
 
-  // The migration path builds its database through a second connection to a
-  // temp file, so it can defeat `StateDb.open`'s `auto_vacuum` ordering
-  // independently of `state-db.ts` — it did, until the holder connection
-  // stopped setting pragmas of its own.
-  it("leaves a migrated database with incremental auto-vacuum", () => {
+  it("leaves a new database with incremental auto-vacuum", () => {
     const root = createTempRoot();
-    const pwragentHome = path.join(root, "pwragent");
-    writeLegacyConfig(root);
+    const dbPath = path.join(root, "profiles", "default", "state", "state.db");
 
-    const outcome = migrateIfNeeded({
-      env: {
-        [PWRAGENT_HOME_ENV]: pwragentHome,
-      } as NodeJS.ProcessEnv,
-      xdgConfigHome: path.join(root, "xdg-config"),
-      xdgStateHome: path.join(root, "xdg-state"),
-    });
+    const stateDb = StateDb.open(dbPath, { profileName: "default" });
+    stateDb.close();
 
-    expect(outcome.status).toBe("migrated");
-    if (outcome.status !== "migrated") throw new Error("expected migration");
-    expect(readAutoVacuum(outcome.dbPath)).toBe(SQLITE_AUTO_VACUUM_INCREMENTAL);
-  });
-
-  it("leaves a fresh-install database with incremental auto-vacuum", () => {
-    const root = createTempRoot();
-    const pwragentHome = path.join(root, "pwragent");
-
-    const outcome = migrateIfNeeded({
-      env: {
-        [PWRAGENT_HOME_ENV]: pwragentHome,
-      } as NodeJS.ProcessEnv,
-      xdgConfigHome: path.join(root, "xdg-config"),
-      xdgStateHome: path.join(root, "xdg-state"),
-    });
-
-    expect(outcome.status).toBe("fresh-install");
-    if (outcome.status !== "fresh-install") {
-      throw new Error("expected fresh install");
-    }
-    expect(readAutoVacuum(outcome.dbPath)).toBe(SQLITE_AUTO_VACUUM_INCREMENTAL);
-  });
-
-  it("still migrates legacy settings into the default profile", () => {
-    const root = createTempRoot();
-    const pwragentHome = path.join(root, "pwragent");
-    const legacyConfigPath = writeLegacyConfig(root);
-
-    const outcome = migrateIfNeeded({
-      env: {
-        [PWRAGENT_HOME_ENV]: pwragentHome,
-      } as NodeJS.ProcessEnv,
-      xdgConfigHome: path.join(root, "xdg-config"),
-      xdgStateHome: path.join(root, "xdg-state"),
-    });
-
-    const defaultConfigPath = path.join(
-      pwragentHome,
-      "profiles",
-      "default",
-      "config.toml",
-    );
-
-    expect(outcome.status).toBe("migrated");
-    if (outcome.status !== "migrated") throw new Error("expected migration");
-    expect(fs.readFileSync(defaultConfigPath, "utf8")).toBe(
-      fs.readFileSync(legacyConfigPath, "utf8"),
-    );
-    expect(readProfileName(outcome.dbPath)).toBe("default");
+    expect(readAutoVacuum(dbPath)).toBe(SQLITE_AUTO_VACUUM_INCREMENTAL);
   });
 });
