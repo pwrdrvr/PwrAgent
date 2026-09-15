@@ -131,6 +131,31 @@ describe("TranscriptList", () => {
     vi.useRealTimers();
   });
 
+  it.each([false, true])("copies the full error with history present: %s", async (hasHistory) => {
+    const error = "Error invoking remote method 'app-server:read-thread':\ninvalid paginated history lineage for fixture-thread: missing source rollout";
+    const copyText = vi.fn(async () => undefined);
+    render(
+      <TranscriptList
+        desktopApi={{ copyText }}
+        entries={hasHistory ? [{ type: "message", id: "fixture-message", role: "user", text: "Fixture message" }] : []}
+        error={error}
+        loading={false}
+        loadingMore={false}
+        onLoadOlder={async () => undefined}
+      />,
+    );
+
+    const button = screen.getByRole("button", { name: "Copy error" });
+    button.focus();
+    expect(button).toHaveFocus();
+    fireEvent.click(button);
+
+    await waitFor(() => {
+      expect(copyText).toHaveBeenCalledWith(error);
+      expect(screen.getByRole("button", { name: "Copied error" })).toHaveAttribute("data-copied", "true");
+    });
+  });
+
   it("renders messaging binding transitions without transcript history", () => {
     render(
       <TranscriptList
