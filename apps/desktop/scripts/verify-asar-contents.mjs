@@ -161,7 +161,9 @@ const unreadableHtmlEntries = [];
 for (const entry of listing.filter(isRendererHtmlEntry)) {
   let contents;
   try {
-    contents = asar.extractFile(asarPath, entry.replace(/^\//, "")).toString("utf8");
+    // Listings use forward slashes for matching; ASAR lookup uses path.sep.
+    const extractionPath = join(...entry.replace(/^\//, "").split("/"));
+    contents = asar.extractFile(asarPath, extractionPath).toString("utf8");
   } catch (error) {
     unreadableHtmlEntries.push({ entry, reason: error?.message ?? String(error) });
     continue;
