@@ -1270,7 +1270,7 @@ describe("App", () => {
       expect(openToolOutputIncidentExplorerWindow).toHaveBeenCalledWith({
         backend: "codex",
         threadId: "thread-1",
-        title: "Codex thread",
+        title: "Codex thread thread-1",
       });
     });
   });
