@@ -5029,10 +5029,23 @@ export function StarMapScreen(props: StarMapScreenProps) {
               type="button"
               className="star-map__cluster-overflow"
               style={{ left: actionSlot.dx, top: actionSlot.dy }}
-              disabled={resource?.loading}
+              // `aria-disabled`, not `disabled`, per the house pattern in
+              // `FederationTargetMenuSection` and `NewThreadButton`. What is
+              // specific here is how SHORT the busy window is: a background
+              // project refresh sets `loading` for 88ms, measured on a
+              // Windows CI runner. Disabling a focused control blurs it, so
+              // an operator holding this chip when a refresh landed was
+              // dropped to `body` — their place in a sky of hundreds of
+              // cards gone, for a state that was over before they could see
+              // it. Keeping it focusable is the whole fix.
+              aria-disabled={resource?.loading || undefined}
+              aria-busy={resource?.loading || undefined}
               aria-label={needsRestart ? `Restart ${cluster.label} threads` : hasMore ? `Load more ${cluster.label} threads`
                 : cluster.overflow > 0 ? `Show ${cluster.overflow} more ${cluster.label} threads` : `Show fewer ${cluster.label} threads`}
               onClick={() => {
+                // `aria-disabled` does not stop a real click the way the
+                // property did, so the refusal has to be here.
+                if (resource?.loading) return;
                 if (needsRestart) {
                   void projectPages.controller.restart(resourceId);
                 } else if (hasMore) {

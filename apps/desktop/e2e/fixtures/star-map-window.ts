@@ -12,6 +12,7 @@
 // anybody has, so the wait now reports which one it was.
 import { expect, type ConsoleMessage, type Page } from "@playwright/test";
 import type { launchElectronApp } from "./electron-app";
+import { withProbeTimeout } from "./probe-report";
 import { tolerateTransientRpcFailure } from "./transient-rpc-poll";
 
 type LaunchedApp = Awaited<ReturnType<typeof launchElectronApp>>;
@@ -49,44 +50,6 @@ function recordRendererErrors(page: Page): RendererErrorLog {
       page.off("pageerror", onPageError);
     },
   };
-}
-
-/**
- * Cap on one diagnostic probe.
- *
- * Neither `page.evaluate` nor `electronApp.evaluate` takes a timeout, so each
- * is bounded only by Playwright's 30s test timeout — and these run precisely
- * when something has already gone wrong, including the case where the process
- * being probed is the wedged one. Uncapped, a hung probe swallows this
- * helper's 6s report and the run fails with a bare "Test timeout of 30000ms
- * exceeded" instead, which says strictly less than the message this file
- * replaced.
- */
-const PROBE_TIMEOUT_MS = 2_000;
-
-/**
- * Both probes answer with a string and never reject, so a probe that loses
- * this race simply stays unsettled — there is no rejection left to go
- * unhandled.
- */
-async function withProbeTimeout(
-  describe: () => Promise<string>,
-  label: string,
-): Promise<string> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      describe(),
-      new Promise<string>((resolve) => {
-        timer = setTimeout(
-          () => resolve(`${label} did not answer within ${PROBE_TIMEOUT_MS}ms`),
-          PROBE_TIMEOUT_MS,
-        );
-      }),
-    ]);
-  } finally {
-    if (timer !== undefined) clearTimeout(timer);
-  }
 }
 
 /**
