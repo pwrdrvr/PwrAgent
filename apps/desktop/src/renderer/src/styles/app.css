@@ -27904,10 +27904,12 @@ button.pricing-token-miser__folded:focus-visible {
 
 /* Inline mention chips inside the composer: `$skill`, `@file`, `@directory`,
    `#thread`, PR pills. They interrupt running prose, so they are sized in `em`
-   off the paragraph rather than off `.chip` (24px / 12px) and `.pr-chip`
-   (22px / 11px), which are row and header geometry. Qualified by the editor so
-   that sizing wins on specificity rather than on this block happening to sit
-   below those two.
+   off the paragraph rather than off `.chip` (24px / 12px), which is row and
+   header geometry. Qualified by the editor so that sizing wins on specificity
+   rather than on this block happening to sit below that one.
+
+   The PR pill is the exception and takes `.pr-chip`'s own 11px / 6px / 8px
+   back; only its HEIGHT is em-based here. Its rule, and why, is below.
 
    Height is ~0.9 of the line box the chip interrupts, so a chip never pushes
    its line taller than a plain one. That ceiling is a FRACTION of the line

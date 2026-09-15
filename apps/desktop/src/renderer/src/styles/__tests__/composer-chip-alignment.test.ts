@@ -52,9 +52,34 @@ function declaration(body: string, property: string): string | undefined {
 const MENTION = ".composer-tiptap-input__editor .composer-tiptap-input__mention";
 const STRUT = `${MENTION}::before`;
 const COMPACT_MENTION = `.compact-composer ${MENTION}`;
+const COMPOSER = ".composer-tiptap-input";
+const COMPACT_COMPOSER = `.compact-composer ${COMPOSER}`;
 const PR_CHIP = ".composer-tiptap-input__editor .pr-chip.composer-pr-chip";
 const PR_STRUT = `${PR_CHIP}::before`;
 const PR_LABEL = `${PR_CHIP} .pr-chip__label`;
+/** The canonical pill the composer's PR chip is supposed to reproduce. */
+const BASE_PR_CHIP = ".pr-chip";
+
+/**
+ * Chip height as a share of the line box it interrupts.
+ *
+ * This is the ratio the `em` values encode, and the only form of the rule
+ * that survives someone retuning a composer's `line-height`: the strut is
+ * centered and sits at the paragraph's own font size, so a chip fills its
+ * line exactly at a share of 1.0. Measured against this stylesheet, the line
+ * grows at 0.969 (14/1.6 at 1.55em; 12/1.5 at 1.45em) and does not at 0.938
+ * (14/1.6 at 1.50em; 12/1.5 at 1.40em). 0.95 sits between the two.
+ */
+const MAX_HEIGHT_SHARE_OF_LINE_BOX = 0.95;
+
+/** `1.45em` -> 1.45. Unitless or non-`em` lengths are not this contract. */
+function emValue(declared: string | undefined, label: string): number {
+  const match = declared?.match(/^(?<number>[0-9]*\.?[0-9]+)em$/);
+  if (!match?.groups?.number) {
+    throw new Error(`Expected ${label} to be declared in em, got ${declared}`);
+  }
+  return Number(match.groups.number);
+}
 
 describe("composer inline chip alignment contract", () => {
   it("aligns every mention chip on the paragraph baseline, not a nudge", () => {
@@ -98,6 +123,33 @@ describe("composer inline chip alignment contract", () => {
     expect(declaration(ruleBody(MENTION), "height")).toBe("1.45em");
   });
 
+  it("keeps both chip heights under their own line box, not a magic em", () => {
+    // The `em` literals above are only half the invariant — they are the
+    // numerator. A change to either composer's `line-height` moves the
+    // denominator and can push the chip past its line with both of those
+    // assertions still green, so pin the ratio the values actually encode.
+    for (const [chipRule, composerRule, name] of [
+      [MENTION, COMPOSER, "composer"],
+      [COMPACT_MENTION, COMPACT_COMPOSER, "compact composer"],
+    ] as const) {
+      const height = emValue(
+        declaration(ruleBody(chipRule), "height"),
+        `${name} chip height`
+      );
+      // `line-height` is unitless here, which is already a multiple of the
+      // font size — the same basis `em` uses — so the two divide directly.
+      const lineHeight = Number(
+        declaration(ruleBody(composerRule), "line-height")
+      );
+      expect(
+        lineHeight,
+        `${name} must declare a unitless line-height for this to mean anything`
+      ).toBeGreaterThan(0);
+      expect(height / lineHeight, `${name} chip, share of its line box`)
+        .toBeLessThanOrEqual(MAX_HEIGHT_SHARE_OF_LINE_BOX);
+    }
+  });
+
   it("steps the height back for the card composer's shorter line box", () => {
     // `.compact-composer` runs 12px/1.5. The same 1.45em is 17.4px of an 18px
     // line box there and pushes every line it lands on; 1.35em is the same
@@ -111,9 +163,24 @@ describe("composer inline chip alignment contract", () => {
     // paragraph put a 14px label in the chip-scale box; these three restore
     // the dot, gap, and padding the sidebar row and the transcript draw.
     const body = ruleBody(PR_CHIP);
-    expect(declaration(body, "gap")).toBe("6px");
-    expect(declaration(body, "padding")).toBe("0 8px");
-    expect(declaration(ruleBody(PR_LABEL), "font-size")).toBe("11px");
+    const base = ruleBody(BASE_PR_CHIP);
+
+    // Against `.pr-chip` itself, not against literals. The literals are the
+    // same three values, so a copy of them passes whatever the base rule
+    // later says — and "the composer chip matches the sidebar and the
+    // transcript" is the entire claim this rule exists to make. Retuning
+    // `.pr-chip` has to break this test, not silently re-open the defect.
+    expect(declaration(body, "gap")).toBe(declaration(base, "gap"));
+    expect(declaration(body, "padding")).toBe(declaration(base, "padding"));
+    expect(declaration(ruleBody(PR_LABEL), "font-size")).toBe(
+      declaration(base, "font-size")
+    );
+
+    // And the base really does declare all three, so the comparison above
+    // cannot pass by matching `undefined` on both sides.
+    expect(declaration(base, "gap")).toBe("6px");
+    expect(declaration(base, "padding")).toBe("0 8px");
+    expect(declaration(base, "font-size")).toBe("11px");
   });
 
   it("cancels the PR pill's own gap, not the shared one", () => {
@@ -131,6 +198,13 @@ describe("composer inline chip alignment contract", () => {
     // under its 14px siblings on the same line (1.1px, measured). Only the
     // label may carry the smaller size; `align-items: center` places it.
     expect(declaration(ruleBody(PR_CHIP), "font-size")).toBeUndefined();
+
+    // File-wide, not just the rule above: the obvious "simplification" is a
+    // NEW block moving the size off the label onto the chip, which the
+    // single-body check would not see. Matches only selectors that END at
+    // the chip, so the label rule — whose selector also contains the class —
+    // is not caught by its own font-size.
+    expect(css).not.toMatch(/composer-pr-chip\s*\{[^}]*font-size/);
   });
 
   it("does not leave an unqualified base rule to lose the cascade with", () => {
