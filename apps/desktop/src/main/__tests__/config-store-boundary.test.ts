@@ -17,18 +17,29 @@ const RAW_CONFIG_EXPORTS = new Set([
 ]);
 
 // Every check below sweeps one of two whole source trees, and the trees do not
-// change while the file runs. Without these three caches the eight tests
-// re-walked the directories, re-read ~940 files and re-parsed them with the
-// TypeScript compiler eight times over — six full parses of `main/` and two of
-// `renderer/src/` — which was the entire runtime of this file (~10s on Linux
-// and macOS, ~8s on Windows) and none of its coverage.
+// change while the file runs. Each of the eight tests used to re-walk the
+// directories, re-read ~940 files and re-parse them with the TypeScript
+// compiler — which was the entire runtime of this file (~10s on Linux and
+// macOS, ~8s on Windows) and none of its coverage.
+//
+// What actually removed that cost is `parsedSourcesContaining`, which parses
+// only the files whose text could implicate them. These caches are what keeps
+// the rest cheap: the walk happens once per tree, each file is read once, and
+// the few files that two different needle sets both match are parsed once.
+//
+// `sourceTextCache` ends up holding the text of both trees (~15 MB) for as
+// long as the module is loaded. Six checks scan a whole tree for a symbol, so
+// the reads have to happen either way; only the retention is a choice.
 const sourceListCache = new Map<string, string[]>();
 const sourceTextCache = new Map<string, string>();
 const sourceFileCache = new Map<string, ts.SourceFile>();
 
 function productionSources(root: string): string[] {
   const cached = sourceListCache.get(root);
-  if (cached) return cached;
+  // `!== undefined`, not truthiness: an empty walk is a legitimate answer to
+  // cache, and a falsy check on `[]` would miss it and re-walk the tree. The
+  // roots have files today, which is exactly why it would go unnoticed.
+  if (cached !== undefined) return cached;
   const files: string[] = [];
   const visit = (directory: string): void => {
     for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
@@ -68,12 +79,33 @@ function sourceText(filePath: string): string {
   return text;
 }
 
+// The text half of the same idea: paths under `root` whose source mentions
+// `needle`. Shares `parsedSourcesContaining`'s zero-match rule for the same
+// reason — a needle that stopped matching leaves the caller filtering an empty
+// list and passing.
+function sourcesMentioning(root: string, needle: string): string[] {
+  const matched = productionSources(root)
+    .filter((filePath) => sourceText(filePath).includes(needle));
+  if (matched.length === 0) {
+    throw new Error(
+      `No source under ${relative(root)} mentions ${needle}; the boundary `
+      + "check that looks for it can no longer fail.",
+    );
+  }
+  return matched;
+}
+
 // Parses only the files that could possibly violate the rule, which on these
 // trees is a handful out of ~940. A node the check looks for — an import
 // specifier, a called method name — cannot exist in the AST unless its spelling
-// exists in the text, so the filter drops nothing a full sweep would have
-// caught. Every caller derives its needles from the same constant the check
-// itself matches on, so the two cannot drift apart.
+// exists in the text. Every caller derives its needles from the same constant
+// the check itself matches on, so the two cannot drift apart.
+//
+// One narrowing against a full sweep, recorded rather than implied away: a
+// check reads `moduleSpecifier.text`, which is the cooked value, so an import
+// written `"./desktop\u002Dconfig"` resolves to a match the raw text does not
+// contain. These rules guard against an honest mistake, not evasion, and no
+// import in either tree is written that way.
 function parsedSourcesContaining(
   root: string,
   needles: readonly string[],
@@ -97,8 +129,9 @@ function parsedSourcesContaining(
   return matched;
 }
 
-// For the checks that walk the tree. `ts.SourceFile` is immutable and nothing
-// here mutates one, so a single parse serves every test in the file.
+// Reached only through `parsedSourcesContaining`. `ts.SourceFile` is immutable
+// and nothing here mutates one, so the cache lets two checks whose needles both
+// match a file share its parse.
 function sourceFile(filePath: string): ts.SourceFile {
   let file = sourceFileCache.get(filePath);
   if (!file) {
@@ -149,30 +182,39 @@ function containsPotentiallyTruthyProperty(
   return found;
 }
 
-// The only method names `providerRefreshCalls` can match. Kept beside it so the
-// text pre-filter and the AST walk stay in step.
-const PROVIDER_REFRESH_METHODS = [
-  "refreshCodexDiscovery",
-  "listAcpAgents",
-  "listBackends",
-] as const;
+// Method name -> the option that has to be truthy for the call to count as a
+// provider refresh, or `undefined` when the call always counts.
+//
+// The walk below and the text pre-filter that decides which files reach it
+// both read this map, so adding a method here extends both at once. A parallel
+// list would not: the pre-filter would keep skipping files that use only the
+// new name, `parsedSourcesContaining` would still find matches for the older
+// ones and so would not throw, and the check would go quiet.
+//
+// Only `x.method(...)` call sites are matched, because `calledMethodName`
+// resolves a name from a property access and nothing else. A destructured
+// `const { listAcpAgents } = api` call is invisible to this and always has
+// been; widening it means matching identifiers against imports, which is a
+// bigger change than this file wants.
+const PROVIDER_REFRESH_METHODS = new Map<string, string | undefined>([
+  ["refreshCodexDiscovery", undefined],
+  ["listAcpAgents", "refresh"],
+  ["listBackends", "refreshModels"],
+]);
 
 function providerRefreshCalls(file: ts.SourceFile): ts.CallExpression[] {
   const calls: ts.CallExpression[] = [];
   const visit = (node: ts.Node): void => {
     if (ts.isCallExpression(node)) {
       const method = calledMethodName(node);
-      if (
-        method === "refreshCodexDiscovery"
-        || (method === "listAcpAgents"
-          && containsPotentiallyTruthyProperty(node.arguments[0], "refresh"))
-        || (method === "listBackends"
-          && containsPotentiallyTruthyProperty(
-            node.arguments[0],
-            "refreshModels",
-          ))
-      ) {
-        calls.push(node);
+      if (method !== undefined && PROVIDER_REFRESH_METHODS.has(method)) {
+        const requiredOption = PROVIDER_REFRESH_METHODS.get(method);
+        if (
+          requiredOption === undefined
+          || containsPotentiallyTruthyProperty(node.arguments[0], requiredOption)
+        ) {
+          calls.push(node);
+        }
       }
     }
     ts.forEachChild(node, visit);
@@ -216,11 +258,12 @@ describe("desktop config/discovery source boundaries", () => {
       "main/ipc/settings.ts",
     ]);
     const violations: string[] = [];
-    for (const filePath of productionSources(MAIN_SRC)) {
-      const text = sourceText(filePath);
+    for (const filePath of sourcesMentioning(
+      MAIN_SRC,
+      "issueProviderDiscoveryPermit",
+    )) {
       if (
-        text.includes("issueProviderDiscoveryPermit")
-        && !relative(filePath).endsWith("provider-discovery-permit.ts")
+        !relative(filePath).endsWith("provider-discovery-permit.ts")
         && !allowed.has(relative(filePath))
       ) {
         violations.push(relative(filePath));
@@ -235,11 +278,12 @@ describe("desktop config/discovery source boundaries", () => {
       "main/ipc/settings.ts",
     ]);
     const violations: string[] = [];
-    for (const filePath of productionSources(MAIN_SRC)) {
-      const text = sourceText(filePath);
+    for (const filePath of sourcesMentioning(
+      MAIN_SRC,
+      "discoverLocalAcpAgentRecords",
+    )) {
       if (
-        text.includes("discoverLocalAcpAgentRecords")
-        && !relative(filePath).endsWith("acp/acp-instance-discovery.ts")
+        !relative(filePath).endsWith("acp/acp-instance-discovery.ts")
         && !allowedLocalAcpProbeOwners.has(relative(filePath))
       ) {
         violations.push(relative(filePath));
@@ -260,7 +304,10 @@ describe("desktop config/discovery source boundaries", () => {
       ])],
     ]);
     const violations: string[] = [];
-    for (const file of parsedSourcesContaining(MAIN_SRC, [...restrictedImports.keys()])) {
+    for (const file of parsedSourcesContaining(
+      MAIN_SRC,
+      [...restrictedImports.keys()],
+    )) {
       for (const statement of file.statements) {
         if (
           !ts.isImportDeclaration(statement)
@@ -283,20 +330,14 @@ describe("desktop config/discovery source boundaries", () => {
       "main/ipc/settings.ts",
       "main/settings/desktop-settings-service.ts",
     ]);
-    const violations = productionSources(MAIN_SRC)
-      .filter((filePath) =>
-        sourceText(filePath).includes("readSettingsProjection"),
-      )
+    const violations = sourcesMentioning(MAIN_SRC, "readSettingsProjection")
       .map(relative)
       .filter((filePath) => !allowed.has(filePath));
     expect(violations).toEqual([]);
   });
 
   it("allows startup provider refresh only from the startup coordinator", () => {
-    const violations = productionSources(MAIN_SRC)
-      .filter((filePath) =>
-        sourceText(filePath).includes("refreshProvidersAtStartup"),
-      )
+    const violations = sourcesMentioning(MAIN_SRC, "refreshProvidersAtStartup")
       .map(relative)
       .filter((filePath) =>
         filePath !== "main/index.ts"
@@ -313,7 +354,7 @@ describe("desktop config/discovery source boundaries", () => {
     const violations: string[] = [];
     for (const file of parsedSourcesContaining(
       RENDERER_SRC,
-      PROVIDER_REFRESH_METHODS,
+      [...PROVIDER_REFRESH_METHODS.keys()],
     )) {
       if (
         providerRefreshCalls(file).length > 0
@@ -328,10 +369,7 @@ describe("desktop config/discovery source boundaries", () => {
   });
 
   it("keeps whole Settings reads inside the Settings feature", () => {
-    const violations = productionSources(RENDERER_SRC)
-      .filter((filePath) =>
-        sourceText(filePath).includes(".readSettings("),
-      )
+    const violations = sourcesMentioning(RENDERER_SRC, ".readSettings(")
       .map(relative)
       .filter((filePath) =>
         !filePath.startsWith("renderer/src/features/settings/"),
