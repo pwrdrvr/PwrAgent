@@ -48,6 +48,39 @@ vi.mock("../log", () => ({
   getMainLogger: vi.fn(() => messagingLog),
 }));
 
+// This file does not call `StateDb.open`; `initializeAppState` opens the
+// profile database for it, once per test, and `migrateIfNeeded` opens it a
+// second time on the way there. Both are incidental to what is tested here,
+// and the two mocks below take all 148 of those file opens out of the run.
+//
+// Migration can only ever report `fresh-install` against the throwaway
+// `PWRAGENT_HOME` each test stubs, so nothing is lost by skipping it — and
+// `state-migration.test.ts` owns that behaviour. It is skipped rather than
+// redirected because it resolves its legacy search roots from the real home
+// directory instead of the stub, so on a machine still carrying pre-1.0
+// PwrAgent state it re-migrates the operator's own messaging and overlay
+// JSON on every one of these tests.
+vi.mock("../state/migration", () => ({
+  migrateIfNeeded: () => ({ status: "already-migrated" }),
+}));
+
+// Only `app-state` and `migration` ask for "state/state.db"; every other
+// caller of `resolveActiveProfilePath` asks for a different relative path and
+// still lands inside the stubbed profile directory.
+vi.mock("../profile", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../profile")>();
+  return {
+    ...actual,
+    resolveActiveProfilePath: (
+      relativePath: string,
+      options?: Parameters<typeof actual.resolveActiveProfilePath>[1],
+    ) =>
+      relativePath === "state/state.db"
+        ? ":memory:"
+        : actual.resolveActiveProfilePath(relativePath, options),
+  };
+});
+
 const tempDirs: string[] = [];
 const activeRuntimes: DesktopMessagingRuntime[] = [];
 
