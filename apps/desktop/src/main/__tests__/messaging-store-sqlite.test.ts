@@ -20,8 +20,6 @@ const tempDirs: string[] = [];
 const stateDbs: StateDb[] = [];
 
 async function createStore(): Promise<SqliteMessagingStore> {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-sqlite-msg-"));
-  tempDirs.push(tempDir);
   const stateDb = openInMemoryStateDb();
   stateDbs.push(stateDb);
   return new SqliteMessagingStore(stateDb);

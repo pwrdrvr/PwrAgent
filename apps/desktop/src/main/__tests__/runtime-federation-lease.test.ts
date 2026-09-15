@@ -1,6 +1,3 @@
-import { mkdtempSync, rmSync } from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   RuntimeFederationLeaseCoordinator,
@@ -11,10 +8,10 @@ import {
   RUNTIME_LEASE_DEAD_OWNER_GRACE_MS,
 } from "../state/app-runtime-instance-store";
 import { StateDb } from "../state/state-db";
+import { openInMemoryStateDb } from "./sqlite-test-utils";
 
 let stateDb: StateDb;
 let store: AppRuntimeInstanceStore;
-let tempDir: string;
 let liveProcessIds: Set<number>;
 const activeCoordinators: RuntimeFederationLeaseCoordinator[] = [];
 
@@ -66,10 +63,7 @@ function recordInstance(
 
 beforeEach(() => {
   liveProcessIds = new Set<number>();
-  tempDir = mkdtempSync(path.join(os.tmpdir(), "pwragent-federation-lease-"));
-  stateDb = StateDb.open(":memory:", {
-    profileName: "dev",
-  });
+  stateDb = openInMemoryStateDb({ profileName: "dev" });
   store = new AppRuntimeInstanceStore(stateDb);
 });
 
@@ -84,7 +78,6 @@ afterEach(() => {
     }
   }
   stateDb.close();
-  rmSync(tempDir, { recursive: true, force: true });
 });
 
 describe("RuntimeFederationLeaseCoordinator", () => {

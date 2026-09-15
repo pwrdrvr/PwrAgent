@@ -39,7 +39,6 @@ import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import { ComposerDraftRecoveryStore } from "../state/composer-draft-recovery-store";
 import { StateDb } from "../state/state-db";
 import { partitionFederationCollection } from "../federation/federation-collection-reads";
-import { openInMemoryStateDb } from "./sqlite-test-utils";
 
 let stateDb: StateDb;
 let store: SqliteOverlayStore;
@@ -56,7 +55,8 @@ const ALERTING_TOOL_OUTPUT_POLICY = {
 beforeEach(() => {
   process.env[SQLITE_WRITE_METRICS_ENV] = "1";
   tempDir = mkdtempSync(path.join(os.tmpdir(), "pwragent-write-metrics-"));
-  stateDb = openInMemoryStateDb();
+  // A write budget records WAL growth, which only a real file has.
+  stateDb = StateDb.open(path.join(tempDir, "state.db"));
   store = new SqliteOverlayStore(stateDb);
   // The collector is process-wide and this file asserts on exact counts, so
   // each test starts from zero. Ordinary test files do not do this — the

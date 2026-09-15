@@ -1,26 +1,19 @@
-import { mkdtempSync, rmSync } from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   listRecentFileReferencePaths,
   recordRecentFileReferencePaths,
 } from "../state/recent-file-references-store";
 import { StateDb } from "../state/state-db";
+import { openInMemoryStateDb } from "./sqlite-test-utils";
 
 let stateDb: StateDb;
-let tempDir: string;
 
 beforeEach(() => {
-  tempDir = mkdtempSync(path.join(os.tmpdir(), "pwragent-recent-file-refs-"));
-  stateDb = StateDb.open(":memory:", {
-    profileName: "dev",
-  });
+  stateDb = openInMemoryStateDb({ profileName: "dev" });
 });
 
 afterEach(() => {
   stateDb.close();
-  rmSync(tempDir, { recursive: true, force: true });
 });
 
 describe("recent-file-references-store", () => {

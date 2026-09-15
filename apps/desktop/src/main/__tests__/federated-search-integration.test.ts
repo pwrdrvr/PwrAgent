@@ -13,7 +13,6 @@ import { AcpSessionStore } from "../acp/acp-session-store";
 import { FederatedSearchService } from "../federation/federated-search-service";
 import { FederationRpcEndpoint } from "../federation/federation-rpc";
 import { FederationRouter } from "../federation/federation-router";
-import { openInMemoryStateDb } from "./sqlite-test-utils";
 import {
   FEDERATION_BACKEND_METHOD_CAPABILITIES,
   FederationRemoteBackendClient,
@@ -53,7 +52,8 @@ describe("generic search through the owner adapter, registry and real SQLite", (
   beforeEach(() => {
     vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
     root = mkdtempSync(path.join(os.tmpdir(), "pwragent-search-integration-"));
-    db = openInMemoryStateDb();
+    // A write budget records WAL growth, which only a real file has.
+    db = StateDb.open(path.join(root, "state.db"));
     store = new SqliteOverlayStore(db);
     sessions = new AcpSessionStore(db);
     rows = [];

@@ -597,7 +597,8 @@ describe("DesktopConfigStore write cost", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-config-budget-"));
     const configPath = path.join(root, "config.toml");
     fs.writeFileSync(configPath, "[messaging]\nenabled = false\n", "utf8");
-    const db = openInMemoryStateDb();
+    // A write budget records WAL growth, which only a real file has.
+    const db = StateDb.open(path.join(root, "state.db"));
     const store = new DesktopConfigStore({ configPath, stateDb: db });
     try {
       resetSqliteWriteMetrics();
@@ -624,7 +625,8 @@ describe("DesktopConfigStore write cost", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-provider-budget-"));
     const configPath = path.join(root, "config.toml");
     fs.writeFileSync(configPath, "", "utf8");
-    const db = openInMemoryStateDb();
+    // A write budget records WAL growth, which only a real file has.
+    const db = StateDb.open(path.join(root, "state.db"));
     const store = new DesktopConfigStore({
       configPath,
       stateDb: db,

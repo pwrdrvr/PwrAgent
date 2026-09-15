@@ -18,6 +18,9 @@ import type { SqliteWriteDelta } from "../../state/sqlite-write-metrics";
  * read and never assert. Commits are the useful proxy for volume anyway, since
  * each one flushes its dirty pages plus every index the row moved.
  *
+ * A scenario that commits but records zero bytes is rejected: that is not a
+ * measurement, it is a database with no WAL file. See `openInMemoryStateDb`.
+ *
  * To change a budget deliberately, run with `UPDATE_SQLITE_WRITE_BUDGETS=1`
  * and commit the diff. A reviewer then sees the write cost change as a line in
  * the PR instead of never seeing it at all.
@@ -63,6 +66,25 @@ export function expectSqliteWriteBudget(params: {
       `No sqlite write budget recorded for "${params.scenario}".\n`
         + `Measured ${describe(measured)}.\n`
         + "Record it with UPDATE_SQLITE_WRITE_BUDGETS=1 and commit the result.",
+    );
+  }
+
+  // Bytes are never asserted, but losing them entirely is deterministic and
+  // is not a measurement — it means the scenario moved to a database with no
+  // WAL file. `attachSqliteWriteMetrics` resolves no WAL path for `:memory:`,
+  // so a suite converted to `openInMemoryStateDb` keeps every counter below
+  // and silently re-records this scenario's MB/day as zero.
+  if (
+    budget.observedWalBytes > 0
+    && measured.observedWalBytes === 0
+    && measured.commits > 0
+  ) {
+    throw new Error(
+      `sqlite write budget "${params.scenario}" recorded no WAL growth `
+        + `after ${measured.commits} commits, but its budget records `
+        + `${budget.observedWalBytes} bytes.\n`
+        + "An in-memory database has no WAL file. Open this scenario's\n"
+        + "database from a real path so the MB/day figure stays measurable.",
     );
   }
 

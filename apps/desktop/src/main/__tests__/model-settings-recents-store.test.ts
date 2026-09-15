@@ -1,6 +1,3 @@
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
@@ -10,11 +7,9 @@ import {
 import { StateDb } from "../state/state-db.js";
 
 describe("model settings recents store", () => {
-  let root: string;
   let stateDb: StateDb;
 
   beforeEach(() => {
-    root = mkdtempSync(path.join(tmpdir(), "pwragent-recents-"));
     stateDb = StateDb.open(":memory:", {
       profileName: "dev",
     });
@@ -22,7 +17,6 @@ describe("model settings recents store", () => {
 
   afterEach(() => {
     stateDb.close();
-    rmSync(root, { force: true, recursive: true });
   });
 
   it("starts empty", () => {

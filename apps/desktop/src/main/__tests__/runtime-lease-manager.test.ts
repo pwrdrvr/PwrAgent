@@ -1,6 +1,3 @@
-import { mkdtempSync, rmSync } from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { RuntimeLeaseManager } from "../runtime-lease-manager";
 import {
@@ -8,10 +5,10 @@ import {
   RUNTIME_LEASE_DEAD_OWNER_GRACE_MS,
 } from "../state/app-runtime-instance-store";
 import { StateDb } from "../state/state-db";
+import { openInMemoryStateDb } from "./sqlite-test-utils";
 
 let stateDb: StateDb;
 let store: AppRuntimeInstanceStore;
-let tempDir: string;
 let liveRuntimeIdentities: Map<number, string>;
 
 function runtimeIdentityKey(params: {
@@ -50,16 +47,12 @@ function createManager(params: {
 
 beforeEach(() => {
   liveRuntimeIdentities = new Map<number, string>();
-  tempDir = mkdtempSync(path.join(os.tmpdir(), "pwragent-runtime-leases-"));
-  stateDb = StateDb.open(":memory:", {
-    profileName: "dev",
-  });
+  stateDb = openInMemoryStateDb({ profileName: "dev" });
   store = new AppRuntimeInstanceStore(stateDb);
 });
 
 afterEach(() => {
   stateDb.close();
-  rmSync(tempDir, { recursive: true, force: true });
 });
 
 describe("RuntimeLeaseManager", () => {
