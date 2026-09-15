@@ -1,0 +1,215 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`budgets pin and renderer reads with four viewers and two active owner threads (separate mounts) 1`] = `
+{
+  "accountingOnly": {
+    "notifications": 0,
+    "pins": {
+      "requestBytes": 0,
+      "requests": 0,
+      "responseBytes": 0,
+      "responseRows": 0,
+      "unchanged": 0,
+    },
+    "renderer": {
+      "requestBytes": 0,
+      "requests": 0,
+      "responseBytes": 0,
+      "responseRows": 0,
+      "unchanged": 0,
+    },
+  },
+  "childDiscovery": {
+    "notifications": 4,
+    "pins": {
+      "requestBytes": 1240,
+      "requests": 5,
+      "responseBytes": 8169,
+      "responseRows": 12,
+      "unchanged": 4,
+    },
+    "renderer": {
+      "requestBytes": 2456,
+      "requests": 8,
+      "responseBytes": 3491,
+      "responseRows": 1,
+      "unchanged": 7,
+    },
+  },
+  "cold": {
+    "notifications": 0,
+    "pins": {
+      "requestBytes": 700,
+      "requests": 4,
+      "responseBytes": 24304,
+      "responseRows": 44,
+      "unchanged": 0,
+    },
+    "renderer": {
+      "requestBytes": 1864,
+      "requests": 8,
+      "responseBytes": 6652,
+      "responseRows": 8,
+      "unchanged": 0,
+    },
+  },
+  "oneWorktree": {
+    "notifications": 4,
+    "pins": {
+      "requestBytes": 248,
+      "requests": 1,
+      "responseBytes": 388,
+      "responseRows": 0,
+      "unchanged": 1,
+    },
+    "renderer": {
+      "requestBytes": 614,
+      "requests": 2,
+      "responseBytes": 774,
+      "responseRows": 0,
+      "unchanged": 2,
+    },
+  },
+  "twoActiveParents": {
+    "notifications": 54,
+    "pins": {
+      "requestBytes": 13392,
+      "requests": 54,
+      "responseBytes": 20952,
+      "responseRows": 0,
+      "unchanged": 54,
+    },
+    "renderer": {
+      "requestBytes": 16578,
+      "requests": 54,
+      "responseBytes": 20898,
+      "responseRows": 0,
+      "unchanged": 54,
+    },
+  },
+  "unrelatedSubagents": {
+    "notifications": 0,
+    "pins": {
+      "requestBytes": 0,
+      "requests": 0,
+      "responseBytes": 0,
+      "responseRows": 0,
+      "unchanged": 0,
+    },
+    "renderer": {
+      "requestBytes": 0,
+      "requests": 0,
+      "responseBytes": 0,
+      "responseRows": 0,
+      "unchanged": 0,
+    },
+  },
+}
+`;
+
+exports[`budgets pin and renderer reads with four viewers and two active owner threads (shared mounts) 1`] = `
+{
+  "accountingOnly": {
+    "notifications": 0,
+    "pins": {
+      "requestBytes": 0,
+      "requests": 0,
+      "responseBytes": 0,
+      "responseRows": 0,
+      "unchanged": 0,
+    },
+    "renderer": {
+      "requestBytes": 0,
+      "requests": 0,
+      "responseBytes": 0,
+      "responseRows": 0,
+      "unchanged": 0,
+    },
+  },
+  "childDiscovery": {
+    "notifications": 4,
+    "pins": {
+      "requestBytes": 2280,
+      "requests": 8,
+      "responseBytes": 50912,
+      "responseRows": 92,
+      "unchanged": 4,
+    },
+    "renderer": {
+      "requestBytes": 2456,
+      "requests": 8,
+      "responseBytes": 4676,
+      "responseRows": 4,
+      "unchanged": 4,
+    },
+  },
+  "cold": {
+    "notifications": 0,
+    "pins": {
+      "requestBytes": 848,
+      "requests": 4,
+      "responseBytes": 47196,
+      "responseRows": 88,
+      "unchanged": 0,
+    },
+    "renderer": {
+      "requestBytes": 1864,
+      "requests": 8,
+      "responseBytes": 6256,
+      "responseRows": 8,
+      "unchanged": 0,
+    },
+  },
+  "oneWorktree": {
+    "notifications": 4,
+    "pins": {
+      "requestBytes": 1140,
+      "requests": 4,
+      "responseBytes": 1552,
+      "responseRows": 0,
+      "unchanged": 4,
+    },
+    "renderer": {
+      "requestBytes": 1228,
+      "requests": 4,
+      "responseBytes": 1548,
+      "responseRows": 0,
+      "unchanged": 4,
+    },
+  },
+  "twoActiveParents": {
+    "notifications": 216,
+    "pins": {
+      "requestBytes": 61560,
+      "requests": 216,
+      "responseBytes": 83808,
+      "responseRows": 0,
+      "unchanged": 216,
+    },
+    "renderer": {
+      "requestBytes": 66312,
+      "requests": 216,
+      "responseBytes": 83592,
+      "responseRows": 0,
+      "unchanged": 216,
+    },
+  },
+  "unrelatedSubagents": {
+    "notifications": 0,
+    "pins": {
+      "requestBytes": 0,
+      "requests": 0,
+      "responseBytes": 0,
+      "responseRows": 0,
+      "unchanged": 0,
+    },
+    "renderer": {
+      "requestBytes": 0,
+      "requests": 0,
+      "responseBytes": 0,
+      "responseRows": 0,
+      "unchanged": 0,
+    },
+  },
+}
+`;

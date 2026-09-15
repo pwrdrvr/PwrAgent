@@ -228,6 +228,7 @@ function navigationRequestLogFields(envelope: FederationProtocolEnvelope): Feder
     navigationQueryFingerprint: fingerprint({ query, backend: params.backend ?? "all", inventory: params.inventory ?? "owner", attentionView: params.attentionView }),
     navigationBaseline: typeof params.completeBaselineRevision === "string" ? fingerprint(params.completeBaselineRevision) : undefined,
     navigationConditional: String(Boolean(params.completeBaselineRevision)),
+    navigationCursorFingerprint: typeof params.cursor === "string" ? fingerprint(params.cursor) : undefined,
     navigationCursor: String(Boolean(params.cursor)), navigationRetainedRange: String(Boolean(params.retainedRange)),
     navigationPageSize: typeof params.pageSize === "number" ? String(params.pageSize) : undefined,
   };
@@ -237,8 +238,11 @@ function navigationResponseLogFields(envelope: FederationProtocolEnvelope): Fede
   const page = envelope.result as Record<string, unknown>;
   const coverage = page.coverage as Record<string, unknown> | undefined;
   return {
-    navigationUnchanged: String(page.unchanged === true), navigationRangeUnchanged: String(page.rangeUnchanged === true),
+    navigationUnchanged: String(page.unchanged === true), navigationRangeUnchanged: String(Boolean(page.rangeUnchanged)),
     navigationComplete: String(page.complete === true), navigationNextCursor: String(Boolean(page.nextCursor)),
+    navigationOwnerEpoch: typeof page.ownerEpoch === "string" ? fingerprint(page.ownerEpoch) : undefined,
+    navigationGeneration: typeof page.generation === "string" ? fingerprint(page.generation) : undefined,
+    navigationRangeStart: typeof page.rangeStart === "number" ? String(page.rangeStart) : undefined,
     navigationRevision: typeof page.countsRevision === "string" ? fingerprint(page.countsRevision) : undefined,
     navigationCoverage: ["complete", "checking", "degraded"].includes(String(coverage?.state)) ? String(coverage?.state) : undefined,
     navigationPendingProviders: typeof coverage?.pendingProviders === "number" ? String(coverage.pendingProviders) : undefined,
