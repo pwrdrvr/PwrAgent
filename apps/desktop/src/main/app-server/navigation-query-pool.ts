@@ -40,6 +40,12 @@ function ownerKey(target?: FederationTarget): string {
   return JSON.stringify(target?.scope === "remote" ? ["remote", target.instanceId] : ["local"]);
 }
 
+function navigationReadCancelled(): NavigationQueryError {
+  // Capacity waiters and throwIfAborted propagate the signal reason directly,
+  // before waitForRead can translate cancellation for the quiet IPC path.
+  return new NavigationQueryError("navigation_busy", "Navigation read cancelled or its deadline expired.");
+}
+
 /** Process-owned query admission and cancellation shared by native windows. */
 export class NavigationQueryPool {
   private readonly queries = new Map<string, Query>();
@@ -117,7 +123,7 @@ export class NavigationQueryPool {
     for (const [otherKey, other] of this.queries) {
       if (otherKey === key || !other.consumers.delete(params.consumerId)) continue;
       if (other.consumers.size === 0) {
-        for (const read of other.reads.values()) read.controller.abort();
+        for (const read of other.reads.values()) read.controller.abort(navigationReadCancelled());
       }
     }
     let query = this.queries.get(key);
@@ -215,11 +221,11 @@ export class NavigationQueryPool {
 
   release(consumerId: string): void {
     this.consumerKeys.delete(consumerId);
-    for (const admission of this.admissions.get(consumerId) ?? []) admission.abort();
+    for (const admission of this.admissions.get(consumerId) ?? []) admission.abort(navigationReadCancelled());
     for (const query of this.queries.values()) {
       query.consumers.delete(consumerId);
       if (query.consumers.size === 0) {
-        for (const read of query.reads.values()) read.controller.abort();
+        for (const read of query.reads.values()) read.controller.abort(navigationReadCancelled());
       }
     }
     this.evictUnused();
@@ -246,7 +252,7 @@ export class NavigationQueryPool {
     signal.throwIfAborted();
     this.activeReads += 1;
     params.query.active = true;
-    const timer = setTimeout(() => params.controller.abort(),
+    const timer = setTimeout(() => params.controller.abort(navigationReadCancelled()),
       Math.max(0, params.deadlineAt - Date.now()));
     const completion = (async () => {
       let page: T;
@@ -297,7 +303,7 @@ export class NavigationQueryPool {
     signal?: AbortSignal,
   ): Promise<T> {
     return new Promise((resolve, reject) => {
-      const cancel = (): void => reject(new NavigationQueryError("navigation_busy", "Navigation read cancelled or its deadline expired."));
+      const cancel = (): void => reject(navigationReadCancelled());
       const timer = setTimeout(cancel, Math.max(0, deadlineAt - Date.now()));
       signal?.addEventListener("abort", cancel, { once: true });
       if (signal?.aborted) cancel();

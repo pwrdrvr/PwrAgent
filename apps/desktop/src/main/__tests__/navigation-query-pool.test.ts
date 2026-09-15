@@ -294,10 +294,30 @@ describe("NavigationQueryPool", () => {
       load: async () => { called = true; return page; },
     });
     pool.release("closed");
-    await expect(waiting).rejects.toThrow();
+    await expect(waiting).rejects.toMatchObject({ code: "navigation_busy" });
     expect(called).toBe(false);
     for (const done of finish) done();
     await Promise.all(pending);
+  });
+
+  it.each(["detail", "queue"] as const)("returns expected cancellation for a %s waiting behind physical reads", async (kind) => {
+    const pool = new NavigationQueryPool();
+    const finish: Array<() => void> = [];
+    const active = Array.from({ length: 8 }, (_, index) => pool.readExact({
+      kind: "launchpad", consumerId: `active-${index}`, identity: String(index), operation: "full",
+      load: () => new Promise<NavigationLaunchpadConfigResponse>((resolve) => finish.push(() => resolve({ protocol: 2, revision: "ready" }))),
+    }));
+    const load = vi.fn();
+    const waiting = pool.readExact({ kind, consumerId: "closed", identity: "waiting", operation: "full", load });
+    const settled = Promise.allSettled([waiting]);
+    pool.release("closed");
+    const [result] = await settled;
+    for (const done of finish) done();
+    await Promise.all(active);
+    for (let index = 0; index < 8; index += 1) pool.release(`active-${index}`);
+    expect(result).toMatchObject({ status: "rejected", reason: { code: "navigation_busy" } });
+    expect(load).not.toHaveBeenCalled();
+    expect(pool.getBudgetUsage()).toEqual({ queries: 0, exactResources: 0, retainedBytes: 0, activeReads: 0 });
   });
 
   it("retains the consumer admission budget when inactive backing is evicted", async () => {
