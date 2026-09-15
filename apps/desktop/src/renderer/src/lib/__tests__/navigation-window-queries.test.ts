@@ -368,3 +368,31 @@ it("does not publish or refetch for identical demand or absent-resource invalida
     expect(queries.getSnapshot().resources.size).toBe(0);
   } finally { queries.dispose(); }
 });
+
+
+it("keeps another owner's pending page and conditional baseline across a local invalidation", async () => {
+  const remote = deferred<NavigationQueryPage>();
+  const read = vi.fn<NonNullable<DesktopApi["getNavigationQueryPage"]>>(async (query) =>
+    query.federationTarget?.scope === "remote" ? remote.promise : page({ complete: true, nextCursor: undefined }));
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+  queries.setDemand(new Map([
+    ["local", request()],
+    ["remote", { ...request(), federationTarget: { scope: "remote", instanceId: "peer" } }],
+  ]));
+  try {
+    await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+    queries.invalidate(undefined, [{ scope: "local" }]);
+    await queries.refresh(undefined, [{ scope: "local" }]);
+    expect(read.mock.calls.filter(([query]) => query.federationTarget?.scope === "remote")).toHaveLength(1);
+    remote.resolve(page({ queryKey: "remote", complete: true, nextCursor: undefined }));
+    await vi.waitFor(() => expect(queries.getSnapshot().resources.get("remote")?.loading).toBe(false));
+    expect(queries.getSnapshot().resources.get("remote")?.state.page?.queryKey).toBe("remote");
+    expect(read.mock.calls.filter(([query]) => query.federationTarget?.scope === "remote")).toHaveLength(1);
+    queries.invalidate(undefined, [{ scope: "local" }]);
+    await queries.refresh("remote");
+    expect(read.mock.calls.at(-1)?.[0].completeBaselineRevision).toBe("revision");
+  } finally {
+    queries.dispose();
+    remote.resolve(page());
+  }
+});

@@ -678,7 +678,7 @@ describe("StateDb", () => {
   describe("ensureIncrementalAutoVacuum", () => {
     // A database created the way every pre-fix profile was: WAL first, so the
     // `auto_vacuum` assignment lands on a file that already has a header.
-    const openLegacyDatabase = (dbPath: string) => {
+    const openLegacyDatabase = (dbPath: string, fragmented = true) => {
       const nativeBinding = getNativeBinding();
       const legacy = new Database(
         dbPath,
@@ -687,6 +687,7 @@ describe("StateDb", () => {
       legacy.pragma("journal_mode = WAL");
       legacy.pragma("auto_vacuum = INCREMENTAL");
       legacy.exec("CREATE TABLE bulk(id INTEGER PRIMARY KEY, blob TEXT)");
+      if (!fragmented) return legacy;
       const insert = legacy.prepare("INSERT INTO bulk(blob) VALUES (?)");
       legacy.transaction(() => {
         for (let index = 0; index < 20000; index += 1) {
@@ -757,7 +758,9 @@ describe("StateDb", () => {
 
     it("reports failure when the rewrite leaves the mode unchanged", () => {
       const dbPath = path.join(tempDir, "stubborn.db");
-      openLegacyDatabase(dbPath).close();
+      // This case tests mode verification, not reclaiming fragmented pages.
+      // Keep the legacy header without copying the shrink test's large payload.
+      openLegacyDatabase(dbPath, false).close();
 
       const legacyDb = StateDb.open(dbPath);
       // Stand in for any VACUUM that returns cleanly without converting: the
@@ -770,6 +773,7 @@ describe("StateDb", () => {
           : realExec(sql)) as typeof legacyDb.raw.exec;
 
       try {
+        expect(legacyDb.raw.pragma("auto_vacuum", { simple: true })).toBe(SQLITE_AUTO_VACUUM_NONE);
         const conversion = legacyDb.ensureIncrementalAutoVacuum();
         expect(conversion.status).toBe("failed");
         if (conversion.status !== "failed") throw new Error("unreachable");

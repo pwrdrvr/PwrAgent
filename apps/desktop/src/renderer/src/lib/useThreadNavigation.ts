@@ -165,9 +165,15 @@ type NavigationState = {
 };
 
 type NavigationRefreshOptions = {
+  owners?: FederationTarget[];
   forceRefresh?: boolean;
   refreshMode?: "active-recent" | "full";
 };
+
+function mergeNavigationRefreshOwners(left: FederationTarget[] | undefined, right: FederationTarget[] | undefined): FederationTarget[] | undefined {
+  if (!left || !right) return undefined;
+  return [...new Map([...left, ...right].map((owner) => [JSON.stringify(owner), owner])).values()];
+}
 
 type FederatedLaunchpadSession = {
   directories: NavigationDirectorySummary[];
@@ -2497,7 +2503,8 @@ function mergeHydratedThreadWithOptimisticState(
     codexEnvironmentRuntime: thread.codexEnvironmentRuntime ?? optimistic.codexEnvironmentRuntime,
     optimisticActiveTurn: thread.optimisticActiveTurn ?? optimistic.optimisticActiveTurn,
     optimisticUserMessage: thread.optimisticUserMessage ?? optimistic.optimisticUserMessage,
-    pinnedRank: thread.pinnedRank ?? optimistic.pinnedRank,
+    // An admitted owner row with no rank is authoritatively unpinned.
+    pinnedRank: thread.pinnedRank,
     scheduledStart: thread.scheduledStart ?? optimistic.scheduledStart,
   };
 }
@@ -3011,6 +3018,7 @@ export function useThreadNavigation(
         preferredOptimisticThread?: NavigationThreadSummary;
         preferredSelectionKey?: string;
         refreshMode?: "active-recent" | "full";
+        owners?: FederationTarget[];
       }
     | undefined
   >(undefined);
@@ -3184,6 +3192,10 @@ export function useThreadNavigation(
           const key = threadSummaryIdentityKey(row);
           const ownerPage = boundedNavigation.resources.get(id)?.state.request.federationTarget?.scope === "remote";
           const previous = threadRows.get(key);
+          // Restoring a selection or lens reuses its cached range while a
+          // fresh read runs. That range supplies membership, not newer row
+          // metadata: it must not roll a live PR chip back to an old status.
+          if (previous && boundedNavigation.resources.get(id)?.restoredFromCache) continue;
           let presentedRow = rendererFederationTarget?.scope !== "remote" && row.ref.ownerInstanceId
             ? ownerPage ? { ...row, pinnedRank: previous?.pinnedRank,
                 ownerOrdinaryChildCount: row.ordinaryChildCount, viewerChildCount: previous?.viewerChildCount,
@@ -3230,11 +3242,11 @@ export function useThreadNavigation(
 
   const performRefresh = useCallback(async (
     preferredSelectionKey?: string, preferredOptimisticThread?: NavigationThreadSummary, forcePreferredSelection = false,
-    _options?: NavigationRefreshOptions,
+    options?: NavigationRefreshOptions,
   ): Promise<void> => {
     if (preferredOptimisticThread) setOptimisticThread(preferredOptimisticThread);
     if (preferredSelectionKey) setSelectedItemKey((current) => forcePreferredSelection || !current ? preferredSelectionKey : current);
-    await boundedNavigation.refresh();
+    await boundedNavigation.refresh(options?.owners);
   }, [boundedNavigation.refresh]);
 
   const refresh = useCallback(
@@ -3250,10 +3262,13 @@ export function useThreadNavigation(
         preferredOptimisticThread,
         preferredSelectionKey,
         refreshMode: options?.refreshMode,
+        owners: options?.owners,
       };
 
       if (refreshInFlightRef.current) {
-        queuedRefreshRef.current = initialRequest;
+        const queued = queuedRefreshRef.current;
+        queuedRefreshRef.current = { ...initialRequest, owners: queued
+          ? mergeNavigationRefreshOwners(queued.owners, initialRequest.owners) : initialRequest.owners };
         return;
       }
 
@@ -3270,6 +3285,7 @@ export function useThreadNavigation(
             {
               forceRefresh: nextRequest.forceRefresh,
               refreshMode: nextRequest.refreshMode,
+              owners: nextRequest.owners,
             }
           );
           nextRequest = queuedRefreshRef.current;
@@ -3304,7 +3320,9 @@ export function useThreadNavigation(
       forcePreferredSelection = false,
       options?: NavigationRefreshOptions
     ): void => {
+      const owners = options?.owners ?? [readRendererFederationTarget() ?? { scope: "local" }];
       queuedRefreshRef.current = {
+        owners: queuedRefreshRef.current ? mergeNavigationRefreshOwners(queuedRefreshRef.current.owners, owners) : owners,
         forceRefresh:
           options?.forceRefresh === true || queuedRefreshRef.current?.forceRefresh === true,
         forcePreferredSelection,
@@ -3336,6 +3354,7 @@ export function useThreadNavigation(
           {
             forceRefresh: nextRequest.forceRefresh,
             refreshMode: nextRequest.refreshMode,
+            owners: nextRequest.owners,
           }
         );
       }, 0);
@@ -3535,13 +3554,17 @@ export function useThreadNavigation(
     return desktopApi.onAgentEvent((event) => {
       const windowTarget = readRendererFederationTarget();
       const method = event.notification.method as string;
+      const owners: FederationTarget[] = [event.federationTarget ?? { scope: "local" }];
+      if (event.federationTarget?.scope === "remote" && windowTarget?.scope !== "remote") owners.push({ scope: "local" });
+      const scheduleEventRefresh: typeof scheduleRefresh = (selection, optimistic, forceSelection, options) =>
+        scheduleRefresh(selection, optimistic, forceSelection, { ...options, owners });
       if (federationTargetsEqual(event.federationTarget, windowTarget) && navigationQueryEventRequiresRefresh(method)) {
-        boundedNavigation.invalidate();
+        boundedNavigation.invalidate(owners);
         // These notifications contain the complete replacement for every
         // affected chip. Keep the patched baseline stale for the next query,
         // without reading a new page for each working-state probe.
         if (method !== "navigation/threadGitWorkingState/updated" && method !== "navigation/directoryGitStatus/updated") {
-          scheduleRefresh();
+          scheduleEventRefresh();
         }
       }
       if (method === "navigation/thread/seen" && federationTargetsEqual(event.federationTarget, windowTarget)) {
@@ -3552,11 +3575,11 @@ export function useThreadNavigation(
         return;
       }
       if (method === "navigation/directory/seen") {
-        scheduleRefresh();
+        scheduleEventRefresh();
         return;
       }
       if (method === "navigation/directory/removed") {
-        scheduleRefresh();
+        scheduleEventRefresh();
         return;
       }
       // A peer's row-state events carry its own remote target, which never
@@ -3573,7 +3596,9 @@ export function useThreadNavigation(
       const remoteThreadStatePassthrough =
         !windowTarget
         && Boolean(event.federationTarget)
-        && (method === "pullRequest/status/updated"
+        && (method === "navigation/invalidated"
+          || method === "federation/eventStream/changed"
+          || method === "pullRequest/status/updated"
           || method === "thread/name/updated"
           || method === "thread/pullRequests/updated"
           || method === "thread/reactions/updated"
@@ -3590,8 +3615,8 @@ export function useThreadNavigation(
       if (remoteThreadStatePassthrough && navigationQueryEventRequiresRefresh(method)) {
         // Viewer pages also contain mounted remote identities. A peer event
         // invalidates their in-flight baseline before its canonical patch lands.
-        boundedNavigation.invalidate();
-        scheduleRefresh();
+        boundedNavigation.invalidate(owners);
+        scheduleEventRefresh();
       }
       if (
         !remoteThreadStatePassthrough
@@ -3619,7 +3644,7 @@ export function useThreadNavigation(
           ),
         }));
         if (params.status === "connected") {
-          scheduleRefresh(undefined, undefined, false, {
+          scheduleEventRefresh(undefined, undefined, false, {
             forceRefresh: true,
             refreshMode: "full",
           });
@@ -3633,14 +3658,14 @@ export function useThreadNavigation(
         // Startup served the durable provider snapshot first. The background
         // revalidation has now populated the registry caches, so consume that
         // publication without forcing a second provider walk.
-        scheduleRefresh();
+        scheduleEventRefresh();
         return;
       }
       if (method === "navigation/remoteThreadPins/changed") {
         // Viewer-side pin membership or rank changed (possibly in another
         // window) — the merged snapshot is the source of truth for the row
         // set, so refresh rather than patch.
-        scheduleRefresh();
+        scheduleEventRefresh();
         return;
       }
       if (method === "federation/peerStatus/changed") {
@@ -3721,7 +3746,7 @@ export function useThreadNavigation(
       }
 
       if (method === "navigation/threadDirectories/updated") {
-        scheduleRefresh();
+        scheduleEventRefresh();
         return;
       }
 
@@ -3748,7 +3773,7 @@ export function useThreadNavigation(
             rows: nextResponse,
           };
         });
-        scheduleRefresh();
+        scheduleEventRefresh();
         return;
       }
 
@@ -3789,7 +3814,7 @@ export function useThreadNavigation(
             rows: result.snapshot,
           };
         });
-        scheduleRefresh();
+        scheduleEventRefresh();
         return;
       }
 
@@ -3900,7 +3925,7 @@ export function useThreadNavigation(
               }
             : current
         );
-        scheduleRefresh();
+        scheduleEventRefresh();
         return;
       }
 
@@ -3965,7 +3990,7 @@ export function useThreadNavigation(
         // Refresh so the persisted permissionTransitionLog (which the
         // registry just appended an `applied` entry to) flows back into
         // the snapshot for transcript rendering.
-        scheduleRefresh();
+        scheduleEventRefresh();
         return;
       }
 
@@ -3996,7 +4021,7 @@ export function useThreadNavigation(
         );
         // The registry already persisted a `queued` audit entry; pull
         // the snapshot so the transcript renders it.
-        scheduleRefresh();
+        scheduleEventRefresh();
         return;
       }
 
@@ -4023,7 +4048,7 @@ export function useThreadNavigation(
         );
         // Pull the snapshot so the matching `applied` / `cancelled`
         // transition entry shows up in the transcript.
-        scheduleRefresh();
+        scheduleEventRefresh();
         return;
       }
 
@@ -4155,7 +4180,7 @@ export function useThreadNavigation(
               }
             : current
         );
-        scheduleRefresh();
+        scheduleEventRefresh();
         return;
       }
 
@@ -4164,7 +4189,7 @@ export function useThreadNavigation(
         // thread overlay before broadcasting this event. Refresh so the
         // navigation snapshot carries `turnFailureLog` into the transcript;
         // without it the failure would never surface as a durable entry.
-        scheduleRefresh();
+        scheduleEventRefresh();
         return;
       }
 
@@ -4172,7 +4197,7 @@ export function useThreadNavigation(
         // Completed questionnaire answers are persisted in the thread overlay
         // because App Server replay does not include request-user-input items.
         // Refresh so the sanitized Q/A summary appears in the transcript now.
-        scheduleRefresh();
+        scheduleEventRefresh();
         return;
       }
 
@@ -4180,7 +4205,7 @@ export function useThreadNavigation(
         // Recovery audit metadata is persisted on the failed turn before each
         // status event. Refresh so repair and automatic-resubmission markers
         // appear inline and survive transcript reconciliation.
-        scheduleRefresh();
+        scheduleEventRefresh();
         return;
       }
 
@@ -4190,7 +4215,7 @@ export function useThreadNavigation(
           threadId: string;
         };
         if (!params.subAgents) {
-          scheduleRefresh();
+          scheduleEventRefresh();
           return;
         }
         setState((current) => ({
@@ -4216,7 +4241,7 @@ export function useThreadNavigation(
         method === "thread/turnQueue/updated" ||
         method === "thread/agent/updated"
       ) {
-        scheduleRefresh();
+        scheduleEventRefresh();
         return;
       }
 
@@ -4289,7 +4314,7 @@ export function useThreadNavigation(
             parentThreadInstanceId,
           }),
         }));
-        scheduleRefresh();
+        scheduleEventRefresh();
         return;
       }
 
@@ -4307,14 +4332,14 @@ export function useThreadNavigation(
             parentThreadBackend: undefined,
           }),
         }));
-        scheduleRefresh();
+        scheduleEventRefresh();
         return;
       }
 
       if (method === "thread/subthreadOrder/updated") {
         // The independently paged child collection owns placement/order.
         // Exact selected detail consumes this event's complete configuration.
-        scheduleRefresh();
+        scheduleEventRefresh();
         return;
       }
 
@@ -4406,12 +4431,12 @@ export function useThreadNavigation(
         suppressedArchivedThreadKeysRef.current.delete(
           agentEventThreadIdentityKey(event, threadId)
         );
-        scheduleRefresh();
+        scheduleEventRefresh();
         return;
       }
 
       if (method === "thread/started") {
-        scheduleRefresh();
+        scheduleEventRefresh();
         return;
       }
 
@@ -4420,7 +4445,7 @@ export function useThreadNavigation(
         method === "turn/failed" ||
         method === "turn/cancelled"
       ) {
-        scheduleRefresh();
+        scheduleEventRefresh();
       }
     });
   }, [desktopApi, enabled, markNavigationActivity, scheduleRefresh, state.rows]);
@@ -7253,19 +7278,25 @@ export function useThreadNavigation(
         return;
       }
 
-      const pinnedRank = pinned ? thread.pinnedRank : undefined;
       const federationTarget = thread.federation?.ref.target
         ?? readRendererFederationTarget();
-
-      setState((current) => ({
-        ...current,
-        rows: updateThreadPinInLoadedRows(current.rows, {
-          backend: thread.source,
-          federationTarget,
-          threadId: thread.id,
-          pinnedRank,
-        }),
-      }));
+      const threadKey = threadSummaryIdentityKey(thread);
+      const applyPinRank = (pinnedRank: string | undefined): void => {
+        // A just-materialized thread may exist only in the optimistic row.
+        // Keep it in sync so it cannot restore a removed pin during hydration.
+        setOptimisticThread((current) => current && threadSummaryIdentityKey(current) === threadKey
+          ? { ...current, pinnedRank } : current);
+        setState((current) => ({
+          ...current,
+          rows: updateThreadPinInLoadedRows(current.rows, {
+            backend: thread.source,
+            federationTarget,
+            threadId: thread.id,
+            pinnedRank,
+          }),
+        }));
+      };
+      applyPinRank(pinned ? thread.pinnedRank : undefined);
 
       try {
         // A remote row pinned in the MAIN window takes a VIEWER-owned rank
@@ -7283,15 +7314,8 @@ export function useThreadNavigation(
             ref: thread.federation.ref,
             pinned,
           });
-          setState((current) => ({
-            ...current,
-            rows: updateThreadPinInLoadedRows(current.rows, {
-              backend: thread.source,
-              federationTarget,
-              threadId: thread.id,
-              pinnedRank: result.pinnedRank,
-            }),
-          }));
+          boundedNavigation.invalidate();
+          applyPinRank(result.pinnedRank);
           return;
         }
         const result = await setThreadPinRequest({
@@ -7300,15 +7324,8 @@ export function useThreadNavigation(
           threadId: thread.id,
           pinned,
         });
-        setState((current) => ({
-          ...current,
-          rows: updateThreadPinInLoadedRows(current.rows, {
-            backend: result.backend,
-            federationTarget,
-            threadId: result.threadId,
-            pinnedRank: result.pinnedRank,
-          }),
-        }));
+        boundedNavigation.invalidate();
+        applyPinRank(result.pinnedRank);
       } catch {
         await refresh(threadSummaryIdentityKey(thread));
       }
@@ -7317,6 +7334,7 @@ export function useThreadNavigation(
       refresh,
       setRemoteThreadLocalPinRequest,
       setThreadPinRequest,
+      boundedNavigation.invalidate,
     ],
   );
 

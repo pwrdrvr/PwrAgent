@@ -1,6 +1,6 @@
 import { act, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import type { NavigationQueryPage, NavigationRow, NavigationSelectedDetailResponse } from "@pwragent/shared";
+import type { NavigationQueryPage, NavigationRow, NavigationSelectedDetailResponse, PrSummary } from "@pwragent/shared";
 import type { DesktopApi } from "../desktop-api";
 import { useThreadNavigation } from "../useThreadNavigation";
 import { Sidebar } from "../../features/navigation/Sidebar";
@@ -86,10 +86,10 @@ it.each([false, true])("waits for New Thread owner authority and respects change
   unmount();
 });
 
-it("fences a page started before an accepted relative pin move and accepts the next owner baseline", async () => {
+it.each(["reorder", "unpin"])("fences a page started before an accepted pin %s and accepts the next owner baseline", async (operation) => {
   const f = fixture();
   const originalRead = f.read.getMockImplementation()!;
-  let rank = "1024";
+  let rank: string | undefined = "1024";
   let hold = false;
   let release!: () => void;
   let captured = false;
@@ -105,17 +105,27 @@ it("fences a page started before an accepted relative pin move and accepts the n
     rank = "3072";
     return { pinnedRanks: { "codex:thread-0": rank } };
   });
-  const api = { ...f.api, reorderThreadPins };
+  const setThreadPin = vi.fn<NonNullable<DesktopApi["setThreadPin"]>>(async (request) => {
+    rank = undefined;
+    return { backend: "codex", threadId: request.threadId };
+  });
+  const api = { ...f.api, reorderThreadPins, setThreadPin };
   const { result } = renderHook(() => useThreadNavigation(api));
   await waitFor(() => expect(result.current.selectedThreadConfigurationReady).toBe(true));
   hold = true;
   let refresh!: Promise<void>;
   act(() => { refresh = result.current.refresh(); });
   await waitFor(() => expect(captured).toBe(true));
-  await act(() => result.current.reorderThreadPins([], { key: "codex:thread-0", direction: "down" }));
+  await act(() => operation === "reorder"
+    ? result.current.reorderThreadPins([], { key: "codex:thread-0", direction: "down" })
+    : result.current.setThreadPin(result.current.threads.find((thread) => thread.id === "thread-0")!, false));
   await act(async () => { hold = false; release(); await refresh; });
-  expect(result.current.threads.find((thread) => thread.id === "thread-0")?.pinnedRank).toBe("3072");
-  expect(reorderThreadPins).toHaveBeenCalledWith({ federationTarget: undefined, move: { key: "codex:thread-0", direction: "down" } });
+  expect(result.current.threads.find((thread) => thread.id === "thread-0")?.pinnedRank).toBe(operation === "reorder" ? "3072" : undefined);
+  if (operation === "reorder") {
+    expect(reorderThreadPins).toHaveBeenCalledWith({ federationTarget: undefined, move: { key: "codex:thread-0", direction: "down" } });
+  } else {
+    expect(setThreadPin).toHaveBeenCalledWith({ backend: "codex", federationTarget: undefined, threadId: "thread-0", pinned: false });
+  }
   rank = "4096";
   await act(() => result.current.refresh());
   expect(result.current.threads.find((thread) => thread.id === "thread-0")?.pinnedRank).toBe("4096");
@@ -430,4 +440,42 @@ it("keeps the unlinked directory breadcrumb for an exact selected thread", async
   expect(result.current.selectedDirectory?.key).toBe("unlinked");
   expect(result.current.pagedNavigation.selectedDirectoryKeys).toEqual(["unlinked"]);
   unmount();
+});
+
+it("does not flash a retained selection's old PR status over the current row", async () => {
+  const f = fixture();
+  const originalRead = f.read.getMockImplementation()!;
+  let state: NonNullable<PrSummary["checkState"]> = "passing";
+  let hold = false;
+  let release!: () => void;
+  const pending = new Promise<void>((resolve) => { release = resolve; });
+  f.read.mockImplementation(async (request) => {
+    if (hold && request.query.kind === "exact" && request.query.identities[0]?.threadId === "thread-0") await pending;
+    const page = await originalRead(request);
+    return { ...page, entries: page.entries.map((entry) => ({ ...entry, row: { ...entry.row,
+      prs: [{ provider: "github.com", org: "fixture", repo: "project", number: 1,
+        url: "https://github.com/fixture/project/pull/1", state, checkState: state }],
+    } })) };
+  });
+  const frames: Array<PrSummary["state"] | undefined> = [];
+  const { result } = renderHook(() => {
+    const navigation = useThreadNavigation(f.api);
+    frames.push(navigation.threads.find((thread) => thread.id === "thread-0")?.prs?.[0]?.state);
+    return navigation;
+  });
+  await waitFor(() => expect(result.current.pagedNavigation.resources.get("selected-context")?.state.page).toBeDefined());
+  act(() => result.current.selectThread(row("thread-1")));
+  await waitFor(() => expect(result.current.selectedThread?.id).toBe("thread-1"));
+  state = "pending";
+  await act(() => result.current.refresh());
+  expect(result.current.threads.find((thread) => thread.id === "thread-0")?.prs?.[0]?.state).toBe("pending");
+  hold = true;
+  frames.length = 0;
+  act(() => result.current.selectThread(row("thread-0")));
+  expect(frames.length).toBeGreaterThan(0);
+  expect(frames.every((state) => state === "pending")).toBe(true);
+  // A fresh response must still be allowed to change the chip's state.
+  state = "failing";
+  await act(async () => { release(); await pending; });
+  await waitFor(() => expect(result.current.threads.find((thread) => thread.id === "thread-0")?.prs?.[0]?.state).toBe("failing"));
 });

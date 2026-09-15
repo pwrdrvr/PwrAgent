@@ -83,6 +83,8 @@ export type ComposerMentionSources = {
    * does not already have.
    */
   currentThreadKey?: string;
+  /** Selected thread attachments remain available outside the search page. */
+  currentThread?: ThreadJumpCandidate;
   /** Tracked directories behind `@`. */
   directories?: readonly Pick<NavigationDirectorySummary,
     "key" | "kind" | "label" | "path" | "latestUpdatedAt"
@@ -286,13 +288,14 @@ export function useComposerMentions(params: {
         ? []
         : buildHashReferenceOptions({
             currentThreadKey: sources?.currentThreadKey,
+            currentThread: sources?.currentThread,
             localThreads: threads,
             localOwnerMatched: sources?.navigationSettledQuery === hashQuery.trim().toLowerCase(),
             query: hashQuery,
             remoteThreads,
             remoteOwnerMatched: remoteSettledQuery === hashQuery.trim(),
           }),
-    [hashQuery, remoteThreads, remoteSettledQuery, sources?.currentThreadKey, sources?.navigationSettledQuery, threads],
+    [hashQuery, remoteThreads, remoteSettledQuery, sources?.currentThread, sources?.currentThreadKey, sources?.navigationSettledQuery, threads],
   );
 
   // Same precedence the full composer uses. A trigger with no candidates

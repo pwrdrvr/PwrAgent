@@ -46,6 +46,8 @@ import type {
 } from "@pwragent/shared";
 import { execFile } from "node:child_process";
 import { readFile } from "node:fs/promises";
+import { accessSync, constants, statSync } from "node:fs";
+import { retainManagedCodexCommand } from "../codex-managed-runtime";
 import path from "node:path";
 import {
   DEFAULT_BACKGROUND_PR_POLLING,
@@ -278,6 +280,7 @@ type DesktopSettingsServiceOptions = {
   configStore?: DesktopConfigStore;
   defaultDeveloperMode?: boolean;
   defaultManagedGrokBuilds?: boolean;
+  retainCachedCodexCommand?: (command: string) => Promise<void>;
   ensureManagedCodexRuntime?: (options: {
     checkMode: ManagedCodexCheckMode;
     signal?: AbortSignal;
@@ -578,6 +581,10 @@ export class DesktopSettingsService {
   private terminalSpawnEnv?: NodeJS.ProcessEnv;
   private terminalSpawnEnvHydrationPromise?: Promise<NodeJS.ProcessEnv>;
   private managedCodexRuntime?: ManagedCodexRuntime;
+  private sessionCodexCommand?: ResolvedCodexCommandCandidate;
+  private sessionCodexSelectionGeneration = 0;
+  private sessionCodexRetention: Promise<void> = Promise.resolve();
+  private rejectedStartupCachedCommand = false;
   private readonly managedCodexSelectionListeners = new Set<(
     change: ManagedCodexSelectionChange,
   ) => Promise<unknown> | unknown>();
@@ -2269,22 +2276,74 @@ export class DesktopSettingsService {
     permit: ProviderDiscoveryPermit,
   ): Promise<DesktopSettingsSnapshot> {
     assertProviderDiscoveryPermit(permit, ["startup"]);
+    const startedAt = performance.now();
+    // Keep startup timings at info level without logging probe results or
+    // settings values. Failures still flow to the existing allSettled boundary.
+    const measure = async <T>(stage: string, run: () => Promise<T>): Promise<T> => {
+      const stageStartedAt = performance.now();
+      let outcome = "rejected";
+      try {
+        const result = await run();
+        outcome = "fulfilled";
+        return result;
+      } finally {
+        settingsLog.info("startup settings discovery stage completed", {
+          stage,
+          outcome,
+          durationMs: Math.round(performance.now() - stageStartedAt),
+        });
+      }
+    };
     if (!this.startupDiscoveryAttempted) {
       this.startupDiscoveryAttempted = true;
+      const cached = this.readSelectedCodexCommand();
+      if (cached) {
+        try {
+          if (!path.isAbsolute(cached.command) || !statSync(cached.command).isFile()) {
+            throw new Error("Cached executable is missing");
+          }
+          accessSync(cached.command, process.platform === "win32" ? constants.F_OK : constants.X_OK);
+          const generation = this.sessionCodexSelectionGeneration;
+          // Withhold the persisted selection until validation AND retention
+          // finish. Neither failure may poison subsequent discovery attempts.
+          this.rejectedStartupCachedCommand = true;
+          this.sessionCodexRetention = Promise.resolve()
+            .then(() => (this.options.retainCachedCodexCommand ?? retainManagedCodexCommand)(cached.command))
+            .then(() => {
+              if (generation !== this.sessionCodexSelectionGeneration) return;
+              this.sessionCodexCommand = cached;
+              this.rejectedStartupCachedCommand = false;
+              settingsLog.info("startup Codex selection reused", { source: cached.source });
+            })
+            .catch(() => {
+              settingsLog.warn("startup Codex cached selection rejected; falling back to discovery");
+            });
+        } catch {
+          this.rejectedStartupCachedCommand = true;
+        }
+      }
       const applications = this.configStore.read("applications");
       const configuredGhCommand = applications.gh?.path;
       this.startupDiscoveryPromise = Promise.allSettled([
-        this.runCodexDiscovery(permit),
-        this.discoverGhCommandsCached(configuredGhCommand),
-        this.discoverGlabCommandsCached(applications.glab?.path),
-        this.discoverGitCommandsCached(applications.git?.path),
-        this.discoverDesktopApplicationsCached(),
+        measure("codex", () => this.runCodexDiscovery(permit)),
+        measure("gh", () => this.discoverGhCommandsCached(configuredGhCommand)),
+        measure("glab", () => this.discoverGlabCommandsCached(applications.glab?.path)),
+        measure("git", () => this.discoverGitCommandsCached(applications.git?.path)),
+        measure("desktop-applications", () => this.discoverDesktopApplicationsCached()),
       ]).then(() => undefined).finally(() => {
         this.startupDiscoveryPromise = undefined;
       });
     }
     await this.startupDiscoveryPromise;
-    return await this.readSettingsProjection();
+    const discoveryDurationMs = Math.round(performance.now() - startedAt);
+    try {
+      return await measure("projection", () => this.readSettingsProjection());
+    } finally {
+      settingsLog.info("startup settings discovery completed", {
+        discoveryDurationMs,
+        durationMs: Math.round(performance.now() - startedAt),
+      });
+    }
   }
 
   /**
@@ -2311,6 +2370,10 @@ export class DesktopSettingsService {
       "settings-user-action",
       "setup-user-action",
     ]);
+    // Explicit Settings/setup discovery retains its existing opt-in switch
+    // behavior; only automatic background startup discovery is pinned.
+    this.sessionCodexSelectionGeneration += 1;
+    this.sessionCodexCommand = undefined;
     await this.runCodexDiscovery(permit);
     return await this.readSettingsProjection();
   }
@@ -2335,12 +2398,14 @@ export class DesktopSettingsService {
   private async runCodexDiscoveryAttempt(
     permit: ProviderDiscoveryPermit,
   ): Promise<void> {
+    await this.sessionCodexRetention;
     this.codexSpawnEnvHydratedAt = undefined;
     const config = this.readConfig().config;
     const checkMode = permit.intent === "startup" ? "ttl" : "force";
     const previousManagedCommand =
       this.managedCodexRuntime?.command
       ?? this.configStore.read("providers").codex.lastKnownGood?.selectedCommand;
+    const managedStartedAt = performance.now();
     try {
       this.managedCodexRuntime = await this.resolveManagedCodexRuntime(
         config,
@@ -2351,11 +2416,19 @@ export class DesktopSettingsService {
       this.managedCodexError = error instanceof Error
         ? error.message
         : String(error);
+    } finally {
+      settingsLog.info("Codex discovery managed runtime completed", {
+        checkMode,
+        durationMs: Math.round(performance.now() - managedStartedAt),
+        available: Boolean(this.managedCodexRuntime),
+        failed: Boolean(this.managedCodexError),
+      });
     }
     if (
       this.managedCodexRuntime
       && this.resolveTokenMiserEnabled()
       && this.managedCodexRuntime.command !== previousManagedCommand
+      && !this.sessionCodexCommand
     ) {
       this.managedCodexRuntimeSwitchPending = true;
       await this.publishManagedCodexSelectionChange({
@@ -2365,6 +2438,7 @@ export class DesktopSettingsService {
       });
     }
     const configuredCommand = this.resolveActiveCodexCommand(config);
+    const executableStartedAt = performance.now();
     const discovery = await this.codexDiscoveryCoordinator.discover(
       configuredCommand,
       {
@@ -2372,6 +2446,11 @@ export class DesktopSettingsService {
         force: permit.intent !== "startup",
       },
     );
+    settingsLog.info("Codex discovery executable probes completed", {
+      durationMs: Math.round(performance.now() - executableStartedAt),
+      candidateCount: discovery.candidates.length,
+    });
+    const profilesStartedAt = performance.now();
     this.codexProfiles = normalizeCodexProfilesSnapshot(
       discoverCodexAuthProfiles({
         configuredProfile: config.models?.codex?.profile,
@@ -2397,12 +2476,18 @@ export class DesktopSettingsService {
         : {}),
       ...(selected?.version ? { selectedVersion: selected.version } : {}),
     });
+    if (discovery.selectedCommand) this.rejectedStartupCachedCommand = false;
+    settingsLog.info("Codex discovery profile snapshot completed", {
+      durationMs: Math.round(performance.now() - profilesStartedAt),
+    });
   }
 
   async resolveCodexCommand(): Promise<ResolvedCodexCommandCandidate> {
+    await this.sessionCodexRetention;
     const resolved = this.readSelectedCodexCommand();
     if (resolved) {
-      return resolved;
+      this.sessionCodexCommand ??= resolved;
+      return this.sessionCodexCommand;
     }
     // A Codex discovery is already running and is the authority for this
     // profile's selection. Waiting for the answer in flight is not a retry:
@@ -2429,7 +2514,8 @@ export class DesktopSettingsService {
       await codexDiscovery;
       const discovered = this.readSelectedCodexCommand();
       if (discovered) {
-        return discovered;
+        this.sessionCodexCommand ??= discovered;
+        return this.sessionCodexCommand;
       }
     }
     throw new Error(
@@ -2444,6 +2530,7 @@ export class DesktopSettingsService {
   private readSelectedCodexCommand():
     | ResolvedCodexCommandCandidate
     | undefined {
+    if (this.sessionCodexCommand) return this.sessionCodexCommand;
     const managedRuntime = this.managedCodexRuntime;
     if (managedRuntime) {
       return {
@@ -2454,8 +2541,9 @@ export class DesktopSettingsService {
     }
     const configuredCommand = this.resolveCodexCommandPreference();
     const cached = this.codexDiscoveryCoordinator.peek?.(configuredCommand)
-      ?? codexDiscoveryFromProvider(this.configStore.read("providers").codex);
-    const selected = cached.candidates.find((candidate) => candidate.selected);
+      ?? (this.rejectedStartupCachedCommand ? undefined
+        : codexDiscoveryFromProvider(this.configStore.read("providers").codex));
+    const selected = cached?.candidates.find((candidate) => candidate.selected);
     if (!selected) {
       return undefined;
     }
@@ -2466,21 +2554,9 @@ export class DesktopSettingsService {
     };
   }
 
-  /**
-   * Whether a Codex discovery still owes this profile an answer. The desktop
-   * uses it to keep a startup surface pending rather than reporting a
-   * configured profile as having no provider.
-   *
-   * Deliberately keyed on discovery state alone, never on
-   * `readSelectedCodexCommand()`. That resolver answers from the managed
-   * runtime and the coordinator cache, which `runCodexDiscoveryAttempt`
-   * populates seconds before it publishes `lastKnownGood` — and
-   * `lastKnownGood` is what `readCodexBackendSummary` derives `available`
-   * from. Consulting the resolver here made the two disagree for the length
-   * of a version probe, dropping the pending flag while the summary was still
-   * unavailable: exactly the window this flag exists to cover.
-   */
+  /** A retained executable can serve this process while discovery checks the next launch. */
   isCodexDiscoveryPending(): boolean {
+    if (this.sessionCodexCommand) return false;
     return this.codexDiscoveryPromise !== undefined
       || !this.codexDiscoverySettled;
   }
@@ -2562,6 +2638,10 @@ export class DesktopSettingsService {
       const nextEnabled = this.resolveTokenMiserEnabled();
       if (nextEnabled === enabled) return;
       enabled = nextEnabled;
+      // Availability changes are explicit operator actions. Drop the startup
+      // pin before any listener can reconnect, and fence pending validation.
+      this.sessionCodexSelectionGeneration += 1;
+      this.sessionCodexCommand = undefined;
       if (enabled) {
         this.managedCodexRuntimeSwitchPending = true;
       } else {

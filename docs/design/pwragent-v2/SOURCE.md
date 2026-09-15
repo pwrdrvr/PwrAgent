@@ -97,6 +97,32 @@ throughout the bundle. They were already checked in as of 2026-05-05 and are
 left alone — rewriting them would be an in-place edit of design content (see
 below).
 
+## Authored here first
+
+`project/README Header.dc.html` did not come down from the project — it was
+written in this repository and pushed up with `DesignSync` (project id in
+"Source" above; `list_projects` does not return PwrAgent, which is a plain
+`PROJECT_TYPE_PROJECT`, so address it by id). The chip PNGs it draws and
+`apps/desktop/scripts/generate-readme-chips.swift` went up with it, so the
+project now carries a `docs/assets/` tree it did not have before.
+
+**Its image `src`s are spelled differently in the two places, and getting it
+backwards renders every chip as a broken image, silently.** The artboard sits
+at the project root but four levels down in this repo:
+
+| Where | Spelling |
+|---|---|
+| Claude Design project | `docs/assets/buttons/...` |
+| This repo | `../../../../docs/assets/buttons/...` |
+
+Re-apply the `../../../../` rewrite on every import, and strip it on every
+push. PwrGit hit this on the first push of its own copy of this artboard.
+
+The artboard and
+[`generate-readme-chips.swift`](../../../apps/desktop/scripts/generate-readme-chips.swift)
+are the same design twice — one is what a person reads, the other is what
+produces the pixels. Change both together.
+
 ## How to update this directory
 
 The upstream project is the source of truth. Replace this directory wholesale;

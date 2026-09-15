@@ -3590,6 +3590,35 @@ describe("Composer", () => {
     });
   });
 
+  it("offers the selected thread's fork PR first when search omits that thread", async () => {
+    const pullRequest = {
+      provider: "github.com", org: "huntharo", repo: "dugite", number: 2,
+      state: "passing" as const, url: "https://github.com/huntharo/dugite/pull/2",
+    };
+    const currentThread: NavigationThreadSummary = {
+      id: "current", title: "Dugite", titleSource: "explicit", source: "codex",
+      linkedDirectories: [], inbox: { inInbox: false }, prs: [pullRequest],
+      gitOriginUrl: "https://github.com/desktop/dugite.git",
+    };
+    render(<Composer
+      desktopApi={{ onAgentEvent: () => () => undefined }}
+      disabled={false}
+      skills={[]}
+      thread={currentThread}
+      threads={[{ ...currentThread, id: "other", title: "Another PR", prs: [{
+        ...pullRequest, org: "other", url: "https://github.com/other/dugite/pull/2",
+      }] }]}
+    />);
+    const textbox = screen.getByRole("textbox", { name: "Reply" });
+    fireEvent.change(textbox, { target: { value: "See #2" } });
+    const listbox = await screen.findByRole("listbox", { name: "Threads and pull requests" });
+    const first = within(listbox).getAllByRole("option")[0]!;
+    expect(first).toHaveTextContent("huntharo/dugite#2");
+    fireEvent.click(first);
+    await waitFor(() => expect(textbox.querySelector('[data-mention-kind="pull-request"]'))
+      .toHaveAttribute("data-skill-path", pullRequest.url));
+  });
+
   it("gives a picked pull-request chip the status color the thread list shows", async () => {
     const pullRequest = {
       provider: "github.com" as const,

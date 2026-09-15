@@ -1,6 +1,7 @@
 import { NAVIGATION_QUERY_MAX_RESULT_BYTES } from "@pwragent/shared";
-import type { NavigationQueryAnchor, NavigationQueryPage, NavigationQueryRequest } from "@pwragent/shared";
+import type { FederationTarget, NavigationQueryAnchor, NavigationQueryPage, NavigationQueryRequest } from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
+import { federationTargetsEqual } from "./federated-thread-events";
 import {
   applyNavigationPage, beginNavigationPageRead, createNavigationPageState,
   failNavigationPageRead, isNavigationCursorExpired, navigationRetainedRange, type NavigationPageState,
@@ -15,6 +16,8 @@ export type NavigationWindowResource = {
   id: string;
   state: NavigationPageState;
   loading: boolean;
+  /** Cached membership awaiting a fresh owner read; existing row metadata wins. */
+  restoredFromCache?: boolean;
 };
 export type NavigationWindowQueriesState = {
   resources: ReadonlyMap<string, NavigationWindowResource>;
@@ -115,7 +118,8 @@ export class NavigationWindowQueries {
       this.retained.delete(retainedKey);
       const resource: Resource = {
         requestKey, token: `${this.prefix}:${++this.nextResource}`,
-        value: { id, state: retained ? { ...retained.state, stale: true, error: undefined } : createNavigationPageState(request), loading: false },
+        value: { id, state: retained ? { ...retained.state, stale: true, error: undefined } : createNavigationPageState(request),
+          loading: false, restoredFromCache: Boolean(retained) },
         refreshAfterPending: false, invalidated: false, released: !this.visible, anchor: retained?.anchor ?? request.anchor,
       };
       this.resources.set(id, resource);
@@ -149,10 +153,11 @@ export class NavigationWindowQueries {
     this.publish();
   }
 
-  refresh(id?: string): Promise<void> {
+  refresh(id?: string, owners?: readonly FederationTarget[]): Promise<void> {
     if (!this.visible || this.disposed) return Promise.resolve();
     const resources = id ? [this.resources.get(id)].filter((value): value is Resource => Boolean(value)) : [...this.resources.values()];
-    return Promise.all(resources.map(async (resource) => {
+    return Promise.all(resources.filter((resource) => !owners || owners.some((owner) =>
+      federationTargetsEqual(owner, resource.value.state.request.federationTarget))).map(async (resource) => {
       if (resource.pending) resource.refreshAfterPending = true;
       await this.read(resource, false);
       // A caller awaiting refresh owns the coalesced replacement too, not
@@ -162,10 +167,11 @@ export class NavigationWindowQueries {
   }
 
   /** Invalidate transport baselines before canonical owner events can race a late page. */
-  invalidate(id?: string): void {
+  invalidate(id?: string, owners?: readonly FederationTarget[]): void {
     let changed = false;
     for (const resource of this.resources.values()) {
       if (id && resource.value.id !== id) continue;
+      if (owners && !owners.some((owner) => federationTargetsEqual(owner, resource.value.state.request.federationTarget))) continue;
       // Fence each physical read once. Further events before its replacement
       // carry no new presentation state and must not rerender every row.
       if (resource.invalidated) continue;
@@ -305,7 +311,7 @@ export class NavigationWindowQueries {
           if (size(next.page) <= before) throw new Error("Navigation range refresh did not advance.");
           assertRetained(next);
         }
-        resource.value = { ...resource.value, state: next };
+        resource.value = { ...resource.value, state: next, restoredFromCache: false };
       } catch (error) {
         if (this.isCurrent(resource)) resource.value = { ...resource.value,
           state: failNavigationPageRead(resource.value.state, started.pendingSequence, error) };

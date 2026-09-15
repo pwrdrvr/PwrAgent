@@ -145,7 +145,12 @@ async function recordComposerTrajectory(
  * away all land within 3ms of each other. Absent means authorized.
  */
 async function waitForAuthorizedComposer(chatCard: Locator): Promise<void> {
-  await expect(chatCard).not.toHaveAttribute("data-composer-block");
+  // `/.+/` rather than the bare presence form, so an authorized card that
+  // ever rendered the attribute empty still reads as authorized. Today
+  // `composerBlockReason` is `undefined` when the composer is live and a
+  // non-empty reason otherwise, so the two agree; this one keeps agreeing if
+  // that ever becomes an empty string.
+  await expect(chatCard).not.toHaveAttribute("data-composer-block", /.+/);
 }
 
 /**
@@ -251,9 +256,11 @@ test("sends pasted, dropped, and local-file attachments from a Star Map chat car
     // 5ms on every Windows run while the recorder above showed the composer
     // blocked from mount to keystroke — so the composer appeared to be live
     // here and dead 300ms later. It was never live: `toBeEditable()` asserts
-    // nothing against a `<div role="textbox">` (see the helper). Windows
-    // simply takes longer than macOS and Linux to complete the card's exact
-    // detail read, and this is the wait that was supposed to cover that.
+    // nothing against a `<div role="textbox">` (see the helper), and DOM
+    // editability can also observe an editor's initial state before its
+    // disabled option is applied. Windows simply takes longer than macOS and
+    // Linux to complete the card's exact detail read, and this is the wait
+    // that was supposed to cover that.
     await waitForAuthorizedComposer(chatCard);
 
     await attachPng(messageInput, {

@@ -5981,27 +5981,11 @@ function shouldEnrichThreadDirectories(
 }
 
 /**
- * Missing threads above this share of the visible Codex thread list stop being
- * a stale-row cleanup and start looking like a misconfiguration — most likely
- * this PwrAgent profile pointing at the wrong Codex authentication profile.
- * PwrAgent asks instead of archiving when the share is above the threshold.
- */
-const CODEX_MISSING_THREAD_CONFIRMATION_RATIO = 0.2;
-
-/**
- * Missing-thread failures arrive one per thread as each pending workspace
- * synchronization rejects. Coalesce a startup burst into one decision so the
- * ratio is computed against every thread Codex lost, not the first one.
+ * Coalesce workspace synchronization failures into one operator decision.
  */
 export const CODEX_MISSING_THREAD_EVALUATION_DELAY_MS = 2_000;
 
-/**
- * Codex answers any thread-scoped request for a thread it can no longer
- * resolve with `thread not found: <id>`. `thread/list` keeps returning the
- * row — the list is served from Codex's session index, not from the rollout —
- * so PwrAgent sees a thread that exists for browsing and does not exist for
- * every operation that has to open it.
- */
+/** Matches a thread-specific rejection, which does not prove durable absence. */
 function isCodexMissingThreadError(error: unknown, threadId: string): boolean {
   const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
   const normalizedThreadId = threadId.trim().toLowerCase();
@@ -8289,18 +8273,7 @@ export class DesktopBackendRegistry {
   private readonly unresolvedMissingCodexThreadIds = new Set<string>();
   private missingCodexThreadEvaluationTimer?: ReturnType<typeof setTimeout>;
   private missingCodexThreadEvaluation?: Promise<void>;
-  /**
-   * Set once the operator answers a missing-thread prompt with "keep". That
-   * answer means they suspect a Codex profile mismatch, so nothing may be
-   * auto-archived afterwards: every later audit asks instead of deciding.
-   */
-  private missingCodexThreadsKeptThisSession = false;
-  /**
-   * Visible (non-tombstoned, non-archived) Codex thread count from the most
-   * recent full `thread/list`. It is the denominator for the missing-thread
-   * ratio, so it is only recorded from the full-list path — never from the
-   * single-thread repair path, whose "list" is one thread.
-   */
+  /** Visible Codex thread count from the full list, for the operator notice. */
   private codexVisibleThreadCount = 0;
   private readonly activeCodexTurnModes = new Map<string, ThreadExecutionMode>();
   private readonly activeCodexReviewTurnKeys = new Set<string>();
@@ -11138,20 +11111,31 @@ export class DesktopBackendRegistry {
   private async refreshCodexProviderAtStartup(
     permit: ProviderDiscoveryPermit,
   ): Promise<StartupProviderThreadRefresh> {
+    const startedAt = performance.now();
     const threads = await this.listThreads({
       backend: "codex",
       callerReason: "startup-provider-refresh",
       enrichDirectories: false,
       forceRefresh: true,
     });
+    backendRegistryLog.info("startup Codex thread refresh completed", {
+      durationMs: Math.round(performance.now() - startedAt),
+      threadCount: threads.length,
+    });
+    const discoveryStartedAt = performance.now();
     await this.discoverCodexBackend(permit);
+    backendRegistryLog.info("startup Codex backend discovery completed", {
+      durationMs: Math.round(performance.now() - discoveryStartedAt),
+    });
     return { backends: ["codex"], threads };
   }
 
   private async refreshAcpProviderThreadsAtStartup(
     permit: ProviderDiscoveryPermit,
   ): Promise<StartupProviderThreadRefresh> {
+    const startedAt = performance.now();
     const agents = await this.acpBackend.discoverAvailableAgents(permit);
+    const discoveryDurationMs = Math.round(performance.now() - startedAt);
     const threads = (await Promise.all(
       agents.map(async (agent) => {
         return await this.listThreads({
@@ -11161,6 +11145,12 @@ export class DesktopBackendRegistry {
         });
       }),
     )).flat();
+    backendRegistryLog.info("startup ACP provider refresh completed", {
+      durationMs: Math.round(performance.now() - startedAt),
+      discoveryDurationMs,
+      providerCount: agents.length,
+      threadCount: threads.length,
+    });
     return {
       backends: agents.map((agent) => agent.backendId),
       threads,
@@ -29694,8 +29684,8 @@ export class DesktopBackendRegistry {
   }
 
   /**
-   * Records the visible Codex thread count as the denominator for the
-   * missing-thread ratio. Only the full `thread/list` path may call this.
+   * Records the visible Codex thread count for the operator notice.
+   * Only the full `thread/list` path may call this.
    */
   private recordCodexVisibleThreadCount(count: number): void {
     this.codexVisibleThreadCount = count;
@@ -29748,47 +29738,24 @@ export class DesktopBackendRegistry {
       return;
     }
 
-    // An unrecorded count means no full list has landed yet. Falling back to
-    // the missing count itself yields a ratio of 1, so an unknown denominator
-    // asks the operator rather than archiving on a guess.
+    // A workspace settings error can mean the thread is not loaded, rather
+    // than absent from durable storage. In particular, handoff has already
+    // committed the destination before its background synchronization runs.
+    // Never turn that error into an archive or worktree cleanup automatically,
+    // even when only one thread in a large profile is affected.
     const totalCount = Math.max(this.codexVisibleThreadCount, threadIds.length);
-    const ratio = threadIds.length / totalCount;
-    // The audit only runs when a thread is newly missing, so re-emitting is
-    // not a loop: it revises a prompt the operator has not answered yet. The
-    // notice id is stable, so the renderer replaces rather than stacks. This
-    // is also the recovery path when the first prompt was emitted before any
-    // window had subscribed to the event channel.
-    if (
-      ratio > CODEX_MISSING_THREAD_CONFIRMATION_RATIO
-      || this.missingCodexThreadsKeptThisSession
-    ) {
-      backendRegistryLog.warn(
-        "Codex missing threads need an operator decision",
-        {
-          keptThisSession: this.missingCodexThreadsKeptThisSession,
-          missingCount: threadIds.length,
-          totalCount,
-          threadIds,
-        },
-      );
-      await this.emitCodexMissingThreadsUpdate({
+    backendRegistryLog.warn(
+      "Codex missing threads need an operator decision",
+      {
         missingCount: threadIds.length,
-        profileName: this.resolveMissingCodexThreadProfileName(),
-        status: "confirmationRequired",
-        threadIds,
         totalCount,
-      });
-      return;
-    }
-
-    const result = await this.archiveMissingCodexThreads(threadIds);
+        threadIds,
+      },
+    );
     await this.emitCodexMissingThreadsUpdate({
-      archivedCount: result.archived.length,
-      failedCount: result.failed.length,
-      failures: result.failures,
       missingCount: threadIds.length,
       profileName: this.resolveMissingCodexThreadProfileName(),
-      status: "archived",
+      status: "confirmationRequired",
       threadIds,
       totalCount,
     });
@@ -29853,7 +29820,6 @@ export class DesktopBackendRegistry {
     if (request.action === "keep") {
       // The ids stay in `missingCodexThreadIds`, which is what keeps the
       // thread visible and its retries suspended.
-      this.missingCodexThreadsKeptThisSession = true;
       backendRegistryLog.warn("keeping Codex threads reported missing", {
         threadCount: threadIds.length,
       });

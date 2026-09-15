@@ -8749,6 +8749,7 @@ export class CodexAppServerClient {
   ): Promise<BackendModelOption[]> {
     await this.ensureInitialized();
 
+    const startedAt = performance.now();
     const payload: CodexModelListParams = {};
     const result = await requestWithFallbacks({
       client: this.connection,
@@ -8762,6 +8763,7 @@ export class CodexAppServerClient {
       const parsedResult = parseConsumedCodexModelListResponse(result);
       const models = extractGeneratedModelOptions(parsedResult);
       codexClientLog.info("model/list", {
+        durationMs: Math.round(performance.now() - startedAt),
         normalizedModelIds: models.map((model) => model.id),
       });
       codexClientLog.debug("model/list raw models", {
@@ -8772,6 +8774,7 @@ export class CodexAppServerClient {
 
     const models = extractModelOptions(result);
     codexClientLog.info("model/list", {
+      durationMs: Math.round(performance.now() - startedAt),
       normalizedModelIds: models.map((model) => model.id),
     });
     codexClientLog.debug("model/list raw models", {
@@ -9749,6 +9752,22 @@ export class CodexAppServerClient {
       throw new Error("A non-empty workspace CWD is required.");
     }
 
+    // Settings updates require a loaded thread. Newly created threads are
+    // already loaded but cannot resume on stock Codex until their first turn
+    // creates a rollout. Existing threads must resume at the destination:
+    // handoff may have already removed the source worktree.
+    if (!this.pendingFirstTurnThreadResults.has(params.threadId)) {
+      await requestWithFallbacks({
+        client: this.connection,
+        methods: ["thread/resume"],
+        payloads: buildThreadResumePayloads(
+          { threadId: params.threadId, cwd: params.cwd.trim() },
+          this.getProtocolCompatibility(),
+        ),
+        timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+      });
+    }
+
     const result = await requestWithFallbacks({
       client: this.connection,
       methods: ["thread/settings/update"],
@@ -10019,9 +10038,14 @@ export class CodexAppServerClient {
     };
     this.serverGeneration += 1;
     this.initializationPromise = (async () => {
+      const startedAt = performance.now();
       await this.rawConnection.connect();
       assertNotClosed();
+      codexClientLog.info("app-server transport connected", {
+        durationMs: Math.round(performance.now() - startedAt),
+      });
 
+      const handshakeStartedAt = performance.now();
       try {
         const activationNonce =
           this.options.resolvePwrdrvrTokenMiserActivationNonce?.();
@@ -10063,6 +10087,10 @@ export class CodexAppServerClient {
       await this.rawConnection.notify("initialized", {});
       assertNotClosed();
       this.initialized = true;
+      codexClientLog.info("app-server initialized", {
+        handshakeDurationMs: Math.round(performance.now() - handshakeStartedAt),
+        durationMs: Math.round(performance.now() - startedAt),
+      });
     })();
 
     try {

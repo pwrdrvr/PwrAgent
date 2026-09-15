@@ -218,6 +218,37 @@ describe("AgentToolRouter", () => {
     });
   });
 
+  it("converts dynamic audio data URLs to MCP audio blocks", async () => {
+    const router = new AgentToolRouter([
+      {
+        namespace: "pwragent_test",
+        name: "render_audio",
+        description: "Render a local audio clip.",
+        inputSchema: { type: "object" },
+        dispatch: () => agentToolSuccess(
+          { clip: "ready" },
+          {
+            contentItems: [
+              { type: "inputAudio", audioUrl: "data:audio/wav;base64,AQID" },
+            ],
+          },
+        ),
+      },
+    ]);
+
+    await expect(
+      router.handleMcpToolCall({
+        backend: "codex",
+        threadId: "thread-1",
+        namespace: "pwragent_test",
+        tool: "render_audio",
+      }),
+    ).resolves.toEqual({
+      structuredContent: { clip: "ready" },
+      content: [{ type: "audio", data: "AQID", mimeType: "audio/wav" }],
+    });
+  });
+
   it("returns MCP errors for unsupported MCP tools", async () => {
     const router = new AgentToolRouter([], {
       unsupportedMessage: "Unsupported test MCP tool.",

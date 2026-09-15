@@ -49,7 +49,12 @@ vi.mock("../log", () => ({
 function createCodexModel(
   overrides: Pick<Model, "id"> & Partial<Model>,
 ): Model {
-  const { id, ...modelOverrides } = overrides;
+  const {
+    id,
+    modelSpecialty = null,
+    multiAgentVersion = null,
+    ...modelOverrides
+  } = overrides;
   return {
     id,
     model: id,
@@ -58,6 +63,7 @@ function createCodexModel(
     availabilityNux: null,
     displayName: overrides.id,
     description: "",
+    modelSpecialty,
     hidden: false,
     supportedReasoningEfforts: [
       { reasoningEffort: "medium", description: "Balanced" },
@@ -65,6 +71,7 @@ function createCodexModel(
     defaultReasoningEffort: "medium",
     inputModalities: ["text", "image"],
     supportsPersonality: false,
+    multiAgentVersion,
     additionalSpeedTiers: [],
     serviceTiers: [],
     defaultServiceTier: null,
@@ -1058,6 +1065,10 @@ class MockTransport implements JsonRpcTransport {
     }
 
     if (payload.method === "thread/start") {
+      const result = MockTransport.threadStartResult as { thread?: { id?: string } };
+      if (result.thread?.id) {
+        this.loadedThreads.add(result.thread.id);
+      }
       this.messageHandler(
         JSON.stringify({
           jsonrpc: "2.0",
@@ -12268,7 +12279,33 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
-  it("persists a thread workspace without resuming or starting a turn", async () => {
+  it("updates a newly created thread workspace before its first rollout exists", async () => {
+    MockTransport.requireLoadedThreads = true;
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+    try {
+      const { threadId } = await client.startThread({ cwd: "/repo/source" });
+      MockTransport.threadResumeError = { message: "no rollout before the first turn" };
+      await expect(client.updateThreadWorkspace({
+        threadId,
+        cwd: "/repo/destination",
+      })).resolves.toEqual({ threadId });
+      const requests = MockTransport.instances.flatMap((transport) => transport.sentMessages)
+        .map((message) => JSON.parse(message) as { method?: string; params?: unknown });
+      expect(requests.find((request) => request.method === "thread/settings/update")?.params)
+        .toEqual({ threadId, cwd: "/repo/destination" });
+      expect(requests.map((request) => request.method)).not.toContain("thread/resume");
+      expect(requests.map((request) => request.method)).not.toContain("turn/start");
+    } finally {
+      await client.close();
+    }
+  });
+
+  it("resumes an unloaded thread at the handoff destination before updating its workspace", async () => {
+    MockTransport.requireLoadedThreads = true;
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     const client = new CodexAppServerClient({
       command: "codex",
@@ -12294,10 +12331,40 @@ describe("CodexAppServerClient", () => {
         },
       }),
     );
-    expect(requests.map((request) => request.method)).not.toContain("thread/resume");
+    expect(requests.filter((request) =>
+      ["thread/resume", "thread/settings/update"].includes(request.method ?? ""),
+    ).map((request) => request.method)).toEqual(["thread/resume", "thread/settings/update"]);
+    expect(requests.find((request) => request.method === "thread/resume")?.params)
+      .toMatchObject({ threadId: "thread-workspace", cwd: "/Users/example/project/.worktrees/thread-workspace" });
     expect(requests.map((request) => request.method)).not.toContain("turn/start");
 
     await client.close();
+  });
+
+  it("does not update workspace settings or start a turn when handoff resume fails", async () => {
+    MockTransport.threadResumeError = {
+      code: -32600,
+      message: "thread not found: thread-workspace",
+    };
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+    try {
+      await expect(client.updateThreadWorkspace({
+        threadId: "thread-workspace",
+        cwd: "/repo/destination",
+      })).rejects.toThrow("thread not found: thread-workspace");
+      const methods = MockTransport.instances.at(-1)!.sentMessages.map(
+        (message) => (JSON.parse(message) as { method?: string }).method,
+      );
+      expect(methods).toContain("thread/resume");
+      expect(methods).not.toContain("thread/settings/update");
+      expect(methods).not.toContain("turn/start");
+    } finally {
+      await client.close();
+    }
   });
 
   it("best-effort resumes an existing thread before starting a review", async () => {

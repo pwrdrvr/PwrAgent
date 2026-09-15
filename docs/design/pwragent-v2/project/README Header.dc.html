@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="design_doc_mode" content="canvas">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  body { margin:0; background:#000; }
+  a { color:#ff8a1f; text-decoration:none; }
+  a:hover { color:#ffa33d; }
+</style>
+</helmet>
+<div style="min-height:100vh; background:#000; color:#f7f3eb; font-family:Geist,'IBM Plex Sans',system-ui,sans-serif; padding:40px 44px 72px; display:flex; flex-direction:column; gap:44px">
+
+  <div style="display:flex; flex-direction:column; gap:8px">
+    <div style="font:500 10px/1 'IBM Plex Mono',monospace; letter-spacing:.14em; color:#8c857a; text-transform:uppercase">PwrAgent · repository landing page</div>
+    <div style="font:600 24px/1.2 Geist,sans-serif; letter-spacing:-.01em">README header</div>
+    <div style="font:400 13px/1.6 Geist,sans-serif; color:#b8b0a5; max-width:640px; text-wrap:pretty">GitHub is the landing page for most people who arrive at PwrAgent, and the first screenful has one job: hand them the right binary. Seven chips do that — three downloads, four places to go instead. The system is <a href="https://github.com/pwrdrvr/PwrGit/pull/259">PwrGit's</a>, ported here with PwrAgent's tokens and one structural change: PwrAgent ships a fourth platform, and the row will not hold four download chips.</div>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- The composition, on both GitHub surfaces                     -->
+  <!-- ============================================================ -->
+
+  <div style="display:flex; flex-direction:column; gap:18px">
+    <div style="font:500 10px/1 'IBM Plex Mono',monospace; letter-spacing:.14em; color:#8c857a; text-transform:uppercase">Composition · 836px content column</div>
+    <div style="font:400 13px/1.6 Geist,sans-serif; color:#b8b0a5; max-width:640px; text-wrap:pretty">Same PNGs on both surfaces. Nothing here is theme-switched, and that is the point — see the rule below.</div>
+
+    <div style="display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:24px">
+
+      <div style="display:flex; flex-direction:column; gap:10px">
+        <div style="font:500 10px/1 'IBM Plex Mono',monospace; color:#6f685e">GitHub dark · #0d1117</div>
+        <div style="background:#0d1117; border:1px solid rgba(247,243,235,.10); border-radius:8px; padding:28px 24px; display:flex; flex-direction:column; align-items:center; gap:18px">
+          <img src="../../../../docs/assets/pwragent-icon.png" width="72" height="72" alt="PwrAgent" style="display:block">
+          <div style="font:700 26px/1.1 Geist,sans-serif; color:#e6edf3; letter-spacing:-.02em">PwrAgent</div>
+          <div style="font:400 12px/1.5 Geist,sans-serif; color:#8d96a0; text-align:center; max-width:380px">Your coding agent runs on your laptop. You drive it from your phone.</div>
+          <div style="display:flex; gap:10px; flex-wrap:wrap; justify-content:center">
+            <img src="../../../../docs/assets/buttons/download-mac-universal.png" width="176" alt="Download for Mac — Universal" style="display:block">
+            <img src="../../../../docs/assets/buttons/download-mac-apple-silicon.png" width="176" alt="Download for Mac — Apple Silicon" style="display:block">
+            <img src="../../../../docs/assets/buttons/download-windows.png" width="176" alt="Download for Windows" style="display:block">
+          </div>
+          <div style="display:flex; gap:8px; flex-wrap:wrap; justify-content:center">
+            <img src="../../../../docs/assets/buttons/link-linux.png" width="120" alt="Debian / Ubuntu" style="display:block">
+            <img src="../../../../docs/assets/buttons/link-docs.png" width="120" alt="Documentation" style="display:block">
+            <img src="../../../../docs/assets/buttons/link-website.png" width="120" alt="pwragent.ai" style="display:block">
+            <img src="../../../../docs/assets/buttons/link-about.png" width="120" alt="About PwrDrvr" style="display:block">
+          </div>
+        </div>
+      </div>
+
+      <div style="display:flex; flex-direction:column; gap:10px">
+        <div style="font:500 10px/1 'IBM Plex Mono',monospace; color:#6f685e">GitHub light · #ffffff</div>
+        <div style="background:#ffffff; border:1px solid rgba(247,243,235,.10); border-radius:8px; padding:28px 24px; display:flex; flex-direction:column; align-items:center; gap:18px">
+          <img src="../../../../docs/assets/pwragent-icon.png" width="72" height="72" alt="PwrAgent" style="display:block">
+          <div style="font:700 26px/1.1 Geist,sans-serif; color:#1f2328; letter-spacing:-.02em">PwrAgent</div>
+          <div style="font:400 12px/1.5 Geist,sans-serif; color:#59636e; text-align:center; max-width:380px">Your coding agent runs on your laptop. You drive it from your phone.</div>
+          <div style="display:flex; gap:10px; flex-wrap:wrap; justify-content:center">
+            <img src="../../../../docs/assets/buttons/download-mac-universal.png" width="176" alt="Download for Mac — Universal" style="display:block">
+            <img src="../../../../docs/assets/buttons/download-mac-apple-silicon.png" width="176" alt="Download for Mac — Apple Silicon" style="display:block">
+            <img src="../../../../docs/assets/buttons/download-windows.png" width="176" alt="Download for Windows" style="display:block">
+          </div>
+          <div style="display:flex; gap:8px; flex-wrap:wrap; justify-content:center">
+            <img src="../../../../docs/assets/buttons/link-linux.png" width="120" alt="Debian / Ubuntu" style="display:block">
+            <img src="../../../../docs/assets/buttons/link-docs.png" width="120" alt="Documentation" style="display:block">
+            <img src="../../../../docs/assets/buttons/link-website.png" width="120" alt="pwragent.ai" style="display:block">
+            <img src="../../../../docs/assets/buttons/link-about.png" width="120" alt="About PwrDrvr" style="display:block">
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- The chips at true size                                       -->
+  <!-- ============================================================ -->
+
+  <div style="display:flex; flex-direction:column; gap:18px">
+    <div style="font:500 10px/1 'IBM Plex Mono',monospace; letter-spacing:.14em; color:#8c857a; text-transform:uppercase">Chips at 1× · 2× PNGs displayed at half</div>
+
+    <div style="display:flex; gap:28px; flex-wrap:wrap; align-items:flex-start">
+
+      <div style="display:flex; flex-direction:column; gap:14px; padding:22px 24px; border:1px solid rgba(247,243,235,.10); border-radius:8px; background:#0a0a0a">
+        <div style="font:500 10px/1 'IBM Plex Mono',monospace; letter-spacing:.14em; color:#8c857a; text-transform:uppercase">Download · 276×64</div>
+        <div style="display:flex; flex-direction:column; gap:10px">
+          <div style="display:flex; flex-direction:column; gap:6px">
+            <img src="../../../../docs/assets/buttons/download-mac-universal.png" width="276" alt="Download for Mac — Universal" style="display:block">
+            <div style="font:400 10px/1 'IBM Plex Mono',monospace; color:#6f685e">primary · the one tangerine chip on the page</div>
+          </div>
+          <div style="display:flex; flex-direction:column; gap:6px">
+            <img src="../../../../docs/assets/buttons/download-mac-apple-silicon.png" width="276" alt="Download for Mac — Apple Silicon" style="display:block">
+            <div style="font:400 10px/1 'IBM Plex Mono',monospace; color:#6f685e">secondary · becomes the primary when an arm64 DMG ships</div>
+          </div>
+          <div style="display:flex; flex-direction:column; gap:6px">
+            <img src="../../../../docs/assets/buttons/download-windows.png" width="276" alt="Download for Windows" style="display:block">
+            <div style="font:400 10px/1 'IBM Plex Mono',monospace; color:#6f685e">secondary</div>
+          </div>
+        </div>
+      </div>
+
+      <div style="display:flex; flex-direction:column; gap:14px; padding:22px 24px; border:1px solid rgba(247,243,235,.10); border-radius:8px; background:#0a0a0a">
+        <div style="font:500 10px/1 'IBM Plex Mono',monospace; letter-spacing:.14em; color:#8c857a; text-transform:uppercase">Link · 200×44</div>
+        <div style="display:flex; flex-direction:column; gap:10px">
+          <img src="../../../../docs/assets/buttons/link-linux.png" width="200" alt="Debian / Ubuntu" style="display:block">
+          <img src="../../../../docs/assets/buttons/link-docs.png" width="200" alt="Documentation" style="display:block">
+          <img src="../../../../docs/assets/buttons/link-website.png" width="200" alt="pwragent.ai" style="display:block">
+          <img src="../../../../docs/assets/buttons/link-about.png" width="200" alt="About PwrDrvr" style="display:block">
+        </div>
+        <div style="font:400 10px/1.5 'IBM Plex Mono',monospace; color:#6f685e; max-width:200px">secondary only — a second tangerine chip would compete with the download</div>
+      </div>
+
+      <div style="display:flex; flex-direction:column; gap:14px; padding:22px 24px; border:1px solid rgba(247,243,235,.10); border-radius:8px; background:#0a0a0a; max-width:300px">
+        <div style="font:500 10px/1 'IBM Plex Mono',monospace; letter-spacing:.14em; color:#8c857a; text-transform:uppercase">Anatomy</div>
+        <div style="display:flex; flex-direction:column; gap:9px; font:400 11px/1.5 Geist,sans-serif; color:#b8b0a5">
+          <div><span style="color:#f7f3eb">Asset</span> 276×64 and 200×44, written at 2×. README displays them at 250 and 180, so three download chips and four link chips each hold one row in GitHub's ~836px column.</div>
+          <div><span style="color:#f7f3eb">Radius</span> 12 on download, 10 on link.</div>
+          <div><span style="color:#f7f3eb">Padding</span> 18 leading, 14 between icon and text.</div>
+          <div><span style="color:#f7f3eb">Title</span> Geist Bold 15 / 13.</div>
+          <div><span style="color:#f7f3eb">Subtitle</span> system medium 11 — only Geist Bold is vendored, and Bold at 11 reads as a second heading.</div>
+          <div><span style="color:#f7f3eb">Icons</span> lucide <code style="font-family:'IBM Plex Mono',monospace; color:#ff8a1f">arrow-down-to-line</code> at 20, <code style="font-family:'IBM Plex Mono',monospace; color:#ff8a1f">arrow-up-right</code> at 14 — published coordinates, stroke 2 on the 24 grid.</div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- Colour                                                       -->
+  <!-- ============================================================ -->
+
+  <div style="display:flex; flex-direction:column; gap:18px">
+    <div style="font:500 10px/1 'IBM Plex Mono',monospace; letter-spacing:.14em; color:#8c857a; text-transform:uppercase">Colour · docs/UI-THEME.md dark tokens, pinned in deviceRGB</div>
+
+    <div style="display:grid; grid-template-columns:repeat(6, minmax(0, 1fr)); gap:14px; max-width:840px">
+      <div style="display:flex; flex-direction:column; gap:8px">
+        <div style="height:56px; border-radius:6px; background:linear-gradient(#ffa33d, #ff8a1f)"></div>
+        <div style="font:400 10px/1.4 'IBM Plex Mono',monospace; color:#6f685e">#ffa33d → #ff8a1f<br>--accent-strong → --accent</div>
+      </div>
+      <div style="display:flex; flex-direction:column; gap:8px">
+        <div style="height:56px; border-radius:6px; background:#160a00"></div>
+        <div style="font:400 10px/1.4 'IBM Plex Mono',monospace; color:#6f685e">#160a00<br>ink on tangerine</div>
+      </div>
+      <div style="display:flex; flex-direction:column; gap:8px">
+        <div style="height:56px; border-radius:6px; background:#0a0a0a; border:1px solid rgba(247,243,235,.16)"></div>
+        <div style="font:400 10px/1.4 'IBM Plex Mono',monospace; color:#6f685e">#0a0a0a<br>--bg-panel + .16 hairline</div>
+      </div>
+      <div style="display:flex; flex-direction:column; gap:8px">
+        <div style="height:56px; border-radius:6px; background:#f7f3eb"></div>
+        <div style="font:400 10px/1.4 'IBM Plex Mono',monospace; color:#6f685e">#f7f3eb<br>--text-primary</div>
+      </div>
+      <div style="display:flex; flex-direction:column; gap:8px">
+        <div style="height:56px; border-radius:6px; background:#b8b0a5"></div>
+        <div style="font:400 10px/1.4 'IBM Plex Mono',monospace; color:#6f685e">#b8b0a5<br>--text-secondary</div>
+      </div>
+      <div style="display:flex; flex-direction:column; gap:8px">
+        <div style="height:56px; border-radius:6px; background:#ff8a1f"></div>
+        <div style="font:400 10px/1.4 'IBM Plex Mono',monospace; color:#6f685e">#ff8a1f<br>--accent, icons</div>
+      </div>
+    </div>
+
+    <div style="font:400 12px/1.6 Geist,sans-serif; color:#b8b0a5; max-width:660px; text-wrap:pretty">Two deliberate departures from the in-app token values. The hairline is <code style="font-family:'IBM Plex Mono',monospace; color:#ff8a1f">.16</code>, between <code style="font-family:'IBM Plex Mono',monospace; color:#ff8a1f">--border-subtle</code> and <code style="font-family:'IBM Plex Mono',monospace; color:#ff8a1f">--border-strong</code>, because on GitHub's #0d1117 it is the only edge separating a secondary chip from the page. The subtitle is <code style="font-family:'IBM Plex Mono',monospace; color:#ff8a1f">--text-secondary</code> rather than <code style="font-family:'IBM Plex Mono',monospace; color:#ff8a1f">--text-muted</code>, which at 11px on #0a0a0a lands near 4:1 — and the subtitle is the line that names the artifact.</div>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- Rules                                                        -->
+  <!-- ============================================================ -->
+
+  <div style="display:flex; flex-direction:column; gap:18px">
+    <div style="font:500 10px/1 'IBM Plex Mono',monospace; letter-spacing:.14em; color:#8c857a; text-transform:uppercase">Rules that decided the design</div>
+
+    <div style="display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:16px; max-width:900px">
+
+      <div style="padding:20px 22px; border:1px solid rgba(247,243,235,.10); border-radius:8px; background:#0a0a0a; display:flex; flex-direction:column; gap:8px">
+        <div style="font:600 13px/1.3 Geist,sans-serif; color:#f7f3eb">One opaque chip, not two theme variants</div>
+        <div style="font:400 12px/1.6 Geist,sans-serif; color:#b8b0a5; text-wrap:pretty">Every chip carries its own fill and clears contrast on white and on #0d1117 alike, so there is no <code style="font-family:'IBM Plex Mono',monospace; color:#ff8a1f">&lt;picture&gt;</code> and no doubled asset count. It also keeps the header correct where <code style="font-family:'IBM Plex Mono',monospace; color:#ff8a1f">&lt;picture&gt;</code> is ignored: npm, VS Code's preview, GitHub mobile.</div>
+      </div>
+
+      <div style="padding:20px 22px; border:1px solid rgba(255,138,31,.28); border-radius:8px; background:rgba(255,138,31,.06); display:flex; flex-direction:column; gap:8px">
+        <div style="font:600 13px/1.3 Geist,sans-serif; color:#ff8a1f">Four platforms, three download chips</div>
+        <div style="font:400 12px/1.6 Geist,sans-serif; color:#b8b0a5; text-wrap:pretty">At the 250px display width that keeps a download label readable, four chips need 1000px against an ~836px column and would wrap. Debian and Ubuntu become a link chip — and the reason is editorial before it is geometric: Linux ships <em style="color:#f7f3eb">two</em> architectures and a <code style="font-family:'IBM Plex Mono',monospace; color:#ff8a1f">.deb</code> wants install instructions, neither of which one chip can say. The 2×2 grid and a narrower chip were the alternatives; both cost more than the demotion does.</div>
+      </div>
+
+      <div style="padding:20px 22px; border:1px solid rgba(247,243,235,.10); border-radius:8px; background:#0a0a0a; display:flex; flex-direction:column; gap:8px">
+        <div style="font:600 13px/1.3 Geist,sans-serif; color:#f7f3eb">The primary is the chip that resolves</div>
+        <div style="font:400 12px/1.6 Geist,sans-serif; color:#b8b0a5; text-wrap:pretty">PwrGit makes Apple Silicon primary. PwrAgent cannot yet: no release carries an arm64 macOS DMG, so the loudest chip on the page would point at a releases page with no matching asset. Universal runs natively on Apple Silicon, so it is the correct answer for every Mac today — and exactly one chip is tangerine either way. One commit later swaps the styles, moves Apple Silicon to the first slot, repoints its href, and deletes the hedge sentence.</div>
+      </div>
+
+      <div style="padding:20px 22px; border:1px solid rgba(247,243,235,.10); border-radius:8px; background:#0a0a0a; display:flex; flex-direction:column; gap:8px">
+        <div style="font:600 13px/1.3 Geist,sans-serif; color:#f7f3eb">The subtitle names the build, not the benefit</div>
+        <div style="font:400 12px/1.6 Geist,sans-serif; color:#b8b0a5; text-wrap:pretty">“Universal · Intel + Apple Silicon”, “x64 installer”. Someone standing at a download chip is picking an artifact, and the second line is the only place that question gets answered.</div>
+      </div>
+
+      <div style="padding:20px 22px; border:1px solid rgba(247,243,235,.10); border-radius:8px; background:#0a0a0a; display:flex; flex-direction:column; gap:8px">
+        <div style="font:600 13px/1.3 Geist,sans-serif; color:#f7f3eb">Text that does not fit fails the build</div>
+        <div style="font:400 12px/1.6 Geist,sans-serif; color:#b8b0a5; text-wrap:pretty">A clipped label is silent in a PNG. <code style="font-family:'IBM Plex Mono',monospace; color:#ff8a1f">apps/desktop/scripts/generate-readme-chips.swift</code> measures every label against its chip and exits non-zero rather than writing one — which is what made the system safe to hand from PwrGit to a product with a longer name and a fourth platform.</div>
+      </div>
+
+      <div style="padding:20px 22px; border:1px solid rgba(247,243,235,.10); border-radius:8px; background:#0a0a0a; display:flex; flex-direction:column; gap:8px">
+        <div style="font:600 13px/1.3 Geist,sans-serif; color:#f7f3eb">Only <code style="font-family:'IBM Plex Mono',monospace; color:#ff8a1f">brand</code> and <code style="font-family:'IBM Plex Mono',monospace; color:#ff8a1f">chips</code> diverge</div>
+        <div style="font:400 12px/1.6 Geist,sans-serif; color:#b8b0a5; text-wrap:pretty">Everything below those two declarations is byte-identical to PwrGit's copy, verified by diff at port time. A fix to the renderer — a metric, an icon, the fit check — can be moved between the repositories without a merge. Keep it that way.</div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- Not borrowed                                                 -->
+  <!-- ============================================================ -->
+
+  <div style="display:flex; flex-direction:column; gap:14px">
+    <div style="font:500 10px/1 'IBM Plex Mono',monospace; letter-spacing:.14em; color:#8c857a; text-transform:uppercase">Inherited from PwrGit, which looked at DockDoor</div>
+
+    <div style="display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:16px; max-width:900px">
+      <div style="padding:20px 22px; border:1px solid rgba(255,138,31,.28); border-radius:8px; background:rgba(255,138,31,.06); display:flex; flex-direction:column; gap:10px">
+        <div style="font:600 13px/1.3 Geist,sans-serif; color:#ff8a1f">Took</div>
+        <div style="display:flex; flex-direction:column; gap:7px; font:400 12px/1.5 Geist,sans-serif; color:#b8b0a5">
+          <div>Centred icon, wordmark and one-line pitch above the fold.</div>
+          <div>A hero screenshot immediately under the chips — the app before the prose.</div>
+          <div>A short “ways to help” list at the bottom: star, file an issue.</div>
+        </div>
+      </div>
+      <div style="padding:20px 22px; border:1px solid rgba(247,243,235,.10); border-radius:8px; background:#0a0a0a; display:flex; flex-direction:column; gap:10px">
+        <div style="font:600 13px/1.3 Geist,sans-serif; color:#f7f3eb">Left</div>
+        <div style="display:flex; flex-direction:column; gap:7px; font:400 12px/1.5 Geist,sans-serif; color:#b8b0a5">
+          <div><span style="color:#f7f3eb">Download counters.</span> DockDoor's are proof. PwrAgent's would be a number arguing against the product.</div>
+          <div><span style="color:#f7f3eb">for-the-badge stack shields.</span> Electron / TypeScript / macOS tells a visitor nothing they came for.</div>
+          <div><span style="color:#f7f3eb">Hand-rolled table of contents and back-to-top links.</span> GitHub renders its own outline.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+</x-dc>
+</body>
+</html>

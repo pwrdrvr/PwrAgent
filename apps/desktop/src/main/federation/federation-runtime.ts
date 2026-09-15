@@ -603,26 +603,6 @@ const NAVIGATION_EVENT_METHODS = new Set<string>([
   "turn/started",
 ]);
 
-/**
- * Live events patch renderer state, but pinned remote rows also come from a
- * cached owner snapshot. Turn boundaries can advance `updatedAt` while that
- * cache still holds the pre-turn value, leaving a previously hydrated
- * transcript convinced it is current. Invalidate only at lifecycle
- * boundaries — never for streamed transcript items — so the next pinned-row
- * refresh catches up without turning every token into a snapshot fetch.
- */
-const REMOTE_THREAD_SUMMARY_LIFECYCLE_METHODS = new Set<string>([
-  "thread/status/changed",
-  "thread/parent/cleared",
-  "thread/parent/set",
-  "thread/subthreadOrder/updated",
-  "thread/subthreadsCollapsed/updated",
-  "turn/cancelled",
-  "turn/completed",
-  "turn/failed",
-  "turn/started",
-]);
-
 export function federationEventClassForMethod(
   method: string,
 ): FederationEventClass {
@@ -924,6 +904,7 @@ export class DesktopFederationRuntime {
     FederationInstanceId,
     IncomingEventSubscription
   >();
+  private readonly sentNavigationSubscriptions = new Set<FederationInstanceId>();
   private readonly desiredEventStreamIds = new Map<FederationInstanceId, string>();
   private readonly receivedEventStreams = new Map<FederationInstanceId, {
     epoch: string;
@@ -1097,11 +1078,15 @@ export class DesktopFederationRuntime {
     for (const [consumerId, subscriptions] of
       this.desiredEventSubscriptions) {
       const subscription = subscriptions.get(sourceInstanceId);
+      // A transcript stream can also carry navigation events for another
+      // window. Its recovery invalidates both consumers' owner projections.
+      const subscriptionClass = event?.notification.method === "federation/eventStream/changed"
+        && subscription?.eventClasses.has("navigation") ? "navigation" : eventClass;
       if (
         consumerId.startsWith(prefix)
-        && subscription?.eventClasses.has(eventClass)
-        && (!event || eventClass === "star_map" || eventMatchesThreadSelection(
-          event, eventClass, selectionForEventClass(subscription, eventClass),
+        && subscription?.eventClasses.has(subscriptionClass)
+        && (!event || subscriptionClass === "star_map" || eventMatchesThreadSelection(
+          event, subscriptionClass, selectionForEventClass(subscription, subscriptionClass),
         ))
       ) {
         return true;
@@ -1232,6 +1217,7 @@ export class DesktopFederationRuntime {
     this.remotePeerDirectory.clear();
     this.publishedPeerStatuses.clear();
     this.incomingEventSubscriptions.clear();
+    this.sentNavigationSubscriptions.clear();
     this.desiredEventStreamIds.clear();
     this.receivedEventStreams.clear();
     this.relayedEventSubscriptions.clear();
@@ -2489,6 +2475,7 @@ export class DesktopFederationRuntime {
           return {};
         }
       },
+      hasNavigationSubscription: (instanceId) => this.hasNavigationSubscription(instanceId),
       onPeerInterestChanged: (interests) => {
         const byInstanceId = new Map(
           interests.map((interest) => [interest.instanceId, interest]),
@@ -4607,11 +4594,24 @@ export class DesktopFederationRuntime {
     return this.remotePeerAdvertisesCapability(instanceId, "navigation_snapshot_deltas");
   }
 
+  private hasNavigationSubscription(instanceId: FederationInstanceId): boolean {
+    // Navigation-only subscriptions have no stream acknowledgement. Require a
+    // successful send and a connected, capable owner; sequenced streams must
+    // additionally have recovered any detected gap.
+    return this.sentNavigationSubscriptions.has(instanceId)
+      && Boolean(this.desiredEventSubscriptions.get(REMOTE_THREAD_SUMMARY_EVENT_CONSUMER_ID)
+        ?.get(instanceId)?.eventClasses.has("navigation"))
+      && this.connectedPeerTargets().some((peer) => peer.target.instanceId === instanceId
+        && peer.capabilities.includes("event_subscriptions"))
+      && (!this.desiredEventStreamIds.has(instanceId) || this.receivedEventStreams.has(instanceId));
+  }
+
   private sendDesiredEventSubscription(
     sourceInstanceId: FederationInstanceId,
     subscription: DesiredEventSubscription,
   ): void {
     if (sourceInstanceId === this.ensureLocalInstanceId()) return;
+    this.sentNavigationSubscriptions.delete(sourceInstanceId);
     const supportsSelection = this.remotePeerSupportsThreadSelection(sourceInstanceId);
     const eventClassSelections = eventClassSelectionsForWire(subscription, supportsSelection);
     const subscriptionId = randomUUID();
@@ -4643,6 +4643,7 @@ export class DesktopFederationRuntime {
         targetInstanceId: sourceInstanceId,
         createdAt: Date.now(),
       });
+      if (subscription.eventClasses.has("navigation")) this.sentNavigationSubscriptions.add(sourceInstanceId);
     } catch {
       // Desired state survives disconnects and is replayed after reconnect.
     }
@@ -5067,7 +5068,8 @@ export class DesktopFederationRuntime {
       // The acknowledgement is ordered before subsequent live events. A read
       // started now covers the subscription/reconnection gap, even if the
       // owner is idle waiting for a prompt and never emits another event.
-      this.publishAgentEvent?.({
+      this.remoteThreadSummaryCache?.invalidate(envelope.sourceInstanceId);
+      this.publishReceivedBackendEvent({
         backend: "codex",
         federationTarget: { scope: "remote", instanceId: envelope.sourceInstanceId },
         notification: {
@@ -5141,19 +5143,18 @@ export class DesktopFederationRuntime {
     if (!this.wantsRemoteEvent(sourceInstanceId, eventClass, event)) {
       return true;
     }
-    const sourceMethod = event.notification.method === "navigation/invalidated"
-        && typeof event.notification.params.sourceMethod === "string"
-      ? event.notification.params.sourceMethod : event.notification.method;
-    if (
-      sourceMethod === "thread/pullRequests/updated"
-      || sourceMethod === "thread/reactions/updated"
-      || sourceMethod === "thread/name/updated"
-      || REMOTE_THREAD_SUMMARY_LIFECYCLE_METHODS.has(
-        sourceMethod,
-      )
-    ) {
+    // Subscribed pin snapshots stay fresh through owner events, not a TTL.
+    // Every navigation invalidation can change membership, counts or row metadata;
+    // transcript deltas still never trigger a collection fetch.
+    if (event.notification.method === "navigation/invalidated"
+      || NAVIGATION_EVENT_METHODS.has(event.notification.method)) {
       this.remoteThreadSummaryCache?.invalidate(sourceInstanceId);
     }
+    this.publishReceivedBackendEvent(event);
+    return true;
+  }
+
+  private publishReceivedBackendEvent(event: AgentEvent): void {
     this.publishAgentEvent?.(event);
     for (const listener of this.remoteBackendEventListeners) {
       void Promise.resolve(listener(event)).catch((error) => {
@@ -5163,7 +5164,6 @@ export class DesktopFederationRuntime {
         });
       });
     }
-    return true;
   }
 }
 

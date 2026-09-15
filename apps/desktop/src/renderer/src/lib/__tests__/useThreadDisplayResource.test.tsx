@@ -68,8 +68,12 @@ it("refreshes snapshot-only peers on a changed navigation version without duplic
   const { result, rerender, unmount } = renderHook(({ updatedAt }) => useThreadDisplayResource({ desktopApi: h.api, thread: thread(false, updatedAt), resource: "subagents" }), { initialProps: { updatedAt: 1 } });
   await waitFor(() => expect(result.current.data).toBeDefined());
   expect(h.readThread).toHaveBeenCalledTimes(1);
+  // Automatic refreshes are budgeted to one per second. Drive that clock
+  // explicitly instead of racing waitFor's default one-second deadline.
+  vi.useFakeTimers();
   h.readThread.mockResolvedValue(page("updated")); rerender({ updatedAt: 2 });
-  await waitFor(() => expect(result.current.data?.subAgents?.[0]?.monitorId).toBe("updated"));
+  await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+  expect(result.current.data?.subAgents?.[0]?.monitorId).toBe("updated");
   expect(h.readThread).toHaveBeenCalledTimes(2);
   unmount();
 });
