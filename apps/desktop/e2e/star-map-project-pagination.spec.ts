@@ -88,7 +88,12 @@ test("discovers all project clouds and continues one project's cards in Electron
     const more = map.getByRole("button", { name: "Load more project-0 threads", exact: true });
     // Keyboard activation tests the real control even when this cloud is
     // outside the initial camera rectangle in a fifteen-project sky.
+    // The control stays mounted while a project query refresh disables it.
+    // Presence alone does not make it a keyboard target: focusing a disabled
+    // button leaves focus on body and Enter cannot request a continuation.
+    await expect(more).toBeEnabled();
     await more.focus();
+    await expect(more).toBeFocused();
     await more.press("Enter");
     await expect(map.locator('[data-thread-key$="project-0-card-19"]')).toHaveCount(1)
       .catch(async (error: unknown) => {
