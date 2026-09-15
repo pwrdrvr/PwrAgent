@@ -1,4 +1,8 @@
-import { FORGE_PRODUCTS, type ForgeKind } from "@pwragent/shared";
+import {
+  DESKTOP_UI_LAYOUT_DEFAULTS,
+  FORGE_PRODUCTS,
+  type ForgeKind,
+} from "@pwragent/shared";
 import { codexAuthState } from "../codex-auth-state";
 import type {
   DesktopAppearanceDensity,
@@ -1058,14 +1062,16 @@ export class DesktopSettingsService {
       ui: {
         sidebarHidden: this.resolveConfigBoolean(
           config.ui?.sidebarHidden,
-          false,
+          DESKTOP_UI_LAYOUT_DEFAULTS.sidebarHidden,
         ),
         // Default the context rail to pinned-open so first-run users discover
         // it exists. An explicit unpin persists `false` (see the inverted
         // sentinel in desktopSettingsPatchToEdits); absence means "never set".
+        // The constant is shared with the pre-React layout bootstrap, which
+        // has to reach the same answer before this snapshot exists.
         contextRailPinned: this.resolveConfigBoolean(
           config.ui?.contextRailPinned,
-          true,
+          DESKTOP_UI_LAYOUT_DEFAULTS.contextRailPinned,
         ),
         activeContextTab: {
           value: config.ui?.activeContextTab ?? "info",

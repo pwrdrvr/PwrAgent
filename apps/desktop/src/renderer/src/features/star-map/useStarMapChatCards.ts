@@ -54,6 +54,53 @@ type StarMapChatCardsState = {
   views: Partial<Record<StarMapWorkspaceLayout, StarMapWorkspaceView>>;
 };
 
+/**
+ * The placeholder owner a card carries until `federation:get-health` names
+ * this instance. `StarMapScreen` spells it the same way in two places — the
+ * `localInstanceId` fallback and the `remapOwner` call that retires it.
+ */
+export const STAR_MAP_PLACEHOLDER_INSTANCE_ID = "local";
+
+/**
+ * React's reconciliation identity for a chat card, which is NOT `card.key`.
+ *
+ * `card.key` embeds the owner instance id, and the local instance is the
+ * placeholder `"local"` until the federation-health read resolves.
+ * `remapOwner` then rewrites every local card's key to the durable id — so
+ * a card opened before that read lands gets a different `key` afterwards,
+ * which React reads as a different element and REMOUNTS. The remount
+ * restarts the card's exact detail read, so its composer drops back to
+ * `data-composer-block="detail:none"` and refuses keystrokes until the read
+ * completes again, and it discards card-local state, staged attachments
+ * included.
+ *
+ * Reproduced by delaying `federation:get-health`: the card mounts, the
+ * composer goes live, and when health lands `data-card-mount` steps 1 -> 2
+ * with the composer dead for the width of the new read. No platform has
+ * been observed producing that ordering unaided — `data-card-mount` held at
+ * 1 throughout the Windows failures this was first suspected of causing —
+ * so `star-map-late-federation-health.spec.ts` creates it deliberately.
+ *
+ * So the local owner normalizes to a stable token: the placeholder and the
+ * durable id are the same instance, and which name it is currently going by
+ * is a data change, not an identity change. A remote card keeps its own
+ * owner and stays distinct from every other instance's card for the same
+ * thread. One card per thread per instance, so the thread key alone
+ * separates local cards.
+ */
+export function starMapChatCardReactKey(
+  card: Pick<StarMapChatCardEntry, "key" | "ownerInstanceId" | "threadKey">,
+  localInstanceId: string | undefined,
+): string {
+  return card.ownerInstanceId === STAR_MAP_PLACEHOLDER_INSTANCE_ID
+    || card.ownerInstanceId === localInstanceId
+    ? starMapWorkspaceCardKey({
+      instanceId: STAR_MAP_PLACEHOLDER_INSTANCE_ID,
+      threadKey: card.threadKey,
+    })
+    : card.key;
+}
+
 export type StarMapChatCardsController = {
   cards: StarMapChatCardEntry[];
   hydrated: boolean;

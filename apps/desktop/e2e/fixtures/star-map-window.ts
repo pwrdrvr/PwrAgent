@@ -190,6 +190,53 @@ async function waitForStarMapWindow(
 }
 
 /**
+ * Make the map window the foreground window, and wait until its renderer
+ * agrees.
+ *
+ * The Star Map deliberately goes inactive when it is not focused:
+ * `useStarMapForeground` is
+ * `visibilityState === "visible" && document.hasFocus()`, and the screen
+ * passes it to every feed as `active`. For `useStarMapProjectPages` that
+ * becomes `controller.setVisible(false)`, and
+ * `NavigationWindowController.read` returns early unless the resource is
+ * current — which requires visibility. A `Load more` press that lands while
+ * the window is inactive is therefore discarded with no error, no spinner
+ * and no state change, and `setVisible(true)` re-reads each resource from
+ * the start rather than replaying the continuation it dropped. That is the
+ * intended product behavior, so a spec that drives a pagination control has
+ * to hold the foreground rather than expect the map to answer without it.
+ *
+ * `openStarMapWindow` deliberately does NOT do this — it only waits for the
+ * MAIN window to be visible, and explicitly tolerates the runner never
+ * making the app frontmost. Only the specs that depend on the map being
+ * active need this, and they should say so.
+ */
+export async function focusStarMapWindow(
+  app: LaunchedApp,
+  mapWindow: Page,
+): Promise<void> {
+  const nativeMapWindow = await app.electronApp.browserWindow(mapWindow);
+  await nativeMapWindow.evaluate((win) => {
+    win.show();
+    win.focus();
+  });
+  const foreground = tolerateTransientRpcFailure(async () =>
+    await mapWindow.evaluate(
+      () => `${document.visibilityState}/${document.hasFocus()}`,
+    )
+  );
+  await expect
+    .poll(foreground.read, {
+      message:
+        "the Star Map window never became active (visible + focused), so"
+        + " every feed on it stays suspended and a pagination press would be"
+        + " discarded in silence",
+    })
+    .toBe("visible/true")
+    .catch(foreground.rethrowWithLastFailure);
+}
+
+/**
  * Click the main window's header control and wait for the map window.
  *
  * The `expect.poll` is a readiness barrier, and it is the fix for the

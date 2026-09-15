@@ -80,6 +80,10 @@ import {
   navigationPreferencesAdditionalArguments,
   readBootstrapNavigationPreferences,
 } from "./navigation-browse-mode-bootstrap";
+import {
+  layoutPreferencesAdditionalArguments,
+  readBootstrapLayoutPreferences,
+} from "./layout-prefs-bootstrap";
 import { boundsForCursorDisplay } from "./window-placement";
 import { federationWindowTargetAdditionalArguments } from "../shared/federation-window";
 
@@ -405,6 +409,10 @@ export function createMainWindow(options?: {
       additionalArguments: [
         ...themedWindowAdditionalArguments(appearance),
         ...navigationPreferencesAdditionalArguments(navigationPreferences),
+        // The rail/sidebar must be right at first paint, like the lens above:
+        // correcting them from the settings snapshot reflows the transcript by
+        // the rail's 428px reserve after the app is already on screen.
+        ...layoutPreferencesAdditionalArguments(readBootstrapLayoutPreferences()),
         // Surface the OS home directory so the renderer can collapse long
         // absolute paths to `~` (the sandboxed preload can't read it itself).
         `--pwragent-home-dir=${JSON.stringify(homedir())}`,

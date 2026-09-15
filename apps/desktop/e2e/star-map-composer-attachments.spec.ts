@@ -3,6 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test, type Locator, type Page } from "@playwright/test";
+import {
+  recordDomTrajectory,
+  type DomTrajectoryRecorder,
+} from "./fixtures/dom-trajectory";
 import { launchElectronApp } from "./fixtures/electron-app";
 import { startInProcessFederationGateway } from "./fixtures/federation-gateway";
 import { openStarMapWindow } from "./fixtures/star-map-window";
@@ -88,46 +92,99 @@ async function attachPng(
   }, options);
 }
 
-async function readCardIdentity(
-  chatCard: Locator,
-): Promise<{ mount: string | null; identity: string | null }> {
-  return {
-    mount: await chatCard.getAttribute("data-card-mount"),
-    identity: await chatCard.getAttribute("data-detail-identity"),
-  };
+/**
+ * Watch every attribute the card publishes about its composer gate.
+ *
+ * `StarMapChatCard` publishes `data-composer-block` whenever it withholds
+ * the composer, plus `data-card-mount` and `data-detail-identity` to say
+ * WHY it holds no detail — it remounted, or the identity it asks for
+ * changed. Those were previously read twice, once before the attachments
+ * and once after the keystroke was refused, which cannot see a value that
+ * changed and changed back; Windows reported `mount=1->1
+ * identity=[...]->[...]` while the block reason was `detail:none`, a state
+ * the card only reaches with no completed read for that identity. Exactly
+ * one of the two named causes must therefore have round-tripped, and two
+ * samples cannot say which.
+ *
+ * `editable` is the composer's own answer rather than the card's, because
+ * the two disagreeing is itself a finding — and measured locally they do
+ * NOT disagree: the gate opening, `contenteditable` flipping, and the
+ * `is-disabled` class clearing all land within 3ms of each other. So a
+ * barrier that passed against `contenteditable` saw a gate that was open
+ * at that moment, and a later `detail:none` is a withdrawal rather than a
+ * composer that was never authorized.
+ */
+async function recordComposerTrajectory(
+  mapWindow: Page,
+): Promise<DomTrajectoryRecorder> {
+  return await recordDomTrajectory(mapWindow, {
+    attributes: [
+      "data-composer-block",
+      "data-card-mount",
+      "data-detail-identity",
+    ],
+    editableSelector: ".composer-tiptap-input__editor",
+    selector: ".star-map-chat-card",
+  });
 }
 
 /**
- * Type into the card's composer, naming the gate if it is closed.
+ * Wait until the card itself says the composer is authorized.
  *
- * `StarMapChatCard` publishes `data-composer-block` whenever it withholds the
- * composer. Reading it at the instant the keystroke is refused turns "element
- * is not editable" into the specific term — an unresolved exact identity, a
- * failed read, a non-present thread, or a queue projection that is not ready.
- * `data-card-mount` and `data-detail-identity` separate the two ways the card
- * can end up holding no detail: it remounted, or the identity it asks for
- * changed under it.
+ * NOT `expect(messageInput).toBeEditable()`, which this spec used and which
+ * asserts nothing here: Playwright's editable check is "enabled and not
+ * read-only", and a `<div role="textbox">` has neither attribute, so it
+ * passes in 5ms against `contenteditable="false"` with
+ * `isContentEditable === false`. `contenteditable` only gates the FILL
+ * action's element-type check — which is why the keystroke below could
+ * refuse an element this barrier had just accepted.
+ *
+ * `data-composer-block` is the card's own answer and the thing that
+ * actually governs the editor: measured locally, the gate clearing,
+ * `contenteditable` flipping to `true` and the `is-disabled` class going
+ * away all land within 3ms of each other. Absent means authorized.
+ */
+async function waitForAuthorizedComposer(chatCard: Locator): Promise<void> {
+  // `/.+/` rather than the bare presence form, so an authorized card that
+  // ever rendered the attribute empty still reads as authorized. Today
+  // `composerBlockReason` is `undefined` when the composer is live and a
+  // non-empty reason otherwise, so the two agree; this one keeps agreeing if
+  // that ever becomes an empty string.
+  await expect(chatCard).not.toHaveAttribute("data-composer-block", /.+/);
+}
+
+/**
+ * Type into the card's composer, reporting the whole gate history if it is
+ * closed.
+ *
+ * Reading `data-composer-block` at the instant the keystroke is refused
+ * turns "element is not editable" into the specific term — an unresolved
+ * exact identity, a failed read, a non-present thread, or a queue
+ * projection that is not ready. The trajectory then says whether that term
+ * held the whole time or the composer was withdrawn after this spec had
+ * already seen it live, and `RECORDER_LOST` separates both from a renderer
+ * that reloaded underneath the spec (which resets the module-scoped mount
+ * counter, and so forges `mount=1` for a card that is not the first one).
  */
 async function fillReportingComposerBlock(
   chatCard: Locator,
   messageInput: Locator,
   text: string,
-  before: { mount: string | null; identity: string | null },
+  trajectory: DomTrajectoryRecorder,
 ): Promise<void> {
   try {
     await messageInput.fill(text);
   } catch (error) {
-    const after = {
-      block: await chatCard.getAttribute("data-composer-block"),
-      mount: await chatCard.getAttribute("data-card-mount"),
-      identity: await chatCard.getAttribute("data-detail-identity"),
-    };
+    const block = await chatCard.getAttribute("data-composer-block");
     throw new Error(
-      `Composer refused the keystroke: block=${
-        after.block ?? "<absent, so it believed the composer was live>"
-      } mount=${before.mount}->${after.mount} identity=${
-        before.identity
-      }->${after.identity}`,
+      [
+        `Composer refused the keystroke: block=${
+          block ?? "<absent, so it believed the composer was live>"
+        }`,
+        "  composer gate trajectory (mutation-driven, identical snapshots"
+        + " collapsed):",
+        await trajectory.report(),
+      ].join("\n"),
       { cause: error },
     );
   }
@@ -171,19 +228,40 @@ test("sends pasted, dropped, and local-file attachments from a Star Map chat car
   const notesPath = path.join(fileRoot, "star-map-notes.txt");
   await writeFile(notesPath, "renderer preload attachment evidence\n", "utf8");
   const app = await launchElectronApp({ fixturePath });
+  // Hoisted so the `finally` can stop it on the failing path too. Left
+  // running, its 250ms backstop and its subtree observer keep sampling
+  // through teardown — while the report they produced is being read.
+  let trajectory: DomTrajectoryRecorder | undefined;
 
   try {
     const mapWindow = await openStarMapWindow(app);
+    // Armed BEFORE the card opens: the composer's first `detail:none` is the
+    // card's own opening state, and a report that cannot show that one has
+    // no baseline to call a later `detail:none` a regression against.
+    trajectory = await recordComposerTrajectory(mapWindow);
     const chatCard = await openChatCard(mapWindow, LOCAL_THREAD_TITLE);
     const messageInput = chatCard.getByRole("textbox", {
       name: `Message ${LOCAL_THREAD_TITLE}`,
     });
-    // Wait for the exact-detail and queue authorization owned by the card.
-    // DOM editability alone can observe an editor's initial state before its
-    // disabled option is applied; it cannot prove that owner detail arrived.
-    await expect(chatCard).not.toHaveAttribute("data-composer-block", /.+/);
-    await expect(messageInput).toBeEditable();
-    const cardBaseline = await readCardIdentity(chatCard);
+    // The card enables its composer once the exact detail read and the queue
+    // both report ready, and attaching never consults that state, so without
+    // this the attachment steps below run against a dead composer.
+    //
+    // It has to be an explicit wait rather than letting `fill` handle it:
+    // Playwright rejects a `contenteditable="false"` node as the wrong
+    // element type outright instead of retrying until it becomes editable.
+    //
+    // This barrier is why the Windows failure looked impossible for four CI
+    // rounds. It was `expect(messageInput).toBeEditable()`, which passed in
+    // 5ms on every Windows run while the recorder above showed the composer
+    // blocked from mount to keystroke — so the composer appeared to be live
+    // here and dead 300ms later. It was never live: `toBeEditable()` asserts
+    // nothing against a `<div role="textbox">` (see the helper), and DOM
+    // editability can also observe an editor's initial state before its
+    // disabled option is applied. Windows simply takes longer than macOS and
+    // Linux to complete the card's exact detail read, and this is the wait
+    // that was supposed to cover that.
+    await waitForAuthorizedComposer(chatCard);
 
     await attachPng(messageInput, {
       color: "#2255aa",
@@ -220,7 +298,7 @@ test("sends pasted, dropped, and local-file attachments from a Star Map chat car
       chatCard,
       messageInput,
       "Inspect these Star Map attachments",
-      cardBaseline,
+      trajectory,
     );
     await chatCard.getByRole("button", { name: "Send" }).click();
 
@@ -264,6 +342,7 @@ test("sends pasted, dropped, and local-file attachments from a Star Map chat car
       }),
     );
   } finally {
+    await trajectory?.stop();
     await app.close();
     await rm(fileRoot, { recursive: true, force: true });
   }
@@ -312,7 +391,7 @@ test("rejects a local file on a remote Star Map chat card", async () => {
     const messageInput = chatCard.getByRole("textbox", {
       name: `Message ${REMOTE_THREAD_TITLE}`,
     });
-    await expect(messageInput).toBeEditable();
+    await waitForAuthorizedComposer(chatCard);
     await attachFilesystemFile(mapWindow, messageInput, notesPath);
 
     await expect(chatCard.getByRole("alert")).toContainText(

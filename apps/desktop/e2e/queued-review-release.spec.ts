@@ -2,8 +2,9 @@ import { execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import { launchElectronApp } from "./fixtures/electron-app";
+import { probeReport } from "./fixtures/probe-report";
 
 async function createQueuedReviewReleaseFixture(): Promise<{
   cleanup: () => Promise<void>;
@@ -263,6 +264,57 @@ async function createDuplicateTurnStartGuardFixture(): Promise<{
   };
 }
 
+/**
+ * Why the Send button is still disabled, read after the wait ran out.
+ *
+ * `sendButtonDisabled` is an OR of four terms and the DOM publishes none of
+ * them, so a bare "Received: disabled" cannot tell the two candidates apart:
+ *
+ *  - The composer's authorization was withdrawn after the fill landed — the
+ *    thread view's `composerDisabled` covers navigation detail, thread
+ *    configuration, queue readiness, and backend availability. Then the
+ *    editor is `contenteditable="false"` and carries `is-disabled`, and the
+ *    text the fill wrote is still in it.
+ *  - The fill never reached the composer this button belongs to, or its
+ *    content was lost. Then the editor is editable and empty, and
+ *    `getByRole("textbox", { name: "Reply" })` may have matched something
+ *    else — role names match as a normalized substring, so any later textbox
+ *    whose name merely contains "Reply" is a candidate.
+ *
+ * Electron traces carry no DOM snapshots, so a failure that is not described
+ * here is not described anywhere.
+ */
+async function describeDisabledSend(page: Page): Promise<string> {
+  const observed = await page.evaluate(() => {
+    const editors = [...document.querySelectorAll<HTMLElement>("[role='textbox']")]
+      .map((editor) => ({
+        label: editor.getAttribute("aria-label"),
+        contenteditable: editor.getAttribute("contenteditable"),
+        className: editor.className,
+        text: (editor.textContent ?? "").trim().slice(0, 60),
+      }));
+    const submits = [...document.querySelectorAll<HTMLButtonElement>("button[type='submit']")]
+      .map((button) => ({
+        label: (button.textContent ?? "").trim(),
+        disabled: button.disabled,
+        className: button.className,
+      }));
+    return {
+      editors,
+      submits,
+      attachments: document.querySelectorAll(".composer__attachment").length,
+      turnActive: Boolean(document.querySelector("[data-testid='composer-stop-turn']")),
+    };
+  });
+
+  return [
+    `  textboxes: ${JSON.stringify(observed.editors)}`,
+    `  submit buttons: ${JSON.stringify(observed.submits)}`,
+    `  composer attachments=${observed.attachments}`
+    + ` stop-turn present=${observed.turnActive}`,
+  ].join("\n");
+}
+
 test("background queued review releases after active turn branch adoption", async () => {
   const fixture = await createQueuedReviewReleaseFixture();
   const app = await launchElectronApp({
@@ -279,7 +331,17 @@ test("background queued review releases after active turn branch adoption", asyn
     ).toBeVisible();
 
     await app.window.getByRole("textbox", { name: "Reply" }).fill("Make a PR");
-    await expect(app.window.getByRole("button", { name: "Send", exact: true })).toBeEnabled();
+    await expect(app.window.getByRole("button", { name: "Send", exact: true }))
+      .toBeEnabled()
+      .catch(async (error: unknown) => {
+        throw new Error(
+          [
+            "Send stayed disabled after the composer accepted the keystroke.",
+            await probeReport(async () => await describeDisabledSend(app.window)),
+          ].join("\n"),
+          { cause: error },
+        );
+      });
     await app.window.getByRole("button", { name: "Send" }).click();
     await expect
       .poll(async () => await app.getLastStartTurn())

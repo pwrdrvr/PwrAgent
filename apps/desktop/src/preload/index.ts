@@ -6,6 +6,7 @@ import type { RemoveNavigationDirectoryRequest, RemoveNavigationDirectoryRespons
 import { contextBridge, ipcRenderer, webUtils } from "electron";
 import {
   DEFAULT_NAVIGATION_BROWSE_MODE,
+  DESKTOP_UI_LAYOUT_DEFAULTS,
   DESKTOP_TEXT_SIZE_DEFAULT,
   isDesktopTextSize,
   normalizeNavigationBrowseMode,
@@ -2772,6 +2773,43 @@ function readBootstrapNavigationPreferences(): {
   return { browseMode: DEFAULT_NAVIGATION_BROWSE_MODE };
 }
 const bootstrapNavigationPreferences = readBootstrapNavigationPreferences();
+
+// Layout preferences, decoded here for the same reason the lens above is:
+// the sandboxed preload cannot import the main-process module that encodes
+// them, so the shape is agreed by the argv contract rather than by a shared
+// import. `layout-prefs-bootstrap.test.ts` pins that contract.
+//
+// The defaults come from the shared constant the main-process bootstrap
+// and the settings service also read: a decoder that fell back to a
+// different rail state than the one main would have sent would paint the
+// flicker this hint exists to remove.
+const LAYOUT_ARG_PREFIX = "--pwragent-layout-preferences=";
+function readBootstrapLayoutPreferences(): {
+  contextRailPinned: boolean;
+  sidebarHidden: boolean;
+} {
+  const defaults = DESKTOP_UI_LAYOUT_DEFAULTS;
+  for (const arg of process.argv) {
+    if (!arg.startsWith(LAYOUT_ARG_PREFIX)) continue;
+    try {
+      const raw = JSON.parse(arg.slice(LAYOUT_ARG_PREFIX.length)) as
+        | { contextRailPinned?: unknown; sidebarHidden?: unknown }
+        | null;
+      return {
+        contextRailPinned: typeof raw?.contextRailPinned === "boolean"
+          ? raw.contextRailPinned
+          : defaults.contextRailPinned,
+        sidebarHidden: typeof raw?.sidebarHidden === "boolean"
+          ? raw.sidebarHidden
+          : defaults.sidebarHidden,
+      };
+    } catch {
+      break;
+    }
+  }
+  return defaults;
+}
+const bootstrapLayoutPreferences = readBootstrapLayoutPreferences();
 const bootstrapFederationTarget = readFederationWindowTargetFromArgv(
   process.argv,
 );
@@ -2829,6 +2867,10 @@ if (process.contextIsolated) {
   contextBridge.exposeInMainWorld(
     "__pwragentNavigationPreferences",
     bootstrapNavigationPreferences,
+  );
+  contextBridge.exposeInMainWorld(
+    "__pwragentLayoutPreferences",
+    bootstrapLayoutPreferences,
   );
   contextBridge.exposeInMainWorld("__pwragentHomeDir", bootstrapHomeDir);
   contextBridge.exposeInMainWorld(

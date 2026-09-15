@@ -6,7 +6,11 @@ import {
 } from "@pwragent/shared";
 import { describe, expect, it, vi } from "vitest";
 import type { DesktopApi } from "../../../lib/desktop-api";
-import { useStarMapChatCards } from "../useStarMapChatCards";
+import {
+  starMapChatCardReactKey,
+  STAR_MAP_PLACEHOLDER_INSTANCE_ID,
+  useStarMapChatCards,
+} from "../useStarMapChatCards";
 
 function savedWorkspace(): ReadStarMapWorkspaceResponse {
   return {
@@ -520,5 +524,61 @@ describe("useStarMapChatCards", () => {
       "pwr_remote::codex:t-remote",
       "pwr_local::codex:t-local",
     ]);
+  });
+});
+
+describe("starMapChatCardReactKey", () => {
+  const localCard = {
+    key: "local::codex:t-local",
+    ownerInstanceId: STAR_MAP_PLACEHOLDER_INSTANCE_ID,
+    threadKey: "codex:t-local",
+  };
+
+  it("survives the placeholder owner being replaced by the durable id", () => {
+    // The transition `remapOwner` performs once federation health names this
+    // instance. A different key here remounts every open chat card, which
+    // restarts its exact detail read (the composer drops to
+    // `detail:none` and refuses keystrokes) and discards staged attachments.
+    const beforeHealth = starMapChatCardReactKey(
+      localCard,
+      STAR_MAP_PLACEHOLDER_INSTANCE_ID,
+    );
+    // The render between health arriving and `remapOwner` applying: the card
+    // still carries the placeholder while `localInstanceId` is already
+    // durable. Keying on equality with `localInstanceId` alone breaks here.
+    const midTransition = starMapChatCardReactKey(localCard, "pwr_durable");
+    const afterRemap = starMapChatCardReactKey(
+      {
+        key: "pwr_durable::codex:t-local",
+        ownerInstanceId: "pwr_durable",
+        threadKey: "codex:t-local",
+      },
+      "pwr_durable",
+    );
+
+    expect(midTransition).toBe(beforeHealth);
+    expect(afterRemap).toBe(beforeHealth);
+  });
+
+  it("keeps each instance's card for one thread distinct", () => {
+    const local = starMapChatCardReactKey(localCard, "pwr_durable");
+    const remote = starMapChatCardReactKey(
+      {
+        key: "pwr_remote::codex:t-local",
+        ownerInstanceId: "pwr_remote",
+        threadKey: "codex:t-local",
+      },
+      "pwr_durable",
+    );
+    const otherRemote = starMapChatCardReactKey(
+      {
+        key: "pwr_other::codex:t-local",
+        ownerInstanceId: "pwr_other",
+        threadKey: "codex:t-local",
+      },
+      "pwr_durable",
+    );
+
+    expect(new Set([local, remote, otherRemote]).size).toBe(3);
   });
 });
