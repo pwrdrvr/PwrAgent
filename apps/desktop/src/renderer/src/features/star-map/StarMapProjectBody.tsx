@@ -41,8 +41,24 @@ export function StarMapProjectBody(props: {
         <span className="star-map-instance__actions">
           <button type="button" className="star-map-instance__action"
             aria-label={actionLabel}
-            disabled={props.loadingThreads}
-            onClick={props.onRestartThreads ?? props.onLoadMoreThreads}
+            // `aria-disabled`, not `disabled`, per the house pattern in
+            // `ThreadHeader`'s terminal toggle. Disabling a FOCUSED control
+            // blurs it — focus goes to `body` and clearing the property puts
+            // it back nowhere — and a project refresh holds `loading` for
+            // well under a tenth of a second (88ms, measured on a Windows CI
+            // runner in pwrdrvr/PwrAgent#2176). A keyboard operator holding
+            // this button when a refresh landed lost their place on the map
+            // for a state that was over before they could see it. Keeping it
+            // focusable also keeps the tooltip below, which is this
+            // icon-only control's only visible name, on screen throughout.
+            aria-disabled={props.loadingThreads || undefined}
+            aria-busy={props.loadingThreads || undefined}
+            onClick={() => {
+              // `aria-disabled` does not stop a real click the way the
+              // property did, so the refusal has to be here.
+              if (props.loadingThreads) return;
+              (props.onRestartThreads ?? props.onLoadMoreThreads)?.();
+            }}
             onMouseEnter={(event) => labelTooltip.show(event.currentTarget, actionLabel)}
             onMouseLeave={labelTooltip.hide}
             onFocus={(event) => labelTooltip.show(event.currentTarget, actionLabel)}

@@ -28,7 +28,8 @@ function InstanceAction(props: {
   className: string;
   label: string;
   pressed?: boolean;
-  disabled?: boolean;
+  /** In flight. Refuses the press without leaving the tab order. */
+  busy?: boolean;
   children: ReactNode;
   onClick: () => void;
 }) {
@@ -44,11 +45,26 @@ function InstanceAction(props: {
         type="button"
         className={`star-map-instance__action ${props.className}`}
         aria-label={props.label}
-        disabled={props.disabled}
+        // `aria-disabled`, not `disabled`, per the house pattern in
+        // `ThreadHeader`'s terminal toggle. Doubly so here: disabling a
+        // FOCUSED control blurs it, and this button is icon-only — the
+        // tooltip below IS its discoverable name, and it is shown on focus.
+        // Carrying the native property meant a keyboard user who pressed
+        // this lost the button, the tooltip naming it, and their place on a
+        // map of hundreds of cards, all for a load that was over in
+        // milliseconds (measured at 88ms on the cluster chip,
+        // pwrdrvr/PwrAgent#2176).
+        aria-disabled={props.busy || undefined}
+        aria-busy={props.busy || undefined}
         {...(props.pressed !== undefined
           ? { "aria-pressed": props.pressed }
           : {})}
-        onClick={props.onClick}
+        onClick={() => {
+          // `aria-disabled` does not stop a real click the way the property
+          // did, so the refusal has to be here.
+          if (props.busy) return;
+          props.onClick();
+        }}
         onMouseEnter={(event) => tooltip.show(event.currentTarget, props.label)}
         onMouseLeave={tooltip.hide}
         onFocus={(event) => tooltip.show(event.currentTarget, props.label)}
@@ -129,7 +145,7 @@ export function StarMapInstanceCard(props: {
         {props.onLoadMoreThreads ? (
           <InstanceAction className="star-map-instance__action--more"
             label={`Load more threads on ${fullLabel}`}
-            disabled={props.loadingThreads}
+            busy={props.loadingThreads}
             onClick={props.onLoadMoreThreads}
           >
             ↓
