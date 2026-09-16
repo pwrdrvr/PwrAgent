@@ -3252,6 +3252,27 @@ describe("SettingsScreen", () => {
     expect(dialog).not.toHaveTextContent("Codex login exited before emitting a login link");
   });
 
+  it("retains independently loaded Token Miser usage across settings refreshes", async () => {
+    const snapshot = createSnapshot();
+    const readTokenMiserUsage = vi.fn().mockResolvedValue({
+      interceptionCount: 1, originalCharacters: 100, baselineParentTokens: 25,
+      replacementTokens: 5, retrievedTokens: 0, estimatedParentTokensSaved: 20,
+    });
+    const desktopApi = { readTokenMiserUsage };
+    const { rerender } = render(<SettingsScreen
+      desktopApi={desktopApi} initialSection="experimental"
+      settings={createSettingsState(snapshot)} onClose={() => undefined}
+    />);
+    await waitFor(() => expect(screen.getByText("Saved 20 tokens")).toBeInTheDocument());
+    const refreshed = { ...snapshot, fetchedAt: snapshot.fetchedAt + 1 };
+    rerender(<SettingsScreen
+      desktopApi={desktopApi} initialSection="experimental"
+      settings={createSettingsState(refreshed)} onClose={() => undefined}
+    />);
+    expect(screen.getByText("Saved 20 tokens")).toBeInTheDocument();
+    expect(readTokenMiserUsage).toHaveBeenCalledTimes(1);
+  });
+
   it("lets an available Token Miser experiment default threads on or off", async () => {
     const snapshot = createSnapshot();
     snapshot.experimental.tokenMiserEnabled = { value: true, source: "config" };
@@ -3261,12 +3282,6 @@ describe("SettingsScreen", () => {
     };
     snapshot.runtime.tokenMiser = {
       activation: { observedAt: 1_800_000_000_000, state: "active" },
-      interceptionCount: 0,
-      originalCharacters: 0,
-      baselineParentTokens: 0,
-      replacementTokens: 0,
-      retrievedTokens: 0,
-      estimatedParentTokensSaved: 0,
     };
     const settings = createSettingsState(snapshot);
 
@@ -3302,12 +3317,6 @@ describe("SettingsScreen", () => {
         state: "pending-switch",
         version: "0.201.0-pwragent.1",
       },
-      interceptionCount: 0,
-      originalCharacters: 0,
-      baselineParentTokens: 0,
-      replacementTokens: 0,
-      retrievedTokens: 0,
-      estimatedParentTokensSaved: 0,
     };
     const settings = createSettingsState(snapshot);
 
@@ -3337,12 +3346,6 @@ describe("SettingsScreen", () => {
         state: "pending-switch",
         version: "0.201.0-pwragent.1",
       },
-      interceptionCount: 0,
-      originalCharacters: 0,
-      baselineParentTokens: 0,
-      replacementTokens: 0,
-      retrievedTokens: 0,
-      estimatedParentTokensSaved: 0,
     };
 
     render(
@@ -3402,12 +3405,6 @@ describe("SettingsScreen", () => {
         reason: "marketplace 'pwragent-local' is already added from a different source",
         state: "unavailable",
       },
-      interceptionCount: 0,
-      originalCharacters: 0,
-      baselineParentTokens: 0,
-      replacementTokens: 0,
-      retrievedTokens: 0,
-      estimatedParentTokensSaved: 0,
     };
     const settings = createSettingsState(snapshot);
 
@@ -3432,12 +3429,6 @@ describe("SettingsScreen", () => {
     snapshot.experimental.tokenMiserEnabled = { value: true, source: "config" };
     snapshot.runtime.tokenMiser = {
       activation: { observedAt: 1_800_000_000_000, state: "active" },
-      interceptionCount: 0,
-      originalCharacters: 0,
-      baselineParentTokens: 0,
-      replacementTokens: 0,
-      retrievedTokens: 0,
-      estimatedParentTokensSaved: 0,
     };
     const settings = createSettingsState(snapshot);
 

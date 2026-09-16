@@ -1,5 +1,6 @@
-import type { DesktopSettingsSnapshot } from "@pwragent/shared";
-import { useState } from "react";
+import type { DesktopSettingsSnapshot, DesktopTokenMiserUsage } from "@pwragent/shared";
+import { useEffect, useState } from "react";
+import type { DesktopApi } from "../../lib/desktop-api";
 import {
   SettingsField,
   SettingsPanelHead,
@@ -51,6 +52,7 @@ const DEFAULT_TOKEN_MISER_DEFAULT_ENABLED = {
 };
 
 export function ExperimentalSettings(props: {
+  desktopApi?: DesktopApi;
   saving: boolean;
   snapshot: DesktopSettingsSnapshot;
   onDiffCondensationEnabledChange: (enabled: boolean) => Promise<void>;
@@ -87,9 +89,18 @@ export function ExperimentalSettings(props: {
   const tokenMiserDefaultEnabled =
     props.snapshot.experimental.tokenMiserDefaultEnabled ??
     DEFAULT_TOKEN_MISER_DEFAULT_ENABLED;
-  const tokenMiserUsage = props.snapshot.runtime.tokenMiser;
-  const tokenMiserActivation = tokenMiserUsage?.activation;
-  const managedCodex = tokenMiserUsage?.managedCodex;
+  const [tokenMiserUsage, setTokenMiserUsage] = useState<DesktopTokenMiserUsage>();
+  useEffect(() => {
+    let cancelled = false;
+    void props.desktopApi?.readTokenMiserUsage?.().then((usage) => {
+      if (!cancelled) setTokenMiserUsage(usage);
+    }).catch(() => {
+      // Unavailable accounting must not block configuration or imply zero usage.
+    });
+    return () => { cancelled = true; };
+  }, [props.desktopApi]);
+  const tokenMiserActivation = props.snapshot.runtime.tokenMiser?.activation;
+  const managedCodex = props.snapshot.runtime.tokenMiser?.managedCodex;
   const tokenMiserSwitchPending =
     tokenMiserEnabled.value
     && managedCodex?.state === "pending-switch";

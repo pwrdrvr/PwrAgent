@@ -14439,12 +14439,10 @@ export class DesktopBackendRegistry {
     if (typeof this.overlayStore.readThreadToolAccounting !== "function") {
       return;
     }
-    const storedToolAccounting = await this.overlayStore.readThreadToolAccounting({
-      backend: params.backend,
-      threadId: params.threadId,
-    });
-    const toolAccounting = await this.withTokenMiserAccounting({
-      accounting: storedToolAccounting,
+    // Live displays invalidate and read their own accounting on demand. The
+    // incident projection only needs the SQLite invocation/alert records;
+    // enriching this event scans Token Miser files only to discard the result.
+    const toolAccounting = await this.overlayStore.readThreadToolAccounting({
       backend: params.backend,
       threadId: params.threadId,
     });

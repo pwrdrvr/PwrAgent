@@ -535,6 +535,7 @@ function forgeCliPresent(
 }
 
 export class DesktopSettingsService {
+  private tokenMiserUsageStore?: TokenMiserStore;
   private readonly env: NodeJS.ProcessEnv;
   private readonly argv: readonly string[];
   private readonly configPath: string;
@@ -626,6 +627,15 @@ export class DesktopSettingsService {
         now: this.now,
         resolveEnv: async () => await this.resolveCodexSpawnEnvAsync(),
       });
+  }
+
+  async readTokenMiserUsage() {
+    // Retain filename indexes, but reread mutable accounting for each explicit
+    // request so another process's committed updates remain visible.
+    this.tokenMiserUsageStore ??= new TokenMiserStore(
+      path.join(path.dirname(this.configPath), "state", "token-miser", "objects"),
+    );
+    return await this.tokenMiserUsageStore.summarizeUsage();
   }
 
   async readSettingsProjection(): Promise<DesktopSettingsSnapshot> {
@@ -788,21 +798,6 @@ export class DesktopSettingsService {
     const slackChannelUserAccessMode = this.resolveSlackChannelUserAccessMode(
       config.messaging?.slack?.channelUserAccessMode,
     );
-    const tokenMiserUsage = await new TokenMiserStore(
-      path.join(
-        path.dirname(this.configPath),
-        "state",
-        "token-miser",
-        "objects",
-      ),
-    ).summarizeUsage().catch(() => ({
-      interceptionCount: 0,
-      originalCharacters: 0,
-      baselineParentTokens: 0,
-      replacementTokens: 0,
-      retrievedTokens: 0,
-      estimatedParentTokensSaved: 0,
-    }));
     const tokenMiserActivation = await this.readTokenMiserActivation();
 
     return {
@@ -812,7 +807,6 @@ export class DesktopSettingsService {
       runtime: {
         tokenMiser: tokenMiserActivation
           ? {
-              ...tokenMiserUsage,
               activation: tokenMiserActivation,
               ...(managedCodexRuntime
                 ? {
@@ -833,7 +827,6 @@ export class DesktopSettingsService {
                   : {}),
             }
           : {
-              ...tokenMiserUsage,
               ...(managedCodexRuntime
                 ? {
                     managedCodex: {

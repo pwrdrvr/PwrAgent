@@ -59,12 +59,6 @@ function createSnapshot(options: {
           state: "ready",
           version: options.managedCodexVersion ?? "pwragent-v0.149.0",
         },
-        interceptionCount: 0,
-        originalCharacters: 0,
-        baselineParentTokens: 0,
-        replacementTokens: 0,
-        retrievedTokens: 0,
-        estimatedParentTokensSaved: 0,
       },
     },
     models: {

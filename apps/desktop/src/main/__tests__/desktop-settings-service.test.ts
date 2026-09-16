@@ -11,6 +11,7 @@ import {
 import { readBootstrapAppearance } from "../settings/appearance-bootstrap";
 import { issueProviderDiscoveryPermit } from "../settings/provider-discovery-permit";
 import { DesktopConfigStore } from "../settings/config-store/desktop-config-store";
+import { TokenMiserStore } from "../token-miser/token-miser-store";
 
 // `DesktopSettingsService` builds a real `CodexDiscoveryCoordinator` unless the
 // test injects one, and the kit's probe runs `codex --version` against every
@@ -43,6 +44,44 @@ function existsOrEmpty(filePath: string): boolean {
 }
 
 describe("DesktopSettingsService", () => {
+  it("does not scan Token Miser accounting for an ordinary settings projection", async () => {
+    const service = new DesktopSettingsService({
+      configPath: path.join(createTempRoot(), "config.toml"),
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+    const scan = vi.spyOn(TokenMiserStore.prototype, "listMetadata");
+    try {
+      await service.readSettingsProjection();
+      await service.writeConfigPatchTargeted({ general: { developerMode: true } });
+      await service.readSettingsProjection();
+      expect(scan).not.toHaveBeenCalled();
+    } finally {
+      scan.mockRestore();
+    }
+  });
+
+  it("keeps explicit Token Miser usage reads fresh independently of settings", async () => {
+    const root = createTempRoot();
+    const service = new DesktopSettingsService({
+      configPath: path.join(root, "config.toml"), env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+    expect((await service.readTokenMiserUsage()).interceptionCount).toBe(0);
+    const writer = new TokenMiserStore(path.join(root, "state", "token-miser", "objects"));
+    await writer.store({
+      threadId: "fixture-thread", turnId: "fixture-turn", toolUseId: "fixture-tool",
+      toolName: "fixture", output: "fixture output",
+      replacementCharacters: 4, summary: { summary: "fixture", usefulDetails: [] },
+    });
+    const usage = await service.readTokenMiserUsage();
+    expect(usage.interceptionCount).toBe(1);
+    await service.readSettingsProjection();
+    expect(await service.readTokenMiserUsage()).toEqual(usage);
+    expect((await service.readSettingsProjection()).runtime.tokenMiser)
+      .not.toHaveProperty("interceptionCount");
+  });
+
   it("projects runtime rejection without changing auth-file discovery", async () => {
     const { codexAuthState } = await import("../codex-auth-state");
     const root = createTempRoot();

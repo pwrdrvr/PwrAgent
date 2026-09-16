@@ -77,6 +77,7 @@ import {
   SETTINGS_PICK_GIT_COMMAND_CHANNEL,
   SETTINGS_REFRESH_GIT_DISCOVERY_CHANNEL,
   SETTINGS_READ_CHANNEL,
+  TOKEN_MISER_READ_USAGE_CHANNEL,
   SETTINGS_READ_BOOTSTRAP_CHANNEL,
   SETTINGS_READ_FULL_ACCESS_POLICY_CHANNEL,
   SETTINGS_READ_MESSAGING_CHANNEL,
@@ -1412,6 +1413,11 @@ export function registerSettingsIpcHandlers(
     },
   );
 
+  ipcMain.removeHandler(TOKEN_MISER_READ_USAGE_CHANNEL);
+  ipcMain.handle(TOKEN_MISER_READ_USAGE_CHANNEL, async () =>
+    await getService(service).readTokenMiserUsage(),
+  );
+
   ipcMain.removeHandler(SETTINGS_READ_CHANNEL);
   ipcMain.handle(
     SETTINGS_READ_CHANNEL,
@@ -1980,6 +1986,7 @@ export function disposeSettingsIpcHandlers(): void {
   recentAcpRefreshes.clear();
   ipcMain.removeHandler(ACP_AGENTS_LIST_CHANNEL);
   ipcMain.removeHandler(ACP_AGENT_UPDATE_ACKNOWLEDGE_CHANNEL);
+  ipcMain.removeHandler(TOKEN_MISER_READ_USAGE_CHANNEL);
   ipcMain.removeHandler(SETTINGS_READ_CHANNEL);
   ipcMain.removeHandler(SETTINGS_READ_BOOTSTRAP_CHANNEL);
   ipcMain.removeHandler(SETTINGS_READ_MESSAGING_CHANNEL);

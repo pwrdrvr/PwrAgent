@@ -29,6 +29,37 @@ function harness() {
 }
 afterEach(() => vi.useRealTimers());
 
+it("isolates Pricing invalidation by instance, backend, and thread", async () => {
+  const h = harness();
+  const local = { ...thread(), federation: undefined };
+  const localView = renderHook(() => useThreadDisplayResource({ desktopApi: h.api, thread: local, resource: "pricing" }));
+  const remoteView = renderHook(() => useThreadDisplayResource({ desktopApi: h.api, thread: thread(), resource: "pricing" }));
+  await waitFor(() => expect(h.readThread).toHaveBeenCalledTimes(2));
+  await waitFor(() => expect(remoteView.result.current.data).toBeDefined());
+  vi.useFakeTimers();
+  h.invalidate("unrelated-owner");
+  h.emit({ backend: "codex", federationTarget: target, notification: {
+    method: "thread/pricing/updated", params: { threadId: "unknown-remote-thread", pricing: { lines: [], summaries: [] } },
+  } });
+  h.emit({ backend: "acp:other", federationTarget: target, notification: {
+    method: "thread/pricing/updated", params: { threadId: "thread", pricing: { lines: [], summaries: [] } },
+  } });
+  await act(async () => { await vi.advanceTimersByTimeAsync(1_050); });
+  expect(h.readThread).toHaveBeenCalledTimes(2);
+  h.invalidate();
+  await act(async () => { await vi.advanceTimersByTimeAsync(1_050); });
+  expect(h.readThread).toHaveBeenCalledTimes(3);
+  expect(h.readThread.mock.lastCall?.[0].federationTarget).toEqual(target);
+  h.emit({ backend: "codex", notification: {
+    method: "thread/pricing/updated", params: { threadId: "thread", pricing: { lines: [], summaries: [] } },
+  } });
+  await act(async () => { await vi.advanceTimersByTimeAsync(1_050); });
+  expect(h.readThread).toHaveBeenCalledTimes(4);
+  expect(h.readThread.mock.lastCall?.[0].federationTarget).toBeUndefined();
+  localView.unmount();
+  remoteView.unmount();
+});
+
 it("reads a resource only while its panel is open and stops refreshes when it closes", async () => {
   const h = harness();
   const { result, rerender, unmount } = renderHook(({ open }) => useThreadDisplayResource({ desktopApi: h.api, thread: thread(), resource: open ? "subagents" : undefined }), { initialProps: { open: false } });
