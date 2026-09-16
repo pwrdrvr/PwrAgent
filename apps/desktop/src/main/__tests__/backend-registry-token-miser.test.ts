@@ -136,6 +136,26 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
     expect(listMetadata).toHaveBeenCalledExactlyOnceWith("thread-parent");
   });
 
+  it("does not read Token Miser files when publishing accounting invalidation", async () => {
+    const tokenMiserStore = new TokenMiserStore(path.join(directory, "token-miser-objects"));
+    await tokenMiserStore.store({
+      ...metadata(randomUUID(), "helper-notification"), output: "fixture output",
+    });
+    Object.assign(registry, { tokenMiserStore });
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => { events.push(event); });
+    const readFile = vi.spyOn(fs, "readFile");
+    try {
+      await (registry as unknown as {
+        emitThreadToolAccountingUpdated(params: { backend: "codex"; threadId: string }): Promise<void>;
+      }).emitThreadToolAccountingUpdated({ backend: "codex", threadId: "thread-parent" });
+      expect(events.some((event) => event.notification.method === "thread/toolAccounting/updated")).toBe(true);
+      expect(readFile.mock.calls.filter(([file]) => String(file).includes("token-miser-objects"))).toEqual([]);
+    } finally {
+      readFile.mockRestore();
+    }
+  });
+
   it("batches gate cards and Luna usage into the parent ledgers", async () => {
     await store.upsertThreadUsageLine({
       line: {
@@ -892,7 +912,8 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
       inputTokens: 200_000,
       outputTokens: 1_000,
     }));
-    const staleObservedAt = Date.now();
+    // The fixture is older even when both SQLite operations share a millisecond.
+    const staleObservedAt = Date.now() - 1;
     await store.recordThreadCompaction({
       compaction: {
         backend: "codex",
