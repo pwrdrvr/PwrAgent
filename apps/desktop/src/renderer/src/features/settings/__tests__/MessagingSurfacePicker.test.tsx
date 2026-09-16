@@ -6,17 +6,19 @@ import { MessagingSurfacePicker } from "../MessagingSurfacePicker";
 afterEach(cleanup);
 
 const options = [
-  { value: "channel-a", label: "Orchard", kind: "channel" as const, detail: "ID C_ORCHARD" },
-  { value: "channel-b", label: "Meadow", kind: "channel" as const, detail: "ID C_MEADOW" },
-  { value: "dm", label: "Alex and Sam", kind: "dm" as const, detail: "ID D_FRIENDS" },
+  { value: "channel-a", label: "Orchard", kind: "channel" as const, detail: "C_ORCHARD", seen: "Sep 16" },
+  { value: "channel-b", label: "Meadow", kind: "channel" as const, detail: "C_MEADOW", seen: "Sep 15" },
+  { value: "dm", label: "Alex and Sam", kind: "dm" as const, detail: "D_FRIENDS", seen: "Sep 14" },
   { value: "thread", label: "Harvest discussion", kind: "thread" as const },
-  { value: "topic", label: "Garden topic", kind: "topic" as const },
+  { value: "topic", label: "Garden topic", kind: "topic" as const, detail: "T_GARDEN", seen: "Sep 13" },
 ];
+
+const CLOSED_LABEL = "Choose a messaging surface";
 
 function setup(value = "", allowTopics = false) {
   const onChange = vi.fn();
   render(<MessagingSurfacePicker value={value} options={options} filterConversations allowTopics={allowTopics} onChange={onChange} />);
-  fireEvent.click(screen.getByRole("button", { name: "Messaging surface" }));
+  fireEvent.click(screen.getByRole("button", { name: value ? /^Surface: / : CLOSED_LABEL }));
   return onChange;
 }
 
@@ -24,16 +26,49 @@ function labels() {
   return within(screen.getByRole("listbox")).queryAllByRole("option").map((option) => option.textContent);
 }
 
+function sections() {
+  return within(screen.getByRole("listbox"))
+    .queryAllByRole("group")
+    .map((group) => group.getAttribute("aria-label"));
+}
+
 describe("MessagingSurfacePicker", () => {
-  it("starts with channels and DMs and never offers ephemeral threads", () => {
+  it("groups durable destinations by kind and never offers ephemeral threads", () => {
     setup();
-    expect(labels()).toEqual(["OrchardID C_ORCHARD", "MeadowID C_MEADOW", "Alex and SamID D_FRIENDS"]);
-    fireEvent.click(screen.getByRole("button", { name: "Direct messages" }));
-    expect(labels()).toEqual(["Alex and SamID D_FRIENDS"]);
-    fireEvent.click(screen.getByRole("button", { name: "Channels / groups" }));
-    expect(labels()).toEqual(["OrchardID C_ORCHARD", "MeadowID C_MEADOW"]);
-    expect(screen.queryByRole("button", { name: "Telegram topics" })).not.toBeInTheDocument();
+    expect(sections()).toEqual(["Channels & groups", "Direct messages"]);
+    expect(labels()).toEqual([
+      "#OrchardC_ORCHARDSep 16",
+      "#MeadowC_MEADOWSep 15",
+      "@Alex and SamD_FRIENDSSep 14",
+    ]);
     expect(screen.queryByRole("option", { name: /Harvest discussion/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: /Garden topic/ })).not.toBeInTheDocument();
+  });
+
+  it("gives named Telegram topics their own section when the platform allows them", () => {
+    setup("", true);
+    expect(sections()).toEqual(["Channels & groups", "Direct messages", "Telegram topics"]);
+    expect(screen.getByRole("option", { name: /Garden topic/ })).toBeInTheDocument();
+  });
+
+  it("replaces the trigger while open so the field shows no stale placeholder", () => {
+    setup();
+    expect(screen.queryByRole("button", { name: CLOSED_LABEL })).not.toBeInTheDocument();
+    fireEvent.keyDown(screen.getByRole("combobox"), { key: "Escape" });
+    expect(screen.getByRole("button", { name: CLOSED_LABEL })).toBeInTheDocument();
+  });
+
+  it("names the chosen destination on the closed trigger", () => {
+    setup("topic", true);
+    fireEvent.keyDown(screen.getByRole("combobox"), { key: "Escape" });
+    expect(screen.getByRole("button", { name: "Surface: Garden topic" })).toBeInTheDocument();
+    expect(screen.getByText("Garden topic")).toBeInTheDocument();
+  });
+
+  it("marks the chosen destination as selected", () => {
+    setup("topic", true);
+    expect(screen.getByRole("option", { name: /Garden topic/ })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("option", { name: /Orchard/ })).toHaveAttribute("aria-selected", "false");
   });
 
   it("searches every candidate by name or ID and selects with the keyboard", () => {
@@ -41,24 +76,30 @@ describe("MessagingSurfacePicker", () => {
     const input = screen.getByRole("combobox");
     expect(input).toHaveFocus();
     fireEvent.change(input, { target: { value: " c_meadow " } });
-    expect(labels()).toEqual(["MeadowID C_MEADOW"]);
+    expect(labels()).toEqual(["#MeadowC_MEADOWSep 15"]);
     fireEvent.keyDown(input, { key: "Enter" });
     expect(onChange).toHaveBeenCalledWith("channel-b");
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    expect(screen.getByLabelText("Messaging surface")).toHaveFocus();
+    expect(screen.getByRole("button", { name: CLOSED_LABEL })).toHaveFocus();
   });
 
-  it("moves the active result with arrows and dismisses without changing selection", () => {
+  it("walks the cursor across section headings with the arrow keys", () => {
     const onChange = setup();
-    fireEvent.keyDown(screen.getByRole("combobox"), { key: "ArrowDown" });
-    fireEvent.keyDown(screen.getByRole("combobox"), { key: "Enter" });
-    expect(onChange).toHaveBeenCalledWith("channel-b");
-    onChange.mockClear();
-    fireEvent.click(screen.getByLabelText("Messaging surface"));
+    const input = screen.getByRole("combobox");
+    // Third press crosses from the channels section into direct messages.
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    expect(input).toHaveAttribute("aria-activedescendant", expect.stringMatching(/-2$/));
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onChange).toHaveBeenCalledWith("dm");
+  });
+
+  it("dismisses without changing the selection", () => {
+    const onChange = setup();
     fireEvent.keyDown(screen.getByRole("combobox"), { key: "Escape" });
     expect(onChange).not.toHaveBeenCalled();
-    expect(screen.getByLabelText("Messaging surface")).toHaveFocus();
-    fireEvent.click(screen.getByLabelText("Messaging surface"));
+    expect(screen.getByRole("button", { name: CLOSED_LABEL })).toHaveFocus();
+    fireEvent.click(screen.getByRole("button", { name: CLOSED_LABEL }));
     fireEvent.pointerDown(document.body);
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
@@ -67,15 +108,24 @@ describe("MessagingSurfacePicker", () => {
     const onChange = setup();
     fireEvent.change(screen.getByRole("combobox"), { target: { value: "unknown" } });
     expect(screen.getByText("No matching surfaces.")).toBeInTheDocument();
+    expect(screen.queryAllByRole("group")).toHaveLength(0);
     fireEvent.keyDown(screen.getByRole("combobox"), { key: "Enter" });
     expect(onChange).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Enter an ID manually..." }));
     expect(onChange).toHaveBeenCalledWith("manual");
   });
 
-  it("opens a selected Telegram topic in the topic filter", () => {
-    setup("topic", true);
-    expect(screen.getByRole("button", { name: "Telegram topics" })).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByRole("option", { name: /Garden topic/ })).toHaveAttribute("aria-selected", "true");
+  it("drops the kind glyph for container scopes, which are not channels", () => {
+    render(
+      <MessagingSurfacePicker
+        value=""
+        filterConversations={false}
+        onChange={vi.fn()}
+        options={[{ value: "workspace", label: "Orchard Co", detail: "T012AB", seen: "Sep 16" }]}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: CLOSED_LABEL }));
+    expect(sections()).toEqual(["Recently seen"]);
+    expect(labels()).toEqual(["Orchard CoT012ABSep 16"]);
   });
 });

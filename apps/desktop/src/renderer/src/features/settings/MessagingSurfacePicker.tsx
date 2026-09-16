@@ -2,20 +2,75 @@ import { useEffect, useId, useRef, useState } from "react";
 import type { MessagingConversationKind } from "@pwragent/shared";
 import { SearchIcon } from "../../icons";
 
+/**
+ * Durable-destination picker for a messaging default route.
+ *
+ * This is the composer's project / branch picker in a Settings form, and it
+ * deliberately borrows that popover's primitives rather than restating them:
+ * one search row, an uppercase section eyebrow per group, and a single-line
+ * row whose anatomy never varies (check column, kind glyph, name, then the
+ * durable ID right-aligned in dim mono). Two destinations that share a name
+ * are told apart by that ID column, which is what the native `<select>` this
+ * replaced could not do.
+ *
+ * Two deliberate departures from the composer pickers:
+ *
+ *   - The panel is anchored INLINE, not absolutely. `.settings-panel` sets
+ *     `overflow: hidden` and `.settings-content` scrolls, so a floating
+ *     popover would be clipped by the card it opens inside. It therefore
+ *     carries no drop shadow — it is an expanded well in a form, and lighting
+ *     it like something that floats over the page would be a lie.
+ *   - The trigger is REPLACED by the panel rather than sitting above it, so
+ *     the field never shows a stale "choose one…" placeholder while its own
+ *     list is open underneath. Focus returns to the trigger when the panel
+ *     closes by Escape or by choosing a row.
+ *
+ * Kind is carried by a section heading instead of a filter control: grouping
+ * answers "which of these is a DM?" without hiding anything and without a
+ * control that only exists on one platform.
+ */
+
+type SurfaceSection = "configured" | "channel" | "dm" | "topic" | "other";
+
 type SurfaceOption = {
   value: string;
   label: string;
+  /** Durable identifier, right-aligned in mono. Also matched by the search. */
   detail?: string;
+  /** Trailing recency label. */
+  seen?: string;
+  /** Overrides the kind-derived section. */
+  section?: SurfaceSection;
   kind?: MessagingConversationKind;
 };
 
-type SurfaceFilter = "roots" | "channel" | "dm" | "topic";
-const FILTERS: { value: SurfaceFilter; label: string }[] = [
-  { value: "roots", label: "Channels & DMs" },
-  { value: "channel", label: "Channels / groups" },
-  { value: "dm", label: "Direct messages" },
-  { value: "topic", label: "Telegram topics" },
+const SECTIONS: { key: SurfaceSection; label: string }[] = [
+  { key: "configured", label: "Current configuration" },
+  { key: "channel", label: "Channels & groups" },
+  { key: "dm", label: "Direct messages" },
+  { key: "topic", label: "Telegram topics" },
+  { key: "other", label: "Recently seen" },
 ];
+
+/**
+ * Kind glyph for the leading icon column, like the composer's folder and
+ * branch marks. Only the conversation scope has one: the container scopes
+ * list servers and workspaces, which are not channels, and a homogeneous
+ * section stays aligned without a glyph at all.
+ */
+function kindGlyph(kind: MessagingConversationKind | undefined): string {
+  if (kind === "dm") return "@";
+  if (kind === "topic") return "▸";
+  return "#";
+}
+
+function sectionFor(option: SurfaceOption, grouped: boolean): SurfaceSection {
+  if (option.section) return option.section;
+  if (!grouped) return "other";
+  if (option.kind === "dm") return "dm";
+  if (option.kind === "topic") return "topic";
+  return "channel";
+}
 
 export function MessagingSurfacePicker(props: {
   value: string;
@@ -26,30 +81,50 @@ export function MessagingSurfacePicker(props: {
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
-  const [filter, setFilter] = useState<SurfaceFilter>("roots");
   const [active, setActive] = useState(0);
   const root = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
+  const restoreFocus = useRef(false);
   const listId = useId();
   const selected = props.options.find((option) => option.value === props.value);
+
+  const trimmed = query.trim().toLowerCase();
   const visible = props.options.filter((option) => {
     if (props.filterConversations && option.kind) {
-      if (option.kind === "thread" || (option.kind === "topic" && !props.allowTopics)) return false;
-      if (filter === "roots" && option.kind !== "channel" && option.kind !== "dm") return false;
-      if (filter === "topic" && option.kind !== "topic") return false;
-      if ((filter === "channel" || filter === "dm") && option.kind !== filter) return false;
+      // Default routes target durable destinations only; an ephemeral reply
+      // thread belongs to a binding, and topics are a Telegram-only concept.
+      if (option.kind === "thread") return false;
+      if (option.kind === "topic" && !props.allowTopics) return false;
     }
-    return `${option.label} ${option.detail ?? ""}`.toLowerCase().includes(query.trim().toLowerCase());
+    return `${option.label} ${option.detail ?? ""}`.toLowerCase().includes(trimmed);
   });
   const activeIndex = Math.min(active, Math.max(0, visible.length - 1));
+
+  // Group for rendering while keeping each row's flat index, so arrow keys and
+  // `aria-activedescendant` still walk one continuous list across headings.
+  const groups = SECTIONS.map((section) => ({
+    ...section,
+    rows: visible
+      .map((option, index) => ({ option, index }))
+      .filter((row) => sectionFor(row.option, props.filterConversations) === section.key),
+  })).filter((section) => section.rows.length > 0);
+
   const close = () => {
+    restoreFocus.current = true;
     setOpen(false);
-    trigger.current?.focus();
   };
   const choose = (value: string) => {
     props.onChange(value);
     close();
   };
+
+  useEffect(() => {
+    if (open || !restoreFocus.current) return;
+    // The trigger unmounts while the panel is open, so focus has to be
+    // restored after it remounts rather than inside `close`.
+    restoreFocus.current = false;
+    trigger.current?.focus();
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -67,7 +142,10 @@ export function MessagingSurfacePicker(props: {
   return (
     <div ref={root} className="messaging-surface-picker"
       onBlur={(event) => {
-        if (!event.currentTarget.contains(event.relatedTarget as Node)) setOpen(false);
+        // `relatedTarget` is null while the trigger unmounts on open — closing
+        // on that would slam the panel shut the moment it appeared.
+        const next = event.relatedTarget as Node | null;
+        if (next && !event.currentTarget.contains(next)) setOpen(false);
       }}
       onKeyDown={(event) => {
         if (event.key === "Escape" && open) {
@@ -77,26 +155,38 @@ export function MessagingSurfacePicker(props: {
         }
       }}
     >
-      <button ref={trigger} type="button" className="settings-select messaging-surface-picker__trigger"
-        aria-label="Messaging surface" aria-haspopup="dialog" aria-expanded={open}
-        onClick={() => {
-          setQuery("");
-          setActive(0);
-          setFilter(selected?.kind === "topic" ? "topic" : "roots");
-          setOpen(!open);
-        }}
-      >
-        {selected?.label ?? (props.value === "manual" ? "Enter an ID manually..." : "Choose a recently seen surface...")}
-      </button>
+      {open ? null : (
+        <button ref={trigger} type="button" className="settings-select messaging-surface-picker__trigger"
+          aria-label={selected ? `Surface: ${selected.label}` : "Choose a messaging surface"}
+          aria-haspopup="dialog" aria-expanded={false}
+          onClick={() => {
+            setQuery("");
+            setActive(0);
+            setOpen(true);
+          }}
+        >
+          {selected?.label ?? (props.value === "manual" ? "Enter an ID manually..." : "Choose a recently seen surface...")}
+        </button>
+      )}
       {open ? (
         <div className="messaging-surface-picker__panel" role="dialog" aria-label="Choose a messaging surface">
           <div className="project-picker__search">
-            <SearchIcon size={14} />
-            <input autoFocus className="project-picker__search-input" role="combobox"
-              aria-label="Find a messaging surface" placeholder="Find a channel, DM, or ID"
-              aria-expanded="true" aria-controls={listId} aria-autocomplete="list"
+            <span aria-hidden="true" className="project-picker__search-icon">
+              <SearchIcon size={13} />
+            </span>
+            <input
+              autoFocus
+              type="text"
+              className="project-picker__search-input"
+              role="combobox"
+              aria-label="Find a messaging surface"
+              placeholder="Find a channel, DM, or ID"
+              aria-expanded="true"
+              aria-controls={listId}
+              aria-autocomplete="list"
               aria-activedescendant={visible.length ? `${listId}-${activeIndex}` : undefined}
-              value={query} onChange={(event) => { setQuery(event.target.value); setActive(0); }}
+              value={query}
+              onChange={(event) => { setQuery(event.target.value); setActive(0); }}
               onKeyDown={(event) => {
                 if (event.key === "ArrowDown" || event.key === "ArrowUp") {
                   event.preventDefault();
@@ -108,34 +198,42 @@ export function MessagingSurfacePicker(props: {
               }}
             />
           </div>
-          {props.filterConversations ? (
-            <div className="messaging-surface-picker__filters" role="group" aria-label="Conversation types">
-              {FILTERS.filter((item) => item.value !== "topic" || props.allowTopics).map((item) => (
-                <button type="button" className="button button--ghost" key={item.value}
-                  aria-pressed={filter === item.value}
-                  onClick={() => { setFilter(item.value); setActive(0); }}
-                >{item.label}</button>
-              ))}
-            </div>
-          ) : null}
           <div id={listId} role="listbox" aria-label="Messaging surfaces" className="messaging-surface-picker__list">
-            {visible.map((option, index) => (
-              <button type="button" role="option" id={`${listId}-${index}`} key={option.value}
-                aria-selected={props.value === option.value}
-                className={`project-picker__row${index === activeIndex ? " is-active" : ""}`}
-                onClick={() => choose(option.value)}
-              >
-                <span className="project-picker__row-check">{props.value === option.value ? "✓" : ""}</span>
-                <span className="messaging-surface-picker__identity">
-                  <span>{option.label}</span>
-                  {option.detail ? <small>{option.detail}</small> : null}
-                </span>
-              </button>
+            {groups.map((section) => (
+              <div key={section.key} role="group" aria-label={section.label}>
+                <div aria-hidden="true" className="project-picker__section">{section.label}</div>
+                {section.rows.map(({ option, index }) => {
+                  const glyph = props.filterConversations ? kindGlyph(option.kind) : undefined;
+                  const isSelected = props.value === option.value;
+                  return (
+                    <button type="button" role="option" id={`${listId}-${index}`} key={option.value}
+                      aria-selected={isSelected}
+                      className={`project-picker__row${isSelected ? " is-active" : ""}${index === activeIndex ? " is-cursor" : ""}`}
+                      onClick={() => choose(option.value)}
+                    >
+                      <span aria-hidden="true" className="project-picker__row-check">
+                        {isSelected ? "✓" : ""}
+                      </span>
+                      {glyph ? (
+                        <span aria-hidden="true" className="messaging-surface-picker__glyph">{glyph}</span>
+                      ) : null}
+                      <span className="project-picker__row-name">{option.label}</span>
+                      {option.detail ? <span className="project-picker__row-path">{option.detail}</span> : null}
+                      {option.seen ? <span className="messaging-surface-picker__seen">{option.seen}</span> : null}
+                    </button>
+                  );
+                })}
+              </div>
             ))}
+            {visible.length === 0 ? <p className="project-picker__empty">No matching surfaces.</p> : null}
           </div>
-          {visible.length === 0 ? <p className="messaging-routes__empty">No matching surfaces.</p> : null}
-          <button type="button" className="project-picker__row" onClick={() => choose("manual")}>
-            Enter an ID manually...
+          <div className="project-picker__separator" />
+          <button type="button" className="project-picker__row project-picker__row--action"
+            onClick={() => choose("manual")}
+          >
+            <span aria-hidden="true" className="project-picker__row-check" />
+            <span aria-hidden="true" className="project-picker__plus">+</span>
+            <span className="project-picker__row-name">Enter an ID manually...</span>
           </button>
         </div>
       ) : null}

@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   AppServerBackendKind,
@@ -18,8 +18,22 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+/** The trigger is replaced by the panel while open, and names the chosen
+ *  destination once there is one, so neither label alone finds it. */
+function surfaceTrigger(): HTMLElement {
+  return screen.getByRole("button", { name: /^(Choose a messaging surface|Surface: )/ });
+}
+
+function openSurfacePicker() {
+  fireEvent.click(surfaceTrigger());
+}
+
+function surfaceOptions(): HTMLElement[] {
+  return within(screen.getByRole("listbox")).getAllByRole("option");
+}
+
 function chooseSurface(label: string) {
-  fireEvent.click(screen.getByLabelText("Messaging surface"));
+  openSurfacePicker();
   fireEvent.click(screen.getByRole("option", { name: new RegExp(label) }));
 }
 
@@ -616,9 +630,12 @@ describe("MessagingRoutesSettings", () => {
 
     expect(screen.getByLabelText("Default scope")).toHaveValue("conversation");
     expect(screen.getByLabelText("Messaging platform")).toHaveValue("slack");
-    expect(screen.getByLabelText("Messaging surface")).toHaveTextContent(
-      "Slack / incident-response - approved configuration",
-    );
+    expect(surfaceTrigger()).toHaveTextContent("Slack / incident-response");
+    openSurfacePicker();
+    expect(
+      within(screen.getByRole("listbox")).getByRole("group", { name: "Current configuration" }),
+    ).toBeInTheDocument();
+    fireEvent.keyDown(screen.getByLabelText("Find a messaging surface"), { key: "Escape" });
     expect(screen.queryByLabelText("Conversation ID")).not.toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Default Agent"), {
       target: { value: JSON.stringify(["codex", "agent-1"]) },
@@ -700,7 +717,7 @@ describe("MessagingRoutesSettings", () => {
     fireEvent.change(screen.getByLabelText("Default scope"), {
       target: { value: "parent" },
     });
-    fireEvent.click(screen.getByLabelText("Messaging surface"));
+    openSurfacePicker();
     expect(screen.getByText("No matching surfaces.")).toBeInTheDocument();
     fireEvent.keyDown(screen.getByLabelText("Find a messaging surface"), { key: "Escape" });
 
@@ -809,9 +826,8 @@ describe("MessagingRoutesSettings", () => {
     await screen.findByText("Orchard Agent");
 
     fireEvent.click(screen.getByRole("button", { name: "Add default" }));
-    fireEvent.click(screen.getByLabelText("Messaging surface"));
-    expect(screen.getAllByRole("option").filter((option) => option.parentElement?.getAttribute("role") === "listbox")
-      .map((option) => option.textContent)).toEqual([
+    openSurfacePicker();
+    expect(surfaceOptions().map((option) => option.textContent)).toEqual([
       expect.stringContaining("orchard-planning"),
       expect.stringContaining("archived-project"),
     ]);
@@ -821,13 +837,13 @@ describe("MessagingRoutesSettings", () => {
     fireEvent.change(screen.getByLabelText("Default scope"), {
       target: { value: "parent" },
     });
-    fireEvent.click(screen.getByLabelText("Messaging surface"));
+    openSurfacePicker();
     expect(screen.getByRole("option", { name: /Slack \/ orchard-planning/ })).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText("Default scope"), {
       target: { value: "workspace" },
     });
-    fireEvent.click(screen.getByLabelText("Messaging surface"));
+    openSurfacePicker();
     expect(screen.getByRole("option", { name: /Slack \/ T1/ })).toBeInTheDocument();
   });
 
@@ -851,8 +867,12 @@ describe("MessagingRoutesSettings", () => {
     renderRoutes(api.desktopApi, undefined, ["telegram"]);
     await screen.findByText("Orchard Agent");
     fireEvent.click(screen.getByRole("button", { name: "Add default" }));
-    fireEvent.click(screen.getByLabelText("Messaging surface"));
-    fireEvent.click(screen.getByRole("button", { name: "Telegram topics" }));
+    openSurfacePicker();
+    // A named forum topic is a durable destination, so it gets its own section
+    // rather than hiding behind a Telegram-only filter. A reply thread is not.
+    expect(
+      within(screen.getByRole("listbox")).getByRole("group", { name: "Telegram topics" }),
+    ).toBeInTheDocument();
     expect(screen.queryByRole("option", { name: /Ephemeral reply/ })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("option", { name: /Garden plans/ }));
     fireEvent.change(screen.getByLabelText("Default Agent"), {
@@ -876,7 +896,7 @@ describe("MessagingRoutesSettings", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Add default" }));
     expect(screen.queryByLabelText("Conversation ID")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByLabelText("Messaging surface"));
+    openSurfacePicker();
     fireEvent.click(screen.getByRole("button", { name: "Enter an ID manually..." }));
     expect(screen.queryByRole("option", { name: "Thread" })).not.toBeInTheDocument();
     expect(screen.queryByRole("option", { name: "Telegram topic" })).not.toBeInTheDocument();

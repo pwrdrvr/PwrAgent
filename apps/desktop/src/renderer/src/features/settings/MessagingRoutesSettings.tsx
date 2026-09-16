@@ -764,14 +764,16 @@ function DefaultAgentEditor(props: {
                 options={[
                   ...(hasConfiguredSurface ? [{
                     value: "configured",
-                    label: `${configuredSurfaceLabel(form)} - approved configuration`,
+                    label: configuredSurfaceLabel(form),
                     kind: form.conversationKind,
+                    section: "configured" as const,
                   }] : []),
                   ...surfaceCandidates.map((surface) => ({
                     value: surface.value,
                     label: surface.label,
                     kind: surface.form.conversationKind,
                     detail: observedSurfaceDetail(surface),
+                    seen: formatSeenDate(surface.lastSeenAt),
                   })),
                 ]}
                 onChange={(value) => {
@@ -1047,14 +1049,28 @@ function observedSurfaceCandidates(
     || left.label.localeCompare(right.label));
 }
 
+/**
+ * The durable identifier for one observed surface, shown right-aligned in the
+ * picker's mono column. Kind is carried by the row's section heading and
+ * recency by `formatSeenDate`, so neither is repeated here — what is left is
+ * the one fact that tells two similarly named destinations apart.
+ */
 function observedSurfaceDetail(surface: ObservedSurfaceCandidate): string {
   const form = surface.form;
-  const kind = form.scopeKind === "conversation"
-    ? formatConversationKind(form.conversationKind)
-    : form.scopeKind === "parent" ? "Channel / group" : "Workspace / server";
   const id = form.conversationId || form.parentConversationId || form.workspaceId;
-  const parent = form.identityParentId ? ` / ${form.identityParentId}` : "";
-  return `${kind} · ID ${id}${parent} · Seen ${formatTimestamp(surface.lastSeenAt)}`;
+  return form.identityParentId ? `${id} / ${form.identityParentId}` : id;
+}
+
+/**
+ * Compact last-seen stamp for the picker's trailing column. Deliberately
+ * date-only: the full `formatTimestamp` string is too wide to sit beside an
+ * ID, and staleness is what the operator is reading it for.
+ */
+function formatSeenDate(value: number): string {
+  return new Date(value).toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+  });
 }
 
 function surfaceSelectionForForm(
