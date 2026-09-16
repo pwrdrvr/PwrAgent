@@ -78,7 +78,24 @@ describe("ImageLightbox", () => {
 
     const dialog = screen.getByRole("dialog", { name: "Expanded image" });
     pointer(dialog, "pointerdown", { clientX: 40, clientY: 40 });
-    fireEvent.click(dialog, { clientX: 220, clientY: 40 });
+    fireEvent.click(dialog, { clientX: 220, clientY: 40, detail: 1 });
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("does not let a keyboard-activated control dismiss through a stale press", () => {
+    // A press aborted outside the window leaves its record behind, and a
+    // keypress on a control synthesises a click that reports (0, 0) — close
+    // enough to a press near the window origin to pass the slop test.
+    const onClose = vi.fn();
+    render(
+      <ImageLightbox src="https://example.test/cat.png" alt="A cat" onClose={onClose} />,
+    );
+
+    const dialog = screen.getByRole("dialog", { name: "Expanded image" });
+    pointer(dialog, "pointerdown", { clientX: 2, clientY: 2 });
+    fireEvent(dialog, new Event("pointercancel", { bubbles: true }));
+    // `detail: 0` is what a keypress produces; Testing Library's default.
+    fireEvent.click(screen.getByRole("button", { name: "Zoom in" }), { clientX: 0, clientY: 0 });
     expect(onClose).not.toHaveBeenCalled();
   });
 
@@ -120,6 +137,11 @@ describe("ImageLightbox", () => {
     // A native `title` is not enough here: `.image-lightbox` is
     // `overflow: hidden`, which clips a CSS pseudo-element tooltip, and every
     // control in the pill is an unlabelled glyph.
+    //
+    // This render has TWO greyed-out controls, and both are in the list:
+    // "Fit to window" (nothing to fit yet) and "Previous image" (no
+    // `onPrevious` at the first image). Leaving the natively-disabled one out
+    // is how this guard passed while the edge control explained nothing.
     for (const [name, hint] of [
       ["Zoom out", "Zoom out"],
       ["Zoom in", "Zoom in"],
@@ -127,6 +149,7 @@ describe("ImageLightbox", () => {
       ["Copy image", "Copy image"],
       ["Close", "Close (Esc)"],
       ["Next image", "Next image (Right Arrow)"],
+      ["Previous image", "Previous image (Left Arrow)"],
     ] as const) {
       const control = screen.getByRole("button", { name });
       fireEvent.mouseEnter(control);
@@ -135,12 +158,49 @@ describe("ImageLightbox", () => {
       expect(document.body.querySelector(".viewport-tooltip")).toBeNull();
     }
 
-    // Nothing in the pill is `disabled`, because a disabled button fires no
+    // Nothing greyed out is `disabled`, because a disabled button fires no
     // pointer events and so could never raise the tooltip an operator hovers a
     // greyed-out glyph to read.
-    const fit = screen.getByRole("button", { name: "Fit to window" });
-    expect(fit).toHaveAttribute("aria-disabled", "true");
-    expect(fit).toBeEnabled();
+    for (const name of ["Fit to window", "Previous image"] as const) {
+      const control = screen.getByRole("button", { name });
+      expect(control, name).toHaveAttribute("aria-disabled", "true");
+      expect(control, name).toBeEnabled();
+    }
+  });
+
+  it("raises one tooltip at a time across the controls that own separate hooks", () => {
+    // Every control shares the dialog's tooltip. With a hook per control, a
+    // focused control kept its tooltip up (no blur) while a hover raised a
+    // second one beside it.
+    render(
+      <ImageLightbox src="https://example.test/cat.png" alt="A cat" onClose={() => {}} />,
+    );
+
+    fireEvent.focus(screen.getByRole("button", { name: "Zoom out" }));
+    expect(document.body.querySelectorAll(".viewport-tooltip")).toHaveLength(1);
+    fireEvent.mouseEnter(screen.getByRole("button", { name: "Copy image" }));
+    expect(document.body.querySelectorAll(".viewport-tooltip")).toHaveLength(1);
+    expect(document.body.querySelector(".viewport-tooltip")).toHaveTextContent("Copy image");
+  });
+
+  it("announces a gallery step from a region that outlives the image", () => {
+    // The visible plate is rebuilt with the image on every step, so a live
+    // region inside it would never announce; screen readers report mutations
+    // to an already-mounted region, not the content of a fresh one.
+    const { rerender } = render(
+      <ImageLightbox src="https://example.test/first.png" alt="First" position={1} total={14}
+        onClose={() => {}} onNext={() => {}} />,
+    );
+    const live = document.body.querySelector("[role='status'][aria-live='polite']");
+    expect(live).toHaveTextContent("Image 1 of 14");
+
+    rerender(
+      <ImageLightbox src="https://example.test/second.png" alt="Second" position={2} total={14}
+        onClose={() => {}} onNext={() => {}} />,
+    );
+    // The same node, with new text — which is what gets announced.
+    expect(document.body.querySelector("[role='status'][aria-live='polite']")).toBe(live);
+    expect(live).toHaveTextContent("Image 2 of 14");
   });
 
   it("closes on Escape", () => {
@@ -195,8 +255,10 @@ describe("ImageLightbox", () => {
       />,
     );
 
-    expect(screen.getByRole("button", { name: "Previous image" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Next image" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Previous image" }))
+      .toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByRole("button", { name: "Next image" }))
+      .toHaveAttribute("aria-disabled", "false");
 
     rerender(
       <ImageLightbox
@@ -209,8 +271,10 @@ describe("ImageLightbox", () => {
       />,
     );
 
-    expect(screen.getByRole("button", { name: "Previous image" })).toBeEnabled();
-    expect(screen.getByRole("button", { name: "Next image" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Previous image" }))
+      .toHaveAttribute("aria-disabled", "false");
+    expect(screen.getByRole("button", { name: "Next image" }))
+      .toHaveAttribute("aria-disabled", "true");
   });
 
   it("stops listening for Escape after unmount", () => {
@@ -261,7 +325,9 @@ function stubPointerCapture(element: HTMLElement) {
  */
 function pressAndClick(target: HTMLElement, at = { clientX: 120, clientY: 120 }) {
   pointer(target, "pointerdown", at);
-  fireEvent.click(target, at);
+  // `detail` is what separates a pointer click from the one a keypress
+  // synthesises; Testing Library defaults it to 0, i.e. the keyboard.
+  fireEvent.click(target, { ...at, detail: 1 });
 }
 
 function pointer(target: HTMLElement, type: string, fields: Record<string, number>) {

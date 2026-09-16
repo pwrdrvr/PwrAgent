@@ -29233,7 +29233,7 @@ button.pricing-token-miser__folded:focus-visible {
   right: 18px;
 }
 
-.image-lightbox__nav:hover:not(:disabled) {
+.image-lightbox__nav:hover:not(:disabled):not([aria-disabled="true"]) {
   border-color: var(--accent-border);
   background: var(--bg-panel-hover);
   color: var(--accent);
@@ -29244,7 +29244,11 @@ button.pricing-token-miser__folded:focus-visible {
   outline-offset: 2px;
 }
 
-.image-lightbox__nav:disabled {
+/* `aria-disabled`, not `disabled`, for the same reason the pill's controls use
+   it: a disabled button fires no pointer events, so a greyed-out edge control
+   could not raise the tooltip naming the key that pages the gallery. */
+.image-lightbox__nav:disabled,
+.image-lightbox__nav[aria-disabled="true"] {
   opacity: 0.32;
   cursor: default;
 }
@@ -35275,10 +35279,13 @@ details.launchpad-pending__output > summary .launchpad-pending__command-label {
 }
 
 /* The Mermaid strip's copy controls carry a glyph beside their word, the same
-   pair the lightbox pill shows. Baseline, not centre: font substitution is
-   per-character, so a centred glyph beside a substituted label drifts on the
-   platforms that substitute (see the Ubuntu-only regression this rule's twin
-   in the pill avoids by using a flex row of two boxes instead of inline text). */
+   pair the lightbox pill shows. Centre, not baseline, and the glyph is why:
+   `.settings-nav__exit` aligns on the baseline because its mark is a TEXT
+   character (an arrow the OS substitutes per-character, off the label's
+   baseline under `center`). This one is an inline `<svg>` with no baseline of
+   its own — `baseline` would drop its bottom margin edge onto the text's
+   baseline and sit the icon low. Centring two boxes is correct here and is
+   what every other icon-and-label control in this file does. */
 .image-viewer__button--labelled {
   display: inline-flex;
   align-items: center;

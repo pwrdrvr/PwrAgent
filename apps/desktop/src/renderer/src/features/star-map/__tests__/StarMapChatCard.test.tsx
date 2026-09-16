@@ -536,10 +536,14 @@ describe("StarMapChatCard transcript loading", () => {
     expect(document.activeElement).toBe(dialog);
     expect(isStarMapTypingTarget(dialog)).toBe(true);
     expect(within(dialog).getByRole("img").getAttribute("src")).toContain("one.png");
-    expect(within(dialog).getByRole("button", { name: "Previous image" })).toHaveProperty("disabled", true);
+    // `aria-disabled`, not `disabled`: a disabled button fires no pointer
+    // events and so could never raise its own tooltip.
+    expect(within(dialog).getByRole("button", { name: "Previous image" })
+      .getAttribute("aria-disabled")).toBe("true");
     fireEvent.click(within(dialog).getByRole("button", { name: "Next image" }));
     expect(within(dialog).getByRole("img").getAttribute("src")).toContain("two.png");
-    expect(within(dialog).getByRole("button", { name: "Next image" })).toHaveProperty("disabled", true);
+    expect(within(dialog).getByRole("button", { name: "Next image" })
+      .getAttribute("aria-disabled")).toBe("true");
     fireEvent.keyDown(dialog, { key: "ArrowLeft" });
     expect(within(dialog).getByRole("img").getAttribute("src")).toContain("one.png");
     fireEvent.keyDown(dialog, { key: "Escape" });

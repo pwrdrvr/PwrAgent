@@ -1,4 +1,4 @@
-import { type FocusEvent, type MouseEvent, type ReactNode, useEffect, useRef } from "react";
+import { type ReactNode, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import {
   ChevronLeftIcon,
@@ -10,7 +10,12 @@ import {
 } from "../../icons";
 import { ImageCopyButton } from "./ImageCopyButton";
 import { useLightboxGestures } from "./useLightboxGestures";
-import { useViewportTooltip } from "../../lib/useViewportTooltip";
+import {
+  tooltipHandlers,
+  useViewportTooltip,
+  ViewportTooltipProvider,
+  type ViewportTooltip,
+} from "../../lib/useViewportTooltip";
 import { TranscriptImage } from "./TranscriptImage";
 
 type ImageLightboxProps = {
@@ -129,6 +134,7 @@ export function ImageLightbox({
   }
 
   return createPortal(
+    <ViewportTooltipProvider value={tooltip}>
     <div
       ref={dialogRef}
       tabIndex={-1}
@@ -156,6 +162,10 @@ export function ImageLightbox({
       onClick={(event) => {
         const start = press.current;
         press.current = null;
+        // Keyboard activation of a control synthesises a click with no
+        // `pointerdown` behind it and reports (0, 0), so it would otherwise be
+        // matched against whatever record an aborted press left here.
+        if (event.detail === 0) return;
         if (!start || !start.scrim) return;
         // A press that travelled is a drag the operator aborted over the
         // scrim, not a click on it.
@@ -169,15 +179,24 @@ export function ImageLightbox({
         className="image-lightbox__close"
         aria-label="Close"
         onClick={onClose}
-        {...hint(tooltip, "Close (Esc)")}
+        {...tooltipHandlers(tooltip, "Close (Esc)")}
       >
         <CloseIcon size={18} aria-hidden="true" />
       </button>
-      <LightboxImage key={src} src={src} alt={alt} actions={actions}
+      {/* Outside the keyed subtree below, because a live region only announces
+          mutations to a region that was already mounted — one rebuilt with the
+          image on every gallery step says nothing at all. The visible plate
+          rides the bottom cluster and is not itself live. */}
+      {gallery ? (
+        <span className="image-viewer__status" role="status" aria-live="polite">
+          Image {position} of {total}
+        </span>
+      ) : null}
+      <LightboxImage key={src} src={src} alt={alt} actions={actions} tooltip={tooltip}
         meta={gallery || caption ? (
           <p className="image-lightbox__meta">
             {gallery ? (
-              <span className="image-lightbox__position" aria-live="polite">
+              <span className="image-lightbox__position">
                 <b>{position}</b> / {total}
               </span>
             ) : null}
@@ -189,8 +208,12 @@ export function ImageLightbox({
           type="button"
           className="image-lightbox__nav image-lightbox__nav--previous"
           aria-label="Previous image"
-          disabled={!onPrevious}
-          {...hint(tooltip, "Previous image (Left Arrow)")}
+          // `aria-disabled`, not `disabled`, for the same reason the pill's
+          // controls use it: a disabled button fires no pointer events, so the
+          // greyed-out edge control could never raise the tooltip naming the
+          // key that pages the gallery.
+          aria-disabled={!onPrevious}
+          {...tooltipHandlers(tooltip, "Previous image (Left Arrow)")}
           onClick={(event) => {
             event.stopPropagation();
             onPrevious?.();
@@ -204,8 +227,8 @@ export function ImageLightbox({
           type="button"
           className="image-lightbox__nav image-lightbox__nav--next"
           aria-label="Next image"
-          disabled={!onNext}
-          {...hint(tooltip, "Next image (Right Arrow)")}
+          aria-disabled={!onNext}
+          {...tooltipHandlers(tooltip, "Next image (Right Arrow)")}
           onClick={(event) => {
             event.stopPropagation();
             onNext?.();
@@ -215,41 +238,31 @@ export function ImageLightbox({
         </button>
       ) : null}
       {tooltip.tooltipNode}
-    </div>,
+    </div>
+    </ViewportTooltipProvider>,
     document.body,
   );
 }
 
-/**
- * Hover and focus handlers for one control's tooltip.
- *
- * Not the native `title` attribute, and not the CSS pseudo-element tooltip
- * either: `.image-lightbox` is `overflow: hidden`, which clips the pseudo
- * element, and every control here is an unlabelled glyph, so "what does this
- * do" has to be answerable. `useViewportTooltip` portals out of the clip and
- * already knows to stay clear of the macOS stoplights and the win32 title
- * strip.
- */
-function hint(tooltip: ReturnType<typeof useViewportTooltip>, label: string) {
-  return {
-    onMouseEnter: (event: MouseEvent<HTMLElement>) => tooltip.show(event.currentTarget, label),
-    onMouseLeave: tooltip.hide,
-    onFocus: (event: FocusEvent<HTMLElement>) => tooltip.show(event.currentTarget, label),
-    onBlur: tooltip.hide,
-  };
-}
-
-function LightboxImage({ src, alt, meta, actions }: {
+function LightboxImage({ src, alt, meta, actions, tooltip }: {
   src: string;
   alt: string;
   meta: ReactNode;
   actions: ReactNode;
+  /** The dialog's one tooltip. Per-control instances do not know about each
+   *  other, so a control left showing one on focus would still be showing it
+   *  while a hover raised a second. */
+  tooltip: ViewportTooltip;
 }) {
   const gestures = useLightboxGestures();
-  const tooltip = useViewportTooltip({ className: "viewport-tooltip" });
   return <>
+    {/* Focus, not hover: this box is the scrim, so a hover tooltip would pop
+        every time the pointer crossed the letterbox. On focus it is the only
+        thing that names the arrow-key pan the `onKeyDown` below implements. */}
     <div ref={gestures.viewport} className="image-lightbox__viewport"
-      tabIndex={0} aria-label="Image pan and zoom" onKeyDown={gestures.onKeyDown}>
+      tabIndex={0} aria-label="Image pan and zoom" onKeyDown={gestures.onKeyDown}
+      onFocus={(event) => tooltip.show(event.currentTarget, "Use arrow keys to pan")}
+      onBlur={tooltip.hide}>
       <TranscriptImage className="image-lightbox__image" src={src} alt={alt}
         data-panning={gestures.panning} draggable={false} onDragStart={(event) => event.preventDefault()}
         onLoad={(event) => gestures.onLoad(event.currentTarget)} style={gestures.imageStyle}
@@ -264,7 +277,7 @@ function LightboxImage({ src, alt, meta, actions }: {
         <button type="button" className="image-lightbox__tool" aria-label="Zoom out"
           aria-disabled={gestures.view.scale <= 0.1}
           onClick={() => { if (gestures.view.scale > 0.1) gestures.zoom(1 / 1.5); }}
-          {...hint(tooltip, "Zoom out")}>
+          {...tooltipHandlers(tooltip, "Zoom out")}>
           <ZoomOutIcon size={16} aria-hidden="true" />
         </button>
         {/* The readout carries the discoverability the text labels used to: it
@@ -273,20 +286,19 @@ function LightboxImage({ src, alt, meta, actions }: {
         <button type="button" className="image-lightbox__tool" aria-label="Zoom in"
           aria-disabled={gestures.view.scale >= 8}
           onClick={() => { if (gestures.view.scale < 8) gestures.zoom(1.5); }}
-          {...hint(tooltip, "Zoom in")}>
+          {...tooltipHandlers(tooltip, "Zoom in")}>
           <ZoomInIcon size={16} aria-hidden="true" />
         </button>
         <button type="button" className="image-lightbox__tool" aria-label="Fit to window"
           aria-disabled={gestures.atFit}
           onClick={() => { if (!gestures.atFit) gestures.reset(); }}
-          {...hint(tooltip, "Fit the whole image in the window")}>
+          {...tooltipHandlers(tooltip, "Fit the whole image in the window")}>
           <FitToWindowIcon size={16} aria-hidden="true" />
         </button>
         <span className="image-lightbox__tool-divider" aria-hidden="true" />
         <ImageCopyButton src={src} appearance="pill" />
         {actions}
       </div>
-      {tooltip.tooltipNode}
     </div>
   </>;
 }

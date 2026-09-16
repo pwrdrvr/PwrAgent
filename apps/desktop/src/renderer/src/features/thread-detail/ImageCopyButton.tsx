@@ -1,7 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { CheckIcon, CopyIcon } from "../../icons";
 import { copyImage } from "../../lib/copy-image";
-import { useViewportTooltip } from "../../lib/useViewportTooltip";
+import {
+  tooltipHandlers,
+  useInheritedViewportTooltip,
+  useViewportTooltip,
+} from "../../lib/useViewportTooltip";
 
 /**
  * `chip` for the Mermaid strip's bordered row; `pill` for the lightbox's
@@ -27,9 +31,14 @@ export function ClipboardActionButton({ label, text, copy, appearance }: {
   const [status, setStatus] = useState<"idle" | "pending" | "copied" | "failed">("idle");
   const timer = useRef<number | undefined>(undefined);
   const mounted = useRef(true);
-  // The lightbox is `overflow: hidden`, so a CSS pseudo-element tooltip would
-  // be clipped by it; this one portals out and clears the OS chrome itself.
-  const tooltip = useViewportTooltip({ className: "viewport-tooltip" });
+  // Inside the lightbox this is the dialog's own tooltip, so the pill never
+  // shows two at once — including for a copy control the CALLER passed in, which
+  // no prop from here could reach. On the Mermaid card's strip there is no
+  // surrounding tooltip and this one stands alone; it portals out either way,
+  // which is what a `overflow: hidden` surface needs.
+  const inherited = useInheritedViewportTooltip();
+  const ownTooltip = useViewportTooltip({ className: "viewport-tooltip" });
+  const activeTooltip = inherited ?? ownTooltip;
   useEffect(() => {
     mounted.current = true;
     return () => { mounted.current = false; window.clearTimeout(timer.current); };
@@ -43,10 +52,7 @@ export function ClipboardActionButton({ label, text, copy, appearance }: {
         ? "image-lightbox__tool image-lightbox__tool--labelled"
         : "image-viewer__button image-viewer__button--labelled"}
       disabled={status === "pending"}
-      onMouseEnter={(event) => tooltip.show(event.currentTarget, label)}
-      onMouseLeave={tooltip.hide}
-      onFocus={(event) => tooltip.show(event.currentTarget, label)}
-      onBlur={tooltip.hide}
+      {...tooltipHandlers(activeTooltip, label)}
       onClick={(event) => {
         event.stopPropagation();
         window.clearTimeout(timer.current);
@@ -65,6 +71,6 @@ export function ClipboardActionButton({ label, text, copy, appearance }: {
     <span className="image-viewer__status" role={status === "failed" ? "alert" : "status"}>
       {status === "failed" ? `${label} failed. Try again or use the context menu.` : status === "copied" ? `${label} succeeded` : ""}
     </span>
-    {tooltip.tooltipNode}
+    {inherited ? null : ownTooltip.tooltipNode}
   </>;
 }
