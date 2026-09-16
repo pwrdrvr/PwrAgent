@@ -39,8 +39,23 @@ export function SidebarShowMore(props: {
       // name here, so renaming it to "Loading…" mid-flight would move the
       // control out from under anyone searching for it by name.
       aria-busy={props.busy ? true : undefined}
-      disabled={props.busy}
-      onClick={props.onClick}
+      // `aria-disabled`, not `disabled`, per the house pattern in
+      // `FederationTargetMenuSection` and `NewThreadButton`. Disabling a
+      // FOCUSED control blurs it: the browser moves focus to `body` the
+      // moment the property lands and clearing it puts focus back nowhere.
+      // A page arrives in well under a second, so a keyboard user who
+      // pressed this and kept hold of it was dropped out of the rail
+      // entirely — with the rows they had just asked for now somewhere above
+      // them and nothing on screen to say why. Measured at an 88ms busy
+      // window on the Star Map's equivalent chip (pwrdrvr/PwrAgent#2176);
+      // every one of this component's call sites had the same defect.
+      aria-disabled={props.busy ? true : undefined}
+      onClick={() => {
+        // `aria-disabled` does not stop a real click the way the property
+        // did, so the block this prop promises has to live here.
+        if (props.busy) return;
+        props.onClick();
+      }}
     >
       {props.label}
     </button>

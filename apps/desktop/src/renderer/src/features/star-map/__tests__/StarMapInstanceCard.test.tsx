@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { StarMapInstanceCard } from "../StarMapInstanceCard";
 
@@ -34,12 +34,33 @@ describe("StarMapInstanceCard", () => {
     renderCard({ profileName: "work", onLoadMoreThreads });
     fireEvent.click(screen.getByRole("button", { name: "Load more threads on Studio Mac / work" }));
     expect(onLoadMoreThreads).toHaveBeenCalledTimes(1);
-    cleanup();
+  });
+
+  it("keeps a loading continuation focusable and refuses the press", () => {
+    // Busy the accessible way, NOT the native property. Disabling a focused
+    // control blurs it — a real engine moves focus to `body` the moment the
+    // property lands and clearing it puts focus back nowhere — so an
+    // operator who pressed this by keyboard was dropped off a map of
+    // hundreds of cards for a load measured at 88ms
+    // (pwrdrvr/PwrAgent#2176). This asserts the CAUSE rather than the blur:
+    // jsdom does not implement blur-on-disable, so checking
+    // `document.activeElement` here would pass against the regression too.
+    const onLoadMoreThreads = vi.fn();
     renderCard({ profileName: "work", onLoadMoreThreads, loadingThreads: true });
     const button = screen.getByRole("button", { name: "Load more threads on Studio Mac / work" }) as HTMLButtonElement;
-    expect(button.disabled).toBe(true);
+    expect(button.getAttribute("aria-disabled")).toBe("true");
+    expect(button.getAttribute("aria-busy")).toBe("true");
+    expect(button.hasAttribute("disabled")).toBe(false);
+    // Still focusable — the whole reason for the swap. Wrapped, because the
+    // focus shows this control's tooltip and a bare `.focus()` would leave
+    // that state update outside `act`.
+    act(() => {
+      button.focus();
+    });
+    expect(document.activeElement).toBe(button);
+    // And `aria-disabled` stops no real click, so the handler must refuse it.
     fireEvent.click(button);
-    expect(onLoadMoreThreads).toHaveBeenCalledTimes(1);
+    expect(onLoadMoreThreads).not.toHaveBeenCalled();
   });
 
   it("selects the instance on body click instead of opening a window", () => {
