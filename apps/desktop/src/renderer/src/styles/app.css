@@ -13450,7 +13450,12 @@ a.button {
   fill: currentColor;
 }
 
-.star-map-instance__action:hover {
+/* `:not()` rather than a restatement below: a busy control carries
+   `aria-disabled`, not the native property, so it still matches this rule —
+   and excluding it here means the quiet treatment never has to copy this
+   rule's resting values, which would drift the moment one is retuned. Same
+   technique as `.sidebar-show-more:hover` above. */
+.star-map-instance__action:hover:not([aria-disabled="true"]) {
   border-color: var(--accent-border);
   background: var(--accent-soft);
   color: var(--accent-bright);
@@ -13473,19 +13478,13 @@ a.button {
 
 /* A load in flight. These carry `aria-disabled` rather than the native
    property so a focused control is not blurred out from under a keyboard
-   operator (see StarMapInstanceCard.tsx), which means the row still matches
-   the accent `:hover` rule above — restate the quiet treatment at higher
-   specificity so a busy button never looks actionable. The focus ring below
-   is untouched, because the whole point is that focus stays here. */
+   operator (see StarMapInstanceCard.tsx). The accent hover is withdrawn by
+   the `:not()` on the rule above, so this only has to quiet the resting
+   treatment. The focus ring below is untouched, because the whole point is
+   that focus stays here. */
 .star-map-instance__action[aria-disabled="true"] {
   color: var(--text-muted);
   cursor: default;
-}
-
-.star-map-instance__action[aria-disabled="true"]:hover {
-  border-color: var(--border-subtle);
-  background: color-mix(in srgb, var(--bg-panel) 80%, transparent);
-  color: var(--text-muted);
 }
 
 .star-map-instance__action:focus-visible {

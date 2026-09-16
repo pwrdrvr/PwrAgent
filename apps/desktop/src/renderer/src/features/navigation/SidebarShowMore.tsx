@@ -49,7 +49,7 @@ export function SidebarShowMore(props: {
       // them and nothing on screen to say why. Measured at an 88ms busy
       // window on the Star Map's equivalent chip (pwrdrvr/PwrAgent#2176);
       // every one of this component's call sites had the same defect.
-      aria-disabled={props.busy || undefined}
+      aria-disabled={props.busy ? true : undefined}
       onClick={() => {
         // `aria-disabled` does not stop a real click the way the property
         // did, so the block this prop promises has to live here.

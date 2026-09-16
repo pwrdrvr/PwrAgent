@@ -346,6 +346,30 @@ describe("Tangerine Terminal theme contract", () => {
     );
   });
 
+  it("keeps a busy Star Map action quiet without disabling it", () => {
+    // These controls advertise a load in flight with `aria-disabled` rather
+    // than the native property, because disabling a FOCUSED control blurs it
+    // and drops a keyboard operator off a map of hundreds of cards. Pinned
+    // here because the CSS half has no other guard: the renderer tests assert
+    // DOM attributes, so deleting these rules leaves a busy button wearing
+    // the full accent hover with every test still green.
+    expect(css).toContain(
+      '.star-map-instance__action:hover:not([aria-disabled="true"])',
+    );
+    expect(
+      extractRuleBody(css, '.star-map-instance__action[aria-disabled="true"]'),
+    ).toMatch(/color:\s*var\(--text-muted\);/);
+    // The exclusion above is what withdraws the hover, so the quiet rule
+    // never restates the base rule's resting values. A restatement is how
+    // the two drift when one of them is retuned.
+    expect(css).not.toContain(
+      '.star-map-instance__action[aria-disabled="true"]:hover',
+    );
+    // A revert to the native property would take the control out of the tab
+    // order again, and the styling would follow it here first.
+    expect(css).not.toContain(".star-map-instance__action:disabled");
+  });
+
   it("keeps every border chevron on one size", () => {
     // The band above the composer stacks two disclosure rows whose chevrons
     // sit directly above one another. `.composer__queued-env-action-chevron`

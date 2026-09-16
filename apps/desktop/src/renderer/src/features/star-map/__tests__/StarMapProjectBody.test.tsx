@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { StarMapProjectBody } from "../StarMapProjectBody";
 
@@ -35,8 +35,13 @@ describe("StarMapProjectBody", () => {
       />,
     );
     const button = screen.getByRole("button", { name: label });
-    button.focus();
-    fireEvent.focus(button);
+    // `act`, because jsdom dispatches focus synchronously and the component's
+    // `onFocus` shows the tooltip — a bare `.focus()` leaves that state update
+    // unwrapped, and React's warning about it is filtered by the renderer test
+    // setup, so the test would give no signal either way.
+    act(() => {
+      button.focus();
+    });
     expect(document.activeElement).toBe(button);
     expect(tooltipText()).toEqual([label]);
 
