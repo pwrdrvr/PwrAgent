@@ -35401,27 +35401,33 @@ details.launchpad-pending__output > summary .launchpad-pending__command-label {
   white-space: nowrap;
 }
 
-/* Anchored in flow rather than over the page: `.settings-panel` sets
-   `overflow: hidden` and `.settings-content` scrolls, so an absolutely
-   positioned panel would be clipped by the card it opens inside. Because it
-   does not float, it drops `--shadow-popover` and instead wears the focus
-   treatment of the `.settings-select` it replaces, so an open picker still
-   reads as this form's focused field. */
+/* Portalled to `document.body` and positioned against the trigger's rect, so
+   it escapes `.settings-panel`'s `overflow: hidden` and every scrolling pane
+   between the two. `top` / `left` / `width` / `max-height` are set inline
+   from that measurement; everything that does not change per-open lives here.
+
+   The layer has to clear Settings (`z-index: 120`), which is a full-window
+   surface in the same root stacking context — see `.messaging-status-tooltip`
+   at 140 for the same problem. */
 .messaging-surface-picker__panel {
-  position: static;
-  border-color: var(--accent-border);
-  box-shadow: 0 0 0 1px var(--accent-shadow);
-  /* The panel is a child of the `Surface` field, whose label type is 11px /
-     650 / `--text-secondary`. Reset it here so rows that legitimately say
-     `font: inherit` (and slots that set no weight of their own, like
-     `__row-path`) get list typography rather than the label's. */
+  position: fixed;
+  z-index: 150;
+  bottom: auto;
+  /* The panel is portalled out of the field, but its typography used to come
+     from one (an 11px / 650 / `--text-secondary` label). Set it outright so
+     rows that say `font: inherit` — and slots with no weight of their own,
+     like `__row-path` — get list typography wherever the panel is mounted. */
   color: var(--text-primary);
   font-size: 13px;
   font-weight: 400;
 }
 
+/* No fixed cap: `placePanel` measures what the viewport actually allows and
+   sets the panel's `max-height` inline, so the list takes whatever is left
+   after the search row and the action row. `min-height: 0` is what lets it
+   shrink inside the flex column rather than overflowing the panel. */
 .messaging-surface-picker__list {
-  max-height: 320px;
+  min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
 }

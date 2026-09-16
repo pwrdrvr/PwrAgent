@@ -54,11 +54,30 @@ describe("MessagingSurfacePicker", () => {
     expect(screen.getByRole("option", { name: /Garden topic/ })).toBeInTheDocument();
   });
 
-  it("replaces the trigger while open so the field shows no stale placeholder", () => {
-    setup();
-    expect(screen.queryByRole("button", { name: CLOSED_LABEL })).not.toBeInTheDocument();
-    fireEvent.keyDown(screen.getByRole("combobox"), { key: "Escape" });
-    expect(screen.getByRole("button", { name: CLOSED_LABEL })).toBeInTheDocument();
+  it("opens as a popover outside the field, and the trigger toggles it", () => {
+    const onChange = vi.fn();
+    const { container } = render(
+      <MessagingSurfacePicker fieldLabel="Surface" value="" options={options} filterConversations onChange={onChange} />,
+    );
+    const trigger = screen.getByRole("button", { name: CLOSED_LABEL });
+
+    fireEvent.click(trigger);
+    const panel = screen.getByRole("dialog", { name: "Surface" });
+    // Portalled: the panel must not be a descendant of the field, or every
+    // `overflow: hidden` ancestor between them would clip it.
+    expect(container).not.toContainElement(panel);
+    expect(document.body).toContainElement(panel);
+    // And it was measured and placed against the trigger rather than laid out
+    // in flow. (`position: fixed` itself comes from app.css, which jsdom does
+    // not load, so the inline placement is what is observable here.)
+    expect(panel.style.width).not.toBe("");
+    expect(panel.style.maxHeight).not.toBe("");
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+
+    // The trigger stays put and closes what it opened.
+    fireEvent.click(trigger);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
   });
 
   it("names the chosen destination on the closed trigger", () => {

@@ -1,4 +1,5 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { MessagingConversationKind } from "@pwragent/shared";
 import { SearchIcon } from "../icons";
 
@@ -19,22 +20,65 @@ import { SearchIcon } from "../icons";
  * are told apart by that ID column, which is what the native `<select>` this
  * replaced could not do.
  *
- * Two deliberate departures from the composer pickers:
- *
- *   - The panel is anchored INLINE, not absolutely. `.settings-panel` sets
- *     `overflow: hidden` and `.settings-content` scrolls, so a floating
- *     popover would be clipped by the card it opens inside. It therefore
- *     carries no drop shadow — it is an expanded well in a form, and lighting
- *     it like something that floats over the page would be a lie.
- *   - The trigger is REPLACED by the panel rather than sitting above it, so
- *     the field never shows a stale "choose one…" placeholder while its own
- *     list is open underneath. Focus returns to the trigger when the panel
- *     closes by Escape or by choosing a row.
+ * It opens as a POPOVER over the page, like the pickers it copies. That takes
+ * a portal: `.settings-panel` sets `overflow: hidden` and both
+ * `.settings-content` and the Automations pane scroll, so a panel positioned
+ * inside the field is clipped by the card it opens in. The composer pickers
+ * have no such ancestor and can stay `position: absolute`; here the panel
+ * renders into `document.body` and is positioned `fixed` against the
+ * trigger's rect, which is the only way to escape a clipping ancestor without
+ * pushing the form around.
  *
  * Kind is carried by a section heading instead of a filter control: grouping
  * answers "which of these is a DM?" without hiding anything and without a
  * control that only exists on one platform.
  */
+
+/** Gap between the trigger and the panel, matching the composer pickers. */
+const PANEL_GAP = 6;
+const VIEWPORT_PADDING = 12;
+/** Widths the branch picker uses; a panel narrower than this cannot show a
+ *  name and an ID on one line. */
+const PANEL_MIN_WIDTH = 360;
+const PANEL_MAX_WIDTH = 560;
+
+type PanelPosition = {
+  top: number;
+  left: number;
+  width: number;
+  maxHeight: number;
+  /** Pinned by its bottom edge above the trigger, so it grows upward. */
+  flipped: boolean;
+};
+
+/**
+ * Place the panel against the trigger in viewport coordinates: below it when
+ * there is room, above when there is not, and clamped so neither edge leaves
+ * the window. Returns the height available too, so a long list scrolls inside
+ * the panel instead of running off-screen.
+ */
+function placePanel(trigger: DOMRect): PanelPosition {
+  const width = Math.min(
+    PANEL_MAX_WIDTH,
+    Math.max(PANEL_MIN_WIDTH, trigger.width),
+  );
+  const left = Math.max(
+    VIEWPORT_PADDING,
+    Math.min(trigger.left, window.innerWidth - width - VIEWPORT_PADDING),
+  );
+  const below = window.innerHeight - trigger.bottom - PANEL_GAP - VIEWPORT_PADDING;
+  const above = trigger.top - PANEL_GAP - VIEWPORT_PADDING;
+  // Flip only when the space above is genuinely better; a cramped-but-adequate
+  // drop-down reads more naturally than a drop-up.
+  const flip = below < 240 && above > below;
+  return {
+    width,
+    left,
+    flipped: flip,
+    top: flip ? trigger.top - PANEL_GAP : trigger.bottom + PANEL_GAP,
+    maxHeight: Math.max(160, flip ? above : below),
+  };
+}
 
 type SurfaceSection = "configured" | "channel" | "dm" | "topic" | "other";
 
@@ -126,8 +170,9 @@ export function MessagingSurfacePicker(props: {
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
   const root = useRef<HTMLDivElement>(null);
+  const panel = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
-  const restoreFocus = useRef(false);
+  const [position, setPosition] = useState<PanelPosition | null>(null);
   const listId = useId();
   const selected = props.options.find((option) => option.value === props.value);
   // Only an empty value is "nothing chosen". Manual entry never matches an
@@ -177,26 +222,45 @@ export function MessagingSurfacePicker(props: {
   })).filter((section) => section.rows.length > 0);
 
   const close = () => {
-    restoreFocus.current = true;
     setOpen(false);
+    trigger.current?.focus();
   };
   const choose = (value: string) => {
     props.onChange(value);
     close();
   };
 
+  const reposition = useCallback(() => {
+    const rect = trigger.current?.getBoundingClientRect();
+    if (rect) setPosition(placePanel(rect));
+  }, []);
+
+  // Before paint, so the panel never renders at a stale position for a frame.
+  useLayoutEffect(() => {
+    if (open) reposition();
+    else setPosition(null);
+  }, [open, reposition]);
+
   useEffect(() => {
-    if (open || !restoreFocus.current) return;
-    // The trigger unmounts while the panel is open, so focus has to be
-    // restored after it remounts rather than inside `close`.
-    restoreFocus.current = false;
-    trigger.current?.focus();
-  }, [open]);
+    if (!open) return;
+    // Capture phase: the panel is anchored to a trigger inside a scrolling
+    // pane, and a scroll event on that pane does not bubble to window.
+    window.addEventListener("scroll", reposition, true);
+    window.addEventListener("resize", reposition);
+    return () => {
+      window.removeEventListener("scroll", reposition, true);
+      window.removeEventListener("resize", reposition);
+    };
+  }, [open, reposition]);
 
   useEffect(() => {
     if (!open) return;
     const outside = (event: PointerEvent) => {
-      if (!root.current?.contains(event.target as Node)) setOpen(false);
+      const target = event.target as Node;
+      // The panel is portalled out of `root`, so it needs its own containment
+      // check — DOM ancestry no longer follows the React tree.
+      if (root.current?.contains(target) || panel.current?.contains(target)) return;
+      setOpen(false);
     };
     document.addEventListener("pointerdown", outside);
     return () => document.removeEventListener("pointerdown", outside);
@@ -209,10 +273,15 @@ export function MessagingSurfacePicker(props: {
   return (
     <div ref={root} className="messaging-surface-picker"
       onBlur={(event) => {
-        // `relatedTarget` is null while the trigger unmounts on open — closing
-        // on that would slam the panel shut the moment it appeared.
+        // React routes the portalled panel's events through this handler, but
+        // `contains` walks the DOM, where the panel is not a descendant — so
+        // it has to be checked separately or focusing into the list would
+        // close it. A null `relatedTarget` (focus leaving to nothing) is not a
+        // reason to close either.
         const next = event.relatedTarget as Node | null;
-        if (next && !event.currentTarget.contains(next)) setOpen(false);
+        if (!next) return;
+        if (event.currentTarget.contains(next) || panel.current?.contains(next)) return;
+        setOpen(false);
       }}
       onKeyDown={(event) => {
         if (event.key === "Escape" && open) {
@@ -222,25 +291,44 @@ export function MessagingSurfacePicker(props: {
         }
       }}
     >
-      {open ? null : (
-        <button ref={trigger} type="button" className="settings-select messaging-surface-picker__trigger"
-          // An `aria-label` overrides the visible text, so it has to carry both
-          // the field's name and whatever the button currently shows — the
-          // placeholder included, since that text is the button's only content
-          // before a choice is made.
-          aria-label={`${props.fieldLabel}: ${triggerLabel}`}
-          aria-haspopup="dialog" aria-expanded={false}
-          onClick={() => {
-            setQuery("");
-            setActive(0);
-            setOpen(true);
+      <button ref={trigger} type="button" className="settings-select messaging-surface-picker__trigger"
+        // An `aria-label` overrides the visible text, so it has to carry both
+        // the field's name and whatever the button currently shows — the
+        // placeholder included, since that text is the button's only content
+        // before a choice is made.
+        aria-label={`${props.fieldLabel}: ${triggerLabel}`}
+        aria-haspopup="dialog" aria-expanded={open}
+        onClick={() => {
+          if (open) {
+            setOpen(false);
+            return;
+          }
+          setQuery("");
+          setActive(0);
+          setOpen(true);
+        }}
+      >
+        {triggerLabel}
+      </button>
+      {open && position ? createPortal((
+        <div
+          ref={panel}
+          className="messaging-surface-picker__panel"
+          role="dialog"
+          aria-label={props.fieldLabel}
+          style={{
+            top: position.top,
+            left: position.left,
+            width: position.width,
+            maxHeight: position.maxHeight,
+            // A flipped panel is pinned by its BOTTOM edge to the gap above the
+            // trigger, so it grows upward as rows are added. `placePanel`
+            // decided this from the rect it measured — recomputing it here
+            // would be a layout read during render, against a rect that may
+            // already have moved.
+            transform: position.flipped ? "translateY(-100%)" : undefined,
           }}
         >
-          {triggerLabel}
-        </button>
-      )}
-      {open ? (
-        <div className="messaging-surface-picker__panel" role="dialog" aria-label={props.fieldLabel}>
           <div className="project-picker__search">
             <span aria-hidden="true" className="project-picker__search-icon">
               <SearchIcon size={13} />
@@ -318,7 +406,7 @@ export function MessagingSurfacePicker(props: {
             <span className="project-picker__row-name">{manualLabel}</span>
           </button>
         </div>
-      ) : null}
+      ), document.body) : null}
     </div>
   );
 }
