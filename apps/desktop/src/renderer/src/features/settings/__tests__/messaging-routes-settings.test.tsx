@@ -18,13 +18,18 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+function chooseSurface(label: string) {
+  fireEvent.click(screen.getByLabelText("Messaging surface"));
+  fireEvent.click(screen.getByRole("option", { name: new RegExp(label) }));
+}
+
 function buildRoutes(): ListMessagingRoutesResponse {
   return {
     eligibleAgents: [
       {
         backend: "codex",
         threadId: "agent-1",
-        label: "Search Signals Agent",
+        label: "Orchard Agent",
         backendLabel: "Codex",
         backendAvailable: true,
         available: true,
@@ -45,16 +50,16 @@ function buildRoutes(): ListMessagingRoutesResponse {
           kind: "conversation",
           platform: "slack",
           conversation: {
-            id: "C13056",
+            id: "C_ORCHARD",
             kind: "channel",
-            title: "p-search-signals-project",
+            title: "orchard-planning",
             workspaceId: "T1",
           },
         },
         target: {
           backend: "codex",
           threadId: "agent-1",
-          label: "Search Signals Agent",
+          label: "Orchard Agent",
           backendLabel: "Codex",
           backendAvailable: true,
           available: true,
@@ -84,15 +89,15 @@ function buildRoutes(): ListMessagingRoutesResponse {
         conversation: {
           id: "1700000000.000100",
           kind: "thread",
-          title: "13056 investigation",
-          parentTitle: "p-search-signals-project",
+          title: "Fictional harvest discussion",
+          parentTitle: "orchard-planning",
         },
         target: {
           backend: "codex",
           backendLabel: "Codex",
           backendAvailable: true,
           threadId: "work-1",
-          label: "Issue 13056",
+          label: "Harvest task",
           kind: "thread",
         },
         createdAt: 1000,
@@ -103,9 +108,9 @@ function buildRoutes(): ListMessagingRoutesResponse {
       {
         platform: "slack",
         conversation: {
-          id: "C13056",
+          id: "C_ORCHARD",
           kind: "channel",
-          title: "p-search-signals-project",
+          title: "orchard-planning",
           workspaceId: "T1",
         },
         firstSeenAt: 1000,
@@ -394,12 +399,12 @@ describe("MessagingRoutesSettings", () => {
     renderRoutes(desktopApi);
 
     expect(
-      await screen.findByText("Slack / p-search-signals-project"),
+      await screen.findByText("Slack / orchard-planning"),
     ).toBeInTheDocument();
-    expect(screen.getByText("Search Signals Agent")).toBeInTheDocument();
+    expect(screen.getByText("Orchard Agent")).toBeInTheDocument();
     expect(screen.getByText("Missing unavailable")).toBeInTheDocument();
-    expect(screen.getByText(/13056 investigation/)).toBeInTheDocument();
-    expect(screen.getByText("Issue 13056")).toBeInTheDocument();
+    expect(screen.getByText(/Fictional harvest discussion/)).toBeInTheDocument();
+    expect(screen.getByText("Harvest task")).toBeInTheDocument();
     expect(screen.getAllByText("Codex")).toHaveLength(2);
     expect(screen.getByText("3 active")).toBeInTheDocument();
     // Routes that inherit the default carry no chip at all — the marker is
@@ -537,10 +542,10 @@ describe("MessagingRoutesSettings", () => {
     const onOpenThread = vi.fn();
 
     renderRoutes(desktopApi, onOpenThread);
-    await screen.findByText("Issue 13056");
+    await screen.findByText("Harvest task");
 
     fireEvent.click(
-      screen.getByRole("button", { name: "Open thread Search Signals Agent" }),
+      screen.getByRole("button", { name: "Open thread Orchard Agent" }),
     );
     expect(onOpenThread).toHaveBeenLastCalledWith({
       backend: "codex",
@@ -548,7 +553,7 @@ describe("MessagingRoutesSettings", () => {
     });
 
     fireEvent.click(
-      screen.getByRole("button", { name: "Open thread Issue 13056" }),
+      screen.getByRole("button", { name: "Open thread Harvest task" }),
     );
     expect(onOpenThread).toHaveBeenLastCalledWith({
       backend: "codex",
@@ -562,27 +567,27 @@ describe("MessagingRoutesSettings", () => {
     render(
       <MessagingRoutesProvider desktopApi={api.desktopApi}>
         <ApprovedSurfaceDefaultAgent
-          id="C13056"
+          id="C_ORCHARD"
           label="Channel default Agent"
           platform="slack"
           scopeKind="conversation"
-          title="p-search-signals-project"
+          title="orchard-planning"
         />
         <MessagingRoutesSettings desktopApi={api.desktopApi} />
       </MessagingRoutesProvider>,
     );
 
     expect(await screen.findByText("Channel default Agent")).toBeInTheDocument();
-    expect(screen.getAllByText("Search Signals Agent")).toHaveLength(2);
+    expect(screen.getAllByText("Orchard Agent")).toHaveLength(2);
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Change default Agent for p-search-signals-project",
+        name: "Change default Agent for orchard-planning",
       }),
     );
 
     expect(screen.getByText("Change default Agent")).toBeInTheDocument();
     expect(
-      screen.getAllByText("Slack / p-search-signals-project"),
+      screen.getAllByText("Slack / orchard-planning"),
     ).toHaveLength(2);
     expect(api.listMessagingRoutes).toHaveBeenCalledTimes(1);
   });
@@ -611,7 +616,7 @@ describe("MessagingRoutesSettings", () => {
 
     expect(screen.getByLabelText("Default scope")).toHaveValue("conversation");
     expect(screen.getByLabelText("Messaging platform")).toHaveValue("slack");
-    expect(screen.getByLabelText("Messaging surface")).toHaveDisplayValue(
+    expect(screen.getByLabelText("Messaging surface")).toHaveTextContent(
       "Slack / incident-response - approved configuration",
     );
     expect(screen.queryByLabelText("Conversation ID")).not.toBeInTheDocument();
@@ -639,20 +644,10 @@ describe("MessagingRoutesSettings", () => {
   it("adds a conversation default from a recently seen surface", async () => {
     const api = buildDesktopApi();
     renderRoutes(api.desktopApi);
-    await screen.findByText("Search Signals Agent");
+    await screen.findByText("Orchard Agent");
 
     fireEvent.click(screen.getByRole("button", { name: "Add default" }));
-    fireEvent.change(screen.getByLabelText("Messaging surface"), {
-      target: {
-        value: JSON.stringify([
-          "conversation",
-          "slack",
-          "channel",
-          "",
-          "C13056",
-        ]),
-      },
-    });
+    chooseSurface("Slack / orchard-planning");
     fireEvent.change(screen.getByLabelText("Default Agent"), {
       target: { value: JSON.stringify(["acp:grok", "agent-2"]) },
     });
@@ -664,9 +659,9 @@ describe("MessagingRoutesSettings", () => {
           kind: "conversation",
           platform: "slack",
           conversation: {
-            id: "C13056",
+            id: "C_ORCHARD",
             kind: "channel",
-            title: "p-search-signals-project",
+            title: "orchard-planning",
             workspaceId: "T1",
           },
         },
@@ -683,9 +678,9 @@ describe("MessagingRoutesSettings", () => {
       {
         platform: "slack",
         conversation: {
-          id: "C0BN6UXFREE",
+          id: "C_MEADOW",
           kind: "channel",
-          title: "p-pwragent-testing",
+          title: "meadow-testing",
           workspaceId: "T1",
         },
         firstSeenAt: 1000,
@@ -705,28 +700,14 @@ describe("MessagingRoutesSettings", () => {
     fireEvent.change(screen.getByLabelText("Default scope"), {
       target: { value: "parent" },
     });
-    expect(
-      [...screen.getByLabelText("Messaging surface").querySelectorAll("option")]
-        .map((option) => option.textContent),
-    ).toEqual([
-      "Choose a recently seen surface...",
-      "Enter an ID manually...",
-    ]);
+    fireEvent.click(screen.getByLabelText("Messaging surface"));
+    expect(screen.getByText("No matching surfaces.")).toBeInTheDocument();
+    fireEvent.keyDown(screen.getByLabelText("Find a messaging surface"), { key: "Escape" });
 
     fireEvent.change(screen.getByLabelText("Default scope"), {
       target: { value: "conversation" },
     });
-    fireEvent.change(screen.getByLabelText("Messaging surface"), {
-      target: {
-        value: JSON.stringify([
-          "conversation",
-          "slack",
-          "channel",
-          "",
-          "C0BN6UXFREE",
-        ]),
-      },
-    });
+    chooseSurface("Slack / meadow-testing");
     fireEvent.change(screen.getByLabelText("Default Agent"), {
       target: { value: JSON.stringify(["codex", "agent-1"]) },
     });
@@ -738,9 +719,9 @@ describe("MessagingRoutesSettings", () => {
           kind: "conversation",
           platform: "slack",
           conversation: {
-            id: "C0BN6UXFREE",
+            id: "C_MEADOW",
             kind: "channel",
-            title: "p-pwragent-testing",
+            title: "meadow-testing",
             workspaceId: "T1",
           },
         },
@@ -756,7 +737,7 @@ describe("MessagingRoutesSettings", () => {
       scope: {
         kind: "parent",
         platform: "slack",
-        conversationId: "C13056",
+        conversationId: "C_ORCHARD",
       },
     }];
     routes.bindings = [];
@@ -777,7 +758,7 @@ describe("MessagingRoutesSettings", () => {
       undefined,
       ["telegram", "mattermost", "line"],
     );
-    await screen.findByText("Search Signals Agent");
+    await screen.findByText("Orchard Agent");
 
     fireEvent.click(screen.getByRole("button", { name: "Add default" }));
 
@@ -793,7 +774,7 @@ describe("MessagingRoutesSettings", () => {
   it("keeps profile defaults available without a configured platform", async () => {
     const api = buildDesktopApi();
     renderRoutes(api.desktopApi, undefined, []);
-    await screen.findByText("Search Signals Agent");
+    await screen.findByText("Orchard Agent");
 
     fireEvent.click(screen.getByRole("button", { name: "Add default" }));
 
@@ -812,12 +793,12 @@ describe("MessagingRoutesSettings", () => {
     routes.observedSurfaces.push({
       platform: "slack",
       conversation: {
-        id: "C13056",
+        id: "C_ORCHARD",
         kind: "thread",
         parentId: "1700000000.000100",
-        parentConversationId: "C13056",
-        parentTitle: "p-search-signals-project",
-        title: "13056 investigation",
+        parentConversationId: "C_ORCHARD",
+        parentTitle: "orchard-planning",
+        title: "Fictional harvest discussion",
         workspaceId: "T1",
       },
       firstSeenAt: 2500,
@@ -825,50 +806,80 @@ describe("MessagingRoutesSettings", () => {
     });
     const api = buildDesktopApi(routes);
     renderRoutes(api.desktopApi);
-    await screen.findByText("Search Signals Agent");
+    await screen.findByText("Orchard Agent");
 
     fireEvent.click(screen.getByRole("button", { name: "Add default" }));
-    const surfaceSelect = screen.getByLabelText("Messaging surface");
-    expect(
-      [...surfaceSelect.querySelectorAll("option")].map((option) => option.textContent),
-    ).toEqual([
-      "Choose a recently seen surface...",
-      expect.stringContaining("13056 investigation"),
-      expect.stringContaining("p-search-signals-project"),
+    fireEvent.click(screen.getByLabelText("Messaging surface"));
+    expect(screen.getAllByRole("option").filter((option) => option.parentElement?.getAttribute("role") === "listbox")
+      .map((option) => option.textContent)).toEqual([
+      expect.stringContaining("orchard-planning"),
       expect.stringContaining("archived-project"),
-      "Enter an ID manually...",
     ]);
+    expect(screen.queryByRole("option", { name: /Fictional harvest discussion/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Threads / topics" })).not.toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText("Default scope"), {
       target: { value: "parent" },
     });
-    expect(
-      [...screen.getByLabelText("Messaging surface").querySelectorAll("option")]
-        .map((option) => option.textContent),
-    ).toEqual([
-      "Choose a recently seen surface...",
-      expect.stringContaining("Slack / p-search-signals-project"),
-      "Enter an ID manually...",
-    ]);
+    fireEvent.click(screen.getByLabelText("Messaging surface"));
+    expect(screen.getByRole("option", { name: /Slack \/ orchard-planning/ })).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText("Default scope"), {
       target: { value: "workspace" },
     });
-    expect(screen.getByLabelText("Messaging surface")).toHaveTextContent(
-      "Slack / T1",
-    );
+    fireEvent.click(screen.getByLabelText("Messaging surface"));
+    expect(screen.getByRole("option", { name: /Slack \/ T1/ })).toBeInTheDocument();
+  });
+
+  it("selects durable Telegram topics with their group identity and excludes reply threads", async () => {
+    const routes = buildRoutes();
+    routes.observedSurfaces = [
+      {
+        platform: "telegram",
+        conversation: { id: "42", kind: "topic", parentId: "-100900", parentConversationId: "-100900", title: "Garden plans" },
+        firstSeenAt: 1000,
+        lastSeenAt: 2000,
+      },
+      {
+        platform: "telegram",
+        conversation: { id: "99", kind: "thread", title: "Ephemeral reply" },
+        firstSeenAt: 1000,
+        lastSeenAt: 3000,
+      },
+    ];
+    const api = buildDesktopApi(routes);
+    renderRoutes(api.desktopApi, undefined, ["telegram"]);
+    await screen.findByText("Orchard Agent");
+    fireEvent.click(screen.getByRole("button", { name: "Add default" }));
+    fireEvent.click(screen.getByLabelText("Messaging surface"));
+    fireEvent.click(screen.getByRole("button", { name: "Telegram topics" }));
+    expect(screen.queryByRole("option", { name: /Ephemeral reply/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("option", { name: /Garden plans/ }));
+    fireEvent.change(screen.getByLabelText("Default Agent"), {
+      target: { value: JSON.stringify(["codex", "agent-1"]) },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save default" }));
+    await waitFor(() => expect(api.setMessagingDefaultAgent).toHaveBeenCalledWith({
+      scope: {
+        kind: "conversation",
+        platform: "telegram",
+        conversation: { id: "42", kind: "topic", parentId: "-100900", parentConversationId: "-100900", title: "Garden plans" },
+      },
+      target: { backend: "codex", threadId: "agent-1" },
+    }));
   });
 
   it("keeps manual IDs as an explicit fallback", async () => {
     const api = buildDesktopApi();
     renderRoutes(api.desktopApi);
-    await screen.findByText("Search Signals Agent");
+    await screen.findByText("Orchard Agent");
 
     fireEvent.click(screen.getByRole("button", { name: "Add default" }));
     expect(screen.queryByLabelText("Conversation ID")).not.toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText("Messaging surface"), {
-      target: { value: "manual" },
-    });
+    fireEvent.click(screen.getByLabelText("Messaging surface"));
+    fireEvent.click(screen.getByRole("button", { name: "Enter an ID manually..." }));
+    expect(screen.queryByRole("option", { name: "Thread" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "Telegram topic" })).not.toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Conversation ID"), {
       target: { value: "C200" },
     });
@@ -899,7 +910,7 @@ describe("MessagingRoutesSettings", () => {
   it("retargets and clears defaults and unbinds conversations", async () => {
     const api = buildDesktopApi();
     renderRoutes(api.desktopApi);
-    await screen.findByText("Search Signals Agent");
+    await screen.findByText("Orchard Agent");
 
     fireEvent.click(screen.getAllByRole("button", { name: "Change" })[0]!);
     fireEvent.change(screen.getByLabelText("Default Agent"), {

@@ -10395,6 +10395,7 @@ a.button {
   line-height: 1.35;
 }
 
+.messaging-route-editor__surface,
 .messaging-route-editor label {
   display: flex;
   min-width: 0;
@@ -29406,6 +29407,7 @@ button.pricing-token-miser__folded:focus-visible {
    badges/timestamp, reference tabs) in the `.project-picker__*`
    / `.branch-picker__*` / `.reference-picker__*` blocks.
    ============================================================ */
+.messaging-surface-picker__panel,
 .project-picker__pop,
 .branch-picker__menu,
 .reference-picker__pop {
@@ -35091,4 +35093,51 @@ details.launchpad-pending__output > summary .launchpad-pending__command-label {
   overflow: hidden;
   clip-path: inset(50%);
   white-space: nowrap;
+}
+
+/* Route surfaces share the composer picker primitives, but expand in the
+   settings flow so long lists cannot be clipped by the settings scroller. */
+.messaging-surface-picker__trigger {
+  width: 100%;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.messaging-surface-picker__panel {
+  position: relative;
+  bottom: auto;
+  margin-top: 8px;
+}
+
+.messaging-surface-picker__filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 4px;
+}
+
+.messaging-surface-picker__filters [aria-pressed="true"],
+.messaging-surface-picker__list .is-active {
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+}
+
+.messaging-surface-picker__list {
+  max-height: 280px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.messaging-surface-picker__identity {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.messaging-surface-picker__identity small {
+  color: var(--text-muted);
+  font-size: 11px;
 }

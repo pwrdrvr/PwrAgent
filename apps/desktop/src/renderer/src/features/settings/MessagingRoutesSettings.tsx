@@ -28,6 +28,7 @@ import {
   formatMessagingPlatformName,
 } from "../../lib/messaging-platform-branding";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { MessagingSurfacePicker } from "./MessagingSurfacePicker";
 import { SettingsSection } from "./SettingsLayout";
 import { RESPONSE_MODE_OPTIONS, responseModeTitle } from "./settings-fields";
 
@@ -753,14 +754,27 @@ function DefaultAgentEditor(props: {
           {form.scopeKind === "conversation"
             || form.scopeKind === "parent"
             || form.scopeKind === "workspace" ? (
-            <label className="messaging-route-editor__surface">
+            <div className="messaging-route-editor__surface">
               <span>Surface</span>
-              <select
-                aria-label="Messaging surface"
-                className="settings-select"
+              <MessagingSurfacePicker
+                key={`${form.scopeKind}:${form.platform}`}
                 value={surfaceSelection}
-                onChange={(event) => {
-                  const value = event.target.value;
+                filterConversations={form.scopeKind === "conversation"}
+                allowTopics={form.platform === "telegram"}
+                options={[
+                  ...(hasConfiguredSurface ? [{
+                    value: "configured",
+                    label: `${configuredSurfaceLabel(form)} - approved configuration`,
+                    kind: form.conversationKind,
+                  }] : []),
+                  ...surfaceCandidates.map((surface) => ({
+                    value: surface.value,
+                    label: surface.label,
+                    kind: surface.form.conversationKind,
+                    detail: observedSurfaceDetail(surface),
+                  })),
+                ]}
+                onChange={(value) => {
                   setSurfaceSelection(value);
                   if (value === "manual") {
                     setManualEntry(true);
@@ -768,35 +782,18 @@ function DefaultAgentEditor(props: {
                     return;
                   }
                   setManualEntry(false);
-                  if (!value) {
-                    setForm((current) => resetSurfaceForm(current));
-                    return;
-                  }
                   const candidate = surfaceCandidates.find(
                     (surface) => surface.value === value,
                   );
                   if (candidate) setForm(candidate.form);
                 }}
-              >
-                <option value="">Choose a recently seen surface...</option>
-                {hasConfiguredSurface ? (
-                  <option value="configured">
-                    {configuredSurfaceLabel(form)} - approved configuration
-                  </option>
-                ) : null}
-                {surfaceCandidates.map((surface) => (
-                  <option key={surface.value} value={surface.value}>
-                    {surface.label} - seen {formatTimestamp(surface.lastSeenAt)}
-                  </option>
-                ))}
-                <option value="manual">Enter an ID manually...</option>
-              </select>
+              />
               {surfaceCandidates.length === 0 && !hasConfiguredSurface ? (
                 <small>
                   {emptySurfaceMessage(form.scopeKind)}
                 </small>
               ) : null}
-            </label>
+            </div>
           ) : null}
           {manualEntry && form.scopeKind === "workspace" ? (
             <RouteTextInput
@@ -829,8 +826,7 @@ function DefaultAgentEditor(props: {
                     }))}
                 >
                   <option value="channel">Channel</option>
-                  <option value="thread">Thread</option>
-                  <option value="topic">Topic</option>
+                  {form.platform === "telegram" ? <option value="topic">Telegram topic</option> : null}
                   <option value="dm">Direct message</option>
                 </select>
               </label>
@@ -983,6 +979,10 @@ function observedSurfaceCandidates(
     let candidateForm: NewDefaultForm | undefined;
     let label: string | undefined;
     if (form.scopeKind === "conversation") {
+      // Default routes target durable destinations. Ephemeral reply threads
+      // belong to bindings; Telegram's named forum topics remain selectable.
+      if (conversation.kind === "thread") continue;
+      if (conversation.kind === "topic" && surface.platform !== "telegram") continue;
       candidateForm = {
         ...EMPTY_FORM,
         scopeKind: "conversation",
@@ -1045,6 +1045,16 @@ function observedSurfaceCandidates(
   return [...candidates.values()].sort((left, right) =>
     right.lastSeenAt - left.lastSeenAt
     || left.label.localeCompare(right.label));
+}
+
+function observedSurfaceDetail(surface: ObservedSurfaceCandidate): string {
+  const form = surface.form;
+  const kind = form.scopeKind === "conversation"
+    ? formatConversationKind(form.conversationKind)
+    : form.scopeKind === "parent" ? "Channel / group" : "Workspace / server";
+  const id = form.conversationId || form.parentConversationId || form.workspaceId;
+  const parent = form.identityParentId ? ` / ${form.identityParentId}` : "";
+  return `${kind} · ID ${id}${parent} · Seen ${formatTimestamp(surface.lastSeenAt)}`;
 }
 
 function surfaceSelectionForForm(
