@@ -6406,6 +6406,36 @@ describe("SettingsScreen", () => {
     );
   });
 
+  it("routes the Messaging nav's Routes child to the hub's Routes section", () => {
+    render(
+      <SettingsScreen
+        settings={createSettingsState()}
+        onClose={() => undefined}
+      />,
+    );
+
+    const nav = screen.getByRole("navigation", { name: "Settings sections" });
+    fireEvent.click(
+      within(nav).getByRole("button", { name: "Expand Messaging" }),
+    );
+    // Routes leads the children, in the order the hub itself reads.
+    expect(
+      Array.from(nav.querySelectorAll(".settings-nav__sublabel")).map(
+        (label) => label.textContent,
+      ),
+    ).toContain("Routes");
+
+    fireEvent.click(within(nav).getByRole("button", { name: "Routes" }));
+    // Its sub names no platform, so the hub stays rendered rather than
+    // swapping to a focused platform screen.
+    expect(
+      screen.getByRole("region", { name: "Messaging settings" }),
+    ).toBeInTheDocument();
+    expect(
+      within(nav).getByRole("button", { name: "Routes" }),
+    ).toHaveAttribute("aria-current", "page");
+  });
+
   it("expands a nav group from the caret without navigating", () => {
     render(
       <SettingsScreen

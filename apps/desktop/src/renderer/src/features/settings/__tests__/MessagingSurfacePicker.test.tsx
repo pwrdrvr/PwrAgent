@@ -115,6 +115,44 @@ describe("MessagingSurfacePicker", () => {
     expect(onChange).toHaveBeenCalledWith("manual");
   });
 
+  it("keeps a saved thread route visible in its own editor", () => {
+    // Threads stopped being selectable, but a route saved before that must
+    // still show what it targets — and must not be marked as a channel.
+    const onChange = vi.fn();
+    render(
+      <MessagingSurfacePicker
+        value="thread"
+        filterConversations
+        onChange={onChange}
+        options={[
+          { value: "thread", label: "Harvest discussion", kind: "thread" as const, section: "configured" as const, detail: "T_HARVEST" },
+          ...options.filter((option) => option.kind === "channel"),
+        ]}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Surface: Harvest discussion" }));
+    expect(sections()).toEqual(["Current configuration", "Channels & groups"]);
+    const saved = screen.getByRole("option", { name: /Harvest discussion/ });
+    expect(saved).toHaveAttribute("aria-selected", "true");
+    expect(saved.textContent).toContain("▸");
+    expect(saved.textContent).not.toContain("#");
+  });
+
+  it("names manual entry on the closed trigger", () => {
+    render(<MessagingSurfacePicker value="manual" options={options} filterConversations onChange={vi.fn()} />);
+    expect(
+      screen.getByRole("button", { name: "Surface: Enter an ID manually..." }),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps the empty state out of the listbox", () => {
+    setup();
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "unknown" } });
+    const empty = screen.getByText("No matching surfaces.");
+    expect(empty).toBeInTheDocument();
+    expect(screen.getByRole("listbox")).not.toContainElement(empty);
+  });
+
   it("drops the kind glyph for container scopes, which are not channels", () => {
     render(
       <MessagingSurfacePicker

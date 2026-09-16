@@ -262,6 +262,7 @@ export function MessagingRoutesSettings(props: {
     <SettingsSection
       eyebrow="Messaging"
       title="Routes"
+      sectionId="routes"
       description="Manage persistent defaults and active messaging bindings from one place."
       chip={`${routeCount} active`}
       chipKind={routeCount > 0 ? "ok" : "muted"}
@@ -1065,11 +1066,19 @@ function observedSurfaceDetail(surface: ObservedSurfaceCandidate): string {
  * Compact last-seen stamp for the picker's trailing column. Deliberately
  * date-only: the full `formatTimestamp` string is too wide to sit beside an
  * ID, and staleness is what the operator is reading it for.
+ *
+ * The year appears only when it is not the current one. Dropping it outright
+ * would render a surface last seen thirteen months ago as "Sep 16" — exactly
+ * like one seen two days ago — which inverts the signal this column exists to
+ * give.
  */
-function formatSeenDate(value: number): string {
-  return new Date(value).toLocaleDateString(undefined, {
+function formatSeenDate(value: number, now = Date.now()): string {
+  const seen = new Date(value);
+  const sameYear = seen.getFullYear() === new Date(now).getFullYear();
+  return seen.toLocaleDateString(undefined, {
     month: "short",
     day: "numeric",
+    ...(sameYear ? {} : { year: "numeric" }),
   });
 }
 

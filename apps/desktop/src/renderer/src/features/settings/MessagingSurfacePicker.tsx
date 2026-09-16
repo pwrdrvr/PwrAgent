@@ -60,7 +60,10 @@ const SECTIONS: { key: SurfaceSection; label: string }[] = [
  */
 function kindGlyph(kind: MessagingConversationKind | undefined): string {
   if (kind === "dm") return "@";
-  if (kind === "topic") return "▸";
+  // A topic and a thread are both sub-conversations hanging off a parent. A
+  // thread is no longer offered, but a route saved before that reaches this
+  // list as the current configuration and must not be marked as a channel.
+  if (kind === "topic" || kind === "thread") return "▸";
   return "#";
 }
 
@@ -87,10 +90,20 @@ export function MessagingSurfacePicker(props: {
   const restoreFocus = useRef(false);
   const listId = useId();
   const selected = props.options.find((option) => option.value === props.value);
+  // Manual entry matches no option, so it is a choice the trigger must report
+  // even though `selected` is undefined.
+  const triggerChoice = Boolean(selected) || props.value === "manual";
+  const triggerLabel = selected?.label
+    ?? (props.value === "manual" ? "Enter an ID manually..." : "Choose a recently seen surface...");
 
   const trimmed = query.trim().toLowerCase();
   const visible = props.options.filter((option) => {
-    if (props.filterConversations && option.kind) {
+    // The route's own saved destination is always offered, whatever its kind.
+    // Threads stopped being selectable, but a route saved before that still
+    // arrives here as the current configuration: hiding it would leave its
+    // editor showing no current target, and the keyboard cursor sitting on
+    // some unrelated row ready to retarget the route on the next Enter.
+    if (option.value !== props.value && props.filterConversations && option.kind) {
       // Default routes target durable destinations only; an ephemeral reply
       // thread belongs to a binding, and topics are a Telegram-only concept.
       if (option.kind === "thread") return false;
@@ -100,13 +113,18 @@ export function MessagingSurfacePicker(props: {
   });
   const activeIndex = Math.min(active, Math.max(0, visible.length - 1));
 
-  // Group for rendering while keeping each row's flat index, so arrow keys and
-  // `aria-activedescendant` still walk one continuous list across headings.
+  // Index once, then group: keeping each row's flat index lets arrow keys and
+  // `aria-activedescendant` walk one continuous list across headings, and
+  // resolving the section here keeps this a single pass over `visible` rather
+  // than one per section on every keystroke.
+  const indexed = visible.map((option, index) => ({
+    option,
+    index,
+    section: sectionFor(option, props.filterConversations),
+  }));
   const groups = SECTIONS.map((section) => ({
     ...section,
-    rows: visible
-      .map((option, index) => ({ option, index }))
-      .filter((row) => sectionFor(row.option, props.filterConversations) === section.key),
+    rows: indexed.filter((row) => row.section === section.key),
   })).filter((section) => section.rows.length > 0);
 
   const close = () => {
@@ -157,7 +175,10 @@ export function MessagingSurfacePicker(props: {
     >
       {open ? null : (
         <button ref={trigger} type="button" className="settings-select messaging-surface-picker__trigger"
-          aria-label={selected ? `Surface: ${selected.label}` : "Choose a messaging surface"}
+          // An `aria-label` overrides the visible text, so it has to carry the
+          // current choice in every state the button can show — including
+          // manual entry, which matches no option and so has no `selected`.
+          aria-label={triggerChoice ? `Surface: ${triggerLabel}` : "Choose a messaging surface"}
           aria-haspopup="dialog" aria-expanded={false}
           onClick={() => {
             setQuery("");
@@ -165,7 +186,7 @@ export function MessagingSurfacePicker(props: {
             setOpen(true);
           }}
         >
-          {selected?.label ?? (props.value === "manual" ? "Enter an ID manually..." : "Choose a recently seen surface...")}
+          {triggerLabel}
         </button>
       )}
       {open ? (
@@ -225,8 +246,11 @@ export function MessagingSurfacePicker(props: {
                 })}
               </div>
             ))}
-            {visible.length === 0 ? <p className="project-picker__empty">No matching surfaces.</p> : null}
           </div>
+          {/* Outside the listbox: assistive technology drops a non-option
+              child of `role="listbox"`, which would leave a screen-reader
+              user with an empty list and no explanation. */}
+          {visible.length === 0 ? <p className="project-picker__empty">No matching surfaces.</p> : null}
           <div className="project-picker__separator" />
           <button type="button" className="project-picker__row project-picker__row--action"
             onClick={() => choose("manual")}

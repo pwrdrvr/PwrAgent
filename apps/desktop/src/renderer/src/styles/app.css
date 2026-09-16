@@ -35104,6 +35104,16 @@ details.launchpad-pending__output > summary .launchpad-pending__command-label {
    the shared picker primitives above. Only the anchor and the two extra row
    slots are genuinely per-picker. */
 
+/* A reading column, not a form column. The Settings card runs the full width
+   of the window, and a list stretched across it puts the name at one end and
+   the ID at the other — a long, wasteful saccade per row for a list the
+   operator is scanning. Cap the field so a row reads in one fixation, and cap
+   the wrapper rather than the panel so the control does not change width when
+   it opens. */
+.messaging-surface-picker {
+  max-width: 560px;
+}
+
 .messaging-surface-picker__trigger {
   width: 100%;
   text-align: left;
@@ -35132,7 +35142,7 @@ details.launchpad-pending__output > summary .launchpad-pending__command-label {
 }
 
 .messaging-surface-picker__list {
-  max-height: 280px;
+  max-height: 320px;
   overflow-y: auto;
   overscroll-behavior: contain;
 }

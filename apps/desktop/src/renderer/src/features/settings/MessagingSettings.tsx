@@ -122,6 +122,12 @@ export function MessagingSettings(props: {
    * general defaults, routes, and the platform index.
    */
   focus?: MessagingSettingsFocus;
+  /**
+   * Hub section the nav wants brought into view, e.g. "routes". A sub-route
+   * that names no platform leaves `focus` undefined, so the hub renders and
+   * this scrolls it to the section the operator actually clicked.
+   */
+  focusSectionId?: string;
   /** Navigate between the hub (undefined) and a focused platform screen. */
   onFocusChange?: (focus?: MessagingSettingsFocus) => void;
   onOpenThread?: (target: {
@@ -386,6 +392,7 @@ export function MessagingSettings(props: {
   return (
     <MessagingRoutesProvider desktopApi={props.desktopApi}>
       <SettingsSectionStack
+        focusSectionId={props.focusSectionId}
         paneId={props.focus ? `messaging-${props.focus}` : "messaging"}
         aria-label={
           focusedPlatformLabel
