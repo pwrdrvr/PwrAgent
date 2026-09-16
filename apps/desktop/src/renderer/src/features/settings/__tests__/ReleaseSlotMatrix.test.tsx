@@ -1,6 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppUpdateReleaseVersions } from "../../../../../shared/app-metadata";
 import { ReleaseSlotMatrix } from "../ReleaseSlotMatrix";
 
@@ -175,5 +175,79 @@ describe("ReleaseSlotMatrix", () => {
     );
     expect(onSelect).not.toHaveBeenCalled();
     expect(stableLatest).toHaveAttribute("aria-checked", "true");
+  });
+});
+
+describe("ReleaseSlotMatrix release notes", () => {
+  const openWindow = vi.fn();
+
+  beforeEach(() => {
+    vi.stubGlobal("open", openWindow);
+  });
+
+  afterEach(() => {
+    cleanup();
+    openWindow.mockReset();
+    vi.unstubAllGlobals();
+  });
+
+  it("gives every populated slot its own link, selected or not", () => {
+    // Picking a slot rewrites which build PwrAgent installs, so reading the
+    // notes has to be possible WITHOUT picking.
+    renderMatrix({ channel: "latest", train: "stable" });
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Release notes for Beta Prerelease v1.1.0-alpha.2",
+      }),
+    );
+
+    expect(openWindow).toHaveBeenCalledWith(
+      "https://github.com/pwrdrvr/PwrAgent/releases/tag/v1.1.0-alpha.2",
+      "_blank",
+      "noopener,noreferrer",
+    );
+  });
+
+  it("keeps the link OUTSIDE the tile, which is a radio", () => {
+    // A `role="radio"` may contain no interactive descendant: it would be
+    // neither valid nor reachable by the roving tabindex this matrix
+    // implements, and it would swallow the Space that commits the slot.
+    renderMatrix({ channel: "latest", train: "stable" });
+
+    const tile = screen.getByRole("radio", { name: "Stable Latest — v1.0.3" });
+    const link = screen.getByRole("button", {
+      name: "Release notes for Stable Latest v1.0.3",
+    });
+
+    expect(tile.contains(link)).toBe(false);
+    expect(link.parentElement).toBe(tile.parentElement);
+    expect(tile.querySelector("button")).toBeNull();
+  });
+
+  it("renders no link for a slot that resolved to no version", () => {
+    // The empty slot's headline is prose ("Unavailable"), not a tag, so
+    // there is nothing to link to and nothing is rendered.
+    renderMatrix({ channel: "latest", train: "beta" });
+
+    expect(
+      screen.getByRole("radio", { name: "Beta Latest — Unavailable" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /Release notes for Beta Latest/ }),
+    ).toBeNull();
+    // The three populated slots still have theirs.
+    expect(
+      screen.getAllByRole("button", { name: /^Release notes for/ }),
+    ).toHaveLength(3);
+  });
+
+  it("renders no links at all while the release read is still out", () => {
+    renderMatrix({ releaseVersions: undefined, releasesSettled: false });
+
+    expect(screen.getAllByRole("radio")).toHaveLength(4);
+    expect(
+      screen.queryAllByRole("button", { name: /^Release notes for/ }),
+    ).toHaveLength(0);
   });
 });

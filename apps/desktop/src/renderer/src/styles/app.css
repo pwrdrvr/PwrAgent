@@ -7887,6 +7887,38 @@ a.button {
   padding: 0 10px;
 }
 
+/* "Release notes" — text among real buttons, on purpose. The card already
+   carries the one action it exists for (Restart / Cancel) and the one way
+   out of it (Dismiss); a third pill would make the operator choose between
+   three things that look equally like the point. */
+.app-update-banner__notes {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 30px;
+  padding: 0 4px;
+  appearance: none;
+  cursor: pointer;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.2;
+  transition: color 120ms ease;
+}
+
+.app-update-banner__notes:hover {
+  color: var(--text-primary);
+  text-decoration: underline;
+}
+
+.app-update-banner__notes:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 /* Live progress for a check the operator asked for. This card carries no
    `.app-notice-toast__timer`, because the work it reports has no fixed
    duration - the track below is the only bar on it, and it means the thing
@@ -9832,6 +9864,46 @@ a.button {
   color: var(--danger-text);
 }
 
+/* Inline with the sentence it qualifies. It is scoped to the version that
+   sentence just named, so it must not float away from it — and it stays
+   quieter than the sentence, because reading the notes is the smaller of
+   the two things happening on this row. */
+.settings-update-channel__notes {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  /* 24px for WCAG 2.2 target-size; the padding carries the horizontal half,
+     so the visible gap to the sentence stays ~6px of ink. */
+  min-height: 24px;
+  margin-left: 2px;
+  padding: 0 4px;
+  appearance: none;
+  cursor: pointer;
+  border: 0;
+  background: none;
+  color: var(--text-muted);
+  /* Sans, not the mono this can sit inside (`__downloaded`): a mono label
+     beside a version reads as a second version. */
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.2;
+  vertical-align: baseline;
+  transition: color 120ms ease;
+}
+
+.settings-update-channel__notes:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.settings-update-channel__notes:focus-visible {
+  outline: 2px solid var(--accent-bright);
+  outline-offset: 2px;
+  border-radius: 3px;
+  color: var(--accent);
+}
+
 /* Release slot matrix — all four published slots at once, trains as rows and
    tracks as columns. It replaced two segmented controls that could only label
    themselves with the slot the OTHER control was on, so a populated
@@ -9841,8 +9913,30 @@ a.button {
   display: grid;
   grid-template-columns: 76px minmax(0, 1fr) minmax(0, 1fr);
   align-items: stretch;
-  gap: 8px;
+  column-gap: 8px;
+  /* Wider than the column gap on purpose. Each cell now ends in a
+     "Release notes" link, and with an even 8px both ways that link sat as
+     close to the NEXT row's tile as to its own — it has to read as a
+     caption on the tile above it. */
+  row-gap: 14px;
   width: 100%;
+}
+
+/* The grid cell, not the tile. The tile is a `role="radio"` and cannot
+   contain an interactive element, so its "Release notes" link is a sibling
+   below it; the cell is what makes the two read as one unit and keeps the
+   tiles in a row the same height whether or not their slot resolved to a
+   version. */
+/* No gap: the link's own 24px box supplies the air below the tile. A flex
+   gap on top of it would push the caption away from what it captions. */
+.settings-release-slots__cell {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.settings-release-slots__cell > .settings-release-slot {
+  flex: 1 1 auto;
 }
 
 .settings-release-slots__colhdr,
@@ -9969,6 +10063,49 @@ a.button {
   border-color: var(--success-border);
   background: var(--success-soft);
   color: var(--success-text);
+}
+
+/* Quiet by default, accent on hover. It sits under a tile the operator is
+   deciding about, so it must not compete with the tile itself for the
+   click; the underline appears on hover/focus for the same reason.
+   Text-sized rather than button-sized: four of these at button weight would
+   out-shout the four versions above them. */
+.settings-release-slot__notes {
+  display: inline-flex;
+  align-self: flex-start;
+  align-items: center;
+  gap: 4px;
+  /* 24px is not decoration. WCAG 2.2 target-size (2.5.8) wants 24x24, and
+     axe measures spacing to the nearest neighbor when a target is under it:
+     at 12px tall with a 5px gap this read as a 22px safe circle against the
+     tile directly above, which is a `wcag22aa` failure the a11y gate would
+     have caught. The text stays 10px; the box around it does the work. */
+  min-height: 24px;
+  /* Indented to the tile's own text column (12px padding + 1px border) so
+     it hangs under the version rather than off the tile's outer edge. */
+  padding: 0 0 0 13px;
+  appearance: none;
+  cursor: pointer;
+  border: 0;
+  background: none;
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1.2;
+  transition: color 120ms ease;
+}
+
+.settings-release-slot__notes:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.settings-release-slot__notes:focus-visible {
+  outline: 2px solid var(--accent-bright);
+  outline-offset: 2px;
+  border-radius: 3px;
+  color: var(--accent);
 }
 
 .settings-section__description {
@@ -12984,6 +13121,43 @@ a.button {
 
 .settings-aboutkv dd a:hover {
   text-decoration: underline;
+}
+
+/* The version is mono; its link is not. A tag-shaped mono label beside the
+   number would read as a second version rather than as a way to go read
+   about the first. */
+.settings-aboutkv__notes {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  /* 24px for WCAG 2.2 target-size, as on the other inline copies. */
+  min-height: 24px;
+  margin-left: 4px;
+  padding: 0 4px;
+  appearance: none;
+  cursor: pointer;
+  border: 0;
+  background: none;
+  color: var(--text-muted);
+  /* The `dd` around it is mono; this is not. */
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.2;
+  vertical-align: baseline;
+  transition: color 120ms ease;
+}
+
+.settings-aboutkv__notes:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.settings-aboutkv__notes:focus-visible {
+  outline: 2px solid var(--accent-bright);
+  outline-offset: 2px;
+  border-radius: 3px;
+  color: var(--accent);
 }
 
 .federation-peer-summary {
@@ -16497,6 +16671,15 @@ a.button {
   flex-wrap: wrap;
   gap: 10px;
   padding: 12px 18px 16px;
+}
+
+/* `ReleaseNotesLink` wearing `.button` — the only surface where it does.
+   It stands beside "Open changelog", which does the neighboring job, and
+   all this rule adds is room for the trailing popout glyph. */
+.settings-about__notes-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .settings-license-viewer {

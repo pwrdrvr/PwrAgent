@@ -7,7 +7,7 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   AppUpdateCheckResult,
   AppUpdateStatus,
@@ -456,5 +456,96 @@ describe("AppUpdateBanner", () => {
         screen.getByText("Restart to update to v1.2.3."),
       ).toBeInTheDocument();
     });
+  });
+});
+
+describe("the release page every card names a version to", () => {
+  // One case per card. The composer and the control have their own tests;
+  // these pin that each REAL surface wires them to the version it prints.
+  const openWindow = vi.fn();
+
+  beforeEach(() => {
+    vi.stubGlobal("open", openWindow);
+  });
+
+  afterEach(() => {
+    openWindow.mockReset();
+    vi.unstubAllGlobals();
+  });
+
+  it("opens the offered version's page from the sticky Restart card", async () => {
+    renderBanner({ status: "downloaded", version: "1.2.3" });
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Release notes" }),
+    );
+
+    expect(openWindow).toHaveBeenCalledWith(
+      "https://github.com/pwrdrvr/PwrAgent/releases/tag/v1.2.3",
+      "_blank",
+      "noopener,noreferrer",
+    );
+  });
+
+  it("opens the downloading version's page from the live card", async () => {
+    const { emit, emitResult } = renderBanner({ status: "idle" });
+
+    act(() => {
+      emitResult({ status: "checking" });
+    });
+    // `checking` names no version, so it is the one card with no link.
+    expect(screen.queryByRole("button", { name: "Release notes" })).toBeNull();
+
+    act(() => {
+      emit({ status: "downloading", version: "1.1.0-beta.1", percent: 40 });
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Release notes" }));
+
+    expect(openWindow).toHaveBeenCalledWith(
+      "https://github.com/pwrdrvr/PwrAgent/releases/tag/v1.1.0-beta.1",
+      "_blank",
+      "noopener,noreferrer",
+    );
+  });
+
+  it("carries the page as a notice action when the check settles on a version", async () => {
+    // The settled outcome leaves the component for the notice stack, which
+    // renders its own buttons — so here the link is an action, not markup.
+    const { emit, emitResult, notices } = renderBanner({ status: "idle" });
+
+    act(() => {
+      emitResult({ status: "checking" });
+    });
+    act(() => {
+      emit({ status: "canceled", version: "1.2.3" });
+    });
+
+    await waitFor(() => {
+      expect(notices).toHaveLength(1);
+    });
+    const action = notices[0]?.actions?.[0];
+    expect(action?.label).toBe("Release notes");
+    action?.onClick();
+    expect(openWindow).toHaveBeenCalledWith(
+      "https://github.com/pwrdrvr/PwrAgent/releases/tag/v1.2.3",
+      "_blank",
+      "noopener,noreferrer",
+    );
+  });
+
+  it("offers no notice action for the outcomes that name no version", async () => {
+    const { emit, emitResult, notices } = renderBanner({ status: "idle" });
+
+    act(() => {
+      emitResult({ status: "checking" });
+    });
+    act(() => {
+      emit({ status: "error", message: "404" });
+    });
+
+    await waitFor(() => {
+      expect(notices).toHaveLength(1);
+    });
+    expect(notices[0]?.actions).toBeUndefined();
   });
 });

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { releaseNotesUrl } from "@pwragent/shared";
 import type {
   DesktopSettingsSnapshot,
   DesktopUpdateChannel,
@@ -27,6 +28,7 @@ import {
   ToggleField,
   useSettingsFieldPending,
 } from "./SettingsLayout";
+import { ReleaseNotesLink } from "../update/ReleaseNotesLink";
 import { ReleaseSlotMatrix } from "./ReleaseSlotMatrix";
 import { sourceBadge } from "./settings-fields";
 
@@ -147,6 +149,22 @@ function updateResultText(result: AppUpdateCheckResult): string {
   return result.direction === "downgrade"
     ? `Switch to v${result.version}. Downloading in the background.`
     : `Update available: v${result.version}. Downloading in the background.`;
+}
+
+/** Whichever version the sentence above just named, or `undefined` for the
+ *  three results that name none. Kept beside `updateResultText` so a result
+ *  that starts naming a version cannot get a sentence without a link. */
+function updateResultVersion(
+  result: AppUpdateCheckResult,
+): string | undefined {
+  if (
+    result.status === "skipped"
+    || result.status === "error"
+    || result.status === "checking"
+  ) {
+    return undefined;
+  }
+  return result.version;
 }
 
 export function GeneralSettings(props: {
@@ -285,6 +303,10 @@ export function GeneralSettings(props: {
   const checkForUpdates = props.desktopApi?.checkForAppUpdates;
   const downloadedVersion =
     updateStatus.status === "downloaded" ? updateStatus.version : undefined;
+  // The version the inline result sentence names, if it names one.
+  const resultVersion = updateResult
+    ? updateResultVersion(updateResult)
+    : undefined;
   // A resolved selection that is older than the running build is a switch back
   // onto the operator's own channel, not an update.
   const downloadedIsSwitchBack =
@@ -534,6 +556,14 @@ export function GeneralSettings(props: {
                   }
                 >
                   {updateResultText(updateResult)}
+                  {/* Scoped to the version that sentence just named, so it
+                      has to stay inline with it rather than float down to
+                      the controls. */}
+                  <ReleaseNotesLink
+                    ariaLabel={`Release notes for v${resultVersion}`}
+                    className="settings-update-channel__notes"
+                    url={releaseNotesUrl(resultVersion)}
+                  />
                 </span>
               ) : undefined
             }
@@ -573,6 +603,15 @@ export function GeneralSettings(props: {
                   <>
                     <span className="settings-update-channel__downloaded">
                       Downloaded version: {downloadedVersion}
+                      {/* Named for the downloaded build specifically: the
+                          status line above can be sitting on the same
+                          version, and two controls with one accessible name
+                          are not a usable list. */}
+                      <ReleaseNotesLink
+                        ariaLabel={`Release notes for the downloaded v${downloadedVersion}`}
+                        className="settings-update-channel__notes"
+                        url={releaseNotesUrl(downloadedVersion)}
+                      />
                     </span>
                     {updateRestartError ? (
                       <span
