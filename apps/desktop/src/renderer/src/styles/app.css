@@ -28901,9 +28901,9 @@ button.pricing-token-miser__folded:focus-visible {
 }
 
 /* The single full-size local-raster viewer (`ImageLightbox`) — used for pasted
-   Composer attachments, Composer PDF page previews, and sent transcript
-   images. Click anywhere off the image, the close cookie, or Escape to
-   dismiss. Transcript galleries add edge controls and a position indicator.
+   Composer attachments, Composer PDF page previews, sent transcript images,
+   and expanded Mermaid diagrams. Click anywhere off the image, the close
+   cookie, or Escape to dismiss.
 
    Three boxes, and keeping them apart is the whole layout:
 
@@ -28915,19 +28915,33 @@ button.pricing-token-miser__folded:focus-visible {
    - The image is the only pan handle. Every other pixel of the dialog is
      scrim, and scrim dismisses on click.
 
-   This replaced a single fixed 1100px × (100dvh - 180px) box that was all
-   three at once: it clipped a zoomed image at an edge nothing drew, it
-   swallowed the dismiss click across 66% of a 1440×900 window, and it left
-   its own letterbox — 34% of that window for a portrait image — reading as
-   scrim while acting as a pan handle.
+   THE TOP-LEFT AND TOP-RIGHT CORNERS BELONG TO THE OS, NOT TO THIS DIALOG.
+   The lightbox is portaled to <body> and covers the whole renderer, including
+   the strip the window controls are drawn in — and those are drawn OVER the
+   web contents, so nothing here can move them:
 
-   The bands are declared as custom properties rather than written into the
-   viewport's insets so the arithmetic stays in one place: the gallery variant
-   widens one number to clear the edge controls, and the narrow breakpoint
-   shrinks the same number. */
+   - macOS floats the stoplights inside the renderer at `hiddenInset`'s
+     `MACOS_TRAFFIC_LIGHT_POSITION` (x 16, y 13, 60px wide). The top-LEFT is
+     theirs. That is why this dialog puts nothing there at all — the position
+     indicator and the caption ride the bottom cluster with the toolbar, which
+     is safe on every platform, in fullscreen, and maximized.
+   - win32 and linux paint a `titleBarOverlay` strip of `--win-titlebar-h` and
+     the OS draws its caption buttons at the top-RIGHT of it. The close cookie
+     is the one thing up there, so it drops below that strip by
+     `--lightbox-os-chrome-h`.
+
+   The bands are custom properties rather than numbers written into the
+   viewport's insets, so the arithmetic lives in one place: the gallery variant
+   widens the side band to clear its edge controls, the captioned variant grows
+   the bottom band to hold the meta plate, and the narrow breakpoint shrinks
+   the side band back. */
 .image-lightbox {
-  --lightbox-band-top: 56px;
-  --lightbox-band-bottom: 80px;
+  /* Zero everywhere the OS does not draw window controls over the renderer's
+     top-right corner. */
+  --lightbox-os-chrome-h: 0px;
+  --lightbox-band-top: calc(var(--lightbox-os-chrome-h) + 56px);
+  /* 20px of floor + the 42px control pill + air. */
+  --lightbox-band-bottom: 76px;
   --lightbox-band-side: 24px;
   position: fixed;
   inset: 0;
@@ -28945,10 +28959,21 @@ button.pricing-token-miser__folded:focus-visible {
   -webkit-app-region: no-drag;
 }
 
+/* The two platforms that paint their own title strip. `MACOS_TRAFFIC_LIGHT_POSITION`
+   handles the third, by this dialog leaving the top-left corner empty. */
+:root:is([data-platform="win32"], [data-platform="linux"]) .image-lightbox {
+  --lightbox-os-chrome-h: var(--win-titlebar-h);
+}
+
 /* An edge control stands in the side band, so a gallery's band has to be wide
    enough to hold one without overlapping the fitted image. */
 .image-lightbox[data-gallery="true"] {
   --lightbox-band-side: 80px;
+}
+
+/* The meta plate sits above the pill, so the floor has to hold both. */
+.image-lightbox[data-meta="true"] {
+  --lightbox-band-bottom: 112px;
 }
 
 .image-lightbox__viewport {
@@ -28989,78 +29014,20 @@ button.pricing-token-miser__folded:focus-visible {
   cursor: grabbing;
 }
 
-/* The top band is scrim: it takes no pointer events of its own, so a click on
-   the empty stretch between the caption and the close cookie reaches the
-   dialog and dismisses, exactly like the scrim beside it. */
-.image-lightbox__band {
-  position: absolute;
-  top: 0;
-  right: 0;
-  left: 0;
-  z-index: 1;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  height: var(--lightbox-band-top);
-  padding: 0 16px;
-  pointer-events: none;
-}
-
-.image-lightbox__band > * {
-  pointer-events: auto;
-}
-
-/* Caption and position ride on a plate rather than bare on the scrim: a
-   zoomed image reaches under this band, and unbacked text over arbitrary
-   image content has no contrast floor. */
-.image-lightbox__meta {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-  margin: 0;
-  padding: 5px 12px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--bg-panel-elevated) 88%, transparent);
-  color: var(--text-secondary);
-  font-size: 12px;
-}
-
-.image-lightbox__position {
-  flex: none;
-  /* `--text-muted` measures 4.46:1 here in light theme — the plate is ~#eee
-     once the scrim is composited under it — so these two readouts take the
-     next step up rather than sitting just under the 4.5:1 floor. */
-  color: var(--text-secondary);
-  font-family: var(--font-mono);
-  font-size: 11px;
-  font-variant-numeric: tabular-nums;
-}
-
-.image-lightbox__position b {
-  color: var(--text-primary);
-  font-weight: 700;
-}
-
-.image-lightbox__caption {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 /* Close affordance: an accent "cookie" — the same treatment as the
    scroll-to-bottom CTA — so it reads as an unmistakable high-contrast control
-   instead of blending into the scrim. */
+   instead of blending into the scrim. Parked below whatever strip the OS draws
+   its caption buttons in; see the block comment above. */
 .image-lightbox__close {
-  flex: none;
+  position: absolute;
+  top: calc(var(--lightbox-os-chrome-h) + 8px);
+  right: 16px;
+  z-index: 1;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   width: 40px;
   height: 40px;
-  margin-left: auto;
   padding: 0;
   border: 1px solid var(--accent-border);
   border-radius: 50%;
@@ -29081,24 +29048,84 @@ button.pricing-token-miser__folded:focus-visible {
   outline-offset: 2px;
 }
 
-/* Zoom, fit, and copy, as one floating pill in the bottom band. They were
-   four full-width text buttons stacked above the image, in a wrapping row
-   left-aligned to a box the operator could not see — the loudest thing in a
-   viewer whose whole job is to show one image. */
-.image-lightbox__toolbar {
+/* The bottom cluster: caption and position on a plate, the control pill under
+   it. It spans the window so both centre on the same axis, and takes no
+   pointer events of its own — a click in the empty stretch beside them reaches
+   the dialog and dismisses, exactly like the scrim above it. */
+.image-lightbox__chrome {
   position: absolute;
-  bottom: 20px;
-  left: 50%;
+  right: 0;
+  bottom: 0;
+  left: 0;
   z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  height: var(--lightbox-band-bottom);
+  padding-bottom: 20px;
+  pointer-events: none;
+}
+
+.image-lightbox__chrome > * {
+  pointer-events: auto;
+}
+
+/* Caption and position ride a plate rather than bare on the scrim: a zoomed
+   image reaches under this band, and unbacked text over arbitrary image
+   content has no contrast floor. */
+.image-lightbox__meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: calc(100% - 32px);
+  margin: 0;
+  padding: 5px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg-panel-elevated) 88%, transparent);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.image-lightbox__position {
+  flex: none;
+  /* `--text-muted` measures 4.46:1 here in light theme — the plate is ~#eee
+     once the scrim is composited under it — so these readouts take the next
+     step up rather than sitting just under the 4.5:1 floor. */
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.image-lightbox__position b {
+  color: var(--text-primary);
+  font-weight: 700;
+}
+
+.image-lightbox__caption {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Zoom, fit, and copy, as one floating pill. They were four full-width text
+   buttons stacked above the image, in a wrapping row left-aligned to a box the
+   operator could not see — the loudest thing in a viewer whose whole job is to
+   show one image. */
+.image-lightbox__toolbar {
   display: flex;
   align-items: center;
   gap: 2px;
+  max-width: calc(100% - 32px);
   padding: 4px;
   border: 1px solid var(--border-strong);
   border-radius: 999px;
   background: color-mix(in srgb, var(--bg-panel-elevated) 92%, transparent);
   box-shadow: 0 6px 18px color-mix(in srgb, var(--shadow-base) 34%, transparent);
-  transform: translateX(-50%);
   -webkit-app-region: no-drag;
 }
 
@@ -29106,17 +29133,27 @@ button.pricing-token-miser__folded:focus-visible {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
+  gap: 6px;
   height: 32px;
+  min-width: 32px;
   padding: 0;
   border: 1px solid transparent;
-  border-radius: 50%;
+  border-radius: 999px;
   background: transparent;
   color: var(--text-secondary);
+  font-size: 12px;
   cursor: pointer;
 }
 
-.image-lightbox__tool:hover:not(:disabled) {
+/* A copy control earns a word: two copy glyphs side by side in the Mermaid
+   viewer are indistinguishable, and the tooltip only speaks on hover. The
+   accessible name stays the full "Copy image" / "Copy source", which keeps the
+   visible word inside it (WCAG 2.5.3). */
+.image-lightbox__tool--labelled {
+  padding: 0 12px 0 10px;
+}
+
+.image-lightbox__tool:hover:not(:disabled):not([aria-disabled="true"]) {
   border-color: var(--accent-border);
   background: var(--bg-panel-hover);
   color: var(--accent);
@@ -29127,7 +29164,13 @@ button.pricing-token-miser__folded:focus-visible {
   outline-offset: 2px;
 }
 
-.image-lightbox__tool:disabled {
+/* `aria-disabled`, not `disabled`, for the zoom and fit controls: a disabled
+   button fires no pointer events, so it could not raise the tooltip that says
+   what it does — which is exactly what an operator hovers a greyed-out glyph
+   to find out. The click handlers no-op instead. `:disabled` stays for the
+   copy button's sub-second pending state, which needs no explaining. */
+.image-lightbox__tool:disabled,
+.image-lightbox__tool[aria-disabled="true"] {
   opacity: 0.32;
   cursor: default;
 }
@@ -29145,8 +29188,7 @@ button.pricing-token-miser__folded:focus-visible {
 }
 
 /* The readout is the discoverability the text labels used to carry: it names
-   the state the two magnifiers change, and it says "Fit" when the fit button
-   has nothing left to do. */
+   the state the two magnifiers change, and the zoom buttons have no words. */
 .image-lightbox__zoom {
   min-width: 46px;
   padding: 0 2px;
@@ -29159,7 +29201,12 @@ button.pricing-token-miser__folded:focus-visible {
 
 .image-lightbox__nav {
   position: absolute;
-  top: 50%;
+  /* Centred on the VIEWPORT, not the dialog: the bands are different heights,
+     so `top: 50%` would sit below the middle of the picture it pages. */
+  top: calc(
+    var(--lightbox-band-top)
+    + (100% - var(--lightbox-band-top) - var(--lightbox-band-bottom)) / 2
+  );
   z-index: 1;
   display: inline-flex;
   align-items: center;
@@ -29177,7 +29224,7 @@ button.pricing-token-miser__folded:focus-visible {
   -webkit-app-region: no-drag;
 }
 
-/* Centered in the 80px side band: (80 - 44) / 2. */
+/* Centred in the 80px side band: (80 - 44) / 2. */
 .image-lightbox__nav--previous {
   left: 18px;
 }
@@ -35226,6 +35273,19 @@ details.launchpad-pending__output > summary .launchpad-pending__command-label {
   color: var(--text-secondary);
   cursor: pointer;
 }
+
+/* The Mermaid strip's copy controls carry a glyph beside their word, the same
+   pair the lightbox pill shows. Baseline, not centre: font substitution is
+   per-character, so a centred glyph beside a substituted label drifts on the
+   platforms that substitute (see the Ubuntu-only regression this rule's twin
+   in the pill avoids by using a flex row of two boxes instead of inline text). */
+.image-viewer__button--labelled {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.image-viewer__button--labelled[data-status="copied"] { color: var(--success-text); }
 
 .image-viewer__button:hover:not(:disabled),
 .mermaid-diagram__toggle:hover { background: var(--bg-panel-hover); }

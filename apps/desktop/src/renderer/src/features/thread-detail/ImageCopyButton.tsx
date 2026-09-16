@@ -1,36 +1,52 @@
 import { useEffect, useRef, useState } from "react";
 import { CheckIcon, CopyIcon } from "../../icons";
 import { copyImage } from "../../lib/copy-image";
+import { useViewportTooltip } from "../../lib/useViewportTooltip";
 
-export function ImageCopyButton({ src, appearance }: { src: string; appearance?: ClipboardActionAppearance }) {
-  return <ClipboardActionButton key={src} label="Copy image" appearance={appearance} copy={() => copyImage(src)} />;
+/**
+ * `chip` for the Mermaid strip's bordered row; `pill` for the lightbox's
+ * floating control pill. Both draw a glyph beside a one-word label — two copy
+ * glyphs alone, which is what the Mermaid viewer shows, are indistinguishable.
+ */
+export type ClipboardActionAppearance = "chip" | "pill";
+
+export function ImageCopyButton({ src, appearance }: { src: string; appearance: ClipboardActionAppearance }) {
+  return <ClipboardActionButton key={src} label="Copy image" text="image"
+    appearance={appearance} copy={() => copyImage(src)} />;
 }
 
-/** `text` for a labelled toolbar row (the Mermaid strip); `icon` for the
- *  lightbox's control pill, where the label becomes the accessible name and
- *  the tooltip instead of visible ink. */
-export type ClipboardActionAppearance = "text" | "icon";
-
-export function ClipboardActionButton({ label, copy, appearance = "text" }: {
+export function ClipboardActionButton({ label, text, copy, appearance }: {
+  /** The accessible name and the tooltip. Contains `text`, so the visible word
+   *  is inside the name the control answers to (WCAG 2.5.3). */
   label: string;
+  /** The visible word beside the glyph. */
+  text: string;
   copy: () => Promise<void>;
-  appearance?: ClipboardActionAppearance;
+  appearance: ClipboardActionAppearance;
 }) {
   const [status, setStatus] = useState<"idle" | "pending" | "copied" | "failed">("idle");
   const timer = useRef<number | undefined>(undefined);
   const mounted = useRef(true);
-  const icon = appearance === "icon";
+  // The lightbox is `overflow: hidden`, so a CSS pseudo-element tooltip would
+  // be clipped by it; this one portals out and clears the OS chrome itself.
+  const tooltip = useViewportTooltip({ className: "viewport-tooltip" });
   useEffect(() => {
     mounted.current = true;
     return () => { mounted.current = false; window.clearTimeout(timer.current); };
   }, []);
   return <>
     {/* The label stays the accessible name through every state: it is how the
-        control is found by name, and "Copied" would move it out from under
-        anyone searching for it. */}
-    <button type="button" className={icon ? "image-lightbox__tool" : "image-viewer__button"}
-      data-status={status} aria-label={icon ? label : undefined} title={icon ? label : undefined}
+        control is found by name, so the glyph carries the outcome and the word
+        holds still. */}
+    <button type="button" aria-label={label} data-status={status}
+      className={appearance === "pill"
+        ? "image-lightbox__tool image-lightbox__tool--labelled"
+        : "image-viewer__button image-viewer__button--labelled"}
       disabled={status === "pending"}
+      onMouseEnter={(event) => tooltip.show(event.currentTarget, label)}
+      onMouseLeave={tooltip.hide}
+      onFocus={(event) => tooltip.show(event.currentTarget, label)}
+      onBlur={tooltip.hide}
       onClick={(event) => {
         event.stopPropagation();
         window.clearTimeout(timer.current);
@@ -41,12 +57,14 @@ export function ClipboardActionButton({ label, copy, appearance = "text" }: {
           timer.current = window.setTimeout(() => setStatus("idle"), 1400);
         }).catch(() => { if (mounted.current) setStatus("failed"); });
       }}>
-      {icon
-        ? status === "copied" ? <CheckIcon size={16} aria-hidden="true" /> : <CopyIcon size={16} aria-hidden="true" />
-        : status === "copied" ? "Copied" : label}
+      {status === "copied"
+        ? <CheckIcon size={appearance === "pill" ? 16 : 14} aria-hidden="true" />
+        : <CopyIcon size={appearance === "pill" ? 16 : 14} aria-hidden="true" />}
+      <span>{text}</span>
     </button>
     <span className="image-viewer__status" role={status === "failed" ? "alert" : "status"}>
       {status === "failed" ? `${label} failed. Try again or use the context menu.` : status === "copied" ? `${label} succeeded` : ""}
     </span>
+    {tooltip.tooltipNode}
   </>;
 }

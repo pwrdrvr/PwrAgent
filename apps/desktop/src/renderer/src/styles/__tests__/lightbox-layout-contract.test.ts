@@ -84,12 +84,47 @@ describe("image lightbox layout contract", () => {
     expect(pixels(region.narrow, ".image-lightbox__nav--next", "right")).toBe((narrowBand - narrowNav) / 2);
   });
 
-  it("keeps the bottom band taller than the control pill that floats in it", () => {
+  it("keeps the bottom band taller than the cluster that floats in it", () => {
     const bottom = pixels(region.base, ".image-lightbox", "--lightbox-band-bottom");
-    const offset = pixels(region.base, ".image-lightbox__toolbar", "bottom");
+    const floor = pixels(region.base, ".image-lightbox__chrome", "padding-bottom");
     const tool = pixels(region.base, ".image-lightbox__tool", "height");
     const padding = pixels(region.base, ".image-lightbox__toolbar", "padding");
-    expect(offset + tool + padding * 2).toBeLessThan(bottom);
+    expect(floor + tool + padding * 2).toBeLessThan(bottom);
+    // The captioned variant carries the meta plate above the pill, so its
+    // floor has to be taller than the pill-only one.
+    expect(pixels(region.base, '.image-lightbox[data-meta="true"]', "--lightbox-band-bottom"))
+      .toBeGreaterThan(bottom);
+  });
+
+  it("leaves both top corners to the operating system", () => {
+    // This dialog covers the whole renderer, and the window controls are drawn
+    // OVER the web contents, so nothing here can move them out of the way.
+    //
+    // Top-left is macOS's: `hiddenInset` floats the stoplights inside the
+    // renderer. The rule is the absence of anything there — the position
+    // indicator and the caption ride the bottom cluster — so what is checked
+    // is that the top band holds exactly one thing, the close cookie, and that
+    // it is anchored to the right.
+    expect(region.base).not.toContain(".image-lightbox__band");
+    expect(declaration(region.base, ".image-lightbox__meta", "margin")).toBe("0");
+    expect(region.base.indexOf(".image-lightbox__meta"))
+      .toBeGreaterThan(region.base.indexOf(".image-lightbox__chrome"));
+    expect(declaration(region.base, ".image-lightbox__close", "right")).toBe("16px");
+
+    // Top-right is win32's and linux's: a `titleBarOverlay` strip whose caption
+    // buttons the close cookie has to clear.
+    expect(declaration(region.base, ".image-lightbox__close", "top"))
+      .toBe("calc(var(--lightbox-os-chrome-h) + 8px)");
+    expect(declaration(region.base, ".image-lightbox", "--lightbox-band-top"))
+      .toBe("calc(var(--lightbox-os-chrome-h) + 56px)");
+    expect(declaration(region.base, ".image-lightbox", "--lightbox-os-chrome-h")).toBe("0px");
+    expect(
+      declaration(
+        region.base,
+        ':root:is([data-platform="win32"], [data-platform="linux"]) .image-lightbox',
+        "--lightbox-os-chrome-h",
+      ),
+    ).toBe("var(--win-titlebar-h)");
   });
 
   it("puts the pan cursor on the image and the dismiss cursor everywhere else", () => {
@@ -102,10 +137,10 @@ describe("image lightbox layout contract", () => {
     expect(region.base).not.toMatch(/\.image-lightbox__viewport\s*\{[^}]*cursor:/);
   });
 
-  it("lets a click pass through the top band's empty stretch", () => {
-    // The band spans the full window width to place the caption and the close
-    // cookie at opposite ends. Everything between them is scrim.
-    expect(declaration(region.base, ".image-lightbox__band", "pointer-events")).toBe("none");
-    expect(declaration(region.base, ".image-lightbox__band > *", "pointer-events")).toBe("auto");
+  it("lets a click pass through the bottom cluster's empty stretch", () => {
+    // The cluster spans the full window width so the meta plate and the pill
+    // centre on one axis. Everything beside them is scrim.
+    expect(declaration(region.base, ".image-lightbox__chrome", "pointer-events")).toBe("none");
+    expect(declaration(region.base, ".image-lightbox__chrome > *", "pointer-events")).toBe("auto");
   });
 });

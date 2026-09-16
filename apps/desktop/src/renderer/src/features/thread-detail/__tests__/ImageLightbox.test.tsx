@@ -111,6 +111,38 @@ describe("ImageLightbox", () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
+  it("explains every glyph-only control on hover, including a greyed-out one", () => {
+    render(
+      <ImageLightbox src="https://example.test/cat.png" alt="A cat" position={1} total={2}
+        onClose={() => {}} onNext={() => {}} />,
+    );
+
+    // A native `title` is not enough here: `.image-lightbox` is
+    // `overflow: hidden`, which clips a CSS pseudo-element tooltip, and every
+    // control in the pill is an unlabelled glyph.
+    for (const [name, hint] of [
+      ["Zoom out", "Zoom out"],
+      ["Zoom in", "Zoom in"],
+      ["Fit to window", "Fit the whole image in the window"],
+      ["Copy image", "Copy image"],
+      ["Close", "Close (Esc)"],
+      ["Next image", "Next image (Right Arrow)"],
+    ] as const) {
+      const control = screen.getByRole("button", { name });
+      fireEvent.mouseEnter(control);
+      expect(document.body.querySelector(".viewport-tooltip"), name).toHaveTextContent(hint);
+      fireEvent.mouseLeave(control);
+      expect(document.body.querySelector(".viewport-tooltip")).toBeNull();
+    }
+
+    // Nothing in the pill is `disabled`, because a disabled button fires no
+    // pointer events and so could never raise the tooltip an operator hovers a
+    // greyed-out glyph to read.
+    const fit = screen.getByRole("button", { name: "Fit to window" });
+    expect(fit).toHaveAttribute("aria-disabled", "true");
+    expect(fit).toBeEnabled();
+  });
+
   it("closes on Escape", () => {
     const onClose = vi.fn();
     render(

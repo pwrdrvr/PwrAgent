@@ -444,6 +444,12 @@ describe("Tangerine Terminal theme contract", () => {
       "lightbox-band-top",
       "lightbox-band-bottom",
       "lightbox-band-side",
+      // How much of the top edge the OS is drawing its own window controls
+      // over. `0px` on macOS, where `hiddenInset` floats the stoplights inside
+      // the renderer's own top-left; the `titleBarOverlay` strip's height on
+      // win32 and linux, whose caption buttons the close control has to clear.
+      // Platform geometry, not theme.
+      "lightbox-os-chrome-h",
     ]);
     const tokenReferences = [...css.matchAll(/var\(--([a-z0-9-]+)\)/g)].map(
       ([, token]) => token

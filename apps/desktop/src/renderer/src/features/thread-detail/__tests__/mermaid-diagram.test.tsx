@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MermaidDiagram } from "../MermaidDiagram";
 import { ThreadMarkdown } from "../ThreadMarkdown";
@@ -91,9 +91,11 @@ describe("Mermaid transcript rendering", () => {
     fireEvent.keyDown(screen.getByRole("button", { name: "Expand Mermaid diagram" }), { key: "Enter" });
     expect(screen.getByRole("dialog", { name: "Expanded Mermaid diagram" })).toBeInTheDocument();
     fireEvent.wheel(screen.getByLabelText("Image pan and zoom"), { ctrlKey: true, deltaY: 10000 });
-    expect(screen.getByRole("button", { name: "Zoom out" })).toBeDisabled();
+    // `aria-disabled`, not `disabled`: the control has to stay hoverable so it
+    // can still raise the tooltip that says what it does.
+    expect(screen.getByRole("button", { name: "Zoom out" })).toHaveAttribute("aria-disabled", "true");
     fireEvent.click(screen.getByRole("button", { name: "Fit to window" }));
-    expect(screen.getByRole("button", { name: "Zoom out" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Zoom out" })).toHaveAttribute("aria-disabled", "false");
     fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
     expect(screen.getByRole("button", { name: "Fit to window" })).toBeInTheDocument();
     fireEvent.keyDown(window, { key: "Escape" });
@@ -117,10 +119,15 @@ describe("Mermaid clipboard actions", () => {
     expect(write.mock.calls[0][0][0].data["image/png"]).toBe(png);
     expect(screen.getByText("Copy image succeeded")).toHaveAttribute("role", "status");
     fireEvent.click(screen.getByRole("button", { name: "Expand Mermaid diagram" }));
+    // The expanded viewer carries BOTH of the card's copy actions, and each is
+    // a glyph beside one word — two bare copy glyphs would be indistinguishable.
+    const dialog = screen.getByRole("dialog", { name: "Expanded Mermaid diagram" });
+    expect(within(dialog).getByRole("button", { name: "Copy image" })).toHaveTextContent(/^image$/);
+    expect(within(dialog).getByRole("button", { name: "Copy source" })).toHaveTextContent(/^source$/);
     write.mockRejectedValueOnce(new Error("denied"));
-    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Copy image" })));
-    expect(screen.getByRole("alert")).toHaveTextContent("Copy image failed");
-    expect(screen.getByRole("button", { name: "Copy image" })).toBeInTheDocument();
+    await act(async () => fireEvent.click(within(dialog).getByRole("button", { name: "Copy image" })));
+    expect(within(dialog).getByRole("alert")).toHaveTextContent("Copy image failed");
+    expect(within(dialog).getByRole("button", { name: "Copy image" })).toBeInTheDocument();
     expect(write.mock.calls[1][0][0].data["image/png"]).toBe(png);
     delete (navigator as { clipboard?: unknown }).clipboard;
   });
@@ -129,9 +136,15 @@ describe("Mermaid clipboard actions", () => {
     let finish = () => {};
     const api = { copyText: vi.fn(() => new Promise<void>((resolve) => { finish = resolve; })) };
     render(<MermaidDiagram source="flowchart LR\nA --> B" desktopApi={api} />);
-    fireEvent.click(screen.getByRole("button", { name: "Copy source" }));
-    expect(screen.queryByRole("button", { name: "Copied" })).not.toBeInTheDocument();
+    const button = screen.getByRole("button", { name: "Copy source" });
+    fireEvent.click(button);
+    expect(button).toHaveAttribute("data-status", "pending");
+    expect(screen.queryByText("Copy source succeeded")).not.toBeInTheDocument();
     await act(async () => finish());
-    expect(screen.getByRole("button", { name: "Copied" })).toBeInTheDocument();
+    // The accessible name never changes — it is how the control is found by
+    // name — so success is the status line and the glyph, not a relabel.
+    expect(button).toHaveAttribute("data-status", "copied");
+    expect(screen.getByText("Copy source succeeded")).toHaveAttribute("role", "status");
+    expect(screen.getByRole("button", { name: "Copy source" })).toBe(button);
   });
 });
