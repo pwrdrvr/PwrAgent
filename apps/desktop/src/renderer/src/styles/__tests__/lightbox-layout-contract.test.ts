@@ -4,7 +4,17 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const testDir = path.dirname(fileURLToPath(import.meta.url));
-const css = readFileSync(path.resolve(testDir, "../app.css"), "utf8");
+/**
+ * Comments come out before anything is matched, because every assertion here is
+ * a claim about a declaration and the regexes that read one anchor on `;` or a
+ * newline — which a commented-out `cursor: zoom-out;` satisfies exactly as well
+ * as a live rule. Measured against this stylesheet: with a two-line comment
+ * naming the old value above the new one, `declaration` returned `zoom-out`
+ * while the browser saw `default`. The dangerous direction is the mirror image
+ * — prose naming the wanted value above a rule that sets the wrong one — and it
+ * passes. Stripping first is what makes this file read what Chromium reads.
+ */
+const css = readFileSync(path.resolve(testDir, "../app.css"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
 
 /**
  * `ImageLightbox` is three boxes that used to be one, and nothing else in the
@@ -31,9 +41,10 @@ const region = (() => {
   return { base: css.slice(start, narrow), narrow: css.slice(narrow, end) };
 })();
 
+const escapeSelector = (selector: string) => selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
 function declaration(source: string, selector: string, property: string): string {
-  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const block = source.match(new RegExp(`(?:^|\\n)\\s*${escaped}\\s*\\{(?<body>[^}]*)\\}`));
+  const block = source.match(new RegExp(`(?:^|\\n)\\s*${escapeSelector(selector)}\\s*\\{(?<body>[^}]*)\\}`));
   expect(block?.groups?.body, `${selector} is missing from app.css`).toBeDefined();
   const found = block!.groups!.body.match(new RegExp(`(?:^|;|\\n)\\s*${property}\\s*:\\s*(?<value>[^;\\n]+)`));
   expect(found?.groups?.value, `${selector} declares no ${property}`).toBeDefined();
@@ -127,14 +138,46 @@ describe("image lightbox layout contract", () => {
     ).toBe("var(--win-titlebar-h)");
   });
 
-  it("puts the pan cursor on the image and the dismiss cursor everywhere else", () => {
-    // The affordance and the behavior have to agree: the surface that says
-    // "grab" is the only surface that pans, and the rest says "zoom-out"
-    // because the rest dismisses.
-    expect(declaration(region.base, ".image-lightbox", "cursor")).toBe("zoom-out");
+  it("puts grab on the image and a plain arrow on the surfaces that dismiss", () => {
+    // The affordance and the behavior have to agree. The image says "grab" and
+    // is the only surface that pans; the dialog and the letterbox around the
+    // image are scrim, and a click on either closes. `zoom-out` in particular
+    // is the wrong thing to say there — it predicts the picture shrinking,
+    // which is what the pill's minus-magnifier button does and what dismissing
+    // never does. The viewport declares nothing and inherits the arrow.
+    expect(declaration(region.base, ".image-lightbox", "cursor")).toBe("default");
     expect(declaration(region.base, ".image-lightbox__image", "cursor")).toBe("grab");
     expect(declaration(region.base, '.image-lightbox__image[data-panning="true"]', "cursor")).toBe("grabbing");
     expect(region.base).not.toMatch(/\.image-lightbox__viewport\s*\{[^}]*cursor:/);
+  });
+
+  it("keeps zoom-in on the thumbnails, which really do expand", () => {
+    // The other half of the pair, and the reason the scrim is allowed to say
+    // nothing: clicking one of these opens the dialog above. They sit in three
+    // unrelated regions of a 35,000-line stylesheet, and since the scrim
+    // stopped saying `zoom-out` they are the only `zoom` cursors left in the
+    // repository — so nothing but this connects them to the decision they
+    // justify, which `app.css` states in prose beside the rule above.
+    for (const thumbnail of [
+      ".transcript-activity__image-button",
+      ".composer__attachment-open",
+      ".mermaid-diagram__viewport img",
+    ]) {
+      expect(css, `${thumbnail} no longer opens with zoom-in`).toMatch(
+        new RegExp(`(?:^|\\n)\\s*${escapeSelector(thumbnail)}\\s*\\{[^}]*cursor:\\s*zoom-in`),
+      );
+    }
+  });
+
+  it("leaves the dialog's chrome unselectable, the way the app shell does", () => {
+    // `ImageLightbox` portals to `<body>`, so it is not inside `.app-shell` and
+    // inherits none of its rules — including the one that keeps chrome from
+    // being selected. Without this, a press-and-drag on the bottom cluster (the
+    // gesture the dismiss handler already expects, and forgives within 4px)
+    // paints a text selection across the position readout and the caption, and
+    // the arrow asserted above sits over text that turns out to be selectable.
+    expect(declaration(region.base, ".image-lightbox", "user-select")).toBe("none");
+    expect(declaration(region.base, ".image-lightbox", "-webkit-user-select")).toBe("none");
   });
 
   it("lets a click pass through the bottom cluster's empty stretch", () => {
