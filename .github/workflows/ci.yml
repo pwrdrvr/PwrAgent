@@ -325,6 +325,11 @@ jobs:
 
       - name: Test
         timeout-minutes: 20
+        # Keep a common MSYS parent alive while parallel workers launch Git
+        # and Bash. Independent starts from PowerShell can race MSYS shared
+        # mount initialization (fatal add_item, errno 1).
+        # https://github.com/git-for-windows/git/issues/1135#issuecomment-4757184373
+        shell: bash
         # The deploy-isolation test launches pnpm's JS entry directly to avoid
         # Windows .cmd handoffs. pnpm run supplies npm_execpath; exec does not.
         run: pnpm test --project desktop-main
