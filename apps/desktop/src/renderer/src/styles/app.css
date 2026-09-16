@@ -24825,6 +24825,28 @@ a.transcript-message__messaging-origin:focus-visible {
   padding: 0 9px;
 }
 
+/* The surface picker's trigger stands in for `.automation-field select` here,
+   so it takes that control's chrome instead of the Settings field it was
+   first built for. Only the background and type differ between the two; the
+   chevron, border and radius come from `.settings-select` unchanged. */
+.automation-field--picker .messaging-surface-picker__trigger {
+  min-height: 32px;
+  height: auto;
+  padding: 0 30px 0 9px;
+  background-color: var(--bg-app);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* Same reading-column cap as the Settings field: the Automations card runs
+   the full window width, and a row whose name and ID sit at opposite ends is
+   a long saccade for a list being scanned. Capping the field keeps the label,
+   the control and the panel on one measure. */
+.automation-field--picker {
+  max-width: 560px;
+}
+
 .automation-field textarea {
   padding: 9px;
   resize: vertical;
@@ -35417,11 +35439,15 @@ details.launchpad-pending__output > summary .launchpad-pending__command-label {
 }
 
 /* `.project-picker__row-name` caps at 160px, which is right inside a ~420px
-   composer popover and far too tight here: this panel is as wide as the
-   Settings form, so a name like "Slack / harvest-release" would truncate with
-   most of the row empty beside it. Let the name take what it needs and keep
-   the ID column's claim on the rest. */
-.messaging-surface-picker__list .project-picker__row-name {
+   composer popover and far too tight here: this panel is as wide as the field,
+   so a name like "Slack / harvest-release" would truncate with most of the row
+   empty beside it. Let the name take what it needs and keep the ID column's
+   claim on the rest.
+
+   Scoped to the whole picker, not just the list, so the action row is covered
+   too — "Enter Channel ID manually..." is longer than 160px and was being cut
+   off mid-word. */
+.messaging-surface-picker .project-picker__row-name {
   flex: 0 1 auto;
   min-width: 0;
   max-width: 60%;

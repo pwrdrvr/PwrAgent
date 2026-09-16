@@ -1,9 +1,15 @@
 import { useEffect, useId, useRef, useState } from "react";
 import type { MessagingConversationKind } from "@pwragent/shared";
-import { SearchIcon } from "../../icons";
+import { SearchIcon } from "../icons";
 
 /**
- * Durable-destination picker for a messaging default route.
+ * Searchable picker for a messaging conversation.
+ *
+ * Shared by the Messaging Routes settings (which offers durable destinations
+ * drawn from observed surfaces) and the Automations editor (which offers the
+ * channels and groups an operator has authorized). The two feed it different
+ * lists and name things differently, so every word it shows is a prop with a
+ * routes-shaped default.
  *
  * This is the composer's project / branch picker in a Settings form, and it
  * deliberately borrows that popover's primitives rather than restating them:
@@ -44,13 +50,24 @@ type SurfaceOption = {
   kind?: MessagingConversationKind;
 };
 
-const SECTIONS: { key: SurfaceSection; label: string }[] = [
-  { key: "configured", label: "Current configuration" },
-  { key: "channel", label: "Channels & groups" },
-  { key: "dm", label: "Direct messages" },
-  { key: "topic", label: "Telegram topics" },
-  { key: "other", label: "Recently seen" },
+const SECTION_ORDER: SurfaceSection[] = [
+  "configured",
+  "channel",
+  "dm",
+  "topic",
+  "other",
 ];
+
+const SECTION_LABELS: Record<SurfaceSection, string> = {
+  configured: "Current configuration",
+  channel: "Channels & groups",
+  dm: "Direct messages",
+  topic: "Telegram topics",
+  // Every option lands here when the caller does not group by kind, so the
+  // caller names it: "Recently seen" is true of observed surfaces and false
+  // of an authorized-channel list.
+  other: "Recently seen",
+};
 
 /**
  * Kind glyph for the leading icon column, like the composer's folder and
@@ -81,10 +98,30 @@ function sectionFor(option: SurfaceOption, grouped: boolean): SurfaceSection {
 export function MessagingSurfacePicker(props: {
   value: string;
   options: SurfaceOption[];
+  /** Group by conversation kind and drop the kinds a default route cannot target. */
   filterConversations: boolean;
   allowTopics?: boolean;
+  /**
+   * The field's name, e.g. "Surface" or "Destination channel". An
+   * `aria-label` replaces the button's visible text, so the name has to carry
+   * both halves — without it, three pickers on one Automations form all
+   * announce identically and a screen-reader user cannot tell them apart.
+   */
+  fieldLabel: string;
+  /** Trigger text before anything is chosen. */
+  placeholder?: string;
+  /** Search-row placeholder. */
+  searchPlaceholder?: string;
+  /** Action-row text, and the label the trigger shows once it is chosen. */
+  manualLabel?: string;
+  /** Heading for the ungrouped bucket, used when `filterConversations` is off. */
+  otherSectionLabel?: string;
+  /** Message shown when the search matches nothing. */
+  emptyLabel?: string;
   onChange: (value: string) => void;
 }) {
+  const placeholder = props.placeholder ?? "Choose a recently seen surface...";
+  const manualLabel = props.manualLabel ?? "Enter an ID manually...";
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
@@ -93,14 +130,17 @@ export function MessagingSurfacePicker(props: {
   const restoreFocus = useRef(false);
   const listId = useId();
   const selected = props.options.find((option) => option.value === props.value);
-  // Any non-empty value is a choice the trigger has to report, not just one
-  // that still matches an option. Manual entry never matches, and an observed
-  // surface can drop out of the list while the editor is open — in both cases
-  // the form still holds that surface, so showing the unset placeholder would
-  // deny a selection Save is about to write.
-  const triggerChoice = props.value !== "";
+  // Only an empty value is "nothing chosen". Manual entry never matches an
+  // option, and a listed option can disappear while the editor is open (the
+  // routes provider reloads observed surfaces on every bindings change) — in
+  // both cases the form still holds that destination, so falling through to
+  // the placeholder would deny a selection Save is about to write. The
+  // dropped-out case has no label left to show, so it says so rather than
+  // showing an encoded value or claiming the field is unset.
   const triggerLabel = selected?.label
-    ?? (props.value === "manual" ? "Enter an ID manually..." : "Choose a recently seen surface...");
+    ?? (props.value === "" ? placeholder
+      : props.value === "manual" ? manualLabel
+      : "Selected (no longer listed)");
 
   const trimmed = query.trim().toLowerCase();
   const visible = props.options.filter((option) => {
@@ -128,9 +168,12 @@ export function MessagingSurfacePicker(props: {
     index,
     section: sectionFor(option, props.filterConversations),
   }));
-  const groups = SECTIONS.map((section) => ({
-    ...section,
-    rows: indexed.filter((row) => row.section === section.key),
+  const groups = SECTION_ORDER.map((key) => ({
+    key,
+    label: key === "other"
+      ? props.otherSectionLabel ?? SECTION_LABELS.other
+      : SECTION_LABELS[key],
+    rows: indexed.filter((row) => row.section === key),
   })).filter((section) => section.rows.length > 0);
 
   const close = () => {
@@ -181,10 +224,11 @@ export function MessagingSurfacePicker(props: {
     >
       {open ? null : (
         <button ref={trigger} type="button" className="settings-select messaging-surface-picker__trigger"
-          // An `aria-label` overrides the visible text, so it has to carry the
-          // current choice in every state the button can show — including
-          // manual entry, which matches no option and so has no `selected`.
-          aria-label={triggerChoice ? `Surface: ${triggerLabel}` : "Choose a messaging surface"}
+          // An `aria-label` overrides the visible text, so it has to carry both
+          // the field's name and whatever the button currently shows — the
+          // placeholder included, since that text is the button's only content
+          // before a choice is made.
+          aria-label={`${props.fieldLabel}: ${triggerLabel}`}
           aria-haspopup="dialog" aria-expanded={false}
           onClick={() => {
             setQuery("");
@@ -196,7 +240,7 @@ export function MessagingSurfacePicker(props: {
         </button>
       )}
       {open ? (
-        <div className="messaging-surface-picker__panel" role="dialog" aria-label="Choose a messaging surface">
+        <div className="messaging-surface-picker__panel" role="dialog" aria-label={props.fieldLabel}>
           <div className="project-picker__search">
             <span aria-hidden="true" className="project-picker__search-icon">
               <SearchIcon size={13} />
@@ -206,8 +250,8 @@ export function MessagingSurfacePicker(props: {
               type="text"
               className="project-picker__search-input"
               role="combobox"
-              aria-label="Find a messaging surface"
-              placeholder="Find a channel, DM, or ID"
+              aria-label={`Find a ${props.fieldLabel.toLowerCase()}`}
+              placeholder={props.searchPlaceholder ?? "Find a channel, DM, or ID"}
               aria-expanded="true"
               aria-controls={listId}
               aria-autocomplete="list"
@@ -261,7 +305,9 @@ export function MessagingSurfacePicker(props: {
               screen-reader user cannot tell no-match from an unresponsive
               control. */}
           {visible.length === 0 ? (
-            <p role="status" className="project-picker__empty">No matching surfaces.</p>
+            <p role="status" className="project-picker__empty">
+              {props.emptyLabel ?? "No matching surfaces."}
+            </p>
           ) : null}
           <div className="project-picker__separator" />
           <button type="button" className="project-picker__row project-picker__row--action"
@@ -269,7 +315,7 @@ export function MessagingSurfacePicker(props: {
           >
             <span aria-hidden="true" className="project-picker__row-check" />
             <span aria-hidden="true" className="project-picker__plus">+</span>
-            <span className="project-picker__row-name">Enter an ID manually...</span>
+            <span className="project-picker__row-name">{manualLabel}</span>
           </button>
         </div>
       ) : null}

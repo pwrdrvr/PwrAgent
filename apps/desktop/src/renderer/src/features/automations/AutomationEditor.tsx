@@ -36,6 +36,7 @@ import {
   validateAutomationScheduleDefinition,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { MessagingSurfacePicker } from "../../components/MessagingSurfacePicker";
 import {
   CODEX_AGENT_THREAD_CREATION_NOTE,
   canChangeExistingThreadAgentDesignation,
@@ -1362,32 +1363,25 @@ export function AutomationEditor(props: AutomationEditorProps) {
                       </select>
                     </label>
                     {telegramGroups.length > 0 ? (
-                      <label className="automation-field">
+                      <div className="automation-field automation-field--picker">
                         <span>{conversationPickerLabel(inboundProvider)}</span>
-                        <select
-                          value={groupSelection}
-                          onChange={(event) => {
-                            const value = event.currentTarget.value;
+                        <MessagingSurfacePicker
+                          key={`inbound:${inboundProvider}`}
+                          fieldLabel={conversationPickerLabel(inboundProvider)}
+                          filterConversations={false}
+                          options={conversationOptions(telegramGroups)}
+                          value={pickerValue(groupSelection)}
+                          {...conversationPickerLabels(inboundProvider)}
+                          onChange={(picked) => {
+                            const value = selectionValue(picked);
                             setGroupSelection(value);
                             setInboundGroupId(value === MANUAL_GROUP_VALUE ? "" : value);
                             setTopicSelection("");
                             setInboundTopicId("");
                             setValidationError(undefined);
                           }}
-                        >
-                          <option value="">
-                            Choose a {conversationPickerLabel(inboundProvider).toLowerCase()}
-                          </option>
-                          {telegramGroups.map((group) => (
-                            <option key={group.id} value={group.id}>
-                              {group.title}
-                            </option>
-                          ))}
-                          <option value={MANUAL_GROUP_VALUE}>
-                            Enter {conversationLabel(inboundProvider)} manually...
-                          </option>
-                        </select>
-                      </label>
+                        />
+                      </div>
                     ) : null}
                   </div>
 
@@ -1504,30 +1498,28 @@ export function AutomationEditor(props: AutomationEditorProps) {
                       {telegramScope === "topic" ? (
                         <div className="automation-field-group">
                           {topicOptions.length > 0 ? (
-                            <label className="automation-field">
+                            <div className="automation-field automation-field--picker">
                               <span>Topic</span>
-                              <select
-                                value={topicSelection}
-                                onChange={(event) => {
-                                  const value = event.currentTarget.value;
+                              <MessagingSurfacePicker
+                                fieldLabel="Topic"
+                                filterConversations={false}
+                                options={conversationOptions(topicOptions)}
+                                value={pickerValue(topicSelection)}
+                                placeholder="Choose a topic"
+                                searchPlaceholder="Find a topic or ID"
+                                manualLabel="Enter topic ID manually..."
+                                otherSectionLabel="Topics"
+                                emptyLabel="No matching topics."
+                                onChange={(picked) => {
+                                  const value = selectionValue(picked);
                                   setTopicSelection(value);
                                   setInboundTopicId(
                                     value === MANUAL_GROUP_VALUE ? "" : value,
                                   );
                                   setValidationError(undefined);
                                 }}
-                              >
-                                <option value="">Choose a topic</option>
-                                {topicOptions.map((topic) => (
-                                  <option key={topic.id} value={topic.id}>
-                                    {topic.title}
-                                  </option>
-                                ))}
-                                <option value={MANUAL_GROUP_VALUE}>
-                                  Enter topic ID manually...
-                                </option>
-                              </select>
-                            </label>
+                              />
+                            </div>
                           ) : null}
                           {topicOptions.length === 0 ||
                           topicSelection === MANUAL_GROUP_VALUE ? (
@@ -2448,34 +2440,26 @@ export function AutomationEditor(props: AutomationEditorProps) {
                               </select>
                             </label>
                             {destGroups.length > 0 ? (
-                              <label className="automation-field">
+                              <div className="automation-field automation-field--picker">
                                 <span>
                                   Destination{" "}
                                   {conversationPickerLabel(destProvider).toLowerCase()}
                                 </span>
-                                <select
-                                  value={destGroupSelection}
-                                  onChange={(event) => {
-                                    const value = event.currentTarget.value;
+                                <MessagingSurfacePicker
+                                  key={`dest:${destProvider}`}
+                                  fieldLabel={`Destination ${conversationPickerLabel(destProvider).toLowerCase()}`}
+                                  filterConversations={false}
+                                  options={conversationOptions(destGroups)}
+                                  value={pickerValue(destGroupSelection)}
+                                  {...conversationPickerLabels(destProvider)}
+                                  onChange={(picked) => {
+                                    const value = selectionValue(picked);
                                     setDestGroupSelection(value);
                                     setDestGroupId(value === MANUAL_GROUP_VALUE ? "" : value);
                                     setValidationError(undefined);
                                   }}
-                                >
-                                  <option value="">
-                                    Choose a{" "}
-                                    {conversationPickerLabel(destProvider).toLowerCase()}
-                                  </option>
-                                  {destGroups.map((group) => (
-                                    <option key={group.id} value={group.id}>
-                                      {group.title}
-                                    </option>
-                                  ))}
-                                  <option value={MANUAL_GROUP_VALUE}>
-                                    Enter {conversationLabel(destProvider)} manually...
-                                  </option>
-                                </select>
-                              </label>
+                                />
+                              </div>
                             ) : null}
                           </div>
                           {destGroups.length === 0 ||
@@ -2956,6 +2940,57 @@ function buildTriggerConfig(params: {
         name: formatAutomationInboundConditionGroup(conditionGroup),
       },
     ],
+  };
+}
+
+/**
+ * The picker reports its manual row as "manual"; this editor's selection
+ * state uses a sentinel chosen not to collide with a real conversation ID.
+ * Translate at the boundary rather than widening either one.
+ */
+function pickerValue(selection: string): string {
+  return selection === MANUAL_GROUP_VALUE ? "manual" : selection;
+}
+
+function selectionValue(picked: string): string {
+  return picked === "manual" ? MANUAL_GROUP_VALUE : picked;
+}
+
+/**
+ * Authorized groups, channels and topics all arrive as `{id, title}`. The ID
+ * rides in the picker's mono column so two similarly titled destinations stay
+ * distinguishable — except when the title IS the ID, where repeating it would
+ * be noise.
+ */
+function conversationOptions(
+  entries: ReadonlyArray<{ id: string; title: string }>,
+): Array<{ value: string; label: string; detail?: string }> {
+  return entries.map((entry) => ({
+    value: entry.id,
+    label: entry.title,
+    detail: entry.title === entry.id ? undefined : entry.id,
+  }));
+}
+
+/**
+ * Every word the picker shows, in this provider's vocabulary. The list is the
+ * operator's authorized conversations, not everything the bot has seen, so the
+ * heading says so — a short list is then explained rather than suspicious.
+ */
+function conversationPickerLabels(provider: MessagingChannelKind): {
+  placeholder: string;
+  searchPlaceholder: string;
+  manualLabel: string;
+  otherSectionLabel: string;
+  emptyLabel: string;
+} {
+  const noun = conversationPickerLabel(provider).toLowerCase();
+  return {
+    placeholder: `Choose a ${noun}`,
+    searchPlaceholder: `Find a ${noun} or ID`,
+    manualLabel: `Enter ${conversationLabel(provider)} manually...`,
+    otherSectionLabel: `Authorized ${noun}s`,
+    emptyLabel: `No matching ${noun}s.`,
   };
 }
 

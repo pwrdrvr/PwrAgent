@@ -13,12 +13,15 @@ const options = [
   { value: "topic", label: "Garden topic", kind: "topic" as const, detail: "T_GARDEN", seen: "Sep 13" },
 ];
 
-const CLOSED_LABEL = "Choose a messaging surface";
+// The accessible name is always "<field>: <whatever the button shows>", so
+// one regex finds the trigger in every state and the unset case is explicit.
+const CLOSED_LABEL = "Surface: Choose a recently seen surface...";
+const ANY_TRIGGER = /^Surface: /;
 
 function setup(value = "", allowTopics = false) {
   const onChange = vi.fn();
-  render(<MessagingSurfacePicker value={value} options={options} filterConversations allowTopics={allowTopics} onChange={onChange} />);
-  fireEvent.click(screen.getByRole("button", { name: value ? /^Surface: / : CLOSED_LABEL }));
+  render(<MessagingSurfacePicker fieldLabel="Surface" value={value} options={options} filterConversations allowTopics={allowTopics} onChange={onChange} />);
+  fireEvent.click(screen.getByRole("button", { name: ANY_TRIGGER }));
   return onChange;
 }
 
@@ -121,6 +124,7 @@ describe("MessagingSurfacePicker", () => {
     const onChange = vi.fn();
     render(
       <MessagingSurfacePicker
+        fieldLabel="Surface"
         value="thread"
         filterConversations
         onChange={onChange}
@@ -147,18 +151,22 @@ describe("MessagingSurfacePicker", () => {
     // field must not answer "nothing chosen" for a surface Save would write.
     render(
       <MessagingSurfacePicker
+        fieldLabel="Surface"
         value="channel-a"
         options={options.filter((option) => option.value !== "channel-a")}
         filterConversations
         onChange={vi.fn()}
       />,
     );
+    // No label survives for it, but the field must not answer "nothing chosen".
     expect(screen.queryByRole("button", { name: CLOSED_LABEL })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /^Surface: / })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Surface: Selected (no longer listed)" }),
+    ).toBeInTheDocument();
   });
 
   it("names manual entry on the closed trigger", () => {
-    render(<MessagingSurfacePicker value="manual" options={options} filterConversations onChange={vi.fn()} />);
+    render(<MessagingSurfacePicker fieldLabel="Surface" value="manual" options={options} filterConversations onChange={vi.fn()} />);
     expect(
       screen.getByRole("button", { name: "Surface: Enter an ID manually..." }),
     ).toBeInTheDocument();
@@ -177,6 +185,7 @@ describe("MessagingSurfacePicker", () => {
   it("drops the kind glyph for container scopes, which are not channels", () => {
     render(
       <MessagingSurfacePicker
+        fieldLabel="Surface"
         value=""
         filterConversations={false}
         onChange={vi.fn()}

@@ -18,10 +18,10 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-/** The trigger is replaced by the panel while open, and names the chosen
- *  destination once there is one, so neither label alone finds it. */
+/** The trigger's accessible name is always "Surface: <whatever it shows>",
+ *  so one regex finds it whether or not a destination is chosen. */
 function surfaceTrigger(): HTMLElement {
-  return screen.getByRole("button", { name: /^(Choose a messaging surface|Surface: )/ });
+  return screen.getByRole("button", { name: /^Surface: / });
 }
 
 function openSurfacePicker() {
@@ -642,7 +642,7 @@ describe("MessagingRoutesSettings", () => {
     expect(within(configuredGroup).getByRole("option").textContent).toContain(
       "C200",
     );
-    fireEvent.keyDown(screen.getByLabelText("Find a messaging surface"), { key: "Escape" });
+    fireEvent.keyDown(screen.getByLabelText("Find a surface"), { key: "Escape" });
     expect(screen.queryByLabelText("Conversation ID")).not.toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Default Agent"), {
       target: { value: JSON.stringify(["codex", "agent-1"]) },
@@ -762,7 +762,7 @@ describe("MessagingRoutesSettings", () => {
     });
     openSurfacePicker();
     expect(screen.getByText("No matching surfaces.")).toBeInTheDocument();
-    fireEvent.keyDown(screen.getByLabelText("Find a messaging surface"), { key: "Escape" });
+    fireEvent.keyDown(screen.getByLabelText("Find a surface"), { key: "Escape" });
 
     fireEvent.change(screen.getByLabelText("Default scope"), {
       target: { value: "conversation" },
