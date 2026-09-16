@@ -251,7 +251,11 @@ export function SettingsSectionStack(props: {
     updateCollapsedSections((current) =>
       current[target.id] === true ? { ...current, [target.id]: false } : current,
     );
-    target.element.scrollIntoView({ block: "start", behavior: "smooth" });
+    // Optional call: jsdom implements no `scrollIntoView`, and expanding and
+    // focusing the section is the part that has to happen. Throwing here
+    // would abort both, which is what it did once the Messaging nav became
+    // the first live caller of this path.
+    target.element.scrollIntoView?.({ block: "start", behavior: "smooth" });
     target.element.focus({ preventScroll: true });
   }, [props.focusSectionId, props.paneId, registeredSections, rememberSectionVisit]);
 

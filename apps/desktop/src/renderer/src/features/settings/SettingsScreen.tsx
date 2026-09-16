@@ -431,16 +431,23 @@ export function SettingsScreen(props: {
       );
     }
     if (target === "messaging") {
-      return MESSAGING_SETTINGS_PLATFORMS.map((platform) => ({
-        key: platform,
-        label: formatMessagingPlatformName(platform),
-        sub: platform,
-        dot: snapshot
-          ? snapshot.messaging[platform].enabled.value
-            ? "ok"
-            : "off"
-          : undefined,
-      }));
+      return [
+        // Routes is cross-platform and sits above the platform index on the
+        // hub, so it leads the list in the same order the pane reads. Its
+        // `sub` names no platform, which is what keeps the hub rendered
+        // while `focusSectionId` scrolls to the section.
+        { key: "routes", label: "Routes", sub: "routes" },
+        ...MESSAGING_SETTINGS_PLATFORMS.map((platform): SettingsNavChild => ({
+          key: platform,
+          label: formatMessagingPlatformName(platform),
+          sub: platform,
+          dot: snapshot
+            ? snapshot.messaging[platform].enabled.value
+              ? "ok"
+              : "off"
+            : undefined,
+        })),
+      ];
     }
     return [];
   };
@@ -941,6 +948,7 @@ function SettingsSectionBody(props: {
       <MessagingSettings
         desktopApi={props.desktopApi}
         focus={messagingPlatformFromSub(props.sub)}
+        focusSectionId={props.sub}
         onFocusChange={(focus) => props.onOpenRoute("messaging", focus)}
         onOpenThread={props.onOpenThread}
         saving={props.settings.saving}

@@ -10398,6 +10398,17 @@ a.button {
   line-height: 1.35;
 }
 
+/* A reading column, not a form column. The Settings card runs the full width
+   of the window, and a list stretched across it puts the name at one end and
+   the ID at the other — a long, wasteful saccade per row for a list the
+   operator is scanning. The cap sits on the field rather than the picker so
+   the label, the control and the empty-surface hint all agree on one width,
+   and so the control does not change width when it opens. */
+.messaging-route-editor__surface {
+  max-width: 560px;
+}
+
+.messaging-route-editor__surface,
 .messaging-route-editor label {
   display: flex;
   min-width: 0;
@@ -29674,6 +29685,7 @@ button.pricing-token-miser__folded:focus-visible {
    badges/timestamp, reference tabs) in the `.project-picker__*`
    / `.branch-picker__*` / `.reference-picker__*` blocks.
    ============================================================ */
+.messaging-surface-picker__panel,
 .project-picker__pop,
 .branch-picker__menu,
 .reference-picker__pop {
@@ -29770,6 +29782,10 @@ button.pricing-token-miser__folded:focus-visible {
 
 .project-picker__row:hover:not(:disabled),
 .project-picker__row:focus-visible:not(:disabled),
+/* The surface picker keeps DOM focus on its search input and tracks the
+   keyboard cursor with `aria-activedescendant`, so :focus-visible never
+   reaches the row — `.is-cursor` carries the same fill instead. */
+.messaging-surface-picker__list .project-picker__row.is-cursor,
 .branch-picker__option:hover,
 .branch-picker__option:focus-visible,
 .branch-picker__option.is-active,
@@ -35348,4 +35364,80 @@ details.launchpad-pending__output > summary .launchpad-pending__command-label {
   overflow: hidden;
   clip-path: inset(50%);
   white-space: nowrap;
+}
+
+/* ---- Messaging surface picker specifics ----
+   The rows, search header, eyebrow, separator and action row all come from
+   the shared picker primitives above. Only the anchor and the two extra row
+   slots are genuinely per-picker. */
+
+.messaging-surface-picker__trigger {
+  width: 100%;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Anchored in flow rather than over the page: `.settings-panel` sets
+   `overflow: hidden` and `.settings-content` scrolls, so an absolutely
+   positioned panel would be clipped by the card it opens inside. Because it
+   does not float, it drops `--shadow-popover` and instead wears the focus
+   treatment of the `.settings-select` it replaces, so an open picker still
+   reads as this form's focused field. */
+.messaging-surface-picker__panel {
+  position: static;
+  border-color: var(--accent-border);
+  box-shadow: 0 0 0 1px var(--accent-shadow);
+  /* The panel is a child of the `Surface` field, whose label type is 11px /
+     650 / `--text-secondary`. Reset it here so rows that legitimately say
+     `font: inherit` (and slots that set no weight of their own, like
+     `__row-path`) get list typography rather than the label's. */
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 400;
+}
+
+.messaging-surface-picker__list {
+  max-height: 320px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* Kind mark (#, @, topic caret) in the leading glyph column. Sized to sit on
+   the same baseline as the composer pickers' 13px icons. */
+.messaging-surface-picker__glyph {
+  display: inline-flex;
+  flex: 0 0 13px;
+  width: 13px;
+  justify-content: center;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+/* `.project-picker__row-name` caps at 160px, which is right inside a ~420px
+   composer popover and far too tight here: this panel is as wide as the
+   Settings form, so a name like "Slack / harvest-release" would truncate with
+   most of the row empty beside it. Let the name take what it needs and keep
+   the ID column's claim on the rest. */
+.messaging-surface-picker__list .project-picker__row-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 60%;
+}
+
+/* Trailing recency, matching `.branch-picker__option-time`. */
+.messaging-surface-picker__seen {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.messaging-surface-picker__list .project-picker__row.is-cursor .messaging-surface-picker__glyph,
+.messaging-surface-picker__list .project-picker__row.is-cursor .messaging-surface-picker__seen,
+.messaging-surface-picker__list .project-picker__row:hover .messaging-surface-picker__glyph,
+.messaging-surface-picker__list .project-picker__row:hover .messaging-surface-picker__seen {
+  color: var(--accent-bright);
 }

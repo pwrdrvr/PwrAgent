@@ -28,6 +28,7 @@ import {
   formatMessagingPlatformName,
 } from "../../lib/messaging-platform-branding";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { MessagingSurfacePicker } from "./MessagingSurfacePicker";
 import { SettingsSection } from "./SettingsLayout";
 import { RESPONSE_MODE_OPTIONS, responseModeTitle } from "./settings-fields";
 
@@ -261,6 +262,7 @@ export function MessagingRoutesSettings(props: {
     <SettingsSection
       eyebrow="Messaging"
       title="Routes"
+      sectionId="routes"
       description="Manage persistent defaults and active messaging bindings from one place."
       chip={`${routeCount} active`}
       chipKind={routeCount > 0 ? "ok" : "muted"}
@@ -753,14 +755,30 @@ function DefaultAgentEditor(props: {
           {form.scopeKind === "conversation"
             || form.scopeKind === "parent"
             || form.scopeKind === "workspace" ? (
-            <label className="messaging-route-editor__surface">
+            <div className="messaging-route-editor__surface">
               <span>Surface</span>
-              <select
-                aria-label="Messaging surface"
-                className="settings-select"
+              <MessagingSurfacePicker
+                key={`${form.scopeKind}:${form.platform}`}
                 value={surfaceSelection}
-                onChange={(event) => {
-                  const value = event.target.value;
+                filterConversations={form.scopeKind === "conversation"}
+                allowTopics={form.platform === "telegram"}
+                options={[
+                  ...(hasConfiguredSurface ? [{
+                    value: "configured",
+                    label: configuredSurfaceLabel(form),
+                    kind: form.conversationKind,
+                    detail: surfaceFormDetail(form),
+                    section: "configured" as const,
+                  }] : []),
+                  ...surfaceCandidates.map((surface) => ({
+                    value: surface.value,
+                    label: surface.label,
+                    kind: surface.form.conversationKind,
+                    detail: observedSurfaceDetail(surface),
+                    seen: formatSeenDate(surface.lastSeenAt),
+                  })),
+                ]}
+                onChange={(value) => {
                   setSurfaceSelection(value);
                   if (value === "manual") {
                     setManualEntry(true);
@@ -768,35 +786,18 @@ function DefaultAgentEditor(props: {
                     return;
                   }
                   setManualEntry(false);
-                  if (!value) {
-                    setForm((current) => resetSurfaceForm(current));
-                    return;
-                  }
                   const candidate = surfaceCandidates.find(
                     (surface) => surface.value === value,
                   );
                   if (candidate) setForm(candidate.form);
                 }}
-              >
-                <option value="">Choose a recently seen surface...</option>
-                {hasConfiguredSurface ? (
-                  <option value="configured">
-                    {configuredSurfaceLabel(form)} - approved configuration
-                  </option>
-                ) : null}
-                {surfaceCandidates.map((surface) => (
-                  <option key={surface.value} value={surface.value}>
-                    {surface.label} - seen {formatTimestamp(surface.lastSeenAt)}
-                  </option>
-                ))}
-                <option value="manual">Enter an ID manually...</option>
-              </select>
+              />
               {surfaceCandidates.length === 0 && !hasConfiguredSurface ? (
                 <small>
                   {emptySurfaceMessage(form.scopeKind)}
                 </small>
               ) : null}
-            </label>
+            </div>
           ) : null}
           {manualEntry && form.scopeKind === "workspace" ? (
             <RouteTextInput
@@ -829,8 +830,7 @@ function DefaultAgentEditor(props: {
                     }))}
                 >
                   <option value="channel">Channel</option>
-                  <option value="thread">Thread</option>
-                  <option value="topic">Topic</option>
+                  {form.platform === "telegram" ? <option value="topic">Telegram topic</option> : null}
                   <option value="dm">Direct message</option>
                 </select>
               </label>
@@ -983,6 +983,10 @@ function observedSurfaceCandidates(
     let candidateForm: NewDefaultForm | undefined;
     let label: string | undefined;
     if (form.scopeKind === "conversation") {
+      // Default routes target durable destinations. Ephemeral reply threads
+      // belong to bindings; Telegram's named forum topics remain selectable.
+      if (conversation.kind === "thread") continue;
+      if (conversation.kind === "topic" && surface.platform !== "telegram") continue;
       candidateForm = {
         ...EMPTY_FORM,
         scopeKind: "conversation",
@@ -1045,6 +1049,45 @@ function observedSurfaceCandidates(
   return [...candidates.values()].sort((left, right) =>
     right.lastSeenAt - left.lastSeenAt
     || left.label.localeCompare(right.label));
+}
+
+/**
+ * The durable identifier for one surface, shown right-aligned in the picker's
+ * mono column. Kind is carried by the row's section heading and recency by
+ * `formatSeenDate`, so neither is repeated here — what is left is the one fact
+ * that tells two similarly named destinations apart.
+ *
+ * Taken from the form rather than the candidate so the route's own saved
+ * destination gets the same column. It is the row the operator most needs to
+ * identify, and it was the only one rendering without an ID.
+ */
+function surfaceFormDetail(form: NewDefaultForm): string {
+  const id = form.conversationId || form.parentConversationId || form.workspaceId;
+  return form.identityParentId ? `${id} / ${form.identityParentId}` : id;
+}
+
+function observedSurfaceDetail(surface: ObservedSurfaceCandidate): string {
+  return surfaceFormDetail(surface.form);
+}
+
+/**
+ * Compact last-seen stamp for the picker's trailing column. Deliberately
+ * date-only: the full `formatTimestamp` string is too wide to sit beside an
+ * ID, and staleness is what the operator is reading it for.
+ *
+ * The year appears only when it is not the current one. Dropping it outright
+ * would render a surface last seen thirteen months ago as "Sep 16" — exactly
+ * like one seen two days ago — which inverts the signal this column exists to
+ * give.
+ */
+function formatSeenDate(value: number): string {
+  const seen = new Date(value);
+  const sameYear = seen.getFullYear() === new Date().getFullYear();
+  return seen.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    ...(sameYear ? {} : { year: "numeric" }),
+  });
 }
 
 function surfaceSelectionForForm(
