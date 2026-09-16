@@ -119,9 +119,13 @@ const DEFAULT_INBOUND_PROVIDERS: MessagingChannelKind[] = ["slack", "telegram"];
 
 const MANUAL_GROUP_VALUE = "__manual__";
 
-type ProviderGroups = Partial<
-  Record<MessagingChannelKind, Array<{ id: string; title: string }>>
->;
+type ProviderConversation = {
+  id: string;
+  title: string;
+  kind: MessagingConversationKind;
+};
+
+type ProviderGroups = Partial<Record<MessagingChannelKind, ProviderConversation[]>>;
 
 const ACCESS_MODE_OPTIONS: Array<{ label: string; value: ThreadExecutionMode }> = [
   { label: "Default", value: "default" },
@@ -1368,7 +1372,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
                         <MessagingSurfacePicker
                           key={`inbound:${inboundProvider}`}
                           fieldLabel={conversationPickerLabel(inboundProvider)}
-                          filterConversations={false}
+                          filterConversations
                           options={conversationOptions(telegramGroups)}
                           value={pickerValue(groupSelection)}
                           {...conversationPickerLabels(inboundProvider)}
@@ -1508,7 +1512,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
                                 placeholder="Choose a topic"
                                 searchPlaceholder="Find a topic or ID"
                                 manualLabel="Enter topic ID manually..."
-                                otherSectionLabel="Topics"
+                                sectionLabels={{ other: "Topics" }}
                                 emptyLabel="No matching topics."
                                 onChange={(picked) => {
                                   const value = selectionValue(picked);
@@ -2448,7 +2452,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
                                 <MessagingSurfacePicker
                                   key={`dest:${destProvider}`}
                                   fieldLabel={`Destination ${conversationPickerLabel(destProvider).toLowerCase()}`}
-                                  filterConversations={false}
+                                  filterConversations
                                   options={conversationOptions(destGroups)}
                                   value={pickerValue(destGroupSelection)}
                                   {...conversationPickerLabels(destProvider)}
@@ -2963,12 +2967,18 @@ function selectionValue(picked: string): string {
  * be noise.
  */
 function conversationOptions(
-  entries: ReadonlyArray<{ id: string; title: string }>,
-): Array<{ value: string; label: string; detail?: string }> {
+  entries: ReadonlyArray<{ id: string; title: string; kind?: MessagingConversationKind }>,
+): Array<{
+  value: string;
+  label: string;
+  detail?: string;
+  kind?: MessagingConversationKind;
+}> {
   return entries.map((entry) => ({
     value: entry.id,
     label: entry.title,
     detail: entry.title === entry.id ? undefined : entry.id,
+    ...(entry.kind ? { kind: entry.kind } : {}),
   }));
 }
 
@@ -2981,16 +2991,22 @@ function conversationPickerLabels(provider: MessagingChannelKind): {
   placeholder: string;
   searchPlaceholder: string;
   manualLabel: string;
-  otherSectionLabel: string;
+  sectionLabels: { channel: string; dm: string };
   emptyLabel: string;
 } {
   const noun = conversationPickerLabel(provider).toLowerCase();
   return {
-    placeholder: `Choose a ${noun}`,
-    searchPlaceholder: `Find a ${noun} or ID`,
+    placeholder: `Choose a ${noun} or DM`,
+    searchPlaceholder: `Find a ${noun}, DM, or ID`,
     manualLabel: `Enter ${conversationLabel(provider)} manually...`,
-    otherSectionLabel: `Authorized ${noun}s`,
-    emptyLabel: `No matching ${noun}s.`,
+    // Both headings say "authorized": this list is what the operator has let
+    // the bot talk to, not everything it has seen, and a short list is then
+    // explained rather than suspicious.
+    sectionLabels: {
+      channel: `Authorized ${noun}s`,
+      dm: "Authorized direct messages",
+    },
+    emptyLabel: "No matching conversations.",
   };
 }
 
@@ -3108,18 +3124,76 @@ function readEnabledProviders(
   return providers;
 }
 
+/**
+ * The conversations an automation may watch or reply to, per provider.
+ *
+ * Every provider names its conversation list differently, and each also keeps
+ * an `authorizedUserIds` list — the people the bot will talk to one-to-one.
+ * Those are DMs, and leaving them out meant an automation could never watch or
+ * answer a direct message. The container lists (`authorizedGuilds`,
+ * `authorizedWorkspaces`, `authorizedTeams`, `authorizedTenants`) are servers
+ * and workspaces rather than conversations, so nothing here reads them.
+ */
 function readProviderGroups(
   snapshot: DesktopMessagingSettingsProjection,
 ): ProviderGroups {
-  const toGroup = (contact: { id: string; displayName?: string }) => ({
-    id: contact.id,
-    title: contact.displayName ? `${contact.displayName}` : contact.id,
-  });
-  const telegram = snapshot.messaging.telegram.authorizedSupergroups.value.map(toGroup);
-  const slack = snapshot.messaging.slack.authorizedChannels.value.map(toGroup);
+  const messaging = snapshot.messaging;
+  const toConversation =
+    (kind: MessagingConversationKind) =>
+    (contact: { id: string; displayName?: string }): ProviderConversation => ({
+      id: contact.id,
+      title: contact.displayName ? `${contact.displayName}` : contact.id,
+      kind,
+    });
+  /**
+   * Every list here is read defensively. A provider block or an authorized
+   * list the snapshot does not carry contributes nothing; without this, one
+   * absent key throws and the caller's catch swallows it, leaving every
+   * picker empty and every provider looking unconfigured.
+   */
+  const read = (
+    list: { value?: Array<{ id: string; displayName?: string }> } | undefined,
+    kind: MessagingConversationKind,
+  ): ProviderConversation[] => (list?.value ?? []).map(toConversation(kind));
+
+  // Partial by design: `MessagingChannelKind` covers more providers than have
+  // a Settings screen, and one without an authorized list simply has no
+  // conversations to offer.
+  const byProvider: ProviderGroups = {
+    telegram: [
+      ...read(messaging.telegram?.authorizedSupergroups, "channel"),
+      ...read(messaging.telegram?.authorizedUserIds, "dm"),
+    ],
+    // Discord's only authorized list is of guilds, which are servers rather
+    // than conversations; its channels are discovered per-guild elsewhere.
+    discord: read(messaging.discord?.authorizedUserIds, "dm"),
+    slack: [
+      ...read(messaging.slack?.authorizedChannels, "channel"),
+      ...read(messaging.slack?.authorizedUserIds, "dm"),
+    ],
+    mattermost: [
+      ...read(messaging.mattermost?.authorizedConversations, "channel"),
+      ...read(messaging.mattermost?.authorizedUserIds, "dm"),
+    ],
+    feishu: [
+      ...read(messaging.feishu?.authorizedChats, "channel"),
+      ...read(messaging.feishu?.authorizedUserIds, "dm"),
+    ],
+    line: [
+      // A LINE "room" is a multi-person chat without a group identity — a
+      // group DM in every way that matters here.
+      ...read(messaging.line?.authorizedGroups, "channel"),
+      ...read(messaging.line?.authorizedRooms, "channel"),
+      ...read(messaging.line?.authorizedUserIds, "dm"),
+    ],
+  };
+
   const groups: ProviderGroups = {};
-  if (telegram.length > 0) groups.telegram = telegram;
-  if (slack.length > 0) groups.slack = slack;
+  for (const [provider, conversations] of Object.entries(byProvider)) {
+    if (conversations && conversations.length > 0) {
+      groups[provider as MessagingChannelKind] = conversations;
+    }
+  }
   return groups;
 }
 

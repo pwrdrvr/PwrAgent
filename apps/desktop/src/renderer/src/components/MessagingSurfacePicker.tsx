@@ -158,8 +158,12 @@ export function MessagingSurfacePicker(props: {
   searchPlaceholder?: string;
   /** Action-row text, and the label the trigger shows once it is chosen. */
   manualLabel?: string;
-  /** Heading for the ungrouped bucket, used when `filterConversations` is off. */
-  otherSectionLabel?: string;
+  /**
+   * Overrides for the section headings. Automations offers only the
+   * conversations an operator has authorized, and the heading is where that
+   * is said — a short list is then explained rather than suspicious.
+   */
+  sectionLabels?: Partial<Record<SurfaceSection, string>>;
   /** Message shown when the search matches nothing. */
   emptyLabel?: string;
   onChange: (value: string) => void;
@@ -215,9 +219,7 @@ export function MessagingSurfacePicker(props: {
   }));
   const groups = SECTION_ORDER.map((key) => ({
     key,
-    label: key === "other"
-      ? props.otherSectionLabel ?? SECTION_LABELS.other
-      : SECTION_LABELS[key],
+    label: props.sectionLabels?.[key] ?? SECTION_LABELS[key],
     rows: indexed.filter((row) => row.section === key),
   })).filter((section) => section.rows.length > 0);
 

@@ -6,6 +6,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -470,6 +471,37 @@ describe("AutomationEditor", () => {
     // listed once the field is opened.
     await openConversationPicker("Group");
     expect(screen.getByRole("option", { name: /Ops Room/ })).toBeInTheDocument();
+  });
+
+  it("offers authorized DMs beside channels, in their own section", async () => {
+    // Every provider keeps an `authorizedUserIds` list; leaving it out meant an
+    // automation could never watch or answer a direct message.
+    render(
+      <AutomationEditor
+        desktopApi={fakeDesktopApi(
+          fakeSettings({
+            enabled: { slack: true },
+            slackChannels: [{ id: "C_ORCHARD", displayName: "orchard-planning" }],
+            slackUsers: [{ id: "D_AVERY", displayName: "Avery Quill" }],
+          }),
+        )}
+        mode={{ kind: "create" }}
+        onCancel={() => undefined}
+        onSubmit={vi.fn(async () => undefined)}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Inbound message" }));
+    await openConversationPicker("Channel");
+    const listbox = screen.getByRole("listbox");
+    expect(
+      within(listbox)
+        .getAllByRole("group")
+        .map((group) => group.getAttribute("aria-label")),
+    ).toEqual(["Authorized channels", "Authorized direct messages"]);
+    expect(
+      within(listbox).getByRole("option", { name: /Avery Quill/ }),
+    ).toBeInTheDocument();
   });
 
   it("includes an MCP allowlist in the execution profile", async () => {
@@ -1527,6 +1559,7 @@ function fakeSettings(params: {
   enabled: Partial<Record<MessagingChannelKind, boolean>>;
   telegramGroups?: Array<{ displayName: string; id: string }>;
   slackChannels?: Array<{ displayName: string; id: string }>;
+  slackUsers?: Array<{ displayName: string; id: string }>;
 }): ReadDesktopMessagingSettingsResponse {
   const provider = (kind: MessagingChannelKind) => ({
     enabled: { value: Boolean(params.enabled[kind]) },
@@ -1541,6 +1574,7 @@ function fakeSettings(params: {
         slack: {
           enabled: { value: Boolean(params.enabled.slack) },
           authorizedChannels: { value: params.slackChannels ?? [] },
+          authorizedUserIds: { value: params.slackUsers ?? [] },
         },
         discord: provider("discord"),
         mattermost: provider("mattermost"),
