@@ -4861,6 +4861,9 @@ describe("app server ipc", () => {
       scope: "remote" as const,
       instanceId: "pwr_owner",
     };
+    federationMock.runtime.connectedPeerTargets.mockReturnValue([
+      { target: federationTarget, label: "Owner", capabilities: ["thread_navigation"] },
+    ]);
     const request = {
       backend: "codex",
       threadId: "thread-remote",
@@ -4893,6 +4896,90 @@ describe("app server ipc", () => {
       ghAvailable: true,
       prs: [],
     });
+  });
+
+  it.each([true, false])("quietly skips disconnected PR refreshes with remembered navigation support=%s and resumes after reconnect", async (supportsNavigation) => {
+    const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
+    const federationTarget = { scope: "remote" as const, instanceId: "pwr_owner" };
+    const request = {
+      threadId: "thread-remote",
+      trigger: "scheduled" as const,
+      provider: "gitlab.com",
+      branch: "fix/remote-pr-refresh",
+      directoryPaths: ["/remote/repo"],
+      federationTarget,
+    };
+    federationMock.runtime.remoteTargetSupportsCapability.mockReturnValue(supportsNavigation);
+    registerAppServerIpcHandlers();
+    const refresh = () => handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)?.(
+      { sender: { id: 999 } }, request,
+    );
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      await expect(refresh()).resolves.toEqual({
+        backend: "codex",
+        threadId: "thread-remote",
+        provider: "gitlab.com",
+        ghAvailable: false,
+        prs: [],
+        refreshStarted: false,
+        skippedReason: "remote_peer_unavailable",
+      });
+    }
+    expect(federationMock.runtime.remoteBackend).not.toHaveBeenCalled();
+    expect(detectPullRequestsForThread).not.toHaveBeenCalled();
+    expect(mockAppServerLog.info).not.toHaveBeenCalled();
+    expect(mockAppServerLog.warn).not.toHaveBeenCalled();
+    expect(mockAppServerLog.error).not.toHaveBeenCalled();
+
+    federationMock.runtime.connectedPeerTargets.mockReturnValue([
+      { target: federationTarget, label: "Owner", capabilities: ["thread_navigation"] },
+    ]);
+    federationMock.runtime.remoteTargetSupportsCapability.mockReturnValue(true);
+    await expect(refresh()).resolves.toMatchObject({ ghAvailable: true });
+    expect(federationMock.remoteBackend.refreshThreadPullRequests).toHaveBeenCalledTimes(1);
+  });
+
+  it("quietly skips PR refresh when a peer disconnects during the request", async () => {
+    const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
+    const { FederationPeerUnavailableError } = await import("../federation/federation-peer-unavailable-error");
+    const federationTarget = { scope: "remote" as const, instanceId: "pwr_owner" };
+    federationMock.runtime.connectedPeerTargets.mockReturnValue([
+      { target: federationTarget, label: "Owner", capabilities: ["thread_navigation"] },
+    ]);
+    federationMock.remoteBackend.refreshThreadPullRequests.mockRejectedValueOnce(
+      new FederationPeerUnavailableError(federationTarget.instanceId),
+    );
+    registerAppServerIpcHandlers();
+
+    await expect(handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)?.(
+      { sender: { id: 999 } },
+      { threadId: "thread-remote", branch: "main", directoryPaths: ["/remote/repo"], federationTarget },
+    )).resolves.toMatchObject({
+      refreshStarted: false,
+      skippedReason: "remote_peer_unavailable",
+    });
+    expect(mockAppServerLog.info).not.toHaveBeenCalled();
+    expect(mockAppServerLog.warn).not.toHaveBeenCalled();
+    expect(mockAppServerLog.error).not.toHaveBeenCalled();
+    expect(detectPullRequestsForThread).not.toHaveBeenCalled();
+  });
+
+  it("keeps unexpected remote PR failures visible to the caller", async () => {
+    const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
+    const federationTarget = { scope: "remote" as const, instanceId: "pwr_owner" };
+    federationMock.runtime.connectedPeerTargets.mockReturnValue([
+      { target: federationTarget, label: "Owner", capabilities: ["thread_navigation"] },
+    ]);
+    const failure = new Error("Owner PR cache is corrupt");
+    federationMock.remoteBackend.refreshThreadPullRequests.mockRejectedValueOnce(failure);
+    registerAppServerIpcHandlers();
+
+    await expect(handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)?.(
+      { sender: { id: 999 } },
+      { threadId: "thread-remote", branch: "main", directoryPaths: ["/remote/repo"], federationTarget },
+    )).rejects.toBe(failure);
+    expect(detectPullRequestsForThread).not.toHaveBeenCalled();
   });
 
   it("skips remote PR refresh when the attached profile lacks navigation support", async () => {

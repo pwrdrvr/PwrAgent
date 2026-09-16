@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import electronLog from "electron-log/main.js";
 import {
   compactStructuredLogData,
+  formatAppLogLine,
   isMainLogDebugCollectionEnabled,
   MAIN_LOG_MAX_SIZE_BYTES,
   resolveMainLogFileNameForProfile,
@@ -53,13 +54,35 @@ describe("main logger compact formatting", () => {
     ]);
   });
 
-  it("keeps non-object arguments as passthrough data", () => {
+  it("formats errors as messages without stacks alongside structured fields", () => {
     const error = new Error("boom");
 
     expect(compactStructuredLogData(["message", { ok: true }, error])).toEqual([
       "message ok=true",
-      error,
+      "Error: boom",
     ]);
+  });
+
+  it("formats standalone and nested errors without stacks", () => {
+    const error = new TypeError("Request failed");
+    error.stack = "TypeError: Request failed\n    at secretInternalFrame";
+    expect(compactStructuredLogData([error])).toEqual(["TypeError: Request failed"]);
+    expect(compactStructuredLogData(["Request failed", { error }])).toEqual([
+      'Request failed error="TypeError: Request failed"',
+    ]);
+    expect(compactStructuredLogData([[error], { nested: { errors: [error] } }])).toEqual([
+      ["TypeError: Request failed"], { nested: { errors: ["TypeError: Request failed"] } },
+    ]);
+    expect(error.stack).toContain("secretInternalFrame");
+  });
+
+  it("formats raw app-log errors without stacks", () => {
+    const error = new Error("Request failed");
+    const line = formatAppLogLine({
+      data: [error], date: new Date("2026-09-16T12:00:00Z"), level: "error",
+    });
+    expect(line).toContain("Error: Request failed");
+    expect(line).not.toContain("\n");
   });
 
   it("uses profile-scoped main log filenames", () => {

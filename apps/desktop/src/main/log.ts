@@ -140,6 +140,13 @@ export function initializeMainLogger(options?: { profileName?: string }): void {
     }
     return compacted;
   });
+  // Electron reports rejected IPC handlers through Node's console, bypassing
+  // our logger. Route those diagnostics through the same message-only formatter.
+  // electron-log captures the original console methods when it is imported,
+  // so its console transport does not recurse through these replacements.
+  const consoleLog = getMainLogger("pwragent:console");
+  console.error = (...data: unknown[]) => consoleLog.error(...data);
+  console.warn = (...data: unknown[]) => consoleLog.warn(...data);
 }
 
 export function getMainLogger(scope: string) {
@@ -192,7 +199,9 @@ export function formatAppLogLine(message: ElectronLogMessage): string {
   const timestamp = formatLogTimestamp(message.date);
   const level = String(message.level).padEnd(5, " ");
   const scope = message.scope ? ` (${message.scope})` : "";
-  const text = message.data.map(formatLogTextPart).join(" ");
+  const text = message.data
+    .map((value) => formatLogTextPart(normalizeLogErrors(value)))
+    .join(" ");
   return `[${timestamp}] [${level}]${scope} ${text}`.trimEnd();
 }
 
@@ -206,9 +215,6 @@ function formatLogTextPart(value: unknown): string {
   if (typeof value === "string") {
     return value;
   }
-  if (value instanceof Error) {
-    return value.stack ?? value.message;
-  }
   if (typeof value === "number" || typeof value === "boolean" || value === null) {
     return String(value);
   }
@@ -219,6 +225,7 @@ function formatLogTextPart(value: unknown): string {
 }
 
 export function compactStructuredLogData(data: unknown[]): unknown[] {
+  data = data.map((value) => normalizeLogErrors(value));
   if (data.length < 2 || typeof data[0] !== "string") {
     return data;
   }
@@ -243,6 +250,27 @@ export function compactStructuredLogData(data: unknown[]): unknown[] {
     : hadStructuredPayload
       ? [data[0], ...passthrough]
     : data;
+}
+
+/** Keep errors useful without forwarding their stacks to any log transport. */
+function normalizeLogErrors(value: unknown, ancestors = new Set<object>()): unknown {
+  if (value instanceof Error) {
+    return `${value.name}: ${value.message}`;
+  }
+  if (!Array.isArray(value) && !isPlainObject(value)) {
+    return value;
+  }
+  if (ancestors.has(value)) {
+    return "[Circular]";
+  }
+  ancestors.add(value);
+  const normalized = Array.isArray(value)
+    ? value.map((child) => normalizeLogErrors(child, ancestors))
+    : Object.fromEntries(Object.entries(value).map(([key, child]) => [
+      key, normalizeLogErrors(child, ancestors),
+    ]));
+  ancestors.delete(value);
+  return normalized;
 }
 
 function compactObjectFields(value: Record<string, unknown>): string {
@@ -297,9 +325,6 @@ function compactLogValue(value: unknown): string {
   }
   if (Array.isArray(value)) {
     return `[${value.map((item) => compactLogValue(item)).join(",")}]`;
-  }
-  if (value instanceof Error) {
-    return quoteIfNeeded(value.stack ?? value.message);
   }
   if (value instanceof Date) {
     return value.toISOString();

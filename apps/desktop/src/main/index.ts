@@ -306,7 +306,7 @@ function surfaceBootFailure(reason: string, error?: unknown): void {
   const logFilePath = getMainLogFilePath();
   mainLog.error("startup failed before the main window appeared", {
     reason,
-    error: detail instanceof Error ? (detail.stack ?? detail.message) : detail,
+    error: detail instanceof Error ? detail.message : detail,
     logFilePath,
   });
   const detailText = [
@@ -365,7 +365,7 @@ function installBootErrorHandlers(): void {
   process.on("unhandledRejection", (reason) => {
     mainLog.error("unhandled promise rejection", {
       bootCompleted: mainWindowEverShown,
-      error: reason instanceof Error ? (reason.stack ?? reason.message) : reason,
+      error: reason instanceof Error ? reason.message : reason,
     });
     if (!mainWindowEverShown) {
       lastBootError = reason;

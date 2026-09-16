@@ -213,13 +213,13 @@ describe("usePullRequestRefresh", () => {
     expect(onRefreshNavigation).not.toHaveBeenCalled();
   });
 
-  it("does not refresh navigation when an attached instance skips the probe", async () => {
+  it.each(["remote_refresh_unsupported", "remote_peer_unavailable"] as const)("preserves displayed PRs when an attached instance skips the probe: %s", async (skippedReason) => {
     const onRefreshNavigation = vi.fn(async () => undefined);
     const refreshThreadPullRequests = vi.fn(async () => buildResponse({
       ghAvailable: false,
       prs: [],
       refreshStarted: false,
-      skippedReason: "remote_refresh_unsupported",
+      skippedReason,
     }));
     const desktopApi = {
       refreshThreadPullRequests,
