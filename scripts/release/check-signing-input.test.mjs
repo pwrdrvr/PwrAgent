@@ -66,7 +66,10 @@ it("archives and expands the Windows manifest with the verifier helper present",
       mkdirSync(dirname(join(input, path)), { recursive: true });
       cpSync(join(root, path), join(input, path));
     }
-    const archive = join(temp, "input.tgz");
+    // Both working directories are siblings beneath temp. A relative archive
+    // path also works with Git Bash's GNU tar, which parses the colon in an
+    // absolute Windows drive path as a remote-host separator.
+    const archive = "../input.tgz";
     const packed = spawnSync("tar", ["-czf", archive, ...paths], { cwd: input, encoding: "utf8" });
     expect(packed.status, packed.stderr).toBe(0);
     const expanded = spawnSync("tar", ["-xzf", archive], { cwd: output, encoding: "utf8" });
