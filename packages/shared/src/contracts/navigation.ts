@@ -2384,9 +2384,9 @@ export type RefreshThreadPullRequestsResponse = {
   refreshStarted?: boolean;
   /**
    * Present when main intentionally skipped the refresh because the attached
-   * remote instance does not support this federation operation.
+   * remote instance is disconnected or does not support this operation.
    */
-  skippedReason?: "remote_refresh_unsupported";
+  skippedReason?: "remote_refresh_unsupported" | "remote_peer_unavailable";
   /** GitHub CLI availability; use providerAvailable for provider-neutral callers. */
   ghAvailable: boolean;
   /**

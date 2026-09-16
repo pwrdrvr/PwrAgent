@@ -15,11 +15,13 @@ const mocks = vi.hoisted(() => {
     getFile: vi.fn(() => ({ path: "/tmp/profile-default.main.log" })),
   });
 
-  const scope = Object.assign(vi.fn(), {
+  const consoleLog = { error: vi.fn(), warn: vi.fn() };
+  const scope = Object.assign(vi.fn(() => consoleLog), {
     labelPadding: true,
   });
 
   return {
+    consoleLog,
     consoleTransport,
     consoleWriteFn,
     electronLog: {
@@ -59,14 +61,20 @@ function makeMessage() {
 describe("initializeMainLogger stdio handling", () => {
   let stdoutErrorListeners: ErrorListener[];
   let stderrErrorListeners: ErrorListener[];
+  let originalConsoleError: typeof console.error;
+  let originalConsoleWarn: typeof console.warn;
 
   beforeEach(() => {
+    originalConsoleError = console.error;
+    originalConsoleWarn = console.warn;
     stdoutErrorListeners = process.stdout.listeners("error") as ErrorListener[];
     stderrErrorListeners = process.stderr.listeners("error") as ErrorListener[];
     vi.resetModules();
     mocks.electronLog.hooks = [];
     mocks.electronLog.initialize.mockClear();
     mocks.scope.mockClear();
+    mocks.consoleLog.error.mockClear();
+    mocks.consoleLog.warn.mockClear();
     mocks.scope.labelPadding = true;
     mocks.consoleWriteFn.mockReset();
     mocks.consoleTransport.level = "silly";
@@ -77,6 +85,8 @@ describe("initializeMainLogger stdio handling", () => {
   });
 
   afterEach(() => {
+    console.error = originalConsoleError;
+    console.warn = originalConsoleWarn;
     for (const listener of process.stdout.listeners("error") as ErrorListener[]) {
       if (!stdoutErrorListeners.includes(listener)) {
         process.stdout.off("error", listener);
@@ -88,6 +98,28 @@ describe("initializeMainLogger stdio handling", () => {
         process.stderr.off("error", listener);
       }
     }
+  });
+
+  it("routes Electron handler failures through message-only logging", async () => {
+    // Capture the old console so a regression does not print the test stack.
+    const rawConsoleError = vi.fn();
+    console.error = rawConsoleError;
+    const { initializeMainLogger } = await import("../log");
+    initializeMainLogger();
+    initializeMainLogger();
+    const error = new Error("Federation peer pwr_owner is not connected.");
+    console.error("Error occurred in handler for 'navigation:refresh-thread-prs':", error);
+    console.warn("Request failed:", error);
+
+    expect(rawConsoleError).not.toHaveBeenCalled();
+    expect(mocks.consoleLog.error).toHaveBeenCalledTimes(1);
+    expect(mocks.consoleLog.warn).toHaveBeenCalledTimes(1);
+    const hook = mocks.electronLog.hooks[0] as (message: ReturnType<typeof makeMessage>, transport: unknown, name: string) => ReturnType<typeof makeMessage>;
+    const message = hook({ ...makeMessage(), data: mocks.consoleLog.error.mock.calls[0] }, undefined, "console");
+    expect(message.data).toEqual([
+      "Error occurred in handler for 'navigation:refresh-thread-prs':",
+      "Error: Federation peer pwr_owner is not connected.",
+    ]);
   });
 
   it("disables console logging when the console transport hits a broken stdout pipe", async () => {

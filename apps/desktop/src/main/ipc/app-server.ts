@@ -3695,9 +3695,24 @@ class DesktopAppServerService {
     ) {
       const federationTarget = request.federationTarget;
       const federationRuntime = getDesktopFederationRuntime();
-      const instanceLabel = federationRuntime.connectedPeerTargets().find(
+      const connectedPeer = federationRuntime.connectedPeerTargets().find(
         (peer) => peer.target.instanceId === federationTarget.instanceId,
-      )?.label ?? federationTarget.instanceId;
+      );
+      const unavailableResponse = (): RefreshThreadPullRequestsResponse => ({
+        backend: request.backend ?? "codex",
+        threadId: request.threadId,
+        provider: request.provider ?? DEFAULT_PULL_REQUEST_PROVIDER,
+        ghAvailable: false,
+        prs: [],
+        refreshStarted: false,
+        skippedReason: "remote_peer_unavailable",
+      });
+      // Capabilities can survive a disconnect in remembered peer metadata.
+      // Background refreshes should stay silent until the owner reconnects.
+      if (!connectedPeer) {
+        return unavailableResponse();
+      }
+      const instanceLabel = connectedPeer.label;
       const skippedResponse = (
         reason:
           | "missing-thread-navigation-capability"
@@ -3739,6 +3754,10 @@ class DesktopAppServerService {
             ...(request.trigger ? { trigger: request.trigger } : {}),
           });
       } catch (error) {
+        // The route can disappear after the connected-peer check above.
+        if (isFederationPeerUnavailableError(error)) {
+          return unavailableResponse();
+        }
         if (isFederationMethodNotFoundError(error)) {
           return skippedResponse("remote-method-not-found");
         }

@@ -57,19 +57,14 @@ describe("renderer error ipc", () => {
       timestamp: "2026-04-20T12:28:04.188Z",
       userAgent: "Vitest",
     });
-    // The compact field formatter caps a structured value at 320 characters;
-    // the stacks carry the only frames that identify the faulty code, so they
-    // are logged verbatim as their own messages.
-    expect(errorLog.error).toHaveBeenCalledWith(
-      "report stack\nError: Should have a queue",
-    );
-    expect(errorLog.error).toHaveBeenCalledWith("report component stack\nat App");
+    expect(errorLog.error).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(errorLog.error.mock.calls)).not.toContain("at App");
 
     disposeRendererErrorIpcHandlers();
     expect(handlers.has(RENDERER_ERROR_REPORT_CHANNEL)).toBe(false);
   });
 
-  it("bounds a stack that exceeds the log limit", async () => {
+  it("omits even large stacks while preserving the error message", async () => {
     const {
       registerRendererErrorIpcHandlers,
       disposeRendererErrorIpcHandlers,
@@ -87,19 +82,14 @@ describe("renderer error ipc", () => {
       userAgent: "Vitest",
     });
 
-    const logged = errorLog.error.mock.calls
-      .map(([first]) => String(first))
-      .find((message) => message.startsWith("report stack"));
-    // The first 8000 characters, then a suffix naming what was dropped so a
-    // truncated frame is never read as the last frame.
-    expect(logged).toBe(
-      `report stack\n${stack.slice(0, 8000)}… (${stack.length - 8000} more characters)`,
-    );
+    expect(errorLog.error).toHaveBeenCalledTimes(1);
+    expect(errorLog.error).toHaveBeenCalledWith("report", expect.objectContaining({ message: "Deep stack" }));
+    expect(JSON.stringify(errorLog.error.mock.calls)).not.toContain("at frame");
 
     disposeRendererErrorIpcHandlers();
   });
 
-  it("logs a repeated fault's stack once per window", async () => {
+  it("logs repeated faults as messages without stacks", async () => {
     const {
       registerRendererErrorIpcHandlers,
       disposeRendererErrorIpcHandlers,
@@ -122,10 +112,8 @@ describe("renderer error ipc", () => {
     const stackMessages = errorLog.error.mock.calls
       .map(([first]) => String(first))
       .filter((message) => message.startsWith("report stack"));
-    // Every report still logs its summary; only the identical stack is dropped,
-    // because re-logging it adds no signal and rotates the 1 MB main log.
     expect(errorLog.error.mock.calls.filter(([first]) => first === "report")).toHaveLength(3);
-    expect(stackMessages).toHaveLength(1);
+    expect(stackMessages).toHaveLength(0);
 
     disposeRendererErrorIpcHandlers();
   });
