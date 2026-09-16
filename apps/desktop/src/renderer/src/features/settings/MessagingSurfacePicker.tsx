@@ -71,7 +71,10 @@ function sectionFor(option: SurfaceOption, grouped: boolean): SurfaceSection {
   if (option.section) return option.section;
   if (!grouped) return "other";
   if (option.kind === "dm") return "dm";
-  if (option.kind === "topic") return "topic";
+  // Threads share the topic heading rather than falling through to channels:
+  // `kindGlyph` already marks both as sub-conversations, and a row whose
+  // heading and glyph disagree is worse than one filed a little loosely.
+  if (option.kind === "topic" || option.kind === "thread") return "topic";
   return "channel";
 }
 
@@ -90,9 +93,12 @@ export function MessagingSurfacePicker(props: {
   const restoreFocus = useRef(false);
   const listId = useId();
   const selected = props.options.find((option) => option.value === props.value);
-  // Manual entry matches no option, so it is a choice the trigger must report
-  // even though `selected` is undefined.
-  const triggerChoice = Boolean(selected) || props.value === "manual";
+  // Any non-empty value is a choice the trigger has to report, not just one
+  // that still matches an option. Manual entry never matches, and an observed
+  // surface can drop out of the list while the editor is open — in both cases
+  // the form still holds that surface, so showing the unset placeholder would
+  // deny a selection Save is about to write.
+  const triggerChoice = props.value !== "";
   const triggerLabel = selected?.label
     ?? (props.value === "manual" ? "Enter an ID manually..." : "Choose a recently seen surface...");
 
@@ -250,7 +256,13 @@ export function MessagingSurfacePicker(props: {
           {/* Outside the listbox: assistive technology drops a non-option
               child of `role="listbox"`, which would leave a screen-reader
               user with an empty list and no explanation. */}
-          {visible.length === 0 ? <p className="project-picker__empty">No matching surfaces.</p> : null}
+          {/* `role="status"` so a search that stops matching is announced.
+              Outside the listbox it is reachable but silent, and a
+              screen-reader user cannot tell no-match from an unresponsive
+              control. */}
+          {visible.length === 0 ? (
+            <p role="status" className="project-picker__empty">No matching surfaces.</p>
+          ) : null}
           <div className="project-picker__separator" />
           <button type="button" className="project-picker__row project-picker__row--action"
             onClick={() => choose("manual")}

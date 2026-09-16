@@ -632,9 +632,16 @@ describe("MessagingRoutesSettings", () => {
     expect(screen.getByLabelText("Messaging platform")).toHaveValue("slack");
     expect(surfaceTrigger()).toHaveTextContent("Slack / incident-response");
     openSurfacePicker();
-    expect(
-      within(screen.getByRole("listbox")).getByRole("group", { name: "Current configuration" }),
-    ).toBeInTheDocument();
+    const configuredGroup = within(screen.getByRole("listbox")).getByRole(
+      "group",
+      { name: "Current configuration" },
+    );
+    expect(configuredGroup).toBeInTheDocument();
+    // The route's own destination is the row the operator most needs to
+    // identify, and it was the only one rendering without its identifier.
+    expect(within(configuredGroup).getByRole("option").textContent).toContain(
+      "C200",
+    );
     fireEvent.keyDown(screen.getByLabelText("Find a messaging surface"), { key: "Escape" });
     expect(screen.queryByLabelText("Conversation ID")).not.toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Default Agent"), {
@@ -685,6 +692,42 @@ describe("MessagingRoutesSettings", () => {
         target: { backend: "acp:grok", threadId: "agent-2" },
       });
     });
+  });
+
+  it("dates a stale surface by year and the saved route by its ID", async () => {
+    const routes = buildRoutes();
+    const thisYear = new Date();
+    thisYear.setMonth(0, 15);
+    routes.observedSurfaces = [
+      {
+        platform: "slack",
+        conversation: { id: "C_FRESH", kind: "channel", title: "fresh-channel", workspaceId: "T1" },
+        firstSeenAt: 1000,
+        lastSeenAt: thisYear.getTime(),
+      },
+      {
+        platform: "slack",
+        conversation: { id: "C_STALE", kind: "channel", title: "stale-channel", workspaceId: "T1" },
+        firstSeenAt: 1000,
+        // Mid-month, mid-year so no timezone can shift it across a year
+        // boundary. Without the year this reads as the same recency as the
+        // row above it.
+        lastSeenAt: new Date(2020, 5, 15, 12).getTime(),
+      },
+    ];
+    const api = buildDesktopApi(routes);
+    renderRoutes(api.desktopApi);
+    await screen.findByText("Orchard Agent");
+
+    fireEvent.click(screen.getByRole("button", { name: "Add default" }));
+    openSurfacePicker();
+    const rows = Object.fromEntries(
+      surfaceOptions().map((option) => [option.textContent ?? "", option]),
+    );
+    const stale = Object.keys(rows).find((text) => text.includes("stale-channel"));
+    const fresh = Object.keys(rows).find((text) => text.includes("fresh-channel"));
+    expect(stale).toContain("2020");
+    expect(fresh).not.toContain(String(new Date().getFullYear()));
   });
 
   it("routes a selected Slack channel as an exact conversation, not a parent fallback", async () => {

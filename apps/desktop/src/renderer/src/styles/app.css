@@ -10395,6 +10395,16 @@ a.button {
   line-height: 1.35;
 }
 
+/* A reading column, not a form column. The Settings card runs the full width
+   of the window, and a list stretched across it puts the name at one end and
+   the ID at the other — a long, wasteful saccade per row for a list the
+   operator is scanning. The cap sits on the field rather than the picker so
+   the label, the control and the empty-surface hint all agree on one width,
+   and so the control does not change width when it opens. */
+.messaging-route-editor__surface {
+  max-width: 560px;
+}
+
 .messaging-route-editor__surface,
 .messaging-route-editor label {
   display: flex;
@@ -35103,16 +35113,6 @@ details.launchpad-pending__output > summary .launchpad-pending__command-label {
    The rows, search header, eyebrow, separator and action row all come from
    the shared picker primitives above. Only the anchor and the two extra row
    slots are genuinely per-picker. */
-
-/* A reading column, not a form column. The Settings card runs the full width
-   of the window, and a list stretched across it puts the name at one end and
-   the ID at the other — a long, wasteful saccade per row for a list the
-   operator is scanning. Cap the field so a row reads in one fixation, and cap
-   the wrapper rather than the panel so the control does not change width when
-   it opens. */
-.messaging-surface-picker {
-  max-width: 560px;
-}
 
 .messaging-surface-picker__trigger {
   width: 100%;

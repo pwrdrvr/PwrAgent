@@ -134,8 +134,27 @@ describe("MessagingSurfacePicker", () => {
     expect(sections()).toEqual(["Current configuration", "Channels & groups"]);
     const saved = screen.getByRole("option", { name: /Harvest discussion/ });
     expect(saved).toHaveAttribute("aria-selected", "true");
-    expect(saved.textContent).toContain("▸");
-    expect(saved.textContent).not.toContain("#");
+    // Assert the glyph element itself: a row whose name or ID happened to
+    // contain "#" would pass or fail a whole-text check for the wrong reason.
+    expect(
+      saved.querySelector(".messaging-surface-picker__glyph")?.textContent,
+    ).toBe("▸");
+  });
+
+  it("keeps reporting a selection whose option has dropped out of the list", () => {
+    // The routes provider reloads observed surfaces on every bindings change,
+    // so a candidate can vanish mid-edit while the form still holds it. The
+    // field must not answer "nothing chosen" for a surface Save would write.
+    render(
+      <MessagingSurfacePicker
+        value="channel-a"
+        options={options.filter((option) => option.value !== "channel-a")}
+        filterConversations
+        onChange={vi.fn()}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: CLOSED_LABEL })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Surface: / })).toBeInTheDocument();
   });
 
   it("names manual entry on the closed trigger", () => {
@@ -145,11 +164,13 @@ describe("MessagingSurfacePicker", () => {
     ).toBeInTheDocument();
   });
 
-  it("keeps the empty state out of the listbox", () => {
+  it("announces the empty state from outside the listbox", () => {
     setup();
     fireEvent.change(screen.getByRole("combobox"), { target: { value: "unknown" } });
-    const empty = screen.getByText("No matching surfaces.");
-    expect(empty).toBeInTheDocument();
+    // Inside the listbox assistive technology drops it; outside with no live
+    // region nothing announces it. It needs both.
+    const empty = screen.getByRole("status");
+    expect(empty).toHaveTextContent("No matching surfaces.");
     expect(screen.getByRole("listbox")).not.toContainElement(empty);
   });
 

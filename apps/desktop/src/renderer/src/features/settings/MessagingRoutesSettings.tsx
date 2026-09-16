@@ -767,6 +767,7 @@ function DefaultAgentEditor(props: {
                     value: "configured",
                     label: configuredSurfaceLabel(form),
                     kind: form.conversationKind,
+                    detail: surfaceFormDetail(form),
                     section: "configured" as const,
                   }] : []),
                   ...surfaceCandidates.map((surface) => ({
@@ -1051,15 +1052,22 @@ function observedSurfaceCandidates(
 }
 
 /**
- * The durable identifier for one observed surface, shown right-aligned in the
- * picker's mono column. Kind is carried by the row's section heading and
- * recency by `formatSeenDate`, so neither is repeated here — what is left is
- * the one fact that tells two similarly named destinations apart.
+ * The durable identifier for one surface, shown right-aligned in the picker's
+ * mono column. Kind is carried by the row's section heading and recency by
+ * `formatSeenDate`, so neither is repeated here — what is left is the one fact
+ * that tells two similarly named destinations apart.
+ *
+ * Taken from the form rather than the candidate so the route's own saved
+ * destination gets the same column. It is the row the operator most needs to
+ * identify, and it was the only one rendering without an ID.
  */
-function observedSurfaceDetail(surface: ObservedSurfaceCandidate): string {
-  const form = surface.form;
+function surfaceFormDetail(form: NewDefaultForm): string {
   const id = form.conversationId || form.parentConversationId || form.workspaceId;
   return form.identityParentId ? `${id} / ${form.identityParentId}` : id;
+}
+
+function observedSurfaceDetail(surface: ObservedSurfaceCandidate): string {
+  return surfaceFormDetail(surface.form);
 }
 
 /**
@@ -1072,9 +1080,9 @@ function observedSurfaceDetail(surface: ObservedSurfaceCandidate): string {
  * like one seen two days ago — which inverts the signal this column exists to
  * give.
  */
-function formatSeenDate(value: number, now = Date.now()): string {
+function formatSeenDate(value: number): string {
   const seen = new Date(value);
-  const sameYear = seen.getFullYear() === new Date(now).getFullYear();
+  const sameYear = seen.getFullYear() === new Date().getFullYear();
   return seen.toLocaleDateString(undefined, {
     month: "short",
     day: "numeric",

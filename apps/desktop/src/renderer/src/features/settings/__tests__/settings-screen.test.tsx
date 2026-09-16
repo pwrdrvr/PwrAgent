@@ -6436,6 +6436,35 @@ describe("SettingsScreen", () => {
     ).toHaveAttribute("aria-current", "page");
   });
 
+  it("lands on the Routes section again after visiting a platform", () => {
+    // Two focus mechanisms overlap here: the nav's `focusSectionId` request
+    // and the stack's remembered-visit restore. The request is guarded
+    // against repeats and a platform sub matches no section, so the return
+    // trip is carried by the restore path — pin it, because a refactor of
+    // either one alone would silently drop it.
+    render(
+      <SettingsScreen
+        settings={createSettingsState()}
+        onClose={() => undefined}
+      />,
+    );
+    const nav = screen.getByRole("navigation", { name: "Settings sections" });
+    fireEvent.click(
+      within(nav).getByRole("button", { name: "Expand Messaging" }),
+    );
+    const routesHeader = () =>
+      document.querySelector(
+        '[aria-controls="settings-section-messaging-routes-body"]',
+      );
+
+    fireEvent.click(within(nav).getByRole("button", { name: "Routes" }));
+    expect(document.activeElement).toBe(routesHeader());
+
+    fireEvent.click(within(nav).getByRole("button", { name: "Slack" }));
+    fireEvent.click(within(nav).getByRole("button", { name: "Routes" }));
+    expect(document.activeElement).toBe(routesHeader());
+  });
+
   it("expands a nav group from the caret without navigating", () => {
     render(
       <SettingsScreen
