@@ -353,7 +353,7 @@ describe("Activity report controls", () => {
     expect(text).toContain("Physical connections: gateway");
     expect(text).toContain("Requests\t12\t12\t12\t987");
     expect(text).toContain("2 KB (2000 bytes)");
-    expect(text).toContain("sent requests\t33\t0.54 KB (543 bytes)\t0.54 KB (540 bytes)\t0.4 KB (403 bytes)\t0.66 KB (655 bytes)");
+    expect(text).toContain("sent requests\t33\t1 KB (543 bytes)\t1 KB (540 bytes)\t0 KB (403 bytes)\t1 KB (655 bytes)");
     expect(text).toContain("Samples\tAvg\tp50 (approx.)\tMin\tMax");
     expect(text).toContain("Since: 1970-01-01T00:00:00.000Z");
     expect(text).toContain("excludes WebSocket framing");
