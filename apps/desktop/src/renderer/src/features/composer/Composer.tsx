@@ -383,7 +383,7 @@ type ComposerProps = {
   onHandoffThreadWorkspace?: (
     request: Omit<HandoffThreadWorkspaceRequest, "backend" | "threadId">
   ) => Promise<void>;
-  onBeforeStartTurn?: () => Promise<boolean>;
+  onBeforeStartTurn?: (signal?: AbortSignal) => Promise<boolean>;
   onSetThreadModelSettings?: (
     patch: Partial<
       Pick<
@@ -2862,6 +2862,29 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     sendingRef.current = nextSending;
     setSendingState(nextSending);
   };
+  const [preparingSend, setPreparingSend] = useState(false);
+  const sendPreparationRef = useRef<AbortController | undefined>(undefined);
+  // One teardown for every way a preparation ends early. The preparation is
+  // what set `sending` true, and the abort makes `prepareThreadTurnPayload`
+  // return before its own reset, so releasing it belongs here rather than at
+  // each call site. On a scope change the draft-rehydration effect below also
+  // clears `sending`; saying it here too keeps this function correct on its
+  // own instead of load-bearing on that ordering.
+  const abandonSendPreparation = (): void => {
+    const preparation = sendPreparationRef.current;
+    sendPreparationRef.current = undefined;
+    if (!preparation) {
+      return;
+    }
+    preparation.abort();
+    setPreparingSend(false);
+    updateSending(false);
+  };
+  const cancelSendPreparation = abandonSendPreparation;
+  useEffect(() => {
+    setPreparingSend(false);
+    return abandonSendPreparation;
+  }, [composerScopeKey]);
   const [interrupting, setInterrupting] = useState(false);
   const [steering, setSteering] = useState(false);
   // React state only drives presentation. This ref synchronously suppresses
@@ -6142,6 +6165,47 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     return isPromiseLike(payload) ? payload.then(merge) : merge(payload);
   };
 
+  const prepareThreadTurnPayload = async (
+    payloadOrPromise: ComposerTurnPayload | Promise<ComposerTurnPayload>,
+  ): Promise<ComposerTurnPayload | undefined> => {
+    // Nothing has been sent yet. Keep the draft in place while remote file
+    // inspection and the branch check run. Cancellation abandons this attempt
+    // without waiting for the remote read or letting its result send later.
+    const preparation = new AbortController();
+    sendPreparationRef.current = preparation;
+    setPreparingSend(true);
+    updateSending(true);
+    dismissAutocomplete();
+    const cancelled = new Promise<undefined>((resolve) => {
+      preparation.signal.addEventListener("abort", () => resolve(undefined), { once: true });
+    });
+    try {
+      const payload = await Promise.race([
+        (async () => {
+          const prepared = await payloadOrPromise;
+          if (preparation.signal.aborted || prepared.input.length === 0) return;
+          if (props.onBeforeStartTurn && !(await props.onBeforeStartTurn(preparation.signal))) return;
+          return prepared;
+        })(),
+        cancelled,
+      ]);
+      if (preparation.signal.aborted) return;
+      if (!payload) updateSending(false);
+      return payload;
+    } catch (error) {
+      if (sendPreparationRef.current === preparation) {
+        updateSending(false);
+        setSendError(error instanceof Error ? error.message : String(error));
+      }
+      return;
+    } finally {
+      if (sendPreparationRef.current === preparation) {
+        sendPreparationRef.current = undefined;
+        setPreparingSend(false);
+      }
+    }
+  };
+
   const sendThreadTurn = async (
     queued?: QueuedTurnDraft,
     options?: {
@@ -6224,20 +6288,6 @@ export const Composer = memo(function Composer(props: ComposerProps) {
             },
           } satisfies AppServerCollaborationModeRequest)
         : undefined;
-
-    if (
-      !queued &&
-      !options?.backendQueueProjection &&
-      props.onBeforeStartTurn &&
-      !(await props.onBeforeStartTurn())
-    ) {
-      updateSending(false);
-      restoreQueuedTurnIfClaimed(queued, options?.queueClaimed);
-      if (queued && options?.queueClaimed) {
-        globalQueuedTurnReleaseScopeKeys.delete(composerScopeKey);
-      }
-      return;
-    }
 
     let optimisticMessageId: string | undefined;
     if (!backendQueueSubmission) {
@@ -7425,7 +7475,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
 
   const submitTurn = async (mode: "default" | "steer" = "default"): Promise<void> => {
     const reviewCommand = parsedReviewCommand;
-    if (turnPayloadPreparationInFlightRef.current) {
+    if (turnPayloadPreparationInFlightRef.current || sendPreparationRef.current) {
       return;
     }
     if (
@@ -7648,7 +7698,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       skillTokens,
     );
     let payload: ComposerTurnPayload;
-    if (isPromiseLike(payloadOrPromise)) {
+    if (!props.launchpad && (isPromiseLike(payloadOrPromise) || props.onBeforeStartTurn)) {
+      const prepared = await prepareThreadTurnPayload(payloadOrPromise);
+      if (!prepared) return;
+      payload = prepared;
+    } else if (isPromiseLike(payloadOrPromise)) {
       turnPayloadPreparationInFlightRef.current = true;
       updateSending(true);
       try {
@@ -9281,6 +9335,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       : []),
   ];
   const sendButtonDisabled =
+    preparingSend ||
     props.disabled ||
     steering ||
     (!activeTurnId && sending && !isLaunchpad) ||
@@ -9318,21 +9373,22 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const effectiveScheduledSendAt = scheduleArmed
     ? futureScheduledDraftSendAt
     : undefined;
-  const submitButtonLabel =
-    launchpadSubmitting ||
-    activeTurnId ||
-    queuedTurns.some((queued) =>
-      Boolean(queued.backendQueuePending || queued.queueEntryId)
-    ) ||
-    props.threadBusy
-      ? "Queue"
-      : sending
-        ? props.launchpad
-          ? "Starting…"
-          : "Sending…"
-        : props.launchpad
-          ? "Start thread"
-          : "Send";
+  const submitButtonLabel = preparingSend
+    ? "Preparing…"
+    : launchpadSubmitting ||
+      activeTurnId ||
+      queuedTurns.some((queued) =>
+        Boolean(queued.backendQueuePending || queued.queueEntryId)
+      ) ||
+      props.threadBusy
+        ? "Queue"
+        : sending
+          ? props.launchpad
+            ? "Starting…"
+            : "Sending…"
+          : props.launchpad
+            ? "Start thread"
+            : "Send";
   const launchpadWorkspaceOptions = props.launchpad
     ? buildLaunchpadWorkspaceOptions(props.launchpad, props.directory)
     : [];
@@ -10215,6 +10271,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     <>
       <form
         className="composer"
+        aria-busy={preparingSend}
         data-composer-implementation="tiptap-wysiwyg-markdown-chips"
         onSubmit={(event) => {
           event.preventDefault();
@@ -10226,6 +10283,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
           }
         }}
       >
+      <fieldset className="composer__pending-controls" disabled={preparingSend}>
         {/* Issue #240: removed the visible "Reply" / "New thread" /
           "Review" eyebrow that used to sit above the composer. The
           input itself carries the same name through its `aria-label`
@@ -11138,6 +11196,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
             ariaControls={autocompleteListboxId}
             ariaExpanded={Boolean(autocompleteKind)}
             disabled={composerDisabled}
+            readOnly={preparingSend}
             label={isLaunchpad ? "New thread" : "Reply"}
             markdownConversion
             placeholder={composerPlaceholder}
@@ -11157,6 +11216,17 @@ export const Composer = memo(function Composer(props: ComposerProps) {
             onKeyDown={handleTiptapComposerKeyDown}
           />
         )}
+
+        {/* The draft is deliberately still on screen and still selectable, so
+          the only thing distinguishing it from a live input is this line and
+          the `is-readonly` fill behind it. `aria-readonly` covers assistive
+          tech; nothing else covered a sighted operator, who would otherwise
+          click in, get no caret, and lose the keystrokes silently. */}
+        {preparingSend ? (
+          <p className="composer__meta composer__held-notice" role="status">
+            Message held while checks run. Select and copy still work.
+          </p>
+        ) : null}
 
         {autocompleteKind === "skills" ? (
           <div
@@ -12213,7 +12283,12 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         </p>
       ) : null}
 
+      </fieldset>
       <div className="composer__footer">
+        <fieldset
+          className="composer__pending-controls composer__pending-controls--dim"
+          disabled={preparingSend}
+        >
         {launchpadCodexEnvironmentOptions.length > 0 ||
         threadCodexEnvironmentOptions.length > 0 ||
         props.thread?.codexEnvironmentRuntime ||
@@ -12355,13 +12430,23 @@ export const Composer = memo(function Composer(props: ComposerProps) {
           <span aria-hidden="true" className="composer__footer-spacer" />
         )}
 
+        </fieldset>
         <div className="composer__actions">
           <ContextWindowMoon contextWindow={props.contextWindow} />
+          {preparingSend ? (
+            <button
+              className="button button--ghost composer__cancel-preparation"
+              type="button"
+              onClick={cancelSendPreparation}
+            >
+              Cancel
+            </button>
+          ) : null}
           {activeTurnId ? (
             <button
               className="button button--ghost"
               data-testid="composer-stop-turn"
-              disabled={props.disabled || interrupting}
+              disabled={preparingSend || props.disabled || interrupting}
               type="button"
               onClick={() => {
                 void stopTurn();
@@ -12401,6 +12486,10 @@ export const Composer = memo(function Composer(props: ComposerProps) {
               className={[
                 "composer__send-split-pill",
                 sendButtonDisabled ? "is-disabled" : "",
+                // While the pre-send checks run this pill is the only thing
+                // reporting them, so it keeps its contrast. `is-disabled`
+                // would dim the spinner and its label along with the rest.
+                preparingSend ? "is-preparing" : "",
               ]
                 .filter(Boolean)
                 .join(" ")}
@@ -12469,6 +12558,12 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                 disabled={sendButtonDisabled}
                 type="submit"
               >
+                {preparingSend ? (
+                  <span
+                    aria-hidden="true"
+                    className="pending-spinner pending-spinner--sm"
+                  />
+                ) : null}
                 {submitButtonLabel}
               </button>
             </div>

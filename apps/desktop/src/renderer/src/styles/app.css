@@ -27676,7 +27676,8 @@ button.pricing-token-miser__folded:focus-visible {
    composer's content column lines up with the transcript's. The
    composer form itself stays full-width (bg-panel band edge-to-edge)
    — only the rows inside it center. */
-.composer > * {
+.composer > *,
+.composer > .composer__pending-controls > * {
   width: 100%;
   max-width: var(--chat-column-max);
 }
@@ -29327,6 +29328,53 @@ button.pricing-token-miser__folded:focus-visible {
   flex-wrap: wrap;
   align-items: center;
   gap: 6px;
+}
+
+.composer__pending-controls {
+  display: contents;
+}
+
+/* One "off" step for the whole footer group.
+   The primitives disagreed on what disabled looks like:
+   `.composer-dropdown__button:disabled` swaps a color token (one step),
+   `.composer__toggle:disabled` uses opacity 0.45 (about three), and
+   `.composer__fixed-value` is a <span>, which `fieldset[disabled]` never
+   reaches, so it did not change at all. Measured on the pending row that
+   read as 17.99:1 → 8.71:1, 8.71:1 → 2.21:1, and no change, side by side.
+   The fieldset itself is `display: contents` and paints no box, so it
+   cannot carry a single opacity for the group — each child takes the same
+   value instead, which is the 0.45 the rest of the renderer already uses
+   for disabled. */
+.composer__pending-controls--dim:disabled .composer__fixed-value,
+.composer__pending-controls--dim:disabled .composer-dropdown__button:disabled,
+.composer__pending-controls--dim:disabled .composer__toggle:disabled {
+  opacity: 0.45;
+}
+
+/* The dropdown's own disabled rule also mutes its label. Inside the group
+   that would spend a second step on top of the shared opacity, putting it
+   back below its neighbours. */
+.composer__pending-controls--dim:disabled .composer-dropdown__button:disabled {
+  color: var(--text-primary);
+}
+
+/* The draft stays on screen through the pre-send checks, and stays
+   selectable — so the only thing separating it from the live input it was a
+   moment ago is this treatment. `aria-readonly` already covered assistive
+   tech; this covers the operator who would otherwise click in, get no caret,
+   and lose the keystrokes with nothing on screen to explain it. The inset
+   rule is the `.note` left-rule idiom: this is a state, not content. */
+.composer-tiptap-input.is-readonly {
+  border-color: var(--border-strong);
+  background: var(--bg-panel-elevated);
+  box-shadow: inset 2px 0 0 var(--accent-border);
+  color: var(--text-secondary);
+  cursor: default;
+}
+
+.composer__held-notice {
+  margin: 6px 0 0;
+  color: var(--text-muted);
 }
 
 .composer__footer {
@@ -31575,6 +31623,17 @@ button.pricing-token-miser__folded:focus-visible {
   font-size: 13px;
 }
 
+/* Secondary to the pill beside it. `.button--ghost` paints --text-primary,
+   which made Cancel the highest-contrast control in the whole composer at
+   the one moment the operator should be watching the send instead. */
+.composer__cancel-preparation {
+  color: var(--text-secondary);
+}
+
+.composer__cancel-preparation:hover {
+  color: var(--text-primary);
+}
+
 /* Scheduled-send split button. One pill, two zones: a caret trigger that opens
    the time menu and the primary Send action, joined by a hairline divider. The
    pill owns the border, radius, and background; the inner zones are transparent
@@ -31601,6 +31660,22 @@ button.pricing-token-miser__folded:focus-visible {
 .composer__send-split-pill.is-disabled {
   cursor: not-allowed;
   opacity: 0.45;
+}
+
+/* Preparing is disabled for input but it is also the only thing on screen
+   reporting that the pre-send checks are running. Dimming it to 0.45 put
+   its label at 2.07:1 while the Cancel button beside it sat at 17.99:1 —
+   the escape hatch outshouting the action. Hold full contrast here so the
+   spinner and its label are legible, and let Cancel recede instead. */
+.composer__send-split-pill.is-disabled.is-preparing {
+  cursor: progress;
+  opacity: 1;
+}
+
+.composer__actions .composer__send-split-pill .composer__send-submit-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 
 /* Inner zones shed their own chrome; the pill supplies border, radius, and bg. */
@@ -32332,7 +32407,11 @@ button.pricing-token-miser__folded:focus-visible {
    sole indication of progress is not that. Give a standalone ring a text or
    `aria-busy` companion and it belongs in the selector below. */
 @media (prefers-reduced-motion: reduce) {
-  .settings-pending .pending-spinner {
+  .settings-pending .pending-spinner,
+  /* The composer's pre-send ring qualifies under the same rule: it sits
+     beside the word "Preparing…" and the form carries `aria-busy`, so the
+     state survives the ring going still. */
+  .composer__send-split-pill .pending-spinner {
     border-color: var(--accent);
     animation: none;
   }

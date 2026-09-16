@@ -53,6 +53,7 @@ type ComposerTiptapInputProps = {
   ariaControls?: string;
   ariaExpanded?: boolean;
   disabled?: boolean;
+  readOnly?: boolean;
   editorDocument?: JSONContent;
   id: string;
   label: string;
@@ -2366,6 +2367,7 @@ export const ComposerTiptapInput = forwardRef<
 >(function ComposerTiptapInput(props, ref) {
   const propsRef = useRef(props);
   const editorRef = useRef<TiptapEditor | null>(null);
+  const wasReadOnlyRef = useRef(false);
   const [threadContextMenu, setThreadContextMenu] =
     useState<ComposerThreadContextMenuState>();
   const selectionIndexRef = useRef(props.value.length);
@@ -2508,12 +2510,12 @@ export const ComposerTiptapInput = forwardRef<
     // The mounted editor must never authorize input before the parent does.
     // Applying disabled only in the layout effect exposes Tiptap's default
     // editable DOM during initial attachment.
-    editable: !props.disabled,
+    editable: !props.disabled && !props.readOnly,
     content: initialContent,
     editorProps: {
       // TipTap installs its editable plugin after constructing the DOM view.
       // Guard that first view too, before any layout effect or plugin runs.
-      editable: () => !propsRef.current.disabled,
+      editable: () => !propsRef.current.disabled && !propsRef.current.readOnly,
       attributes: {
         // ARIA 1.2 textbox + listbox autocomplete pattern. We
         // deliberately do NOT set aria-expanded here — that attribute
@@ -2533,25 +2535,38 @@ export const ComposerTiptapInput = forwardRef<
           : {}),
         "aria-autocomplete": "list",
         "aria-label": props.label,
+        ...(props.readOnly ? { "aria-readonly": "true", tabindex: "0" } : {}),
         class: `composer-tiptap-input__editor${props.disabled ? " is-disabled" : ""}`,
         "data-placeholder": props.placeholder,
         id: props.id,
         role: "textbox",
       },
       handleClick: (_view, _pos, event) => {
+        if (propsRef.current.readOnly) return false;
         propsRef.current.onClick?.(event as unknown as MouseEvent<HTMLDivElement>);
         return false;
       },
       handleDOMEvents: {
         dragover: (_view, event) => {
+          if (propsRef.current.readOnly) {
+            event.preventDefault();
+            return true;
+          }
           propsRef.current.onDragOver?.(event as unknown as DragEvent<HTMLDivElement>);
           return event.defaultPrevented;
         },
         drop: (_view, event) => {
+          if (propsRef.current.readOnly) {
+            event.preventDefault();
+            return true;
+          }
           propsRef.current.onDrop?.(event as unknown as DragEvent<HTMLDivElement>);
           return event.defaultPrevented;
         },
         keydown: (_view, event) => {
+          // Let the browser select, copy, and scroll, without running editor
+          // commands (including undo and the composer's submit shortcuts).
+          if (propsRef.current.readOnly) return true;
           const macPlatform = isMacPlatform();
           if (
             event.key.toLowerCase() === "y" &&
@@ -2726,6 +2741,10 @@ export const ComposerTiptapInput = forwardRef<
           return event.defaultPrevented;
         },
         paste: (_view, event) => {
+          if (propsRef.current.readOnly) {
+            event.preventDefault();
+            return true;
+          }
           propsRef.current.onPaste?.(event as unknown as ClipboardEvent<HTMLDivElement>);
           if (event.defaultPrevented) {
             return true;
@@ -2792,9 +2811,19 @@ export const ComposerTiptapInput = forwardRef<
       return;
     }
 
-    editor.setEditable(!props.disabled);
+    // Entering or leaving read-only mode is not a draft edit. Emitting an
+    // update would clear the parent's send error when a failed check unlocks.
+    editor.setEditable(!props.disabled && !props.readOnly, !props.readOnly && !wasReadOnlyRef.current);
+    wasReadOnlyRef.current = Boolean(props.readOnly);
     editor.view.dom.setAttribute("id", props.id);
     editor.view.dom.setAttribute("aria-label", props.label);
+    if (props.readOnly) {
+      editor.view.dom.setAttribute("aria-readonly", "true");
+      editor.view.dom.setAttribute("tabindex", "0");
+    } else {
+      editor.view.dom.removeAttribute("aria-readonly");
+      editor.view.dom.removeAttribute("tabindex");
+    }
     // aria-expanded is deliberately NOT set on the textbox role — see
     // the editorProps.attributes block above for the rationale. The
     // ariaExpanded prop is still consumed via the aria-controls /
@@ -2817,6 +2846,7 @@ export const ComposerTiptapInput = forwardRef<
     props.ariaControls,
     props.ariaExpanded,
     props.disabled,
+    props.readOnly,
     props.id,
     props.label,
   ]);
@@ -2836,6 +2866,7 @@ export const ComposerTiptapInput = forwardRef<
       configurable: true,
       get: () => propsRef.current.value,
       set: (nextValue) => {
+        if (propsRef.current.readOnly) return;
         const value = String(nextValue ?? "");
         pushControlledUndoEntry(editor);
         controlledRedoStackRef.current = [];
@@ -3067,6 +3098,7 @@ export const ComposerTiptapInput = forwardRef<
 
   useImperativeHandle(ref, () => ({
     deleteSelection: () => {
+      if (propsRef.current.readOnly) return;
       editor?.commands.deleteSelection();
     },
     focus: () => {
@@ -3079,7 +3111,7 @@ export const ComposerTiptapInput = forwardRef<
       editor?.commands.focus();
     },
     insertMentionToken: (token) => {
-      if (!editor) {
+      if (!editor || propsRef.current.readOnly) {
         return false;
       }
       return insertMentionTokenAtSelection({ editor, readMode, token });
@@ -3120,7 +3152,7 @@ export const ComposerTiptapInput = forwardRef<
 
   return (
     <div
-      className={`composer-tiptap-input${props.value || props.skillTokens.length > 0 ? "" : " is-empty"}`}
+      className={`composer-tiptap-input${props.value || props.skillTokens.length > 0 ? "" : " is-empty"}${props.readOnly ? " is-readonly" : ""}`}
       data-placeholder={props.placeholder}
       data-testid="composer-tiptap-input"
       data-value={props.value}
@@ -3153,7 +3185,7 @@ export const ComposerTiptapInput = forwardRef<
         });
       }}
       onKeyDownCapture={(event) => {
-        if (!editor || event.defaultPrevented) {
+        if (!editor || event.defaultPrevented || propsRef.current.readOnly) {
           return;
         }
         if (event.key === "ArrowUp" || event.key === "ArrowDown") {
