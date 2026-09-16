@@ -17,15 +17,15 @@ fixtures, not the operator captures.
 | --- | --- | --- |
 | One accounting notification, one retained gate | One metadata JSON read and one retention-generation read | Zero Token Miser content reads |
 | Ordinary Pricing, Sub-agents, or accounting display, one retained gate | Each reads metadata JSON and retention generation | Unchanged; separate projection work required |
-| Two ordinary Settings projections | Two unscoped `listMetadata()` calls | Unchanged; separate projection work required |
+| Two ordinary Settings projections | Two unscoped `listMetadata()` calls | Zero accounting scans, including after an unrelated config write |
 | Unknown-thread or wrong-owner remote event with local and remote Pricing mounted | No extra read | Preserved |
 | Matching remote event with colliding local/remote thread IDs | Only remote Pricing rereads | Preserved |
 
-The notification regression failed before removing enrichment. The separate
-Settings and display regressions also failed; local reproductions were retained
+The notification regression failed before removing enrichment. The Settings regression also failed before decoupling usage reads and now passes.
+The separate display regressions still fail; local reproductions were retained
 under `.local/` rather than disabled in the test suite.
 
-## Confirmed paths
+## Confirmed paths before fixes
 
 - `DesktopSettingsService.readSettingsProjection` constructs a fresh
   `TokenMiserStore` and calls unscoped `summarizeUsage`. Every projection
@@ -55,6 +55,17 @@ thread reads and detailed explorer requests retain enrichment. This removes a
 redundant background scan without adding caching, polling, writes, or a new
 freshness boundary.
 
+## Settings decoupling
+
+Settings snapshots now contain configuration and Token Miser activation status,
+not accounting totals. `readTokenMiserUsage` is a separate IPC operation backed
+by a lazily retained store. Only opening the Experimental pane requests the
+usage aggregate. Ordinary Settings reads, runtime notifications, and unrelated
+configuration writes do not scan or replace that accounting state. The pane
+retains its usage across Settings snapshot refreshes. Explicit usage reads
+reread mutable records, preserving visibility of another process's commits.
+There is no TTL cache, periodic scan, or added database write.
+
 ## Ownership
 
 `useThreadDisplayResource` matches instance, backend, and thread before
@@ -78,7 +89,7 @@ JSON would conceal another process's writes.
 
 A complete fix needs a versioned accounting projection keyed by local
 backend/thread identity, with object/observation identities for idempotence.
-Ordinary Settings aggregation and Pricing should query it; detailed evidence
+The explicit usage aggregate and ordinary Pricing should query it; detailed evidence
 and output retrieval should have explicit demand. Migration must be restartable
 and establish when SQLite becomes authoritative. Updates must cover accepted
 gates, retrieval delivery, replay flush/retirement, Code Mode observations,

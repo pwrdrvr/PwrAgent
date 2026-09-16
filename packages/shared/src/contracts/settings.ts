@@ -993,6 +993,16 @@ export type DesktopFederationSettingsSnapshot = {
   cloudflareAccessClientSecret: DesktopSettingsSecretState;
 };
 
+/** Accounting is read on demand, independently of configuration snapshots. */
+export type DesktopTokenMiserUsage = {
+  interceptionCount: number;
+  originalCharacters: number;
+  baselineParentTokens: number;
+  replacementTokens: number;
+  retrievedTokens: number;
+  estimatedParentTokensSaved: number;
+};
+
 export type DesktopSettingsSnapshot = {
   fetchedAt: number;
   configPath: string;
@@ -1014,12 +1024,6 @@ export type DesktopSettingsSnapshot = {
         reason?: string;
         observedAt: number;
       };
-      interceptionCount: number;
-      originalCharacters: number;
-      baselineParentTokens: number;
-      replacementTokens: number;
-      retrievedTokens: number;
-      estimatedParentTokensSaved: number;
     };
     messaging: {
       disabled: boolean;

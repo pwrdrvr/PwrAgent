@@ -412,6 +412,7 @@ import type {
   WriteStarMapWorkspaceRequest,
   ReadDesktopSettingsRequest,
   ReadDesktopSettingsResponse,
+  DesktopTokenMiserUsage,
   DesktopSettingsRuntimeChangedEvent,
   ReadDesktopConfigBootstrapResponse,
   ReadDesktopFullAccessPolicyResponse,
@@ -812,6 +813,7 @@ import {
   SETTINGS_PICK_GIT_COMMAND_CHANNEL,
   SETTINGS_REFRESH_GIT_DISCOVERY_CHANNEL,
   SETTINGS_READ_CHANNEL,
+  TOKEN_MISER_READ_USAGE_CHANNEL,
   SETTINGS_READ_BOOTSTRAP_CHANNEL,
   SETTINGS_READ_FULL_ACCESS_POLICY_CHANNEL,
   SETTINGS_READ_MESSAGING_CHANNEL,
@@ -1345,6 +1347,8 @@ const desktopApi = Object.freeze({
     request: AcknowledgeAcpAgentUpdateRequest,
   ): Promise<AcknowledgeAcpAgentUpdateResponse> =>
     await ipcRenderer.invoke(ACP_AGENT_UPDATE_ACKNOWLEDGE_CHANNEL, request),
+  readTokenMiserUsage: async (): Promise<DesktopTokenMiserUsage> =>
+    await ipcRenderer.invoke(TOKEN_MISER_READ_USAGE_CHANNEL),
   readSettings: async (
     request?: ReadDesktopSettingsRequest,
   ): Promise<ReadDesktopSettingsResponse> =>

@@ -884,6 +884,7 @@ function SettingsSectionBody(props: {
   if (props.section === "experimental") {
     return (
       <ExperimentalSettings
+        desktopApi={props.desktopApi}
         saving={props.settings.saving}
         snapshot={props.snapshot}
         onDiffCondensationEnabledChange={async (enabled: boolean) => {

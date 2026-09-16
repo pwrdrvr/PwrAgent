@@ -308,12 +308,14 @@ describe("settings ipc", () => {
     const {
       SETTINGS_READ_BOOTSTRAP_CHANNEL,
       SETTINGS_READ_CHANNEL,
+      TOKEN_MISER_READ_USAGE_CHANNEL,
       SETTINGS_REFRESH_CODEX_DISCOVERY_CHANNEL,
       SETTINGS_REPLACE_SECRET_CHANNEL,
       SETTINGS_WRITE_CONFIG_CHANNEL,
     } = await import("../../shared/ipc");
     const refreshCodexDiscovery = vi.spyOn(service, "refreshCodexDiscovery");
     const readSettings = vi.spyOn(service, "readSettingsProjection");
+    const readUsage = vi.spyOn(service, "readTokenMiserUsage");
 
     registerSettingsIpcHandlers(service);
 
@@ -326,6 +328,11 @@ describe("settings ipc", () => {
         onboarding: { completed: true },
       },
     });
+    expect(readSettings).not.toHaveBeenCalled();
+    expect(readUsage).not.toHaveBeenCalled();
+    await expect(handlers.get(TOKEN_MISER_READ_USAGE_CHANNEL)?.({}))
+      .resolves.toMatchObject({ interceptionCount: 0 });
+    expect(readUsage).toHaveBeenCalledTimes(1);
     expect(readSettings).not.toHaveBeenCalled();
 
     await expect(
@@ -406,6 +413,7 @@ describe("settings ipc", () => {
 
     disposeSettingsIpcHandlers();
     expect(handlers.has(SETTINGS_READ_CHANNEL)).toBe(false);
+    expect(handlers.has(TOKEN_MISER_READ_USAGE_CHANNEL)).toBe(false);
     expect(handlers.has(SETTINGS_READ_BOOTSTRAP_CHANNEL)).toBe(false);
   });
 

@@ -434,6 +434,7 @@ import type {
   OpenDesktopPwrAgentProfileResponse,
   ReadDesktopSettingsRequest,
   ReadDesktopSettingsResponse,
+  DesktopTokenMiserUsage,
   DesktopSettingsRuntimeChangedEvent,
   ReadDesktopConfigBootstrapResponse,
   ReadDesktopFullAccessPolicyResponse,
@@ -948,6 +949,7 @@ export type DesktopApi = {
   acknowledgeAcpAgentUpdate?: (
     request: AcknowledgeAcpAgentUpdateRequest,
   ) => Promise<AcknowledgeAcpAgentUpdateResponse>;
+  readTokenMiserUsage?: () => Promise<DesktopTokenMiserUsage>;
   readSettings?: (
     request?: ReadDesktopSettingsRequest
   ) => Promise<ReadDesktopSettingsResponse>;

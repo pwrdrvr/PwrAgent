@@ -569,6 +569,7 @@ export const WINDOW_COPY_LOCAL_DIAGNOSTICS_INFO_CHANNEL =
   "window:copy-local-diagnostics-info";
 export const RUNTIME_IDENTITY_CHANNEL = "runtime:get-identity";
 export const SETTINGS_READ_CHANNEL = "settings:read";
+export const TOKEN_MISER_READ_USAGE_CHANNEL = "token-miser:read-usage";
 export const SETTINGS_READ_BOOTSTRAP_CHANNEL = "settings:read-bootstrap";
 export const SETTINGS_READ_MESSAGING_CHANNEL = "settings:read-messaging";
 export const SETTINGS_READ_FULL_ACCESS_POLICY_CHANNEL =
