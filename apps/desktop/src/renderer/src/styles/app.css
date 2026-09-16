@@ -14010,6 +14010,19 @@ a.button {
   color: var(--text-primary);
 }
 
+/* Busy, not gone: the chip keeps its focus ring and its place in the tab
+   order (see the `aria-disabled` note in StarMapScreen.tsx), so only the
+   affordances that promise a response are withdrawn. It carried no
+   `:disabled` rule before this, so resting appearance is unchanged. */
+.star-map__cluster-overflow[aria-disabled="true"] {
+  cursor: default;
+}
+
+.star-map__cluster-overflow[aria-disabled="true"]:hover {
+  background: transparent;
+  color: var(--text-muted);
+}
+
 .star-map__cluster-label:focus-visible,
 .star-map__cluster-overflow:focus-visible {
   outline: 2px solid var(--focus-ring);
