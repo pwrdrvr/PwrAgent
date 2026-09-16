@@ -80,6 +80,29 @@ describe("MessagingSurfacePicker", () => {
     expect(trigger).toHaveAttribute("aria-expanded", "false");
   });
 
+  it("survives the focus move that opening it causes", () => {
+    // The sequence a real click produces, which `fireEvent.click` alone does
+    // not: the trigger takes focus, then the panel's search input pulls it
+    // away via `autoFocus`. That fires a focus-out on the field whose
+    // relatedTarget lives in the portal — not a DOM descendant of the field.
+    // A close-on-focus-out check closed the panel in the frame it opened, so
+    // it flashed and vanished, and no assertion that only clicked the trigger
+    // could see it.
+    render(
+      <MessagingSurfacePicker fieldLabel="Surface" value="" options={options} filterConversations onChange={vi.fn()} />,
+    );
+    const trigger = screen.getByRole("button", { name: CLOSED_LABEL });
+    trigger.focus();
+    fireEvent.click(trigger);
+
+    const input = screen.getByRole("combobox");
+    fireEvent.focusOut(trigger, { relatedTarget: input });
+    fireEvent.blur(trigger, { relatedTarget: input });
+
+    expect(screen.getByRole("dialog", { name: "Surface" })).toBeInTheDocument();
+    expect(screen.getAllByRole("option").length).toBeGreaterThan(0);
+  });
+
   it("names the chosen destination on the closed trigger", () => {
     setup("topic", true);
     fireEvent.keyDown(screen.getByRole("combobox"), { key: "Escape" });

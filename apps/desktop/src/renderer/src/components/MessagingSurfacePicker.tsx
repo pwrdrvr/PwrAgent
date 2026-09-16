@@ -274,17 +274,14 @@ export function MessagingSurfacePicker(props: {
 
   return (
     <div ref={root} className="messaging-surface-picker"
-      onBlur={(event) => {
-        // React routes the portalled panel's events through this handler, but
-        // `contains` walks the DOM, where the panel is not a descendant — so
-        // it has to be checked separately or focusing into the list would
-        // close it. A null `relatedTarget` (focus leaving to nothing) is not a
-        // reason to close either.
-        const next = event.relatedTarget as Node | null;
-        if (!next) return;
-        if (event.currentTarget.contains(next) || panel.current?.contains(next)) return;
-        setOpen(false);
-      }}
+      // Deliberately no blur handler. Closing on focus-out cannot be done
+      // safely here: the panel's search input takes focus via `autoFocus`
+      // during React's MUTATION phase, while `ref={panel}` is assigned in the
+      // LAYOUT phase that runs after it. The blur therefore fires while
+      // `panel.current` is still null, and any containment check that consults
+      // it closes the panel in the frame it opened — it flashed and vanished.
+      // `pointerdown` outside and Escape are what the composer pickers use,
+      // and they have no such ordering hazard.
       onKeyDown={(event) => {
         if (event.key === "Escape" && open) {
           event.preventDefault();
