@@ -174,6 +174,7 @@ type ThreadSessionEntry = {
   hydratedInitialHistoryLimit?: number;
   hydratedUpdatedAt?: number;
   hydratedStreamRecoveryVersion?: number;
+  hydrationPendingInteraction?: Pick<ThreadSessionEntry, "pendingRequest" | "pendingUserInput" | "pendingMcpInteraction">;
   initialLoadDurationMs?: number;
   interacted: boolean;
   lastTouchedAt: number;
@@ -4813,6 +4814,11 @@ export function useThreadSessionState(params: {
         failedHydrationVersion: undefined,
         lastTouchedAt: Date.now(),
         loading: true,
+        hydrationPendingInteraction: {
+          pendingRequest: current.pendingRequest,
+          pendingUserInput: current.pendingUserInput,
+          pendingMcpInteraction: current.pendingMcpInteraction,
+        },
         // A latest hydration supersedes any older-page read for the same
         // thread. Its request-version bump makes that page response stale, so
         // release the loading state here instead of waiting for a response
@@ -4899,7 +4905,16 @@ export function useThreadSessionState(params: {
             current.response,
             Boolean(current.loadedHistory),
           );
-          const hydratedPendingRequest = response.pendingRequest;
+          // Remote snapshots also report the absence of pending interactions.
+          // Preserve newer live state if a request changed while this read was in flight.
+          const pendingAtRead = current.hydrationPendingInteraction;
+          const preserveLivePendingInteraction = federationTarget?.scope === "remote"
+            && (current.pendingRequest !== pendingAtRead?.pendingRequest
+              || current.pendingUserInput !== pendingAtRead?.pendingUserInput
+              || current.pendingMcpInteraction !== pendingAtRead?.pendingMcpInteraction);
+          const reconcilePendingInteraction = federationTarget?.scope === "remote"
+            && !preserveLivePendingInteraction;
+          const hydratedPendingRequest = preserveLivePendingInteraction ? undefined : response.pendingRequest;
           const hydratedPendingUserInput =
             hydratedPendingRequest && isRequestUserInputNotification(hydratedPendingRequest)
               ? createQuestionnaireState(hydratedPendingRequest)
@@ -4917,6 +4932,16 @@ export function useThreadSessionState(params: {
             || hydratedPendingMcpInteraction
             || hydratedApprovalRequest
           );
+          const nextPendingInteraction = {
+            pendingRequest: reconcilePendingInteraction || hydratedPendingInteraction
+              ? hydratedApprovalRequest : current.pendingRequest,
+            pendingUserInput: reconcilePendingInteraction || hydratedPendingInteraction
+              ? hydratedPendingUserInput : current.pendingUserInput,
+            pendingMcpInteraction: reconcilePendingInteraction || hydratedPendingInteraction
+              ? hydratedPendingMcpInteraction : current.pendingMcpInteraction,
+          };
+          const clearedPendingInteraction = hasPendingInteraction(current)
+            && !hasPendingInteraction({ ...current, ...nextPendingInteraction });
           // Host tool calls can remain pending after their provider turn ends.
           // Only a request the renderer can present as an interaction owns a
           // turn here; otherwise it would undo idle reconciliation below.
@@ -4964,7 +4989,7 @@ export function useThreadSessionState(params: {
           const shouldClearStaleThinking =
             responseThreadStatus === "idle"
             && thinkingReasons.length > 0
-            && !hasPendingInteraction(current)
+            && !hasPendingInteraction({ ...current, ...nextPendingInteraction })
             && !hydratedPendingInteraction
             && !ownUpdateStillSettling
             && !reviewUpdateStillSettling
@@ -5078,12 +5103,8 @@ export function useThreadSessionState(params: {
             pendingAssistantMessage: shouldClearStaleThinking
               ? undefined
               : current.pendingAssistantMessage,
-            pendingMcpInteraction: hydratedPendingInteraction
-              ? hydratedPendingMcpInteraction
-              : current.pendingMcpInteraction,
-            pendingRequest: hydratedPendingInteraction
-              ? hydratedApprovalRequest
-              : current.pendingRequest,
+            ...nextPendingInteraction,
+            hydrationPendingInteraction: undefined,
             pendingStatusText: hydratedPendingUserInput
               ? "Waiting for input"
               : hydratedPendingMcpInteraction
@@ -5092,10 +5113,9 @@ export function useThreadSessionState(params: {
                   ? "Waiting for approval"
                   : shouldClearStaleThinking
                     ? undefined
-                    : current.pendingStatusText,
-            pendingUserInput: hydratedPendingInteraction
-              ? hydratedPendingUserInput
-              : current.pendingUserInput,
+                    : clearedPendingInteraction
+                      ? backendReportedActive ? "Thinking" : undefined
+                      : current.pendingStatusText,
             response: responseWithRetainedTail,
             staleThinkingRecheckAt:
               federationTarget?.scope !== "remote" && (ownUpdateStillSettling || reviewUpdateStillSettling)
