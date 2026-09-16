@@ -54,6 +54,12 @@ export function MermaidDiagram(props: {
 
   const current = result?.source === props.source && result.theme === theme;
   const image = current ? result.image : undefined;
+  const copySource = async () => {
+    const api = props.desktopApi ?? getDesktopApi();
+    if (api?.copyText) await api.copyText(props.source);
+    else if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(props.source);
+    else throw new Error("Text clipboard is unavailable");
+  };
   return (
     <div className="transcript-message__pre-wrap mermaid-diagram" ref={root}>
       <div className="mermaid-diagram__toolbar">
@@ -62,13 +68,9 @@ export function MermaidDiagram(props: {
           aria-pressed={showSource} onClick={() => setShowSource(!showSource)}>
           {showSource ? "Show diagram" : "Show source"}
         </button>
-        {image ? <ImageCopyButton src={image.src} /> : null}
-        <ClipboardActionButton key={props.source} label="Copy source" copy={async () => {
-          const api = props.desktopApi ?? getDesktopApi();
-          if (api?.copyText) await api.copyText(props.source);
-          else if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(props.source);
-          else throw new Error("Text clipboard is unavailable");
-        }} />
+        {image ? <ImageCopyButton src={image.src} appearance="chip" /> : null}
+        <ClipboardActionButton key={props.source} label="Copy source" text="source"
+          appearance="chip" copy={copySource} />
       </div>
       {image && !showSource ? (
         <div className="mermaid-diagram__viewport" tabIndex={0} aria-label="Mermaid diagram">
@@ -91,7 +93,9 @@ export function MermaidDiagram(props: {
       )}
       {expanded && image ? <ImageLightbox src={image.src} alt="Mermaid diagram"
         dialogLabel="Expanded Mermaid diagram"
-        caption="Right-click to copy image" onClose={() => setExpanded(false)} /> : null}
+        actions={<ClipboardActionButton key={props.source} label="Copy source" text="source"
+          appearance="pill" copy={copySource} />}
+        onClose={() => setExpanded(false)} /> : null}
     </div>
   );
 }

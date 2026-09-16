@@ -43,7 +43,20 @@ describe("ImageLightbox", () => {
       <ImageLightbox src="https://example.test/cat.png" alt="A cat" onClose={onClose} />,
     );
 
-    fireEvent.click(screen.getByRole("dialog", { name: "Expanded image" }));
+    pressAndClick(screen.getByRole("dialog", { name: "Expanded image" }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("closes when the empty letterbox beside the image is clicked", () => {
+    // The viewport spans the window minus the chrome bands, so most of what
+    // reads as scrim is inside it. It used to take that press as the start of
+    // a pan and dismiss nothing at all.
+    const onClose = vi.fn();
+    render(
+      <ImageLightbox src="https://example.test/cat.png" alt="A cat" onClose={onClose} />,
+    );
+
+    pressAndClick(screen.getByLabelText("Image pan and zoom"));
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
@@ -53,8 +66,141 @@ describe("ImageLightbox", () => {
       <ImageLightbox src="https://example.test/cat.png" alt="A cat" onClose={onClose} />,
     );
 
-    fireEvent.click(screen.getByRole("img", { name: "A cat" }));
+    pressAndClick(stubPointerCapture(screen.getByRole("img", { name: "A cat" })));
     expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("does not close when a press on the scrim travels before release", () => {
+    const onClose = vi.fn();
+    render(
+      <ImageLightbox src="https://example.test/cat.png" alt="A cat" onClose={onClose} />,
+    );
+
+    const dialog = screen.getByRole("dialog", { name: "Expanded image" });
+    pointer(dialog, "pointerdown", { clientX: 40, clientY: 40 });
+    fireEvent.click(dialog, { clientX: 220, clientY: 40, detail: 1 });
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("does not let a keyboard-activated control dismiss through a stale press", () => {
+    // A press aborted outside the window leaves its record behind, and a
+    // keypress on a control synthesises a click that reports (0, 0) — close
+    // enough to a press near the window origin to pass the slop test.
+    const onClose = vi.fn();
+    render(
+      <ImageLightbox src="https://example.test/cat.png" alt="A cat" onClose={onClose} />,
+    );
+
+    const dialog = screen.getByRole("dialog", { name: "Expanded image" });
+    pointer(dialog, "pointerdown", { clientX: 2, clientY: 2 });
+    fireEvent(dialog, new Event("pointercancel", { bubbles: true }));
+    // `detail: 0` is what a keypress produces; Testing Library's default.
+    fireEvent.click(screen.getByRole("button", { name: "Zoom in" }), { clientX: 0, clientY: 0 });
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("does not let a stale scrim press dismiss a later click on the image", () => {
+    const onClose = vi.fn();
+    render(
+      <ImageLightbox src="https://example.test/cat.png" alt="A cat" onClose={onClose} />,
+    );
+
+    const dialog = screen.getByRole("dialog", { name: "Expanded image" });
+    const image = stubPointerCapture(screen.getByRole("img", { name: "A cat" }));
+    // A cancelled press leaves its record behind: no click ever cleared it.
+    pointer(dialog, "pointerdown", { clientX: 200, clientY: 200 });
+    fireEvent(dialog, new Event("pointercancel", { bubbles: true }));
+    // The image stops the next press from reaching the dialog's bubble
+    // handler — the gesture needs that — so only a capture-phase record can
+    // overwrite the stale one before the click arrives.
+    pressAndClick(image, { clientX: 200, clientY: 200 });
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("does not close when a toolbar control is used", () => {
+    const onClose = vi.fn();
+    render(
+      <ImageLightbox src="https://example.test/cat.png" alt="A cat" onClose={onClose} />,
+    );
+
+    pressAndClick(screen.getByRole("button", { name: "Zoom in" }));
+    pressAndClick(screen.getByRole("button", { name: "Copy image" }));
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("explains every glyph-only control on hover, including a greyed-out one", () => {
+    render(
+      <ImageLightbox src="https://example.test/cat.png" alt="A cat" position={1} total={2}
+        onClose={() => {}} onNext={() => {}} />,
+    );
+
+    // A native `title` is not enough here: `.image-lightbox` is
+    // `overflow: hidden`, which clips a CSS pseudo-element tooltip, and every
+    // control in the pill is an unlabelled glyph.
+    //
+    // This render has TWO greyed-out controls, and both are in the list:
+    // "Fit to window" (nothing to fit yet) and "Previous image" (no
+    // `onPrevious` at the first image). Leaving the natively-disabled one out
+    // is how this guard passed while the edge control explained nothing.
+    for (const [name, hint] of [
+      ["Zoom out", "Zoom out"],
+      ["Zoom in", "Zoom in"],
+      ["Fit to window", "Fit the whole image in the window"],
+      ["Copy image", "Copy image"],
+      ["Close", "Close (Esc)"],
+      ["Next image", "Next image (Right Arrow)"],
+      ["Previous image", "Previous image (Left Arrow)"],
+    ] as const) {
+      const control = screen.getByRole("button", { name });
+      fireEvent.mouseEnter(control);
+      expect(document.body.querySelector(".viewport-tooltip"), name).toHaveTextContent(hint);
+      fireEvent.mouseLeave(control);
+      expect(document.body.querySelector(".viewport-tooltip")).toBeNull();
+    }
+
+    // Nothing greyed out is `disabled`, because a disabled button fires no
+    // pointer events and so could never raise the tooltip an operator hovers a
+    // greyed-out glyph to read.
+    for (const name of ["Fit to window", "Previous image"] as const) {
+      const control = screen.getByRole("button", { name });
+      expect(control, name).toHaveAttribute("aria-disabled", "true");
+      expect(control, name).toBeEnabled();
+    }
+  });
+
+  it("raises one tooltip at a time across the controls that own separate hooks", () => {
+    // Every control shares the dialog's tooltip. With a hook per control, a
+    // focused control kept its tooltip up (no blur) while a hover raised a
+    // second one beside it.
+    render(
+      <ImageLightbox src="https://example.test/cat.png" alt="A cat" onClose={() => {}} />,
+    );
+
+    fireEvent.focus(screen.getByRole("button", { name: "Zoom out" }));
+    expect(document.body.querySelectorAll(".viewport-tooltip")).toHaveLength(1);
+    fireEvent.mouseEnter(screen.getByRole("button", { name: "Copy image" }));
+    expect(document.body.querySelectorAll(".viewport-tooltip")).toHaveLength(1);
+    expect(document.body.querySelector(".viewport-tooltip")).toHaveTextContent("Copy image");
+  });
+
+  it("announces a gallery step from a region that outlives the image", () => {
+    // The visible plate is rebuilt with the image on every step, so a live
+    // region inside it would never announce; screen readers report mutations
+    // to an already-mounted region, not the content of a fresh one.
+    const { rerender } = render(
+      <ImageLightbox src="https://example.test/first.png" alt="First" position={1} total={14}
+        onClose={() => {}} onNext={() => {}} />,
+    );
+    const live = document.body.querySelector("[role='status'][aria-live='polite']");
+    expect(live).toHaveTextContent("Image 1 of 14");
+
+    rerender(
+      <ImageLightbox src="https://example.test/second.png" alt="Second" position={2} total={14}
+        onClose={() => {}} onNext={() => {}} />,
+    );
+    // The same node, with new text — which is what gets announced.
+    expect(document.body.querySelector("[role='status'][aria-live='polite']")).toBe(live);
+    expect(live).toHaveTextContent("Image 2 of 14");
   });
 
   it("closes on Escape", () => {
@@ -84,6 +230,9 @@ describe("ImageLightbox", () => {
 
     const dialog = screen.getByRole("dialog", { name: "Expanded image" });
     expect(dialog).toHaveTextContent("2 / 3");
+    // Widens the side band in `app.css` so an edge control has somewhere to
+    // stand that the fitted image does not already occupy.
+    expect(dialog).toHaveAttribute("data-gallery", "true");
 
     fireEvent.click(screen.getByRole("button", { name: "Previous image" }));
     fireEvent.keyDown(window, { key: "ArrowLeft" });
@@ -106,8 +255,10 @@ describe("ImageLightbox", () => {
       />,
     );
 
-    expect(screen.getByRole("button", { name: "Previous image" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Next image" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Previous image" }))
+      .toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByRole("button", { name: "Next image" }))
+      .toHaveAttribute("aria-disabled", "false");
 
     rerender(
       <ImageLightbox
@@ -120,8 +271,10 @@ describe("ImageLightbox", () => {
       />,
     );
 
-    expect(screen.getByRole("button", { name: "Previous image" })).toBeEnabled();
-    expect(screen.getByRole("button", { name: "Next image" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Previous image" }))
+      .toHaveAttribute("aria-disabled", "false");
+    expect(screen.getByRole("button", { name: "Next image" }))
+      .toHaveAttribute("aria-disabled", "true");
   });
 
   it("stops listening for Escape after unmount", () => {
@@ -155,6 +308,26 @@ function installResizeObserver() {
     disconnect() {}
   });
   return () => act(() => resize());
+}
+
+/** jsdom implements no pointer capture; Electron does. */
+function stubPointerCapture(element: HTMLElement) {
+  element.setPointerCapture = vi.fn();
+  element.hasPointerCapture = vi.fn(() => true);
+  element.releasePointerCapture = vi.fn();
+  return element;
+}
+
+/**
+ * A dismiss is a press followed by a click, and the dialog reads both — it has
+ * to, or a pan released over the scrim would close the lightbox. A bare
+ * `fireEvent.click` describes nothing an operator can actually do.
+ */
+function pressAndClick(target: HTMLElement, at = { clientX: 120, clientY: 120 }) {
+  pointer(target, "pointerdown", at);
+  // `detail` is what separates a pointer click from the one a keypress
+  // synthesises; Testing Library defaults it to 0, i.e. the keyboard.
+  fireEvent.click(target, { ...at, detail: 1 });
 }
 
 function pointer(target: HTMLElement, type: string, fields: Record<string, number>) {
@@ -246,35 +419,37 @@ describe("shared lightbox gestures", () => {
     expect(image.style.width).toBe("80px");
   });
 
-  it("captures click-drag, ignores other pointers, and releases cancelled or lost drags", () => {
+  it("captures click-drag on the image, ignores other pointers, and releases cancelled or lost drags", () => {
     const resize = installResizeObserver();
     const onClose = vi.fn();
     render(<ImageLightbox src="first.png" alt="First" onClose={onClose} />);
     const { viewport, image } = measureImage();
     resize();
-    viewport.setPointerCapture = vi.fn();
-    viewport.hasPointerCapture = vi.fn(() => true);
-    viewport.releasePointerCapture = vi.fn();
+    stubPointerCapture(image);
+    // A press on the box AROUND the image starts nothing: that surface is
+    // scrim, and it dismisses.
     pointer(viewport, "pointerdown", { clientX: 300, clientY: 200 });
-    expect(viewport.setPointerCapture).toHaveBeenCalledWith(1);
-    pointer(viewport, "pointermove", { pointerId: 2, clientX: 600 });
+    expect(image.setPointerCapture).not.toHaveBeenCalled();
+    pointer(image, "pointerdown", { clientX: 300, clientY: 200 });
+    expect(image.setPointerCapture).toHaveBeenCalledWith(1);
+    pointer(image, "pointermove", { pointerId: 2, clientX: 600 });
     expect(image.style.transform).toBe("translate(0px, 0px)");
-    pointer(viewport, "pointermove", { clientX: 340, clientY: 250 });
+    pointer(image, "pointermove", { clientX: 340, clientY: 250 });
     expect(image.style.transform).toBe("translate(40px, 50px)");
-    pointer(viewport, "pointercancel", {});
-    pointer(viewport, "pointermove", { clientX: 500 });
+    pointer(image, "pointercancel", {});
+    pointer(image, "pointermove", { clientX: 500 });
     expect(image.style.transform).toBe("translate(40px, 50px)");
-    expect(viewport.releasePointerCapture).toHaveBeenCalledWith(1);
-    pointer(viewport, "pointerdown", {});
-    pointer(viewport, "pointermove", { buttons: 0, clientX: 100 });
-    expect(viewport).toHaveAttribute("data-panning", "false");
-    pointer(viewport, "pointerdown", {});
-    pointer(viewport, "lostpointercapture", {});
-    expect(viewport).toHaveAttribute("data-panning", "false");
-    pointer(viewport, "pointerdown", {});
+    expect(image.releasePointerCapture).toHaveBeenCalledWith(1);
+    pointer(image, "pointerdown", {});
+    pointer(image, "pointermove", { buttons: 0, clientX: 100 });
+    expect(image).toHaveAttribute("data-panning", "false");
+    pointer(image, "pointerdown", {});
+    pointer(image, "lostpointercapture", {});
+    expect(image).toHaveAttribute("data-panning", "false");
+    pointer(image, "pointerdown", {});
     fireEvent(window, new Event("blur"));
-    expect(viewport).toHaveAttribute("data-panning", "false");
-    fireEvent.click(viewport);
+    expect(image).toHaveAttribute("data-panning", "false");
+    pressAndClick(image);
     expect(onClose).not.toHaveBeenCalled();
     expect(image).toHaveAttribute("draggable", "false");
     const context = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });

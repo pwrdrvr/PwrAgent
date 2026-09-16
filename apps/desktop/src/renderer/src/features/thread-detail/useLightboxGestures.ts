@@ -6,14 +6,21 @@ const clamp = (value: number, min: number, max: number) => Math.min(max, Math.ma
 /** Adapted from PwrSnap's editor/useZoomPan: explicit image dimensions,
  * cursor-anchored zoom, unmodified wheel pan and a 64px visible pan handle.
  * Keep ordinary wheel events uncancelled: cancelling them can suppress macOS
- * pinch synthesis. The modal locks document scrolling and contains overscroll. */
+ * pinch synthesis. The modal locks document scrolling and contains overscroll.
+ *
+ * Two surfaces, and they are deliberately different sizes. `viewport` owns
+ * wheel, pinch and the measured fit box; `imageHandlers` go on the image
+ * itself, so a press only becomes a drag when it lands on something to drag.
+ * They were both on the viewport, which made the empty letterbox around the
+ * image — a third of the window for a portrait image — capture the pointer
+ * and swallow the click that should have dismissed the lightbox. */
 export function useLightboxGestures() {
   const viewport = useRef<HTMLDivElement>(null);
   const [natural, setNatural] = useState({ width: 0, height: 0 });
   const [size, setSize] = useState({ width: 0, height: 0 });
   const [view, setView] = useState(FIT);
   const [panning, setPanning] = useState(false);
-  const pan = useRef<{ id: number; x: number; y: number } | null>(null);
+  const pan = useRef<{ id: number; x: number; y: number; element: Element } | null>(null);
   const fit = Math.min(1, size.width / natural.width, size.height / natural.height) || 0;
   const width = natural.width * fit;
   const height = natural.height * fit;
@@ -84,16 +91,16 @@ export function useLightboxGestures() {
 
   useLayoutEffect(() => {
     const cancel = () => {
-      const id = pan.current?.id;
+      const active = pan.current;
       pan.current = null;
       setPanning(false);
-      if (id !== undefined && viewport.current?.hasPointerCapture(id)) viewport.current.releasePointerCapture(id);
+      if (active && active.element.hasPointerCapture(active.id)) active.element.releasePointerCapture(active.id);
     };
     window.addEventListener("blur", cancel);
     return () => window.removeEventListener("blur", cancel);
   }, []);
 
-  const endPan = (event: PointerEvent<HTMLDivElement>) => {
+  const endPan = (event: PointerEvent<HTMLImageElement>) => {
     event.stopPropagation();
     if (pan.current?.id !== event.pointerId) return;
     pan.current = null;
@@ -117,23 +124,28 @@ export function useLightboxGestures() {
     },
     onLoad: (image: HTMLImageElement) => setNatural({ width: image.naturalWidth, height: image.naturalHeight }),
     imageStyle: width && height ? { width: width * view.scale, height: height * view.scale, transform: `translate(${view.x}px, ${view.y}px)` } : undefined,
-    pointerHandlers: {
-      onPointerDown: (event: PointerEvent<HTMLDivElement>) => {
+    /** Scale against the image's own pixels, for the toolbar readout — `view.scale`
+     *  alone is relative to fit, which says nothing about what the operator sees. */
+    percent: Math.round(fit * view.scale * 100),
+    /** Nothing left for "Fit to window" to do. */
+    atFit: view.scale === 1 && view.x === 0 && view.y === 0,
+    imageHandlers: {
+      onPointerDown: (event: PointerEvent<HTMLImageElement>) => {
         event.stopPropagation();
         if ((event.button !== 0 && event.button !== 1) || pan.current) return;
         event.preventDefault();
         event.currentTarget.setPointerCapture(event.pointerId);
-        pan.current = { id: event.pointerId, x: event.clientX, y: event.clientY };
+        pan.current = { id: event.pointerId, x: event.clientX, y: event.clientY, element: event.currentTarget };
         setPanning(true);
       },
-      onPointerMove: (event: PointerEvent<HTMLDivElement>) => {
+      onPointerMove: (event: PointerEvent<HTMLImageElement>) => {
         event.stopPropagation();
         const start = pan.current;
         if (!start || start.id !== event.pointerId) return;
         if (!event.buttons) { endPan(event); return; }
         const dx = event.clientX - start.x;
         const dy = event.clientY - start.y;
-        pan.current = { id: start.id, x: event.clientX, y: event.clientY };
+        pan.current = { id: start.id, x: event.clientX, y: event.clientY, element: start.element };
         setView((previous) => bound({ ...previous, x: previous.x + dx, y: previous.y + dy }));
       },
       onPointerUp: endPan,

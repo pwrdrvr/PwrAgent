@@ -3131,7 +3131,10 @@ describe("ThreadView", () => {
     const dialog = screen.getByRole("dialog", { name: "Expanded image" });
     expect(within(dialog).getByRole("img", { name: "Overview" })).toBeInTheDocument();
     expect(dialog).toHaveTextContent("1 / 3");
-    expect(screen.getByRole("button", { name: "Previous image" })).toBeDisabled();
+    // `aria-disabled`, not `disabled`: a disabled button fires no pointer
+    // events and so could never raise its own tooltip.
+    expect(screen.getByRole("button", { name: "Previous image" }))
+      .toHaveAttribute("aria-disabled", "true");
 
     fireEvent.click(screen.getByRole("button", { name: "Next image" }));
     expect(within(dialog).getByRole("img", { name: "Branches" })).toBeInTheDocument();
@@ -3140,7 +3143,8 @@ describe("ThreadView", () => {
     fireEvent.keyDown(window, { key: "ArrowRight" });
     expect(within(dialog).getByRole("img", { name: "Remotes" })).toBeInTheDocument();
     expect(dialog).toHaveTextContent("3 / 3");
-    expect(screen.getByRole("button", { name: "Next image" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Next image" }))
+      .toHaveAttribute("aria-disabled", "true");
 
     fireEvent.keyDown(window, { key: "ArrowLeft" });
     expect(within(dialog).getByRole("img", { name: "Branches" })).toBeInTheDocument();

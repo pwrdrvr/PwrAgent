@@ -1,10 +1,14 @@
 import {
+  createContext,
   useCallback,
+  useContext,
   useEffect,
   useId,
   useLayoutEffect,
   useRef,
   useState,
+  type FocusEvent as ReactFocusEvent,
+  type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
@@ -278,6 +282,59 @@ function toTargetRect(rect: DOMRect | TooltipTargetRect): TooltipTargetRect {
  *     </span>
  *   );
  */
+/** What `useViewportTooltip` returns, for a component that is handed one
+ *  rather than creating its own. */
+export type ViewportTooltip = ReturnType<typeof useViewportTooltip>;
+
+/**
+ * A surface's single tooltip, offered to everything inside it.
+ *
+ * Separate instances do not know about each other: one control left showing a
+ * tooltip on focus is still showing it when a hover raises a second, so two
+ * land on screen at once. A surface whose controls are partly its own and
+ * partly passed in by a caller (the lightbox pill, which takes extra copy
+ * controls as a prop) cannot thread a prop to all of them, so it publishes
+ * one here instead.
+ */
+const ViewportTooltipContext = createContext<ViewportTooltip | undefined>(undefined);
+
+export const ViewportTooltipProvider = ViewportTooltipContext.Provider;
+
+/** The surrounding surface's tooltip, or `undefined` outside one. */
+export function useInheritedViewportTooltip(): ViewportTooltip | undefined {
+  return useContext(ViewportTooltipContext);
+}
+
+/**
+ * The hover-and-focus handler quad every caller of this hook writes, as one
+ * spreadable object. Focus as well as hover, so the tooltip is reachable from
+ * the keyboard; `currentTarget` rather than a captured ref, so one helper
+ * serves every control on a surface.
+ *
+ * Use it in place of the native `title` attribute wherever a control sits
+ * inside a clipping or layered surface — and note that `title` is also the
+ * only one of the two that a natively `disabled` control can still show, since
+ * a disabled control dispatches no pointer or focus events at all. A greyed-out
+ * control that needs to explain itself wants `aria-disabled` and a guarded
+ * handler, not `disabled`.
+ */
+export function tooltipHandlers(
+  tooltip: Pick<ViewportTooltip, "show" | "hide">,
+  content: ReactNode,
+): {
+  onMouseEnter: (event: ReactMouseEvent<HTMLElement>) => void;
+  onMouseLeave: () => void;
+  onFocus: (event: ReactFocusEvent<HTMLElement>) => void;
+  onBlur: () => void;
+} {
+  return {
+    onMouseEnter: (event) => tooltip.show(event.currentTarget, content),
+    onMouseLeave: tooltip.hide,
+    onFocus: (event) => tooltip.show(event.currentTarget, content),
+    onBlur: tooltip.hide,
+  };
+}
+
 export function useViewportTooltip(options: {
   /** CSS class applied to the rendered tooltip element. */
   className: string;
