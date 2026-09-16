@@ -3,8 +3,9 @@ import { formatTrafficBytes, trafficByteUnit } from "./format-traffic-bytes";
 
 describe("network byte display", () => {
   it.each([
-    [0, "0 KB"], [1, "<0.01 KB"], [1_000, "1 KB"],
-    [31_826, "31.83 KB"], [4_260_270, "4.26 MB"],
+    [0, "0 KB"], [1, "0 KB"], [499, "0 KB"], [500, "1 KB"], [1_000, "1 KB"],
+    [31_826, "32 KB"], [125_740, "126 KB"], [122_030, "122 KB"],
+    [4_260_270, "4.26 MB"],
     [50_000_000_000, "50 GB"], [1_000_000_000_000, "1 TB"],
   ])("formats %s bytes as %s", (value, expected) => {
     expect(formatTrafficBytes(value)).toBe(expected);

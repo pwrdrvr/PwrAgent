@@ -7,6 +7,5 @@ export function trafficByteUnit(value: number) {
 export function formatTrafficBytes(value: number): string {
   const { scale, unit } = trafficByteUnit(value);
   const scaled = value / scale;
-  if (scaled > 0 && scaled < 0.01) return `<0.01 ${unit}`;
-  return `${scaled.toLocaleString(undefined, { maximumFractionDigits: 2 })} ${unit}`;
+  return `${scaled.toLocaleString(undefined, { maximumFractionDigits: unit === "KB" ? 0 : 2 })} ${unit}`;
 }
