@@ -6818,10 +6818,11 @@ a.button {
     color 120ms ease;
 }
 
-/* `:hover` matches a disabled button, so the unqualified rule lit this up
-   while the page it asks for was already in flight and the click went
-   nowhere. */
-.sidebar-show-more:hover:not(:disabled) {
+/* `:hover` matches a busy control exactly as it matched a disabled one, so
+   the unqualified rule lit this up while the page it asks for was already in
+   flight and the click went nowhere. The busy state is `aria-disabled` now
+   (see SidebarShowMore.tsx), which `:disabled` does not match. */
+.sidebar-show-more:hover:not([aria-disabled="true"]) {
   background: var(--bg-panel-hover);
   color: var(--text-primary);
 }
@@ -6831,10 +6832,12 @@ a.button {
   outline-offset: 2px;
 }
 
-/* A page in flight. `disabled` has been set on every one of these since they
-   shipped and styled on none of them, so the rail looked the same whether a
-   click would do something or nothing. */
-.sidebar-show-more:disabled {
+/* A page in flight. Busy, not gone: the control keeps its place in the tab
+   order and the focus ring from the rule above, and only the promise of a
+   response is withdrawn. The state was styled on none of these for their
+   whole life, so the rail looked the same whether a click would do something
+   or nothing. */
+.sidebar-show-more[aria-disabled="true"] {
   color: var(--text-muted);
   cursor: default;
 }
@@ -13466,6 +13469,23 @@ a.button {
 
 .star-map-instance__action[aria-pressed="true"]:hover {
   background: color-mix(in srgb, var(--accent) 28%, transparent);
+}
+
+/* A load in flight. These carry `aria-disabled` rather than the native
+   property so a focused control is not blurred out from under a keyboard
+   operator (see StarMapInstanceCard.tsx), which means the row still matches
+   the accent `:hover` rule above — restate the quiet treatment at higher
+   specificity so a busy button never looks actionable. The focus ring below
+   is untouched, because the whole point is that focus stays here. */
+.star-map-instance__action[aria-disabled="true"] {
+  color: var(--text-muted);
+  cursor: default;
+}
+
+.star-map-instance__action[aria-disabled="true"]:hover {
+  border-color: var(--border-subtle);
+  background: color-mix(in srgb, var(--bg-panel) 80%, transparent);
+  color: var(--text-muted);
 }
 
 .star-map-instance__action:focus-visible {

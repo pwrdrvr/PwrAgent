@@ -265,13 +265,18 @@ describe("Tangerine Terminal theme contract", () => {
     expect(showMore).toMatch(/background:\s*transparent;/);
     expect(showMore).toMatch(/justify-self:\s*start;/);
     expect(showMore).toMatch(/align-self:\s*flex-start;/);
-    // `:hover` matches a disabled button, so the hover rule has to exclude
-    // one or a control with a page already in flight lights up on a click
-    // that goes nowhere.
-    expect(css).toContain(".sidebar-show-more:hover:not(:disabled)");
-    expect(extractRuleBody(css, ".sidebar-show-more:disabled")).toMatch(
-      /color:\s*var\(--text-muted\);/,
+    // `:hover` matches a busy control, so the hover rule has to exclude one
+    // or a control with a page already in flight lights up on a click that
+    // goes nowhere. The exclusion has to name `aria-disabled`: the control
+    // stopped taking the native property so a focused one is not blurred out
+    // from under a keyboard operator, and `:not(:disabled)` matches every
+    // busy control there is now.
+    expect(css).toContain(
+      '.sidebar-show-more:hover:not([aria-disabled="true"])',
     );
+    expect(
+      extractRuleBody(css, '.sidebar-show-more[aria-disabled="true"]'),
+    ).toMatch(/color:\s*var\(--text-muted\);/);
 
     // Same floor for the thread-row hover cluster: the transcript-gaps
     // pass first shrank these to 22px for visual weight and the review
