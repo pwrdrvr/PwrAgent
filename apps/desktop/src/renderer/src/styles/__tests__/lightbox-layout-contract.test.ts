@@ -127,11 +127,13 @@ describe("image lightbox layout contract", () => {
     ).toBe("var(--win-titlebar-h)");
   });
 
-  it("puts the pan cursor on the image and the dismiss cursor everywhere else", () => {
-    // The affordance and the behavior have to agree: the surface that says
-    // "grab" is the only surface that pans, and the rest says "zoom-out"
-    // because the rest dismisses.
-    expect(declaration(region.base, ".image-lightbox", "cursor")).toBe("zoom-out");
+  it("puts the pan cursor on the image and promises nothing anywhere else", () => {
+    // The affordance and the behavior have to agree. The image says "grab" and
+    // is the only surface that pans. Everything else dismisses, and no cursor
+    // means that -- `zoom-out` in particular does not: it predicts the picture
+    // shrinking, which is what the pill's minus-magnifier button does and what
+    // a click on the scrim never does.
+    expect(declaration(region.base, ".image-lightbox", "cursor")).toBe("default");
     expect(declaration(region.base, ".image-lightbox__image", "cursor")).toBe("grab");
     expect(declaration(region.base, '.image-lightbox__image[data-panning="true"]', "cursor")).toBe("grabbing");
     expect(region.base).not.toMatch(/\.image-lightbox__viewport\s*\{[^}]*cursor:/);

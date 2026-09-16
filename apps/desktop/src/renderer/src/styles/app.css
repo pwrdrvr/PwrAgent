@@ -28991,7 +28991,13 @@ button.pricing-token-miser__folded:focus-visible {
   inset: 0;
   z-index: 60;
   background: var(--scrim-opaque);
-  cursor: zoom-out;
+  /* Not `zoom-out`, which is what the thumbnails' `zoom-in` used to pair with
+     when this dialog had no zoom of its own. The pill now carries a literal
+     minus-magnifier button that really does scale the image down, so the same
+     glyph as a cursor would predict the wrong outcome twice over: a click on
+     the scrim closes the lightbox and changes no scale at all. The thumbnails
+     keep `zoom-in`, because clicking one really does expand. */
+  cursor: default;
   /* `hidden` still establishes a scroll container, so `overscroll-behavior`
      keeps a wheel that outruns the image from chaining into the transcript —
      without cancelling plain wheel events, which can suppress macOS pinch
