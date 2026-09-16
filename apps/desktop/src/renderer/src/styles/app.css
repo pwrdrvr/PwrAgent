@@ -28998,6 +28998,14 @@ button.pricing-token-miser__folded:focus-visible {
      the scrim closes the lightbox and changes no scale at all. The thumbnails
      keep `zoom-in`, because clicking one really does expand. */
   cursor: default;
+  /* Portaled to `<body>`, so this dialog is not inside `.app-shell` and
+     inherits none of its rules — including the one that keeps chrome from
+     being selected. Without these, a press-and-drag on the bottom cluster —
+     the gesture the dismiss handler already expects, and forgives within 4px —
+     paints a text selection across the position readout and the caption, and
+     the arrow above ends up sitting over text that is selectable after all. */
+  -webkit-user-select: none;
+  user-select: none;
   /* `hidden` still establishes a scroll container, so `overscroll-behavior`
      keeps a wheel that outruns the image from chaining into the transcript —
      without cancelling plain wheel events, which can suppress macOS pinch
