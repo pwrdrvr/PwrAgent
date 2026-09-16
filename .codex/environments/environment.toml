@@ -56,3 +56,22 @@ nvm use --silent
 corepack enable
 PWRAGENT_PROTOCOL_CAPTURE=1 PWRAGENT_PROTOCOL_CAPTURE_ROOT=.local/protocol-captures PWRAGENT_APP_SERVER_PROTOCOL_LOG=1 PWRAGENT_PROFILE=dev pnpm dev:no-messaging
 '''
+
+# Start standalone React DevTools before launching the app with its bridge enabled.
+[[actions]]
+name = "React DevTools - Standalone"
+icon = "run"
+command = '''
+nvm use --silent
+corepack enable
+npx react-devtools --port 8097
+'''
+
+[[actions]]
+name = "Dev - React DevTools"
+icon = "run"
+command = '''
+nvm use --silent
+corepack enable
+PWRAGENT_PROFILE=dev PWRAGENT_DEV_REACT_DEVTOOLS=1 PWRAGENT_DEV_REACT_DEVTOOLS_PORT=8097 pnpm dev
+'''
