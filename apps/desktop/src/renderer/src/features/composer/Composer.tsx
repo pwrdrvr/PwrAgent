@@ -11212,6 +11212,17 @@ export const Composer = memo(function Composer(props: ComposerProps) {
           />
         )}
 
+        {/* The draft is deliberately still on screen and still selectable, so
+          the only thing distinguishing it from a live input is this line and
+          the `is-readonly` fill behind it. `aria-readonly` covers assistive
+          tech; nothing else covered a sighted operator, who would otherwise
+          click in, get no caret, and lose the keystrokes silently. */}
+        {preparingSend ? (
+          <p className="composer__meta composer__held-notice">
+            Message held while checks run. Select and copy still work.
+          </p>
+        ) : null}
+
         {autocompleteKind === "skills" ? (
           <div
             className={`composer__autocomplete composer__autocomplete--${autocompleteLayout.placement}`}
@@ -12269,7 +12280,10 @@ export const Composer = memo(function Composer(props: ComposerProps) {
 
       </fieldset>
       <div className="composer__footer">
-        <fieldset className="composer__pending-controls" disabled={preparingSend}>
+        <fieldset
+          className="composer__pending-controls composer__pending-controls--dim"
+          disabled={preparingSend}
+        >
         {launchpadCodexEnvironmentOptions.length > 0 ||
         threadCodexEnvironmentOptions.length > 0 ||
         props.thread?.codexEnvironmentRuntime ||
@@ -12415,7 +12429,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         <div className="composer__actions">
           <ContextWindowMoon contextWindow={props.contextWindow} />
           {preparingSend ? (
-            <button className="button button--ghost" type="button" onClick={cancelSendPreparation}>
+            <button
+              className="button button--ghost composer__cancel-preparation"
+              type="button"
+              onClick={cancelSendPreparation}
+            >
               Cancel
             </button>
           ) : null}
@@ -12463,6 +12481,10 @@ export const Composer = memo(function Composer(props: ComposerProps) {
               className={[
                 "composer__send-split-pill",
                 sendButtonDisabled ? "is-disabled" : "",
+                // While the pre-send checks run this pill is the only thing
+                // reporting them, so it keeps its contrast. `is-disabled`
+                // would dim the spinner and its label along with the rest.
+                preparingSend ? "is-preparing" : "",
               ]
                 .filter(Boolean)
                 .join(" ")}
@@ -12531,6 +12553,12 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                 disabled={sendButtonDisabled}
                 type="submit"
               >
+                {preparingSend ? (
+                  <span
+                    aria-hidden="true"
+                    className="pending-spinner pending-spinner--sm"
+                  />
+                ) : null}
                 {submitButtonLabel}
               </button>
             </div>

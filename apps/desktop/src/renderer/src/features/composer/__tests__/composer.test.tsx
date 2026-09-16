@@ -5116,6 +5116,38 @@ describe("Composer", () => {
     expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
   });
 
+  it("shows the pending send state instead of only disabling the row", async () => {
+    const check = createDeferred<boolean>();
+    const startTurn = vi.fn();
+    const { container } = render(<Composer
+      backends={[backendSummary("codex")]}
+      desktopApi={{ startTurn }}
+      onBeforeStartTurn={() => check.promise}
+      skills={[]}
+      thread={{ id: "thread-1", title: "Remote send", titleSource: "explicit", source: "codex",
+        executionMode: "default", linkedDirectories: [], inbox: { inInbox: false } }}
+    />);
+    const input = screen.getByRole("textbox", { name: "Reply" });
+    fireEvent.change(input, { target: { value: "Keep this message visible" } });
+    await clickButton("Send");
+
+    // aria-readonly alone left a sighted operator with a draft that still
+    // looked editable and silently swallowed keystrokes.
+    expect(container.querySelector(".composer-tiptap-input")).toHaveClass("is-readonly");
+    expect(screen.getByText(/Message held while checks run/)).toBeInTheDocument();
+    // The pill is the only thing reporting the wait, so it keeps its contrast
+    // and carries the spinner while the footer group dims behind it.
+    const pill = container.querySelector(".composer__send-split-pill");
+    expect(pill).toHaveClass("is-preparing");
+    expect(pill?.querySelector(".pending-spinner")).toBeTruthy();
+    expect(container.querySelector(".composer__pending-controls--dim")).toBeTruthy();
+
+    await act(async () => { check.resolve(false); });
+    expect(container.querySelector(".composer-tiptap-input")).not.toHaveClass("is-readonly");
+    expect(container.querySelector(".composer__send-split-pill")).not.toHaveClass("is-preparing");
+    expect(screen.queryByText(/Message held while checks run/)).toBeNull();
+  });
+
   it("keeps the draft read-only while preparing remote references and cancels before send", async () => {
     const inspection = createDeferred<{ filePaths: string[]; pdfPaths: string[] }>();
     const inspectPdfReferencePaths = vi.fn(() => inspection.promise);

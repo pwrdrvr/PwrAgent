@@ -3152,7 +3152,7 @@ export const ComposerTiptapInput = forwardRef<
 
   return (
     <div
-      className={`composer-tiptap-input${props.value || props.skillTokens.length > 0 ? "" : " is-empty"}`}
+      className={`composer-tiptap-input${props.value || props.skillTokens.length > 0 ? "" : " is-empty"}${props.readOnly ? " is-readonly" : ""}`}
       data-placeholder={props.placeholder}
       data-testid="composer-tiptap-input"
       data-value={props.value}
