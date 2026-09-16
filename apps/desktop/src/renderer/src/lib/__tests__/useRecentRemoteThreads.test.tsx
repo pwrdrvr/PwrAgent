@@ -30,6 +30,22 @@ function snapshot(id: string): AppServerReadThreadResponse {
   };
 }
 
+const pendingInteractions: NonNullable<AppServerReadThreadResponse["pendingRequest"]>[] = [
+  { method: "item/commandExecution/requestApproval", params: {
+    threadId: "A", turnId: "turn-A", itemId: "command-A", requestId: "request-A", command: "echo test",
+  } },
+  { method: "item/tool/requestUserInput", params: {
+    threadId: "A", turnId: "turn-A", requestId: "request-A", questions: [{
+      id: "choice", header: "Choice", question: "Continue?", isOther: false, isSecret: false,
+      options: [{ label: "Yes", description: "Continue." }],
+    }],
+  } },
+  { method: "mcpServer/elicitation/request", params: {
+    threadId: "A", turnId: "turn-A", requestId: "request-A", serverName: "fixture", mode: "form",
+    message: "Continue?", requestedSchema: { type: "object", properties: {} },
+  } },
+];
+
 describe("recent remote threads", () => {
   it("retains five selections by owner identity, ignores background activity and releases revoked interests", () => {
     const threads = Array.from({ length: 6 }, (_, index) => remoteThread(String(index)));
@@ -94,6 +110,54 @@ describe("recent remote threads", () => {
     expect(setFederationEventSubscriptions).toHaveBeenCalledTimes(3);
     rendered.unmount();
     expect(setFederationEventSubscriptions).toHaveBeenLastCalledWith({ consumer: "thread_view", subscriptions: [] });
+  });
+
+  it.each(pendingInteractions)("reconciles an off-screen resolved $method on return", async (pendingRequest) => {
+    const threads = [remoteThread("A"), remoteThread("B")];
+    let ownerSnapshot = { ...snapshot("A"), pendingRequest } as AppServerReadThreadResponse;
+    const readThread = vi.fn(async ({ threadId }: { threadId: string }) => threadId === "A" ? ownerSnapshot : snapshot(threadId));
+    const desktopApi: DesktopApi = { readThread, onAgentEvent: () => () => undefined };
+    const rendered = renderHook(({ thread }) => useThreadSessionState({ desktopApi, thread, retainedRemoteThreads: threads }), {
+      initialProps: { thread: threads[0]! },
+    });
+    await waitFor(() => expect(rendered.result.current.pendingStatusText).toMatch(/^Waiting for/));
+    rendered.rerender({ thread: threads[1]! });
+    await waitFor(() => expect(rendered.result.current.response?.threadId).toBe("B"));
+    ownerSnapshot = { ...snapshot("A"), replayRevision: "resolved-A" };
+    rendered.rerender({ thread: threads[0]! });
+    await waitFor(() => expect(rendered.result.current.response?.replayRevision).toBe("resolved-A"));
+    expect(rendered.result.current.pendingRequest).toBeUndefined();
+    expect(rendered.result.current.pendingUserInput).toBeUndefined();
+    expect(rendered.result.current.pendingMcpInteraction).toBeUndefined();
+    expect(rendered.result.current.pendingStatusText).toBeUndefined();
+    expect(rendered.result.current.activeTurnId).toBeUndefined();
+  });
+
+  it.each(["arrived", "resolved"])("preserves a live request that %s during catch-up", async (change) => {
+    const threads = [remoteThread("A"), remoteThread("B")];
+    const pendingRequest = pendingInteractions[0]!;
+    const initial = { ...snapshot("A"), ...(change === "resolved" ? { pendingRequest } : {}) };
+    let finishRead!: (response: AppServerReadThreadResponse) => void;
+    const readThread = vi.fn().mockResolvedValueOnce(initial).mockResolvedValueOnce(snapshot("B"))
+      .mockImplementationOnce(() => new Promise<AppServerReadThreadResponse>((resolve) => { finishRead = resolve; }));
+    let emit: (event: AgentEvent) => void = () => undefined;
+    const desktopApi: DesktopApi = { readThread, onAgentEvent: (listener) => { emit = listener; return () => undefined; } };
+    const rendered = renderHook(({ thread }) => useThreadSessionState({ desktopApi, thread, retainedRemoteThreads: threads }), {
+      initialProps: { thread: threads[0]! },
+    });
+    await waitFor(() => expect(rendered.result.current.response?.threadId).toBe("A"));
+    rendered.rerender({ thread: threads[1]! });
+    await waitFor(() => expect(rendered.result.current.response?.threadId).toBe("B"));
+    rendered.rerender({ thread: threads[0]! });
+    await waitFor(() => expect(readThread).toHaveBeenCalledTimes(3));
+    act(() => emit({ backend: "codex", federationTarget: { scope: "remote", instanceId: "owner" },
+      notification: change === "arrived" ? pendingRequest : {
+        method: "serverRequest/resolved", params: { threadId: "A", requestId: "request-A" },
+      },
+    }));
+    await act(async () => finishRead({ ...initial, replayRevision: "catch-up-A" }));
+    await waitFor(() => expect(rendered.result.current.loading).toBe(false));
+    expect(rendered.result.current.pendingRequest?.params.requestId).toBe(change === "arrived" ? "request-A" : undefined);
   });
 
   it("recovers a retained thread after a background stream gap using its owner revision", async () => {
