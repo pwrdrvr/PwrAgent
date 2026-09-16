@@ -5761,6 +5761,50 @@ describe("ThreadView", () => {
     });
   });
 
+  it.each(["cancel", "failure"])("retains the remote draft on send-time branch check %s", async (outcome) => {
+    const result = { backend: "codex" as const, threadId: "thread-branch", drifted: false,
+      expectedBranch: "feature/current", observedBranch: "feature/current", checkedAt: 1 };
+    let resolveCheck!: (value: typeof result) => void;
+    let rejectCheck!: (error: Error) => void;
+    const pendingCheck = new Promise<typeof result>((resolve, reject) => {
+      resolveCheck = resolve;
+      rejectCheck = reject;
+    });
+    const checkThreadBranchDrift = vi.fn().mockResolvedValueOnce(result).mockReturnValueOnce(pendingCheck);
+    const startTurn = vi.fn();
+    render(<ThreadView
+      addOptimisticUserMessage={() => "optimistic-1"}
+      backends={[]}
+      composerDisabled={false}
+      desktopApi={{ checkThreadBranchDrift, startTurn }}
+      loading={false} loadingMore={false} messageCount={0}
+      selectedThread={{ id: "thread-branch", title: "Remote branch", titleSource: "explicit", source: "codex",
+        executionMode: "default", gitBranch: "feature/current", observedGitBranch: "feature/current",
+        federation: { ref: { backend: "codex", target: { scope: "remote", instanceId: "owner-one" },
+          threadId: "thread-branch" }, instanceLabel: "Owner Mac", peerStatus: "connected",
+          capabilities: ["thread_navigation", "turn_control"] }, linkedDirectories: [], inbox: { inInbox: false } }}
+      skills={[]} transcriptEntries={[]} clearPendingRequest={() => undefined}
+      onLoadOlder={async () => undefined} removeOptimisticMessage={() => undefined}
+    />);
+    await waitFor(() => expect(checkThreadBranchDrift).toHaveBeenCalledTimes(1));
+    const input = screen.getByRole("textbox", { name: "Reply" });
+    fireEvent.change(input, { target: { value: "Keep my remote draft" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(input).toHaveAttribute("aria-readonly", "true"));
+    if (outcome === "cancel") {
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      await act(async () => { resolveCheck({ ...result, drifted: true, observedBranch: "another-branch" }); });
+    } else {
+      await act(async () => { rejectCheck(new Error("Remote check disconnected")); });
+      expect(screen.getByRole("alert")).toHaveTextContent("Remote check disconnected");
+    }
+    expect(startTurn).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog", { name: "Thread branch changed" })).not.toBeInTheDocument();
+    expect(input).toHaveValue("Keep my remote draft");
+    expect(input).toHaveAttribute("contenteditable", "true");
+    expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
+  });
+
   it("allows a remote send when an older owner lacks branch drift RPC", async () => {
     const checkThreadBranchDrift = vi.fn(async () => {
       throw Object.assign(new Error(

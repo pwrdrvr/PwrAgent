@@ -2120,6 +2120,7 @@ export function ThreadView(props: ThreadViewProps) {
 
   const checkSelectedThreadBranchDrift = async (
     reason: BranchDriftDialogState["reason"],
+    signal?: AbortSignal,
   ): Promise<boolean> => {
     const thread = selectedThread;
     if (!thread?.gitBranch || !props.desktopApi?.checkThreadBranchDrift) {
@@ -2137,12 +2138,12 @@ export function ThreadView(props: ThreadViewProps) {
         threadId: thread.id,
       });
       // Stale-closure guard: user navigated away mid-IPC.
-      if (selectedThreadKeyRef.current !== startedThreadKey) {
+      if (signal?.aborted || selectedThreadKeyRef.current !== startedThreadKey) {
         return false;
       }
       if (result.observedBranch !== thread.observedGitBranch) {
         await props.onRefreshNavigation?.();
-        if (selectedThreadKeyRef.current !== startedThreadKey) {
+        if (signal?.aborted || selectedThreadKeyRef.current !== startedThreadKey) {
           return false;
         }
       }
@@ -2165,7 +2166,13 @@ export function ThreadView(props: ThreadViewProps) {
         reason,
         result.checkedAt,
       );
-    } catch {
+    } catch (error) {
+      // Older federation owners have no branch-check RPC. Preserve that
+      // compatibility fallback, but let real send-time failures unlock the
+      // unchanged draft with an error instead of silently sending anyway.
+      const message = error instanceof Error ? error.message : String(error);
+      const unsupported = message.includes("No federation handler registered for backend.checkThreadBranchDrift");
+      if (reason === "turn" && !signal?.aborted && !unsupported) throw error;
       return false;
     }
   };
@@ -3896,7 +3903,7 @@ export function ThreadView(props: ThreadViewProps) {
             onHandoffThreadWorkspace={props.onHandoffThreadWorkspace}
             onBeforeStartTurn={
               selectedThread?.gitBranch && props.desktopApi?.checkThreadBranchDrift
-                ? async () => !(await checkSelectedThreadBranchDrift("turn"))
+                ? async (signal) => !(await checkSelectedThreadBranchDrift("turn", signal))
                 : undefined
             }
             onBeforeSendTurn={() => {

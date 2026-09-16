@@ -27646,7 +27646,8 @@ button.pricing-token-miser__folded:focus-visible {
    composer's content column lines up with the transcript's. The
    composer form itself stays full-width (bg-panel band edge-to-edge)
    — only the rows inside it center. */
-.composer > * {
+.composer > *,
+.composer > .composer__pending-controls > * {
   width: 100%;
   max-width: var(--chat-column-max);
 }
@@ -29297,6 +29298,10 @@ button.pricing-token-miser__folded:focus-visible {
   flex-wrap: wrap;
   align-items: center;
   gap: 6px;
+}
+
+.composer__pending-controls {
+  display: contents;
 }
 
 .composer__footer {

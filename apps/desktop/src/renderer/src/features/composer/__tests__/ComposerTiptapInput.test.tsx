@@ -196,6 +196,41 @@ const pastedCatalogSql = [
 ].join("\n");
 
 describe("ComposerTiptapInput", () => {
+  it("keeps read-only text selectable without running edit, paste, drop, or submit handlers", () => {
+    const onChange = vi.fn();
+    const onKeyDown = vi.fn();
+    const onPaste = vi.fn();
+    const onDrop = vi.fn();
+    const props = { id: "pending-reply", label: "Pending reply", value: "Keep this message",
+      skillTokens: [], placeholder: "Reply", onChange, onKeyDown, onPaste, onDrop };
+    const { rerender } = render(<ComposerTiptapInput {...props} readOnly />);
+    const textbox = screen.getByRole("textbox", { name: "Pending reply" });
+    textbox.focus();
+    expect(textbox).toHaveFocus();
+    expect(textbox).toHaveTextContent("Keep this message");
+    expect(textbox).toHaveAttribute("contenteditable", "false");
+    const range = document.createRange();
+    range.selectNodeContents(textbox);
+    window.getSelection()?.removeAllRanges();
+    window.getSelection()?.addRange(range);
+    expect(window.getSelection()?.toString()).toBe("Keep this message");
+    fireEvent.keyDown(textbox, { key: "c", ctrlKey: true });
+    fireEvent.keyDown(textbox, { key: "Enter" });
+    fireEvent.keyDown(textbox, { key: "ArrowUp" });
+    fireEvent.keyDown(textbox, { key: "z", ctrlKey: true });
+    fireEvent.paste(textbox, { clipboardData: { getData: () => "Replacement" } });
+    fireEvent.drop(textbox, { dataTransfer: { files: [] } });
+    expect(textbox).toHaveTextContent("Keep this message");
+    expect(onChange).not.toHaveBeenCalled();
+    expect(onKeyDown).not.toHaveBeenCalled();
+    expect(onPaste).not.toHaveBeenCalled();
+    expect(onDrop).not.toHaveBeenCalled();
+    rerender(<ComposerTiptapInput {...props} readOnly={false} />);
+    expect(textbox).toHaveAttribute("contenteditable", "true");
+    expect(textbox).not.toHaveAttribute("aria-readonly");
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
   it("never mounts a writable editor while the composer is disabled", async () => {
     const container = document.createElement("div");
     document.body.append(container);

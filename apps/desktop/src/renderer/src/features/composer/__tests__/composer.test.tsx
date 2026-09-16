@@ -5084,6 +5084,118 @@ describe("Composer", () => {
     );
   });
 
+  it("keeps the draft read-only and settings disabled while a remote send check is pending", async () => {
+    const check = createDeferred<boolean>();
+    const startTurn = vi.fn();
+    render(<Composer
+      backends={[backendSummary("codex")]}
+      desktopApi={{ startTurn }}
+      onBeforeStartTurn={() => check.promise}
+      skills={[]}
+      thread={{ id: "thread-1", title: "Remote send", titleSource: "explicit", source: "codex",
+        executionMode: "default", linkedDirectories: [], inbox: { inInbox: false } }}
+    />);
+    const input = screen.getByRole("textbox", { name: "Reply" });
+    fireEvent.change(input, { target: { value: "Keep this message visible" } });
+    await clickButton("Send");
+
+    expect(input).toHaveValue("Keep this message visible");
+    expect(input).toHaveAttribute("contenteditable", "false");
+    expect(input).toHaveAttribute("aria-readonly", "true");
+    expect(input).toHaveAttribute("tabindex", "0");
+    expect(screen.getByRole("button", { name: "Preparing…" })).toBeDisabled();
+    for (const button of screen.getAllByRole("button")) {
+      if (button.textContent === "Cancel") expect(button).toBeEnabled();
+      else expect(button).toBeDisabled();
+    }
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(startTurn).not.toHaveBeenCalled();
+    await act(async () => { check.resolve(false); });
+    expect(input).toHaveAttribute("contenteditable", "true");
+    expect(input).toHaveValue("Keep this message visible");
+    expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
+  });
+
+  it("keeps the draft read-only while preparing remote references and cancels before send", async () => {
+    const inspection = createDeferred<{ filePaths: string[]; pdfPaths: string[] }>();
+    const inspectPdfReferencePaths = vi.fn(() => inspection.promise);
+    const startTurn = vi.fn();
+    render(<Composer desktopApi={{ startTurn, inspectPdfReferencePaths }} skills={[]}
+      thread={{ id: "thread-1", title: "Remote send", titleSource: "explicit", source: "codex",
+        executionMode: "default", linkedDirectories: [], inbox: { inInbox: false } }} />);
+    const input = screen.getByRole("textbox", { name: "Reply" });
+    fireEvent.change(input, { target: { value: "Read [@notes](/repo/notes.txt)" } });
+    await clickButton("Send");
+    await waitFor(() => expect(inspectPdfReferencePaths).toHaveBeenCalled());
+    expect(input).toHaveAttribute("contenteditable", "false");
+    const retainedValue = (input as HTMLInputElement).value;
+    await clickButton("Cancel");
+    await act(async () => { inspection.resolve({ filePaths: ["/repo/notes.txt"], pdfPaths: [] }); });
+    expect(startTurn).not.toHaveBeenCalled();
+    expect(input).toHaveValue(retainedValue);
+    expect(input).toHaveAttribute("contenteditable", "true");
+  });
+
+  it("cancels a pending send check and ignores its late completion after retry", async () => {
+    const first = createDeferred<boolean>();
+    const retry = createDeferred<boolean>();
+    const check = vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(retry.promise);
+    const startTurn = vi.fn(async () => ({ backend: "codex" as const, threadId: "thread-1", turnId: "turn-1" }));
+    render(<Composer desktopApi={{ startTurn }} onBeforeStartTurn={check} skills={[]}
+      thread={{ id: "thread-1", title: "Remote send", titleSource: "explicit", source: "codex",
+        executionMode: "default", linkedDirectories: [], inbox: { inInbox: false } }} />);
+    const input = screen.getByRole("textbox", { name: "Reply" });
+    fireEvent.change(input, { target: { value: "Original message" } });
+    await clickButton("Send");
+    await clickButton("Cancel");
+    expect(input).toHaveValue("Original message");
+    expect(input).toHaveAttribute("contenteditable", "true");
+    fireEvent.change(input, { target: { value: "Revised message" } });
+    await clickButton("Send");
+    await act(async () => { first.resolve(true); });
+    expect(startTurn).not.toHaveBeenCalled();
+    expect(input).toHaveAttribute("contenteditable", "false");
+    await act(async () => { retry.resolve(true); });
+    expect(startTurn).toHaveBeenCalledTimes(1);
+    expect(startTurn).toHaveBeenCalledWith(expect.objectContaining({ input: [{ type: "text", text: "Revised message" }] }));
+  });
+
+  it("re-enables the unchanged draft when the send check fails", async () => {
+    const check = createDeferred<boolean>();
+    const startTurn = vi.fn();
+    render(<Composer desktopApi={{ startTurn }} onBeforeStartTurn={() => check.promise} skills={[]}
+      thread={{ id: "thread-1", title: "Remote send", titleSource: "explicit", source: "codex",
+        executionMode: "default", linkedDirectories: [], inbox: { inInbox: false } }} />);
+    const input = screen.getByRole("textbox", { name: "Reply" });
+    fireEvent.change(input, { target: { value: "Retry after reconnecting" } });
+    await clickButton("Send");
+    await act(async () => { check.reject(new Error("Remote instance disconnected")); });
+    expect(input).toHaveValue("Retry after reconnecting");
+    expect(input).toHaveAttribute("contenteditable", "true");
+    expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
+    expect(screen.getByText("Remote instance disconnected")).toBeInTheDocument();
+    expect(startTurn).not.toHaveBeenCalled();
+  });
+
+  it.each(["unmount", "switch"])("abandons a pending send check on composer %s", async (navigation) => {
+    const check = createDeferred<boolean>();
+    const startTurn = vi.fn();
+    const props = { desktopApi: { startTurn }, onBeforeStartTurn: () => check.promise, skills: [],
+      thread: { id: "thread-1", title: "Remote send", titleSource: "explicit" as const, source: "codex" as const,
+        executionMode: "default" as const, linkedDirectories: [], inbox: { inInbox: false } } };
+    const view = render(<Composer {...props} />);
+    fireEvent.change(screen.getByRole("textbox", { name: "Reply" }), { target: { value: "Stay with this thread" } });
+    await clickButton("Send");
+    if (navigation === "unmount") view.unmount();
+    else view.rerender(<Composer {...props} thread={{ ...props.thread, id: "thread-2" }} />);
+    await act(async () => { check.resolve(true); });
+    expect(startTurn).not.toHaveBeenCalled();
+    if (navigation === "switch") {
+      expect(screen.getByRole("textbox", { name: "Reply" })).toHaveValue("");
+      expect(screen.getByRole("textbox", { name: "Reply" })).toHaveAttribute("contenteditable", "true");
+    }
+  });
+
   it("keeps the reply input focusable while the send request is pending", async () => {
     let resolveStartTurn: ((value: StartTurnResponse) => void) | undefined;
     const startTurn = vi.fn(
