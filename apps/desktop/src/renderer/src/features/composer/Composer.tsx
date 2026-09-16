@@ -2864,20 +2864,26 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   };
   const [preparingSend, setPreparingSend] = useState(false);
   const sendPreparationRef = useRef<AbortController | undefined>(undefined);
-  const cancelSendPreparation = (): void => {
+  // One teardown for every way a preparation ends early. The preparation is
+  // what set `sending` true, and the abort makes `prepareThreadTurnPayload`
+  // return before its own reset, so releasing it belongs here rather than at
+  // each call site. On a scope change the draft-rehydration effect below also
+  // clears `sending`; saying it here too keeps this function correct on its
+  // own instead of load-bearing on that ordering.
+  const abandonSendPreparation = (): void => {
     const preparation = sendPreparationRef.current;
     sendPreparationRef.current = undefined;
-    preparation?.abort();
+    if (!preparation) {
+      return;
+    }
+    preparation.abort();
     setPreparingSend(false);
     updateSending(false);
   };
+  const cancelSendPreparation = abandonSendPreparation;
   useEffect(() => {
     setPreparingSend(false);
-    return () => {
-      const preparation = sendPreparationRef.current;
-      sendPreparationRef.current = undefined;
-      preparation?.abort();
-    };
+    return abandonSendPreparation;
   }, [composerScopeKey]);
   const [interrupting, setInterrupting] = useState(false);
   const [steering, setSteering] = useState(false);
@@ -6282,7 +6288,6 @@ export const Composer = memo(function Composer(props: ComposerProps) {
             },
           } satisfies AppServerCollaborationModeRequest)
         : undefined;
-
 
     let optimisticMessageId: string | undefined;
     if (!backendQueueSubmission) {
@@ -11218,7 +11223,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
           tech; nothing else covered a sighted operator, who would otherwise
           click in, get no caret, and lose the keystrokes silently. */}
         {preparingSend ? (
-          <p className="composer__meta composer__held-notice">
+          <p className="composer__meta composer__held-notice" role="status">
             Message held while checks run. Select and copy still work.
           </p>
         ) : null}

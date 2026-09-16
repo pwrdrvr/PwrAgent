@@ -165,7 +165,7 @@ const MOTION_EXEMPTIONS: Record<string, string> = {
   // .pending-spinner` — ARE stopped, which is why the bare selector cannot
   // inherit that rule's coverage.
   ".pending-spinner":
-    "standalone busy ring with no text companion; the reduce rule covers the paired `.settings-pending .pending-spinner` instead",
+    "standalone busy ring with no text companion; the reduce rules cover the paired `.settings-pending .pending-spinner` and `.composer__send-split-pill .pending-spinner` instead",
 };
 
 describe("app.css reduced-motion contract", () => {

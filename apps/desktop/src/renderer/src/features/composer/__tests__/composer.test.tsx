@@ -5192,6 +5192,37 @@ describe("Composer", () => {
     expect(startTurn).toHaveBeenCalledWith(expect.objectContaining({ input: [{ type: "text", text: "Revised message" }] }));
   });
 
+  it("abandons a pending send check when the thread changes", async () => {
+    const check = createDeferred<boolean>();
+    const startTurn = vi.fn();
+    const threadProps = (id: string) => ({
+      id, title: "Remote send", titleSource: "explicit" as const, source: "codex" as const,
+      executionMode: "default" as const, linkedDirectories: [], inbox: { inInbox: false },
+    });
+    const { rerender } = render(<Composer desktopApi={{ startTurn }}
+      onBeforeStartTurn={() => check.promise} skills={[]} thread={threadProps("thread-1")} />);
+    fireEvent.change(screen.getByRole("textbox", { name: "Reply" }), { target: { value: "Held message" } });
+    await clickButton("Send");
+    expect(screen.getByRole("button", { name: "Preparing…" })).toBeDisabled();
+
+    // "Navigating away also abandons the attempt" had no coverage: the other
+    // tests all cancel or fail in place. The new thread must come up idle, and
+    // the abandoned check must not start a turn when it finally resolves.
+    await act(async () => {
+      rerender(<Composer desktopApi={{ startTurn }}
+        onBeforeStartTurn={() => check.promise} skills={[]} thread={threadProps("thread-2")} />);
+    });
+    expect(screen.queryByRole("button", { name: "Preparing…" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Sending…" })).toBeNull();
+    // An empty draft disables Send on its own, so type before asserting:
+    // only a composer with content shows that `sending` is back down.
+    fireEvent.change(screen.getByRole("textbox", { name: "Reply" }), { target: { value: "New thread message" } });
+    expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
+
+    await act(async () => { check.resolve(true); });
+    expect(startTurn).not.toHaveBeenCalled();
+  });
+
   it("re-enables the unchanged draft when the send check fails", async () => {
     const check = createDeferred<boolean>();
     const startTurn = vi.fn();

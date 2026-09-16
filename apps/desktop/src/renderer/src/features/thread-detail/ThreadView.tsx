@@ -2171,7 +2171,16 @@ export function ThreadView(props: ThreadViewProps) {
       // compatibility fallback, but let real send-time failures unlock the
       // unchanged draft with an error instead of silently sending anyway.
       const message = error instanceof Error ? error.message : String(error);
-      const unsupported = message.includes("No federation handler registered for backend.checkThreadBranchDrift");
+      // `federation-router` rejects an unknown method with code
+      // `method_not_found` and a sentence naming it. The code is the stable
+      // half, but it does not survive the IPC hop as a property and the
+      // renderer cannot import the main process's `hasFederationErrorCode`,
+      // so match either. Keying on the full sentence alone made a reworded
+      // message turn this compatibility fallback into a hard send failure.
+      const unsupported =
+        /\bmethod_not_found\b/.test(message)
+        || (message.includes("No federation handler registered")
+          && message.includes("checkThreadBranchDrift"));
       if (reason === "turn" && !signal?.aborted && !unsupported) throw error;
       return false;
     }
@@ -3903,7 +3912,15 @@ export function ThreadView(props: ThreadViewProps) {
             onHandoffThreadWorkspace={props.onHandoffThreadWorkspace}
             onBeforeStartTurn={
               selectedThread?.gitBranch && props.desktopApi?.checkThreadBranchDrift
-                ? async (signal) => !(await checkSelectedThreadBranchDrift("turn", signal))
+                ? async (signal) => {
+                    const drifted = await checkSelectedThreadBranchDrift("turn", signal);
+                    // An aborted check reports "no drift" so it does not raise
+                    // a dialog on the way out, and negating that alone would
+                    // read as "proceed". Say no explicitly: the composer's
+                    // race already discards the payload, but the answer must
+                    // not depend on which promise settles first.
+                    return !drifted && !signal?.aborted;
+                  }
                 : undefined
             }
             onBeforeSendTurn={() => {
