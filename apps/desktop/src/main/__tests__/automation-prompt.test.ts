@@ -35,6 +35,24 @@ function buildAutomation(): AutomationRecord {
 }
 
 describe("buildAutomationTurnInput", () => {
+  it("describes an untitled DM without assuming a channel name", () => {
+    const [item] = buildAutomationTurnInput({
+      automation: buildAutomation(),
+      run: {
+        id: "dm-run", automationId: "automation-1", trigger: "inbound_message",
+        status: "pending", scheduledWindows: [],
+        source: {
+          kind: "messaging", sourceEventKey: "dm-source", receivedAt: 1,
+          matchedTriggerId: "dm-trigger", actor: { platformUserId: "peer" },
+          conversation: { channel: "discord", conversationId: "native-dm", conversationKind: "dm" },
+          message: { text: "Please investigate" },
+        },
+      },
+    });
+    expect(item?.type === "text" ? item.text : "").toContain("Surface: direct message");
+    expect(item?.type === "text" ? item.text : "").toContain("Conversation: native-dm");
+  });
+
   it("includes catch-up metadata before the task prompt", () => {
     const input = buildAutomationTurnInput({
       automation: buildAutomation(),

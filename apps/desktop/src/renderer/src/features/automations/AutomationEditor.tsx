@@ -1,3 +1,4 @@
+import { matchesAutomationConversation } from "@pwragent/shared";
 import type { NavigationDirectoryView as NavigationDirectorySummary } from "../../lib/navigation-loaded-rows";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type {
@@ -235,7 +236,9 @@ export function AutomationEditor(props: AutomationEditorProps) {
   const [inboundGroupId, setInboundGroupId] = useState(
     initialIsTopic
       ? initialConversation?.parentId ?? ""
-      : initialConversation?.conversationId ?? "",
+      : initialConversation?.recipientUserId
+        ? `dm:${initialConversation.recipientUserId}`
+        : initialConversation?.conversationId ?? "",
   );
   const [telegramScope, setTelegramScope] = useState<TelegramScope>(
     initialIsTopic ? "topic" : "group",
@@ -325,7 +328,9 @@ export function AutomationEditor(props: AutomationEditorProps) {
   const [destGroupId, setDestGroupId] = useState(
     initialTargetIsTopic
       ? initialTargetSnapshot?.parentId ?? ""
-      : initialTargetSnapshot?.conversationId ?? "",
+      : initialTargetSnapshot?.recipientUserId
+        ? `dm:${initialTargetSnapshot.recipientUserId}`
+        : initialTargetSnapshot?.conversationId ?? "",
   );
   const [destTopicId, setDestTopicId] = useState(
     initialTargetIsTopic ? initialTargetSnapshot?.conversationId ?? "" : "",
@@ -440,7 +445,9 @@ export function AutomationEditor(props: AutomationEditorProps) {
   const inboundSelectionReconciledRef = useRef(false);
   const initialInboundGroupId = initialIsTopic
     ? initialConversation?.parentId
-    : initialConversation?.conversationId;
+    : initialConversation?.recipientUserId
+      ? `dm:${initialConversation.recipientUserId}`
+      : initialConversation?.conversationId;
   useEffect(() => {
     if (inboundSelectionReconciledRef.current) return;
     if (!initialConversation || !initialInboundGroupId) return;
@@ -482,7 +489,9 @@ export function AutomationEditor(props: AutomationEditorProps) {
   const destSelectionReconciledRef = useRef(false);
   const initialDestGroupId = initialTargetIsTopic
     ? initialTargetSnapshot?.parentId
-    : initialTargetSnapshot?.conversationId;
+    : initialTargetSnapshot?.recipientUserId
+      ? `dm:${initialTargetSnapshot.recipientUserId}`
+      : initialTargetSnapshot?.conversationId;
   useEffect(() => {
     // On edit, preselect the saved destination in the dropdown once it appears
     // in the provider's authorized groups (which can arrive after mount, or when
@@ -597,15 +606,14 @@ export function AutomationEditor(props: AutomationEditorProps) {
       if (!event.entry.observedChat) return;
       const chat = event.entry.observedChat;
       if (chat.kind === "dm") {
-        // A 1:1 DM can't be an inbound trigger source (only you and the bot are
-        // in it), and Slack refuses to authorize a DM as a channel — approving
-        // would throw. Tell the operator instead of silently reporting success.
+        // This code registers a shared conversation. DM triggers instead use
+        // authorized contacts, so do not approve a user as a group/workspace.
         void props.desktopApi
           ?.rejectMessagingPairing?.({ entryId: event.entry.id })
           .catch(() => {});
         setCaptureStatus("error");
         setCaptureError(
-          "Drop the code in a channel or group, not a direct message.",
+          "For a DM trigger, choose an authorized contact above. Add new contacts in Messaging settings.",
         );
         setCaptureEntryId(undefined);
         return;
@@ -667,16 +675,19 @@ export function AutomationEditor(props: AutomationEditorProps) {
     props.desktopApi?.startInboundPreview &&
       props.desktopApi?.onInboundPreviewMessage,
   );
-  const previewScope =
-    inboundProvider === "telegram" && telegramScope === "topic"
-      ? inboundGroupId.trim() && inboundTopicId.trim()
-        ? { conversationId: inboundTopicId.trim(), parentId: inboundGroupId.trim() }
-        : undefined
-      : inboundGroupId.trim()
-        ? { conversationId: inboundGroupId.trim() }
-        : undefined;
+  const previewScope = inboundProvider === "telegram" && telegramScope === "topic"
+    && !inboundGroupId.startsWith("dm:") && !inboundTopicId.trim()
+    ? undefined
+    : buildDestinationSnapshot({
+    provider: inboundProvider,
+    groupId: inboundGroupId,
+    topicId: telegramScope === "topic" ? inboundTopicId : "",
+  });
   const previewConversationId = previewScope?.conversationId;
   const previewParentId = previewScope?.parentId;
+  const previewRecipientUserId = previewScope?.recipientUserId;
+  const previewConversationKind = previewScope?.conversationKind;
+  const [previewHistorySupported, setPreviewHistorySupported] = useState(false);
 
   useEffect(() => {
     if (!previewOpen || !previewConversationId) return;
@@ -685,19 +696,28 @@ export function AutomationEditor(props: AutomationEditorProps) {
     const subscribe = props.desktopApi?.onInboundPreviewMessage;
     if (!start || !subscribe) return;
     setPreviewMessages([]);
+    setPreviewHistorySupported(false);
+    let active = true;
     void start({
       subscriptionId: previewSubscriptionId,
       provider: inboundProvider,
       conversationId: previewConversationId,
       ...(previewParentId ? { parentId: previewParentId } : {}),
+      recipientUserId: previewRecipientUserId,
+      conversationKind: previewConversationKind,
+    }).then((response) => {
+      if (active) setPreviewHistorySupported(response.historySupported === true);
+    }).catch(() => {
+      if (active) setPreviewHistorySupported(false);
     });
     const unsubscribe = subscribe((message) => {
-      if (
-        message.conversationId !== previewConversationId &&
-        message.parentId !== previewConversationId
-      ) {
-        return;
-      }
+      if (!matchesAutomationConversation({
+        channel: inboundProvider,
+        conversationId: previewConversationId,
+        parentId: previewParentId,
+        recipientUserId: previewRecipientUserId,
+        conversationKind: previewConversationKind,
+      }, { ...message, channel: message.provider }, message.actor.platformUserId)) return;
       setPreviewMessages((current) =>
         current.some((entry) => entry.id === message.id)
           ? current
@@ -705,6 +725,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
       );
     });
     return () => {
+      active = false;
       unsubscribe?.();
       void stop?.({ subscriptionId: previewSubscriptionId });
     };
@@ -712,6 +733,8 @@ export function AutomationEditor(props: AutomationEditorProps) {
     previewOpen,
     previewConversationId,
     previewParentId,
+    previewRecipientUserId,
+    previewConversationKind,
     inboundProvider,
     previewSubscriptionId,
     props.desktopApi,
@@ -720,7 +743,12 @@ export function AutomationEditor(props: AutomationEditorProps) {
   // Shares one evaluator with the main-process matcher so the preview can
   // never claim a match the trigger would reject (or vice versa).
   const previewMessageMatches = (message: InboundPreviewMessage): boolean =>
-    evaluateAutomationInboundConditions(inboundConditions, {
+    Boolean(previewScope && matchesAutomationConversation(
+      previewScope,
+      { ...message, channel: message.provider },
+      message.actor.platformUserId,
+      inboundIncludeReplies,
+    )) && evaluateAutomationInboundConditions(inboundConditions, {
       text: message.text,
       platformUserId: message.actor.platformUserId,
       ...(message.actor.isBot === undefined ? {} : { isBot: message.actor.isBot }),
@@ -1472,7 +1500,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
                     </div>
                   ) : null}
 
-                  {inboundProvider === "telegram" ? (
+                  {inboundProvider === "telegram" && !inboundGroupId.startsWith("dm:") ? (
                     <>
                       <div
                         aria-label="Telegram scope"
@@ -1609,9 +1637,10 @@ export function AutomationEditor(props: AutomationEditorProps) {
                       {previewOpen && previewConversationId ? (
                         <div className="automation-preview__panel" role="status">
                           <p className="automation-field__hint">
-                            Showing recent history where the platform allows it, then
-                            messages as they arrive. Messages your filter would match
-                            are highlighted.
+                            {previewHistorySupported
+                              ? "Showing available recent history, then messages as they arrive."
+                              : "Showing messages as they arrive. History is unavailable for this destination."}
+                            {" Messages your filter would match are highlighted."}
                           </p>
                           {previewMessages.length === 0 ? (
                             <p className="automation-preview__empty">
@@ -2857,7 +2886,8 @@ function buildTriggerConfig(params: {
   const groupId = params.groupId.trim();
   const topicId = params.topicId.trim();
   const isTopic =
-    params.provider === "telegram" && params.telegramScope === "topic";
+    params.provider === "telegram" && params.telegramScope === "topic"
+    && !groupId.startsWith("dm:");
   if (!groupId) {
     return {
       error:
@@ -2895,7 +2925,7 @@ function buildTriggerConfig(params: {
     };
   }
 
-  const conversation: AutomationMessagingConversationSnapshot = isTopic
+  const conversation: AutomationMessagingConversationSnapshot | undefined = isTopic
     ? {
         channel: params.provider,
         conversationId: topicId,
@@ -2904,12 +2934,10 @@ function buildTriggerConfig(params: {
         ...(params.topicTitle ? { title: params.topicTitle } : {}),
         ...(params.groupTitle ? { parentTitle: params.groupTitle } : {}),
       }
-    : {
-        channel: params.provider,
-        conversationId: groupId,
-        conversationKind: "channel",
-        ...(params.groupTitle ? { title: params.groupTitle } : {}),
-      };
+    : buildDestinationSnapshot({ ...params, topicId: "" });
+  if (!conversation) {
+    return { ok: false, error: "Choose a conversation or DM recipient." };
+  }
 
   const conditionGroup = params.conditionGroup;
 
@@ -3092,6 +3120,17 @@ function buildDestinationSnapshot(params: {
 }): AutomationMessagingConversationSnapshot | undefined {
   const groupId = params.groupId.trim();
   if (!groupId) return undefined;
+  if (groupId.startsWith("dm:")) {
+    const userId = groupId.slice(3).trim();
+    if (!userId) return undefined;
+    return {
+      channel: params.provider,
+      conversationId: userId,
+      conversationKind: "dm",
+      recipientUserId: userId,
+      ...(params.groupTitle ? { title: params.groupTitle } : {}),
+    };
+  }
   const topicId = params.topicId.trim();
   if (params.provider === "telegram" && topicId) {
     return {
@@ -3141,7 +3180,7 @@ function readProviderGroups(
   const toConversation =
     (kind: MessagingConversationKind) =>
     (contact: { id: string; displayName?: string }): ProviderConversation => ({
-      id: contact.id,
+      id: kind === "dm" ? `dm:${contact.id}` : contact.id,
       title: contact.displayName ? `${contact.displayName}` : contact.id,
       kind,
     });

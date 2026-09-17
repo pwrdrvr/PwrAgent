@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { matchesAutomationConversation } from "@pwragent/shared";
 import type {
   AutomationInboundCondition,
   AutomationInboundConditionJoin,
@@ -98,6 +99,7 @@ describe("automation trigger matcher", () => {
           id: "1710000000.000000",
           kind: "thread",
           parentId: "C123",
+          parentConversationId: "C123",
         },
       },
       routingState: {
@@ -549,5 +551,39 @@ describe("automation replay helpers", () => {
     expect(source.matchedTriggerId).toBe("datadog-error");
     expect(source.conversation.title).toBe("#alerts-prod");
     expect(source.message?.text).toBe("ERROR rate spike");
+  });
+});
+
+
+describe("normalized automation conversation identity", () => {
+  it.each(["telegram", "discord", "slack", "mattermost", "feishu", "line"] as const)(
+    "%s contact matches only a 1:1 DM from that peer", (channel) => {
+      const target = { channel, conversationId: "peer", recipientUserId: "peer", conversationKind: "dm" as const };
+      const actual = { channel, conversationId: "native-dm-id", conversationKind: "dm" as const };
+      expect(matchesAutomationConversation(target, actual, "peer")).toBe(true);
+      expect(matchesAutomationConversation(target, actual, "other")).toBe(false);
+      expect(matchesAutomationConversation(target, { ...actual, conversationKind: "channel", conversationId: "peer" }, "peer")).toBe(false);
+      expect(matchesAutomationConversation(target, { ...actual, conversationKind: "thread", isDirectMessage: true }, "peer", true)).toBe(true);
+      expect(matchesAutomationConversation(target, { ...actual, conversationKind: "thread", isDirectMessage: true }, "peer", false)).toBe(false);
+      expect(matchesAutomationConversation({ channel, conversationId: "native-dm-id", conversationKind: "channel" }, actual, "peer")).toBe(false);
+    },
+  );
+
+  it("scopes topics by both topic and group IDs", () => {
+    const target = { channel: "telegram", conversationId: "42", parentId: "-1001", conversationKind: "topic" } as const;
+    expect(matchesAutomationConversation(target, target, "peer")).toBe(true);
+    expect(matchesAutomationConversation(target, { ...target, parentId: "-1002" }, "peer")).toBe(false);
+  });
+
+  it("uses Discord's parent conversation, never its guild, for child matching", () => {
+    const child = { channel: "discord", conversationId: "thread", conversationKind: "thread", parentId: "guild", parentConversationId: "channel", parentConversationParentId: "guild" } as const;
+    expect(matchesAutomationConversation({ channel: "discord", conversationId: "guild" }, child, "peer")).toBe(false);
+    expect(matchesAutomationConversation({ channel: "discord", conversationId: "channel", parentId: "guild" }, child, "peer")).toBe(true);
+  });
+
+  it.each(["slack", "mattermost", "line"] as const)("%s shared conversations match by native conversation ID", (channel) => {
+    const shared = { channel, conversationId: "shared", conversationKind: "channel" } as const;
+    expect(matchesAutomationConversation(shared, shared, "peer")).toBe(true);
+    expect(matchesAutomationConversation(shared, { ...shared, conversationId: "other" }, "peer")).toBe(false);
   });
 });

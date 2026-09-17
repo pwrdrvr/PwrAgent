@@ -335,6 +335,7 @@ export type SlackProviderAdapter = {
   capabilityProfile: MessagingCapabilityProfile;
   channel: "slack";
   clientRateLimitStrategy: MessagingClientRateLimitStrategy;
+  resolveDirectConversation?(userId: string): Promise<MessagingPrivateConversationResolveResult>;
   deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult>;
   resolveDeliveryScope?(intent: MessagingSurfaceIntent): MessagingDeliveryScope | undefined;
   onRateLimit?(listener: (info: MessagingRateLimitInfo) => void): () => void;
@@ -767,6 +768,26 @@ export class SlackAdapter implements SlackProviderAdapter {
     }
     const target = this.resolveTarget(intent);
     return target ? this.rateLimitScopeForTarget(target) : undefined;
+  }
+
+  async resolveDirectConversation(
+    userId: string,
+  ): Promise<MessagingPrivateConversationResolveResult> {
+    if (!validateSlackUserId(userId).ok) {
+      return {
+        channel: this.channel,
+        outcome: "failed",
+        updatedAt: this.now(),
+        errorMessage: "Invalid direct-message recipient ID.",
+      };
+    }
+    const conversationId = userId;
+    return {
+      channel: this.channel,
+      conversation: { id: conversationId, kind: "dm", isDirectMessage: true },
+      outcome: "resolved",
+      updatedAt: this.now(),
+    };
   }
 
   async start(listener: SlackInboundListener): Promise<void> {
@@ -1589,13 +1610,9 @@ export class SlackAdapter implements SlackProviderAdapter {
       channelType: event.channel_type,
     });
 
-    // In a group DM the bot only answers when explicitly @mentioned. A message
-    // that doesn't mention the bot isn't addressed to it, so ignore it silently
-    // *before* authorization — otherwise an ordinary group-DM message from a
-    // non-authorized participant would be logged as a scary "rejected" event
-    // even though it was never meant for the bot. Slash commands and pairing
-    // are explicit invocations and are exempt.
-    if (isGroupDm && !isMention && !command && !isPairingMessage) return;
+    // Ambient group-DM messages are observable by automations, but must not
+    // enter ordinary bound-thread input without an explicit invocation.
+    const ambientGroupDm = isGroupDm && !isMention && !command && !isPairingMessage;
 
     const authorization = this.authorizeInbound({
       actor,
@@ -1613,7 +1630,7 @@ export class SlackAdapter implements SlackProviderAdapter {
       teamId: ids.teamId,
     });
     if (authorization === false) return;
-    const observedOnly = authorization === "observed";
+    const observedOnly = authorization === "observed" || ambientGroupDm;
     // Observation is not authorization: a command from a sender who only
     // passed the observed-conversation gate must not execute.
     if (observedOnly && command) return;
@@ -3802,7 +3819,11 @@ export class SlackAdapter implements SlackProviderAdapter {
         actor,
         channel: {
           channel: this.channel,
-          conversation: { id: channelId, kind: "channel" },
+          conversation: {
+            id: channelId,
+            kind: channelId.startsWith("D") ? "dm" : "channel",
+            ...(channelId.startsWith("D") ? { isDirectMessage: true } : {}),
+          },
         },
         receivedAt: slackTimestampToMs(message.ts) ?? this.now(),
         text,

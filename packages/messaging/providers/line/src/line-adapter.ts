@@ -3,6 +3,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { Readable } from "node:stream";
 import { messagingApi } from "@line/bot-sdk";
 import type {
+  MessagingPrivateConversationResolveResult,
   MessagingActorIdentity,
   MessagingAdapterAuthorizationUpdate,
   MessagingAdapterRenderingPreferencesUpdate,
@@ -88,6 +89,7 @@ export type LineProviderAdapter = {
   capabilityProfile: MessagingCapabilityProfile;
   channel: "line";
   clientRateLimitStrategy: MessagingClientRateLimitStrategy;
+  resolveDirectConversation?(userId: string): Promise<MessagingPrivateConversationResolveResult>;
   deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult>;
   resolveDeliveryScope?(intent: MessagingSurfaceIntent): MessagingDeliveryScope | undefined;
   downloadAttachment(
@@ -249,6 +251,26 @@ export class LineAdapter implements LineProviderAdapter {
     if (update.streamingResponses !== undefined) {
       this.config.streamingResponses = update.streamingResponses;
     }
+  }
+
+  async resolveDirectConversation(
+    userId: string,
+  ): Promise<MessagingPrivateConversationResolveResult> {
+    if (!validateLineUserId(userId).ok) {
+      return {
+        channel: this.channel,
+        outcome: "failed",
+        updatedAt: this.now(),
+        errorMessage: "Invalid direct-message recipient ID.",
+      };
+    }
+    const conversationId = userId;
+    return {
+      channel: this.channel,
+      conversation: { id: conversationId, kind: "dm", isDirectMessage: true },
+      outcome: "resolved",
+      updatedAt: this.now(),
+    };
   }
 
   async start(listener: LineInboundListener): Promise<void> {
@@ -662,7 +684,11 @@ export class LineAdapter implements LineProviderAdapter {
     const botMention =
       event.message.type === "text"
       && this.eventMentionsBot(event);
-    if (!isPairing && !this.shouldAcceptTextEvent(event, channel, text)) {
+    const observedOnly = channel.conversation.kind !== "dm"
+      && !botMention && !isCommand && !isPairing;
+    if (observedOnly && (!this.authorizedActorIds.includes(actor.platformUserId)
+      || !this.isAuthorizedConversation(channel))) {
+      // Unaddressed chatter outside the allowlists is not an actionable rejection.
       return;
     }
     if (!this.authorizeInbound({
@@ -702,6 +728,8 @@ export class LineAdapter implements LineProviderAdapter {
         ...receipt,
         routingState,
         text: stripSelfMention(text, event.message.mention),
+        ...(observedOnly ? { observedOnly: true } : {}),
+        ...(botMention ? { botMention: true } : {}),
       });
       return;
     }
@@ -716,6 +744,7 @@ export class LineAdapter implements LineProviderAdapter {
       ...receipt,
       routingState,
       attachments: [attachment],
+      ...(observedOnly ? { observedOnly: true } : {}),
       disposition: attachment.disposition,
       text,
     });
@@ -824,16 +853,6 @@ export class LineAdapter implements LineProviderAdapter {
       return roomIds.includes(channel.conversation.id);
     }
     return false;
-  }
-
-  private shouldAcceptTextEvent(
-    event: LineWebhookEvent,
-    channel: MessagingChannelRef,
-    text: string,
-  ): boolean {
-    if (channel.conversation.kind === "dm") return true;
-    if (text.startsWith("/")) return true;
-    return this.eventMentionsBot(event);
   }
 
   private eventMentionsBot(event: LineWebhookEvent): boolean {

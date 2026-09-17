@@ -1583,3 +1583,48 @@ describe("MattermostAdapter — onRuntimeError", () => {
     await adapter.stop();
   });
 });
+
+
+describe("Mattermost automation surfaces", () => {
+  it.each(["D", "G"])("normalizes %s messages and replies, then sends to the conversation", async (channelType) => {
+    const userId = "haroldabcdefghijklmnopqr12";
+    const channelId = "channelabcdefghijklmn12345";
+    const rootId = "postpostabcdefghijklmn1234";
+    const spies = { createdPosts: [] as CreatedPost[], patchedPosts: [] as PatchedPost[] };
+    const client = fakeClient4(spies);
+    client.createDirectChannel = vi.fn(async () => ({ id: channelId })) as unknown as typeof client.createDirectChannel;
+    client.getPost = vi.fn(async () => ({ message: "Root message" })) as unknown as typeof client.getPost;
+    const hooks = {} as WebSocketHooks;
+    const adapter = new MattermostAdapter({
+      client, websocketClient: fakeWebSocketClient(undefined, hooks),
+      callbackHandleStore: fakeStore,
+      callbackServer: { start: async () => {}, stop: async () => {}, signContext: () => ({ hmac: "x", issuedAt: 0 }) } as never,
+      config: { ...baseConfig, authorizedActorIds: [{ id: userId, displayName: "Peer" }], authorizedConversationIds: channelType === "G" ? [{ id: channelId, displayName: "Group DM" }] : [] },
+      logger: silentLogger,
+    });
+    const events: MessagingInboundEvent[] = [];
+    await adapter.start(async (event) => { events.push(event); });
+    for (const root of [undefined, rootId]) {
+      hooks.fireMessage({ event: "posted", data: {
+        channel_type: channelType, sender_name: "Peer",
+        post: JSON.stringify({ id: "replyabcdefghijklmnopqr123", channel_id: channelId, user_id: userId, root_id: root, message: "Alert" }),
+      } });
+    }
+    await vi.waitFor(() => expect(events).toHaveLength(2));
+    expect(events[0]?.channel.conversation).toMatchObject({ id: channelId, kind: channelType === "D" ? "dm" : "channel" });
+    expect(events[1]?.channel.conversation).toMatchObject({ id: channelId, kind: "thread", parentConversationId: channelId });
+    if (channelType === "D") {
+      expect(events[1]?.channel.conversation.isDirectMessage).toBe(true);
+      const resolved = await adapter.resolveDirectConversation(userId);
+      expect(client.createDirectChannel).toHaveBeenCalledWith(["bot-user-id", userId]);
+      expect(resolved.conversation).toMatchObject({ id: channelId, kind: "dm" });
+    }
+    await adapter.deliver({
+      id: "result", kind: "message", role: "assistant", createdAt: 1,
+      parts: [{ type: "text", text: "Completed" }],
+      audit: { channel: events[0]!.channel, actor: events[0]!.actor, occurredAt: 1 },
+    });
+    expect(spies.createdPosts.at(-1)).toMatchObject({ channel_id: channelId, message: expect.stringContaining("Completed") });
+    await adapter.stop();
+  });
+});

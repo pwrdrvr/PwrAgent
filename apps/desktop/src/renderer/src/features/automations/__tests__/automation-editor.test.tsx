@@ -359,6 +359,81 @@ describe("AutomationEditor", () => {
     );
   });
 
+  it.each(["telegram", "discord", "slack", "mattermost", "feishu", "line"] as const)("saves %s DM contacts with recipient identity", async (provider) => {
+    const onSubmit = vi.fn(async () => undefined);
+
+    render(
+      <AutomationEditor
+        desktopApi={fakeDesktopApi(
+          fakeSettings({
+            enabled: { [provider]: true },
+            users: [{ displayName: "Peer", id: "peer-id" }],
+          }),
+        )}
+        mode={{
+          assignment: { backend: "codex", threadId: "thread-1" },
+          kind: "create",
+        }}
+        onCancel={() => undefined}
+        onSubmit={onSubmit}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("Name"), {
+      target: { value: "Slack alerts" },
+    });
+    fireEvent.change(screen.getByLabelText("Task prompt"), {
+      target: { value: "Investigate the alert." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Inbound message" }));
+    await waitFor(() =>
+      expect(screen.getByLabelText("Provider")).toHaveValue(provider),
+    );
+    const conversationLabel = provider === "telegram" ? "Group"
+      : provider === "slack" || provider === "discord" ? "Channel"
+      : "Conversation";
+    await pickConversation(conversationLabel, /Peer/);
+    fireEvent.change(screen.getByLabelText("Value"), {
+      target: { value: "ERROR" },
+    });
+    fireEvent.change(screen.getByLabelText("Where should the result go?"), {
+      target: { value: "different" },
+    });
+    fireEvent.change(screen.getByLabelText("Destination provider"), {
+      target: { value: provider },
+    });
+    const destinationLabel = provider === "telegram" ? "Destination group"
+      : provider === "slack" || provider === "discord" ? "Destination channel"
+      : "Destination conversation";
+    await pickConversation(destinationLabel, /Peer/);
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "create",
+        request: expect.objectContaining({
+          outputActions: expect.arrayContaining([
+            expect.objectContaining({
+              kind: "messaging_target",
+              target: expect.objectContaining({ channel: provider, conversationId: "peer-id", recipientUserId: "peer-id", conversationKind: "dm" }),
+            }),
+          ]),
+          triggers: [
+            expect.objectContaining({
+              conversation: expect.objectContaining({
+                channel: provider,
+                conversationId: "peer-id",
+                recipientUserId: "peer-id",
+                conversationKind: "dm",
+              }),
+            }),
+          ],
+        }),
+      }),
+    );
+  });
+
   it("submits an inbound Telegram trigger scoped to a specific topic", async () => {
     const onSubmit = vi.fn(async () => undefined);
 
@@ -1557,24 +1632,31 @@ function buildAutomation(overrides: Partial<AutomationDetail> = {}): AutomationD
 
 function fakeSettings(params: {
   enabled: Partial<Record<MessagingChannelKind, boolean>>;
+  users?: Array<{ displayName: string; id: string }>;
   telegramGroups?: Array<{ displayName: string; id: string }>;
   slackChannels?: Array<{ displayName: string; id: string }>;
   slackUsers?: Array<{ displayName: string; id: string }>;
 }): ReadDesktopMessagingSettingsResponse {
   const provider = (kind: MessagingChannelKind) => ({
     enabled: { value: Boolean(params.enabled[kind]) },
+    authorizedUserIds: { value: params.users ?? [] },
+    authorizedConversations: { value: [] },
+    authorizedChats: { value: [] },
+    authorizedGroups: { value: [] },
+    authorizedRooms: { value: [] },
   });
   return {
     snapshot: {
       messaging: {
         telegram: {
+          authorizedUserIds: { value: params.users ?? [] },
           enabled: { value: Boolean(params.enabled.telegram) },
           authorizedSupergroups: { value: params.telegramGroups ?? [] },
         },
         slack: {
           enabled: { value: Boolean(params.enabled.slack) },
           authorizedChannels: { value: params.slackChannels ?? [] },
-          authorizedUserIds: { value: params.slackUsers ?? [] },
+          authorizedUserIds: { value: params.slackUsers ?? params.users ?? [] },
         },
         discord: provider("discord"),
         mattermost: provider("mattermost"),

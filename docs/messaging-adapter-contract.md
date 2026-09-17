@@ -277,6 +277,25 @@ thread-reply broadcast flag, such as Slack's `reply_broadcast`, should map
 providers may fall back to a normal fresh message or return a structured
 unsupported delivery result.
 
+## Automation recipient addressing
+
+`resolveDirectConversation(userId)` resolves a configured contact to a normalized
+1:1 destination before an automation sends a `messaging_target` result. The
+provider validates the recipient and owns any API call needed to open the DM.
+The controller never assumes a user ID is a native conversation ID. A failed
+resolution records a failed action and does not attempt delivery to the user ID
+as a channel. An ordinary conversation target bypasses this resolver, including
+shared group DMs and LINE rooms.
+
+Automation snapshots mark contact targets with `recipientUserId`; native
+conversation targets keep `conversationId` and optional `parentId`. Live matching
+requires 1:1 DM semantics before comparing the contact with the inbound actor.
+Child matching uses `parentConversationId`, not a workspace/guild or thread root
+stored in `parentId`. Preview subscriptions use the same scope matcher.
+
+See [automation messaging surface verification](automation-messaging-surfaces.md)
+for the adapter evidence and remaining account-dependent limitations.
+
 ## Private Terminal Responses
 
 An adapter may implement `resolvePrivateConversation` when the platform can

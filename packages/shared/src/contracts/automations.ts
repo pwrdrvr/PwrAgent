@@ -272,11 +272,42 @@ export type AutomationMessagingConversationSnapshot = {
   channel: MessagingChannelKind;
   conversationId: string;
   conversationKind?: MessagingConversationKind;
+  /** A selected contact addresses their 1:1 DM, not a conversation with this ID. */
+  recipientUserId?: string;
+  isDirectMessage?: boolean;
   parentId?: string;
   title?: string;
   parentTitle?: string;
   ancestorTitle?: string;
 };
+
+/** Match normalized conversation identity without interpreting provider routing state. */
+export function matchesAutomationConversation(
+  expected: AutomationMessagingConversationSnapshot,
+  actual: AutomationMessagingConversationSnapshot & {
+    parentConversationId?: string;
+    parentConversationParentId?: string;
+  },
+  actorId: string,
+  includeThreadReplies = true,
+): boolean {
+  if (actual.channel !== expected.channel) return false;
+  const isDm = actual.conversationKind === "dm" || actual.isDirectMessage === true;
+  if (expected.recipientUserId) {
+    if (!isDm || actorId !== expected.recipientUserId) return false;
+  } else {
+    if (expected.conversationKind === "dm" && !isDm) return false;
+    if (expected.conversationKind === "channel" && isDm) return false;
+    const exact = actual.conversationId === expected.conversationId
+      && (expected.parentId === undefined || actual.parentId === expected.parentId);
+    const child = actual.parentConversationId === expected.conversationId
+      && (expected.parentId === undefined
+        || actual.parentConversationParentId === expected.parentId);
+    if (!exact && !child) return false;
+  }
+  return actual.conversationKind !== "thread" || includeThreadReplies
+    || expected.conversationKind === "thread";
+}
 
 export type AutomationInboundMessageTriggerDefinition = {
   id: string;
@@ -1048,9 +1079,9 @@ export type AutomationReplayCandidate = {
 export type ListAutomationReplayCandidatesResponse = {
   candidates: AutomationReplayCandidate[];
   /**
-   * False when the provider cannot serve conversation history (only Slack can
-   * today) — the UI says so instead of rendering an empty list that reads as
-   * "the channel is silent".
+   * False when the adapter cannot read history for this scope. Currently only
+   * Slack native top-level conversation IDs are supported; contact recipients
+   * and scoped threads/topics still support going-forward live preview.
    */
   supported: boolean;
 };

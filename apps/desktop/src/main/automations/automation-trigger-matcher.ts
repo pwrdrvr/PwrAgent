@@ -1,5 +1,6 @@
 import {
   evaluateAutomationInboundConditions,
+  matchesAutomationConversation,
   normalizeInboundTriggerConditions,
 } from "@pwragent/shared";
 import type {
@@ -73,20 +74,18 @@ function matchesInboundTrigger(
   trigger: AutomationInboundMessageTriggerDefinition,
   event: Extract<MessagingInboundEvent, { kind: "text" | "media" }>,
 ): boolean {
-  if (event.channel.channel !== trigger.conversation.channel) return false;
-  const conversation = event.channel.conversation;
-  const expectedConversationId = trigger.conversation.conversationId;
-  const matchesConversation =
-    conversation.id === expectedConversationId ||
-    conversation.parentId === expectedConversationId;
+  const matchesConversation = matchesAutomationConversation(
+    trigger.conversation,
+    {
+      ...event.channel.conversation,
+      channel: event.channel.channel,
+      conversationId: event.channel.conversation.id,
+      conversationKind: event.channel.conversation.kind,
+    },
+    event.actor.platformUserId,
+    trigger.includeThreadReplies === true,
+  );
   if (!matchesConversation) return false;
-  if (
-    conversation.kind === "thread" &&
-    !trigger.includeThreadReplies &&
-    conversation.id !== expectedConversationId
-  ) {
-    return false;
-  }
 
   return matchesConditionGroup(trigger, event);
 }
@@ -128,6 +127,7 @@ function buildRunSourceMetadata(params: {
       channel: params.event.channel.channel,
       conversationId: params.event.channel.conversation.id,
       conversationKind: params.event.channel.conversation.kind,
+      isDirectMessage: params.event.channel.conversation.isDirectMessage,
       parentId: params.event.channel.conversation.parentId,
       title: params.event.channel.conversation.title,
       parentTitle: params.event.channel.conversation.parentTitle,
@@ -171,7 +171,10 @@ export function buildAutomationReplayCandidates(
   const group = normalizeInboundTriggerConditions(trigger);
   return messages.map((message) => ({
     message,
-    matches: evaluateAutomationInboundConditions(group, {
+    matches: matchesAutomationConversation(
+      trigger.conversation, { ...message, channel: message.provider },
+      message.actor.platformUserId, trigger.includeThreadReplies === true,
+    ) && evaluateAutomationInboundConditions(group, {
       text: message.text,
       platformUserId: message.actor.platformUserId,
       ...(message.actor.isBot === undefined ? {} : { isBot: message.actor.isBot }),
@@ -211,6 +214,8 @@ export function buildReplayRunSourceMetadata(params: {
     conversation: {
       channel: message.provider,
       conversationId: message.conversationId,
+      conversationKind: message.conversationKind,
+      isDirectMessage: message.isDirectMessage,
       ...(message.parentId ? { parentId: message.parentId } : {}),
       ...(trigger.conversation.conversationId === message.conversationId
         && trigger.conversation.title

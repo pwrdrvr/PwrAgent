@@ -1811,3 +1811,26 @@ describe("FeishuAdapter", () => {
     });
   });
 });
+
+
+describe("feishu automation DM addressing", () => {
+  it("resolves a contact and delivers through the provider", async () => {
+    const userId = "ou_user";
+    const api = fakeApi({});
+    const send = vi.spyOn(api, "sendMessage");
+    const adapter = new FeishuAdapter({
+      api, callbackHandleStore: fakeStore(), config: baseConfig,
+    });
+    const resolved = await adapter.resolveDirectConversation(userId);
+    expect(resolved).toMatchObject({ outcome: "resolved", conversation: { id: userId, kind: "dm" } });
+    const result = await adapter.deliver({
+      id: "automation-dm", kind: "message", role: "assistant", createdAt: 1,
+      parts: [{ type: "text", text: "Automation completed" }],
+      audit: { actor: { platformUserId: "automation" }, channel: { channel: "feishu", conversation: resolved.conversation! }, occurredAt: 1 },
+    });
+    expect(result.outcome).toMatch(/presented/);
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({ receiveId: userId, receiveIdType: "open_id" }));
+    expect(await adapter.resolveDirectConversation("invalid recipient !")).toMatchObject({ outcome: "failed" });
+    await adapter.stop();
+  });
+});

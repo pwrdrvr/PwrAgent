@@ -3489,7 +3489,7 @@ describe("SlackAdapter", () => {
     ]);
   });
 
-  it("ignores group DM messages that don't @mention the bot", async () => {
+  it("observes group DM messages without admitting them as ordinary input", async () => {
     const socket = fakeSocket();
     const adapter = new SlackAdapter({
       config: {
@@ -3524,7 +3524,8 @@ describe("SlackAdapter", () => {
       },
     });
 
-    expect(events).toEqual([]);
+    expect(events).toEqual([expect.objectContaining({ kind: "text", observedOnly: true, channel: expect.objectContaining({ conversation: expect.objectContaining({ id: "G012ABCDEF0", kind: "channel" }) }) })]);
+    await adapter.stop();
     expect(rejected).toEqual([]);
   });
 
@@ -5868,5 +5869,28 @@ describe("SlackAdapter", () => {
     for (const chunk of rendered) {
       expect(chunk.length).toBeLessThanOrEqual(3_000);
     }
+  });
+});
+
+
+describe("slack automation DM addressing", () => {
+  it("resolves a contact and delivers through the provider", async () => {
+    const userId = "U012ABCDEF0";
+    const api = fakeApi({});
+    const send = vi.spyOn(api, "postMessage");
+    const adapter = new SlackAdapter({
+      api, callbackHandleStore: fakeStore(), config: baseConfig, socketClient: fakeSocket(),
+    });
+    const resolved = await adapter.resolveDirectConversation(userId);
+    expect(resolved).toMatchObject({ outcome: "resolved", conversation: { id: userId, kind: "dm" } });
+    const result = await adapter.deliver({
+      id: "automation-dm", kind: "message", role: "assistant", createdAt: 1,
+      parts: [{ type: "text", text: "Automation completed" }],
+      audit: { actor: { platformUserId: "automation" }, channel: { channel: "slack", conversation: resolved.conversation! }, occurredAt: 1 },
+    });
+    expect(result.outcome).toMatch(/presented/);
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({ channel: userId }));
+    expect(await adapter.resolveDirectConversation("invalid recipient !")).toMatchObject({ outcome: "failed" });
+    await adapter.stop();
   });
 });

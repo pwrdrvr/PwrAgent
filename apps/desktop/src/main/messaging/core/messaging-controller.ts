@@ -1422,6 +1422,34 @@ export class MessagingController {
       receivedAt: this.now(),
       text: "",
     };
+    if (params.target.recipientUserId) {
+      const resolve = this.options.adapter.resolveDirectConversation
+        ?.bind(this.options.adapter);
+      if (!resolve) {
+        return {
+          ok: false,
+          unsupported: true,
+          errorMessage: "Direct-message recipient resolution is unavailable.",
+        };
+      }
+      try {
+        const resolved = await resolve(params.target.recipientUserId);
+        if (resolved.outcome !== "resolved" || !resolved.conversation) {
+          return {
+            ok: false,
+            unsupported: resolved.outcome === "unsupported",
+            errorMessage: resolved.errorMessage ?? "Could not resolve direct-message recipient.",
+          };
+        }
+        event.channel = { channel: params.target.channel, conversation: resolved.conversation };
+        event.routingState = resolved.routingState;
+      } catch (error) {
+        return {
+          ok: false,
+          errorMessage: error instanceof Error ? error.message : String(error),
+        };
+      }
+    }
     const result = await this.deliver(
       {
         id: params.intentId,
@@ -21542,6 +21570,7 @@ function messagingEventFromAutomationSource(
       conversation: {
         id: source.conversation.conversationId,
         kind: source.conversation.conversationKind ?? "channel",
+        isDirectMessage: source.conversation.isDirectMessage,
         parentId: source.conversation.parentId,
         title: source.conversation.title,
         parentTitle: source.conversation.parentTitle,

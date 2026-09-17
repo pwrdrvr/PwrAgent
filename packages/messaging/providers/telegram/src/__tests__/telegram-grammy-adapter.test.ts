@@ -1012,3 +1012,34 @@ function fakeTelegramApi(): TelegramBotApi {
     unpinChatMessage: async () => true,
   };
 }
+
+
+describe("telegram automation DM addressing", () => {
+  it("resolves a contact and delivers through the provider", async () => {
+    const userId = "42";
+    const api = fakeTelegramApi();
+    const send = vi.spyOn(api, "sendMessage");
+    const adapter = new TelegramAdapter({
+      api, store: fakeCallbackStore(),
+      config: { channel: "telegram", botToken: "token", authorizedActorIds: [{ id: "42", displayName: "Peer" }] },
+    });
+    const events: MessagingInboundEvent[] = [];
+    await adapter.start(async (event) => { events.push(event); });
+    await adapter.handleUpdate({ update_id: 10, message: {
+      message_id: 20, chat: { id: 42, type: "private" },
+      from: { id: 42, first_name: "Peer" }, text: "DM alert",
+    } });
+    expect(events[0]).toMatchObject({ kind: "text", channel: { conversation: { id: userId, kind: "dm" } } });
+    const resolved = await adapter.resolveDirectConversation(userId);
+    expect(resolved).toMatchObject({ outcome: "resolved", conversation: { id: userId, kind: "dm" } });
+    const result = await adapter.deliver({
+      id: "automation-dm", kind: "message", role: "assistant", createdAt: 1,
+      parts: [{ type: "text", text: "Automation completed" }],
+      audit: { actor: { platformUserId: "automation" }, channel: { channel: "telegram", conversation: resolved.conversation! }, occurredAt: 1 },
+    });
+    expect(result.outcome).toMatch(/presented/);
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({ chat_id: 42 }));
+    expect(await adapter.resolveDirectConversation("invalid recipient !")).toMatchObject({ outcome: "failed" });
+    await adapter.stop();
+  });
+});

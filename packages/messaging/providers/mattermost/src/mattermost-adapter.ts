@@ -12,6 +12,7 @@ import { Client4, WebSocketClient, type WebSocketMessage } from "@mattermost/cli
 // needed; if you ever downgrade below 11.4.0, you'll need to stub
 // `globalThis.window` before importing this module.
 import type {
+  MessagingPrivateConversationResolveResult,
   MessagingActorIdentity,
   MessagingAdapterState,
   MessagingAdapterAuthorizationUpdate,
@@ -147,6 +148,7 @@ export type MattermostProviderAdapter = {
   capabilityProfile: MessagingCapabilityProfile;
   channel: "mattermost";
   clientRateLimitStrategy: MessagingClientRateLimitStrategy;
+  resolveDirectConversation?(userId: string): Promise<MessagingPrivateConversationResolveResult>;
   deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult>;
   resolveDeliveryScope?(intent: MessagingSurfaceIntent): MessagingDeliveryScope | undefined;
   downloadAttachment(
@@ -449,6 +451,42 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     if (update.streamingResponses !== undefined) {
       this.config.streamingResponses = update.streamingResponses;
     }
+  }
+
+  async resolveDirectConversation(
+    userId: string,
+  ): Promise<MessagingPrivateConversationResolveResult> {
+    if (!validateMattermostId(userId).ok) {
+      return {
+        channel: this.channel,
+        outcome: "failed",
+        updatedAt: this.now(),
+        errorMessage: "Invalid direct-message recipient ID.",
+      };
+    }
+    if (!this.botUserId) {
+      return {
+        channel: this.channel,
+        outcome: "failed",
+        updatedAt: this.now(),
+        errorMessage: "Mattermost is not connected.",
+      };
+    }
+    const conversationId = (await this.client.createDirectChannel([this.botUserId, userId])).id;
+    if (!validateMattermostId(conversationId).ok) {
+      return {
+        channel: this.channel,
+        outcome: "failed",
+        updatedAt: this.now(),
+        errorMessage: "Provider returned an invalid DM conversation ID.",
+      };
+    }
+    return {
+      channel: this.channel,
+      conversation: { id: conversationId, kind: "dm", isDirectMessage: true },
+      outcome: "resolved",
+      updatedAt: this.now(),
+    };
   }
 
   async start(listener: MattermostInboundListener): Promise<void> {
@@ -1595,7 +1633,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     channel: MessagingChannelRef,
     teamId?: string,
   ): boolean {
-    if (channel.conversation.kind === "dm") {
+    if (channel.conversation.kind === "dm" || channel.conversation.isDirectMessage) {
       return true;
     }
     const authorizedConversations = this.config.authorizedConversationIds ?? [];
@@ -2583,6 +2621,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
       conversation: {
         id: post.channel_id,
         kind,
+        ...(data.channel_type === "D" ? { isDirectMessage: true } : {}),
         ...(isThread && post.root_id ? { parentId: post.root_id } : {}),
         ...(isThread ? { parentConversationId: post.channel_id } : {}),
         ...(data.team_id ? { workspaceId: data.team_id } : {}),

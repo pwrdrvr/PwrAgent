@@ -667,7 +667,8 @@ export class DesktopAutomationService {
     if (trigger?.kind !== "inbound_message") {
       return { candidates: [], supported: false };
     }
-    if (!deps.supportsHistory(trigger.conversation.channel)) {
+    if (trigger.conversation.recipientUserId || trigger.conversation.parentId
+      || !deps.supportsHistory(trigger.conversation.channel)) {
       return { candidates: [], supported: false };
     }
     const messages = await deps.fetchRecent({

@@ -124,6 +124,9 @@ function formatInboundSource(run: AutomationRunSummary): string[] {
     `Received at: ${new Date(source.receivedAt).toISOString()}`,
     `Provider: ${source.conversation.channel}`,
     `Conversation: ${source.conversation.title ?? source.conversation.conversationId}`,
+    source.conversation.conversationKind === "dm" || source.conversation.isDirectMessage
+      ? "Surface: direct message"
+      : `Surface: ${source.conversation.conversationKind ?? "conversation"}`,
     source.conversation.parentId
       ? `Parent/thread root: ${source.conversation.parentId}`
       : "",

@@ -29,7 +29,7 @@ function textEvent(params: {
       conversation: {
         id: params.conversationId,
         kind: params.parentId ? "topic" : "channel",
-        ...(params.parentId ? { parentId: params.parentId } : {}),
+        ...(params.parentId ? { parentId: params.parentId, parentConversationId: params.parentId } : {}),
       },
     },
     receivedAt: 1,

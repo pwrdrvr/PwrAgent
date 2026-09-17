@@ -2952,3 +2952,50 @@ function applicationCommand(): DiscordApplicationCommand {
     type: 1,
   };
 }
+
+
+describe("Discord automation DM addressing", () => {
+  it("opens the user's DM and sends to the returned channel", async () => {
+    const createDirectConversation = vi.fn(async () => ({ id: TEST_CHANNEL_ID }));
+    const createMessage = vi.fn(async () => ({ id: TEST_MESSAGE_ID, channel_id: TEST_CHANNEL_ID }));
+    const gateway = new TestDiscordGateway();
+    const adapter = new DiscordAdapter({
+      api: createApi({ createDirectConversation, createMessage }),
+      gateway,
+      config: { channel: "discord", botToken: "token", authorizedActorIds: [{ id: TEST_USER_ID, displayName: "Peer" }] },
+    });
+    const events: MessagingInboundEvent[] = [];
+    await adapter.start(async (event) => { events.push(event); });
+    const dm = { ...messageDispatch({ authorBot: false, content: "DM alert", id: TEST_MESSAGE_ID }), channel_type: 1 };
+    Reflect.deleteProperty(dm, "guild_id");
+    await gateway.emit({ op: 0, t: "MESSAGE_CREATE", d: dm });
+    expect(events[0]).toMatchObject({ kind: "text", actor: { platformUserId: TEST_USER_ID }, channel: { conversation: { id: TEST_CHANNEL_ID, kind: "dm" } } });
+    const resolved = await adapter.resolveDirectConversation(TEST_USER_ID);
+    expect(createDirectConversation).toHaveBeenCalledWith(TEST_USER_ID);
+    expect(resolved.conversation).toMatchObject({ id: TEST_CHANNEL_ID, kind: "dm" });
+    await adapter.deliver({
+      id: "automation-dm", kind: "message", role: "assistant", createdAt: 1,
+      parts: [{ type: "text", text: "Automation completed" }],
+      audit: { actor: { platformUserId: "automation" }, channel: { channel: "discord", conversation: resolved.conversation! }, occurredAt: 1 },
+    });
+    expect(createMessage).toHaveBeenCalledWith(TEST_CHANNEL_ID, expect.objectContaining({ content: "Automation completed" }));
+    expect(await adapter.resolveDirectConversation("invalid recipient !")).toMatchObject({ outcome: "failed" });
+    expect(createDirectConversation).toHaveBeenCalledTimes(1);
+    await adapter.stop();
+  });
+
+  it("forwards authorized bot messages but suppresses its own messages", async () => {
+    const gateway = new TestDiscordGateway();
+    const events: MessagingInboundEvent[] = [];
+    const adapter = new DiscordAdapter({
+      api: createApi(), gateway,
+      config: { channel: "discord", botToken: "token", applicationId: TEST_APPLICATION_ID, authorizedActorIds: [{ id: TEST_USER_ID, displayName: "Bot" }], authorizedGuildIds: TEST_AUTHORIZED_GUILD_IDS },
+    });
+    await adapter.start(async (event) => { events.push(event); });
+    const message = messageDispatch({ authorBot: true, content: "alert", id: TEST_MESSAGE_ID });
+    await gateway.emit({ op: 0, t: "MESSAGE_CREATE", d: message });
+    await gateway.emit({ op: 0, t: "MESSAGE_CREATE", d: { ...message, author: { ...message.author, id: TEST_APPLICATION_ID } } });
+    expect(events).toEqual([expect.objectContaining({ kind: "text", actor: expect.objectContaining({ isBot: true }) })]);
+    await adapter.stop();
+  });
+});

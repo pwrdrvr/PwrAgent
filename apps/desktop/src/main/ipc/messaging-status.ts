@@ -615,6 +615,8 @@ export function registerMessagingStatusIpcHandlers(): void {
       startInboundPreview(request.subscriptionId, {
         conversationId: request.conversationId,
         provider: request.provider,
+        recipientUserId: request.recipientUserId,
+        conversationKind: request.conversationKind,
         ...(request.parentId ? { parentId: request.parentId } : {}),
       });
       // Reap the scope if the renderer goes away without sending stop (window
@@ -625,7 +627,9 @@ export function registerMessagingStatusIpcHandlers(): void {
       // Best-effort history backfill (Slack today). Pushed through the same
       // preview event channel as live messages, oldest-first, so the renderer
       // shows recent context immediately instead of an empty "waiting" panel.
+      const historySupported = runtime.supportsPreviewHistory(request.provider, request);
       void (async () => {
+        if (!historySupported) return;
         try {
           const history = await runtime.fetchRecentPreviewMessages({
             provider: request.provider,
@@ -639,7 +643,7 @@ export function registerMessagingStatusIpcHandlers(): void {
           // History is optional; live capture continues regardless.
         }
       })();
-      return { ok: true };
+      return { ok: true, historySupported };
     },
   );
 

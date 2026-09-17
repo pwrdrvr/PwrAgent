@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { Bot, InputFile } from "grammy";
 import type {
+  MessagingPrivateConversationResolveResult,
   MessagingAdapterState,
   MessagingAdapterAuthorizationUpdate,
   MessagingAdapterRenderingPreferencesUpdate,
@@ -426,6 +427,7 @@ export type TelegramProviderAdapter = {
   capabilityProfile: MessagingCapabilityProfile;
   channel: "telegram";
   clientRateLimitStrategy: MessagingClientRateLimitStrategy;
+  resolveDirectConversation?(userId: string): Promise<MessagingPrivateConversationResolveResult>;
   deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult>;
   resolveDeliveryScope?(intent: MessagingSurfaceIntent): MessagingDeliveryScope | undefined;
   onRateLimit?(listener: (info: MessagingRateLimitInfo) => void): () => void;
@@ -646,6 +648,26 @@ export class TelegramAdapter implements TelegramProviderAdapter {
   resolveDeliveryScope(intent: MessagingSurfaceIntent): MessagingDeliveryScope | undefined {
     const target = this.resolveTarget(intent);
     return target ? this.rateLimitScopeForTarget(target) : undefined;
+  }
+
+  async resolveDirectConversation(
+    userId: string,
+  ): Promise<MessagingPrivateConversationResolveResult> {
+    if (!validateTelegramPositiveId(userId).ok) {
+      return {
+        channel: this.channel,
+        outcome: "failed",
+        updatedAt: this.now(),
+        errorMessage: "Invalid direct-message recipient ID.",
+      };
+    }
+    const conversationId = userId;
+    return {
+      channel: this.channel,
+      conversation: { id: conversationId, kind: "dm", isDirectMessage: true },
+      outcome: "resolved",
+      updatedAt: this.now(),
+    };
   }
 
   async start(listener: (event: MessagingInboundEvent) => Promise<void>): Promise<void> {

@@ -8,6 +8,7 @@ import {
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { Readable } from "node:stream";
 import type {
+  MessagingPrivateConversationResolveResult,
   MessagingActorIdentity,
   MessagingAdapterAuthorizationUpdate,
   MessagingAdapterDiagnosticEvent,
@@ -120,6 +121,7 @@ export type FeishuProviderAdapter = {
   capabilityProfile: MessagingCapabilityProfile;
   channel: "feishu";
   clientRateLimitStrategy: MessagingClientRateLimitStrategy;
+  resolveDirectConversation?(userId: string): Promise<MessagingPrivateConversationResolveResult>;
   deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult>;
   downloadAttachment(
     request: MessagingAttachmentDownloadRequest,
@@ -434,6 +436,26 @@ export class FeishuAdapter implements FeishuProviderAdapter {
   resolveDeliveryScope(intent: MessagingSurfaceIntent): MessagingDeliveryScope | undefined {
     const target = this.resolveTarget(intent);
     return target ? this.rateLimitScopeForTarget(target) : undefined;
+  }
+
+  async resolveDirectConversation(
+    userId: string,
+  ): Promise<MessagingPrivateConversationResolveResult> {
+    if (!validateFeishuOpenId(userId).ok) {
+      return {
+        channel: this.channel,
+        outcome: "failed",
+        updatedAt: this.now(),
+        errorMessage: "Invalid direct-message recipient ID.",
+      };
+    }
+    const conversationId = userId;
+    return {
+      channel: this.channel,
+      conversation: { id: conversationId, kind: "dm", isDirectMessage: true },
+      outcome: "resolved",
+      updatedAt: this.now(),
+    };
   }
 
   async start(listener: FeishuInboundListener): Promise<void> {

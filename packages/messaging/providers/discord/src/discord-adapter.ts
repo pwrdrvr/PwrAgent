@@ -13,6 +13,7 @@ import {
   type User,
 } from "discord.js";
 import type {
+  MessagingPrivateConversationResolveResult,
   MessagingAdapterAuthorizationUpdate,
   MessagingCapabilityProfile,
   MessagingAdapterState,
@@ -232,6 +233,7 @@ export type DiscordGuildInfo = {
 };
 
 export type DiscordApi = DiscordApplicationCommandApi & {
+  createDirectConversation?(userId: string): Promise<{ id: string }>;
   createThreadFromMessage(
     channelId: string,
     messageId: string,
@@ -284,6 +286,7 @@ export type DiscordProviderAdapter = {
   capabilityProfile: MessagingCapabilityProfile;
   channel: "discord";
   clientRateLimitStrategy: MessagingClientRateLimitStrategy;
+  resolveDirectConversation?(userId: string): Promise<MessagingPrivateConversationResolveResult>;
   deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult>;
   resolveDeliveryScope?(intent: MessagingSurfaceIntent): MessagingDeliveryScope | undefined;
   onRateLimit?(listener: (info: MessagingRateLimitInfo) => void): () => void;
@@ -445,6 +448,37 @@ export class DiscordAdapter implements DiscordProviderAdapter {
   resolveDeliveryScope(intent: MessagingSurfaceIntent): MessagingDeliveryScope | undefined {
     const target = this.resolveTarget(intent);
     return target ? this.rateLimitScopeForTarget(target) : undefined;
+  }
+
+  async resolveDirectConversation(
+    userId: string,
+  ): Promise<MessagingPrivateConversationResolveResult> {
+    if (!validateDiscordSnowflake(userId).ok) {
+      return {
+        channel: this.channel,
+        outcome: "failed",
+        updatedAt: this.now(),
+        errorMessage: "Invalid direct-message recipient ID.",
+      };
+    }
+    if (!this.api.createDirectConversation) {
+      return { channel: this.channel, outcome: "unsupported", updatedAt: this.now() };
+    }
+    const conversationId = (await this.api.createDirectConversation(userId)).id;
+    if (!validateDiscordSnowflake(conversationId).ok) {
+      return {
+        channel: this.channel,
+        outcome: "failed",
+        updatedAt: this.now(),
+        errorMessage: "Provider returned an invalid DM conversation ID.",
+      };
+    }
+    return {
+      channel: this.channel,
+      conversation: { id: conversationId, kind: "dm", isDirectMessage: true },
+      outcome: "resolved",
+      updatedAt: this.now(),
+    };
   }
 
   async start(listener: (event: MessagingInboundEvent) => Promise<void>): Promise<void> {
@@ -1114,7 +1148,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     if (!this.validateMessageIdentifiers(message)) {
       return;
     }
-    if (message.author.bot) {
+    if (message.author.id === this.applicationId) {
       return;
     }
     const mentionRemainder =
@@ -2574,6 +2608,12 @@ class DiscordRestApi implements DiscordApi {
       guildId: request.guildId,
       rest: this.rest,
     });
+  }
+
+  async createDirectConversation(userId: string): Promise<{ id: string }> {
+    return await this.rest.post(Routes.userChannels(), {
+      body: { recipient_id: userId },
+    }) as { id: string };
   }
 
   async createMessage(

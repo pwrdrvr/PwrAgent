@@ -1,3 +1,4 @@
+import { matchesAutomationConversation } from "@pwragent/shared";
 import { randomBytes, randomUUID } from "node:crypto";
 import {
   isMessagingInteractivePendingRequest,
@@ -116,6 +117,7 @@ export type DesktopMessagingAdapter = {
   channel: MessagingChannelKind;
   clientRateLimitStrategy?: MessagingClientRateLimitStrategy;
   readCredentialMetadata?(): MessagingCredentialMetadata | undefined;
+  resolveDirectConversation?: MessagingAdapter["resolveDirectConversation"];
   deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult>;
   resolveDeliveryScope?(intent: MessagingSurfaceIntent): MessagingDeliveryScope | undefined;
   downloadAttachment?: MessagingAdapter["downloadAttachment"];
@@ -882,7 +884,12 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
    * today). Callers use this to tell "no history support" apart from "the
    * conversation is simply empty", which fetchRecentPreviewMessages cannot.
    */
-  supportsPreviewHistory(provider: MessagingChannelKind): boolean {
+  supportsPreviewHistory(
+    provider: MessagingChannelKind,
+    scope?: { parentId?: string; recipientUserId?: string },
+  ): boolean {
+    // History currently reads top-level conversation IDs, not contact IDs or thread roots.
+    if (scope?.recipientUserId || scope?.parentId) return false;
     const adapter = this.adapters.find((entry) => entry.channel === provider);
     return Boolean(adapter?.fetchRecentMessages);
   }
@@ -917,10 +924,11 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     for (const event of events) {
       const message = inboundEventToPreviewMessage(event);
       if (!message) continue;
-      if (
-        message.conversationId === params.conversationId ||
-        message.parentId === params.conversationId
-      ) {
+      if (matchesAutomationConversation(
+        { ...params, channel: params.provider },
+        { ...message, channel: message.provider },
+        message.actor.platformUserId,
+      )) {
         messages.push({ ...message, origin: "history" });
       }
     }
@@ -1546,7 +1554,8 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
         ) {
           // Observed-only traffic exists for automations and the editor's
           // live preview; it must never reach the controller's reply/command
-          // path — the sender did not clear the per-user access gate.
+          // path — the sender failed the per-user gate or the shared message
+          // did not explicitly address the bot.
           // A matching automation is its own narrow authorization context:
           // classify that event as routed without widening the sender's
           // adapter or RBAC permissions for any interactive messaging path.

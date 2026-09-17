@@ -1,4 +1,5 @@
-import type { InboundPreviewMessage } from "@pwragent/shared";
+import { matchesAutomationConversation } from "@pwragent/shared";
+import type { InboundPreviewMessage, StartInboundPreviewRequest } from "@pwragent/shared";
 import type { MessagingInboundEvent } from "@pwragent/messaging-interface";
 
 /**
@@ -11,11 +12,7 @@ import type { MessagingInboundEvent } from "@pwragent/messaging-interface";
  * filter would catch. There is no history backfill — only messages that
  * arrive while a preview scope is active are surfaced.
  */
-export type InboundPreviewScope = {
-  conversationId: string;
-  parentId?: string;
-  provider: string;
-};
+export type InboundPreviewScope = Omit<StartInboundPreviewRequest, "subscriptionId">;
 
 const MAX_PREVIEW_TEXT_CHARS = 600;
 
@@ -67,13 +64,12 @@ function matchesAnyScope(
 ): boolean {
   const conversation = event.channel.conversation;
   for (const scope of activeScopes.values()) {
-    if (scope.provider !== event.channel.channel) continue;
-    if (
-      conversation.id === scope.conversationId ||
-      conversation.parentId === scope.conversationId
-    ) {
-      return true;
-    }
+    if (matchesAutomationConversation({ ...scope, channel: scope.provider }, {
+      ...conversation,
+      conversationId: conversation.id,
+      conversationKind: conversation.kind,
+      channel: event.channel.channel,
+    }, event.actor.platformUserId)) return true;
   }
   return false;
 }
@@ -102,6 +98,10 @@ function toPreviewMessage(
     id: event.id,
     provider: event.channel.channel,
     conversationId: event.channel.conversation.id,
+    conversationKind: event.channel.conversation.kind,
+    isDirectMessage: event.channel.conversation.isDirectMessage,
+    parentConversationId: event.channel.conversation.parentConversationId,
+    parentConversationParentId: event.channel.conversation.parentConversationParentId,
     ...(event.channel.conversation.parentId
       ? { parentId: event.channel.conversation.parentId }
       : {}),

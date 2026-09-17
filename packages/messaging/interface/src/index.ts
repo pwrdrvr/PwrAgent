@@ -1411,9 +1411,10 @@ export type MessagingInboundBaseEvent = MessagingInboundReceipt & {
   actor: MessagingActorIdentity;
   channel: MessagingChannelRef;
   /**
-   * True when the adapter forwarded this event ONLY because its conversation
-   * is being observed (an enabled inbound automation watches it), while the
-   * sender would otherwise fail the per-user access gate. Observed-only
+   * True when an event is available to automations/preview but not ordinary
+   * Agent input: either an observed conversation admits a sender who fails
+   * the per-user gate, or an authorized shared message lacks a required mention.
+   * Observed-only
    * events must never reach the reply/command path — they exist so
    * automations and the editor's live preview can see channel traffic (bot
    * alerts especially) without widening who may command the bot.
