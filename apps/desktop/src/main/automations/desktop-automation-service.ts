@@ -667,9 +667,16 @@ export class DesktopAutomationService {
     if (trigger?.kind !== "inbound_message") {
       return { candidates: [], supported: false };
     }
-    if (trigger.conversation.recipientUserId || trigger.conversation.parentId
-      || !deps.supportsHistory(trigger.conversation.channel)) {
-      return { candidates: [], supported: false };
+    // Ordered most specific first: a contact DM on Slack is refused by the
+    // scope, not by the provider, and the empty state says which.
+    if (trigger.conversation.recipientUserId) {
+      return { candidates: [], supported: false, unsupportedReason: "contact_dm" };
+    }
+    if (trigger.conversation.parentId) {
+      return { candidates: [], supported: false, unsupportedReason: "scoped_thread" };
+    }
+    if (!deps.supportsHistory(trigger.conversation.channel)) {
+      return { candidates: [], supported: false, unsupportedReason: "provider" };
     }
     const messages = await deps.fetchRecent({
       provider: trigger.conversation.channel,

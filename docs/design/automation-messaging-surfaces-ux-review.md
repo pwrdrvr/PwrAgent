@@ -14,6 +14,23 @@ plumbing will do.
 Mockups for every finding below:
 [`automation-surfaces-v1/`](automation-surfaces-v1/).
 
+## Status
+
+| # | Finding | Status |
+| --- | --- | --- |
+| 1 | `dm:` sentinel in the picker's ID column | Fixed on this branch |
+| 2 | Manual entry cannot express a DM | Fixed on this branch |
+| 3 | Replay blames the provider for a scope limit | Fixed on this branch |
+| 4 | Discarded Telegram destination topic field | Fixed on this branch |
+| 5 | Discord's nouns promise channels that cannot appear | Open |
+| 6 | Three providers have no manual-entry guidance | Open |
+| 7 | The pipeline caption describes a room | Open |
+| 8 | Preview copy, and a limit stated too late | Open |
+| 9 | Smaller items | Open |
+
+Findings 5–9 are a copy pass with no structural change. The mockup sheets
+draft every one of their strings; none of that wording is a decision yet.
+
 ## Overall
 
 The feature reads as finished from the main process outward and unfinished from
@@ -30,7 +47,7 @@ sentence.
 
 ## Findings
 
-### 1. The `dm:` sentinel reaches the operator-facing ID column — critical
+### 1. The `dm:` sentinel reaches the operator-facing ID column — critical, fixed
 
 `readProviderGroups` encodes contacts as `` `dm:${contact.id}` `` so the editor
 can tell a contact from a conversation
@@ -46,10 +63,12 @@ against. A contact with no display name is worse still — `title` falls back to
 the raw ID while `detail` shows the prefixed one, so the row prints the same
 identifier twice, spelled two ways.
 
-Fix: keep the sentinel in `value` and give `detail` the platform ID. The DM-ness
-is already carried by `kind`, which is what drives the glyph and the section.
+Fixed: `conversationOptions` strips the marker through one `contactUserId`
+helper and gives `detail` the platform ID, dropping the column entirely when it
+would repeat the label. The DM-ness is already carried by `kind`, which is what
+drives the glyph and the section.
 
-### 2. Manual entry cannot express a DM, and silently saves an inert trigger — critical
+### 2. Manual entry cannot express a DM, and silently saves an inert trigger — critical, fixed
 
 `buildDestinationSnapshot` only produces a DM when the value carries the `dm:`
 prefix, which only the picker can produce. Anything typed into the manual field
@@ -66,12 +85,14 @@ nothing in either case.
 The Slack hint makes this actively likely: it says to "open the channel details
 and copy the ID at the bottom", which in a DM yields the `D…` conversation ID.
 
-Fix: a Channel / Direct message switch on the manual path, feeding
-`recipientUserId`. Failing that, reject a DM-shaped ID at save time with an
-error that names the right field — silence is the one option that is not
-acceptable, because the automation looks saved and enabled.
+Fixed: a Channel / Direct message switch on both manual paths, writing the same
+`dm:` form the picker produces so nothing downstream learns a second encoding.
+The label, placeholder and hint follow the switch, and the DM hint asks for the
+sender's user ID — which is what `matchesAutomationConversation` compares —
+while naming the conversation ID it is not. Switching the kind re-encodes what
+is already typed rather than clearing it.
 
-### 3. The replay empty state blames the provider for a scope limit — critical
+### 3. The replay empty state blames the provider for a scope limit — critical, fixed
 
 `listReplayCandidates` gained two refusals in this PR: a trigger carrying
 `recipientUserId` or `parentId`
@@ -84,10 +105,14 @@ would offer replay if its trigger were a channel. The sentence sends the
 operator to check their provider when the constraint is the scope, and it will
 keep being wrong as more adapters gain history.
 
-Fix: carry a refusal reason across the IPC alongside `supported`, and write one
-sentence per reason. Sheet 6 drafts all three.
+Fixed: `ListAutomationReplayCandidatesResponse` carries an
+`unsupportedReason` (`contact_dm` / `scoped_thread` / `provider`) beside
+`supported`, checked most-specific-first so a Slack DM reports the scope. Each
+reason gets its own sentence, the provider one names the provider, and a
+response carrying no reason — an older main process, or a schedule trigger —
+falls back to a sentence that blames nothing.
 
-### 4. A live destination field whose value is discarded — moderate
+### 4. A live destination field whose value is discarded — moderate, fixed
 
 The trigger side suppresses Telegram's topic controls once a DM is selected
 (`inboundProvider === "telegram" && !inboundGroupId.startsWith("dm:")`). The
@@ -96,7 +121,7 @@ destination side guards on `destProvider === "telegram"` alone, while
 value. "Destination topic ID (optional)" therefore stays on screen for a 1:1
 Telegram DM, accepts input, and throws it away on save.
 
-Fix: the same `dm:` test the trigger side already uses.
+Fixed: the same `dm:` test the trigger side already uses.
 
 ### 5. The picker's nouns promise channels that can never appear — moderate
 
@@ -194,11 +219,10 @@ with a room noun. Fixing the visible labels fixes the announced ones.
 
 ## Priority
 
-1. **Findings 1, 2 and 4 before merge.** Each is a case where the form accepts
-   input and discards or misrepresents it. Finding 2 in particular ships the
-   failure mode this work existed to remove.
-2. **Finding 3 before merge**, or revert the two new refusals until the copy can
-   follow. A false sentence in an empty state costs more debugging time than the
-   missing feature.
-3. **Findings 5–8 as a copy pass.** No structural change; they are labels,
-   nouns, and one banner.
+Findings 1–4 are fixed on this branch: each was a case where the form accepted
+input and then discarded or misrepresented it, and finding 2 in particular
+shipped the failure mode this work existed to remove.
+
+Findings 5–9 remain open and are a copy pass — labels, nouns, and one banner,
+with no structural change. Of them, finding 5 is the one worth doing next: a
+Discord operator is currently told to look for a section that cannot exist.

@@ -35,6 +35,7 @@ import {
 import {
   AutomationEditor,
   type AutomationEditorSubmit,
+  INBOUND_PROVIDER_LABELS,
 } from "./AutomationEditor";
 import { AutomationRunHistoryItem } from "./ThreadAutomationsPanel";
 import { useAutomationRuns, useAutomations } from "./useAutomations";
@@ -476,9 +477,9 @@ function AutomationTableRow(props: {
             <p className="automation-field__hint">Loading recent messages…</p>
           ) : !replayCandidates.supported ? (
             <p className="automation-field__hint">
-              This provider can&rsquo;t serve conversation history, so there is
-              nothing to replay. Use &ldquo;Preview live messages&rdquo; in the
-              editor to test against new traffic instead.
+              {replayUnsupportedReason(replayCandidates, props.automation)} Use
+              &ldquo;Preview live messages&rdquo; in the editor to test against
+              new traffic instead.
             </p>
           ) : replayCandidates.candidates.length === 0 ? (
             <p className="automation-field__hint">
@@ -715,4 +716,39 @@ function AutomationTableHistory(props: {
       )}
     </div>
   );
+}
+
+/**
+ * Why replay has nothing to show. Three different constraints refuse and they
+ * send the operator to three different places, so the empty state names the
+ * one that applied rather than assuming the provider. Telling someone on a
+ * Slack DM trigger that Slack cannot serve history points them at the one
+ * part that is working.
+ *
+ * `unsupportedReason` is absent on a response from a build that predates it,
+ * and on a schedule automation, which has no conversation to replay from at
+ * all. Both fall back to a sentence that blames nothing.
+ */
+function replayUnsupportedReason(
+  response: ListAutomationReplayCandidatesResponse,
+  automation: AutomationDetail,
+): string {
+  switch (response.unsupportedReason) {
+    case "contact_dm":
+      return "PwrAgent can't read back a contact's direct messages, only a conversation's.";
+    case "scoped_thread":
+      return "Replay reads whole conversations, not a single thread or topic.";
+    case "provider": {
+      const trigger = automation.triggers.find(
+        (entry) => entry.kind === "inbound_message",
+      );
+      const provider =
+        trigger?.kind === "inbound_message"
+          ? INBOUND_PROVIDER_LABELS[trigger.conversation.channel]
+          : undefined;
+      return `${provider ?? "This provider"} can't serve conversation history, so there is nothing to replay.`;
+    }
+    default:
+      return "There is no recent history to replay for this trigger.";
+  }
 }

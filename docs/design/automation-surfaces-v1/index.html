@@ -49,6 +49,10 @@
         --info-text: #9fc8ff;
         --info-border: rgba(86, 137, 196, 0.28);
         --info-soft: rgba(86, 137, 196, 0.16);
+
+        --success-text: #9ce5b3;
+        --success-border: rgba(74, 148, 92, 0.32);
+        --success-soft: rgba(74, 148, 92, 0.16);
       }
 
       * { box-sizing: border-box; }
@@ -91,6 +95,7 @@
       }
       .col__head--now { color: var(--danger-text); }
       .col__head--next { color: var(--accent-bright); }
+      .col__head--done { color: var(--success-text); }
       .col__head::after { content: ""; flex: 1; height: 1px; background: var(--border-subtle); }
 
       .stage {
@@ -108,6 +113,8 @@
         font-size: 11.5px; line-height: 1.5;
       }
       .note--ok { border-left-color: var(--accent-border); background: var(--accent-soft); color: var(--accent-bright); }
+      .note--done { border-left-color: var(--success-border); background: var(--success-soft); color: var(--success-text); }
+      .note--todo { border-left-color: var(--info-border); background: var(--info-soft); color: var(--info-text); }
       .note code { font-family: var(--font-mono); font-size: 11px; }
 
       /* ---- Shipped primitives, transcribed from app.css ---- */
@@ -237,6 +244,7 @@
       .index p { margin: 0 0 16px; max-width: 760px; color: var(--text-secondary); line-height: 1.6; }
       .index ol { margin: 0; padding-left: 20px; color: var(--text-secondary); line-height: 1.9; }
       .index code { font-family: var(--font-mono); font-size: 11.5px; color: var(--text-muted); }
+      .index .fixed { color: var(--success-text); font-size: 10.5px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; }
       body.is-isolated .index { display: none; }
       body.is-isolated { padding-top: 48px; }
     </style>
@@ -245,19 +253,20 @@
     <header class="index">
       <h1>Automation messaging surfaces — design pass</h1>
       <p>
-        Six surfaces from the Automations editor, each shown as it behaves on
-        <code>fix/automation-provider-surfaces</code> (left) and as this pass
-        proposes it should read (right). Tokens and control geometry are
-        transcribed from <code>apps/desktop/src/renderer/src/styles/app.css</code>.
+        Six surfaces from the Automations editor, each shown as the review found
+        it (left) and as it reads after the fix (right). A green right-hand
+        column landed on <code>fix/automation-provider-surfaces</code>; an orange
+        one is still a proposal. Tokens and control geometry are transcribed from
+        <code>apps/desktop/src/renderer/src/styles/app.css</code>.
         Append <code>?slide=&lt;id&gt;</code> to isolate one sheet.
       </p>
       <ol>
-        <li><code>picker</code> — the DM rows in the surface picker</li>
-        <li><code>manual</code> — manual ID entry has no way to say “this is a DM”</li>
+        <li><code>picker</code> — the DM rows in the surface picker <b class="fixed">fixed</b></li>
+        <li><code>manual</code> — manual ID entry had no way to say “this is a DM” <b class="fixed">fixed</b></li>
         <li><code>discord</code> — a provider whose channels are never in the list</li>
         <li><code>preview</code> — history availability, stated before it is needed</li>
-        <li><code>destination</code> — a Telegram DM destination with a live topic field</li>
-        <li><code>replay</code> — the empty state blames the provider for a scope limit</li>
+        <li><code>destination</code> — a Telegram DM destination with a live topic field <b class="fixed">fixed</b></li>
+        <li><code>replay</code> — the empty state blamed the provider for a scope limit <b class="fixed">fixed</b></li>
       </ol>
     </header>
 
@@ -273,7 +282,7 @@
       </p>
       <div class="pair">
         <div>
-          <div class="col__head col__head--now">On the branch</div>
+          <div class="col__head col__head--now">Before the fix</div>
           <div class="panel">
             <div class="panel__search">
               <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5L14 14"/></svg>
@@ -295,7 +304,7 @@
           </p>
         </div>
         <div>
-          <div class="col__head col__head--next">Proposed</div>
+          <div class="col__head col__head--done">Fixed on this branch</div>
           <div class="panel">
             <div class="panel__search">
               <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5L14 14"/></svg>
@@ -304,17 +313,20 @@
             <div class="panel__section">Authorized channels</div>
             <div class="row"><span class="row__check"></span><span class="row__glyph">#</span><span class="row__name">release-eng</span><span class="row__path">C04KJ8ZB2QT</span></div>
             <div class="row"><span class="row__check"></span><span class="row__glyph">#</span><span class="row__name">oncall-escalations</span><span class="row__path">C05RR1M4X8P</span></div>
-            <div class="panel__section">Direct messages from</div>
+            <div class="panel__section">Authorized direct messages</div>
             <div class="row is-cursor"><span class="row__check"></span><span class="row__glyph">@</span><span class="row__name">Dana Okonkwo</span><span class="row__path">U03QW7ELB19</span></div>
             <div class="row"><span class="row__check"></span><span class="row__glyph">@</span><span class="row__name">U08ZT4NKC22</span><span class="row__path"></span></div>
             <div class="panel__separator"></div>
-            <div class="row row--action"><span class="row__check"></span><span class="row__plus">+</span><span class="row__name">Enter an ID manually...</span></div>
+            <div class="row row--action"><span class="row__check"></span><span class="row__plus">+</span><span class="row__name">Enter Channel ID manually...</span></div>
           </div>
-          <p class="note note--ok">
+          <p class="note note--done">
             The sentinel stays in <code>value</code>; <code>detail</code> shows the
-            platform ID, and drops entirely when it would repeat the label. The
-            heading says <em>from</em>, because a contact DM trigger fires on
-            messages that person sends — not on everything in that conversation.
+            platform ID, and drops entirely when it would repeat the label.
+          </p>
+          <p class="note note--todo">
+            Still proposed: the heading should say <em>Direct messages from</em>,
+            because a contact DM trigger fires on messages that person sends —
+            not on everything in that conversation.
           </p>
         </div>
       </div>
@@ -333,7 +345,7 @@
       </p>
       <div class="pair">
         <div>
-          <div class="col__head col__head--now">On the branch</div>
+          <div class="col__head col__head--now">Before the fix</div>
           <div class="stage">
             <label class="field">
               <span>Channel ID</span>
@@ -352,7 +364,7 @@
           </p>
         </div>
         <div>
-          <div class="col__head col__head--next">Proposed</div>
+          <div class="col__head col__head--done">Fixed on this branch</div>
           <div class="stage">
             <div class="field">
               <span>Surface kind</span>
@@ -362,20 +374,27 @@
               </div>
             </div>
             <label class="field" style="margin-top:14px">
-              <span>Recipient user ID</span>
+              <span>Member ID</span>
               <input value="U03QW7ELB19" />
             </label>
             <p class="hint">
               The Slack member ID of the person whose DMs should trigger this — open
-              their profile and copy the member ID. Not the <code>D…</code> conversation ID.
+              their profile and copy the member ID. Not the D... conversation ID.
             </p>
-            <div class="flow">every direct message from U03QW7ELB19</div>
+            <div class="flow">every message in U03QW7ELB19</div>
           </div>
-          <p class="note note--ok">
+          <p class="note note--done">
             One switch decides the kind, so the saved snapshot carries
             <code>recipientUserId</code> and the matcher can agree with the form.
             Label, placeholder and hint all follow the switch, so the field asks for
-            the identifier it will actually use.
+            the identifier it will actually use — the sender's member ID, which is
+            what the matcher compares. Switching the kind re-encodes what is already
+            typed rather than clearing it.
+          </p>
+          <p class="note note--todo">
+            Still proposed: the connector caption. It reads "every message in
+            U03QW7ELB19" for a DM, which is both ungrammatical and imprecise — see
+            sheet 5's note and finding 7.
           </p>
         </div>
       </div>
@@ -531,7 +550,7 @@
       </p>
       <div class="pair">
         <div>
-          <div class="col__head col__head--now">On the branch</div>
+          <div class="col__head col__head--now">Before the fix</div>
           <div class="stage">
             <div class="stage__legend"><span class="stage__verb">Then</span><span class="stage__name">Result</span></div>
             <div class="field picker-field">
@@ -551,23 +570,24 @@
           </p>
         </div>
         <div>
-          <div class="col__head col__head--next">Proposed</div>
+          <div class="col__head col__head--done">Fixed on this branch</div>
           <div class="stage">
             <div class="stage__legend"><span class="stage__verb">Then</span><span class="stage__name">Result</span></div>
             <div class="field picker-field">
-              <span>Destination</span>
-              <button type="button" class="picker-trigger">Dana Okonkwo — direct message</button>
+              <span>Destination group</span>
+              <button type="button" class="picker-trigger">Dana Okonkwo</button>
             </div>
-            <p class="hint">
-              The result is sent to Dana Okonkwo as a direct message, instead of back
-              where the trigger fired.
-            </p>
+            <p class="hint">The result is posted here instead of back where the trigger fired.</p>
           </div>
-          <p class="note note--ok">
+          <p class="note note--done">
             The topic field is suppressed by the same <code>dm:</code> test the trigger
-            side already uses. The label drops the room noun, and the trailing kind
-            makes the accessible name — “Destination: Dana Okonkwo — direct message” —
-            true for every provider.
+            side already uses, so there is no longer a field whose value Save drops.
+          </p>
+          <p class="note note--todo">
+            Still proposed: the label. “Destination group” is a room noun for a 1:1
+            DM, and the picker composes its accessible name from it — so this still
+            announces “Destination group: Dana Okonkwo”. “Destination”, with the kind
+            trailing the name, would be true for every provider.
           </p>
         </div>
       </div>
@@ -580,12 +600,12 @@
       <p class="sheet__lede">
         <code>listReplayCandidates</code> gained two new refusals in this change: a
         trigger with a <code>recipientUserId</code> or a <code>parentId</code>. The
-        copy underneath was written when the only refusal was the provider, and it
-        still says so — which for a Slack DM trigger is simply false.
+        copy underneath was written when the only refusal was the provider, and said
+        so — which for a Slack DM trigger is simply false.
       </p>
       <div class="pair pair--stack">
         <div>
-          <div class="col__head col__head--now">On the branch — Slack DM trigger</div>
+          <div class="col__head col__head--now">Before the fix — Slack DM trigger</div>
           <div class="stage">
             <p class="hint" style="margin-top:0">
               Replay a recent message from the trigger conversation. The badge is the
@@ -606,29 +626,35 @@
           </p>
         </div>
         <div style="margin-top:28px">
-          <div class="col__head col__head--next">Proposed — one sentence per refusal</div>
+          <div class="col__head col__head--done">Fixed on this branch — one sentence per refusal</div>
           <div class="stage">
             <p class="hint" style="margin-top:0; color: var(--text-secondary)">
-              <b>Contact DM trigger</b> — PwrAgent can't read back a contact's DM
-              history, only a channel's. Use “Preview live messages” in the editor to
-              test against new traffic.
+              <b>Contact DM trigger</b> — PwrAgent can't read back a contact's direct
+              messages, only a conversation's. Use “Preview live messages” in the
+              editor to test against new traffic instead.
             </p>
             <p class="hint" style="margin-top:10px; color: var(--text-secondary)">
               <b>Thread or topic trigger</b> — replay reads whole conversations, not a
-              single thread. Use “Preview live messages” in the editor to test against
-              new traffic.
+              single thread or topic. Use “Preview live messages” in the editor to test
+              against new traffic instead.
             </p>
             <p class="hint" style="margin-top:10px; color: var(--text-secondary)">
               <b>Provider without history</b> — Telegram can't serve conversation
               history, so there is nothing to replay. Use “Preview live messages” in
-              the editor to test against new traffic.
+              the editor to test against new traffic instead.
+            </p>
+            <p class="hint" style="margin-top:10px; color: var(--text-secondary)">
+              <b>A response from an older build, or a schedule trigger</b> — there is
+              no recent history to replay for this trigger. Use “Preview live
+              messages” in the editor to test against new traffic instead.
             </p>
           </div>
-          <p class="note note--ok">
-            The refusal reason already exists in the main process; only
-            <code>supported: false</code> survives the IPC. Widening that to a reason
-            code lets each sentence name the real constraint and keeps the provider
-            sentence true when it is the one that applies.
+          <p class="note note--done">
+            <code>listReplayCandidates</code> now returns an
+            <code>unsupportedReason</code> beside <code>supported</code>, checked
+            most-specific-first so a Slack DM reports the scope rather than the
+            provider. The provider sentence names the provider, and the fourth
+            sentence is the fallback for a response that carries no reason at all.
           </p>
         </div>
       </div>

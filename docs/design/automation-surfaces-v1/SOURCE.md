@@ -15,15 +15,17 @@ The findings these sheets illustrate are written up in
 ## What's in here
 
 - [`index.html`](index.html) — single-page HTML prototype. Six sheets stacked
-  vertically, each a before/after pair: the surface as it behaves on
-  `fix/automation-provider-surfaces`, and as this pass proposes it should read.
+  vertically, each a before/after pair. A **green** right-hand column landed on
+  `fix/automation-provider-surfaces` and is what the branch does today; an
+  **orange** one is still a proposal. Four sheets carry both, because part of
+  what they draft was in scope for the fix and part was not.
 
-  1. `picker` — the `dm:` sentinel reaching the picker's durable-ID column
-  2. `manual` — manual ID entry cannot express a DM, and saves an inert trigger
+  1. `picker` — the `dm:` sentinel reaching the picker's durable-ID column *(fixed)*
+  2. `manual` — manual ID entry could not express a DM, and saved an inert trigger *(fixed)*
   3. `discord` — a picker whose nouns promise channels it can never list
   4. `preview` — history availability, stated before the operator commits
-  5. `destination` — a Telegram DM destination with a live, discarded topic field
-  6. `replay` — an empty state that blames the provider for a scope limit
+  5. `destination` — a Telegram DM destination with a live, discarded topic field *(fixed)*
+  6. `replay` — an empty state that blamed the provider for a scope limit *(fixed)*
 
   Append `?slide=<id>` (e.g. `?slide=manual`) to isolate one sheet — used for
   screenshot capture.
@@ -34,7 +36,7 @@ The findings these sheets illustrate are written up in
   ```bash
   python3 -m http.server 8771 --directory docs/design/automation-surfaces-v1 &
   CH=~/Library/Caches/ms-playwright/chromium_headless_shell-1217/chrome-headless-shell-mac-arm64/chrome-headless-shell
-  declare -A H=( [picker]=600 [manual]=570 [discord]=600 [preview]=620 [destination]=530 [replay]=640 )
+  declare -A H=( [picker]=680 [manual]=680 [discord]=600 [preview]=620 [destination]=620 [replay]=740 )
   for slide in picker manual discord preview destination replay; do
     "$CH" --headless --disable-gpu --hide-scrollbars \
       --window-size=1400,${H[$slide]} \
@@ -87,7 +89,11 @@ The findings these sheets illustrate are written up in
 
 ## Note on the proposed copy
 
-Every "proposed" string in the prototype is a draft, not a decision. The
-constraint each one encodes — name the scope rather than the provider, say
-*from* for a contact DM, do not print an internal sentinel — is the part worth
-keeping if the wording changes.
+Every string in an **orange** note is a draft, not a decision. The constraint
+each one encodes — name the scope rather than the provider, say *from* for a
+contact DM, do not print an internal sentinel — is the part worth keeping if
+the wording changes.
+
+Strings in a **green** note are transcribed from what the branch now renders.
+If the implementation's wording changes, these go stale; the sheets are a
+design record of one review, not a live mirror of the renderer.

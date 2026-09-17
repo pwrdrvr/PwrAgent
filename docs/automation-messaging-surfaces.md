@@ -49,6 +49,12 @@ IDs; [LINE documents both sources](https://developers.line.biz/en/docs/messaging
   ID. Existing executor tests cover `messaging_target` dispatch and result status.
 - The editor tests verify that contacts save as explicit recipient targets for
   all six providers. Existing group/topic selectors keep their native IDs.
+- Manual ID entry carries a Channel/Direct message switch on both the trigger
+  and the destination. Without it a typed DM ID saved as a channel, which the
+  matcher rejects against every real DM on Slack, Mattermost, Feishu and
+  Discord — the automation looked enabled and never ran. Telegram and LINE
+  reached the same target through the legacy-ID fallback above, so the same
+  operator action behaved differently across providers.
 
 Ambient Slack group-DM and LINE group/room messages pass authorization and are
 marked `observedOnly`. The runtime sends these only to preview and matching

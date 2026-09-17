@@ -1093,6 +1093,20 @@ export type AutomationReplayCandidate = {
   matches: boolean;
 };
 
+/**
+ * Why replay has nothing to offer. Three different constraints refuse, and the
+ * empty state has to name the right one: telling an operator on a Slack DM
+ * trigger that "this provider can't serve conversation history" sends them to
+ * check the one thing that is working.
+ */
+export type AutomationReplayUnsupportedReason =
+  /** The adapter has no history reader at all. */
+  | "provider"
+  /** A contact's DMs. The history reader takes conversation IDs, not user IDs. */
+  | "contact_dm"
+  /** A thread or Telegram topic. The history reader takes top-level IDs only. */
+  | "scoped_thread";
+
 export type ListAutomationReplayCandidatesResponse = {
   candidates: AutomationReplayCandidate[];
   /**
@@ -1101,6 +1115,8 @@ export type ListAutomationReplayCandidatesResponse = {
    * and scoped threads/topics still support going-forward live preview.
    */
   supported: boolean;
+  /** Set whenever `supported` is false and the reason is one the UI can name. */
+  unsupportedReason?: AutomationReplayUnsupportedReason;
 };
 
 export type ReplayAutomationInboundRequest = {

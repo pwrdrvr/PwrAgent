@@ -102,7 +102,7 @@ type AgentThreadOption = {
 };
 
 /** Human labels for every messaging provider that can host an inbound trigger. */
-const INBOUND_PROVIDER_LABELS: Partial<Record<MessagingChannelKind, string>> = {
+export const INBOUND_PROVIDER_LABELS: Partial<Record<MessagingChannelKind, string>> = {
   slack: "Slack",
   telegram: "Telegram",
   discord: "Discord",
@@ -240,6 +240,15 @@ export function AutomationEditor(props: AutomationEditorProps) {
         ? `dm:${initialConversation.recipientUserId}`
         : initialConversation?.conversationId ?? "",
   );
+  // Manual entry has to be able to say which KIND of surface an ID names; a
+  // typed ID alone cannot. `D0481KQ9ZLA` is a Slack DM and `C04KJ8ZB2QT` a
+  // channel, and a DM saved as a channel is rejected by the matcher for every
+  // message it ever sees — an automation that looks saved and enabled and
+  // never runs. The switch writes the same `dm:` form the picker produces, so
+  // nothing downstream learns a second encoding.
+  const [inboundManualKind, setInboundManualKind] = useState<ManualSurfaceKind>(
+    initialConversation?.recipientUserId ? "dm" : "channel",
+  );
   const [telegramScope, setTelegramScope] = useState<TelegramScope>(
     initialIsTopic ? "topic" : "group",
   );
@@ -331,6 +340,9 @@ export function AutomationEditor(props: AutomationEditorProps) {
       : initialTargetSnapshot?.recipientUserId
         ? `dm:${initialTargetSnapshot.recipientUserId}`
         : initialTargetSnapshot?.conversationId ?? "",
+  );
+  const [destManualKind, setDestManualKind] = useState<ManualSurfaceKind>(
+    initialTargetSnapshot?.recipientUserId ? "dm" : "channel",
   );
   const [destTopicId, setDestTopicId] = useState(
     initialTargetIsTopic ? initialTargetSnapshot?.conversationId ?? "" : "",
@@ -1420,19 +1432,62 @@ export function AutomationEditor(props: AutomationEditorProps) {
                   {telegramGroups.length === 0 ||
                   groupSelection === MANUAL_GROUP_VALUE ? (
                     <div className="automation-field-group">
+                      <div
+                        aria-label="Surface kind"
+                        className="automation-segmented"
+                        role="group"
+                      >
+                        {([
+                          ["channel", conversationPickerLabel(inboundProvider)],
+                          ["dm", "Direct message"],
+                        ] as const).map(([kind, label]) => (
+                          <button
+                            key={kind}
+                            aria-pressed={inboundManualKind === kind}
+                            className={`automation-segmented__button${
+                              inboundManualKind === kind ? " is-active" : ""
+                            }`}
+                            type="button"
+                            onClick={() => {
+                              setInboundManualKind(kind);
+                              setInboundGroupId(
+                                encodeManualSurface(kind, inboundGroupId),
+                              );
+                              setValidationError(undefined);
+                            }}
+                          >
+                            {label}
+                          </button>
+                        ))}
+                      </div>
                       <label className="automation-field">
-                        <span>{conversationLabel(inboundProvider)}</span>
+                        <span>
+                          {inboundManualKind === "dm"
+                            ? recipientLabel(inboundProvider)
+                            : conversationLabel(inboundProvider)}
+                        </span>
                         <input
-                          placeholder={conversationPlaceholder(inboundProvider)}
-                          value={inboundGroupId}
+                          placeholder={
+                            inboundManualKind === "dm"
+                              ? recipientPlaceholder(inboundProvider)
+                              : conversationPlaceholder(inboundProvider)
+                          }
+                          value={manualSurfaceValue(inboundGroupId)}
                           onChange={(event) => {
-                            setInboundGroupId(event.currentTarget.value);
+                            setInboundGroupId(
+                              encodeManualSurface(
+                                inboundManualKind,
+                                event.currentTarget.value,
+                              ),
+                            );
                             setValidationError(undefined);
                           }}
                         />
                       </label>
                       <p className="automation-field__hint">
-                        {conversationHint(inboundProvider)}
+                        {inboundManualKind === "dm"
+                          ? recipientHint(inboundProvider)
+                          : conversationHint(inboundProvider)}
                       </p>
                     </div>
                   ) : null}
@@ -2497,21 +2552,72 @@ export function AutomationEditor(props: AutomationEditorProps) {
                           </div>
                           {destGroups.length === 0 ||
                           destGroupSelection === MANUAL_GROUP_VALUE ? (
-                            <label className="automation-field">
-                              <span>
-                                Destination {lowerLead(conversationLabel(destProvider))}
-                              </span>
-                              <input
-                                placeholder={conversationPlaceholder(destProvider)}
-                                value={destGroupId}
-                                onChange={(event) => {
-                                  setDestGroupId(event.currentTarget.value);
-                                  setValidationError(undefined);
-                                }}
-                              />
-                            </label>
+                            <>
+                              <div
+                                aria-label="Destination surface kind"
+                                className="automation-segmented"
+                                role="group"
+                              >
+                                {([
+                                  ["channel", conversationPickerLabel(destProvider)],
+                                  ["dm", "Direct message"],
+                                ] as const).map(([kind, label]) => (
+                                  <button
+                                    key={kind}
+                                    aria-pressed={destManualKind === kind}
+                                    className={`automation-segmented__button${
+                                      destManualKind === kind ? " is-active" : ""
+                                    }`}
+                                    type="button"
+                                    onClick={() => {
+                                      setDestManualKind(kind);
+                                      setDestGroupId(
+                                        encodeManualSurface(kind, destGroupId),
+                                      );
+                                      setValidationError(undefined);
+                                    }}
+                                  >
+                                    {label}
+                                  </button>
+                                ))}
+                              </div>
+                              <label className="automation-field">
+                                <span>
+                                  Destination{" "}
+                                  {lowerLead(
+                                    destManualKind === "dm"
+                                      ? recipientLabel(destProvider)
+                                      : conversationLabel(destProvider),
+                                  )}
+                                </span>
+                                <input
+                                  placeholder={
+                                    destManualKind === "dm"
+                                      ? recipientPlaceholder(destProvider)
+                                      : conversationPlaceholder(destProvider)
+                                  }
+                                  value={manualSurfaceValue(destGroupId)}
+                                  onChange={(event) => {
+                                    setDestGroupId(
+                                      encodeManualSurface(
+                                        destManualKind,
+                                        event.currentTarget.value,
+                                      ),
+                                    );
+                                    setValidationError(undefined);
+                                  }}
+                                />
+                              </label>
+                            </>
                           ) : null}
-                          {destProvider === "telegram" ? (
+                          {/* Same test the trigger side applies to its own
+                              topic controls. A 1:1 DM has no forum topics, and
+                              `buildDestinationSnapshot` returns before it ever
+                              reads `destTopicId` for a contact — so leaving the
+                              field up lets the operator fill in a value that
+                              Save discards without a word. */}
+                          {destProvider === "telegram"
+                          && !destGroupId.startsWith("dm:") ? (
                             <label className="automation-field">
                               <span>Destination topic ID (optional)</span>
                               <input
@@ -3002,12 +3108,34 @@ function conversationOptions(
   detail?: string;
   kind?: MessagingConversationKind;
 }> {
-  return entries.map((entry) => ({
-    value: entry.id,
-    label: entry.title,
-    detail: entry.title === entry.id ? undefined : entry.id,
-    ...(entry.kind ? { kind: entry.kind } : {}),
-  }));
+  return entries.map((entry) => {
+    // `dm:` is how this editor tells a contact from a conversation in its own
+    // state. It is not an identifier anyone can paste into Slack or Telegram,
+    // and the ID column exists so two same-named rows can be told apart by
+    // something durable — so the column gets the platform ID, never the
+    // sentinel. Strip it here rather than at the source: every other consumer
+    // (`buildDestinationSnapshot`, the Telegram scope guard, `previewScope`)
+    // reads the prefixed form.
+    const platformId = contactUserId(entry.id) ?? entry.id;
+    return {
+      value: entry.id,
+      label: entry.title,
+      // A contact PwrAgent has no name for is labelled with its own ID; a
+      // column repeating it is noise, and worse, reads as a second identifier.
+      detail: entry.title === platformId ? undefined : platformId,
+      ...(entry.kind ? { kind: entry.kind } : {}),
+    };
+  });
+}
+
+/**
+ * The platform user ID inside a contact selection, or undefined when the value
+ * addresses a shared conversation. One place decides what `dm:` means.
+ */
+function contactUserId(value: string): string | undefined {
+  if (!value.startsWith("dm:")) return undefined;
+  const userId = value.slice(3).trim();
+  return userId || undefined;
 }
 
 /**
@@ -3036,6 +3164,72 @@ function conversationPickerLabels(provider: MessagingChannelKind): {
     },
     emptyLabel: "No matching conversations.",
   };
+}
+
+/**
+ * Which kind of surface a manually typed ID names. The picker carries this in
+ * the option it was built from; manual entry has to be told.
+ */
+type ManualSurfaceKind = "channel" | "dm";
+
+/** The bare ID a manual field shows, with the editor's `dm:` marker removed. */
+function manualSurfaceValue(stored: string): string {
+  return contactUserId(stored) ?? (stored.startsWith("dm:") ? "" : stored);
+}
+
+/**
+ * Store a typed ID under the selected kind. Toggling the switch re-encodes
+ * what is already there rather than clearing it, so an operator who picks the
+ * wrong kind first does not retype the ID.
+ */
+function encodeManualSurface(kind: ManualSurfaceKind, value: string): string {
+  const raw = manualSurfaceValue(value);
+  return kind === "dm" && raw ? `dm:${raw}` : raw;
+}
+
+/**
+ * A DM trigger matches on the SENDER's platform user ID, not on the
+ * conversation's — `matchesAutomationConversation` compares `recipientUserId`
+ * against the actor. These three say so, because every provider also has a
+ * separate DM conversation ID that is the wrong answer here and is usually the
+ * easier one to find.
+ */
+function recipientLabel(provider: MessagingChannelKind): string {
+  if (provider === "slack") return "Member ID";
+  if (provider === "feishu") return "Open ID";
+  return "User ID";
+}
+
+function recipientPlaceholder(provider: MessagingChannelKind): string {
+  if (provider === "telegram") return "e.g. 123456789";
+  if (provider === "slack") return "e.g. U0123ABCD";
+  if (provider === "discord") return "e.g. 123456789012345678";
+  if (provider === "feishu") return "e.g. ou_9c1f2a...";
+  if (provider === "line") return "e.g. U4af4980629...";
+  if (provider === "mattermost") return "e.g. 8f3k2j1h9g8f7d6s5a4q3w2e1r";
+  return "e.g. a user ID";
+}
+
+function recipientHint(provider: MessagingChannelKind): string {
+  if (provider === "telegram") {
+    return "The person's numeric Telegram user ID, and they must have started a chat with the bot. Authorize them in Settings > Messaging to pick them from the list instead.";
+  }
+  if (provider === "slack") {
+    return "The Slack member ID of the person whose DMs should trigger this — open their profile and copy the member ID. Not the D... conversation ID.";
+  }
+  if (provider === "discord") {
+    return "The Discord user ID. Enable Developer Mode, then right-click the person and Copy User ID. Not the DM channel ID.";
+  }
+  if (provider === "feishu") {
+    return "The person's Feishu/Lark open_id for this app — not the p2p chat_id.";
+  }
+  if (provider === "line") {
+    return "The person's LINE user ID (starts with U). Not a group or room ID.";
+  }
+  if (provider === "mattermost") {
+    return "The Mattermost user ID — open their profile and copy the ID, or take it from the System Console. Not the DM channel ID.";
+  }
+  return "The platform user ID of the person whose direct messages should trigger this.";
 }
 
 /** Noun for the conversation-picker dropdown ("Group" / "Channel"). */
@@ -3120,8 +3314,8 @@ function buildDestinationSnapshot(params: {
 }): AutomationMessagingConversationSnapshot | undefined {
   const groupId = params.groupId.trim();
   if (!groupId) return undefined;
+  const userId = contactUserId(groupId);
   if (groupId.startsWith("dm:")) {
-    const userId = groupId.slice(3).trim();
     if (!userId) return undefined;
     return {
       channel: params.provider,

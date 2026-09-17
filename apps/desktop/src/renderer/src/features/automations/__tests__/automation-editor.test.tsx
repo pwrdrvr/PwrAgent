@@ -579,6 +579,160 @@ describe("AutomationEditor", () => {
     ).toBeInTheDocument();
   });
 
+  it("shows a DM's platform ID in the picker, never the dm: marker", async () => {
+    // `dm:` is how the editor marks a contact in its own state. The mono ID
+    // column exists so two same-named rows can be told apart by something
+    // durable, and `dm:U_AVERY` is not an identifier anyone can paste into
+    // Slack — nor one the search box should be matching against.
+    render(
+      <AutomationEditor
+        desktopApi={fakeDesktopApi(
+          fakeSettings({
+            enabled: { slack: true },
+            slackChannels: [{ id: "C_ORCHARD", displayName: "orchard-planning" }],
+            slackUsers: [
+              { id: "U_AVERY", displayName: "Avery Quill" },
+              { id: "U_NAMELESS" },
+            ],
+          }),
+        )}
+        mode={{ kind: "create" }}
+        onCancel={() => undefined}
+        onSubmit={vi.fn(async () => undefined)}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Inbound message" }));
+    await openConversationPicker("Channel");
+    const listbox = screen.getByRole("listbox");
+    expect(listbox.textContent).not.toContain("dm:");
+    expect(
+      within(listbox).getByRole("option", { name: /Avery Quill/ }),
+    ).toHaveTextContent("U_AVERY");
+    // A contact with no display name is labelled with its own ID. Repeating it
+    // in the ID column reads as a second, different identifier.
+    expect(
+      within(listbox)
+        .getByRole("option", { name: /U_NAMELESS/ })
+        .textContent?.match(/U_NAMELESS/g),
+    ).toHaveLength(1);
+  });
+
+  it("saves a manually entered DM as a recipient, not as a channel", async () => {
+    // Manual entry could only ever build a channel, so a DM ID typed here
+    // saved `conversationKind: "channel"` — which the matcher rejects against
+    // every real DM on Slack, Mattermost, Feishu and Discord. The automation
+    // looked saved and enabled and never ran, and nothing said why.
+    const onSubmit = vi.fn(async () => undefined);
+
+    render(
+      <AutomationEditor
+        desktopApi={fakeDesktopApi(fakeSettings({ enabled: { slack: true } }))}
+        mode={{
+          assignment: { backend: "codex", threadId: "thread-1" },
+          kind: "create",
+        }}
+        onCancel={() => undefined}
+        onSubmit={onSubmit}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("Name"), {
+      target: { value: "DM triage" },
+    });
+    fireEvent.change(screen.getByLabelText("Task prompt"), {
+      target: { value: "Summarize what they asked for." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Inbound message" }));
+    await waitFor(() =>
+      expect(screen.getByLabelText("Provider")).toHaveValue("slack"),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Direct message" }));
+    // The field asks for the sender's member ID, because that is what the
+    // matcher compares — not the D... conversation ID the channel hint names.
+    fireEvent.change(screen.getByLabelText("Member ID"), {
+      target: { value: "U03QW7ELB19" },
+    });
+    fireEvent.change(screen.getByLabelText("Value"), {
+      target: { value: "deploy" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        request: expect.objectContaining({
+          triggers: [
+            expect.objectContaining({
+              conversation: {
+                channel: "slack",
+                conversationId: "U03QW7ELB19",
+                conversationKind: "dm",
+                recipientUserId: "U03QW7ELB19",
+              },
+            }),
+          ],
+        }),
+      }),
+    );
+  });
+
+  it("keeps a typed ID when the manual surface kind is switched", async () => {
+    render(
+      <AutomationEditor
+        desktopApi={fakeDesktopApi(fakeSettings({ enabled: { slack: true } }))}
+        mode={{ kind: "create" }}
+        onCancel={() => undefined}
+        onSubmit={vi.fn(async () => undefined)}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Inbound message" }));
+    await waitFor(() =>
+      expect(screen.getByLabelText("Provider")).toHaveValue("slack"),
+    );
+    fireEvent.change(screen.getByLabelText("Channel ID"), {
+      target: { value: "U03QW7ELB19" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Direct message" }));
+    expect(screen.getByLabelText("Member ID")).toHaveValue("U03QW7ELB19");
+    fireEvent.click(screen.getByRole("button", { name: "Channel" }));
+    expect(screen.getByLabelText("Channel ID")).toHaveValue("U03QW7ELB19");
+  });
+
+  it("drops the Telegram destination topic field for a DM", async () => {
+    // A 1:1 DM has no forum topics, and `buildDestinationSnapshot` returns
+    // before it reads the topic at all — so an operator could fill the field
+    // in and have Save discard it without a word.
+    render(
+      <AutomationEditor
+        desktopApi={fakeDesktopApi(
+          fakeSettings({
+            enabled: { telegram: true },
+            telegramGroups: [{ displayName: "Ops Room", id: "-100" }],
+            users: [{ displayName: "Avery Quill", id: "4242" }],
+          }),
+        )}
+        mode={{ kind: "create" }}
+        onCancel={() => undefined}
+        onSubmit={vi.fn(async () => undefined)}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Inbound message" }));
+    fireEvent.change(screen.getByLabelText("Where should the result go?"), {
+      target: { value: "different" },
+    });
+    await pickConversation("Destination group", /Ops Room/);
+    expect(
+      screen.getByLabelText("Destination topic ID (optional)"),
+    ).toBeInTheDocument();
+    await pickConversation("Destination group", /Avery Quill/);
+    expect(
+      screen.queryByLabelText("Destination topic ID (optional)"),
+    ).not.toBeInTheDocument();
+  });
+
   it("includes an MCP allowlist in the execution profile", async () => {
     const onSubmit = vi.fn(async () => undefined);
 
@@ -1630,12 +1784,17 @@ function buildAutomation(overrides: Partial<AutomationDetail> = {}): AutomationD
   };
 }
 
+/** `displayName` is optional in the real snapshot: PwrAgent does not always
+ *  have a name for an authorized contact, and a row for one it cannot name is
+ *  a case the picker has to render. */
+type AuthorizedEntry = { displayName?: string; id: string };
+
 function fakeSettings(params: {
   enabled: Partial<Record<MessagingChannelKind, boolean>>;
-  users?: Array<{ displayName: string; id: string }>;
-  telegramGroups?: Array<{ displayName: string; id: string }>;
-  slackChannels?: Array<{ displayName: string; id: string }>;
-  slackUsers?: Array<{ displayName: string; id: string }>;
+  users?: AuthorizedEntry[];
+  telegramGroups?: AuthorizedEntry[];
+  slackChannels?: AuthorizedEntry[];
+  slackUsers?: AuthorizedEntry[];
 }): ReadDesktopMessagingSettingsResponse {
   const provider = (kind: MessagingChannelKind) => ({
     enabled: { value: Boolean(params.enabled[kind]) },
