@@ -296,14 +296,31 @@ export function matchesAutomationConversation(
   if (expected.recipientUserId) {
     if (!isDm || actorId !== expected.recipientUserId) return false;
   } else {
-    if (expected.conversationKind === "dm" && !isDm) return false;
-    if (expected.conversationKind === "channel" && isDm) return false;
+    // Older editors saved authorized contacts as channels with their raw user
+    // IDs. Telegram and LINE distinguish users from shared conversation IDs:
+    // https://core.telegram.org/api/bots/ids
+    // https://developers.line.biz/en/faq/#what-are-user-id-groupid-roomid
+    const legacyDm = expected.conversationKind === "channel"
+      && expected.parentId === undefined
+      && (expected.channel === "telegram"
+        ? /^[1-9][0-9]*$/.test(expected.conversationId)
+          && Number(expected.conversationId) <= 0xffffffffff
+        : expected.channel === "line" && /^U[0-9a-f]{32}$/.test(expected.conversationId));
+    const expectedKind = legacyDm ? "dm" : expected.conversationKind;
+    if (expectedKind === "dm" && !isDm) return false;
+    if (expectedKind === "channel" && isDm) return false;
     const exact = actual.conversationId === expected.conversationId
       && (expected.parentId === undefined || actual.parentId === expected.parentId);
     const child = actual.parentConversationId === expected.conversationId
       && (expected.parentId === undefined
         || actual.parentConversationParentId === expected.parentId);
     if (!exact && !child) return false;
+    // Discord threads have their own native channel IDs. Manual entry and
+    // older captures label them "channel"; an exact target is not a child
+    // reply. Slack and Mattermost can reuse the parent channel ID for replies.
+    if (exact && actual.channel === "discord" && actual.conversationKind === "thread") {
+      return true;
+    }
   }
   return actual.conversationKind !== "thread" || includeThreadReplies
     || expected.conversationKind === "thread";

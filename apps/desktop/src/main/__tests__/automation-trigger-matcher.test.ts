@@ -126,6 +126,80 @@ describe("automation trigger matcher", () => {
     ).toHaveLength(1);
   });
 
+  it.each([
+    { channel: "telegram", conversationId: "123456789" },
+    { channel: "line", conversationId: "U0123456789abcdef0123456789abcdef" },
+  ] as const)("keeps legacy $channel contact triggers working", ({ channel, conversationId }) => {
+    // Shape emitted by the previous editor: a contact ID mislabeled channel,
+    // with no recipientUserId. Exercise the main-process entry point too.
+    const record = automation({
+      conversation: { channel, conversationId, conversationKind: "channel" },
+      sender: undefined,
+      includeThreadReplies: false,
+    });
+    const event = {
+      ...slackTextEvent(),
+      actor: { platformUserId: conversationId, isBot: false },
+      channel: { channel, conversation: { id: conversationId, kind: "dm" as const } },
+    };
+    expect(matchAutomationInboundEvent({ automations: [record], event })).toHaveLength(1);
+    expect(matchAutomationInboundEvent({
+      automations: [record],
+      event: { ...event, channel: { channel, conversation: { id: conversationId, kind: "channel" } } },
+    })).toEqual([]);
+    expect(matchAutomationInboundEvent({
+      automations: [record],
+      event: { ...event, channel: { channel, conversation: { id: "other-dm", kind: "dm" } } },
+    })).toEqual([]);
+  });
+
+  it.each([undefined, "guild"])("matches an explicit Discord thread with parent scope %s", (parentId) => {
+    const event: MessagingInboundTextEvent = {
+      ...slackTextEvent(),
+      channel: {
+        channel: "discord",
+        conversation: {
+          id: "thread-id",
+          kind: "thread",
+          parentId: "guild",
+          parentConversationId: "channel-id",
+          parentConversationParentId: "guild",
+        },
+      },
+    };
+    const record = automation({
+      conversation: { channel: "discord", conversationId: "thread-id", conversationKind: "channel", parentId },
+      includeThreadReplies: false,
+    });
+    expect(matchAutomationInboundEvent({ automations: [record], event })).toHaveLength(1);
+    expect(matchAutomationInboundEvent({
+      automations: [automation({
+        conversation: { channel: "discord", conversationId: "thread-id", conversationKind: "channel", parentId: "other-guild" },
+        includeThreadReplies: false,
+      })],
+      event,
+    })).toEqual([]);
+    for (const includeThreadReplies of [false, true]) {
+      expect(matchAutomationInboundEvent({
+        automations: [automation({
+          conversation: { channel: "discord", conversationId: "channel-id", conversationKind: "channel", parentId },
+          includeThreadReplies,
+        })],
+        event,
+      })).toHaveLength(includeThreadReplies ? 1 : 0);
+    }
+  });
+
+  it.each(["slack", "mattermost"] as const)("still excludes %s replies sharing the channel ID", (channel) => {
+    const target = { channel, conversationId: "channel-id", conversationKind: "channel" as const };
+    expect(matchesAutomationConversation(target, {
+      ...target,
+      conversationKind: "thread",
+      parentId: "root-message",
+      parentConversationId: "channel-id",
+    }, "peer", false)).toBe(false);
+  });
+
   it("produces stable source keys for duplicate provider events", () => {
     const first = slackTextEvent({ id: "local-random-1" });
     const second = slackTextEvent({ id: "local-random-2" });
