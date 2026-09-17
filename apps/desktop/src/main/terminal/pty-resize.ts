@@ -104,9 +104,16 @@ export class PtyResizeCoalescer {
   private pending?: PtySize;
   private timer?: ReturnType<typeof setTimeout>;
 
+  private disposed = false;
+
   constructor(options: PtyResizeCoalescerOptions) {
     this.apply = options.apply;
-    this.intervalMs = options.intervalMs ?? PTY_RESIZE_INTERVAL_MS;
+    // A non-finite or negative interval would disable pacing silently, which
+    // is the one failure mode this class exists to prevent.
+    this.intervalMs =
+      options.intervalMs !== undefined && Number.isFinite(options.intervalMs)
+        ? Math.max(0, options.intervalMs)
+        : PTY_RESIZE_INTERVAL_MS;
     this.now = options.now ?? Date.now;
     this.onDeferredError = options.onDeferredError;
     this.applied = {
@@ -121,6 +128,11 @@ export class PtyResizeCoalescer {
    * fails goes to `onDeferredError` instead.
    */
   request(cols: number, rows: number): void {
+    // `dispose` is final. The session is dropped from its registry in the
+    // same synchronous block, so nothing can reach this today — but the
+    // guarantee that no resize follows teardown belongs here rather than
+    // resting on that ordering.
+    if (this.disposed) return;
     const next: PtySize = {
       cols: clampTerminalColumns(cols),
       rows: clampTerminalRows(rows),
@@ -136,16 +148,18 @@ export class PtyResizeCoalescer {
       this.pending = next;
       return;
     }
-    if (this.now() - this.appliedAt >= this.intervalMs) {
+    const now = this.now();
+    if (now - this.appliedAt >= this.intervalMs) {
       this.applyNow(next);
       return;
     }
     this.pending = next;
-    this.arm();
+    this.arm(now);
   }
 
   /** Stops a queued resize from reaching a PTY that is being torn down. */
   dispose(): void {
+    this.disposed = true;
     if (this.timer !== undefined) {
       clearTimeout(this.timer);
       this.timer = undefined;
@@ -153,8 +167,17 @@ export class PtyResizeCoalescer {
     this.pending = undefined;
   }
 
-  private arm(): void {
-    const wait = Math.max(0, this.intervalMs - (this.now() - this.appliedAt));
+  private arm(now: number): void {
+    // Bounded by the interval at BOTH ends. `now - appliedAt` goes negative
+    // whenever the wall clock steps backwards — an NTP correction, a resume
+    // from sleep, an operator changing the clock — and an unbounded wait then
+    // parks this PTY for the length of the jump, because every later request
+    // only overwrites `pending` while a timer is armed. A one-hour step back
+    // would freeze the terminal's size for an hour.
+    const wait = Math.min(
+      this.intervalMs,
+      Math.max(0, this.intervalMs - (now - this.appliedAt)),
+    );
     this.timer = setTimeout(() => {
       this.timer = undefined;
       const next = this.pending;

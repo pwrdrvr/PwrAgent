@@ -328,8 +328,9 @@ export class FederationPtyService {
       }
       throw new Error("Federation peer disconnected while the terminal was starting.");
     }
+    const sessionId = randomUUID();
     const session: FederationPtySession = {
-      sessionId: randomUUID(),
+      sessionId,
       peerId,
       backend: request.backend,
       threadId,
@@ -353,6 +354,7 @@ export class FederationPtyService {
         onDeferredError: (error) => {
           this.options.log?.warn("remote pty resize failed", {
             error: error instanceof Error ? error.message : String(error),
+            sessionId,
           });
         },
         spawnedCols: request.cols,

@@ -8,21 +8,37 @@ import {
 
 /** A pacer over a fake clock, with every applied size recorded in order. */
 function createCoalescer(
-  options: { spawnedCols?: number; spawnedRows?: number } = {},
+  options: {
+    spawnedCols?: number;
+    spawnedRows?: number;
+    intervalMs?: number;
+  } = {},
 ) {
   const applied: [number, number][] = [];
   const apply = vi.fn((cols: number, rows: number) => {
     applied.push([cols, rows]);
   });
   const deferredErrors: unknown[] = [];
+  // Offset from the fake timer clock, so a test can step the wall clock
+  // independently of how far timers have advanced.
+  let clockOffset = 0;
   const coalescer = new PtyResizeCoalescer({
     apply,
-    now: () => Date.now(),
+    ...(options.intervalMs === undefined ? {} : { intervalMs: options.intervalMs }),
+    now: () => Date.now() + clockOffset,
     onDeferredError: (error) => deferredErrors.push(error),
     spawnedCols: options.spawnedCols ?? 80,
     spawnedRows: options.spawnedRows ?? 24,
   });
-  return { applied, apply, coalescer, deferredErrors };
+  return {
+    applied,
+    apply,
+    coalescer,
+    deferredErrors,
+    stepClock: (ms: number) => {
+      clockOffset += ms;
+    },
+  };
 }
 
 describe("clampTerminalColumns / clampTerminalRows", () => {
@@ -174,6 +190,75 @@ describe("PtyResizeCoalescer", () => {
     // Still not remembered as applied, so a later request retries it.
     coalescer.request(120, 40);
     expect(apply).toHaveBeenLastCalledWith(120, 40);
+  });
+
+  it("still applies a queued resize after the wall clock steps backwards", () => {
+    const { applied, coalescer, stepClock } = createCoalescer();
+    coalescer.request(100, 30);
+    expect(applied).toEqual([[100, 30]]);
+    // An NTP correction or a resume from sleep moves the clock back an hour.
+    // Unbounded, the armed wait becomes an hour and every later request only
+    // overwrites `pending`, so this PTY's size freezes for that whole hour.
+    stepClock(-60 * 60 * 1000);
+    coalescer.request(120, 40);
+    vi.advanceTimersByTime(PTY_RESIZE_INTERVAL_MS);
+    expect(applied).toEqual([
+      [100, 30],
+      [120, 40],
+    ]);
+  });
+
+  it("keeps pacing after the wall clock steps backwards", () => {
+    const { applied, coalescer, stepClock } = createCoalescer();
+    coalescer.request(100, 30);
+    stepClock(-60 * 60 * 1000);
+    // A backwards clock must not turn into a free pass either: these all land
+    // inside one interval and must still collapse to one apply.
+    for (let cols = 101; cols <= 140; cols += 1) {
+      coalescer.request(cols, 30);
+    }
+    expect(applied).toEqual([[100, 30]]);
+    vi.advanceTimersByTime(PTY_RESIZE_INTERVAL_MS);
+    expect(applied).toEqual([
+      [100, 30],
+      [140, 30],
+    ]);
+  });
+
+  it("paces on a frozen clock rather than stalling or running free", () => {
+    // `IntegratedTerminalService` tests already inject `now: () => 1_000`, so
+    // a stopped clock is a shape this has to survive.
+    const { applied, coalescer } = createCoalescer();
+    vi.setSystemTime(1_000);
+    coalescer.request(100, 30);
+    coalescer.request(120, 40);
+    expect(applied).toEqual([[100, 30]]);
+    vi.advanceTimersByTime(PTY_RESIZE_INTERVAL_MS);
+    expect(applied).toEqual([
+      [100, 30],
+      [120, 40],
+    ]);
+  });
+
+  it("falls back to the default interval when handed a nonsense one", () => {
+    const { applied, coalescer } = createCoalescer({ intervalMs: Number.NaN });
+    coalescer.request(100, 30);
+    coalescer.request(120, 40);
+    // Not applied immediately: NaN must not read as "no minimum gap".
+    expect(applied).toEqual([[100, 30]]);
+    vi.advanceTimersByTime(PTY_RESIZE_INTERVAL_MS);
+    expect(applied).toEqual([
+      [100, 30],
+      [120, 40],
+    ]);
+  });
+
+  it("applies nothing more once disposed", () => {
+    const { applied, coalescer } = createCoalescer();
+    coalescer.dispose();
+    coalescer.request(100, 30);
+    vi.advanceTimersByTime(PTY_RESIZE_INTERVAL_MS * 4);
+    expect(applied).toEqual([]);
   });
 
   it("drops a queued resize on dispose", () => {
