@@ -1,10 +1,11 @@
 import { execFileSync } from "node:child_process";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expect } from "@playwright/test";
 import Database from "better-sqlite3";
 import { seedProfileOverlayState } from "./overlay-state-seeding";
+import { removeTempRoot } from "./temp-root-cleanup";
 
 export async function createBranchDriftFixture(options: {
   expectedBranch?: string;
@@ -145,7 +146,7 @@ export async function createBranchDriftFixture(options: {
 
   return {
     cleanup: async () => {
-      await rm(rootDir, { force: true, recursive: true });
+      await removeTempRoot(rootDir);
     },
     // The whole scenario rides on the app booting into the profile seeded
     // above, so the launch environment belongs to the fixture that wrote it

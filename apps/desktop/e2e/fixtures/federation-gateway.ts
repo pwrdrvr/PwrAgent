@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type {
@@ -60,6 +60,7 @@ import {
 import { FederationRouter } from "../../src/main/federation/federation-router";
 import { FederationStore } from "../../src/main/federation/federation-store";
 import { FederationGatewayWebSocketServer } from "../../src/main/federation/federation-transport";
+import { removeTempRoot } from "./temp-root-cleanup";
 
 export type GatewayThreadSeed = {
   id: string;
@@ -748,7 +749,7 @@ export async function startInProcessFederationGateway(params: {
       ptyService?.disposeAll();
       await server.stop();
       stateDb.close();
-      await rm(stateRoot, { force: true, recursive: true });
+      await removeTempRoot(stateRoot);
     },
   };
 }
