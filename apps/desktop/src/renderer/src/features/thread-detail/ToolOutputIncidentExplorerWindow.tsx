@@ -2405,12 +2405,32 @@ const RESULT_FILTERS: Array<{
   { key: "direct", label: "Direct" },
 ];
 
+function TokenMiserOriginalAvailability(props: { expiresAt?: number }) {
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    const current = Date.now();
+    setNow(current);
+    if (!props.expiresAt || props.expiresAt <= current) return;
+    // Update this disclosure at expiry without fetching accounting or settings.
+    const timer = window.setTimeout(() => setNow(Date.now()), props.expiresAt - current);
+    return () => window.clearTimeout(timer);
+  }, [props.expiresAt]);
+
+  return (
+    <p>
+      {props.expiresAt && props.expiresAt > now
+        ? `Original output is temporary and expires by ${new Date(props.expiresAt).toLocaleTimeString()}. It may become unavailable earlier.`
+        : "Original output is expired or unavailable."}
+      {" "}Costs and tokens are saved. Originals are unavailable after archive or restart.
+    </p>
+  );
+}
+
 /**
  * Every observed result in one filterable list.
  *
- * Gated entries carry the summary the parent actually got; direct entries carry
- * the ordinary result preview. Keeping both populations behind one filter makes
- * "All" truthful and avoids spending a second section on a single outcome.
+ * Gated entries carry accounting and original availability; direct entries carry
+ * observation counts. Both populations share one outcome filter.
  */
 function TokenMiserResultList(props: {
   entries: TokenMiserGateEntry[];
@@ -2505,12 +2525,9 @@ function TokenMiserResultList(props: {
                     <p className="incident-explorer__gate-summary">
                       {entry.interception.disposition === "passed_through" ? "Output passed through." : "Output summarized."}
                     </p>
-                    <p>
-                      {entry.interception.originalOutputAvailableUntil && entry.interception.originalOutputAvailableUntil > Date.now()
-                        ? `Original output is temporary and expires by ${new Date(entry.interception.originalOutputAvailableUntil).toLocaleTimeString()}. It may become unavailable earlier.`
-                        : "Original output is expired or unavailable."}
-                      {" "}Costs and tokens are saved. Originals are unavailable after archive or restart.
-                    </p>
+                    <TokenMiserOriginalAvailability
+                      expiresAt={entry.interception.originalOutputAvailableUntil}
+                    />
                   </div>
                 ) : null}
               </li>
