@@ -35,6 +35,7 @@ import {
   formatPrimaryAccel,
   matchThreadJumpChord,
 } from "../../lib/keyboard-accel";
+import { createFrameCoalescer } from "../../lib/frame-coalescer";
 import { useCelestialIcons } from "../../lib/useCelestialIcons";
 import { useFederationHealth } from "../../lib/useFederationHealth";
 import { SidebarSearchPopup } from "../navigation/SidebarSearchPopup";
@@ -1009,7 +1010,6 @@ export function StarMapScreen(props: StarMapScreenProps) {
     /** Pointer travel since the press. Applied to the live base. */
     let travelX = 0;
     let travelY = 0;
-    let frame = 0;
     /**
      * Read at use, not captured: a cloud arriving mid-drag resizes the
      * canvas, and clamping against the size the map had at pointerdown
@@ -1025,6 +1025,13 @@ export function StarMapScreen(props: StarMapScreenProps) {
       x: base.x + travelX,
       y: base.y + travelY,
     });
+    // Clamped per frame, not only on release: the drag writes the
+    // transform straight onto the canvas, so an unclamped live path
+    // would let the map leave the window and then jump back on
+    // pointerup when the clamped state landed.
+    const paintFrame = createFrameCoalescer(() => {
+      paintView(clampStarMapView({ view: dragged(), ...bounds() }));
+    });
     const move = (pointerEvent: globalThis.PointerEvent) => {
       travelX = pointerEvent.clientX - startX;
       travelY = pointerEvent.clientY - startY;
@@ -1034,25 +1041,13 @@ export function StarMapScreen(props: StarMapScreenProps) {
       // are in the middle of setting. `stop` sets it too, for the flick
       // that commits before any frame has run.
       operatorMovedViewRef.current = true;
-      if (!frame) {
-        frame = requestAnimationFrame(() => {
-          frame = 0;
-          // Clamped per frame, not only on release: the drag writes the
-          // transform straight onto the canvas, so an unclamped live path
-          // would let the map leave the window and then jump back on
-          // pointerup when the clamped state landed.
-          paintView(clampStarMapView({ view: dragged(), ...bounds() }));
-        });
-      }
+      paintFrame.schedule();
     };
     const stop = () => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", stop);
       window.removeEventListener("pointercancel", stop);
-      if (frame) {
-        cancelAnimationFrame(frame);
-        frame = 0;
-      }
+      paintFrame.cancel();
       viewport?.classList.remove("is-panning");
       operatorMovedViewRef.current = true;
       // Clamps the raw pointer position independently of the frame above,

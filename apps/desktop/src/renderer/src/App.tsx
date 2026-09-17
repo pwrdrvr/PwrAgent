@@ -77,6 +77,7 @@ import { ThreadPlaceholderHeader } from "./features/thread-detail/ThreadPlacehol
 import { handoffLaunchpadComposer } from "./features/composer/launchpad-composer-handoff";
 import { useComposerDraftStore } from "./features/composer/useComposerDraftStore";
 import { useDurableComposerDraftStore } from "./features/composer/useDurableComposerDraftStore";
+import { createFrameCoalescer } from "./lib/frame-coalescer";
 import { readBootstrapLayoutPreferences } from "./lib/layout-preferences";
 import { useAppearance, type AppearanceController } from "./lib/useAppearance";
 import { useBackendSummaries } from "./lib/useBackendSummaries";
@@ -2681,33 +2682,27 @@ function DesktopAppShell(props: {
     event.preventDefault();
     const startX = event.clientX;
     const startWidth = sidebarWidthRef.current;
-    let frame = 0;
 
     const flush = (): void => {
-      frame = 0;
       appShellRef.current?.style.setProperty(
         "--sidebar-width",
         `${sidebarWidthRef.current}px`,
       );
     };
+    const flushFrame = createFrameCoalescer(flush);
     const move = (moveEvent: globalThis.PointerEvent): void => {
       // Update the live width synchronously so any incidental rerender reads
       // the current value, but coalesce the actual DOM write to one per frame.
       sidebarWidthRef.current = clampSidebarWidth(
         startWidth + moveEvent.clientX - startX,
       );
-      if (frame === 0) {
-        frame = window.requestAnimationFrame(flush);
-      }
+      flushFrame.schedule();
     };
     const stop = (): void => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", stop);
       window.removeEventListener("pointercancel", stop);
-      if (frame !== 0) {
-        window.cancelAnimationFrame(frame);
-        frame = 0;
-      }
+      flushFrame.cancel();
       // Make sure the DOM is at the final width before the transcript
       // re-syncs (the last move's rAF flush may have been cancelled above).
       flush();

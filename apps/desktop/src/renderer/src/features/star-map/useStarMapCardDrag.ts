@@ -1,4 +1,5 @@
 import { useRef, type PointerEvent as ReactPointerEvent } from "react";
+import { createFrameCoalescer } from "../../lib/frame-coalescer";
 import { pointerDeltaToCanvas, resolveCardDragOffset } from "./star-map-layout";
 import type { AlignmentGuide } from "./star-map-snapping";
 
@@ -97,7 +98,16 @@ export function useStarMapCardDrag(params: {
     let dragging = false;
     let lastDx = startOffset.dx;
     let lastDy = startOffset.dy;
-    let frame = 0;
+    // One DOM write and one group update per frame, however many pointer
+    // moves arrive between them; the frame reads the latest resolved offset.
+    const paintFrame = createFrameCoalescer(() => {
+      element.style.left = `${baseSlot.dx + lastDx}px`;
+      element.style.top = `${baseSlot.dy + lastDy}px`;
+      drag.onGroupDelta?.({
+        dx: lastDx - startOffset.dx,
+        dy: lastDy - startOffset.dy,
+      });
+    });
     const move = (pointerEvent: globalThis.PointerEvent) => {
       const screenX = pointerEvent.clientX - startX;
       const screenY = pointerEvent.clientY - startY;
@@ -128,26 +138,13 @@ export function useStarMapCardDrag(params: {
       lastDx = snapped ? snapped.dx : resolved.dx;
       lastDy = snapped ? snapped.dy : resolved.dy;
       drag.onGuidesChange?.(snapped?.guides ?? []);
-      if (!frame) {
-        frame = requestAnimationFrame(() => {
-          frame = 0;
-          element.style.left = `${baseSlot.dx + lastDx}px`;
-          element.style.top = `${baseSlot.dy + lastDy}px`;
-          drag.onGroupDelta?.({
-            dx: lastDx - startOffset.dx,
-            dy: lastDy - startOffset.dy,
-          });
-        });
-      }
+      paintFrame.schedule();
     };
     const stop = () => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", stop);
       window.removeEventListener("pointercancel", stop);
-      if (frame) {
-        cancelAnimationFrame(frame);
-        frame = 0;
-      }
+      paintFrame.cancel();
       drag.onGuidesChange?.([]);
       if (dragging) {
         drag.onCommitOffset({ dx: lastDx, dy: lastDy });

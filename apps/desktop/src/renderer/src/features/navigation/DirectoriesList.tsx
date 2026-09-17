@@ -38,6 +38,10 @@ import {
   NewThreadIcon,
   UnlinkedDotIcon,
 } from "../../icons";
+import {
+  createFrameCoalescer,
+  type FrameCoalescer,
+} from "../../lib/frame-coalescer";
 import { useEventCallback } from "../../lib/useEventCallback";
 import {
   didDragLeaveCurrentTarget,
@@ -275,9 +279,9 @@ type ThreadPinDragSession = {
   canceled: boolean;
   directory: NavigationDirectorySummary;
   directoryElement: HTMLElement;
-  frame: number;
   lastPoint: { x: number; y: number };
   pointerId: number;
+  pointerTargetFrame: FrameCoalescer;
   preview?: ThreadRowPointerDragPreview;
   releaseClickSuppression?: () => void;
   removeListeners?: () => void;
@@ -563,10 +567,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
   const lastDirectoryThreadDropAtRef = useRef(0);
 
   const deactivateThreadPinDrag = (session: ThreadPinDragSession): void => {
-    if (session.frame) {
-      cancelAnimationFrame(session.frame);
-      session.frame = 0;
-    }
+    session.pointerTargetFrame.cancel();
     session.preview?.remove();
     session.preview = undefined;
     session.sourceElement.classList.remove("is-pointer-dragging");
@@ -615,11 +616,8 @@ export function DirectoriesList(props: DirectoriesListProps) {
   const scheduleThreadPinPointerTarget = (
     session: ThreadPinDragSession,
   ): void => {
-    if (session.frame || !session.activated || session.canceled) return;
-    session.frame = requestAnimationFrame(() => {
-      session.frame = 0;
-      updateThreadPinPointerTarget(session);
-    });
+    if (!session.activated || session.canceled) return;
+    session.pointerTargetFrame.schedule();
   };
 
   /**
@@ -643,6 +641,12 @@ export function DirectoriesList(props: DirectoriesListProps) {
     if (!(directoryElement instanceof HTMLElement)) return;
 
     const startPoint = { x: event.clientX, y: event.clientY };
+    // Hit testing runs at most once per frame while the pointer moves. The
+    // frame reads the session's latest point, so the pointer moves that are
+    // dropped between frames are not lost work.
+    const pointerTargetFrame = createFrameCoalescer(() => {
+      updateThreadPinPointerTarget(session);
+    });
     const session: ThreadPinDragSession = {
       activated: false,
       appendTargetElement:
@@ -652,9 +656,9 @@ export function DirectoriesList(props: DirectoriesListProps) {
       canceled: false,
       directory,
       directoryElement,
-      frame: 0,
       lastPoint: startPoint,
       pointerId: event.pointerId,
+      pointerTargetFrame,
       scrollElement:
         sourceElement.closest<HTMLElement>(".directory-list") ?? undefined,
       sourceElement,
@@ -739,10 +743,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
         y: pointerEvent.clientY,
       };
       if (session.activated && !session.canceled) {
-        if (session.frame) {
-          cancelAnimationFrame(session.frame);
-          session.frame = 0;
-        }
+        session.pointerTargetFrame.cancel();
         updateThreadPinPointerTarget(session);
       }
       const target = session.target;

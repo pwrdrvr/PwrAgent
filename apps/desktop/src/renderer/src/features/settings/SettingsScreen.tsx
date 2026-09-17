@@ -29,6 +29,7 @@ import {
   MessagingSettings,
   type MessagingSettingsFocus,
 } from "./MessagingSettings";
+import { createFrameCoalescer } from "../../lib/frame-coalescer";
 import { formatMessagingPlatformName } from "../../lib/messaging-platform-branding";
 import { ModelsSettings } from "./ModelsSettings";
 import { ProfilesSettings } from "./ProfilesSettings";
@@ -307,7 +308,6 @@ export function SettingsScreen(props: {
       contentRef.current.scrollTop = 0;
     }
   }, [route.section, route.sub]);
-  const scrollClampFrameRef = useRef<number | undefined>(undefined);
   useEffect(() => {
     const clampDocumentScroll = () => {
       if (window.scrollX === 0 && window.scrollY === 0) {
@@ -326,23 +326,13 @@ export function SettingsScreen(props: {
         },
       })?.catch(() => undefined);
     };
-    const scheduleClamp = () => {
-      if (scrollClampFrameRef.current !== undefined) {
-        return;
-      }
-      scrollClampFrameRef.current = window.requestAnimationFrame(() => {
-        scrollClampFrameRef.current = undefined;
-        clampDocumentScroll();
-      });
-    };
+    const clampFrame = createFrameCoalescer(clampDocumentScroll);
+    const scheduleClamp = () => clampFrame.schedule();
     clampDocumentScroll();
     window.addEventListener("scroll", scheduleClamp, { passive: true });
     return () => {
       window.removeEventListener("scroll", scheduleClamp);
-      if (scrollClampFrameRef.current !== undefined) {
-        window.cancelAnimationFrame(scrollClampFrameRef.current);
-        scrollClampFrameRef.current = undefined;
-      }
+      clampFrame.cancel();
     };
   }, [props.desktopApi, section]);
   const snapshot = props.settings.snapshot;

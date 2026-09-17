@@ -1,6 +1,7 @@
 import "@xterm/xterm/css/xterm.css";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { createFrameCoalescer } from "../../lib/frame-coalescer";
 import type { IntegratedTerminalPaneRemote } from "../../lib/useIntegratedTerminals";
 import { InstanceChip } from "../federation/InstanceGlyph";
 import type { Terminal } from "@xterm/xterm";
@@ -133,7 +134,6 @@ export function IntegratedTerminal({
         terminal.focus();
         terminalRef.current = terminal;
 
-        let resizeFrame: number | undefined;
         const fitAndResize = () => {
           if (!visibleRef.current) return;
           if (disposed || !desktopApi.resizeIntegratedTerminal) return;
@@ -146,14 +146,15 @@ export function IntegratedTerminal({
             rows: terminal.rows,
           });
         };
+        // Fitting changes xterm's layout. Leave ResizeObserver delivery
+        // before doing that work, and coalesce observer/prop/attach changes.
+        // The visibility test stays inside `fitAndResize` rather than moving
+        // up here: a frame queued before a visibility flip has to fit against
+        // the state at frame time, not at schedule time.
+        const resizeFrame = createFrameCoalescer(fitAndResize);
         const scheduleFitAndResize = () => {
-          if (disposed || resizeFrame !== undefined) return;
-          // Fitting changes xterm's layout. Leave ResizeObserver delivery
-          // before doing that work, and coalesce observer/prop/attach changes.
-          resizeFrame = window.requestAnimationFrame(() => {
-            resizeFrame = undefined;
-            fitAndResize();
-          });
+          if (disposed) return;
+          resizeFrame.schedule();
         };
         fitAndResizeRef.current = scheduleFitAndResize;
 
@@ -221,7 +222,7 @@ export function IntegratedTerminal({
 
         cleanupTerminal = () => {
           resizeObserver.disconnect();
-          if (resizeFrame !== undefined) window.cancelAnimationFrame(resizeFrame);
+          resizeFrame.cancel();
           dataDisposable.dispose();
           terminal.dispose();
           terminalRef.current = null;
