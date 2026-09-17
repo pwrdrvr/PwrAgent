@@ -533,4 +533,57 @@ describe("PluginsSettings", () => {
       ).toBeEnabled();
     });
   });
+  /**
+   * An OAuth round trip leaves for the browser, and the card cannot see what
+   * happens there. Without a way out, `connectionPending` disabled every
+   * button on every row -- including the Reauthorize that would have issued a
+   * fresh sign-in link -- until the main process gave up five minutes later.
+   */
+  it("hands back the card when an authorization never returns", async () => {
+    const api = createDesktopApi([]);
+    const cancel = vi.fn().mockResolvedValue({ connectionId: "rovo" });
+    let settleAuthorize: ((value: unknown) => void) | undefined;
+    api.authorizeMcpConnection = vi.fn(
+      () => new Promise((resolve) => { settleAuthorize = resolve; }),
+    );
+    api.cancelMcpConnectionAuthorization = cancel;
+    api.listMcpConnections = vi.fn().mockResolvedValue({ connections: [{
+      id: "rovo", displayName: "Atlassian Rovo",
+      serverUrl: "https://mcp.atlassian.com/v2/mcp",
+      kind: "remote", authMode: "oauth", enabled: true, configured: false,
+      state: "disconnected", createdAt: 0, updatedAt: 0,
+    }] });
+    render(<PluginsSettings desktopApi={api} snapshot={createSnapshot()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Authorize" }));
+    await screen.findByText(
+      "Waiting for Atlassian Rovo authorization to complete...",
+    );
+    const row = within(
+      screen.getByText("https://mcp.atlassian.com/v2/mcp").closest("article")!,
+    );
+    expect(row.getByRole("button", { name: "Edit" })).toBeDisabled();
+    expect(row.getByRole("button", { name: "Remove" })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Stop waiting" }));
+
+    await waitFor(() => {
+      expect(row.getByRole("button", { name: "Authorize" })).toBeEnabled();
+    });
+    expect(row.getByRole("button", { name: "Edit" })).toBeEnabled();
+    expect(row.getByRole("button", { name: "Remove" })).toBeEnabled();
+    expect(cancel).toHaveBeenCalledWith({ connectionId: "rovo" });
+
+    // The abandoned attempt still settles in the main process. Landing on a
+    // stale epoch it says nothing -- a success notice for an authorization the
+    // operator gave up on would be a claim the card cannot support, and
+    // re-entering `finally` would disable the row it was just released from.
+    settleAuthorize?.({ connection: {} });
+    await waitFor(() => {
+      expect(
+        screen.getByText(/Stopped waiting for authorization/),
+      ).toBeInTheDocument();
+    });
+    expect(row.getByRole("button", { name: "Authorize" })).toBeEnabled();
+  });
 });

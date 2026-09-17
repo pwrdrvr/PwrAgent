@@ -322,4 +322,119 @@ describe("McpConnectionGatewayService", () => {
     await expect(service.registerBridge("pwrsnap", "thread-1"))
       .resolves.toBeTruthy();
   });
+  /**
+   * The OAuth round trip belongs to the browser, so "cancel" can only mean
+   * releasing PwrAgent's half of it. Before this the only exit from an
+   * abandoned attempt was the five-minute callback timeout, during which the
+   * Settings card stayed disabled -- including the Reauthorize that would have
+   * issued a fresh URL.
+   */
+  it("releases an authorization the operator walked away from", async () => {
+    const registry = temporaryRegistry();
+    const connection = registry.create({
+      displayName: "Atlassian Rovo",
+      serverUrl: "https://mcp.atlassian.com/v2/mcp",
+    });
+    const service = new McpConnectionGatewayService({
+      registry,
+      settings: createSettings(),
+      leaseManager: null,
+    });
+    services.push(service);
+
+    // The real callback listener and the real pending-authorization bookkeeping;
+    // only the coordinator's own OAuth traffic is stood in for. It parks on
+    // `waitForCode`, which is where a browser round trip actually waits.
+    const redirects: URL[] = [];
+    const stubCoordinator = {
+      configured: async () => false,
+      authorize: async (params: {
+        redirectUrl: URL;
+        onRedirect: (url: URL) => Promise<void>;
+        waitForCode: () => Promise<string>;
+      }) => {
+        redirects.push(params.redirectUrl);
+        await params.waitForCode();
+      },
+    };
+    Object.assign(service, { coordinatorFor: () => stubCoordinator });
+
+    const abandoned = service.authorizeConnection(connection.id);
+    const failure = abandoned.catch((error: unknown) => error);
+    await vi.waitFor(() => expect(redirects).toHaveLength(1));
+
+    // The cancel resolves on the connection's unchanged state -- giving up on
+    // an attempt is not disconnecting, so nothing stored is discarded.
+    await expect(service.cancelAuthorization(connection.id)).resolves.toMatchObject({
+      id: connection.id,
+      configured: false,
+    });
+    await expect(failure).resolves.toBeInstanceOf(Error);
+    expect(String(await failure)).toContain("cancelled");
+
+    // And the abandoned listener is gone rather than parked on its port, so a
+    // retry gets its own callback instead of racing the first one.
+    const port = redirects[0]!.port;
+    await expect(
+      fetch(`http://127.0.0.1:${port}/oauth/callback?code=late`),
+    ).rejects.toThrow();
+
+    const retry = service.authorizeConnection(connection.id);
+    const retryFailure = retry.catch((error: unknown) => error);
+    await vi.waitFor(() => expect(redirects).toHaveLength(2));
+    expect(redirects[1]!.port).not.toBe(port);
+    await service.cancelAuthorization(connection.id);
+    await retryFailure;
+  });
+
+  /**
+   * The coordinator's own attempt counter stops a superseded flow from
+   * committing tokens. It does not close that flow's listener, so without this
+   * a retry ran a second one beside the first and both sat on their ports
+   * until the five-minute timeout.
+   */
+  it("abandons an in-flight authorization when a newer one starts", async () => {
+    const registry = temporaryRegistry();
+    const connection = registry.create({
+      displayName: "Datadog",
+      serverUrl: "https://mcp.datadoghq.com/mcp",
+    });
+    const service = new McpConnectionGatewayService({
+      registry,
+      settings: createSettings(),
+      leaseManager: null,
+    });
+    services.push(service);
+
+    const redirects: URL[] = [];
+    Object.assign(service, {
+      coordinatorFor: () => ({
+        configured: async () => false,
+        authorize: async (params: {
+          redirectUrl: URL;
+          waitForCode: () => Promise<string>;
+        }) => {
+          redirects.push(params.redirectUrl);
+          await params.waitForCode();
+        },
+      }),
+    });
+
+    const first = service.authorizeConnection(connection.id);
+    const firstFailure = first.catch((error: unknown) => error);
+    await vi.waitFor(() => expect(redirects).toHaveLength(1));
+
+    const second = service.authorizeConnection(connection.id);
+    const secondFailure = second.catch((error: unknown) => error);
+    await vi.waitFor(() => expect(redirects).toHaveLength(2));
+
+    expect(String(await firstFailure)).toContain("newer");
+    await expect(
+      fetch(`http://127.0.0.1:${redirects[0]!.port}/oauth/callback?code=late`),
+    ).rejects.toThrow();
+
+    // The replacement is untouched by its predecessor's teardown.
+    await service.cancelAuthorization(connection.id);
+    expect(String(await secondFailure)).toContain("cancelled");
+  });
 });

@@ -141,8 +141,30 @@ export function PluginsSettings(props: {
   const [servers, setServers] = useState<CodexMcpServerSummary[]>([]);
   const [connections, setConnections] = useState<McpConnectionStatus[]>([]);
   const [connectionsLoading, setConnectionsLoading] = useState(true);
-  const [connectionPending, setConnectionPending] =
+  const [connectionPending, setConnectionPendingState] =
     useState<ConnectionPendingAction>();
+  /**
+   * `connectionPending` read from a closure the OAuth wait was started in is
+   * always the value it held when that wait began, so the Stop waiting button
+   * needs the live one to know what it is stopping.
+   */
+  const connectionPendingRef = useRef<ConnectionPendingAction | undefined>(
+    undefined,
+  );
+  const setConnectionPending = useCallback(
+    (action?: ConnectionPendingAction) => {
+      connectionPendingRef.current = action;
+      setConnectionPendingState(action);
+    },
+    [],
+  );
+  /**
+   * Which authorization attempt the card is currently listening to. Stop
+   * waiting and a fresh Authorize each bump it, so a browser round trip the
+   * operator has walked away from cannot come back later and overwrite the
+   * notice -- or, worse, re-disable the card it was just released from.
+   */
+  const authorizationEpochRef = useRef(0);
   const [connectionNotice, setConnectionNotice] = useState<ActionNotice>();
   const [connectionName, setConnectionName] = useState("");
   const [connectionUrl, setConnectionUrl] = useState("");
@@ -628,11 +650,56 @@ export function PluginsSettings(props: {
     });
   };
 
+  /**
+   * Give up on an authorization that left for the browser and never came back.
+   *
+   * There is nothing here to abort: the round trip belongs to the browser and
+   * to the callback listener in the main process, which gives up on its own
+   * after five minutes. What the operator is actually stuck behind is
+   * `connectionPending`, which disables every button on every row in this card
+   * -- including the Edit and Remove of the connection being authorized, and
+   * the Reauthorize that would issue a fresh URL. So this releases the wait
+   * and bumps the epoch, and the abandoned attempt lands on a stale epoch and
+   * says nothing.
+   *
+   * The main process is told as well, so the abandoned listener stops holding
+   * its port and a retry starts from a clean callback rather than racing the
+   * one the operator walked away from.
+   */
+  const stopWaitingForAuthorization = async (message?: string) => {
+    const pending = connectionPendingRef.current;
+    if (pending?.kind !== "authorize") return;
+    authorizationEpochRef.current += 1;
+    setConnectionPending(undefined);
+    setConnectionNotice({
+      kind: "info",
+      text: message
+        ?? "Stopped waiting for authorization. Authorize again to start over"
+          + " with a fresh sign-in link.",
+    });
+    if (!pending.connectionId) return;
+    try {
+      await props.desktopApi?.cancelMcpConnectionAuthorization?.({
+        connectionId: pending.connectionId,
+      });
+    } catch {
+      // Releasing the card is the whole point, and it already happened. A
+      // listener that outlives this call times out on its own.
+    }
+    await loadConnections();
+  };
+
   const authorizeConnection = async (
     connection: McpConnectionStatus,
     continueCreate = false,
   ) => {
     if (connectionPending && !continueCreate) return;
+    // Any attempt still in flight from before this one is abandoned: the
+    // operator asked for a new sign-in link, so the old callback must not be
+    // the one that answers.
+    authorizationEpochRef.current += 1;
+    const epoch = authorizationEpochRef.current;
+    const isCurrent = () => authorizationEpochRef.current === epoch;
     setConnectionPending({
       kind: "authorize",
       connectionId: connection.id,
@@ -662,17 +729,19 @@ export function PluginsSettings(props: {
         });
       }
       await loadConnections();
+      if (!isCurrent()) return;
       setConnectionNotice({
         kind: "success",
         text: `${connection.displayName} is connected through PwrAgent.`,
       });
     } catch (error) {
+      if (!isCurrent()) return;
       setConnectionNotice({
         kind: "error",
         text: error instanceof Error ? error.message : String(error),
       });
     } finally {
-      setConnectionPending(undefined);
+      if (isCurrent()) setConnectionPending(undefined);
     }
   };
 
@@ -872,7 +941,7 @@ export function PluginsSettings(props: {
       <SettingsPanelHead
         eyebrow="Plugins"
         title="MCP connections"
-        help="PwrAgent connections are held here and shared with every Codex and ACP thread you choose. The agent's own servers are configured inside Codex; PwrAgent only reports those."
+        help="PwrAgent-managed connections are held here and shared with every Codex and ACP thread you choose. Codex-managed servers are configured inside Codex itself; PwrAgent only reports those."
         action={
           <button
             className="button button--secondary"
@@ -891,7 +960,7 @@ export function PluginsSettings(props: {
 
       <SettingsSection
         eyebrow="PwrAgent gateway"
-        title="PwrAgent connections"
+        title="PwrAgent-managed connections"
         sectionId="managed-mcp-connections"
         description="PwrAgent keeps OAuth credentials encrypted in this profile, refreshes them centrally, and gives selected threads a local proxy instead of copying tokens into each agent process."
         chip={readinessChip}
@@ -914,136 +983,172 @@ export function PluginsSettings(props: {
             }
           />
         </div>
-        {connectionNotice ? (
-          <div
-            className={`settings-plugin-notice settings-plugin-notice--${connectionNotice.kind}`}
-            role={connectionNotice.kind === "error" ? "alert" : "status"}
+        <div className="settings-mcp-manage">
+          {connectionNotice ? (
+            <div
+              className={`settings-plugin-notice settings-plugin-notice--${connectionNotice.kind}`}
+              role={connectionNotice.kind === "error" ? "alert" : "status"}
+            >
+              <span>{connectionNotice.text}</span>
+              {/*
+                * An OAuth round trip leaves the browser, and PwrAgent cannot
+                * see what happens there. Without this the whole card stayed
+                * disabled behind `connectionPending` until the main process
+                * gave up five minutes later, so an authorization the operator
+                * had already abandoned -- a wrong account, a consent screen
+                * that wanted a fresh URL -- had no way to be retried. The
+                * Codex card below has carried the same affordance for its own
+                * sign-ins since it was written.
+                */}
+              {connectionPending?.kind === "authorize" ? (
+                <button
+                  className="button button--ghost settings-plugin-notice__action"
+                  type="button"
+                  onClick={() => void stopWaitingForAuthorization()}
+                >
+                  Stop waiting
+                </button>
+              ) : null}
+            </div>
+          ) : null}
+          {/*
+            * The inventory first, then the slot to add to it.
+            *
+            * Both used to render as bare children of the card body at the
+            * same weight, with the empty add fields directly above the rows,
+            * so the form read as a fourth connection that had lost its name.
+            * The rows are what the operator came to manage; `--create` is
+            * dashed and unfilled because it is the one block here that is not
+            * yet a thing.
+            */}
+          {connectionsLoading ? (
+            <p className="settings-empty">Loading connections...</p>
+          ) : connections.length ? (
+            <div className="settings-mcp-list">
+              {connections.map((connection) => (
+                <ManagedMcpConnectionRow
+                  key={connection.id}
+                  busy={connectionPending?.connectionId === connection.id}
+                  connection={connection}
+                  desktopApi={props.desktopApi}
+                  disabled={Boolean(connectionPending)}
+                  gatewayEnabled={gatewayEnabled}
+                  onAuthorize={() => void authorizeConnection(connection)}
+                  onAvailabilityChange={
+                    props.desktopApi?.setMcpConnectionEnabled
+                      ? (enabled) =>
+                          void setConnectionAvailability(connection, enabled)
+                      : undefined
+                  }
+                  onChanged={() => void loadConnections()}
+                  onDisconnect={() => void disconnectConnection(connection)}
+                  onEdit={() =>
+                    setConnectionEdit({
+                      connectionId: connection.id,
+                      displayName: connection.displayName,
+                      serverUrl: connection.serverUrl,
+                      originalServerUrl: connection.serverUrl,
+                    })
+                  }
+                  onNotice={setConnectionNotice}
+                  onRemove={() => setConnectionRemoveCandidate(connection)}
+                />
+              ))}
+            </div>
+          ) : (
+            <p className="settings-empty">No PwrAgent connections yet.</p>
+          )}
+          <form
+            className="settings-mcp-create"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void createConnection();
+            }}
           >
-            <span>{connectionNotice.text}</span>
-          </div>
-        ) : null}
-        {/*
-          * The constraint belongs above the fields. `authMode` is the literal
-          * "oauth", so a command-line server — which is what most people mean
-          * by "an MCP server" — can never be added here. Saying so first is
-          * cheaper than a discovery failure after the record is written.
-          */}
-        <p className="settings-mcp-create__constraint">
-          <strong>Remote MCP servers that sign in with OAuth.</strong>{" "}
-          Command-line (stdio) servers belong in the agent&rsquo;s own config.
-        </p>
-        <form
-          className="settings-mcp-create"
-          onSubmit={(event) => {
-            event.preventDefault();
-            void createConnection();
-          }}
-        >
-          <label>
-            <span>Name</span>
-            <input
-              className="settings-input"
-              disabled={Boolean(connectionPending)}
-              placeholder="Datadog"
-              value={connectionName}
-              onChange={(event) => setConnectionName(event.target.value)}
-            />
-          </label>
-          <label>
-            <span>Remote MCP URL</span>
-            <input
-              className="settings-input"
-              disabled={Boolean(connectionPending)}
-              inputMode="url"
-              placeholder="https://mcp.example.com/mcp"
-              value={connectionUrl}
-              onChange={(event) => {
-                setConnectionUrl(event.target.value);
-                // A probe describes one URL. Keeping a stale verdict beside
-                // an edited field would offer to save something that was
-                // never checked.
-                setProbe(undefined);
-              }}
-            />
-          </label>
-          <button
-            className="button button--secondary"
-            disabled={
-              Boolean(connectionPending)
-              || !connectionUrl.trim()
-              || (probe?.ok === true && !connectionName.trim())
-            }
-            type="submit"
-          >
-            {connectionPending?.kind === "probe"
-              ? "Checking..."
-              : connectionPending?.kind === "create"
-                ? "Adding..."
-                : probe?.ok
-                  ? "Add and authorize"
-                  : "Check"}
-          </button>
-        </form>
-        {probe ? (
-          <p
-            className={`settings-mcp-probe settings-mcp-probe--${
-              probe.ok ? "ok" : "err"
-            }`}
-            role={probe.ok ? "status" : "alert"}
-          >
-            {probe.ok
-              ? `Found ${probe.serverName ?? "an MCP server"} at ${probe.serverUrl}. It signs in with OAuth${
-                  probe.toolCount === undefined
-                    ? ""
-                    : ` and offers ${probe.toolCount} tools`
-                }. Nothing is saved yet.`
-              : probe.message}
-          </p>
-        ) : null}
-        {connectionsLoading ? (
-          <p className="settings-empty">Loading connections...</p>
-        ) : connections.length ? (
-          <div className="settings-mcp-list">
-            {connections.map((connection) => (
-              <ManagedMcpConnectionRow
-                key={connection.id}
-                busy={connectionPending?.connectionId === connection.id}
-                connection={connection}
-                desktopApi={props.desktopApi}
-                disabled={Boolean(connectionPending)}
-                gatewayEnabled={gatewayEnabled}
-                onAuthorize={() => void authorizeConnection(connection)}
-                onAvailabilityChange={
-                  props.desktopApi?.setMcpConnectionEnabled
-                    ? (enabled) =>
-                        void setConnectionAvailability(connection, enabled)
-                    : undefined
+            <h4 className="settings-mcp-create__title">Add a remote MCP server</h4>
+            {/*
+              * The constraint belongs above the fields. `authMode` is the
+              * literal "oauth", so a command-line server -- which is what most
+              * people mean by "an MCP server" -- can never be added here.
+              * Saying so first is cheaper than a discovery failure after the
+              * record is written.
+              */}
+            <p className="settings-mcp-create__constraint">
+              It has to be a remote server that signs in with OAuth.
+              Command-line (stdio) servers belong in the agent&rsquo;s own
+              configuration file.
+            </p>
+            <div className="settings-mcp-create__fields">
+              <label>
+                <span>Name</span>
+                <input
+                  className="settings-input"
+                  disabled={Boolean(connectionPending)}
+                  placeholder="Datadog"
+                  value={connectionName}
+                  onChange={(event) => setConnectionName(event.target.value)}
+                />
+              </label>
+              <label>
+                <span>Remote MCP URL</span>
+                <input
+                  className="settings-input"
+                  disabled={Boolean(connectionPending)}
+                  inputMode="url"
+                  placeholder="https://mcp.example.com/mcp"
+                  value={connectionUrl}
+                  onChange={(event) => {
+                    setConnectionUrl(event.target.value);
+                    // A probe describes one URL. Keeping a stale verdict beside
+                    // an edited field would offer to save something that was
+                    // never checked.
+                    setProbe(undefined);
+                  }}
+                />
+              </label>
+              <button
+                className="button button--secondary"
+                disabled={
+                  Boolean(connectionPending)
+                  || !connectionUrl.trim()
+                  || (probe?.ok === true && !connectionName.trim())
                 }
-                onChanged={() => void loadConnections()}
-                onDisconnect={() => void disconnectConnection(connection)}
-                onEdit={() =>
-                  setConnectionEdit({
-                    connectionId: connection.id,
-                    displayName: connection.displayName,
-                    serverUrl: connection.serverUrl,
-                    originalServerUrl: connection.serverUrl,
-                  })
-                }
-                onNotice={setConnectionNotice}
-                onRemove={() => setConnectionRemoveCandidate(connection)}
-              />
-            ))}
-          </div>
-        ) : (
-          <p className="settings-empty">No PwrAgent connections yet.</p>
-        )}
+                type="submit"
+              >
+                {connectionPending?.kind === "probe"
+                  ? "Checking..."
+                  : connectionPending?.kind === "create"
+                    ? "Adding..."
+                    : probe?.ok
+                      ? "Add and authorize"
+                      : "Check"}
+              </button>
+            </div>
+            {probe ? (
+              <p
+                className={`settings-mcp-probe settings-mcp-probe--${
+                  probe.ok ? "ok" : "err"
+                }`}
+                role={probe.ok ? "status" : "alert"}
+              >
+                {probe.ok
+                  ? `Found ${probe.serverName ?? "an MCP server"} at ${probe.serverUrl}. It signs in with OAuth${
+                      probe.toolCount === undefined
+                        ? ""
+                        : ` and offers ${probe.toolCount} tools`
+                    }. Nothing is saved yet.`
+                  : probe.message}
+              </p>
+            ) : null}
+          </form>
+        </div>
       </SettingsSection>
 
       <SettingsSection
         eyebrow="Codex only"
-        title="The agent's own servers"
+        title="Codex-managed servers"
         sectionId="mcp-servers"
-        description="Servers configured inside Codex itself, which PwrAgent reports but does not hold credentials for. Sign-in replaces expired OAuth credentials. Remove deletes only this server's configuration from the selected Codex profile."
+        description="Codex reads these from its own configuration file and holds their credentials itself; PwrAgent reports them but cannot offer them to an ACP thread. Sign-in replaces expired OAuth credentials. Remove deletes only this server's configuration from the selected Codex profile."
         chip={
           loading
             ? "Loading..."

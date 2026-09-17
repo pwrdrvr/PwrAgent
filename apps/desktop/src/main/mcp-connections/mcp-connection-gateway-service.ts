@@ -421,6 +421,21 @@ export class McpConnectionGatewayService {
    */
   private readonly threadHandovers = new Map<string, number>();
   private readonly coordinators = new Map<string, McpOAuthSessionCoordinator>();
+  /**
+   * The authorization currently out in the browser, per connection.
+   *
+   * `McpOAuthSessionCoordinator.authorize` already refuses to let a superseded
+   * attempt commit tokens or move the connection's state, so a stale flow
+   * cannot corrupt anything. What it cannot do is end that flow: an attempt
+   * the operator abandoned still holds its loopback listener on its port and
+   * still runs to the five-minute callback timeout, and `authorizeConnection`
+   * stays unresolved for all of it -- which is what the Settings card sits
+   * behind. This map is what makes stopping possible: one entry per
+   * connection, torn down by the next attempt or by an explicit cancel.
+   */
+  private readonly pendingAuthorizations = new Map<string, {
+    abandon: (reason: string) => void;
+  }>();
   private readonly upstreamSessions = new Map<string, UpstreamSession>();
   /**
    * In-flight session opens, keyed by bridge token.
@@ -583,6 +598,10 @@ export class McpConnectionGatewayService {
       );
     }
     const connection = this.requireConnection(connectionId);
+    this.abandonPendingAuthorization(
+      connectionId,
+      `A newer ${connection.displayName} authorization replaced this one.`,
+    );
     await this.closeConnectionSessions(connectionId);
     const authorizationState = randomBytes(24).toString("base64url");
     const callback = await this.createOAuthCallback(
@@ -590,6 +609,7 @@ export class McpConnectionGatewayService {
       connection.displayName,
       connection.id,
     );
+    this.pendingAuthorizations.set(connectionId, { abandon: callback.abandon });
     try {
       await this.coordinatorFor(connection).authorize({
         redirectUrl: callback.url,
@@ -615,8 +635,45 @@ export class McpConnectionGatewayService {
       );
       throw cause;
     } finally {
+      if (this.pendingAuthorizations.get(connectionId)?.abandon === callback.abandon) {
+        this.pendingAuthorizations.delete(connectionId);
+      }
       await callback.close();
     }
+  }
+
+  /**
+   * Release PwrAgent's side of an authorization the operator gave up on.
+   *
+   * The browser round trip is beyond reach; this closes the loopback listener
+   * waiting for it so the port is free and the in-flight `authorizeConnection`
+   * rejects now rather than at the five-minute timeout. Returns the
+   * connection's state afterwards, which is whatever it was before the attempt
+   * -- cancelling authorization is not the same as disconnecting, and stored
+   * credentials are untouched.
+   */
+  async cancelAuthorization(connectionId: string): Promise<McpConnectionStatus> {
+    const ownership = await this.ensureOwnerBroker();
+    if (!ownership.owned) {
+      return await this.requestOwnerBroker<McpConnectionStatus>(
+        ownership.holder,
+        "broker/cancel-authorize",
+        { connectionId },
+      );
+    }
+    const connection = this.requireConnection(connectionId);
+    this.abandonPendingAuthorization(
+      connectionId,
+      `${connection.displayName} authorization was cancelled.`,
+    );
+    return await this.connectionStatus(connection);
+  }
+
+  private abandonPendingAuthorization(connectionId: string, reason: string): void {
+    const pending = this.pendingAuthorizations.get(connectionId);
+    if (!pending) return;
+    this.pendingAuthorizations.delete(connectionId);
+    pending.abandon(reason);
   }
 
   /**
@@ -1114,6 +1171,7 @@ export class McpConnectionGatewayService {
     url: URL;
     waitForCode: () => Promise<string>;
     complete: (state: "connected" | "failed", detail: string) => void;
+    abandon: (reason: string) => void;
     close: () => Promise<void>;
   }> {
     let resolveRequest: ((url: URL) => void) | undefined;
@@ -1122,6 +1180,15 @@ export class McpConnectionGatewayService {
       resolveRequest = resolve;
       rejectRequest = reject;
     });
+    /*
+     * `abandon` can reject this before `waitForCode` is ever awaited -- a
+     * cancel during OAuth discovery, or a retry that replaces an attempt
+     * still in `authFn`. Without a handler attached at creation that is an
+     * unhandled rejection, which crashes the main process under Node's
+     * default policy. `waitForCode` still sees the rejection: this marks the
+     * promise handled, it does not consume it.
+     */
+    requestPromise.catch(() => {});
     let callbackState: {
       state: "connecting" | "connected" | "failed";
       detail: string;
@@ -1237,6 +1304,21 @@ export class McpConnectionGatewayService {
       },
       complete: (state, detail) => {
         callbackState = { state, detail };
+      },
+      /*
+       * Fail the wait now instead of at the callback timeout.
+       *
+       * `authorizeConnection`'s `finally` runs `close` off the rejection, so
+       * this is what actually frees the port. `server.close()` is called
+       * directly rather than left to `close`'s 30s grace: the grace exists so
+       * a browser that arrives a moment after a *successful* exchange still
+       * gets the completion page, and there is no completion to show for an
+       * attempt nobody is waiting on.
+       */
+      abandon: (reason: string) => {
+        callbackState = { state: "failed", detail: reason };
+        rejectRequest?.(new Error(reason));
+        server.close();
       },
       close: async () => {
         server.unref();
@@ -1683,6 +1765,7 @@ export class McpConnectionGatewayService {
     }
     if (
       operation === "broker/authorize"
+      || operation === "broker/cancel-authorize"
       || operation === "broker/disconnect"
       || operation === "broker/remove"
     ) {
@@ -1691,6 +1774,12 @@ export class McpConnectionGatewayService {
       }
       if (operation === "broker/authorize") {
         return await this.authorizeConnection(values.connectionId);
+      }
+      // The attempt being abandoned lives in the owner broker's process, which
+      // is where this already runs -- the same place the callback listener it
+      // has to close was opened.
+      if (operation === "broker/cancel-authorize") {
+        return await this.cancelAuthorization(values.connectionId);
       }
       if (operation === "broker/disconnect") {
         return await this.disconnectConnection(values.connectionId);

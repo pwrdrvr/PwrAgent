@@ -74,6 +74,20 @@ export type AuthorizeMcpConnectionResponse = {
   connection: McpConnectionStatus;
 };
 
+/**
+ * Abandon an authorization that is still out in the browser.
+ *
+ * The OAuth round trip cannot be aborted -- the browser holds it. What this
+ * releases is PwrAgent's side: the loopback callback listener stops waiting
+ * and gives up its port, so the next Authorize starts from a fresh redirect
+ * URL instead of racing a listener the operator already walked away from.
+ * Cancelling an attempt that has already finished, or one that never started,
+ * is a no-op.
+ */
+export type CancelMcpConnectionAuthorizationRequest = {
+  connectionId: McpConnectionId;
+};
+
 export type DisconnectMcpConnectionRequest = {
   connectionId: McpConnectionId;
 };

@@ -179,6 +179,8 @@ export const MCP_CONNECTION_PWRGIT_DOWNLOAD_CHANNEL =
 export const MCP_CONNECTION_LIST_CHANNEL = "mcp-connection:list";
 export const MCP_CONNECTION_CREATE_CHANNEL = "mcp-connection:create";
 export const MCP_CONNECTION_AUTHORIZE_CHANNEL = "mcp-connection:authorize";
+export const MCP_CONNECTION_CANCEL_AUTHORIZE_CHANNEL =
+  "mcp-connection:cancel-authorize";
 export const MCP_CONNECTION_DISCONNECT_CHANNEL = "mcp-connection:disconnect";
 export const MCP_CONNECTION_REMOVE_CHANNEL = "mcp-connection:remove";
 export const MCP_CONNECTION_UPDATE_CHANNEL = "mcp-connection:update";

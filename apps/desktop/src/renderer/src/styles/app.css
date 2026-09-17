@@ -11947,6 +11947,13 @@ a.button {
   font-size: 11px;
 }
 
+/* Inside the connections card the wrapper's `gap` owns the rhythm; the
+   `margin-bottom` below is for the Codex card, whose notice is still a bare
+   body child. */
+.settings-mcp-manage > .settings-plugin-notice {
+  margin: 0;
+}
+
 .settings-plugin-notice {
   display: flex;
   align-items: center;
@@ -11985,12 +11992,58 @@ a.button {
   gap: 8px;
 }
 
+/*
+ * The card body pays the padding its children used to go without.
+ *
+ * `.settings-section__body` has no padding of its own -- `.settings-field`
+ * carries `14px 18px` and every other body child is expected to do the same
+ * (see `.settings-section__body > .settings-paths`). This card had four
+ * unpadded children, so the constraint line, the Name label and the rows all
+ * sat on the card's left border and the Check button on its right one, while
+ * the gateway field directly above them was inset 18px. One wrapper is
+ * cheaper than repeating the padding on each, and it owns the rhythm between
+ * them so the children can drop their own `margin-bottom`.
+ */
+.settings-mcp-manage {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 14px 18px;
+  /* The same hairline `.settings-field` draws above itself: this is the next
+     band of the card, not a continuation of the gateway switch's row. */
+  border-top: 1px solid var(--border-subtle);
+}
+
+/*
+ * The slot, told apart from the inventory.
+ *
+ * The add fields rendered as a bare grid at the same weight as the rows below
+ * them, so an empty Name field directly above `PwrSnap` read as a connection
+ * that had lost its name. The rows are solid and elevated because they exist;
+ * this is dashed and sits on the card's own background because it does not
+ * yet.
+ */
 .settings-mcp-create {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 8px;
+}
+
+.settings-mcp-create__title {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.settings-mcp-create__fields {
   display: grid;
   grid-template-columns: minmax(140px, .6fr) minmax(240px, 1.4fr) auto;
   align-items: end;
   gap: 10px;
-  margin-bottom: 14px;
 }
 
 .settings-mcp-create label {
@@ -12117,7 +12170,7 @@ a.button {
 
 .settings-mcp-create__constraint {
   max-width: 72ch;
-  margin: 0 0 10px;
+  margin: -4px 0 0;
   color: var(--text-muted);
   font-size: 11.5px;
   line-height: 1.5;
@@ -12129,7 +12182,7 @@ a.button {
 }
 
 .settings-mcp-probe {
-  margin: -4px 0 14px;
+  margin: 0;
   padding: 9px 11px;
   border: 1px solid var(--border-subtle);
   border-radius: 7px;
@@ -12323,7 +12376,7 @@ a.button {
 }
 
 @media (max-width: 820px) {
-  .settings-mcp-create {
+  .settings-mcp-create__fields {
     grid-template-columns: 1fr;
   }
 }

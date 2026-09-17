@@ -2,6 +2,7 @@ import { ipcMain } from "electron";
 import {
   type AuthorizeMcpConnectionRequest,
   type AuthorizeMcpConnectionResponse,
+  type CancelMcpConnectionAuthorizationRequest,
   type CreateMcpConnectionRequest,
   type CreateMcpConnectionResponse,
   type DescribeThreadMcpConnectionsRequest,
@@ -33,6 +34,7 @@ import {
   MCP_CONNECTION_PWRGIT_OPEN_CHANNEL,
   MCP_CONNECTION_PWRGIT_STATUS_CHANNEL,
   MCP_CONNECTION_AUTHORIZE_CHANNEL,
+  MCP_CONNECTION_CANCEL_AUTHORIZE_CHANNEL,
   MCP_CONNECTION_CREATE_CHANNEL,
   MCP_CONNECTION_DISCONNECT_CHANNEL,
   MCP_CONNECTION_LIST_CHANNEL,
@@ -102,6 +104,19 @@ export function registerMcpConnectionIpcHandlers(
       return {
         connection: await service.authorizeConnection(request.connectionId),
       };
+    },
+  );
+  ipcMain.removeHandler(MCP_CONNECTION_CANCEL_AUTHORIZE_CHANNEL);
+  ipcMain.handle(
+    MCP_CONNECTION_CANCEL_AUTHORIZE_CHANNEL,
+    async (
+      event,
+      request: CancelMcpConnectionAuthorizationRequest,
+    ): Promise<MutateMcpConnectionResponse> => {
+      requireLocalOwner(event);
+      const connection: McpConnectionStatus =
+        await service.cancelAuthorization(request.connectionId);
+      return { connectionId: request.connectionId, connection };
     },
   );
   ipcMain.removeHandler(MCP_CONNECTION_DISCONNECT_CHANNEL);
@@ -329,6 +344,7 @@ export function disposeMcpConnectionIpcHandlers(): void {
   ipcMain.removeHandler(MCP_CONNECTION_LIST_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_CREATE_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_AUTHORIZE_CHANNEL);
+  ipcMain.removeHandler(MCP_CONNECTION_CANCEL_AUTHORIZE_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_DISCONNECT_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_REMOVE_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_SET_ENABLED_CHANNEL);
