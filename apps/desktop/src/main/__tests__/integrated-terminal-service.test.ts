@@ -528,13 +528,21 @@ describe("resolveTerminalShell", () => {
   it("deduplicates normalized PTY sizes across viewers without suppressing a viewer's return size", async () => {
     const pty = fakePty();
     const service = new IntegratedTerminalService({
-      loadNodePty: async () => ({ spawn: vi.fn(() => pty) as unknown as typeof import("node-pty").spawn }),
+      loadNodePty: async () => ({
+        spawn: vi.fn(() => pty) as unknown as typeof import("node-pty").spawn,
+      }),
     });
-    const request = { threadKey: "codex:resize", cwd: os.tmpdir(), cols: 80, rows: 24 };
+    const request = {
+      threadKey: "codex:resize",
+      cwd: os.tmpdir(),
+      cols: 80,
+      rows: 24,
+    };
     const first = await service.createOrAttach(request, fakeWebContents());
     const second = await service.createOrAttach(request, fakeWebContents());
     expect(second.sessionId).toBe(first.sessionId);
-    const resize = (sessionId: string, cols: number, rows: number) => service.resize({ sessionId, cols, rows });
+    const resize = (sessionId: string, cols: number, rows: number) =>
+      service.resize({ sessionId, cols, rows });
     resize(first.sessionId, 80, 24);
     resize(first.sessionId, 80, 24);
     resize(second.sessionId, 100, 30);
@@ -542,7 +550,12 @@ describe("resolveTerminalShell", () => {
     resize(first.sessionId, 80, 24);
     resize(first.sessionId, 0, 0);
     resize(second.sessionId, 1, 1);
-    expect(vi.mocked(pty.resize).mock.calls).toEqual([[80, 24], [100, 30], [80, 24], [2, 2]]);
+    expect(vi.mocked(pty.resize).mock.calls).toEqual([
+      [80, 24],
+      [100, 30],
+      [80, 24],
+      [2, 2],
+    ]);
     vi.mocked(pty.onExit).mock.calls[0]![0]({ exitCode: 0 });
     await service.dispose();
   });
@@ -550,11 +563,23 @@ describe("resolveTerminalShell", () => {
   it("does not remember a rejected PTY resize as applied", async () => {
     const pty = fakePty();
     const service = new IntegratedTerminalService({
-      loadNodePty: async () => ({ spawn: vi.fn(() => pty) as unknown as typeof import("node-pty").spawn }),
+      loadNodePty: async () => ({
+        spawn: vi.fn(() => pty) as unknown as typeof import("node-pty").spawn,
+      }),
     });
-    const session = await service.createOrAttach({ threadKey: "codex:resize", cwd: os.tmpdir(), cols: 80, rows: 24 }, fakeWebContents());
+    const session = await service.createOrAttach(
+      {
+        threadKey: "codex:resize",
+        cwd: os.tmpdir(),
+        cols: 80,
+        rows: 24,
+      },
+      fakeWebContents(),
+    );
     const request = { sessionId: session.sessionId, cols: 100, rows: 30 };
-    vi.mocked(pty.resize).mockImplementationOnce(() => { throw new Error("Resize failed"); });
+    vi.mocked(pty.resize).mockImplementationOnce(() => {
+      throw new Error("Resize failed");
+    });
     expect(() => service.resize(request)).toThrow("Resize failed");
     service.resize(request);
     service.resize(request);

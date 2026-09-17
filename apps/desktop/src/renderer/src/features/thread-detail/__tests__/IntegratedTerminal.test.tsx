@@ -415,15 +415,25 @@ describe("IntegratedTerminal", () => {
 
   it("coalesces terminal fitting outside observer delivery", async () => {
     const api = terminalApiStub();
-    render(<IntegratedTerminal desktopApi={api} threadKey="codex:resize" height={260}
-      onClose={() => undefined} onExit={() => undefined} />);
+    render(
+      <IntegratedTerminal
+        desktopApi={api}
+        threadKey="codex:resize"
+        height={260}
+        onClose={() => undefined}
+        onExit={() => undefined}
+      />,
+    );
     await waitFor(() => expect(api.resizeIntegratedTerminal).toHaveBeenCalled());
     const frames = mockAnimationFrames();
     const observer = MockResizeObserver.instances[0]!;
     xtermState.fit.mockClear();
     vi.mocked(api.resizeIntegratedTerminal!).mockClear();
 
-    act(() => { observer.callback(); observer.callback(); });
+    act(() => {
+      observer.callback();
+      observer.callback();
+    });
     expect(xtermState.fit).not.toHaveBeenCalled();
     expect(api.resizeIntegratedTerminal).not.toHaveBeenCalled();
     act(() => frames.flush());
@@ -435,15 +445,29 @@ describe("IntegratedTerminal", () => {
     // the one the shared PTY owner needs.
     xtermState.instances[0]!.cols = 101;
     xtermState.instances[0]!.rows = 25;
-    act(() => { observer.callback(); observer.callback(); });
+    act(() => {
+      observer.callback();
+      observer.callback();
+    });
     act(() => frames.flush());
-    expect(api.resizeIntegratedTerminal).toHaveBeenCalledExactlyOnceWith({ sessionId: "session-1", cols: 101, rows: 25 });
+    expect(api.resizeIntegratedTerminal).toHaveBeenCalledExactlyOnceWith({
+      sessionId: "session-1",
+      cols: 101,
+      rows: 25,
+    });
   });
 
   it("cancels a queued fit when the terminal unmounts", async () => {
     const api = terminalApiStub();
-    const { unmount } = render(<IntegratedTerminal desktopApi={api} threadKey="codex:resize" height={260}
-      onClose={() => undefined} onExit={() => undefined} />);
+    const { unmount } = render(
+      <IntegratedTerminal
+        desktopApi={api}
+        threadKey="codex:resize"
+        height={260}
+        onClose={() => undefined}
+        onExit={() => undefined}
+      />,
+    );
     await waitFor(() => expect(api.resizeIntegratedTerminal).toHaveBeenCalled());
     const frames = mockAnimationFrames();
     const observer = MockResizeObserver.instances[0]!;
@@ -454,15 +478,26 @@ describe("IntegratedTerminal", () => {
     unmount();
     expect(frames.pending.size).toBe(0);
     // A delivered callback retained by the browser must not revive work.
-    act(() => { observer.callback(); frames.flush(); });
+    act(() => {
+      observer.callback();
+      frames.flush();
+    });
     expect(xtermState.fit).not.toHaveBeenCalled();
     expect(api.resizeIntegratedTerminal).not.toHaveBeenCalled();
   });
 
   it("skips a queued fit while hidden and fits the current grid when shown", async () => {
     const api = terminalApiStub();
-    const view = (visible: boolean) => <IntegratedTerminal desktopApi={api} threadKey="codex:resize" height={260}
-      visible={visible} onClose={() => undefined} onExit={() => undefined} />;
+    const view = (visible: boolean) => (
+      <IntegratedTerminal
+        desktopApi={api}
+        threadKey="codex:resize"
+        height={260}
+        visible={visible}
+        onClose={() => undefined}
+        onExit={() => undefined}
+      />
+    );
     const { rerender } = render(view(true));
     await waitFor(() => expect(api.resizeIntegratedTerminal).toHaveBeenCalled());
     const frames = mockAnimationFrames();
@@ -478,7 +513,11 @@ describe("IntegratedTerminal", () => {
     rerender(view(true));
     act(() => frames.flush());
     expect(xtermState.fit).toHaveBeenCalledTimes(1);
-    expect(api.resizeIntegratedTerminal).toHaveBeenCalledExactlyOnceWith({ sessionId: "session-1", cols: 80, rows: 30 });
+    expect(api.resizeIntegratedTerminal).toHaveBeenCalledExactlyOnceWith({
+      sessionId: "session-1",
+      cols: 80,
+      rows: 30,
+    });
   });
 });
 
@@ -489,12 +528,17 @@ function mockAnimationFrames() {
     pending.set(++nextId, callback);
     return nextId;
   });
-  vi.spyOn(window, "cancelAnimationFrame").mockImplementation((id) => { pending.delete(id); });
-  return { pending, flush: () => {
-    const callbacks = [...pending.values()];
-    pending.clear();
-    for (const callback of callbacks) callback(0);
-  } };
+  vi.spyOn(window, "cancelAnimationFrame").mockImplementation((id) => {
+    pending.delete(id);
+  });
+  return {
+    pending,
+    flush: () => {
+      const callbacks = [...pending.values()];
+      pending.clear();
+      for (const callback of callbacks) callback(0);
+    },
+  };
 }
 
 function terminalApiStub(): DesktopApi {
