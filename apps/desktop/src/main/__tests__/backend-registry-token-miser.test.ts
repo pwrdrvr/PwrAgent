@@ -46,6 +46,26 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
     rmSync(directory, { force: true, recursive: true });
   });
 
+  it("releases previous originals on turn start, while completion leaves them readable", async () => {
+    const tokenMiserStore = new TokenMiserStore(path.join(directory, "token-miser-objects"));
+    const entry = await tokenMiserStore.store({
+      ...metadata(randomUUID(), "helper-lifetime"), output: "fixture original",
+    });
+    Object.assign(registry, { tokenMiserStore });
+    const emit = (registry as unknown as { emit(event: AgentEvent): Promise<void> }).emit.bind(registry);
+    const lifecycle = (method: "turn/started" | "turn/completed", turnId: string): AgentEvent => ({
+      backend: "codex",
+      notification: method === "turn/started"
+        ? { method, params: { threadId: entry.threadId, turn: { id: turnId, status: "inProgress" } } }
+        : { method, params: { threadId: entry.threadId, turnId, turn: { id: turnId, status: "completed", output: [] } } },
+    });
+    await emit(lifecycle("turn/started", entry.turnId));
+    await emit(lifecycle("turn/completed", entry.turnId));
+    expect((await tokenMiserStore.readAll({ objectId: entry.objectId, threadId: entry.threadId }))?.text).toBe("fixture original");
+    await emit(lifecycle("turn/started", "next-turn"));
+    expect(await tokenMiserStore.readAll({ objectId: entry.objectId, threadId: entry.threadId })).toBeUndefined();
+  });
+
   it.each([true, false])("migrates history before reconciliation and accounting reads (enabled=%s)", async (enabled) => {
     const root = path.join(directory, "legacy-objects");
     await fs.mkdir(root);

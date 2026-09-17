@@ -2405,7 +2405,7 @@ const RESULT_FILTERS: Array<{
   { key: "direct", label: "Direct" },
 ];
 
-function TokenMiserOriginalAvailability(props: { expiresAt?: number }) {
+function TokenMiserOriginalAvailability(props: { available?: boolean; expiresAt?: number }) {
   const [now, setNow] = useState(Date.now);
   useEffect(() => {
     const current = Date.now();
@@ -2418,7 +2418,9 @@ function TokenMiserOriginalAvailability(props: { expiresAt?: number }) {
 
   return (
     <p>
-      {props.expiresAt && props.expiresAt > now
+      {props.available === true
+        ? "Original output was available at the last refresh. It is retained until the next turn starts, unless evicted for memory pressure."
+        : props.available === undefined && props.expiresAt && props.expiresAt > now
         ? `Original output is temporary and expires by ${new Date(props.expiresAt).toLocaleTimeString()}. It may become unavailable earlier.`
         : "Original output is expired or unavailable."}
       {" "}Costs and tokens are saved. Originals are unavailable after archive or restart.
@@ -2526,6 +2528,7 @@ function TokenMiserResultList(props: {
                       {entry.interception.disposition === "passed_through" ? "Output passed through." : "Output summarized."}
                     </p>
                     <TokenMiserOriginalAvailability
+                      available={entry.interception.originalOutputAvailable}
                       expiresAt={entry.interception.originalOutputAvailableUntil}
                     />
                   </div>

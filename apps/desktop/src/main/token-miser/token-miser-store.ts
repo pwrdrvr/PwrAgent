@@ -145,7 +145,7 @@ export type TokenMiserUsageSummary = {
 export type TokenMiserThreadUsageSummary = TokenMiserUsageSummary & {
   interceptions: Array<{
     objectId: string;
-    originalOutputAvailableUntil?: number;
+    originalOutputAvailable: boolean;
     turnId: string;
     toolUseId: string;
     toolName: string;
@@ -256,9 +256,11 @@ export class TokenMiserStore {
   private readonly outputs = new TokenMiserOutputCache();
   private readonly updateLocks = new Map<string, Promise<void>>();
   private readonly pendingRetrievalDeliveries =
-    new Map<string, { createdAt: number; threadId: string }>();
+    new Map<string, { createdAt: number; threadId: string; turnId: string }>();
   private readonly replayUpdates = new Map<string, PendingReplayUpdate>();
   private readonly outputGenerations = new Map<string, string>();
+  private readonly currentTurns = new Map<string, string>();
+  private readonly outputTurns = new Map<string, { threadId: string; turnId: string }>();
   private readonly owners = new Map<string, string>();
   private readonly metadataIndexes = new Map<string, TokenMiserRecordIndex<TokenMiserObjectMetadata>>();
   private readonly observationIndexes = new Map<string, TokenMiserRecordIndex<TokenMiserCodeModeObservation>>();
@@ -267,6 +269,26 @@ export class TokenMiserStore {
     private readonly rootDir: string,
     private readonly options: TokenMiserStoreOptions = {},
   ) {}
+
+  /** Release only this thread's previous originals; duplicate starts are harmless. */
+  startTurn(threadId: string, turnId: string): void {
+    if (this.currentTurns.get(threadId) === turnId) return;
+    this.currentTurns.set(threadId, turnId);
+    for (const [id, owner] of this.outputTurns) {
+      if (owner.threadId !== threadId || owner.turnId === turnId) continue;
+      this.outputs.remove(id);
+      this.outputGenerations.delete(id);
+      this.outputTurns.delete(id);
+    }
+    for (const [id, pending] of this.pendingRetrievalDeliveries) {
+      if (pending.threadId === threadId && pending.turnId !== turnId) this.abandonRetrievalDelivery(id);
+    }
+  }
+
+  private isCurrentTurn(threadId: string, turnId: string): boolean {
+    const current = this.currentTurns.get(threadId);
+    return current === undefined || current === turnId;
+  }
 
   private threadKey(threadId: string): string {
     return createHash("sha256").update(threadId).digest("hex");
@@ -371,12 +393,16 @@ export class TokenMiserStore {
         : {}),
     };
     if (this.owners.has(objectId)) throw new Error("Token Miser object id already reserved.");
+    if (!this.isCurrentTurn(params.threadId, params.turnId)) {
+      throw new Error("Token Miser original output expired or unavailable.");
+    }
     // Reserve before returning a replacement. The closure retains no raw text.
     const retained = params.disposition === "passed_through"
-      || this.outputs.put(objectId, params.output);
+      || this.outputs.put(objectId, params.output, "turn");
     if (!retained) throw new Error("Token Miser temporary output capacity exceeded.");
     this.owners.set(objectId, this.threadKey(params.threadId));
     this.outputGenerations.set(objectId, generation);
+    this.outputTurns.set(objectId, { threadId: params.threadId, turnId: params.turnId });
     let persisted = false;
     let committed = false;
     let discarded = false;
@@ -387,7 +413,8 @@ export class TokenMiserStore {
     };
     const persist = async (): Promise<void> => {
       await serialize(async () => {
-        if (!await this.isCurrentRetention(metadata.threadId, generation)) {
+        if (!await this.isCurrentRetention(metadata.threadId, generation)
+          || !this.isCurrentTurn(metadata.threadId, metadata.turnId)) {
           this.outputs.remove(objectId);
           throw new Error("Token Miser original output expired or unavailable.");
         }
@@ -408,7 +435,8 @@ export class TokenMiserStore {
           if (committed || discarded) {
             return;
           }
-          if (!await this.isCurrentRetention(metadata.threadId, generation)) {
+          if (!await this.isCurrentRetention(metadata.threadId, generation)
+            || !this.isCurrentTurn(metadata.threadId, metadata.turnId)) {
             this.outputs.remove(objectId);
             throw new Error("Token Miser original output expired or unavailable.");
           }
@@ -598,6 +626,8 @@ export class TokenMiserStore {
       !metadata
       || metadata.threadId !== params.threadId
       || metadata.disposition === "passed_through"
+      || this.outputs.get(params.objectId) === undefined
+      || this.outputGenerations.get(params.objectId) !== generation
     ) {
       return undefined;
     }
@@ -620,7 +650,7 @@ export class TokenMiserStore {
       visibleTextOffset: begin.length + 1,
       wrappedText,
     }))) return undefined;
-    this.pendingRetrievalDeliveries.set(deliveryId, { createdAt: now, threadId: params.threadId });
+    this.pendingRetrievalDeliveries.set(deliveryId, { createdAt: now, threadId: params.threadId, turnId: metadata.turnId });
     return { deliveryId, text: wrappedText };
   }
 
@@ -800,7 +830,7 @@ export class TokenMiserStore {
     // Accounting and savings can share the same current metadata snapshot.
     const metadata = (metadataSnapshot ?? await this.listMetadata(threadId))
       .filter((entry) => entry.threadId === threadId);
-    const generation = metadata.some((entry) => this.outputs.expiresAt(entry.objectId) !== undefined)
+    const generation = metadata.some((entry) => this.outputs.get(entry.objectId) !== undefined)
       ? await this.readRetentionGeneration(threadId)
       : undefined;
     const archived = await this.isArchived(threadId);
@@ -839,9 +869,9 @@ export class TokenMiserStore {
         const retrievedTokens = estimateTokenCount(entry.retrievedCharacters);
         return {
           objectId: entry.objectId,
-          originalOutputAvailableUntil: archived || this.outputGenerations.get(entry.objectId) !== generation
-            ? undefined
-            : this.outputs.expiresAt(entry.objectId),
+          originalOutputAvailable: !archived
+            && this.outputGenerations.get(entry.objectId) === generation
+            && this.outputs.get(entry.objectId) !== undefined,
           turnId: entry.turnId,
           toolUseId: entry.toolUseId,
           toolName: entry.toolName,
@@ -993,7 +1023,10 @@ export class TokenMiserStore {
     const key = this.threadKey(threadId);
     this.archivedThreads.add(threadId);
     for (const [objectId, owner] of this.owners) {
-      if (owner === key) this.outputs.remove(objectId);
+      if (owner === key) {
+        this.outputs.remove(objectId);
+        this.outputTurns.delete(objectId);
+      }
     }
     for (const [id, pending] of this.pendingRetrievalDeliveries) {
       if (pending.threadId === threadId) this.abandonRetrievalDelivery(id);
@@ -1195,6 +1228,7 @@ export class TokenMiserStore {
   }
 
   private async remove(objectId: string): Promise<void> {
+    this.outputTurns.delete(objectId);
     this.outputs.remove(objectId);
     await Promise.all([
       fs.rm(this.outputPath(objectId), { force: true }),

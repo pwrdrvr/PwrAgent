@@ -36,17 +36,45 @@ it("never writes raw output, summaries, scripts or previews, including pass-thro
     expect(writes.mock.calls.some((call) => String(call[0]).includes(".txt"))).toBe(false);
   } finally { writes.mockRestore(); }
 });
-it("expires originals after five minutes and cannot retrieve them in a fresh store", async () => {
+it("retains originals beyond five minutes until the next turn, but not across restart", async () => {
   const { store, root } = await fixture();
-  const entry = await store.store(params);
-  expect(await store.readAll({ objectId: entry.objectId, threadId: "owner" })).toBeDefined();
-  expect((await store.summarizeThreadUsage("owner")).interceptions[0]?.originalOutputAvailableUntil).toBeGreaterThan(Date.now());
-  expect(await new TokenMiserStore(root).readAll({ objectId: entry.objectId, threadId: "owner" })).toBeUndefined();
   vi.useFakeTimers();
-  vi.setSystemTime(Date.now() + 5 * 60_000 + 1);
+  const entry = await store.store(params);
+  vi.advanceTimersByTime(30 * 60_000);
+  expect((await store.readAll({ objectId: entry.objectId, threadId: "owner" }))?.text).toBe(params.output);
+  expect((await store.summarizeThreadUsage("owner")).interceptions[0]?.originalOutputAvailable).toBe(true);
+  expect(await new TokenMiserStore(root).readAll({ objectId: entry.objectId, threadId: "owner" })).toBeUndefined();
+  store.startTurn("owner", "next-turn");
   expect(await store.readAll({ objectId: entry.objectId, threadId: "owner" })).toBeUndefined();
-  expect((await store.summarizeThreadUsage("owner")).interceptions[0]?.originalOutputAvailableUntil).toBeUndefined();
+  expect((await store.summarizeThreadUsage("owner")).interceptions[0]?.originalOutputAvailable).toBe(false);
   expect((await store.listMetadata("owner"))[0]?.baselineParentTokens).toBe(entry.baselineParentTokens);
+});
+it("invalidates old reservations and deliveries at the next turn without filesystem I/O", async () => {
+  const { store } = await fixture();
+  store.startTurn("owner", "turn");
+  const accepted = await store.store(params);
+  const other = await store.store({ ...params, threadId: "other" });
+  const pending = await store.stage(params);
+  await pending.persist();
+  const delivery = await store.prepareRetrievalDelivery({ objectId: accepted.objectId, threadId: "owner", visibleText: params.output });
+  const read = vi.spyOn(fs, "readFile");
+  const list = vi.spyOn(fs, "readdir");
+  const writes = vi.spyOn(fs, "writeFile");
+  try {
+    store.startTurn("owner", "next-turn");
+    expect(read).not.toHaveBeenCalled();
+    expect(list).not.toHaveBeenCalled();
+    expect(writes).not.toHaveBeenCalled();
+  } finally { read.mockRestore(); list.mockRestore(); writes.mockRestore(); }
+  expect(await store.readAll({ objectId: accepted.objectId, threadId: "owner" })).toBeUndefined();
+  expect(await store.readAll({ objectId: other.objectId, threadId: "other" })).toBeDefined();
+  expect(await store.confirmModelVisibleRetrievals({ threadId: "owner", output: delivery!.text })).toBe(0);
+  await expect(pending.persist()).rejects.toThrow("unavailable");
+  await expect(pending.commit()).rejects.toThrow("unavailable");
+  await expect(store.stage(params)).rejects.toThrow("unavailable");
+  const fresh = await store.store({ ...params, turnId: "next-turn" });
+  store.startTurn("owner", "next-turn");
+  expect(await store.readAll({ objectId: fresh.objectId, threadId: "owner" })).toBeDefined();
 });
 it("retains accepted accounting across archive but rejects pending and late originals", async () => {
   const { store, root } = await fixture();
@@ -229,8 +257,8 @@ it("shares the payload byte budget across cache instances and bounds individual 
   const second = new TokenMiserOutputCache();
   expect(first.put("oversized", "x".repeat(TOKEN_MISER_OUTPUT_ENTRY_BYTES))).toBe(false);
   const payload = "x".repeat(1024 * 1024);
-  expect(first.put("oldest", payload)).toBe(true);
-  for (let index = 0; index < 12; index += 1) expect(second.put(String(index), payload)).toBe(true);
+  expect(first.put("oldest", payload, "turn")).toBe(true);
+  for (let index = 0; index < 12; index += 1) expect(second.put(String(index), payload, "turn")).toBe(true);
   expect(first.get("oldest")).toBeUndefined();
   expect(second.get("11")).toBe(payload);
   for (let index = 0; index < 12; index += 1) second.remove(String(index));
@@ -261,7 +289,7 @@ it("restores new reductions without reviving originals, deliveries, or staged ca
   await archiveOwner.archiveThread("owner");
   await archiveOwner.restoreThread("owner");
   expect(await store.readAll({ objectId: accepted.objectId, threadId: "owner" })).toBeUndefined();
-  expect((await store.summarizeThreadUsage("owner")).interceptions[0]?.originalOutputAvailableUntil).toBeUndefined();
+  expect((await store.summarizeThreadUsage("owner")).interceptions[0]?.originalOutputAvailable).toBe(false);
   expect(await store.confirmModelVisibleRetrievals({ threadId: "owner", output: delivery!.text })).toBe(0);
   await expect(staged.persist()).rejects.toThrow("unavailable");
   await expect(staged.commit()).rejects.toThrow("unavailable");

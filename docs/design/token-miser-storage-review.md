@@ -248,3 +248,25 @@ separately. The desktop still clears archive bookkeeping, restores worktrees,
 invalidates cached state, and publishes notifications after Codex succeeds.
 A failed retention restore keeps originals unavailable through the durable
 archive marker and a local guard; successful restoration can clear that guard.
+
+## Turn-scoped original retention (September 17, 2026)
+
+The five-minute lifetime above could expire originals while the agent was still
+working in the same turn. Originals now remain in process memory until the next
+turn starts in their thread. Completion, failure, and cancellation do not clear
+them: the idle interval before the next turn remains available for retrieval.
+The shared 32 MiB charged-memory budget and 4 MiB entry ceiling still apply;
+oldest entries can be evicted earlier. Archive and process restart still make
+originals unavailable. Nested capture and delivery scratch entries retain their
+short TTL; only original-output reservations use the turn lifetime.
+
+Turn-start cleanup uses in-memory ownership and does not scan accounting files
+or consult the settings cache. It rejects previous-turn staged callbacks and
+clears previous-turn retrieval deliveries. Duplicate starts for the current
+turn preserve its originals. There are no new filesystem or SQLite writes
+(incremental write cost: 0 MB/day). Durable accounting files remain unchanged.
+
+The explorer reports availability as a snapshot, with the next-turn and
+memory-pressure limits, rather than inventing a clock deadline. Legacy peers'
+five-minute deadlines remain supported. This does not add original or summary
+inspection to the explorer.

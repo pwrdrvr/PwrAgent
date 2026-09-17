@@ -38683,6 +38683,15 @@ export class DesktopBackendRegistry {
   }
 
   private emit(event: AgentEvent): Promise<void> {
+    if (event.backend === "codex" && event.notification.method === "turn/started") {
+      const notification = event.notification as {
+        params: { threadId: string; turnId?: string; turn: { id: string } };
+      };
+      this.tokenMiserStore?.startTurn(
+        notification.params.threadId,
+        turnIdFromStartedNotification(notification),
+      );
+    }
     // Capture ownership before terminal handling removes the monitor record.
     // Keep protocol IDs intact for accounting, recovery, and lifecycle consumers.
     if (

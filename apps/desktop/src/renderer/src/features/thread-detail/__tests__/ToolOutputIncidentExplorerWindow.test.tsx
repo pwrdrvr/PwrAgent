@@ -485,7 +485,7 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     }
   });
 
-  it("shows safe decision notes and unavailable originals while filtering outcomes", async () => {
+  it.each([false, true])("shows decision notes and original availability while filtering outcomes (available=%s)", async (available) => {
     const response = buildResponse();
     const gate = (
       objectId: string,
@@ -496,6 +496,7 @@ describe("ToolOutputIncidentExplorerWindow", () => {
       turnId: "turn-1",
       toolUseId: `item-${objectId}`,
       toolName: `cmd-${objectId}`,
+      originalOutputAvailable: available,
       createdAt: 1_800_000_000_000,
       originalCharacters: 40_000,
       baselineParentTokens: 10_000,
@@ -535,7 +536,9 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     expect(screen.queryByText("Traced the handler for win-1.")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /win-1/ }));
     expect(screen.getByText("Output summarized.")).toBeInTheDocument();
-    expect(screen.getByText(/Original output is expired or unavailable/)).toBeInTheDocument();
+    expect(screen.getByText(available
+      ? /retained until the next turn starts/
+      : /Original output is expired or unavailable/)).toBeInTheDocument();
     expect(screen.queryByText("Traced the handler for win-1.")).not.toBeInTheDocument();
     expect(screen.queryByText(/Inspect notifyPending for win-1/)).not.toBeInTheDocument();
 

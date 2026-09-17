@@ -22,6 +22,36 @@ afterEach(async () => {
 });
 
 describe("Token Miser agent tools", () => {
+  it("lets an agent retrieve a long-running turn's original until the next turn starts", async () => {
+    const store = await createStore();
+    const router = new AgentToolRouter(buildTokenMiserToolDefinitions(store));
+    vi.useFakeTimers();
+    try {
+      store.startTurn("thread-1", "turn-1");
+      const entry = await store.store({
+        threadId: "thread-1", turnId: "turn-1", toolUseId: "cell-1", toolName: "Code Mode",
+        output: "ORIGINAL_AFTER_LONG_REASONING", replacementCharacters: 10,
+        summary: { summary: "A result", usefulDetails: [] },
+      });
+      vi.advanceTimersByTime(30 * 60_000);
+      const read = () => router.handleDynamicToolCall({
+        backend: "codex",
+        call: {
+          threadId: "thread-1", turnId: "turn-1", callId: "read-original",
+          namespace: "pwragent", tool: "read_all_token_miser_output",
+          arguments: { objectId: entry.objectId },
+        },
+      });
+      const response = await read();
+      expect(response.success).toBe(true);
+      expect(response.contentItems?.[0]).toMatchObject({
+        type: "inputText", text: expect.stringContaining("ORIGINAL_AFTER_LONG_REASONING"),
+      });
+      store.startTurn("thread-1", "turn-2");
+      expect((await read()).success).toBe(false);
+    } finally { vi.useRealTimers(); }
+  });
+
   it("keeps complete reads backward compatible for minified output", async () => {
     const store = await createStore();
     const metadata = await store.store({
