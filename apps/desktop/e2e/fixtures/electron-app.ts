@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readdir, readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
@@ -51,6 +51,7 @@ import {
   type ElectronCloseExecution,
   type ElectronShutdownSummary,
 } from "./electron-shutdown-policy";
+import { removeTempRoot } from "./temp-root-cleanup";
 import { tolerateTransientRpcFailure } from "./transient-rpc-poll";
 
 const fixtureDir = path.dirname(fileURLToPath(import.meta.url));
@@ -105,9 +106,10 @@ const ELECTRON_FORCE_EXIT_TIMEOUT_MS = 1_000;
  * room for every step while still failing inside one test.
  *
  * Derivation, worst case: 1s evaluate + 6s graceful close + 1s force-kill +
- * 1s post-kill close + 5s leftover-profile wait + `rm`. Raised 15s → 20s when
- * the graceful close went 1s → 6s; both halves of that trade have to move
- * together or the ceiling starts cutting off the wait it is meant to contain.
+ * 1s post-kill close + 5s leftover-profile wait + up to 1.8s `rm` (its retry
+ * budget, see `temp-root-cleanup.ts`). Raised 15s → 20s when the graceful
+ * close went 1s → 6s; all of that trade has to move together or the ceiling
+ * starts cutting off the wait it is meant to contain.
  */
 const ELECTRON_TEARDOWN_TIMEOUT_MS = 20_000;
 /**
@@ -615,7 +617,10 @@ async function finishElectronLaunch(args: {
         await killSpawnedProfileProcessesUnder(homeRoot);
       },
       removeHomeRoot: async () => {
-        await rm(homeRoot, { recursive: true, force: true });
+        // Retries past Windows' asynchronous handle release; see
+        // `temp-root-cleanup.ts` for why that is not a substitute for the
+        // ownership work above.
+        await removeTempRoot(homeRoot);
       },
     });
   }

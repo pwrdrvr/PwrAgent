@@ -1,7 +1,8 @@
 import { execFileSync } from "node:child_process";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { removeTempRoot } from "./temp-root-cleanup";
 
 function createReplayFixture(params: {
   fixturePath: string;
@@ -136,7 +137,7 @@ export async function createLocalHandoffFixture(): Promise<{
 
   return {
     cleanup: async () => {
-      await rm(rootDir, { recursive: true, force: true });
+      await removeTempRoot(rootDir);
     },
     fixturePath,
     repoDir,
@@ -199,7 +200,7 @@ export async function createWorktreeHandoffFixture(): Promise<{
 
   return {
     cleanup: async () => {
-      await rm(rootDir, { recursive: true, force: true });
+      await removeTempRoot(rootDir);
     },
     fixturePath,
     repoDir,
