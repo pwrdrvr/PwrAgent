@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Summarize GitHub Release desktop asset download stats."""
+"""Summarize GitHub Release desktop asset download stats for PwrAgent."""
 
 from __future__ import annotations
 
@@ -14,7 +14,11 @@ from typing import Any
 
 DEFAULT_REPO = "pwrdrvr/PwrAgent"
 STABLE_SETUP_RE = re.compile(
-    r"^Pwr[A-Za-z0-9]+(?:\.Setup|-windows-(?:x64|arm64|ia32)-setup)\.exe$",
+    r"^PwrAgent(?:\.Setup|-windows-(?:x64|arm64|ia32)-setup)\.exe$",
+    re.IGNORECASE,
+)
+VERSIONED_SETUP_RE = re.compile(
+    r"^PwrAgent-.+-windows-(?:x64|arm64|ia32)-setup\.exe$",
     re.IGNORECASE,
 )
 
@@ -113,11 +117,11 @@ def classify_asset(name: str) -> str | None:
     if lowered.endswith(".zip"):
         return "zip"
     if lowered.endswith(".dmg"):
-        return "stable_dmg" if re.fullmatch(r"Pwr[A-Za-z0-9]+\.dmg", name) else "versioned_dmg"
-    if lowered.endswith(".exe") and (
-        "-setup" in lowered or lowered.endswith(".setup.exe")
-    ):
-        return "stable_setup" if STABLE_SETUP_RE.fullmatch(name) else "versioned_setup"
+        return "stable_dmg" if name == "PwrAgent.dmg" else "versioned_dmg"
+    if STABLE_SETUP_RE.fullmatch(name):
+        return "stable_setup"
+    if VERSIONED_SETUP_RE.fullmatch(name):
+        return "versioned_setup"
     return None
 
 
@@ -236,7 +240,7 @@ def print_markdown(repo: str, rows: list[dict[str, Any]], selected_count: int) -
             ["Asset group", "Downloads", "Bytes", "GiB"],
             [
                 ["ZIP updater assets", zip_dl, zip_bytes, zip_gib],
-                ["Stable DMG alias", stable_dl, stable_bytes, stable_gib],
+                ["Stable PwrAgent.dmg alias", stable_dl, stable_bytes, stable_gib],
                 ["Versioned DMG assets", versioned_dl, versioned_bytes, versioned_gib],
                 [
                     "All DMG assets",
@@ -245,19 +249,19 @@ def print_markdown(repo: str, rows: list[dict[str, Any]], selected_count: int) -
                     round(stable_gib + versioned_gib, 2),
                 ],
                 [
-                    "Stable Setup.exe alias",
+                    "Stable PwrAgent Setup.exe alias",
                     stable_setup_dl,
                     stable_setup_bytes,
                     stable_setup_gib,
                 ],
                 [
-                    "Versioned Setup.exe assets",
+                    "Versioned PwrAgent Setup.exe assets",
                     versioned_setup_dl,
                     versioned_setup_bytes,
                     versioned_setup_gib,
                 ],
                 [
-                    "All Setup.exe assets",
+                    "All PwrAgent Setup.exe assets",
                     stable_setup_dl + versioned_setup_dl,
                     stable_setup_bytes + versioned_setup_bytes,
                     round(stable_setup_gib + versioned_setup_gib, 2),

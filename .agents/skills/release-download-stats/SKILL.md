@@ -1,14 +1,14 @@
 ---
 name: release-download-stats
-description: Check and summarize PwrAgent or PwrSnap GitHub Release asset download statistics. Use when the user asks for download counts, bytes served, DMG, ZIP, Windows Setup.exe, or updater traffic, per-release stats, or whether GitHub Releases show any traffic.
+description: Check and summarize PwrAgent GitHub Release asset download statistics. Use when the user asks for download counts, bytes served, DMG, ZIP, Windows Setup.exe, or updater traffic, per-release stats, or whether GitHub Releases show any traffic.
 ---
 
 # Release Download Stats
 
-Use this skill to inspect GitHub Release asset metadata for `pwrdrvr/PwrAgent`
-or `pwrdrvr/PwrSnap`. It reports cumulative GitHub `download_count` values
-for release assets; it does not identify users and it does not count
-update-check polls.
+Use this skill to inspect GitHub Release asset metadata for
+`pwrdrvr/PwrAgent`. It reports cumulative GitHub `download_count` values for
+release assets; it does not identify users and it does not count update-check
+polls.
 
 ## Workflow
 
@@ -16,12 +16,6 @@ update-check polls.
 
    ```bash
    python3 .agents/skills/release-download-stats/scripts/release_download_stats.py
-   ```
-
-   For PwrSnap, select its repository:
-
-   ```bash
-   python3 .agents/skills/release-download-stats/scripts/release_download_stats.py --repo pwrdrvr/PwrSnap
    ```
 
 2. For specific releases, pass exact tags or PwrAgent shorthand:
@@ -38,9 +32,9 @@ update-check polls.
 
 4. Summarize the results in the response. Prefer:
    - ZIP updater downloads separately from DMG downloads.
-   - A stable DMG alias such as `PwrAgent.dmg` or `PwrSnap.dmg` separately from versioned DMG assets.
+   - `PwrAgent.dmg` stable alias separately from versioned DMG assets.
    - Total DMG as `stable alias + versioned DMG` only when useful.
-   - A stable Windows setup alias such as `PwrSnap.Setup.exe` or `PwrAgent.Setup.exe` separately from versioned `*-windows-*-setup.exe` assets.
+   - `PwrAgent.Setup.exe` and unversioned `PwrAgent-windows-*-setup.exe` aliases separately from versioned `PwrAgent-*-windows-*-setup.exe` assets.
    - Total Windows setup traffic as `stable alias + versioned setup` only when useful.
    - GiB totals for approximate transfer volume.
 
