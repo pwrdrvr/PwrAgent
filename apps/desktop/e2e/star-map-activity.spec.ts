@@ -3,6 +3,10 @@ import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
 import { launchElectronApp } from "./fixtures/electron-app";
 import { openStarMapWindow } from "./fixtures/star-map-window";
+import {
+  retryTransientRpcCall,
+  tolerateTransientRpcFailure,
+} from "./fixtures/transient-rpc-poll";
 
 test("pauses map load demand when its renderer is blurred or its window is hidden", async () => {
   test.skip(Boolean(process.env.CI), "Requires an unlocked interactive desktop to restore focus after hide/show; verified on the local macOS host.");
@@ -11,15 +15,23 @@ test("pauses map load demand when its renderer is blurred or its window is hidde
   try {
     // Count only the map's explicit load requests, separately from navigation
     // and federation heartbeats. Values and threads are wholly contrived.
-    await app.electronApp.evaluate(({ ipcMain }) => {
-      const state = globalThis as typeof globalThis & { mapLoadReads: number };
-      state.mapLoadReads = 0;
-      ipcMain.removeHandler("federation:read-instance-load");
-      ipcMain.handle("federation:read-instance-load", () => {
-        state.mapLoadReads++;
-        return { load: { loadAvg1: 1, loadAvg5: 1, loadAvg15: 1, availableMemoryBytes: 100, sampledAt: Date.now() } };
-      });
-    });
+    //
+    // Safe to re-issue only BEFORE the map opens. Unlike a bare
+    // `removeHandler`/`handle` pair this body also zeroes the counter, so a
+    // retry that landed after the app had served reads would discard them and
+    // the `toBe(1)` / `toBe(2)` assertions below would read low. Keep this
+    // above `openStarMapWindow`.
+    await retryTransientRpcCall(() =>
+      app.electronApp.evaluate(({ ipcMain }) => {
+        const state = globalThis as typeof globalThis & { mapLoadReads: number };
+        state.mapLoadReads = 0;
+        ipcMain.removeHandler("federation:read-instance-load");
+        ipcMain.handle("federation:read-instance-load", () => {
+          state.mapLoadReads++;
+          return { load: { loadAvg1: 1, loadAvg5: 1, loadAvg15: 1, availableMemoryBytes: 100, sampledAt: Date.now() } };
+        });
+      }),
+    );
     const map = await openStarMapWindow(app);
     const cdp = await map.context().newCDPSession(map);
     // Playwright emulates a focused page by default; this regression needs
@@ -62,8 +74,11 @@ test("pauses map load demand when its renderer is blurred or its window is hidde
     });
     // Electron can keep document.visibilityState visible when background
     // throttling is disabled; assert the OS window state directly.
-    await expect.poll(() => app.electronApp.evaluate(({ BrowserWindow }) =>
-      BrowserWindow.getAllWindows().find((win) => win.webContents.getURL().includes("#star-map"))!.isVisible())).toBe(false);
+    const mapHidden = tolerateTransientRpcFailure(() =>
+      app.electronApp.evaluate(({ BrowserWindow }) =>
+        BrowserWindow.getAllWindows().find((win) => win.webContents.getURL().includes("#star-map"))!.isVisible()));
+    await expect.poll(mapHidden.read).toBe(false)
+      .catch(mapHidden.rethrowWithLastFailure);
     expect(await map.evaluate(() => document.hasFocus())).toBe(false);
     await map.clock.fastForward(60_000);
     expect(await count()).toBe(1);

@@ -13,6 +13,7 @@ import { applyDesktopSettingsPatch } from "../src/main/settings/desktop-config";
 import { SqliteOverlayStore } from "../src/main/state/overlay-store-sqlite";
 import { StateDb } from "../src/main/state/state-db";
 import { launchElectronApp, rightClickThreadRow } from "./fixtures/electron-app";
+import { tolerateTransientRpcFailure } from "./fixtures/transient-rpc-poll";
 import {
   buildFakeAgentConfigToml,
   FEDERATION_CHILD_ENVIRONMENT_MARKER,
@@ -802,15 +803,16 @@ test.describe("federation remote window", () => {
       // renderer's static <title> used to clobber it back to the app
       // name, collapsing every window to one entry in the macOS Window
       // menu.
+      const peerTitled = tolerateTransientRpcFailure(async () =>
+        (
+          await electronApp.evaluate(({ BrowserWindow }) =>
+            BrowserWindow.getAllWindows().map((win) => win.getTitle()),
+          )
+        ).some((title) => /^PwrAgent - ./.test(title)));
       await expect
-        .poll(async () =>
-          (
-            await electronApp.evaluate(({ BrowserWindow }) =>
-              BrowserWindow.getAllWindows().map((win) => win.getTitle()),
-            )
-          ).some((title) => /^PwrAgent - ./.test(title)),
-        )
-        .toBe(true);
+        .poll(peerTitled.read)
+        .toBe(true)
+        .catch(peerTitled.rethrowWithLastFailure);
 
       // The peer's threads render; the local thread does not leak in.
       await expect(

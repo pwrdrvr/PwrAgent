@@ -27,6 +27,7 @@ import { expect, test } from "@playwright/test";
 import { recordDomTrajectory } from "./fixtures/dom-trajectory";
 import { launchElectronApp } from "./fixtures/electron-app";
 import { openStarMapWindow } from "./fixtures/star-map-window";
+import { retryTransientRpcCall } from "./fixtures/transient-rpc-poll";
 
 const specDir = path.dirname(fileURLToPath(import.meta.url));
 const THREAD_TITLE = "Star map attention thread";
@@ -47,22 +48,24 @@ test("keeps an open Star Map chat card mounted when federation health lands late
     // `star-map-activity.spec.ts` stubs its own load channel: the renderer
     // reads `health.instanceId` and `health.peers` and nothing else here,
     // and a synthetic answer is what makes the arrival time controllable.
-    await app.electronApp.evaluate(async ({ ipcMain }, delayMs) => {
-      const channel = "federation:get-health";
-      ipcMain.removeHandler(channel);
-      ipcMain.handle(channel, async () => {
-        await new Promise((resolve) => setTimeout(resolve, delayMs));
-        return {
-          health: {
-            enabled: true,
-            instanceId: "e2e-durable-instance",
-            peers: [],
-            role: "client",
-            status: "connecting",
-          },
-        };
-      });
-    }, HEALTH_DELAY_MS);
+    await retryTransientRpcCall(() =>
+      app.electronApp.evaluate(async ({ ipcMain }, delayMs) => {
+        const channel = "federation:get-health";
+        ipcMain.removeHandler(channel);
+        ipcMain.handle(channel, async () => {
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+          return {
+            health: {
+              enabled: true,
+              instanceId: "e2e-durable-instance",
+              peers: [],
+              role: "client",
+              status: "connecting",
+            },
+          };
+        });
+      }, HEALTH_DELAY_MS),
+    );
 
     const mapWindow = await openStarMapWindow(app);
     const trajectory = await recordDomTrajectory(mapWindow, {
