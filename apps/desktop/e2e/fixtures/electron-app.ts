@@ -615,7 +615,33 @@ async function finishElectronLaunch(args: {
         await killSpawnedProfileProcessesUnder(homeRoot);
       },
       removeHomeRoot: async () => {
-        await rm(homeRoot, { recursive: true, force: true });
+        // `maxRetries` is not a substitute for the ownership work above --
+        // that already ran. `closeApplication` completes a bounded graceful
+        // or forced close of the Playwright-owned tree, and
+        // `cleanupProfileProcesses` sweeps any detached profile child, so
+        // every process that held this root has been observed to exit before
+        // this line runs.
+        //
+        // What is left is the gap Windows leaves between that observed exit
+        // and the last handle actually being released -- plus Defender, which
+        // routinely opens a transient handle on a file that was just written.
+        // `state.db` and `state.db-shm` are the ones that lose, because they
+        // are the largest and most recently written files in the tree. No
+        // amount of process ownership makes that release synchronous, which
+        // is exactly the case Node added these options for: they retry only
+        // EBUSY / EMFILE / ENFILE / ENOTEMPTY / EPERM, so a tree that deletes
+        // cleanly pays nothing.
+        //
+        // Budget: linear backoff, 50ms longer each attempt, so 8 retries is
+        // 1.8s worst case. `ELECTRON_TEARDOWN_TIMEOUT_MS` is 20s against a
+        // ~14s worst-case close, so this fits the remaining headroom without
+        // moving any timeout.
+        await rm(homeRoot, {
+          force: true,
+          maxRetries: 8,
+          recursive: true,
+          retryDelay: 50,
+        });
       },
     });
   }
