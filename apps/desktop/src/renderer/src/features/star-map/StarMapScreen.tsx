@@ -2297,15 +2297,37 @@ export function StarMapScreen(props: StarMapScreenProps) {
 
   // Trackpad: two-finger drag pans, pinch (ctrl+wheel) zooms about the
   // pointer. Registered natively because the listener must not be passive.
-  // Sits below panZoomCanvas because the clamp needs the canvas size.
+  // Sits below panZoomCanvas because the clamp needs `canvasBoundsRef`.
   useEffect(() => {
     const element = viewportRef.current;
     if (!element) return;
     let wheelOwner: "canvas" | "embedded" | undefined;
     let wheelIdleTimer: number | undefined;
-    const bounds = {
-      canvas: { width: panZoomCanvas.width, height: panZoomCanvas.height },
-      viewport: { width: viewportSize.width, height: viewportSize.height },
+    /**
+     * Read at use, not captured, for the reason the pointer pan reads the
+     * same refs: a cloud arriving mid-gesture resizes the canvas, and
+     * clamping against the size the map had when this listener was
+     * registered would pull the view in against bounds that no longer
+     * exist. It also keeps those sizes OUT of the deps below — a relayout
+     * that re-registers this listener tears down the idle timer, which is
+     * the only thing that writes a pan to state.
+     */
+    const bounds = () => ({
+      canvas: canvasBoundsRef.current,
+      viewport: viewportSizeRef.current,
+    });
+    /**
+     * End the wheel sequence. A pan only paints, so this is where it
+     * becomes React state and a stored view; a pinch has already committed
+     * each frame and this persists where it landed.
+     */
+    const settleWheelGesture = () => {
+      const completedOwner = wheelOwner;
+      wheelOwner = undefined;
+      wheelIdleTimer = undefined;
+      if (completedOwner === "canvas" && operatorMovedViewRef.current) {
+        commitViewAndPersist(viewRef.current);
+      }
     };
     const onWheel = (event: WheelEvent) => {
       // Pinch (ctrl+wheel) is a map gesture wherever the pointer is; a
@@ -2321,14 +2343,10 @@ export function StarMapScreen(props: StarMapScreenProps) {
           : "embedded";
       }
       if (wheelIdleTimer !== undefined) window.clearTimeout(wheelIdleTimer);
-      wheelIdleTimer = window.setTimeout(() => {
-        const completedOwner = wheelOwner;
-        wheelOwner = undefined;
-        wheelIdleTimer = undefined;
-        if (completedOwner === "canvas" && operatorMovedViewRef.current) {
-          commitViewAndPersist(viewRef.current);
-        }
-      }, WHEEL_GESTURE_IDLE_MS);
+      wheelIdleTimer = window.setTimeout(
+        settleWheelGesture,
+        WHEEL_GESTURE_IDLE_MS,
+      );
       if (wheelOwner === "embedded") return;
       event.preventDefault();
       abortFlight();
@@ -2357,7 +2375,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
               x: pointerX - (pointerX - current.x) * ratio,
               y: pointerY - (pointerY - current.y) * ratio,
             },
-            ...bounds,
+            ...bounds(),
           }),
         );
         return;
@@ -2372,26 +2390,25 @@ export function StarMapScreen(props: StarMapScreenProps) {
             x: current.x - event.deltaX,
             y: current.y - event.deltaY,
           },
-          ...bounds,
+          ...bounds(),
         }),
       );
     };
     element.addEventListener("wheel", onWheel, { passive: false });
     return () => {
       element.removeEventListener("wheel", onWheel);
-      if (wheelIdleTimer !== undefined) window.clearTimeout(wheelIdleTimer);
+      // Run the pending settle rather than only cancelling it. A pan that
+      // has not settled exists ONLY as a painted transform and `viewRef`,
+      // so dropping the timer here would leave React state and the stored
+      // view at the pre-pan position. The `commitViewAndPersist` closed
+      // over here is the previous render's, so the view lands under the
+      // layout the gesture was made in.
+      if (wheelIdleTimer !== undefined) {
+        window.clearTimeout(wheelIdleTimer);
+        settleWheelGesture();
+      }
     };
-  }, [
-    abortFlight,
-    commitView,
-    commitViewAndPersist,
-    paintView,
-    topAnchoredView,
-    panZoomCanvas.width,
-    panZoomCanvas.height,
-    viewportSize.width,
-    viewportSize.height,
-  ]);
+  }, [abortFlight, commitView, commitViewAndPersist, paintView]);
 
   // A lens switch is a different map, so the view starts placed again.
   // A layout effect, and declared above the placement below, because that

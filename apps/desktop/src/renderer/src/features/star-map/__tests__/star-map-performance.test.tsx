@@ -4,7 +4,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { act, fireEvent, render, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { NavigationThreadSummary } from "@pwragent/shared";
+import { emptyStarMapWorkspaceState } from "@pwragent/shared";
+import type {
+  NavigationThreadSummary,
+  WriteStarMapWorkspaceRequest,
+} from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { StarMapScreen } from "../StarMapScreen";
 
@@ -44,10 +48,13 @@ function thread(id: string): NavigationThreadSummary {
   } as unknown as NavigationThreadSummary;
 }
 
-function screen(threads: readonly NavigationThreadSummary[]) {
+function screen(
+  threads: readonly NavigationThreadSummary[],
+  desktopApi: DesktopApi = buildDesktopApi(),
+) {
   return (
     <StarMapScreen
-      desktopApi={buildDesktopApi()}
+      desktopApi={desktopApi}
       localThreads={threads}
       sessionKeys={{}}
       onOpenLocalThread={() => undefined}
@@ -155,6 +162,64 @@ describe("star map idle performance", () => {
     act(() => vi.advanceTimersByTime(120));
     expect(cardScans()).toBeGreaterThan(0);
     expect(canvas.style.transform).toBe(pannedTransform);
+  });
+
+  it("commits a wheel pan that is still painting when the map tears down", async () => {
+    Object.defineProperty(globalThis, "ResizeObserver", {
+      configurable: true,
+      value: class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    });
+    // A pan paints frames and settles on an idle timer. The listener's own
+    // cleanup is reachable long before that timer — a relayout re-registers
+    // it, and leaving the map ends it outright — and the painted frames live
+    // nowhere but the canvas transform until the settle runs. Dropping the
+    // timer there would lose the whole gesture.
+    const stored = emptyStarMapWorkspaceState();
+    const desktopApi = buildDesktopApi();
+    desktopApi.readStarMapWorkspace = vi.fn(async () => ({
+      workspace: stored,
+    }));
+    const writeStarMapWorkspace = vi.fn(
+      async (request: WriteStarMapWorkspaceRequest) => ({
+        workspace: {
+          ...request.workspace,
+          revision: stored.revision + 1,
+          updatedAt: 1,
+        },
+      }),
+    );
+    desktopApi.writeStarMapWorkspace = writeStarMapWorkspace;
+    const { container, unmount } = render(
+      screen([thread("t0"), thread("t1")], desktopApi),
+    );
+    await waitFor(() => {
+      expect(desktopApi.readStarMapWorkspace).toHaveBeenCalled();
+    });
+    await waitFor(() => {
+      expect(container.querySelector("[data-thread-key]")).toBeTruthy();
+    });
+    const viewport = container.querySelector<HTMLElement>(".star-map__viewport")!;
+    const canvas = container.querySelector<HTMLElement>(".star-map__canvas")!;
+    writeStarMapWorkspace.mockClear();
+
+    fireEvent.wheel(viewport, { deltaX: 40, deltaY: 24 });
+    const painted = canvas.style.transform;
+    expect(writeStarMapWorkspace).not.toHaveBeenCalled();
+
+    unmount();
+    await waitFor(() => {
+      expect(writeStarMapWorkspace).toHaveBeenCalled();
+    });
+    const view = Object.values(
+      writeStarMapWorkspace.mock.calls[0]![0].workspace.views,
+    )[0]!;
+    expect(`translate(${view.x}px, ${view.y}px) scale(${view.scale})`).toBe(
+      painted,
+    );
   });
 
   it("updates card layout from ResizeObserver without reading offsetHeight", async () => {
