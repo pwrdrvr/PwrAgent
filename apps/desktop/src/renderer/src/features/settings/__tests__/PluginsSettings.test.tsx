@@ -9,8 +9,10 @@ import {
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
+  AuthorizeMcpConnectionResponse,
   CodexMcpServerSummary,
   DesktopSettingsSnapshot,
+  McpConnectionStatus,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { PluginsSettings as PluginsSettingsComponent } from "../PluginsSettings";
@@ -542,17 +544,24 @@ describe("PluginsSettings", () => {
   it("hands back the card when an authorization never returns", async () => {
     const api = createDesktopApi([]);
     const cancel = vi.fn().mockResolvedValue({ connectionId: "rovo" });
-    let settleAuthorize: ((value: unknown) => void) | undefined;
-    api.authorizeMcpConnection = vi.fn(
-      () => new Promise((resolve) => { settleAuthorize = resolve; }),
-    );
-    api.cancelMcpConnectionAuthorization = cancel;
-    api.listMcpConnections = vi.fn().mockResolvedValue({ connections: [{
+    const rovo: McpConnectionStatus = {
       id: "rovo", displayName: "Atlassian Rovo",
       serverUrl: "https://mcp.atlassian.com/v2/mcp",
       kind: "remote", authMode: "oauth", enabled: true, configured: false,
       state: "disconnected", createdAt: 0, updatedAt: 0,
-    }] });
+    };
+    // Held open so the test can settle it *after* Stop waiting, which is what
+    // an abandoned browser round trip does.
+    let settleAuthorize:
+      | ((value: AuthorizeMcpConnectionResponse) => void)
+      | undefined;
+    api.authorizeMcpConnection = vi.fn(
+      () => new Promise<AuthorizeMcpConnectionResponse>((resolve) => {
+        settleAuthorize = resolve;
+      }),
+    );
+    api.cancelMcpConnectionAuthorization = cancel;
+    api.listMcpConnections = vi.fn().mockResolvedValue({ connections: [rovo] });
     render(<PluginsSettings desktopApi={api} snapshot={createSnapshot()} />);
 
     fireEvent.click(await screen.findByRole("button", { name: "Authorize" }));
@@ -578,7 +587,7 @@ describe("PluginsSettings", () => {
     // stale epoch it says nothing -- a success notice for an authorization the
     // operator gave up on would be a claim the card cannot support, and
     // re-entering `finally` would disable the row it was just released from.
-    settleAuthorize?.({ connection: {} });
+    settleAuthorize?.({ connection: { ...rovo, configured: true, state: "ready" } });
     await waitFor(() => {
       expect(
         screen.getByText(/Stopped waiting for authorization/),
