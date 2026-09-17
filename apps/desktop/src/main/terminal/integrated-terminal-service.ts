@@ -384,6 +384,17 @@ export class IntegratedTerminalService {
       sessionId,
       threadKey,
       pty: ptyProcess,
+      // Record the grid the PTY is ALREADY running at. `spawnTerminalPty`
+      // sized it from this same request through these same clamps, and
+      // `forkpty`/`CreatePseudoConsole` both take that size verbatim, so this
+      // is what the shell has — not a guess. Leaving it unset made the
+      // renderer's first `fitAddon.fit()` after attach, which usually
+      // proposes the spawn grid straight back, the one resize dedup could
+      // never catch.
+      lastResize: {
+        cols: clampTerminalColumns(request.cols),
+        rows: clampTerminalRows(request.rows),
+      },
       cwd,
       shell: shell.file,
       buffer: "",

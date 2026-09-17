@@ -542,7 +542,36 @@ describe("resolveTerminalShell", () => {
     resize(first.sessionId, 80, 24);
     resize(first.sessionId, 0, 0);
     resize(second.sessionId, 1, 1);
-    expect(vi.mocked(pty.resize).mock.calls).toEqual([[80, 24], [100, 30], [80, 24], [2, 2]]);
+    // No leading [80, 24]: the session is seeded with the spawn size, so the
+    // viewers' opening fits are already deduplicated.
+    expect(vi.mocked(pty.resize).mock.calls).toEqual([[100, 30], [80, 24], [2, 2]]);
+    vi.mocked(pty.onExit).mock.calls[0]![0]({ exitCode: 0 });
+    await service.dispose();
+  });
+
+  it("does not resize a PTY to the size it was spawned at", async () => {
+    const pty = fakePty();
+    const spawn = vi.fn(
+      (_file: string, _args: string[], _options: { cols: number; rows: number }) => pty,
+    );
+    const service = new IntegratedTerminalService({
+      loadNodePty: async () => ({ spawn: spawn as unknown as typeof import("node-pty").spawn }),
+    });
+    // Out of range on both axes, so the seed only matches back when it runs
+    // through the same clamps `resize` uses.
+    const session = await service.createOrAttach(
+      { threadKey: "codex:resize-seed", cwd: os.tmpdir(), cols: 4000, rows: 1 },
+      fakeWebContents(),
+    );
+    // The seed is only worth anything if it is what the PTY actually got.
+    expect(spawn.mock.calls[0]![2]).toMatchObject({ cols: 500, rows: 2 });
+    // The renderer's first `fitAddon.fit()` after attach proposes the grid the
+    // shell is already running at — in either form.
+    service.resize({ sessionId: session.sessionId, cols: 4000, rows: 1 });
+    service.resize({ sessionId: session.sessionId, cols: 500, rows: 2 });
+    expect(pty.resize).not.toHaveBeenCalled();
+    service.resize({ sessionId: session.sessionId, cols: 100, rows: 30 });
+    expect(vi.mocked(pty.resize).mock.calls).toEqual([[100, 30]]);
     vi.mocked(pty.onExit).mock.calls[0]![0]({ exitCode: 0 });
     await service.dispose();
   });
