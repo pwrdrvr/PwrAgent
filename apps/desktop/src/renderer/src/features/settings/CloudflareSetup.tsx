@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { CloudflareSetupLink, CloudflareSetupRequest, CloudflareSetupStatus, DesktopSettingsConfigPatch } from "@pwragent/shared";
+import type { CloudflareFederationGate, CloudflareSetupLink, CloudflareSetupRequest, CloudflareSetupStatus, DesktopSettingsConfigPatch } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { SettingsField, SettingsSection } from "./SettingsLayout";
 
@@ -22,6 +22,9 @@ export function CloudflareSetup({ api, listenPort, mode, onWriteConfig, onSettin
   const [busy, setBusy] = useState<string>();
   const [error, setError] = useState<string>();
   const [tab, setTab] = useState<"gateway" | "client">("gateway");
+  // Service tokens work on every Zero Trust plan, so they are the default.
+  // A provisioned endpoint reports its own gate and the choice is fixed.
+  const [gate, setGate] = useState<CloudflareFederationGate>("service-token");
 
   useEffect(() => {
     let active = true;
@@ -31,6 +34,7 @@ export function CloudflareSetup({ api, listenPort, mode, onWriteConfig, onSettin
       setAccountId(value.accountId ?? "");
       setZoneId(value.zoneId ?? "");
       setHostname(value.hostname ?? "");
+      if (value.gate) setGate(value.gate);
     }).catch((err: unknown) => { if (active) setError(err instanceof Error ? err.message : "Could not read Cloudflare setup."); });
     return () => { active = false; };
   }, [api]);
@@ -56,6 +60,12 @@ export function CloudflareSetup({ api, listenPort, mode, onWriteConfig, onSettin
     } finally { setBusy(undefined); }
   };
 
+  // A provisioned endpoint's gate is a fact, not a preference: the Access policy
+  // and every issued credential are built around it. Only an unprovisioned
+  // setup reads the local choice.
+  const effectiveGate: CloudflareFederationGate = status?.gate ?? gate;
+  const mtls = effectiveGate === "mtls";
+  const credential = mtls ? "certificate" : "service token";
   const disabled = Boolean(busy) || !api?.configureFederationCloudflare;
   const field = (name: string, value: string, change: (text: string) => void, placeholder: string, secret = false) => (
     <input className="settings-input" aria-label={name} value={value} onChange={(event) => change(event.target.value)} placeholder={placeholder}
@@ -73,21 +83,33 @@ export function CloudflareSetup({ api, listenPort, mode, onWriteConfig, onSettin
       onClick={() => void api?.configureFederationCloudflare?.({ action: "open-link", link: target })}>{name}</button>
   );
 
-  return <SettingsSection eyebrow="Private access over the Internet" title="Cloudflare Zero Trust — Access mTLS"
-    chip={status?.hostname ? "mTLS" : "Unvalidated"} chipKind="muted">
+  return <SettingsSection eyebrow="Private access over the Internet" title="Cloudflare Zero Trust — Access"
+    chip={status?.hostname ? (mtls ? "mTLS" : "Service token") : "Setup"} chipKind="muted">
     <div className="cloudflare-setup">
-      <p className="cloudflare-setup__intro">A public address that only your certificate holders can use. PwrAgent creates the tunnel, generates its own certificate authority, issues client certificates, and verifies that Cloudflare blocks everyone else before they reach this gateway.</p>
-      <div className="cloudflare-setup__notice" role="note">
-        <strong>Requires a paid Zero Trust plan. Confirmed unavailable on the Free plan.</strong>
-        <p>This builds on <em>Access mTLS</em>, under Zero Trust → Access controls → Service credentials → Mutual TLS. On a Free plan the certificate-authority upload is refused with &ldquo;maximum number of certificates has been reached&rdquo; even with none stored — the quota is zero.</p>
-        <p>Whether pay-as-you-go is enough is unsettled: Cloudflare&rsquo;s plan comparison marks mTLS authentication as Contract-only, while the feature&rsquo;s own documentation page lists pay-as-you-go. Setup reports which is true for your account when it uploads the certificate authority.</p>
-        <p>Certificates themselves cost nothing: PwrAgent generates the CA and 90-day client certificates locally. Nothing is purchased, and no machine has to trust a new root — Cloudflare checks the client certificate, while the server certificate stays Cloudflare&rsquo;s own.</p>
+      <p className="cloudflare-setup__intro">A public address that only your credential holders can use. PwrAgent creates the tunnel and a Service Auth policy, issues one {credential} per client, and verifies that Cloudflare blocks everyone else before they reach this gateway.</p>
+      <fieldset className="cloudflare-setup__gate" disabled={disabled || Boolean(status?.gate)}>
+        <legend>Admission credential</legend>
+        <label>
+          <input type="radio" name="cloudflare-gate" value="service-token" checked={!mtls}
+            onChange={() => setGate("service-token")} />
+          <span><strong>Service token</strong> — works on every Zero Trust plan, including Free. Cloudflare issues an ID and secret; PwrAgent sends them on each connection.</span>
+        </label>
+        <label>
+          <input type="radio" name="cloudflare-gate" value="mtls" checked={mtls} onChange={() => setGate("mtls")} />
+          <span><strong>Client certificate (mTLS)</strong> — needs a paid plan. PwrAgent generates its own certificate authority; nothing is purchased and no machine trusts a new root.</span>
+        </label>
+        {status?.gate ? <p className="cloudflare-setup__hint">This endpoint already uses {mtls ? "client certificates" : "service tokens"}. Changing gate means recreating it.</p> : null}
+      </fieldset>
+      {mtls ? <div className="cloudflare-setup__notice" role="note">
+        <strong>Access mTLS requires a paid Zero Trust plan. Confirmed unavailable on the Free plan.</strong>
+        <p>On a Free plan the certificate-authority upload is refused with &ldquo;maximum number of certificates has been reached&rdquo; even with none stored — the quota is zero. Whether pay-as-you-go is enough is unsettled: Cloudflare&rsquo;s plan comparison marks mTLS authentication as Contract-only, while the feature&rsquo;s own documentation page lists pay-as-you-go.</p>
+        <p>Service tokens gate the same endpoint at the same edge, on any plan.</p>
         <div className="settings-button-row">
           {link("Compare Zero Trust plans", "mtls-plans")}
           {link("Access mTLS documentation", "mtls-docs")}
           {link("Open Mutual TLS in the dashboard", "dash-mtls")}
         </div>
-      </div>
+      </div> : null}
       <div className="settings-button-row" role="group" aria-label="Cloudflare setup role">
         <button type="button" className={`button button--${tab === "gateway" ? "primary" : "secondary"}`} aria-pressed={tab === "gateway"} disabled={disabled} onClick={() => setTab("gateway")}>Set up this gateway</button>
         <button type="button" className={`button button--${tab === "client" ? "primary" : "secondary"}`} aria-pressed={tab === "client"} disabled={disabled} onClick={() => setTab("client")}>Connect this client</button>
@@ -99,7 +121,9 @@ export function CloudflareSetup({ api, listenPort, mode, onWriteConfig, onSettin
           <li className={status?.checks && status.checks.length >= 9 && status.checks.every((check) => check.passed) ? "is-complete" : status?.hostname ? "is-current" : ""}>Verify & connect</li>
         </ol>
         {!status?.connected ? <div className="settings-fields">
-          <p>Use a domain already active on Cloudflare and a Zero Trust account. PwrAgent creates its own CA and 90-day client certificates; no purchased CA certificate is needed.</p>
+          <p>Use a domain already active on Cloudflare and a Zero Trust account. {mtls
+            ? "PwrAgent creates its own CA and 90-day client certificates; no purchased CA certificate is needed."
+            : "PwrAgent creates one 90-day Cloudflare service token per client; nothing is purchased and no certificate authority is involved."}</p>
           <div className="settings-button-row">{action("Create API token in Cloudflare", { action: "token-link" }, "Opening Cloudflare…")}</div>
           <details className="cloudflare-setup__help" open>
             <summary>Token permissions and scope</summary>
@@ -107,15 +131,15 @@ export function CloudflareSetup({ api, listenPort, mode, onWriteConfig, onSettin
             <ul>
               <li>Account → Cloudflare Tunnel → Edit</li>
               <li>Account → Access: Apps and Policies → Edit</li>
-              <li>Account → Access: Mutual TLS Certificates → Edit</li>
+              <li>{mtls ? "Account → Access: Mutual TLS Certificates → Edit" : "Account → Access: Service Tokens → Edit"}</li>
               <li>Zone → Access: Apps and Policies → Edit (includes the zone audit)</li>
               <li>Zone → DNS → Edit; Zone → Zone → Read</li>
             </ul>
-            <p><strong>Access: Mutual TLS Certificates → Edit</strong> is the permission the certificate-authority upload needs, and the first place a plan or scope problem will surface.</p>
+            <p><strong>{mtls ? "Access: Mutual TLS Certificates → Edit" : "Access: Service Tokens → Edit"}</strong> is the permission this gate needs{mtls ? ", and the first place a plan or scope problem will surface." : "."}</p>
             <p>Copy Account ID and Zone ID from your domain’s Overview page. The API token stays in memory until you disconnect or quit PwrAgent.</p>
             <div className="settings-button-row">
               {link("Open domain Overview for the IDs", "dash-zone-overview")}
-              {link("Allowed CA signature algorithms", "signature-algorithms")}
+              {mtls ? link("Allowed CA signature algorithms", "signature-algorithms") : link("Service token documentation", "service-token-docs")}
             </div>
           </details>
           <SettingsField label="Account ID" control={field("Cloudflare account ID", accountId, setAccountId, "32-character account ID")} />
@@ -131,8 +155,8 @@ export function CloudflareSetup({ api, listenPort, mode, onWriteConfig, onSettin
             <SettingsField label="Public hostname" sub={`A new hostname directly under ${status.zoneName}. Existing DNS and Access policies are preserved.`}
               control={field("Cloudflare public hostname", hostname, setHostname, `federation.${status.zoneName}`)} />
             {!status.tunnelId || status.phase?.startsWith("Setup incomplete") ? <>
-              <p>This enables a gateway on 127.0.0.1:{listenPort}, creates a private CA and certificate-only Access policy, then publishes the tunnel hostname.</p>
-              <div className="settings-button-row">{action(status.hostname ? "Resume endpoint creation" : "Create protected endpoint", { action: "provision", hostname, listenPort: Number(listenPort) }, "Creating CA, Access policy, and tunnel…", true, !hostname || !status.connectorInstalled)}</div>
+              <p>This enables a gateway on 127.0.0.1:{listenPort}, creates {effectiveGate === "mtls" ? "a private CA and certificate-only" : "a service token and a token-only"} Access policy, then publishes the tunnel hostname.</p>
+              <div className="settings-button-row">{action(status.hostname ? "Resume endpoint creation" : "Create protected endpoint", { action: "provision", hostname, listenPort: Number(listenPort), gate: effectiveGate }, effectiveGate === "mtls" ? "Creating CA, Access policy, and tunnel…" : "Creating service token, Access policy, and tunnel…", true, !hostname || !status.connectorInstalled)}</div>
             </> : null}
           </>}
         </div>
@@ -146,7 +170,7 @@ export function CloudflareSetup({ api, listenPort, mode, onWriteConfig, onSettin
           <p className="cloudflare-setup__hint">Validation checks the live policy, then tries HTTPS and WebSocket requests with and without a certificate. A pass requires 403 at Cloudflare and no matching request at this gateway.</p>
           <div className="settings-button-row cloudflare-setup__dash">
             <span>Inspect in Cloudflare:</span>
-            {link("Mutual TLS", "dash-mtls")}
+            {mtls ? link("Mutual TLS", "dash-mtls") : link("Service Tokens", "dash-service-tokens")}
             {link("Applications", "dash-applications")}
             {link("Policies", "dash-policies")}
             {link("Tunnels", "dash-tunnels")}

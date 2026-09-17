@@ -3,7 +3,9 @@ import { CloudflareSetupService, type CloudflareSetupState } from "../federation
 import { CloudflareApi } from "../federation/cloudflare-api";
 import { CloudflareOriginProbes } from "../federation/cloudflare-origin-probes";
 
-function harness() {
+type Gate = "service-token" | "mtls";
+
+function harness(gate: Gate = "service-token") {
   let stored: CloudflareSetupState | undefined;
   const calls: Array<{ method: string; path: string; body: Record<string, unknown> }> = [];
   const resources = new Map<string, Record<string, unknown>>();
@@ -18,8 +20,13 @@ function harness() {
     if (path === `/zones/${"b".repeat(32)}`) result = { name: "example.com", status: "active", account: { id: "a".repeat(32) } };
     else if (method === "POST") {
       const id = `resource-${resources.size}`;
-      result = { id, ...body, ...(path.endsWith("/certificates") ? { expires_on: "2036-01-01" } : {}), ...(path.endsWith("/cfd_tunnel") ? { token: "connector-secret" } : {}) };
+      result = { id, ...body, ...(path.endsWith("/certificates") ? { expires_on: "2036-01-01" } : {}), ...(path.endsWith("/cfd_tunnel") ? { token: "connector-secret" } : {}),
+        // Cloudflare returns the secret exactly once, on create.
+        ...(path.endsWith("/service_tokens") ? { client_id: `${id}.access`, client_secret: `secret-${id}`, expires_at: "2036-01-01T00:00:00Z" } : {}) };
       resources.set(`${path}/${id}`, result as Record<string, unknown>);
+    } else if (method === "DELETE") {
+      resources.delete(path);
+      result = { id: path.split("/").at(-1) };
     } else if (method === "PUT") {
       result = { ...resources.get(path), ...body };
       resources.set(path, result as Record<string, unknown>);
@@ -46,71 +53,141 @@ function harness() {
     stopConnector: async () => undefined,
     publishUrl,
   });
-  return { service, calls, resources, publishUrl, startConnector, verifyListener,
+  return { service, calls, resources, publishUrl, startConnector, verifyListener, gate,
     tamper: () => { tamper = true; }, state: () => stored,
     connect: () => service.connect("x".repeat(40), "a".repeat(32), "b".repeat(32)),
+    provision: () => service.provision("federation.example.com", 47830, gate),
   };
 }
 
-describe("Cloudflare provisioning", () => {
-  it("creates and audits admission before DNS publication, keeps private keys out of API calls", async () => {
-    const h = harness();
+// Both gates ride the same provisioning order, audit, and revocation flow, so
+// every one of these runs twice. The credential is the only thing that differs.
+describe.each<Gate>(["service-token", "mtls"])("Cloudflare provisioning (%s)", (gate) => {
+  // Under mTLS the certificate authority is uploaded first; a service-token
+  // endpoint has no CA to upload and mints its validator token before this.
+  const creates = gate === "mtls"
+    ? ["certificates", "apps", "policies", "cfd_tunnel", "dns_records"]
+    : ["service_tokens", "apps", "policies", "cfd_tunnel", "dns_records"];
+
+  it("creates and audits admission before DNS publication, keeps secrets out of later API calls", async () => {
+    const h = harness(gate);
     await h.connect();
-    await h.service.provision("federation.example.com", 47830);
+    await h.provision();
     const mutations = h.calls.filter((call) => call.method === "POST");
-    expect(mutations.map((call) => call.path.split("/").at(-1))).toEqual(["certificates", "apps", "policies", "cfd_tunnel", "dns_records"]);
+    expect(mutations.map((call) => call.path.split("/").at(-1))).toEqual(creates);
     expect(JSON.stringify(h.calls)).not.toContain("PRIVATE KEY");
     expect(h.startConnector).toHaveBeenCalledWith("connector-secret");
     expect(h.publishUrl).toHaveBeenCalledWith("wss://federation.example.com");
     expect((await h.service.audit()).every((check) => check.passed)).toBe(true);
     const status = await h.service.status();
+    expect(status.gate).toBe(gate);
     expect(JSON.stringify(status)).not.toContain("connector-secret");
     expect(JSON.stringify(status)).not.toContain("PRIVATE KEY");
-    await h.service.provision("federation.example.com", 47830);
-    expect(h.calls.filter((call) => call.method === "POST")).toHaveLength(5);
+    // The validator's own secret must not reach the status projection either.
+    const verifierSecret = h.state()?.verifier.clientSecret;
+    if (verifierSecret) expect(JSON.stringify(status)).not.toContain(verifierSecret);
+    await h.provision();
+    expect(h.calls.filter((call) => call.method === "POST")).toHaveLength(creates.length);
   });
 
   it("does not publish DNS when read-back finds a bypass policy", async () => {
-    const h = harness();
+    const h = harness(gate);
     await h.connect();
     h.tamper();
-    await expect(h.service.provision("federation.example.com", 47830)).rejects.toThrow("audit failed");
+    await expect(h.provision()).rejects.toThrow("audit failed");
     expect(h.calls.some((call) => call.method === "POST" && call.path.endsWith("dns_records"))).toBe(false);
     expect(h.startConnector).not.toHaveBeenCalled();
     expect(h.state()?.applicationId).toBeDefined();
   });
 
   it("refuses a competing wildcard Access application without changing it", async () => {
-    const h = harness();
+    const h = harness(gate);
     h.resources.set(`/accounts/${"a".repeat(32)}/access/apps/existing`, { id: "existing", domain: "*.example.com" });
     await h.connect();
-    await expect(h.service.provision("federation.example.com", 47830)).rejects.toThrow("already covers");
-    expect(h.calls.some((call) => call.method !== "GET")).toBe(false);
+    await expect(h.provision()).rejects.toThrow("already covers");
+    // The validator credential is minted before the conflict check, so a
+    // service-token run has exactly one create to its name and no more.
+    const mutations = h.calls.filter((call) => call.method !== "GET");
+    expect(mutations.map((call) => call.path.split("/").at(-1)))
+      .toEqual(gate === "mtls" ? [] : ["service_tokens"]);
   });
 
   it("does not mutate Cloudflare without local listener ownership", async () => {
-    const h = harness();
+    const h = harness(gate);
     await h.connect();
     h.verifyListener.mockImplementation(() => { throw new Error("wrong listener"); });
-    await expect(h.service.provision("federation.example.com", 47830)).rejects.toThrow("wrong listener");
+    await expect(h.provision()).rejects.toThrow("wrong listener");
     expect(h.calls.some((call) => call.method !== "GET")).toBe(false);
   });
 
-  it("admits and revokes each issued client without exposing its private key", async () => {
-    const h = harness();
+  it("admits and revokes each issued client without exposing its secret", async () => {
+    const h = harness(gate);
     await h.connect();
-    await h.service.provision("federation.example.com", 47830);
+    await h.provision();
     const client = await h.service.issue("Travel laptop");
     expect(h.state()?.clients[0].id).toBe(client.id);
     expect((await h.service.audit()).every((check) => check.passed)).toBe(true);
-    expect(JSON.stringify(h.calls)).not.toContain(client.privateKey);
-    expect(JSON.stringify(await h.service.status())).not.toContain(client.privateKey);
+    const secret = client.privateKey ?? client.clientSecret;
+    expect(secret).toBeTruthy();
+    // The credential's private half is created here and must never be sent to
+    // Cloudflare afterwards, nor surface in the renderer-facing projection.
+    const callsAfterIssue = JSON.stringify(h.calls.filter((call) => call.method !== "POST" || !call.path.endsWith("/service_tokens")));
+    expect(callsAfterIssue).not.toContain(secret);
+    expect(JSON.stringify(await h.service.status())).not.toContain(secret);
     await h.service.revoke(client.id);
     expect(h.state()?.clients[0].revoked).toBe(true);
     const policyUpdate = h.calls.filter((call) => call.method === "PUT" && call.path.includes("/policies/")).at(-1);
     expect(JSON.stringify(policyUpdate?.body)).not.toContain(client.id);
     expect(JSON.stringify(policyUpdate?.body)).toContain(h.state()?.verifier.id);
     expect((await h.service.audit()).every((check) => check.passed)).toBe(true);
+  });
+
+  it("refuses to change gate on an existing endpoint", async () => {
+    const h = harness(gate);
+    await h.connect();
+    await h.provision();
+    const other: Gate = gate === "mtls" ? "service-token" : "mtls";
+    await expect(h.service.provision("federation.example.com", 47830, other))
+      .rejects.toThrow("different admission gate");
+  });
+});
+
+describe("Cloudflare service-token admission", () => {
+  it("deletes the Cloudflare token on revoke, because it outlives the policy edit", async () => {
+    const h = harness("service-token");
+    await h.connect();
+    await h.provision();
+    const client = await h.service.issue("Travel laptop");
+    await h.service.revoke(client.id);
+    const deletes = h.calls.filter((call) => call.method === "DELETE");
+    expect(deletes.map((call) => call.path.split("/").at(-1))).toEqual([client.id]);
+    // The secret is unrecoverable and the token is gone; keeping the copy would
+    // be a credential we can neither use nor rotate.
+    expect(h.state()?.clients[0].clientSecret).toBeUndefined();
+  });
+
+  it("fails the audit when the policy admits a token that no longer exists", async () => {
+    const h = harness("service-token");
+    await h.connect();
+    await h.provision();
+    const client = await h.service.issue("Travel laptop");
+    expect((await h.service.audit()).every((check) => check.passed)).toBe(true);
+    // Deleted in Cloudflare behind our back, leaving the policy naming a
+    // credential nothing can present.
+    h.resources.delete(`/accounts/${"a".repeat(32)}/access/service_tokens/${client.id}`);
+    const checks = await h.service.audit();
+    const tokens = checks.find((check) => check.label === "Issued service tokens");
+    expect(tokens?.passed).toBe(false);
+    expect(checks.find((check) => check.label === "Mandatory service token")?.passed).toBe(true);
+  });
+
+  it("never uploads a certificate authority", async () => {
+    const h = harness("service-token");
+    await h.connect();
+    await h.provision();
+    expect(h.calls.some((call) => call.path.includes("/access/certificates") && call.method !== "GET")).toBe(false);
+    expect(h.state()?.ca).toBeUndefined();
+    expect(h.state()?.certificateId).toBeUndefined();
   });
 });
 

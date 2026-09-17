@@ -55,6 +55,10 @@ describe("Cloudflare setup flow", () => {
     await screen.findByLabelText("Cloudflare public hostname");
     // The pane has to name Access mTLS: two different Cloudflare products are
     // called mTLS and only one of them is what this provisions.
+    // mTLS is not the default any more, so its plan warning must appear only
+    // when the operator actually selects that gate.
+    expect(screen.queryByText(/Confirmed unavailable on the Free plan/)).toBeNull();
+    fireEvent.click(screen.getByRole("radio", { name: /Client certificate/ }));
     expect(screen.getByText(/Confirmed unavailable on the Free plan/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Open Mutual TLS in the dashboard" }));
     await waitFor(() => expect(call).toHaveBeenCalledWith({ action: "open-link", link: "dash-mtls" }));
@@ -70,11 +74,37 @@ describe("Cloudflare setup flow", () => {
     render(<CloudflareSetup api={{ configureFederationCloudflare: call } as DesktopApi}
       listenPort="47830" onWriteConfig={async () => true} onSettingsChanged={async () => {}} />);
     await screen.findByLabelText("Cloudflare public hostname");
+    // Select mTLS so its plan notice — and the reference links inside it — render.
+    fireEvent.click(screen.getByRole("radio", { name: /Client certificate/ }));
     fireEvent.change(screen.getByLabelText("Cloudflare public hostname"), { target: { value: "federation.example.com" } });
     fireEvent.click(screen.getByRole("button", { name: "Create protected endpoint" }));
     await screen.findByRole("status");
     // Reading the docs is exactly what an operator does while provisioning runs.
     expect(screen.getByRole("button", { name: "Access mTLS documentation" })).toBeEnabled();
     release();
+  });
+  it("defaults to service tokens and provisions with that gate", async () => {
+    const events: CloudflareSetupRequest[] = [];
+    const call = vi.fn(async (request: CloudflareSetupRequest) => { events.push(request); return connected; });
+    render(<CloudflareSetup api={{ configureFederationCloudflare: call } as DesktopApi}
+      listenPort="47830" onWriteConfig={async () => true} onSettingsChanged={async () => {}} />);
+    await screen.findByLabelText("Cloudflare public hostname");
+    expect(screen.getByRole("radio", { name: /Service token/ })).toBeChecked();
+    fireEvent.change(screen.getByLabelText("Cloudflare public hostname"), { target: { value: "federation.example.com" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create protected endpoint" }));
+    await waitFor(() => expect(events.some((event) => event.action === "provision")).toBe(true));
+    expect(events.find((event) => event.action === "provision")).toMatchObject({ gate: "service-token" });
+  });
+
+  it("locks the gate once an endpoint reports one", async () => {
+    const call = vi.fn(async () => ({ ...connected, gate: "mtls" as const, tunnelId: "tunnel",
+      hostname: "federation.example.com", phase: "Published" }));
+    render(<CloudflareSetup api={{ configureFederationCloudflare: call } as DesktopApi}
+      listenPort="47830" onWriteConfig={async () => true} onSettingsChanged={async () => {}} />);
+    // The Access policy and every issued credential are built around the gate,
+    // so a provisioned endpoint must not offer to switch it.
+    await waitFor(() => expect(screen.getByRole("radio", { name: /Client certificate/ })).toBeChecked());
+    expect(screen.getByRole("radio", { name: /Service token/ })).toBeDisabled();
+    expect(screen.getByText(/Changing gate means recreating it/)).toBeInTheDocument();
   });
 });

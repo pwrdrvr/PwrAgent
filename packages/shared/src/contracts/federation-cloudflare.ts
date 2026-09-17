@@ -10,11 +10,22 @@ export type CloudflareSetupLink =
   | "mtls-docs"
   | "mtls-plans"
   | "signature-algorithms"
+  | "service-token-docs"
   | "dash-mtls"
+  | "dash-service-tokens"
   | "dash-applications"
   | "dash-policies"
   | "dash-tunnels"
   | "dash-zone-overview";
+
+/**
+ * Which credential Cloudflare Access admits this endpoint's clients with.
+ *
+ * `service-token` works on every Zero Trust plan and is the default. `mtls`
+ * needs a paid plan — confirmed unavailable on Free, where the certificate
+ * authority upload is refused outright.
+ */
+export type CloudflareFederationGate = "service-token" | "mtls";
 
 export type CloudflareSetupRequest =
   | { action: "status" }
@@ -23,7 +34,7 @@ export type CloudflareSetupRequest =
   | { action: "open-link"; link: CloudflareSetupLink }
   | { action: "connect"; token: string; accountId: string; zoneId: string }
   | { action: "disconnect" }
-  | { action: "provision"; hostname: string; listenPort: number }
+  | { action: "provision"; hostname: string; listenPort: number; gate?: CloudflareFederationGate }
   | { action: "audit" }
   | { action: "validate" }
   | { action: "start" }
@@ -40,6 +51,8 @@ export type CloudflareSecurityCheck = {
 
 export type CloudflareSetupStatus = {
   connected: boolean;
+  /** The gate a provisioned endpoint uses; absent before one exists. */
+  gate?: CloudflareFederationGate;
   accountId?: string;
   zoneId?: string;
   zoneName?: string;

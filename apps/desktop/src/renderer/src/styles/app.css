@@ -9402,6 +9402,44 @@ a.button {
 .cloudflare-setup .cloudflare-setup__error { color: var(--danger-text); }
 .cloudflare-setup__checks p { font-size: 12px; }
 
+/* Admission-credential choice. A fieldset because the two options are one
+   decision, and it locks itself once an endpoint exists. */
+.cloudflare-setup__gate {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+}
+
+.cloudflare-setup__gate legend {
+  padding: 0 6px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.cloudflare-setup__gate label {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+.cloudflare-setup__gate label strong {
+  color: var(--text-primary);
+}
+
+.cloudflare-setup__gate:disabled label {
+  opacity: 0.7;
+}
+
 /* Plan/prerequisite notice. Reads as a caution rather than an error: the plan
    requirement is a fact about the account, not something the operator did. */
 .cloudflare-setup__notice {

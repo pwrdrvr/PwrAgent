@@ -2,12 +2,12 @@ import { dialog, ipcMain, shell } from "electron";
 import fs from "node:fs/promises";
 import type { CloudflareSetupLink, CloudflareSetupRequest, CloudflareSetupStatus } from "@pwragent/shared";
 import { FEDERATION_CLOUDFLARE_SETUP_CHANNEL } from "../../shared/ipc";
-import { CloudflareSetupService } from "../federation/cloudflare-setup-service";
+import { CloudflareSetupService, cloudflareSetupGate } from "../federation/cloudflare-setup-service";
 import { loadCloudflareSetup, saveCloudflareSetup } from "../federation/cloudflare-setup-storage";
 import { cloudflareConnector } from "../federation/cloudflare-connector";
 import { getDesktopFederationRuntime } from "../federation/federation-runtime";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
-import { decryptCloudflareBundle, encryptCloudflareBundle } from "../federation/cloudflare-client-bundle";
+import { bundleGate, decryptCloudflareBundle, encryptCloudflareBundle } from "../federation/cloudflare-client-bundle";
 import { decodeFederationInvite, encodeFederationInvite } from "../federation/federation-enrollment";
 
 const setup = new CloudflareSetupService({
@@ -42,7 +42,10 @@ const CLOUDFLARE_LINKS: Record<CloudflareSetupLink, string> = {
   "mtls-plans": "https://www.cloudflare.com/sase/products/access/",
   "signature-algorithms":
     "https://developers.cloudflare.com/ssl/client-certificates/byo-ca/",
+  "service-token-docs":
+    "https://developers.cloudflare.com/cloudflare-one/access-controls/service-credentials/service-tokens/",
   "dash-mtls": "https://one.dash.cloudflare.com/?to=/:account/access/service-auth/mtls",
+  "dash-service-tokens": "https://one.dash.cloudflare.com/?to=/:account/access/service-auth/service-tokens",
   "dash-applications": "https://one.dash.cloudflare.com/?to=/:account/access/apps",
   "dash-policies": "https://one.dash.cloudflare.com/?to=/:account/access/policies",
   "dash-tunnels": "https://one.dash.cloudflare.com/?to=/:account/access/tunnels",
@@ -97,7 +100,7 @@ export function registerCloudflareSetupIpc(): void {
           // The renderer has saved the listener config; wait for runtime ownership
           // instead of racing the asynchronous settings-change subscription.
           await getDesktopFederationRuntime().restart();
-          await setup.provision(request.hostname, request.listenPort);
+          await setup.provision(request.hostname, request.listenPort, request.gate);
           break;
         case "audit": await setup.audit(); break;
         case "validate": await setup.validate(); break;
@@ -114,7 +117,13 @@ export function registerCloudflareSetupIpc(): void {
           const generated = await getDesktopFederationRuntime().generateInvite({ label: request.label });
           const endpoint = `wss://${state.hostname}`;
           const invite = encodeFederationInvite({ ...decodeFederationInvite(generated.invite), gatewayUrl: endpoint, gatewayEndpoints: [endpoint] });
-          await fs.writeFile(destination.filePath, await encryptCloudflareBundle({ version: 1, endpoint, invite, certificate: client.certificate, privateKey: client.privateKey }, request.password), { mode: 0o600 });
+          const gate = cloudflareSetupGate(state);
+          await fs.writeFile(destination.filePath, await encryptCloudflareBundle({
+            version: 1, gate, endpoint, invite,
+            ...(gate === "service-token"
+              ? { accessClientId: client.clientId, accessClientSecret: client.clientSecret }
+              : { certificate: client.certificate, privateKey: client.privateKey }),
+          }, request.password), { mode: 0o600 });
           return { ...await setup.status(), message: "Client setup saved. Transfer the encrypted file and share its password separately. The enrollment invite expires in one hour." };
         }
         case "import-client": {
@@ -133,18 +142,36 @@ export function registerCloudflareSetupIpc(): void {
           const storage = settings.readSecretStorageState();
           if (!storage.available || !storage.encrypted) throw new Error("Encrypted OS credential storage is required to import a client certificate.");
           const previous = await settings.resolveFederationCloudflareCredentials();
+          const importGate = bundleGate(bundle);
+          // Which two secrets this writes is the whole difference between the
+          // gates on the client side; the runtime reads one pair or the other.
+          const keys = importGate === "service-token"
+            ? ["federationCloudflareAccessClientId", "federationCloudflareAccessClientSecret"] as const
+            : ["federationCloudflareClientCertificate", "federationCloudflareClientPrivateKey"] as const;
+          const values = importGate === "service-token"
+            ? [bundle.accessClientId, bundle.accessClientSecret]
+            : [bundle.certificate, bundle.privateKey];
+          const restore = importGate === "service-token"
+            ? [previous.accessClientId, previous.accessClientSecret]
+            : [previous.clientCertificate, previous.clientPrivateKey];
+          if (!values[0] || !values[1]) throw new Error("The client setup file is missing its credential.");
           try {
-            const certificate = await settings.replaceSecret("federationCloudflareClientCertificate", bundle.certificate);
-            const key = await settings.replaceSecret("federationCloudflareClientPrivateKey", bundle.privateKey);
-            if (!certificate.configured || !key.configured) throw new Error("Client credentials could not be stored.");
+            for (const [index, key] of keys.entries()) {
+              const stored = await settings.replaceSecret(key, values[index] as string);
+              if (!stored.configured) throw new Error("Client credentials could not be stored.");
+            }
           } catch {
-            if (previous.clientCertificate) await settings.replaceSecret("federationCloudflareClientCertificate", previous.clientCertificate);
-            else await settings.clearSecret("federationCloudflareClientCertificate");
-            if (previous.clientPrivateKey) await settings.replaceSecret("federationCloudflareClientPrivateKey", previous.clientPrivateKey);
-            else await settings.clearSecret("federationCloudflareClientPrivateKey");
+            for (const [index, key] of keys.entries()) {
+              if (restore[index]) await settings.replaceSecret(key, restore[index] as string);
+              else await settings.clearSecret(key);
+            }
             throw new Error("Client credentials could not be stored; previous credentials were restored.");
           }
-          await settings.writeConfigPatchTargeted({ federation: { cloudflareEndpoint: bundle.endpoint, cloudflareMtlsEnabled: true, cloudflareAccessServiceAuthEnabled: false } });
+          await settings.writeConfigPatchTargeted({ federation: {
+            cloudflareEndpoint: bundle.endpoint,
+            cloudflareMtlsEnabled: importGate === "mtls",
+            cloudflareAccessServiceAuthEnabled: importGate === "service-token",
+          } });
           await getDesktopFederationRuntime().restart();
           await getDesktopFederationRuntime().importInvite(bundle.invite);
           return { ...await setup.status(), message: "Client credentials installed and gateway invite imported." };

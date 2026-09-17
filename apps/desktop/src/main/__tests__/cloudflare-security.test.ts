@@ -114,3 +114,60 @@ describe("Cloudflare policy audit", () => {
     await expect(api.request("https://evil.example")).rejects.toThrow("Invalid Cloudflare");
   });
 });
+
+describe("Cloudflare service-token admission proof", () => {
+  const credentials = { accessClientId: "abc.access", accessClientSecret: "a-service-token-secret" };
+
+  it("proves the same boundary with a service token and names it in every result", async () => {
+    const probes = new CloudflareOriginProbes();
+    const shapes: boolean[] = [];
+    const checks = await validateCloudflareBoundary({ endpoint: "https://federation.example.com/", probes, credentials,
+      request: async (input) => {
+        shapes.push(input.upgrade);
+        if (!input.credentials) return { status: 403, ray: "edge-ray" };
+        return { status: 204, proof: probes.observe({ headers: { "x-pwragent-security-probe": input.id } } as unknown as IncomingMessage) };
+      },
+    });
+    expect(shapes).toEqual([false, false, true, true]);
+    expect(checks.every((check) => check.passed)).toBe(true);
+    // A result reading "without certificate" here would describe a test that
+    // never ran — nothing in this flow presents a certificate.
+    expect(checks.map((check) => check.label)).toEqual([
+      "HTTPS request with service token",
+      "HTTPS request without service token",
+      "WebSocket upgrade with service token",
+      "WebSocket upgrade without service token",
+    ]);
+  });
+
+  it("fails when the uncredentialed request reaches the gateway", async () => {
+    const probes = new CloudflareOriginProbes();
+    const checks = await validateCloudflareBoundary({ endpoint: "https://federation.example.com/", probes, credentials,
+      request: async (input) => {
+        const proof = probes.observe({ headers: { "x-pwragent-security-probe": input.id } } as unknown as IncomingMessage);
+        return input.credentials ? { status: 204, proof } : { status: 403, ray: "edge-ray" };
+      },
+    });
+    expect(checks.filter((check) => !check.passed)).toHaveLength(2);
+    expect(checks[1].detail).toContain("without a service token reached the gateway");
+  });
+
+  it("carries a service token through the encrypted bundle and rejects a mixed one", async () => {
+    const bundle = {
+      version: 1 as const, gate: "service-token" as const,
+      endpoint: "wss://federation.example.com", invite: "test-invite", ...credentials,
+    };
+    const encrypted = await encryptCloudflareBundle(bundle, "a-long-test-password");
+    expect(encrypted).not.toContain("a-service-token-secret");
+    expect(await decryptCloudflareBundle(encrypted, "a-long-test-password")).toEqual(bundle);
+    // A bundle claiming one gate while carrying the other credential is
+    // malformed, and accepting it would install a credential the endpoint's
+    // policy does not admit.
+    const mixed = await encryptCloudflareBundle(
+      { ...bundle, certificate: "cert", privateKey: "key" }, "a-long-test-password");
+    await expect(decryptCloudflareBundle(mixed, "a-long-test-password")).rejects.toThrow("Could not open");
+    const empty = await encryptCloudflareBundle(
+      { version: 1, gate: "service-token", endpoint: bundle.endpoint, invite: "test-invite" }, "a-long-test-password");
+    await expect(decryptCloudflareBundle(empty, "a-long-test-password")).rejects.toThrow("Could not open");
+  });
+});

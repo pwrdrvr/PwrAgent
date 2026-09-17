@@ -25,7 +25,9 @@ export async function loadCloudflareSetup(): Promise<CloudflareSetupState | unde
   requireSecureStorage();
   try {
     const state = JSON.parse(safeStorage.decryptString(data)) as CloudflareSetupState;
-    if (state.version !== 1 || !state.ca || !Array.isArray(state.clients)) throw new Error();
+    // A service-token setup has no certificate authority, so the validator —
+    // which both gates always have — is what proves the record is complete.
+    if (state.version !== 1 || !state.verifier || !Array.isArray(state.clients)) throw new Error();
     return state;
   } catch { throw new Error("The Cloudflare setup could not be decrypted. Its encrypted data has been preserved."); }
 }

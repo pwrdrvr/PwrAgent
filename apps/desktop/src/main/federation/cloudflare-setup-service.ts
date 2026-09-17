@@ -1,20 +1,41 @@
 import { randomBytes, X509Certificate } from "node:crypto";
 import type { CloudflareSecurityCheck, CloudflareSetupStatus } from "@pwragent/shared";
-import { CloudflareApi, applicationCoversHostname, cloudflareHostname, cloudflareMtlsPolicy, cloudflareScopeId, isExactMtlsPolicy, type AccessApplication } from "./cloudflare-api";
+import { CloudflareApi, applicationCoversHostname, cloudflareAdmissionPolicy, cloudflareHostname, cloudflareScopeId, isExactAdmissionPolicy, type AccessApplication, type CloudflareGate } from "./cloudflare-api";
 import { createCloudflareCa, issueCloudflareClient, type CloudflareCertificate } from "./cloudflare-certificates";
 import type { CloudflareOriginProbes } from "./cloudflare-origin-probes";
-import { validateCloudflareBoundary } from "./cloudflare-security-validation";
+import { validateCloudflareBoundary, type CloudflareProbeCredentials } from "./cloudflare-security-validation";
 
-type Client = CloudflareCertificate & { id: string; label: string; expiresAt: string; revoked: boolean };
+/**
+ * One admitted client, under either gate.
+ *
+ * `id` is deliberately whatever the Access policy selects on — the certificate
+ * common name under mTLS, the Cloudflare service-token id otherwise — so the
+ * policy, the audit, and revocation all read the same field and need no branch.
+ * The credential beside it is the half that differs.
+ */
+type Client = {
+  id: string;
+  label: string;
+  expiresAt: string;
+  revoked: boolean;
+  certificate?: string;
+  privateKey?: string;
+  clientId?: string;
+  clientSecret?: string;
+};
+
 export type CloudflareSetupState = {
   version: 1;
+  /** Absent in setups written before service tokens existed; those are mTLS. */
+  gate?: CloudflareGate;
   accountId: string;
   zoneId: string;
   zoneName: string;
   hostname: string;
   listenPort: number;
   name: string;
-  ca: CloudflareCertificate;
+  /** mTLS only. Service-token setups never generate a certificate authority. */
+  ca?: CloudflareCertificate;
   verifier: Client;
   clients: Client[];
   certificateId?: string;
@@ -24,6 +45,18 @@ export type CloudflareSetupState = {
   tunnelToken?: string;
   dnsId?: string;
 };
+
+/** Cloudflare's service-token record. `client_secret` is returned only once. */
+type ServiceTokenResult = {
+  id: string;
+  client_id: string;
+  client_secret?: string;
+  expires_at?: string;
+};
+
+export function cloudflareSetupGate(state: Pick<CloudflareSetupState, "gate">): CloudflareGate {
+  return state.gate === "service-token" ? "service-token" : "mtls";
+}
 
 export type CloudflareSetupDependencies = {
   load: () => Promise<CloudflareSetupState | undefined>;
@@ -48,6 +81,7 @@ export class CloudflareSetupService {
     const state = await this.deps.load();
     return {
       connected: Boolean(this.api),
+      gate: state ? cloudflareSetupGate(state) : undefined,
       accountId: state?.accountId ?? this.scope?.accountId,
       zoneId: state?.zoneId ?? this.scope?.zoneId,
       zoneName: state?.zoneName ?? this.scope?.zoneName,
@@ -90,8 +124,46 @@ export class CloudflareSetupService {
     if (!state) throw new Error("Create the protected endpoint first.");
     return state;
   }
-  private names(state: CloudflareSetupState): string[] {
+  /** Everything the Access policy currently admits: the validator plus live clients. */
+  private admissionIds(state: CloudflareSetupState): string[] {
     return [state.verifier, ...state.clients].filter((client) => !client.revoked).map((client) => client.id);
+  }
+
+  /**
+   * Mint one credential under the active gate.
+   *
+   * Under `service-token` the secret comes back exactly once, so it is stored
+   * with the record before anything else can fail. Under `mtls` the key is
+   * generated locally and the CA never leaves the host.
+   */
+  private async mintCredential(
+    state: Pick<CloudflareSetupState, "gate" | "ca" | "accountId" | "name">,
+    label: string,
+  ): Promise<Client> {
+    if (cloudflareSetupGate(state) === "mtls") {
+      if (!state.ca) throw new Error("This setup has no certificate authority. Recreate the protected endpoint.");
+      const id = `pwragent-${randomBytes(16).toString("hex")}`;
+      const certificate = await issueCloudflareClient(state.ca, id);
+      return { ...certificate, id, label,
+        expiresAt: new Date(new X509Certificate(certificate.certificate).validTo).toISOString(), revoked: false };
+    }
+    const result = await this.apiClient().request<ServiceTokenResult>(
+      `/accounts/${state.accountId}/access/service_tokens`, "POST",
+      // `duration` is Cloudflare's own expiry vocabulary. 90 days matches what
+      // the certificate path issues, so both gates age the same way.
+      { name: `${state.name} ${label}`.slice(0, 120), duration: "2160h" },
+    );
+    if (!result?.id || !result.client_id || !result.client_secret) {
+      throw new Error("Cloudflare did not return a usable service token. Its secret is shown only once; check Service credentials before retrying.");
+    }
+    return {
+      id: result.id,
+      label,
+      clientId: result.client_id,
+      clientSecret: result.client_secret,
+      expiresAt: result.expires_at ?? new Date(Date.now() + 90 * 86_400_000).toISOString(),
+      revoked: false,
+    };
   }
   private async applications(state: CloudflareSetupState): Promise<AccessApplication[]> {
     const api = this.apiClient();
@@ -100,7 +172,7 @@ export class CloudflareSetupService {
     return [...new Map([...account, ...zone].filter((app) => applicationCoversHostname(app, state.hostname)).map((app) => [app.id, app])).values()];
   }
 
-  async provision(hostname: string, listenPort: number): Promise<void> {
+  async provision(hostname: string, listenPort: number, gate: CloudflareGate = "service-token"): Promise<void> {
     const api = this.apiClient();
     if (!this.scope) throw new Error("Connect Cloudflare first.");
     hostname = cloudflareHostname(hostname, this.scope.zoneName);
@@ -109,15 +181,31 @@ export class CloudflareSetupService {
     this.checks = undefined;
     let state = await this.deps.load();
     if (state && (state.hostname !== hostname || state.listenPort !== listenPort)) throw new Error("Resume this profile's existing hostname and listener port.");
+    // The gate decides the policy selector and the credential type, so a resumed
+    // setup keeps the one it was created with rather than half-migrating.
+    if (state && cloudflareSetupGate(state) !== gate) {
+      throw new Error("This profile's endpoint already uses a different admission gate. Disconnect and recreate it to change gates.");
+    }
     if (!state) {
-      const ca = await createCloudflareCa();
-      const id = `pwragent-${randomBytes(16).toString("hex")}`;
-      const verifier = await issueCloudflareClient(ca, id);
-      state = { version: 1, ...this.scope, hostname, listenPort,
+      const base = {
+        version: 1 as const, gate, ...this.scope, hostname, listenPort,
         name: `PwrAgent ${hostname} ${randomBytes(6).toString("hex")}`,
-        ca, verifier: { ...verifier, id, label: "Endpoint validator", expiresAt: new X509Certificate(verifier.certificate).validTo, revoked: false }, clients: [] };
-      // Persist encrypted keys before any external mutation; a failed secure store
-      // cannot leave a public endpoint whose client keys were discarded.
+      };
+      if (gate === "mtls") {
+        const ca = await createCloudflareCa();
+        const id = `pwragent-${randomBytes(16).toString("hex")}`;
+        const verifier = await issueCloudflareClient(ca, id);
+        state = { ...base, ca,
+          verifier: { ...verifier, id, label: "Endpoint validator", expiresAt: new X509Certificate(verifier.certificate).validTo, revoked: false },
+          clients: [] };
+      } else {
+        // The validator is an ordinary service token, so the positive control
+        // exercises the same admission path a real client will.
+        state = { ...base, verifier: await this.mintCredential(base, "Endpoint validator"), clients: [] };
+      }
+      // Persist encrypted credentials before any further external mutation; a
+      // failed secure store cannot leave a public endpoint whose client
+      // credentials were discarded. A service-token secret is unrecoverable.
       await this.deps.save(state);
     }
     const base = `/accounts/${state.accountId}`;
@@ -125,7 +213,8 @@ export class CloudflareSetupService {
     if (conflicts.some((app) => app.id !== state.applicationId)) throw new Error("An Access application already covers this hostname. Choose a dedicated hostname; existing policies were not changed.");
     const dns = await api.list<{ id: string }>(`/zones/${state.zoneId}/dns_records?name=${hostname}`);
     if (dns.some((entry) => entry.id !== state.dnsId)) throw new Error("DNS already exists for this hostname. Existing records were not changed.");
-    if (!state.certificateId) {
+    if (cloudflareSetupGate(state) === "mtls" && !state.certificateId) {
+      if (!state.ca) throw new Error("This setup has no certificate authority. Recreate the protected endpoint.");
       const result = await api.request<{ id: string }>(`${base}/access/certificates`, "POST", {
         name: state.name, certificate: state.ca.certificate, associated_hostnames: [hostname],
       });
@@ -143,7 +232,8 @@ export class CloudflareSetupService {
       await this.deps.save(state);
     }
     if (!state.policyId) {
-      const result = await api.request<{ id: string }>(`${base}/access/apps/${state.applicationId}/policies`, "POST", cloudflareMtlsPolicy(this.names(state)));
+      const result = await api.request<{ id: string }>(`${base}/access/apps/${state.applicationId}/policies`, "POST",
+        cloudflareAdmissionPolicy(cloudflareSetupGate(state), this.admissionIds(state)));
       state.policyId = result.id;
       await this.deps.save(state);
     }
@@ -181,20 +271,37 @@ export class CloudflareSetupService {
     const api = this.apiClient();
     this.checks = undefined;
     const base = `/accounts/${state.accountId}`;
-    if (!state.applicationId || !state.certificateId || !state.tunnelId) throw new Error("Resume endpoint creation before auditing.");
+    // A service-token endpoint has no certificate authority, so requiring a
+    // certificateId here would report every one of them as half-created.
+    if (!state.applicationId || !state.tunnelId
+      || (cloudflareSetupGate(state) === "mtls" && !state.certificateId)) {
+      throw new Error("Resume endpoint creation before auditing.");
+    }
     const apps = await this.applications(state);
     const app = await api.request<AccessApplication>(`${base}/access/apps/${state.applicationId}`);
     const policies = await api.list<{ id: string }>(`${base}/access/apps/${state.applicationId}/policies`);
-    const certificates = await api.list<{ id: string; associated_hostnames?: string[]; expires_on?: string }>(`${base}/access/certificates`);
-    const matchingCas = certificates.filter((cert) => cert.associated_hostnames?.includes(state.hostname));
+    const gate = cloudflareSetupGate(state);
+    const admitted = this.admissionIds(state);
     const tunnel = await api.request<{ config: { ingress: Array<{ hostname?: string; path?: string; service: string }> } }>(`${base}/cfd_tunnel/${state.tunnelId}/configurations`);
     const expected = this.ingress(state);
     const checks: CloudflareSecurityCheck[] = [
       { label: "Dedicated Access application", passed: apps.length === 1 && apps[0].id === state.applicationId && app.domain === state.hostname && app.type === "self_hosted" && !(app.destinations?.length), detail: "Exact hostname, with no competing account or zone application." },
-      { label: "Mandatory client certificate", passed: policies.length === 1 && policies[0].id === state.policyId && isExactMtlsPolicy(policies[0], this.names(state)), detail: "Only Service Auth for issued client names, requiring a valid certificate; no bypass or alternative policy." },
-      { label: "Certificate authority", passed: matchingCas.length === 1 && matchingCas[0].id === state.certificateId && Date.parse(matchingCas[0].expires_on ?? "") > Date.now(), detail: "Only this setup's unexpired CA is associated with the hostname." },
+      gate === "mtls"
+        ? { label: "Mandatory client certificate", passed: policies.length === 1 && policies[0].id === state.policyId && isExactAdmissionPolicy(gate, policies[0], admitted), detail: "Only Service Auth for issued client names, requiring a valid certificate; no bypass or alternative policy." }
+        : { label: "Mandatory service token", passed: policies.length === 1 && policies[0].id === state.policyId && isExactAdmissionPolicy(gate, policies[0], admitted), detail: "Only Service Auth for this setup's issued tokens; no bypass, alternative policy, or additional selector." },
       { label: "Tunnel origin", passed: tunnel.config.ingress.length === 2 && tunnel.config.ingress.every((rule, index) => rule.hostname === expected[index].hostname && rule.service === expected[index].service && !rule.path), detail: "Exact hostname to the selected loopback listener, followed by a 404 catch-all." },
     ];
+    if (gate === "mtls") {
+      const certificates = await api.list<{ id: string; associated_hostnames?: string[]; expires_on?: string }>(`${base}/access/certificates`);
+      const matchingCas = certificates.filter((cert) => cert.associated_hostnames?.includes(state.hostname));
+      checks.push({ label: "Certificate authority", passed: matchingCas.length === 1 && matchingCas[0].id === state.certificateId && Date.parse(matchingCas[0].expires_on ?? "") > Date.now(), detail: "Only this setup's unexpired CA is associated with the hostname." });
+    } else {
+      // Every id the policy admits has to still exist as a live token. A policy
+      // naming a deleted token would otherwise read as a passing allowlist.
+      const tokens = await api.list<{ id: string }>(`${base}/access/service_tokens`);
+      const live = new Set(tokens.map((token) => token.id));
+      checks.push({ label: "Issued service tokens", passed: admitted.length > 0 && admitted.every((id) => live.has(id)), detail: "Every token the policy admits still exists in this account." });
+    }
     if (requireDns) {
       const dns = await api.list<{ id: string; type: string; content: string; proxied: boolean }>(`/zones/${state.zoneId}/dns_records?name=${state.hostname}`);
       checks.push({ label: "Proxied DNS", passed: dns.length === 1 && dns[0].id === state.dnsId && dns[0].type === "CNAME" && dns[0].proxied && dns[0].content === `${state.tunnelId}.cfargotunnel.com`, detail: "The hostname routes through Cloudflare to this tunnel." });
@@ -208,14 +315,17 @@ export class CloudflareSetupService {
     const checks = await this.audit();
     if (checks.some((check) => !check.passed)) return;
     const state = await this.state();
-    if (Date.parse(state.verifier.expiresAt) < Date.now() + 7 * 86_400_000) {
+    if (cloudflareSetupGate(state) === "mtls" && state.ca
+      && Date.parse(state.verifier.expiresAt) < Date.now() + 7 * 86_400_000) {
       const renewed = await issueCloudflareClient(state.ca, state.verifier.id);
       state.verifier = { ...state.verifier, ...renewed, expiresAt: new X509Certificate(renewed.certificate).validTo };
       await this.deps.save(state);
     }
+    const credentials = this.probeCredentials(state.verifier);
+    if (!credentials) throw new Error("This setup has no validator credential. Recreate the protected endpoint.");
     const probes = this.deps.verifyListener(state.listenPort);
     try {
-      checks.push(...await validateCloudflareBoundary({ endpoint: `https://${state.hostname}/`, credentials: state.verifier, probes }));
+      checks.push(...await validateCloudflareBoundary({ endpoint: `https://${state.hostname}/`, credentials, probes }));
     } catch (error) {
       checks.push({ label: "Live endpoint validation", passed: false, detail: error instanceof Error ? error.message : "Endpoint validation failed." });
     }
@@ -230,17 +340,27 @@ export class CloudflareSetupService {
   }
   async stop(): Promise<void> { await this.deps.stopConnector(); }
 
+  /** The half of a client record the probe presents at Cloudflare's edge. */
+  private probeCredentials(client: Client): CloudflareProbeCredentials | undefined {
+    if (client.certificate && client.privateKey) {
+      return { certificate: client.certificate, privateKey: client.privateKey };
+    }
+    if (client.clientId && client.clientSecret) {
+      return { accessClientId: client.clientId, accessClientSecret: client.clientSecret };
+    }
+    return undefined;
+  }
+
   async issue(label: string): Promise<Client> {
     if (!label.trim() || label.length > 80) throw new Error("Enter a client name of up to 80 characters.");
     const state = await this.state();
     this.deps.verifyListener(state.listenPort);
-    if (state.clients.length >= 50) throw new Error("This setup supports up to 50 issued certificates.");
+    if (state.clients.length >= 50) throw new Error("This setup supports up to 50 issued clients.");
     if ((await this.audit()).some((check) => !check.passed)) throw new Error("Resolve the policy audit before issuing a client.");
-    const id = `pwragent-${randomBytes(16).toString("hex")}`;
-    const certificate = await issueCloudflareClient(state.ca, id);
-    const client = { ...certificate, id, label: label.trim(), expiresAt: new Date(new X509Certificate(certificate.certificate).validTo).toISOString(), revoked: false };
+    const client = await this.mintCredential(state, label.trim());
     state.clients.push(client);
-    // Save before admission so failure can be recovered/revoked by ID.
+    // Save before admission so a failure can be recovered or revoked by id. A
+    // service-token secret exists nowhere else once Cloudflare has returned it.
     await this.deps.save(state);
     await this.updatePolicy(state);
     this.checks = undefined;
@@ -251,14 +371,24 @@ export class CloudflareSetupService {
     const state = await this.state();
     this.deps.verifyListener(state.listenPort);
     const client = state.clients.find((entry) => entry.id === id);
-    if (!client) throw new Error("Client certificate was not found.");
+    if (!client) throw new Error("Client credential was not found.");
     client.revoked = true;
+    // Drop admission first under either gate: a failure after this point leaves
+    // the credential locked out, which is the safe direction.
     await this.updatePolicy(state);
+    if (cloudflareSetupGate(state) === "service-token") {
+      // A revoked certificate stays valid until it expires, so removing it from
+      // the policy is the whole revocation. A service token is a Cloudflare
+      // resource and outlives the policy edit, so delete it too.
+      await this.apiClient().request(`/accounts/${state.accountId}/access/service_tokens/${client.id}`, "DELETE");
+      client.clientSecret = undefined;
+    }
     await this.deps.save(state);
     this.checks = undefined;
   }
   private async updatePolicy(state: CloudflareSetupState): Promise<void> {
     if (!state.applicationId || !state.policyId) throw new Error("Complete endpoint creation first.");
-    await this.apiClient().request(`/accounts/${state.accountId}/access/apps/${state.applicationId}/policies/${state.policyId}`, "PUT", cloudflareMtlsPolicy(this.names(state)));
+    await this.apiClient().request(`/accounts/${state.accountId}/access/apps/${state.applicationId}/policies/${state.policyId}`, "PUT",
+      cloudflareAdmissionPolicy(cloudflareSetupGate(state), this.admissionIds(state)));
   }
 }

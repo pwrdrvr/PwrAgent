@@ -146,6 +146,32 @@ export function applicationCoversHostname(app: AccessApplication, hostname: stri
   });
 }
 
+/**
+ * The two credentials Cloudflare Access can admit a non-interactive client with.
+ *
+ * `service-token` is available on every Zero Trust plan, including Free.
+ * `mtls` requires a paid plan and is confirmed unavailable on Free, so it is an
+ * option rather than the default. Both ride the same Service Auth decision and
+ * the same deny-by-default provisioning order; only the selector differs.
+ */
+export type CloudflareGate = "service-token" | "mtls";
+
+export function cloudflareAdmissionPolicy(gate: CloudflareGate, ids: string[]) {
+  return gate === "mtls" ? cloudflareMtlsPolicy(ids) : cloudflareServiceTokenPolicy(ids);
+}
+
+export function cloudflareServiceTokenPolicy(tokenIds: string[]) {
+  return {
+    name: "PwrAgent service tokens",
+    decision: "non_identity",
+    include: tokenIds.map((id) => ({ service_token: { token_id: id } })),
+    // No `require`: the service-token selector is itself the credential check.
+    // An empty array is meaningful here and must survive the exact comparison.
+    require: [],
+    exclude: [],
+  };
+}
+
 export function cloudflareMtlsPolicy(commonNames: string[]) {
   return {
     name: "PwrAgent certificate holders",
@@ -154,6 +180,26 @@ export function cloudflareMtlsPolicy(commonNames: string[]) {
     require: [{ certificate: {} }],
     exclude: [],
   };
+}
+
+export function isExactAdmissionPolicy(gate: CloudflareGate, value: unknown, ids: string[]): boolean {
+  if (!value || typeof value !== "object") return false;
+  const p = value as Record<string, unknown>;
+  const expected = cloudflareAdmissionPolicy(gate, ids);
+  // A policy carrying no includes admits nobody, but it also cannot be
+  // distinguished from one whose selectors were stripped. Refuse either way
+  // rather than calling an empty allowlist a passing audit.
+  if (ids.length === 0) return false;
+  // `require` is compared verbatim in both directions: a certificate
+  // requirement appearing on a service-token policy, or disappearing from an
+  // mTLS one, both have to fail.
+  const requireMatches = JSON.stringify(p.require ?? []) === JSON.stringify(expected.require);
+  return p.decision === expected.decision
+    && requireMatches
+    && Array.isArray(p.include)
+    && p.include.length === ids.length
+    && p.include.every((rule) => expected.include.some((r) => JSON.stringify(r) === JSON.stringify(rule)))
+    && (!p.exclude || (Array.isArray(p.exclude) && p.exclude.length === 0));
 }
 
 export function isExactMtlsPolicy(value: unknown, names: string[]): boolean {
