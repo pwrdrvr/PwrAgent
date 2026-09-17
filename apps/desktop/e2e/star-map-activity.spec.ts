@@ -15,6 +15,12 @@ test("pauses map load demand when its renderer is blurred or its window is hidde
   try {
     // Count only the map's explicit load requests, separately from navigation
     // and federation heartbeats. Values and threads are wholly contrived.
+    //
+    // Safe to re-issue only BEFORE the map opens. Unlike a bare
+    // `removeHandler`/`handle` pair this body also zeroes the counter, so a
+    // retry that landed after the app had served reads would discard them and
+    // the `toBe(1)` / `toBe(2)` assertions below would read low. Keep this
+    // above `openStarMapWindow`.
     await retryTransientRpcCall(() =>
       app.electronApp.evaluate(({ ipcMain }) => {
         const state = globalThis as typeof globalThis & { mapLoadReads: number };

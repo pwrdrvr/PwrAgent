@@ -134,13 +134,22 @@ function describePollFailure(error: unknown): string {
 }
 
 /**
- * The CDP failure both helpers are about, as Playwright rewrites it.
+ * The CDP failure, as Playwright rewrites it.
  *
  * `crExecutionContext.rewriteError` turns CDP's "Promise was collected" into
- * this, so the text is Playwright's, not ours, and matching it is how we
- * retry ONLY this and not a throw from inside the evaluated callback.
+ * this, so the text is Playwright's, not ours.
+ *
+ * Only `retryTransientRpcCall` narrows to it, because re-running a callback
+ * is a decision about that callback. `tolerateTransientRpcFailure`
+ * deliberately does NOT: a poll retries anyway, so it tolerates any failure
+ * and hands the retained one to `rethrowWithLastFailure`. Gating the
+ * tolerance on this message would restore the bug it was written for, where
+ * a non-RPC throw from inside the callback ends the poll on its first tick.
  */
 const TRANSIENT_RPC_MESSAGE = "Resulting promise was garbage collected";
+
+/** Long enough to leave the collection behind, short enough to not read as a wait. */
+const TRANSIENT_RPC_RETRY_DELAY_MS = 50;
 
 export function isTransientRpcFailure(error: unknown): boolean {
   return error instanceof Error
@@ -168,9 +177,21 @@ export function isTransientRpcFailure(error: unknown): boolean {
  */
 export async function retryTransientRpcCall<T>(
   call: () => Promise<T>,
-  options: { attempts?: number } = {},
+  options: { attempts?: number; retryDelayMs?: number } = {},
 ): Promise<T> {
   const attempts = options.attempts ?? 2;
+  const retryDelayMs = options.retryDelayMs ?? TRANSIENT_RPC_RETRY_DELAY_MS;
+  // Rejected rather than clamped: a budget below one means the caller asked
+  // for a call that never happens, and silently making it happen anyway
+  // would hide that. Without this the loop body never runs and the function
+  // rejects with `undefined` — no message, no stack, and the side effect the
+  // caller was waiting on never issued.
+  if (!Number.isInteger(attempts) || attempts < 1) {
+    throw new Error(
+      `retryTransientRpcCall needs at least one attempt, got ${attempts}`,
+    );
+  }
+
   let lastFailure: unknown;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
@@ -180,6 +201,12 @@ export async function retryTransientRpcCall<T>(
         throw error;
       }
       lastFailure = error;
+      // V8 collected the pending promise, which it does under memory
+      // pressure — so the next microtask is the worst moment to ask again.
+      // Nothing waits on the passing path, where the first call answers.
+      if (attempt < attempts && retryDelayMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+      }
     }
   }
   throw lastFailure;

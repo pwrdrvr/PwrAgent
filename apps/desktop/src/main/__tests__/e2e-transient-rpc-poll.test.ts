@@ -227,9 +227,8 @@ describe("retryTransientRpcCall", () => {
   it("gives up with the transient failure once the attempts run out", async () => {
     const call = vi.fn().mockRejectedValue(new Error(TRANSIENT_RPC_ERROR));
 
-    await expect(retryTransientRpcCall(call)).rejects.toThrow(
-      "Resulting promise was garbage collected",
-    );
+    await expect(retryTransientRpcCall(call, { retryDelayMs: 0 })).rejects
+      .toThrow("Resulting promise was garbage collected");
     expect(call).toHaveBeenCalledTimes(2);
   });
 
@@ -239,9 +238,48 @@ describe("retryTransientRpcCall", () => {
       .mockRejectedValueOnce(new Error(TRANSIENT_RPC_ERROR))
       .mockResolvedValue("answered");
 
-    await expect(retryTransientRpcCall(call, { attempts: 3 })).resolves
-      .toBe("answered");
+    await expect(retryTransientRpcCall(call, { attempts: 3, retryDelayMs: 0 }))
+      .resolves.toBe("answered");
     expect(call).toHaveBeenCalledTimes(3);
+  });
+
+  it("refuses a budget that would never call at all", async () => {
+    // Without the guard the loop body never runs and the function rejects
+    // with `undefined`, so the caller sees no error and the side effect it
+    // was awaiting never issued.
+    const call = vi.fn();
+
+    await expect(retryTransientRpcCall(call, { attempts: 0 })).rejects
+      .toThrow("needs at least one attempt");
+    expect(call).not.toHaveBeenCalled();
+  });
+
+  it("waits between attempts rather than re-issuing into the same collection", async () => {
+    const waits: number[] = [];
+    const sleep = vi.spyOn(globalThis, "setTimeout").mockImplementation(((
+      handler: () => void,
+      ms?: number,
+    ) => {
+      waits.push(ms ?? 0);
+      handler();
+      return 0 as unknown as ReturnType<typeof setTimeout>;
+    }) as typeof setTimeout);
+    const call = vi.fn()
+      .mockRejectedValueOnce(new Error(TRANSIENT_RPC_ERROR))
+      .mockResolvedValue("answered");
+
+    await expect(retryTransientRpcCall(call)).resolves.toBe("answered");
+    expect(waits).toEqual([50]);
+    sleep.mockRestore();
+  });
+
+  it("does not wait when the first attempt answers", async () => {
+    const sleep = vi.spyOn(globalThis, "setTimeout");
+    const call = vi.fn().mockResolvedValue("answered");
+
+    await expect(retryTransientRpcCall(call)).resolves.toBe("answered");
+    expect(sleep).not.toHaveBeenCalled();
+    sleep.mockRestore();
   });
 
   it("recognizes only the transient failure", () => {
@@ -332,7 +370,9 @@ describe("desktop E2E spec polls across the Electron RPC boundary", () => {
   // A rename or a move that leaves the scan empty would otherwise pass as
   // "nothing to check".
   it("finds the specs to scan", () => {
-    expect(specs.length).toBeGreaterThan(20);
+    // The directory holds ~85 specs; a floor near that catches a glob
+    // regression that drops most of them, which `> 20` would not.
+    expect(specs.length).toBeGreaterThan(60);
   });
 
   it("has no poll that calls the Electron app without the tolerance", () => {
@@ -343,34 +383,110 @@ describe("desktop E2E spec polls across the Electron RPC boundary", () => {
     expect(offenders).toEqual([]);
   });
 
+  // The failure that motivated all of this was a ONE-SHOT `ipcMain.handle`
+  // install, not a poll, so a guard that only understood polls would miss the
+  // exact shape it was written for. An install is the one-shot worth pinning:
+  // it is setup, it kills the whole test when it is lost, and replacing a
+  // handler is idempotent, so the retry's precondition always holds.
+  it("has no Electron-app handler install without the retry", () => {
+    const offenders = specs
+      .filter(({ code }) => unretriedHandlerInstalls(code) > 0)
+      .map(({ entry }) => entry);
+
+    expect(offenders).toEqual([]);
+  });
+
   for (const { code, entry } of specs.filter(({ code }) =>
     code.includes("tolerateTransientRpcFailure("))) {
-    it(`pairs every tolerance in ${entry} with a rethrow`, () => {
-      // A tolerance without the rethrow swallows the RPC detail and reports
-      // the poll's own timeout instead, which is the failure mode the
-      // helper's `rethrowWithLastFailure` exists to prevent.
+    it(`pairs every tolerated poll in ${entry} with a rethrow`, () => {
+      // Counted per POLL, not per tolerance instance: one instance may serve
+      // several polls, and `read()` clears the retained failure on every
+      // success so that reuse is sound. A tolerated poll WITHOUT the rethrow
+      // is the real defect — it swallows the RPC detail and reports the
+      // poll's own timeout, which is what `rethrowWithLastFailure` exists to
+      // prevent.
       expect((code.match(/rethrowWithLastFailure/g) ?? []).length)
-        .toBe((code.match(/tolerateTransientRpcFailure\(/g) ?? []).length);
+        .toBe(countCallsWhoseArgumentsContain(code, ".poll(", TOLERATED_READ));
     });
   }
 });
 
 /**
- * `.poll(` callbacks that reach `electronApp` inline — the shape that has no
- * tolerance around it. Walks forward from each `.poll(` to its matcher, so a
- * later `electronApp` elsewhere in the file cannot produce a false positive.
+ * `.poll(` callbacks that reach `electronApp` inline — the shape with no
+ * tolerance around it.
+ *
+ * The callback is delimited by matching `.poll(`'s own parenthesis rather
+ * than by a fixed slice. A window wide enough for today's longest callback
+ * silently stops covering the next one, and when it fails to find the
+ * matcher it starts reading the statements AFTER the poll, so it can miss a
+ * real offender and invent one that is already wrapped.
  */
 function inlineRpcPolls(code: string): number {
+  return countCallsWhoseArgumentsContain(code, ".poll(", /electronApp/);
+}
+
+/**
+ * A poll argument that is a tolerance's `read`, and not merely something
+ * whose name starts that way — `.readFederationHealth` appears six times in
+ * `federation-remote-window.spec.ts` and a bare `.read` substring counted
+ * every one of them.
+ */
+const TOLERATED_READ = /\.read\s*[),]/;
+
+/**
+ * `electronApp.evaluate(...)` calls that install an `ipcMain` handler without
+ * `retryTransientRpcCall` around them.
+ */
+function unretriedHandlerInstalls(code: string): number {
   let count = 0;
-  let index = code.indexOf(".poll(");
+  let index = code.indexOf("electronApp.evaluate(");
   while (index !== -1) {
-    const region = code.slice(index, index + 400);
-    const matcher = region.search(/\)\s*\.(?:toBe|toEqual|toMatchObject|not)/);
-    const callback = region.slice(0, matcher === -1 ? region.length : matcher);
-    if (callback.includes("electronApp")) {
+    const open = code.indexOf("(", index);
+    const args = code.slice(open, matchingParen(code, open) + 1);
+    // `retryTransientRpcCall(() =>` sits immediately before the call it
+    // wraps, so the preceding text is where the wrapper shows up.
+    const preceding = code.slice(Math.max(0, index - 120), index);
+    if (
+      args.includes("ipcMain.handle(")
+      && !preceding.includes("retryTransientRpcCall(")
+    ) {
       count += 1;
     }
-    index = code.indexOf(".poll(", index + 1);
+    index = code.indexOf("electronApp.evaluate(", index + 1);
   }
   return count;
+}
+
+function countCallsWhoseArgumentsContain(
+  code: string,
+  call: string,
+  needle: RegExp,
+): number {
+  let count = 0;
+  let index = code.indexOf(call);
+  while (index !== -1) {
+    const open = index + call.length - 1;
+    if (needle.test(code.slice(open, matchingParen(code, open) + 1))) {
+      count += 1;
+    }
+    index = code.indexOf(call, index + 1);
+  }
+  return count;
+}
+
+/**
+ * Index of the `)` closing the `(` at `open`, or the end of the string when
+ * the source is unbalanced — which only happens if the file does not parse,
+ * and a scan is not the place to report that.
+ */
+function matchingParen(code: string, open: number): number {
+  let depth = 0;
+  for (let index = open; index < code.length; index += 1) {
+    if (code[index] === "(") depth += 1;
+    if (code[index] === ")") {
+      depth -= 1;
+      if (depth === 0) return index;
+    }
+  }
+  return code.length - 1;
 }

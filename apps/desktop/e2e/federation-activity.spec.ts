@@ -101,20 +101,19 @@ for (const theme of ["dark", "light"] as const) {
       const topmost = activity.getByRole("checkbox", { name: "Always on top", exact: true });
       await topmost.click();
       await expect(topmost).toBeChecked();
-      const alwaysOnTopTrue = tolerateTransientRpcFailure(() =>
+      // One instance serves both polls: `read()` clears the retained failure
+      // on every success, so the second poll cannot be blamed for a blip the
+      // first one already recovered from.
+      const alwaysOnTop = tolerateTransientRpcFailure(() =>
         app.electronApp.evaluate(({ BrowserWindow }) =>
           BrowserWindow.getAllWindows().find((window) => window.getTitle() === "Federation Activity")?.isAlwaysOnTop(),
         ));
-      await expect.poll(alwaysOnTopTrue.read).toBe(true)
-        .catch(alwaysOnTopTrue.rethrowWithLastFailure);
+      await expect.poll(alwaysOnTop.read).toBe(true)
+        .catch(alwaysOnTop.rethrowWithLastFailure);
       await topmost.click();
       await expect(topmost).not.toBeChecked();
-      const alwaysOnTopFalse = tolerateTransientRpcFailure(() =>
-        app.electronApp.evaluate(({ BrowserWindow }) =>
-          BrowserWindow.getAllWindows().find((window) => window.getTitle() === "Federation Activity")?.isAlwaysOnTop(),
-        ));
-      await expect.poll(alwaysOnTopFalse.read).toBe(false)
-        .catch(alwaysOnTopFalse.rethrowWithLastFailure);
+      await expect.poll(alwaysOnTop.read).toBe(false)
+        .catch(alwaysOnTop.rethrowWithLastFailure);
       const audit = await new AxeBuilder({ page: activity })
         .setLegacyMode(true)
         .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"]).analyze();
