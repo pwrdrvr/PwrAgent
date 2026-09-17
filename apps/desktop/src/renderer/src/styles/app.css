@@ -29717,10 +29717,20 @@ button.pricing-token-miser__folded:focus-visible {
   display: flex;
   flex-direction: column;
   padding: 6px;
-  border: 1px solid var(--border-subtle);
+  /* Every one of these floats over a near-black surface: the transcript and
+     composer panes are transparent and ride `--bg-app`, and the messaging
+     picker opens over `--bg-panel` cards. A `--shadow-popover` lift is black,
+     so on those backgrounds it contributes nothing, and a `--border-subtle`
+     rim then weighs exactly the same as the `__separator` and row edges INSIDE
+     the panel — nothing tells the eye where the panel stops. (The Star Map
+     float tokens record the same finding for its chat cards against the sky.)
+     So the rim does the work, at the weight `.viewport-tooltip` and
+     `.context-usage-card` already use for portalled surfaces here, with a
+     tinted lift rather than a black one. Both tokens are defined per theme. */
+  border: 1px solid var(--border-strong);
   border-radius: 8px;
   background: var(--bg-panel-elevated);
-  box-shadow: var(--shadow-popover);
+  box-shadow: 0 12px 28px var(--shadow-tint-soft);
 }
 
 .project-picker__search,
@@ -35413,18 +35423,6 @@ details.launchpad-pending__output > summary .launchpad-pending__command-label {
   position: fixed;
   z-index: 150;
   bottom: auto;
-  /* The shared picker edge — `--border-subtle` plus a black `--shadow-popover`
-     — disappears here. This panel floats over `--bg-panel` cards and the
-     `--bg-app` behind them, so a black lift shadow lands on an equally dark
-     surface and contributes nothing, and a subtle rim weighs exactly the same
-     as the `__separator` and row edges INSIDE the panel: nothing told the eye
-     where the panel stopped. (The Star Map float tokens carry the same finding
-     for its chat cards.) This is the treatment `.viewport-tooltip` and
-     `.context-usage-card` already use for portalled surfaces over these
-     backgrounds — a `--border-strong` rim doing the work, with a tinted rather
-     than black lift. Both tokens are defined per theme, so light follows. */
-  border-color: var(--border-strong);
-  box-shadow: 0 12px 28px var(--shadow-tint-soft);
   /* The panel is portalled out of the field, but its typography used to come
      from one (an 11px / 650 / `--text-secondary` label). Set it outright so
      rows that say `font: inherit` — and slots with no weight of their own,
