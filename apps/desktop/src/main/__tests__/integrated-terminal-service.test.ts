@@ -19,6 +19,7 @@ import {
   resolveTerminalShell,
   writeZshIntegrationDirectory,
 } from "../terminal/integrated-terminal-service";
+import { PTY_RESIZE_INTERVAL_MS } from "../terminal/pty-resize";
 
 const settingsServiceMock = vi.hoisted(() => ({
   resolveIntegratedTerminalWindowsShell: vi.fn(() => "auto"),
@@ -534,18 +535,81 @@ describe("resolveTerminalShell", () => {
     const first = await service.createOrAttach(request, fakeWebContents());
     const second = await service.createOrAttach(request, fakeWebContents());
     expect(second.sessionId).toBe(first.sessionId);
-    const resize = (sessionId: string, cols: number, rows: number) => service.resize({ sessionId, cols, rows });
-    resize(first.sessionId, 80, 24);
-    resize(first.sessionId, 80, 24);
-    resize(second.sessionId, 100, 30);
-    resize(second.sessionId, 100, 30);
-    resize(first.sessionId, 80, 24);
-    resize(first.sessionId, 0, 0);
-    resize(second.sessionId, 1, 1);
-    // No leading [80, 24]: the session is seeded with the spawn size, so the
-    // viewers' opening fits are already deduplicated.
-    expect(vi.mocked(pty.resize).mock.calls).toEqual([[100, 30], [80, 24], [2, 2]]);
+    vi.useFakeTimers();
+    try {
+      const resize = (sessionId: string, cols: number, rows: number) => {
+        service.resize({ sessionId, cols, rows });
+        // Clear the pacing window after each one, so this test measures
+        // deduplication rather than coalescing.
+        vi.advanceTimersByTime(PTY_RESIZE_INTERVAL_MS);
+      };
+      resize(first.sessionId, 80, 24);
+      resize(first.sessionId, 80, 24);
+      resize(second.sessionId, 100, 30);
+      resize(second.sessionId, 100, 30);
+      resize(first.sessionId, 80, 24);
+      resize(first.sessionId, 0, 0);
+      resize(second.sessionId, 1, 1);
+      // No leading [80, 24]: the session is seeded with the spawn size, so the
+      // viewers' opening fits are already deduplicated.
+      expect(vi.mocked(pty.resize).mock.calls).toEqual([[100, 30], [80, 24], [2, 2]]);
+    } finally {
+      vi.useRealTimers();
+    }
     vi.mocked(pty.onExit).mock.calls[0]![0]({ exitCode: 0 });
+    await service.dispose();
+  });
+
+  it("collapses a viewer's resize burst into one PTY resize per interval", async () => {
+    const pty = fakePty();
+    const service = new IntegratedTerminalService({
+      loadNodePty: async () => ({ spawn: vi.fn(() => pty) as unknown as typeof import("node-pty").spawn }),
+    });
+    const session = await service.createOrAttach(
+      { threadKey: "codex:resize-burst", cwd: os.tmpdir(), cols: 80, rows: 24 },
+      fakeWebContents(),
+    );
+    vi.useFakeTimers();
+    try {
+      // What a window drag delivers. The renderer already coalesces to one
+      // frame, but a cell is ~8px wide, so nearly every frame carries a
+      // genuinely different size and survives deduplication.
+      for (let cols = 100; cols < 140; cols += 1) {
+        service.resize({ sessionId: session.sessionId, cols, rows: 30 });
+      }
+      // Leading edge only: the other 39 were superseded, not queued.
+      expect(vi.mocked(pty.resize).mock.calls).toEqual([[100, 30]]);
+      vi.advanceTimersByTime(PTY_RESIZE_INTERVAL_MS);
+      // And the shell ends up at the size the drag finished on.
+      expect(vi.mocked(pty.resize).mock.calls).toEqual([[100, 30], [139, 30]]);
+    } finally {
+      vi.useRealTimers();
+    }
+    vi.mocked(pty.onExit).mock.calls[0]![0]({ exitCode: 0 });
+    await service.dispose();
+  });
+
+  it("drops a queued resize when the terminal exits", async () => {
+    const pty = fakePty();
+    const service = new IntegratedTerminalService({
+      loadNodePty: async () => ({ spawn: vi.fn(() => pty) as unknown as typeof import("node-pty").spawn }),
+    });
+    const session = await service.createOrAttach(
+      { threadKey: "codex:resize-exit", cwd: os.tmpdir(), cols: 80, rows: 24 },
+      fakeWebContents(),
+    );
+    vi.useFakeTimers();
+    try {
+      service.resize({ sessionId: session.sessionId, cols: 100, rows: 30 });
+      service.resize({ sessionId: session.sessionId, cols: 120, rows: 40 });
+      // node-pty rejects a resize on an exited PTY, and nothing is left to
+      // catch a throw from the timer.
+      vi.mocked(pty.onExit).mock.calls[0]![0]({ exitCode: 0 });
+      vi.advanceTimersByTime(PTY_RESIZE_INTERVAL_MS * 4);
+      expect(vi.mocked(pty.resize).mock.calls).toEqual([[100, 30]]);
+    } finally {
+      vi.useRealTimers();
+    }
     await service.dispose();
   });
 

@@ -9,6 +9,11 @@ import { isFederationInstanceId } from "@pwragent/shared";
 import type { FederationRouter } from "./federation-router";
 import type { FederationRpcEndpoint } from "./federation-rpc";
 import { terminalHasForegroundCommand } from "../terminal/terminal-foreground-command";
+import {
+  clampTerminalColumns,
+  clampTerminalRows,
+  PtyResizeCoalescer,
+} from "../terminal/pty-resize";
 
 /**
  * Remote PTY protocol for federated threads.
@@ -237,6 +242,8 @@ type FederationPtySession = {
   lastOutputAt: number;
   /** Armed while paused at the high-water mark; an ack re-arms or clears it. */
   ackWatchdog?: ReturnType<typeof setTimeout>;
+  /** Owns this PTY's size: clamping, deduplication, and pacing. */
+  resizes: PtyResizeCoalescer;
 };
 
 /** Output is the only evidence a foreground command started or ended — both
@@ -248,15 +255,6 @@ const FOREGROUND_SETTLE_MS = 250;
 /** Ceiling on how stale the answer can get under continuously streaming
  *  output, where the settle timer never fires. */
 const FOREGROUND_MAX_INTERVAL_MS = 1_000;
-
-const MIN_DIMENSION = 2;
-const MAX_PTY_COLUMNS = 500;
-const MAX_PTY_ROWS = 200;
-
-function clampDimension(value: number, fallback: number, maximum: number): number {
-  if (!Number.isFinite(value)) return fallback;
-  return Math.min(maximum, Math.max(MIN_DIMENSION, Math.round(value)));
-}
 
 /**
  * Owner-side remote PTY sessions. Wraps the shared integrated-terminal spawn
@@ -306,8 +304,8 @@ export class FederationPtyService {
       });
       spawned = await this.options.spawnPty({
         cwd,
-        cols: clampDimension(request.cols, 80, MAX_PTY_COLUMNS),
-        rows: clampDimension(request.rows, 18, MAX_PTY_ROWS),
+        cols: clampTerminalColumns(request.cols),
+        rows: clampTerminalRows(request.rows),
       });
     } finally {
       const remaining = (this.spawningCountByPeer.get(peerId) ?? 1) - 1;
@@ -345,6 +343,21 @@ export class FederationPtyService {
       foregroundCommand: false,
       foregroundCheckedAt: 0,
       lastOutputAt: 0,
+      // Seeded with the grid the spawn above just sized this PTY to. A remote
+      // viewer's resize is a network round trip before it reaches the shell,
+      // so pacing matters more here than it does locally.
+      resizes: new PtyResizeCoalescer({
+        apply: (cols, rows) => spawned.pty.resize(cols, rows),
+        // `now` is a method here, so it has to stay bound.
+        now: () => this.now(),
+        onDeferredError: (error) => {
+          this.options.log?.warn("remote pty resize failed", {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        },
+        spawnedCols: request.cols,
+        spawnedRows: request.rows,
+      }),
     };
     session.foregroundCommand = this.detectForegroundCommand(session);
     session.foregroundCheckedAt = this.now();
@@ -382,10 +395,7 @@ export class FederationPtyService {
 
   resize(peerId: FederationInstanceId, request: FederationPtyResizeRequest): void {
     const session = this.requireSession(peerId, request.sessionId);
-    session.pty.resize(
-      clampDimension(request.cols, 80, MAX_PTY_COLUMNS),
-      clampDimension(request.rows, 18, MAX_PTY_ROWS),
-    );
+    session.resizes.request(request.cols, request.rows);
   }
 
   ack(peerId: FederationInstanceId, request: FederationPtyAckRequest): void {
@@ -677,6 +687,8 @@ export class FederationPtyService {
   }
 
   private deleteSession(session: FederationPtySession, reason: string): void {
+    // A queued resize must not reach a PTY that is being torn down.
+    session.resizes.dispose();
     if (session.reapTimer) {
       clearTimeout(session.reapTimer);
       session.reapTimer = undefined;

@@ -24,15 +24,16 @@ import type {
   IntegratedTerminalWriteRequest,
 } from "../../shared/integrated-terminal";
 import { getMainLogger } from "../log";
+import {
+  clampTerminalColumns,
+  clampTerminalRows,
+  PtyResizeCoalescer,
+} from "./pty-resize";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { resolvePwragentRoot } from "../profile";
 import { terminalHasForegroundCommand } from "./terminal-foreground-command";
 
-const DEFAULT_COLUMNS = 80;
-const DEFAULT_ROWS = 18;
-const MAX_COLUMNS = 500;
-const MAX_ROWS = 200;
 const OUTPUT_BUFFER_LIMIT = 128 * 1024;
 const PTY_SHUTDOWN_FORCE_KILL_MS = 500;
 const RUNTIME_PATH_PREFIX_ENV =
@@ -181,7 +182,8 @@ function windowsPowerShellArgs(env: NodeJS.ProcessEnv): string[] {
 }
 
 type TerminalSession = {
-  lastResize?: { cols: number; rows: number };
+  /** Owns this PTY's size: clamping, deduplication, and pacing. */
+  resizes: PtyResizeCoalescer;
   sessionId: string;
   threadKey: string;
   pty: IPty;
@@ -384,17 +386,20 @@ export class IntegratedTerminalService {
       sessionId,
       threadKey,
       pty: ptyProcess,
-      // Record the grid the PTY is ALREADY running at. `spawnTerminalPty`
-      // sized it from this same request through these same clamps, and
-      // `forkpty`/`CreatePseudoConsole` both take that size verbatim, so this
-      // is what the shell has — not a guess. Leaving it unset made the
-      // renderer's first `fitAddon.fit()` after attach, which usually
-      // proposes the spawn grid straight back, the one resize dedup could
-      // never catch.
-      lastResize: {
-        cols: clampTerminalColumns(request.cols),
-        rows: clampTerminalRows(request.rows),
-      },
+      // Seeded with the grid `spawnTerminalPty` just sized this PTY to, from
+      // this same request.
+      resizes: new PtyResizeCoalescer({
+        apply: (cols, rows) => ptyProcess.resize(cols, rows),
+        now: () => this.now(),
+        onDeferredError: (error) => {
+          this.logger.warn("resize-failed", {
+            error: error instanceof Error ? error.message : String(error),
+            sessionId,
+          });
+        },
+        spawnedCols: request.cols,
+        spawnedRows: request.rows,
+      }),
       cwd,
       shell: shell.file,
       buffer: "",
@@ -474,16 +479,11 @@ export class IntegratedTerminalService {
   }
 
   resize(request: IntegratedTerminalResizeRequest): void {
-    const session = this.sessionsById.get(request.sessionId);
-    if (!session) return;
-    const cols = clampTerminalColumns(request.cols);
-    const rows = clampTerminalRows(request.rows);
-    // Viewers share this PTY. Deduplicate at its owner, not against a
-    // renderer's stale last size. Track accepted requests because node-pty
-    // can defer a Windows resize before its cols/rows getters change.
-    if (session.lastResize?.cols === cols && session.lastResize.rows === rows) return;
-    session.pty.resize(cols, rows);
-    session.lastResize = { cols, rows };
+    // Viewers share this PTY, so clamping, deduplication, and pacing all
+    // happen at its owner rather than against a renderer's stale last size.
+    this.sessionsById
+      .get(request.sessionId)
+      ?.resizes.request(request.cols, request.rows);
   }
 
   close(request: IntegratedTerminalCloseRequest): void {
@@ -668,6 +668,8 @@ export class IntegratedTerminalService {
   }
 
   private deleteSession(session: TerminalSession): void {
+    // Before the listeners: a queued resize must not reach a dead PTY.
+    session.resizes.dispose();
     this.disposeSessionListeners(session);
     this.sessionsById.delete(session.sessionId);
     session.subscribers.clear();
@@ -968,14 +970,6 @@ async function removeOrphanedIntegrationTempFiles(
   }
 }
 
-export function clampTerminalColumns(value: number): number {
-  return clampInteger(value, DEFAULT_COLUMNS, 2, MAX_COLUMNS);
-}
-
-export function clampTerminalRows(value: number): number {
-  return clampInteger(value, DEFAULT_ROWS, 2, MAX_ROWS);
-}
-
 function terminalStartErrorMessage(error: unknown): string {
   const detail = error instanceof Error ? error.message : String(error);
   return detail
@@ -1124,16 +1118,6 @@ function commandExistsOnPath(
     }
   }
   return false;
-}
-
-function clampInteger(
-  value: number,
-  fallback: number,
-  minimum: number,
-  maximum: number,
-): number {
-  if (!Number.isFinite(value)) return fallback;
-  return Math.min(maximum, Math.max(minimum, Math.round(value)));
 }
 
 function trimBufferedOutput(value: string): string {
