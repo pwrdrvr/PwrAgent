@@ -1,5 +1,6 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { SocketModeClient } from "@slack/socket-mode";
+import { SlackSocketDiagnostics } from "./slack-socket-diagnostics";
 import type {
   AgentSessionStoppedEvent,
   AgentSessionTitleChangedEvent,
@@ -638,7 +639,7 @@ export class SlackAdapter implements SlackProviderAdapter {
       options.socketClient
       ?? (options.config.inboundMode === "events"
         ? undefined
-        : createSlackSocketClient(options.config.appToken));
+        : createSlackSocketClient(options.config.appToken, this.logger));
   }
 
   get authorizedActorIds(): readonly string[] {
@@ -4303,14 +4304,19 @@ export function createSlackApi(botToken: string): SlackApi {
 
 export function createSlackSocketClient(
   appToken: string | undefined,
+  logger: SlackProviderLogger = {},
 ): SlackSocketClient | undefined {
   if (!appToken?.trim()) {
     return undefined;
   }
-  return new SlackSocketModeConnection(new SocketModeClient({
+  const diagnostics = new SlackSocketDiagnostics(logger, [appToken]);
+  const client = new SocketModeClient({
     appToken,
     autoReconnectEnabled: true,
-  }) as unknown as SlackSocketModeClientWithDiscovery);
+    logger: diagnostics.sdkLogger,
+  });
+  diagnostics.attach(client);
+  return new SlackSocketModeConnection(client as unknown as SlackSocketModeClientWithDiscovery);
 }
 
 type SlackSocketModeClientWithDiscovery = SlackSocketClient & {
