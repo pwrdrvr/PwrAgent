@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Summarize GitHub Release asset download stats for PwrAgent."""
+"""Summarize GitHub Release desktop asset download stats."""
 
 from __future__ import annotations
 
 import argparse
 import json
+import re
 import shutil
 import subprocess
 from datetime import datetime, timezone
@@ -12,6 +13,10 @@ from typing import Any
 
 
 DEFAULT_REPO = "pwrdrvr/PwrAgent"
+STABLE_SETUP_RE = re.compile(
+    r"^Pwr[A-Za-z0-9]+(?:\.Setup|-windows-(?:x64|arm64|ia32)-setup)\.exe$",
+    re.IGNORECASE,
+)
 
 
 def run_gh(repo: str) -> list[dict[str, Any]]:
@@ -108,7 +113,11 @@ def classify_asset(name: str) -> str | None:
     if lowered.endswith(".zip"):
         return "zip"
     if lowered.endswith(".dmg"):
-        return "stable_dmg" if name == "PwrAgent.dmg" else "versioned_dmg"
+        return "stable_dmg" if re.fullmatch(r"Pwr[A-Za-z0-9]+\.dmg", name) else "versioned_dmg"
+    if lowered.endswith(".exe") and (
+        "-setup" in lowered or lowered.endswith(".setup.exe")
+    ):
+        return "stable_setup" if STABLE_SETUP_RE.fullmatch(name) else "versioned_setup"
     return None
 
 
@@ -157,8 +166,23 @@ def release_summary(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         zip_downloads = sum(row["downloads"] for row in group if row["kind"] == "zip")
         stable_downloads = sum(row["downloads"] for row in group if row["kind"] == "stable_dmg")
         versioned_downloads = sum(row["downloads"] for row in group if row["kind"] == "versioned_dmg")
+        stable_setup_downloads = sum(
+            row["downloads"] for row in group if row["kind"] == "stable_setup"
+        )
+        versioned_setup_downloads = sum(
+            row["downloads"] for row in group if row["kind"] == "versioned_setup"
+        )
         zip_bytes = sum(row["bytes"] for row in group if row["kind"] == "zip")
-        dmg_bytes = sum(row["bytes"] for row in group if row["kind"] != "zip")
+        dmg_bytes = sum(
+            row["bytes"]
+            for row in group
+            if row["kind"] in {"stable_dmg", "versioned_dmg"}
+        )
+        setup_bytes = sum(
+            row["bytes"]
+            for row in group
+            if row["kind"] in {"stable_setup", "versioned_setup"}
+        )
         first = group[0]
         summaries.append(
             {
@@ -171,6 +195,10 @@ def release_summary(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "versioned_dmg_downloads": versioned_downloads,
                 "total_dmg_downloads": stable_downloads + versioned_downloads,
                 "dmg_gib": round(dmg_bytes / 1_073_741_824, 2),
+                "stable_setup_downloads": stable_setup_downloads,
+                "versioned_setup_downloads": versioned_setup_downloads,
+                "total_setup_downloads": stable_setup_downloads + versioned_setup_downloads,
+                "setup_gib": round(setup_bytes / 1_073_741_824, 2),
             }
         )
 
@@ -197,6 +225,10 @@ def print_markdown(repo: str, rows: list[dict[str, Any]], selected_count: int) -
     zip_dl, zip_bytes, zip_gib = sum_rows(rows, "zip")
     stable_dl, stable_bytes, stable_gib = sum_rows(rows, "stable_dmg")
     versioned_dl, versioned_bytes, versioned_gib = sum_rows(rows, "versioned_dmg")
+    stable_setup_dl, stable_setup_bytes, stable_setup_gib = sum_rows(rows, "stable_setup")
+    versioned_setup_dl, versioned_setup_bytes, versioned_setup_gib = sum_rows(
+        rows, "versioned_setup"
+    )
     print("## Totals")
     print()
     print(
@@ -204,13 +236,31 @@ def print_markdown(repo: str, rows: list[dict[str, Any]], selected_count: int) -
             ["Asset group", "Downloads", "Bytes", "GiB"],
             [
                 ["ZIP updater assets", zip_dl, zip_bytes, zip_gib],
-                ["Stable PwrAgent.dmg alias", stable_dl, stable_bytes, stable_gib],
+                ["Stable DMG alias", stable_dl, stable_bytes, stable_gib],
                 ["Versioned DMG assets", versioned_dl, versioned_bytes, versioned_gib],
                 [
                     "All DMG assets",
                     stable_dl + versioned_dl,
                     stable_bytes + versioned_bytes,
                     round(stable_gib + versioned_gib, 2),
+                ],
+                [
+                    "Stable Setup.exe alias",
+                    stable_setup_dl,
+                    stable_setup_bytes,
+                    stable_setup_gib,
+                ],
+                [
+                    "Versioned Setup.exe assets",
+                    versioned_setup_dl,
+                    versioned_setup_bytes,
+                    versioned_setup_gib,
+                ],
+                [
+                    "All Setup.exe assets",
+                    stable_setup_dl + versioned_setup_dl,
+                    stable_setup_bytes + versioned_setup_bytes,
+                    round(stable_setup_gib + versioned_setup_gib, 2),
                 ],
             ],
         )
@@ -231,6 +281,10 @@ def print_markdown(repo: str, rows: list[dict[str, Any]], selected_count: int) -
                 "Versioned DMG dl",
                 "Total DMG dl",
                 "DMG GiB",
+                "Stable Setup dl",
+                "Versioned Setup dl",
+                "Total Setup dl",
+                "Setup GiB",
             ],
             [
                 [
@@ -243,6 +297,10 @@ def print_markdown(repo: str, rows: list[dict[str, Any]], selected_count: int) -
                     row["versioned_dmg_downloads"],
                     row["total_dmg_downloads"],
                     row["dmg_gib"],
+                    row["stable_setup_downloads"],
+                    row["versioned_setup_downloads"],
+                    row["total_setup_downloads"],
+                    row["setup_gib"],
                 ]
                 for row in release_summary(rows)
             ],
@@ -289,6 +347,15 @@ def main() -> int:
                         ),
                         "versioned_dmg": dict(
                             zip(["downloads", "bytes", "gib"], sum_rows(rows, "versioned_dmg"))
+                        ),
+                        "stable_setup": dict(
+                            zip(["downloads", "bytes", "gib"], sum_rows(rows, "stable_setup"))
+                        ),
+                        "versioned_setup": dict(
+                            zip(
+                                ["downloads", "bytes", "gib"],
+                                sum_rows(rows, "versioned_setup"),
+                            )
                         ),
                     },
                     "by_release": release_summary(rows),
