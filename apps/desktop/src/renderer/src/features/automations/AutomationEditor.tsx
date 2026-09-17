@@ -36,6 +36,7 @@ import {
   validateAutomationScheduleDefinition,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { MessagingSurfacePicker } from "../../components/MessagingSurfacePicker";
 import {
   CODEX_AGENT_THREAD_CREATION_NOTE,
   canChangeExistingThreadAgentDesignation,
@@ -118,9 +119,13 @@ const DEFAULT_INBOUND_PROVIDERS: MessagingChannelKind[] = ["slack", "telegram"];
 
 const MANUAL_GROUP_VALUE = "__manual__";
 
-type ProviderGroups = Partial<
-  Record<MessagingChannelKind, Array<{ id: string; title: string }>>
->;
+type ProviderConversation = {
+  id: string;
+  title: string;
+  kind: MessagingConversationKind;
+};
+
+type ProviderGroups = Partial<Record<MessagingChannelKind, ProviderConversation[]>>;
 
 const ACCESS_MODE_OPTIONS: Array<{ label: string; value: ThreadExecutionMode }> = [
   { label: "Default", value: "default" },
@@ -1362,32 +1367,25 @@ export function AutomationEditor(props: AutomationEditorProps) {
                       </select>
                     </label>
                     {telegramGroups.length > 0 ? (
-                      <label className="automation-field">
+                      <div className="automation-field automation-field--picker">
                         <span>{conversationPickerLabel(inboundProvider)}</span>
-                        <select
-                          value={groupSelection}
-                          onChange={(event) => {
-                            const value = event.currentTarget.value;
+                        <MessagingSurfacePicker
+                          key={`inbound:${inboundProvider}`}
+                          fieldLabel={conversationPickerLabel(inboundProvider)}
+                          filterConversations
+                          options={conversationOptions(telegramGroups)}
+                          value={pickerValue(groupSelection)}
+                          {...conversationPickerLabels(inboundProvider)}
+                          onChange={(picked) => {
+                            const value = selectionValue(picked);
                             setGroupSelection(value);
                             setInboundGroupId(value === MANUAL_GROUP_VALUE ? "" : value);
                             setTopicSelection("");
                             setInboundTopicId("");
                             setValidationError(undefined);
                           }}
-                        >
-                          <option value="">
-                            Choose a {conversationPickerLabel(inboundProvider).toLowerCase()}
-                          </option>
-                          {telegramGroups.map((group) => (
-                            <option key={group.id} value={group.id}>
-                              {group.title}
-                            </option>
-                          ))}
-                          <option value={MANUAL_GROUP_VALUE}>
-                            Enter {conversationLabel(inboundProvider)} manually...
-                          </option>
-                        </select>
-                      </label>
+                        />
+                      </div>
                     ) : null}
                   </div>
 
@@ -1504,30 +1502,28 @@ export function AutomationEditor(props: AutomationEditorProps) {
                       {telegramScope === "topic" ? (
                         <div className="automation-field-group">
                           {topicOptions.length > 0 ? (
-                            <label className="automation-field">
+                            <div className="automation-field automation-field--picker">
                               <span>Topic</span>
-                              <select
-                                value={topicSelection}
-                                onChange={(event) => {
-                                  const value = event.currentTarget.value;
+                              <MessagingSurfacePicker
+                                fieldLabel="Topic"
+                                filterConversations={false}
+                                options={conversationOptions(topicOptions)}
+                                value={pickerValue(topicSelection)}
+                                placeholder="Choose a topic"
+                                searchPlaceholder="Find a topic or ID"
+                                manualLabel="Enter topic ID manually..."
+                                sectionLabels={{ other: "Topics" }}
+                                emptyLabel="No matching topics."
+                                onChange={(picked) => {
+                                  const value = selectionValue(picked);
                                   setTopicSelection(value);
                                   setInboundTopicId(
                                     value === MANUAL_GROUP_VALUE ? "" : value,
                                   );
                                   setValidationError(undefined);
                                 }}
-                              >
-                                <option value="">Choose a topic</option>
-                                {topicOptions.map((topic) => (
-                                  <option key={topic.id} value={topic.id}>
-                                    {topic.title}
-                                  </option>
-                                ))}
-                                <option value={MANUAL_GROUP_VALUE}>
-                                  Enter topic ID manually...
-                                </option>
-                              </select>
-                            </label>
+                              />
+                            </div>
                           ) : null}
                           {topicOptions.length === 0 ||
                           topicSelection === MANUAL_GROUP_VALUE ? (
@@ -2448,34 +2444,26 @@ export function AutomationEditor(props: AutomationEditorProps) {
                               </select>
                             </label>
                             {destGroups.length > 0 ? (
-                              <label className="automation-field">
+                              <div className="automation-field automation-field--picker">
                                 <span>
                                   Destination{" "}
                                   {conversationPickerLabel(destProvider).toLowerCase()}
                                 </span>
-                                <select
-                                  value={destGroupSelection}
-                                  onChange={(event) => {
-                                    const value = event.currentTarget.value;
+                                <MessagingSurfacePicker
+                                  key={`dest:${destProvider}`}
+                                  fieldLabel={`Destination ${conversationPickerLabel(destProvider).toLowerCase()}`}
+                                  filterConversations
+                                  options={conversationOptions(destGroups)}
+                                  value={pickerValue(destGroupSelection)}
+                                  {...conversationPickerLabels(destProvider)}
+                                  onChange={(picked) => {
+                                    const value = selectionValue(picked);
                                     setDestGroupSelection(value);
                                     setDestGroupId(value === MANUAL_GROUP_VALUE ? "" : value);
                                     setValidationError(undefined);
                                   }}
-                                >
-                                  <option value="">
-                                    Choose a{" "}
-                                    {conversationPickerLabel(destProvider).toLowerCase()}
-                                  </option>
-                                  {destGroups.map((group) => (
-                                    <option key={group.id} value={group.id}>
-                                      {group.title}
-                                    </option>
-                                  ))}
-                                  <option value={MANUAL_GROUP_VALUE}>
-                                    Enter {conversationLabel(destProvider)} manually...
-                                  </option>
-                                </select>
-                              </label>
+                                />
+                              </div>
                             ) : null}
                           </div>
                           {destGroups.length === 0 ||
@@ -2959,6 +2947,69 @@ function buildTriggerConfig(params: {
   };
 }
 
+/**
+ * The picker reports its manual row as "manual"; this editor's selection
+ * state uses a sentinel chosen not to collide with a real conversation ID.
+ * Translate at the boundary rather than widening either one.
+ */
+function pickerValue(selection: string): string {
+  return selection === MANUAL_GROUP_VALUE ? "manual" : selection;
+}
+
+function selectionValue(picked: string): string {
+  return picked === "manual" ? MANUAL_GROUP_VALUE : picked;
+}
+
+/**
+ * Authorized groups, channels and topics all arrive as `{id, title}`. The ID
+ * rides in the picker's mono column so two similarly titled destinations stay
+ * distinguishable — except when the title IS the ID, where repeating it would
+ * be noise.
+ */
+function conversationOptions(
+  entries: ReadonlyArray<{ id: string; title: string; kind?: MessagingConversationKind }>,
+): Array<{
+  value: string;
+  label: string;
+  detail?: string;
+  kind?: MessagingConversationKind;
+}> {
+  return entries.map((entry) => ({
+    value: entry.id,
+    label: entry.title,
+    detail: entry.title === entry.id ? undefined : entry.id,
+    ...(entry.kind ? { kind: entry.kind } : {}),
+  }));
+}
+
+/**
+ * Every word the picker shows, in this provider's vocabulary. The list is the
+ * operator's authorized conversations, not everything the bot has seen, so the
+ * heading says so — a short list is then explained rather than suspicious.
+ */
+function conversationPickerLabels(provider: MessagingChannelKind): {
+  placeholder: string;
+  searchPlaceholder: string;
+  manualLabel: string;
+  sectionLabels: { channel: string; dm: string };
+  emptyLabel: string;
+} {
+  const noun = conversationPickerLabel(provider).toLowerCase();
+  return {
+    placeholder: `Choose a ${noun} or DM`,
+    searchPlaceholder: `Find a ${noun}, DM, or ID`,
+    manualLabel: `Enter ${conversationLabel(provider)} manually...`,
+    // Both headings say "authorized": this list is what the operator has let
+    // the bot talk to, not everything it has seen, and a short list is then
+    // explained rather than suspicious.
+    sectionLabels: {
+      channel: `Authorized ${noun}s`,
+      dm: "Authorized direct messages",
+    },
+    emptyLabel: "No matching conversations.",
+  };
+}
+
 /** Noun for the conversation-picker dropdown ("Group" / "Channel"). */
 function conversationPickerLabel(provider: MessagingChannelKind): string {
   if (provider === "telegram") return "Group";
@@ -3073,18 +3124,76 @@ function readEnabledProviders(
   return providers;
 }
 
+/**
+ * The conversations an automation may watch or reply to, per provider.
+ *
+ * Every provider names its conversation list differently, and each also keeps
+ * an `authorizedUserIds` list — the people the bot will talk to one-to-one.
+ * Those are DMs, and leaving them out meant an automation could never watch or
+ * answer a direct message. The container lists (`authorizedGuilds`,
+ * `authorizedWorkspaces`, `authorizedTeams`, `authorizedTenants`) are servers
+ * and workspaces rather than conversations, so nothing here reads them.
+ */
 function readProviderGroups(
   snapshot: DesktopMessagingSettingsProjection,
 ): ProviderGroups {
-  const toGroup = (contact: { id: string; displayName?: string }) => ({
-    id: contact.id,
-    title: contact.displayName ? `${contact.displayName}` : contact.id,
-  });
-  const telegram = snapshot.messaging.telegram.authorizedSupergroups.value.map(toGroup);
-  const slack = snapshot.messaging.slack.authorizedChannels.value.map(toGroup);
+  const messaging = snapshot.messaging;
+  const toConversation =
+    (kind: MessagingConversationKind) =>
+    (contact: { id: string; displayName?: string }): ProviderConversation => ({
+      id: contact.id,
+      title: contact.displayName ? `${contact.displayName}` : contact.id,
+      kind,
+    });
+  /**
+   * Every list here is read defensively. A provider block or an authorized
+   * list the snapshot does not carry contributes nothing; without this, one
+   * absent key throws and the caller's catch swallows it, leaving every
+   * picker empty and every provider looking unconfigured.
+   */
+  const read = (
+    list: { value?: Array<{ id: string; displayName?: string }> } | undefined,
+    kind: MessagingConversationKind,
+  ): ProviderConversation[] => (list?.value ?? []).map(toConversation(kind));
+
+  // Partial by design: `MessagingChannelKind` covers more providers than have
+  // a Settings screen, and one without an authorized list simply has no
+  // conversations to offer.
+  const byProvider: ProviderGroups = {
+    telegram: [
+      ...read(messaging.telegram?.authorizedSupergroups, "channel"),
+      ...read(messaging.telegram?.authorizedUserIds, "dm"),
+    ],
+    // Discord's only authorized list is of guilds, which are servers rather
+    // than conversations; its channels are discovered per-guild elsewhere.
+    discord: read(messaging.discord?.authorizedUserIds, "dm"),
+    slack: [
+      ...read(messaging.slack?.authorizedChannels, "channel"),
+      ...read(messaging.slack?.authorizedUserIds, "dm"),
+    ],
+    mattermost: [
+      ...read(messaging.mattermost?.authorizedConversations, "channel"),
+      ...read(messaging.mattermost?.authorizedUserIds, "dm"),
+    ],
+    feishu: [
+      ...read(messaging.feishu?.authorizedChats, "channel"),
+      ...read(messaging.feishu?.authorizedUserIds, "dm"),
+    ],
+    line: [
+      // A LINE "room" is a multi-person chat without a group identity — a
+      // group DM in every way that matters here.
+      ...read(messaging.line?.authorizedGroups, "channel"),
+      ...read(messaging.line?.authorizedRooms, "channel"),
+      ...read(messaging.line?.authorizedUserIds, "dm"),
+    ],
+  };
+
   const groups: ProviderGroups = {};
-  if (telegram.length > 0) groups.telegram = telegram;
-  if (slack.length > 0) groups.slack = slack;
+  for (const [provider, conversations] of Object.entries(byProvider)) {
+    if (conversations && conversations.length > 0) {
+      groups[provider as MessagingChannelKind] = conversations;
+    }
+  }
   return groups;
 }
 

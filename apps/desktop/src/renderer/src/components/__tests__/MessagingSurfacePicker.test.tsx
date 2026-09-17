@@ -1,7 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { MessagingSurfacePicker } from "../MessagingSurfacePicker";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { MessagingSurfacePicker, placePanel } from "../MessagingSurfacePicker";
 
 afterEach(cleanup);
 
@@ -13,12 +13,15 @@ const options = [
   { value: "topic", label: "Garden topic", kind: "topic" as const, detail: "T_GARDEN", seen: "Sep 13" },
 ];
 
-const CLOSED_LABEL = "Choose a messaging surface";
+// The accessible name is always "<field>: <whatever the button shows>", so
+// one regex finds the trigger in every state and the unset case is explicit.
+const CLOSED_LABEL = "Surface: Choose a recently seen surface...";
+const ANY_TRIGGER = /^Surface: /;
 
 function setup(value = "", allowTopics = false) {
   const onChange = vi.fn();
-  render(<MessagingSurfacePicker value={value} options={options} filterConversations allowTopics={allowTopics} onChange={onChange} />);
-  fireEvent.click(screen.getByRole("button", { name: value ? /^Surface: / : CLOSED_LABEL }));
+  render(<MessagingSurfacePicker fieldLabel="Surface" value={value} options={options} filterConversations allowTopics={allowTopics} onChange={onChange} />);
+  fireEvent.click(screen.getByRole("button", { name: ANY_TRIGGER }));
   return onChange;
 }
 
@@ -31,6 +34,70 @@ function sections() {
     .queryAllByRole("group")
     .map((group) => group.getAttribute("aria-label"));
 }
+
+/** A trigger rect at the given position; only these four fields are read. */
+function triggerRect(box: {
+  top: number;
+  bottom: number;
+  left: number;
+  width: number;
+}): DOMRect {
+  return box as unknown as DOMRect;
+}
+
+describe("placePanel", () => {
+  const viewport = { width: 1440, height: 900 };
+
+  beforeEach(() => {
+    window.innerWidth = viewport.width;
+    window.innerHeight = viewport.height;
+  });
+
+  it("caps the panel height instead of growing to fill the viewport", () => {
+    // Without a ceiling a tall window turns twenty rows into a dropdown
+    // covering most of the screen; the branch picker stops at 440.
+    const placed = placePanel(triggerRect({ top: 100, bottom: 132, left: 40, width: 560 }));
+    expect(placed.flipped).toBe(false);
+    expect(placed.maxHeight).toBe(440);
+  });
+
+  it("keeps a narrow window's panel inside the viewport", () => {
+    window.innerWidth = 320;
+    const placed = placePanel(triggerRect({ top: 100, bottom: 132, left: 8, width: 300 }));
+    // The minimum width cannot win over the viewport: `left` alone cannot
+    // rescue a panel wider than the window.
+    expect(placed.left + placed.width).toBeLessThanOrEqual(320);
+    expect(placed.left).toBeGreaterThanOrEqual(0);
+  });
+
+  it("holds the panel on screen when the trigger scrolls out of its pane", () => {
+    // `reposition` runs on every scroll, so an unclamped top would drag the
+    // panel off-screen while it is still open and holding focus.
+    // A flipped panel is pinned by its bottom edge and grows upward, so its
+    // bounds are [top - maxHeight, top]; an unflipped one runs downward.
+    const bounds = (placed: ReturnType<typeof placePanel>) =>
+      placed.flipped
+        ? [placed.top - placed.maxHeight, placed.top]
+        : [placed.top, placed.top + placed.maxHeight];
+
+    for (const rect of [
+      triggerRect({ top: 2000, bottom: 2032, left: 40, width: 560 }),
+      triggerRect({ top: -2000, bottom: -1968, left: 40, width: 560 }),
+    ]) {
+      const [top, bottom] = bounds(placePanel(rect));
+      expect(top).toBeGreaterThanOrEqual(0);
+      expect(bottom).toBeLessThanOrEqual(viewport.height);
+    }
+  });
+
+  it("flips upward without growing past the top of the window", () => {
+    const placed = placePanel(triggerRect({ top: 820, bottom: 852, left: 40, width: 560 }));
+    expect(placed.flipped).toBe(true);
+    // A flipped panel is pinned by its bottom edge, so its top is
+    // `top - maxHeight`; that has to stay on screen.
+    expect(placed.top - placed.maxHeight).toBeGreaterThanOrEqual(0);
+  });
+});
 
 describe("MessagingSurfacePicker", () => {
   it("groups durable destinations by kind and never offers ephemeral threads", () => {
@@ -51,11 +118,53 @@ describe("MessagingSurfacePicker", () => {
     expect(screen.getByRole("option", { name: /Garden topic/ })).toBeInTheDocument();
   });
 
-  it("replaces the trigger while open so the field shows no stale placeholder", () => {
-    setup();
-    expect(screen.queryByRole("button", { name: CLOSED_LABEL })).not.toBeInTheDocument();
-    fireEvent.keyDown(screen.getByRole("combobox"), { key: "Escape" });
-    expect(screen.getByRole("button", { name: CLOSED_LABEL })).toBeInTheDocument();
+  it("opens as a popover outside the field, and the trigger toggles it", () => {
+    const onChange = vi.fn();
+    const { container } = render(
+      <MessagingSurfacePicker fieldLabel="Surface" value="" options={options} filterConversations onChange={onChange} />,
+    );
+    const trigger = screen.getByRole("button", { name: CLOSED_LABEL });
+
+    fireEvent.click(trigger);
+    const panel = screen.getByRole("dialog", { name: "Surface" });
+    // Portalled: the panel must not be a descendant of the field, or every
+    // `overflow: hidden` ancestor between them would clip it.
+    expect(container).not.toContainElement(panel);
+    expect(document.body).toContainElement(panel);
+    // And it was measured and placed against the trigger rather than laid out
+    // in flow. (`position: fixed` itself comes from app.css, which jsdom does
+    // not load, so the inline placement is what is observable here.)
+    expect(panel.style.width).not.toBe("");
+    expect(panel.style.maxHeight).not.toBe("");
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+
+    // The trigger stays put and closes what it opened.
+    fireEvent.click(trigger);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("survives the focus move that opening it causes", () => {
+    // The sequence a real click produces, which `fireEvent.click` alone does
+    // not: the trigger takes focus, then the panel's search input pulls it
+    // away via `autoFocus`. That fires a focus-out on the field whose
+    // relatedTarget lives in the portal — not a DOM descendant of the field.
+    // A close-on-focus-out check closed the panel in the frame it opened, so
+    // it flashed and vanished, and no assertion that only clicked the trigger
+    // could see it.
+    render(
+      <MessagingSurfacePicker fieldLabel="Surface" value="" options={options} filterConversations onChange={vi.fn()} />,
+    );
+    const trigger = screen.getByRole("button", { name: CLOSED_LABEL });
+    trigger.focus();
+    fireEvent.click(trigger);
+
+    const input = screen.getByRole("combobox");
+    fireEvent.focusOut(trigger, { relatedTarget: input });
+    fireEvent.blur(trigger, { relatedTarget: input });
+
+    expect(screen.getByRole("dialog", { name: "Surface" })).toBeInTheDocument();
+    expect(screen.getAllByRole("option").length).toBeGreaterThan(0);
   });
 
   it("names the chosen destination on the closed trigger", () => {
@@ -121,6 +230,7 @@ describe("MessagingSurfacePicker", () => {
     const onChange = vi.fn();
     render(
       <MessagingSurfacePicker
+        fieldLabel="Surface"
         value="thread"
         filterConversations
         onChange={onChange}
@@ -147,18 +257,22 @@ describe("MessagingSurfacePicker", () => {
     // field must not answer "nothing chosen" for a surface Save would write.
     render(
       <MessagingSurfacePicker
+        fieldLabel="Surface"
         value="channel-a"
         options={options.filter((option) => option.value !== "channel-a")}
         filterConversations
         onChange={vi.fn()}
       />,
     );
+    // No label survives for it, but the field must not answer "nothing chosen".
     expect(screen.queryByRole("button", { name: CLOSED_LABEL })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /^Surface: / })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Surface: Selected (no longer listed)" }),
+    ).toBeInTheDocument();
   });
 
   it("names manual entry on the closed trigger", () => {
-    render(<MessagingSurfacePicker value="manual" options={options} filterConversations onChange={vi.fn()} />);
+    render(<MessagingSurfacePicker fieldLabel="Surface" value="manual" options={options} filterConversations onChange={vi.fn()} />);
     expect(
       screen.getByRole("button", { name: "Surface: Enter an ID manually..." }),
     ).toBeInTheDocument();
@@ -177,6 +291,7 @@ describe("MessagingSurfacePicker", () => {
   it("drops the kind glyph for container scopes, which are not channels", () => {
     render(
       <MessagingSurfacePicker
+        fieldLabel="Surface"
         value=""
         filterConversations={false}
         onChange={vi.fn()}

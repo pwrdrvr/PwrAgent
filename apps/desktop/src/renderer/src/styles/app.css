@@ -25008,6 +25008,28 @@ a.transcript-message__messaging-origin:focus-visible {
   padding: 0 9px;
 }
 
+/* The surface picker's trigger stands in for `.automation-field select` here,
+   so it takes that control's chrome instead of the Settings field it was
+   first built for. Only the background and type differ between the two; the
+   chevron, border and radius come from `.settings-select` unchanged. */
+.automation-field--picker .messaging-surface-picker__trigger {
+  min-height: 32px;
+  height: auto;
+  padding: 0 30px 0 9px;
+  background-color: var(--bg-app);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* Same reading-column cap as the Settings field: the Automations card runs
+   the full window width, and a row whose name and ID sit at opposite ends is
+   a long saccade for a list being scanned. Capping the field keeps the label,
+   the control and the panel on one measure. */
+.automation-field--picker {
+  max-width: 560px;
+}
+
 .automation-field textarea {
   padding: 9px;
   resize: vertical;
@@ -29940,10 +29962,20 @@ button.pricing-token-miser__folded:focus-visible {
   display: flex;
   flex-direction: column;
   padding: 6px;
-  border: 1px solid var(--border-subtle);
+  /* Every one of these floats over a near-black surface: the transcript and
+     composer panes are transparent and ride `--bg-app`, and the messaging
+     picker opens over `--bg-panel` cards. A `--shadow-popover` lift is black,
+     so on those backgrounds it contributes nothing, and a `--border-subtle`
+     rim then weighs exactly the same as the `__separator` and row edges INSIDE
+     the panel — nothing tells the eye where the panel stops. (The Star Map
+     float tokens record the same finding for its chat cards against the sky.)
+     So the rim does the work, at the weight `.viewport-tooltip` and
+     `.context-usage-card` already use for portalled surfaces here, with a
+     tinted lift rather than a black one. Both tokens are defined per theme. */
+  border: 1px solid var(--border-strong);
   border-radius: 8px;
   background: var(--bg-panel-elevated);
-  box-shadow: var(--shadow-popover);
+  box-shadow: 0 12px 28px var(--shadow-tint-soft);
 }
 
 .project-picker__search,
@@ -35655,27 +35687,33 @@ details.launchpad-pending__output > summary .launchpad-pending__command-label {
   white-space: nowrap;
 }
 
-/* Anchored in flow rather than over the page: `.settings-panel` sets
-   `overflow: hidden` and `.settings-content` scrolls, so an absolutely
-   positioned panel would be clipped by the card it opens inside. Because it
-   does not float, it drops `--shadow-popover` and instead wears the focus
-   treatment of the `.settings-select` it replaces, so an open picker still
-   reads as this form's focused field. */
+/* Portalled to `document.body` and positioned against the trigger's rect, so
+   it escapes `.settings-panel`'s `overflow: hidden` and every scrolling pane
+   between the two. `top` / `left` / `width` / `max-height` are set inline
+   from that measurement; everything that does not change per-open lives here.
+
+   The layer has to clear Settings (`z-index: 120`), which is a full-window
+   surface in the same root stacking context — see `.messaging-status-tooltip`
+   at 140 for the same problem. */
 .messaging-surface-picker__panel {
-  position: static;
-  border-color: var(--accent-border);
-  box-shadow: 0 0 0 1px var(--accent-shadow);
-  /* The panel is a child of the `Surface` field, whose label type is 11px /
-     650 / `--text-secondary`. Reset it here so rows that legitimately say
-     `font: inherit` (and slots that set no weight of their own, like
-     `__row-path`) get list typography rather than the label's. */
+  position: fixed;
+  z-index: 150;
+  bottom: auto;
+  /* The panel is portalled out of the field, but its typography used to come
+     from one (an 11px / 650 / `--text-secondary` label). Set it outright so
+     rows that say `font: inherit` — and slots with no weight of their own,
+     like `__row-path` — get list typography wherever the panel is mounted. */
   color: var(--text-primary);
   font-size: 13px;
   font-weight: 400;
 }
 
+/* No fixed cap: `placePanel` measures what the viewport actually allows and
+   sets the panel's `max-height` inline, so the list takes whatever is left
+   after the search row and the action row. `min-height: 0` is what lets it
+   shrink inside the flex column rather than overflowing the panel. */
 .messaging-surface-picker__list {
-  max-height: 320px;
+  min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
 }
@@ -35693,11 +35731,17 @@ details.launchpad-pending__output > summary .launchpad-pending__command-label {
 }
 
 /* `.project-picker__row-name` caps at 160px, which is right inside a ~420px
-   composer popover and far too tight here: this panel is as wide as the
-   Settings form, so a name like "Slack / harvest-release" would truncate with
-   most of the row empty beside it. Let the name take what it needs and keep
-   the ID column's claim on the rest. */
-.messaging-surface-picker__list .project-picker__row-name {
+   composer popover and far too tight here: this panel is as wide as the field,
+   so a name like "Slack / harvest-release" would truncate with most of the row
+   empty beside it. Let the name take what it needs and keep the ID column's
+   claim on the rest.
+
+   Scoped to the PANEL, not the field wrapper, so it covers the action row as
+   well as the list rows — "Enter Channel ID manually..." is longer than 160px
+   and was being cut off mid-word. The panel is portalled to `document.body`,
+   so `.messaging-surface-picker` is not an ancestor of it and a selector
+   hung off the wrapper matches nothing. */
+.messaging-surface-picker__panel .project-picker__row-name {
   flex: 0 1 auto;
   min-width: 0;
   max-width: 60%;

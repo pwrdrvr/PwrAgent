@@ -28,7 +28,7 @@ import {
   formatMessagingPlatformName,
 } from "../../lib/messaging-platform-branding";
 import type { DesktopApi } from "../../lib/desktop-api";
-import { MessagingSurfacePicker } from "./MessagingSurfacePicker";
+import { MessagingSurfacePicker } from "../../components/MessagingSurfacePicker";
 import { SettingsSection } from "./SettingsLayout";
 import { RESPONSE_MODE_OPTIONS, responseModeTitle } from "./settings-fields";
 
@@ -759,6 +759,7 @@ function DefaultAgentEditor(props: {
               <span>Surface</span>
               <MessagingSurfacePicker
                 key={`${form.scopeKind}:${form.platform}`}
+                fieldLabel="Surface"
                 value={surfaceSelection}
                 filterConversations={form.scopeKind === "conversation"}
                 allowTopics={form.platform === "telegram"}

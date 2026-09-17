@@ -48,7 +48,15 @@ const STOPLIGHT_GUTTER_SELECTORS = [
   ".settings-nav__masthead",
 ];
 
-function tooltipViewportTop(): number {
+/**
+ * The highest y a portalled surface may occupy: below the Windows title bar
+ * and clear of the macOS traffic lights.
+ *
+ * Exported because every portal on `document.body` has this problem, not just
+ * tooltips — the surface picker's popover flips upward and would otherwise
+ * render under the same chrome. Nothing here reads tooltip state.
+ */
+export function portalViewportTop(): number {
   // On Windows the fixed custom title bar occupies the top of the renderer,
   // while `.app-shell` begins immediately below it. Portal tooltips live on
   // document.body, so the raw viewport top would let them render underneath
@@ -508,7 +516,7 @@ export function useViewportTooltip(options: {
       Math.max(horizontalLeft, horizontalRight - rect.width),
       Math.max(horizontalLeft, state.targetCenter - rect.width / 2),
     );
-    const viewportTop = tooltipViewportTop();
+    const viewportTop = portalViewportTop();
     const viewportBottom = window.innerHeight - VIEWPORT_PADDING;
     const aboveTop = state.targetTop - rect.height - TOOLTIP_GAP;
     const belowTop = state.targetBottom + TOOLTIP_GAP;

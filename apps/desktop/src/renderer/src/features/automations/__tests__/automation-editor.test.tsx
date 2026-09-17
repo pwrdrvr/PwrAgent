@@ -6,6 +6,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -25,6 +26,29 @@ afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
 });
+
+/**
+ * The conversation fields are searchable pickers, not `<select>`s: open the
+ * field, then click the row. Both waits matter — the authorized lists arrive
+ * from an async settings read, so the trigger appears late, and the rows only
+ * exist while the panel is open.
+ */
+async function openConversationPicker(field: string): Promise<void> {
+  fireEvent.click(
+    await screen.findByRole("button", { name: new RegExp(`^${field}: `) }),
+  );
+}
+
+async function pickConversation(field: string, option: RegExp) {
+  await openConversationPicker(field);
+  fireEvent.click(await screen.findByRole("option", { name: option }));
+}
+
+/** Manual entry is an action beside the list, not one of its options. */
+async function pickManualEntry(field: string, action: RegExp) {
+  await openConversationPicker(field);
+  fireEvent.click(await screen.findByRole("button", { name: action }));
+}
 
 describe("AutomationEditor", () => {
   it("submits a coalescing interval automation for the assigned Agent", async () => {
@@ -311,13 +335,7 @@ describe("AutomationEditor", () => {
     fireEvent.change(screen.getByLabelText("Provider"), {
       target: { value: "slack" },
     });
-    // The channel dropdown is populated from the authorized Slack channels.
-    await waitFor(() =>
-      expect(screen.getByRole("option", { name: "Alerts" })).toBeInTheDocument(),
-    );
-    fireEvent.change(screen.getByLabelText("Channel"), {
-      target: { value: "C0ALERTS" },
-    });
+    await pickConversation("Channel", /Alerts/);
     fireEvent.change(screen.getByLabelText("Value"), {
       target: { value: "ERROR" },
     });
@@ -384,13 +402,7 @@ describe("AutomationEditor", () => {
     expect(
       screen.getByRole("heading", { name: "Where results go" }),
     ).toBeInTheDocument();
-    // The authorized group appears in the picker once settings load.
-    await waitFor(() =>
-      expect(screen.getByRole("option", { name: "Ops Room" })).toBeInTheDocument(),
-    );
-    fireEvent.change(screen.getByLabelText("Group"), {
-      target: { value: "-1001234567890" },
-    });
+    await pickConversation("Group", /Ops Room/);
     fireEvent.click(screen.getByRole("button", { name: "Specific topic" }));
     fireEvent.change(screen.getByLabelText("Topic ID"), {
       target: { value: "42" },
@@ -455,7 +467,41 @@ describe("AutomationEditor", () => {
       expect(screen.queryByRole("option", { name: "Slack" })).not.toBeInTheDocument(),
     );
     expect(screen.getByRole("option", { name: "Telegram" })).toBeInTheDocument();
-    expect(screen.getByRole("option", { name: "Ops Room" })).toBeInTheDocument();
+    // The authorized group is a row inside the conversation picker, so it is
+    // listed once the field is opened.
+    await openConversationPicker("Group");
+    expect(screen.getByRole("option", { name: /Ops Room/ })).toBeInTheDocument();
+  });
+
+  it("offers authorized DMs beside channels, in their own section", async () => {
+    // Every provider keeps an `authorizedUserIds` list; leaving it out meant an
+    // automation could never watch or answer a direct message.
+    render(
+      <AutomationEditor
+        desktopApi={fakeDesktopApi(
+          fakeSettings({
+            enabled: { slack: true },
+            slackChannels: [{ id: "C_ORCHARD", displayName: "orchard-planning" }],
+            slackUsers: [{ id: "D_AVERY", displayName: "Avery Quill" }],
+          }),
+        )}
+        mode={{ kind: "create" }}
+        onCancel={() => undefined}
+        onSubmit={vi.fn(async () => undefined)}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Inbound message" }));
+    await openConversationPicker("Channel");
+    const listbox = screen.getByRole("listbox");
+    expect(
+      within(listbox)
+        .getAllByRole("group")
+        .map((group) => group.getAttribute("aria-label")),
+    ).toEqual(["Authorized channels", "Authorized direct messages"]);
+    expect(
+      within(listbox).getByRole("option", { name: /Avery Quill/ }),
+    ).toBeInTheDocument();
   });
 
   it("includes an MCP allowlist in the execution profile", async () => {
@@ -777,19 +823,9 @@ describe("AutomationEditor", () => {
       target: { value: "Investigate." },
     });
     fireEvent.click(screen.getByRole("button", { name: "Inbound message" }));
-    await waitFor(() =>
-      expect(screen.getByRole("option", { name: "Ops Room" })).toBeInTheDocument(),
-    );
-    fireEvent.change(screen.getByLabelText("Group"), {
-      target: { value: "-100" },
-    });
+    await pickConversation("Group", /Ops Room/);
     fireEvent.click(screen.getByRole("button", { name: "Specific topic" }));
-    await waitFor(() =>
-      expect(screen.getByRole("option", { name: "Incidents" })).toBeInTheDocument(),
-    );
-    fireEvent.change(screen.getByLabelText("Topic"), {
-      target: { value: "42" },
-    });
+    await pickConversation("Topic", /Incidents/);
     fireEvent.change(screen.getByLabelText("Value"), {
       target: { value: "ERROR" },
     });
@@ -842,10 +878,7 @@ describe("AutomationEditor", () => {
       target: { value: "Record the incident for later." },
     });
     fireEvent.click(screen.getByRole("button", { name: "Inbound message" }));
-    await waitFor(() =>
-      expect(screen.getByRole("option", { name: "Ops Room" })).toBeInTheDocument(),
-    );
-    fireEvent.change(screen.getByLabelText("Group"), { target: { value: "-100" } });
+    await pickConversation("Group", /Ops Room/);
     fireEvent.change(screen.getByLabelText("Value"), {
       target: { value: "ERROR" },
     });
@@ -895,19 +928,11 @@ describe("AutomationEditor", () => {
       target: { value: "Investigate." },
     });
     fireEvent.click(screen.getByRole("button", { name: "Inbound message" }));
-    await waitFor(() =>
-      expect(screen.getByRole("option", { name: "Ops Room" })).toBeInTheDocument(),
-    );
-    fireEvent.change(screen.getByLabelText("Group"), { target: { value: "-100" } });
+    await pickConversation("Group", /Ops Room/);
     fireEvent.click(screen.getByRole("button", { name: "Specific topic" }));
-    await waitFor(() =>
-      expect(screen.getByRole("option", { name: "Incidents" })).toBeInTheDocument(),
-    );
-    fireEvent.change(screen.getByLabelText("Topic"), { target: { value: "42" } });
+    await pickConversation("Topic", /Incidents/);
     // Switch the group to manual entry — the previously chosen topic must clear.
-    fireEvent.change(screen.getByLabelText("Group"), {
-      target: { value: "__manual__" },
-    });
+    await pickManualEntry("Group", /Enter Group ID manually/);
     fireEvent.change(screen.getByLabelText("Group ID"), {
       target: { value: "-200" },
     });
@@ -950,21 +975,14 @@ describe("AutomationEditor", () => {
       target: { value: "Investigate and report." },
     });
     fireEvent.click(screen.getByRole("button", { name: "Inbound message" }));
-    await waitFor(() =>
-      expect(screen.getByRole("option", { name: "Ops Room" })).toBeInTheDocument(),
-    );
-    fireEvent.change(screen.getByLabelText("Group"), {
-      target: { value: "-100" },
-    });
+    await pickConversation("Group", /Ops Room/);
     fireEvent.change(screen.getByLabelText("Value"), {
       target: { value: "ERROR" },
     });
     fireEvent.change(screen.getByLabelText("Where should the result go?"), {
       target: { value: "different" },
     });
-    fireEvent.change(screen.getByLabelText("Destination group"), {
-      target: { value: "__manual__" },
-    });
+    await pickManualEntry("Destination group", /Enter Group ID manually/);
     fireEvent.change(screen.getByLabelText("Destination group ID"), {
       target: { value: "-200" },
     });
@@ -1044,8 +1062,8 @@ describe("AutomationEditor", () => {
     // (not "Enter manually"), so selectedDestGroup resolves.
     await waitFor(() =>
       expect(
-        (screen.getByLabelText("Destination channel") as HTMLSelectElement).value,
-      ).toBe("C0ALERTS"),
+        screen.getByRole("button", { name: /^Destination channel: / }),
+      ).toHaveAccessibleName(/Alerts/),
     );
 
     // Re-saving without touching the destination must keep its friendly title.
@@ -1128,9 +1146,9 @@ describe("AutomationEditor", () => {
     // preselected by name — not left on "Enter Channel ID manually…" showing
     // the raw platform id.
     await waitFor(() =>
-      expect((screen.getByLabelText("Channel") as HTMLSelectElement).value).toBe(
-        "C2LE02620",
-      ),
+      expect(
+        screen.getByRole("button", { name: /^Channel: / }),
+      ).toHaveAccessibleName(/t-search-bots/),
     );
 
     // Re-saving without touching the channel must keep its friendly title.
@@ -1541,6 +1559,7 @@ function fakeSettings(params: {
   enabled: Partial<Record<MessagingChannelKind, boolean>>;
   telegramGroups?: Array<{ displayName: string; id: string }>;
   slackChannels?: Array<{ displayName: string; id: string }>;
+  slackUsers?: Array<{ displayName: string; id: string }>;
 }): ReadDesktopMessagingSettingsResponse {
   const provider = (kind: MessagingChannelKind) => ({
     enabled: { value: Boolean(params.enabled[kind]) },
@@ -1555,6 +1574,7 @@ function fakeSettings(params: {
         slack: {
           enabled: { value: Boolean(params.enabled.slack) },
           authorizedChannels: { value: params.slackChannels ?? [] },
+          authorizedUserIds: { value: params.slackUsers ?? [] },
         },
         discord: provider("discord"),
         mattermost: provider("mattermost"),
