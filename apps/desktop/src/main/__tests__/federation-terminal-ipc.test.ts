@@ -1,9 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WebContents } from "electron";
 import {
   INTEGRATED_TERMINAL_CLOSE_CHANNEL,
   INTEGRATED_TERMINAL_CREATE_CHANNEL,
   INTEGRATED_TERMINAL_LIST_CHANNEL,
+  INTEGRATED_TERMINAL_RESIZE_CHANNEL,
   INTEGRATED_TERMINAL_REVEAL_CHANNEL,
   INTEGRATED_TERMINAL_SESSIONS_CHANNEL,
   INTEGRATED_TERMINAL_SET_PANEL_HIDDEN_CHANNEL,
@@ -62,6 +63,12 @@ const mocks = vi.hoisted(() => {
       }),
     ),
     remotePtyInput: vi.fn(async () => undefined),
+    // Shared rather than built per `remotePty()` call, so a test can count
+    // the requests that actually reached the wire.
+    remotePtyResize: vi.fn(
+      async (_params: { sessionId: string; cols: number; rows: number }) =>
+        undefined,
+    ),
     remotePtyAck: vi.fn(async () => undefined),
     // Typed params so an assertion can read back WHICH session was closed,
     // not just that something was.
@@ -130,7 +137,7 @@ vi.mock("../federation/federation-runtime", () => ({
     remotePty: () => ({
       open: mocks.remotePtyOpen,
       input: mocks.remotePtyInput,
-      resize: vi.fn(async () => undefined),
+      resize: mocks.remotePtyResize,
       ack: mocks.remotePtyAck,
       close: mocks.remotePtyClose,
     }),
@@ -1024,5 +1031,127 @@ describe("integrated terminal IPC federation branch", () => {
     expect(reattached.sessionId).toBe("remote-session");
     expect(reattached.buffer).toBe("scrollback line");
     expect(mocks.remotePtyOpen).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("remote terminal resize reaches the wire only when it has to", () => {
+  const OPEN = { threadKey: "codex:remote-thread", cols: 120, rows: 32 };
+
+  async function openRemotePane(id = 7) {
+    const sender = fakeWebContents(id);
+    mocks.federationWindowIds.add(id);
+    mocks.federationTargets.set(id, { scope: "remote", instanceId: "peer-a" });
+    const opened = (await invoke(
+      INTEGRATED_TERMINAL_CREATE_CHANNEL,
+      sender,
+      OPEN,
+    )) as { sessionId: string };
+    return { sender, sessionId: opened.sessionId };
+  }
+
+  const resize = (sender: WebContents, sessionId: string, cols: number, rows: number) =>
+    invoke(INTEGRATED_TERMINAL_RESIZE_CHANNEL, sender, { sessionId, cols, rows });
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.clearAllMocks();
+    mocks.federationWindowIds.clear();
+    mocks.federationTargets.clear();
+    mocks.remotePtyEventListener = undefined;
+    mocks.channelSubscribers = [];
+    mocks.localSessionsChanged = undefined;
+    mocks.connectedPeers = [
+      {
+        target: { scope: "remote" as const, instanceId: "peer-a" },
+        label: "Peer Mac",
+        capabilities: ["remote_pty"],
+      },
+    ];
+    disposeIntegratedTerminalIpcHandlers();
+    registerIntegratedTerminalIpcHandlers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  // The headline case. `IntegratedTerminal` runs `fitAddon.fit()` once the
+  // session attaches, and a pane that was opened at the size it fits to
+  // proposes that same grid straight back. Measured against the real
+  // renderer in headless Chromium, attaching a Star Map terminal card sent
+  // TWO resizes, both identical to the grid the session was opened at.
+  it("drops a post-attach fit that restates the size the session opened at", async () => {
+    const { sender, sessionId } = await openRemotePane();
+    await resize(sender, sessionId, OPEN.cols, OPEN.rows);
+    await resize(sender, sessionId, OPEN.cols, OPEN.rows);
+    expect(mocks.remotePtyResize).not.toHaveBeenCalled();
+  });
+
+  it("drops a repeat of the size this pane last sent", async () => {
+    const { sender, sessionId } = await openRemotePane();
+    await resize(sender, sessionId, 100, 30);
+    expect(mocks.remotePtyResize).toHaveBeenCalledTimes(1);
+    // Far enough past the interval that pacing cannot be what dropped it.
+    vi.advanceTimersByTime(500);
+    await resize(sender, sessionId, 100, 30);
+    expect(mocks.remotePtyResize).toHaveBeenCalledTimes(1);
+  });
+
+  it("sends a size the pane has not asked for yet", async () => {
+    const { sender, sessionId } = await openRemotePane();
+    await resize(sender, sessionId, 90, 20);
+    expect(mocks.remotePtyResize).toHaveBeenCalledWith({
+      sessionId: "remote-session",
+      cols: 90,
+      rows: 20,
+    });
+  });
+
+  // A grip drag crosses a column boundary every few pixels, and every one of
+  // those frames is a genuinely different size that survives deduplication.
+  // Without pacing each one is its own round trip.
+  it("paces a drag burst and still lands on the size it ended at", async () => {
+    const { sender, sessionId } = await openRemotePane();
+    for (let rows = 10; rows < 40; rows++) {
+      await resize(sender, sessionId, 100, rows);
+      vi.advanceTimersByTime(4);
+    }
+    // 30 distinct sizes over 120ms of drag. Pinned rather than bounded, so a
+    // change to the pacing interval shows up as one reviewable diff line.
+    expect(mocks.remotePtyResize).toHaveBeenCalledTimes(3);
+    await vi.advanceTimersByTimeAsync(100);
+    const last = mocks.remotePtyResize.mock.calls.at(-1)?.[0];
+    expect(last).toEqual({ sessionId: "remote-session", cols: 100, rows: 39 });
+  });
+
+  // The filter is per pane, not per shell: `pty.open` spawns a fresh PTY for
+  // each pane, so one pane's record must never speak for another's.
+  it("keeps one pane's sent sizes out of another pane's record", async () => {
+    const first = await openRemotePane(7);
+    mocks.remotePtyOpen.mockResolvedValueOnce({
+      sessionId: "remote-session-2",
+      cwd: "/owner/worktree",
+      shell: "/bin/zsh",
+    });
+    const second = await openRemotePane(8);
+    expect(second.sessionId).toBe("remote-session-2");
+
+    await resize(first.sender, first.sessionId, 100, 30);
+    vi.advanceTimersByTime(500);
+    await resize(second.sender, second.sessionId, 100, 30);
+
+    expect(mocks.remotePtyResize.mock.calls.map((call) => call[0])).toEqual([
+      { sessionId: "remote-session", cols: 100, rows: 30 },
+      { sessionId: "remote-session-2", cols: 100, rows: 30 },
+    ]);
+  });
+
+  it("does not send a paced resize for a session that was closed first", async () => {
+    const { sender, sessionId } = await openRemotePane();
+    await resize(sender, sessionId, 100, 30);
+    expect(mocks.remotePtyResize).toHaveBeenCalledTimes(1);
+    await resize(sender, sessionId, 101, 31);
+    await invoke(INTEGRATED_TERMINAL_CLOSE_CHANNEL, sender, { sessionId });
+    await vi.advanceTimersByTimeAsync(200);
+    expect(mocks.remotePtyResize).toHaveBeenCalledTimes(1);
   });
 });

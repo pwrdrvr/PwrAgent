@@ -26,6 +26,7 @@ import {
   type FederationPtyStreamEvent,
 } from "../federation/federation-pty-service";
 import { terminalsForThread } from "../terminal/integrated-terminal-service";
+import { PtyResizeCoalescer } from "../terminal/pty-resize";
 import { getDesktopFederationRuntime } from "../federation/federation-runtime";
 import { getMainLogger } from "../log";
 import { federationWindowTargetForWebContents } from "../window";
@@ -54,6 +55,13 @@ type RemoteTerminalSession = {
    *  it, so an owner that never reports leaves this true and the shell keeps
    *  blocking quit — the conservative answer, unchanged from before. */
   foregroundCommand: boolean;
+  /**
+   * Paces `pty.resize` onto the wire. Holds the size this pane last SENT,
+   * never a belief about the shell: the owner clamps and paces again on
+   * arrival and stays authoritative. Dropping a repeat here only withholds a
+   * request this pane already made, which is why it cannot race the owner.
+   */
+  resizes: PtyResizeCoalescer;
 };
 
 /**
@@ -168,6 +176,24 @@ export class FederationTerminalBridge {
           consumedBytes: 0,
           // An owner that predates `pty.state` omits this; stay conservative.
           foregroundCommand: opened.foregroundCommand ?? true,
+          // Seeded with the grid this pane opened at, which is exactly what
+          // the `pty.open` above already carried to the owner. Unseeded, the
+          // renderer's first `fitAddon.fit()` after attach — which proposes
+          // that same grid straight back — spent a round trip restating it.
+          resizes: new PtyResizeCoalescer({
+            apply: (cols, rows) => {
+              void getDesktopFederationRuntime()
+                .remotePty(target)
+                .resize({ sessionId: opened.sessionId, cols, rows })
+                .catch((error) => {
+                  log.warn("remote terminal resize failed", {
+                    error: error instanceof Error ? error.message : String(error),
+                  });
+                });
+            },
+            spawnedCols: request.cols,
+            spawnedRows: request.rows,
+          }),
         };
         this.sessionsById.set(session.sessionId, session);
         this.ensureStreamSubscription();
@@ -196,21 +222,21 @@ export class FederationTerminalBridge {
       });
   }
 
+  /**
+   * Every resize used to become a `pty.resize` RPC. The owner's own coalescer
+   * then dropped the no-ops — correctly, so a remote vim never redrew — but
+   * only after the round trip had already been paid, which left the redundant
+   * post-attach fit costing a request for a size the owner was already at.
+   *
+   * Filtering here is safe because `pty.open` spawns a fresh PTY per pane, so
+   * this session's shell has exactly one viewer: the pane whose sizes this
+   * coalescer holds. It still only skips re-sending a size this pane itself
+   * last asked for, so it stays correct if a shell ever gains a second viewer.
+   */
   resize(request: IntegratedTerminalResizeRequest, webContents: WebContents): void {
     const session = this.ownedSession(webContents, request.sessionId);
     if (!session) return;
-    void getDesktopFederationRuntime()
-      .remotePty(session.target)
-      .resize({
-        sessionId: session.sessionId,
-        cols: request.cols,
-        rows: request.rows,
-      })
-      .catch((error) => {
-        log.warn("remote terminal resize failed", {
-          error: error instanceof Error ? error.message : String(error),
-        });
-      });
+    session.resizes.request(request.cols, request.rows);
   }
 
   close(request: IntegratedTerminalCloseRequest, webContents: WebContents): void {
@@ -351,6 +377,7 @@ export class FederationTerminalBridge {
   dispose(): void {
     this.unsubscribeStreamEvents?.();
     this.unsubscribeStreamEvents = undefined;
+    for (const session of this.sessionsById.values()) session.resizes.dispose();
     this.sessionsById.clear();
     this.watchedWebContents.clear();
   }
@@ -542,6 +569,8 @@ export class FederationTerminalBridge {
   }
 
   private dropSession(session: RemoteTerminalSession): void {
+    // Stops a queued resize from reaching a session that is being torn down.
+    session.resizes.dispose();
     this.sessionsById.delete(session.sessionId);
   }
 

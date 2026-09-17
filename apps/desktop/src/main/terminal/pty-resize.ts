@@ -1,12 +1,12 @@
 /**
- * Owner-side PTY sizing: one set of dimension clamps and one resize pacer,
- * shared by the local integrated-terminal service and the federation
- * remote-PTY service.
+ * PTY sizing: one set of dimension clamps and one resize pacer, shared by the
+ * local integrated-terminal service, the federation remote-PTY service, and
+ * the viewer-side federation terminal bridge.
  *
- * Both used to carry their own copy of these bounds — identical by
- * coincidence rather than by construction — and a size that clamps one way at
- * spawn and another way at resize makes the deduplication below silently
- * wrong, so they are defined once here.
+ * The two owner services used to carry their own copy of these bounds —
+ * identical by coincidence rather than by construction — and a size that
+ * clamps one way at spawn and another way at resize makes the deduplication
+ * below silently wrong, so they are defined once here.
  */
 
 const DEFAULT_COLUMNS = 80;
@@ -72,10 +72,17 @@ export type PtyResizeCoalescerOptions = {
  * Paces resizes for one PTY: drops what the shell is already running at, and
  * applies at most one size per interval, keeping the newest.
  *
- * Deduplication belongs at the PTY's owner rather than in a viewer, because
- * viewers share the PTY — two of them dragging produce one interleaved stream
- * that only the owner sees whole, and a viewer's idea of the current size is
- * always one round trip stale.
+ * The owner is the authority. Only it sees every viewer's stream whole, so
+ * only its record means "what the PTY is running at" — a viewer's idea of
+ * that is always one round trip stale, and must never be treated as the
+ * shell's true size.
+ *
+ * A viewer may still run one of these over its own outbound requests, where
+ * `applied` means "what I last sent" rather than "what the PTY is". That is a
+ * claim a viewer can actually make, and dropping a repeat of it only withholds
+ * a request the same viewer already made. The federation terminal bridge does
+ * exactly this, so a redundant fit costs no round trip; the owner clamps,
+ * deduplicates and paces again on arrival regardless.
  *
  * The first request after a quiet period applies immediately, so opening a
  * pane sizes its shell at once; only a burst is paced. Whatever a burst ends
