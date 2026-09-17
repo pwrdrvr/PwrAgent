@@ -2,7 +2,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { TokenMiserStore } from "../token-miser/token-miser-store";
+import { TestTokenMiserStore as TokenMiserStore } from "./token-miser-test-store";
 
 const temporaryDirectories: string[] = [];
 
@@ -15,79 +15,56 @@ afterEach(async () => {
 });
 
 describe("TokenMiserStore", () => {
-  it("bounds metadata reads across overlapping scans and store instances", async () => {
+  it("inspects retained originals and summaries without charging agent retrieval", async () => {
+    const store = await createStore();
+    const output = "x".repeat(20_000);
+    const entry = await createObject(store, output, 1);
+    const before = await store.listMetadata("thread-owner");
+    const changesBefore = store.stateDb.raw.prepare("SELECT total_changes() AS count").get();
+    const page = await store.inspectOutput({ objectId: entry.objectId, threadId: "thread-owner", source: "original" });
+    expect(page).toEqual({ available: true, text: output.slice(0, 16_000), offset: 0, nextOffset: 16_000, totalCharacters: 20_000 });
+    expect(await store.inspectOutput({ objectId: entry.objectId, threadId: "thread-owner", source: "original", offset: 16_000 }))
+      .toEqual({ available: true, text: output.slice(16_000), offset: 16_000, totalCharacters: 20_000 });
+    expect(await store.inspectOutput({ objectId: entry.objectId, threadId: "other-thread", source: "original" }))
+      .toEqual({ available: false });
+    expect(await store.inspectOutput({ objectId: entry.objectId, threadId: "thread-owner", source: "summary", offset: 20_000 }))
+      .toMatchObject({ available: true, text: "\nNone." });
+    expect(await store.listMetadata("thread-owner")).toEqual(before);
+    expect(store.stateDb.raw.prepare("SELECT total_changes() AS count").get()).toEqual(changesBefore);
+    store.startTurn("thread-owner", "turn-2");
+    for (const source of ["original", "summary"] as const) {
+      expect(await store.inspectOutput({ objectId: entry.objectId, threadId: "thread-owner", source }))
+        .toEqual({ available: false });
+    }
+  });
+
+  it("rejects invalid inspection offsets and pages Unicode without splitting surrogate pairs", async () => {
+    const store = await createStore();
+    const output = "a".repeat(15_999) + "😀tail";
+    const entry = await createObject(store, output, 1);
+    const request = { objectId: entry.objectId, threadId: "thread-owner", source: "original" as const };
+    for (const offset of [-1, 0.5, NaN, Infinity]) {
+      await expect(store.inspectOutput({ ...request, offset })).rejects.toThrow("Invalid output offset");
+    }
+    expect(await store.inspectOutput(request)).toMatchObject({ text: "a".repeat(15_999), nextOffset: 15_999 });
+    expect(await store.inspectOutput({ ...request, offset: 15_999 })).toMatchObject({ text: "😀tail" });
+    expect(JSON.stringify(await store.listMetadata("thread-owner"))).not.toContain("😀tail");
+  });
+
+  it("queries SQLite across overlapping readers without filesystem scans", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "pwragent-token-miser-"));
     temporaryDirectories.push(root);
     const first = new TokenMiserStore(root);
     const second = new TokenMiserStore(root);
-    for (let index = 0; index < 40; index += 1) {
-      await createObject(first, `output-${index}`, index);
-      await first.recordCodeModeObservation({
-        threadId: "thread-owner",
-        turnId: "turn-1",
-        callId: `call-${index}`,
-        cellId: `cell-${index}`,
-        outputCharacters: 100,
-        maxOutputTokens: 1_000,
-        scriptStatus: "completed",
-        retrieval: false,
-        capturedNestedInvocationCount: 1,
-      });
-    }
-
-    let releaseReads!: () => void;
-    const gate = new Promise<void>((resolve) => { releaseReads = resolve; });
-    let active = 0;
-    let peak = 0;
-    const readFile = fs.readFile.bind(fs);
-    const readSpy = vi.spyOn(fs, "readFile").mockImplementation(async (file, options) => {
-      active += 1;
-      peak = Math.max(peak, active);
-      try {
-        await gate;
-        return await readFile(file, options);
-      } finally {
-        active -= 1;
-      }
-    });
-    const scans = Promise.all([
-      first.listMetadata(),
-      second.listMetadata(),
-      first.listCodeModeObservations("thread-owner"),
-      second.listCodeModeObservations("thread-owner"),
-    ]);
+    for (let index = 0; index < 40; index += 1) await createObject(first, `output-${index}`, index);
+    const read = vi.spyOn(fs, "readFile");
+    const list = vi.spyOn(fs, "readdir");
     try {
-      await vi.waitFor(() => expect(active).toBe(16));
-      releaseReads();
-      const results = await scans;
-      expect(results.map((entries) => entries.length)).toEqual([40, 40, 40, 40]);
-      expect(readSpy).toHaveBeenCalledTimes(160);
-      expect(peak).toBeLessThanOrEqual(16);
-      expect(active).toBe(0);
-    } finally {
-      releaseReads();
-      await scans;
-      readSpy.mockRestore();
-    }
-  });
-
-  it("releases metadata read slots after filesystem failures", async () => {
-    const store = await createStore();
-    const entry = await createObject(store, "retained output", 1);
-    const readFile = fs.readFile.bind(fs);
-    const readSpy = vi.spyOn(fs, "readFile").mockRejectedValue(
-      Object.assign(new Error("read failed"), { code: "EIO" }),
-    );
-    try {
-      const results = await Promise.allSettled(
-        Array.from({ length: 40 }, () => store.readMetadata(entry.objectId)),
-      );
-      expect(results.every((result) => result.status === "rejected")).toBe(true);
-      readSpy.mockImplementation(readFile);
-      expect(await store.readMetadata(entry.objectId)).toEqual(entry);
-    } finally {
-      readSpy.mockRestore();
-    }
+      const results = await Promise.all([first.listMetadata(), second.listMetadata("thread-owner")]);
+      expect(results.map((entries) => entries.length)).toEqual([40, 40]);
+      expect(read).not.toHaveBeenCalled();
+      expect(list).not.toHaveBeenCalled();
+    } finally { read.mockRestore(); list.mockRestore(); }
   });
 
   it("counts all decisions separately from helper evaluations", async () => {
@@ -354,7 +331,7 @@ describe("TokenMiserStore", () => {
       accepted.commit(),
       accepted.persist(),
     ]);
-    expect(await fs.readdir(root)).toEqual(["threads"]);
+    await expect(fs.stat(root)).rejects.toMatchObject({ code: "ENOENT" });
     expect(await store.listMetadata()).toEqual([accepted.metadata]);
     expect(onMetadataUpdated).toHaveBeenCalledOnce();
     expect(onMetadataUpdated).toHaveBeenCalledWith(

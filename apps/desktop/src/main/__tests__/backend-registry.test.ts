@@ -114,7 +114,7 @@ import type { WorktreeArchiveService } from "../app-server/worktree-archive-serv
 import type { AcpInstalledAgentRecord } from "../acp/acp-registry-types";
 import { AcpRolloutStore } from "../acp/acp-rollout-store";
 import type { AcpSessionMetadata } from "../acp/acp-session-store";
-import { TokenMiserStore } from "../token-miser/token-miser-store";
+import { TestTokenMiserStore as TokenMiserStore } from "./token-miser-test-store";
 import type { ThreadSearchService } from "../thread-search/thread-search-service";
 import { resolveAgentToolCatalogs } from "../agent-tools/agent-tool-catalog-registry";
 import type {

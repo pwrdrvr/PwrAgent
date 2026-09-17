@@ -121,6 +121,8 @@ import {
   type AppServerTurnInputItem,
   type AppServerAvailableCommandSummary,
   type AppServerBackendKind,
+  type InspectTokenMiserOutputRequest,
+  type InspectTokenMiserOutputResponse,
   type AnalyzeThreadToolHistoryRequest,
   type AnalyzeThreadToolHistoryResponse,
   type AppServerCollaborationModeRequest,
@@ -9185,6 +9187,7 @@ export class DesktopBackendRegistry {
       this.tokenMiserStore = new TokenMiserStore(
         path.join(tokenMiserStateDir, "objects"),
         {
+          stateDb: getAppStateDb(),
           onMetadataUpdated: async (metadata, reason) => {
             this.pendingTokenMiserInterceptions.set(metadata.objectId, metadata);
             this.rememberActiveTokenMiserReplayEntry(metadata);
@@ -14147,6 +14150,13 @@ export class DesktopBackendRegistry {
             replayWithReviewMetadata,
           ),
     };
+  }
+
+  async inspectTokenMiserOutput(
+    request: InspectTokenMiserOutputRequest,
+  ): Promise<InspectTokenMiserOutputResponse> {
+    if (request.backend !== "codex" || !this.tokenMiserStore) return { available: false };
+    return await this.tokenMiserStore.inspectOutput(request);
   }
 
   async analyzeThreadToolHistory(
@@ -38683,6 +38693,15 @@ export class DesktopBackendRegistry {
   }
 
   private emit(event: AgentEvent): Promise<void> {
+    if (event.backend === "codex" && event.notification.method === "turn/started") {
+      const notification = event.notification as {
+        params: { threadId: string; turnId?: string; turn: { id: string } };
+      };
+      this.tokenMiserStore?.startTurn(
+        notification.params.threadId,
+        turnIdFromStartedNotification(notification),
+      );
+    }
     // Capture ownership before terminal handling removes the monitor record.
     // Keep protocol IDs intact for accounting, recovery, and lifecycle consumers.
     if (

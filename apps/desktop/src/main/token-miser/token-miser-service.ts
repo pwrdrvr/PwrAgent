@@ -1168,7 +1168,7 @@ function buildCappedReplacement(params: {
   if (utf8ByteLength(full) <= params.maxBytes) {
     return full;
   }
-  const reference = `Output reference: ${params.objectId} (temporary, expires within 5m)`;
+  const reference = `Output reference: ${params.objectId} (temporary, retained until the next turn)`;
   if (utf8ByteLength(reference) > params.maxBytes) {
     return undefined;
   }
@@ -1193,7 +1193,7 @@ function buildReplacement(params: {
     buildReplacementBody(params.summary),
     "",
     `Output reference: ${params.objectId}`,
-    "Original output is temporary (up to five minutes); expiry, eviction or restart makes it unavailable.",
+    "Original output is retained until the next turn starts; memory pressure, archive or restart may make it unavailable earlier.",
   ].join("\n");
 }
 
@@ -1224,7 +1224,7 @@ function buildCappedGroupReplacement(params: {
       toolName: member.toolName,
       summary: member.summary,
     })),
-    sourceMaterial: "Temporary: expires within five minutes; unavailable after eviction or restart.",
+    sourceMaterial: "Temporary: retained until the next turn starts; unavailable after eviction, archive or restart.",
   }, null, 2);
   if (utf8ByteLength(full) <= params.maxBytes) {
     return full;
@@ -1237,7 +1237,7 @@ function buildCappedGroupReplacement(params: {
       objectId: member.objectId,
       toolName: member.toolName,
     })),
-    sourceMaterial: "Temporary group/member retrieval; expires within five minutes or earlier.",
+    sourceMaterial: "Temporary group/member retrieval until the next turn starts, or earlier eviction, archive or restart.",
   });
   if (utf8ByteLength(compact) <= params.maxBytes) {
     return compact;

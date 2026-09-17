@@ -52,6 +52,7 @@ const backendRegistryLifecycle = vi.hoisted(() => ({
 }));
 const federationMock = vi.hoisted(() => {
   const remoteBackend = {
+    inspectTokenMiserOutput: vi.fn(async () => ({ available: false })),
     archiveThread: vi.fn(async (request: ArchiveThreadRequest) => ({
       backend: request.backend,
       threadId: request.threadId,
@@ -4375,6 +4376,17 @@ describe("app server ipc", () => {
     );
 
     expect(fetched).toEqual({ diff });
+  });
+
+  it("routes output inspection to the owning instance without using the local store", async () => {
+    const { appServerService } = await import("../ipc/app-server");
+    const target = { scope: "remote" as const, instanceId: "owner-one" };
+    const request = { backend: "codex" as const, threadId: "thread-1", objectId: "object-1", source: "summary" as const, offset: 0 };
+    backendRegistryLifecycle.get.mockClear();
+    expect(await appServerService.inspectTokenMiserOutput({ ...request, federationTarget: target })).toEqual({ available: false });
+    expect(federationMock.runtime.remoteBackend).toHaveBeenCalledWith(target);
+    expect(federationMock.remoteBackend.inspectTokenMiserOutput).toHaveBeenCalledWith(request);
+    expect(backendRegistryLifecycle.get).not.toHaveBeenCalled();
   });
 
   it("hydrates retained worktree snapshots when listing archived threads", async () => {

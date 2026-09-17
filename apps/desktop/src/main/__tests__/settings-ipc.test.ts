@@ -6,9 +6,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AcpAgentSettingsEntry } from "@pwragent/shared";
 import { DesktopSettingsService } from "../settings/desktop-settings-service";
 import { MemoryDesktopSecretStore } from "../settings/desktop-secret-store";
+import { TokenMiserStore } from "../token-miser/token-miser-store";
+import { openInMemoryStateDb } from "./sqlite-test-utils";
 
 const handlers = new Map<string, (...args: unknown[]) => Promise<unknown>>();
 const tempRoots: string[] = [];
+const stateDbs: Array<ReturnType<typeof openInMemoryStateDb>> = [];
 const disposeDesktopBackendRegistryMock = vi.fn(async () => undefined);
 const listThreadsMock = vi.fn(async () => [] as unknown[]);
 const refreshCodexAfterAuthenticationMock = vi.fn(async () => undefined);
@@ -228,6 +231,7 @@ vi.mock("@pwragent/messaging-provider-slack", () => ({
 
 describe("settings ipc", () => {
   afterEach(() => {
+    for (const db of stateDbs.splice(0)) db.close();
     for (const root of tempRoots.splice(0)) {
       fs.rmSync(root, { recursive: true, force: true });
     }
@@ -295,8 +299,11 @@ describe("settings ipc", () => {
     tempRoots.push(tempRoot);
     const secretStore = new MemoryDesktopSecretStore();
     await secretStore.setSecret("telegramBotToken", "123456789:secret-token");
+    const stateDb = openInMemoryStateDb();
+    stateDbs.push(stateDb);
     const service = new DesktopSettingsService({
       configPath: path.join(tempRoot, "config.toml"),
+      tokenMiserStore: new TokenMiserStore(path.join(tempRoot, "token-miser"), { stateDb }),
       env: {},
       secretStore,
       now: () => 20,

@@ -1371,7 +1371,9 @@ export type ThreadTokenMiserCodeModeAccounting = {
 
 export type ThreadTokenMiserInterceptionAccounting = {
   objectId: string;
-  /** Temporary owner-process availability; eviction may make it unavailable earlier. */
+  /** Owner-process snapshot; retained until the next turn, eviction, archive or restart. */
+  originalOutputAvailable?: boolean;
+  /** Legacy peers may still report a fixed expiry deadline. */
   originalOutputAvailableUntil?: number;
   turnId: string;
   toolUseId: string;

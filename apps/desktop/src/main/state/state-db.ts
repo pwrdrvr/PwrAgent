@@ -14,7 +14,7 @@ import {
   isSqliteWriteMetricsEnabled,
 } from "./sqlite-write-metrics.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 61;
+export const CURRENT_STATE_DB_USER_VERSION = 62;
 export const STATE_DB_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const STATE_DB_JOURNAL_SIZE_LIMIT_BYTES = 16 * 1024 * 1024;
 
@@ -1295,6 +1295,28 @@ const MESSAGING_ACTIVITY_LOG_PER_PLATFORM_CAP = 500;
  */
 const FEDERATION_SESSION_AUDIT_CAP = 500;
 
+const TOKEN_MISER_SCHEMA = `
+CREATE TABLE IF NOT EXISTS token_miser_objects (
+  object_id TEXT PRIMARY KEY,
+  thread_id TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  payload TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_token_miser_objects_thread ON token_miser_objects(thread_id, created_at);
+CREATE TABLE IF NOT EXISTS token_miser_observations (
+  observation_id TEXT PRIMARY KEY,
+  thread_id TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  payload TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_token_miser_observations_thread ON token_miser_observations(thread_id, created_at);
+CREATE TABLE IF NOT EXISTS token_miser_retention (
+  thread_key TEXT PRIMARY KEY,
+  generation TEXT NOT NULL,
+  archived INTEGER NOT NULL
+);
+`;
+
 export class StateDb {
   private db: BetterSqlite3.Database;
   private gcTimer: ReturnType<typeof setInterval> | null = null;
@@ -1781,6 +1803,12 @@ export class StateDb {
           // row's existing cost. Token and boundary guards remain unchanged.
           db.exec("DROP TRIGGER IF EXISTS protect_finalized_thread_usage_update");
           db.exec(THREAD_USAGE_FINALIZATION_SCHEMA);
+          db.pragma("user_version = 61");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 62) {
+        db.transaction(() => {
+          db.exec(TOKEN_MISER_SCHEMA);
           db.pragma(`user_version = ${CURRENT_STATE_DB_USER_VERSION}`);
         })();
       }

@@ -442,10 +442,50 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     expect(within(chart).getByText(/compaction boundary/)).toBeInTheDocument();
   });
 
-  // The summary is what the parent actually received in place of the payload.
-  // Without it the screen can only say how many tokens were traded, never what
-  // was traded for — which is the only way to judge whether a "win" was one.
-  it("shows safe decision notes and unavailable originals while filtering outcomes", async () => {
+  it("updates an expanded original's expiry without refreshing thread data", async () => {
+    const response = buildResponse();
+    const expiresAt = Date.now() + 60_000;
+    response.toolAccounting!.tokenMiser = {
+      interceptionCount: 1,
+      originalCharacters: 40_000,
+      baselineParentTokens: 10_000,
+      replacementTokens: 500,
+      retrievedTokens: 0,
+      estimatedParentTokensSaved: 9_500,
+      interceptions: [{
+        objectId: "expiring",
+        turnId: "turn-1",
+        toolUseId: "item-expiring",
+        toolName: "expiring-output",
+        createdAt: expiresAt - 300_000,
+        originalOutputAvailableUntil: expiresAt,
+        originalCharacters: 40_000,
+        baselineParentTokens: 10_000,
+        replacementTokens: 500,
+        retrievedTokens: 0,
+        estimatedParentTokensSaved: 9_500,
+      }],
+    };
+    const readThread = vi.fn(async () => response);
+    installApi({ readThread });
+    window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
+    render(<ToolOutputIncidentExplorerWindow />);
+    await screen.findByRole("button", { name: /expiring-output/ });
+    vi.useFakeTimers();
+    try {
+      fireEvent.click(screen.getByRole("button", { name: /expiring-output/ }));
+      expect(screen.getByText(/Original output is temporary and expires by/)).toBeInTheDocument();
+      const reads = readThread.mock.calls.length;
+      await act(async () => { vi.advanceTimersByTime(60_001); });
+      expect(screen.getByText(/Original output is expired or unavailable/)).toBeInTheDocument();
+      expect(screen.queryByText(/Original output is temporary and expires by/)).not.toBeInTheDocument();
+      expect(readThread).toHaveBeenCalledTimes(reads);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([false, true])("shows decision notes and original availability while filtering outcomes (available=%s)", async (available) => {
     const response = buildResponse();
     const gate = (
       objectId: string,
@@ -456,6 +496,7 @@ describe("ToolOutputIncidentExplorerWindow", () => {
       turnId: "turn-1",
       toolUseId: `item-${objectId}`,
       toolName: `cmd-${objectId}`,
+      originalOutputAvailable: available,
       createdAt: 1_800_000_000_000,
       originalCharacters: 40_000,
       baselineParentTokens: 10_000,
@@ -481,7 +522,8 @@ describe("ToolOutputIncidentExplorerWindow", () => {
         gate("cost-1", -200, 0),
       ],
     };
-    installApi({ readThread: async () => response });
+    const inspectTokenMiserOutput = vi.fn(async () => ({ available: true, text: "Retained original", offset: 0, totalCharacters: 17 }));
+    installApi({ readThread: async () => response, inspectTokenMiserOutput });
     window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
     render(<ToolOutputIncidentExplorerWindow />);
 
@@ -495,7 +537,13 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     expect(screen.queryByText("Traced the handler for win-1.")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /win-1/ }));
     expect(screen.getByText("Output summarized.")).toBeInTheDocument();
-    expect(screen.getByText(/Original output is expired or unavailable/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "View original" }));
+    expect(await screen.findByText("Retained original")).toBeInTheDocument();
+    expect(inspectTokenMiserOutput).toHaveBeenCalledWith(expect.objectContaining({ backend: "codex", threadId: "thread-1", objectId: "win-1", source: "original" }));
+
+    expect(screen.getByText(available
+      ? /retained until the next turn starts/
+      : /Original output is expired or unavailable/)).toBeInTheDocument();
     expect(screen.queryByText("Traced the handler for win-1.")).not.toBeInTheDocument();
     expect(screen.queryByText(/Inspect notifyPending for win-1/)).not.toBeInTheDocument();
 

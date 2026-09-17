@@ -1,3 +1,4 @@
+import { TokenMiserOutputInspector } from "./TokenMiserOutputInspector";
 import type { ReactNode } from "react";
 import {
   useCallback,
@@ -628,6 +629,7 @@ export function ToolOutputIncidentExplorerWindow() {
 
       {lens === "savings" ? (
         <TokenMiserSavingsLens
+          inspectionTarget={route}
           comparison={tokenMiserComparison}
           compactions={latest?.pricing?.compactions ?? []}
           contextWindow={contextWindowSummary}
@@ -1511,6 +1513,7 @@ function SavingsFigureGrid(props: { figures: SavingsFigure[] }) {
   );
 }
 function TokenMiserSavingsLens(props: {
+  inspectionTarget?: { backend: AppServerBackendKind; threadId: string; federationTarget?: FederationTarget };
   comparison?: TokenMiserContextComparison;
   compactions: readonly ThreadCompactionRecord[];
   contextWindow?: TokenMiserContextWindowSummary;
@@ -1560,7 +1563,7 @@ function TokenMiserSavingsLens(props: {
           />
         </SavingsDetailStack>
         <SavingsSplitGrip measurement={measurement} onResize={resizeDetails} />
-        <TokenMiserResultList entries={props.gates} tokenMiser={tokenMiser} />
+        <TokenMiserResultList entries={props.gates} tokenMiser={tokenMiser} inspectionTarget={props.inspectionTarget} />
       </div>
     );
   }
@@ -1898,7 +1901,7 @@ function TokenMiserSavingsLens(props: {
 
       <SavingsSplitGrip measurement={measurement} onResize={resizeDetails} />
 
-      <TokenMiserResultList entries={props.gates} tokenMiser={tokenMiser} />
+      <TokenMiserResultList entries={props.gates} tokenMiser={tokenMiser} inspectionTarget={props.inspectionTarget} />
     </div>
   );
 }
@@ -2405,14 +2408,37 @@ const RESULT_FILTERS: Array<{
   { key: "direct", label: "Direct" },
 ];
 
+function TokenMiserOriginalAvailability(props: { available?: boolean; expiresAt?: number }) {
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    const current = Date.now();
+    setNow(current);
+    if (!props.expiresAt || props.expiresAt <= current) return;
+    // Update this disclosure at expiry without fetching accounting or settings.
+    const timer = window.setTimeout(() => setNow(Date.now()), props.expiresAt - current);
+    return () => window.clearTimeout(timer);
+  }, [props.expiresAt]);
+
+  return (
+    <p>
+      {props.available === true
+        ? "Original output was available at the last refresh. It is retained until the next turn starts, unless evicted for memory pressure."
+        : props.available === undefined && props.expiresAt && props.expiresAt > now
+        ? `Original output is temporary and expires by ${new Date(props.expiresAt).toLocaleTimeString()}. It may become unavailable earlier.`
+        : "Original output is expired or unavailable."}
+      {" "}Costs and tokens are saved. Originals are unavailable after archive or restart.
+    </p>
+  );
+}
+
 /**
  * Every observed result in one filterable list.
  *
- * Gated entries carry the summary the parent actually got; direct entries carry
- * the ordinary result preview. Keeping both populations behind one filter makes
- * "All" truthful and avoids spending a second section on a single outcome.
+ * Gated entries carry accounting and original availability; direct entries carry
+ * observation counts. Both populations share one outcome filter.
  */
 function TokenMiserResultList(props: {
+  inspectionTarget?: { backend: AppServerBackendKind; threadId: string; federationTarget?: FederationTarget };
   entries: TokenMiserGateEntry[];
   tokenMiser: NonNullable<ThreadToolAccounting["tokenMiser"]>;
 }) {
@@ -2505,12 +2531,17 @@ function TokenMiserResultList(props: {
                     <p className="incident-explorer__gate-summary">
                       {entry.interception.disposition === "passed_through" ? "Output passed through." : "Output summarized."}
                     </p>
-                    <p>
-                      {entry.interception.originalOutputAvailableUntil && entry.interception.originalOutputAvailableUntil > Date.now()
-                        ? `Original output is temporary and expires by ${new Date(entry.interception.originalOutputAvailableUntil).toLocaleTimeString()}. It may become unavailable earlier.`
-                        : "Original output is expired or unavailable."}
-                      {" "}Costs and tokens are saved. Originals are unavailable after archive or restart.
-                    </p>
+                    {props.inspectionTarget && entry.interception.disposition !== "passed_through" ? (
+                      <TokenMiserOutputInspector
+                        key={`${props.inspectionTarget.threadId}:${entry.interception.objectId}`}
+                        {...props.inspectionTarget}
+                        objectId={entry.interception.objectId}
+                      />
+                    ) : null}
+                    <TokenMiserOriginalAvailability
+                      available={entry.interception.originalOutputAvailable}
+                      expiresAt={entry.interception.originalOutputAvailableUntil}
+                    />
                   </div>
                 ) : null}
               </li>

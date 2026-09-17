@@ -7,7 +7,7 @@ import {
   type TokenMiserStructuredGenerationResult,
   type TokenMiserServiceOptions,
 } from "../token-miser/token-miser-service";
-import { TokenMiserStore } from "../token-miser/token-miser-store";
+import { TestTokenMiserStore as TokenMiserStore } from "./token-miser-test-store";
 import type {
   TokenMiserCodeModeOutputPayload,
   TokenMiserPostToolUsePayload,
@@ -67,7 +67,7 @@ describe("TokenMiserService", () => {
     expect(result?.stopReason).toContain("Summary: The command printed");
     expect(result?.stopReason).toContain("Output reference:");
     expect(result?.stopReason).toContain(
-      "Original output is temporary (up to five minutes); expiry, eviction or restart makes it unavailable.",
+      "Original output is retained until the next turn starts; memory pressure, archive or restart may make it unavailable earlier.",
     );
     expect(result?.stopReason).not.toMatch(BEHAVIOR_PRIMING_LANGUAGE);
     expect(result?.stopReason).not.toMatch(/suggested next step/i);
@@ -1003,7 +1003,7 @@ describe("TokenMiserService code-mode reduction", () => {
         { toolName: "Bash", summary: "Found alpha matches." },
         { toolName: "Read", summary: "Found beta matches." },
       ],
-      sourceMaterial: "Temporary: expires within five minutes; unavailable after eviction or restart.",
+      sourceMaterial: "Temporary: retained until the next turn starts; unavailable after eviction, archive or restart.",
     });
     expect(replacementText).not.toMatch(BEHAVIOR_PRIMING_LANGUAGE);
     const [metadata] = await store.listMetadata();
