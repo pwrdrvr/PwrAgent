@@ -56,10 +56,10 @@ export function updateCheckOutcomeNotice(
     // a notice owns its own action buttons, so the link rides as an action
     // and shares `openReleaseNotes` instead of the markup. Omitted entirely
     // for `skipped` and `error`, which name no version.
-    ...(notesUrl === undefined
-      ? {}
-      : {
-          actions: [
+    actions:
+      notesUrl === undefined
+        ? undefined
+        : [
             {
               label: "Release notes",
               onClick: () => {
@@ -67,7 +67,6 @@ export function updateCheckOutcomeNotice(
               },
             },
           ],
-        }),
   };
 }
 
@@ -316,7 +315,10 @@ export function AppUpdateBanner(props: {
               </p>
             ) : null}
           </div>
-          {progress.cancelable || progress.notesUrl ? (
+          {/* `updateProgressCopy` gives every cancelable phase a version and
+              the one phase without a version (`checking`) no Cancel, so the
+              row is present exactly when Cancel is. */}
+          {progress.cancelable ? (
             <div className="app-update-banner__actions">
               {progress.cancelable ? (
                 <button

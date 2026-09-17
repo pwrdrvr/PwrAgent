@@ -9,11 +9,11 @@ import {
   TooltipValue,
   formatTimestamp,
   handleCopyPath,
-  openExternalUrl,
   pathBaseName,
   type HideRailTooltip,
   type ShowRailTooltip,
 } from "./context-rail-shared";
+import { openExternalUrl } from "../../../lib/open-external-url";
 
 type LinkedProjectsPanelProps = {
   desktopApi?: Pick<

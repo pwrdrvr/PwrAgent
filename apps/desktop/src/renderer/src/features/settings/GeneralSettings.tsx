@@ -152,19 +152,13 @@ function updateResultText(result: AppUpdateCheckResult): string {
 }
 
 /** Whichever version the sentence above just named, or `undefined` for the
- *  three results that name none. Kept beside `updateResultText` so a result
- *  that starts naming a version cannot get a sentence without a link. */
+ *  three results that name none. Asked of the union itself rather than by
+ *  listing those three: a status added later carries a link exactly when it
+ *  carries a version, with nothing here to keep in step. */
 function updateResultVersion(
   result: AppUpdateCheckResult,
 ): string | undefined {
-  if (
-    result.status === "skipped"
-    || result.status === "error"
-    || result.status === "checking"
-  ) {
-    return undefined;
-  }
-  return result.version;
+  return "version" in result ? result.version : undefined;
 }
 
 export function GeneralSettings(props: {
@@ -560,7 +554,9 @@ export function GeneralSettings(props: {
                       has to stay inline with it rather than float down to
                       the controls. */}
                   <ReleaseNotesLink
-                    ariaLabel={`Release notes for v${resultVersion}`}
+                    {...(resultVersion === undefined
+                      ? {}
+                      : { ariaLabel: `Release notes for v${resultVersion}` })}
                     className="settings-update-channel__notes"
                     url={releaseNotesUrl(resultVersion)}
                   />
