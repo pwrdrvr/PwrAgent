@@ -70,6 +70,18 @@ export class McpOAuthSessionCoordinator {
   private loadPromise?: Promise<void>;
   private refreshPromise?: Promise<void>;
   private authorizationAttempt = 0;
+  /**
+   * The attempt currently inside `authorize`, or 0 when none is.
+   *
+   * `abandonAuthorization` restores the state an attempt overwrote, so it must
+   * be able to tell "an attempt is running" from "one finished a while ago".
+   * Keyed on the attempt number rather than a bare boolean because a
+   * superseded attempt's `finally` runs after its replacement has already
+   * started, and must not clear the replacement's claim.
+   */
+  private liveAuthorizationAttempt = 0;
+  private stateBeforeAuthorization?: McpConnectionRuntimeState;
+  private detailBeforeAuthorization?: string;
   private runtimeState: McpConnectionRuntimeState = "disconnected";
   private runtimeDetail?: string;
 
@@ -99,6 +111,36 @@ export class McpOAuthSessionCoordinator {
     return Boolean(this.credential?.tokens?.access_token);
   }
 
+  /**
+   * Abandon the in-flight authorization without holding its failure against
+   * the connection.
+   *
+   * `authorize` reports a failed attempt as `reauthorization_required`, which
+   * is right for a flow that broke and wrong for one the operator called off:
+   * a `ready` connection whose credentials were never touched would start
+   * claiming "Login required". Bumping the attempt counter is the mechanism
+   * that already exists for "this attempt no longer owns our state" -- it
+   * makes the in-flight `isCurrent()` false, so its catch reports the failure
+   * to its own caller and leaves the state alone -- and the state the attempt
+   * overwrote with `connecting` is put back.
+   *
+   * The caller still has to end the flow it is waiting on; this only decides
+   * what the abandoned one is allowed to say on its way out.
+   */
+  abandonAuthorization(): void {
+    // Nothing in flight means there is no attempt to retire and, more to the
+    // point, no state of its to put back: the snapshot still holds whatever
+    // preceded the *last* authorization, so acting here would knock a `ready`
+    // connection back to whatever it was before it was authorized.
+    if (this.liveAuthorizationAttempt === 0) return;
+    this.authorizationAttempt += 1;
+    this.liveAuthorizationAttempt = 0;
+    this.setState(
+      this.stateBeforeAuthorization ?? "disconnected",
+      this.detailBeforeAuthorization,
+    );
+  }
+
   async authorize(params: {
     redirectUrl: URL;
     state?: string;
@@ -106,7 +148,11 @@ export class McpOAuthSessionCoordinator {
     waitForCode: () => Promise<string>;
   }): Promise<void> {
     await this.ensureLoaded();
+    // What to put back if this attempt is called off rather than finished.
+    this.stateBeforeAuthorization = this.runtimeState;
+    this.detailBeforeAuthorization = this.runtimeDetail;
     const attempt = ++this.authorizationAttempt;
+    this.liveAuthorizationAttempt = attempt;
     const epoch = this.revocationEpoch;
     const isCurrent = () =>
       attempt === this.authorizationAttempt && epoch === this.revocationEpoch;
@@ -186,6 +232,10 @@ export class McpOAuthSessionCoordinator {
       // Its caller still needs the failure, but it no longer owns our state.
       if (isCurrent()) this.setState("reauthorization_required", detail);
       throw new Error(detail, { cause: error });
+    } finally {
+      if (this.liveAuthorizationAttempt === attempt) {
+        this.liveAuthorizationAttempt = 0;
+      }
     }
   }
 

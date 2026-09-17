@@ -45,6 +45,7 @@ import type {
 import type {
   AgentEvent,
   AuthorizeMcpConnectionRequest,
+  CancelMcpConnectionAuthorizationRequest,
   AuthorizeMcpConnectionResponse,
   AutomationIdRequest,
   AutomationMutationResponse,
@@ -514,6 +515,9 @@ export type DesktopApi = {
   authorizeMcpConnection?: (
     request: AuthorizeMcpConnectionRequest,
   ) => Promise<AuthorizeMcpConnectionResponse>;
+  cancelMcpConnectionAuthorization?: (
+    request: CancelMcpConnectionAuthorizationRequest,
+  ) => Promise<MutateMcpConnectionResponse>;
   disconnectMcpConnection?: (
     request: DisconnectMcpConnectionRequest,
   ) => Promise<MutateMcpConnectionResponse>;

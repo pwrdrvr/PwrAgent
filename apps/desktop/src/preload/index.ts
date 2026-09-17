@@ -17,6 +17,7 @@ import {
 import type {
   AgentEvent,
   AuthorizeMcpConnectionRequest,
+  CancelMcpConnectionAuthorizationRequest,
   AuthorizeMcpConnectionResponse,
   ApplyThreadModelMigrationRequest,
   ApplyThreadModelMigrationResponse,
@@ -683,6 +684,7 @@ import {
   MCP_CONNECTION_PWRGIT_OPEN_CHANNEL,
   MCP_CONNECTION_PWRGIT_DOWNLOAD_CHANNEL,
   MCP_CONNECTION_AUTHORIZE_CHANNEL,
+  MCP_CONNECTION_CANCEL_AUTHORIZE_CHANNEL,
   MCP_CONNECTION_CREATE_CHANNEL,
   MCP_CONNECTION_DISCONNECT_CHANNEL,
   MCP_CONNECTION_LIST_CHANNEL,
@@ -981,6 +983,10 @@ const desktopApi = Object.freeze({
     request: AuthorizeMcpConnectionRequest,
   ): Promise<AuthorizeMcpConnectionResponse> =>
     await ipcRenderer.invoke(MCP_CONNECTION_AUTHORIZE_CHANNEL, request),
+  cancelMcpConnectionAuthorization: async (
+    request: CancelMcpConnectionAuthorizationRequest,
+  ): Promise<MutateMcpConnectionResponse> =>
+    await ipcRenderer.invoke(MCP_CONNECTION_CANCEL_AUTHORIZE_CHANNEL, request),
   disconnectMcpConnection: async (
     request: DisconnectMcpConnectionRequest,
   ): Promise<MutateMcpConnectionResponse> =>

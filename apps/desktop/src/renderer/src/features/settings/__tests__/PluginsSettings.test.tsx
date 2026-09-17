@@ -9,8 +9,10 @@ import {
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
+  AuthorizeMcpConnectionResponse,
   CodexMcpServerSummary,
   DesktopSettingsSnapshot,
+  McpConnectionStatus,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { PluginsSettings as PluginsSettingsComponent } from "../PluginsSettings";
@@ -532,5 +534,142 @@ describe("PluginsSettings", () => {
         screen.getByRole("button", { name: "More actions for datadog" }),
       ).toBeEnabled();
     });
+  });
+  /**
+   * An OAuth round trip leaves for the browser, and the card cannot see what
+   * happens there. Without a way out, `connectionPending` disabled every
+   * button on every row -- including the Reauthorize that would have issued a
+   * fresh sign-in link -- until the main process gave up five minutes later.
+   */
+  it("hands back the card when an authorization never returns", async () => {
+    const api = createDesktopApi([]);
+    const cancel = vi.fn().mockResolvedValue({ connectionId: "rovo" });
+    const rovo: McpConnectionStatus = {
+      id: "rovo", displayName: "Atlassian Rovo",
+      serverUrl: "https://mcp.atlassian.com/v2/mcp",
+      kind: "remote", authMode: "oauth", enabled: true, configured: false,
+      state: "disconnected", createdAt: 0, updatedAt: 0,
+    };
+    // Held open so the test can settle it *after* Stop waiting, which is what
+    // an abandoned browser round trip does.
+    let settleAuthorize:
+      | ((value: AuthorizeMcpConnectionResponse) => void)
+      | undefined;
+    api.authorizeMcpConnection = vi.fn(
+      () => new Promise<AuthorizeMcpConnectionResponse>((resolve) => {
+        settleAuthorize = resolve;
+      }),
+    );
+    api.cancelMcpConnectionAuthorization = cancel;
+    api.listMcpConnections = vi.fn().mockResolvedValue({ connections: [rovo] });
+    render(<PluginsSettings desktopApi={api} snapshot={createSnapshot()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Authorize" }));
+    await screen.findByText(
+      "Waiting for Atlassian Rovo authorization to complete...",
+    );
+    const row = within(
+      screen.getByText("https://mcp.atlassian.com/v2/mcp").closest("article")!,
+    );
+    expect(row.getByRole("button", { name: "Edit" })).toBeDisabled();
+    expect(row.getByRole("button", { name: "Remove" })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Stop waiting" }));
+
+    await waitFor(() => {
+      expect(row.getByRole("button", { name: "Authorize" })).toBeEnabled();
+    });
+    expect(row.getByRole("button", { name: "Edit" })).toBeEnabled();
+    expect(row.getByRole("button", { name: "Remove" })).toBeEnabled();
+    expect(cancel).toHaveBeenCalledWith({ connectionId: "rovo" });
+
+    // The abandoned attempt still settles in the main process. Landing on a
+    // stale epoch it says nothing -- a success notice for an authorization the
+    // operator gave up on would be a claim the card cannot support, and
+    // re-entering `finally` would disable the row it was just released from.
+    settleAuthorize?.({ connection: { ...rovo, configured: true, state: "ready" } });
+    await waitFor(() => {
+      expect(
+        screen.getByText(/Stopped waiting for authorization/),
+      ).toBeInTheDocument();
+    });
+    expect(row.getByRole("button", { name: "Authorize" })).toBeEnabled();
+  });
+  /**
+   * The endpoint is the one thing in the row an operator hands to something
+   * else verbatim — a `curl`, a bug report, the agent's own config when a
+   * server turns out to belong there instead. It was selectable text in a row
+   * full of buttons, which in practice means a drag that catches the row.
+   */
+  it("copies each connection's endpoint through the shared affordance", async () => {
+    const api = createDesktopApi([]);
+    const copyText = vi.fn().mockResolvedValue(undefined);
+    api.copyText = copyText;
+    api.listMcpConnections = vi.fn().mockResolvedValue({ connections: [
+      {
+        id: "rovo", displayName: "Atlassian Rovo",
+        serverUrl: "https://mcp.atlassian.com/v2/mcp",
+        kind: "remote", authMode: "oauth", enabled: true, configured: false,
+        state: "disconnected", createdAt: 0, updatedAt: 0,
+      },
+      {
+        id: "datadog", displayName: "Datadog",
+        serverUrl: "https://mcp.datadoghq.com/api/unstable/mcp-server/mcp",
+        kind: "remote", authMode: "oauth", enabled: true, configured: true,
+        state: "ready", createdAt: 0, updatedAt: 0,
+      },
+    ] });
+    render(<PluginsSettings desktopApi={api} snapshot={createSnapshot()} />);
+
+    // Named per connection: a row full of identical "Copy" buttons is
+    // unusable by anything that reads names rather than sees positions.
+    const copy = await screen.findByRole("button", {
+      name: "Copy Atlassian Rovo MCP URL",
+    });
+    fireEvent.click(copy);
+    await waitFor(() => {
+      expect(copyText).toHaveBeenCalledWith("https://mcp.atlassian.com/v2/mcp");
+    });
+    // The acknowledgement is what tells the operator it landed; the endpoint
+    // is invisible in the clipboard, so a silent button reads as a dead one.
+    expect(await screen.findByRole("button", {
+      name: "Copy Atlassian Rovo MCP URL",
+    })).toHaveTextContent("Copied");
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Copy Datadog MCP URL" }),
+    );
+    await waitFor(() => {
+      expect(copyText).toHaveBeenLastCalledWith(
+        "https://mcp.datadoghq.com/api/unstable/mcp-server/mcp",
+      );
+    });
+  });
+  /**
+   * Disconnect and Remove differ only in whether the row survives, and the
+   * row said nothing about which was which — two destructive-looking buttons
+   * side by side, one of which is recoverable and one of which is not.
+   */
+  it("says what Disconnect keeps and Remove does not", async () => {
+    const api = createDesktopApi([]);
+    api.listMcpConnections = vi.fn().mockResolvedValue({ connections: [{
+      id: "rovo", displayName: "Atlassian Rovo",
+      serverUrl: "https://mcp.atlassian.com/v2/mcp",
+      kind: "remote", authMode: "oauth", enabled: true, configured: true,
+      state: "ready", createdAt: 0, updatedAt: 0,
+    }] });
+    render(<PluginsSettings desktopApi={api} snapshot={createSnapshot()} />);
+
+    const disconnect = await screen.findByRole("button", { name: "Disconnect" });
+    // The recoverable one has to say it is recoverable; that is the whole
+    // distinction an operator is choosing between.
+    expect(disconnect).toHaveAttribute(
+      "title",
+      expect.stringContaining("stays in this list"),
+    );
+    expect(screen.getByRole("button", { name: "Remove" })).toHaveAttribute(
+      "title",
+      expect.stringContaining("entirely"),
+    );
   });
 });
