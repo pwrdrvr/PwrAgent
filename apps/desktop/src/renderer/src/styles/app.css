@@ -9402,6 +9402,60 @@ a.button {
 .cloudflare-setup .cloudflare-setup__error { color: var(--danger-text); }
 .cloudflare-setup__checks p { font-size: 12px; }
 
+/* Plan/prerequisite notice. Reads as a caution rather than an error: the plan
+   requirement is a fact about the account, not something the operator did. */
+.cloudflare-setup__notice {
+  display: grid;
+  gap: 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--border-subtle);
+  border-left: 2px solid var(--accent-border);
+  border-radius: 6px;
+  background: var(--bg-panel-elevated);
+}
+
+.cloudflare-setup__notice strong {
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.cloudflare-setup__notice p {
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+/* Reference links. Rendered as buttons because opening one is an IPC call, not
+   a navigation, but they must read as links beside the real actions. */
+.cloudflare-setup__link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent-bright);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.cloudflare-setup__link:hover:not(:disabled) {
+  color: var(--text-primary);
+}
+
+.cloudflare-setup__link:disabled {
+  color: var(--text-muted);
+  cursor: default;
+  text-decoration: none;
+}
+
+.cloudflare-setup__dash {
+  align-items: baseline;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
 .settings-section-controls {
   display: inline-flex;
   align-items: center;

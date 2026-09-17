@@ -47,4 +47,34 @@ describe("Cloudflare setup flow", () => {
     expect(screen.getByRole("button", { name: "Validate Endpoint Security" })).toBeDisabled();
     expect(screen.getByText("The request reached the gateway.")).toBeInTheDocument();
   });
+
+  it("names the product, discloses the plan requirement, and opens reference links", async () => {
+    const call = vi.fn(async (_request: CloudflareSetupRequest) => connected);
+    render(<CloudflareSetup api={{ configureFederationCloudflare: call } as DesktopApi}
+      listenPort="47830" onWriteConfig={async () => true} onSettingsChanged={async () => {}} />);
+    await screen.findByLabelText("Cloudflare public hostname");
+    // The pane has to name Access mTLS: two different Cloudflare products are
+    // called mTLS and only one of them is what this provisions.
+    expect(screen.getByText(/Contract \(Enterprise\) Zero Trust plan/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Open Mutual TLS in the dashboard" }));
+    await waitFor(() => expect(call).toHaveBeenCalledWith({ action: "open-link", link: "dash-mtls" }));
+  });
+
+  it("keeps reference links usable while an operation is running", async () => {
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const call = vi.fn(async (request: CloudflareSetupRequest) => {
+      if (request.action === "provision") await gate;
+      return connected;
+    });
+    render(<CloudflareSetup api={{ configureFederationCloudflare: call } as DesktopApi}
+      listenPort="47830" onWriteConfig={async () => true} onSettingsChanged={async () => {}} />);
+    await screen.findByLabelText("Cloudflare public hostname");
+    fireEvent.change(screen.getByLabelText("Cloudflare public hostname"), { target: { value: "federation.example.com" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create protected endpoint" }));
+    await screen.findByRole("status");
+    // Reading the docs is exactly what an operator does while provisioning runs.
+    expect(screen.getByRole("button", { name: "Access mTLS documentation" })).toBeEnabled();
+    release();
+  });
 });

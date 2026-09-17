@@ -113,3 +113,43 @@ describe("Cloudflare provisioning", () => {
     expect((await h.service.audit()).every((check) => check.passed)).toBe(true);
   });
 });
+
+describe("Cloudflare API failure reporting", () => {
+  const account = "a".repeat(32);
+  const respond = (status: number, payload: unknown) =>
+    new CloudflareApi("secret-token", async () =>
+      new Response(JSON.stringify(payload), { status, headers: { "Content-Type": "application/json" } }));
+
+  it("names the plan entitlement and the token scope when the CA upload is refused", async () => {
+    const api = respond(403, { success: false, errors: [{ code: 10000, message: "Authentication error" }] });
+    // The operator needs to know a 403 here has two candidate causes; the old
+    // message named only the token, which sends them re-scoping a token that
+    // was never the problem.
+    await expect(api.request(`/accounts/${account}/access/certificates`, "POST", {}))
+      .rejects.toThrow(/Authentication error \(code 10000\).*Contract \(Enterprise\) Zero Trust plan.*Mutual TLS Certificates/s);
+  });
+
+  it("reports Cloudflare's own reason for an ordinary failure", async () => {
+    const api = respond(400, { success: false, errors: [{ code: 1004, message: "DNS record already exists" }] });
+    await expect(api.request(`/zones/${account}/dns_records`, "POST", {}))
+      .rejects.toThrow("DNS record already exists (code 1004)");
+  });
+
+  it("does not attach the plan hint to unrelated paths", async () => {
+    const api = respond(403, { success: false, errors: [{ code: 10000, message: "Authentication error" }] });
+    await expect(api.request(`/accounts/${account}/cfd_tunnel`, "POST", {}))
+      .rejects.toThrow(/^(?!.*Zero Trust plan).*Authentication error/s);
+  });
+
+  it("never reflects the bearer token back into a message", async () => {
+    const api = respond(403, { success: false, errors: [{ code: 10000, message: "Bad token secret-token" }] });
+    await expect(api.request(`/accounts/${account}/access/certificates`))
+      .rejects.toThrow(/^(?!.*secret-token)/s);
+  });
+
+  it("falls back to the status when the body is not Cloudflare JSON", async () => {
+    const api = new CloudflareApi("secret-token", async () => new Response("<html>502</html>", { status: 502 }));
+    await expect(api.request(`/accounts/${account}/access/apps`))
+      .rejects.toThrow("Cloudflare API returned HTTP 502. Check token permissions and account access.");
+  });
+});

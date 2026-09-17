@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { CloudflareSetupRequest, CloudflareSetupStatus, DesktopSettingsConfigPatch } from "@pwragent/shared";
+import type { CloudflareSetupLink, CloudflareSetupRequest, CloudflareSetupStatus, DesktopSettingsConfigPatch } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { SettingsField, SettingsSection } from "./SettingsLayout";
 
@@ -65,11 +65,28 @@ export function CloudflareSetup({ api, listenPort, mode, onWriteConfig, onSettin
     <button type="button" className={`button button--${primary ? "primary" : "secondary"}`} disabled={disabled || blocked}
       onClick={() => void run(request, progress)}>{name}</button>
   );
+  // Reference links stay enabled while an operation runs: an operator reading the
+  // docs mid-setup is the case they exist for. They carry no request payload, so
+  // they cannot collide with the main-process busy latch.
+  const link = (name: string, target: CloudflareSetupLink) => (
+    <button type="button" className="cloudflare-setup__link" disabled={!api?.configureFederationCloudflare}
+      onClick={() => void api?.configureFederationCloudflare?.({ action: "open-link", link: target })}>{name}</button>
+  );
 
-  return <SettingsSection eyebrow="Private access over the Internet" title="Cloudflare secure setup"
-    chip={status?.hostname ? "mTLS" : "Setup"} chipKind="muted">
+  return <SettingsSection eyebrow="Private access over the Internet" title="Cloudflare Zero Trust — Access mTLS"
+    chip={status?.hostname ? "mTLS" : "Unvalidated"} chipKind="muted">
     <div className="cloudflare-setup">
-      <p className="cloudflare-setup__intro">A public address that only your certificate holders can use. Create the tunnel, issue client certificates, and verify that Cloudflare blocks everyone else before they reach this gateway.</p>
+      <p className="cloudflare-setup__intro">A public address that only your certificate holders can use. PwrAgent creates the tunnel, generates its own certificate authority, issues client certificates, and verifies that Cloudflare blocks everyone else before they reach this gateway.</p>
+      <div className="cloudflare-setup__notice" role="note">
+        <strong>Requires a Contract (Enterprise) Zero Trust plan — not yet validated on a live account.</strong>
+        <p>This builds on <em>Access mTLS</em>, under Zero Trust → Access controls → Service credentials → Mutual TLS. Cloudflare&rsquo;s plan comparison marks mTLS authentication as Contract-only; the feature&rsquo;s own documentation page disagrees and lists pay-as-you-go. Setup will tell you which is true for your account when it uploads the certificate authority.</p>
+        <p>Certificates themselves cost nothing: PwrAgent generates the CA and 90-day client certificates locally. Nothing is purchased, and no machine has to trust a new root — Cloudflare checks the client certificate, while the server certificate stays Cloudflare&rsquo;s own.</p>
+        <div className="settings-button-row">
+          {link("Compare Zero Trust plans", "mtls-plans")}
+          {link("Access mTLS documentation", "mtls-docs")}
+          {link("Open Mutual TLS in the dashboard", "dash-mtls")}
+        </div>
+      </div>
       <div className="settings-button-row" role="group" aria-label="Cloudflare setup role">
         <button type="button" className={`button button--${tab === "gateway" ? "primary" : "secondary"}`} aria-pressed={tab === "gateway"} disabled={disabled} onClick={() => setTab("gateway")}>Set up this gateway</button>
         <button type="button" className={`button button--${tab === "client" ? "primary" : "secondary"}`} aria-pressed={tab === "client"} disabled={disabled} onClick={() => setTab("client")}>Connect this client</button>
@@ -93,7 +110,12 @@ export function CloudflareSetup({ api, listenPort, mode, onWriteConfig, onSettin
               <li>Zone → Access: Apps and Policies → Edit (includes the zone audit)</li>
               <li>Zone → DNS → Edit; Zone → Zone → Read</li>
             </ul>
+            <p><strong>Access: Mutual TLS Certificates → Edit</strong> is the permission the certificate-authority upload needs, and the first place a plan or scope problem will surface.</p>
             <p>Copy Account ID and Zone ID from your domain’s Overview page. The API token stays in memory until you disconnect or quit PwrAgent.</p>
+            <div className="settings-button-row">
+              {link("Open domain Overview for the IDs", "dash-zone-overview")}
+              {link("Allowed CA signature algorithms", "signature-algorithms")}
+            </div>
           </details>
           <SettingsField label="Account ID" control={field("Cloudflare account ID", accountId, setAccountId, "32-character account ID")} />
           <SettingsField label="Zone ID" control={field("Cloudflare zone ID", zoneId, setZoneId, "32-character zone ID")} />
@@ -121,6 +143,13 @@ export function CloudflareSetup({ api, listenPort, mode, onWriteConfig, onSettin
             {status.connectorRunning ? action("Stop connector", { action: "stop" }, "Stopping connector…") : action("Start connector", { action: "start" }, "Starting connector…")}
           </div>
           <p className="cloudflare-setup__hint">Validation checks the live policy, then tries HTTPS and WebSocket requests with and without a certificate. A pass requires 403 at Cloudflare and no matching request at this gateway.</p>
+          <div className="settings-button-row cloudflare-setup__dash">
+            <span>Inspect in Cloudflare:</span>
+            {link("Mutual TLS", "dash-mtls")}
+            {link("Applications", "dash-applications")}
+            {link("Policies", "dash-policies")}
+            {link("Tunnels", "dash-tunnels")}
+          </div>
           {status.checks && <div className="cloudflare-setup__checks" aria-label="Endpoint security results">
             {status.checks.map((check) => <div key={check.label} className={check.passed ? "is-pass" : "is-fail"}>
               <span>{check.passed ? "PASS" : "FAIL"}</span><div><strong>{check.label}</strong><p>{check.detail}</p></div>

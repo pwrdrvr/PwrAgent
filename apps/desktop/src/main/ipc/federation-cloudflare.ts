@@ -1,6 +1,6 @@
 import { dialog, ipcMain, shell } from "electron";
 import fs from "node:fs/promises";
-import type { CloudflareSetupRequest, CloudflareSetupStatus } from "@pwragent/shared";
+import type { CloudflareSetupLink, CloudflareSetupRequest, CloudflareSetupStatus } from "@pwragent/shared";
 import { FEDERATION_CLOUDFLARE_SETUP_CHANNEL } from "../../shared/ipc";
 import { CloudflareSetupService } from "../federation/cloudflare-setup-service";
 import { loadCloudflareSetup, saveCloudflareSetup } from "../federation/cloudflare-setup-storage";
@@ -23,6 +23,31 @@ const setup = new CloudflareSetupService({
     await getDesktopFederationRuntime().restart();
   },
 });
+
+/**
+ * Fixed reference table for `open-link`.
+ *
+ * `:account` and `:zone` are the only interpolation, filled from setup state, so
+ * an operator lands on their own dashboard page rather than a generic one. The
+ * Zero Trust deep-link shape (`one.dash…/?to=/:account/...`) is Cloudflare's own,
+ * taken from the route table their docs build `DashButton` from.
+ */
+const CLOUDFLARE_LINKS: Record<CloudflareSetupLink, string> = {
+  "mtls-docs":
+    "https://developers.cloudflare.com/cloudflare-one/access-controls/service-credentials/mutual-tls-authentication/",
+  // The plan comparison, not the docs availability note: that note currently
+  // reads "Enterprise and pay-as-you-go", which contradicts the summary of the
+  // pull request that added it ("requires a Zero Trust contract plan") and the
+  // plan table's own mTLS row. Send operators to the table.
+  "mtls-plans": "https://www.cloudflare.com/sase/products/access/",
+  "signature-algorithms":
+    "https://developers.cloudflare.com/ssl/client-certificates/byo-ca/",
+  "dash-mtls": "https://one.dash.cloudflare.com/?to=/:account/access/service-auth/mtls",
+  "dash-applications": "https://one.dash.cloudflare.com/?to=/:account/access/apps",
+  "dash-policies": "https://one.dash.cloudflare.com/?to=/:account/access/policies",
+  "dash-tunnels": "https://one.dash.cloudflare.com/?to=/:account/access/tunnels",
+  "dash-zone-overview": "https://dash.cloudflare.com/:account/:zone",
+};
 
 let busy = false;
 
@@ -49,6 +74,23 @@ export function registerCloudflareSetupIpc(): void {
         case "install-link":
           await shell.openExternal("https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/downloads/");
           break;
+        case "open-link": {
+          const template = Object.prototype.hasOwnProperty.call(CLOUDFLARE_LINKS, request.link)
+            ? CLOUDFLARE_LINKS[request.link]
+            : undefined;
+          if (!template) throw new Error("Unknown Cloudflare reference link.");
+          const state = await loadCloudflareSetup();
+          const status = await setup.status();
+          const accountId = state?.accountId ?? status.accountId;
+          const zoneId = state?.zoneId ?? status.zoneId;
+          // A dashboard deep link with an unresolved placeholder is worse than a
+          // generic one: it 404s. Fall back to the dashboard root instead.
+          const url = template.includes(":account") && !accountId
+            ? "https://one.dash.cloudflare.com/"
+            : template.replace(":account", accountId ?? "").replace(":zone", zoneId ?? "");
+          await shell.openExternal(url);
+          break;
+        }
         case "connect": await setup.connect(request.token, request.accountId, request.zoneId); break;
         case "disconnect": setup.disconnect(); break;
         case "provision":
