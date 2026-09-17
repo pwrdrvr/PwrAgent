@@ -5538,6 +5538,22 @@ export function useThreadSessionState(params: {
 
       const targetThreadKey = agentEventThreadIdentityKey(event, notificationThreadId);
       const isUnfocusedThread = targetThreadKey !== selectedThreadKeyRef.current;
+      if (
+        event.notification.method === "turn/completed"
+        || event.notification.method === "turn/failed"
+        || event.notification.method === "turn/cancelled"
+      ) {
+        void desktopApi.logRendererDiagnostic?.({
+          level: "info",
+          message: "renderer received terminal turn notification",
+          details: {
+            method: event.notification.method,
+            threadKey: targetThreadKey,
+            turnId: readNotificationTurnId(event.notification),
+            focused: !isUnfocusedThread,
+          },
+        }).catch(() => undefined);
+      }
       const isRetainedRemoteThread = retainedRemoteThreadsRef.current.some((item) => threadSummaryIdentityKey(item) === targetThreadKey);
       // Another window can still subscribe to an evicted thread. Its events
       // must not recreate this window's discarded transcript cache.
@@ -7114,22 +7130,24 @@ export function useThreadSessionState(params: {
         return;
       }
 
-      // IPC startup responses can arrive after the terminal notification.
-      // They acknowledge an earlier start; they cannot restart that turn.
-      if (turnId && consumedOptimisticActiveTurnKeysRef.current.has(`${threadKey}:${turnId}`)) {
-        return;
-      }
+      updateSession(threadKey, (current) => {
+        // Check inside the updater: a terminal event queued in this same React
+        // batch must record its turn before we consider the startup response.
+        if (turnId && consumedOptimisticActiveTurnKeysRef.current.has(`${threadKey}:${turnId}`)) {
+          return current;
+        }
 
-      updateSession(threadKey, (current) => ({
-        ...current,
-        activeTurnId: turnId,
-        activeTurnStartedAt: turnId ? Date.now() : undefined,
-        expectOwnUpdate: Boolean(turnId) || current.expectOwnUpdate,
-        interacted: Boolean(turnId) || current.interacted,
-        lastTouchedAt: Date.now(),
-        pendingTurnUsage: undefined,
-        recentlyCompletedTurnUsage: undefined,
-      }));
+        return {
+          ...current,
+          activeTurnId: turnId,
+          activeTurnStartedAt: turnId ? Date.now() : undefined,
+          expectOwnUpdate: Boolean(turnId) || current.expectOwnUpdate,
+          interacted: Boolean(turnId) || current.interacted,
+          lastTouchedAt: Date.now(),
+          pendingTurnUsage: undefined,
+          recentlyCompletedTurnUsage: undefined,
+        };
+      });
     },
     [threadKey, updateSession]
   );

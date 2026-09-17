@@ -14465,7 +14465,9 @@ describe("useThreadSessionState", () => {
 
   it("settles unfinished tools and ignores a late start acknowledgement for a completed turn", async () => {
     let emit!: Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0];
+    const logRendererDiagnostic = vi.fn(async () => undefined);
     const desktopApi: DesktopApi = {
+      logRendererDiagnostic,
       onAgentEvent: (listener) => { emit = listener; return () => undefined; },
       readThread: vi.fn(async ({ backend, threadId }) => ({
         backend: backend ?? "codex",
@@ -14495,6 +14497,20 @@ describe("useThreadSessionState", () => {
         threadId: "thread-1", turnId: "turn-1",
         turn: { id: "turn-1", status: "completed", output: [] },
       } } });
+      // The startup response can be queued before React commits completion.
+      result.current.setActiveTurnId("turn-1");
+    });
+    expect(result.current.activeTurnId).toBeUndefined();
+    expect(result.current.thinkingThreadKeys["codex:thread-1"]).toBeUndefined();
+    expect(logRendererDiagnostic).toHaveBeenCalledWith({
+      level: "info",
+      message: "renderer received terminal turn notification",
+      details: {
+        method: "turn/completed",
+        threadKey: "codex:thread-1",
+        turnId: "turn-1",
+        focused: true,
+      },
     });
     expect(result.current.entries).toEqual([expect.objectContaining({
       type: "activity", status: "cancelled",
