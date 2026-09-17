@@ -21,12 +21,14 @@
 // asked for from one the hour hand asked for. See AGENTS.md in this folder.
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { releaseNotesUrl } from "@pwragent/shared";
 import type {
   AppUpdateCheckResult,
   AppUpdateStatus,
 } from "../../../../shared/app-metadata";
 import type { DesktopApi } from "../../lib/desktop-api";
 import type { AppNoticeToastNotice } from "../notifications/AppNoticeToast";
+import { openReleaseNotes, ReleaseNotesLink } from "./ReleaseNotesLink";
 import {
   isUpdateCheckInProgress,
   updateCheckOutcomeCopy,
@@ -41,6 +43,7 @@ export function updateCheckOutcomeNotice(
   result: Parameters<typeof updateCheckOutcomeCopy>[0],
 ): AppNoticeToastNotice {
   const copy = updateCheckOutcomeCopy(result);
+  const notesUrl = copy.notesUrl;
   return {
     // Status-keyed so a genuinely new outcome remounts the notice and
     // restarts its countdown, while a repeat of the same one is idempotent.
@@ -49,6 +52,22 @@ export function updateCheckOutcomeNotice(
     title: copy.eyebrow,
     message: copy.message,
     tone: copy.tone,
+    // This is the one update surface that does NOT render `ReleaseNotesLink`:
+    // a notice owns its own action buttons, so the link rides as an action
+    // and shares `openReleaseNotes` instead of the markup. Omitted entirely
+    // for `skipped` and `error`, which name no version.
+    ...(notesUrl === undefined
+      ? {}
+      : {
+          actions: [
+            {
+              label: "Release notes",
+              onClick: () => {
+                openReleaseNotes(notesUrl);
+              },
+            },
+          ],
+        }),
   };
 }
 
@@ -297,16 +316,25 @@ export function AppUpdateBanner(props: {
               </p>
             ) : null}
           </div>
-          {progress.cancelable ? (
+          {progress.cancelable || progress.notesUrl ? (
             <div className="app-update-banner__actions">
-              <button
-                className="button button--ghost app-update-banner__cancel"
-                type="button"
-                disabled={canceling}
-                onClick={handleCancel}
-              >
-                {canceling ? "Canceling..." : "Cancel"}
-              </button>
+              {progress.cancelable ? (
+                <button
+                  className="button button--ghost app-update-banner__cancel"
+                  type="button"
+                  disabled={canceling}
+                  onClick={handleCancel}
+                >
+                  {canceling ? "Canceling..." : "Cancel"}
+                </button>
+              ) : null}
+              {/* The card names a version it is spending the operator's
+                  bandwidth on. Reading what is in it is the one question
+                  Cancel exists to answer. */}
+              <ReleaseNotesLink
+                className="app-update-banner__notes"
+                url={progress.notesUrl}
+              />
             </div>
           ) : null}
         </aside>
@@ -337,6 +365,15 @@ export function AppUpdateBanner(props: {
             >
               {restarting ? "Restarting..." : "Restart"}
             </button>
+            {/* Between the action and the way out of it, and rendered as
+                quiet text rather than a third pill: the card already asks
+                the operator to choose between Restart and Dismiss, and a
+                third control that looked equally like the point would make
+                that a three-way decision. */}
+            <ReleaseNotesLink
+              className="app-update-banner__notes"
+              url={releaseNotesUrl(version)}
+            />
             <button
               className="button button--ghost app-update-banner__dismiss"
               type="button"

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { releaseNotesUrl } from "@pwragent/shared";
 import type {
   AppLicenseDocument,
   AppLicenseDocumentKind,
@@ -6,6 +7,7 @@ import type {
   AppUpdateCheckResult,
 } from "../../../../shared/app-metadata";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { ReleaseNotesLink } from "../update/ReleaseNotesLink";
 import { SettingsCopyValue } from "./SettingsCopyValue";
 import { formatProcessIds } from "./settings-fields";
 import {
@@ -148,7 +150,17 @@ export function AboutSettings(props: { desktopApi?: DesktopApi }) {
         <dl className="settings-aboutkv">
           <div>
             <dt>Version</dt>
-            <dd>{metadata.applicationVersion}</dd>
+            <dd>
+              {metadata.applicationVersion}
+              {/* "this build", because a check result further down the page
+                  can name the same version and the two must not share one
+                  accessible name. */}
+              <ReleaseNotesLink
+                ariaLabel={`Release notes for this build, v${metadata.applicationVersion}`}
+                className="settings-aboutkv__notes"
+                url={releaseNotesUrl(metadata.applicationVersion)}
+              />
+            </dd>
           </div>
           <div>
             <dt>Copyright</dt>
@@ -202,7 +214,10 @@ export function AboutSettings(props: { desktopApi?: DesktopApi }) {
       <SettingsSection eyebrow="Release Notes" title="Changelog">
         <div className="settings-license-actions">
           <p className="settings-panel__hint">
-            Review bundled release notes for this build.
+            The changelog ships inside this build, so it stops at v
+            {metadata.applicationVersion}. The published release page carries
+            the same notes and is the only one that can describe a newer
+            build.
           </p>
           <div className="settings-button-row">
             <button
@@ -215,6 +230,15 @@ export function AboutSettings(props: { desktopApi?: DesktopApi }) {
             >
               Open changelog
             </button>
+            {/* The one place this control wears a button skin: it stands
+                beside a real button doing the neighboring job, and the
+                quiet register the other surfaces use would read as a
+                caption on it. */}
+            <ReleaseNotesLink
+              className="button button--secondary settings-about__notes-button"
+              label="Open release notes"
+              url={releaseNotesUrl(metadata.applicationVersion)}
+            />
           </div>
         </div>
       </SettingsSection>
@@ -280,8 +304,21 @@ function UpdateResultStatus({ result }: { result: AppUpdateCheckResult }) {
   if (result.status === "checking") {
     return <p className="settings-empty">Checking for updates…</p>;
   }
+  // Every branch below names a version, so every branch below carries the
+  // way out to what is in it. The three above name none.
+  const notes = (
+    <ReleaseNotesLink
+      ariaLabel={`Release notes for v${result.version}`}
+      className="settings-update-channel__notes"
+      url={releaseNotesUrl(result.version)}
+    />
+  );
   if (result.status === "no-update") {
-    return <p className="settings-empty">You're up to date (v{result.version}).</p>;
+    return (
+      <p className="settings-empty">
+        You're up to date (v{result.version}).{notes}
+      </p>
+    );
   }
   if (result.status === "downloaded") {
     return (
@@ -289,6 +326,7 @@ function UpdateResultStatus({ result }: { result: AppUpdateCheckResult }) {
         {result.direction === "downgrade"
           ? `Switch ready: v${result.version}. Restart to switch.`
           : `Update ready: v${result.version}. Restart to install.`}
+        {notes}
       </p>
     );
   }
@@ -297,6 +335,7 @@ function UpdateResultStatus({ result }: { result: AppUpdateCheckResult }) {
       {result.direction === "downgrade"
         ? `Switch to v${result.version}. Downloading in the background.`
         : `Update available: v${result.version}. Downloading in the background.`}
+      {notes}
     </p>
   );
 }

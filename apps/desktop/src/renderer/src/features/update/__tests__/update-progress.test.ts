@@ -157,6 +157,11 @@ describe("updateCheckOutcomeCopy", () => {
     // An error tone would put a red card in front of someone who got exactly
     // what they asked for.
     expect(copy.tone).toBe("neutral");
+    // The release is still published; what is in it is the question the
+    // operator is holding while they decide whether to ask again.
+    expect(copy.notesUrl).toBe(
+      "https://github.com/pwrdrvr/PwrAgent/releases/tag/v1.0.0",
+    );
   });
 
   it("keeps the error tone for the one outcome that is a failure", () => {
@@ -166,6 +171,8 @@ describe("updateCheckOutcomeCopy", () => {
       eyebrow: "Update check failed",
       message: "404",
       tone: "error",
+      // Names no version, so there is nothing to link to.
+      notesUrl: undefined,
     });
   });
 
@@ -179,6 +186,7 @@ describe("updateCheckOutcomeCopy", () => {
       eyebrow: "Updates unavailable",
       message: "Linux builds are updated by installing a newer package.",
       tone: "neutral",
+      notesUrl: undefined,
     });
   });
 
@@ -189,6 +197,43 @@ describe("updateCheckOutcomeCopy", () => {
       eyebrow: "PwrAgent is up to date",
       message: "You're running v0.8.0.",
       tone: "neutral",
+      notesUrl: "https://github.com/pwrdrvr/PwrAgent/releases/tag/v0.8.0",
     });
+  });
+});
+
+describe("the release page each card points at", () => {
+  // One rule, checked on every phase: a card that names a version carries a
+  // way out to what is in it, and a card that names none carries nothing.
+  it("is absent while checking, which has no version yet", () => {
+    expect(updateProgressCopy({ status: "checking" }).notesUrl).toBeUndefined();
+  });
+
+  it("is the offered version's page from `available` onward", () => {
+    expect(
+      updateProgressCopy({ status: "available", version: "1.1.0-beta.1" })
+        .notesUrl,
+    ).toBe("https://github.com/pwrdrvr/PwrAgent/releases/tag/v1.1.0-beta.1");
+    expect(
+      updateProgressCopy({
+        status: "downloading",
+        version: "1.1.0-beta.1",
+        percent: 42,
+      }).notesUrl,
+    ).toBe("https://github.com/pwrdrvr/PwrAgent/releases/tag/v1.1.0-beta.1");
+  });
+
+  it("is absent for a string that is not a version at all", () => {
+    // `runAppUpdateCheck` falls back to this literal when electron-updater
+    // answers without `updateInfo`, and it reaches the status channel like
+    // any other version would. A link onto a 404 is worse than none.
+    expect(
+      updateProgressCopy({ status: "downloading", version: "unknown" })
+        .notesUrl,
+    ).toBeUndefined();
+    expect(
+      updateCheckOutcomeCopy({ status: "no-update", version: "unknown" })
+        .notesUrl,
+    ).toBeUndefined();
   });
 });

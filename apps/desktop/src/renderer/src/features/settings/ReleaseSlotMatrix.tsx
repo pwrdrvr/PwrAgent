@@ -3,6 +3,7 @@ import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import {
   DESKTOP_UPDATE_CHANNELS,
   DESKTOP_UPDATE_TRAINS,
+  releaseNotesUrl,
 } from "@pwragent/shared";
 import type {
   DesktopUpdateChannel,
@@ -12,6 +13,7 @@ import type {
   AppUpdateReleaseInfo,
   AppUpdateReleaseVersions,
 } from "../../../../shared/app-metadata";
+import { ReleaseNotesLink } from "../update/ReleaseNotesLink";
 
 /**
  * All four published release slots at once — trains as rows, tracks as
@@ -120,41 +122,57 @@ function SlotTile(props: {
         : (props.release?.unavailableReason ?? "Nothing published here yet.");
 
   return (
-    <button
-      ref={props.registerRef}
-      aria-checked={props.selected}
-      aria-label={`${label} — ${headline}`}
-      className={`settings-release-slot${props.selected ? " is-selected" : ""}`}
-      disabled={props.disabled}
-      role="radio"
-      tabIndex={props.tabbable ? 0 : -1}
-      type="button"
-      onClick={props.onSelect}
-      onKeyDown={props.onKeyDown}
-    >
-      <span
-        className={`settings-release-slot__version${
-          version === undefined ? " is-empty" : ""
-        }`}
+    // The grid cell, not the tile. A `role="radio"` may contain no
+    // interactive descendant — it would be neither valid nor reachable by
+    // the roving tabindex this matrix implements — so the release-notes link
+    // is a SIBLING below the tile, and this wrapper is what makes the two
+    // read as one unit.
+    //
+    // Every slot gets a link, not just the selected one: picking a slot
+    // rewrites which build PwrAgent installs, so reading the notes has to be
+    // possible WITHOUT picking.
+    <div className="settings-release-slots__cell">
+      <button
+        ref={props.registerRef}
+        aria-checked={props.selected}
+        aria-label={`${label} — ${headline}`}
+        className={`settings-release-slot${props.selected ? " is-selected" : ""}`}
+        disabled={props.disabled}
+        role="radio"
+        tabIndex={props.tabbable ? 0 : -1}
+        type="button"
+        onClick={props.onSelect}
+        onKeyDown={props.onKeyDown}
       >
-        {headline}
-      </span>
-      <span className="settings-release-slot__sub">{sub}</span>
-      {props.selected || props.installed ? (
-        <span className="settings-release-slot__chips">
-          {props.selected ? (
-            <span className="settings-release-slot__chip is-selected">
-              Selected
-            </span>
-          ) : null}
-          {props.installed ? (
-            <span className="settings-release-slot__chip is-installed">
-              Installed
-            </span>
-          ) : null}
+        <span
+          className={`settings-release-slot__version${
+            version === undefined ? " is-empty" : ""
+          }`}
+        >
+          {headline}
         </span>
-      ) : null}
-    </button>
+        <span className="settings-release-slot__sub">{sub}</span>
+        {props.selected || props.installed ? (
+          <span className="settings-release-slot__chips">
+            {props.selected ? (
+              <span className="settings-release-slot__chip is-selected">
+                Selected
+              </span>
+            ) : null}
+            {props.installed ? (
+              <span className="settings-release-slot__chip is-installed">
+                Installed
+              </span>
+            ) : null}
+          </span>
+        ) : null}
+      </button>
+      <ReleaseNotesLink
+        ariaLabel={`Release notes for ${label} ${headline}`}
+        className="settings-release-slot__notes"
+        url={releaseNotesUrl(version)}
+      />
+    </div>
   );
 }
 

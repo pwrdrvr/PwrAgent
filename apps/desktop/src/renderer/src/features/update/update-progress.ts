@@ -3,6 +3,7 @@
 // Split out of the component because the interesting part of a progress card
 // is the wording and the arithmetic, and neither needs a DOM to be checked.
 
+import { releaseNotesUrl } from "@pwragent/shared";
 import type { AppUpdateStatus } from "../../../../shared/app-metadata";
 import { formatByteCount } from "../../lib/format-bytes";
 
@@ -42,6 +43,9 @@ export type UpdateProgressCopy = {
   meter: string | undefined;
   /** A download is running, so there is something for Cancel to stop. */
   cancelable: boolean;
+  /** The release page for the version being fetched, when it names one.
+   *  `undefined` while `checking`, which has no version yet. */
+  notesUrl: string | undefined;
 };
 
 export function updateProgressCopy(
@@ -54,6 +58,9 @@ export function updateProgressCopy(
       percent: undefined,
       meter: undefined,
       cancelable: false,
+      // The one in-flight phase with no version yet, so the one card that
+      // deliberately offers no link.
+      notesUrl: undefined,
     };
   }
   // A resolved selection older than the running build is the operator moving
@@ -67,6 +74,7 @@ export function updateProgressCopy(
       percent: undefined,
       meter: undefined,
       cancelable: true,
+      notesUrl: releaseNotesUrl(status.version),
     };
   }
   // A provider that sends no content length gives electron-updater nothing to
@@ -82,6 +90,7 @@ export function updateProgressCopy(
     percent,
     meter: downloadMeter(status),
     cancelable: true,
+    notesUrl: releaseNotesUrl(status.version),
   };
 }
 
@@ -127,6 +136,9 @@ export type UpdateCheckOutcomeCopy = {
   eyebrow: string;
   message: string;
   tone: "neutral" | "error";
+  /** The release page for whichever version the outcome names. `undefined`
+   *  for `skipped` and `error`, which name none. */
+  notesUrl: string | undefined;
 };
 
 /**
@@ -148,6 +160,7 @@ export function updateCheckOutcomeCopy(
       eyebrow: "Updates unavailable",
       message: result.reason,
       tone: "neutral",
+      notesUrl: undefined,
     };
   }
   if (result.status === "error") {
@@ -155,6 +168,7 @@ export function updateCheckOutcomeCopy(
       eyebrow: "Update check failed",
       message: result.message,
       tone: "error",
+      notesUrl: undefined,
     };
   }
   if (result.status === "canceled") {
@@ -165,11 +179,18 @@ export function updateCheckOutcomeCopy(
       eyebrow: "Download canceled",
       message: `PwrAgent v${result.version} is still available - check again to download it.`,
       tone: "neutral",
+      // The operator stopped a download and is now deciding whether to ask
+      // for it again. What is in the build is the question they are holding.
+      notesUrl: releaseNotesUrl(result.version),
     };
   }
   return {
     eyebrow: "PwrAgent is up to date",
     message: `You're running v${result.version}.`,
     tone: "neutral",
+    // The running version, and the one case where Settings -> About's
+    // bundled changelog CAN answer "what did I get?" — but it opens a second
+    // window to do it, so the link stays for symmetry.
+    notesUrl: releaseNotesUrl(result.version),
   };
 }

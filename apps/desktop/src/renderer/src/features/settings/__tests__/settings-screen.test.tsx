@@ -6175,6 +6175,161 @@ describe("SettingsScreen", () => {
     );
   });
 
+  it("links About's version and changelog rows to the published release page", async () => {
+    // Settings → About names the running version twice — in the Build table
+    // and beside the bundled changelog — and neither could reach what is in
+    // it. The changelog ships INSIDE this build, so it is the one thing that
+    // structurally cannot describe a newer one.
+    const openWindow = vi.fn();
+    vi.stubGlobal("open", openWindow);
+    const desktopApi = {
+      readAppMetadata: vi.fn(async () => ({
+        applicationName: "PwrAgent",
+        applicationVersion: "1.0.6",
+        copyright: "Copyright © 2026 PwrDrvr LLC.",
+        homepage: "https://pwragent.ai",
+        documentationUrl: "https://docs.pwragent.ai",
+        electronVersion: "41.2.1",
+        chromeVersion: "142.0.0.0",
+        nodeVersion: "24.0.0",
+      })),
+      openChangelogWindow: vi.fn(async () => undefined),
+    } as unknown as Parameters<typeof SettingsScreen>[0]["desktopApi"];
+
+    render(
+      <SettingsScreen
+        desktopApi={desktopApi}
+        initialSection="about"
+        settings={createSettingsState()}
+        onClose={() => undefined}
+      />,
+    );
+
+    // The Build table's row, named for the version it sits beside.
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Release notes for this build, v1.0.6",
+      }),
+    );
+    // And the Changelog section's, named to mirror "Open changelog" — the
+    // two buttons there do neighboring jobs and differ only in which copy
+    // of the notes they open.
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open release notes" }),
+    );
+
+    expect(openWindow).toHaveBeenCalledTimes(2);
+    for (const call of openWindow.mock.calls) {
+      expect(call).toEqual([
+        "https://github.com/pwrdrvr/PwrAgent/releases/tag/v1.0.6",
+        "_blank",
+        "noopener,noreferrer",
+      ]);
+    }
+    vi.unstubAllGlobals();
+  });
+
+  it("links the Updates status line to the version that line names", async () => {
+    const openWindow = vi.fn();
+    vi.stubGlobal("open", openWindow);
+    const desktopApi = {
+      checkForAppUpdates: vi.fn(async () => ({
+        status: "available" as const,
+        version: "1.1.0-beta.1",
+      })),
+      readAppUpdateReleaseVersions: vi.fn(async () => ({
+        fetchedAt: 1,
+        stable: {
+          latest: { version: "v1.0.6" },
+          prerelease: { version: "v1.0.6" },
+        },
+        beta: {
+          latest: { version: "v1.1.0-beta.1" },
+          prerelease: { version: "v1.1.0-alpha.5" },
+        },
+      })),
+    } as unknown as Parameters<typeof SettingsScreen>[0]["desktopApi"];
+
+    render(
+      <SettingsScreen
+        desktopApi={desktopApi}
+        settings={createSettingsState()}
+        onClose={() => undefined}
+      />,
+    );
+
+    // Before the check there is no status sentence, so nothing to link.
+    expect(
+      screen.queryByRole("button", { name: /^Release notes for v1\.1\.0-beta/ }),
+    ).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Check for Update" }));
+    expect(
+      await screen.findByText(/Update available: v1\.1\.0-beta\.1/),
+    ).toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Release notes for v1.1.0-beta.1" }),
+    );
+    expect(openWindow).toHaveBeenCalledWith(
+      "https://github.com/pwrdrvr/PwrAgent/releases/tag/v1.1.0-beta.1",
+      "_blank",
+      "noopener,noreferrer",
+    );
+    vi.unstubAllGlobals();
+  });
+
+  it("names the downloaded row's link apart from the status line's", async () => {
+    // Both can be on screen naming the same version, and two controls with
+    // one accessible name are not a usable list.
+    const openWindow = vi.fn();
+    vi.stubGlobal("open", openWindow);
+    const desktopApi = {
+      readAppUpdateStatus: vi.fn(async () => ({
+        status: "downloaded" as const,
+        version: "1.1.0-beta.1",
+      })),
+      checkForAppUpdates: vi.fn(async () => ({
+        status: "downloaded" as const,
+        version: "1.1.0-beta.1",
+      })),
+    } as unknown as Parameters<typeof SettingsScreen>[0]["desktopApi"];
+
+    render(
+      <SettingsScreen
+        desktopApi={desktopApi}
+        settings={createSettingsState()}
+        onClose={() => undefined}
+      />,
+    );
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Release notes for the downloaded v1.1.0-beta.1",
+      }),
+    );
+    expect(openWindow).toHaveBeenCalledWith(
+      "https://github.com/pwrdrvr/PwrAgent/releases/tag/v1.1.0-beta.1",
+      "_blank",
+      "noopener,noreferrer",
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Check for Update" }));
+    // Now the status line names it too, and the two names stay distinct —
+    // an exact-name query resolving proves there is no collision.
+    expect(
+      await screen.findByRole("button", {
+        name: "Release notes for v1.1.0-beta.1",
+      }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", {
+        name: "Release notes for the downloaded v1.1.0-beta.1",
+      }),
+    ).toBeInTheDocument();
+    vi.unstubAllGlobals();
+  });
+
   it("renders the chrome with brand in the nav masthead and breadcrumb + MessagingStatusBar in the right-pane title bar", async () => {
     // Lock the new chrome contract: brand sits in the LEFT nav's
     // `__masthead` (mirrors `.sidebar__masthead` on the main app
