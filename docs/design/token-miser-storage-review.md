@@ -270,3 +270,35 @@ The explorer reports availability as a snapshot, with the next-turn and
 memory-pressure limits, rather than inventing a clock deadline. Legacy peers'
 five-minute deadlines remain supported. This does not add original or summary
 inspection to the explorer.
+
+## SQLite accounting (September 17, 2026)
+
+Accounting, Code Mode observations, and archive generations now live in the
+profile's existing `state.db`. The object and observation tables have thread and
+creation-order indexes. Original output remains only in the bounded process
+memory cache described above. Safe schema projection still excludes raw output,
+helper summaries, scripts, and previews from durable records.
+
+Startup imports both former file layouts in one transaction before deleting any
+legacy files. The newer threaded layout wins over duplicate flat records.
+Existing SQLite rows win on retry, preserving counters advanced after a prior
+import. A completion marker is committed after cleanup; failures retry without
+replacing newer accounting. Routine reads query SQLite and never discover files.
+The settings projection still does no accounting work; its explicit usage query
+reads the database.
+
+Acceptance and Code Mode observations retain immediate durability. Replay
+request counters remain buffered in RAM; all pending counters for a turn flush
+in one transaction, including cross-connection read/modify/write protection.
+An unsuccessful flush rolls back the whole batch and retains it for retry.
+No new timer, streaming-event write, or periodic persistence is introduced.
+
+Measured budgets on a real WAL database: one acceptance commits once and adds
+12,360 WAL bytes; one observation commits once and adds 12,360 bytes; 100 model
+requests across ten gates commit zero times; flushing those ten gates commits
+once and adds 8,240 bytes. At ten gate/observation pairs per minute for an
+eight-hour working day and ten gates per turn, that calibration projects about
+123 MB/day of WAL writes (2 * 4,800 * 12,360 + 480 * 8,240 bytes). Idle cost is
+zero. Page occupancy and payload size affect actual WAL volume. Turn-boundary
+batching of accepted records would reduce this at the cost of losing the current
+turn's accounting on a crash; that durability tradeoff remains a review decision.

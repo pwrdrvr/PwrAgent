@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { AgentToolRouter } from "../agent-tools/agent-tool-router";
 import { buildTokenMiserToolDefinitions } from "../agent-tools/token-miser-agent-tools";
 import { TokenMiserService } from "../token-miser/token-miser-service";
-import { TokenMiserStore } from "../token-miser/token-miser-store";
+import { TestTokenMiserStore as TokenMiserStore } from "./token-miser-test-store";
 import {
   TOKEN_MISER_MODEL_VISIBLE_CAP_BYTES,
   utf8ByteLength,

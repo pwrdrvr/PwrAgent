@@ -15,7 +15,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
-import { TokenMiserStore } from "../token-miser/token-miser-store";
+import { TestTokenMiserStore as TokenMiserStore } from "./token-miser-test-store";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
 
 describe("DesktopBackendRegistry Token Miser ledger", () => {

@@ -1,9 +1,8 @@
 import { promises as fs } from "node:fs";
-import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { TokenMiserStore } from "../token-miser/token-miser-store";
+import { TestTokenMiserStore as TokenMiserStore } from "./token-miser-test-store";
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -96,11 +95,8 @@ it("cold thread queries never enumerate or open unrelated thread directories", a
   try {
     const cold = new TokenMiserStore(root);
     expect(await cold.listMetadata("owner")).toHaveLength(1);
-    expect(read).toHaveBeenCalledTimes(1);
-    expect(list).toHaveBeenCalledTimes(1);
-    expect(String(list.mock.calls[0]![0])).toBe(path.join(
-      root, "threads", createHash("sha256").update("owner").digest("hex"),
-    ));
+    expect(read).not.toHaveBeenCalled();
+    expect(list).not.toHaveBeenCalled();
     await store.store({ ...params, threadId: "owner" });
     expect(await cold.listMetadata("owner")).toHaveLength(2);
   } finally { read.mockRestore(); list.mockRestore(); }
@@ -117,7 +113,7 @@ it("does not materialize an absent profile during startup migration and accounti
     expect(await store.listCodeModeObservations()).toEqual([]);
     expect(mkdir).not.toHaveBeenCalled();
     expect(writes).not.toHaveBeenCalled();
-    expect(await fs.readdir(root)).toEqual([]);
+    expect((await fs.readdir(root)).filter((name) => name !== "profiles")).toEqual([]);
   } finally { mkdir.mockRestore(); writes.mockRestore(); }
 });
 it("migrates contrived legacy content while preserving historical costs and deleting originals", async () => {
@@ -127,7 +123,7 @@ it("migrates contrived legacy content while preserving historical costs and dele
     last: { inputTokens: 50, cachedInputTokens: 20, cacheWriteInputTokens: 10, outputTokens: 5, reasoningOutputTokens: 2, totalTokens: 55 },
     modelContextWindow: 128_000,
   };
-  const metadata = await store.store({ ...params, helperUsage: { model: "test", tokenUsage: { inputTokens: 10, outputTokens: 2 } } });
+  const metadata = (await store.stage({ ...params, helperUsage: { model: "test", tokenUsage: { inputTokens: 10, outputTokens: 2 } } })).metadata;
   await fs.rm(path.join(root, "threads"), { recursive: true, force: true });
   await fs.writeFile(path.join(root, `${metadata.objectId}.txt`), "PRIVATE_LEGACY_RAW");
   await fs.writeFile(path.join(root, `${metadata.objectId}.json`), JSON.stringify({
@@ -137,7 +133,7 @@ it("migrates contrived legacy content while preserving historical costs and dele
   try {
     await store.prune({ maxAgeMs: 0, maxBytes: 0 });
     expect(writes.mock.calls.map((call) => String(call[1])).join("\n")).not.toContain("PRIVATE_");
-    expect(await fs.readdir(root)).toEqual(["threads"]);
+    await expect(fs.stat(root)).rejects.toMatchObject({ code: "ENOENT" });
     const [restored] = await new TokenMiserStore(root).listMetadata("owner");
     expect(restored?.helperUsage?.tokenUsage).toEqual(tokenUsage);
     expect(restored?.originalCharacters).toBe(metadata.originalCharacters);
@@ -146,22 +142,16 @@ it("migrates contrived legacy content while preserving historical costs and dele
     expect(writes).not.toHaveBeenCalled();
   } finally { writes.mockRestore(); }
 });
-it("bounds filesystem bytes and writes at acceptance and lifecycle boundaries", async () => {
+it("makes no filesystem writes at acceptance or replay boundaries", async () => {
   const { store } = await fixture();
   const writes = vi.spyOn(fs, "writeFile");
   try {
     const entry = await store.store(params);
-    expect(writes).toHaveBeenCalledTimes(1);
-    const acceptedBytes = Buffer.byteLength(String(writes.mock.calls[0]![1]));
-    expect(acceptedBytes).toBeLessThan(1024);
-    writes.mockClear();
     for (let request = 1; request <= 100; request += 1) {
       await store.recordParentModelRequest({ objectId: entry.objectId, cumulativeInputTokens: request * 100 });
     }
-    expect(writes).not.toHaveBeenCalled();
     await store.flushThread("owner");
-    expect(writes).toHaveBeenCalledTimes(1);
-    expect(Buffer.byteLength(String(writes.mock.calls[0]![1]))).toBeLessThan(1024);
+    expect(writes).not.toHaveBeenCalled();
   } finally { writes.mockRestore(); }
 });
 it("merges buffered replay deltas with another instance's retirement and retrieval updates", async () => {
@@ -193,32 +183,18 @@ it("adds independent replay deltas without replacing newer durable counters", as
     cachedReplayCount: 2, parentRequestsObservedAfterGate: 4, lastParentCumulativeInputTokens: 400,
   });
 });
-it("retains failed flush deltas and drains other threads before reporting shutdown failure", async () => {
+it("rolls back a failed batch flush and retains all pending deltas for retry", async () => {
   const { store, root } = await fixture();
   const entries = await Promise.all([store.store(params), store.store({ ...params, threadId: "other" })]);
-  for (const entry of entries) {
-    for (const tokens of [100, 200, 300]) await store.recordParentModelRequest({ objectId: entry.objectId, cumulativeInputTokens: tokens });
-  }
-  const writeFile = fs.writeFile.bind(fs);
-  const write = vi.spyOn(fs, "writeFile").mockImplementation(async (file, data, options) => {
-    if (String(file).includes(entries[0]!.objectId)) throw new Error("fixture flush failure");
-    return writeFile(file, data, options);
-  });
-  try {
-    await expect(store.flushAll()).rejects.toThrow("replay flush failed");
-    expect(write).toHaveBeenCalledTimes(2);
-    expect(write.mock.calls.every((call) => Buffer.byteLength(String(call[1])) < 1024)).toBe(true);
-  }
-  finally { write.mockRestore(); }
+  for (const entry of entries) for (const tokens of [100, 200, 300]) await store.recordParentModelRequest({ objectId: entry.objectId, cumulativeInputTokens: tokens });
+  store.stateDb.raw.exec("CREATE TRIGGER fail_flush BEFORE UPDATE ON token_miser_objects WHEN NEW.thread_id = 'other' BEGIN SELECT RAISE(ABORT, 'fixture flush failure'); END");
+  await expect(store.flushAll()).rejects.toThrow("fixture flush failure");
   const other = new TokenMiserStore(root);
-  expect((await other.readMetadata(entries[1]!.objectId))?.cachedReplayCount).toBe(1);
-  await other.stopReplayTracking({ objectId: entries[0]!.objectId, stoppedAt: 1234 });
+  expect((await other.readMetadata(entries[0]!.objectId))?.cachedReplayCount).toBe(0);
+  store.stateDb.raw.exec("DROP TRIGGER fail_flush");
   await store.flushAll();
-  expect(await other.readMetadata(entries[0]!.objectId)).toMatchObject({ cachedReplayCount: 1, replayTrackingStoppedAt: 1234 });
+  expect((await other.readMetadata(entries[0]!.objectId))?.cachedReplayCount).toBe(1);
   expect((await other.readMetadata(entries[1]!.objectId))?.cachedReplayCount).toBe(1);
-  const writes = vi.spyOn(fs, "writeFile");
-  try { await store.flushAll(); expect(writes).not.toHaveBeenCalled(); }
-  finally { writes.mockRestore(); }
 });
 it("preserves a newer durable request epoch when older buffered estimates flush", async () => {
   const { store, root } = await fixture();
@@ -232,7 +208,7 @@ it("preserves a newer durable request epoch when older buffered estimates flush"
   const writes = vi.spyOn(fs, "writeFile");
   try {
     await Promise.all([store.flushAll(), store.flushAll()]);
-    expect(writes).toHaveBeenCalledTimes(1);
+    expect(writes).not.toHaveBeenCalled();
   } finally { writes.mockRestore(); }
   expect(await other.readMetadata(entry.objectId)).toMatchObject({
     parentRequestEpoch: "new", lastParentCumulativeInputTokens: 10, parentRequestsObservedAfterGate: 3,
@@ -242,9 +218,9 @@ it("never publishes a failed acceptance or exposes another thread's payload", as
   const { store } = await fixture();
   const staged = await store.stage(params);
   await staged.persist();
-  const rename = vi.spyOn(fs, "rename").mockRejectedValue(new Error("fixture failure"));
-  try { await expect(staged.commit()).rejects.toThrow("fixture failure"); }
-  finally { rename.mockRestore(); }
+  store.stateDb.raw.exec("CREATE TRIGGER fail_accept BEFORE INSERT ON token_miser_objects BEGIN SELECT RAISE(ABORT, 'fixture failure'); END");
+  await expect(staged.commit()).rejects.toThrow("fixture failure");
+  store.stateDb.raw.exec("DROP TRIGGER fail_accept");
   expect(await store.readAll({ objectId: staged.metadata.objectId, threadId: "owner" })).toBeUndefined();
   await staged.discard();
   const accepted = await store.store(params);
@@ -304,8 +280,7 @@ it("makes duplicate restoration harmless and writes only a bounded lifecycle mar
   const writes = vi.spyOn(fs, "writeFile");
   try {
     await store.archiveThread("owner");
-    expect(writes).toHaveBeenCalledTimes(1);
-    expect(Buffer.byteLength(String(writes.mock.calls[0]![1]))).toBe(37);
+    expect(writes).not.toHaveBeenCalled();
     writes.mockClear();
     await Promise.all([store.restoreThread("owner"), store.restoreThread("owner")]);
     expect(writes).not.toHaveBeenCalled();
@@ -316,14 +291,14 @@ it("makes duplicate restoration harmless and writes only a bounded lifecycle mar
     expect(await store.readAll({ objectId: fresh.objectId, threadId: "owner" })).toBeDefined();
   } finally { writes.mockRestore(); }
 });
-it("keeps restoration fail-closed if the archive marker cannot be moved", async () => {
+it("keeps restoration fail-closed if the SQLite archive update fails", async () => {
   const { store } = await fixture();
   await store.archiveThread("owner");
-  const rename = vi.spyOn(fs, "rename").mockRejectedValue(new Error("fixture rename failure"));
+  store.stateDb.raw.exec("CREATE TRIGGER fail_restore BEFORE UPDATE ON token_miser_retention BEGIN SELECT RAISE(ABORT, 'fixture restore failure'); END");
   try {
-    await expect(store.restoreThread("owner")).rejects.toThrow("fixture rename failure");
+    await expect(store.restoreThread("owner")).rejects.toThrow("fixture restore failure");
     await expect(store.stage(params)).rejects.toThrow("archived");
-  } finally { rename.mockRestore(); }
+  } finally { store.stateDb.raw.exec("DROP TRIGGER fail_restore"); }
   await store.restoreThread("owner");
   await expect(store.store(params)).resolves.toBeDefined();
 });
@@ -333,11 +308,10 @@ it.each(["marker", "flush"])("invalidates originals and deliveries before archiv
   const pending = await store.stage(params);
   await pending.persist();
   const delivery = await store.prepareRetrievalDelivery({ objectId: accepted.objectId, threadId: "owner", visibleText: params.output });
-  const fail = failure === "marker"
-    ? vi.spyOn(fs, "rename").mockRejectedValue(new Error("fixture marker failure"))
-    : vi.spyOn(store, "flushThread").mockRejectedValue(new Error("fixture flush failure"));
+  if (failure === "marker") store.stateDb.raw.exec("CREATE TRIGGER fail_archive BEFORE INSERT ON token_miser_retention BEGIN SELECT RAISE(ABORT, 'fixture marker failure'); END");
+  const fail = failure === "flush" ? vi.spyOn(store, "flushThread").mockRejectedValue(new Error("fixture flush failure")) : undefined;
   try { await expect(store.archiveThread("owner")).rejects.toThrow("fixture"); }
-  finally { fail.mockRestore(); }
+  finally { fail?.mockRestore(); if (failure === "marker") store.stateDb.raw.exec("DROP TRIGGER fail_archive"); }
   expect(await store.readAll({ objectId: accepted.objectId, threadId: "owner" })).toBeUndefined();
   expect(await store.confirmModelVisibleRetrievals({ threadId: "owner", output: delivery!.text })).toBe(0);
   await expect(pending.commit()).rejects.toThrow("unavailable");

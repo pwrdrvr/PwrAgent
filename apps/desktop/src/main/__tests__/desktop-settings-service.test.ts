@@ -11,7 +11,7 @@ import {
 import { readBootstrapAppearance } from "../settings/appearance-bootstrap";
 import { issueProviderDiscoveryPermit } from "../settings/provider-discovery-permit";
 import { DesktopConfigStore } from "../settings/config-store/desktop-config-store";
-import { TokenMiserStore } from "../token-miser/token-miser-store";
+import { TestTokenMiserStore as TokenMiserStore } from "./token-miser-test-store";
 
 // `DesktopSettingsService` builds a real `CodexDiscoveryCoordinator` unless the
 // test injects one, and the kit's probe runs `codex --version` against every
@@ -63,12 +63,13 @@ describe("DesktopSettingsService", () => {
 
   it("keeps explicit Token Miser usage reads fresh independently of settings", async () => {
     const root = createTempRoot();
+    const writer = new TokenMiserStore(path.join(root, "state", "token-miser", "objects"));
     const service = new DesktopSettingsService({
+      tokenMiserStore: writer,
       configPath: path.join(root, "config.toml"), env: {},
       secretStore: new MemoryDesktopSecretStore(),
     });
     expect((await service.readTokenMiserUsage()).interceptionCount).toBe(0);
-    const writer = new TokenMiserStore(path.join(root, "state", "token-miser", "objects"));
     await writer.store({
       threadId: "fixture-thread", turnId: "fixture-turn", toolUseId: "fixture-tool",
       toolName: "fixture", output: "fixture output",

@@ -1,211 +1,83 @@
-import { createHash } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { TokenMiserStore } from "../token-miser/token-miser-store";
+import { afterEach, expect, it, vi } from "vitest";
+import { TestTokenMiserStore as TokenMiserStore } from "./token-miser-test-store";
 
 const roots: string[] = [];
-
 afterEach(async () => {
   vi.restoreAllMocks();
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
 });
-
 async function fixture() {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "pwragent-miser-pressure-"));
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "miser-migration-pressure-"));
   roots.push(root);
-  const writer = new TokenMiserStore(root);
-  const records = [];
-  for (const threadId of ["thread-a", "thread-b"]) {
-    const metadata = await addObject(writer, threadId);
-    const observation = await addObservation(writer, threadId);
-    records.push({ threadId, metadata, observation });
+  const store = new TokenMiserStore(root);
+  for (let index = 0; index < 40; index += 1) {
+    const objectId = randomUUID();
+    await fs.writeFile(path.join(root, `${objectId}.json`), JSON.stringify({
+      version: 1, objectId, threadId: `owner-${index % 2}`, turnId: "turn", toolUseId: objectId,
+      toolName: "Code Mode", createdAt: index, originalCharacters: 100,
+      baselineParentTokens: 25, replacementCharacters: 10, retrievedCharacters: 0, replayTrackingVersion: 2,
+      summary: { summary: "PRIVATE_SUMMARY", usefulDetails: [] },
+    }));
+    await fs.writeFile(path.join(root, `${objectId}.txt`), "PRIVATE_OUTPUT");
   }
-  return { root, writer, records, reader: new TokenMiserStore(root) };
+  return { root, store };
 }
-
-async function addObject(store: TokenMiserStore, threadId: string) {
-  return await store.store({
-    threadId,
-    turnId: "turn-1",
-    toolUseId: "tool-1",
-    toolName: "Bash",
-    output: "fixture output",
-    replacementCharacters: 10,
-    summary: { summary: "fixture summary", usefulDetails: [] },
+it("bounds migration reads and never scans files after successful migration", async () => {
+  const { store, root } = await fixture();
+  let active = 0;
+  let peak = 0;
+  const readFile = fs.readFile.bind(fs);
+  const read = vi.spyOn(fs, "readFile").mockImplementation(async (file, options) => {
+    active += 1; peak = Math.max(peak, active);
+    try { return await readFile(file, options); } finally { active -= 1; }
   });
-}
-
-async function addObservation(store: TokenMiserStore, threadId: string, callId = "call-1") {
-  return await store.recordCodeModeObservation({
-    threadId,
-    turnId: "turn-1",
-    callId,
-    cellId: callId,
-    outputCharacters: 100,
-    maxOutputTokens: 1_000,
-    scriptStatus: "completed",
-    retrieval: false,
-    capturedNestedInvocationCount: 1,
-  });
-}
-
-describe("Token Miser storage I/O budgets", () => {
-  it("reads only the requested thread's JSON after discovery", async () => {
-    const { reader, records } = await fixture();
-    await reader.summarizeThreadUsage("thread-a");
-    const other = records[1]!;
-    const readFile = fs.readFile.bind(fs);
-    const reads = vi.spyOn(fs, "readFile").mockImplementation(async (file, options) => {
-      const name = path.basename(String(file));
-      if ([`${other.metadata.objectId}.json`, `${other.observation.observationId}.json`].includes(name)) {
-        throw new Error("unrelated thread record must not be opened");
-      }
-      return await readFile(file, options);
-    });
-
-    const usage = await reader.summarizeThreadUsage("thread-a");
-    expect(usage.interceptionCount).toBe(1);
-    expect(usage.codeMode.callCount).toBe(1);
-    expect(reads).toHaveBeenCalledTimes(2);
-    reads.mockClear();
-    expect(await reader.readGroupBatch({
-      groupId: "missing-group",
-      threadId: "thread-a",
-      operations: [],
-    })).toBeUndefined();
-    expect(reads).toHaveBeenCalledTimes(1);
-  });
-
-  it("shares cold discovery across overlapping thread queries", async () => {
-    const { reader, records } = await fixture();
-    const reads = vi.spyOn(fs, "readFile");
-    const summaries = await Promise.all([
-      reader.summarizeThreadUsage("thread-a"),
-      reader.summarizeThreadUsage("thread-b"),
-    ]);
-    expect(summaries.map((summary) => summary.interceptionCount)).toEqual([1, 1]);
-    const counts = new Map<string, number>();
-    for (const [file] of reads.mock.calls) {
-      const name = path.basename(String(file));
-      counts.set(name, (counts.get(name) ?? 0) + 1);
-    }
-    for (const { metadata, observation } of records) {
-      expect(counts.get(`${metadata.objectId}.json`)).toBe(1);
-      expect(counts.get(`${observation.observationId}.json`)).toBe(1);
-    }
-  });
-
-  it("discovers external additions and removals and reads changed counters fresh", async () => {
-    const { root, writer, reader, records } = await fixture();
-    await reader.summarizeThreadUsage("thread-a");
-    const original = records[0]!.metadata;
-    await writer.recordParentModelRequest({ objectId: original.objectId, cumulativeInputTokens: 100 });
-    await writer.recordParentModelRequest({ objectId: original.objectId, cumulativeInputTokens: 200 });
-    await writer.recordParentModelRequest({ objectId: original.objectId, cumulativeInputTokens: 300 });
-    await writer.flushThread("thread-a");
-    const added = await addObject(writer, "thread-a");
-    await addObservation(writer, "thread-a", "call-2");
-    expect(await reader.summarizeThreadUsage("thread-a")).toMatchObject({
-      interceptionCount: 2,
-      cachedReplayCount: 1,
-      codeMode: { callCount: 2 },
-    });
-    await fs.rm(path.join(threadRoot(root), `${added.objectId}.json`));
-    await fs.rm(path.join(threadRoot(root), "code-mode-observations", `${records[0]!.observation.observationId}.json`));
-    expect(await reader.summarizeThreadUsage("thread-a")).toMatchObject({
-      interceptionCount: 1,
-      cachedReplayCount: 1,
-      codeMode: { callCount: 1 },
-    });
-  });
-
-  it("bounds writes and reads together across stores", async () => {
-    const { reader, writer } = await fixture();
-    let release!: () => void;
-    const gate = new Promise<void>((resolve) => { release = resolve; });
-    let active = 0;
-    let peak = 0;
-    const track = async <T>(run: () => Promise<T>): Promise<T> => {
-      active += 1;
-      peak = Math.max(peak, active);
-      try {
-        await gate;
-        return await run();
-      } finally {
-        active -= 1;
-      }
-    };
-    const readFile = fs.readFile.bind(fs);
-    const writeFile = fs.writeFile.bind(fs);
-    vi.spyOn(fs, "readFile").mockImplementation((file, options) => track(() => readFile(file, options)));
-    vi.spyOn(fs, "writeFile").mockImplementation((file, data, options) => track(() => writeFile(file, data, options)));
-    const work = Promise.all([
-      reader.summarizeThreadUsage("thread-a"),
-      ...Array.from({ length: 40 }, (_, index) => addObservation(writer, "thread-b", `burst-${index}`)),
-    ]);
-    try {
-      await vi.waitFor(() => expect(active).toBeGreaterThan(0));
-      release();
-      await work;
-      expect(peak).toBeLessThanOrEqual(16);
-      expect(active).toBe(0);
-    } finally {
-      release();
-      await work;
-    }
-  });
-
-  it.each(["local", "external"])("includes %s commits in a query started during an older discovery", async (owner) => {
-    const { root, reader, writer, records } = await fixture();
-    let release!: () => void;
-    let entered!: () => void;
-    const gate = new Promise<void>((resolve) => { release = resolve; });
-    const started = new Promise<void>((resolve) => { entered = resolve; });
-    const readFile = fs.readFile.bind(fs);
-    let blocked = false;
-    vi.spyOn(fs, "readFile").mockImplementation(async (file, options) => {
-      if (!blocked && String(file) === path.join(threadRoot(root), `${records[0]!.metadata.objectId}.json`)) {
-        blocked = true;
-        entered();
-        await gate;
-      }
-      return await readFile(file, options);
-    });
-    const older = reader.listMetadata("thread-a");
-    try {
-      await started;
-      const added = await addObject(owner === "local" ? reader : writer, "thread-a");
-      const pending = reader.listMetadata("thread-a");
-      release();
-      const current = await pending;
-      expect(current.map((record) => record.objectId)).toContain(added.objectId);
-      expect(current).toHaveLength(2);
-    } finally {
-      release();
-      await older;
-    }
-  });
-
-  it("releases write slots and removes temporary files after failed renames", async () => {
-    const { root, writer } = await fixture();
-    const rename = vi.spyOn(fs, "rename").mockRejectedValue(
-      Object.assign(new Error("rename failed"), { code: "EIO" }),
-    );
-    const results = await Promise.allSettled(Array.from(
-      { length: 40 },
-      (_, index) => addObservation(writer, "thread-a", `failed-${index}`),
-    ));
-    expect(results.every((result) => result.status === "rejected")).toBe(true);
-    expect((await fs.readdir(path.join(threadRoot(root), "code-mode-observations")))
-      .some((name) => name.endsWith(".tmp"))).toBe(false);
-    rename.mockRestore();
-    await addObservation(writer, "thread-a", "successful");
-    expect(await writer.listCodeModeObservations("thread-a")).toHaveLength(2);
-  });
+  await store.prune({ maxAgeMs: 0, maxBytes: 0 });
+  expect(peak).toBeLessThanOrEqual(16);
+  expect(read).toHaveBeenCalledTimes(40);
+  await expect(fs.stat(root)).rejects.toMatchObject({ code: "ENOENT" });
+  read.mockClear();
+  const list = vi.spyOn(fs, "readdir");
+  const restarted = new TokenMiserStore(root);
+  await restarted.prune({ maxAgeMs: 0, maxBytes: 0 });
+  const usage = await restarted.summarizeThreadUsage("owner-0");
+  expect(usage.interceptionCount).toBe(20);
+  expect(read).not.toHaveBeenCalled();
+  expect(list).not.toHaveBeenCalled();
+});
+it("retains every legacy file when the import transaction fails and retries atomically", async () => {
+  const { store, root } = await fixture();
+  store.stateDb.raw.exec("CREATE TRIGGER fail_import BEFORE INSERT ON token_miser_objects WHEN NEW.thread_id = 'owner-1' BEGIN SELECT RAISE(ABORT, 'fixture import failure'); END");
+  await expect(store.prune({ maxAgeMs: 0, maxBytes: 0 })).rejects.toThrow("fixture import failure");
+  expect(await fs.readdir(root)).toHaveLength(80);
+  expect(await store.listMetadata()).toHaveLength(0);
+  store.stateDb.raw.exec("DROP TRIGGER fail_import");
+  await store.prune({ maxAgeMs: 0, maxBytes: 0 });
+  expect(await store.listMetadata()).toHaveLength(40);
+});
+it("retries interrupted deletion without replacing newer SQLite counters", async () => {
+  const { store, root } = await fixture();
+  const remove = vi.spyOn(fs, "rm").mockRejectedValue(new Error("fixture unlink failure"));
+  await expect(store.prune({ maxAgeMs: 0, maxBytes: 0 })).rejects.toThrow("fixture unlink failure");
+  remove.mockRestore();
+  const [entry] = await store.listMetadata();
+  await store.stopReplayTracking({ objectId: entry!.objectId, stoppedAt: 1234 });
+  await new TokenMiserStore(root).prune({ maxAgeMs: 0, maxBytes: 0 });
+  expect((await store.readMetadata(entry!.objectId))?.replayTrackingStoppedAt).toBe(1234);
+  expect(await store.listMetadata()).toHaveLength(40);
 });
 
-function threadRoot(root: string): string {
-  return path.join(root, "threads", createHash("sha256").update("thread-a").digest("hex"));
-}
+it("allows concurrent processes to import and clean up the same legacy directory", async () => {
+  const { store, root } = await fixture();
+  const second = new TokenMiserStore(root);
+  await Promise.all([
+    store.prune({ maxAgeMs: 0, maxBytes: 0 }),
+    second.prune({ maxAgeMs: 0, maxBytes: 0 }),
+  ]);
+  expect(await store.listMetadata()).toHaveLength(40);
+  expect(await second.listMetadata()).toHaveLength(40);
+  await expect(fs.stat(root)).rejects.toMatchObject({ code: "ENOENT" });
+});

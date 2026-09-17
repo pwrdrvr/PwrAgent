@@ -531,12 +531,40 @@
     "rowsChanged": 0,
     "statements": 0
   },
+  "token-miser-accept": {
+    "commits": 1,
+    "note": "One accepted gate; original content stays in memory.",
+    "observedWalBytes": 12360,
+    "rowsChanged": 1,
+    "statements": 1
+  },
+  "token-miser-observation": {
+    "commits": 1,
+    "note": "One Code Mode output observation.",
+    "observedWalBytes": 12360,
+    "rowsChanged": 1,
+    "statements": 1
+  },
+  "token-miser-replay-buffer": {
+    "commits": 0,
+    "note": "100 model requests across ten gates, buffered in RAM.",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 0
+  },
   "token-miser-retrieval-ledger": {
     "commits": 1,
     "note": "one previously gated output retrieved in a later parent turn, updating its savings equation at the turn boundary",
     "observedWalBytes": 16480,
     "rowsChanged": 1,
     "statements": 1
+  },
+  "token-miser-turn-flush": {
+    "commits": 1,
+    "note": "Flush ten gate counters in one turn-boundary transaction.",
+    "observedWalBytes": 8240,
+    "rowsChanged": 10,
+    "statements": 10
   },
   "token-miser-turn-ledger": {
     "commits": 2,

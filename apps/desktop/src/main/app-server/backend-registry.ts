@@ -9185,6 +9185,7 @@ export class DesktopBackendRegistry {
       this.tokenMiserStore = new TokenMiserStore(
         path.join(tokenMiserStateDir, "objects"),
         {
+          stateDb: getAppStateDb(),
           onMetadataUpdated: async (metadata, reason) => {
             this.pendingTokenMiserInterceptions.set(metadata.objectId, metadata);
             this.rememberActiveTokenMiserReplayEntry(metadata);

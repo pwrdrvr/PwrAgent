@@ -1,3 +1,4 @@
+import { getAppStateDb } from "../state/app-state";
 import {
   DESKTOP_UI_LAYOUT_DEFAULTS,
   FORGE_PRODUCTS,
@@ -272,6 +273,7 @@ function normalizeCodexProfilesSnapshot(
 }
 
 type DesktopSettingsServiceOptions = {
+  tokenMiserStore?: TokenMiserStore;
   codexDiscoveryCoordinator?: Pick<
     CodexDiscoveryCoordinator,
     "discover" | "invalidate" | "resolve"
@@ -630,10 +632,10 @@ export class DesktopSettingsService {
   }
 
   async readTokenMiserUsage() {
-    // Retain filename indexes, but reread mutable accounting for each explicit
-    // request so another process's committed updates remain visible.
-    this.tokenMiserUsageStore ??= new TokenMiserStore(
+    // Explicit usage requests query SQLite; ordinary settings reads do no accounting I/O.
+    this.tokenMiserUsageStore ??= this.options.tokenMiserStore ?? new TokenMiserStore(
       path.join(path.dirname(this.configPath), "state", "token-miser", "objects"),
+      { stateDb: getAppStateDb() },
     );
     return await this.tokenMiserUsageStore.summarizeUsage();
   }

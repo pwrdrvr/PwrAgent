@@ -7,7 +7,7 @@ import {
   type TokenMiserStructuredGenerationResult,
   type TokenMiserServiceOptions,
 } from "../token-miser/token-miser-service";
-import { TokenMiserStore } from "../token-miser/token-miser-store";
+import { TestTokenMiserStore as TokenMiserStore } from "./token-miser-test-store";
 import type {
   TokenMiserCodeModeOutputPayload,
   TokenMiserPostToolUsePayload,
