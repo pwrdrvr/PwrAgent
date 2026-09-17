@@ -645,4 +645,31 @@ describe("PluginsSettings", () => {
       );
     });
   });
+  /**
+   * Disconnect and Remove differ only in whether the row survives, and the
+   * row said nothing about which was which — two destructive-looking buttons
+   * side by side, one of which is recoverable and one of which is not.
+   */
+  it("says what Disconnect keeps and Remove does not", async () => {
+    const api = createDesktopApi([]);
+    api.listMcpConnections = vi.fn().mockResolvedValue({ connections: [{
+      id: "rovo", displayName: "Atlassian Rovo",
+      serverUrl: "https://mcp.atlassian.com/v2/mcp",
+      kind: "remote", authMode: "oauth", enabled: true, configured: true,
+      state: "ready", createdAt: 0, updatedAt: 0,
+    }] });
+    render(<PluginsSettings desktopApi={api} snapshot={createSnapshot()} />);
+
+    const disconnect = await screen.findByRole("button", { name: "Disconnect" });
+    // The recoverable one has to say it is recoverable; that is the whole
+    // distinction an operator is choosing between.
+    expect(disconnect).toHaveAttribute(
+      "title",
+      expect.stringContaining("stays in this list"),
+    );
+    expect(screen.getByRole("button", { name: "Remove" })).toHaveAttribute(
+      "title",
+      expect.stringContaining("entirely"),
+    );
+  });
 });

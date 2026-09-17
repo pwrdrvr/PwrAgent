@@ -1584,6 +1584,11 @@ function ManagedMcpConnectionRow(props: {
           <button
             className="button button--secondary"
             disabled={props.disabled}
+            title={
+              connection.configured
+                ? `Sign in to ${connection.displayName} again and replace the credentials PwrAgent holds. Use this when it stops working or you want a different account.`
+                : `Sign in to ${connection.displayName} in your browser. PwrAgent stores the credentials encrypted in this profile.`
+            }
             type="button"
             onClick={props.onAuthorize}
           >
@@ -1592,10 +1597,16 @@ function ManagedMcpConnectionRow(props: {
               : connection.configured ? "Reauthorize" : "Authorize"}
           </button>
         )}
+        {/*
+          * Disconnect and Remove differ only in whether the row survives, and
+          * nothing on screen said so -- two destructive-looking buttons side
+          * by side with no way to tell which one you wanted.
+          */}
         {connection.configured ? (
           <button
             className="button button--ghost"
             disabled={props.disabled}
+            title={`Discard the credentials PwrAgent holds for ${connection.displayName} and close its open sessions. The connection stays in this list, so you can authorize it again without retyping its URL.`}
             type="button"
             onClick={props.onDisconnect}
           >
@@ -1613,6 +1624,7 @@ function ManagedMcpConnectionRow(props: {
             <button
               className="button button--ghost"
               disabled={props.disabled}
+              title={`Rename ${connection.displayName} or point it at a different URL. A changed URL discards the stored credentials, because they were issued by the old server.`}
               type="button"
               onClick={props.onEdit}
             >
@@ -1621,6 +1633,7 @@ function ManagedMcpConnectionRow(props: {
             <button
               className="button button--ghost settings-mcp-row__remove"
               disabled={props.disabled}
+              title={`Delete ${connection.displayName} from PwrAgent entirely -- the row, its URL, and its credentials. Threads that selected it lose access to it.`}
               type="button"
               onClick={props.onRemove}
             >
