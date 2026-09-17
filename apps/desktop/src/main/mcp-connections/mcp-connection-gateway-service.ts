@@ -648,9 +648,9 @@ export class McpConnectionGatewayService {
    * The browser round trip is beyond reach; this closes the loopback listener
    * waiting for it so the port is free and the in-flight `authorizeConnection`
    * rejects now rather than at the five-minute timeout. Returns the
-   * connection's state afterwards, which is whatever it was before the attempt
-   * -- cancelling authorization is not the same as disconnecting, and stored
-   * credentials are untouched.
+   * connection's state afterwards, which is the one it held before the attempt
+   * began -- cancelling authorization is not the same as disconnecting, and
+   * neither the stored credentials nor the reported state are changed by it.
    */
   async cancelAuthorization(connectionId: string): Promise<McpConnectionStatus> {
     const ownership = await this.ensureOwnerBroker();
@@ -662,6 +662,13 @@ export class McpConnectionGatewayService {
       );
     }
     const connection = this.requireConnection(connectionId);
+    // Retire the attempt in the coordinator *before* ending its wait, so the
+    // rejection that follows lands on a stale attempt and cannot report a
+    // called-off authorization as `reauthorization_required`. Doing it the
+    // other way round is a race the cancel loses: the reject resolves the
+    // coordinator's catch first, and a healthy connection ends up claiming
+    // "Login required" with its credentials untouched.
+    this.coordinatorFor(connection).abandonAuthorization();
     this.abandonPendingAuthorization(
       connectionId,
       `${connection.displayName} authorization was cancelled.`,

@@ -45,7 +45,13 @@ export function SettingsCopyValue(props: SettingsCopyValueProps) {
         props.compact ? " settings-copyvalue--compact" : ""
       }`}
     >
-      <code className="settings-copyvalue__value" title={props.value}>
+      {/* Only the compact variant ellipsizes, so only it needs the value
+          back on hover. On the pill the text is already fully visible and a
+          tooltip repeating it is noise. */}
+      <code
+        className="settings-copyvalue__value"
+        {...(props.compact ? { title: props.value } : {})}
+      >
         {props.value}
       </code>
       <button
@@ -67,6 +73,11 @@ export function SettingsCopyValue(props: SettingsCopyValueProps) {
                 1500,
               );
             },
+            // A clipboard write can be refused -- no permission, an unfocused
+            // document. Staying on "Copy" is the honest answer: the operator
+            // cannot see a clipboard, so a button that silently did nothing
+            // and a button that worked looked identical.
+            () => setCopied(false),
           );
         }}
       >

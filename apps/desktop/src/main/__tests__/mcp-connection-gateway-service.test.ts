@@ -346,7 +346,13 @@ describe("McpConnectionGatewayService", () => {
     // only the coordinator's own OAuth traffic is stood in for. It parks on
     // `waitForCode`, which is where a browser round trip actually waits.
     const redirects: URL[] = [];
+    // Stands in for the coordinator's OAuth traffic only. What a cancel does
+    // to the connection's *state* is the real coordinator's business and is
+    // covered in `mcp-oauth-session-coordinator.test.ts`; these two tests are
+    // about the listener and its port.
+    const abandonAuthorization = vi.fn();
     const stubCoordinator = {
+      abandonAuthorization,
       configured: async () => false,
       authorize: async (params: {
         redirectUrl: URL;
@@ -369,6 +375,10 @@ describe("McpConnectionGatewayService", () => {
       id: connection.id,
       configured: false,
     });
+    // Retiring the attempt is what keeps a called-off authorization from
+    // reporting itself as `reauthorization_required`, and it has to happen
+    // before the wait is rejected or the coordinator's catch wins the race.
+    expect(abandonAuthorization).toHaveBeenCalled();
     await expect(failure).resolves.toBeInstanceOf(Error);
     expect(String(await failure)).toContain("cancelled");
 
@@ -409,6 +419,7 @@ describe("McpConnectionGatewayService", () => {
     const redirects: URL[] = [];
     Object.assign(service, {
       coordinatorFor: () => ({
+        abandonAuthorization: () => {},
         configured: async () => false,
         authorize: async (params: {
           redirectUrl: URL;

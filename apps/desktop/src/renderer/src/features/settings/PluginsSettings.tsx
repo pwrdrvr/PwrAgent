@@ -694,7 +694,10 @@ export function PluginsSettings(props: {
     connection: McpConnectionStatus,
     continueCreate = false,
   ) => {
-    if (connectionPending && !continueCreate) return;
+    // The ref, not the state: two clicks in one tick both read a
+    // `connectionPending` that React has not flushed yet, and both start a
+    // browser round trip.
+    if (connectionPendingRef.current && !continueCreate) return;
     // Any attempt still in flight from before this one is abandoned: the
     // operator asked for a new sign-in link, so the old callback must not be
     // the one that answers.
@@ -1066,7 +1069,7 @@ export function PluginsSettings(props: {
               void createConnection();
             }}
           >
-            <h4 className="settings-mcp-create__title">Add a remote MCP server</h4>
+            <h3 className="settings-mcp-create__title">Add a remote MCP server</h3>
             {/*
               * The constraint belongs above the fields. `authMode` is the
               * literal "oauth", so a command-line server -- which is what most

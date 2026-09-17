@@ -54,9 +54,11 @@ describe("Plugins MCP card", () => {
     expect(row).toMatch(/\bborder:\s*1px\s+solid\b/);
     // The rows are elevated off the card; the slot is not. Matching this to
     // the row background is the regression, and it makes the two blocks
-    // indistinguishable again.
+    // indistinguishable again. Both spellings are rejected: `background:`
+    // alone would let `background-color` restore the collision while this
+    // test stayed green.
     expect(row).toMatch(/\bbackground:\s*var\(--bg-panel-elevated\)/);
-    expect(create).not.toMatch(/\bbackground:/);
+    expect(create).not.toMatch(/\bbackground(-color)?:/);
   });
 
   /**

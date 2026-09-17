@@ -498,4 +498,124 @@ describe("McpOAuthSessionCoordinator", () => {
     expect(coordinator.state).not.toBe("ready");
     expect(vault.delete).toHaveBeenCalled();
   });
+  /**
+   * A cancel is not a failure.
+   *
+   * `authorize` reports every rejection as `reauthorization_required`, which
+   * is right for a flow that broke. Called off deliberately -- the operator
+   * clicked Reauthorize on a working connection, then Stop waiting -- that
+   * same path told them a `ready` connection whose credentials were never
+   * touched now needs a login.
+   */
+  it("restores the pre-authorization state when an attempt is called off", async () => {
+    const { vault } = createVault({
+      resourceUrl: "https://mcp.example.com/mcp",
+      discoveryState: { authorizationServerUrl: "https://auth.example.com" },
+    });
+    const authFn = vi.fn(async (
+      provider: OAuthClientProvider,
+      options: { authorizationCode?: string },
+    ) => {
+      if (!options.authorizationCode) return "REDIRECT" as const;
+      await provider.saveTokens?.({
+        access_token: options.authorizationCode,
+        token_type: "bearer",
+      });
+      return "AUTHORIZED" as const;
+    }) as unknown as typeof auth;
+    const coordinator = new McpOAuthSessionCoordinator({
+      authFn,
+      connectionId: "example",
+      serverUrl: new URL("https://mcp.example.com/mcp"),
+      vault,
+    });
+
+    // Get the connection to `ready` the way a working one gets there.
+    await coordinator.authorize({
+      redirectUrl: new URL("http://127.0.0.1:4040/oauth/callback"),
+      onRedirect: vi.fn(async () => undefined),
+      waitForCode: vi.fn(async () => "good-access"),
+    });
+    expect(coordinator.state).toBe("ready");
+
+    // Reauthorize, then walk away. The wait rejects the way the gateway's
+    // `abandon` rejects it, after the attempt has been retired.
+    let releaseCode: ((reason: Error) => void) | undefined;
+    const attempt = coordinator.authorize({
+      redirectUrl: new URL("http://127.0.0.1:4041/oauth/callback"),
+      onRedirect: vi.fn(async () => undefined),
+      waitForCode: () => new Promise<string>((_resolve, reject) => {
+        releaseCode = reject;
+      }),
+    });
+    await vi.waitFor(() => expect(releaseCode).toBeDefined());
+    expect(coordinator.state).toBe("connecting");
+
+    coordinator.abandonAuthorization();
+    releaseCode?.(new Error("example authorization was cancelled."));
+
+    // The caller still learns its attempt failed...
+    await expect(attempt).rejects.toThrow();
+    // ...but the connection is exactly where it was, not "Login required".
+    expect(coordinator.state).toBe("ready");
+    expect(coordinator.detail).toBeUndefined();
+    await expect(coordinator.configured()).resolves.toBe(true);
+  });
+
+  /**
+   * The state snapshot survives the attempt that took it, so a cancel arriving
+   * when nothing is in flight would restore the state that preceded the *last*
+   * authorization -- knocking a working connection back to `disconnected`.
+   */
+  it("ignores a cancel when no authorization is in flight", async () => {
+    const { vault } = createVault({
+      resourceUrl: "https://mcp.example.com/mcp",
+      discoveryState: { authorizationServerUrl: "https://auth.example.com" },
+    });
+    const authFn = vi.fn(async (
+      provider: OAuthClientProvider,
+      options: { authorizationCode?: string },
+    ) => {
+      if (!options.authorizationCode) return "REDIRECT" as const;
+      await provider.saveTokens?.({
+        access_token: options.authorizationCode,
+        token_type: "bearer",
+      });
+      return "AUTHORIZED" as const;
+    }) as unknown as typeof auth;
+    const coordinator = new McpOAuthSessionCoordinator({
+      authFn,
+      connectionId: "example",
+      serverUrl: new URL("https://mcp.example.com/mcp"),
+      vault,
+    });
+
+    // Before anything has run: the snapshot is empty, so an unguarded restore
+    // would force `disconnected`.
+    coordinator.abandonAuthorization();
+
+    await coordinator.authorize({
+      redirectUrl: new URL("http://127.0.0.1:4040/oauth/callback"),
+      onRedirect: vi.fn(async () => undefined),
+      waitForCode: vi.fn(async () => "good-access"),
+    });
+    expect(coordinator.state).toBe("ready");
+
+    // And after it completed: the snapshot now holds `disconnected`, the state
+    // that preceded the authorization that just succeeded. A stray cancel must
+    // not put that back.
+    coordinator.abandonAuthorization();
+    coordinator.abandonAuthorization();
+    expect(coordinator.state).toBe("ready");
+    await expect(coordinator.configured()).resolves.toBe(true);
+
+    // The attempt counter is untouched, so the next authorization still owns
+    // its own state rather than starting out superseded.
+    await coordinator.authorize({
+      redirectUrl: new URL("http://127.0.0.1:4041/oauth/callback"),
+      onRedirect: vi.fn(async () => undefined),
+      waitForCode: vi.fn(async () => "second-access"),
+    });
+    expect(coordinator.state).toBe("ready");
+  });
 });

@@ -11117,6 +11117,11 @@ a.button {
 .settings-copyvalue--compact {
   min-width: 0;
   margin-top: 3px;
+  /* The base rule wraps, which is right for a pill that owns its own line and
+     wrong here: in a row the URL ellipsizes and the button holds its place.
+     Without this it works only because `min-width: 0` lets the value shrink
+     to nothing first, which is a coincidence rather than a statement. */
+  flex-wrap: nowrap;
   /* Clears the button's focus ring, which is `2px solid` at `outline-offset:
      2px` — 4px of gap puts it on top of the last character of the URL. */
   gap: 8px;
