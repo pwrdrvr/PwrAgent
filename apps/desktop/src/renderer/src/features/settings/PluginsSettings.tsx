@@ -36,6 +36,7 @@ import {
   describeMcpServerTools,
   readMcpServerHealth,
 } from "./mcp-server-health";
+import { SettingsCopyValue } from "./SettingsCopyValue";
 import { SettingsSwitch } from "./SettingsSwitch";
 import { sourceBadge } from "./settings-fields";
 
@@ -1548,7 +1549,19 @@ function ManagedMcpConnectionRow(props: {
             {setup.headline}
           </span>
         </div>
-        <span title={connection.serverUrl}>{connection.serverUrl}</span>
+        {/*
+          * The endpoint is the one thing in this row an operator has to hand
+          * to something else verbatim -- a `curl`, a bug report, the agent's
+          * own config when a server turns out to belong there instead. It was
+          * selectable text in a row full of buttons, which in practice means
+          * a drag that catches the row instead.
+          */}
+        <SettingsCopyValue
+          compact
+          desktopApi={props.desktopApi}
+          label={`${connection.displayName} MCP URL`}
+          value={connection.serverUrl}
+        />
         <p className="settings-mcp-row__state">{setup.detail}</p>
       </div>
       <div className="settings-mcp-row__actions">

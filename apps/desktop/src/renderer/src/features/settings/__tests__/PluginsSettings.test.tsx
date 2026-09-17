@@ -586,4 +586,54 @@ describe("PluginsSettings", () => {
     });
     expect(row.getByRole("button", { name: "Authorize" })).toBeEnabled();
   });
+  /**
+   * The endpoint is the one thing in the row an operator hands to something
+   * else verbatim — a `curl`, a bug report, the agent's own config when a
+   * server turns out to belong there instead. It was selectable text in a row
+   * full of buttons, which in practice means a drag that catches the row.
+   */
+  it("copies each connection's endpoint through the shared affordance", async () => {
+    const api = createDesktopApi([]);
+    const copyText = vi.fn().mockResolvedValue(undefined);
+    api.copyText = copyText;
+    api.listMcpConnections = vi.fn().mockResolvedValue({ connections: [
+      {
+        id: "rovo", displayName: "Atlassian Rovo",
+        serverUrl: "https://mcp.atlassian.com/v2/mcp",
+        kind: "remote", authMode: "oauth", enabled: true, configured: false,
+        state: "disconnected", createdAt: 0, updatedAt: 0,
+      },
+      {
+        id: "datadog", displayName: "Datadog",
+        serverUrl: "https://mcp.datadoghq.com/api/unstable/mcp-server/mcp",
+        kind: "remote", authMode: "oauth", enabled: true, configured: true,
+        state: "ready", createdAt: 0, updatedAt: 0,
+      },
+    ] });
+    render(<PluginsSettings desktopApi={api} snapshot={createSnapshot()} />);
+
+    // Named per connection: a row full of identical "Copy" buttons is
+    // unusable by anything that reads names rather than sees positions.
+    const copy = await screen.findByRole("button", {
+      name: "Copy Atlassian Rovo MCP URL",
+    });
+    fireEvent.click(copy);
+    await waitFor(() => {
+      expect(copyText).toHaveBeenCalledWith("https://mcp.atlassian.com/v2/mcp");
+    });
+    // The acknowledgement is what tells the operator it landed; the endpoint
+    // is invisible in the clipboard, so a silent button reads as a dead one.
+    expect(await screen.findByRole("button", {
+      name: "Copy Atlassian Rovo MCP URL",
+    })).toHaveTextContent("Copied");
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Copy Datadog MCP URL" }),
+    );
+    await waitFor(() => {
+      expect(copyText).toHaveBeenLastCalledWith(
+        "https://mcp.datadoghq.com/api/unstable/mcp-server/mcp",
+      );
+    });
+  });
 });

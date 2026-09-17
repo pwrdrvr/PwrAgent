@@ -11110,6 +11110,48 @@ a.button {
   font-size: 12px;
 }
 
+/* A value that is a list row's secondary line rather than the point of the
+   row. It keeps the weight the plain text it replaced had -- muted, 11px,
+   un-boxed -- because the connection's name above it is what the row is
+   about. */
+.settings-copyvalue--compact {
+  min-width: 0;
+  margin-top: 3px;
+  /* Clears the button's focus ring, which is `2px solid` at `outline-offset:
+     2px` — 4px of gap puts it on top of the last character of the URL. */
+  gap: 8px;
+}
+
+.settings-copyvalue--compact .settings-copyvalue__value {
+  overflow: hidden;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  color: var(--text-muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Quiet until wanted, and never smaller than a pointer target: 24px square is
+   the WCAG 2.2 minimum, and shrinking this to match the 11px line beside it
+   would fail `target-size` in the a11y gate. */
+.settings-copyvalue__button--compact {
+  flex: 0 0 auto;
+  min-width: 24px;
+  min-height: 24px;
+  padding: 0 6px;
+  color: var(--text-muted);
+  font-size: 10.5px;
+}
+
+.settings-copyvalue__button--compact:hover,
+.settings-copyvalue__button--compact:focus-visible {
+  color: var(--accent);
+}
+
 .settings-segmented__button:hover,
 .settings-segmented__button:focus-visible {
   color: var(--text-primary);
@@ -12125,6 +12167,15 @@ a.button {
   margin-top: 3px;
   color: var(--text-muted);
   font-size: 11px;
+}
+
+/* The endpoint line is a `SettingsCopyValue` rather than a bare span, so it
+   opts out of the `display: block` above and lays its own value and button
+   out. `min-width: 0` has to reach it for the URL to be allowed to ellipsize
+   instead of widening the row's first column. */
+.settings-mcp-row__body > .settings-copyvalue {
+  display: flex;
+  max-width: 100%;
 }
 
 .settings-mcp-row--managed .settings-mcp-row__error {

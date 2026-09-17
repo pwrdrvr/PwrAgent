@@ -9,6 +9,18 @@ type SettingsCopyValueProps = {
   copyValue?: string | (() => string);
   desktopApi?: DesktopApi;
   label?: string;
+  /**
+   * Drop the pill and the button's chrome, for a value that is a row's
+   * secondary line rather than the thing the row is about.
+   *
+   * The default treatment is sized to be the control in a `SettingsField`. In
+   * a list row -- where the value sits under a title and beside the row's own
+   * actions -- it outweighs the name above it and adds a fourth button to a
+   * row that already has three. Same behaviour and the same acknowledgement,
+   * quieter presentation: a copy is a copy wherever it is offered, and one
+   * component is what keeps the wording and the 1.5s reset from drifting.
+   */
+  compact?: boolean;
 };
 
 /**
@@ -28,11 +40,19 @@ export function SettingsCopyValue(props: SettingsCopyValueProps) {
   );
 
   return (
-    <div className="settings-copyvalue">
-      <code className="settings-copyvalue__value">{props.value}</code>
+    <div
+      className={`settings-copyvalue${
+        props.compact ? " settings-copyvalue--compact" : ""
+      }`}
+    >
+      <code className="settings-copyvalue__value" title={props.value}>
+        {props.value}
+      </code>
       <button
         type="button"
-        className="button button--ghost"
+        className={`button button--ghost${
+          props.compact ? " settings-copyvalue__button--compact" : ""
+        }`}
         aria-label={props.label ? `Copy ${props.label}` : undefined}
         onClick={() => {
           const copyValue = typeof props.copyValue === "function"
