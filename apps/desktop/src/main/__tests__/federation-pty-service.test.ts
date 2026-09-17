@@ -14,6 +14,7 @@ import {
   type FederationPtyProcess,
 } from "../federation/federation-pty-service";
 import { FederationRouter } from "../federation/federation-router";
+import { PTY_RESIZE_INTERVAL_MS } from "../terminal/pty-resize";
 
 class FakePty implements FederationPtyProcess {
   pid = 4242;
@@ -160,6 +161,50 @@ describe("FederationPtyService sessions", () => {
         detail: "codex:thread-1",
       },
     ]);
+  });
+
+  it("never resizes a remote PTY to the grid it was spawned at", async () => {
+    const { pty, service } = createHarness();
+    const { sessionId } = await service.open("peer-a", OPEN_REQUEST);
+    // A remote viewer's first `fitAddon.fit()` after attach costs a network
+    // round trip before it reaches the shell, so this is the one most worth
+    // dropping.
+    service.resize("peer-a", { sessionId, cols: 80, rows: 24 });
+    expect(pty.resizes).toEqual([]);
+  });
+
+  it("collapses a remote viewer's resize burst into one per interval", async () => {
+    const { pty, service } = createHarness();
+    const { sessionId } = await service.open("peer-a", OPEN_REQUEST);
+    vi.useFakeTimers();
+    try {
+      for (let cols = 100; cols < 140; cols += 1) {
+        service.resize("peer-a", { sessionId, cols, rows: 30 });
+      }
+      expect(pty.resizes).toEqual([{ cols: 100, rows: 30 }]);
+      vi.advanceTimersByTime(PTY_RESIZE_INTERVAL_MS);
+      expect(pty.resizes).toEqual([
+        { cols: 100, rows: 30 },
+        { cols: 139, rows: 30 },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("drops a queued remote resize when the session is torn down", async () => {
+    const { pty, service } = createHarness();
+    const { sessionId } = await service.open("peer-a", OPEN_REQUEST);
+    vi.useFakeTimers();
+    try {
+      service.resize("peer-a", { sessionId, cols: 100, rows: 30 });
+      service.resize("peer-a", { sessionId, cols: 120, rows: 40 });
+      pty.emitExit(0);
+      vi.advanceTimersByTime(PTY_RESIZE_INTERVAL_MS * 4);
+      expect(pty.resizes).toEqual([{ cols: 100, rows: 30 }]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("rejects input, resize, ack, and close from a non-opener peer", async () => {
