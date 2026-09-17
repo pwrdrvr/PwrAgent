@@ -140,11 +140,19 @@ export function IntegratedTerminal({
           fitAddon.fit();
           const sessionId = sessionIdRef.current;
           if (!sessionId) return;
-          void desktopApi.resizeIntegratedTerminal({
-            sessionId,
-            cols: terminal.cols,
-            rows: terminal.rows,
-          });
+          // Swallowed, not voided: main rethrows whatever node-pty's resize
+          // threw — a ConPTY error, or a PTY that exited between this fit
+          // and the handler — and a bare `void` on the invoke makes that an
+          // unhandled rejection in the renderer. Nothing to report either:
+          // main does not record a rejected resize as applied, so the next
+          // fit re-sends this grid rather than deduplicating it away.
+          void desktopApi
+            .resizeIntegratedTerminal({
+              sessionId,
+              cols: terminal.cols,
+              rows: terminal.rows,
+            })
+            .catch(() => undefined);
         };
         const scheduleFitAndResize = () => {
           if (disposed || resizeFrame !== undefined) return;

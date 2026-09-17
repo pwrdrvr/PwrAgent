@@ -465,8 +465,8 @@ export class IntegratedTerminalService {
   resize(request: IntegratedTerminalResizeRequest): void {
     const session = this.sessionsById.get(request.sessionId);
     if (!session) return;
-    const cols = clampInteger(request.cols, DEFAULT_COLUMNS, 2, MAX_COLUMNS);
-    const rows = clampInteger(request.rows, DEFAULT_ROWS, 2, MAX_ROWS);
+    const cols = clampTerminalColumns(request.cols);
+    const rows = clampTerminalRows(request.rows);
     // Viewers share this PTY. Deduplicate at its owner, not against a
     // renderer's stale last size. Track accepted requests because node-pty
     // can defer a Windows resize before its cols/rows getters change.
