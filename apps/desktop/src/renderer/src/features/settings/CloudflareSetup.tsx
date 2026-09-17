@@ -78,8 +78,9 @@ export function CloudflareSetup({ api, listenPort, mode, onWriteConfig, onSettin
     <div className="cloudflare-setup">
       <p className="cloudflare-setup__intro">A public address that only your certificate holders can use. PwrAgent creates the tunnel, generates its own certificate authority, issues client certificates, and verifies that Cloudflare blocks everyone else before they reach this gateway.</p>
       <div className="cloudflare-setup__notice" role="note">
-        <strong>Requires a Contract (Enterprise) Zero Trust plan — not yet validated on a live account.</strong>
-        <p>This builds on <em>Access mTLS</em>, under Zero Trust → Access controls → Service credentials → Mutual TLS. Cloudflare&rsquo;s plan comparison marks mTLS authentication as Contract-only; the feature&rsquo;s own documentation page disagrees and lists pay-as-you-go. Setup will tell you which is true for your account when it uploads the certificate authority.</p>
+        <strong>Requires a paid Zero Trust plan. Confirmed unavailable on the Free plan.</strong>
+        <p>This builds on <em>Access mTLS</em>, under Zero Trust → Access controls → Service credentials → Mutual TLS. On a Free plan the certificate-authority upload is refused with &ldquo;maximum number of certificates has been reached&rdquo; even with none stored — the quota is zero.</p>
+        <p>Whether pay-as-you-go is enough is unsettled: Cloudflare&rsquo;s plan comparison marks mTLS authentication as Contract-only, while the feature&rsquo;s own documentation page lists pay-as-you-go. Setup reports which is true for your account when it uploads the certificate authority.</p>
         <p>Certificates themselves cost nothing: PwrAgent generates the CA and 90-day client certificates locally. Nothing is purchased, and no machine has to trust a new root — Cloudflare checks the client certificate, while the server certificate stays Cloudflare&rsquo;s own.</p>
         <div className="settings-button-row">
           {link("Compare Zero Trust plans", "mtls-plans")}

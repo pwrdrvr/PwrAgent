@@ -55,7 +55,7 @@ describe("Cloudflare setup flow", () => {
     await screen.findByLabelText("Cloudflare public hostname");
     // The pane has to name Access mTLS: two different Cloudflare products are
     // called mTLS and only one of them is what this provisions.
-    expect(screen.getByText(/Contract \(Enterprise\) Zero Trust plan/)).toBeInTheDocument();
+    expect(screen.getByText(/Confirmed unavailable on the Free plan/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Open Mutual TLS in the dashboard" }));
     await waitFor(() => expect(call).toHaveBeenCalledWith({ action: "open-link", link: "dash-mtls" }));
   });

@@ -129,6 +129,23 @@ describe("Cloudflare API failure reporting", () => {
       .rejects.toThrow(/Authentication error \(code 10000\).*Contract \(Enterprise\) Zero Trust plan.*Mutual TLS Certificates/s);
   });
 
+  it("explains a quota-zero refusal rather than passing on \"maximum reached\"", async () => {
+    // Measured against a non-contract account with an empty Mutual TLS list.
+    // Verbatim, this message sends an operator looking for certificates to
+    // delete when they have none.
+    const api = respond(400, {
+      success: false,
+      errors: [{ code: 12130, message: "access.api.error.invalid_request: maximum number of certificates has been reached" }],
+    });
+    const failure = await api.request(`/accounts/${account}/access/certificates`, "POST", {})
+      .then(() => undefined, (error: Error) => error.message);
+    expect(failure).toContain("maximum number of certificates has been reached");
+    expect(failure).toContain("quota is zero");
+    expect(failure).toContain("lists no certificates");
+    // The generic plan/token sentence would contradict the specific one.
+    expect(failure).not.toContain("Confirm the plan before re-scoping");
+  });
+
   it("reports Cloudflare's own reason for an ordinary failure", async () => {
     const api = respond(400, { success: false, errors: [{ code: 1004, message: "DNS record already exists" }] });
     await expect(api.request(`/zones/${account}/dns_records`, "POST", {}))
