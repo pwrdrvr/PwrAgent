@@ -133,6 +133,8 @@ import type {
   ThreadSearchResponse,
   AppServerReadThreadRequest,
   AppServerReadThreadResponse,
+  InspectTokenMiserOutputRequest,
+  InspectTokenMiserOutputResponse,
   AnalyzeThreadToolHistoryRequest,
   AnalyzeThreadToolHistoryResponse,
   GetThreadFileDiffRequest,
@@ -604,6 +606,7 @@ import {
   APP_SERVER_RESTORE_WORKTREE_CHANNEL,
   APP_SERVER_RENAME_THREAD_CHANNEL,
   APP_SERVER_READ_THREAD_CHANNEL,
+  APP_SERVER_INSPECT_TOKEN_MISER_OUTPUT_CHANNEL,
   APP_SERVER_ANALYZE_THREAD_TOOL_HISTORY_CHANNEL,
   APP_SERVER_GET_THREAD_FILE_DIFF_CHANNEL,
   APPLICATIONS_READ_CHANNEL,
@@ -1663,6 +1666,10 @@ const desktopApi = Object.freeze({
       APP_SERVER_READ_THREAD_CHANNEL,
       request,
     ),
+  inspectTokenMiserOutput: async (
+    request: InspectTokenMiserOutputRequest,
+  ): Promise<InspectTokenMiserOutputResponse> =>
+    await ipcRenderer.invoke(APP_SERVER_INSPECT_TOKEN_MISER_OUTPUT_CHANNEL, request),
   analyzeThreadToolHistory: async (
     request: AnalyzeThreadToolHistoryRequest,
   ): Promise<AnalyzeThreadToolHistoryResponse> =>

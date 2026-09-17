@@ -11,6 +11,8 @@ import path from "node:path";
 import type {
   ReadFederationActivityRequest,
   ReadFederationActivityResponse,
+  InspectTokenMiserOutputRequest,
+  InspectTokenMiserOutputResponse,
   AnalyzeThreadToolHistoryRequest,
   AnalyzeThreadToolHistoryResponse,
   AgentEvent,
@@ -5533,6 +5535,15 @@ function localBackendOperations(): FederationBackendOperations {
         resolveApprovedLocalImageRoots: () => getDesktopBackendRegistry().getThreadTranscriptImageRoots({
           backend, threadId: request.threadId,
         }),
+      });
+    },
+    async inspectTokenMiserOutput(request: InspectTokenMiserOutputRequest): Promise<InspectTokenMiserOutputResponse> {
+      return await getDesktopBackendRegistry().inspectTokenMiserOutput({
+        backend: request.backend,
+        threadId: request.threadId,
+        objectId: request.objectId,
+        source: request.source,
+        offset: request.offset,
       });
     },
     async analyzeThreadToolHistory(

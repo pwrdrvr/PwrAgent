@@ -43,6 +43,11 @@ it("retains originals beyond five minutes until the next turn, but not across re
   expect((await store.readAll({ objectId: entry.objectId, threadId: "owner" }))?.text).toBe(params.output);
   expect((await store.summarizeThreadUsage("owner")).interceptions[0]?.originalOutputAvailable).toBe(true);
   expect(await new TokenMiserStore(root).readAll({ objectId: entry.objectId, threadId: "owner" })).toBeUndefined();
+  for (const source of ["original", "summary"] as const) {
+    expect(await store.inspectOutput({ objectId: entry.objectId, threadId: "owner", source })).toMatchObject({ available: true });
+    expect(await new TokenMiserStore(root).inspectOutput({ objectId: entry.objectId, threadId: "owner", source })).toEqual({ available: false });
+  }
+
   store.startTurn("owner", "next-turn");
   expect(await store.readAll({ objectId: entry.objectId, threadId: "owner" })).toBeUndefined();
   expect((await store.summarizeThreadUsage("owner")).interceptions[0]?.originalOutputAvailable).toBe(false);
@@ -84,6 +89,8 @@ it("retains accepted accounting across archive but rejects pending and late orig
   await expect(pending.persist()).rejects.toThrow("unavailable");
   await expect(new TokenMiserStore(root).stage(params)).rejects.toThrow("archived");
   expect(await store.readAll({ objectId: accepted.objectId, threadId: "owner" })).toBeUndefined();
+  expect(await store.inspectOutput({ objectId: accepted.objectId, threadId: "owner", source: "summary" })).toEqual({ available: false });
+
   expect(await new TokenMiserStore(root).listMetadata("owner")).toHaveLength(1);
 });
 it("cold thread queries never enumerate or open unrelated thread directories", async () => {
@@ -232,10 +239,13 @@ it("shares the payload byte budget across cache instances and bounds individual 
   const first = new TokenMiserOutputCache();
   const second = new TokenMiserOutputCache();
   expect(first.put("oversized", "x".repeat(TOKEN_MISER_OUTPUT_ENTRY_BYTES))).toBe(false);
+  expect(first.put("oversized-summary", "raw", "turn", "x".repeat(TOKEN_MISER_OUTPUT_ENTRY_BYTES))).toBe(false);
   const payload = "x".repeat(1024 * 1024);
-  expect(first.put("oldest", payload, "turn")).toBe(true);
+  expect(first.put("oldest", payload, "turn", "retained summary")).toBe(true);
+  expect(first.getDetail("oldest")).toBe("retained summary");
   for (let index = 0; index < 12; index += 1) expect(second.put(String(index), payload, "turn")).toBe(true);
   expect(first.get("oldest")).toBeUndefined();
+  expect(first.getDetail("oldest")).toBeUndefined();
   expect(second.get("11")).toBe(payload);
   for (let index = 0; index < 12; index += 1) second.remove(String(index));
 });

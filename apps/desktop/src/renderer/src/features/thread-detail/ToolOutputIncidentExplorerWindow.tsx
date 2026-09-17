@@ -1,3 +1,4 @@
+import { TokenMiserOutputInspector } from "./TokenMiserOutputInspector";
 import type { ReactNode } from "react";
 import {
   useCallback,
@@ -628,6 +629,7 @@ export function ToolOutputIncidentExplorerWindow() {
 
       {lens === "savings" ? (
         <TokenMiserSavingsLens
+          inspectionTarget={route}
           comparison={tokenMiserComparison}
           compactions={latest?.pricing?.compactions ?? []}
           contextWindow={contextWindowSummary}
@@ -1511,6 +1513,7 @@ function SavingsFigureGrid(props: { figures: SavingsFigure[] }) {
   );
 }
 function TokenMiserSavingsLens(props: {
+  inspectionTarget?: { backend: AppServerBackendKind; threadId: string; federationTarget?: FederationTarget };
   comparison?: TokenMiserContextComparison;
   compactions: readonly ThreadCompactionRecord[];
   contextWindow?: TokenMiserContextWindowSummary;
@@ -1560,7 +1563,7 @@ function TokenMiserSavingsLens(props: {
           />
         </SavingsDetailStack>
         <SavingsSplitGrip measurement={measurement} onResize={resizeDetails} />
-        <TokenMiserResultList entries={props.gates} tokenMiser={tokenMiser} />
+        <TokenMiserResultList entries={props.gates} tokenMiser={tokenMiser} inspectionTarget={props.inspectionTarget} />
       </div>
     );
   }
@@ -1898,7 +1901,7 @@ function TokenMiserSavingsLens(props: {
 
       <SavingsSplitGrip measurement={measurement} onResize={resizeDetails} />
 
-      <TokenMiserResultList entries={props.gates} tokenMiser={tokenMiser} />
+      <TokenMiserResultList entries={props.gates} tokenMiser={tokenMiser} inspectionTarget={props.inspectionTarget} />
     </div>
   );
 }
@@ -2435,6 +2438,7 @@ function TokenMiserOriginalAvailability(props: { available?: boolean; expiresAt?
  * observation counts. Both populations share one outcome filter.
  */
 function TokenMiserResultList(props: {
+  inspectionTarget?: { backend: AppServerBackendKind; threadId: string; federationTarget?: FederationTarget };
   entries: TokenMiserGateEntry[];
   tokenMiser: NonNullable<ThreadToolAccounting["tokenMiser"]>;
 }) {
@@ -2527,6 +2531,13 @@ function TokenMiserResultList(props: {
                     <p className="incident-explorer__gate-summary">
                       {entry.interception.disposition === "passed_through" ? "Output passed through." : "Output summarized."}
                     </p>
+                    {props.inspectionTarget && entry.interception.disposition !== "passed_through" ? (
+                      <TokenMiserOutputInspector
+                        key={`${props.inspectionTarget.threadId}:${entry.interception.objectId}`}
+                        {...props.inspectionTarget}
+                        objectId={entry.interception.objectId}
+                      />
+                    ) : null}
                     <TokenMiserOriginalAvailability
                       available={entry.interception.originalOutputAvailable}
                       expiresAt={entry.interception.originalOutputAvailableUntil}

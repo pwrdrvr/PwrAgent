@@ -251,3 +251,23 @@ function guidanceForInvocation(invocation: ThreadToolInvocationRecord): string {
   }
   return "Redirect complete output to a local log and retrieve only targeted sections or a bounded tail when more detail is needed.";
 }
+
+/** Explicit, bounded operator inspection; never counts as model retrieval. */
+export type InspectTokenMiserOutputRequest = {
+  backend: AppServerBackendKind;
+  federationTarget?: FederationTarget;
+  threadId: string;
+  objectId: string;
+  source: "original" | "summary";
+  offset?: number;
+};
+
+export type InspectTokenMiserOutputResponse =
+  | { available: false }
+  | {
+      available: true;
+      text: string;
+      offset: number;
+      nextOffset?: number;
+      totalCharacters: number;
+    };

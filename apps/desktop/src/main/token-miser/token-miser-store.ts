@@ -1,3 +1,4 @@
+import type { InspectTokenMiserOutputRequest, InspectTokenMiserOutputResponse } from "@pwragent/shared";
 import { createHash, randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
@@ -360,7 +361,11 @@ export class TokenMiserStore {
     }
     // Reserve before returning a replacement. The closure retains no raw text.
     const retained = params.disposition === "passed_through"
-      || this.outputs.put(objectId, params.output, "turn");
+      || this.outputs.put(objectId, params.output, "turn", [
+        params.summary.summary,
+        ...params.summary.usefulDetails,
+        ...(params.summary.suggestedNextStep ? [params.summary.suggestedNextStep] : []),
+      ].join("\n"));
     if (!retained) throw new Error("Token Miser temporary output capacity exceeded.");
     this.owners.set(objectId, this.threadKey(params.threadId));
     this.outputGenerations.set(objectId, generation);
@@ -467,6 +472,31 @@ export class TokenMiserStore {
       text,
     };
     return result;
+  }
+
+  async inspectOutput(
+    params: Omit<InspectTokenMiserOutputRequest, "backend" | "federationTarget">,
+  ): Promise<InspectTokenMiserOutputResponse> {
+    if (params.source !== "original" && params.source !== "summary") {
+      throw new Error("Invalid output source.");
+    }
+    const offset = params.offset ?? 0;
+    if (!Number.isSafeInteger(offset) || offset < 0) throw new Error("Invalid output offset.");
+    const stored = await this.readAuthorizedObject(params.objectId, params.threadId);
+    if (!stored) return { available: false };
+    const text = params.source === "original" ? stored.output : this.outputs.getDetail(params.objectId);
+    if (text === undefined) return { available: false };
+    // Character pages bound IPC and rendering even for a single enormous line.
+    const start = Math.min(offset, text.length);
+    let end = Math.min(start + 16_000, text.length);
+    if (end < text.length && /[\uD800-\uDBFF]/.test(text[end - 1]!)) end -= 1;
+    return {
+      available: true,
+      text: text.slice(start, end),
+      offset: start,
+      ...(end < text.length ? { nextOffset: end } : {}),
+      totalCharacters: text.length,
+    };
   }
 
   async readAll(params: {

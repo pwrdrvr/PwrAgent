@@ -522,7 +522,8 @@ describe("ToolOutputIncidentExplorerWindow", () => {
         gate("cost-1", -200, 0),
       ],
     };
-    installApi({ readThread: async () => response });
+    const inspectTokenMiserOutput = vi.fn(async () => ({ available: true, text: "Retained original", offset: 0, totalCharacters: 17 }));
+    installApi({ readThread: async () => response, inspectTokenMiserOutput });
     window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
     render(<ToolOutputIncidentExplorerWindow />);
 
@@ -536,6 +537,10 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     expect(screen.queryByText("Traced the handler for win-1.")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /win-1/ }));
     expect(screen.getByText("Output summarized.")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "View original" }));
+    expect(await screen.findByText("Retained original")).toBeInTheDocument();
+    expect(inspectTokenMiserOutput).toHaveBeenCalledWith(expect.objectContaining({ backend: "codex", threadId: "thread-1", objectId: "win-1", source: "original" }));
+
     expect(screen.getByText(available
       ? /retained until the next turn starts/
       : /Original output is expired or unavailable/)).toBeInTheDocument();

@@ -87,6 +87,8 @@ import type {
   ForkThreadResponse,
   AppServerReadThreadRequest,
   AppServerReadThreadResponse,
+  InspectTokenMiserOutputRequest,
+  InspectTokenMiserOutputResponse,
   AnalyzeThreadToolHistoryRequest,
   AnalyzeThreadToolHistoryResponse,
   GetThreadFileDiffRequest,
@@ -754,6 +756,9 @@ export type DesktopApi = {
   readThread?: (
     request: AppServerReadThreadRequest
   ) => Promise<AppServerReadThreadResponse>;
+  inspectTokenMiserOutput?: (
+    request: InspectTokenMiserOutputRequest,
+  ) => Promise<InspectTokenMiserOutputResponse>;
   analyzeThreadToolHistory?: (
     request: AnalyzeThreadToolHistoryRequest,
   ) => Promise<AnalyzeThreadToolHistoryResponse>;

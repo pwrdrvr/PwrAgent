@@ -10,6 +10,8 @@ import {
   type FederationProjectPageRequest,
 } from "./federation-collection-reads";
 import type {
+  InspectTokenMiserOutputRequest,
+  InspectTokenMiserOutputResponse,
   AnalyzeThreadToolHistoryRequest,
   AnalyzeThreadToolHistoryResponse,
   AppServerBackendKind,
@@ -404,6 +406,7 @@ export const FEDERATION_BACKEND_METHODS = {
   resolveThread: "backend.resolveThread",
   resolveThreadAdmissionState: "backend.resolveThreadAdmissionState",
   readThread: "backend.readThread",
+  inspectTokenMiserOutput: "backend.inspectTokenMiserOutput",
   analyzeThreadToolHistory: "backend.analyzeThreadToolHistory",
   readTranscriptImage: "backend.readTranscriptImage",
   listSkills: "backend.listSkills",
@@ -516,6 +519,7 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.resolveThreadAdmissionState]: "messaging_route",
   [FEDERATION_BACKEND_METHODS.readThread]: "thread_detail",
   /* Reads the thread's own transcript history; same data class as reading it. */
+  [FEDERATION_BACKEND_METHODS.inspectTokenMiserOutput]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.analyzeThreadToolHistory]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.readTranscriptImage]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.listSkills]: "thread_detail",
@@ -680,6 +684,7 @@ export type FederationBackendOperations = {
   readThread(
     request: AppServerReadThreadRequest,
   ): Promise<AppServerReadThreadResponse>;
+  inspectTokenMiserOutput(request: InspectTokenMiserOutputRequest): Promise<InspectTokenMiserOutputResponse>;
   analyzeThreadToolHistory(
     request: AnalyzeThreadToolHistoryRequest,
   ): Promise<AnalyzeThreadToolHistoryResponse>;
@@ -1024,6 +1029,12 @@ export function registerFederationBackendHandlers(params: {
         },
       );
     },
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.inspectTokenMiserOutput,
+    async (envelope) => await params.backend.inspectTokenMiserOutput(
+      envelope.params as InspectTokenMiserOutputRequest,
+    ),
   );
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.analyzeThreadToolHistory,
@@ -1894,6 +1905,13 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
     finally {
       if (this.pendingThreadReads.get(key) === read) this.pendingThreadReads.delete(key);
     }
+  }
+
+  async inspectTokenMiserOutput(request: InspectTokenMiserOutputRequest): Promise<InspectTokenMiserOutputResponse> {
+    return await this.rpc.request<InspectTokenMiserOutputResponse>({
+      method: FEDERATION_BACKEND_METHODS.inspectTokenMiserOutput,
+      params: request,
+    });
   }
 
   async analyzeThreadToolHistory(

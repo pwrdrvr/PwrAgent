@@ -15,6 +15,42 @@ afterEach(async () => {
 });
 
 describe("TokenMiserStore", () => {
+  it("inspects retained originals and summaries without charging agent retrieval", async () => {
+    const store = await createStore();
+    const output = "x".repeat(20_000);
+    const entry = await createObject(store, output, 1);
+    const before = await store.listMetadata("thread-owner");
+    const changesBefore = store.stateDb.raw.prepare("SELECT total_changes() AS count").get();
+    const page = await store.inspectOutput({ objectId: entry.objectId, threadId: "thread-owner", source: "original" });
+    expect(page).toEqual({ available: true, text: output.slice(0, 16_000), offset: 0, nextOffset: 16_000, totalCharacters: 20_000 });
+    expect(await store.inspectOutput({ objectId: entry.objectId, threadId: "thread-owner", source: "original", offset: 16_000 }))
+      .toEqual({ available: true, text: output.slice(16_000), offset: 16_000, totalCharacters: 20_000 });
+    expect(await store.inspectOutput({ objectId: entry.objectId, threadId: "other-thread", source: "original" }))
+      .toEqual({ available: false });
+    expect(await store.inspectOutput({ objectId: entry.objectId, threadId: "thread-owner", source: "summary", offset: 20_000 }))
+      .toMatchObject({ available: true, text: "\nNone." });
+    expect(await store.listMetadata("thread-owner")).toEqual(before);
+    expect(store.stateDb.raw.prepare("SELECT total_changes() AS count").get()).toEqual(changesBefore);
+    store.startTurn("thread-owner", "turn-2");
+    for (const source of ["original", "summary"] as const) {
+      expect(await store.inspectOutput({ objectId: entry.objectId, threadId: "thread-owner", source }))
+        .toEqual({ available: false });
+    }
+  });
+
+  it("rejects invalid inspection offsets and pages Unicode without splitting surrogate pairs", async () => {
+    const store = await createStore();
+    const output = "a".repeat(15_999) + "😀tail";
+    const entry = await createObject(store, output, 1);
+    const request = { objectId: entry.objectId, threadId: "thread-owner", source: "original" as const };
+    for (const offset of [-1, 0.5, NaN, Infinity]) {
+      await expect(store.inspectOutput({ ...request, offset })).rejects.toThrow("Invalid output offset");
+    }
+    expect(await store.inspectOutput(request)).toMatchObject({ text: "a".repeat(15_999), nextOffset: 15_999 });
+    expect(await store.inspectOutput({ ...request, offset: 15_999 })).toMatchObject({ text: "😀tail" });
+    expect(JSON.stringify(await store.listMetadata("thread-owner"))).not.toContain("😀tail");
+  });
+
   it("queries SQLite across overlapping readers without filesystem scans", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "pwragent-token-miser-"));
     temporaryDirectories.push(root);

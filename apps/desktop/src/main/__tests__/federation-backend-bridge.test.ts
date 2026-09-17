@@ -984,6 +984,32 @@ describe("federation backend bridge", () => {
     ]);
   });
 
+  it.each([true, false])("routes retained output inspection with thread-detail authorization (%s)", async (allowed) => {
+    const result = { available: true, text: "owner output", offset: 0, totalCharacters: 12 };
+    const inspectTokenMiserOutput = vi.fn(async () => result);
+    const sent: FederationProtocolEnvelope[] = [];
+    const rpc = new FederationRpcEndpoint({
+      localInstanceId: "viewer_one", remoteInstanceId: "owner_one",
+      sendEnvelope: (envelope) => sent.push(envelope),
+    });
+    const router = new FederationRouter({
+      localInstanceId: "owner_one", methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES,
+    });
+    router.registerConnection({
+      peerId: "viewer_one", capabilities: allowed ? ["thread_detail"] : ["thread_navigation"],
+      sendEnvelope: (envelope) => { rpc.receiveEnvelope(envelope); },
+    });
+    registerFederationBackendHandlers({ router, backend: { inspectTokenMiserOutput } as unknown as FederationBackendOperations });
+    const client = new FederationRemoteBackendClient(rpc);
+    const request = { backend: "codex" as const, threadId: "thread-1", objectId: "object-1", source: "original" as const, offset: 16_000 };
+    const pending = client.inspectTokenMiserOutput(request);
+    const check = allowed ? expect(pending).resolves.toEqual(result) : expect(pending).rejects.toThrow();
+    await router.routeEnvelope({ sourcePeerId: "viewer_one", envelope: sent[0]! });
+    await check;
+    if (allowed) expect(inspectTokenMiserOutput).toHaveBeenCalledWith(request);
+    else expect(inspectTokenMiserOutput).not.toHaveBeenCalled();
+  });
+
   it("sends unpublished commit reads from the remote backend client", async () => {
     const sent: FederationProtocolEnvelope[] = [];
     const rpc = new FederationRpcEndpoint({
@@ -1033,6 +1059,7 @@ describe("federation backend bridge", () => {
       })),
       readThread: vi.fn(),
       analyzeThreadToolHistory: vi.fn(),
+      inspectTokenMiserOutput: vi.fn(),
       listSkills: vi.fn(),
       listBackends: vi.fn(),
       archiveThread: vi.fn(async () => ({
@@ -3001,6 +3028,7 @@ describe("federation backend bridge", () => {
         listThreads: vi.fn(),
         readThread: vi.fn(),
         analyzeThreadToolHistory: vi.fn(),
+      inspectTokenMiserOutput: vi.fn(),
         listSkills: vi.fn(),
         listBackends: vi.fn(),
         startTurn: vi.fn(),
@@ -3079,6 +3107,7 @@ describe("federation backend bridge", () => {
       listThreads: vi.fn(),
       readThread: vi.fn(),
       analyzeThreadToolHistory: vi.fn(),
+      inspectTokenMiserOutput: vi.fn(),
       listSkills: vi.fn(),
       startTurn: vi.fn(async () => ({
         backend: "codex",
@@ -3167,6 +3196,7 @@ describe("federation backend bridge", () => {
       listThreads: vi.fn(),
       readThread: vi.fn(),
       analyzeThreadToolHistory: vi.fn(),
+      inspectTokenMiserOutput: vi.fn(),
       listSkills: vi.fn(),
       replaceQueuedMessage: vi.fn(async () => ({
         backend: "codex",
@@ -3318,6 +3348,7 @@ describe("federation backend bridge", () => {
       resolveThread: vi.fn(),
       readThread: vi.fn(),
       analyzeThreadToolHistory: vi.fn(),
+      inspectTokenMiserOutput: vi.fn(),
       readTranscriptImage: vi.fn(),
       listSkills: vi.fn(),
       listBackends: vi.fn(),
@@ -3719,6 +3750,7 @@ describe("federation backend bridge", () => {
         resolveThread: vi.fn(),
         readThread: vi.fn(),
         analyzeThreadToolHistory: vi.fn(),
+      inspectTokenMiserOutput: vi.fn(),
         readTranscriptImage: vi.fn(),
         listSkills: vi.fn(),
         listBackends: vi.fn(),

@@ -51,6 +51,7 @@ export const STAR_MAP_OPEN_THREAD_IN_MAIN_CHANNEL =
  */
 export const STAR_MAP_FOCUS_MAIN_WINDOW_CHANNEL =
   "star-map:focus-main-window";
+export const APP_SERVER_INSPECT_TOKEN_MISER_OUTPUT_CHANNEL = "app-server:inspect-token-miser-output";
 export const APP_SERVER_READ_THREAD_CHANNEL = "app-server:read-thread";
 export const APP_SERVER_ANALYZE_THREAD_TOOL_HISTORY_CHANNEL =
   "app-server:analyze-thread-tool-history";

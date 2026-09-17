@@ -121,6 +121,8 @@ import {
   type AppServerTurnInputItem,
   type AppServerAvailableCommandSummary,
   type AppServerBackendKind,
+  type InspectTokenMiserOutputRequest,
+  type InspectTokenMiserOutputResponse,
   type AnalyzeThreadToolHistoryRequest,
   type AnalyzeThreadToolHistoryResponse,
   type AppServerCollaborationModeRequest,
@@ -14148,6 +14150,13 @@ export class DesktopBackendRegistry {
             replayWithReviewMetadata,
           ),
     };
+  }
+
+  async inspectTokenMiserOutput(
+    request: InspectTokenMiserOutputRequest,
+  ): Promise<InspectTokenMiserOutputResponse> {
+    if (request.backend !== "codex" || !this.tokenMiserStore) return { available: false };
+    return await this.tokenMiserStore.inspectOutput(request);
   }
 
   async analyzeThreadToolHistory(

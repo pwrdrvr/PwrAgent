@@ -54,6 +54,8 @@ import {
   type PersistThreadUsageActivityResponse,
   type AppServerReadThreadRequest,
   type AppServerReadThreadResponse,
+  type InspectTokenMiserOutputRequest,
+  type InspectTokenMiserOutputResponse,
   type AnalyzeThreadToolHistoryRequest,
   type AnalyzeThreadToolHistoryResponse,
   type GetThreadFileDiffRequest,
@@ -254,6 +256,7 @@ import {
   APP_SERVER_RESTORE_WORKTREE_CHANNEL,
   APP_SERVER_RENAME_THREAD_CHANNEL,
   APP_SERVER_READ_THREAD_CHANNEL,
+  APP_SERVER_INSPECT_TOKEN_MISER_OUTPUT_CHANNEL,
   APP_SERVER_ANALYZE_THREAD_TOOL_HISTORY_CHANNEL,
   APP_SERVER_GET_THREAD_FILE_DIFF_CHANNEL,
   THREAD_MIGRATION_LIST_SOURCES_CHANNEL,
@@ -1721,6 +1724,17 @@ class DesktopAppServerService {
     // Transcript bodies are lossless. Character cuts can split Markdown tables,
     // code fences, and cross-thread message arguments in the middle.
     return shapeReadThreadFileDiffsForRenderer(materialized);
+  }
+
+  async inspectTokenMiserOutput(
+    request: InspectTokenMiserOutputRequest,
+  ): Promise<InspectTokenMiserOutputResponse> {
+    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      const { federationTarget, ...remoteRequest } = request;
+      return await getDesktopFederationRuntime().remoteBackend(federationTarget)
+        .inspectTokenMiserOutput(remoteRequest);
+    }
+    return await getDesktopBackendRegistry().inspectTokenMiserOutput(request);
   }
 
   async analyzeThreadToolHistory(
@@ -8076,6 +8090,11 @@ export function registerAppServerIpcHandlers(): void {
       });
     }
   );
+  ipcMain.removeHandler(APP_SERVER_INSPECT_TOKEN_MISER_OUTPUT_CHANNEL);
+  ipcMain.handle(APP_SERVER_INSPECT_TOKEN_MISER_OUTPUT_CHANNEL,
+    async (_event, request: InspectTokenMiserOutputRequest): Promise<InspectTokenMiserOutputResponse> =>
+      await appServerService.inspectTokenMiserOutput(request),
+  );
   ipcMain.removeHandler(APP_SERVER_ANALYZE_THREAD_TOOL_HISTORY_CHANNEL);
   ipcMain.handle(
     APP_SERVER_ANALYZE_THREAD_TOOL_HISTORY_CHANNEL,
@@ -8989,6 +9008,7 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(APP_SERVER_LIST_SKILLS_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_LIST_THREADS_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_READ_THREAD_CHANNEL);
+  ipcMain.removeHandler(APP_SERVER_INSPECT_TOKEN_MISER_OUTPUT_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_ANALYZE_THREAD_TOOL_HISTORY_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_GET_THREAD_FILE_DIFF_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_PERSIST_THREAD_USAGE_ACTIVITY_CHANNEL);

@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 export const TOKEN_MISER_OUTPUT_TTL_MS = 5 * 60_000;
 export const TOKEN_MISER_OUTPUT_BUDGET_BYTES = 32 * 1024 * 1024;
 export const TOKEN_MISER_OUTPUT_ENTRY_BYTES = 4 * 1024 * 1024;
-const entries = new Map<string, { text: string; bytes: number; expiresAt?: number; timer?: NodeJS.Timeout }>();
+const entries = new Map<string, { text: string; detail?: string; bytes: number; expiresAt?: number; timer?: NodeJS.Timeout }>();
 let retainedBytes = 0;
 function remove(key: string): void {
   const entry = entries.get(key);
@@ -17,10 +17,11 @@ function remove(key: string): void {
 export class TokenMiserOutputCache {
   private readonly namespace = randomUUID();
 
-  put(id: string, text: string, lifetime: "temporary" | "turn" = "temporary"): boolean {
+  put(id: string, text: string, lifetime: "temporary" | "turn" = "temporary", detail?: string): boolean {
     const key = `${this.namespace}:${id}`;
     remove(key);
-    const bytes = 256 + id.length * 2 + Buffer.byteLength(text, "utf8") + text.length * 2;
+    const bytes = 256 + id.length * 2 + Buffer.byteLength(text, "utf8") + text.length * 2
+      + (detail ? Buffer.byteLength(detail, "utf8") + detail.length * 2 : 0);
     if (bytes > TOKEN_MISER_OUTPUT_ENTRY_BYTES) return false;
     for (const [candidate, entry] of entries) {
       if (entry.expiresAt !== undefined && entry.expiresAt <= Date.now()) remove(candidate);
@@ -33,7 +34,7 @@ export class TokenMiserOutputCache {
       : undefined;
     timer?.unref();
     entries.set(key, {
-      text, bytes, timer,
+      text, detail, bytes, timer,
       expiresAt: lifetime === "temporary" ? Date.now() + TOKEN_MISER_OUTPUT_TTL_MS : undefined,
     });
     retainedBytes += bytes;
@@ -48,6 +49,11 @@ export class TokenMiserOutputCache {
       return undefined;
     }
     return entry?.text;
+  }
+
+  getDetail(id: string): string | undefined {
+    if (this.get(id) === undefined) return undefined;
+    return entries.get(`${this.namespace}:${id}`)?.detail;
   }
 
   remove(id: string): void { remove(`${this.namespace}:${id}`); }
