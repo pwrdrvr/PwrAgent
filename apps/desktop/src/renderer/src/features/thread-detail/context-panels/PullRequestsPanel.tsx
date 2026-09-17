@@ -7,7 +7,7 @@ import {
   shouldShowDetachPullRequestWarning,
 } from "../../pr-status/DetachPullRequestWarning";
 import { PrChip } from "../../pr-status/PrChip";
-import { openExternalUrl } from "./context-rail-shared";
+import { openExternalUrl } from "../../../lib/open-external-url";
 import { RailStatusChip, type RailChipTone } from "./RailStatusChip";
 
 type PullRequestsPanelProps = {

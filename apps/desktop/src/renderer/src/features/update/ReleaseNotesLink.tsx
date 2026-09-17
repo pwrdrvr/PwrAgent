@@ -33,6 +33,7 @@
 
 import type { ReactElement } from "react";
 import { PopoutIcon } from "../../icons";
+import { openExternalUrl } from "../../lib/open-external-url";
 
 /**
  * Hand a composed release-notes URL to the OS browser.
@@ -41,12 +42,14 @@ import { PopoutIcon } from "../../icons";
  * it rides on `AppNoticeToastNotice.actions`, which owns its own button
  * markup. Sharing this call is what keeps that path from becoming a second
  * opinion about how a release page opens.
+ *
+ * A named seam over `openExternalUrl`, not a second implementation of it.
+ * The rail's PR chips already open a GitHub page this way; two copies of
+ * `window.open(url, "_blank", "noopener,noreferrer")` is how one of them
+ * loses an argument.
  */
 export function openReleaseNotes(url: string): void {
-  if (typeof window === "undefined") {
-    return;
-  }
-  window.open(url, "_blank", "noopener,noreferrer");
+  openExternalUrl(url);
 }
 
 export type ReleaseNotesLinkProps = {
@@ -61,6 +64,9 @@ export type ReleaseNotesLinkProps = {
    * version's notes these are — the slot matrix renders four of these at
    * once, and "Release notes, Release notes, Release notes, Release notes"
    * is not a usable list.
+   *
+   * Left off, it reaches the DOM as `undefined`, which React drops, so the
+   * button keeps its visible label as its name.
    */
   ariaLabel?: string;
 };
@@ -79,7 +85,7 @@ export function ReleaseNotesLink({
       className={className}
       type="button"
       title={url}
-      {...(ariaLabel === undefined ? {} : { "aria-label": ariaLabel })}
+      aria-label={ariaLabel}
       onClick={() => {
         openReleaseNotes(url);
       }}
