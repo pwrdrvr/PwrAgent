@@ -2707,6 +2707,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const autocompleteListRef = useRef<HTMLDivElement>(null);
   const activeTurnIdRef = useRef<string | undefined>(props.activeTurnId);
   const confirmedActiveTurnIdRef = useRef<string | undefined>(undefined);
+  const terminalTurnKeysRef = useRef(new Set<string>());
   const activeReviewTurnIdRef = useRef<string | undefined>(undefined);
   const inFlightReviewSubmissionKeyRef = useRef<string | undefined>(undefined);
   const autocompleteOptionRefs = useRef<Array<HTMLButtonElement | null>>([]);
@@ -4220,13 +4221,16 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       if (response.disposition === "started") {
         removeQueuedTurnInScope(scopeKey, queued);
         if (response.turnId) {
-          updateActiveTurnId(response.turnId);
-          props.onActiveTurnIdChange?.(response.turnId);
+          if (updateActiveTurnId(response.turnId)) {
+            props.onActiveTurnIdChange?.(response.turnId);
+          }
         }
         if (props.thread) {
           props.onUserRepliedToThread?.(props.thread);
         }
-        props.onPendingStatusChange?.("Thinking");
+        if (!response.turnId || !terminalTurnKeysRef.current.has(`${composerScopeKey}:${response.turnId}`)) {
+          props.onPendingStatusChange?.("Thinking");
+        }
         return;
       }
       if (response.disposition === "blocked") {
@@ -4382,7 +4386,10 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const updateActiveTurnId = (
     nextTurnId?: string,
     options?: { review?: boolean },
-  ): void => {
+  ): boolean => {
+    if (nextTurnId && terminalTurnKeysRef.current.has(`${composerScopeKey}:${nextTurnId}`)) {
+      return false;
+    }
     if (options?.review) {
       activeReviewTurnIdRef.current = nextTurnId;
     } else if (!nextTurnId || activeReviewTurnIdRef.current !== nextTurnId) {
@@ -4393,6 +4400,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     }
     activeTurnIdRef.current = nextTurnId;
     setActiveTurnId(nextTurnId);
+    return true;
   };
   const trigger = findSkillTrigger(draft, selectionStart);
   const slashTrigger = findSlashCommandTrigger(draft, selectionStart);
@@ -5318,9 +5326,10 @@ export const Composer = memo(function Composer(props: ComposerProps) {
           turnQueueRecord.status === "started" &&
           typeof turnQueueRecord.turnId === "string"
         ) {
-          updateActiveTurnId(turnQueueRecord.turnId);
-          props.onActiveTurnIdChange?.(turnQueueRecord.turnId);
-          props.onPendingStatusChange?.("Thinking");
+          if (updateActiveTurnId(turnQueueRecord.turnId)) {
+            props.onActiveTurnIdChange?.(turnQueueRecord.turnId);
+            props.onPendingStatusChange?.("Thinking");
+          }
         }
         if (
           turnQueueRecord.status === "terminal" ||
@@ -5412,7 +5421,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
           // Keep Stop/active-turn wiring pointed at the real review turn.
           return;
         }
-        updateActiveTurnId(startedTurnId);
+        if (!updateActiveTurnId(startedTurnId)) return;
         confirmedActiveTurnIdRef.current = startedTurnId;
         props.onActiveTurnIdChange?.(startedTurnId);
       }
@@ -5426,6 +5435,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
           typeof event.notification.params.turnId === "string"
             ? event.notification.params.turnId
             : undefined;
+        if (terminalTurnId) {
+          terminalTurnKeysRef.current.add(`${composerScopeKey}:${terminalTurnId}`);
+        }
         if (
           activeTurnIdRef.current &&
           terminalTurnId &&
@@ -5737,8 +5749,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         })?.catch(() => undefined);
       }
       inFlightReviewSubmissionKeyRef.current = undefined;
-      updateActiveTurnId(response.turnId, { review: true });
-      props.onActiveTurnIdChange?.(response.turnId);
+      if (updateActiveTurnId(response.turnId, { review: true })) {
+        props.onActiveTurnIdChange?.(response.turnId);
+      }
       if (options?.queued) {
         if (!options.queueClaimed) {
           removeQueuedTurn(options.queued);
@@ -5841,8 +5854,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
           readRendererFederationTarget(),
         threadId: props.thread.id,
       });
-      updateActiveTurnId(response.turnId);
-      props.onActiveTurnIdChange?.(response.turnId);
+      if (updateActiveTurnId(response.turnId)) {
+        props.onActiveTurnIdChange?.(response.turnId);
+      }
       recordComposerDraftHistory(
         submittedScopeKey,
         submittedSnapshot,
@@ -6371,9 +6385,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
           );
           if (submittedScopeIsVisible()) {
             props.onBeforeSendTurn?.();
-            props.onPendingStatusChange?.(
-              collaborationMode ? "Planning" : "Thinking",
-            );
+            if (!terminalTurnKeysRef.current.has(`${composerScopeKey}:${response.turnId}`)) {
+              props.onPendingStatusChange?.(
+                collaborationMode ? "Planning" : "Thinking",
+              );
+            }
             optimisticMessageId = props.addOptimisticUserMessage?.(
               payload.displayText,
               payload.imageParts,
@@ -6383,8 +6399,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
           }
         }
         if (!backendQueueSubmission || submittedScopeIsVisible()) {
-          updateActiveTurnId(response.turnId);
-          props.onActiveTurnIdChange?.(response.turnId);
+          if (updateActiveTurnId(response.turnId)) {
+            props.onActiveTurnIdChange?.(response.turnId);
+          }
         }
       }
       // Queued turns only carry their serialized text, but that text is

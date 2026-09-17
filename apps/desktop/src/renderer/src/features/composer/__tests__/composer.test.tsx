@@ -8131,6 +8131,48 @@ describe("Composer", () => {
     expect(startTurn).toHaveBeenCalledTimes(1);
   });
 
+  it("does not restore Stop when a start response arrives after turn completion", async () => {
+    const deferred = createDeferred<StartTurnResponse>();
+    const startTurn = vi.fn(() => deferred.promise);
+    const onActiveTurnIdChange = vi.fn();
+    let emit!: (event: AgentEvent) => void;
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: (listener) => { emit = listener; return () => undefined; },
+          startTurn,
+        }}
+        onActiveTurnIdChange={onActiveTurnIdChange}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1", title: "Fixture", titleSource: "explicit",
+          source: "codex", linkedDirectories: [], inbox: { inInbox: false },
+        }}
+      />,
+    );
+    fireEvent.change(screen.getByRole("textbox", { name: "Reply" }), {
+      target: { value: "Fixture request" },
+    });
+    await clickButton("Send");
+    await waitFor(() => expect(startTurn).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      emit({ backend: "codex", notification: { method: "turn/started", params: {
+        threadId: "thread-1", turnId: "turn-1", turn: { id: "turn-1", status: "inProgress" },
+      } } });
+      emit({ backend: "codex", notification: { method: "turn/completed", params: {
+        threadId: "thread-1", turnId: "turn-1", turn: { id: "turn-1", status: "completed", output: [] },
+      } } });
+    });
+    onActiveTurnIdChange.mockClear();
+    await act(async () => {
+      deferred.resolve({ backend: "codex", threadId: "thread-1", turnId: "turn-1" });
+      await deferred.promise;
+    });
+    expect(onActiveTurnIdChange).not.toHaveBeenCalledWith("turn-1");
+    expect(screen.queryByRole("button", { name: "Stop" })).not.toBeInTheDocument();
+  });
+
   it("reconciles queue admission that arrives before the enqueue response", async () => {
     const draftStore = createComposerDraftStore();
     const startTurnDeferred = createDeferred<StartTurnResponse>();

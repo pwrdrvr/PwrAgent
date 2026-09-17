@@ -34,6 +34,67 @@ function refreshAuth(
 }
 
 describe("McpOAuthSessionCoordinator", () => {
+  it.each(["timeout", "late callback", "late token response"])(
+    "keeps the newer authorization when an abandoned attempt returns a %s",
+    async (outcome) => {
+      const { vault, writes } = createVault({
+        resourceUrl: "https://mcp.example.com/mcp",
+        discoveryState: { authorizationServerUrl: "https://auth.example.com" },
+      });
+      let release!: () => void;
+      let started!: () => void;
+      const paused = new Promise<void>((resolve) => { release = resolve; });
+      const waiting = new Promise<void>((resolve) => { started = resolve; });
+      const authFn = vi.fn(async (
+        provider: OAuthClientProvider,
+        options: { authorizationCode?: string },
+      ) => {
+        if (!options.authorizationCode) return "REDIRECT" as const;
+        if (options.authorizationCode === "old" && outcome === "late token response") {
+          started();
+          await paused;
+        }
+        await provider.saveTokens?.({
+          access_token: options.authorizationCode,
+          refresh_token: `${options.authorizationCode}-refresh`,
+          token_type: "bearer",
+        });
+        return "AUTHORIZED" as const;
+      }) as unknown as typeof auth;
+      const coordinator = new McpOAuthSessionCoordinator({
+        connectionId: "example",
+        serverUrl: new URL("https://mcp.example.com/mcp"),
+        vault,
+        authFn,
+      });
+      const old = coordinator.authorize({
+        redirectUrl: new URL("http://127.0.0.1:4040/oauth/callback"),
+        onRedirect: vi.fn(),
+        waitForCode: async () => {
+          if (outcome !== "late token response") {
+            started();
+            await paused;
+          }
+          if (outcome === "timeout") throw new Error("Authorization timed out.");
+          return "old";
+        },
+      }).catch((error: unknown) => error);
+      await waiting;
+      await coordinator.authorize({
+        redirectUrl: new URL("http://127.0.0.1:4041/oauth/callback"),
+        onRedirect: vi.fn(),
+        waitForCode: async () => "new",
+      });
+      release();
+      expect(await old).toBeInstanceOf(Error);
+      expect(coordinator.state).toBe("ready");
+      expect(coordinator.detail).toBeUndefined();
+      expect(writes.map((entry) => entry.tokens?.access_token)).toEqual(["new"]);
+      expect((await vault.read("example", "https://mcp.example.com/mcp"))?.tokens)
+        .toMatchObject({ access_token: "new", refresh_token: "new-refresh" });
+    },
+  );
+
   it("advertises refresh grants and requests advertised offline access", async () => {
     const { vault } = createVault({
       resourceUrl: "https://mcp.example.com/mcp",

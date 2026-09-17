@@ -2883,6 +2883,28 @@ function withCompletedAssistantTimestamp(
   };
 }
 
+function settleTurnActivity(
+  entry: AppServerThreadEntry,
+  turn: AppServerThreadTurnMetadata,
+): AppServerThreadEntry {
+  if (entry.type !== "activity") return { ...entry, turn };
+  // A terminal turn cannot still own running tools. Without an item result,
+  // mark them cancelled rather than inventing a successful tool response.
+  const details = entry.details.map((detail) =>
+    detail.status === "in_progress"
+      ? { ...detail, status: "cancelled" as const }
+      : detail,
+  );
+  return {
+    ...entry,
+    turn,
+    details,
+    status: entry.status === "in_progress"
+      ? summarizeActivityStatus(details) ?? "cancelled"
+      : entry.status,
+  };
+}
+
 function withCompletedResponseTurnMetadata(
   response: AppServerReadThreadResponse | undefined,
   turn: AppServerThreadTurnMetadata | undefined,
@@ -2900,7 +2922,7 @@ function withCompletedResponseTurnMetadata(
         entry.turn?.id === turn.id
           ? entry.type === "message"
             ? withTurnMetadataAndPhase(entry, turn, unphasedAssistantPhase)
-            : { ...entry, turn }
+            : settleTurnActivity(entry, turn)
           : entry
       ),
     },
@@ -5930,6 +5952,9 @@ export function useThreadSessionState(params: {
             typeof startedTurnRecord?.id === "string"
               ? startedTurnRecord.id
               : event.notification.params.turnId;
+          if (consumedOptimisticActiveTurnKeysRef.current.has(`${targetThreadKey}:${turnId}`)) {
+            return current;
+          }
           const startedAt =
             normalizeNotificationTimestamp(startedTurnRecord?.startedAt) ?? Date.now();
 
@@ -6336,7 +6361,7 @@ export function useThreadSessionState(params: {
             .filter((entry) => entry.type !== "message")
             .map((entry) =>
               entry.turn?.id === completedTurn?.id && completedTurn
-                ? { ...entry, turn: completedTurn }
+                ? settleTurnActivity(entry, completedTurn)
                 : entry
             );
           const retainedLiveEntryStore =
@@ -6361,7 +6386,7 @@ export function useThreadSessionState(params: {
                         unphasedAssistantCompletionPhase ?? entry.phase,
                     },
                   )
-                : { ...entry, turn: completedTurn };
+                : settleTurnActivity(entry, completedTurn);
               retainedLiveEntryStore.set(entryId, completedEntry);
               didCompleteRetainedLiveEntry = true;
             }
@@ -7086,6 +7111,12 @@ export function useThreadSessionState(params: {
   const setActiveTurnId = useCallback(
     (turnId?: string): void => {
       if (!threadKey) {
+        return;
+      }
+
+      // IPC startup responses can arrive after the terminal notification.
+      // They acknowledge an earlier start; they cannot restart that turn.
+      if (turnId && consumedOptimisticActiveTurnKeysRef.current.has(`${threadKey}:${turnId}`)) {
         return;
       }
 
