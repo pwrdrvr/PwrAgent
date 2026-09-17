@@ -2883,6 +2883,28 @@ function withCompletedAssistantTimestamp(
   };
 }
 
+function settleTurnActivity(
+  entry: AppServerThreadEntry,
+  turn: AppServerThreadTurnMetadata,
+): AppServerThreadEntry {
+  if (entry.type !== "activity") return { ...entry, turn };
+  // A terminal turn cannot still own running tools. Without an item result,
+  // mark them cancelled rather than inventing a successful tool response.
+  const details = entry.details.map((detail) =>
+    detail.status === "in_progress"
+      ? { ...detail, status: "cancelled" as const }
+      : detail,
+  );
+  return {
+    ...entry,
+    turn,
+    details,
+    status: entry.status === "in_progress"
+      ? summarizeActivityStatus(details) ?? "cancelled"
+      : entry.status,
+  };
+}
+
 function withCompletedResponseTurnMetadata(
   response: AppServerReadThreadResponse | undefined,
   turn: AppServerThreadTurnMetadata | undefined,
@@ -2900,7 +2922,7 @@ function withCompletedResponseTurnMetadata(
         entry.turn?.id === turn.id
           ? entry.type === "message"
             ? withTurnMetadataAndPhase(entry, turn, unphasedAssistantPhase)
-            : { ...entry, turn }
+            : settleTurnActivity(entry, turn)
           : entry
       ),
     },
@@ -5516,6 +5538,22 @@ export function useThreadSessionState(params: {
 
       const targetThreadKey = agentEventThreadIdentityKey(event, notificationThreadId);
       const isUnfocusedThread = targetThreadKey !== selectedThreadKeyRef.current;
+      if (
+        event.notification.method === "turn/completed"
+        || event.notification.method === "turn/failed"
+        || event.notification.method === "turn/cancelled"
+      ) {
+        void desktopApi.logRendererDiagnostic?.({
+          level: "info",
+          message: "renderer received terminal turn notification",
+          details: {
+            method: event.notification.method,
+            threadKey: targetThreadKey,
+            turnId: readNotificationTurnId(event.notification),
+            focused: !isUnfocusedThread,
+          },
+        }).catch(() => undefined);
+      }
       const isRetainedRemoteThread = retainedRemoteThreadsRef.current.some((item) => threadSummaryIdentityKey(item) === targetThreadKey);
       // Another window can still subscribe to an evicted thread. Its events
       // must not recreate this window's discarded transcript cache.
@@ -5930,6 +5968,9 @@ export function useThreadSessionState(params: {
             typeof startedTurnRecord?.id === "string"
               ? startedTurnRecord.id
               : event.notification.params.turnId;
+          if (consumedOptimisticActiveTurnKeysRef.current.has(`${targetThreadKey}:${turnId}`)) {
+            return current;
+          }
           const startedAt =
             normalizeNotificationTimestamp(startedTurnRecord?.startedAt) ?? Date.now();
 
@@ -6336,7 +6377,7 @@ export function useThreadSessionState(params: {
             .filter((entry) => entry.type !== "message")
             .map((entry) =>
               entry.turn?.id === completedTurn?.id && completedTurn
-                ? { ...entry, turn: completedTurn }
+                ? settleTurnActivity(entry, completedTurn)
                 : entry
             );
           const retainedLiveEntryStore =
@@ -6361,7 +6402,7 @@ export function useThreadSessionState(params: {
                         unphasedAssistantCompletionPhase ?? entry.phase,
                     },
                   )
-                : { ...entry, turn: completedTurn };
+                : settleTurnActivity(entry, completedTurn);
               retainedLiveEntryStore.set(entryId, completedEntry);
               didCompleteRetainedLiveEntry = true;
             }
@@ -7089,16 +7130,24 @@ export function useThreadSessionState(params: {
         return;
       }
 
-      updateSession(threadKey, (current) => ({
-        ...current,
-        activeTurnId: turnId,
-        activeTurnStartedAt: turnId ? Date.now() : undefined,
-        expectOwnUpdate: Boolean(turnId) || current.expectOwnUpdate,
-        interacted: Boolean(turnId) || current.interacted,
-        lastTouchedAt: Date.now(),
-        pendingTurnUsage: undefined,
-        recentlyCompletedTurnUsage: undefined,
-      }));
+      updateSession(threadKey, (current) => {
+        // Check inside the updater: a terminal event queued in this same React
+        // batch must record its turn before we consider the startup response.
+        if (turnId && consumedOptimisticActiveTurnKeysRef.current.has(`${threadKey}:${turnId}`)) {
+          return current;
+        }
+
+        return {
+          ...current,
+          activeTurnId: turnId,
+          activeTurnStartedAt: turnId ? Date.now() : undefined,
+          expectOwnUpdate: Boolean(turnId) || current.expectOwnUpdate,
+          interacted: Boolean(turnId) || current.interacted,
+          lastTouchedAt: Date.now(),
+          pendingTurnUsage: undefined,
+          recentlyCompletedTurnUsage: undefined,
+        };
+      });
     },
     [threadKey, updateSession]
   );

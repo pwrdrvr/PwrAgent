@@ -14463,6 +14463,81 @@ describe("useThreadSessionState", () => {
     });
   });
 
+  it("settles unfinished tools and ignores a late start acknowledgement for a completed turn", async () => {
+    let emit!: Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0];
+    const logRendererDiagnostic = vi.fn(async () => undefined);
+    const desktopApi: DesktopApi = {
+      logRendererDiagnostic,
+      onAgentEvent: (listener) => { emit = listener; return () => undefined; },
+      readThread: vi.fn(async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [], messages: [],
+          pagination: { supportsPagination: false, hasPreviousPage: false },
+        },
+      })),
+    };
+    const { result } = renderHook(() => useThreadSessionState({
+      desktopApi,
+      thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+    }));
+    await waitForThreadHydration(result);
+    act(() => {
+      emit({ backend: "codex", notification: { method: "turn/started", params: {
+        threadId: "thread-1", turnId: "turn-1",
+        turn: { id: "turn-1", status: "inProgress" },
+      } } });
+      emit({ backend: "codex", notification: { method: "item/started", params: {
+        threadId: "thread-1", turnId: "turn-1",
+        item: { id: "tool-1", type: "commandExecution", status: "in_progress", command: "fixture" },
+      } } });
+      emit({ backend: "codex", notification: { method: "turn/completed", params: {
+        threadId: "thread-1", turnId: "turn-1",
+        turn: { id: "turn-1", status: "completed", output: [] },
+      } } });
+      // The startup response can be queued before React commits completion.
+      result.current.setActiveTurnId("turn-1");
+    });
+    expect(result.current.activeTurnId).toBeUndefined();
+    expect(result.current.thinkingThreadKeys["codex:thread-1"]).toBeUndefined();
+    expect(logRendererDiagnostic).toHaveBeenCalledWith({
+      level: "info",
+      message: "renderer received terminal turn notification",
+      details: {
+        method: "turn/completed",
+        threadKey: "codex:thread-1",
+        turnId: "turn-1",
+        focused: true,
+      },
+    });
+    expect(result.current.entries).toEqual([expect.objectContaining({
+      type: "activity", status: "cancelled",
+      details: [expect.objectContaining({ status: "cancelled" })],
+      turn: expect.objectContaining({ id: "turn-1", status: "completed" }),
+    })]);
+    act(() => { result.current.setActiveTurnId("turn-1"); });
+    expect(result.current.activeTurnId).toBeUndefined();
+    expect(result.current.thinkingThreadKeys["codex:thread-1"]).toBeUndefined();
+    act(() => {
+      emit({ backend: "codex", notification: { method: "turn/started", params: {
+        threadId: "thread-1", turnId: "turn-1",
+        turn: { id: "turn-1", status: "inProgress" },
+      } } });
+    });
+    expect(result.current.activeTurnId).toBeUndefined();
+    act(() => {
+      emit({ backend: "codex", notification: { method: "turn/started", params: {
+        threadId: "thread-1", turnId: "turn-2",
+        turn: { id: "turn-2", status: "inProgress" },
+      } } });
+      result.current.setActiveTurnId("turn-1");
+    });
+    expect(result.current.activeTurnId).toBe("turn-2");
+    expect(result.current.thinkingThreadKeys["codex:thread-1"]).toBe(true);
+  });
+
   it("does not keep list thinking after completed live activity is retained", async () => {
     const agentEventListeners = new Set<
       Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]

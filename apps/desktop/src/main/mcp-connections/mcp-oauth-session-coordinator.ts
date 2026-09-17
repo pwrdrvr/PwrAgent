@@ -69,6 +69,7 @@ export class McpOAuthSessionCoordinator {
   private revocationEpoch = 0;
   private loadPromise?: Promise<void>;
   private refreshPromise?: Promise<void>;
+  private authorizationAttempt = 0;
   private runtimeState: McpConnectionRuntimeState = "disconnected";
   private runtimeDetail?: string;
 
@@ -105,6 +106,15 @@ export class McpOAuthSessionCoordinator {
     waitForCode: () => Promise<string>;
   }): Promise<void> {
     await this.ensureLoaded();
+    const attempt = ++this.authorizationAttempt;
+    const epoch = this.revocationEpoch;
+    const isCurrent = () =>
+      attempt === this.authorizationAttempt && epoch === this.revocationEpoch;
+    const assertCurrent = () => {
+      if (!isCurrent()) {
+        throw new Error("This MCP authorization was superseded or disconnected.");
+      }
+    };
     this.setState("connecting");
     const previous = this.credential;
     const redirectChanged =
@@ -126,23 +136,29 @@ export class McpOAuthSessionCoordinator {
         working.discoveryState = discovered;
       } catch (error) {
         const detail = errorMessage(error);
-        this.setState("temporarily_unavailable", detail);
+        if (isCurrent()) this.setState("temporarily_unavailable", detail);
         throw new Error(detail, { cause: error });
       }
     }
     const authorizationScope = this.authorizationScope(working);
-    const epoch = this.revocationEpoch;
     const provider = new CoordinatedOAuthProvider({
       callbackUrl: params.redirectUrl,
       credential: working,
       authorizationState:
         params.state ?? randomBytes(24).toString("base64url"),
-      onRedirect: params.onRedirect,
-      onCommit: async (credential) =>
-        await this.commitCredential(credential, epoch),
+      onRedirect: async (url) => {
+        assertCurrent();
+        await params.onRedirect(url);
+      },
+      onCommit: async (credential) => {
+        assertCurrent();
+        await this.commitCredential(credential, epoch);
+        assertCurrent();
+      },
       retainRefreshToken: false,
     });
     try {
+      assertCurrent();
       const initial = await this.authFn(provider, {
         serverUrl: this.serverUrl,
         scope: authorizationScope,
@@ -152,6 +168,7 @@ export class McpOAuthSessionCoordinator {
         throw new Error("The MCP authorization server did not request consent.");
       }
       const authorizationCode = await params.waitForCode();
+      assertCurrent();
       const completed = await this.authFn(provider, {
         serverUrl: this.serverUrl,
         authorizationCode,
@@ -161,10 +178,13 @@ export class McpOAuthSessionCoordinator {
       if (completed !== "AUTHORIZED") {
         throw new Error("The MCP authorization did not complete.");
       }
+      assertCurrent();
       this.setState("ready");
     } catch (error) {
       const detail = errorMessage(error);
-      this.setState("reauthorization_required", detail);
+      // An abandoned browser flow can time out after a newer one succeeded.
+      // Its caller still needs the failure, but it no longer owns our state.
+      if (isCurrent()) this.setState("reauthorization_required", detail);
       throw new Error(detail, { cause: error });
     }
   }
