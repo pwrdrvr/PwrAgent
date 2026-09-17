@@ -671,15 +671,11 @@ export class McpConnectionGatewayService {
         request,
       );
     }
-    // Through the same guard every other outbound path here uses. The probe
-    // takes its URL from the renderer or from an agent tool, so it is the
-    // one call in this file reachable with a wholly attacker-chosen host --
-    // exactly what `createMcpSafeFetch` exists to refuse. `allowLoopback` is
-    // false because only the built-in PwrSuite connections are local, and
-    // those are never probed.
+    // Probe and authorization share transport rules, including support for
+    // configured servers on private networks and custom loopback endpoints.
     return await probeMcpConnectionUrl(
       request.serverUrl,
-      createMcpSafeFetch({ allowLoopback: false, fetchFn: this.fetchFn }),
+      createMcpSafeFetch({ fetchFn: this.fetchFn }),
     );
   }
 
@@ -1330,9 +1326,6 @@ export class McpConnectionGatewayService {
     let coordinator = this.coordinators.get(connection.id);
     if (!coordinator) {
       const serverUrl = new URL(connection.serverUrl);
-      const allowLoopback = serverUrl.hostname === "127.0.0.1"
-        || serverUrl.hostname === "localhost"
-        || serverUrl.hostname === "[::1]";
       coordinator = new McpOAuthSessionCoordinator({
         connectionId: connection.id,
         serverUrl,
@@ -1344,7 +1337,6 @@ export class McpConnectionGatewayService {
         } : {}),
         vault: this.credentialVault,
         fetchFn: createMcpSafeFetch({
-          allowLoopback,
           fetchFn: this.fetchFn,
         }),
         ...(connection.kind === "pwrsnap"
