@@ -2,6 +2,7 @@ import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from
 import { createPortal } from "react-dom";
 import type { MessagingConversationKind } from "@pwragent/shared";
 import { SearchIcon } from "../icons";
+import { portalViewportTop } from "../lib/useViewportTooltip";
 
 /**
  * Searchable picker for a messaging conversation.
@@ -12,13 +13,12 @@ import { SearchIcon } from "../icons";
  * lists and name things differently, so every word it shows is a prop with a
  * routes-shaped default.
  *
- * This is the composer's project / branch picker in a Settings form, and it
- * deliberately borrows that popover's primitives rather than restating them:
- * one search row, an uppercase section eyebrow per group, and a single-line
- * row whose anatomy never varies (check column, kind glyph, name, then the
- * durable ID right-aligned in dim mono). Two destinations that share a name
- * are told apart by that ID column, which is what the native `<select>` this
- * replaced could not do.
+ * It deliberately borrows the composer picker's primitives rather than
+ * restating them: one search row, an uppercase section eyebrow per group, and
+ * a single-line row whose anatomy never varies (check column, kind glyph,
+ * name, then the durable ID right-aligned in dim mono). Two destinations that
+ * share a name are told apart by that ID column, which is what the native
+ * `<select>` it replaced on both screens could not do.
  *
  * It opens as a POPOVER over the page, like the pickers it copies. That takes
  * a portal: `.settings-panel` sets `overflow: hidden` and both
@@ -41,8 +41,15 @@ const VIEWPORT_PADDING = 12;
  *  name and an ID on one line. */
 const PANEL_MIN_WIDTH = 360;
 const PANEL_MAX_WIDTH = 560;
+/** The branch picker's ceiling. Without one the panel grows to whatever the
+ *  viewport allows, and a tall window turns twenty rows into a dropdown that
+ *  covers most of the screen. */
+const PANEL_MAX_HEIGHT = 440;
+/** Below this there is not enough room for the search row and a couple of
+ *  rows, so a flip is worth considering. */
+const PANEL_MIN_USEFUL_HEIGHT = 160;
 
-type PanelPosition = {
+export type PanelPosition = {
   top: number;
   left: number;
   width: number;
@@ -57,27 +64,44 @@ type PanelPosition = {
  * the window. Returns the height available too, so a long list scrolls inside
  * the panel instead of running off-screen.
  */
-function placePanel(trigger: DOMRect): PanelPosition {
+export function placePanel(trigger: DOMRect): PanelPosition {
+  // A narrow window wins over the minimum: a panel wider than the viewport
+  // cannot be clamped into it, and `left` alone cannot rescue that.
   const width = Math.min(
     PANEL_MAX_WIDTH,
     Math.max(PANEL_MIN_WIDTH, trigger.width),
+    Math.max(0, window.innerWidth - VIEWPORT_PADDING * 2),
   );
   const left = Math.max(
     VIEWPORT_PADDING,
     Math.min(trigger.left, window.innerWidth - width - VIEWPORT_PADDING),
   );
-  const below = window.innerHeight - trigger.bottom - PANEL_GAP - VIEWPORT_PADDING;
-  const above = trigger.top - PANEL_GAP - VIEWPORT_PADDING;
+  // Not the raw viewport top: on Windows a fixed title bar owns the first
+  // 40px, and on macOS the traffic lights sit inside the renderer. A flipped
+  // panel would otherwise grow underneath one or over the other.
+  const ceiling = portalViewportTop();
+  const floor = window.innerHeight - VIEWPORT_PADDING;
+  const below = floor - trigger.bottom - PANEL_GAP;
+  const above = trigger.top - PANEL_GAP - ceiling;
   // Flip only when the space above is genuinely better; a cramped-but-adequate
   // drop-down reads more naturally than a drop-up.
   const flip = below < 240 && above > below;
-  return {
-    width,
-    left,
-    flipped: flip,
-    top: flip ? trigger.top - PANEL_GAP : trigger.bottom + PANEL_GAP,
-    maxHeight: Math.max(160, flip ? above : below),
-  };
+  const available = Math.max(PANEL_MIN_USEFUL_HEIGHT, flip ? above : below);
+  const maxHeight = Math.min(PANEL_MAX_HEIGHT, available);
+  // Clamp the anchor into view as well as the size. `reposition` runs on every
+  // scroll, so a trigger scrolled out of its pane would otherwise drag the
+  // panel off-screen while it is still open and holding focus. The clamp is
+  // against `maxHeight`, not `available`: a trigger far above the viewport
+  // leaves a huge `available`, and clamping to `floor - available` would park
+  // the panel thousands of pixels off the top.
+  //
+  // A flipped panel is pinned by its BOTTOM edge at `top` and grows upward, so
+  // its bounds are [top - maxHeight, top]; an unflipped one occupies
+  // [top, top + maxHeight]. Hence the two different clamps.
+  const top = flip
+    ? Math.min(Math.max(trigger.top - PANEL_GAP, ceiling + maxHeight), floor)
+    : Math.max(Math.min(trigger.bottom + PANEL_GAP, floor - maxHeight), ceiling);
+  return { width, left, top, maxHeight, flipped: flip };
 }
 
 type SurfaceSection = "configured" | "channel" | "dm" | "topic" | "other";
@@ -115,9 +139,10 @@ const SECTION_LABELS: Record<SurfaceSection, string> = {
 
 /**
  * Kind glyph for the leading icon column, like the composer's folder and
- * branch marks. Only the conversation scope has one: the container scopes
- * list servers and workspaces, which are not channels, and a homogeneous
- * section stays aligned without a glyph at all.
+ * branch marks. Only rendered when the caller groups by kind
+ * (`filterConversations`): a list that is not grouped is homogeneous — route
+ * container scopes are servers and workspaces rather than channels, and the
+ * topic list is all topics — and stays aligned without a glyph at all.
  */
 function kindGlyph(kind: MessagingConversationKind | undefined): string {
   if (kind === "dm") return "@";
@@ -356,7 +381,7 @@ export function MessagingSurfacePicker(props: {
               }}
             />
           </div>
-          <div id={listId} role="listbox" aria-label="Messaging surfaces" className="messaging-surface-picker__list">
+          <div id={listId} role="listbox" aria-label={`${props.fieldLabel} options`} className="messaging-surface-picker__list">
             {groups.map((section) => (
               <div key={section.key} role="group" aria-label={section.label}>
                 <div aria-hidden="true" className="project-picker__section">{section.label}</div>
@@ -384,13 +409,11 @@ export function MessagingSurfacePicker(props: {
               </div>
             ))}
           </div>
-          {/* Outside the listbox: assistive technology drops a non-option
-              child of `role="listbox"`, which would leave a screen-reader
-              user with an empty list and no explanation. */}
-          {/* `role="status"` so a search that stops matching is announced.
-              Outside the listbox it is reachable but silent, and a
-              screen-reader user cannot tell no-match from an unresponsive
-              control. */}
+          {/* Outside the listbox, because assistive technology drops a
+              non-option child of `role="listbox"`; and `role="status"`,
+              because outside it the text is reachable but silent. It needs
+              both, or a search that stops matching leaves a screen-reader
+              user unable to tell no-match from an unresponsive control. */}
           {visible.length === 0 ? (
             <p role="status" className="project-picker__empty">
               {props.emptyLabel ?? "No matching surfaces."}

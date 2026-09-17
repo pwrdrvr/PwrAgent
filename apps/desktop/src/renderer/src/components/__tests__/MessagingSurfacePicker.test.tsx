@@ -1,7 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { MessagingSurfacePicker } from "../MessagingSurfacePicker";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { MessagingSurfacePicker, placePanel } from "../MessagingSurfacePicker";
 
 afterEach(cleanup);
 
@@ -34,6 +34,70 @@ function sections() {
     .queryAllByRole("group")
     .map((group) => group.getAttribute("aria-label"));
 }
+
+/** A trigger rect at the given position; only these four fields are read. */
+function triggerRect(box: {
+  top: number;
+  bottom: number;
+  left: number;
+  width: number;
+}): DOMRect {
+  return box as unknown as DOMRect;
+}
+
+describe("placePanel", () => {
+  const viewport = { width: 1440, height: 900 };
+
+  beforeEach(() => {
+    window.innerWidth = viewport.width;
+    window.innerHeight = viewport.height;
+  });
+
+  it("caps the panel height instead of growing to fill the viewport", () => {
+    // Without a ceiling a tall window turns twenty rows into a dropdown
+    // covering most of the screen; the branch picker stops at 440.
+    const placed = placePanel(triggerRect({ top: 100, bottom: 132, left: 40, width: 560 }));
+    expect(placed.flipped).toBe(false);
+    expect(placed.maxHeight).toBe(440);
+  });
+
+  it("keeps a narrow window's panel inside the viewport", () => {
+    window.innerWidth = 320;
+    const placed = placePanel(triggerRect({ top: 100, bottom: 132, left: 8, width: 300 }));
+    // The minimum width cannot win over the viewport: `left` alone cannot
+    // rescue a panel wider than the window.
+    expect(placed.left + placed.width).toBeLessThanOrEqual(320);
+    expect(placed.left).toBeGreaterThanOrEqual(0);
+  });
+
+  it("holds the panel on screen when the trigger scrolls out of its pane", () => {
+    // `reposition` runs on every scroll, so an unclamped top would drag the
+    // panel off-screen while it is still open and holding focus.
+    // A flipped panel is pinned by its bottom edge and grows upward, so its
+    // bounds are [top - maxHeight, top]; an unflipped one runs downward.
+    const bounds = (placed: ReturnType<typeof placePanel>) =>
+      placed.flipped
+        ? [placed.top - placed.maxHeight, placed.top]
+        : [placed.top, placed.top + placed.maxHeight];
+
+    for (const rect of [
+      triggerRect({ top: 2000, bottom: 2032, left: 40, width: 560 }),
+      triggerRect({ top: -2000, bottom: -1968, left: 40, width: 560 }),
+    ]) {
+      const [top, bottom] = bounds(placePanel(rect));
+      expect(top).toBeGreaterThanOrEqual(0);
+      expect(bottom).toBeLessThanOrEqual(viewport.height);
+    }
+  });
+
+  it("flips upward without growing past the top of the window", () => {
+    const placed = placePanel(triggerRect({ top: 820, bottom: 852, left: 40, width: 560 }));
+    expect(placed.flipped).toBe(true);
+    // A flipped panel is pinned by its bottom edge, so its top is
+    // `top - maxHeight`; that has to stay on screen.
+    expect(placed.top - placed.maxHeight).toBeGreaterThanOrEqual(0);
+  });
+});
 
 describe("MessagingSurfacePicker", () => {
   it("groups durable destinations by kind and never offers ephemeral threads", () => {

@@ -35460,10 +35460,12 @@ details.launchpad-pending__output > summary .launchpad-pending__command-label {
    empty beside it. Let the name take what it needs and keep the ID column's
    claim on the rest.
 
-   Scoped to the whole picker, not just the list, so the action row is covered
-   too — "Enter Channel ID manually..." is longer than 160px and was being cut
-   off mid-word. */
-.messaging-surface-picker .project-picker__row-name {
+   Scoped to the PANEL, not the field wrapper, so it covers the action row as
+   well as the list rows — "Enter Channel ID manually..." is longer than 160px
+   and was being cut off mid-word. The panel is portalled to `document.body`,
+   so `.messaging-surface-picker` is not an ancestor of it and a selector
+   hung off the wrapper matches nothing. */
+.messaging-surface-picker__panel .project-picker__row-name {
   flex: 0 1 auto;
   min-width: 0;
   max-width: 60%;
