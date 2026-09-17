@@ -5,6 +5,10 @@ import { expect, test } from "@playwright/test";
 import type { ReadFederationActivityResponse } from "@pwragent/shared";
 import { FederationActivityLedger } from "../src/main/federation/federation-activity-ledger";
 import { launchElectronApp } from "./fixtures/electron-app";
+import {
+  retryTransientRpcCall,
+  tolerateTransientRpcFailure,
+} from "./fixtures/transient-rpc-poll";
 
 const specDir = path.dirname(fileURLToPath(import.meta.url));
 function activityFixture(): ReadFederationActivityResponse {
@@ -37,10 +41,16 @@ for (const theme of ["dark", "light"] as const) {
     });
     try {
       // Contrived numeric fixture only; the real native window, preload and UI are exercised.
-      await app.electronApp.evaluate(({ ipcMain }, snapshot) => {
-        ipcMain.removeHandler("federation:read-activity");
-        ipcMain.handle("federation:read-activity", () => snapshot);
-      }, activityFixture());
+      // Idempotent by construction — `removeHandler` before `handle` — so a
+      // lost round trip can be re-issued. This exact call is what went
+      // `Resulting promise was garbage collected` on both themes in run
+      // 35145222279.
+      await retryTransientRpcCall(() =>
+        app.electronApp.evaluate(({ ipcMain }, snapshot) => {
+          ipcMain.removeHandler("federation:read-activity");
+          ipcMain.handle("federation:read-activity", () => snapshot);
+        }, activityFixture()),
+      );
       await app.window.emulateMedia({ reducedMotion: "reduce" });
       const trigger = app.window.getByRole("button", { name: "Open Star Map", exact: true });
       await expect(trigger).toBeVisible();
@@ -91,14 +101,20 @@ for (const theme of ["dark", "light"] as const) {
       const topmost = activity.getByRole("checkbox", { name: "Always on top", exact: true });
       await topmost.click();
       await expect(topmost).toBeChecked();
-      await expect.poll(() => app.electronApp.evaluate(({ BrowserWindow }) =>
-        BrowserWindow.getAllWindows().find((window) => window.getTitle() === "Federation Activity")?.isAlwaysOnTop(),
-      )).toBe(true);
+      const alwaysOnTopTrue = tolerateTransientRpcFailure(() =>
+        app.electronApp.evaluate(({ BrowserWindow }) =>
+          BrowserWindow.getAllWindows().find((window) => window.getTitle() === "Federation Activity")?.isAlwaysOnTop(),
+        ));
+      await expect.poll(alwaysOnTopTrue.read).toBe(true)
+        .catch(alwaysOnTopTrue.rethrowWithLastFailure);
       await topmost.click();
       await expect(topmost).not.toBeChecked();
-      await expect.poll(() => app.electronApp.evaluate(({ BrowserWindow }) =>
-        BrowserWindow.getAllWindows().find((window) => window.getTitle() === "Federation Activity")?.isAlwaysOnTop(),
-      )).toBe(false);
+      const alwaysOnTopFalse = tolerateTransientRpcFailure(() =>
+        app.electronApp.evaluate(({ BrowserWindow }) =>
+          BrowserWindow.getAllWindows().find((window) => window.getTitle() === "Federation Activity")?.isAlwaysOnTop(),
+        ));
+      await expect.poll(alwaysOnTopFalse.read).toBe(false)
+        .catch(alwaysOnTopFalse.rethrowWithLastFailure);
       const audit = await new AxeBuilder({ page: activity })
         .setLegacyMode(true)
         .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"]).analyze();
@@ -124,18 +140,20 @@ for (const theme of ["dark", "light"] as const) {
       expect(copied).toContain("Last 1m\tLast 10m\tLast 1h\tTotal");
       expect(copied).toContain("Samples\tAvg\tp50 (approx.)\tMin\tMax");
       // Reset still crosses the real preload/IPC bridge, with contrived returned totals.
-      await app.electronApp.evaluate(({ ipcMain }, activity) => {
-        ipcMain.removeHandler("federation:reset-activity");
-        const cleared = {
-          activity, configuredMode: "dual", running: true,
-          health: { enabled: true, role: "dual", status: "connected", peers: [] },
-        };
-        ipcMain.handle("federation:reset-activity", () => {
-          ipcMain.removeHandler("federation:read-activity");
-          ipcMain.handle("federation:read-activity", () => cleared);
-          return cleared;
-        });
-      }, new FederationActivityLedger().snapshot());
+      await retryTransientRpcCall(() =>
+        app.electronApp.evaluate(({ ipcMain }, activity) => {
+          ipcMain.removeHandler("federation:reset-activity");
+          const cleared = {
+            activity, configuredMode: "dual", running: true,
+            health: { enabled: true, role: "dual", status: "connected", peers: [] },
+          };
+          ipcMain.handle("federation:reset-activity", () => {
+            ipcMain.removeHandler("federation:read-activity");
+            ipcMain.handle("federation:read-activity", () => cleared);
+            return cleared;
+          });
+        }, new FederationActivityLedger().snapshot()),
+      );
       await activity.getByRole("button", { name: "Reset", exact: true }).click();
       await sizes.scrollIntoViewIfNeeded();
       await expect(sizes.getByRole("row", { name: "Sent requests 0 — — — —", exact: true })).toBeVisible();

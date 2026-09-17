@@ -1,6 +1,11 @@
-// Retry tolerance for `expect.poll` callbacks that cross the Playwright <->
-// Electron RPC boundary, split out so the retry and the reporting are
-// unit-testable without launching Electron.
+// Handling for a Playwright <-> Electron round trip that fails for reasons
+// unrelated to the state being read, split out so the retry and the reporting
+// are unit-testable without launching Electron.
+//
+// Two shapes, because they need opposite things. `tolerateTransientRpcFailure`
+// keeps an `expect.poll` polling through one failed round trip.
+// `retryTransientRpcCall` re-issues a ONE-SHOT call that has no poll to
+// retry it.
 
 /**
  * Wrap a poll callback so ONE failed round trip retries instead of ending
@@ -126,4 +131,56 @@ export function tolerateTransientRpcFailure<T>(read: () => Promise<T>): {
 
 function describePollFailure(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * The CDP failure both helpers are about, as Playwright rewrites it.
+ *
+ * `crExecutionContext.rewriteError` turns CDP's "Promise was collected" into
+ * this, so the text is Playwright's, not ours, and matching it is how we
+ * retry ONLY this and not a throw from inside the evaluated callback.
+ */
+const TRANSIENT_RPC_MESSAGE = "Resulting promise was garbage collected";
+
+export function isTransientRpcFailure(error: unknown): boolean {
+  return error instanceof Error
+    && error.message.includes(TRANSIENT_RPC_MESSAGE);
+}
+
+/**
+ * Re-issue a one-shot round trip that failed in transit.
+ *
+ * `tolerateTransientRpcFailure` cannot help here: it answers `undefined` and
+ * lets the poll go round again, so applying it to a call with a side effect
+ * would report success while the side effect never happened.
+ *
+ * THE PRECONDITION IS IDEMPOTENCE, and it is on the caller. Playwright raises
+ * this error from `rewriteError` when CDP reports "Promise was collected",
+ * which means V8 had already created a promise for the callback — so the
+ * callback may well have RUN and only its result was lost. A retry can
+ * therefore run the body twice. Wrap a pure read, or a write that lands on
+ * the same state twice (`ipcMain.removeHandler` before `ipcMain.handle` is
+ * the pattern here). Do not wrap something that appends, increments, or
+ * sends an event a second observer would count.
+ *
+ * Anything that is not this exact failure propagates on the first throw, so a
+ * real error from inside the callback is never retried and never delayed.
+ */
+export async function retryTransientRpcCall<T>(
+  call: () => Promise<T>,
+  options: { attempts?: number } = {},
+): Promise<T> {
+  const attempts = options.attempts ?? 2;
+  let lastFailure: unknown;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await call();
+    } catch (error) {
+      if (!isTransientRpcFailure(error)) {
+        throw error;
+      }
+      lastFailure = error;
+    }
+  }
+  throw lastFailure;
 }

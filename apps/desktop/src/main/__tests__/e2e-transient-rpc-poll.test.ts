@@ -1,8 +1,12 @@
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
-import { tolerateTransientRpcFailure } from "../../../e2e/fixtures/transient-rpc-poll";
+import { describe, expect, it, vi } from "vitest";
+import {
+  isTransientRpcFailure,
+  retryTransientRpcCall,
+  tolerateTransientRpcFailure,
+} from "../../../e2e/fixtures/transient-rpc-poll";
 
 const e2eDir = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -197,6 +201,57 @@ describe("tolerateTransientRpcFailure", () => {
   });
 });
 
+describe("retryTransientRpcCall", () => {
+  it("re-issues the call once the round trip fails in transit", async () => {
+    const call = vi.fn()
+      .mockRejectedValueOnce(new Error(TRANSIENT_RPC_ERROR))
+      .mockResolvedValue("answered");
+
+    await expect(retryTransientRpcCall(call)).resolves.toBe("answered");
+    expect(call).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retry a throw from inside the evaluated callback", async () => {
+    // The whole point of matching Playwright's exact text: a real failure
+    // must surface on the first attempt, not after a pointless second run of
+    // a callback that already did whatever it does.
+    const call = vi.fn()
+      .mockRejectedValue(new Error("Expected the Star Map BrowserWindow"));
+
+    await expect(retryTransientRpcCall(call)).rejects.toThrow(
+      "Expected the Star Map BrowserWindow",
+    );
+    expect(call).toHaveBeenCalledTimes(1);
+  });
+
+  it("gives up with the transient failure once the attempts run out", async () => {
+    const call = vi.fn().mockRejectedValue(new Error(TRANSIENT_RPC_ERROR));
+
+    await expect(retryTransientRpcCall(call)).rejects.toThrow(
+      "Resulting promise was garbage collected",
+    );
+    expect(call).toHaveBeenCalledTimes(2);
+  });
+
+  it("honors a wider attempt budget", async () => {
+    const call = vi.fn()
+      .mockRejectedValueOnce(new Error(TRANSIENT_RPC_ERROR))
+      .mockRejectedValueOnce(new Error(TRANSIENT_RPC_ERROR))
+      .mockResolvedValue("answered");
+
+    await expect(retryTransientRpcCall(call, { attempts: 3 })).resolves
+      .toBe("answered");
+    expect(call).toHaveBeenCalledTimes(3);
+  });
+
+  it("recognizes only the transient failure", () => {
+    expect(isTransientRpcFailure(new Error(TRANSIENT_RPC_ERROR))).toBe(true);
+    expect(isTransientRpcFailure(new Error("Target page has been closed")))
+      .toBe(false);
+    expect(isTransientRpcFailure(TRANSIENT_RPC_ERROR)).toBe(false);
+  });
+});
+
 // Every `expect.poll` in these fixtures reads across the RPC boundary, so
 // every one of them needs the tolerance. Counting is what catches the case the
 // helper cannot: a NEW poll added later without it. If you add a poll here
@@ -254,4 +309,68 @@ function readFixtureCode(relativePath: string): string {
   return readFileSync(path.join(e2eDir, relativePath), "utf8")
     .replace(/\/\*[\s\S]*?\*\//g, "")
     .replace(/(^|[^:])\/\/.*$/gm, "$1");
+}
+
+// The fixture scan above cannot see the SPECS, and that is where the polls
+// that flake actually live: `federation-activity.spec.ts` lost both of its
+// themes to `Resulting promise was garbage collected` in run 35145222279
+// while every fixture poll was already tolerated.
+//
+// Stated as "no offenders" rather than as a count of wrapped polls, because
+// wrapping a poll MOVES `electronApp` out of the poll callback and onto the
+// line above it. A guard that counted wrapped polls would therefore count
+// down to zero as the work got done and then never fail again.
+//
+// It cannot see a poll that reaches the app through a named helper
+// (`expect.poll(count)` in `star-map-activity.spec.ts` is one), so this is a
+// floor, not a proof.
+describe("desktop E2E spec polls across the Electron RPC boundary", () => {
+  const specs = readdirSync(e2eDir)
+    .filter((entry) => entry.endsWith(".spec.ts"))
+    .map((entry) => ({ code: readFixtureCode(entry), entry }));
+
+  // A rename or a move that leaves the scan empty would otherwise pass as
+  // "nothing to check".
+  it("finds the specs to scan", () => {
+    expect(specs.length).toBeGreaterThan(20);
+  });
+
+  it("has no poll that calls the Electron app without the tolerance", () => {
+    const offenders = specs
+      .filter(({ code }) => inlineRpcPolls(code) > 0)
+      .map(({ entry }) => entry);
+
+    expect(offenders).toEqual([]);
+  });
+
+  for (const { code, entry } of specs.filter(({ code }) =>
+    code.includes("tolerateTransientRpcFailure("))) {
+    it(`pairs every tolerance in ${entry} with a rethrow`, () => {
+      // A tolerance without the rethrow swallows the RPC detail and reports
+      // the poll's own timeout instead, which is the failure mode the
+      // helper's `rethrowWithLastFailure` exists to prevent.
+      expect((code.match(/rethrowWithLastFailure/g) ?? []).length)
+        .toBe((code.match(/tolerateTransientRpcFailure\(/g) ?? []).length);
+    });
+  }
+});
+
+/**
+ * `.poll(` callbacks that reach `electronApp` inline — the shape that has no
+ * tolerance around it. Walks forward from each `.poll(` to its matcher, so a
+ * later `electronApp` elsewhere in the file cannot produce a false positive.
+ */
+function inlineRpcPolls(code: string): number {
+  let count = 0;
+  let index = code.indexOf(".poll(");
+  while (index !== -1) {
+    const region = code.slice(index, index + 400);
+    const matcher = region.search(/\)\s*\.(?:toBe|toEqual|toMatchObject|not)/);
+    const callback = region.slice(0, matcher === -1 ? region.length : matcher);
+    if (callback.includes("electronApp")) {
+      count += 1;
+    }
+    index = code.indexOf(".poll(", index + 1);
+  }
+  return count;
 }
