@@ -236,7 +236,13 @@ export function SettingsSectionStack(props: {
   const requestedFocusRef = useRef<string | undefined>(undefined);
   useEffect(() => {
     const requested = props.focusSectionId;
-    if (!requested || registeredSections.length === 0) return;
+    // Leaving for the pane's own label ends the request, so asking for the
+    // same section again afterwards is a new request, not a repeat.
+    if (!requested) {
+      requestedFocusRef.current = undefined;
+      return;
+    }
+    if (registeredSections.length === 0) return;
     if (requestedFocusRef.current === requested) return;
     const target = registeredSections.find(
       (entry) => entry.id === `${props.paneId}-${requested}`,

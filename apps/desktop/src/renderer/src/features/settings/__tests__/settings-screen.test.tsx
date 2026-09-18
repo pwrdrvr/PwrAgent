@@ -6676,6 +6676,34 @@ describe("SettingsScreen", () => {
     expect(writes).toEqual([0, 0]);
   });
 
+  it("jumps to a Federation section again after visiting the pane's label", () => {
+    render(
+      <SettingsScreen
+        settings={createSettingsState()}
+        onClose={() => undefined}
+      />,
+    );
+    const nav = screen.getByRole("navigation", { name: "Settings sections" });
+    fireEvent.click(
+      within(nav).getByRole("button", { name: "Expand Federation" }),
+    );
+    const cloudflareHeader = () =>
+      document.querySelector(
+        '[aria-controls="settings-section-federation-cloudflare-body"]',
+      );
+
+    fireEvent.click(
+      within(nav).getByRole("button", { name: "Cloudflare Access" }),
+    );
+    expect(document.activeElement).toBe(cloudflareHeader());
+    fireEvent.click(within(nav).getByRole("button", { name: "Federation" }));
+    (document.activeElement as HTMLElement | null)?.blur();
+    fireEvent.click(
+      within(nav).getByRole("button", { name: "Cloudflare Access" }),
+    );
+    expect(document.activeElement).toBe(cloudflareHeader());
+  });
+
   it("lands on the Routes section again after visiting a platform", () => {
     // Two focus mechanisms overlap here: the nav's `focusSectionId` request
     // and the stack's remembered-visit restore. The request is guarded
