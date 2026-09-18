@@ -28,7 +28,7 @@ Mockups for every finding below:
 | 8 | Preview copy, and a limit stated too late | Fixed on this branch |
 | 9 | Smaller items | Fixed, one withdrawn |
 | 10 | A new destination saved to a disabled provider | Fixed on this branch |
-| 11 | Four providers drop every sender outside the allowlist | Open |
+| 11 | Four providers drop every sender outside the allowlist | Fixed on this branch |
 
 Finding 5 turned out to be structural, not copy — see its section. Findings 10
 and 11 came out of fixing it.
@@ -155,8 +155,9 @@ missing, one in each layer:
   teammate. Picking channels would have produced automations that silently
   never ran. Fixed: the Discord adapter now implements the observed-conversation
   set Slack already had. In a channel an enabled automation watches, other
-  senders' messages are forwarded `observedOnly`, and their slash commands are
-  dropped. The server allowlist still applies first.
+  senders' messages are forwarded `observedOnly`, and their commands are
+  rejected as anywhere else (see finding 11). The server allowlist still
+  applies first.
 
 ### 6. Three of six providers have no manual-entry guidance — moderate
 
@@ -258,7 +259,7 @@ branch. Tests that waited on the Provider select's value were waiting on a
 signal the state had not reached yet. They now wait for something only the
 target state renders.
 
-### 11. Four providers drop every sender outside the allowlist — open
+### 11. Four providers drop every sender outside the allowlist — critical, fixed
 
 Only Slack and Discord forward a non-allowlisted sender in a watched
 conversation. Telegram, Mattermost, Feishu, and LINE drop that sender in every
@@ -266,12 +267,26 @@ shared conversation, so an automation there fires only for authorized contacts
 — an alert bot posting into a Telegram group never triggers one unless the bot
 is itself authorized. The editor does not say so.
 
-This is the same silent-failure class as finding 5, and the fix is the same
-shape: each adapter implements `updateObservedConversations`. It is left open
-because each platform's own delivery rules need checking first. Telegram's bot
-privacy mode, for one, keeps ordinary group messages from reaching the bot at
-all, which no adapter change can fix. The contract is now written down in
-[messaging-adapter-contract.md](../messaging-adapter-contract.md#observed-conversations).
+This was the same silent-failure class as finding 5, with the same fix: each
+adapter now implements `updateObservedConversations`. The contract is written
+down in [messaging-adapter-contract.md](../messaging-adapter-contract.md#observed-conversations),
+including how each provider matches a thread or topic under a watched
+conversation.
+
+Fixing it turned up a regression in the Slack original, repeated in the first
+Discord version: a command from an observed sender was dropped silently,
+where before it produced an "unauthorized" rejection the operator could see.
+On all six, a command is now never observed — it is rejected and reported as
+anywhere else.
+
+Two platform rules sit upstream of every adapter and stay as they are. Telegram
+delivers ordinary group messages only to a bot with Group Privacy off or admin
+rights; Feishu delivers un-@mentioned group messages only to an app holding
+`im:message.group_msg`. Neither errors, so the editor now says so beside a
+group trigger on those providers, and the Telegram adapter logs a warning when
+`getMe` reports privacy on while a watched group exists. Mattermost's
+webhook-attributed posts are still excluded as an anti-echo defense, which
+means webhook-posted alerts there cannot trigger an automation.
 
 ## Accessibility
 
@@ -301,11 +316,12 @@ with a room noun. Fixing the visible labels fixes the announced ones.
 
 ## Priority
 
-Findings 1–10 are fixed on this branch, except the one item in finding 9 that
-was withdrawn. Each blocking finding was a case where the form accepted input
-and then discarded or misrepresented it. Finding 2 in particular shipped the
-failure mode this work existed to remove.
+All eleven findings are fixed on this branch, except the one item in finding 9
+that was withdrawn. Each blocking finding was a case where the form accepted
+input and then discarded or misrepresented it, or where an automation could be
+built that silently never fires.
 
-Finding 11 is the one worth doing next. It is the same failure class as
-finding 5 on four more providers, and until it is fixed a group automation
-there fires only for authorized contacts, with nothing on screen to say so.
+What remains is outside PwrAgent's control and is now stated rather than
+silent: Telegram group privacy, Feishu's group-message permission, and
+Mattermost's webhook exclusion. None of it has been exercised against a live
+account.
