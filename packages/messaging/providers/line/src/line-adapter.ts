@@ -3,6 +3,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { Readable } from "node:stream";
 import { messagingApi } from "@line/bot-sdk";
 import type {
+  MessagingPrivateConversationResolveResult,
   MessagingActorIdentity,
   MessagingAdapterAuthorizationUpdate,
   MessagingAdapterRenderingPreferencesUpdate,
@@ -88,6 +89,7 @@ export type LineProviderAdapter = {
   capabilityProfile: MessagingCapabilityProfile;
   channel: "line";
   clientRateLimitStrategy: MessagingClientRateLimitStrategy;
+  resolveDirectConversation?(userId: string): Promise<MessagingPrivateConversationResolveResult>;
   deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult>;
   resolveDeliveryScope?(intent: MessagingSurfaceIntent): MessagingDeliveryScope | undefined;
   downloadAttachment(
@@ -206,6 +208,11 @@ export class LineAdapter implements LineProviderAdapter {
   private started = false;
   private lifecycleGeneration = 0;
   private readonly inboundRejectedListeners = new Set<MessagingInboundRejectedListener>();
+  // Groups and rooms an enabled automation or open editor preview watches,
+  // pushed by the desktop runtime. There, a sender outside the actor
+  // allowlist is forwarded observedOnly instead of dropped; without it a LINE
+  // group automation fired only for authorized contacts. Empty by default.
+  private observedConversationIds = new Set<string>();
 
   constructor(options: LineAdapterOptions) {
     this.config = options.config;
@@ -225,6 +232,10 @@ export class LineAdapter implements LineProviderAdapter {
 
   get authorizedActorIds(): readonly string[] {
     return this.authorizedActorIdsValue;
+  }
+
+  updateObservedConversations(conversationIds: readonly string[]): void {
+    this.observedConversationIds = new Set(conversationIds);
   }
 
   async updateAuthorization(update: MessagingAdapterAuthorizationUpdate): Promise<void> {
@@ -249,6 +260,26 @@ export class LineAdapter implements LineProviderAdapter {
     if (update.streamingResponses !== undefined) {
       this.config.streamingResponses = update.streamingResponses;
     }
+  }
+
+  async resolveDirectConversation(
+    userId: string,
+  ): Promise<MessagingPrivateConversationResolveResult> {
+    if (!validateLineUserId(userId).ok) {
+      return {
+        channel: this.channel,
+        outcome: "failed",
+        updatedAt: this.now(),
+        errorMessage: "Invalid direct-message recipient ID.",
+      };
+    }
+    const conversationId = userId;
+    return {
+      channel: this.channel,
+      conversation: { id: conversationId, kind: "dm", isDirectMessage: true },
+      outcome: "resolved",
+      updatedAt: this.now(),
+    };
   }
 
   async start(listener: LineInboundListener): Promise<void> {
@@ -662,22 +693,40 @@ export class LineAdapter implements LineProviderAdapter {
     const botMention =
       event.message.type === "text"
       && this.eventMentionsBot(event);
-    if (!isPairing && !this.shouldAcceptTextEvent(event, channel, text)) {
-      return;
-    }
-    if (!this.authorizeInbound({
-      actor,
-      botMention,
-      channel,
-      kind: isCommand
-        ? "command"
-        : event.message.type === "text"
-          ? "text"
-          : "media",
-      pairing: isPairing,
-      routingState,
-    })) {
-      return;
+    // Unaddressed chatter in a group or room: automations may see it, but it
+    // is never ordinary input to a bound thread.
+    const ambient = channel.conversation.kind !== "dm"
+      && !botMention && !isCommand && !isPairing;
+    // A sender outside the actor allowlist, in an authorized group or room
+    // that an enabled automation or open preview watches. Forwarded for
+    // observation only — a command or pairing code never is, and a command
+    // is still rejected below exactly as it would be anywhere else.
+    const observedSender = channel.conversation.kind !== "dm"
+      && !isCommand && !isPairing
+      && this.observedConversationIds.has(channel.conversation.id)
+      && this.isAuthorizedConversation(channel)
+      && !this.authorizedActorIds.includes(actor.platformUserId);
+    const observedOnly = ambient || observedSender;
+    if (!observedSender) {
+      if (ambient && (!this.authorizedActorIds.includes(actor.platformUserId)
+        || !this.isAuthorizedConversation(channel))) {
+        // Unaddressed chatter outside the allowlists is not an actionable rejection.
+        return;
+      }
+      if (!this.authorizeInbound({
+        actor,
+        botMention,
+        channel,
+        kind: isCommand
+          ? "command"
+          : event.message.type === "text"
+            ? "text"
+            : "media",
+        pairing: isPairing,
+        routingState,
+      })) {
+        return;
+      }
     }
     if (event.message.type === "text") {
       if (text.startsWith("/")) {
@@ -702,6 +751,8 @@ export class LineAdapter implements LineProviderAdapter {
         ...receipt,
         routingState,
         text: stripSelfMention(text, event.message.mention),
+        ...(observedOnly ? { observedOnly: true } : {}),
+        ...(botMention ? { botMention: true } : {}),
       });
       return;
     }
@@ -716,6 +767,7 @@ export class LineAdapter implements LineProviderAdapter {
       ...receipt,
       routingState,
       attachments: [attachment],
+      ...(observedOnly ? { observedOnly: true } : {}),
       disposition: attachment.disposition,
       text,
     });
@@ -824,16 +876,6 @@ export class LineAdapter implements LineProviderAdapter {
       return roomIds.includes(channel.conversation.id);
     }
     return false;
-  }
-
-  private shouldAcceptTextEvent(
-    event: LineWebhookEvent,
-    channel: MessagingChannelRef,
-    text: string,
-  ): boolean {
-    if (channel.conversation.kind === "dm") return true;
-    if (text.startsWith("/")) return true;
-    return this.eventMentionsBot(event);
   }
 
   private eventMentionsBot(event: LineWebhookEvent): boolean {

@@ -1583,3 +1583,155 @@ describe("MattermostAdapter — onRuntimeError", () => {
     await adapter.stop();
   });
 });
+
+
+describe("Mattermost automation surfaces", () => {
+  it.each(["D", "G"])("normalizes %s messages and replies, then sends to the conversation", async (channelType) => {
+    const userId = "haroldabcdefghijklmnopqr12";
+    const channelId = "channelabcdefghijklmn12345";
+    const rootId = "postpostabcdefghijklmn1234";
+    const spies = { createdPosts: [] as CreatedPost[], patchedPosts: [] as PatchedPost[] };
+    const client = fakeClient4(spies);
+    client.createDirectChannel = vi.fn(async () => ({ id: channelId })) as unknown as typeof client.createDirectChannel;
+    client.getPost = vi.fn(async () => ({ message: "Root message" })) as unknown as typeof client.getPost;
+    const hooks = {} as WebSocketHooks;
+    const adapter = new MattermostAdapter({
+      client, websocketClient: fakeWebSocketClient(undefined, hooks),
+      callbackHandleStore: fakeStore,
+      callbackServer: { start: async () => {}, stop: async () => {}, signContext: () => ({ hmac: "x", issuedAt: 0 }) } as never,
+      config: { ...baseConfig, authorizedActorIds: [{ id: userId, displayName: "Peer" }], authorizedConversationIds: channelType === "G" ? [{ id: channelId, displayName: "Group DM" }] : [] },
+      logger: silentLogger,
+    });
+    const events: MessagingInboundEvent[] = [];
+    await adapter.start(async (event) => { events.push(event); });
+    for (const root of [undefined, rootId]) {
+      hooks.fireMessage({ event: "posted", data: {
+        channel_type: channelType, sender_name: "Peer",
+        post: JSON.stringify({ id: "replyabcdefghijklmnopqr123", channel_id: channelId, user_id: userId, root_id: root, message: "Alert" }),
+      } });
+    }
+    await vi.waitFor(() => expect(events).toHaveLength(2));
+    expect(events[0]?.channel.conversation).toMatchObject({ id: channelId, kind: channelType === "D" ? "dm" : "channel" });
+    expect(events[1]?.channel.conversation).toMatchObject({ id: channelId, kind: "thread", parentConversationId: channelId });
+    if (channelType === "D") {
+      expect(events[1]?.channel.conversation.isDirectMessage).toBe(true);
+      const resolved = await adapter.resolveDirectConversation(userId);
+      expect(client.createDirectChannel).toHaveBeenCalledWith(["bot-user-id", userId]);
+      expect(resolved.conversation).toMatchObject({ id: channelId, kind: "dm" });
+    }
+    await adapter.deliver({
+      id: "result", kind: "message", role: "assistant", createdAt: 1,
+      parts: [{ type: "text", text: "Completed" }],
+      audit: { channel: events[0]!.channel, actor: events[0]!.actor, occurredAt: 1 },
+    });
+    expect(spies.createdPosts.at(-1)).toMatchObject({ channel_id: channelId, message: expect.stringContaining("Completed") });
+    await adapter.stop();
+  });
+});
+
+/**
+ * Before the observed set, a Mattermost channel automation fired only for
+ * authorized contacts: every other sender's post was dropped at the actor
+ * gate.
+ */
+describe("observed channels", () => {
+  const OPERATOR = "haroldabcdefghijklmnopqr12";
+  const OUTSIDER = "outsiderabcdefghijklmnop12";
+  const CHANNEL = "channelabcdefghijklmn12345";
+  const OTHER_CHANNEL = "otherchanabcdefghijklm1234";
+
+  const startObserved = async (observed: string[]) => {
+    const hooks = {} as WebSocketHooks;
+    const adapter = new MattermostAdapter({
+      client: fakeClient4({ createdPosts: [], patchedPosts: [] }),
+      websocketClient: fakeWebSocketClient(undefined, hooks),
+      callbackHandleStore: fakeStore,
+      callbackServer: { start: async () => {}, stop: async () => {}, signContext: () => ({ hmac: "x", issuedAt: 0 }) } as never,
+      config: {
+        ...baseConfig,
+        authorizedActorIds: [{ id: OPERATOR, displayName: "Operator" }],
+        authorizedConversationIds: [
+          { id: CHANNEL, displayName: "alerts" },
+          { id: OTHER_CHANNEL, displayName: "general" },
+        ],
+      },
+      logger: silentLogger,
+    });
+    adapter.updateObservedConversations(observed);
+    const events: MessagingInboundEvent[] = [];
+    const rejected: MessagingRejectedInboundEvent[] = [];
+    adapter.onInboundRejected((event) => { rejected.push(event); });
+    await adapter.start(async (event) => { events.push(event); });
+    let postNumber = 0;
+    const post = (params: { userId: string; message: string; channelId?: string; rootId?: string }) => {
+      postNumber += 1;
+      hooks.fireMessage({ event: "posted", data: {
+        channel_type: "O", sender_name: params.userId === OPERATOR ? "Operator" : "Alertbot",
+        post: JSON.stringify({
+          id: `post${String(postNumber).padStart(22, "0")}`,
+          channel_id: params.channelId ?? CHANNEL,
+          user_id: params.userId,
+          ...(params.rootId ? { root_id: params.rootId } : {}),
+          message: params.message,
+        }),
+      } });
+    };
+    return { adapter, events, post, rejected };
+  };
+
+  it("forwards an outside sender's post in a watched channel as observed only", async () => {
+    const { adapter, events, post, rejected } = await startObserved([CHANNEL]);
+
+    post({ userId: OUTSIDER, message: "Deploy failed on prod" });
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+
+    expect(events[0]).toMatchObject({
+      kind: "text",
+      observedOnly: true,
+      text: "Deploy failed on prod",
+      actor: { platformUserId: OUTSIDER },
+    });
+    expect(rejected).toEqual([]);
+    await adapter.stop();
+  });
+
+  it("drops an outside sender in a channel nothing watches, silently", async () => {
+    const { adapter, events, post, rejected } = await startObserved([CHANNEL]);
+
+    post({ userId: OUTSIDER, message: "chatter", channelId: OTHER_CHANNEL });
+    post({ userId: OPERATOR, message: "control", channelId: OTHER_CHANNEL });
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+
+    expect(events[0]).toMatchObject({ text: "control" });
+    expect(rejected).toEqual([]);
+    await adapter.stop();
+  });
+
+  it.each(["/status", "@pwragent"])(
+    "rejects an outside sender's command %j in a watched channel",
+    async (message) => {
+      // Observation is not authorization, and it must not hide the attempt.
+      const { adapter, events, post, rejected } = await startObserved([CHANNEL]);
+
+      post({ userId: OUTSIDER, message });
+      await vi.waitFor(() => expect(rejected).toHaveLength(1));
+
+      expect(events).toEqual([]);
+      expect(rejected[0]).toMatchObject({ kind: "command", reason: "unauthorized-actor" });
+      await adapter.stop();
+    },
+  );
+
+  it("keeps the channel gate: a watched but unauthorized channel stays silent", async () => {
+    const unauthorized = "strangerabcdefghijklmn1234";
+    const { adapter, events, post, rejected } = await startObserved([unauthorized]);
+
+    post({ userId: OUTSIDER, message: "alert", channelId: unauthorized });
+    post({ userId: OPERATOR, message: "control" });
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+
+    expect(events[0]).toMatchObject({ text: "control" });
+    expect(rejected).toEqual([]);
+    await adapter.stop();
+  });
+});

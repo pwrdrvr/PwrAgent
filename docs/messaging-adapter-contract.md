@@ -277,6 +277,79 @@ thread-reply broadcast flag, such as Slack's `reply_broadcast`, should map
 providers may fall back to a normal fresh message or return a structured
 unsupported delivery result.
 
+## Automation recipient addressing
+
+`resolveDirectConversation(userId)` resolves a configured contact to a normalized
+1:1 destination before an automation sends a `messaging_target` result. The
+provider validates the recipient and owns any API call needed to open the DM.
+The controller never assumes a user ID is a native conversation ID. A failed
+resolution records a failed action and does not attempt delivery to the user ID
+as a channel. An ordinary conversation target bypasses this resolver, including
+shared group DMs and LINE rooms.
+
+Automation snapshots mark contact targets with `recipientUserId`; native
+conversation targets keep `conversationId` and optional `parentId`. Live matching
+requires 1:1 DM semantics before comparing the contact with the inbound actor.
+Child matching uses `parentConversationId`, not a workspace/guild or thread root
+stored in `parentId`. Preview subscriptions use the same scope matcher.
+
+### Observed conversations
+
+An adapter may implement `updateObservedConversations(conversationIds)`. The
+desktop runtime pushes the conversations that enabled inbound automations
+watch, plus any conversation an open editor preview is watching, and re-pushes
+on every change. In an observed conversation that already passes the
+adapter's conversation and workspace/server gates, a message from a sender who
+fails the per-user gate is forwarded with `observedOnly: true` instead of
+dropped. Without this, an automation on a shared channel fires only for the
+people allowed to command the bot, and never for the alert bots it usually
+exists to watch.
+
+Observation is not authorization:
+
+- Conversation, workspace, and server allowlists still apply first. An
+  observed conversation that fails them is dropped, not observed.
+- A command is never observed. A slash command — or whatever the adapter would
+  turn into one, such as a bare bot mention that becomes Help — is rejected and
+  reported exactly as in a conversation nothing watches. Observing it would
+  hide the attempt from the operator.
+- Direct messages are never observed. A 1:1 DM is gated by who sent it.
+- The runtime sends `observedOnly` events only to the editor preview and to
+  matching automations — never to a binding, the command path, or a reply.
+
+All six providers implement it. How each matches a watched conversation:
+
+| Provider | Watched ID | Thread or topic under it |
+| --- | --- | --- |
+| Slack | Channel ID | Reply shares the channel ID; parent ID also checked |
+| Discord | Channel ID | Thread matched by its parent channel |
+| Telegram | Group or supergroup chat ID | A topic trigger pushes its group ID, which decides |
+| Mattermost | Channel ID | Reply shares the channel ID |
+| Feishu | Group `chat_id` | Threads are not normalized separately |
+| LINE | Group or room ID | No threads |
+
+LINE's `observedOnly` flag also marks unaddressed group and room messages from
+authorized senders, which automations may see but a bound thread must not take
+as input.
+
+Some platforms decide delivery before any adapter runs, and no adapter change
+can widen it:
+
+- **Telegram** delivers ordinary group messages to a bot only when its Group
+  Privacy is off (@BotFather) or it is a group admin. The adapter reads
+  `getMe().can_read_all_group_messages` and logs a warning when a watched group
+  exists while it is false.
+- **Feishu/Lark** delivers group messages that do not @mention the bot only when
+  the app holds `im:message.group_msg`.
+- **Mattermost** posts attributed to an incoming webhook (`from_webhook`) are
+  dropped before authorization as an anti-echo defense, observed or not. Most
+  webhook-posted alerts therefore cannot trigger an automation.
+
+The editor states the Telegram and Feishu rules where a group trigger is chosen.
+
+See [automation messaging surface verification](automation-messaging-surfaces.md)
+for the adapter evidence and remaining account-dependent limitations.
+
 ## Private Terminal Responses
 
 An adapter may implement `resolvePrivateConversation` when the platform can

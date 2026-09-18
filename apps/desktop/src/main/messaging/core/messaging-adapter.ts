@@ -116,6 +116,7 @@ export type MessagingThreadAdmissionState = ThreadAdmissionState;
 export type MessagingAdapter = {
   capabilityProfile: MessagingCapabilityProfile;
   clientRateLimitStrategy?: MessagingClientRateLimitStrategy;
+  resolveDirectConversation?(userId: string): Promise<MessagingPrivateConversationResolveResult>;
   deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult>;
   resolveDeliveryScope?(intent: MessagingSurfaceIntent): MessagingDeliveryScope | undefined;
   updateAuthorization?(update: MessagingAdapterAuthorizationUpdate): Promise<void>;

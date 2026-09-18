@@ -2253,6 +2253,47 @@ describe("SlackAdapter", () => {
     expect(botsInfoCalls).toEqual(["B012DATADOG"]);
   });
 
+  it("rejects an unauthorized sender's command in an observed conversation", async () => {
+    // Observation is for automations, not for steering: a command is rejected
+    // and reported exactly as in a conversation nothing watches. Observing it
+    // used to swallow the rejection, hiding the attempt from the operator.
+    const socket = fakeSocket();
+    const adapter = new SlackAdapter({
+      config: baseConfig,
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({}),
+      socketClient: socket,
+      now: () => 1_700_000_000_000,
+    });
+    const events: MessagingInboundEvent[] = [];
+    const rejected: MessagingRejectedInboundEvent[] = [];
+    adapter.onInboundRejected((event) => {
+      rejected.push(event);
+    });
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+    adapter.updateObservedConversations(["C012ABCDEF0"]);
+
+    await socket.emitEvent("slack_event", {
+      ack: async () => undefined,
+      event: {
+        type: "message",
+        channel: "C012ABCDEF0",
+        channel_type: "channel",
+        team: "T012ABCDEF0",
+        user: "U012OUTSIDER",
+        ts: "1712023032.001100",
+        text: "/status",
+      },
+    });
+
+    expect(events).toEqual([]);
+    expect(rejected).toEqual([
+      expect.objectContaining({ kind: "command", reason: "unauthorized-actor" }),
+    ]);
+  });
+
   it("drops unauthorized-sender messages in conversations nothing observes", async () => {
     const socket = fakeSocket();
     const adapter = new SlackAdapter({
@@ -3489,7 +3530,7 @@ describe("SlackAdapter", () => {
     ]);
   });
 
-  it("ignores group DM messages that don't @mention the bot", async () => {
+  it("observes group DM messages without admitting them as ordinary input", async () => {
     const socket = fakeSocket();
     const adapter = new SlackAdapter({
       config: {
@@ -3524,7 +3565,8 @@ describe("SlackAdapter", () => {
       },
     });
 
-    expect(events).toEqual([]);
+    expect(events).toEqual([expect.objectContaining({ kind: "text", observedOnly: true, channel: expect.objectContaining({ conversation: expect.objectContaining({ id: "G012ABCDEF0", kind: "channel" }) }) })]);
+    await adapter.stop();
     expect(rejected).toEqual([]);
   });
 
@@ -5868,5 +5910,28 @@ describe("SlackAdapter", () => {
     for (const chunk of rendered) {
       expect(chunk.length).toBeLessThanOrEqual(3_000);
     }
+  });
+});
+
+
+describe("slack automation DM addressing", () => {
+  it("resolves a contact and delivers through the provider", async () => {
+    const userId = "U012ABCDEF0";
+    const api = fakeApi({});
+    const send = vi.spyOn(api, "postMessage");
+    const adapter = new SlackAdapter({
+      api, callbackHandleStore: fakeStore(), config: baseConfig, socketClient: fakeSocket(),
+    });
+    const resolved = await adapter.resolveDirectConversation(userId);
+    expect(resolved).toMatchObject({ outcome: "resolved", conversation: { id: userId, kind: "dm" } });
+    const result = await adapter.deliver({
+      id: "automation-dm", kind: "message", role: "assistant", createdAt: 1,
+      parts: [{ type: "text", text: "Automation completed" }],
+      audit: { actor: { platformUserId: "automation" }, channel: { channel: "slack", conversation: resolved.conversation! }, occurredAt: 1 },
+    });
+    expect(result.outcome).toMatch(/presented/);
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({ channel: userId }));
+    expect(await adapter.resolveDirectConversation("invalid recipient !")).toMatchObject({ outcome: "failed" });
+    await adapter.stop();
   });
 });

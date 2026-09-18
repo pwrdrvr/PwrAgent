@@ -1,3 +1,4 @@
+import { matchesAutomationConversation } from "@pwragent/shared";
 import { randomBytes, randomUUID } from "node:crypto";
 import {
   isMessagingInteractivePendingRequest,
@@ -91,8 +92,10 @@ import { resolvePwragentRoot } from "../profile";
 import { getDesktopFederationRuntime } from "../federation/federation-runtime";
 import { getDesktopMessagingActivityLog } from "./desktop-messaging-activity-log";
 import {
+  activeInboundPreviewConversationIds,
   hasActiveInboundPreview,
   inboundEventToPreviewMessage,
+  onInboundPreviewScopesChanged,
   publishInboundPreview,
 } from "./inbound-preview-bus";
 import { getDesktopMessagingPairingStore } from "./desktop-messaging-pairing-store";
@@ -116,6 +119,7 @@ export type DesktopMessagingAdapter = {
   channel: MessagingChannelKind;
   clientRateLimitStrategy?: MessagingClientRateLimitStrategy;
   readCredentialMetadata?(): MessagingCredentialMetadata | undefined;
+  resolveDirectConversation?: MessagingAdapter["resolveDirectConversation"];
   deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult>;
   resolveDeliveryScope?(intent: MessagingSurfaceIntent): MessagingDeliveryScope | undefined;
   downloadAttachment?: MessagingAdapter["downloadAttachment"];
@@ -433,6 +437,7 @@ export type CredentialValidationRequest =
 export class DesktopMessagingRuntime implements MessagingAgentToolService {
   private adapters: DesktopMessagingAdapter[] = [];
   private automationsChangedUnsubscribe?: () => void;
+  private previewScopesChangedUnsubscribe?: () => void;
   private controllers: MessagingController[] = [];
   private readonly runningAdapters = new Map<
     MessagingChannelKind,
@@ -586,6 +591,8 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
   ): Promise<void> {
     this.automationsChangedUnsubscribe?.();
     this.automationsChangedUnsubscribe = undefined;
+    this.previewScopesChangedUnsubscribe?.();
+    this.previewScopesChangedUnsubscribe = undefined;
     if (!this.started) {
       if (!options.preserveStartupFailures) {
         this.clearRetainedStartupFailures();
@@ -882,7 +889,12 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
    * today). Callers use this to tell "no history support" apart from "the
    * conversation is simply empty", which fetchRecentPreviewMessages cannot.
    */
-  supportsPreviewHistory(provider: MessagingChannelKind): boolean {
+  supportsPreviewHistory(
+    provider: MessagingChannelKind,
+    scope?: { parentId?: string; recipientUserId?: string },
+  ): boolean {
+    // History currently reads top-level conversation IDs, not contact IDs or thread roots.
+    if (scope?.recipientUserId || scope?.parentId) return false;
     const adapter = this.adapters.find((entry) => entry.channel === provider);
     return Boolean(adapter?.fetchRecentMessages);
   }
@@ -917,10 +929,11 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     for (const event of events) {
       const message = inboundEventToPreviewMessage(event);
       if (!message) continue;
-      if (
-        message.conversationId === params.conversationId ||
-        message.parentId === params.conversationId
-      ) {
+      if (matchesAutomationConversation(
+        { ...params, channel: params.provider },
+        { ...message, channel: message.provider },
+        message.actor.platformUserId,
+      )) {
         messages.push({ ...message, origin: "history" });
       }
     }
@@ -943,39 +956,53 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
    * forwarded (flagged observedOnly) instead of dying at the per-user gate —
    * which is what lets a sender filter see bot alerts at all.
    */
-  private collectAutomationObservedConversations(
-    platform: MessagingChannelKind,
-  ): string[] {
+  private collectAutomationObservedConversations(): Map<MessagingChannelKind, Set<string>> {
+    const byPlatform = new Map<MessagingChannelKind, Set<string>>();
     try {
-      const ids = new Set<string>();
       for (const automation of getDesktopAutomationService().list({}).automations) {
         if (automation.status !== "enabled") continue;
         for (const trigger of automation.triggers) {
           if (trigger.kind !== "inbound_message") continue;
-          if (trigger.conversation.channel !== platform) continue;
+          const platform = trigger.conversation.channel;
+          const ids = byPlatform.get(platform) ?? new Set<string>();
+          byPlatform.set(platform, ids);
           ids.add(trigger.conversation.conversationId);
           if (trigger.conversation.parentId) {
             ids.add(trigger.conversation.parentId);
           }
         }
       }
-      return [...ids];
     } catch (error) {
       messagingLog.warn("failed to collect observed conversations", {
-        platform,
         error: error instanceof Error ? error.message : String(error),
       });
-      return [];
+      return new Map();
     }
+    return byPlatform;
   }
 
-  /** Re-push the observed-conversation sets to every running adapter. */
+  /**
+   * Re-push the observed-conversation sets to every running adapter: what
+   * enabled automations watch, plus whatever an open editor preview is
+   * watching, so the preview shows the senders the automation will see.
+   * Runs on every automation change and every preview open or close, so the
+   * automation list is read once per push, not once per adapter.
+   */
   pushObservedConversations(): void {
+    // Only when some adapter takes the set. Reading the list constructs the
+    // automation service as a side effect, and the per-adapter optional call
+    // this replaced never evaluated its argument for an adapter without the
+    // method — so a runtime of such adapters never touched the service.
+    if (!this.adapters.some((adapter) => adapter.updateObservedConversations)) return;
+    const automationObserved = this.collectAutomationObservedConversations();
     for (const adapter of this.adapters) {
       try {
-        adapter.updateObservedConversations?.(
-          this.collectAutomationObservedConversations(adapter.channel),
-        );
+        adapter.updateObservedConversations?.([
+          ...new Set([
+            ...(automationObserved.get(adapter.channel) ?? []),
+            ...activeInboundPreviewConversationIds(adapter.channel),
+          ]),
+        ]);
       } catch (error) {
         messagingLog.warn("failed to push observed conversations", {
           platform: adapter.channel,
@@ -1546,7 +1573,8 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
         ) {
           // Observed-only traffic exists for automations and the editor's
           // live preview; it must never reach the controller's reply/command
-          // path — the sender did not clear the per-user access gate.
+          // path — the sender failed the per-user gate or the shared message
+          // did not explicitly address the bot.
           // A matching automation is its own narrow authorization context:
           // classify that event as routed without widening the sender's
           // adapter or RBAC permissions for any interactive messaging path.
@@ -1993,6 +2021,11 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     const running = [...this.runningAdapters.values()];
     this.adapters = running.map((record) => record.adapter);
     this.controllers = running.map((record) => record.controller);
+    // Subscribed outside the try below: previews work with the automation
+    // service unavailable, and a preview's observation must not depend on it.
+    this.previewScopesChangedUnsubscribe ??= onInboundPreviewScopesChanged(
+      () => this.pushObservedConversations(),
+    );
     // The automation service may be unavailable (unit harnesses, an app
     // instance with automations disabled); messaging must start regardless —
     // observed sets simply stay empty.

@@ -24867,6 +24867,7 @@ async function createHarness<
   onDeliveryBudgetEvent?: MessagingControllerOptions["onDeliveryBudgetEvent"];
   resolveDeliveryScope?: MessagingAdapter["resolveDeliveryScope"];
   resolvePrivateConversation?: MessagingAdapter["resolvePrivateConversation"];
+  resolveDirectConversation?: MessagingAdapter["resolveDirectConversation"];
   responseModeForConversation?: MessagingControllerOptions["responseModeForConversation"];
   getManagedConversationRights?: MessagingAdapter["getManagedConversationRights"];
   getNavigationSnapshot?: NonNullable<MessagingBackendBridge["getNavigationSnapshot"]>;
@@ -25015,6 +25016,9 @@ async function createHarness<
       : {}),
     ...(options?.createManagedConversation
       ? { createManagedConversation: options.createManagedConversation }
+      : {}),
+    ...(options?.resolveDirectConversation
+      ? { resolveDirectConversation: options.resolveDirectConversation }
       : {}),
     ...(options?.resolvePrivateConversation
       ? { resolvePrivateConversation: options.resolvePrivateConversation }
@@ -26185,3 +26189,30 @@ function buildCallbackEvent(params: {
     value: params.value,
   };
 }
+
+
+describe("automation messaging targets", () => {
+  it.each(["telegram", "discord", "slack", "mattermost", "feishu", "line"] as const)(
+    "resolves a %s contact before sending to the native DM", async (channel) => {
+      const resolve = vi.fn(async () => ({ channel, outcome: "resolved" as const, updatedAt: 1, conversation: { id: "native-dm", kind: "dm" as const } }));
+      const harness = await createHarness({ channel, resolveDirectConversation: resolve });
+      const result = await harness.controller.deliverAutomationTargetMessage({
+        intentId: "automation-target", text: "Completed",
+        target: { channel, conversationId: "user-id", conversationKind: "dm", recipientUserId: "user-id" },
+      });
+      expect(result.ok).toBe(true);
+      expect(resolve).toHaveBeenCalledWith("user-id");
+      expect(harness.delivered.at(-1)?.audit?.channel).toMatchObject({ channel, conversation: { id: "native-dm", kind: "dm" } });
+      harness.controller.dispose();
+    },
+  );
+
+  it("does not send to a user ID when resolution fails", async () => {
+    const harness = await createHarness({ channel: "discord", resolveDirectConversation: async () => { throw new Error("Cannot open DM"); } });
+    expect(await harness.controller.deliverAutomationTargetMessage({
+      intentId: "failed-dm", text: "Completed", target: { channel: "discord", conversationId: "user", recipientUserId: "user" },
+    })).toMatchObject({ ok: false, errorMessage: "Cannot open DM" });
+    expect(harness.delivered).toEqual([]);
+    harness.controller.dispose();
+  });
+});

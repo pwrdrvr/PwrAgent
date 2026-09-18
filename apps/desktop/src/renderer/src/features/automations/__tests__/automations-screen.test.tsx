@@ -656,4 +656,97 @@ describe("run vs replay actions", () => {
     );
     expect(screen.getByRole("button", { name: "Run" })).toBeInTheDocument();
   });
+
+  /**
+   * Three different constraints refuse replay and they send the operator to
+   * three different places. Blaming the provider for a scope limit points at
+   * the one part that is working: Slack serves channel history perfectly well,
+   * and the same automation would offer replay on a channel trigger.
+   */
+  it.each([
+    [
+      "contact_dm" as const,
+      /can't read back a contact's direct messages/,
+      /Slack can't serve/,
+    ],
+    [
+      "scoped_thread" as const,
+      /whole conversations, not a single thread or topic/,
+      /Slack can't serve/,
+    ],
+    [
+      "provider" as const,
+      /Slack can't serve conversation history/,
+      /This provider/,
+    ],
+  ])("names %s as the reason replay is unavailable", async (
+    unsupportedReason,
+    expected,
+    notExpected,
+  ) => {
+    const inbound = {
+      ...automation,
+      id: "automation-2",
+      triggers: [
+        {
+          id: "inbound-message",
+          kind: "inbound_message" as const,
+          conversation: { channel: "slack" as const, conversationId: "C123" },
+        },
+      ],
+    };
+    render(
+      <AutomationsScreen
+        desktopApi={{
+          listAutomations: vi.fn(async () => ({ automations: [inbound] })),
+          listAutomationRuns: vi.fn(async () => ({ runs: [] })),
+          listAutomationReplayCandidates: vi.fn(async () => ({
+            candidates: [],
+            supported: false,
+            unsupportedReason,
+          })),
+        } as unknown as DesktopApi}
+        threads={[]}
+        onClose={() => undefined}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Replay" }));
+    expect(await screen.findByText(expected)).toBeInTheDocument();
+    expect(screen.queryByText(notExpected)).not.toBeInTheDocument();
+  });
+
+  it("blames nothing when the reason predates the field", async () => {
+    // A response from an older main process carries `supported: false` alone.
+    const inbound = {
+      ...automation,
+      id: "automation-2",
+      triggers: [
+        {
+          id: "inbound-message",
+          kind: "inbound_message" as const,
+          conversation: { channel: "slack" as const, conversationId: "C123" },
+        },
+      ],
+    };
+    render(
+      <AutomationsScreen
+        desktopApi={{
+          listAutomations: vi.fn(async () => ({ automations: [inbound] })),
+          listAutomationRuns: vi.fn(async () => ({ runs: [] })),
+          listAutomationReplayCandidates: vi.fn(async () => ({
+            candidates: [],
+            supported: false,
+          })),
+        } as unknown as DesktopApi}
+        threads={[]}
+        onClose={() => undefined}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Replay" }));
+    expect(
+      await screen.findByText(/no recent history to replay for this trigger/),
+    ).toBeInTheDocument();
+  });
 });

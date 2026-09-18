@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { Bot, InputFile } from "grammy";
 import type {
+  MessagingPrivateConversationResolveResult,
   MessagingAdapterState,
   MessagingAdapterAuthorizationUpdate,
   MessagingAdapterRenderingPreferencesUpdate,
@@ -307,7 +308,12 @@ export type TelegramBotApi = {
     userId: number | string,
   ): Promise<TelegramChatMember>;
   editMessageText(request: TelegramEditMessageTextRequest): Promise<TelegramSentMessage>;
-  getMe(): Promise<{ id: number; is_bot: boolean; username?: string }>;
+  getMe(): Promise<{
+    id: number;
+    is_bot: boolean;
+    username?: string;
+    can_read_all_group_messages?: boolean;
+  }>;
   reopenForumTopic(request: TelegramForumTopicActionRequest): Promise<boolean>;
   getWebhookInfo(): Promise<{ url: string }>;
   getFile(fileId: string): Promise<{ file_path?: string }>;
@@ -369,7 +375,12 @@ export type TelegramGrammyBotLike = {
     // it set for bot accounts, but we keep the type optional here to
     // match `TelegramBotApi.getMe` and avoid a structural narrowing
     // surprise if grammy ever loosens the type.
-    getMe(): Promise<{ id: number; is_bot: boolean; username?: string }>;
+    getMe(): Promise<{
+      id: number;
+      is_bot: boolean;
+      username?: string;
+      can_read_all_group_messages?: boolean;
+    }>;
     reopenForumTopic(
       chatId: number | string,
       messageThreadId: number,
@@ -426,6 +437,7 @@ export type TelegramProviderAdapter = {
   capabilityProfile: MessagingCapabilityProfile;
   channel: "telegram";
   clientRateLimitStrategy: MessagingClientRateLimitStrategy;
+  resolveDirectConversation?(userId: string): Promise<MessagingPrivateConversationResolveResult>;
   deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult>;
   resolveDeliveryScope?(intent: MessagingSurfaceIntent): MessagingDeliveryScope | undefined;
   onRateLimit?(listener: (info: MessagingRateLimitInfo) => void): () => void;
@@ -523,6 +535,20 @@ export class TelegramAdapter implements TelegramProviderAdapter {
    * mention parsing is skipped (slash commands still work).
    */
   private botUsername?: string;
+  /**
+   * `getMe().can_read_all_group_messages`: false while the bot's Group
+   * Privacy is on. Telegram then delivers only commands, mentions, and
+   * replies to the bot from a group — unless the bot is that group's admin —
+   * so an automation on ordinary group traffic sees nothing, from anyone.
+   * No adapter change can fix that; it is logged so the cause is findable.
+   */
+  private canReadAllGroupMessages?: boolean;
+  private privacyWarningLogged = false;
+  // Groups and supergroups an enabled automation or open editor preview
+  // watches, pushed by the desktop runtime. There, a sender outside the actor
+  // allowlist is forwarded observedOnly instead of dropped. A topic trigger
+  // arrives with its group as a parent ID, so the group ID alone decides.
+  private observedConversationIds = new Set<string>();
   private listener?: (event: MessagingInboundEvent) => Promise<void>;
   private streamRateLimits = new Map<string, TelegramStreamRateLimitState>();
   // Per-stream sent messages, keyed by `intent.stream.key`. A response longer
@@ -583,6 +609,24 @@ export class TelegramAdapter implements TelegramProviderAdapter {
 
   get authorizedActorIds(): readonly string[] {
     return this.options.config.authorizedActorIds.map((contact) => contact.id);
+  }
+
+  updateObservedConversations(conversationIds: readonly string[]): void {
+    this.observedConversationIds = new Set(conversationIds);
+    this.warnIfPrivacyHidesObservedGroups();
+  }
+
+  private warnIfPrivacyHidesObservedGroups(): void {
+    if (this.privacyWarningLogged || this.canReadAllGroupMessages !== false) return;
+    // Group and supergroup chat IDs are negative; a user's private chat ID is
+    // positive, and a topic trigger's own ID is a small positive thread ID.
+    const groups = [...this.observedConversationIds].filter((id) => id.startsWith("-"));
+    if (groups.length === 0) return;
+    this.privacyWarningLogged = true;
+    this.options.logger?.warn?.(
+      "telegram group privacy is on; automations on these groups see only commands, mentions, and replies to the bot unless it is a group admin",
+      { groupIds: groups },
+    );
   }
 
   readCredentialMetadata(): { account?: string; detail?: string } | undefined {
@@ -648,6 +692,26 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     return target ? this.rateLimitScopeForTarget(target) : undefined;
   }
 
+  async resolveDirectConversation(
+    userId: string,
+  ): Promise<MessagingPrivateConversationResolveResult> {
+    if (!validateTelegramPositiveId(userId).ok) {
+      return {
+        channel: this.channel,
+        outcome: "failed",
+        updatedAt: this.now(),
+        errorMessage: "Invalid direct-message recipient ID.",
+      };
+    }
+    const conversationId = userId;
+    return {
+      channel: this.channel,
+      conversation: { id: conversationId, kind: "dm", isDirectMessage: true },
+      outcome: "resolved",
+      updatedAt: this.now(),
+    };
+  }
+
   async start(listener: (event: MessagingInboundEvent) => Promise<void>): Promise<void> {
     const lifecycleGeneration = ++this.lifecycleGeneration;
     this.listener = listener;
@@ -670,6 +734,10 @@ export class TelegramAdapter implements TelegramProviderAdapter {
         this.options.logger?.debug(
           `telegram captured bot username for mention parsing: @${this.botUsername}`,
         );
+      }
+      if (me.can_read_all_group_messages !== undefined) {
+        this.canReadAllGroupMessages = me.can_read_all_group_messages;
+        this.warnIfPrivacyHidesObservedGroups();
       }
     } catch (error) {
       this.options.logger?.warn?.("telegram getMe failed; @-mention commands disabled", {
@@ -1559,18 +1627,25 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       : undefined;
     const attachments = this.attachmentsFromMessage(message);
     const sourceUrl = telegramMessageUrl(message, this.botUsername);
-    if (
-      !isPairingMessage &&
-      !this.isAuthorizedMessageSource(message, {
-        actionable:
-          isPairingMessage
-          || mentionRemainder !== undefined
-          || Boolean(message.text?.startsWith("/")),
-        receipt,
-      })
-    ) {
+    const authorization = isPairingMessage
+      ? true
+      : this.isAuthorizedMessageSource(message, {
+          actionable:
+            mentionRemainder !== undefined
+            || Boolean(message.text?.startsWith("/")),
+          // Everything the text branch below would turn into a command: a
+          // slash command, `@bot /status` once the mention is stripped, and a
+          // bare `@bot`, which becomes Help. Media never becomes a command.
+          command:
+            attachments.length === 0
+            && (mentionRemainder === ""
+              || /^\//.test(mentionRemainder ?? message.text ?? "")),
+          receipt,
+        });
+    if (authorization === false) {
       return;
     }
+    const observedOnly = authorization === "observed";
     if (
       mentionRemainder !== undefined &&
       mentionCandidate !== undefined &&
@@ -1625,6 +1700,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
         routingState: this.routingStateFromMessage(message),
         ...(sourceUrl ? { sourceUrl } : {}),
         ...(mentionRemainder !== undefined ? { botMention: true } : {}),
+        ...(observedOnly ? { observedOnly: true } : {}),
         text: mentionRemainder ?? message.caption,
       });
       return;
@@ -1636,6 +1712,11 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     }
 
     const commandMatch = /^\/([A-Za-z0-9_]+)(?:@\S+)?(?:\s+(.*))?$/.exec(inboundText);
+    // Unreachable while `isAuthorizedMessageSource` never observes a command;
+    // kept so that invariant failing can only drop a message, never run one.
+    if (observedOnly && commandMatch) {
+      return;
+    }
     this.options.logger?.debug(
       `telegram inbound ${commandMatch ? "command" : "text"} update=${updateId} message=${message.message_id} chat=${message.chat.id} actor=${message.from.id} chars=${inboundText.length} preview="${compactPreview(inboundText)}"`,
     );
@@ -1653,6 +1734,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
           }
         : {
             text: inboundText,
+            ...(observedOnly ? { observedOnly: true } : {}),
           }),
       ...receipt,
       routingState: this.routingStateFromMessage(message),
@@ -1815,12 +1897,26 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     return false;
   }
 
+  /**
+   * `"observed"` admits a message for automations and the editor preview only:
+   * a non-command from a sender outside the actor allowlist, in an authorized
+   * group that an enabled automation or open preview watches. The runtime
+   * keeps observed traffic off every reply and command path.
+   */
   private isAuthorizedMessageSource(
     message: TelegramMessage,
-    options: { actionable: boolean; receipt: MessagingInboundReceipt },
-  ): boolean {
+    options: { actionable: boolean; command: boolean; receipt: MessagingInboundReceipt },
+  ): boolean | "observed" {
     const actorId = String(message.from?.id ?? "");
     if (!this.isAuthorizedActor(actorId)) {
+      if (
+        !options.command
+        && (message.chat.type === "group" || message.chat.type === "supergroup")
+        && this.observedConversationIds.has(String(message.chat.id))
+        && this.isAuthorizedTelegramConversation(message.chat)
+      ) {
+        return "observed";
+      }
       if (message.chat.type === "private" || options.actionable) {
         this.options.logger?.warn?.("telegram inbound ignored unauthorized actor", {
           actorId,

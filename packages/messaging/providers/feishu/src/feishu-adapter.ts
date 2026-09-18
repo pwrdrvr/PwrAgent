@@ -8,6 +8,7 @@ import {
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { Readable } from "node:stream";
 import type {
+  MessagingPrivateConversationResolveResult,
   MessagingActorIdentity,
   MessagingAdapterAuthorizationUpdate,
   MessagingAdapterDiagnosticEvent,
@@ -120,6 +121,7 @@ export type FeishuProviderAdapter = {
   capabilityProfile: MessagingCapabilityProfile;
   channel: "feishu";
   clientRateLimitStrategy: MessagingClientRateLimitStrategy;
+  resolveDirectConversation?(userId: string): Promise<MessagingPrivateConversationResolveResult>;
   deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult>;
   downloadAttachment(
     request: MessagingAttachmentDownloadRequest,
@@ -334,6 +336,11 @@ export class FeishuAdapter implements FeishuProviderAdapter {
   private readonly inboundRejectedListeners = new Set<MessagingInboundRejectedListener>();
   private readonly rateLimitListeners = new Set<(info: MessagingRateLimitInfo) => void>();
   private readonly recentlyHandledInboundKeys = new Map<string, number>();
+  // Group chats an enabled automation or open editor preview watches, pushed
+  // by the desktop runtime. There, a sender outside the actor allowlist is
+  // forwarded observedOnly instead of rejected; without it a Feishu group
+  // automation fired only for authorized contacts. Empty by default.
+  private observedConversationIds = new Set<string>();
   // Per-stream card message created for a streaming response, keyed by
   // `intent.stream.key`. Feishu has no create-or-edit primitive, so the first
   // chunk sends a card and records its message id here; later chunks (and the
@@ -386,6 +393,10 @@ export class FeishuAdapter implements FeishuProviderAdapter {
     };
   }
 
+  updateObservedConversations(conversationIds: readonly string[]): void {
+    this.observedConversationIds = new Set(conversationIds);
+  }
+
   async updateAuthorization(update: MessagingAdapterAuthorizationUpdate): Promise<void> {
     this.authorizedActorIdsValue = [...update.authorizedActorIds];
     this.config.authorizedActorIds = feishuContactsFromIds(
@@ -434,6 +445,26 @@ export class FeishuAdapter implements FeishuProviderAdapter {
   resolveDeliveryScope(intent: MessagingSurfaceIntent): MessagingDeliveryScope | undefined {
     const target = this.resolveTarget(intent);
     return target ? this.rateLimitScopeForTarget(target) : undefined;
+  }
+
+  async resolveDirectConversation(
+    userId: string,
+  ): Promise<MessagingPrivateConversationResolveResult> {
+    if (!validateFeishuOpenId(userId).ok) {
+      return {
+        channel: this.channel,
+        outcome: "failed",
+        updatedAt: this.now(),
+        errorMessage: "Invalid direct-message recipient ID.",
+      };
+    }
+    const conversationId = userId;
+    return {
+      channel: this.channel,
+      conversation: { id: conversationId, kind: "dm", isDirectMessage: true },
+      outcome: "resolved",
+      updatedAt: this.now(),
+    };
   }
 
   async start(listener: FeishuInboundListener): Promise<void> {
@@ -998,15 +1029,17 @@ export class FeishuAdapter implements FeishuProviderAdapter {
       messageType: message.message_type,
     });
 
-    if (!(await this.authorizeInbound({
+    const authorization = await this.authorizeInbound({
       actor,
       channel: channelRef,
       kind: inboundKind,
       pairing: Boolean(pairingToken),
       routingState,
-    }))) {
+    });
+    if (authorization === false) {
       return;
     }
+    const observedOnly = authorization === "observed";
 
     const inbound: MessagingInboundEvent = command
       ? {
@@ -1033,11 +1066,13 @@ export class FeishuAdapter implements FeishuProviderAdapter {
                 ? "available"
                 : "unsupported",
               ...(messageText ? { text: messageText } : {}),
+              ...(observedOnly ? { observedOnly: true } : {}),
             }
         : {
             ...eventBase,
             kind: "text",
             text: messageText,
+            ...(observedOnly ? { observedOnly: true } : {}),
           };
     await this.listener?.(inbound);
   }
@@ -1275,16 +1310,31 @@ export class FeishuAdapter implements FeishuProviderAdapter {
       });
   }
 
+  /**
+   * `"observed"` admits a message for automations and the editor preview only:
+   * a non-command from a sender outside the actor allowlist, in an authorized
+   * group chat that an enabled automation or open preview watches. The
+   * runtime keeps observed traffic off every reply and command path; a
+   * command is rejected here exactly as it would be anywhere else.
+   */
   private async authorizeInbound(params: {
     actor: MessagingActorIdentity;
     channel: MessagingChannelRef;
     kind: MessagingInboundEvent["kind"];
     pairing?: boolean;
     routingState?: MessagingAdapterState;
-  }): Promise<boolean> {
+  }): Promise<boolean | "observed"> {
     if (params.pairing) return true;
 
     if (!this.authorizedActorIdsValue.includes(params.actor.platformUserId)) {
+      if (
+        params.kind !== "command"
+        && params.channel.conversation.kind !== "dm"
+        && this.observedConversationIds.has(params.channel.conversation.id)
+        && this.isAuthorizedGroupConversation(params.channel)
+      ) {
+        return "observed";
+      }
       await this.emitInboundRejected({
         id: `${params.actor.platformUserId}:${this.now()}`,
         kind: params.kind,
@@ -1297,15 +1347,7 @@ export class FeishuAdapter implements FeishuProviderAdapter {
       return false;
     }
     if (params.channel.conversation.kind !== "dm") {
-      const chatAllowed = contactIds(this.config.authorizedChatIds).includes(
-        params.channel.conversation.id,
-      );
-      const tenantAllowed =
-        params.channel.conversation.parentId !== undefined
-        && contactIds(this.config.authorizedTenantKeys).includes(
-          params.channel.conversation.parentId,
-        );
-      if (!chatAllowed && !tenantAllowed) {
+      if (!this.isAuthorizedGroupConversation(params.channel)) {
         await this.emitInboundRejected({
           id: `${params.channel.conversation.id}:${this.now()}`,
           kind: params.kind,
@@ -1319,6 +1361,19 @@ export class FeishuAdapter implements FeishuProviderAdapter {
       }
     }
     return true;
+  }
+
+  /** A group chat on the chat allowlist, or in a tenant on the tenant allowlist. */
+  private isAuthorizedGroupConversation(channel: MessagingChannelRef): boolean {
+    const chatAllowed = contactIds(this.config.authorizedChatIds).includes(
+      channel.conversation.id,
+    );
+    const tenantAllowed =
+      channel.conversation.parentId !== undefined
+      && contactIds(this.config.authorizedTenantKeys).includes(
+        channel.conversation.parentId,
+      );
+    return chatAllowed || tenantAllowed;
   }
 
   private async emitInboundRejected(event: MessagingRejectedInboundEvent): Promise<void> {

@@ -1,4 +1,5 @@
-import type { InboundPreviewMessage } from "@pwragent/shared";
+import { matchesAutomationConversation } from "@pwragent/shared";
+import type { InboundPreviewMessage, StartInboundPreviewRequest } from "@pwragent/shared";
 import type { MessagingInboundEvent } from "@pwragent/messaging-interface";
 
 /**
@@ -11,16 +12,17 @@ import type { MessagingInboundEvent } from "@pwragent/messaging-interface";
  * filter would catch. There is no history backfill — only messages that
  * arrive while a preview scope is active are surfaced.
  */
-export type InboundPreviewScope = {
-  conversationId: string;
-  parentId?: string;
-  provider: string;
-};
+export type InboundPreviewScope = Omit<StartInboundPreviewRequest, "subscriptionId">;
 
 const MAX_PREVIEW_TEXT_CHARS = 600;
 
 const activeScopes = new Map<string, InboundPreviewScope>();
 let sink: ((message: InboundPreviewMessage) => void) | undefined;
+const scopeListeners = new Set<() => void>();
+
+function notifyScopesChanged(): void {
+  for (const listener of scopeListeners) listener();
+}
 
 /** Wire the transport that pushes preview messages to renderer windows. */
 export function setInboundPreviewSink(
@@ -34,20 +36,59 @@ export function startInboundPreview(
   scope: InboundPreviewScope,
 ): void {
   activeScopes.set(subscriptionId, scope);
+  notifyScopesChanged();
 }
 
 export function stopInboundPreview(subscriptionId: string): void {
-  activeScopes.delete(subscriptionId);
+  if (activeScopes.delete(subscriptionId)) notifyScopesChanged();
+}
+
+/** Called whenever a preview opens or closes. Returns an unsubscribe. */
+export function onInboundPreviewScopesChanged(listener: () => void): () => void {
+  scopeListeners.add(listener);
+  return () => {
+    scopeListeners.delete(listener);
+  };
+}
+
+/**
+ * Shared conversations an open preview is watching on one platform, for the
+ * adapters' observed sets. Without this, a preview only ever showed senders on
+ * the actor allowlist: an adapter forwards everyone else's messages only in
+ * conversations an ENABLED automation watches, so previewing `#alerts` before
+ * saving showed nothing from the alert bot the automation exists to catch.
+ *
+ * A contact-DM preview contributes nothing. A 1:1 DM is gated by who the
+ * sender is, not by which conversation it is in, and observing the contact's
+ * user ID would widen nothing an operator could see.
+ */
+export function activeInboundPreviewConversationIds(
+  provider: InboundPreviewScope["provider"],
+): string[] {
+  const ids = new Set<string>();
+  for (const scope of activeScopes.values()) {
+    if (scope.provider !== provider || scope.recipientUserId) continue;
+    ids.add(scope.conversationId);
+    if (scope.parentId) ids.add(scope.parentId);
+  }
+  return [...ids];
 }
 
 export function hasActiveInboundPreview(): boolean {
   return activeScopes.size > 0;
 }
 
-/** Test/lifecycle helper. */
+/**
+ * Test/lifecycle helper. Clears scopes and the sink, not scope-change
+ * listeners: those belong to their subscribers, who unsubscribe themselves.
+ * The messaging runtime subscribes once per start, so clearing them here
+ * would silently stop open previews from joining the observed sets.
+ */
 export function resetInboundPreview(): void {
+  const hadScopes = activeScopes.size > 0;
   activeScopes.clear();
   sink = undefined;
+  if (hadScopes) notifyScopesChanged();
 }
 
 /**
@@ -67,13 +108,12 @@ function matchesAnyScope(
 ): boolean {
   const conversation = event.channel.conversation;
   for (const scope of activeScopes.values()) {
-    if (scope.provider !== event.channel.channel) continue;
-    if (
-      conversation.id === scope.conversationId ||
-      conversation.parentId === scope.conversationId
-    ) {
-      return true;
-    }
+    if (matchesAutomationConversation({ ...scope, channel: scope.provider }, {
+      ...conversation,
+      conversationId: conversation.id,
+      conversationKind: conversation.kind,
+      channel: event.channel.channel,
+    }, event.actor.platformUserId)) return true;
   }
   return false;
 }
@@ -102,6 +142,10 @@ function toPreviewMessage(
     id: event.id,
     provider: event.channel.channel,
     conversationId: event.channel.conversation.id,
+    conversationKind: event.channel.conversation.kind,
+    isDirectMessage: event.channel.conversation.isDirectMessage,
+    parentConversationId: event.channel.conversation.parentConversationId,
+    parentConversationParentId: event.channel.conversation.parentConversationParentId,
     ...(event.channel.conversation.parentId
       ? { parentId: event.channel.conversation.parentId }
       : {}),

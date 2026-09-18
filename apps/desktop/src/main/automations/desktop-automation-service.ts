@@ -667,8 +667,18 @@ export class DesktopAutomationService {
     if (trigger?.kind !== "inbound_message") {
       return { candidates: [], supported: false };
     }
+    // The provider first: where it has no history reader, no scope would
+    // replay either, and blaming the scope would imply a channel trigger
+    // could. Only a provider that reads history is refused by the scope — a
+    // Slack DM, not a Telegram one.
     if (!deps.supportsHistory(trigger.conversation.channel)) {
-      return { candidates: [], supported: false };
+      return { candidates: [], supported: false, unsupportedReason: "provider" };
+    }
+    if (trigger.conversation.recipientUserId) {
+      return { candidates: [], supported: false, unsupportedReason: "contact_dm" };
+    }
+    if (trigger.conversation.parentId) {
+      return { candidates: [], supported: false, unsupportedReason: "scoped_thread" };
     }
     const messages = await deps.fetchRecent({
       provider: trigger.conversation.channel,

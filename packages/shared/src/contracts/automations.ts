@@ -272,11 +272,59 @@ export type AutomationMessagingConversationSnapshot = {
   channel: MessagingChannelKind;
   conversationId: string;
   conversationKind?: MessagingConversationKind;
+  /** A selected contact addresses their 1:1 DM, not a conversation with this ID. */
+  recipientUserId?: string;
+  isDirectMessage?: boolean;
   parentId?: string;
   title?: string;
   parentTitle?: string;
   ancestorTitle?: string;
 };
+
+/** Match normalized conversation identity without interpreting provider routing state. */
+export function matchesAutomationConversation(
+  expected: AutomationMessagingConversationSnapshot,
+  actual: AutomationMessagingConversationSnapshot & {
+    parentConversationId?: string;
+    parentConversationParentId?: string;
+  },
+  actorId: string,
+  includeThreadReplies = true,
+): boolean {
+  if (actual.channel !== expected.channel) return false;
+  const isDm = actual.conversationKind === "dm" || actual.isDirectMessage === true;
+  if (expected.recipientUserId) {
+    if (!isDm || actorId !== expected.recipientUserId) return false;
+  } else {
+    // Older editors saved authorized contacts as channels with their raw user
+    // IDs. Telegram and LINE distinguish users from shared conversation IDs:
+    // https://core.telegram.org/api/bots/ids
+    // https://developers.line.biz/en/faq/#what-are-user-id-groupid-roomid
+    const legacyDm = expected.conversationKind === "channel"
+      && expected.parentId === undefined
+      && (expected.channel === "telegram"
+        ? /^[1-9][0-9]*$/.test(expected.conversationId)
+          && Number(expected.conversationId) <= 0xffffffffff
+        : expected.channel === "line" && /^U[0-9a-f]{32}$/.test(expected.conversationId));
+    const expectedKind = legacyDm ? "dm" : expected.conversationKind;
+    if (expectedKind === "dm" && !isDm) return false;
+    if (expectedKind === "channel" && isDm) return false;
+    const exact = actual.conversationId === expected.conversationId
+      && (expected.parentId === undefined || actual.parentId === expected.parentId);
+    const child = actual.parentConversationId === expected.conversationId
+      && (expected.parentId === undefined
+        || actual.parentConversationParentId === expected.parentId);
+    if (!exact && !child) return false;
+    // Discord threads have their own native channel IDs. Manual entry and
+    // older captures label them "channel"; an exact target is not a child
+    // reply. Slack and Mattermost can reuse the parent channel ID for replies.
+    if (exact && actual.channel === "discord" && actual.conversationKind === "thread") {
+      return true;
+    }
+  }
+  return actual.conversationKind !== "thread" || includeThreadReplies
+    || expected.conversationKind === "thread";
+}
 
 export type AutomationInboundMessageTriggerDefinition = {
   id: string;
@@ -1045,14 +1093,30 @@ export type AutomationReplayCandidate = {
   matches: boolean;
 };
 
+/**
+ * Why replay has nothing to offer. Three different constraints refuse, and the
+ * empty state has to name the right one: telling an operator on a Slack DM
+ * trigger that "this provider can't serve conversation history" sends them to
+ * check the one thing that is working.
+ */
+export type AutomationReplayUnsupportedReason =
+  /** The adapter has no history reader at all. */
+  | "provider"
+  /** A contact's DMs. The history reader takes conversation IDs, not user IDs. */
+  | "contact_dm"
+  /** A thread or Telegram topic. The history reader takes top-level IDs only. */
+  | "scoped_thread";
+
 export type ListAutomationReplayCandidatesResponse = {
   candidates: AutomationReplayCandidate[];
   /**
-   * False when the provider cannot serve conversation history (only Slack can
-   * today) — the UI says so instead of rendering an empty list that reads as
-   * "the channel is silent".
+   * False when the adapter cannot read history for this scope. Currently only
+   * Slack native top-level conversation IDs are supported; contact recipients
+   * and scoped threads/topics still support going-forward live preview.
    */
   supported: boolean;
+  /** Set whenever `supported` is false and the reason is one the UI can name. */
+  unsupportedReason?: AutomationReplayUnsupportedReason;
 };
 
 export type ReplayAutomationInboundRequest = {

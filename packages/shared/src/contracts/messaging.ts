@@ -556,6 +556,10 @@ export type RejectMessagingPairingResponse = {
  * everything else is captured going-forward while the preview is open.
  */
 export type InboundPreviewMessage = {
+  conversationKind?: MessagingConversationKind;
+  isDirectMessage?: boolean;
+  parentConversationId?: string;
+  parentConversationParentId?: string;
   id: string;
   provider: MessagingChannelKind;
   conversationId: string;
@@ -614,6 +618,8 @@ export type SearchMessagingSendersResponse = {
 };
 
 export type StartInboundPreviewRequest = {
+  conversationKind?: MessagingConversationKind;
+  recipientUserId?: string;
   subscriptionId: string;
   provider: MessagingChannelKind;
   conversationId: string;
@@ -622,6 +628,7 @@ export type StartInboundPreviewRequest = {
 
 export type StartInboundPreviewResponse = {
   ok: boolean;
+  historySupported?: boolean;
 };
 
 export type StopInboundPreviewRequest = {

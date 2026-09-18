@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { InboundPreviewMessage } from "@pwragent/shared";
 import type { MessagingInboundEvent } from "@pwragent/messaging-interface";
 import {
+  activeInboundPreviewConversationIds,
+  onInboundPreviewScopesChanged,
   publishInboundPreview,
   resetInboundPreview,
   setInboundPreviewSink,
@@ -29,7 +31,7 @@ function textEvent(params: {
       conversation: {
         id: params.conversationId,
         kind: params.parentId ? "topic" : "channel",
-        ...(params.parentId ? { parentId: params.parentId } : {}),
+        ...(params.parentId ? { parentId: params.parentId, parentConversationId: params.parentId } : {}),
       },
     },
     receivedAt: 1,
@@ -95,6 +97,48 @@ describe("inbound-preview-bus", () => {
     );
 
     expect(sink).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Adapters forward a sender outside the actor allowlist only in observed
+   * conversations. An open preview has to be one, or previewing `#alerts`
+   * before saving shows nothing from the alert bot the automation is for.
+   */
+  it("reports open previews' shared conversations for observation", () => {
+    const changed = vi.fn();
+    const unsubscribe = onInboundPreviewScopesChanged(changed);
+    startInboundPreview("s1", { provider: "discord", conversationId: "chan-1" });
+    startInboundPreview("s2", { provider: "telegram", conversationId: "42", parentId: "-100" });
+    // A contact DM is gated by its sender, not its conversation.
+    startInboundPreview("s3", {
+      provider: "discord",
+      conversationId: "U1",
+      conversationKind: "dm",
+      recipientUserId: "U1",
+    });
+
+    expect(activeInboundPreviewConversationIds("discord")).toEqual(["chan-1"]);
+    expect(activeInboundPreviewConversationIds("telegram")).toEqual(["42", "-100"]);
+
+    stopInboundPreview("s1");
+    // Stopping a scope that was never open is not a change.
+    stopInboundPreview("never-started");
+    expect(activeInboundPreviewConversationIds("discord")).toEqual([]);
+    expect(changed).toHaveBeenCalledTimes(4);
+    unsubscribe();
+  });
+
+  it("keeps scope listeners across a reset, and tells them the scopes went", () => {
+    // The runtime subscribes once per start; a reset that dropped it would
+    // leave previews silently outside the adapters' observed sets.
+    const changed = vi.fn();
+    const unsubscribe = onInboundPreviewScopesChanged(changed);
+    startInboundPreview("s1", { provider: "discord", conversationId: "chan-1" });
+    resetInboundPreview();
+    expect(changed).toHaveBeenCalledTimes(2);
+    startInboundPreview("s2", { provider: "discord", conversationId: "chan-2" });
+    expect(changed).toHaveBeenCalledTimes(3);
+    unsubscribe();
   });
 
   it("stops forwarding after the scope is removed", () => {

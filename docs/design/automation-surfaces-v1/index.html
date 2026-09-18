@@ -1,0 +1,671 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <title>PwrAgent — Automation messaging surfaces (design pass for #2196)</title>
+    <meta name="viewport" content="width=1440, initial-scale=1" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700;800&family=Geist+Mono:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      /* ----------------------------------------------------------------
+         PwrAgent token bridge.
+         Mirrors apps/desktop/src/renderer/src/styles/app.css :root.
+         If those tokens drift, this prototype drifts too — intentional.
+         ---------------------------------------------------------------- */
+      :root {
+        color-scheme: dark;
+
+        --font-sans: "Geist", "IBM Plex Sans", "SF Pro Text", "Inter",
+          system-ui, sans-serif;
+        --font-mono: "Geist Mono", "IBM Plex Mono", "SFMono-Regular",
+          "SF Mono", Consolas, monospace;
+
+        --bg-app: #000000;
+        --bg-panel: #0a0a0a;
+        --bg-panel-elevated: #101010;
+        --bg-row-active: #120800;
+        --bg-input: #080808;
+
+        --border-subtle: rgba(247, 243, 235, 0.1);
+        --border-strong: rgba(247, 243, 235, 0.2);
+
+        --text-primary: #f7f3eb;
+        --text-secondary: #b8b0a5;
+        --text-muted: #8c857a;
+
+        --accent: #ff8a1f;
+        --accent-bright: #ffb35c;
+        --accent-soft: rgba(255, 138, 31, 0.12);
+        --accent-border: rgba(255, 138, 31, 0.42);
+
+        --danger-text: #ffb0a1;
+        --danger-border: rgba(232, 90, 58, 0.36);
+        --danger-soft: rgba(232, 90, 58, 0.12);
+
+        --info-text: #9fc8ff;
+        --info-border: rgba(86, 137, 196, 0.28);
+        --info-soft: rgba(86, 137, 196, 0.16);
+
+        --success-text: #9ce5b3;
+        --success-border: rgba(74, 148, 92, 0.32);
+        --success-soft: rgba(74, 148, 92, 0.16);
+      }
+
+      * { box-sizing: border-box; }
+
+      body {
+        margin: 0;
+        padding: 40px 48px 72px;
+        background: var(--bg-app);
+        color: var(--text-primary);
+        font-family: var(--font-sans);
+        font-size: 13px;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      /* ---- Sheet chrome (prototype only, not a product primitive) ---- */
+      .sheet { max-width: 1280px; margin: 0 auto 64px; }
+      .sheet:last-child { margin-bottom: 0; }
+
+      .sheet__eyebrow {
+        margin: 0 0 6px;
+        color: var(--accent);
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+      .sheet__title { margin: 0 0 6px; font-size: 21px; font-weight: 700; letter-spacing: -0.01em; }
+      .sheet__lede { margin: 0 0 24px; max-width: 760px; color: var(--text-secondary); font-size: 13px; line-height: 1.55; }
+
+      .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; align-items: start; }
+      .pair--stack { grid-template-columns: 1fr; }
+      /* A stacked sheet still gets a reading measure — a 1280px line of
+         11px copy is not something anyone reads twice. */
+      .pair--stack > div { max-width: 920px; }
+
+      .col__head {
+        display: flex; align-items: center; gap: 8px;
+        margin-bottom: 10px; font-size: 11px; font-weight: 600;
+        letter-spacing: 0.06em; text-transform: uppercase;
+      }
+      .col__head--now { color: var(--danger-text); }
+      .col__head--next { color: var(--accent-bright); }
+      .col__head--done { color: var(--success-text); }
+      .col__head::after { content: ""; flex: 1; height: 1px; background: var(--border-subtle); }
+
+      .stage {
+        padding: 18px;
+        border: 1px solid var(--border-subtle);
+        border-radius: 10px;
+        background: var(--bg-panel);
+      }
+
+      .note {
+        margin: 12px 0 0; padding: 9px 11px;
+        border-left: 2px solid var(--danger-border);
+        background: var(--danger-soft);
+        color: var(--danger-text);
+        font-size: 11.5px; line-height: 1.5;
+      }
+      .note--ok { border-left-color: var(--accent-border); background: var(--accent-soft); color: var(--accent-bright); }
+      .note--done { border-left-color: var(--success-border); background: var(--success-soft); color: var(--success-text); }
+      .note--todo { border-left-color: var(--info-border); background: var(--info-soft); color: var(--info-text); }
+      .note code { font-family: var(--font-mono); font-size: 11px; }
+
+      /* ---- Shipped primitives, transcribed from app.css ---- */
+
+      /* .automation-field / .automation-field__hint */
+      .field { display: flex; flex-direction: column; gap: 6px; color: var(--text-secondary); font-size: 12px; font-weight: 600; }
+      .field + .field, .field + .hint + .field { margin-top: 14px; }
+      .field input {
+        width: 100%; min-height: 32px; padding: 0 9px;
+        border: 1px solid var(--border-subtle); border-radius: 6px;
+        background: var(--bg-app); color: var(--text-primary); font: inherit; font-weight: 400;
+      }
+      .field input::placeholder { color: var(--text-muted); }
+      .hint { margin: 6px 0 0; color: var(--text-muted); font-size: 11px; font-weight: 400; line-height: 1.4; }
+
+      /* .automation-field--picker .messaging-surface-picker__trigger */
+      .picker-field { max-width: 560px; }
+      .picker-trigger {
+        position: relative; display: block; width: 100%;
+        min-height: 32px; padding: 0 30px 0 9px; line-height: 30px;
+        border: 1px solid var(--border-subtle); border-radius: 6px;
+        background-color: var(--bg-app); color: var(--text-primary);
+        font-family: var(--font-sans); font-size: 12px; font-weight: 600;
+        text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      }
+      .picker-trigger::after {
+        content: ""; position: absolute; top: 50%; right: 11px;
+        width: 5px; height: 5px; margin-top: -4px;
+        border-right: 1px solid var(--text-muted); border-bottom: 1px solid var(--text-muted);
+        transform: rotate(45deg);
+      }
+
+      /* .messaging-surface-picker__panel */
+      .panel {
+        width: 440px; max-height: 440px; overflow: hidden;
+        display: flex; flex-direction: column;
+        border: 1px solid var(--border-strong); border-radius: 10px;
+        background: var(--bg-panel-elevated);
+        box-shadow: 0 18px 44px rgba(0, 0, 0, 0.62);
+        color: var(--text-primary); font-size: 13px; font-weight: 400;
+      }
+
+      /* .project-picker__search */
+      .panel__search {
+        flex: 0 0 auto; display: flex; align-items: center; gap: 8px;
+        padding: 5px 10px; margin-bottom: 4px;
+        border-bottom: 1px solid var(--border-subtle);
+      }
+      .panel__search svg { flex: 0 0 auto; color: var(--text-muted); }
+      .panel__search span { flex: 1; color: var(--text-muted); font-size: 13px; }
+
+      /* .project-picker__section */
+      .panel__section {
+        flex: 0 0 auto; padding: 6px 10px 4px;
+        color: var(--text-muted); font-size: 11px; font-weight: 600;
+        letter-spacing: 0.06em; text-transform: uppercase;
+      }
+
+      /* .project-picker__row */
+      .row {
+        display: flex; width: 100%; align-items: center; gap: 8px;
+        min-height: 38px; padding: 7px 10px; border-radius: 6px;
+        font-size: 14px; line-height: 1.35; text-align: left;
+      }
+      .row.is-cursor { background: var(--accent-soft); color: var(--accent-bright); }
+      .row__check { flex: 0 0 12px; width: 12px; text-align: center; color: var(--accent-bright); }
+      .row__glyph {
+        flex: 0 0 13px; width: 13px; display: inline-flex; justify-content: center;
+        color: var(--text-muted); font-family: var(--font-mono); font-size: 13px;
+      }
+      .row.is-cursor .row__glyph, .row.is-cursor .row__path { color: var(--accent-bright); }
+      .row__name { flex: 0 1 auto; min-width: 0; max-width: 60%; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .row__path { flex: 1; font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .row__path mark { background: var(--danger-soft); color: var(--danger-text); padding: 0 2px; border-radius: 2px; }
+      .panel__separator { flex: 0 0 auto; height: 1px; margin: 4px 2px; background: var(--border-subtle); }
+      .row--action { color: var(--accent-bright); }
+      .row--action .row__plus { flex: 0 0 14px; width: 14px; display: inline-flex; justify-content: center; font-weight: 700; }
+
+      /* .automation-segmented */
+      .segmented {
+        display: inline-grid; grid-auto-flow: column; grid-auto-columns: minmax(104px, max-content);
+        width: max-content; max-width: 100%; padding: 3px;
+        border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--bg-panel);
+      }
+      .segmented button {
+        min-height: 30px; padding: 0 14px; border: 1px solid transparent; border-radius: 6px;
+        background: transparent; color: var(--text-secondary); font: inherit; font-size: 12px; cursor: pointer;
+      }
+      .segmented button.is-active { border-color: var(--accent-border); background: var(--bg-row-active); color: var(--accent-bright); }
+
+      /* .button--ghost */
+      .ghost {
+        min-height: 30px; padding: 0 12px; border: 1px solid var(--border-subtle);
+        border-radius: 6px; background: transparent; color: var(--text-secondary);
+        font: inherit; font-size: 12px; cursor: pointer;
+      }
+
+      /* .automation-flow caption */
+      .flow {
+        display: flex; align-items: center; gap: 10px; margin: 16px 0;
+        color: var(--text-muted); font-size: 11.5px;
+      }
+      .flow::before { content: ""; width: 1px; height: 22px; margin-left: 11px; background: var(--border-subtle); }
+
+      .stage__legend {
+        display: flex; align-items: baseline; gap: 8px; margin: 0 0 14px;
+      }
+      .stage__verb { color: var(--accent); font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
+      .stage__name { font-size: 14px; font-weight: 600; }
+
+      .banner {
+        display: flex; gap: 9px; margin-top: 12px; padding: 9px 11px;
+        border: 1px solid var(--info-border); border-radius: 6px;
+        background: var(--info-soft); color: var(--info-text);
+        font-size: 11.5px; line-height: 1.5;
+      }
+      .banner__glyph { flex: 0 0 auto; font-family: var(--font-mono); }
+
+      .preview-panel { margin-top: 12px; padding: 12px; border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--bg-app); }
+      .preview-item { display: flex; flex-direction: column; gap: 3px; padding: 8px 9px; border-radius: 6px; font-size: 12px; }
+      .preview-item.is-match { background: var(--accent-soft); }
+      .preview-item__who { color: var(--text-muted); font-size: 11px; }
+      .preview-item__who b { color: var(--text-secondary); font-weight: 600; }
+
+      .index { max-width: 1280px; margin: 0 auto 56px; padding-bottom: 24px; border-bottom: 1px solid var(--border-subtle); }
+      .index h1 { margin: 0 0 8px; font-size: 24px; font-weight: 700; letter-spacing: -0.02em; }
+      .index p { margin: 0 0 16px; max-width: 760px; color: var(--text-secondary); line-height: 1.6; }
+      .index ol { margin: 0; padding-left: 20px; color: var(--text-secondary); line-height: 1.9; }
+      .index code { font-family: var(--font-mono); font-size: 11.5px; color: var(--text-muted); }
+      .index .fixed { color: var(--success-text); font-size: 10.5px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; }
+      body.is-isolated .index { display: none; }
+      body.is-isolated { padding-top: 48px; }
+    </style>
+  </head>
+  <body>
+    <header class="index">
+      <h1>Automation messaging surfaces — design pass</h1>
+      <p>
+        Six surfaces from the Automations editor, each shown as the review found
+        it (left) and as it reads after the fix (right). Every right-hand column
+        is what <code>fix/automation-provider-surfaces</code> now renders. Tokens
+        and control geometry are transcribed from
+        <code>apps/desktop/src/renderer/src/styles/app.css</code>.
+        Append <code>?slide=&lt;id&gt;</code> to isolate one sheet.
+      </p>
+      <ol>
+        <li><code>picker</code> — the DM rows in the surface picker <b class="fixed">fixed</b></li>
+        <li><code>manual</code> — manual ID entry had no way to say “this is a DM” <b class="fixed">fixed</b></li>
+        <li><code>discord</code> — a provider whose channels were never in the list <b class="fixed">fixed</b></li>
+        <li><code>preview</code> — history availability, stated before it is needed <b class="fixed">fixed</b></li>
+        <li><code>destination</code> — a Telegram DM destination with a live topic field <b class="fixed">fixed</b></li>
+        <li><code>replay</code> — the empty state blamed the provider for a scope limit <b class="fixed">fixed</b></li>
+      </ol>
+    </header>
+
+    <!-- ============================================================= 1 -->
+    <section class="sheet" data-slide="picker">
+      <p class="sheet__eyebrow">Sheet 1 · Trigger → surface picker</p>
+      <h2 class="sheet__title">The DM rows print an ID that does not exist</h2>
+      <p class="sheet__lede">
+        <code>readProviderGroups</code> prefixes every contact with <code>dm:</code>
+        so the editor can tell a contact from a conversation. That sentinel reaches
+        the mono ID column — the one thing the picker exists to provide. A contact
+        with no display name shows the same identifier twice, spelled two ways.
+      </p>
+      <div class="pair">
+        <div>
+          <div class="col__head col__head--now">Before the fix</div>
+          <div class="panel">
+            <div class="panel__search">
+              <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5L14 14"/></svg>
+              <span>Find a channel, DM, or ID</span>
+            </div>
+            <div class="panel__section">Authorized channels</div>
+            <div class="row"><span class="row__check"></span><span class="row__glyph">#</span><span class="row__name">release-eng</span><span class="row__path">C04KJ8ZB2QT</span></div>
+            <div class="row"><span class="row__check"></span><span class="row__glyph">#</span><span class="row__name">oncall-escalations</span><span class="row__path">C05RR1M4X8P</span></div>
+            <div class="panel__section">Authorized direct messages</div>
+            <div class="row is-cursor"><span class="row__check"></span><span class="row__glyph">@</span><span class="row__name">Dana Okonkwo</span><span class="row__path"><mark>dm:</mark>U03QW7ELB19</span></div>
+            <div class="row"><span class="row__check"></span><span class="row__glyph">@</span><span class="row__name">U08ZT4NKC22</span><span class="row__path"><mark>dm:</mark>U08ZT4NKC22</span></div>
+            <div class="panel__separator"></div>
+            <div class="row row--action"><span class="row__check"></span><span class="row__plus">+</span><span class="row__name">Enter Channel ID manually...</span></div>
+          </div>
+          <p class="note">
+            <code>dm:U03QW7ELB19</code> is an internal sentinel. Pasted into Slack it
+            finds nothing, and it is what the search box matches on. The second row
+            is a contact PwrAgent has no name for: label and ID are the same value.
+          </p>
+        </div>
+        <div>
+          <div class="col__head col__head--done">Fixed on this branch</div>
+          <div class="panel">
+            <div class="panel__search">
+              <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5L14 14"/></svg>
+              <span>Find a channel, DM, or ID</span>
+            </div>
+            <div class="panel__section">Authorized channels</div>
+            <div class="row"><span class="row__check"></span><span class="row__glyph">#</span><span class="row__name">release-eng</span><span class="row__path">C04KJ8ZB2QT</span></div>
+            <div class="row"><span class="row__check"></span><span class="row__glyph">#</span><span class="row__name">oncall-escalations</span><span class="row__path">C05RR1M4X8P</span></div>
+            <div class="panel__section">Direct messages from</div>
+            <div class="row is-cursor"><span class="row__check"></span><span class="row__glyph">@</span><span class="row__name">Dana Okonkwo</span><span class="row__path">U03QW7ELB19</span></div>
+            <div class="row"><span class="row__check"></span><span class="row__glyph">@</span><span class="row__name">U08ZT4NKC22</span><span class="row__path"></span></div>
+            <div class="panel__separator"></div>
+            <div class="row row--action"><span class="row__check"></span><span class="row__plus">+</span><span class="row__name">Enter Channel ID manually...</span></div>
+          </div>
+          <p class="note note--done">
+            The sentinel stays in <code>value</code>; <code>detail</code> shows the
+            platform ID, and drops entirely when it would repeat the label. The heading
+            says <em>from</em>, because a contact trigger fires on messages that person
+            sends; the destination picker's says <em>to</em>.
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================================= 2 -->
+    <section class="sheet" data-slide="manual">
+      <p class="sheet__eyebrow">Sheet 2 · Trigger → manual entry</p>
+      <h2 class="sheet__title">Typing a DM ID builds an automation that never fires</h2>
+      <p class="sheet__lede">
+        Manual entry always saves <code>conversationKind: "channel"</code>. On Slack,
+        Mattermost, Feishu and Discord the matcher rejects a real DM against a
+        channel-kind target, so the automation is silently inert. On Telegram and
+        LINE a legacy heuristic recognises the raw user ID and it works. Same action,
+        two outcomes, no feedback either way.
+      </p>
+      <div class="pair">
+        <div>
+          <div class="col__head col__head--now">Before the fix</div>
+          <div class="stage">
+            <label class="field">
+              <span>Channel ID</span>
+              <input value="D0481KQ9ZLA" />
+            </label>
+            <p class="hint">
+              The Slack channel ID. In Slack, open the channel details and copy the ID
+              at the bottom, or copy a message link and take the C... segment.
+            </p>
+            <div class="flow">every message in D0481KQ9ZLA</div>
+          </div>
+          <p class="note">
+            <code>D…</code> is Slack's DM conversation ID and the hint's own “copy the
+            ID at the bottom” hands it to you. Save succeeds. The automation never runs,
+            and nothing on the screen ever says why.
+          </p>
+        </div>
+        <div>
+          <div class="col__head col__head--done">Fixed on this branch</div>
+          <div class="stage">
+            <div class="field">
+              <span>Surface kind</span>
+              <div class="segmented">
+                <button type="button">Channel</button>
+                <button type="button" class="is-active">Direct message</button>
+              </div>
+            </div>
+            <label class="field" style="margin-top:14px">
+              <span>Member ID</span>
+              <input value="U03QW7ELB19" />
+            </label>
+            <p class="hint">
+              The Slack member ID of the person whose DMs should trigger this — open
+              their profile and copy the member ID. Not the D... conversation ID.
+            </p>
+            <div class="flow">every direct message from U03QW7ELB19</div>
+          </div>
+          <p class="note note--done">
+            One switch decides the kind, so the saved snapshot carries
+            <code>recipientUserId</code> and the matcher can agree with the form.
+            Label, placeholder and hint all follow the switch, so the field asks for
+            the identifier it will actually use — the sender's member ID, which is
+            what the matcher compares. Switching the kind re-encodes what is already
+            typed rather than clearing it.
+          </p>
+
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================================= 3 -->
+    <section class="sheet" data-slide="discord">
+      <p class="sheet__eyebrow">Sheet 3 · Trigger → Discord</p>
+      <h2 class="sheet__title">A picker that promised channels it could never list</h2>
+      <p class="sheet__lede">
+        PwrAgent authorizes Discord servers, not channels, so the settings snapshot has
+        no channel list and the editor offered DMs and nothing else. The first draft of
+        this sheet proposed a banner pointing at manual entry. That documented the gap
+        instead of closing it, and it hid a second one: a guild message from anyone off
+        the actor allowlist died at the adapter, so even a typed channel ID built an
+        automation that could never fire for an alert bot.
+      </p>
+      <div class="pair">
+        <div>
+          <div class="col__head col__head--now">Before the fix</div>
+          <div class="panel">
+            <div class="panel__search">
+              <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5L14 14"/></svg>
+              <span>Find a channel, DM, or ID</span>
+            </div>
+            <div class="panel__section">Authorized direct messages</div>
+            <div class="row"><span class="row__check"></span><span class="row__glyph">@</span><span class="row__name">Dana Okonkwo</span><span class="row__path">801442719953526785</span></div>
+            <div class="panel__separator"></div>
+            <div class="row row--action"><span class="row__check"></span><span class="row__plus">+</span><span class="row__name">Enter Channel ID manually...</span></div>
+          </div>
+          <p class="note">
+            The placeholder said “Choose a channel or DM” and the heading for channels
+            never rendered. Mattermost, Feishu and LINE, the providers this change made
+            selectable, all shared “The conversation ID PwrAgent should watch.”
+          </p>
+        </div>
+        <div>
+          <div class="col__head col__head--done">Fixed on this branch</div>
+          <div class="panel">
+            <div class="panel__search">
+              <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5L14 14"/></svg>
+              <span>Find a channel, DM, or ID</span>
+            </div>
+            <div class="panel__section">Channels in authorized servers</div>
+            <div class="row is-cursor"><span class="row__check"></span><span class="row__glyph">#</span><span class="row__name">Ops / alerts</span><span class="row__path">1287364019266551818</span></div>
+            <div class="row"><span class="row__check"></span><span class="row__glyph">#</span><span class="row__name">Ops / general</span><span class="row__path">1287364019266551810</span></div>
+            <div class="row"><span class="row__check"></span><span class="row__glyph">#</span><span class="row__name">Lab / general</span><span class="row__path">1301928473640038402</span></div>
+            <div class="panel__section">Direct messages from</div>
+            <div class="row"><span class="row__check"></span><span class="row__glyph">@</span><span class="row__name">Dana Okonkwo</span><span class="row__path">801442719953526785</span></div>
+            <div class="panel__separator"></div>
+            <div class="row row--action"><span class="row__check"></span><span class="row__plus">+</span><span class="row__name">Enter Channel ID manually...</span></div>
+          </div>
+          <p class="hint" style="max-width:440px">
+            Some channels could not be listed. Staging: Missing Access. You can still
+            enter a channel ID.
+          </p>
+          <p class="note note--done">
+            Each authorized server's text and announcement channels are listed from
+            Discord's API, through the lister Messaging Settings already uses. Rows read
+            “Server / channel” because two servers both have a <code>#general</code>. A
+            server Discord refuses is named with its error, not shown as empty.
+          </p>
+          <p class="note note--done">
+            In a channel an enabled automation or an open preview watches, the adapter
+            now forwards other senders' messages <code>observedOnly</code>, as Slack's
+            already did; their commands are still rejected. Mattermost, Feishu and LINE
+            each have their own noun, ID label and example.
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================================= 4 -->
+    <section class="sheet" data-slide="preview">
+      <p class="sheet__eyebrow">Sheet 4 · Filters → preview</p>
+      <h2 class="sheet__title">A history limit stated too late, in the wrong noun</h2>
+      <p class="sheet__lede">
+        The main process decides <code>historySupported</code> synchronously from the
+        provider and the scope. The editor only learns it after the panel opens, and
+        because the flag starts <code>false</code> the panel asserts “History is
+        unavailable” for a frame before the answer arrives. It also calls the trigger
+        source a “destination”, which is a different field later in the same form.
+      </p>
+      <div class="pair">
+        <div>
+          <div class="col__head col__head--now">Before the fix</div>
+          <div class="stage">
+            <button type="button" class="ghost">Stop preview</button>
+            <div class="preview-panel">
+              <p class="hint" style="margin-top:0">
+                Showing messages as they arrive. History is unavailable for this
+                destination. Messages your filter would match are highlighted.
+              </p>
+              <div class="preview-item is-match">
+                <span class="preview-item__who"><b>Dana Okonkwo</b> · U03QW7ELB19 · 2m ago</span>
+                <span>deploy the hotfix when you get a sec</span>
+              </div>
+              <div class="preview-item">
+                <span class="preview-item__who"><b>release-bot</b> (bot) · 6m ago</span>
+                <span>build 4821 green</span>
+              </div>
+            </div>
+          </div>
+          <p class="note">
+            “Destination” is the wrong noun in the <em>trigger</em> stage. And the
+            operator has already committed to opening the panel before being told
+            that the one thing it could have shown immediately is unavailable.
+          </p>
+        </div>
+        <div>
+          <div class="col__head col__head--done">Fixed on this branch</div>
+          <div class="stage">
+            <button type="button" class="ghost">Preview live messages</button>
+            <p class="hint">
+              History can't be read back for a contact's direct messages, so the preview
+              shows new messages only.
+            </p>
+            <div style="height:14px"></div>
+            <button type="button" class="ghost">Stop preview</button>
+            <div class="preview-panel">
+              <p class="hint" style="margin-top:0">
+                Showing messages as they arrive; no history is available for this
+                conversation. Messages your filter would match are highlighted.
+              </p>
+              <div class="preview-item is-match">
+                <span class="preview-item__who"><b>Dana Okonkwo</b> · U03QW7ELB19 · 2m ago</span>
+                <span>deploy the hotfix when you get a sec</span>
+              </div>
+            </div>
+          </div>
+          <p class="note note--done">
+            The scope refusals are the same on every provider, so they are stated under
+            the button before opening. Whether the provider reads history is only
+            known to the main process, so the panel states it once it answers, and
+            says nothing until then instead of assuming “unavailable”.
+          </p>
+          <p class="note note--done">
+            An open preview now joins the adapter's observed set. Before, a preview
+            of <code>#alerts</code> before saving showed nothing from the alert bot the
+            automation was for.
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================================= 5 -->
+    <section class="sheet" data-slide="destination">
+      <p class="sheet__eyebrow">Sheet 5 · Result → destination</p>
+      <h2 class="sheet__title">A live field whose value is thrown away</h2>
+      <p class="sheet__lede">
+        The trigger side hides Telegram's topic controls once a DM is chosen. The
+        destination side does not: its guard is <code>destProvider === "telegram"</code>
+        alone, while <code>buildDestinationSnapshot</code> returns before it ever reads
+        <code>topicId</code> for a DM. The operator can fill the field in and lose it
+        without a word.
+      </p>
+      <div class="pair">
+        <div>
+          <div class="col__head col__head--now">Before the fix</div>
+          <div class="stage">
+            <div class="stage__legend"><span class="stage__verb">Then</span><span class="stage__name">Result</span></div>
+            <div class="field picker-field">
+              <span>Destination group</span>
+              <button type="button" class="picker-trigger">Dana Okonkwo</button>
+            </div>
+            <label class="field" style="margin-top:14px">
+              <span>Destination topic ID (optional)</span>
+              <input value="42" />
+            </label>
+            <p class="hint">The result is posted here instead of back where the trigger fired.</p>
+          </div>
+          <p class="note">
+            A 1:1 Telegram DM has no forum topics. The field accepts <code>42</code>,
+            Save succeeds, and the result posts to the DM. The picker's accessible
+            name also reads “Destination group: Dana Okonkwo”.
+          </p>
+        </div>
+        <div>
+          <div class="col__head col__head--done">Fixed on this branch</div>
+          <div class="stage">
+            <div class="stage__legend"><span class="stage__verb">Then</span><span class="stage__name">Result</span></div>
+            <div class="field picker-field">
+              <span>Destination</span>
+              <button type="button" class="picker-trigger">Dana Okonkwo</button>
+            </div>
+            <p class="hint">
+              The result is sent to Dana Okonkwo as a direct message, instead of back
+              where the trigger fired.
+            </p>
+          </div>
+          <p class="note note--done">
+            The topic field is suppressed by the same <code>dm:</code> test the trigger
+            side already uses, so there is no longer a field whose value Save drops.
+          </p>
+          <p class="note note--done">
+            The field is named <em>Destination</em>, since the list holds rooms and
+            people; its accessible name was “Destination group: Dana Okonkwo”. The hint
+            says where a contact's result actually goes.
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================================= 6 -->
+    <section class="sheet" data-slide="replay">
+      <p class="sheet__eyebrow">Sheet 6 · Automations list → replay</p>
+      <h2 class="sheet__title">The empty state now blames the wrong thing</h2>
+      <p class="sheet__lede">
+        <code>listReplayCandidates</code> gained two new refusals in this change: a
+        trigger with a <code>recipientUserId</code> or a <code>parentId</code>. The
+        copy underneath was written when the only refusal was the provider, and said
+        so — which for a Slack DM trigger is simply false.
+      </p>
+      <div class="pair pair--stack">
+        <div>
+          <div class="col__head col__head--now">Before the fix — Slack DM trigger</div>
+          <div class="stage">
+            <p class="hint" style="margin-top:0">
+              Replay a recent message from the trigger conversation. The badge is the
+              filter's live verdict — replaying a non-matching message is a way to test
+              what the automation would do if the filter let it through.
+            </p>
+            <p class="hint" style="margin-top:12px; color: var(--danger-text)">
+              This provider can't serve conversation history, so there is nothing to
+              replay. Use “Preview live messages” in the editor to test against new
+              traffic instead.
+            </p>
+          </div>
+          <p class="note">
+            Slack <em>does</em> serve conversation history — this same automation would
+            offer replay if its trigger were the <code>#release-eng</code> channel. It is
+            the DM scope that this build cannot read, and the sentence sends the
+            operator to check the wrong thing.
+          </p>
+        </div>
+        <div style="margin-top:28px">
+          <div class="col__head col__head--done">Fixed on this branch — one sentence per refusal</div>
+          <div class="stage">
+            <p class="hint" style="margin-top:0; color: var(--text-secondary)">
+              <b>Contact DM trigger</b> — PwrAgent can't read back a contact's direct
+              messages, only a conversation's. Use “Preview live messages” in the
+              editor to test against new traffic instead.
+            </p>
+            <p class="hint" style="margin-top:10px; color: var(--text-secondary)">
+              <b>Thread or topic trigger</b> — replay reads whole conversations, not a
+              single thread or topic. Use “Preview live messages” in the editor to test
+              against new traffic instead.
+            </p>
+            <p class="hint" style="margin-top:10px; color: var(--text-secondary)">
+              <b>Provider without history</b> — Telegram can't serve conversation
+              history, so there is nothing to replay. Use “Preview live messages” in
+              the editor to test against new traffic instead.
+            </p>
+            <p class="hint" style="margin-top:10px; color: var(--text-secondary)">
+              <b>A response from an older build, or a schedule trigger</b> — there is
+              no recent history to replay for this trigger. Use “Preview live
+              messages” in the editor to test against new traffic instead.
+            </p>
+          </div>
+          <p class="note note--done">
+            <code>listReplayCandidates</code> now returns an
+            <code>unsupportedReason</code> beside <code>supported</code>, checked
+            most-specific-first so a Slack DM reports the scope rather than the
+            provider. The provider sentence names the provider, and the fourth
+            sentence is the fallback for a response that carries no reason at all.
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <script>
+      const slide = new URLSearchParams(location.search).get("slide");
+      if (slide) {
+        document.body.classList.add("is-isolated");
+        for (const sheet of document.querySelectorAll(".sheet")) {
+          if (sheet.dataset.slide !== slide) sheet.remove();
+        }
+      }
+    </script>
+  </body>
+</html>

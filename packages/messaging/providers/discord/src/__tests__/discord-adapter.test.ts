@@ -2952,3 +2952,246 @@ function applicationCommand(): DiscordApplicationCommand {
     type: 1,
   };
 }
+
+
+describe("Discord automation DM addressing", () => {
+  it("opens the user's DM and sends to the returned channel", async () => {
+    const createDirectConversation = vi.fn(async () => ({ id: TEST_CHANNEL_ID }));
+    const createMessage = vi.fn(async () => ({ id: TEST_MESSAGE_ID, channel_id: TEST_CHANNEL_ID }));
+    const gateway = new TestDiscordGateway();
+    const adapter = new DiscordAdapter({
+      api: createApi({ createDirectConversation, createMessage }),
+      gateway,
+      config: { channel: "discord", botToken: "token", authorizedActorIds: [{ id: TEST_USER_ID, displayName: "Peer" }] },
+    });
+    const events: MessagingInboundEvent[] = [];
+    await adapter.start(async (event) => { events.push(event); });
+    const dm = { ...messageDispatch({ authorBot: false, content: "DM alert", id: TEST_MESSAGE_ID }), channel_type: 1 };
+    Reflect.deleteProperty(dm, "guild_id");
+    await gateway.emit({ op: 0, t: "MESSAGE_CREATE", d: dm });
+    expect(events[0]).toMatchObject({ kind: "text", actor: { platformUserId: TEST_USER_ID }, channel: { conversation: { id: TEST_CHANNEL_ID, kind: "dm" } } });
+    const resolved = await adapter.resolveDirectConversation(TEST_USER_ID);
+    expect(createDirectConversation).toHaveBeenCalledWith(TEST_USER_ID);
+    expect(resolved.conversation).toMatchObject({ id: TEST_CHANNEL_ID, kind: "dm" });
+    await adapter.deliver({
+      id: "automation-dm", kind: "message", role: "assistant", createdAt: 1,
+      parts: [{ type: "text", text: "Automation completed" }],
+      audit: { actor: { platformUserId: "automation" }, channel: { channel: "discord", conversation: resolved.conversation! }, occurredAt: 1 },
+    });
+    expect(createMessage).toHaveBeenCalledWith(TEST_CHANNEL_ID, expect.objectContaining({ content: "Automation completed" }));
+    expect(await adapter.resolveDirectConversation("invalid recipient !")).toMatchObject({ outcome: "failed" });
+    expect(createDirectConversation).toHaveBeenCalledTimes(1);
+    await adapter.stop();
+  });
+
+  it("forwards authorized bot messages but suppresses its own messages", async () => {
+    const gateway = new TestDiscordGateway();
+    const events: MessagingInboundEvent[] = [];
+    const adapter = new DiscordAdapter({
+      api: createApi(), gateway,
+      config: { channel: "discord", botToken: "token", applicationId: TEST_APPLICATION_ID, authorizedActorIds: [{ id: TEST_USER_ID, displayName: "Bot" }], authorizedGuildIds: TEST_AUTHORIZED_GUILD_IDS },
+    });
+    await adapter.start(async (event) => { events.push(event); });
+    const message = messageDispatch({ authorBot: true, content: "alert", id: TEST_MESSAGE_ID });
+    await gateway.emit({ op: 0, t: "MESSAGE_CREATE", d: message });
+    await gateway.emit({ op: 0, t: "MESSAGE_CREATE", d: { ...message, author: { ...message.author, id: TEST_APPLICATION_ID } } });
+    expect(events).toEqual([expect.objectContaining({ kind: "text", actor: expect.objectContaining({ isBot: true }) })]);
+    await adapter.stop();
+  });
+});
+
+/**
+ * A channel automation is fed mostly by senders who are not authorized
+ * contacts — an alert bot, a teammate. Before the observed set, every one of
+ * their messages died at the actor gate and a Discord channel automation could
+ * only ever fire for the people allowed to command the bot.
+ */
+describe("observed channels", () => {
+  const OBSERVED_THREAD_ID = "1480556454498009360";
+
+  const startObservedAdapter = async (observed: string[]) => {
+    const gateway = new TestDiscordGateway();
+    const events: MessagingInboundEvent[] = [];
+    const rejectedEvents: MessagingRejectedInboundEvent[] = [];
+    const adapter = new DiscordAdapter({
+      api: createApi(),
+      gateway,
+      config: {
+        channel: "discord",
+        botToken: "token",
+        applicationId: TEST_APPLICATION_ID,
+        authorizedActorIds: [{ id: TEST_OTHER_USER_ID, displayName: "" }],
+        authorizedGuildIds: TEST_AUTHORIZED_GUILD_IDS,
+      },
+    });
+    adapter.updateObservedConversations(observed);
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+    adapter.onInboundRejected((event) => {
+      rejectedEvents.push(event);
+    });
+    return { adapter, events, gateway, rejectedEvents };
+  };
+
+  it("forwards an unauthorized sender's message in a watched channel as observed only", async () => {
+    const { adapter, events, gateway, rejectedEvents } =
+      await startObservedAdapter([TEST_CHANNEL_ID]);
+
+    await gateway.emit({
+      op: 0,
+      t: "MESSAGE_CREATE",
+      d: messageDispatch({ authorBot: true, content: "ERROR build 4821", id: "observed-alert" }),
+    });
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        kind: "text",
+        observedOnly: true,
+        text: "ERROR build 4821",
+        actor: expect.objectContaining({ platformUserId: TEST_USER_ID, isBot: true }),
+      }),
+    ]);
+    expect(rejectedEvents).toEqual([]);
+    await adapter.stop();
+  });
+
+  it("forwards a reply in a thread under a watched channel", async () => {
+    const { adapter, events, gateway } = await startObservedAdapter([TEST_CHANNEL_ID]);
+
+    await gateway.emit({
+      op: 0,
+      t: "MESSAGE_CREATE",
+      d: {
+        ...messageDispatch({ authorBot: false, content: "same here", id: "observed-reply" }),
+        channel_id: OBSERVED_THREAD_ID,
+        channel_type: 11,
+        is_thread: true,
+        parent_id: TEST_CHANNEL_ID,
+      },
+    });
+
+    expect(events).toEqual([expect.objectContaining({ observedOnly: true })]);
+    await adapter.stop();
+  });
+
+  it("still drops an unauthorized sender in a channel nothing watches", async () => {
+    const { adapter, events, gateway } = await startObservedAdapter(["1480556454498009399"]);
+
+    await gateway.emit({
+      op: 0,
+      t: "MESSAGE_CREATE",
+      d: messageDispatch({ authorBot: false, content: "hello", id: "unwatched" }),
+    });
+
+    expect(events).toEqual([]);
+    await adapter.stop();
+  });
+
+  it("rejects an observed sender's slash command as it would anywhere", async () => {
+    // Observation is not authorization, and it must not hide the attempt: the
+    // rejection is how an operator sees who is trying to steer the bot.
+    const { adapter, events, gateway, rejectedEvents } =
+      await startObservedAdapter([TEST_CHANNEL_ID]);
+
+    await gateway.emit({
+      op: 0,
+      t: "MESSAGE_CREATE",
+      d: messageDispatch({ authorBot: false, content: "/status", id: "observed-command" }),
+    });
+
+    expect(events).toEqual([]);
+    expect(rejectedEvents).toEqual([
+      expect.objectContaining({ kind: "command", reason: "unauthorized-actor" }),
+    ]);
+    await adapter.stop();
+  });
+
+  it("does not flag an authorized sender's message in a watched channel", async () => {
+    const { adapter, events, gateway } = await startObservedAdapter([TEST_CHANNEL_ID]);
+
+    await gateway.emit({
+      op: 0,
+      t: "MESSAGE_CREATE",
+      d: {
+        ...messageDispatch({ authorBot: false, content: "deploy", id: "authorized-in-watched" }),
+        author: { bot: false, id: TEST_OTHER_USER_ID, username: "operator" },
+      },
+    });
+
+    expect(events).toEqual([expect.objectContaining({ kind: "text", text: "deploy" })]);
+    expect(events[0]).not.toHaveProperty("observedOnly");
+    await adapter.stop();
+  });
+
+  it("drops every bot post while its own application ID is unknown", async () => {
+    // Discovery failed, so the adapter cannot tell its own posts from another
+    // bot's. Admitting them would let an automation posting into a channel it
+    // watches see its own result as observed traffic and re-trigger itself.
+    const gateway = new TestDiscordGateway();
+    const events: MessagingInboundEvent[] = [];
+    const api = createApi();
+    api.getCurrentApplicationId = vi.fn(async () => {
+      throw new Error("Discord unavailable");
+    });
+    const adapter = new DiscordAdapter({
+      api,
+      gateway,
+      config: {
+        channel: "discord",
+        botToken: "token",
+        authorizedActorIds: [{ id: TEST_OTHER_USER_ID, displayName: "" }],
+        authorizedGuildIds: TEST_AUTHORIZED_GUILD_IDS,
+      },
+    });
+    adapter.updateObservedConversations([TEST_CHANNEL_ID]);
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+
+    await gateway.emit({
+      op: 0,
+      t: "MESSAGE_CREATE",
+      d: messageDispatch({ authorBot: true, content: "Result: ERROR resolved", id: "own-post" }),
+    });
+    await gateway.emit({
+      op: 0,
+      t: "MESSAGE_CREATE",
+      d: messageDispatch({ authorBot: false, content: "a person", id: "human-post" }),
+    });
+
+    expect(events).toEqual([
+      expect.objectContaining({ text: "a person", observedOnly: true }),
+    ]);
+    await adapter.stop();
+  });
+
+  it("keeps the server gate: a watched channel in an unauthorized server stays dropped", async () => {
+    const gateway = new TestDiscordGateway();
+    const events: MessagingInboundEvent[] = [];
+    const adapter = new DiscordAdapter({
+      api: createApi(),
+      gateway,
+      config: {
+        channel: "discord",
+        botToken: "token",
+        applicationId: TEST_APPLICATION_ID,
+        authorizedActorIds: [{ id: TEST_OTHER_USER_ID, displayName: "" }],
+        authorizedGuildIds: [{ id: "1480556454498009999", displayName: "" }],
+      },
+    });
+    adapter.updateObservedConversations([TEST_CHANNEL_ID]);
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+
+    await gateway.emit({
+      op: 0,
+      t: "MESSAGE_CREATE",
+      d: messageDispatch({ authorBot: true, content: "alert", id: "other-server" }),
+    });
+
+    expect(events).toEqual([]);
+    await adapter.stop();
+  });
+});

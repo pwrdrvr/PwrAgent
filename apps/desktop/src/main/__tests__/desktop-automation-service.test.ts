@@ -1416,3 +1416,124 @@ describe("DesktopAutomationService", () => {
     });
   });
 });
+
+describe("DesktopAutomationService.listReplayCandidates", () => {
+  const deps = {
+    fetchRecent: vi.fn(async () => []),
+    supportsHistory: vi.fn((provider: string) => provider === "slack"),
+  };
+
+  // The file's own afterEach only closes the database, so these carry calls
+  // between cases and the "never fetched" assertion below would depend on
+  // which test ran first.
+  beforeEach(() => {
+    deps.fetchRecent.mockClear();
+    deps.supportsHistory.mockClear();
+  });
+
+  const createInbound = async (
+    service: DesktopAutomationService,
+    conversation: Record<string, unknown>,
+  ): Promise<string> => {
+    const created = await service.create({
+      backend: "codex",
+      threadId: "thread-1",
+      name: "DM triage",
+      taskPrompt: "Summarize.",
+      triggers: [
+        {
+          id: "inbound",
+          kind: "inbound_message",
+          conversation,
+          textFilter: { mode: "contains", text: "deploy" },
+        },
+      ],
+    } as never);
+    return created.automation.id;
+  };
+
+  /**
+   * The three refusals are distinct, and the UI shows a different sentence for
+   * each. A contact DM on Slack is refused by the scope, not by the provider —
+   * reporting that as "provider" points the operator at the working half.
+   */
+  it("reports a contact DM as a scope refusal, not a provider one", async () => {
+    const service = new DesktopAutomationService({ registry, store });
+    const automationId = await createInbound(service, {
+      channel: "slack",
+      conversationId: "U_AVERY",
+      conversationKind: "dm",
+      recipientUserId: "U_AVERY",
+    });
+
+    expect(await service.listReplayCandidates({ automationId }, deps)).toEqual({
+      candidates: [],
+      supported: false,
+      unsupportedReason: "contact_dm",
+    });
+    expect(deps.fetchRecent).not.toHaveBeenCalled();
+  });
+
+  it("blames the provider, not the scope, where the provider has no history", async () => {
+    // "can't read back a contact's direct messages, only a conversation's"
+    // would imply a Telegram channel trigger could replay. It cannot.
+    const service = new DesktopAutomationService({ registry, store });
+    const automationId = await createInbound(service, {
+      channel: "telegram",
+      conversationId: "4242",
+      conversationKind: "dm",
+      recipientUserId: "4242",
+    });
+
+    expect(await service.listReplayCandidates({ automationId }, deps)).toEqual({
+      candidates: [],
+      supported: false,
+      unsupportedReason: "provider",
+    });
+  });
+
+  it("reports a thread or topic scope separately", async () => {
+    const service = new DesktopAutomationService({ registry, store });
+    const automationId = await createInbound(service, {
+      channel: "slack",
+      conversationId: "1712345678.000100",
+      conversationKind: "thread",
+      parentId: "C_ORCHARD",
+    });
+
+    expect(await service.listReplayCandidates({ automationId }, deps)).toEqual({
+      candidates: [],
+      supported: false,
+      unsupportedReason: "scoped_thread",
+    });
+  });
+
+  it("reports a provider with no history reader as such", async () => {
+    const service = new DesktopAutomationService({ registry, store });
+    const automationId = await createInbound(service, {
+      channel: "telegram",
+      conversationId: "-100",
+      conversationKind: "channel",
+    });
+
+    expect(await service.listReplayCandidates({ automationId }, deps)).toEqual({
+      candidates: [],
+      supported: false,
+      unsupportedReason: "provider",
+    });
+  });
+
+  it("still serves a Slack channel, which none of the three refuse", async () => {
+    const service = new DesktopAutomationService({ registry, store });
+    const automationId = await createInbound(service, {
+      channel: "slack",
+      conversationId: "C_ORCHARD",
+      conversationKind: "channel",
+    });
+
+    expect(await service.listReplayCandidates({ automationId }, deps)).toEqual({
+      candidates: [],
+      supported: true,
+    });
+  });
+});

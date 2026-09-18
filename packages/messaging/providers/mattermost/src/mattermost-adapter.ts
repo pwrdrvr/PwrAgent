@@ -12,6 +12,7 @@ import { Client4, WebSocketClient, type WebSocketMessage } from "@mattermost/cli
 // needed; if you ever downgrade below 11.4.0, you'll need to stub
 // `globalThis.window` before importing this module.
 import type {
+  MessagingPrivateConversationResolveResult,
   MessagingActorIdentity,
   MessagingAdapterState,
   MessagingAdapterAuthorizationUpdate,
@@ -147,6 +148,7 @@ export type MattermostProviderAdapter = {
   capabilityProfile: MessagingCapabilityProfile;
   channel: "mattermost";
   clientRateLimitStrategy: MessagingClientRateLimitStrategy;
+  resolveDirectConversation?(userId: string): Promise<MessagingPrivateConversationResolveResult>;
   deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult>;
   resolveDeliveryScope?(intent: MessagingSurfaceIntent): MessagingDeliveryScope | undefined;
   downloadAttachment(
@@ -371,6 +373,12 @@ export class MattermostAdapter implements MattermostProviderAdapter {
    */
   private readonly responseUrlPostIds = new Set<string>();
   private readonly unauthorizedConversationLogKeys = new Set<string>();
+  // Channels an enabled automation or open editor preview watches, pushed by
+  // the desktop runtime. There, a sender outside the actor allowlist is
+  // forwarded observedOnly instead of dropped; without it a Mattermost
+  // channel automation fired only for authorized contacts. Replies share
+  // their channel's ID, so a thread under a watched channel is watched too.
+  private observedConversationIds = new Set<string>();
   private readonly inboundRejectedListeners = new Set<MessagingInboundRejectedListener>();
   /**
    * Last reconciliation result per team, kept for diagnostics + future
@@ -427,6 +435,10 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     };
   }
 
+  updateObservedConversations(conversationIds: readonly string[]): void {
+    this.observedConversationIds = new Set(conversationIds);
+  }
+
   async updateAuthorization(update: MessagingAdapterAuthorizationUpdate): Promise<void> {
     this.authorizedActorIdsValue = [...update.authorizedActorIds];
     this.config.authorizedActorIds = mattermostContactsFromIds(
@@ -449,6 +461,42 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     if (update.streamingResponses !== undefined) {
       this.config.streamingResponses = update.streamingResponses;
     }
+  }
+
+  async resolveDirectConversation(
+    userId: string,
+  ): Promise<MessagingPrivateConversationResolveResult> {
+    if (!validateMattermostId(userId).ok) {
+      return {
+        channel: this.channel,
+        outcome: "failed",
+        updatedAt: this.now(),
+        errorMessage: "Invalid direct-message recipient ID.",
+      };
+    }
+    if (!this.botUserId) {
+      return {
+        channel: this.channel,
+        outcome: "failed",
+        updatedAt: this.now(),
+        errorMessage: "Mattermost is not connected.",
+      };
+    }
+    const conversationId = (await this.client.createDirectChannel([this.botUserId, userId])).id;
+    if (!validateMattermostId(conversationId).ok) {
+      return {
+        channel: this.channel,
+        outcome: "failed",
+        updatedAt: this.now(),
+        errorMessage: "Provider returned an invalid DM conversation ID.",
+      };
+    }
+    return {
+      channel: this.channel,
+      conversation: { id: conversationId, kind: "dm", isDirectMessage: true },
+      outcome: "resolved",
+      updatedAt: this.now(),
+    };
   }
 
   async start(listener: MattermostInboundListener): Promise<void> {
@@ -901,7 +949,25 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     }
     const messageText = post.message ?? "";
     const isPairingMessage = Boolean(extractMessagingPairingToken(messageText));
-    if (!isPairingMessage && !this.authorizedActorIds.includes(post.user_id)) {
+    const fileIds: string[] = Array.isArray(post.file_ids) ? post.file_ids : [];
+    // Everything the dispatch below turns into a command: a slash command, or
+    // a bare `@bot`, which becomes Help. A post with files is always media.
+    const isCommand = fileIds.length === 0
+      && (messageText.startsWith("/")
+        || stripBotMention(messageText, this.botUsername) === "");
+    // A sender outside the actor allowlist, in a shared channel an enabled
+    // automation or open preview watches: forwarded for observation only. A
+    // command never is — it is rejected below exactly as anywhere else.
+    const observedOnly = !isPairingMessage
+      && !isCommand
+      && data.channel_type !== "D"
+      && !this.authorizedActorIds.includes(post.user_id)
+      && this.observedConversationIds.has(post.channel_id);
+    if (
+      !isPairingMessage
+      && !observedOnly
+      && !this.authorizedActorIds.includes(post.user_id)
+    ) {
       this.logUnauthorizedPostIfActionable(post, data);
       return;
     }
@@ -921,6 +987,10 @@ export class MattermostAdapter implements MattermostProviderAdapter {
       !isPairingMessage
       && !this.isAuthorizedMattermostConversation(channelRef, data.team_id)
     ) {
+      // Observation never widens the conversation gate, and an unaddressed
+      // post from a sender who was never authorized is not an actionable
+      // rejection either.
+      if (observedOnly) return;
       this.emitUnauthorizedConversation({
         actor,
         channel: channelRef,
@@ -930,8 +1000,6 @@ export class MattermostAdapter implements MattermostProviderAdapter {
       return;
     }
 
-    const fileIds: string[] = Array.isArray(post.file_ids) ? post.file_ids : [];
-
     if (fileIds.length > 0) {
       await this.dispatchMediaEvent({
         actor,
@@ -939,6 +1007,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
         eventId: post.id,
         fileIds,
         messageText,
+        observedOnly,
         receipt,
       });
       return;
@@ -978,6 +1047,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
           botMention: true,
           channel: channelRef,
           eventId: post.id,
+          observedOnly,
           text: stripped,
           receipt,
         });
@@ -989,6 +1059,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
       actor,
       channel: channelRef,
       eventId: post.id,
+      observedOnly,
       text: messageText,
       receipt,
     });
@@ -1316,6 +1387,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     botMention?: boolean;
     channel: MessagingChannelRef;
     eventId: string;
+    observedOnly?: boolean;
     receipt: MessagingInboundReceipt;
     text: string;
   }): Promise<void> {
@@ -1329,6 +1401,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
       actor: params.actor,
       channel: params.channel,
       ...(params.botMention ? { botMention: true } : {}),
+      ...(params.observedOnly ? { observedOnly: true } : {}),
       text: params.text,
     });
   }
@@ -1595,7 +1668,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     channel: MessagingChannelRef,
     teamId?: string,
   ): boolean {
-    if (channel.conversation.kind === "dm") {
+    if (channel.conversation.kind === "dm" || channel.conversation.isDirectMessage) {
       return true;
     }
     const authorizedConversations = this.config.authorizedConversationIds ?? [];
@@ -1663,6 +1736,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     eventId: string;
     fileIds: string[];
     messageText: string;
+    observedOnly?: boolean;
     receipt: MessagingInboundReceipt;
   }): Promise<void> {
     if (!this.listener) {
@@ -1683,6 +1757,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
       text: params.messageText || undefined,
       attachments: descriptors,
       disposition: descriptors.length > 0 ? "available" : "unsupported",
+      ...(params.observedOnly ? { observedOnly: true } : {}),
     });
   }
 
@@ -2583,6 +2658,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
       conversation: {
         id: post.channel_id,
         kind,
+        ...(data.channel_type === "D" ? { isDirectMessage: true } : {}),
         ...(isThread && post.root_id ? { parentId: post.root_id } : {}),
         ...(isThread ? { parentConversationId: post.channel_id } : {}),
         ...(data.team_id ? { workspaceId: data.team_id } : {}),

@@ -13,6 +13,7 @@ import {
   type User,
 } from "discord.js";
 import type {
+  MessagingPrivateConversationResolveResult,
   MessagingAdapterAuthorizationUpdate,
   MessagingCapabilityProfile,
   MessagingAdapterState,
@@ -232,6 +233,7 @@ export type DiscordGuildInfo = {
 };
 
 export type DiscordApi = DiscordApplicationCommandApi & {
+  createDirectConversation?(userId: string): Promise<{ id: string }>;
   createThreadFromMessage(
     channelId: string,
     messageId: string,
@@ -284,6 +286,7 @@ export type DiscordProviderAdapter = {
   capabilityProfile: MessagingCapabilityProfile;
   channel: "discord";
   clientRateLimitStrategy: MessagingClientRateLimitStrategy;
+  resolveDirectConversation?(userId: string): Promise<MessagingPrivateConversationResolveResult>;
   deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult>;
   resolveDeliveryScope?(intent: MessagingSurfaceIntent): MessagingDeliveryScope | undefined;
   onRateLimit?(listener: (info: MessagingRateLimitInfo) => void): () => void;
@@ -370,6 +373,13 @@ export class DiscordAdapter implements DiscordProviderAdapter {
   private readonly guildCache = new Map<string, DiscordGuildInfo>();
   private applicationId?: string;
   private readonly unauthorizedGuildLogKeys = new Set<string>();
+  // Channels an enabled inbound automation watches, pushed by the desktop
+  // runtime. In an authorized server, a message there from a sender outside
+  // the actor allowlist is forwarded flagged observedOnly instead of dropped —
+  // otherwise a channel automation fires only for authorized contacts, and an
+  // alert bot posting into `#alerts` can never trigger one. Same contract as
+  // the Slack adapter's set; empty by default.
+  private observedConversationIds = new Set<string>();
   private readonly inboundRejectedListeners = new Set<MessagingInboundRejectedListener>();
   private readonly inboundChannelMetadataListeners =
     new Set<MessagingInboundChannelMetadataListener>();
@@ -400,6 +410,10 @@ export class DiscordAdapter implements DiscordProviderAdapter {
 
   get authorizedActorIds(): readonly string[] {
     return this.options.config.authorizedActorIds.map((contact) => contact.id);
+  }
+
+  updateObservedConversations(conversationIds: readonly string[]): void {
+    this.observedConversationIds = new Set(conversationIds);
   }
 
   async updateAuthorization(update: MessagingAdapterAuthorizationUpdate): Promise<void> {
@@ -445,6 +459,37 @@ export class DiscordAdapter implements DiscordProviderAdapter {
   resolveDeliveryScope(intent: MessagingSurfaceIntent): MessagingDeliveryScope | undefined {
     const target = this.resolveTarget(intent);
     return target ? this.rateLimitScopeForTarget(target) : undefined;
+  }
+
+  async resolveDirectConversation(
+    userId: string,
+  ): Promise<MessagingPrivateConversationResolveResult> {
+    if (!validateDiscordSnowflake(userId).ok) {
+      return {
+        channel: this.channel,
+        outcome: "failed",
+        updatedAt: this.now(),
+        errorMessage: "Invalid direct-message recipient ID.",
+      };
+    }
+    if (!this.api.createDirectConversation) {
+      return { channel: this.channel, outcome: "unsupported", updatedAt: this.now() };
+    }
+    const conversationId = (await this.api.createDirectConversation(userId)).id;
+    if (!validateDiscordSnowflake(conversationId).ok) {
+      return {
+        channel: this.channel,
+        outcome: "failed",
+        updatedAt: this.now(),
+        errorMessage: "Provider returned an invalid DM conversation ID.",
+      };
+    }
+    return {
+      channel: this.channel,
+      conversation: { id: conversationId, kind: "dm", isDirectMessage: true },
+      outcome: "resolved",
+      updatedAt: this.now(),
+    };
   }
 
   async start(listener: (event: MessagingInboundEvent) => Promise<void>): Promise<void> {
@@ -1114,7 +1159,17 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     if (!this.validateMessageIdentifiers(message)) {
       return;
     }
-    if (message.author.bot) {
+    // Our own posts. By ID once discovery has found it; until then, every
+    // bot-authored post, which is what this check did before other bots were
+    // admitted. Without the fallback a failed discovery lets the bot's own
+    // posts through, and in a watched channel they reach automations as
+    // observed traffic — an automation whose result matches its own filter
+    // would re-trigger itself.
+    if (
+      this.applicationId === undefined
+        ? message.author.bot === true
+        : message.author.id === this.applicationId
+    ) {
       return;
     }
     const mentionRemainder =
@@ -1127,18 +1182,21 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     const isPairingMessage = message.content !== undefined
       ? Boolean(extractMessagingPairingToken(message.content))
       : false;
-    if (
-      !isPairingMessage &&
-      !this.isAuthorizedMessageSource(message, {
-        actionable:
-          isPairingMessage
-          || mentionRemainder !== undefined
-          || Boolean(message.content?.startsWith("/")),
-        receipt,
-      })
-    ) {
+    const authorization = isPairingMessage
+      ? true
+      : this.isAuthorizedMessageSource(message, {
+          actionable:
+            mentionRemainder !== undefined
+            || Boolean(message.content?.startsWith("/")),
+          command:
+            mentionRemainder === undefined
+            && /^\/[A-Za-z0-9_]+/.test(message.content ?? ""),
+          receipt,
+        });
+    if (authorization === false) {
       return;
     }
+    const observedOnly = authorization === "observed";
 
     const channel = this.immediateChannelFromDiscord(message.channel_id, message.guild_id, {
       channelType: message.channel_type,
@@ -1198,6 +1256,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
         sourceUrl,
         text: normalizedContent,
         ...(mentionRemainder !== undefined ? { botMention: true } : {}),
+        ...(observedOnly ? { observedOnly: true } : {}),
       };
       await this.dispatchWithBackgroundChannelEnrichment({
         channelId: message.channel_id,
@@ -1218,6 +1277,11 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     const commandMatch = mentionRemainder === undefined
       ? /^\/([A-Za-z0-9_]+)(?:\s+(.*))?$/.exec(message.content)
       : undefined;
+    // Unreachable while `isAuthorizedMessageSource` never observes a command;
+    // kept so that invariant failing can only drop a message, never run one.
+    if (observedOnly && commandMatch) {
+      return;
+    }
     const event = {
       id: `discord:message:${message.id}`,
       kind: commandMatch ? "command" : "text",
@@ -1232,6 +1296,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
         : {
             text: normalizedContent ?? "",
             ...(mentionRemainder !== undefined ? { botMention: true } : {}),
+            ...(observedOnly ? { observedOnly: true } : {}),
           }),
       ...receipt,
       routingState,
@@ -1557,10 +1622,18 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     return false;
   }
 
+  /**
+   * `"observed"` admits a message for automations and the editor preview only.
+   * It is reachable just for a guild message in an authorized server, in a
+   * channel (or a thread under one) that an enabled automation watches, from
+   * a sender outside the actor allowlist. The runtime keeps observed traffic
+   * off every reply and command path. A slash command is never observed: it
+   * is rejected and reported as it would be anywhere else.
+   */
   private isAuthorizedMessageSource(
     message: DiscordMessageCreateDispatch,
-    options: { actionable: boolean; receipt: MessagingInboundReceipt },
-  ): boolean {
+    options: { actionable: boolean; command: boolean; receipt: MessagingInboundReceipt },
+  ): boolean | "observed" {
     if (
       !this.isAuthorizedDiscordConversation({
         channelType: message.channel_type,
@@ -1578,6 +1651,9 @@ export class DiscordAdapter implements DiscordProviderAdapter {
       return false;
     }
     if (!this.isAuthorizedActor(message.author.id)) {
+      if (message.guild_id && !options.command && this.isObservedChannel(message)) {
+        return "observed";
+      }
       if (!message.guild_id || options.actionable) {
         this.options.logger?.warn?.("discord inbound ignored unauthorized actor", {
           actorId: message.author.id,
@@ -1628,6 +1704,12 @@ export class DiscordAdapter implements DiscordProviderAdapter {
       return false;
     }
     return true;
+  }
+
+  private isObservedChannel(message: DiscordMessageCreateDispatch): boolean {
+    return this.observedConversationIds.has(message.channel_id)
+      || (message.parent_id !== undefined
+        && this.observedConversationIds.has(message.parent_id));
   }
 
   private isAuthorizedActor(actorId: string): boolean {
@@ -2574,6 +2656,12 @@ class DiscordRestApi implements DiscordApi {
       guildId: request.guildId,
       rest: this.rest,
     });
+  }
+
+  async createDirectConversation(userId: string): Promise<{ id: string }> {
+    return await this.rest.post(Routes.userChannels(), {
+      body: { recipient_id: userId },
+    }) as { id: string };
   }
 
   async createMessage(
