@@ -78,11 +78,17 @@ export function hasActiveInboundPreview(): boolean {
   return activeScopes.size > 0;
 }
 
-/** Test/lifecycle helper. */
+/**
+ * Test/lifecycle helper. Clears scopes and the sink, not scope-change
+ * listeners: those belong to their subscribers, who unsubscribe themselves.
+ * The messaging runtime subscribes once per start, so clearing them here
+ * would silently stop open previews from joining the observed sets.
+ */
 export function resetInboundPreview(): void {
+  const hadScopes = activeScopes.size > 0;
   activeScopes.clear();
   sink = undefined;
-  scopeListeners.clear();
+  if (hadScopes) notifyScopesChanged();
 }
 
 /**

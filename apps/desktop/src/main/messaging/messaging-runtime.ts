@@ -956,43 +956,50 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
    * forwarded (flagged observedOnly) instead of dying at the per-user gate —
    * which is what lets a sender filter see bot alerts at all.
    */
-  private collectAutomationObservedConversations(
-    platform: MessagingChannelKind,
-  ): string[] {
+  private collectAutomationObservedConversations(): Map<MessagingChannelKind, Set<string>> {
+    const byPlatform = new Map<MessagingChannelKind, Set<string>>();
     try {
-      const ids = new Set<string>();
       for (const automation of getDesktopAutomationService().list({}).automations) {
         if (automation.status !== "enabled") continue;
         for (const trigger of automation.triggers) {
           if (trigger.kind !== "inbound_message") continue;
-          if (trigger.conversation.channel !== platform) continue;
+          const platform = trigger.conversation.channel;
+          const ids = byPlatform.get(platform) ?? new Set<string>();
+          byPlatform.set(platform, ids);
           ids.add(trigger.conversation.conversationId);
           if (trigger.conversation.parentId) {
             ids.add(trigger.conversation.parentId);
           }
         }
       }
-      return [...ids];
     } catch (error) {
       messagingLog.warn("failed to collect observed conversations", {
-        platform,
         error: error instanceof Error ? error.message : String(error),
       });
-      return [];
+      return new Map();
     }
+    return byPlatform;
   }
 
   /**
    * Re-push the observed-conversation sets to every running adapter: what
    * enabled automations watch, plus whatever an open editor preview is
    * watching, so the preview shows the senders the automation will see.
+   * Runs on every automation change and every preview open or close, so the
+   * automation list is read once per push, not once per adapter.
    */
   pushObservedConversations(): void {
+    // Only when some adapter takes the set. Reading the list constructs the
+    // automation service as a side effect, and the per-adapter optional call
+    // this replaced never evaluated its argument for an adapter without the
+    // method — so a runtime of such adapters never touched the service.
+    if (!this.adapters.some((adapter) => adapter.updateObservedConversations)) return;
+    const automationObserved = this.collectAutomationObservedConversations();
     for (const adapter of this.adapters) {
       try {
         adapter.updateObservedConversations?.([
           ...new Set([
-            ...this.collectAutomationObservedConversations(adapter.channel),
+            ...(automationObserved.get(adapter.channel) ?? []),
             ...activeInboundPreviewConversationIds(adapter.channel),
           ]),
         ]);

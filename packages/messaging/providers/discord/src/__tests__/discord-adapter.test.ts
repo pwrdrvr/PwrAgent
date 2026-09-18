@@ -3124,6 +3124,48 @@ describe("observed channels", () => {
     await adapter.stop();
   });
 
+  it("drops every bot post while its own application ID is unknown", async () => {
+    // Discovery failed, so the adapter cannot tell its own posts from another
+    // bot's. Admitting them would let an automation posting into a channel it
+    // watches see its own result as observed traffic and re-trigger itself.
+    const gateway = new TestDiscordGateway();
+    const events: MessagingInboundEvent[] = [];
+    const api = createApi();
+    api.getCurrentApplicationId = vi.fn(async () => {
+      throw new Error("Discord unavailable");
+    });
+    const adapter = new DiscordAdapter({
+      api,
+      gateway,
+      config: {
+        channel: "discord",
+        botToken: "token",
+        authorizedActorIds: [{ id: TEST_OTHER_USER_ID, displayName: "" }],
+        authorizedGuildIds: TEST_AUTHORIZED_GUILD_IDS,
+      },
+    });
+    adapter.updateObservedConversations([TEST_CHANNEL_ID]);
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+
+    await gateway.emit({
+      op: 0,
+      t: "MESSAGE_CREATE",
+      d: messageDispatch({ authorBot: true, content: "Result: ERROR resolved", id: "own-post" }),
+    });
+    await gateway.emit({
+      op: 0,
+      t: "MESSAGE_CREATE",
+      d: messageDispatch({ authorBot: false, content: "a person", id: "human-post" }),
+    });
+
+    expect(events).toEqual([
+      expect.objectContaining({ text: "a person", observedOnly: true }),
+    ]);
+    await adapter.stop();
+  });
+
   it("keeps the server gate: a watched channel in an unauthorized server stays dropped", async () => {
     const gateway = new TestDiscordGateway();
     const events: MessagingInboundEvent[] = [];

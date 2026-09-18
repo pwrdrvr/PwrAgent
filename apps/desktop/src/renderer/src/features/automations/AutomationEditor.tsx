@@ -252,7 +252,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
     initialIsTopic
       ? initialConversation?.parentId ?? ""
       : initialConversation?.recipientUserId
-        ? `dm:${initialConversation.recipientUserId}`
+        ? contactSelection(initialConversation.recipientUserId)
         : initialConversation?.conversationId ?? "",
   );
   // Manual entry has to be able to say which KIND of surface an ID names; a
@@ -353,7 +353,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
     initialTargetIsTopic
       ? initialTargetSnapshot?.parentId ?? ""
       : initialTargetSnapshot?.recipientUserId
-        ? `dm:${initialTargetSnapshot.recipientUserId}`
+        ? contactSelection(initialTargetSnapshot.recipientUserId)
         : initialTargetSnapshot?.conversationId ?? "",
   );
   const [destManualKind, setDestManualKind] = useState<ManualSurfaceKind>(
@@ -453,13 +453,19 @@ export function AutomationEditor(props: AutomationEditorProps) {
     enabledProviders !== undefined && enabledProviders.length === 0;
 
   useEffect(() => {
+    // Not until the enabled list has actually loaded. Before it does,
+    // `availableProviders` is the Slack/Telegram placeholder, and correcting
+    // against that moved every saved Discord, Mattermost, Feishu, or LINE
+    // trigger onto Slack on open — Save then wrote a Slack trigger holding the
+    // original provider's conversation ID.
+    if (enabledProviders === undefined) return;
     if (
       availableProviders.length > 0 &&
       !availableProviders.includes(inboundProvider)
     ) {
       setInboundProvider(availableProviders[0]);
     }
-  }, [availableProviders, inboundProvider]);
+  }, [availableProviders, enabledProviders, inboundProvider]);
 
   // The destination needs the same correction, and never had it. Its default
   // ("telegram", or the trigger's platform) may not be enabled, and a
@@ -469,7 +475,9 @@ export function AutomationEditor(props: AutomationEditorProps) {
   // provider when it is enabled. Only without a saved destination: silently
   // moving a saved target to another platform would be the same bug.
   useEffect(() => {
-    if (initialTargetSnapshot) return;
+    // Same wait as the trigger side, for the same reason: the placeholder
+    // list would move a default that the real list allows.
+    if (enabledProviders === undefined || initialTargetSnapshot) return;
     if (availableProviders.length === 0 || availableProviders.includes(destProvider)) {
       return;
     }
@@ -479,7 +487,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
     setDestGroupSelection("");
     setDestGroupId("");
     setDestTopicId("");
-  }, [availableProviders, destProvider, inboundProvider, initialTargetSnapshot]);
+  }, [availableProviders, destProvider, enabledProviders, inboundProvider, initialTargetSnapshot]);
 
   // Discord authorizes servers, not channels, so the settings snapshot has no
   // channel list to read. The channels come from Discord itself, through the
@@ -549,7 +557,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
   const initialInboundGroupId = initialIsTopic
     ? initialConversation?.parentId
     : initialConversation?.recipientUserId
-      ? `dm:${initialConversation.recipientUserId}`
+      ? contactSelection(initialConversation.recipientUserId)
       : initialConversation?.conversationId;
   useEffect(() => {
     if (inboundSelectionReconciledRef.current) return;
@@ -593,7 +601,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
   const initialDestGroupId = initialTargetIsTopic
     ? initialTargetSnapshot?.parentId
     : initialTargetSnapshot?.recipientUserId
-      ? `dm:${initialTargetSnapshot.recipientUserId}`
+      ? contactSelection(initialTargetSnapshot.recipientUserId)
       : initialTargetSnapshot?.conversationId;
   useEffect(() => {
     // On edit, preselect the saved destination in the dropdown once it appears
@@ -782,7 +790,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
   const previewScope =
     inboundProvider === "telegram"
     && telegramScope === "topic"
-    && !inboundGroupId.startsWith("dm:")
+    && !isContactSelection(inboundGroupId)
     && !inboundTopicId.trim()
       ? undefined
       : buildDestinationSnapshot({
@@ -1538,7 +1546,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
                     />
                   ) : null}
                   {inboundGroupId.trim()
-                  && !inboundGroupId.startsWith("dm:")
+                  && !isContactSelection(inboundGroupId)
                   && groupDeliveryHint(inboundProvider) ? (
                     <p className="automation-field__hint">
                       {groupDeliveryHint(inboundProvider)}
@@ -1671,7 +1679,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
                     </div>
                   ) : null}
 
-                  {inboundProvider === "telegram" && !inboundGroupId.startsWith("dm:") ? (
+                  {inboundProvider === "telegram" && !isContactSelection(inboundGroupId) ? (
                     <>
                       <div
                         aria-label="Telegram scope"
@@ -1756,7 +1764,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
           caption={
             triggerKind === "schedule"
               ? `fires ${selectedScheduleSummary} — no filtering or batching needed`
-              : inboundGroupId.startsWith("dm:")
+              : isContactSelection(inboundGroupId)
                 // A contact trigger matches on the sender, not the room.
                 ? `every direct message from ${inboundConversationLabel}`
                 : `every message in ${inboundConversationLabel}`
@@ -2738,7 +2746,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
                               field up lets the operator fill in a value that
                               Save discards without a word. */}
                           {destProvider === "telegram"
-                          && !destGroupId.startsWith("dm:") ? (
+                          && !isContactSelection(destGroupId) ? (
                             <label className="automation-field">
                               <span>Destination topic ID (optional)</span>
                               <input
@@ -3124,7 +3132,7 @@ function buildTriggerConfig(params: {
   const topicId = params.topicId.trim();
   const isTopic =
     params.provider === "telegram" && params.telegramScope === "topic"
-    && !groupId.startsWith("dm:");
+    && !isContactSelection(groupId);
   if (!groupId) {
     return {
       error:
@@ -3260,12 +3268,27 @@ function conversationOptions(
 }
 
 /**
+ * How a picker or manual-entry value says "this person's DM" rather than "this
+ * conversation". Every read and write of the marker goes through these three,
+ * so the encoding lives in one place.
+ */
+const CONTACT_SELECTION_PREFIX = "dm:";
+
+function contactSelection(userId: string): string {
+  return `${CONTACT_SELECTION_PREFIX}${userId}`;
+}
+
+function isContactSelection(value: string): boolean {
+  return value.startsWith(CONTACT_SELECTION_PREFIX);
+}
+
+/**
  * The platform user ID inside a contact selection, or undefined when the value
- * addresses a shared conversation. One place decides what `dm:` means.
+ * addresses a shared conversation (or is a contact selection with no ID yet).
  */
 function contactUserId(value: string): string | undefined {
-  if (!value.startsWith("dm:")) return undefined;
-  const userId = value.slice(3).trim();
+  if (!isContactSelection(value)) return undefined;
+  const userId = value.slice(CONTACT_SELECTION_PREFIX.length).trim();
   return userId || undefined;
 }
 
@@ -3312,7 +3335,7 @@ type ManualSurfaceKind = "channel" | "dm";
 
 /** The bare ID a manual field shows, with the editor's `dm:` marker removed. */
 function manualSurfaceValue(stored: string): string {
-  return contactUserId(stored) ?? (stored.startsWith("dm:") ? "" : stored);
+  return contactUserId(stored) ?? (isContactSelection(stored) ? "" : stored);
 }
 
 /**
@@ -3322,7 +3345,7 @@ function manualSurfaceValue(stored: string): string {
  */
 function encodeManualSurface(kind: ManualSurfaceKind, value: string): string {
   const raw = manualSurfaceValue(value);
-  return kind === "dm" && raw ? `dm:${raw}` : raw;
+  return kind === "dm" && raw ? contactSelection(raw) : raw;
 }
 
 /**
@@ -3473,8 +3496,8 @@ function buildDestinationSnapshot(params: {
 }): AutomationMessagingConversationSnapshot | undefined {
   const groupId = params.groupId.trim();
   if (!groupId) return undefined;
-  const userId = contactUserId(groupId);
-  if (groupId.startsWith("dm:")) {
+  if (isContactSelection(groupId)) {
+    const userId = contactUserId(groupId);
     if (!userId) return undefined;
     return {
       channel: params.provider,
@@ -3535,7 +3558,7 @@ function readProviderGroups(
   const toConversation =
     (kind: MessagingConversationKind) =>
     (contact: { id: string; displayName?: string }): ProviderConversation => ({
-      id: kind === "dm" ? `dm:${contact.id}` : contact.id,
+      id: kind === "dm" ? contactSelection(contact.id) : contact.id,
       title: contact.displayName ? `${contact.displayName}` : contact.id,
       kind,
     });

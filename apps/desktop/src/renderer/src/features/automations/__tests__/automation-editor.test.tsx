@@ -2064,6 +2064,59 @@ describe("AutomationEditor DM wording", () => {
     expect(screen.queryByText(/Group Privacy/)).not.toBeInTheDocument();
   });
 
+  it("keeps a saved Discord automation on Discord while settings load", async () => {
+    // Before settings arrive the editor's provider list is a Slack/Telegram
+    // placeholder. Correcting against it moved every saved Discord trigger
+    // onto Slack, and Save wrote a Slack trigger holding a Discord channel ID.
+    render(
+      <AutomationEditor
+        desktopApi={fakeDesktopApi(
+          fakeSettings({ enabled: { slack: true, discord: true } }),
+        )}
+        mode={{
+          automation: buildAutomation({
+            triggers: [
+              {
+                id: "inbound",
+                kind: "inbound_message",
+                conversation: {
+                  channel: "discord",
+                  conversationId: "1480556454498009371",
+                  conversationKind: "channel",
+                  title: "Ops / alerts",
+                },
+              },
+            ],
+          }),
+          kind: "edit",
+        }}
+        onCancel={() => undefined}
+        onSubmit={vi.fn(async () => undefined)}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(
+        screen.getByLabelText("Provider").querySelectorAll("option"),
+      ).toHaveLength(2),
+    );
+    // Discord's example ID is a snowflake; Slack's is C0123ABCD.
+    expect(screen.getByLabelText("Channel ID")).toHaveAttribute(
+      "placeholder",
+      "e.g. 123456789012345678",
+    );
+    expect(screen.getByLabelText("Channel ID")).toHaveValue("1480556454498009371");
+    // The destination defaults to the trigger's provider and must not have
+    // been moved by the placeholder either.
+    fireEvent.change(screen.getByLabelText("Where should the result go?"), {
+      target: { value: "different" },
+    });
+    expect(await screen.findByLabelText("Destination channel ID")).toHaveAttribute(
+      "placeholder",
+      "e.g. 123456789012345678",
+    );
+  });
+
   it("asks each provider for the ID it actually uses", async () => {
     render(
       <AutomationEditor

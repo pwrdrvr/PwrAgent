@@ -1474,6 +1474,24 @@ describe("DesktopAutomationService.listReplayCandidates", () => {
     expect(deps.fetchRecent).not.toHaveBeenCalled();
   });
 
+  it("blames the provider, not the scope, where the provider has no history", async () => {
+    // "can't read back a contact's direct messages, only a conversation's"
+    // would imply a Telegram channel trigger could replay. It cannot.
+    const service = new DesktopAutomationService({ registry, store });
+    const automationId = await createInbound(service, {
+      channel: "telegram",
+      conversationId: "4242",
+      conversationKind: "dm",
+      recipientUserId: "4242",
+    });
+
+    expect(await service.listReplayCandidates({ automationId }, deps)).toEqual({
+      candidates: [],
+      supported: false,
+      unsupportedReason: "provider",
+    });
+  });
+
   it("reports a thread or topic scope separately", async () => {
     const service = new DesktopAutomationService({ registry, store });
     const automationId = await createInbound(service, {

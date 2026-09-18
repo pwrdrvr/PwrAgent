@@ -128,6 +128,19 @@ describe("inbound-preview-bus", () => {
     unsubscribe();
   });
 
+  it("keeps scope listeners across a reset, and tells them the scopes went", () => {
+    // The runtime subscribes once per start; a reset that dropped it would
+    // leave previews silently outside the adapters' observed sets.
+    const changed = vi.fn();
+    const unsubscribe = onInboundPreviewScopesChanged(changed);
+    startInboundPreview("s1", { provider: "discord", conversationId: "chan-1" });
+    resetInboundPreview();
+    expect(changed).toHaveBeenCalledTimes(2);
+    startInboundPreview("s2", { provider: "discord", conversationId: "chan-2" });
+    expect(changed).toHaveBeenCalledTimes(3);
+    unsubscribe();
+  });
+
   it("stops forwarding after the scope is removed", () => {
     const sink = vi.fn();
     setInboundPreviewSink(sink);

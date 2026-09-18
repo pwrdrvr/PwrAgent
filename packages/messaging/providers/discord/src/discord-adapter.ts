@@ -1159,7 +1159,17 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     if (!this.validateMessageIdentifiers(message)) {
       return;
     }
-    if (message.author.id === this.applicationId) {
+    // Our own posts. By ID once discovery has found it; until then, every
+    // bot-authored post, which is what this check did before other bots were
+    // admitted. Without the fallback a failed discovery lets the bot's own
+    // posts through, and in a watched channel they reach automations as
+    // observed traffic — an automation whose result matches its own filter
+    // would re-trigger itself.
+    if (
+      this.applicationId === undefined
+        ? message.author.bot === true
+        : message.author.id === this.applicationId
+    ) {
       return;
     }
     const mentionRemainder =
