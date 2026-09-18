@@ -1,4 +1,4 @@
-import { useId, useState } from "react";
+import { memo, useId, useState } from "react";
 import { useTranscriptActivityDetails } from "../../lib/useTranscriptActivityDetails";
 import type {
   AppServerSkillSummary,
@@ -31,12 +31,12 @@ type TranscriptActivityProps = {
   expanded?: boolean;
   fileViewerContext?: MarkdownFileViewerContext;
   onOpenImage?: (image: AppServerThreadImagePart) => void;
-  onExpandedChange?: (expanded: boolean) => void;
+  onExpandedChange?: (activityId: string, expanded: boolean) => void;
   skills?: AppServerSkillSummary[];
   threadLinkSource?: ThreadLinkSource;
 };
 
-export function TranscriptActivity(props: TranscriptActivityProps) {
+export const TranscriptActivity = memo(function TranscriptActivity(props: TranscriptActivityProps) {
   const detailsId = useId();
   const [uncontrolledExpanded, setUncontrolledExpanded] = useState(false);
   const isExpanded = props.expanded ?? uncontrolledExpanded;
@@ -70,7 +70,7 @@ export function TranscriptActivity(props: TranscriptActivityProps) {
         threadLinkSource={props.threadLinkSource}
         onExpandedChange={(expanded) => {
           if (props.expanded !== undefined) {
-            props.onExpandedChange?.(expanded);
+            props.onExpandedChange?.(entry.id, expanded);
             return;
           }
           setUncontrolledExpanded(expanded);
@@ -92,7 +92,7 @@ export function TranscriptActivity(props: TranscriptActivityProps) {
               onClick={() => {
                 const nextExpanded = !isExpanded;
                 if (props.expanded !== undefined) {
-                  props.onExpandedChange?.(nextExpanded);
+                  props.onExpandedChange?.(entry.id, nextExpanded);
                   return;
                 }
                 setUncontrolledExpanded(nextExpanded);
@@ -301,7 +301,7 @@ export function TranscriptActivity(props: TranscriptActivityProps) {
       ) : null}
     </aside>
   );
-}
+});
 
 function singleDirectDetail(
   entry: AppServerThreadActivityEntry,

@@ -698,6 +698,7 @@ export function TranscriptList(props: TranscriptListProps) {
   const skills = props.skills ?? EMPTY_SKILLS;
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const scrollContentRef = useRef<HTMLDivElement>(null);
+  const bottomFollowFrameRef = useRef<number | undefined>(undefined);
   const snapshotRef = useRef<ScrollSnapshot | undefined>(undefined);
   const savedViewportsRef = useRef(new Map<string, TranscriptViewport>());
   const appliedReglueRequestKeyRef = useRef(0);
@@ -1134,7 +1135,14 @@ export function TranscriptList(props: TranscriptListProps) {
     // animation frame so the user lands at the actual latest message
     // rather than the latest message at the moment scrollToBottom was
     // first called.
-    requestAnimationFrame(() => {
+    // Several commits and a ResizeObserver delivery can precede one paint.
+    // Only the latest callback owns the follow-up; older callbacks would read
+    // identical geometry and retain an obsolete transcript snapshot closure.
+    if (bottomFollowFrameRef.current !== undefined) {
+      cancelAnimationFrame(bottomFollowFrameRef.current);
+    }
+    bottomFollowFrameRef.current = requestAnimationFrame(() => {
+      bottomFollowFrameRef.current = undefined;
       if (!isGluedToBottomRef.current) {
         return;
       }
@@ -1152,6 +1160,13 @@ export function TranscriptList(props: TranscriptListProps) {
       }
     });
   }, [syncScrollState]);
+
+  useLayoutEffect(() => () => {
+    if (bottomFollowFrameRef.current !== undefined) {
+      cancelAnimationFrame(bottomFollowFrameRef.current);
+      bottomFollowFrameRef.current = undefined;
+    }
+  }, [props.threadId]);
 
   const disableBottomGlue = useCallback(() => {
     isGluedToBottomRef.current = false;
@@ -1497,7 +1512,7 @@ export function TranscriptList(props: TranscriptListProps) {
                   activeStartedAt={item.activeStartedAt}
                   applications={props.applications}
                   collapsible={item.collapsible}
-                  directoryPaths={props.directoryPaths}
+                  directoryPaths={stableDirectoryPaths}
                   desktopApi={props.desktopApi}
                   entries={item.entries}
                   expanded={expandedCommentaryGroupIds.has(item.id)}
@@ -1518,14 +1533,12 @@ export function TranscriptList(props: TranscriptListProps) {
               ) : item.entry.type === "activity" ? (
                 <TranscriptActivity
                   applications={props.applications}
-                  directoryPaths={props.directoryPaths}
+                  directoryPaths={stableDirectoryPaths}
                   desktopApi={props.desktopApi}
                   entry={item.entry}
                   expanded={controlledExpandedActivityIds?.has(item.entry.id)}
                   fileViewerContext={props.fileViewerContext}
-                  onExpandedChange={(expanded) => {
-                    setActivityExpanded(item.entry.id, expanded);
-                  }}
+                  onExpandedChange={setActivityExpanded}
                   onOpenImage={props.onOpenImage}
                   skills={skills}
                   threadLinkSource={props.threadLinkSource}
@@ -1541,7 +1554,7 @@ export function TranscriptList(props: TranscriptListProps) {
               ) : item.entry.type === "review" ? (
                 <TranscriptReview
                   applications={props.applications}
-                  directoryPaths={props.directoryPaths}
+                  directoryPaths={stableDirectoryPaths}
                   desktopApi={props.desktopApi}
                   entry={item.entry}
                   fileViewerContext={props.fileViewerContext}
