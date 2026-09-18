@@ -227,6 +227,13 @@ function isSettledTurnStatus(
 export class AcpSessionReplayNormalizer {
   private entries: AppServerThreadEntry[] = [];
   private messages: AppServerThreadMessage[] = [];
+  // Arrays own replay order; indexes refer to slots, not entry objects (turn
+  // completion replaces objects). Rebuild only when removing/retyping entries.
+  private readonly messageIndexes = new Map<string, number>();
+  private readonly entryIndexes = new Map<string, number>();
+  private readonly typedEntryIndexes = new Map<string, number>();
+  private lastUserMessageIndex?: number;
+  private lastAssistantMessageIndex?: number;
   private status: AppServerThreadStatus = "idle";
   private currentTurnId?: string;
   private currentTurnStartedAt?: number;
@@ -375,6 +382,8 @@ export class AcpSessionReplayNormalizer {
     this.messages = this.messages.filter((message) =>
       retainedMessageIds.has(message.id)
     );
+    this.rebuildEntryIndexes();
+    this.rebuildMessageIndexes();
     this.currentTurnId = undefined;
     this.currentTurnStartedAt = undefined;
     this.activeAssistantMessageId = undefined;
@@ -532,12 +541,10 @@ export class AcpSessionReplayNormalizer {
     return {
       entries: this.entries,
       messages: this.messages,
-      lastUserMessage: [...this.messages]
-        .reverse()
-        .find((message) => message.role === "user")?.text,
-      lastAssistantMessage: [...this.messages]
-        .reverse()
-        .find((message) => message.role === "assistant")?.text,
+      lastUserMessage: this.lastUserMessageIndex === undefined
+        ? undefined : this.messages[this.lastUserMessageIndex]?.text,
+      lastAssistantMessage: this.lastAssistantMessageIndex === undefined
+        ? undefined : this.messages[this.lastAssistantMessageIndex]?.text,
       pagination: {
         supportsPagination: false,
         hasPreviousPage: false,
@@ -590,13 +597,12 @@ export class AcpSessionReplayNormalizer {
     }
     if (this.currentTurnId) {
       const localPromptId = `user:${this.currentTurnId}`;
-      if (this.messages.some((message) => message.id === localPromptId)) {
+      if (this.messageIndexes.has(localPromptId)) {
         return;
       }
     }
-    const lastUserMessage = [...this.messages]
-      .reverse()
-      .find((message) => message.role === "user");
+    const lastUserMessage = this.lastUserMessageIndex === undefined
+      ? undefined : this.messages[this.lastUserMessageIndex];
     if (lastUserMessage?.text.trim() === text.trim()) {
       return;
     }
@@ -684,12 +690,9 @@ export class AcpSessionReplayNormalizer {
 
   private upsertActivity(activity: AppServerThreadActivityEntry): void {
     const activityWithTurn = this.withCurrentTurn(activity);
-    const index = this.entries.findIndex(
-      (existing): existing is AppServerThreadActivityEntry =>
-        existing.type === "activity" && existing.id === activityWithTurn.id,
-    );
-    if (index === -1) {
-      this.entries.push(activityWithTurn);
+    const index = this.typedEntryIndexes.get(`activity:${activityWithTurn.id}`);
+    if (index === undefined) {
+      this.appendEntry(activityWithTurn);
       return;
     }
     this.entries[index] = mergeActivity(
@@ -728,31 +731,87 @@ export class AcpSessionReplayNormalizer {
   }
 
   private removeAgentWaitingActivity(turnId: string): void {
-    this.entries = this.entries.filter(
-      (entry) => entry.id !== agentWaitingActivityId(turnId),
-    );
+    const id = agentWaitingActivityId(turnId);
+    if (!this.entryIndexes.has(id)) {
+      return;
+    }
+    this.entries = this.entries.filter((entry) => entry.id !== id);
+    this.rebuildEntryIndexes();
   }
 
   private upsertEntry(entry: AppServerThreadEntry): void {
     const entryWithTurn = this.withCurrentTurn(entry);
-    const index = this.entries.findIndex(
-      (existing) => existing.id === entryWithTurn.id,
-    );
-    if (index === -1) {
-      this.entries.push(entryWithTurn);
+    const index = this.entryIndexes.get(entryWithTurn.id);
+    if (index === undefined) {
+      this.appendEntry(entryWithTurn);
       return;
     }
+    const previousType = this.entries[index]?.type;
     this.entries[index] = entryWithTurn;
+    if (previousType !== entryWithTurn.type) {
+      this.rebuildEntryIndexes();
+    }
+  }
+
+  private appendEntry(entry: AppServerThreadEntry): void {
+    const index = this.entries.length;
+    this.entries.push(entry);
+    this.indexEntry(entry, index);
+  }
+
+  private indexEntry(entry: AppServerThreadEntry, index: number): void {
+    // Preserve find/findIndex's first-match semantics even if a provider reuses
+    // an ID across message/activity/plan types.
+    if (!this.entryIndexes.has(entry.id)) {
+      this.entryIndexes.set(entry.id, index);
+    }
+    const key = `${entry.type}:${entry.id}`;
+    if (!this.typedEntryIndexes.has(key)) {
+      this.typedEntryIndexes.set(key, index);
+    }
+  }
+
+  private rebuildEntryIndexes(): void {
+    this.entryIndexes.clear();
+    this.typedEntryIndexes.clear();
+    this.entries.forEach((entry, index) => this.indexEntry(entry, index));
+  }
+
+  private appendMessage(message: AppServerThreadMessage): void {
+    const index = this.messages.length;
+    this.messages.push(message);
+    this.messageIndexes.set(message.id, index);
+    this.indexLastMessage(message, index);
+  }
+
+  private indexLastMessage(message: AppServerThreadMessage, index: number): void {
+    if (message.role === "user") {
+      this.lastUserMessageIndex = index;
+    } else if (message.role === "assistant") {
+      this.lastAssistantMessageIndex = index;
+    }
+  }
+
+  private rebuildMessageIndexes(): void {
+    this.messageIndexes.clear();
+    this.lastUserMessageIndex = undefined;
+    this.lastAssistantMessageIndex = undefined;
+    this.messages.forEach((message, index) => {
+      this.messageIndexes.set(message.id, index);
+      this.indexLastMessage(message, index);
+    });
   }
 
   private upsertMessage(message: AppServerThreadMessage): void {
-    const existingMessageIndex = this.messages.findIndex(
-      (existing) => existing.id === message.id,
-    );
-    if (existingMessageIndex === -1) {
-      this.messages.push(message);
+    const existingMessageIndex = this.messageIndexes.get(message.id);
+    if (existingMessageIndex === undefined) {
+      this.appendMessage(message);
     } else {
+      const previousRole = this.messages[existingMessageIndex]?.role;
       this.messages[existingMessageIndex] = message;
+      if (previousRole !== message.role) {
+        this.rebuildMessageIndexes();
+      }
     }
 
     this.upsertEntry({
@@ -772,16 +831,16 @@ export class AcpSessionReplayNormalizer {
     text: string;
     createdAt: number;
   }): void {
-    const existingMessage = this.messages.find(
-      (message) => message.id === params.id,
-    );
+    const messageIndex = this.messageIndexes.get(params.id);
+    const existingMessage = messageIndex === undefined
+      ? undefined : this.messages[messageIndex];
     if (existingMessage) {
       existingMessage.text = appendAcpTranscriptChunk(
         existingMessage.text,
         params.text,
       );
     } else {
-      this.messages.push({
+      this.appendMessage({
         id: params.id,
         role: params.role,
         text: params.text,
@@ -789,17 +848,16 @@ export class AcpSessionReplayNormalizer {
       });
     }
 
-    const existingEntry = this.entries.find(
-      (entry): entry is AppServerThreadEntry & { type: "message" } =>
-        entry.type === "message" && entry.id === params.id,
-    );
-    if (existingEntry) {
+    const entryIndex = this.typedEntryIndexes.get(`message:${params.id}`);
+    const existingEntry = entryIndex === undefined
+      ? undefined : this.entries[entryIndex];
+    if (existingEntry?.type === "message") {
       existingEntry.text = appendAcpTranscriptChunk(
         existingEntry.text,
         params.text,
       );
     } else {
-      this.entries.push(this.withCurrentTurn({
+      this.appendEntry(this.withCurrentTurn({
         type: "message",
         id: params.id,
         phase: params.phase,
