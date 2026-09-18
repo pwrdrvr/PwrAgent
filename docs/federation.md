@@ -107,6 +107,12 @@ the endpoint saves the federation listener as `127.0.0.1:<port>` (and changes
 `client` mode to `dual`) before anything is created in Cloudflare, and the
 DNS record is published only after the Access policy has been read back.
 
+PwrAgent runs `cloudflared` with `--no-autoupdate`, so the install step
+compares the installed version with Cloudflare's latest GitHub release (checked
+at most once a day) and names a newer one. Update it the way it was installed
+(`brew upgrade cloudflared` for Homebrew), then stop and start the connector:
+the running process keeps the old binary until it restarts.
+
 The three admission choices:
 
 | Choice | Cloudflare plan | Client credential |

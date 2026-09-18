@@ -15,11 +15,11 @@ export type CloudflareSetupLink =
   | "github-login-docs"
   | "dash-mtls"
   | "dash-service-tokens"
-  | "dash-applications"
-  | "dash-policies"
+  | "dash-endpoint-application"
   | "dash-tunnels"
   | "dash-login-methods"
-  | "dash-zone-overview";
+  | "dash-zone-overview"
+  | "cloudflared-update-docs";
 
 /**
  * Which credential Cloudflare Access admits this endpoint's clients with.
@@ -135,6 +135,13 @@ export type CloudflareSetupStatus = {
   resources?: string[];
   connectorRunning: boolean;
   connectorInstalled: boolean;
+  /** The installed cloudflared's version, when it reports one. */
+  connectorVersion?: string;
+  /**
+   * A newer cloudflared release than the installed one; absent when current or
+   * when the latest release could not be looked up.
+   */
+  connectorUpdate?: string;
   phase?: string;
   clients: Array<{ id: string; label: string; expiresAt: string; revoked: boolean }>;
   /** `oauth` gate only: the people the Access policy lets sign in. */

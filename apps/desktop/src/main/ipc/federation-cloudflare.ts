@@ -1,6 +1,6 @@
 import { dialog, ipcMain, shell } from "electron";
 import fs from "node:fs/promises";
-import type { CloudflareSetupLink, CloudflareSetupRequest, CloudflareSetupStatus } from "@pwragent/shared";
+import type { CloudflareSetupRequest, CloudflareSetupStatus } from "@pwragent/shared";
 import { FEDERATION_CLOUDFLARE_SETUP_CHANNEL } from "../../shared/ipc";
 import { CloudflareSetupService, cloudflareSetupGate, cloudflareSetupResources } from "../federation/cloudflare-setup-service";
 import {
@@ -11,6 +11,8 @@ import {
   saveCloudflareSetupDraft,
 } from "../federation/cloudflare-setup-storage";
 import { cloudflareConnector } from "../federation/cloudflare-connector";
+import { CLOUDFLARE_LINKS, resolveCloudflareLink } from "../federation/cloudflare-links";
+import { compareCloudflaredVersions, createCloudflaredReleaseCheck } from "../federation/cloudflared-release";
 import { getCloudflareAccessSignIn } from "../federation/cloudflare-access-sign-in";
 import { getDesktopFederationRuntime } from "../federation/federation-runtime";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
@@ -40,46 +42,15 @@ const setup = new CloudflareSetupService({
   probeSignIn: (endpoint) => getCloudflareAccessSignIn().probe(endpoint),
 });
 
-/**
- * Fixed reference table for `open-link`.
- *
- * `:account` and `:zone` are the only interpolation, filled from setup state, so
- * an operator lands on their own dashboard page rather than a generic one. The
- * Zero Trust deep-link shape (`one.dash…/?to=/:account/...`) is Cloudflare's own,
- * taken from the route table their docs build `DashButton` from.
- */
-const CLOUDFLARE_LINKS: Record<CloudflareSetupLink, string> = {
-  "mtls-docs":
-    "https://developers.cloudflare.com/cloudflare-one/access-controls/service-credentials/mutual-tls-authentication/",
-  // The plan comparison, not the docs availability note: that note currently
-  // reads "Enterprise and pay-as-you-go", which contradicts the summary of the
-  // pull request that added it ("requires a Zero Trust contract plan") and the
-  // plan table's own mTLS row. Send operators to the table.
-  "mtls-plans": "https://www.cloudflare.com/sase/products/access/",
-  "signature-algorithms":
-    "https://developers.cloudflare.com/ssl/client-certificates/byo-ca/",
-  "service-token-docs":
-    "https://developers.cloudflare.com/cloudflare-one/access-controls/service-credentials/service-tokens/",
-  "oauth-docs":
-    "https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/managed-oauth/",
-  "github-login-docs":
-    "https://developers.cloudflare.com/cloudflare-one/integrations/identity-providers/github/",
-  "dash-mtls": "https://one.dash.cloudflare.com/?to=/:account/access/service-auth/mtls",
-  "dash-service-tokens": "https://one.dash.cloudflare.com/?to=/:account/access/service-auth/service-tokens",
-  "dash-applications": "https://one.dash.cloudflare.com/?to=/:account/access/apps",
-  "dash-policies": "https://one.dash.cloudflare.com/?to=/:account/access/policies",
-  "dash-tunnels": "https://one.dash.cloudflare.com/?to=/:account/access/tunnels",
-  "dash-login-methods": "https://one.dash.cloudflare.com/?to=/:account/integrations/identity-providers",
-  "dash-zone-overview": "https://dash.cloudflare.com/:account/:zone",
-};
-
 let busy = false;
+const latestCloudflared = createCloudflaredReleaseCheck();
 
 /**
- * The gateway setup plus what only this profile knows: the unsaved draft and,
- * when this instance connects through a sign-in endpoint, its own sign-in.
+ * The gateway setup plus what only this profile knows: the unsaved draft, the
+ * installed connector's version and any newer release, and, when this instance
+ * connects through a sign-in endpoint, its own sign-in.
  */
-async function describe(message?: string): Promise<CloudflareSetupStatus> {
+async function describe(message?: string, options: { refreshConnector?: boolean } = {}): Promise<CloudflareSetupStatus> {
   const status = await setup.status();
   const draft = await loadCloudflareSetupDraft().catch(() => undefined);
   const federation = getDesktopSettingsService().readFederationConfig();
@@ -87,7 +58,14 @@ async function describe(message?: string): Promise<CloudflareSetupStatus> {
   const signIn = federation.cloudflareAccessOAuthEnabled && endpoint
     ? await getCloudflareAccessSignIn().status(endpoint)
     : undefined;
-  return { ...status, draft, signIn, ...(message ? { message } : {}) };
+  const connectorVersion = status.connectorInstalled
+    ? await cloudflareConnector.version({ refresh: options.refreshConnector }).catch(() => undefined)
+    : undefined;
+  const latest = connectorVersion ? await latestCloudflared() : undefined;
+  const connectorUpdate = connectorVersion && latest && compareCloudflaredVersions(latest, connectorVersion) === 1
+    ? latest
+    : undefined;
+  return { ...status, connectorVersion, connectorUpdate, draft, signIn, ...(message ? { message } : {}) };
 }
 
 function signInEndpoint(): string {
@@ -103,7 +81,8 @@ export function registerCloudflareSetupIpc(): void {
   ipcMain.removeHandler(FEDERATION_CLOUDFLARE_SETUP_CHANNEL);
   ipcMain.handle(FEDERATION_CLOUDFLARE_SETUP_CHANNEL, async (_event, request: CloudflareSetupRequest): Promise<CloudflareSetupStatus> => {
     if (!request || typeof request !== "object") throw new Error("Invalid Cloudflare setup request.");
-    if (request.action === "status") return describe();
+    // Also the pane's "Check again", so it re-reads the installed connector.
+    if (request.action === "status") return describe(undefined, { refreshConnector: true });
     // Outside the latch: it exists to release a sign-in that holds it.
     if (request.action === "cancel-sign-in") {
       getCloudflareAccessSignIn().cancel();
@@ -139,18 +118,11 @@ export function registerCloudflareSetupIpc(): void {
           const state = await loadCloudflareSetup().catch(() => undefined);
           const status = await setup.status().catch(() => undefined);
           const draft = await loadCloudflareSetupDraft().catch(() => undefined);
-          const accountId = state?.accountId ?? status?.accountId ?? draft?.accountId;
-          const zoneId = state?.zoneId ?? status?.zoneId ?? draft?.zoneId;
-          // Only a well-formed id is interpolated: a draft is unvalidated, and
-          // a dashboard deep link with a bad or unresolved placeholder is worse
-          // than a generic one — it 404s. Fall back to the dashboard root.
-          const valid = (value: string | undefined) => value && /^[a-f0-9]{32}$/.test(value) ? value : undefined;
-          const account = valid(accountId);
-          const zone = valid(zoneId);
-          const url = (template.includes(":account") && !account) || (template.includes(":zone") && !zone)
-            ? template.startsWith("https://dash.") ? "https://dash.cloudflare.com/" : "https://one.dash.cloudflare.com/"
-            : template.replace(":account", account ?? "").replace(":zone", zone ?? "");
-          await shell.openExternal(url);
+          await shell.openExternal(resolveCloudflareLink(template, {
+            accountId: state?.accountId ?? status?.accountId ?? draft?.accountId,
+            zoneId: state?.zoneId ?? status?.zoneId ?? draft?.zoneId,
+            applicationId: state?.applicationId ?? status?.applicationId,
+          }));
           break;
         }
         case "save-draft":

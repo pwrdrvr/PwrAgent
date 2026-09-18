@@ -292,4 +292,33 @@ describe("Cloudflare setup flow", () => {
     await screen.findByRole("button", { name: "Remove endpoint" });
     expect(screen.queryByText("The tunnel points at a port the gateway no longer uses.")).toBeNull();
   });
+
+  it("names a newer cloudflared release and how to update to it", async () => {
+    const call = vi.fn(async (_request: CloudflareSetupRequest) => ({ ...connected, connectorRunning: true,
+      connectorVersion: "2026.8.3", connectorUpdate: "2026.9.0" }));
+    render(<CloudflareSetup api={{ configureFederationCloudflare: call } as DesktopApi}
+      listenPort="47830" onWriteConfig={async () => true} onSettingsChanged={async () => {}} />);
+    await screen.findByText("cloudflared 2026.9.0 is available.");
+    expect(screen.getByText("cloudflared 2026.8.3 is running.")).toBeInTheDocument();
+    expect(screen.getByText(/keeps the old version until you stop and start it in step 5/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "How to update cloudflared" }));
+    await waitFor(() => expect(call).toHaveBeenCalledWith({ action: "open-link", link: "cloudflared-update-docs" }));
+  });
+
+  it("says nothing about updates while the installed cloudflared is current", async () => {
+    render(<CloudflareSetup api={{ configureFederationCloudflare: vi.fn(async () => ({ ...connected, connectorVersion: "2026.9.0" })) } as DesktopApi}
+      listenPort="47830" onWriteConfig={async () => true} onSettingsChanged={async () => {}} />);
+    await screen.findByText("cloudflared 2026.9.0 is installed. PwrAgent starts it with the gateway.");
+    expect(screen.queryByRole("button", { name: "How to update cloudflared" })).toBeNull();
+  });
+
+  it("inspects the endpoint's own Access application", async () => {
+    const published: CloudflareSetupStatus = { ...connected, hostname: "federation.example.com", listenPort: 47830,
+      tunnelId: "tunnel", phase: "Published", gate: "service-token" };
+    const call = vi.fn(async (_request: CloudflareSetupRequest) => published);
+    render(<CloudflareSetup api={{ configureFederationCloudflare: call } as DesktopApi}
+      listenPort="47830" onWriteConfig={async () => true} onSettingsChanged={async () => {}} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Access application" }));
+    await waitFor(() => expect(call).toHaveBeenCalledWith({ action: "open-link", link: "dash-endpoint-application" }));
+  });
 });

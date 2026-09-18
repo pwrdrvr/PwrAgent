@@ -112,6 +112,7 @@ export function CloudflareSetup(props: Props) {
   const portMoved = Boolean(status?.listenPort && Number.isInteger(livePort) && livePort > 0 && status.listenPort !== livePort);
   const connected = Boolean(status?.connected);
   const installed = Boolean(status?.connectorInstalled);
+  const connectorVersion = status?.connectorVersion ? ` ${status.connectorVersion}` : "";
   // Validation has run — not just the audit — and nothing failed.
   const verified = Boolean(status?.checks?.length && status.checks.every((check) => check.passed)
     && status.checks.some((check) => check.label.startsWith("WebSocket upgrade without")));
@@ -329,12 +330,20 @@ export function CloudflareSetup(props: Props) {
           <AutomationFlow caption="The tunnel connects outward from this computer; no inbound port opens" />
 
           <AutomationStage verb="Install" title="Tunnel connector" progress={progress("connector", installed, "Installed")}>
-            <p>{status?.connectorRunning ? "cloudflared is running."
-              : installed ? "cloudflared is installed. PwrAgent starts it with the gateway."
+            <p>{status?.connectorRunning ? `cloudflared${connectorVersion} is running.`
+              : installed ? `cloudflared${connectorVersion} is installed. PwrAgent starts it with the gateway.`
                 : "Install cloudflared on this computer, then check again. PwrAgent runs it for you; there is nothing to configure in it."}</p>
             {!installed ? <div className="settings-button-row">
               {action("Install cloudflared", { action: "install-link" }, "Opening installation guide…")}
               {action("Check again", { action: "status" }, "Checking connector…")}
+            </div> : null}
+            {installed && status?.connectorUpdate ? <div className="cloudflare-setup__notice" role="note">
+              <strong>cloudflared {status.connectorUpdate} is available.</strong>
+              <p>Update it the way you installed it; with Homebrew, run <code>brew upgrade cloudflared</code>.{status.connectorRunning ? " The running connector keeps the old version until you stop and start it in step 5." : ""}</p>
+              <div className="settings-button-row">
+                {link("How to update cloudflared", "cloudflared-update-docs")}
+                {action("Check again", { action: "status" }, "Checking connector…")}
+              </div>
             </div> : null}
           </AutomationStage>
           <AutomationFlow caption={oauth ? "Cloudflare admits only the people on your allowlist" : mtls ? "Cloudflare admits only certificates from this gateway’s authority" : "Cloudflare admits only tokens this gateway issued"} />
@@ -409,8 +418,7 @@ export function CloudflareSetup(props: Props) {
               <div className="settings-button-row cloudflare-setup__dash">
                 <span>Inspect in Cloudflare:</span>
                 {oauth ? link("Login methods", "dash-login-methods") : mtls ? link("Mutual TLS", "dash-mtls") : link("Service Tokens", "dash-service-tokens")}
-                {link("Applications", "dash-applications")}
-                {link("Policies", "dash-policies")}
+                {link("Access application", "dash-endpoint-application")}
                 {link("Tunnels", "dash-tunnels")}
               </div>
             </> : <p className="cloudflare-setup__hint">Available once the endpoint exists.</p>}

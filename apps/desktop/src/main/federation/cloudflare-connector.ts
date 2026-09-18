@@ -5,12 +5,29 @@ import { discoverCommands } from "../settings/command-discovery";
 export class CloudflareConnector {
   private child?: ChildProcess;
   private command?: string;
+  private installedVersion?: string;
+  private discoveredAt = 0;
   private discovering?: Promise<boolean>;
   private generation = 0;
   running() { return Boolean(this.child && this.child.exitCode === null && !this.child.killed); }
 
   async installed(): Promise<boolean> {
     if (this.command) return true;
+    return this.discover();
+  }
+
+  /**
+   * The installed version, re-read on request and otherwise at most every 30
+   * seconds, so an update made while PwrAgent runs is seen without a restart.
+   * The running connector keeps the binary it started with until it is stopped
+   * and started again.
+   */
+  async version(options: { refresh?: boolean } = {}): Promise<string | undefined> {
+    if (options.refresh || !this.command || Date.now() - this.discoveredAt > 30_000) await this.discover();
+    return this.installedVersion;
+  }
+
+  private async discover(): Promise<boolean> {
     if (this.discovering) return this.discovering;
     this.discovering = (async () => {
       const result = await discoverCommands({
@@ -19,7 +36,10 @@ export class CloudflareConnector {
         env: process.env,
         parseVersion: (text) => text.match(/\d{4}\.\d+\.\d+/)?.[0],
       });
-      this.command = result.candidates.find((entry) => entry.selected)?.command;
+      const selected = result.candidates.find((entry) => entry.selected);
+      this.command = selected?.command;
+      this.installedVersion = selected?.version;
+      this.discoveredAt = Date.now();
       return Boolean(this.command);
     })();
     try { return await this.discovering; } finally { this.discovering = undefined; }
