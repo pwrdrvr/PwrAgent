@@ -6635,6 +6635,47 @@ describe("SettingsScreen", () => {
     }
   });
 
+  it("keeps the pane scroll when a nav child jumps within the same page", () => {
+    // Resetting to the top before the section scroll made every jump fly up
+    // to the top of the pane and back down, even to the next section.
+    render(
+      <SettingsScreen
+        settings={createSettingsState()}
+        onClose={() => undefined}
+      />,
+    );
+    const nav = screen.getByRole("navigation", { name: "Settings sections" });
+    fireEvent.click(
+      within(nav).getByRole("button", { name: "Expand Federation" }),
+    );
+    fireEvent.click(within(nav).getByRole("button", { name: "Tailscale" }));
+    const content = document.querySelector(".settings-content") as HTMLElement;
+    const writes: number[] = [];
+    let top = 900;
+    Object.defineProperty(content, "scrollTop", {
+      configurable: true,
+      get: () => top,
+      set: (value: number) => {
+        writes.push(value);
+        top = value;
+      },
+    });
+
+    fireEvent.click(
+      within(nav).getByRole("button", { name: "Cloudflare Access" }),
+    );
+    expect(writes).toEqual([]);
+
+    // The pane's own label and a different page both start at the top.
+    fireEvent.click(within(nav).getByRole("button", { name: "Federation" }));
+    expect(writes).toEqual([0]);
+    fireEvent.click(
+      within(nav).getByRole("button", { name: "Expand AI Providers" }),
+    );
+    fireEvent.click(within(nav).getByRole("button", { name: "Codex" }));
+    expect(writes).toEqual([0, 0]);
+  });
+
   it("lands on the Routes section again after visiting a platform", () => {
     // Two focus mechanisms overlap here: the nav's `focusSectionId` request
     // and the stack's remembered-visit restore. The request is guarded
