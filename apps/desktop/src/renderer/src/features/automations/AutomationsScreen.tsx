@@ -10,11 +10,16 @@ import {
 import type {
   AutomationDetail,
   AutomationReplayCandidate,
+  AutomationReplaySource,
+  AutomationReplayUnsupportedReason,
   ListAutomationReplayCandidatesResponse,
   MessagingChannelKind,
   NavigationThreadSummary,
 } from "@pwragent/shared";
-import { buildThreadIdentityKey } from "@pwragent/shared";
+import {
+  buildThreadIdentityKey,
+  formatAutomationConversationLabel,
+} from "@pwragent/shared";
 import {
   CODEX_AGENT_THREAD_CREATION_NOTE,
   canChangeExistingThreadAgentDesignation,
@@ -298,9 +303,20 @@ function AutomationTableRow(props: {
   const [replayCandidates, setReplayCandidates] =
     useState<ListAutomationReplayCandidatesResponse>();
   const [replayError, setReplayError] = useState<string>();
-  const inboundTriggered = props.automation.triggers.some(
+  const inboundSourceCount = props.automation.triggers.filter(
+    (trigger) => trigger.kind === "inbound_message",
+  ).length;
+  const inboundTriggered = inboundSourceCount > 0;
+  // Absent on a response from a build that predates per-source replay; the
+  // single-source path below then reads the automation's own trigger.
+  const replaySources = replayCandidates?.sources ?? [];
+  const firstInboundTrigger = props.automation.triggers.find(
     (trigger) => trigger.kind === "inbound_message",
   );
+  const firstInboundChannel =
+    firstInboundTrigger?.kind === "inbound_message"
+      ? firstInboundTrigger.conversation.channel
+      : undefined;
 
   const toggleReplay = async (): Promise<void> => {
     if (replayOpen) {
@@ -314,9 +330,7 @@ function AutomationTableRow(props: {
       const response = await props.desktopApi?.listAutomationReplayCandidates?.({
         automationId: props.automation.id,
       });
-      setReplayCandidates(
-        response ?? { candidates: [], supported: false },
-      );
+      setReplayCandidates(response ?? { sources: [], supported: false });
     } catch (caught) {
       setReplayError(caught instanceof Error ? caught.message : String(caught));
     }
@@ -464,10 +478,13 @@ function AutomationTableRow(props: {
       {replayOpen ? (
         <div className="automations-table__replay">
           <p className="automations-table__replay-lead">
-            Replay a recent message from the trigger conversation. The badge is
-            the filter&rsquo;s live verdict — replaying a non-matching message
-            is a way to test what the automation would do if the filter let it
-            through.
+            Replay a recent message from{" "}
+            {inboundSourceCount > 1
+              ? "any of the conversations this automation watches"
+              : "the trigger conversation"}
+            . The badge is the filter&rsquo;s live verdict — replaying a
+            non-matching message is a way to test what the automation would do
+            if the filter let it through.
           </p>
           {replayError ? (
             <p className="automations-error" role="alert">
@@ -475,53 +492,62 @@ function AutomationTableRow(props: {
             </p>
           ) : replayCandidates === undefined ? (
             <p className="automation-field__hint">Loading recent messages…</p>
-          ) : !replayCandidates.supported ? (
-            <p className="automation-field__hint">
-              {replayUnsupportedReason(replayCandidates, props.automation)} Use
-              &ldquo;Preview live messages&rdquo; in the editor to test against
-              new traffic instead.
-            </p>
-          ) : replayCandidates.candidates.length === 0 ? (
-            <p className="automation-field__hint">
-              No recent messages in the trigger conversation.
-            </p>
+          ) : replaySources.length <= 1 ? (
+            !replayCandidates.supported ? (
+              <p className="automation-field__hint">
+                {replayUnsupportedReason(
+                  replayCandidates.unsupportedReason,
+                  replaySources[0]?.conversation.channel ?? firstInboundChannel,
+                )}{" "}
+                Use &ldquo;Preview live messages&rdquo; in the editor to test
+                against new traffic instead.
+              </p>
+            ) : (
+              <ReplayCandidateList
+                busy={Boolean(busy)}
+                candidates={replaySources[0]?.candidates ?? []}
+                emptyLabel="No recent messages in the trigger conversation."
+                onReplay={(candidate) =>
+                  void runAction("replay", () => replayMessage(candidate))
+                }
+              />
+            )
           ) : (
-            <ul className="automation-preview__list">
-              {replayCandidates.candidates.map((candidate) => (
-                <li
-                  className={`automation-preview__item${candidate.matches ? " is-match" : ""}`}
-                  key={candidate.message.id}
+            <>
+              {replaySources.map((source) => (
+                <div
+                  className="automations-table__replay-source"
+                  key={source.triggerId}
                 >
-                  <span className="automation-preview__meta">
-                    {new Date(candidate.message.receivedAt).toLocaleTimeString()}{" "}
-                    · {candidate.message.actor.displayName
-                      ?? candidate.message.actor.platformUserId}
-                  </span>
-                  <span className="automation-preview__row-text">
-                    {candidate.message.text || "(no text)"}
-                  </span>
-                  <span className="automation-preview__row-actions">
-                    {candidate.matches ? (
-                      <span className="automation-preview__badge">matches</span>
-                    ) : (
-                      <span className="automation-preview__badge automation-preview__badge--muted">
-                        no match
-                      </span>
-                    )}
-                    <button
-                      className="automation-preview__use-sender"
-                      disabled={Boolean(busy)}
-                      type="button"
-                      onClick={() =>
+                  <h4 className="automations-table__replay-source-title">
+                    {formatReplaySourceLabel(source, replaySources)}
+                  </h4>
+                  {source.supported ? (
+                    <ReplayCandidateList
+                      busy={Boolean(busy)}
+                      candidates={source.candidates}
+                      emptyLabel="No recent messages here."
+                      onReplay={(candidate) =>
                         void runAction("replay", () => replayMessage(candidate))
                       }
-                    >
-                      {candidate.matches ? "Replay" : "Replay anyway"}
-                    </button>
-                  </span>
-                </li>
+                    />
+                  ) : (
+                    <p className="automation-field__hint">
+                      {replayUnsupportedReason(
+                        source.unsupportedReason,
+                        source.conversation.channel,
+                      )}
+                    </p>
+                  )}
+                </div>
               ))}
-            </ul>
+              {!replayCandidates.supported ? (
+                <p className="automation-field__hint">
+                  Use &ldquo;Preview live messages&rdquo; in the editor to test
+                  against new traffic instead.
+                </p>
+              ) : null}
+            </>
           )}
         </div>
       ) : null}
@@ -643,6 +669,76 @@ function AutomationRowMenu(props: {
   );
 }
 
+/**
+ * One source's recent messages with the filter's verdict on each. The single-
+ * source panel and every group of the multi-source panel share it, so a
+ * message reads the same whichever conversation it came from.
+ */
+function ReplayCandidateList(props: {
+  busy: boolean;
+  candidates: AutomationReplayCandidate[];
+  emptyLabel: string;
+  onReplay: (candidate: AutomationReplayCandidate) => void;
+}) {
+  if (props.candidates.length === 0) {
+    return <p className="automation-field__hint">{props.emptyLabel}</p>;
+  }
+  return (
+    <ul className="automation-preview__list">
+      {props.candidates.map((candidate) => (
+        <li
+          className={`automation-preview__item${candidate.matches ? " is-match" : ""}`}
+          key={candidate.message.id}
+        >
+          <span className="automation-preview__meta">
+            {new Date(candidate.message.receivedAt).toLocaleTimeString()}{" "}
+            · {candidate.message.actor.displayName
+              ?? candidate.message.actor.platformUserId}
+          </span>
+          <span className="automation-preview__row-text">
+            {candidate.message.text || "(no text)"}
+          </span>
+          <span className="automation-preview__row-actions">
+            {candidate.matches ? (
+              <span className="automation-preview__badge">matches</span>
+            ) : (
+              <span className="automation-preview__badge automation-preview__badge--muted">
+                no match
+              </span>
+            )}
+            <button
+              className="automation-preview__use-sender"
+              disabled={props.busy}
+              type="button"
+              onClick={() => props.onReplay(candidate)}
+            >
+              {candidate.matches ? "Replay" : "Replay anyway"}
+            </button>
+          </span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/**
+ * Heading for one source's group. The provider is named only when the
+ * automation watches more than one provider — otherwise it repeats on every
+ * heading and says nothing.
+ */
+function formatReplaySourceLabel(
+  source: AutomationReplaySource,
+  sources: AutomationReplaySource[],
+): string {
+  const label = formatAutomationConversationLabel(source.conversation);
+  const mixed = sources.some(
+    (other) => other.conversation.channel !== source.conversation.channel,
+  );
+  return mixed
+    ? `${INBOUND_PROVIDER_LABELS[source.conversation.channel] ?? source.conversation.channel} · ${label}`
+    : label;
+}
+
 function formatAutomationAgentLabel(props: {
   automation: AutomationDetail;
   thread?: NavigationThreadSummary;
@@ -725,27 +821,25 @@ function AutomationTableHistory(props: {
  * Slack DM trigger that Slack cannot serve history points them at the one
  * part that is working.
  *
+ * Asked per source: an automation watching several conversations can have
+ * one refused for its provider and another for its scope, and each group
+ * names its own.
+ *
  * `unsupportedReason` is absent on a response from a build that predates it,
  * and on a schedule automation, which has no conversation to replay from at
  * all. Both fall back to a sentence that blames nothing.
  */
 function replayUnsupportedReason(
-  response: ListAutomationReplayCandidatesResponse,
-  automation: AutomationDetail,
+  reason: AutomationReplayUnsupportedReason | undefined,
+  channel: MessagingChannelKind | undefined,
 ): string {
-  switch (response.unsupportedReason) {
+  switch (reason) {
     case "contact_dm":
       return "PwrAgent can't read back a contact's direct messages, only a conversation's.";
     case "scoped_thread":
       return "Replay reads whole conversations, not a single thread or topic.";
     case "provider": {
-      const trigger = automation.triggers.find(
-        (entry) => entry.kind === "inbound_message",
-      );
-      const provider =
-        trigger?.kind === "inbound_message"
-          ? INBOUND_PROVIDER_LABELS[trigger.conversation.channel]
-          : undefined;
+      const provider = channel ? INBOUND_PROVIDER_LABELS[channel] : undefined;
       return `${provider ?? "This provider"} can't serve conversation history, so there is nothing to replay.`;
     }
     default:

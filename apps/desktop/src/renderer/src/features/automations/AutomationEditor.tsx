@@ -29,8 +29,13 @@ import {
   AUTOMATION_RUN_RATE_PER_HOUR_OPTIONS,
   AUTOMATION_WEEKDAYS,
   DEFAULT_AUTOMATION_MAX_RUNS_PER_HOUR,
+  automationConversationKey,
+  buildAutomationInboundTriggerId,
   buildThreadIdentityKey,
   evaluateAutomationInboundConditions,
+  findAutomationConversationIndexForMessage,
+  formatAutomationConversationLabel,
+  formatAutomationConversationList,
   formatAutomationInboundConditionGroup,
   formatAutomationScheduleSummary,
   normalizeInboundTriggerConditions,
@@ -164,10 +169,17 @@ const DEFER_AGENT_LABEL = "I'll set this up later...";
 export function AutomationEditor(props: AutomationEditorProps) {
   const initialAutomation =
     props.mode.kind === "edit" ? props.mode.automation : undefined;
-  const initialInboundTrigger = initialAutomation?.triggers.find(
+  // Every inbound trigger, not just the first: an automation can watch several
+  // conversations, and a form that read back only one would drop the rest on
+  // the next save. The first fills the conversation fields; the others become
+  // the "Also watching" sources. They share one filter — this editor has only
+  // ever written the same filter to every source — so the first trigger's
+  // filter is the automation's filter.
+  const initialInboundTriggers = (initialAutomation?.triggers ?? []).filter(
     (trigger): trigger is AutomationInboundMessageTriggerDefinition =>
       trigger.kind === "inbound_message",
   );
+  const initialInboundTrigger = initialInboundTriggers[0];
   const initialSchedule = initialAutomation?.schedule;
   const initialAssignment = readInitialAssignment(props);
   const initialThreadKey = initialAssignment
@@ -227,6 +239,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
   const [validationError, setValidationError] = useState<string>();
   const agentLabelId = useId();
   const agentHelpId = useId();
+  const alsoWatchingLabelId = useId();
   const promptLabelId = useId();
   const promptHelpId = useId();
   const canDeferAgent = props.mode.kind === "create";
@@ -269,6 +282,13 @@ export function AutomationEditor(props: AutomationEditorProps) {
   );
   const [inboundTopicId, setInboundTopicId] = useState(
     initialIsTopic ? initialConversation?.conversationId ?? "" : "",
+  );
+  const [extraSources, setExtraSources] = useState<
+    AutomationMessagingConversationSnapshot[]
+  >(() =>
+    dedupeConversations(
+      initialInboundTriggers.slice(1).map((trigger) => trigger.conversation),
+    ),
   );
   // Editing an automation written before condition lists existed converts its
   // legacy sender/text filters forward, so the operator sees the same filter
@@ -778,6 +798,62 @@ export function AutomationEditor(props: AutomationEditorProps) {
     setCaptureError(undefined);
   };
 
+  // The conversation the fields currently describe. It is one source among
+  // possibly several: `extraSources` holds the rest.
+  const fieldConversation = readInboundConversation({
+    groupId: inboundGroupId,
+    groupTitle: selectedGroup?.title ?? capturedGroupTitle ?? storedGroupTitle,
+    provider: inboundProvider,
+    telegramScope,
+    topicId: inboundTopicId,
+    topicTitle: selectedTopic?.title,
+  });
+  const fieldSource =
+    fieldConversation.kind === "complete" ? fieldConversation.conversation : undefined;
+  // Every conversation this automation will watch, fields first, without
+  // duplicates — picking a channel that is already a chip must not watch it
+  // twice.
+  const inboundSources = dedupeConversations([
+    ...(fieldSource ? [fieldSource] : []),
+    ...extraSources,
+  ]);
+  const multipleSources = inboundSources.length > 1;
+  // A chip for the conversation the fields already show would list it twice.
+  // It stays in `extraSources`, so pointing the fields elsewhere brings the
+  // chip back rather than silently dropping that source.
+  const fieldSourceKey = fieldSource
+    ? automationConversationKey(fieldSource)
+    : undefined;
+  const alsoWatching = extraSources.filter(
+    (source) => automationConversationKey(source) !== fieldSourceKey,
+  );
+
+  const watchAnotherConversation = (): void => {
+    if (!fieldSource) return;
+    setExtraSources((current) => dedupeConversations([...current, fieldSource]));
+    // Back to the fields' defaults, as a fresh form would start.
+    setGroupSelection("");
+    setInboundGroupId("");
+    setInboundManualKind("channel");
+    setTelegramScope("group");
+    setTopicSelection("");
+    setInboundTopicId("");
+    setCapturedGroupTitle(undefined);
+    setCapturedName(undefined);
+    if (captureStatus === "captured") setCaptureStatus("idle");
+    setValidationError(undefined);
+  };
+
+  const removeExtraSource = (
+    conversation: AutomationMessagingConversationSnapshot,
+  ): void => {
+    const key = automationConversationKey(conversation);
+    setExtraSources((current) =>
+      current.filter((entry) => automationConversationKey(entry) !== key),
+    );
+    setValidationError(undefined);
+  };
+
   const previewSubscriptionId = useId();
   const [previewOpen, setPreviewOpen] = useState(false);
   const [previewMessages, setPreviewMessages] = useState<InboundPreviewMessage[]>(
@@ -787,54 +863,85 @@ export function AutomationEditor(props: AutomationEditorProps) {
     props.desktopApi?.startInboundPreview &&
       props.desktopApi?.onInboundPreviewMessage,
   );
-  const previewScope =
-    inboundProvider === "telegram"
-    && telegramScope === "topic"
-    && !isContactSelection(inboundGroupId)
-    && !inboundTopicId.trim()
-      ? undefined
-      : buildDestinationSnapshot({
-          provider: inboundProvider,
-          groupId: inboundGroupId,
-          topicId: telegramScope === "topic" ? inboundTopicId : "",
-        });
-  const previewConversationId = previewScope?.conversationId;
-  const previewParentId = previewScope?.parentId;
-  const previewRecipientUserId = previewScope?.recipientUserId;
-  const previewConversationKind = previewScope?.conversationKind;
+  // One preview subscription per source. Keyed by a sorted string so the
+  // effect below restarts only when the set of conversations changes — not on
+  // every render that rebuilds the (equal) array, and not when "Watch another"
+  // merely moves the fields' conversation into the chips.
+  const previewScopeKey = inboundSources
+    .map((source) => automationConversationKey(source))
+    .sort()
+    .join("|");
+  const previewScopes = useMemo(
+    () => inboundSources,
+    // inboundSources is rebuilt each render; its identity is previewScopeKey.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [previewScopeKey],
+  );
+  // The sender picker searches one provider's directory, and its "seen in
+  // this conversation" group needs one conversation: the first source on the
+  // selected provider.
+  const senderScopeConversationId = inboundSources.find(
+    (source) => source.channel === inboundProvider,
+  )?.conversationId;
+  // Each source's answer to "can history be read here?", keyed by source.
   // Unknown until the main process answers. Starting at `false` made the panel
   // assert "History is unavailable" for a frame on every provider that has it.
-  const [previewHistorySupported, setPreviewHistorySupported] = useState<boolean>();
+  const [previewHistoryBySource, setPreviewHistoryBySource] = useState<
+    Record<string, boolean>
+  >({});
+  const previewHistoryAnswers = Object.values(previewHistoryBySource);
+  const previewHistorySupported = previewHistoryAnswers.some(Boolean)
+    ? true
+    : previewHistoryAnswers.length === previewScopes.length
+      && previewScopes.length > 0
+      ? false
+      : undefined;
+  // The scope refusals are knowable before the preview opens. Stated only
+  // when every source shares one, which is always the case for one source.
+  const previewScopeNotes = new Set(inboundSources.map(previewScopeHistoryNote));
+  const [previewHistoryNote] =
+    previewScopeNotes.size === 1 ? previewScopeNotes : [undefined];
 
   useEffect(() => {
-    if (!previewOpen || !previewConversationId) return;
+    if (!previewOpen || previewScopes.length === 0) return;
     const start = props.desktopApi?.startInboundPreview;
     const stop = props.desktopApi?.stopInboundPreview;
     const subscribe = props.desktopApi?.onInboundPreviewMessage;
     if (!start || !subscribe) return;
     setPreviewMessages([]);
-    setPreviewHistorySupported(undefined);
+    setPreviewHistoryBySource({});
     let active = true;
-    void start({
-      subscriptionId: previewSubscriptionId,
-      provider: inboundProvider,
-      conversationId: previewConversationId,
-      ...(previewParentId ? { parentId: previewParentId } : {}),
-      recipientUserId: previewRecipientUserId,
-      conversationKind: previewConversationKind,
-    }).then((response) => {
-      if (active) setPreviewHistorySupported(response.historySupported === true);
-    }).catch(() => {
-      if (active) setPreviewHistorySupported(false);
+    const subscriptionIds = previewScopes.map(
+      (scope) => `${previewSubscriptionId}:${automationConversationKey(scope)}`,
+    );
+    previewScopes.forEach((scope, index) => {
+      const key = automationConversationKey(scope);
+      const answer = (supported: boolean) => {
+        if (!active) return;
+        setPreviewHistoryBySource((current) => ({ ...current, [key]: supported }));
+      };
+      void start({
+        subscriptionId: subscriptionIds[index],
+        provider: scope.channel,
+        conversationId: scope.conversationId,
+        ...(scope.parentId ? { parentId: scope.parentId } : {}),
+        recipientUserId: scope.recipientUserId,
+        conversationKind: scope.conversationKind,
+      }).then((response) => {
+        answer(response.historySupported === true);
+      }).catch(() => {
+        answer(false);
+      });
     });
     const unsubscribe = subscribe((message) => {
-      if (!matchesAutomationConversation({
-        channel: inboundProvider,
-        conversationId: previewConversationId,
-        parentId: previewParentId,
-        recipientUserId: previewRecipientUserId,
-        conversationKind: previewConversationKind,
-      }, { ...message, channel: message.provider }, message.actor.platformUserId)) return;
+      const inScope = previewScopes.some((scope) =>
+        matchesAutomationConversation(
+          scope,
+          { ...message, channel: message.provider },
+          message.actor.platformUserId,
+        ),
+      );
+      if (!inScope) return;
       setPreviewMessages((current) =>
         current.some((entry) => entry.id === message.id)
           ? current
@@ -844,15 +951,13 @@ export function AutomationEditor(props: AutomationEditorProps) {
     return () => {
       active = false;
       unsubscribe?.();
-      void stop?.({ subscriptionId: previewSubscriptionId });
+      for (const subscriptionId of subscriptionIds) {
+        void stop?.({ subscriptionId });
+      }
     };
   }, [
     previewOpen,
-    previewConversationId,
-    previewParentId,
-    previewRecipientUserId,
-    previewConversationKind,
-    inboundProvider,
+    previewScopes,
     previewSubscriptionId,
     props.desktopApi,
   ]);
@@ -860,8 +965,8 @@ export function AutomationEditor(props: AutomationEditorProps) {
   // Shares one evaluator with the main-process matcher so the preview can
   // never claim a match the trigger would reject (or vice versa).
   const previewMessageMatches = (message: InboundPreviewMessage): boolean =>
-    Boolean(previewScope && matchesAutomationConversation(
-      previewScope,
+    inboundSources.some((source) => matchesAutomationConversation(
+      source,
       { ...message, channel: message.provider },
       message.actor.platformUserId,
       inboundIncludeReplies,
@@ -937,11 +1042,15 @@ export function AutomationEditor(props: AutomationEditorProps) {
 
   // Connector captions. These state what actually survives into the next
   // stage, so the form reads as a pipeline rather than a pile of fields.
-  const inboundConversationLabel =
-    selectedGroup?.title
-    ?? capturedGroupTitle
-    ?? storedGroupTitle
-    ?? (inboundGroupId.trim() || "this conversation");
+  const inboundConversationLabel = multipleSources
+    ? formatAutomationConversationList(inboundSources)
+    : selectedGroup?.title
+      ?? capturedGroupTitle
+      ?? storedGroupTitle
+      ?? (inboundGroupId.trim()
+        || (inboundSources[0]
+          ? formatAutomationConversationLabel(inboundSources[0])
+          : "this conversation"));
 
   const inboundFilterSummary =
     inboundConditions.conditions.length === 0
@@ -973,11 +1082,18 @@ export function AutomationEditor(props: AutomationEditorProps) {
       return search({
         provider: inboundProvider,
         query,
-        ...(previewConversationId ? { conversationId: previewConversationId } : {}),
+        ...(senderScopeConversationId
+          ? { conversationId: senderScopeConversationId }
+          : {}),
         ...(initialAutomation?.id ? { automationId: initialAutomation.id } : {}),
       });
     },
-    [props.desktopApi, inboundProvider, previewConversationId, initialAutomation?.id],
+    [
+      props.desktopApi,
+      inboundProvider,
+      senderScopeConversationId,
+      initialAutomation?.id,
+    ],
   );
 
   const agentOptions = useMemo(
@@ -1245,8 +1361,9 @@ export function AutomationEditor(props: AutomationEditorProps) {
     const triggerConfig = buildTriggerConfig({
       broadcast: sourceReplyBroadcast,
       conditionGroup: stampConditionLabels(inboundConditions, senderLabels),
-      groupId: inboundGroupId,
-      groupTitle: selectedGroup?.title ?? capturedGroupTitle ?? storedGroupTitle,
+      existingTriggers: initialInboundTriggers,
+      extraSources,
+      fieldConversation,
       includeThreadReplies: inboundIncludeReplies,
       provider: inboundProvider,
       replyDestination,
@@ -1258,9 +1375,6 @@ export function AutomationEditor(props: AutomationEditorProps) {
         provider: destProvider,
         topicId: destTopicId,
       }),
-      telegramScope,
-      topicId: inboundTopicId,
-      topicTitle: selectedTopic?.title,
       triggerKind,
     });
     if (!triggerConfig.ok) {
@@ -1756,6 +1870,70 @@ export function AutomationEditor(props: AutomationEditorProps) {
                       ) : null}
                     </>
                   ) : null}
+
+                  {alsoWatching.length > 0 || fieldSource ? (
+                    <div className="automation-field-group automation-sources">
+                      {alsoWatching.length > 0 ? (
+                        <div className="automation-sources__watching">
+                          <span
+                            className="automation-sources__label"
+                            id={alsoWatchingLabelId}
+                          >
+                            Also watching
+                          </span>
+                          {/* The sender picker's chip markup, so a removable
+                              list of choices looks and behaves the same
+                              everywhere in this editor. */}
+                          <ul
+                            aria-labelledby={alsoWatchingLabelId}
+                            className="automation-sender-picker__chips"
+                          >
+                            {alsoWatching.map((source) => {
+                              const label = formatSourceChipLabel(
+                                source,
+                                inboundProvider,
+                              );
+                              return (
+                                <li
+                                  className="chip automation-sender-chip"
+                                  key={automationConversationKey(source)}
+                                >
+                                  <span className="automation-sender-chip__label">
+                                    {label}
+                                  </span>
+                                  <button
+                                    aria-label={`Stop watching ${label}`}
+                                    className="automation-sender-chip__remove"
+                                    type="button"
+                                    onClick={() => removeExtraSource(source)}
+                                  >
+                                    ×
+                                  </button>
+                                </li>
+                              );
+                            })}
+                          </ul>
+                        </div>
+                      ) : null}
+                      {fieldSource ? (
+                        <button
+                          className="button button--ghost automation-sources__add"
+                          type="button"
+                          onClick={watchAnotherConversation}
+                        >
+                          {/* "Conversation", like the picker above: it offers
+                              DMs beside channels and groups. */}
+                          Watch another conversation
+                        </button>
+                      ) : null}
+                      {multipleSources ? (
+                        <p className="automation-field__hint">
+                          A message in any of these can start a run. They share
+                          the filters, batching window, and hourly cap below.
+                        </p>
+                      ) : null}
+                    </div>
+                  ) : null}
             </>
           )}
         </AutomationStage>
@@ -1764,7 +1942,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
           caption={
             triggerKind === "schedule"
               ? `fires ${selectedScheduleSummary} — no filtering or batching needed`
-              : isContactSelection(inboundGroupId)
+              : !multipleSources && isContactSelection(inboundGroupId)
                 // A contact trigger matches on the sender, not the room.
                 ? `every direct message from ${inboundConversationLabel}`
                 : `every message in ${inboundConversationLabel}`
@@ -1776,7 +1954,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
             <AutomationStage verb="Only if" title="Filters">
                   <AutomationConditionEditor
                     group={inboundConditions}
-                    conversationId={previewConversationId}
+                    conversationId={senderScopeConversationId}
                     observedSenders={observedSenders}
                     provider={inboundProvider}
                     searchSenders={searchSenders}
@@ -1805,22 +1983,22 @@ export function AutomationEditor(props: AutomationEditorProps) {
                     <div className="automation-preview">
                       <button
                         className="button button--ghost automation-preview__toggle"
-                        disabled={!previewConversationId}
+                        disabled={inboundSources.length === 0}
                         type="button"
                         onClick={() => setPreviewOpen((open) => !open)}
                       >
                         {previewOpen ? "Stop preview" : "Preview live messages"}
                       </button>
-                      {!previewConversationId ? (
+                      {inboundSources.length === 0 ? (
                         <p className="automation-field__hint">
                           Enter a conversation above to preview its incoming messages.
                         </p>
-                      ) : !previewOpen && previewScopeHistoryNote(previewScope) ? (
+                      ) : !previewOpen && previewHistoryNote ? (
                         <p className="automation-field__hint">
-                          {previewScopeHistoryNote(previewScope)}
+                          {previewHistoryNote}
                         </p>
                       ) : null}
-                      {previewOpen && previewConversationId ? (
+                      {previewOpen && inboundSources.length > 0 ? (
                         <div className="automation-preview__panel" role="status">
                           <p className="automation-field__hint">
                             {previewHistorySupported === undefined
@@ -1853,6 +2031,14 @@ export function AutomationEditor(props: AutomationEditorProps) {
                                       {message.actor.displayName ? (
                                         <span className="automation-preview__sender-id">
                                           {message.actor.platformUserId}
+                                        </span>
+                                      ) : null}
+                                      {multipleSources ? (
+                                        <span className="automation-preview__source">
+                                          in {formatPreviewSourceLabel(
+                                            message,
+                                            inboundSources,
+                                          )}
                                         </span>
                                       ) : null}
                                       <span className="automation-preview__time">
@@ -3090,17 +3276,16 @@ function stampConditionLabels(
 function buildTriggerConfig(params: {
   broadcast: boolean;
   conditionGroup: AutomationInboundConditionGroup;
-  groupId: string;
-  groupTitle?: string;
+  /** The automation's stored inbound triggers, whose ids a re-save keeps. */
+  existingTriggers: readonly AutomationInboundMessageTriggerDefinition[];
+  extraSources: readonly AutomationMessagingConversationSnapshot[];
+  fieldConversation: InboundConversationField;
   includeThreadReplies: boolean;
   provider: MessagingChannelKind;
   replyDestination: AutomationSourceMessageDestination;
   resultMode: ResultMode;
   schedule?: AutomationScheduleDefinition;
   target?: AutomationMessagingConversationSnapshot;
-  telegramScope: TelegramScope;
-  topicId: string;
-  topicTitle?: string;
   triggerKind: TriggerFormKind;
 }):
   | {
@@ -3128,12 +3313,14 @@ function buildTriggerConfig(params: {
     };
   }
 
-  const groupId = params.groupId.trim();
-  const topicId = params.topicId.trim();
-  const isTopic =
-    params.provider === "telegram" && params.telegramScope === "topic"
-    && !isContactSelection(groupId);
-  if (!groupId) {
+  // Empty fields are fine once another conversation is already watched: the
+  // operator pressed "Watch another" and then chose not to add one. A
+  // half-filled field (a topic scope with no topic) is still an error.
+  const field = params.fieldConversation;
+  if (field.kind === "incomplete") {
+    return { error: field.error, ok: false };
+  }
+  if (field.kind === "empty" && params.extraSources.length === 0) {
     return {
       error:
         params.provider === "telegram"
@@ -3141,9 +3328,6 @@ function buildTriggerConfig(params: {
           : "Conversation ID is required.",
       ok: false,
     };
-  }
-  if (isTopic && !topicId) {
-    return { error: "Enter a topic ID or switch to Whole group.", ok: false };
   }
   // A row whose value is blank cannot be evaluated, so it is rejected here
   // rather than saved as an inert filter the operator believes is active.
@@ -3170,21 +3354,12 @@ function buildTriggerConfig(params: {
     };
   }
 
-  const conversation: AutomationMessagingConversationSnapshot | undefined = isTopic
-    ? {
-        channel: params.provider,
-        conversationId: topicId,
-        conversationKind: "topic",
-        parentId: groupId,
-        ...(params.topicTitle ? { title: params.topicTitle } : {}),
-        ...(params.groupTitle ? { parentTitle: params.groupTitle } : {}),
-      }
-    : buildDestinationSnapshot({ ...params, topicId: "" });
-  if (!conversation) {
-    return { ok: false, error: "Choose a conversation or DM recipient." };
-  }
-
+  const sources = dedupeConversations([
+    ...(field.kind === "complete" ? [field.conversation] : []),
+    ...params.extraSources,
+  ]);
   const conditionGroup = params.conditionGroup;
+  const name = formatAutomationInboundConditionGroup(conditionGroup);
 
   const outputActions: NonNullable<CreateAutomationRequest["outputActions"]> = [
     { id: "agent-context", kind: "agent_context" },
@@ -3204,20 +3379,129 @@ function buildTriggerConfig(params: {
     });
   }
 
+  // One trigger per source, all carrying the one filter this form edits. The
+  // matcher already walks every trigger, so a message in any of them fires.
+  const ids = assignInboundTriggerIds(sources, params.existingTriggers);
   return {
     ok: true,
     outputActions,
-    triggers: [
-      {
-        conditionGroup,
-        conversation,
-        id: "inbound-message",
-        includeThreadReplies: params.includeThreadReplies,
-        kind: "inbound_message",
-        name: formatAutomationInboundConditionGroup(conditionGroup),
-      },
-    ],
+    triggers: sources.map((conversation, index) => ({
+      conditionGroup,
+      conversation,
+      id: ids[index],
+      includeThreadReplies: params.includeThreadReplies,
+      kind: "inbound_message" as const,
+      name,
+    })),
   };
+}
+
+/**
+ * An "Also watching" chip. The provider is named only when it differs from
+ * the one selected above — otherwise every chip would repeat it.
+ */
+function formatSourceChipLabel(
+  source: AutomationMessagingConversationSnapshot,
+  selectedProvider: MessagingChannelKind,
+): string {
+  const label = formatAutomationConversationLabel(source);
+  return source.channel === selectedProvider
+    ? label
+    : `${INBOUND_PROVIDER_LABELS[source.channel] ?? source.channel} · ${label}`;
+}
+
+/** Which watched conversation a previewed message arrived in. */
+function formatPreviewSourceLabel(
+  message: InboundPreviewMessage,
+  sources: readonly AutomationMessagingConversationSnapshot[],
+): string {
+  const source = sources[findAutomationConversationIndexForMessage(sources, message)];
+  return source ? formatAutomationConversationLabel(source) : message.conversationId;
+}
+
+type InboundConversationField =
+  | { kind: "empty" }
+  | { error: string; kind: "incomplete" }
+  | { conversation: AutomationMessagingConversationSnapshot; kind: "complete" };
+
+/**
+ * The conversation the trigger fields describe, if they describe one. Kept
+ * apart from validation so the same reading feeds the save, the live preview,
+ * and "Watch another", and none of them can disagree about what is selected.
+ */
+function readInboundConversation(params: {
+  groupId: string;
+  groupTitle?: string;
+  provider: MessagingChannelKind;
+  telegramScope: TelegramScope;
+  topicId: string;
+  topicTitle?: string;
+}): InboundConversationField {
+  const groupId = params.groupId.trim();
+  const topicId = params.topicId.trim();
+  const isTopic =
+    params.provider === "telegram" && params.telegramScope === "topic"
+    && !isContactSelection(groupId);
+  if (!groupId) return { kind: "empty" };
+  if (isTopic && !topicId) {
+    return { error: "Enter a topic ID or switch to Whole group.", kind: "incomplete" };
+  }
+  const conversation: AutomationMessagingConversationSnapshot | undefined = isTopic
+    ? {
+        channel: params.provider,
+        conversationId: topicId,
+        conversationKind: "topic",
+        parentId: groupId,
+        ...(params.topicTitle ? { title: params.topicTitle } : {}),
+        ...(params.groupTitle ? { parentTitle: params.groupTitle } : {}),
+      }
+    : buildDestinationSnapshot({ ...params, topicId: "" });
+  if (!conversation) {
+    return { error: "Choose a conversation or DM recipient.", kind: "incomplete" };
+  }
+  return { kind: "complete", conversation };
+}
+
+/** First occurrence wins, so a source keeps its position and its title. */
+function dedupeConversations(
+  conversations: readonly AutomationMessagingConversationSnapshot[],
+): AutomationMessagingConversationSnapshot[] {
+  const seen = new Set<string>();
+  return conversations.filter((conversation) => {
+    const key = automationConversationKey(conversation);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+/**
+ * Stable trigger ids. A source the automation already watched keeps the id it
+ * was stored with — including the fixed "inbound-message" every automation
+ * written before multi-source had — so re-saving an unchanged automation
+ * rewrites no ids. A new source gets an id derived from its conversation.
+ */
+function assignInboundTriggerIds(
+  sources: readonly AutomationMessagingConversationSnapshot[],
+  existing: readonly AutomationInboundMessageTriggerDefinition[],
+): string[] {
+  const storedIdByKey = new Map<string, string>();
+  for (const trigger of existing) {
+    const key = automationConversationKey(trigger.conversation);
+    if (!storedIdByKey.has(key)) storedIdByKey.set(key, trigger.id);
+  }
+  const used = new Set<string>();
+  return sources.map((conversation) => {
+    const base =
+      storedIdByKey.get(automationConversationKey(conversation))
+      ?? buildAutomationInboundTriggerId(conversation);
+    // Distinct conversations derive distinct ids, so this only guards a
+    // stored id that happens to equal another source's derived one.
+    let id = base;
+    for (let suffix = 2; used.has(id); suffix += 1) id = `${base}:${suffix}`;
+    used.add(id);
+    return id;
+  });
 }
 
 /**

@@ -152,7 +152,14 @@ function formatBatchedSources(
       entry.actor.username ??
       entry.actor.platformUserId;
     const text = entry.message?.text ?? "(no text)";
-    lines.push(`- [${new Date(entry.receivedAt).toISOString()}] ${sender}: ${text}`);
+    // Present only when this follow-up came from a different conversation
+    // than the primary message above; otherwise it was posted there too.
+    const where = entry.conversation
+      ? ` (in ${entry.conversation.title ?? entry.conversation.conversationId})`
+      : "";
+    lines.push(
+      `- [${new Date(entry.receivedAt).toISOString()}] ${sender}${where}: ${text}`,
+    );
   }
   return lines;
 }

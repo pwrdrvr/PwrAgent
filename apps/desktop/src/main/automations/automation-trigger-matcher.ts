@@ -1,5 +1,6 @@
 import {
   evaluateAutomationInboundConditions,
+  findAutomationConversationIndexForMessage,
   matchesAutomationConversation,
   normalizeInboundTriggerConditions,
 } from "@pwragent/shared";
@@ -7,6 +8,7 @@ import type {
   AutomationInboundMessageTriggerDefinition,
   AutomationReplayCandidate,
   AutomationRunSourceMetadata,
+  AutomationTriggerDefinition,
   InboundPreviewMessage,
 } from "@pwragent/shared";
 import type { MessagingInboundEvent } from "@pwragent/messaging-interface";
@@ -180,6 +182,27 @@ export function buildAutomationReplayCandidates(
       ...(message.actor.isBot === undefined ? {} : { isBot: message.actor.isBot }),
     }),
   }));
+}
+
+/**
+ * The inbound trigger a captured message belongs to, by the conversation it
+ * was posted in. An automation can watch several conversations, so "the first
+ * inbound trigger" would stamp a message from the second conversation with the
+ * first one's trigger id, name, and title.
+ */
+export function resolveInboundTriggerForMessage(
+  triggers: AutomationTriggerDefinition[],
+  message: InboundPreviewMessage,
+): AutomationInboundMessageTriggerDefinition | undefined {
+  const inbound = triggers.filter(
+    (trigger): trigger is AutomationInboundMessageTriggerDefinition =>
+      trigger.kind === "inbound_message",
+  );
+  const index = findAutomationConversationIndexForMessage(
+    inbound.map((trigger) => trigger.conversation),
+    message,
+  );
+  return index < 0 ? undefined : inbound[index];
 }
 
 /**

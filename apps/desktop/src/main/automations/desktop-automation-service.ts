@@ -6,8 +6,11 @@ import type {
   AutomationInspectionErrorCode,
   AutomationInspectionResponse,
   AutomationIdRequest,
+  AutomationInboundMessageTriggerDefinition,
   AutomationLoadIssue,
   AutomationMutationResponse,
+  AutomationReplaySource,
+  AutomationReplayUnsupportedReason,
   AutomationRunSummary,
   AutomationRunStatus,
   AutomationRunUsage,
@@ -60,6 +63,7 @@ import {
   buildAutomationReplayCandidates,
   buildReplayRunSourceMetadata,
   matchAutomationInboundEvent,
+  resolveInboundTriggerForMessage,
 } from "./automation-trigger-matcher.js";
 import { mergeTranscriptEvents } from "./transcript-merge.js";
 
@@ -81,6 +85,45 @@ const RUN_ACTOR_SCAN_LIMIT = 200;
  * one payload rewrite instead of taking one commit each.
  */
 const RUN_USAGE_FLUSH_INTERVAL_MS = 1_000;
+
+/** Recent messages the Replay picker offers for a single-source automation. */
+const REPLAY_CANDIDATE_LIMIT = 15;
+/**
+ * Floor on each source's share of that page. Without one, an automation
+ * watching many conversations would ask each for one or two messages, which
+ * is too few to find the one worth replaying.
+ */
+const REPLAY_CANDIDATE_MIN_PER_SOURCE = 5;
+
+/**
+ * History to request per source: the single-source page split evenly across
+ * the sources, rounded up and never below the per-source floor. One source
+ * keeps today's page of 15; two get 8 each; three or more get 5 each.
+ */
+export function replayCandidateLimitPerSource(sourceCount: number): number {
+  if (sourceCount <= 1) return REPLAY_CANDIDATE_LIMIT;
+  return Math.max(
+    REPLAY_CANDIDATE_MIN_PER_SOURCE,
+    Math.ceil(REPLAY_CANDIDATE_LIMIT / sourceCount),
+  );
+}
+
+/**
+ * Why one source cannot be replayed, or undefined when its history can be
+ * read. The provider first: where it has no history reader, no scope would
+ * replay either, and blaming the scope would imply a channel trigger could.
+ * Only a provider that reads history is refused by the scope — a Slack DM,
+ * not a Telegram one.
+ */
+function replayUnsupportedReason(
+  trigger: AutomationInboundMessageTriggerDefinition,
+  supportsHistory: (provider: MessagingChannelKind) => boolean,
+): AutomationReplayUnsupportedReason | undefined {
+  if (!supportsHistory(trigger.conversation.channel)) return "provider";
+  if (trigger.conversation.recipientUserId) return "contact_dm";
+  if (trigger.conversation.parentId) return "scoped_thread";
+  return undefined;
+}
 
 let service: DesktopAutomationService | null = null;
 let storeOverride: AutomationStore | null = null;
@@ -640,10 +683,17 @@ export class DesktopAutomationService {
   }
 
   /**
-   * Recent messages from an inbound automation's trigger conversation, each
-   * pre-judged against the trigger's filter so the Replay picker can offer
-   * both positive tests (replay a matching message) and negative ones (see
-   * that a message would NOT have fired the automation).
+   * Recent messages from each of an inbound automation's trigger
+   * conversations, each pre-judged against its own trigger's filter so the
+   * Replay picker can offer both positive tests (replay a matching message)
+   * and negative ones (see that a message would NOT have fired the
+   * automation).
+   *
+   * Every source is fetched, so every source is represented: the page is
+   * split across them ({@link replayCandidateLimitPerSource}) rather than
+   * spent on whichever conversation happens to be first. Sources are fetched
+   * concurrently, and a source whose fetch fails reports no messages rather
+   * than failing the whole picker.
    */
   async listReplayCandidates(
     request: ListAutomationReplayCandidatesRequest,
@@ -661,36 +711,58 @@ export class DesktopAutomationService {
     if (!automation) {
       throw new Error("Automation not found.");
     }
-    const trigger = automation.triggers.find(
-      (candidate) => candidate.kind === "inbound_message",
+    const triggers = automation.triggers.filter(
+      (candidate): candidate is AutomationInboundMessageTriggerDefinition =>
+        candidate.kind === "inbound_message",
     );
-    if (trigger?.kind !== "inbound_message") {
-      return { candidates: [], supported: false };
-    }
-    // The provider first: where it has no history reader, no scope would
-    // replay either, and blaming the scope would imply a channel trigger
-    // could. Only a provider that reads history is refused by the scope — a
-    // Slack DM, not a Telegram one.
-    if (!deps.supportsHistory(trigger.conversation.channel)) {
-      return { candidates: [], supported: false, unsupportedReason: "provider" };
-    }
-    if (trigger.conversation.recipientUserId) {
-      return { candidates: [], supported: false, unsupportedReason: "contact_dm" };
-    }
-    if (trigger.conversation.parentId) {
-      return { candidates: [], supported: false, unsupportedReason: "scoped_thread" };
-    }
-    const messages = await deps.fetchRecent({
-      provider: trigger.conversation.channel,
-      conversationId: trigger.conversation.conversationId,
-      ...(trigger.conversation.parentId
-        ? { parentId: trigger.conversation.parentId }
-        : {}),
-      limit: 15,
-    });
+    // Refusals first, so the page is split only across sources that can
+    // actually be read: a Telegram group beside one Slack channel must not
+    // shrink the Slack channel's share.
+    const refusals = triggers.map((trigger) =>
+      replayUnsupportedReason(trigger, deps.supportsHistory),
+    );
+    const limit = replayCandidateLimitPerSource(
+      refusals.filter((reason) => reason === undefined).length,
+    );
+    const sources = await Promise.all(
+      triggers.map(async (trigger, index): Promise<AutomationReplaySource> => {
+        const base = { triggerId: trigger.id, conversation: trigger.conversation };
+        const unsupportedReason = refusals[index];
+        if (unsupportedReason) {
+          return { ...base, supported: false, unsupportedReason, candidates: [] };
+        }
+        let messages: InboundPreviewMessage[];
+        try {
+          messages = await deps.fetchRecent({
+            provider: trigger.conversation.channel,
+            conversationId: trigger.conversation.conversationId,
+            limit,
+          });
+        } catch (error) {
+          automationServiceLog.warn("replay history fetch failed", {
+            automationId: automation.id,
+            triggerId: trigger.id,
+            provider: trigger.conversation.channel,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          messages = [];
+        }
+        return {
+          ...base,
+          supported: true,
+          candidates: buildAutomationReplayCandidates(trigger, messages),
+        };
+      }),
+    );
+    const supported = sources.some((source) => source.supported);
+    const reasons = new Set(sources.map((source) => source.unsupportedReason));
+    const [sharedReason] = reasons;
     return {
-      candidates: buildAutomationReplayCandidates(trigger, messages),
-      supported: true,
+      sources,
+      supported,
+      ...(!supported && reasons.size === 1 && sharedReason
+        ? { unsupportedReason: sharedReason }
+        : {}),
     };
   }
 
@@ -702,11 +774,19 @@ export class DesktopAutomationService {
     if (!automation) {
       throw new Error("Automation not found.");
     }
-    const trigger = automation.triggers.find(
-      (candidate) => candidate.kind === "inbound_message",
-    );
-    if (trigger?.kind !== "inbound_message") {
+    if (!automation.triggers.some((candidate) => candidate.kind === "inbound_message")) {
       throw new Error("This automation has no inbound trigger to replay.");
+    }
+    // The candidate came from one specific conversation; replay it as that
+    // conversation's trigger, not whichever inbound trigger is listed first.
+    const trigger = resolveInboundTriggerForMessage(
+      automation.triggers,
+      request.message,
+    );
+    if (!trigger) {
+      throw new Error(
+        "This message is not from a conversation this automation watches.",
+      );
     }
     const result = await this.scheduler.replayInboundRun({
       automation,

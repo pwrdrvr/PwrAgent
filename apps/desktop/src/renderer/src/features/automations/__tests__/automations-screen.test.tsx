@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   AutomationDetail,
+  AutomationReplaySource,
   AutomationRunSummary,
   GetAutomationRunArtifactResponse,
   NavigationThreadSummary,
@@ -701,7 +702,15 @@ describe("run vs replay actions", () => {
           listAutomations: vi.fn(async () => ({ automations: [inbound] })),
           listAutomationRuns: vi.fn(async () => ({ runs: [] })),
           listAutomationReplayCandidates: vi.fn(async () => ({
-            candidates: [],
+            sources: [
+              {
+                triggerId: "inbound-message",
+                conversation: { channel: "slack" as const, conversationId: "C123" },
+                supported: false,
+                unsupportedReason,
+                candidates: [],
+              },
+            ],
             supported: false,
             unsupportedReason,
           })),
@@ -748,5 +757,177 @@ describe("run vs replay actions", () => {
     expect(
       await screen.findByText(/no recent history to replay for this trigger/),
     ).toBeInTheDocument();
+  });
+});
+
+describe("replay across watched conversations", () => {
+  const conversation = (conversationId: string, title: string) => ({
+    channel: "slack" as const,
+    conversationId,
+    conversationKind: "channel" as const,
+    title,
+  });
+  const inbound: AutomationDetail = {
+    ...automation,
+    id: "automation-2",
+    name: "Alerts and metrics",
+    schedule: undefined,
+    scheduleSummary: "inbound from f-alerts, f-metrics",
+    triggers: [
+      {
+        id: "inbound-message",
+        kind: "inbound_message",
+        conversation: conversation("C-ALERTS", "f-alerts"),
+      },
+      {
+        id: "inbound-message:slack::C-METRICS",
+        kind: "inbound_message",
+        conversation: conversation("C-METRICS", "f-metrics"),
+      },
+    ],
+  };
+  const candidate = (id: string, conversationId: string, text: string) => ({
+    matches: true,
+    message: {
+      id,
+      provider: "slack" as const,
+      conversationId,
+      receivedAt: 1_000,
+      actor: { platformUserId: "B1", displayName: "Datadog" },
+      text,
+    },
+  });
+
+  function renderWithSources(sources: AutomationReplaySource[]) {
+    const desktopApi = {
+      listAutomations: vi.fn(async () => ({ automations: [inbound] })),
+      listAutomationRuns: vi.fn(async () => ({ runs: [] })),
+      listAutomationReplayCandidates: vi.fn(async () => ({
+        sources,
+        supported: sources.some((source) => source.supported),
+      })),
+      replayAutomationInbound: vi.fn(async () => ({})),
+    };
+    render(
+      <AutomationsScreen
+        desktopApi={desktopApi as unknown as DesktopApi}
+        threads={[thread]}
+        onClose={() => undefined}
+      />,
+    );
+    return desktopApi;
+  }
+
+  it("groups recent messages under the conversation each came from", async () => {
+    const desktopApi = renderWithSources([
+      {
+        triggerId: "inbound-message",
+        conversation: conversation("C-ALERTS", "f-alerts"),
+        supported: true,
+        candidates: [candidate("a1", "C-ALERTS", "disk full")],
+      },
+      {
+        triggerId: "inbound-message:slack::C-METRICS",
+        conversation: conversation("C-METRICS", "f-metrics"),
+        supported: true,
+        candidates: [candidate("m1", "C-METRICS", "p99 over budget")],
+      },
+    ]);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Replay" }));
+
+    const alerts = await screen.findByRole("heading", { name: "f-alerts" });
+    const metrics = screen.getByRole("heading", { name: "f-metrics" });
+    const alertsGroup = alerts.parentElement as HTMLElement;
+    const metricsGroup = metrics.parentElement as HTMLElement;
+    expect(within(alertsGroup).getByText("disk full")).toBeInTheDocument();
+    expect(within(alertsGroup).queryByText("p99 over budget")).toBeNull();
+    expect(within(metricsGroup).getByText("p99 over budget")).toBeInTheDocument();
+
+    fireEvent.click(within(metricsGroup).getByRole("button", { name: "Replay" }));
+    await waitFor(() =>
+      expect(desktopApi.replayAutomationInbound).toHaveBeenCalledWith({
+        automationId: "automation-2",
+        message: expect.objectContaining({ id: "m1", conversationId: "C-METRICS" }),
+      }),
+    );
+  });
+
+  it("says which source cannot serve history while still listing the others", async () => {
+    renderWithSources([
+      {
+        triggerId: "inbound-message",
+        conversation: conversation("C-ALERTS", "f-alerts"),
+        supported: true,
+        candidates: [candidate("a1", "C-ALERTS", "disk full")],
+      },
+      {
+        triggerId: "inbound-message:telegram::-100",
+        conversation: {
+          channel: "telegram",
+          conversationId: "-100",
+          conversationKind: "channel",
+          title: "Ops Room",
+        },
+        supported: false,
+        unsupportedReason: "provider",
+        candidates: [],
+      },
+    ]);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Replay" }));
+
+    // Mixed providers: each heading names its provider.
+    expect(
+      await screen.findByRole("heading", { name: "Slack · f-alerts" }),
+    ).toBeInTheDocument();
+    const ops = screen.getByRole("heading", { name: "Telegram · Ops Room" });
+    expect(ops.parentElement).toHaveTextContent(
+      "Telegram can't serve conversation history",
+    );
+    expect(screen.getByText("disk full")).toBeInTheDocument();
+    // Something is replayable, so there is no "test against new traffic" nudge.
+    expect(screen.queryByText(/Preview live messages/)).toBeNull();
+  });
+
+  it("names each source's own reason when none can be replayed", async () => {
+    renderWithSources([
+      {
+        triggerId: "inbound-message:slack:dm:U-AVERY",
+        conversation: {
+          channel: "slack",
+          conversationId: "U-AVERY",
+          conversationKind: "dm",
+          recipientUserId: "U-AVERY",
+          title: "Avery",
+        },
+        supported: false,
+        unsupportedReason: "contact_dm",
+        candidates: [],
+      },
+      {
+        triggerId: "inbound-message:telegram::-100",
+        conversation: {
+          channel: "telegram",
+          conversationId: "-100",
+          conversationKind: "channel",
+          title: "Ops Room",
+        },
+        supported: false,
+        unsupportedReason: "provider",
+        candidates: [],
+      },
+    ]);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Replay" }));
+
+    const avery = await screen.findByRole("heading", { name: "Slack · Avery (DM)" });
+    expect(avery.parentElement).toHaveTextContent(
+      "can't read back a contact's direct messages",
+    );
+    expect(
+      screen.getByRole("heading", { name: "Telegram · Ops Room" }).parentElement,
+    ).toHaveTextContent("Telegram can't serve conversation history");
+    expect(screen.getByText(/Preview live messages/)).toBeInTheDocument();
   });
 });
