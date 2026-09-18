@@ -1537,6 +1537,13 @@ export function AutomationEditor(props: AutomationEditorProps) {
                       servers={discordServers}
                     />
                   ) : null}
+                  {inboundGroupId.trim()
+                  && !inboundGroupId.startsWith("dm:")
+                  && groupDeliveryHint(inboundProvider) ? (
+                    <p className="automation-field__hint">
+                      {groupDeliveryHint(inboundProvider)}
+                    </p>
+                  ) : null}
 
                   {telegramGroups.length === 0 ||
                   groupSelection === MANUAL_GROUP_VALUE ? (
@@ -3661,6 +3668,24 @@ function previewScopeHistoryNote(
   }
   if (scope?.parentId) {
     return "History is read for whole conversations, not one topic, so the preview shows new messages only.";
+  }
+  return undefined;
+}
+
+/**
+ * A platform rule that decides whether a group trigger sees ordinary
+ * messages at all. PwrAgent cannot change either setting, and neither
+ * produces an error — the automation simply never fires — so the editor says
+ * so where the group is chosen. Static on purpose: Telegram's flag is not
+ * decisive on its own (an admin bot receives everything anyway), and Feishu
+ * does not report the permission to the bot.
+ */
+function groupDeliveryHint(provider: MessagingChannelKind): string | undefined {
+  if (provider === "telegram") {
+    return "Telegram only delivers ordinary group messages to a bot whose Group Privacy is turned off in @BotFather, or that is an admin of the group. Otherwise this automation sees only commands, mentions, and replies to the bot.";
+  }
+  if (provider === "feishu") {
+    return "Feishu/Lark delivers group messages that don't @mention the bot only if the app has the \"read all group messages\" permission (im:message.group_msg). Otherwise this automation sees only messages that @mention it.";
   }
   return undefined;
 }

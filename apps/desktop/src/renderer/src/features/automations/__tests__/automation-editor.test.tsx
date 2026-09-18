@@ -2037,6 +2037,33 @@ describe("AutomationEditor DM wording", () => {
     );
   });
 
+  it("warns where a platform setting decides whether a group trigger sees anything", async () => {
+    // Telegram's Group Privacy (and Feishu's group-message permission) keep
+    // ordinary group messages from reaching the bot at all. Nothing errors;
+    // the automation just never fires, so the editor says so.
+    render(
+      <AutomationEditor
+        desktopApi={fakeDesktopApi(
+          fakeSettings({
+            enabled: { telegram: true },
+            telegramGroups: [{ displayName: "Ops Room", id: "-100" }],
+            users: [{ displayName: "Avery Quill", id: "4242" }],
+          }),
+        )}
+        mode={{ kind: "create" }}
+        onCancel={() => undefined}
+        onSubmit={vi.fn(async () => undefined)}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Inbound message" }));
+    await pickConversation("Conversation", /Ops Room/);
+    expect(screen.getByText(/Group Privacy is turned off in @BotFather/)).toBeInTheDocument();
+    // A DM is not subject to group privacy.
+    await pickConversation("Conversation", /Avery Quill/);
+    expect(screen.queryByText(/Group Privacy/)).not.toBeInTheDocument();
+  });
+
   it("asks each provider for the ID it actually uses", async () => {
     render(
       <AutomationEditor
