@@ -54,11 +54,19 @@ function openAddPicker() {
   fireEvent.click(trigger);
 }
 
-/** Row names as the operator reads them, without the ID and date columns. */
-function addPickerNames(): Array<string | null | undefined> {
+/** Row names as the operator reads them, without the context, ID and date
+ *  columns. Whichever picker is open: only one listbox exists at a time. */
+function pickerNames(): Array<string | null | undefined> {
   return within(screen.getByRole("listbox"))
     .queryAllByRole("option")
     .map((option) => option.querySelector(".project-picker__row-name")?.textContent);
+}
+
+/** The dimmed "where it sits" text after each row's name. */
+function pickerContexts(): Array<string | null | undefined> {
+  return within(screen.getByRole("listbox"))
+    .queryAllByRole("option")
+    .map((option) => option.querySelector(".messaging-surface-picker__context")?.textContent);
 }
 
 function addPickerSections(): Array<string | null> {
@@ -271,10 +279,11 @@ describe("MessagingRoutesSettings", () => {
       name: "Add a channel or thread: Select a channel or thread...",
     });
     openAddPicker();
-    expect(addPickerNames()).toEqual(["Discord / Test server / general"]);
-    fireEvent.click(screen.getByRole("option", {
-      name: /^Discord \/ Test server \/ general/,
-    }));
+    // The channel's own name leads and its server trails it. "Discord" is
+    // left out of a list that holds nothing else.
+    expect(pickerNames()).toEqual(["general"]);
+    expect(pickerContexts()).toEqual(["Test server"]);
+    fireEvent.click(screen.getByRole("option", { name: /^general/ }));
 
     const saved = [
       {
@@ -391,8 +400,8 @@ describe("MessagingRoutesSettings", () => {
       name: "Add a channel or thread: Select a channel or thread...",
     });
     openAddPicker();
-    expect(addPickerNames()).not.toContain("Discord / Test server");
-    expect(addPickerNames()).toContain("Discord / 1480556454498009352");
+    expect(pickerNames()).not.toContain("Test server");
+    expect(pickerNames()).toContain("1480556454498009352");
   });
 
   it("offers native threads under their own heading, with no manual row", async () => {
@@ -432,6 +441,13 @@ describe("MessagingRoutesSettings", () => {
     // A native thread's own setting beats its parent channel's, so the list
     // must keep threads: the default-route filter drops them.
     expect(addPickerSections()).toEqual(["Channels", "Native threads"]);
+    // A thread leads with its own name, the part that tells threads apart.
+    // As one path it came last and was the part the row cut off.
+    expect(pickerNames()).toEqual(["orchard-planning", "Cider press schedule"]);
+    expect(pickerContexts()).toEqual([
+      "Orchard Collective",
+      "Orchard Collective / orchard-planning",
+    ]);
     expect(
       within(screen.getByRole("group", { name: "Native threads" }))
         .getByRole("option", { name: /Cider press schedule/ }),
@@ -503,7 +519,7 @@ describe("MessagingRoutesSettings", () => {
     );
     expect(addTrigger()).toHaveFocus();
     openAddPicker();
-    expect(addPickerNames()).toEqual(["Discord / Orchard Collective / harvest-log"]);
+    expect(pickerNames()).toEqual(["harvest-log"]);
   });
 
   it("disables the add picker while loading and when every surface is configured", async () => {
@@ -827,7 +843,8 @@ describe("MessagingRoutesSettings", () => {
 
     expect(screen.getByLabelText("Default scope")).toHaveValue("conversation");
     expect(screen.getByLabelText("Messaging platform")).toHaveValue("slack");
-    expect(surfaceTrigger()).toHaveTextContent("Slack / incident-response");
+    // No platform: the Platform field beside it already says Slack.
+    expect(surfaceTrigger()).toHaveAccessibleName("Surface: incident-response");
     openSurfacePicker();
     const configuredGroup = within(screen.getByRole("listbox")).getByRole(
       "group",
@@ -868,7 +885,7 @@ describe("MessagingRoutesSettings", () => {
     await screen.findByText("Orchard Agent");
 
     fireEvent.click(screen.getByRole("button", { name: "Add default" }));
-    chooseSurface("Slack / orchard-planning");
+    chooseSurface("orchard-planning");
     fireEvent.change(screen.getByLabelText("Default Agent"), {
       target: { value: JSON.stringify(["acp:grok", "agent-2"]) },
     });
@@ -964,7 +981,7 @@ describe("MessagingRoutesSettings", () => {
     fireEvent.change(screen.getByLabelText("Default scope"), {
       target: { value: "conversation" },
     });
-    chooseSurface("Slack / meadow-testing");
+    chooseSurface("meadow-testing");
     fireEvent.change(screen.getByLabelText("Default Agent"), {
       target: { value: JSON.stringify(["codex", "agent-1"]) },
     });
@@ -1078,13 +1095,13 @@ describe("MessagingRoutesSettings", () => {
       target: { value: "parent" },
     });
     openSurfacePicker();
-    expect(screen.getByRole("option", { name: /Slack \/ orchard-planning/ })).toBeInTheDocument();
+    expect(pickerNames()).toEqual(["orchard-planning"]);
 
     fireEvent.change(screen.getByLabelText("Default scope"), {
       target: { value: "workspace" },
     });
     openSurfacePicker();
-    expect(screen.getByRole("option", { name: /Slack \/ T1/ })).toBeInTheDocument();
+    expect(pickerNames()).toEqual(["T1"]);
   });
 
   it("selects durable Telegram topics with their group identity and excludes reply threads", async () => {

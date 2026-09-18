@@ -17,9 +17,19 @@ import { portalViewportTop } from "../lib/useViewportTooltip";
  * It deliberately borrows the composer picker's primitives rather than
  * restating them: one search row, an uppercase section eyebrow per group, and
  * a single-line row whose anatomy never varies (check column, kind glyph,
- * name, then the durable ID right-aligned in dim mono). Two destinations that
- * share a name are told apart by that ID column, which is what the native
- * `<select>` it replaced on both screens could not do.
+ * name, where it sits, then the durable ID right-aligned in dim mono). Two
+ * destinations that share a name are told apart by that ID column, which is
+ * what the native `<select>` it replaced on both screens could not do.
+ *
+ * The name is the surface's OWN name — a thread's, not its server's — and the
+ * containers it sits in follow it, dimmed. A label written as one path
+ * ("Discord / server / channel / thread") put the part that differs from row
+ * to row at the end, where the ellipsis lands, so a column of threads read as
+ * a column of identical server names. Leading with the name keeps it whole and
+ * lined up down the list; the path gives way first, then the name, and the ID
+ * never does, because a cut-off ID cannot tell anything apart. Callers leave
+ * the platform out: every list here holds one platform, and the field beside
+ * it already says which.
  *
  * It opens as a POPOVER over the page, like the pickers it copies. That takes
  * a portal: `.settings-panel` sets `overflow: hidden` and both
@@ -109,7 +119,14 @@ type SurfaceSection = "configured" | "channel" | "dm" | "topic" | "thread" | "ot
 
 type SurfaceOption = {
   value: string;
+  /** The surface's own name. Shown whole unless the row cannot fit it. */
   label: string;
+  /**
+   * The containers it sits in, outermost first ("server / parent channel").
+   * Dimmed after the name, and the first thing on the row to truncate.
+   * Matched by the search as a path ahead of the name.
+   */
+  context?: string;
   /** Durable identifier, right-aligned in mono. Also matched by the search. */
   detail?: string;
   /** Trailing recency label. */
@@ -247,6 +264,9 @@ export function MessagingSurfacePicker(props: {
     ?? (props.value === "" ? placeholder
       : props.value === "manual" ? manualLabel
       : "Selected (no longer listed)");
+  // The closed field reads like the row that was chosen: the name alone would
+  // not say which server's #general a route targets.
+  const triggerContext = selected?.context;
 
   const trimmed = query.trim().toLowerCase();
   const visible = props.options.filter((option) => {
@@ -261,7 +281,10 @@ export function MessagingSurfacePicker(props: {
       if (option.kind === "thread" && !props.allowThreads) return false;
       if (option.kind === "topic" && !props.allowTopics) return false;
     }
-    return `${option.label} ${option.detail ?? ""}`.toLowerCase().includes(trimmed);
+    // The context is matched as the path it abbreviates, so a query typed the
+    // way these surfaces are written elsewhere ("planning / cider") still hits.
+    const path = option.context ? `${option.context} / ${option.label}` : option.label;
+    return `${path} ${option.detail ?? ""}`.toLowerCase().includes(trimmed);
   });
   const activeIndex = Math.min(active, Math.max(0, visible.length - 1));
 
@@ -351,8 +374,9 @@ export function MessagingSurfacePicker(props: {
         // An `aria-label` overrides the visible text, so it has to carry both
         // the field's name and whatever the button currently shows — the
         // placeholder included, since that text is the button's only content
-        // before a choice is made.
-        aria-label={`${props.fieldLabel}: ${triggerLabel}`}
+        // before a choice is made — and the context, after the name, in the
+        // order the two are drawn.
+        aria-label={`${props.fieldLabel}: ${triggerLabel}${triggerContext ? `, ${triggerContext}` : ""}`}
         aria-haspopup="dialog" aria-expanded={open}
         aria-disabled={props.disabled || undefined}
         onClick={() => {
@@ -367,6 +391,9 @@ export function MessagingSurfacePicker(props: {
         }}
       >
         {triggerLabel}
+        {triggerContext ? (
+          <span className="messaging-surface-picker__context">{triggerContext}</span>
+        ) : null}
       </button>
       {open && position ? createPortal((
         <div
@@ -435,6 +462,9 @@ export function MessagingSurfacePicker(props: {
                         <span aria-hidden="true" className="messaging-surface-picker__glyph">{glyph}</span>
                       ) : null}
                       <span className="project-picker__row-name">{option.label}</span>
+                      {option.context ? (
+                        <span className="messaging-surface-picker__context">{option.context}</span>
+                      ) : null}
                       {option.detail ? <span className="project-picker__row-path">{option.detail}</span> : null}
                       {option.seen ? <span className="messaging-surface-picker__seen">{option.seen}</span> : null}
                     </button>

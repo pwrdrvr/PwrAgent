@@ -123,7 +123,15 @@ const MANUAL_GROUP_VALUE = "__manual__";
 
 type ProviderConversation = {
   id: string;
+  /** The whole name, wherever one string has to stand alone: captions and the
+   *  title stored on the trigger or destination. */
   title: string;
+  /**
+   * The same name split for the picker row, when it is a path: the
+   * conversation's own name leads and its container follows, dimmed. Only
+   * Discord channels have one, since their title reads "Server / channel".
+   */
+  row?: { name: string; context: string };
   kind: MessagingConversationKind;
 };
 
@@ -3240,10 +3248,16 @@ function selectionValue(picked: string): string {
  * be noise.
  */
 function conversationOptions(
-  entries: ReadonlyArray<{ id: string; title: string; kind?: MessagingConversationKind }>,
+  entries: ReadonlyArray<{
+    id: string;
+    title: string;
+    row?: ProviderConversation["row"];
+    kind?: MessagingConversationKind;
+  }>,
 ): Array<{
   value: string;
   label: string;
+  context?: string;
   detail?: string;
   kind?: MessagingConversationKind;
 }> {
@@ -3258,7 +3272,8 @@ function conversationOptions(
     const platformId = contactUserId(entry.id) ?? entry.id;
     return {
       value: entry.id,
-      label: entry.title,
+      label: entry.row?.name ?? entry.title,
+      ...(entry.row ? { context: entry.row.context } : {}),
       // A contact PwrAgent has no name for is labelled with its own ID; a
       // column repeating it is noise, and worse, reads as a second identifier.
       detail: entry.title === platformId ? undefined : platformId,
@@ -3629,9 +3644,11 @@ function readDiscordServers(
  * Discord would not list. A server that fails still leaves the others usable
  * and the manual field reachable, so a failure is reported, never fatal.
  *
- * Rows read "Server / channel", the separator Messaging Routes uses for the
+ * Titles read "Server / channel", the separator Messaging Routes uses for the
  * same surfaces: two servers routinely both have a `#general`, and the ID
- * column alone is a poor way to tell which one an operator meant.
+ * column alone is a poor way to tell which one an operator meant. The picker
+ * row leads with the channel and dims the server after it, so a long server
+ * name cannot push the channel's own name out of the row.
  */
 function buildDiscordChannelCatalog(
   key: string,
@@ -3665,6 +3682,7 @@ function buildDiscordChannelCatalog(
       channels.push({
         id: channel.id,
         title: `${serverName} / ${channel.name}`,
+        row: { name: channel.name, context: serverName },
         kind: "channel",
       });
     }

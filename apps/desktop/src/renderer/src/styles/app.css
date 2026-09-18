@@ -35854,9 +35854,9 @@ details.launchpad-pending__output > summary .launchpad-pending__command-label {
 
 /* `.project-picker__row-name` caps at 160px, which is right inside a ~420px
    composer popover and far too tight here: this panel is as wide as the field,
-   so a name like "Slack / harvest-release" would truncate with most of the row
-   empty beside it. Let the name take what it needs and keep the ID column's
-   claim on the rest.
+   so a name would truncate with most of the row empty beside it. Here the name
+   takes whatever the ID leaves, with no share reserved in advance — `none`, not
+   an omitted declaration, or the 160px cap comes back.
 
    Scoped to the PANEL, not the field wrapper, so it covers the action row as
    well as the list rows — "Enter Channel ID manually..." is longer than 160px
@@ -35866,7 +35866,47 @@ details.launchpad-pending__output > summary .launchpad-pending__command-label {
 .messaging-surface-picker__panel .project-picker__row-name {
   flex: 0 1 auto;
   min-width: 0;
-  max-width: 60%;
+  max-width: none;
+}
+
+/* The ID is placed first and never shrinks: its whole job is to tell two
+   same-named rows apart, and a truncated one cannot. Under the shared
+   `flex: 1` it got only what a 60% name share left, which cut a 19-digit
+   Discord snowflake short in a full 560px panel. The cap keeps a compound
+   "topic / group" ID from pushing the name out of a narrow panel, and
+   `margin-left: auto` right-aligns it on rows with no context to fill the
+   space before it. */
+.messaging-surface-picker__panel .project-picker__row-path {
+  flex: 0 0 auto;
+  max-width: 50%;
+  margin-left: auto;
+}
+
+/* Where the surface sits ("server / parent channel"), after its name. The
+   weight is set rather than inherited because the Automations trigger is
+   600, and a heavy context would read as part of the name. */
+.messaging-surface-picker__context {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+/* A zero basis lays it out from what the name and ID leave over, so it is
+   always the first thing on the row to give way and can never shorten the
+   name beside it. */
+.messaging-surface-picker__panel .messaging-surface-picker__context {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The closed field is one line of inline text that ellipsizes as a whole, so
+   the name, which comes first, is the last part it cuts. Only the row's gap
+   needs restating. */
+.messaging-surface-picker__trigger .messaging-surface-picker__context {
+  margin-left: 8px;
 }
 
 /* Trailing recency, matching `.branch-picker__option-time`. */

@@ -763,17 +763,19 @@ function DefaultAgentEditor(props: {
                 value={surfaceSelection}
                 filterConversations={form.scopeKind === "conversation"}
                 allowTopics={form.platform === "telegram"}
+                // No platform in these names: the list holds the one chosen in
+                // the Platform field beside it.
                 options={[
                   ...(hasConfiguredSurface ? [{
                     value: "configured",
-                    label: configuredSurfaceLabel(form),
+                    ...surfacePickerName(configuredSurfaceName(form)),
                     kind: form.conversationKind,
                     detail: surfaceFormDetail(form),
                     section: "configured" as const,
                   }] : []),
                   ...surfaceCandidates.map((surface) => ({
                     value: surface.value,
-                    label: surface.label,
+                    ...surfacePickerName(surface.name),
                     kind: surface.form.conversationKind,
                     detail: observedSurfaceDetail(surface),
                     seen: formatSeenDate(surface.lastSeenAt),
@@ -969,6 +971,7 @@ type ObservedSurfaceCandidate = {
   form: NewDefaultForm;
   label: string;
   lastSeenAt: number;
+  name: SurfaceName;
   value: string;
 };
 
@@ -982,7 +985,7 @@ function observedSurfaceCandidates(
     if (surface.platform !== form.platform) continue;
     const conversation = surface.conversation;
     let candidateForm: NewDefaultForm | undefined;
-    let label: string | undefined;
+    let name: SurfaceName | undefined;
     if (form.scopeKind === "conversation") {
       // Default routes target durable destinations. Ephemeral reply threads
       // belong to bindings; Telegram's named forum topics remain selectable.
@@ -999,7 +1002,7 @@ function observedSurfaceCandidates(
         identityParentId: conversation.parentId ?? "",
         title: conversation.title ?? "",
       };
-      label = formatConversationLabel(surface.platform, conversation);
+      name = conversationSurfaceName(conversation);
     } else if (form.scopeKind === "parent") {
       const parentConversationId = conversation.parentConversationId;
       if (!parentConversationId) continue;
@@ -1010,14 +1013,10 @@ function observedSurfaceCandidates(
         parentConversationId,
         title: conversation.parentTitle ?? "",
       };
-      label = formatObservedContainerLabel({
-        platform: surface.platform,
-        id: parentConversationId,
-        names: [
-          conversation.ancestorTitle,
-          conversation.parentTitle,
-        ],
-      });
+      name = containerSurfaceName(parentConversationId, [
+        conversation.ancestorTitle,
+        conversation.parentTitle,
+      ]);
     } else {
       const workspaceId = conversation.workspaceId;
       if (!workspaceId) continue;
@@ -1027,23 +1026,20 @@ function observedSurfaceCandidates(
         platform: surface.platform,
         workspaceId,
       };
-      label = formatObservedContainerLabel({
-        platform: surface.platform,
-        id: workspaceId,
-        names: [
-          conversation.ancestorTitle,
-          conversation.kind === "thread" || conversation.kind === "topic"
-            ? undefined
-            : conversation.parentTitle,
-        ],
-      });
+      name = containerSurfaceName(workspaceId, [
+        conversation.ancestorTitle,
+        conversation.kind === "thread" || conversation.kind === "topic"
+          ? undefined
+          : conversation.parentTitle,
+      ]);
     }
     const value = encodeSurfaceForm(candidateForm);
     if (candidates.has(value)) continue;
     candidates.set(value, {
       form: candidateForm,
-      label,
+      label: formatSurfaceLabel(surface.platform, name),
       lastSeenAt: surface.lastSeenAt,
+      name,
       value,
     });
   }
@@ -1146,25 +1142,28 @@ function hasSurfaceIdentity(form: NewDefaultForm): boolean {
   }
 }
 
-function configuredSurfaceLabel(form: NewDefaultForm): string {
-  if (form.title.trim()) {
-    return `${formatMessagingPlatformName(form.platform)} / ${form.title.trim()}`;
+/** A form keeps one title and none of its containers' names, so the saved
+ *  destination's row names it without context. */
+function configuredSurfaceName(form: NewDefaultForm): SurfaceName {
+  if (form.title.trim()) return { name: form.title.trim() };
+  const scope = buildScope(form);
+  if (scope.kind === "profile" || scope.kind === "provider") {
+    return { name: formatScopeLabel(scope) };
   }
-  return formatScopeLabel(buildScope(form));
+  return scopeSurfaceName(scope);
 }
 
-function formatObservedContainerLabel(params: {
-  platform: MessagingChannelKind;
-  id: string;
-  names: Array<string | undefined>;
-}): string {
-  const names = [...new Set(
-    params.names.filter((value): value is string => Boolean(value?.trim())),
+/** A workspace or parent channel, named by the innermost name the adapter
+ *  reported, or by its ID when it reported none. */
+function containerSurfaceName(
+  id: string,
+  names: Array<string | undefined>,
+): SurfaceName {
+  const named = [...new Set(
+    names.filter((value): value is string => Boolean(value?.trim())),
   )];
-  return [
-    formatMessagingPlatformName(params.platform),
-    ...(names.length > 0 ? names : [params.id]),
-  ].join(" / ");
+  const own = named.pop();
+  return own === undefined ? { name: id } : surfaceName(own, named);
 }
 
 function findApprovedSurfaceAssignment(
@@ -1268,37 +1267,76 @@ function formatScopeLabel(scope: DesktopMessagingDefaultAgentScope): string {
   if (scope.kind === "profile") return "All messaging providers";
   const platform = formatMessagingPlatformName(scope.platform);
   if (scope.kind === "provider") return `All ${platform} conversations`;
-  if (scope.kind === "workspace") return `${platform} / ${scope.workspaceId}`;
-  if (scope.kind === "parent") return `${platform} / ${scope.conversationId}`;
-  return formatConversationLabel(scope.platform, scope.conversation);
+  return formatSurfaceLabel(scope.platform, scopeSurfaceName(scope));
+}
+
+/**
+ * A surface's own name, and the containers it sits in, outermost first: a
+ * Discord thread's name, and "server / parent channel". Every label on this
+ * screen is the two joined behind the platform; the surface picker shows them
+ * apart, leading with `name`, because the name is what differs from row to row
+ * and a joined path puts it last, where truncation cuts.
+ */
+type SurfaceName = { name: string; context?: string };
+
+function surfaceName(name: string, containers: string[]): SurfaceName {
+  return containers.length > 0
+    ? { name, context: containers.join(" / ") }
+    : { name };
+}
+
+/** The picker's two name slots. */
+function surfacePickerName(surface: SurfaceName): { label: string; context?: string } {
+  return { label: surface.name, context: surface.context };
+}
+
+function formatSurfaceLabel(
+  platform: MessagingChannelKind,
+  surface: SurfaceName,
+): string {
+  return [
+    formatMessagingPlatformName(platform),
+    ...(surface.context ? [surface.context] : []),
+    surface.name,
+  ].join(" / ");
+}
+
+function scopeSurfaceName(
+  scope: Exclude<DesktopMessagingDefaultAgentScope, { kind: "profile" | "provider" }>,
+): SurfaceName {
+  if (scope.kind === "workspace") return { name: scope.workspaceId };
+  if (scope.kind === "parent") return { name: scope.conversationId };
+  return conversationSurfaceName(scope.conversation);
+}
+
+type NamedConversation = {
+  id: string;
+  kind: MessagingConversationKind;
+  title?: string;
+  parentTitle?: string;
+  ancestorTitle?: string;
+};
+
+/** An untitled conversation is named by its identity ("Topic 119"), still
+ *  under whatever containers the adapter did name. */
+function conversationSurfaceName(conversation: NamedConversation): SurfaceName {
+  const containers = [
+    conversation.ancestorTitle,
+    conversation.parentTitle,
+  ].filter((value): value is string => Boolean(value?.trim()));
+  return surfaceName(
+    conversation.title?.trim()
+      ? conversation.title
+      : formatConversationIdentity(conversation.kind, conversation.id),
+    containers,
+  );
 }
 
 function formatConversationLabel(
   platform: MessagingChannelKind,
-  conversation: {
-    id: string;
-    kind: MessagingConversationKind;
-    title?: string;
-    parentTitle?: string;
-    ancestorTitle?: string;
-  },
+  conversation: NamedConversation,
 ): string {
-  const names = [
-    conversation.ancestorTitle,
-    conversation.parentTitle,
-    conversation.title,
-  ].filter((value): value is string => Boolean(value?.trim()));
-  const identity = formatConversationIdentity(
-    conversation.kind,
-    conversation.id,
-  );
-  if (names.length === 0) {
-    return `${formatMessagingPlatformName(platform)} / ${identity}`;
-  }
-  if (conversation.title?.trim()) {
-    return `${formatMessagingPlatformName(platform)} / ${names.join(" / ")}`;
-  }
-  return `${formatMessagingPlatformName(platform)} / ${names.join(" / ")} / ${identity}`;
+  return formatSurfaceLabel(platform, conversationSurfaceName(conversation));
 }
 
 function formatConversationIdentity(
@@ -1519,9 +1557,11 @@ function DiscordResponseBehavior(props: DiscordResponseBehaviorProps) {
           searchLabel="Find a channel or thread"
           emptyLabel="No matching channels or threads."
           sectionLabels={{ channel: "Channels", thread: "Native threads" }}
+          // The name, not `label`: every row here is Discord, and the
+          // "(ID …)" a colliding label gains would repeat the ID column.
           options={unconfigured.map((candidate) => ({
             value: candidate.id,
-            label: candidate.label,
+            ...surfacePickerName(candidate.name),
             kind: candidate.kind,
             detail: candidate.id,
             seen: formatSeenDate(candidate.lastSeenAt),
@@ -1636,6 +1676,7 @@ type DiscordResponseSurfaceCandidate = {
   kindLabel: string;
   label: string;
   lastSeenAt: number;
+  name: SurfaceName;
 };
 
 /**
@@ -1667,14 +1708,16 @@ function discordResponseSurfaceCandidates(
     if (surface.platform !== "discord") continue;
     const conversation = surface.conversation;
     if (conversation.kind === "channel" || conversation.kind === "thread") {
+      const name = conversationSurfaceName(conversation);
       remember({
         derived: false,
         displayName: conversation.title ?? "",
         id: conversation.id,
         kind: conversation.kind,
         kindLabel: conversation.kind === "thread" ? "Native thread" : "Channel",
-        label: formatConversationLabel("discord", conversation),
+        label: formatSurfaceLabel("discord", name),
         lastSeenAt: surface.lastSeenAt,
+        name,
       });
     }
     const parentConversationId = conversation.parentConversationId;
@@ -1685,20 +1728,19 @@ function discordResponseSurfaceCandidates(
       // its server's name. Fall back to the bare id instead of lying.
       const parentResolved = Boolean(conversation.ancestorTitle?.trim());
       const parentName = parentResolved ? conversation.parentTitle : undefined;
+      const name = containerSurfaceName(
+        parentConversationId,
+        parentResolved ? [conversation.ancestorTitle, conversation.parentTitle] : [],
+      );
       remember({
         derived: true,
         displayName: parentName ?? "",
         id: parentConversationId,
         kind: "channel",
         kindLabel: "Channel",
-        label: formatObservedContainerLabel({
-          platform: "discord",
-          id: parentConversationId,
-          names: parentResolved
-            ? [conversation.ancestorTitle, conversation.parentTitle]
-            : [],
-        }),
+        label: formatSurfaceLabel("discord", name),
         lastSeenAt: surface.lastSeenAt,
+        name,
       });
     }
   }
