@@ -1597,6 +1597,126 @@ describe("AcpBackendAdapter", () => {
     await adapter.close();
   });
 
+  it("reports Grok's envelope token count against the selected model's window", async () => {
+    // Grok Build sends no usage_update. It stamps the session's context size
+    // on every session/update envelope as `_meta.totalTokens`, repeating one
+    // value across a turn's chunks, and lists each model's window.
+    const backendId = "acp:grok" as AcpBackendId;
+    const transport = new FakeAcpAgentTransport();
+    const events: AgentEvent[] = [];
+    const sessions: AcpSessionMetadata[] = [];
+    const agent: AcpInstalledAgentRecord = {
+      ...buildInstalledAgent(),
+      backendId,
+      registryId: "grok",
+      name: "Grok",
+      launchDescriptor: {
+        backendId,
+        registryId: "grok",
+        distributionKind: "local",
+        command: "grok",
+        args: ["agent", "stdio"],
+        env: {},
+      },
+      runtimeCapabilities: {
+        schemaVersion: 1,
+        status: "discovered",
+        checkedAt: 1000,
+        models: {
+          currentModelId: "grok-4.6",
+          availableModels: [
+            { id: "grok-4.6", label: "Grok 4.6", contextWindow: 500000 },
+            { id: "grok-4.5", label: "Grok 4.5", contextWindow: 256000 },
+          ],
+        },
+      },
+    };
+    const getInstalledAgent = vi.fn(() => agent);
+    const adapter = createTestAcpBackendAdapter({
+      acpAgentStore: {
+        getInstalledAgent,
+        listInstalledAgents: () => [agent],
+        upsertInstalledAgent: vi.fn(),
+      },
+      acpSessionStore: {
+        listSessions: () => sessions,
+        getSession: (_backendId, sessionId) =>
+          sessions.find((session) => session.sessionId === sessionId),
+        upsertSession: (metadata) => {
+          const index = sessions.findIndex(
+            (session) => session.sessionId === metadata.sessionId,
+          );
+          if (index >= 0) {
+            sessions[index] = metadata;
+          } else {
+            sessions.push(metadata);
+          }
+        },
+      },
+      captureStores: [],
+      createAcpTransport: () => transport,
+      emit: async (event) => {
+        events.push(event);
+      },
+      handleServerRequest: async () => ({ decision: "accept" }),
+    });
+    const contextEvents = () =>
+      events
+        .filter(
+          (event) =>
+            event.notification.method === "thread/contextWindow/updated",
+        )
+        .map((event) => event.notification.params);
+
+    const client = await adapter.getClient(backendId);
+    const session = await client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+    });
+    for (const [text, totalTokens] of [
+      ["Thinking", 1817],
+      ["more", 1817],
+      ["ok", 1817],
+    ] as const) {
+      transport.emitSessionUpdate(
+        session.sessionId,
+        {
+          sessionUpdate: "agent_thought_chunk",
+          content: { type: "text", text },
+        },
+        { totalTokens, eventId: `event-${text}` },
+      );
+    }
+    transport.emitSessionUpdate(
+      session.sessionId,
+      { sessionUpdate: "available_commands_update", availableCommands: [] },
+      { totalTokens: 17962 },
+    );
+
+    await vi.waitFor(() => {
+      expect(contextEvents()).toHaveLength(2);
+    });
+    expect(contextEvents()).toEqual([
+      {
+        threadId: session.sessionId,
+        usedTokens: 1817,
+        modelContextWindow: 500000,
+      },
+      {
+        threadId: session.sessionId,
+        usedTokens: 17962,
+        modelContextWindow: 500000,
+      },
+    ]);
+    expect(
+      events.filter(
+        (event) => event.notification.method === "thread/tokenUsage/updated",
+      ),
+    ).toEqual([]);
+
+    await adapter.close();
+  });
+
   it("emits cumulative Qwen usage across fixture-backed model calls", async () => {
     const backendId = "acp:qwen" as AcpBackendId;
     const transport = new FakeAcpAgentTransport();

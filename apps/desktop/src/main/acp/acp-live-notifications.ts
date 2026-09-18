@@ -2,7 +2,11 @@ import {
   TOOL_DETAILS_UNAVAILABLE_LABEL,
   type AppServerNotification,
 } from "@pwragent/shared";
-import { readAcpContentText, readAcpTopicTitle } from "./acp-session-normalizer";
+import {
+  isAcpUsageUpdateKind,
+  readAcpContentText,
+  readAcpTopicTitle,
+} from "./acp-session-normalizer";
 import {
   isGenericShellToolTitle,
   readAcpToolCommand,
@@ -224,18 +228,42 @@ export function acpUsageNotification(params: {
 }
 
 /**
- * Map ACP `usage_update` (`used` of `size` tokens in context) to a context
- * window notification. The optional cumulative `cost` is not surfaced yet.
- * Kimi Code 2.0.0 sends this after the prompt response, so it must not
- * require a live turn.
+ * Read how many tokens an ACP update says are in context, in either shape an
+ * agent reports it:
+ *
+ *  - Standard ACP `usage_update`: `used` of `size` tokens. The optional
+ *    cumulative `cost` is not surfaced yet. Kimi Code 2.0.0 sends this after
+ *    the prompt response, so it must not require a live turn.
+ *  - Grok Build's xAI extension: every `session/update` envelope carries the
+ *    session's current context size as `_meta.totalTokens` (the client folds
+ *    envelope `_meta` into the update). The window size is not on the update;
+ *    it is the selected model's `contextWindow`, so the caller resolves it.
+ *    Values seen before the first model call of a session omit the system
+ *    prompt and tools, then match the request once a call completes.
  */
-export function acpContextWindowNotification(params: {
-  threadId: string;
-  turnId?: string;
-  update: Record<string, unknown>;
-}): AppServerNotification | undefined {
-  const usedTokens = params.update.used;
-  const modelContextWindow = params.update.size;
+export function readAcpContextTokens(
+  update: Record<string, unknown>,
+): { usedTokens: unknown; modelContextWindow?: unknown } | undefined {
+  if (isAcpUsageUpdateKind(readString(update, "sessionUpdate"))) {
+    return { usedTokens: update.used, modelContextWindow: update.size };
+  }
+  const usedTokens = readRecord(update._meta)?.totalTokens;
+  return usedTokens !== undefined ? { usedTokens } : undefined;
+}
+
+export type AcpContextWindowFill = {
+  usedTokens: number;
+  modelContextWindow: number;
+};
+
+/**
+ * Validate a context fill the indicator can draw: a finite, non-negative
+ * count inside a positive window.
+ */
+export function acpContextWindowFill(
+  usedTokens: unknown,
+  modelContextWindow: unknown,
+): AcpContextWindowFill | undefined {
   if (
     typeof usedTokens !== "number"
     || !Number.isFinite(usedTokens)
@@ -246,13 +274,21 @@ export function acpContextWindowNotification(params: {
   ) {
     return undefined;
   }
+  return { usedTokens, modelContextWindow };
+}
+
+export function acpContextWindowNotification(params: {
+  threadId: string;
+  turnId?: string;
+  fill: AcpContextWindowFill;
+}): AppServerNotification {
   return {
     method: "thread/contextWindow/updated",
     params: {
       threadId: params.threadId,
       ...(params.turnId ? { turnId: params.turnId } : {}),
-      usedTokens,
-      modelContextWindow,
+      usedTokens: params.fill.usedTokens,
+      modelContextWindow: params.fill.modelContextWindow,
     },
   };
 }

@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  acpContextWindowFill,
   acpContextWindowNotification,
   AcpLiveToolUpdateResolver,
   acpToolUpdateNotifications,
   acpTurnCompletedUsageNotification,
+  readAcpContextTokens,
 } from "../acp/acp-live-notifications";
 
 describe("acpToolUpdateNotifications", () => {
@@ -897,12 +899,40 @@ describe("acpToolUpdateNotifications", () => {
   });
 });
 
-describe("acpContextWindowNotification", () => {
-  it("maps an ACP usage_update to a fill-only context window notification", () => {
+describe("ACP context window fill", () => {
+  it("reads a standard usage_update with its own window size", () => {
+    expect(
+      readAcpContextTokens({
+        sessionUpdate: "usage_update",
+        used: 20209,
+        size: 262144,
+      }),
+    ).toEqual({ usedTokens: 20209, modelContextWindow: 262144 });
+  });
+
+  it("reads Grok's envelope token count, leaving the window to the caller", () => {
+    // Captured from Grok Build 1.0.24: the client folds the session/update
+    // envelope `_meta` into the update, and the window lives on the model.
+    expect(
+      readAcpContextTokens({
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "ok" },
+        _meta: { totalTokens: 17962, eventId: "event-36" },
+      }),
+    ).toEqual({ usedTokens: 17962 });
+    expect(
+      readAcpContextTokens({
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "ok" },
+      }),
+    ).toBeUndefined();
+  });
+
+  it("builds a fill-only notification, keeping the turn when one is known", () => {
     expect(
       acpContextWindowNotification({
         threadId: "session-1",
-        update: { sessionUpdate: "usage_update", used: 20209, size: 262144 },
+        fill: { usedTokens: 20209, modelContextWindow: 262144 },
       }),
     ).toEqual({
       method: "thread/contextWindow/updated",
@@ -912,29 +942,29 @@ describe("acpContextWindowNotification", () => {
         modelContextWindow: 262144,
       },
     });
-  });
-
-  it("keeps the turn when one is known", () => {
     expect(
       acpContextWindowNotification({
         threadId: "session-1",
         turnId: "turn-1",
-        update: { sessionUpdate: "usage_update", used: 0, size: 1000 },
-      })?.params,
+        fill: { usedTokens: 0, modelContextWindow: 1000 },
+      }).params,
     ).toMatchObject({ turnId: "turn-1", usedTokens: 0 });
   });
 
-  it("drops a report the indicator cannot draw", () => {
-    for (const update of [
-      { sessionUpdate: "usage_update", used: 10 },
-      { sessionUpdate: "usage_update", used: 10, size: 0 },
-      { sessionUpdate: "usage_update", used: -1, size: 1000 },
-      { sessionUpdate: "usage_update", used: "10", size: 1000 },
-      { sessionUpdate: "usage_update", used: Number.NaN, size: 1000 },
+  it("drops a fill the indicator cannot draw", () => {
+    expect(acpContextWindowFill(10, 1000)).toEqual({
+      usedTokens: 10,
+      modelContextWindow: 1000,
+    });
+    for (const [used, size] of [
+      [10, undefined],
+      [10, 0],
+      [-1, 1000],
+      ["10", 1000],
+      [Number.NaN, 1000],
+      [10, Number.POSITIVE_INFINITY],
     ]) {
-      expect(
-        acpContextWindowNotification({ threadId: "session-1", update }),
-      ).toBeUndefined();
+      expect(acpContextWindowFill(used, size)).toBeUndefined();
     }
   });
 });

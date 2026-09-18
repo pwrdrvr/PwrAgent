@@ -116,6 +116,36 @@ describe("ACP runtime capabilities", () => {
     });
   });
 
+  it("keeps the context window a model advertises", () => {
+    // Grok Build lists each model's window as `_meta.totalContextTokens`.
+    const capabilities = normalizeAcpRuntimeCapabilities({
+      now: 1000,
+      source: "initialize",
+      value: {
+        models: {
+          currentModelId: "grok-4.6",
+          availableModels: [
+            {
+              modelId: "grok-4.6",
+              name: "Grok 4.6",
+              _meta: { totalContextTokens: 500000 },
+            },
+            {
+              modelId: "grok-4.5",
+              name: "Grok 4.5",
+              _meta: { totalContextTokens: 0 },
+            },
+          ],
+        },
+      },
+    });
+
+    expect(capabilities?.models?.availableModels).toEqual([
+      { id: "grok-4.6", label: "Grok 4.6", contextWindow: 500000 },
+      { id: "grok-4.5", label: "Grok 4.5" },
+    ]);
+  });
+
   it("normalizes model-specific reasoning effort metadata", () => {
     const response = {
       models: {

@@ -65,9 +65,11 @@ import {
 } from "../settings/config-store/provider-runtime-config";
 import {
   AcpLiveToolUpdateResolver,
+  acpContextWindowFill,
   acpContextWindowNotification,
   acpToolUpdateNotifications,
   acpUsageNotification,
+  readAcpContextTokens,
 } from "../acp/acp-live-notifications";
 import {
   foldAcpTurnUsage,
@@ -92,7 +94,6 @@ import {
 import {
   AcpSessionReplayNormalizer,
   inferAcpReplayTurns,
-  isAcpUsageUpdateKind,
   readAcpContentText,
   shouldSurfaceAcpThoughtsAsMessages,
 } from "../acp/acp-session-normalizer";
@@ -1151,6 +1152,12 @@ export class AcpBackendAdapter {
   private closePromise?: Promise<void>;
   private readonly closeTimeoutMs: number;
   private readonly liveTurnUsage = new Map<string, AcpLiveTurnUsage>();
+  // Last context fill sent per session this turn. Grok repeats the same
+  // count on every streamed update, so this keeps one emit per change.
+  private readonly liveContextWindows = new Map<
+    string,
+    { usedTokens: unknown; modelContextWindow: unknown }
+  >();
   private localAcpAgentsRevision = 0;
   private localAcpAgentsPromise?: Promise<AcpInstalledAgentRecord[]>;
   private localAgentSnapshot: AcpInstalledAgentRecord[] = [];
@@ -2311,6 +2318,68 @@ export class AcpBackendAdapter {
     this.startupCapabilityProbe = run;
   }
 
+  /**
+   * Turn an update's context token count into a fill-only notification,
+   * once per change. The window size comes from the update itself
+   * (`usage_update`) or from the session's selected model, which is only
+   * looked up once the count has actually moved.
+   */
+  private liveContextWindowNotification(params: {
+    agent: AcpInstalledAgentRecord;
+    sessionId: string;
+    turnId?: string;
+    update: Record<string, unknown>;
+  }): AppServerNotification | undefined {
+    const reported = readAcpContextTokens(params.update);
+    if (!reported) {
+      return undefined;
+    }
+    const key = [params.agent.backendId, params.sessionId].join(":");
+    const previous = this.liveContextWindows.get(key);
+    if (
+      previous !== undefined
+      && previous.usedTokens === reported.usedTokens
+      && (
+        reported.modelContextWindow === undefined
+        || previous.modelContextWindow === reported.modelContextWindow
+      )
+    ) {
+      return undefined;
+    }
+    const modelContextWindow =
+      reported.modelContextWindow
+      ?? this.selectedModelContextWindow(params.agent, params.sessionId);
+    // Remember the count even when it cannot be drawn, so an agent that
+    // reports no window costs one lookup per change, not one per update.
+    this.liveContextWindows.set(key, {
+      usedTokens: reported.usedTokens,
+      modelContextWindow,
+    });
+    const fill = acpContextWindowFill(reported.usedTokens, modelContextWindow);
+    if (!fill) {
+      return undefined;
+    }
+    return acpContextWindowNotification({
+      threadId: params.sessionId,
+      ...(params.turnId ? { turnId: params.turnId } : {}),
+      fill,
+    });
+  }
+
+  private selectedModelContextWindow(
+    agent: AcpInstalledAgentRecord,
+    sessionId: string,
+  ): number | undefined {
+    const current = this.getInstalledAgent(agent.backendId) ?? agent;
+    const modelId = selectedAcpModel(
+      current,
+      this.getSession(agent.backendId, sessionId),
+    );
+    return current.runtimeCapabilities?.models?.availableModels.find(
+      (model) => model.id === modelId,
+    )?.contextWindow;
+  }
+
   private mergeAndPersistDiscoveredAgents(
     agents: AcpInstalledAgentRecord[],
   ): AcpInstalledAgentRecord[] {
@@ -2417,6 +2486,7 @@ export class AcpBackendAdapter {
     this.grokUpdateRefreshes.clear();
     this.startupCapabilityProbe = undefined;
     this.liveTurnUsage.clear();
+    this.liveContextWindows.clear();
     this.localAgentSnapshot = [];
     this.closePromise = this.closeResources(acpClients);
     return await this.closePromise;
@@ -2804,18 +2874,24 @@ export class AcpBackendAdapter {
             notification: usageNotification,
           });
         }
-        const contextWindowNotification = isAcpUsageUpdateKind(updateKind)
-          ? acpContextWindowNotification({
-              threadId: sessionId,
-              ...(turnId ? { turnId } : {}),
-              update,
-            })
-          : undefined;
+        const contextWindowNotification = this.liveContextWindowNotification({
+          agent,
+          sessionId,
+          turnId,
+          update,
+        });
         if (contextWindowNotification) {
           await this.emit({
             backend: agent.backendId,
             notification: contextWindowNotification,
           });
+        }
+        if (promptSettledTurnFinished) {
+          // The next turn reports again even if the count did not move, so a
+          // window that missed this turn's update still catches up.
+          this.liveContextWindows.delete(
+            [agent.backendId, sessionId].join(":"),
+          );
         }
         if (promptSettledTurnFinished && turnId) {
           this.liveTurnUsage.delete(
