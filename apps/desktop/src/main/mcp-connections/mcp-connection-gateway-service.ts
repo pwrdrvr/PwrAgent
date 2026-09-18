@@ -932,9 +932,22 @@ export class McpConnectionGatewayService {
     connection: McpConnectionRecord,
     generation: number,
   ): Promise<ListMcpConnectionToolsResponse> {
+    // One budget for the whole read. A timeout per request would let a
+    // server that pages slowly hold the row at "reading tools" for the
+    // allowance times every page.
+    const deadlineAt = Date.now() + MCP_CONNECTION_TOOL_LIST_TIMEOUT_MS;
+    const remaining = (): number => {
+      const left = deadlineAt - Date.now();
+      if (left <= 0) {
+        throw new Error(
+          `${connection.displayName} did not list its tools within ${MCP_CONNECTION_TOOL_LIST_TIMEOUT_MS / 1_000} seconds.`,
+        );
+      }
+      return left;
+    };
     const session = await this.connectUpstreamClient(connection, {
       clientName: `pwragent-${connection.id}-settings`,
-      timeout: MCP_CONNECTION_TOOL_LIST_TIMEOUT_MS,
+      timeout: remaining(),
     });
     try {
       const tools: string[] = [];
@@ -942,7 +955,7 @@ export class McpConnectionGatewayService {
       for (let page = 0; page < MAX_TOOL_LIST_PAGES; page += 1) {
         const result = await session.client.listTools(
           cursor ? { cursor } : undefined,
-          { timeout: MCP_CONNECTION_TOOL_LIST_TIMEOUT_MS },
+          { timeout: remaining() },
         );
         tools.push(...result.tools.map((tool) => tool.name));
         cursor = result.nextCursor;

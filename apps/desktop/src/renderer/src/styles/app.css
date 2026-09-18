@@ -21626,6 +21626,15 @@ a.transcript-message__messaging-origin:focus-visible {
   flex: 0 0 auto;
 }
 
+/* A selected connection that needs a sign-in carries its remedy beside the
+   switch that can drop it, as one group at the row's end. */
+.mcp-access-panel__row-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+}
+
 .mcp-access-panel__empty {
   display: flex;
   flex-direction: column;

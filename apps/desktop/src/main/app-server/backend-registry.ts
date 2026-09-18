@@ -6028,6 +6028,15 @@ type MessagingArchiveCleanupResult = {
   revokedCount: number;
 };
 
+/** Same connections, in any order; two absent selections are the same. */
+function sameMcpConnectionIds(
+  a: readonly string[] | undefined,
+  b: readonly string[] | undefined,
+): boolean {
+  if (a === undefined || b === undefined) return a === b;
+  return a.length === b.length && a.every((id) => b.includes(id));
+}
+
 function isEmptyDirectoryLaunchpadDraft(launchpad: NavigationLaunchpadDraft): boolean {
   return (
     launchpad.prompt.trim().length === 0 &&
@@ -7875,6 +7884,14 @@ const ACP_AVAILABLE_COMMAND_PROBE_BUDGET_MS = 20_000;
  * relaunch away.
  */
 const ACP_AVAILABLE_COMMAND_PROBE_COOLDOWN_MS = 1_800_000;
+
+/**
+ * How long opening a new-thread draft waits for the MCP connections that seed
+ * it. On a second instance the read crosses the owner broker, whose own
+ * timeout is sized for a ten-minute tool call; a wedged owner must cost the
+ * draft its defaults, not hold the New thread screen for that long.
+ */
+const LAUNCHPAD_MCP_SEED_BUDGET_MS = 2_000;
 
 /**
  * Match the forward-slashed directory identifiers
@@ -21363,10 +21380,15 @@ export class DesktopBackendRegistry {
     const patch = {
       ...request.patch,
       ...("fastMode" in request.patch ? { serviceTier: undefined } : {}),
-      // Any edit to the selection, including one that happens to reproduce
-      // the seeded set, makes it the operator's. Re-seeding after that would
-      // put back a connection they just turned off.
+      // An edit to the selection makes it the operator's. Re-seeding after
+      // that would put back a connection they just turned off. A patch that
+      // only repeats the current ids is not an edit: the MCP access panel
+      // sends them along with its agent-servers switch.
       ...("mcpConnectionIds" in request.patch
+        && !sameMcpConnectionIds(
+          request.patch.mcpConnectionIds,
+          current.mcpConnectionIds,
+        )
         ? { mcpConnectionIdsFromDefaults: undefined }
         : {}),
     };
@@ -23164,9 +23186,10 @@ export class DesktopBackendRegistry {
    * until it is sent, and a default changed in Settings has to reach the
    * drafts that already exist.
    *
-   * Failing to read the connections leaves the draft as it is. A missing
-   * default is recoverable from the MCP access panel; a failed ensure is a
-   * New thread screen that will not open.
+   * Failing to read the connections, or not reading them within
+   * `LAUNCHPAD_MCP_SEED_BUDGET_MS`, leaves the draft as it is. A missing
+   * default is recoverable from the MCP access panel; a failed or stalled
+   * ensure is a New thread screen that will not open.
    */
   private async resolveLaunchpadMcpSeed(
     existing: NavigationLaunchpadDraft | undefined,
@@ -23182,24 +23205,34 @@ export class DesktopBackendRegistry {
     const service = this.mcpConnectionService;
     if (!service?.listConnections) return undefined;
     let ids: string[];
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      ids = mcpConnectionIdsForNewThread(await service.listConnections());
+      const deadline = new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(
+            `No answer within ${LAUNCHPAD_MCP_SEED_BUDGET_MS} ms.`,
+          )),
+          LAUNCHPAD_MCP_SEED_BUDGET_MS,
+        );
+        timer.unref?.();
+      });
+      ids = mcpConnectionIdsForNewThread(
+        await Promise.race([service.listConnections(), deadline]),
+      );
     } catch (error) {
       backendRegistryLog.warn("launchpad_mcp_defaults_unavailable", {
         error: error instanceof Error ? error.message : String(error),
       });
       return undefined;
+    } finally {
+      clearTimeout(timer);
     }
     if (ids.length === 0) {
       return seeded
         ? { mcpConnectionIds: undefined, mcpConnectionIdsFromDefaults: undefined }
         : undefined;
     }
-    if (
-      seeded
-      && existing?.mcpConnectionIds?.length === ids.length
-      && ids.every((id) => existing.mcpConnectionIds?.includes(id))
-    ) {
+    if (seeded && sameMcpConnectionIds(existing?.mcpConnectionIds, ids)) {
       return undefined;
     }
     return { mcpConnectionIds: ids, mcpConnectionIdsFromDefaults: true };

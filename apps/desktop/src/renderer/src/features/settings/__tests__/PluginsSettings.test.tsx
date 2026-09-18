@@ -830,6 +830,59 @@ describe("PluginsSettings", () => {
       expect(api.setMcpConnectionEnabled).not.toHaveBeenCalled();
     });
 
+    /**
+     * Reauthorizing a working connection can switch accounts while its URL and
+     * its `configured` flag stay the same, which is all the row watched. The
+     * read after a sign-in skips the main-process cache, because PwrSnap and
+     * PwrGit sign in outside the path that invalidates it.
+     */
+    it("re-reads the tools after a sign-in, past any cached list", async () => {
+      const api = managedApi([managed()], ["from_the_old_account"]);
+      api.authorizeMcpConnection = vi.fn(async () => ({
+        connectionId: "datadog",
+        connection: managed(),
+      }));
+      render(<PluginsSettings desktopApi={api} snapshot={createSnapshot()} />);
+
+      const row = within(await findRow("Datadog"));
+      expect(await row.findByText("1 tool")).toBeInTheDocument();
+      expect(api.listMcpConnectionTools).toHaveBeenLastCalledWith({
+        connectionId: "datadog",
+      });
+
+      fireEvent.click(row.getByRole("button", { name: "Reauthorize" }));
+
+      await waitFor(() => {
+        expect(api.listMcpConnectionTools).toHaveBeenLastCalledWith({
+          connectionId: "datadog",
+          refresh: true,
+        });
+      });
+    });
+
+    it("says a connection waiting on a sign-in is skipped for now", async () => {
+      const api = managedApi([
+        managed({
+          selectForNewThreads: true,
+          state: "reauthorization_required",
+        }),
+      ]);
+      render(<PluginsSettings desktopApi={api} snapshot={createSnapshot()} />);
+
+      const row = within(await findRow("Datadog"));
+      // The preference stands, but seeding skips a connection whose sign-in
+      // stopped working, so the hint must not promise the next thread it.
+      expect(
+        row.getByRole("switch", { name: "Select Datadog for new threads" }),
+      ).toBeChecked();
+      expect(
+        row.getByText("New threads skip it until it is signed in again."),
+      ).toBeInTheDocument();
+      expect(
+        row.queryByText(/New threads start with it selected/),
+      ).not.toBeInTheDocument();
+    });
+
     it("never shows a parked connection as selected for new threads", async () => {
       const api = managedApi([
         managed({ enabled: false, selectForNewThreads: true }),

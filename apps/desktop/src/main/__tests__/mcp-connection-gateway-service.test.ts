@@ -457,6 +457,7 @@ describe("McpConnectionGatewayService", () => {
   describe("listConnectionTools", () => {
     type ListTools = (
       params?: { cursor?: string },
+      options?: { timeout?: number },
     ) => Promise<{ tools: { name: string }[]; nextCursor?: string }>;
 
     function fakeUpstream(listTools: ListTools) {
@@ -520,6 +521,31 @@ describe("McpConnectionGatewayService", () => {
         refresh: true,
       });
       expect(upstream.connect).toHaveBeenCalledTimes(2);
+    });
+
+    it("gives the whole read one time budget, not one per page", async () => {
+      let now = 1_000_000;
+      const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+      try {
+        const timeouts: (number | undefined)[] = [];
+        // Each page takes 15 s and names another one. Two fit the budget;
+        // the third would be past it.
+        const upstream = fakeUpstream(async (params, options) => {
+          timeouts.push(options?.timeout);
+          now += 15_000;
+          const page = Number(params?.cursor ?? "1");
+          return { tools: [{ name: `tool_${page}` }], nextCursor: String(page + 1) };
+        });
+        const { connection, service } = serviceWith({ upstream });
+
+        await expect(
+          service.listConnectionTools({ connectionId: connection.id }),
+        ).rejects.toThrow("Datadog did not list its tools within 20 seconds.");
+        expect(timeouts).toEqual([20_000, 5_000]);
+        expect(upstream.close).toHaveBeenCalledOnce();
+      } finally {
+        clock.mockRestore();
+      }
     });
 
     it("lists a parked connection, but not while the gateway is off", async () => {

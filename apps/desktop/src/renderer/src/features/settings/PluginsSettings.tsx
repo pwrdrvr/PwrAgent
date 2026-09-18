@@ -18,6 +18,7 @@ import type {
 import {
   describeMcpAuthStatus,
   describeMcpConnectionAuth,
+  mcpConnectionIdsForNewThread,
   resolveMcpConnectionSetup,
   summarizeMcpConnectionReadiness,
 } from "@pwragent/shared";
@@ -181,6 +182,10 @@ export function PluginsSettings(props: {
    * notice -- or, worse, re-disable the card it was just released from.
    */
   const authorizationEpochRef = useRef(0);
+  // Counts completed sign-ins per connection. A reauthorization can switch
+  // accounts without changing anything else the row can see, so the row
+  // re-reads its tools when this moves.
+  const [signIns, setSignIns] = useState<Record<string, number>>({});
   const [connectionNotice, setConnectionNotice] = useState<ActionNotice>();
   const [connectionName, setConnectionName] = useState("");
   const [connectionUrl, setConnectionUrl] = useState("");
@@ -749,6 +754,10 @@ export function PluginsSettings(props: {
       }
       await loadConnections();
       if (!isCurrent()) return;
+      setSignIns((current) => ({
+        ...current,
+        [connection.id]: (current[connection.id] ?? 0) + 1,
+      }));
       setConnectionNotice({
         kind: "success",
         text: `${connection.displayName} is connected through PwrAgent.`,
@@ -1093,6 +1102,7 @@ export function PluginsSettings(props: {
                   desktopApi={props.desktopApi}
                   disabled={Boolean(connectionPending)}
                   gatewayEnabled={gatewayEnabled}
+                  signIns={signIns[connection.id] ?? 0}
                   onAuthorize={() => void authorizeConnection(connection)}
                   onAvailabilityChange={
                     props.desktopApi?.setMcpConnectionEnabled
@@ -1601,17 +1611,23 @@ function useManagedConnectionTools(params: {
   desktopApi?: DesktopApi;
   identity: string;
   listable: boolean;
+  /** Completed sign-ins; a change forces a fresh read past any cache. */
+  signIns: number;
 }): {
   inventory: ManagedMcpToolInventory | undefined;
   refresh: () => void;
 } {
-  const { connectionId, identity, listable } = params;
+  const { connectionId, identity, listable, signIns } = params;
   const list = params.desktopApi?.listMcpConnectionTools;
   const [inventory, setInventory] = useState<ManagedMcpToolInventory>();
   // A refresh can overtake the read the row started on mount, and the two can
   // resolve in either order. The later request is the one the operator asked
   // for, so an earlier answer arriving second is dropped.
   const latestRead = useRef(0);
+  // PwrSnap and PwrGit connect outside the gateway's own authorization, so
+  // the main process may still hold the list the old credentials read. The
+  // read after a sign-in skips that cache; later re-reads use it again.
+  const readSignIns = useRef(signIns);
 
   const read = useCallback(async (refresh: boolean): Promise<void> => {
     if (!list) return;
@@ -1644,11 +1660,13 @@ function useManagedConnectionTools(params: {
       setInventory(listable ? { status: "unavailable" } : undefined);
       return;
     }
-    void read(false);
+    const signedInAgain = readSignIns.current !== signIns;
+    readSignIns.current = signIns;
+    void read(signedInAgain);
     return () => {
       latestRead.current += 1;
     };
-  }, [identity, list, listable, read]);
+  }, [identity, list, listable, read, signIns]);
 
   return {
     inventory,
@@ -1674,6 +1692,8 @@ function ManagedMcpConnectionRow(props: {
   desktopApi?: DesktopApi;
   disabled: boolean;
   gatewayEnabled: boolean;
+  /** Completed sign-ins for this connection in this pane. */
+  signIns: number;
   onAuthorize: () => void;
   onAvailabilityChange?: (enabled: boolean) => void;
   onSelectForNewThreadsChange?: (selectForNewThreads: boolean) => void;
@@ -1702,6 +1722,7 @@ function ManagedMcpConnectionRow(props: {
     desktopApi: props.desktopApi,
     identity: `${connection.serverUrl}\n${connection.configured}`,
     listable,
+    signIns: props.signIns,
   });
   const health = readManagedMcpConnectionHealth(setup, inventory);
   const auth = describeMcpConnectionAuth(connection);
@@ -1713,6 +1734,11 @@ function ManagedMcpConnectionRow(props: {
     || (setup.state !== "app_not_installed" && setup.state !== "app_not_running");
   const selectedForNewThreads =
     connection.enabled && connection.selectForNewThreads === true;
+  // Whether seeding would take it today, asked of the same predicate the
+  // seeding uses, so the hint cannot promise a thread something it skips.
+  const seedable =
+    mcpConnectionIdsForNewThread([{ ...connection, selectForNewThreads: true }])
+      .length > 0;
   return (
     <article
       className="settings-mcp-row settings-mcp-row--managed"
@@ -1864,7 +1890,7 @@ function ManagedMcpConnectionRow(props: {
                 : inventory?.status === "failed"
                   ? "PwrAgent could not read this server's tools."
                   : inventory?.status === "unavailable"
-                    ? "This build cannot list a managed connection's tools."
+                    ? "Tool lists aren't available for this connection."
                     : "Reading tools..."}
             </p>
           )}
@@ -1941,9 +1967,11 @@ function ManagedMcpConnectionRow(props: {
                   Select for new threads
                 </span>
                 <span className="settings-mcp-row__policy-hint">
-                  {connection.enabled
-                    ? "New threads start with it selected. Existing threads keep theirs."
-                    : "Offer it to threads first."}
+                  {!connection.enabled
+                    ? "Offer it to threads first."
+                    : seedable
+                      ? "New threads start with it selected. Existing threads keep theirs."
+                      : "New threads skip it until it is signed in again."}
                 </span>
               </span>
             </div>
@@ -2149,13 +2177,7 @@ function McpServerRow(props: {
         </button>
         <div className="settings-mcp-row__chips">
           <span
-            className={`settings-pathrow__chip${
-              auth.tone === "ok"
-                ? " settings-pathrow__chip--ok"
-                : auth.tone === "warn"
-                  ? " settings-pathrow__chip--warn"
-                  : ""
-            }`}
+            className={`settings-pathrow__chip${chipToneClass(auth.tone)}`}
             title={auth.description}
           >
             {auth.label}

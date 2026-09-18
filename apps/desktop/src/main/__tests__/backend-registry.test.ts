@@ -17891,6 +17891,66 @@ command = "pnpm grok"
       await registry.close();
     });
 
+    it("opens the draft without defaults when the owner does not answer", async () => {
+      vi.useFakeTimers();
+      try {
+        // A wedged owner broker answers nothing; its own timeout is sized for
+        // a ten-minute tool call, far past what a New thread screen can wait.
+        const listConnections = vi.fn(
+          () => new Promise<McpConnectionStatus[]>(() => undefined),
+        );
+        const registry = new DesktopBackendRegistry({
+          codexClient: new MockBackendClient({
+            initializeResult: { methods: ["thread/start"] },
+          }),
+          overlayStore: createOverlayStoreMock(),
+          mcpConnectionService: { registerBridge: vi.fn(), listConnections },
+        });
+
+        const ensured = registry.ensureDirectoryLaunchpad({
+          directoryKey: "directory:/repo-a",
+          directoryKind: "directory",
+          directoryLabel: "Repo A",
+          directoryPath: "/repo-a",
+        });
+        // The deadline starts only once the read does, after the ensure's
+        // own earlier awaits.
+        await vi.waitFor(() => expect(listConnections).toHaveBeenCalled());
+        await vi.advanceTimersByTimeAsync(2_000);
+        const { launchpad } = await ensured;
+
+        expect(launchpad.mcpConnectionIds).toBeUndefined();
+
+        await registry.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("keeps following the defaults when a patch only repeats the seeded ids", async () => {
+      let connections = [mcpConnection({ id: "datadog" })];
+      const { ensure, registry } = registryWith(() => connections);
+      const seeded = await ensure();
+
+      // The MCP access panel sends the ids with its agent-servers switch.
+      // Turning that switch is not a choice about connections.
+      await registry.updateDirectoryLaunchpad({
+        directoryKey: "directory:/repo-a",
+        patch: {
+          mcpConnectionIds: seeded.mcpConnectionIds,
+          mcpProviderServersEnabled: false,
+        },
+      });
+      connections = [
+        mcpConnection({ id: "datadog" }),
+        mcpConnection({ id: "linear" }),
+      ];
+
+      expect((await ensure()).mcpConnectionIds).toEqual(["datadog", "linear"]);
+
+      await registry.close();
+    });
+
     it("opens the draft anyway when the connections cannot be read", async () => {
       const listConnections = vi.fn(async (): Promise<McpConnectionStatus[]> => {
         throw new Error("owner broker went away");

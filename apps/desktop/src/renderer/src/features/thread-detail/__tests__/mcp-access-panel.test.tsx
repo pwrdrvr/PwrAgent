@@ -38,6 +38,7 @@ function renderPanel(
   selected: string[],
 ) {
   const onSelectionChange = vi.fn(async () => undefined);
+  const onOpenSettings = vi.fn();
   const desktopApi = {
     listMcpConnections: vi.fn().mockResolvedValue({ connections }),
   } as unknown as DesktopApi;
@@ -47,11 +48,11 @@ function renderPanel(
       desktopApi={desktopApi}
       selection={{ connectionIds: selected, providerServersEnabled: true }}
       onDismiss={() => undefined}
-      onOpenSettings={() => undefined}
+      onOpenSettings={onOpenSettings}
       onSelectionChange={onSelectionChange}
     />,
   );
-  return { onSelectionChange };
+  return { onOpenSettings, onSelectionChange };
 }
 
 describe("McpAccessPanel", () => {
@@ -62,7 +63,7 @@ describe("McpAccessPanel", () => {
    * way to drop it from inside the thread.
    */
   it("keeps a switch on a selected connection that stopped working", async () => {
-    const { onSelectionChange } = renderPanel(
+    const { onOpenSettings, onSelectionChange } = renderPanel(
       [connection({ id: "datadog", state: "reauthorization_required" })],
       ["datadog"],
     );
@@ -72,9 +73,11 @@ describe("McpAccessPanel", () => {
     );
     const toggle = row.getByRole("switch", { name: "Use datadog in this thread" });
     expect(toggle).toBeChecked();
-    expect(
-      row.getByText("Login required. Fix it in Settings, or drop it here."),
-    ).toBeInTheDocument();
+    expect(row.getByText("Login required")).toBeInTheDocument();
+    // Dropping it is not the only way out: the sign-in that fixes it is
+    // still one click from the thread.
+    fireEvent.click(row.getByRole("button", { name: "Authorize" }));
+    expect(onOpenSettings).toHaveBeenCalledOnce();
 
     fireEvent.click(toggle);
     await waitFor(() => {
@@ -83,6 +86,31 @@ describe("McpAccessPanel", () => {
         providerServersEnabled: true,
       });
     });
+  });
+
+  it("offers no sign-in for a selected server that is only briefly away", async () => {
+    renderPanel(
+      [
+        connection({
+          id: "datadog",
+          state: "temporarily_unavailable",
+          detail: "The server did not answer the last request.",
+        }),
+      ],
+      ["datadog"],
+    );
+
+    const row = within(
+      (await screen.findByText("datadog")).closest("li")!,
+    );
+    expect(
+      row.getByRole("switch", { name: "Use datadog in this thread" }),
+    ).toBeChecked();
+    // The coordinator's own account of the failure, not a generic one.
+    expect(
+      row.getByText("The server did not answer the last request."),
+    ).toBeInTheDocument();
+    expect(row.queryByRole("button", { name: "Authorize" })).not.toBeInTheDocument();
   });
 
   it("still offers only the remedy for a broken connection nobody selected", async () => {
