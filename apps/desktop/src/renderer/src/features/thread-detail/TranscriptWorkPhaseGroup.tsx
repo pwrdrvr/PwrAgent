@@ -162,9 +162,7 @@ function renderEntry(params: {
       entry={entry}
       expanded={params.expandedActivityIds?.has(entry.id)}
       fileViewerContext={params.fileViewerContext}
-      onExpandedChange={(expanded) => {
-        params.onActivityExpandedChange?.(entry.id, expanded);
-      }}
+      onExpandedChange={params.onActivityExpandedChange}
       onOpenImage={params.onOpenImage}
       skills={params.skills}
       threadLinkSource={params.threadLinkSource}
