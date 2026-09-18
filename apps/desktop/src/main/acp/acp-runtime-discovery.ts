@@ -85,6 +85,7 @@ async function discoverModelReasoningCapabilities(params: {
   }
 
   const originalModel = modelOption.currentValue;
+  const originalThoughtLevel = thoughtLevelOption.currentValue;
   let selectedModel = originalModel;
   const models: BackendAcpRuntimeModel[] = [];
   // Rebuilding the list from config values must keep what only the agent's
@@ -97,6 +98,7 @@ async function discoverModelReasoningCapabilities(params: {
   };
   try {
     for (const model of modelOption.values) {
+      let thoughtLevels: ModelThoughtLevels;
       if (model.value !== selectedModel) {
         try {
           await params.client.setRuntimeOption({
@@ -114,13 +116,12 @@ async function discoverModelReasoningCapabilities(params: {
           });
           continue;
         }
+        thoughtLevels = await settleCarriedThoughtLevel(params);
+      } else {
+        thoughtLevels = readThoughtLevels(params.readRuntimeCapabilities());
       }
 
-      const currentCapabilities = params.readRuntimeCapabilities();
-      const currentThoughtLevel =
-        findConfigOption(currentCapabilities, "thought_level");
-      const reasoningEfforts =
-        currentThoughtLevel?.values.map((value) => value.value) ?? [];
+      const reasoningEfforts = thoughtLevels.values;
       const supportsReasoning = reasoningEfforts.length > 1;
       models.push({
         id: model.value,
@@ -131,11 +132,8 @@ async function discoverModelReasoningCapabilities(params: {
           ? {
               supportsReasoning: true,
               reasoningEfforts,
-              ...(currentThoughtLevel?.currentValue
-                ? {
-                    defaultReasoningEffort:
-                      currentThoughtLevel.currentValue,
-                  }
+              ...(thoughtLevels.currentValue
+                ? { defaultReasoningEffort: thoughtLevels.currentValue }
                 : {}),
             }
           : { supportsReasoning: false }),
@@ -150,6 +148,18 @@ async function discoverModelReasoningCapabilities(params: {
         value: originalModel,
       }).catch(() => undefined);
     }
+    // The restored model can still carry a level from the last model the
+    // walk visited, and the returned capabilities report its menu.
+    const restoredThoughtLevel =
+      readThoughtLevels(params.readRuntimeCapabilities()).currentValue;
+    if (originalThoughtLevel && restoredThoughtLevel !== originalThoughtLevel) {
+      await params.client.setRuntimeOption({
+        sessionId: params.sessionId,
+        source: "configOption",
+        optionId: thoughtLevelOption.id,
+        value: originalThoughtLevel,
+      }).catch(() => undefined);
+    }
   }
 
   const restored = params.readRuntimeCapabilities() ?? initial;
@@ -162,6 +172,63 @@ async function discoverModelReasoningCapabilities(params: {
         },
       }
     : restored;
+}
+
+type ModelThoughtLevels = {
+  values: string[];
+  currentValue?: string;
+};
+
+// A model switch keeps the session's thought level, and Kimi Code 2.0.0 lists
+// that level in the new model's menu even when the model does not offer it:
+// K2.7 reached from K3 at "high" shows {on, high}. Writing the carried level
+// back while the menu still lists it settles which case applies. A model that
+// does not offer the level refuses the write (K2.7), and one that accepts it
+// replies with the level it applied, with the carried level gone from the
+// menu once it is no longer current (K3 turns "on" into its own "high").
+async function settleCarriedThoughtLevel(params: {
+  client: AcpAgentClient;
+  readRuntimeCapabilities: () => BackendAcpRuntimeCapabilities | undefined;
+  sessionId: string;
+}): Promise<ModelThoughtLevels> {
+  const capabilities = params.readRuntimeCapabilities();
+  const option = findConfigOption(capabilities, "thought_level");
+  const switched = readThoughtLevels(capabilities);
+  const carried = switched.currentValue;
+  if (
+    !option
+    || !carried
+    || !switched.values.includes(carried)
+    || switched.values.length < 2
+  ) {
+    return switched;
+  }
+
+  try {
+    await params.client.setRuntimeOption({
+      sessionId: params.sessionId,
+      source: "configOption",
+      optionId: option.id,
+      value: carried,
+    });
+  } catch {
+    // Only the carried level can be foreign to this model, so the others are
+    // what it offers. Which of them it would pick for itself is unknown.
+    return {
+      values: switched.values.filter((value) => value !== carried),
+    };
+  }
+  return readThoughtLevels(params.readRuntimeCapabilities());
+}
+
+function readThoughtLevels(
+  capabilities: BackendAcpRuntimeCapabilities | undefined,
+): ModelThoughtLevels {
+  const option = findConfigOption(capabilities, "thought_level");
+  return {
+    values: option?.values.map((value) => value.value) ?? [],
+    ...(option?.currentValue ? { currentValue: option.currentValue } : {}),
+  };
 }
 
 function findConfigOption(
