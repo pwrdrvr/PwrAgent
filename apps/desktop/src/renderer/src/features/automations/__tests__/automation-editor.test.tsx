@@ -644,9 +644,13 @@ describe("AutomationEditor", () => {
       target: { value: "Summarize what they asked for." },
     });
     fireEvent.click(screen.getByRole("button", { name: "Inbound message" }));
-    await waitFor(() =>
-      expect(screen.getByLabelText("Provider")).toHaveValue("slack"),
-    );
+    // Not `toHaveValue("slack")` on the Provider select. The editor starts on
+    // Telegram and moves to the first enabled provider in an effect one render
+    // after the Slack-only option list arrives, and a controlled select whose
+    // value matches no option reports its first option — so the select reads
+    // "slack" while the form below it is still Telegram's. "Channel ID" is only
+    // rendered once the state itself is Slack.
+    await screen.findByLabelText("Channel ID");
     fireEvent.click(screen.getByRole("button", { name: "Direct message" }));
     // The field asks for the sender's member ID, because that is what the
     // matcher compares — not the D... conversation ID the channel hint names.
@@ -688,10 +692,8 @@ describe("AutomationEditor", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Inbound message" }));
-    await waitFor(() =>
-      expect(screen.getByLabelText("Provider")).toHaveValue("slack"),
-    );
-    fireEvent.change(screen.getByLabelText("Channel ID"), {
+    // Waits on the Slack field, not the select — see the test above.
+    fireEvent.change(await screen.findByLabelText("Channel ID"), {
       target: { value: "U03QW7ELB19" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Direct message" }));
