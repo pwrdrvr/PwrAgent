@@ -3,6 +3,7 @@ import type { CloudflareSecurityCheck, CloudflareSetupStatus } from "@pwragent/s
 import {
   CLOUDFLARE_OAUTH_CONFIGURATION,
   CloudflareApi,
+  CloudflareApiError,
   applicationCoversHostname,
   cloudflareAdmissionPolicy,
   cloudflareEmails,
@@ -11,6 +12,7 @@ import {
   cloudflareScopeId,
   isExactAdmissionPolicy,
   isExactIdentityPolicy,
+  isDedicatedApplication,
   isExpectedOAuthConfiguration,
   type AccessApplication,
   type CloudflareGate,
@@ -78,15 +80,40 @@ export function cloudflareSetupGate(state: Pick<CloudflareSetupState, "gate">): 
   return state.gate === "service-token" || state.gate === "oauth" ? state.gate : "mtls";
 }
 
+/** What the setup has created in Cloudflare, in creation order, as the operator would name it. */
+export function cloudflareSetupResources(state: CloudflareSetupState): string[] {
+  const gate = cloudflareSetupGate(state);
+  const tokens = gate === "mtls" ? 0 : [state.verifier, ...state.clients].filter((client) => !client.revoked).length;
+  return [
+    tokens === 1 ? "1 service token" : tokens > 1 ? `${tokens} service tokens` : "",
+    state.certificateId ? "Certificate authority" : "",
+    state.applicationId ? "Access application" : "",
+    state.identityPolicyId ? "Sign-in policy" : "",
+    state.policyId ? "Service Auth policy" : "",
+    state.tunnelId ? "Tunnel" : "",
+    state.dnsId ? "DNS record" : "",
+  ].filter(Boolean);
+}
+
 export type CloudflareSetupDependencies = {
   load: () => Promise<CloudflareSetupState | undefined>;
   save: (state: CloudflareSetupState) => Promise<void>;
+  /** Forget the setup record once everything it names is gone. */
+  clear: () => Promise<void>;
   verifyListener: (port: number) => CloudflareOriginProbes;
+  /**
+   * The loopback port the gateway is listening on right now, if any. The audit
+   * compares the tunnel against it: a record that matches the tunnel proves
+   * nothing when the listener has since moved.
+   */
+  listeningPort?: () => number | undefined;
   connectorInstalled: () => Promise<boolean>;
   connectorRunning: () => boolean;
   startConnector: (token: string) => Promise<void>;
   stopConnector: () => Promise<void>;
   publishUrl: (url: string) => Promise<void>;
+  /** Undo `publishUrl` when the endpoint it published is removed. */
+  unpublishUrl?: (url: string) => Promise<void>;
   /**
    * `oauth` only: fetch the endpoint's sign-in metadata the way a client will,
    * returning the authorization server's host. Absent, validation skips it.
@@ -111,6 +138,7 @@ export class CloudflareSetupService {
       zoneId: state?.zoneId ?? this.scope?.zoneId,
       zoneName: state?.zoneName ?? this.scope?.zoneName,
       hostname: state?.hostname,
+      listenPort: state?.listenPort,
       tunnelId: state?.tunnelId,
       applicationId: state?.applicationId,
       certificateId: state?.certificateId,
@@ -119,6 +147,7 @@ export class CloudflareSetupService {
       connectorInstalled: await this.deps.connectorInstalled(),
       clients: state?.clients.map(({ id, label, expiresAt, revoked }) => ({ id, label, expiresAt, revoked })) ?? [],
       emails: state?.emails,
+      resources: state ? cloudflareSetupResources(state) : undefined,
       checks: this.checks,
       checkedAt: this.checkedAt,
     };
@@ -215,7 +244,16 @@ export class CloudflareSetupService {
     if (!await this.deps.connectorInstalled()) throw new Error("Install cloudflared before creating the endpoint.");
     this.checks = undefined;
     let state = await this.deps.load();
-    if (state && (state.hostname !== hostname || state.listenPort !== listenPort)) throw new Error("Resume this profile's existing hostname and listener port.");
+    if (state && state.hostname !== hostname) {
+      throw new Error(`This profile's endpoint is ${state.hostname}. Resume it, or start over to use ${hostname}.`);
+    }
+    if (state && state.listenPort !== listenPort) {
+      // The listener moved since the tunnel was pointed at it — usually because
+      // the first port belonged to another process. Follow it: the ingress below
+      // is rewritten from the record, and the audit then checks the new port.
+      state.listenPort = listenPort;
+      await this.deps.save(state);
+    }
     // The gate decides the policy selector and the credential type, so a resumed
     // setup keeps the one it was created with rather than half-migrating.
     if (state && cloudflareSetupGate(state) !== gate) {
@@ -313,6 +351,27 @@ export class CloudflareSetupService {
     return [{ hostname: state.hostname, service: `http://127.0.0.1:${state.listenPort}` }, { service: "http_status:404" }];
   }
 
+  /**
+   * The tunnel must match the record, and the record must match the listener.
+   * Checking only the first let a tunnel pointed at a port the gateway had left
+   * pass while every request went nowhere, or to another process.
+   */
+  private originCheck(
+    state: CloudflareSetupState,
+    ingress: Array<{ hostname?: string; path?: string; service: string }>,
+  ): CloudflareSecurityCheck {
+    const expected = this.ingress(state);
+    const matches = ingress.length === 2
+      && ingress.every((rule, index) => rule.hostname === expected[index].hostname && rule.service === expected[index].service && !rule.path);
+    const live = this.deps.listeningPort ? this.deps.listeningPort() : state.listenPort;
+    if (matches && live !== state.listenPort) {
+      return { label: "Tunnel origin", passed: false, detail: live
+        ? `The tunnel sends traffic to 127.0.0.1:${state.listenPort}, but the gateway listens on 127.0.0.1:${live}. Move the tunnel to port ${live} in step 4.`
+        : `The tunnel sends traffic to 127.0.0.1:${state.listenPort}, but the gateway is not listening there.` };
+    }
+    return { label: "Tunnel origin", passed: matches, detail: "Exact hostname to the selected loopback listener, followed by a 404 catch-all." };
+  }
+
   async audit(requireDns = true): Promise<CloudflareSecurityCheck[]> {
     const state = await this.state();
     const api = this.apiClient();
@@ -333,9 +392,8 @@ export class CloudflareSetupService {
     const gate = cloudflareSetupGate(state);
     const admitted = this.admissionIds(state);
     const tunnel = await api.request<{ config: { ingress: Array<{ hostname?: string; path?: string; service: string }> } }>(`${base}/cfd_tunnel/${state.tunnelId}/configurations`);
-    const expected = this.ingress(state);
     const checks: CloudflareSecurityCheck[] = [
-      { label: "Dedicated Access application", passed: apps.length === 1 && apps[0].id === state.applicationId && app.domain === state.hostname && app.type === "self_hosted" && !(app.destinations?.length), detail: "Exact hostname, with no competing account or zone application." },
+      { label: "Dedicated Access application", passed: apps.length === 1 && apps[0].id === state.applicationId && isDedicatedApplication(app, state.hostname), detail: "Exact hostname, with no competing account or zone application." },
       ...(gate === "oauth" ? [
         { label: "Managed OAuth sign-in", passed: isExpectedOAuthConfiguration(app.oauth_configuration), detail: "Clients are offered sign-in, and sign-in redirects are limited to 127.0.0.1 on the signing-in machine." },
         // Exactly two policies: anything else — a bypass, an Everyone rule, a
@@ -347,7 +405,7 @@ export class CloudflareSetupService {
       ] : [
         { label: "Mandatory service token", passed: policies.length === 1 && servicePolicy !== undefined && isExactAdmissionPolicy(gate, servicePolicy, admitted), detail: "Only Service Auth for this setup's issued tokens; no bypass, alternative policy, or additional selector." },
       ]),
-      { label: "Tunnel origin", passed: tunnel.config.ingress.length === 2 && tunnel.config.ingress.every((rule, index) => rule.hostname === expected[index].hostname && rule.service === expected[index].service && !rule.path), detail: "Exact hostname to the selected loopback listener, followed by a 404 catch-all." },
+      this.originCheck(state, tunnel.config.ingress),
     ];
     if (gate === "mtls") {
       const certificates = await api.list<{ id: string; associated_hostnames?: string[]; expires_on?: string }>(`${base}/access/certificates`);
@@ -408,6 +466,69 @@ export class CloudflareSetupService {
     await this.deps.startConnector(state.tunnelToken);
   }
   async stop(): Promise<void> { await this.deps.stopConnector(); }
+
+  /**
+   * Delete everything this setup recorded, then forget it.
+   *
+   * Only recorded ids are touched, so an unrelated app, tunnel, or record in
+   * the same account is never at risk. DNS goes first: once the hostname stops
+   * routing, nothing that follows can leave a public route without its Access
+   * gate. Each id is cleared and saved as its resource goes, so a failure
+   * partway leaves a record of exactly what remains and a retry resumes there.
+   * A resource already deleted by hand counts as gone.
+   */
+  async remove(): Promise<string> {
+    const state = await this.state();
+    const api = this.apiClient();
+    const base = `/accounts/${state.accountId}`;
+    const gone = async (path: string, method = "DELETE", body?: unknown) => {
+      try { await api.request(path, method, body); }
+      catch (error) { if (!(error instanceof CloudflareApiError && error.status === 404)) throw error; }
+    };
+    this.checks = undefined;
+    await this.deps.stopConnector();
+    if (state.dnsId) {
+      await gone(`/zones/${state.zoneId}/dns_records/${state.dnsId}`);
+      state.dnsId = undefined;
+      await this.deps.save(state);
+    }
+    if (state.tunnelId) {
+      // Cloudflare refuses to delete a tunnel that still lists connections,
+      // and the list lags the connector that was just stopped.
+      await gone(`${base}/cfd_tunnel/${state.tunnelId}/connections`);
+      await gone(`${base}/cfd_tunnel/${state.tunnelId}`);
+      state.tunnelId = undefined;
+      state.tunnelToken = undefined;
+      await this.deps.save(state);
+    }
+    if (state.applicationId) {
+      // Its policies were created on the application and go with it.
+      await gone(`${base}/access/apps/${state.applicationId}`);
+      state.applicationId = undefined;
+      state.policyId = undefined;
+      state.identityPolicyId = undefined;
+      await this.deps.save(state);
+    }
+    if (state.certificateId) {
+      // A CA still associated with a hostname cannot be deleted.
+      await gone(`${base}/access/certificates/${state.certificateId}`, "PUT", { name: state.name, associated_hostnames: [] });
+      await gone(`${base}/access/certificates/${state.certificateId}`);
+      state.certificateId = undefined;
+      await this.deps.save(state);
+    }
+    if (cloudflareSetupGate(state) !== "mtls") {
+      for (const client of [state.verifier, ...state.clients]) {
+        if (client.revoked) continue;
+        await gone(`${base}/access/service_tokens/${client.id}`);
+        client.revoked = true;
+        client.clientSecret = undefined;
+        await this.deps.save(state);
+      }
+    }
+    await this.deps.unpublishUrl?.(`wss://${state.hostname}`);
+    await this.deps.clear();
+    return state.hostname;
+  }
 
   /** The half of a client record the probe presents at Cloudflare's edge. */
   private probeCredentials(client: Client): CloudflareProbeCredentials | undefined {

@@ -245,4 +245,51 @@ describe("Cloudflare setup flow", () => {
     expect(screen.getByText("Enter Cloudflare credentials manually")).toBeInTheDocument();
     expect(screen.getByText("Manual endpoint field")).toBeInTheDocument();
   });
+
+  it("fills in the conventional hostname once the zone is known", async () => {
+    const call = vi.fn(async (_request: CloudflareSetupRequest) => connected);
+    render(<CloudflareSetup api={{ configureFederationCloudflare: call } as DesktopApi}
+      listenPort="47830" onWriteConfig={async () => true} onSettingsChanged={async () => {}} />);
+    // A placeholder read as already filled in while Create stayed disabled.
+    await waitFor(() => expect(screen.getByLabelText("Cloudflare public hostname")).toHaveValue("federation.example.com"));
+    expect(screen.getByRole("button", { name: "Create protected endpoint" })).toBeEnabled();
+  });
+
+  it("lists what a stopped creation left and offers to resume on the moved port or start over", async () => {
+    const stopped: CloudflareSetupStatus = { ...connected, hostname: "federation.example.com", listenPort: 47830,
+      tunnelId: "tunnel", phase: "Setup incomplete — resume creation",
+      resources: ["1 service token", "Access application", "Service Auth policy", "Tunnel"] };
+    const call = vi.fn(async (_request: CloudflareSetupRequest) => stopped);
+    render(<CloudflareSetup api={{ configureFederationCloudflare: call } as DesktopApi}
+      listenPort="47831" onWriteConfig={async () => true} onSettingsChanged={async () => {}} />);
+    await screen.findByText("Creation stopped before the endpoint was published.");
+    expect(screen.getByText(/Created in Cloudflare so far: 1 service token, Access application, Service Auth policy, Tunnel\./)).toBeInTheDocument();
+    expect(screen.getByText(/set up for 127\.0\.0\.1:47830; the gateway listener is now 47831/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Resume endpoint creation" }));
+    await waitFor(() => expect(call).toHaveBeenCalledWith(expect.objectContaining({ action: "provision", listenPort: 47831 })));
+    fireEvent.click(screen.getByRole("button", { name: "Start over" }));
+    await waitFor(() => expect(call).toHaveBeenCalledWith({ action: "remove" }));
+  });
+
+  it("moves a published tunnel to the listener's new port, and can remove the endpoint", async () => {
+    const published: CloudflareSetupStatus = { ...connected, hostname: "federation.example.com", listenPort: 47830,
+      tunnelId: "tunnel", phase: "Published", gate: "service-token" };
+    const call = vi.fn(async (_request: CloudflareSetupRequest) => published);
+    render(<CloudflareSetup api={{ configureFederationCloudflare: call } as DesktopApi}
+      listenPort="47831" onWriteConfig={async () => true} onSettingsChanged={async () => {}} />);
+    await screen.findByText("The tunnel points at a port the gateway no longer uses.");
+    fireEvent.click(screen.getByRole("button", { name: "Move tunnel to port 47831" }));
+    await waitFor(() => expect(call).toHaveBeenCalledWith({ action: "provision", hostname: "federation.example.com", listenPort: 47831, gate: "service-token" }));
+    fireEvent.click(screen.getByRole("button", { name: "Remove endpoint" }));
+    await waitFor(() => expect(call).toHaveBeenCalledWith({ action: "remove" }));
+  });
+
+  it("does not warn about the tunnel port while it matches the listener", async () => {
+    const published: CloudflareSetupStatus = { ...connected, hostname: "federation.example.com", listenPort: 47830,
+      tunnelId: "tunnel", phase: "Published", gate: "service-token" };
+    render(<CloudflareSetup api={{ configureFederationCloudflare: vi.fn(async () => published) } as DesktopApi}
+      listenPort="47830" onWriteConfig={async () => true} onSettingsChanged={async () => {}} />);
+    await screen.findByRole("button", { name: "Remove endpoint" });
+    expect(screen.queryByText("The tunnel points at a port the gateway no longer uses.")).toBeNull();
+  });
 });

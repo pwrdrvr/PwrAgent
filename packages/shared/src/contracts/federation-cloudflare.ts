@@ -86,6 +86,12 @@ export type CloudflareSetupRequest =
       emails?: string[];
     }
   | { action: "set-emails"; emails: string[] }
+  /**
+   * Delete everything this setup recorded in Cloudflare, then forget it. The
+   * main process confirms first; resources the setup did not create are never
+   * touched.
+   */
+  | { action: "remove" }
   | { action: "audit" }
   | { action: "validate" }
   | { action: "start" }
@@ -117,9 +123,16 @@ export type CloudflareSetupStatus = {
   zoneId?: string;
   zoneName?: string;
   hostname?: string;
+  /** The loopback port the tunnel sends traffic to, as recorded by the setup. */
+  listenPort?: number;
   tunnelId?: string;
   applicationId?: string;
   certificateId?: string;
+  /**
+   * What this setup has created in Cloudflare so far, by name. A setup that
+   * stopped partway lists exactly what "Start over" would delete.
+   */
+  resources?: string[];
   connectorRunning: boolean;
   connectorInstalled: boolean;
   phase?: string;

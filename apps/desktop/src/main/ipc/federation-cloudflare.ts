@@ -2,8 +2,9 @@ import { dialog, ipcMain, shell } from "electron";
 import fs from "node:fs/promises";
 import type { CloudflareSetupLink, CloudflareSetupRequest, CloudflareSetupStatus } from "@pwragent/shared";
 import { FEDERATION_CLOUDFLARE_SETUP_CHANNEL } from "../../shared/ipc";
-import { CloudflareSetupService, cloudflareSetupGate } from "../federation/cloudflare-setup-service";
+import { CloudflareSetupService, cloudflareSetupGate, cloudflareSetupResources } from "../federation/cloudflare-setup-service";
 import {
+  clearCloudflareSetup,
   loadCloudflareSetup,
   loadCloudflareSetupDraft,
   saveCloudflareSetup,
@@ -19,13 +20,21 @@ import { decodeFederationInvite, encodeFederationInvite } from "../federation/fe
 const setup = new CloudflareSetupService({
   load: loadCloudflareSetup,
   save: saveCloudflareSetup,
+  clear: clearCloudflareSetup,
   verifyListener: (port) => getDesktopFederationRuntime().cloudflareSecurityProbes(port),
+  listeningPort: () => getDesktopFederationRuntime().loopbackListenPort(),
   connectorInstalled: () => cloudflareConnector.installed(),
   connectorRunning: () => cloudflareConnector.running(),
   startConnector: (token) => cloudflareConnector.start(token),
   stopConnector: () => cloudflareConnector.stop(),
   publishUrl: async (url) => {
     await getDesktopSettingsService().writeConfigPatchTargeted({ federation: { publicUrl: url } });
+    await getDesktopFederationRuntime().restart();
+  },
+  unpublishUrl: async (url) => {
+    // Only the address this setup published: an operator-set one stays.
+    if (getDesktopSettingsService().readFederationConfig().publicUrl !== url) return;
+    await getDesktopSettingsService().writeConfigPatchTargeted({ federation: { publicUrl: "" } });
     await getDesktopFederationRuntime().restart();
   },
   probeSignIn: (endpoint) => getCloudflareAccessSignIn().probe(endpoint),
@@ -106,8 +115,12 @@ export function registerCloudflareSetupIpc(): void {
       switch (request.action) {
         case "token-link": {
           const url = new URL("https://dash.cloudflare.com/profile/api-tokens");
+          // `argotunnel` is Cloudflare Tunnel. Cloudflare publishes no template
+          // key for Access: Service Tokens or zone-level Access apps, so the
+          // setup's permission list names those for the operator to add.
           url.searchParams.set("permissionGroupKeys", JSON.stringify([
-            { key: "dns", type: "edit" }, { key: "zone", type: "read" }, { key: "access", type: "edit" },
+            { key: "argotunnel", type: "edit" }, { key: "access", type: "edit" },
+            { key: "dns", type: "edit" }, { key: "zone", type: "read" },
           ]));
           url.searchParams.set("accountId", "*");
           url.searchParams.set("zoneId", "all");
@@ -153,6 +166,25 @@ export function registerCloudflareSetupIpc(): void {
           // The setup record now holds everything the draft did.
           await saveCloudflareSetupDraft({});
           break;
+        case "remove": {
+          const current = await loadCloudflareSetup();
+          if (!current) throw new Error("There is no endpoint to remove.");
+          const resources = cloudflareSetupResources(current);
+          const published = Boolean(current.dnsId);
+          const confirm = await dialog.showMessageBox({
+            type: "warning",
+            title: published ? "Remove endpoint" : "Start over",
+            message: published ? `Remove ${current.hostname}?` : `Delete what was created for ${current.hostname}?`,
+            detail: `${resources.length ? `This deletes, in Cloudflare: ${resources.join(", ")}.` : "Nothing was created in Cloudflare yet."}`
+              + " Nothing else in the account is changed."
+              + (published ? " Clients connected through this hostname lose access." : "")
+              + " This profile's setup record is then cleared so you can start again.",
+            buttons: ["Cancel", published ? "Remove endpoint" : "Start over"], defaultId: 0, cancelId: 0,
+          });
+          if (confirm.response !== 1) break;
+          const hostname = await setup.remove();
+          return describe(`${hostname} was removed from Cloudflare and this profile.`);
+        }
         case "set-emails":
           await setup.setEmails(request.emails);
           return describe("Sign-in allowlist updated. Removed people lose access at their next token refresh, within 15 minutes.");

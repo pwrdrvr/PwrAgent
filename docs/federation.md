@@ -119,6 +119,22 @@ A client imports the encrypted `.pwrcf` file under "Connect this client". The
 file's enrollment invite expires after 1, 4, 8, or 24 hours, chosen when it
 is saved.
 
+A creation that stops partway lists what it has made in Cloudflare so far.
+Resume finishes with those resources. If the listener port changed in the
+meantime, Resume points the tunnel at the new port. Start over deletes exactly
+those resources and clears the setup record. A published endpoint offers
+Remove endpoint, which deletes the DNS record first, then the tunnel, the
+Access application, and the credentials the setup issued. Both ask for
+confirmation and delete only resources the setup recorded. After a failure a
+retry picks up where the last attempt stopped, and a resource already deleted
+by hand counts as gone.
+
+A gateway bound to a specific address refuses a port that another process
+holds on every interface. On macOS such a bind succeeds and silently takes the
+other listener's loopback traffic, including a Cloudflare tunnel aimed at it.
+The endpoint audit also fails when the tunnel's recorded port is not the port
+the gateway is listening on.
+
 ### Cloudflare Access sign-in
 
 The sign-in choice enables

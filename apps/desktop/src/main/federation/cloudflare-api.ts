@@ -56,6 +56,13 @@ function cloudflareFailureHint(status: number, path: string, detail: string): st
     + " Access: Mutual TLS Certificates → Edit. Confirm the plan before re-scoping the token.";
 }
 
+/** A non-2xx answer from the API, kept with its status so a caller can tell "gone" from "refused". */
+export class CloudflareApiError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message);
+  }
+}
+
 export class CloudflareApi {
   constructor(private readonly token: string, private readonly fetcher: typeof fetch = fetch) {}
 
@@ -83,10 +90,11 @@ export class CloudflareApi {
         const body = (await response.text()).slice(0, 16 * 1024);
         detail = describeCloudflareErrors(JSON.parse(body), this.token);
       } catch { /* A non-JSON or unreadable body leaves only the status. */ }
-      throw new Error(
+      throw new CloudflareApiError(
         `Cloudflare API returned HTTP ${response.status}.${detail ? ` ${detail}.` : ""}`
         + cloudflareFailureHint(response.status, path, detail)
         + (detail ? "" : " Check token permissions and account access."),
+        response.status,
       );
     }
     const reader = response.body?.getReader();
@@ -134,17 +142,38 @@ export type AccessApplication = {
   domain?: string;
   type?: string;
   destinations?: Array<{ uri?: string; type?: string }>;
+  self_hosted_domains?: string[];
   oauth_configuration?: unknown;
 };
 
 export function applicationCoversHostname(app: AccessApplication, hostname: string): boolean {
-  const domains = [app.domain, ...(app.destinations ?? []).map((d) => d.uri)];
+  const domains = [app.domain, ...(app.destinations ?? []).map((d) => d.uri), ...(app.self_hosted_domains ?? [])];
   return domains.some((domain) => {
     if (!domain) return false;
     const host = domain.toLowerCase().split("/")[0];
     const expression = host.split("*").map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(".*");
     return new RegExp(`^${expression}$`).test(hostname);
   });
+}
+
+/**
+ * The app covers exactly one hostname and nothing else.
+ *
+ * Cloudflare mirrors `domain` into `destinations` and `self_hosted_domains` on
+ * every self-hosted app, so their presence is normal: requiring them to be
+ * absent failed every app this setup created. A second entry, a path, or a
+ * non-public destination is another way in that this setup did not make.
+ */
+export function isDedicatedApplication(app: AccessApplication, hostname: string): boolean {
+  const host = hostname.toLowerCase();
+  const destinations = app.destinations ?? [];
+  const domains = app.self_hosted_domains ?? [];
+  return app.type === "self_hosted"
+    && app.domain?.toLowerCase() === host
+    && destinations.length <= 1
+    && destinations.every((entry) => entry.type === "public" && entry.uri?.toLowerCase() === host)
+    && domains.length <= 1
+    && domains.every((domain) => domain.toLowerCase() === host);
 }
 
 /**

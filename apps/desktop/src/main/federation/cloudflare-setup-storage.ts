@@ -62,6 +62,11 @@ export async function saveCloudflareSetup(state: CloudflareSetupState): Promise<
   await writeAtomic(SETUP_FILE, safeStorage.encryptString(JSON.stringify(state)));
 }
 
+/** Forget the gateway setup record. Callers delete what it names in Cloudflare first. */
+export async function clearCloudflareSetup(): Promise<void> {
+  await fs.rm(stateFile(SETUP_FILE), { force: true });
+}
+
 /**
  * This instance's own Cloudflare Access sign-in. It holds a refresh token, so
  * it is encrypted like the gateway setup; unlike it, a record that no longer

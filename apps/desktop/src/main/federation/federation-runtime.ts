@@ -1269,9 +1269,20 @@ export class DesktopFederationRuntime {
   cloudflareSecurityProbes(listenPort: number) {
     if (!Number.isInteger(listenPort) || listenPort < 1 || listenPort > 65535
       || this.stopping || !this.server || this.listenUrl !== `ws://127.0.0.1:${listenPort}`) {
-      throw new Error("Enable the gateway on the selected loopback port before Cloudflare setup or validation.");
+      // Say why when the runtime knows: "enable the gateway" reads as a missing
+      // setting when the listener is enabled and failed to bind.
+      throw new Error(this.gatewayListenerError
+        ? `The gateway is not listening on 127.0.0.1:${listenPort}: ${this.gatewayListenerError}`
+        : "Enable the gateway on the selected loopback port before Cloudflare setup or validation.");
     }
     return this.server.securityProbes;
+  }
+
+  /** The port of a gateway listening on 127.0.0.1 right now, or undefined. */
+  loopbackListenPort(): number | undefined {
+    if (this.stopping || !this.server) return undefined;
+    const match = /^ws:\/\/127\.0\.0\.1:(\d+)$/.exec(this.listenUrl ?? "");
+    return match ? Number(match[1]) : undefined;
   }
 
   async health(): Promise<FederationHealthStatus> {

@@ -100,6 +100,16 @@ export function CloudflareSetup(props: Props) {
   const disabled = Boolean(busy) || !api?.configureFederationCloudflare;
   const created = Boolean(status?.hostname);
   const published = status?.phase === "Published";
+  // Once the zone is known, offer the conventional name as a real value. As a
+  // placeholder it read as already filled in, while Create stayed disabled.
+  const zoneName = status?.zoneName;
+  useEffect(() => {
+    if (zoneName && !created) setHostname((current) => current.trim() ? current : `federation.${zoneName}`);
+  }, [zoneName, created]);
+  // The tunnel sends traffic to the port the setup recorded; the listener may
+  // have moved since, typically off a port another process already held.
+  const livePort = Number(listenPort);
+  const portMoved = Boolean(status?.listenPort && Number.isInteger(livePort) && livePort > 0 && status.listenPort !== livePort);
   const connected = Boolean(status?.connected);
   const installed = Boolean(status?.connectorInstalled);
   // Validation has run — not just the audit — and nothing failed.
@@ -234,7 +244,7 @@ export function CloudflareSetup(props: Props) {
       {tab === "gateway" ? <>
         {!published && started ? <p className="cloudflare-setup__state" role="status">
           {created
-            ? "Endpoint creation stopped partway. Resume it in step 4; nothing is published until every check passes."
+            ? "Endpoint creation stopped partway. Resume it or start over in step 4; nothing is published until every check passes."
             : missing.length
               ? <><strong>Incomplete.</strong> Still needed: {missing.join(", ")}. Save a draft to finish later; nothing is enabled until you create the endpoint.</>
               : <><strong>Ready.</strong> Everything needed to create the endpoint is in place.</>}
@@ -293,12 +303,12 @@ export function CloudflareSetup(props: Props) {
               </div>
               <details className="cloudflare-setup__help">
                 <summary>Token permissions</summary>
-                <p>The link prefills DNS, Zone, and Access permissions. Add the rest below, scope the token to your account and this domain, and choose an expiry.</p>
+                <p>The link fills in every permission below except the two marked Add, which Cloudflare cannot prefill. Add those, scope the token to your account and this domain, and choose an expiry.</p>
                 <ul>
                   <li>Account → Cloudflare Tunnel → Edit</li>
                   <li>Account → Access: Apps and Policies → Edit</li>
-                  <li>{mtls ? "Account → Access: Mutual TLS Certificates → Edit" : "Account → Access: Service Tokens → Edit"}</li>
-                  <li>Zone → Access: Apps and Policies → Edit</li>
+                  <li><strong>Add:</strong> {mtls ? "Account → Access: Mutual TLS Certificates → Edit" : "Account → Access: Service Tokens → Edit"}</li>
+                  <li><strong>Add:</strong> Zone → Access: Apps and Policies → Read</li>
                   <li>Zone → DNS → Edit; Zone → Zone → Read</li>
                 </ul>
                 {oauth ? <p>Sign-in still uses one service token: the gateway&rsquo;s own, for checking the endpoint with no person present.</p> : null}
@@ -332,6 +342,15 @@ export function CloudflareSetup(props: Props) {
           <AutomationStage verb="Create" title="Protected endpoint" progress={progress("endpoint", published, "Published")}>
             {published ? <>
               <div className="cloudflare-setup__endpoint"><code>wss://{status?.hostname}</code><span>{status?.phase}</span></div>
+              {portMoved ? <div className="cloudflare-setup__notice" role="note">
+                <strong>The tunnel points at a port the gateway no longer uses.</strong>
+                <p>Cloudflare sends this endpoint&rsquo;s traffic to 127.0.0.1:{status?.listenPort}, but the gateway listener is set to {livePort}. Move the tunnel, or set the listener back to {status?.listenPort}.</p>
+                <div className="settings-button-row">
+                  {action(`Move tunnel to port ${livePort}`, { action: "provision", hostname: status?.hostname ?? "", listenPort: livePort, gate: effectiveGate },
+                    "Moving the tunnel and re-checking the policy…", true, !connected)}
+                </div>
+                {!connected ? <p className="cloudflare-setup__hint">Connect the Cloudflare account in step 2 to move the tunnel.</p> : null}
+              </div> : null}
               {oauth ? <>
                 <SettingsField label="Who can sign in" sub="One email per line. Removed people lose access at their next token refresh, within 15 minutes; revoke the peer in Federation to end a live session now."
                   control={<textarea className="settings-input cloudflare-setup__textarea" aria-label="People who can sign in" value={allowlistText} rows={3}
@@ -342,11 +361,21 @@ export function CloudflareSetup(props: Props) {
                 </div>
                 {!connected ? <p className="cloudflare-setup__hint">Connect the Cloudflare account in step 2 to change the allowlist.</p> : null}
               </> : null}
+              <div className="settings-button-row">
+                {action("Remove endpoint", { action: "remove" }, "Removing the endpoint from Cloudflare…", false, !connected)}
+              </div>
+              <p className="cloudflare-setup__hint">Deletes the DNS record, tunnel, Access application, and credentials this setup created, after you confirm. Nothing else in the account changes.{!connected ? " Connect the Cloudflare account in step 2 first." : ""}</p>
             </> : <>
+              {created ? <div className="cloudflare-setup__notice" role="note">
+                <strong>Creation stopped before the endpoint was published.</strong>
+                <p>{status?.resources?.length ? `Created in Cloudflare so far: ${status.resources.join(", ")}.` : "Nothing was created in Cloudflare yet."}
+                  {portMoved ? ` The tunnel was set up for 127.0.0.1:${status?.listenPort}; the gateway listener is now ${livePort}, and resuming moves the tunnel there.` : ""}</p>
+                <p>Resume to finish with these, or start over to delete exactly these and begin again. Nothing else in the account is touched.</p>
+              </div> : null}
               <SettingsField label="Public hostname" sub={status?.zoneName
                 ? `A new name directly under ${status.zoneName}. Existing DNS records and Access policies are never changed.`
                 : "A new name directly under your domain, such as federation.example.com. Existing DNS records and Access policies are never changed."}
-                control={field("Cloudflare public hostname", hostname, setHostname, `federation.${status?.zoneName ?? "example.com"}`, { locked: created })} />
+                control={field("Cloudflare public hostname", hostname, setHostname, status?.zoneName ? `A new name under ${status.zoneName}` : "federation.example.com", { locked: created })} />
               {oauth ? <SettingsField label="Who can sign in" sub="One email per line. Each must match the email the person’s login method reports."
                 control={<textarea className="settings-input cloudflare-setup__textarea" aria-label="People who can sign in" value={emailsText} rows={3}
                   placeholder="you@example.com" onChange={(event) => setEmailsText(event.target.value)} spellCheck={false} disabled={disabled || created} />} /> : null}
@@ -356,7 +385,7 @@ export function CloudflareSetup(props: Props) {
                   { action: "provision", hostname, listenPort: Number(listenPort), gate: effectiveGate, emails: oauth ? emails : undefined },
                   oauth ? "Creating validation token, sign-in policy, and tunnel…" : mtls ? "Creating CA, Access policy, and tunnel…" : "Creating service token, Access policy, and tunnel…",
                   true, createMissing.length > 0)}
-                {created ? null : saveDraft}
+                {created ? action("Start over", { action: "remove" }, "Deleting what this setup created…", false, !connected) : saveDraft}
               </div>
               {needs(createMissing)}
             </>}

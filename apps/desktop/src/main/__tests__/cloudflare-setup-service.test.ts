@@ -10,19 +10,30 @@ function harness(gate: Gate = "service-token", emails: string[] = ["Operator@Exa
   const calls: Array<{ method: string; path: string; body: Record<string, unknown> }> = [];
   const resources = new Map<string, Record<string, unknown>>();
   let tamper = false;
+  // A status to answer instead of the fake's own result, once per entry.
+  const failures: Array<{ method: string; path: RegExp; status: number }> = [];
+  let listening: number | undefined = 47830;
   const api = new CloudflareApi("token", async (url, options) => {
     const parsed = new URL(String(url));
     const path = parsed.pathname.replace("/client/v4", "");
     const method = options?.method ?? "GET";
     const body = options?.body ? JSON.parse(String(options.body)) : {};
     calls.push({ method, path, body });
+    const failure = failures.findIndex((entry) => entry.method === method && entry.path.test(path));
+    if (failure >= 0) {
+      const [{ status }] = failures.splice(failure, 1);
+      return new Response(JSON.stringify({ success: false, errors: [{ code: status, message: "fake refusal" }] }), { status });
+    }
     let result: unknown;
     if (path === `/zones/${"b".repeat(32)}`) result = { name: "example.com", status: "active", account: { id: "a".repeat(32) } };
     else if (method === "POST") {
       const id = `resource-${resources.size}`;
       result = { id, ...body, ...(path.endsWith("/certificates") ? { expires_on: "2036-01-01" } : {}), ...(path.endsWith("/cfd_tunnel") ? { token: "connector-secret" } : {}),
         // Cloudflare returns the secret exactly once, on create.
-        ...(path.endsWith("/service_tokens") ? { client_id: `${id}.access`, client_secret: `secret-${id}`, expires_at: "2036-01-01T00:00:00Z" } : {}) };
+        ...(path.endsWith("/service_tokens") ? { client_id: `${id}.access`, client_secret: `secret-${id}`, expires_at: "2036-01-01T00:00:00Z" } : {}),
+        // Cloudflare mirrors `domain` into both of these on every self-hosted
+        // app. A fake that omits them passes an audit the real API fails.
+        ...(path.endsWith("/access/apps") ? { destinations: [{ type: "public", uri: body.domain }], self_hosted_domains: [body.domain] } : {}) };
       resources.set(`${path}/${id}`, result as Record<string, unknown>);
     } else if (method === "DELETE") {
       resources.delete(path);
@@ -40,21 +51,28 @@ function harness(gate: Gate = "service-token", emails: string[] = ["Operator@Exa
     return new Response(JSON.stringify({ success: true, result }), { status: 200 });
   });
   const publishUrl = vi.fn(async () => undefined);
+  const unpublishUrl = vi.fn(async () => undefined);
   const startConnector = vi.fn(async () => undefined);
+  const stopConnector = vi.fn(async () => undefined);
   const verifyListener = vi.fn(() => new CloudflareOriginProbes());
   const service = new CloudflareSetupService({
     load: async () => stored ? structuredClone(stored) : undefined,
     save: async (state) => { stored = structuredClone(state); },
+    clear: async () => { stored = undefined; },
     api: () => api,
     verifyListener,
+    listeningPort: () => listening,
     connectorInstalled: async () => true,
     connectorRunning: () => false,
     startConnector,
-    stopConnector: async () => undefined,
+    stopConnector,
     publishUrl,
+    unpublishUrl,
   });
-  return { service, calls, resources, publishUrl, startConnector, verifyListener, gate,
+  return { service, calls, resources, publishUrl, unpublishUrl, startConnector, stopConnector, verifyListener, gate,
     tamper: () => { tamper = true; }, state: () => stored,
+    fail: (method: string, path: RegExp, status: number) => { failures.push({ method, path, status }); },
+    listenOn: (port: number | undefined) => { listening = port; },
     connect: () => service.connect("x".repeat(40), "a".repeat(32), "b".repeat(32), gate),
     provision: () => service.provision("federation.example.com", 47830, gate, gate === "oauth" ? emails : undefined),
   };
@@ -164,6 +182,131 @@ describe("Cloudflare connection permission checks", () => {
       expect(credentialReads.map((call) => call.path.split("/").at(-1))).toEqual([expected]);
     },
   );
+});
+
+describe("Cloudflare endpoint recovery", () => {
+  const account = `/accounts/${"a".repeat(32)}`;
+
+  it("passes the dedicated-app check with Cloudflare's mirrored fields, and fails on a second hostname", async () => {
+    const h = harness("service-token");
+    await h.connect();
+    await h.provision();
+    const dedicated = async () => (await h.service.audit()).find((check) => check.label === "Dedicated Access application")?.passed;
+    expect(await dedicated()).toBe(true);
+    const key = `${account}/access/apps/${h.state()?.applicationId}`;
+    const app = h.resources.get(key)!;
+    h.resources.set(key, { ...app, destinations: [...(app.destinations as unknown[]), { type: "public", uri: "other.example.com" }] });
+    expect(await dedicated()).toBe(false);
+    h.resources.set(key, { ...app, self_hosted_domains: ["federation.example.com", "other.example.com"] });
+    expect(await dedicated()).toBe(false);
+  });
+
+  it("resumes on a moved listener port and points the tunnel at it", async () => {
+    const h = harness("service-token");
+    await h.connect();
+    h.fail("POST", /\/dns_records$/, 500);
+    await expect(h.provision()).rejects.toThrow("HTTP 500");
+    expect(h.state()?.listenPort).toBe(47830);
+    // The first port turned out to belong to another process, so the operator
+    // moved the listener. Resume used to refuse outright.
+    h.listenOn(47831);
+    await h.service.provision("federation.example.com", 47831, "service-token");
+    expect(h.state()?.listenPort).toBe(47831);
+    expect(h.state()?.dnsId).toBeDefined();
+    const ingress = h.calls.filter((call) => call.method === "PUT" && call.path.endsWith("/configurations")).at(-1);
+    expect(JSON.stringify(ingress?.body)).toContain("http://127.0.0.1:47831");
+    expect((await h.service.audit()).every((check) => check.passed)).toBe(true);
+  });
+
+  it("still refuses a different hostname, and names both", async () => {
+    const h = harness("service-token");
+    await h.connect();
+    h.fail("POST", /\/dns_records$/, 500);
+    await expect(h.provision()).rejects.toThrow();
+    await expect(h.service.provision("other.example.com", 47830, "service-token"))
+      .rejects.toThrow("This profile's endpoint is federation.example.com. Resume it, or start over to use other.example.com.");
+  });
+
+  it("fails the tunnel origin check when the gateway listens elsewhere", async () => {
+    const h = harness("service-token");
+    await h.connect();
+    await h.provision();
+    h.listenOn(47831);
+    const origin = (await h.service.audit()).find((check) => check.label === "Tunnel origin");
+    expect(origin?.passed).toBe(false);
+    expect(origin?.detail).toContain("127.0.0.1:47830, but the gateway listens on 127.0.0.1:47831");
+    h.listenOn(undefined);
+    expect((await h.service.audit()).find((check) => check.label === "Tunnel origin")?.passed).toBe(false);
+  });
+
+  it("lists what a stopped creation left in Cloudflare", async () => {
+    const h = harness("service-token");
+    await h.connect();
+    h.fail("POST", /\/dns_records$/, 500);
+    await expect(h.provision()).rejects.toThrow();
+    const status = await h.service.status();
+    expect(status.listenPort).toBe(47830);
+    expect(status.resources).toEqual(["1 service token", "Access application", "Service Auth policy", "Tunnel"]);
+  });
+
+  it.each<[Gate, string[]]>([
+    ["service-token", ["dns_records", "connections", "cfd_tunnel", "apps", "service_tokens", "service_tokens"]],
+    ["oauth", ["dns_records", "connections", "cfd_tunnel", "apps", "service_tokens"]],
+    ["mtls", ["dns_records", "connections", "cfd_tunnel", "apps", "certificates"]],
+  ])("removes only what the %s setup recorded, DNS first, then forgets it", async (gate, order) => {
+    const h = harness(gate);
+    await h.connect();
+    await h.provision();
+    if (gate !== "oauth") await h.service.issue("Travel laptop");
+    const unrelated = `${account}/access/apps/unrelated`;
+    h.resources.set(unrelated, { id: "unrelated", domain: "other.example.com", type: "self_hosted" });
+    const before = h.calls.length;
+    await expect(h.service.remove()).resolves.toBe("federation.example.com");
+    const deletes = h.calls.slice(before).filter((call) => call.method === "DELETE");
+    const kind = (path: string) => {
+      const parts = path.split("/");
+      return parts.at(-1) === "connections" ? "connections" : parts.at(-2)!;
+    };
+    expect(deletes.map((call) => kind(call.path))).toEqual(order);
+    if (gate === "mtls") {
+      // A CA still associated with a hostname cannot be deleted.
+      const release = h.calls.slice(before).find((call) => call.method === "PUT" && call.path.includes("/access/certificates/"));
+      expect(release?.body).toMatchObject({ associated_hostnames: [] });
+    }
+    expect(h.resources.has(unrelated)).toBe(true);
+    expect(h.stopConnector).toHaveBeenCalled();
+    expect(h.unpublishUrl).toHaveBeenCalledWith("wss://federation.example.com");
+    expect(h.state()).toBeUndefined();
+  });
+
+  it("keeps what a failed removal left, and a retry resumes there", async () => {
+    const h = harness("service-token");
+    await h.connect();
+    await h.provision();
+    h.fail("DELETE", /\/access\/apps\/[^/]+$/, 500);
+    await expect(h.service.remove()).rejects.toThrow("HTTP 500");
+    expect(h.state()?.dnsId).toBeUndefined();
+    expect(h.state()?.tunnelId).toBeUndefined();
+    expect(h.state()?.applicationId).toBeDefined();
+    expect((await h.service.status()).resources).toEqual(["1 service token", "Access application", "Service Auth policy"]);
+    // Deleted by hand in the meantime: a 404 means gone, not failure.
+    h.fail("DELETE", /\/access\/apps\/[^/]+$/, 404);
+    const before = h.calls.length;
+    await h.service.remove();
+    const retried = h.calls.slice(before).filter((call) => call.method === "DELETE").map((call) => call.path.split("/").at(-2));
+    expect(retried).toEqual(["apps", "service_tokens"]);
+    expect(h.state()).toBeUndefined();
+  });
+
+  it("does not remove anything without a connected account", async () => {
+    const h = harness("service-token");
+    await h.connect();
+    await h.provision();
+    h.service.disconnect();
+    await expect(h.service.remove()).rejects.toThrow("Connect a Cloudflare API token");
+    expect(h.stopConnector).not.toHaveBeenCalled();
+    expect(h.state()?.dnsId).toBeDefined();
+  });
 });
 
 describe("Cloudflare service-token admission", () => {
