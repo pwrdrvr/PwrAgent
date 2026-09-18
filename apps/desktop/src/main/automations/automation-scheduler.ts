@@ -328,7 +328,10 @@ export class AutomationScheduler {
     if (!primary) return;
     const source: AutomationRunSourceMetadata =
       rest.length > 0
-        ? { ...primary, batchedEvents: rest.map(toBatchedEntry) }
+        ? {
+            ...primary,
+            batchedEvents: rest.map((entry) => toBatchedEntry(entry, primary)),
+          }
         : primary;
     // dispatchInboundRun applies the rate limit; an over-rate flush drops the
     // (already-merged) batch as a single throttled run.
@@ -916,14 +919,26 @@ function truncateSourceMessage(
   };
 }
 
+/**
+ * A follow-up folded into the primary message's run. The window is per
+ * automation, not per conversation, so with several watched conversations a
+ * follow-up can come from a different one than the primary; it then keeps its
+ * own conversation, or the prompt would present it as posted where the first
+ * message was. Compared by the trigger that matched, not the raw conversation,
+ * so a thread reply inside the same watched channel is not singled out.
+ */
 function toBatchedEntry(
   source: AutomationRunSourceMetadata,
+  primary: AutomationRunSourceMetadata,
 ): AutomationRunSourceBatchedEntry {
   return {
     sourceEventKey: source.sourceEventKey,
     receivedAt: source.receivedAt,
     actor: source.actor,
     ...(source.message ? { message: source.message } : {}),
+    ...(source.matchedTriggerId === primary.matchedTriggerId
+      ? {}
+      : { conversation: source.conversation }),
   };
 }
 

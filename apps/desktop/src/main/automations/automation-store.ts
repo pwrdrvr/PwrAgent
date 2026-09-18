@@ -6,6 +6,7 @@ import type {
   AutomationPriorRunLookback,
   AutomationRunUsage,
   AutomationGateConfig,
+  AutomationInboundMessageTriggerDefinition,
   AutomationListItemSummary,
   AutomationLoadIssue,
   AutomationOutputActionDefinition,
@@ -30,6 +31,7 @@ import {
   DEFAULT_AUTOMATION_BACKLOG_POLICY,
   DEFAULT_AUTOMATION_INBOUND_COALESCE_WINDOW_MS,
   buildThreadIdentityKey,
+  formatAutomationConversationList,
   formatAutomationScheduleSummary,
   isSupportedAutomationInboundConditionGroup,
   normalizeAutomationPriorRunLookback,
@@ -1405,11 +1407,27 @@ function scheduleFromTriggers(
 function formatAutomationTriggerSummary(
   triggers: AutomationTriggerDefinition[],
 ): string {
-  const inbound = triggers.find((trigger) => trigger.kind === "inbound_message");
-  if (inbound?.kind === "inbound_message") {
-    return inbound.name ? `inbound: ${inbound.name}` : "inbound message";
+  const inbound = triggers.filter(
+    (trigger): trigger is AutomationInboundMessageTriggerDefinition =>
+      trigger.kind === "inbound_message",
+  );
+  const [only] = inbound;
+  if (!only) return "not scheduled";
+  if (inbound.length === 1) {
+    return only.name ? `inbound: ${only.name}` : "inbound message";
   }
-  return "not scheduled";
+  // Several sources: name them, since "inbound message" alone no longer says
+  // where the automation listens. The editor writes one filter to every
+  // source, so a shared trigger name (the filter's wording) is still worth
+  // stating; names that disagree are left out rather than listed N times.
+  const sources = formatAutomationConversationList(
+    inbound.map((trigger) => trigger.conversation),
+  );
+  const names = new Set(inbound.map((trigger) => trigger.name));
+  const [sharedName] = names;
+  return names.size === 1 && sharedName
+    ? `inbound from ${sources}: ${sharedName}`
+    : `inbound from ${sources}`;
 }
 
 function normalizeInboundCoalesceWindowMs(value: number | undefined): number {

@@ -157,6 +157,62 @@ describe("buildAutomationTurnInput", () => {
     expect(text).toContain("ERROR api latency high");
   });
 
+  it("names the conversation a batched follow-up came from when it is not the primary's", () => {
+    const [item] = buildAutomationTurnInput({
+      automation: {
+        ...buildAutomation(),
+        schedule: undefined,
+        triggers: [],
+        scheduleSummary: "inbound from f-alerts, f-metrics",
+      },
+      run: {
+        id: "run-1",
+        automationId: "automation-1",
+        trigger: "inbound_message",
+        status: "pending",
+        scheduledWindows: [],
+        source: {
+          kind: "messaging",
+          sourceEventKey: "k1",
+          receivedAt: Date.UTC(2026, 4, 13, 14, 10),
+          matchedTriggerId: "t-alerts",
+          actor: { platformUserId: "B1", displayName: "Datadog" },
+          conversation: {
+            channel: "slack",
+            conversationId: "C-ALERTS",
+            title: "f-alerts",
+          },
+          message: { text: "ERROR disk full" },
+          batchedEvents: [
+            {
+              sourceEventKey: "k2",
+              receivedAt: Date.UTC(2026, 4, 13, 14, 11),
+              actor: { platformUserId: "B1", displayName: "Datadog" },
+              message: { text: "p99 over budget" },
+              conversation: {
+                channel: "slack",
+                conversationId: "C-METRICS",
+                title: "f-metrics",
+              },
+            },
+            {
+              sourceEventKey: "k3",
+              receivedAt: Date.UTC(2026, 4, 13, 14, 12),
+              actor: { platformUserId: "B1", displayName: "Datadog" },
+              message: { text: "ERROR disk still full" },
+            },
+          ],
+        },
+      },
+    });
+
+    const text = item?.type === "text" ? item.text : "";
+    // The run fired from f-alerts; the batch is not all from there.
+    expect(text).toContain("Conversation: f-alerts");
+    expect(text).toContain("Datadog (in f-metrics): p99 over budget");
+    expect(text).toContain("Datadog: ERROR disk still full");
+  });
+
 
   it("includes the source message for an operator replay", () => {
     const [item] = buildAutomationTurnInput({

@@ -412,6 +412,62 @@ describe("AutomationStore", () => {
     });
   });
 
+  it("names every watched conversation in a multi-source trigger summary", () => {
+    const source = (conversationId: string, title?: string) => ({
+      id: `inbound-message:slack::${conversationId}`,
+      kind: "inbound_message" as const,
+      name: "text contains \"ERROR\"",
+      conversation: {
+        channel: "slack" as const,
+        conversationId,
+        conversationKind: "channel" as const,
+        ...(title ? { title } : {}),
+      },
+    });
+
+    const two = store.createAutomation({
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Two channels",
+      taskPrompt: "Investigate.",
+      triggers: [source("C1", "f-alerts"), source("C2", "f-metrics")],
+    });
+    expect(two.scheduleSummary).toBe(
+      "inbound from f-alerts, f-metrics: text contains \"ERROR\"",
+    );
+    // Every source is persisted, not just the first.
+    expect(store.getAutomation(two.id)?.triggers).toHaveLength(2);
+
+    // Past the cap the rest are counted; an untitled source falls back to its
+    // raw id rather than vanishing from the list.
+    const five = store.createAutomation({
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Five channels",
+      taskPrompt: "Investigate.",
+      triggers: [
+        source("C1", "f-alerts"),
+        source("C2", "f-metrics"),
+        source("C3"),
+        source("C4", "f-deploys"),
+        source("C5", "f-oncall"),
+      ],
+    });
+    expect(five.scheduleSummary).toBe(
+      "inbound from f-alerts, f-metrics, C3 +2 more: text contains \"ERROR\"",
+    );
+
+    // A single source keeps the summary it always had.
+    const one = store.createAutomation({
+      backend: "codex",
+      threadId: "thread-1",
+      name: "One channel",
+      taskPrompt: "Investigate.",
+      triggers: [source("C1", "f-alerts")],
+    });
+    expect(one.scheduleSummary).toBe("inbound: text contains \"ERROR\"");
+  });
+
   it("persists inbound run source metadata and action results", () => {
     store.createAutomation({
       id: "automation-inbound",

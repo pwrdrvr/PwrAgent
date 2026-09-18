@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentEvent } from "@pwragent/shared";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
-import { DesktopAutomationService } from "../automations/desktop-automation-service";
+import {
+  DesktopAutomationService,
+  replayCandidateLimitPerSource,
+} from "../automations/desktop-automation-service";
 import { AutomationStore } from "../automations/automation-store";
 import { StateDb } from "../state/state-db";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
@@ -1467,7 +1470,13 @@ describe("DesktopAutomationService.listReplayCandidates", () => {
     });
 
     expect(await service.listReplayCandidates({ automationId }, deps)).toEqual({
-      candidates: [],
+      sources: [
+        expect.objectContaining({
+          candidates: [],
+          supported: false,
+          unsupportedReason: "contact_dm",
+        }),
+      ],
       supported: false,
       unsupportedReason: "contact_dm",
     });
@@ -1486,7 +1495,13 @@ describe("DesktopAutomationService.listReplayCandidates", () => {
     });
 
     expect(await service.listReplayCandidates({ automationId }, deps)).toEqual({
-      candidates: [],
+      sources: [
+        expect.objectContaining({
+          candidates: [],
+          supported: false,
+          unsupportedReason: "provider",
+        }),
+      ],
       supported: false,
       unsupportedReason: "provider",
     });
@@ -1502,7 +1517,13 @@ describe("DesktopAutomationService.listReplayCandidates", () => {
     });
 
     expect(await service.listReplayCandidates({ automationId }, deps)).toEqual({
-      candidates: [],
+      sources: [
+        expect.objectContaining({
+          candidates: [],
+          supported: false,
+          unsupportedReason: "scoped_thread",
+        }),
+      ],
       supported: false,
       unsupportedReason: "scoped_thread",
     });
@@ -1517,7 +1538,13 @@ describe("DesktopAutomationService.listReplayCandidates", () => {
     });
 
     expect(await service.listReplayCandidates({ automationId }, deps)).toEqual({
-      candidates: [],
+      sources: [
+        expect.objectContaining({
+          candidates: [],
+          supported: false,
+          unsupportedReason: "provider",
+        }),
+      ],
       supported: false,
       unsupportedReason: "provider",
     });
@@ -1532,8 +1559,334 @@ describe("DesktopAutomationService.listReplayCandidates", () => {
     });
 
     expect(await service.listReplayCandidates({ automationId }, deps)).toEqual({
-      candidates: [],
+      sources: [expect.objectContaining({ candidates: [], supported: true })],
       supported: true,
     });
+  });
+});
+
+describe("multi-source inbound automations", () => {
+  /**
+   * Two Slack channels with DIFFERENT filters, so a test can tell which
+   * trigger judged a message, plus a Telegram group, whose provider serves no
+   * history in these tests.
+   */
+  async function createMultiSourceAutomation(service: DesktopAutomationService) {
+    const created = await service.create({
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Alerts and metrics",
+      taskPrompt: "Investigate.",
+      triggers: [
+        {
+          id: "inbound-message",
+          kind: "inbound_message",
+          name: "text contains \"ERROR\"",
+          conversation: {
+            channel: "slack",
+            conversationId: "C-ALERTS",
+            conversationKind: "channel",
+            title: "f-alerts",
+          },
+          conditionGroup: {
+            join: "all",
+            conditions: [
+              { id: "c1", field: "message_text", operator: "contains", values: ["ERROR"] },
+            ],
+          },
+        },
+        {
+          id: "inbound-message:slack::C-METRICS",
+          kind: "inbound_message",
+          name: "text contains \"p99\"",
+          conversation: {
+            channel: "slack",
+            conversationId: "C-METRICS",
+            conversationKind: "channel",
+            title: "f-metrics",
+          },
+          conditionGroup: {
+            join: "all",
+            conditions: [
+              { id: "c1", field: "message_text", operator: "contains", values: ["p99"] },
+            ],
+          },
+        },
+        {
+          id: "inbound-message:telegram::-100",
+          kind: "inbound_message",
+          conversation: {
+            channel: "telegram",
+            conversationId: "-100",
+            conversationKind: "channel",
+            title: "Ops Room",
+          },
+          conditionGroup: { join: "all", conditions: [] },
+        },
+      ],
+      outputActions: [{ id: "agent-context", kind: "agent_context" }],
+    });
+    return created.automation;
+  }
+
+  function previewMessage(conversationId: string, id: string, text: string) {
+    return {
+      id,
+      provider: "slack" as const,
+      conversationId,
+      receivedAt: 5_000,
+      origin: "history" as const,
+      actor: { platformUserId: "U1", displayName: "Datadog" },
+      text,
+    };
+  }
+
+  it("starts a run from a message in any watched conversation, as that conversation's trigger", async () => {
+    const service = new DesktopAutomationService({ registry, store });
+    const automation = await createMultiSourceAutomation(service);
+
+    await expect(
+      service.handleMessagingInboundEvent({
+        id: "slack-text:metrics",
+        kind: "text",
+        actor: { platformUserId: "U1", displayName: "Datadog" },
+        channel: {
+          channel: "slack",
+          conversation: { id: "C-METRICS", kind: "channel", title: "f-metrics" },
+        },
+        receivedAt: 2_000,
+        routingState: { opaque: { channelId: "C-METRICS", ts: "1712023032.000001" } },
+        text: "p99 latency over budget",
+      }),
+    ).resolves.toBe(true);
+
+    const [run] = store.listRunsForAutomation(automation.id);
+    expect(run?.source).toMatchObject({
+      matchedTriggerId: "inbound-message:slack::C-METRICS",
+      conversation: { conversationId: "C-METRICS", title: "f-metrics" },
+    });
+  });
+
+  it("lists replay candidates from every source, each judged by its own trigger", async () => {
+    const service = new DesktopAutomationService({ registry, store });
+    const automation = await createMultiSourceAutomation(service);
+    const fetchRecent = vi.fn(async (params: { conversationId: string }) =>
+      params.conversationId === "C-ALERTS"
+        ? [previewMessage("C-ALERTS", "a1", "ERROR disk full")]
+        : [previewMessage("C-METRICS", "m1", "p99 over budget")],
+    );
+
+    const response = await service.listReplayCandidates(
+      { automationId: automation.id },
+      {
+        fetchRecent,
+        supportsHistory: (provider) => provider === "slack",
+      },
+    );
+
+    // The two readable sources split the page; the provider with no history
+    // is never asked and does not shrink their share.
+    expect(fetchRecent).toHaveBeenCalledTimes(2);
+    expect(fetchRecent).toHaveBeenCalledWith(
+      expect.objectContaining({ conversationId: "C-ALERTS", limit: 8 }),
+    );
+    expect(fetchRecent).toHaveBeenCalledWith(
+      expect.objectContaining({ conversationId: "C-METRICS", limit: 8 }),
+    );
+    expect(response.supported).toBe(true);
+    expect(
+      response.sources.map((source) => [
+        source.triggerId,
+        source.supported,
+        source.unsupportedReason,
+      ]),
+    ).toEqual([
+      ["inbound-message", true, undefined],
+      ["inbound-message:slack::C-METRICS", true, undefined],
+      ["inbound-message:telegram::-100", false, "provider"],
+    ]);
+    // Something is readable, so there is no automation-wide refusal to name.
+    expect(response.unsupportedReason).toBeUndefined();
+    // Each message matches only its own source's filter ("ERROR" vs "p99"),
+    // so both reading as matches proves neither was judged by the other
+    // source's trigger.
+    expect(response.sources[0]?.candidates).toEqual([
+      expect.objectContaining({ matches: true, message: expect.objectContaining({ id: "a1" }) }),
+    ]);
+    expect(response.sources[1]?.candidates).toEqual([
+      expect.objectContaining({ matches: true, message: expect.objectContaining({ id: "m1" }) }),
+    ]);
+    expect(response.sources[2]?.candidates).toEqual([]);
+  });
+
+  it("keeps the other sources when one source's history fetch fails", async () => {
+    const service = new DesktopAutomationService({ registry, store });
+    const automation = await createMultiSourceAutomation(service);
+
+    const response = await service.listReplayCandidates(
+      { automationId: automation.id },
+      {
+        fetchRecent: async (params) => {
+          if (params.conversationId === "C-ALERTS") throw new Error("rate limited");
+          return [previewMessage("C-METRICS", "m1", "p99 high")];
+        },
+        supportsHistory: (provider) => provider === "slack",
+      },
+    );
+
+    expect(response.sources[0]?.candidates).toEqual([]);
+    expect(response.sources[1]?.candidates).toHaveLength(1);
+  });
+
+  it("reports history as unsupported only when no source's provider serves it", async () => {
+    const service = new DesktopAutomationService({ registry, store });
+    const automation = await createMultiSourceAutomation(service);
+
+    const response = await service.listReplayCandidates(
+      { automationId: automation.id },
+      { fetchRecent: vi.fn(async () => []), supportsHistory: () => false },
+    );
+
+    expect(response.supported).toBe(false);
+    expect(response.unsupportedReason).toBe("provider");
+    expect(response.sources).toHaveLength(3);
+  });
+
+  it("names no automation-wide reason when every source is refused differently", async () => {
+    const service = new DesktopAutomationService({ registry, store });
+    const created = await service.create({
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Nothing replayable",
+      taskPrompt: "Investigate.",
+      triggers: [
+        {
+          id: "contact",
+          kind: "inbound_message",
+          conversation: {
+            channel: "slack",
+            conversationId: "U1",
+            conversationKind: "dm",
+            recipientUserId: "U1",
+          },
+        },
+        {
+          id: "telegram-group",
+          kind: "inbound_message",
+          conversation: {
+            channel: "telegram",
+            conversationId: "-100",
+            conversationKind: "channel",
+          },
+        },
+      ],
+      outputActions: [{ id: "agent-context", kind: "agent_context" }],
+    });
+
+    const response = await service.listReplayCandidates(
+      { automationId: created.automation.id },
+      { fetchRecent: vi.fn(async () => []), supportsHistory: (p) => p === "slack" },
+    );
+
+    // One sentence would blame one of them for both; each source says its own.
+    expect(response.supported).toBe(false);
+    expect(response.unsupportedReason).toBeUndefined();
+    expect(response.sources.map((source) => source.unsupportedReason)).toEqual([
+      "contact_dm",
+      "provider",
+    ]);
+  });
+
+  it("replays a candidate as the trigger that owns its conversation", async () => {
+    const service = new DesktopAutomationService({ registry, store });
+    const automation = await createMultiSourceAutomation(service);
+
+    await service.replayInbound({
+      automationId: automation.id,
+      message: previewMessage("C-METRICS", "m1", "p99 high"),
+    });
+
+    const [run] = store.listRunsForAutomation(automation.id, 1);
+    // Not the first inbound trigger: the message came from f-metrics.
+    expect(run?.source).toMatchObject({
+      matchedTriggerId: "inbound-message:slack::C-METRICS",
+      matchedTriggerName: "text contains \"p99\"",
+      conversation: { conversationId: "C-METRICS", title: "f-metrics" },
+    });
+  });
+
+  it("replays \"anyway\" as the trigger the candidate was listed under", async () => {
+    // A Slack DM saved as a channel: history lists its messages (as "no
+    // match"), but the matcher's conversation rule rejects a DM for a
+    // channel trigger, so ownership can only come from the listing.
+    const service = new DesktopAutomationService({ registry, store });
+    const created = await service.create({
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Mislabeled DM",
+      taskPrompt: "Investigate.",
+      triggers: [
+        {
+          id: "dm-as-channel",
+          kind: "inbound_message",
+          conversation: {
+            channel: "slack",
+            conversationId: "D123",
+            conversationKind: "channel",
+          },
+        },
+      ],
+      outputActions: [{ id: "agent-context", kind: "agent_context" }],
+    });
+    const message = {
+      ...previewMessage("D123", "d1", "ERROR"),
+      conversationKind: "dm" as const,
+    };
+
+    await expect(
+      service.replayInbound({ automationId: created.automation.id, message }),
+    ).rejects.toThrow(/not from a conversation this automation watches/);
+    await service.replayInbound({
+      automationId: created.automation.id,
+      message,
+      triggerId: "dm-as-channel",
+    });
+
+    const [run] = store.listRunsForAutomation(created.automation.id, 1);
+    expect(run?.source?.matchedTriggerId).toBe("dm-as-channel");
+  });
+
+  it("refuses a trigger id the automation no longer has", async () => {
+    const service = new DesktopAutomationService({ registry, store });
+    const automation = await createMultiSourceAutomation(service);
+
+    await expect(
+      service.replayInbound({
+        automationId: automation.id,
+        message: previewMessage("C-METRICS", "m1", "p99 high"),
+        triggerId: "removed-since-listing",
+      }),
+    ).rejects.toThrow(/no longer watches that conversation/);
+    expect(store.listRunsForAutomation(automation.id)).toEqual([]);
+  });
+
+  it("refuses to replay a message from a conversation the automation does not watch", async () => {
+    const service = new DesktopAutomationService({ registry, store });
+    const automation = await createMultiSourceAutomation(service);
+
+    await expect(
+      service.replayInbound({
+        automationId: automation.id,
+        message: previewMessage("C-ELSEWHERE", "x1", "ERROR"),
+      }),
+    ).rejects.toThrow(/not from a conversation this automation watches/);
+    expect(store.listRunsForAutomation(automation.id)).toEqual([]);
+  });
+
+  it("splits the replay page across sources without going below the per-source floor", () => {
+    expect(replayCandidateLimitPerSource(1)).toBe(15);
+    expect(replayCandidateLimitPerSource(2)).toBe(8);
+    expect(replayCandidateLimitPerSource(3)).toBe(5);
+    expect(replayCandidateLimitPerSource(10)).toBe(5);
   });
 });

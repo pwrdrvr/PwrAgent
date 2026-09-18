@@ -348,6 +348,143 @@ export type AutomationInboundMessageTriggerDefinition = {
   includeThreadReplies?: boolean;
 };
 
+/**
+ * Identity of a watched conversation: provider, conversation, and the group a
+ * Telegram topic lives in — or, for a contact's DMs, the contact. Two inbound
+ * triggers with the same key watch the same messages.
+ */
+export function automationConversationKey(
+  conversation: Pick<
+    AutomationMessagingConversationSnapshot,
+    "channel" | "conversationId" | "parentId" | "recipientUserId"
+  >,
+): string {
+  // A contact is matched by who sends, not by a conversation ID, so it keys on
+  // the contact and cannot collide with a shared conversation's key.
+  if (conversation.recipientUserId) {
+    return [conversation.channel, "dm", conversation.recipientUserId].join(":");
+  }
+  return [
+    conversation.channel,
+    conversation.parentId ?? "",
+    conversation.conversationId,
+  ].join(":");
+}
+
+/**
+ * Index of the watched conversation a message belongs to, or -1. Membership is
+ * {@link matchesAutomationConversation} — the live matcher's rule — so this
+ * can never attribute a message to a source the matcher would not fire for.
+ *
+ * When several sources claim it, the most specific wins, whatever the order:
+ * a contact's DMs or an exact match on a scoped conversation (a Slack thread,
+ * a Telegram topic), then an exact match, then a parent. Slack reports a
+ * thread reply with the CHANNEL's ID and the thread in `parentId`, so the
+ * conversation ID alone calls it exact for both the channel and a thread
+ * watched in its own right; the parent comparison is what tells them apart.
+ *
+ * Shared so the replay path (which trigger owns this message?) and the
+ * editor's live preview (which source is this row from?) give one answer.
+ */
+export function findAutomationConversationIndexForMessage(
+  conversations: readonly AutomationMessagingConversationSnapshot[],
+  message: Pick<
+    InboundPreviewMessage,
+    | "actor"
+    | "conversationId"
+    | "conversationKind"
+    | "isDirectMessage"
+    | "parentConversationId"
+    | "parentConversationParentId"
+    | "parentId"
+    | "provider"
+  >,
+): number {
+  const actual = { ...message, channel: message.provider };
+  let best = -1;
+  let bestRank = 0;
+  for (const [index, conversation] of conversations.entries()) {
+    if (
+      !matchesAutomationConversation(
+        conversation,
+        actual,
+        message.actor.platformUserId,
+      )
+    ) {
+      continue;
+    }
+    const exact =
+      message.conversationId === conversation.conversationId
+      && (
+        conversation.parentId === undefined
+        || message.parentId === conversation.parentId
+      );
+    const rank =
+      conversation.recipientUserId || (exact && conversation.parentId !== undefined)
+        ? 3
+        : exact
+          ? 2
+          : 1;
+    if (rank > bestRank) {
+      best = index;
+      bestRank = rank;
+    }
+  }
+  return best;
+}
+
+/**
+ * Trigger id for an inbound source that has none yet. Derived from the
+ * conversation rather than counted or randomized, so re-saving an unchanged
+ * automation writes the ids it already had, and removing one source does not
+ * renumber the others.
+ */
+export function buildAutomationInboundTriggerId(
+  conversation: Pick<
+    AutomationMessagingConversationSnapshot,
+    "channel" | "conversationId" | "parentId" | "recipientUserId"
+  >,
+): string {
+  return `inbound-message:${automationConversationKey(conversation)}`;
+}
+
+/**
+ * Operator-facing name for a watched conversation: its title, else its raw id.
+ * A Telegram topic also names its group, since topic names repeat across
+ * groups ("General"). A contact's DMs say so, since a person's name listed
+ * beside channel names would otherwise read as a channel.
+ */
+export function formatAutomationConversationLabel(
+  conversation: AutomationMessagingConversationSnapshot,
+): string {
+  if (conversation.recipientUserId) {
+    return `${conversation.title ?? conversation.recipientUserId} (DM)`;
+  }
+  const own = conversation.title ?? conversation.conversationId;
+  if (conversation.conversationKind === "topic" && conversation.parentId) {
+    return `${conversation.parentTitle ?? conversation.parentId} / ${own}`;
+  }
+  return own;
+}
+
+/** How many conversations a one-line summary names before it counts the rest. */
+export const AUTOMATION_CONVERSATION_LIST_LIMIT = 3;
+
+/**
+ * Name up to {@link AUTOMATION_CONVERSATION_LIST_LIMIT} conversations and
+ * count the rest: "alerts, metrics, deploys +2 more". Shared so the editor's
+ * funnel caption and the Automations list name an automation's sources the
+ * same way.
+ */
+export function formatAutomationConversationList(
+  conversations: readonly AutomationMessagingConversationSnapshot[],
+): string {
+  const labels = conversations.map(formatAutomationConversationLabel);
+  const shown = labels.slice(0, AUTOMATION_CONVERSATION_LIST_LIMIT).join(", ");
+  const hidden = labels.length - AUTOMATION_CONVERSATION_LIST_LIMIT;
+  return hidden > 0 ? `${shown} +${hidden} more` : shown;
+}
+
 /** The parts of a message a condition can be evaluated against. */
 export type AutomationInboundConditionSubject = {
   text: string;
@@ -704,6 +841,13 @@ export type AutomationRunSourceBatchedEntry = {
   receivedAt: number;
   actor: AutomationRunSourceActorSnapshot;
   message?: AutomationRunSourceMessage;
+  /**
+   * Where this follow-up was posted, present only when it matched a different
+   * inbound trigger than the run's primary message. The coalescing window is
+   * per automation, so an automation watching several conversations can batch
+   * messages from more than one of them into a single run.
+   */
+  conversation?: AutomationMessagingConversationSnapshot;
 };
 
 /**
@@ -1107,21 +1251,56 @@ export type AutomationReplayUnsupportedReason =
   /** A thread or Telegram topic. The history reader takes top-level IDs only. */
   | "scoped_thread";
 
-export type ListAutomationReplayCandidatesResponse = {
-  candidates: AutomationReplayCandidate[];
+/**
+ * Recent messages from one of an automation's inbound conversations. Each
+ * source is fetched and judged on its own, so an automation watching several
+ * conversations shows a sample from every one of them, labeled, rather than
+ * one conversation's full page.
+ */
+export type AutomationReplaySource = {
+  triggerId: string;
+  conversation: AutomationMessagingConversationSnapshot;
   /**
-   * False when the adapter cannot read history for this scope. Currently only
-   * Slack native top-level conversation IDs are supported; contact recipients
-   * and scoped threads/topics still support going-forward live preview.
+   * False when history cannot be read for this source. Per source, because
+   * one automation can watch a Slack channel beside a Telegram group or a
+   * contact's DMs, and only some of those can be read back.
    */
   supported: boolean;
   /** Set whenever `supported` is false and the reason is one the UI can name. */
+  unsupportedReason?: AutomationReplayUnsupportedReason;
+  candidates: AutomationReplayCandidate[];
+};
+
+export type ListAutomationReplayCandidatesResponse = {
+  /** One entry per inbound trigger, in trigger order. */
+  sources: AutomationReplaySource[];
+  /**
+   * False when no source can serve history — the UI says so instead of
+   * rendering an empty list that reads as "the channel is silent". Currently
+   * only Slack native top-level conversation IDs are supported; contact
+   * recipients and scoped threads/topics still support going-forward live
+   * preview.
+   */
+  supported: boolean;
+  /**
+   * Set when `supported` is false and every source was refused for the same
+   * nameable reason. Mixed refusals leave it unset; each source then says
+   * its own.
+   */
   unsupportedReason?: AutomationReplayUnsupportedReason;
 };
 
 export type ReplayAutomationInboundRequest = {
   automationId: string;
   message: InboundPreviewMessage;
+  /**
+   * The trigger whose source the candidate was listed under
+   * ({@link AutomationReplaySource.triggerId}). Authoritative when present:
+   * "Replay anyway" deliberately offers messages the trigger's own
+   * conversation rule rejects, so ownership cannot be re-derived from the
+   * message.
+   */
+  triggerId?: string;
 };
 
 export type CreateAutomationRequest = AutomationAgentAssignment & {

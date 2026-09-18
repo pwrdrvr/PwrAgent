@@ -8219,6 +8219,27 @@ a.button {
   font-size: 12px;
 }
 
+/* One group per watched conversation when an automation has several. The
+   heading is the conversation's own name, so it is not case-transformed:
+   "f-alerts" shown as "F-ALERTS" would misstate a channel name. */
+.automations-table__replay-source {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.automations-table__replay-source + .automations-table__replay-source {
+  padding-top: 8px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.automations-table__replay-source-title {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
 .automation-preview__badge--muted {
   color: var(--text-muted);
 }
@@ -25177,6 +25198,31 @@ a.transcript-message__messaging-origin:focus-visible {
   font-size: 12px;
 }
 
+/* The other conversations an inbound trigger watches, beside the one the
+   fields above describe. The chips themselves are the sender picker's. */
+.automation-sources {
+  gap: 8px;
+}
+
+.automation-sources__watching {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* Worded and weighted like an .automation-field label; a span, not a
+   <label>, because it names a list rather than a single control. */
+.automation-sources__label {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.automation-sources__add {
+  align-self: flex-start;
+  font-size: 12px;
+}
+
 .automation-capture__panel {
   display: flex;
   flex-direction: column;
@@ -25319,6 +25365,18 @@ a.transcript-message__messaging-origin:focus-visible {
 .automation-preview__sender-id {
   color: var(--text-muted);
   font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  font-weight: 400;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Which watched conversation the message arrived in. Rendered only when the
+   trigger watches more than one, where rows from different conversations
+   interleave by arrival. */
+.automation-preview__source {
+  color: var(--text-muted);
   font-size: 11px;
   font-weight: 400;
   overflow: hidden;
@@ -26100,6 +26158,49 @@ a.transcript-message__messaging-origin:focus-visible {
 
 .automation-sender-chip__remove:hover {
   color: var(--text-primary);
+}
+
+/* An inbound trigger's source list. The source open in the fields keeps the
+   sender chip's accent; the others are neutral, so the one being edited is
+   the only accented chip, and their names are buttons that open them. */
+.automation-source-chip:not(.is-editing) {
+  border-color: var(--border-subtle);
+  background: var(--bg-panel);
+  color: var(--text-secondary);
+}
+
+.automation-source-chip:not(.is-editing):hover {
+  border-color: var(--accent-border);
+  color: var(--text-primary);
+}
+
+.automation-source-chip__label,
+.automation-source-chip__open {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.automation-source-chip__open {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.automation-source-chip__open:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* Why a listed source would not open: shown under the list the operator just
+   clicked, not at the foot of the form where Save's errors go. */
+.automation-sources__notice {
+  margin: 0;
+  color: var(--danger-text);
+  font-size: 12px;
 }
 
 .automation-sender-picker__menu {
