@@ -615,6 +615,11 @@ export class AcpSessionReplayNormalizer {
     });
   }
 
+  /** The live delta stream must use the same message identity as replay. */
+  readActiveAssistantMessageId(): string | undefined {
+    return this.activeAssistantMessageId;
+  }
+
   private assistantMessageIdForChunk(update: AcpSessionUpdate): string {
     const explicitId =
       readString(update.update, "messageId") ??
