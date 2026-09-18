@@ -269,4 +269,35 @@ describe("PtyResizeCoalescer", () => {
     vi.advanceTimersByTime(PTY_RESIZE_INTERVAL_MS * 4);
     expect(applied).toEqual([[100, 30]]);
   });
+
+  it("re-applies a size whose apply failed after it returned", () => {
+    const { applied, coalescer } = createCoalescer();
+    coalescer.request(100, 30);
+    coalescer.forget(100, 30);
+    vi.advanceTimersByTime(PTY_RESIZE_INTERVAL_MS * 4);
+    coalescer.request(100, 30);
+    expect(applied).toEqual([[100, 30], [100, 30]]);
+  });
+
+  it("can forget the spawn grid it was seeded with", () => {
+    const { applied, coalescer } = createCoalescer({
+      spawnedCols: 80,
+      spawnedRows: 24,
+    });
+    coalescer.forget(80, 24);
+    coalescer.request(80, 24);
+    expect(applied).toEqual([[80, 24]]);
+  });
+
+  it("leaves a newer size alone when an older send is forgotten", () => {
+    const { applied, coalescer } = createCoalescer();
+    coalescer.request(100, 30);
+    vi.advanceTimersByTime(PTY_RESIZE_INTERVAL_MS * 4);
+    coalescer.request(120, 40);
+    // The 100x30 send failed late, after 120x40 already went out.
+    coalescer.forget(100, 30);
+    vi.advanceTimersByTime(PTY_RESIZE_INTERVAL_MS * 4);
+    coalescer.request(120, 40);
+    expect(applied).toEqual([[100, 30], [120, 40]]);
+  });
 });

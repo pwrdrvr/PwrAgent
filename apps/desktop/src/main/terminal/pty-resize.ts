@@ -1,12 +1,12 @@
 /**
- * Owner-side PTY sizing: one set of dimension clamps and one resize pacer,
- * shared by the local integrated-terminal service and the federation
- * remote-PTY service.
+ * PTY sizing: one set of dimension clamps and one resize pacer, shared by the
+ * local integrated-terminal service, the federation remote-PTY service, and
+ * the viewer-side federation terminal bridge.
  *
- * Both used to carry their own copy of these bounds — identical by
- * coincidence rather than by construction — and a size that clamps one way at
- * spawn and another way at resize makes the deduplication below silently
- * wrong, so they are defined once here.
+ * The two owner services used to carry their own copy of these bounds —
+ * identical by coincidence rather than by construction — and a size that
+ * clamps one way at spawn and another way at resize makes the deduplication
+ * below silently wrong, so they are defined once here.
  */
 
 const DEFAULT_COLUMNS = 80;
@@ -53,7 +53,11 @@ function clampInteger(
 type PtySize = { cols: number; rows: number };
 
 export type PtyResizeCoalescerOptions = {
-  /** Applies a size to the PTY. A throw means the size was NOT applied. */
+  /**
+   * Applies a size to the PTY. A throw means the size was NOT applied; an
+   * apply that only sends the size somewhere reports a later failure through
+   * `forget` instead.
+   */
   apply: (cols: number, rows: number) => void;
   /** The grid the PTY was spawned at, before clamping. */
   spawnedCols: number;
@@ -72,10 +76,21 @@ export type PtyResizeCoalescerOptions = {
  * Paces resizes for one PTY: drops what the shell is already running at, and
  * applies at most one size per interval, keeping the newest.
  *
- * Deduplication belongs at the PTY's owner rather than in a viewer, because
- * viewers share the PTY — two of them dragging produce one interleaved stream
- * that only the owner sees whole, and a viewer's idea of the current size is
- * always one round trip stale.
+ * The owner is the authority. Only it sees every viewer's stream whole, so
+ * only its record means "what the PTY is running at" — a viewer's idea of
+ * that is always one round trip stale, and must never be treated as the
+ * shell's true size.
+ *
+ * A viewer may still run one of these over its own outbound requests, where
+ * `applied` means "what I last sent" rather than "what the PTY is". That is a
+ * claim a viewer can actually make, and it is only worth acting on while the
+ * viewer is the PTY's sole writer: with a second writer, a repeat of a
+ * viewer's own last size is exactly the request that takes the PTY back, and
+ * dropping it would strand the shell at the other writer's size. The
+ * federation terminal bridge is a sole writer, so it runs one of these and a
+ * redundant fit costs no round trip; the owner clamps, deduplicates and paces
+ * again on arrival regardless. A viewer's apply only sends, so its failure
+ * arrives after `apply` has returned — it reports that through `forget`.
  *
  * The first request after a quiet period applies immediately, so opening a
  * pane sizes its shell at once; only a burst is paced. Whatever a burst ends
@@ -88,17 +103,21 @@ export class PtyResizeCoalescer {
   private readonly now: () => number;
   private readonly onDeferredError?: (error: unknown) => void;
   /**
-   * What the PTY is running at. Seeded with the spawn grid, because that is
-   * what `spawnTerminalPty` already sized it to — `forkpty` and
-   * `CreatePseudoConsole` both take the requested size verbatim, so this is
-   * knowledge, not a guess. Unseeded, the renderer's first `fitAddon.fit()`
+   * What the PTY is running at — at an owner. Seeded with the spawn grid,
+   * because that is what `spawnTerminalPty` already sized it to — `forkpty`
+   * and `CreatePseudoConsole` both take the requested size verbatim, so this
+   * is knowledge, not a guess. Unseeded, the renderer's first `fitAddon.fit()`
    * after attach — which usually proposes the spawn grid straight back — was
    * the one redundant resize that could never be caught.
+   *
+   * At a viewer it is only what that viewer last sent (see the class doc), and
+   * `undefined` once `forget` withdrew a send that failed, so the next request
+   * goes out whatever it is.
    *
    * Tracked here rather than read back off the PTY because node-pty can defer
    * a Windows resize before its own `cols` / `rows` getters change.
    */
-  private applied: PtySize;
+  private applied?: PtySize;
   /** When `applied` was last written; `-Infinity` so the first one is free. */
   private appliedAt = Number.NEGATIVE_INFINITY;
   private pending?: PtySize;
@@ -137,7 +156,7 @@ export class PtyResizeCoalescer {
       cols: clampTerminalColumns(cols),
       rows: clampTerminalRows(rows),
     };
-    if (next.cols === this.applied.cols && next.rows === this.applied.rows) {
+    if (this.matchesApplied(next)) {
       // A burst that lands back where the PTY already is leaves nothing to do,
       // so drop the queued size too rather than resizing away from the size
       // the viewer settled on.
@@ -167,6 +186,28 @@ export class PtyResizeCoalescer {
     this.pending = undefined;
   }
 
+  /**
+   * Withdraws a size that `apply` accepted but that failed to land after it
+   * returned — a viewer's apply only sends a request, and the rejection comes
+   * back later. Left recorded, it would suppress the retry that corrects it,
+   * the same reason `applyNow` records nothing when `apply` throws. Takes the
+   * size `apply` was called with, and leaves a newer size alone: a send that
+   * has already been superseded says nothing about the one after it.
+   */
+  forget(cols: number, rows: number): void {
+    if (this.applied?.cols === cols && this.applied.rows === rows) {
+      this.applied = undefined;
+    }
+  }
+
+  private matchesApplied(size: PtySize): boolean {
+    return (
+      this.applied !== undefined
+      && size.cols === this.applied.cols
+      && size.rows === this.applied.rows
+    );
+  }
+
   private arm(now: number): void {
     // Bounded by the interval at BOTH ends. `now - appliedAt` goes negative
     // whenever the wall clock steps backwards — an NTP correction, a resume
@@ -182,10 +223,7 @@ export class PtyResizeCoalescer {
       this.timer = undefined;
       const next = this.pending;
       this.pending = undefined;
-      if (!next) return;
-      if (next.cols === this.applied.cols && next.rows === this.applied.rows) {
-        return;
-      }
+      if (!next || this.matchesApplied(next)) return;
       try {
         this.applyNow(next);
       } catch (error) {
