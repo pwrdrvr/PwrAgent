@@ -269,7 +269,7 @@ export function MessagingSurfacePicker(props: {
   const triggerContext = selected?.context;
 
   const trimmed = query.trim().toLowerCase();
-  const visible = props.options.filter((option) => {
+  const matching = props.options.filter((option) => {
     // The route's own saved destination is always offered, whatever its kind.
     // Threads stopped being selectable, but a route saved before that still
     // arrives here as the current configuration: hiding it would leave its
@@ -286,22 +286,31 @@ export function MessagingSurfacePicker(props: {
     const path = option.context ? `${option.context} / ${option.label}` : option.label;
     return `${path} ${option.detail ?? ""}`.toLowerCase().includes(trimmed);
   });
-  const activeIndex = Math.min(active, Math.max(0, visible.length - 1));
 
-  // Index once, then group: keeping each row's flat index lets arrow keys and
-  // `aria-activedescendant` walk one continuous list across headings, and
-  // resolving the section here keeps this a single pass over `visible` rather
-  // than one per section on every keystroke.
-  const indexed = visible.map((option, index) => ({
-    option,
-    index,
-    section: sectionFor(option, props.filterConversations),
-  }));
-  const groups = SECTION_ORDER.map((key) => ({
-    key,
-    label: props.sectionLabels?.[key] ?? SECTION_LABELS[key],
-    rows: indexed.filter((row) => row.section === key),
-  })).filter((section) => section.rows.length > 0);
+  // Group, then index in DISPLAY order. Arrow keys, Enter and
+  // `aria-activedescendant` walk one continuous list across headings, and it
+  // has to be the list on screen: callers pass their own order — usually
+  // recency — which interleaves kinds, so indexing the input sent the cursor
+  // from the first channel to a thread under a later heading. Bucketing first
+  // keeps this a single pass over the matches on every keystroke.
+  const bySection = new Map<SurfaceSection, SurfaceOption[]>();
+  for (const option of matching) {
+    const section = sectionFor(option, props.filterConversations);
+    const bucket = bySection.get(section);
+    if (bucket) bucket.push(option);
+    else bySection.set(section, [option]);
+  }
+  const visible: SurfaceOption[] = [];
+  const groups = SECTION_ORDER.flatMap((key) => {
+    const options = bySection.get(key);
+    if (!options) return [];
+    return [{
+      key,
+      label: props.sectionLabels?.[key] ?? SECTION_LABELS[key],
+      rows: options.map((option) => ({ option, index: visible.push(option) - 1 })),
+    }];
+  });
+  const activeIndex = Math.min(active, Math.max(0, visible.length - 1));
 
   const close = () => {
     setOpen(false);

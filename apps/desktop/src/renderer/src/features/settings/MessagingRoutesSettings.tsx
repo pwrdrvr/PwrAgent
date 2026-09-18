@@ -1621,7 +1621,9 @@ function DiscordResponseRow(props: {
         <div className="messaging-route-row__main">
           <div className="messaging-route-row__title">{label}</div>
           <div className="messaging-route-row__meta">
-            {props.observed ? props.observed.kindLabel : "Not seen recently"}
+            {props.observed
+              ? (props.observed.kind === "thread" ? "Native thread" : "Channel")
+              : "Not seen recently"}
             {" / ID "}
             {props.entry.id}
           </div>
@@ -1673,7 +1675,6 @@ type DiscordResponseSurfaceCandidate = {
   displayName: string;
   id: string;
   kind: "channel" | "thread";
-  kindLabel: string;
   label: string;
   lastSeenAt: number;
   name: SurfaceName;
@@ -1714,7 +1715,6 @@ function discordResponseSurfaceCandidates(
         displayName: conversation.title ?? "",
         id: conversation.id,
         kind: conversation.kind,
-        kindLabel: conversation.kind === "thread" ? "Native thread" : "Channel",
         label: formatSurfaceLabel("discord", name),
         lastSeenAt: surface.lastSeenAt,
         name,
@@ -1737,7 +1737,6 @@ function discordResponseSurfaceCandidates(
         displayName: parentName ?? "",
         id: parentConversationId,
         kind: "channel",
-        kindLabel: "Channel",
         label: formatSurfaceLabel("discord", name),
         lastSeenAt: surface.lastSeenAt,
         name,

@@ -306,6 +306,42 @@ describe("MessagingSurfacePicker", () => {
     ).toBe("▸");
   });
 
+  it("walks the keyboard cursor in display order when the caller interleaves kinds", () => {
+    // Callers sort by recency, so a thread can sit between two channels in
+    // the input while it renders under a later heading. The cursor has to
+    // follow the screen, starting on the top row.
+    const onChange = vi.fn();
+    render(
+      <MessagingSurfacePicker
+        fieldLabel="Surface"
+        value=""
+        filterConversations
+        allowThreads
+        onChange={onChange}
+        options={[
+          { value: "thread", label: "Harvest discussion", kind: "thread" as const },
+          { value: "channel-a", label: "Orchard", kind: "channel" as const },
+          { value: "channel-b", label: "Meadow", kind: "channel" as const },
+        ]}
+      />,
+    );
+    const trigger = screen.getByRole("button", { name: CLOSED_LABEL });
+    trigger.focus();
+    fireEvent.click(trigger);
+    expect(labels()).toEqual(["#Orchard", "#Meadow", "▸Harvest discussion"]);
+    const input = screen.getByRole("combobox");
+    const cursorName = () =>
+      document.getElementById(input.getAttribute("aria-activedescendant") ?? "")?.textContent;
+    expect(cursorName()).toBe("#Orchard");
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    expect(cursorName()).toBe("#Meadow");
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    expect(cursorName()).toBe("▸Harvest discussion");
+    fireEvent.keyDown(input, { key: "ArrowUp" });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onChange).toHaveBeenCalledWith("channel-b");
+  });
+
   it("names the search row from searchLabel when the field name is not a noun", () => {
     render(
       <MessagingSurfacePicker fieldLabel="Add a channel or thread" searchLabel="Find a channel or thread" value="" options={options} filterConversations onChange={vi.fn()} />,
