@@ -39,7 +39,7 @@ describe("FederationSettings", () => {
         onWriteConfig={onWriteConfig}
       />,
     );
-    const toggle = screen.getByRole("checkbox", { name: "Protocol compression" });
+    const toggle = screen.getByRole("switch", { name: "Protocol compression" });
     expect(toggle).toBeChecked();
     fireEvent.click(toggle);
     fireEvent.click(screen.getByRole("button", { name: "Save federation settings" }));

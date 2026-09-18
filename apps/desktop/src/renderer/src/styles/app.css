@@ -10892,6 +10892,14 @@ a.button {
   max-width: 320px;
 }
 
+.settings-input--multiline {
+  height: auto;
+  min-height: 64px;
+  padding: 8px 10px;
+  line-height: 1.5;
+  resize: vertical;
+}
+
 .settings-input--readonly {
   display: flex;
   align-items: center;
@@ -10903,6 +10911,11 @@ a.button {
   border-color: var(--accent-border);
   outline: none;
   box-shadow: 0 0 0 1px var(--accent-shadow);
+}
+
+.settings-input:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 .settings-select {
@@ -17007,9 +17020,21 @@ a.button {
 }
 
 .federation-tailscale-actions label {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
   color: var(--text-secondary);
   font-size: 12px;
   line-height: 1.4;
+}
+
+/* The Funnel acknowledgement stays a checkbox: it reads as part of the
+   sentence, not as a setting. Tint it like the thread-management toggles. */
+.federation-tailscale-actions label input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--accent);
 }
 
 .federation-security-note {

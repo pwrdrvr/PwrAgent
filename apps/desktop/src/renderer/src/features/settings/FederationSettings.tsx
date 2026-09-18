@@ -499,6 +499,7 @@ export function FederationSettings(props: FederationSettingsProps) {
             sub="Gateway listens for peers; client connects to a gateway."
             control={
               <select
+                className="settings-select"
                 value={mode}
                 disabled={props.saving}
                 onChange={(event) => setMode(event.target.value as DesktopFederationMode)}
@@ -516,6 +517,7 @@ export function FederationSettings(props: FederationSettingsProps) {
             sub="Shown to peers instead of the raw instance id. Defaults to this machine's hostname."
             control={
               <input
+                className="settings-input"
                 aria-label="Instance name"
                 value={instanceLabel}
                 placeholder="This machine's hostname"
@@ -536,6 +538,7 @@ export function FederationSettings(props: FederationSettingsProps) {
                   />
                 ) : null}
                 <select
+                  className="settings-select"
                   aria-label="Instance icon"
                   value={effectiveHealth.localCelestialIcon ?? ""}
                   disabled={
@@ -566,6 +569,7 @@ export function FederationSettings(props: FederationSettingsProps) {
             sub="What this machine is for, e.g. 'Studio Mac — PwrSnap dev + screen recording'. Shown to peers and read by agents when routing work to an instance."
             control={
               <input
+                className="settings-input"
                 aria-label="Purpose notes"
                 value={instanceNotes}
                 placeholder="What is this machine for?"
@@ -583,6 +587,7 @@ export function FederationSettings(props: FederationSettingsProps) {
             }
             control={
               <input
+                className="settings-input"
                 aria-label="Listen host"
                 value={listenHost}
                 disabled={props.saving || !listensForPeers}
@@ -599,6 +604,7 @@ export function FederationSettings(props: FederationSettingsProps) {
             }
             control={
               <input
+                className="settings-input"
                 aria-label="Listen port"
                 inputMode="numeric"
                 value={listenPort}
@@ -616,6 +622,7 @@ export function FederationSettings(props: FederationSettingsProps) {
             }
             control={
               <input
+                className="settings-input"
                 aria-label="Public URL"
                 value={publicUrl}
                 disabled={props.saving || !listensForPeers}
@@ -641,6 +648,7 @@ export function FederationSettings(props: FederationSettingsProps) {
             }
             control={
               <textarea
+                className="settings-input settings-input--multiline"
                 aria-label="Gateway endpoints"
                 rows={3}
                 value={gatewayEndpointsText}
@@ -665,6 +673,7 @@ export function FederationSettings(props: FederationSettingsProps) {
             }
             control={
               <textarea
+                className="settings-input settings-input--multiline"
                 aria-label="Advertised endpoints"
                 rows={3}
                 value={advertisedEndpointsText}
@@ -680,12 +689,11 @@ export function FederationSettings(props: FederationSettingsProps) {
             label="Protocol compression"
             sub="Use Brotli for larger messages when both peers allow it. Small messages stay uncompressed. Saving reconnects federation sessions."
             control={
-              <input
-                type="checkbox"
-                aria-label="Protocol compression"
+              <SettingsSwitch
+                label="Protocol compression"
                 checked={compressionEnabled}
                 disabled={props.saving}
-                onChange={(event) => setCompressionEnabled(event.target.checked)}
+                onChange={setCompressionEnabled}
               />
             }
           />
@@ -847,6 +855,7 @@ export function FederationSettings(props: FederationSettingsProps) {
             sub="Paste a gateway invite on the client instance."
             control={
               <textarea
+                className="settings-input settings-input--multiline"
                 rows={4}
                 aria-label="Import invite"
                 value={inviteToImport}
@@ -1173,6 +1182,7 @@ export function FederationSettings(props: FederationSettingsProps) {
                       <CelestialIcon icon={peer.celestialIcon} size={16} />
                     ) : null}
                     <select
+                      className="settings-select"
                       aria-label={`Celestial icon for ${peer.label}`}
                       value={peer.celestialIcon ?? ""}
                       disabled={
@@ -1394,7 +1404,7 @@ export function FederationSettings(props: FederationSettingsProps) {
                     type="checkbox"
                     checked={funnelAcknowledged}
                     onChange={(event) => setFunnelAcknowledged(event.target.checked)}
-                  />{" "}
+                  />
                   I understand this creates a public endpoint
                 </label>
                 <button
