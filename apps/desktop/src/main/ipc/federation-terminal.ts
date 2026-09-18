@@ -33,6 +33,12 @@ import { federationWindowTargetForWebContents } from "../window";
 
 const log = getMainLogger("pwragent:federation-terminal");
 
+function logRemoteResizeFailure(error: unknown): void {
+  log.warn("remote terminal resize failed", {
+    error: error instanceof Error ? error.message : String(error),
+  });
+}
+
 /** Mirrors the local service's replay buffer so a pane remount inside the
  *  viewer replays scrollback without any server-side persistence. */
 const OUTPUT_BUFFER_LIMIT = 128 * 1024;
@@ -56,10 +62,10 @@ type RemoteTerminalSession = {
    *  blocking quit — the conservative answer, unchanged from before. */
   foregroundCommand: boolean;
   /**
-   * Paces `pty.resize` onto the wire. Holds the size this pane last SENT,
+   * Paces `pty.resize` onto the wire. Holds the size this session last SENT,
    * never a belief about the shell: the owner clamps and paces again on
-   * arrival and stays authoritative. Dropping a repeat here only withholds a
-   * request this pane already made, which is why it cannot race the owner.
+   * arrival and stays authoritative. Shared by every pane in the window that
+   * attaches to this session, which is what makes it the shell's one writer.
    */
   resizes: PtyResizeCoalescer;
 };
@@ -162,6 +168,27 @@ export class FederationTerminalBridge {
             });
           throw new Error("Remote terminal was closed before it finished starting.");
         }
+        // Seeded with the grid this pane opened at, which is exactly what
+        // the `pty.open` above already carried to the owner. Unseeded, the
+        // renderer's first `fitAddon.fit()` after attach — which proposes
+        // that same grid straight back — spent a round trip restating it.
+        const resizes: PtyResizeCoalescer = new PtyResizeCoalescer({
+          apply: (cols, rows) => {
+            void getDesktopFederationRuntime()
+              .remotePty(target)
+              .resize({ sessionId: opened.sessionId, cols, rows })
+              .catch((error) => {
+                // The coalescer recorded this size when the send went out.
+                // Withdraw it, or the next fit asking for the same grid is
+                // deduplicated away and the shell never gets it.
+                resizes.forget(cols, rows);
+                logRemoteResizeFailure(error);
+              });
+          },
+          onDeferredError: logRemoteResizeFailure,
+          spawnedCols: request.cols,
+          spawnedRows: request.rows,
+        });
         const session: RemoteTerminalSession = {
           sessionId: opened.sessionId,
           threadKey,
@@ -176,24 +203,7 @@ export class FederationTerminalBridge {
           consumedBytes: 0,
           // An owner that predates `pty.state` omits this; stay conservative.
           foregroundCommand: opened.foregroundCommand ?? true,
-          // Seeded with the grid this pane opened at, which is exactly what
-          // the `pty.open` above already carried to the owner. Unseeded, the
-          // renderer's first `fitAddon.fit()` after attach — which proposes
-          // that same grid straight back — spent a round trip restating it.
-          resizes: new PtyResizeCoalescer({
-            apply: (cols, rows) => {
-              void getDesktopFederationRuntime()
-                .remotePty(target)
-                .resize({ sessionId: opened.sessionId, cols, rows })
-                .catch((error) => {
-                  log.warn("remote terminal resize failed", {
-                    error: error instanceof Error ? error.message : String(error),
-                  });
-                });
-            },
-            spawnedCols: request.cols,
-            spawnedRows: request.rows,
-          }),
+          resizes,
         };
         this.sessionsById.set(session.sessionId, session);
         this.ensureStreamSubscription();
@@ -228,10 +238,12 @@ export class FederationTerminalBridge {
    * only after the round trip had already been paid, which left the redundant
    * post-attach fit costing a request for a size the owner was already at.
    *
-   * Filtering here is safe because `pty.open` spawns a fresh PTY per pane, so
-   * this session's shell has exactly one viewer: the pane whose sizes this
-   * coalescer holds. It still only skips re-sending a size this pane itself
-   * last asked for, so it stays correct if a shell ever gains a second viewer.
+   * Filtering here rests on this session being the shell's only writer:
+   * `pty.open` spawns a fresh PTY for every open, the owner accepts a resize
+   * only from the peer that opened it, and only this window can name the
+   * session. If a shell ever gains a second writer, this filter has to change
+   * with it — a pane re-sending its own last size is then exactly how it takes
+   * the shell back, and dropping that request would strand it.
    */
   resize(request: IntegratedTerminalResizeRequest, webContents: WebContents): void {
     const session = this.ownedSession(webContents, request.sessionId);

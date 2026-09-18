@@ -179,25 +179,29 @@ async function invoke(channel: string, sender: WebContents, request?: unknown) {
   return await handler({ sender }, request);
 }
 
+function resetIpcHarness() {
+  vi.clearAllMocks();
+  mocks.federationWindowIds.clear();
+  mocks.federationTargets.clear();
+  mocks.remotePtyEventListener = undefined;
+  mocks.connectedPeers = [
+    {
+      target: { scope: "remote" as const, instanceId: "peer-a" },
+      label: "Peer Mac",
+      capabilities: ["remote_pty"],
+    },
+  ];
+  mocks.localQuitSnapshot = { count: 0, sessionIds: [], threads: [] };
+  mocks.localRevealSession.mockReturnValue(undefined);
+  mocks.channelSubscribers = [];
+  mocks.localSessionsChanged = undefined;
+  disposeIntegratedTerminalIpcHandlers();
+  registerIntegratedTerminalIpcHandlers();
+}
+
 describe("integrated terminal IPC federation branch", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
-    mocks.federationWindowIds.clear();
-    mocks.federationTargets.clear();
-    mocks.remotePtyEventListener = undefined;
-    mocks.connectedPeers = [
-      {
-        target: { scope: "remote" as const, instanceId: "peer-a" },
-        label: "Peer Mac",
-        capabilities: ["remote_pty"],
-      },
-    ];
-    mocks.localQuitSnapshot = { count: 0, sessionIds: [], threads: [] };
-    mocks.localRevealSession.mockReturnValue(undefined);
-    mocks.channelSubscribers = [];
-    mocks.localSessionsChanged = undefined;
-    disposeIntegratedTerminalIpcHandlers();
-    registerIntegratedTerminalIpcHandlers();
+    resetIpcHarness();
   });
 
   it("routes a local window's create to the local PTY service", async () => {
@@ -1053,22 +1057,9 @@ describe("remote terminal resize reaches the wire only when it has to", () => {
     invoke(INTEGRATED_TERMINAL_RESIZE_CHANNEL, sender, { sessionId, cols, rows });
 
   beforeEach(() => {
+    // Before the reset, so every coalescer the tests build reads fake time.
     vi.useFakeTimers();
-    vi.clearAllMocks();
-    mocks.federationWindowIds.clear();
-    mocks.federationTargets.clear();
-    mocks.remotePtyEventListener = undefined;
-    mocks.channelSubscribers = [];
-    mocks.localSessionsChanged = undefined;
-    mocks.connectedPeers = [
-      {
-        target: { scope: "remote" as const, instanceId: "peer-a" },
-        label: "Peer Mac",
-        capabilities: ["remote_pty"],
-      },
-    ];
-    disposeIntegratedTerminalIpcHandlers();
-    registerIntegratedTerminalIpcHandlers();
+    resetIpcHarness();
   });
   afterEach(() => {
     vi.useRealTimers();
@@ -1115,17 +1106,19 @@ describe("remote terminal resize reaches the wire only when it has to", () => {
       await resize(sender, sessionId, 100, rows);
       vi.advanceTimersByTime(4);
     }
-    // 30 distinct sizes over 120ms of drag. Pinned rather than bounded, so a
-    // change to the pacing interval shows up as one reviewable diff line.
-    expect(mocks.remotePtyResize).toHaveBeenCalledTimes(3);
     await vi.advanceTimersByTimeAsync(100);
+    // 30 distinct sizes over 120ms of drag reach the wire as 4: the leading
+    // edge, two paced sends, and the trailing edge. Pinned for the whole
+    // gesture rather than bounded, so a change to the pacing shows up as one
+    // reviewable diff line.
+    expect(mocks.remotePtyResize).toHaveBeenCalledTimes(4);
     const last = mocks.remotePtyResize.mock.calls.at(-1)?.[0];
     expect(last).toEqual({ sessionId: "remote-session", cols: 100, rows: 39 });
   });
 
-  // The filter is per pane, not per shell: `pty.open` spawns a fresh PTY for
-  // each pane, so one pane's record must never speak for another's.
-  it("keeps one pane's sent sizes out of another pane's record", async () => {
+  // The record belongs to the session, and `pty.open` spawns a fresh PTY for
+  // every open, so one session's record must never speak for another's.
+  it("keeps one session's sent sizes out of another session's record", async () => {
     const first = await openRemotePane(7);
     mocks.remotePtyOpen.mockResolvedValueOnce({
       sessionId: "remote-session-2",
@@ -1151,6 +1144,31 @@ describe("remote terminal resize reaches the wire only when it has to", () => {
     expect(mocks.remotePtyResize).toHaveBeenCalledTimes(1);
     await resize(sender, sessionId, 101, 31);
     await invoke(INTEGRATED_TERMINAL_CLOSE_CHANNEL, sender, { sessionId });
+    await vi.advanceTimersByTimeAsync(200);
+    expect(mocks.remotePtyResize).toHaveBeenCalledTimes(1);
+  });
+
+  // A resize RPC that fails after it went out must not be remembered as
+  // sent. `IntegratedTerminal` relies on exactly this: a rejected resize is
+  // retried by the next fit of the same grid instead of deduplicated away.
+  it("re-sends a size whose resize RPC was rejected", async () => {
+    const { sender, sessionId } = await openRemotePane();
+    mocks.remotePtyResize.mockRejectedValueOnce(new Error("peer unreachable"));
+    await resize(sender, sessionId, 100, 30);
+    await vi.advanceTimersByTimeAsync(500);
+    await resize(sender, sessionId, 100, 30);
+    expect(mocks.remotePtyResize.mock.calls.map((call) => call[0])).toEqual([
+      { sessionId: "remote-session", cols: 100, rows: 30 },
+      { sessionId: "remote-session", cols: 100, rows: 30 },
+    ]);
+  });
+
+  it("does not send a paced resize after the bridge is disposed", async () => {
+    const { sender, sessionId } = await openRemotePane();
+    await resize(sender, sessionId, 100, 30);
+    await resize(sender, sessionId, 101, 31);
+    expect(mocks.remotePtyResize).toHaveBeenCalledTimes(1);
+    void disposeIntegratedTerminalIpcHandlers();
     await vi.advanceTimersByTimeAsync(200);
     expect(mocks.remotePtyResize).toHaveBeenCalledTimes(1);
   });
