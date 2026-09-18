@@ -10298,13 +10298,18 @@ a.button {
   padding: 0 18px 14px;
 }
 
-.messaging-routes__response-add > label {
+.messaging-routes__response-add > .settings-authorized-list__policy-label {
   flex: 0 0 auto;
   white-space: nowrap;
 }
 
-.messaging-routes__response-add select {
+/* The same 560px reading column as the route editor's Surface field, for the
+   same reason: the panel takes the trigger's width, and a list stretched
+   across the card puts each name at one end and its ID at the other. */
+.messaging-routes__response-add .messaging-surface-picker {
+  width: 100%;
   min-width: 0;
+  max-width: 560px;
   flex: 1 1 auto;
 }
 
@@ -35794,6 +35799,14 @@ details.launchpad-pending__output > summary .launchpad-pending__command-label {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* `.settings-select:disabled`, restated for `aria-disabled`. The trigger is
+   never natively disabled because Chromium drops focus from a button the
+   moment it is; see the `disabled` prop in MessagingSurfacePicker.tsx. */
+.messaging-surface-picker__trigger[aria-disabled="true"] {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 /* Portalled to `document.body` and positioned against the trigger's rect, so

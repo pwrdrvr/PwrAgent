@@ -8,8 +8,9 @@ import { portalViewportTop } from "../lib/useViewportTooltip";
  * Searchable picker for a messaging conversation.
  *
  * Shared by the Messaging Routes settings (which offers durable destinations
- * drawn from observed surfaces) and the Automations editor (which offers the
- * channels and groups an operator has authorized). The two feed it different
+ * drawn from observed surfaces, and the Discord channels and threads that can
+ * be given a response mode) and the Automations editor (which offers the
+ * channels and groups an operator has authorized). They feed it different
  * lists and name things differently, so every word it shows is a prop with a
  * routes-shaped default.
  *
@@ -104,7 +105,7 @@ export function placePanel(trigger: DOMRect): PanelPosition {
   return { width, left, top, maxHeight, flipped: flip };
 }
 
-type SurfaceSection = "configured" | "channel" | "dm" | "topic" | "other";
+type SurfaceSection = "configured" | "channel" | "dm" | "topic" | "thread" | "other";
 
 type SurfaceOption = {
   value: string;
@@ -123,6 +124,7 @@ const SECTION_ORDER: SurfaceSection[] = [
   "channel",
   "dm",
   "topic",
+  "thread",
   "other",
 ];
 
@@ -131,6 +133,7 @@ const SECTION_LABELS: Record<SurfaceSection, string> = {
   channel: "Channels & groups",
   dm: "Direct messages",
   topic: "Telegram topics",
+  thread: "Threads",
   // Every option lands here when the caller does not group by kind, so the
   // caller names it: "Recently seen" is true of observed surfaces and false
   // of an authorized-channel list.
@@ -146,9 +149,10 @@ const SECTION_LABELS: Record<SurfaceSection, string> = {
  */
 function kindGlyph(kind: MessagingConversationKind | undefined): string {
   if (kind === "dm") return "@";
-  // A topic and a thread are both sub-conversations hanging off a parent. A
-  // thread is no longer offered, but a route saved before that reaches this
-  // list as the current configuration and must not be marked as a channel.
+  // A topic and a thread are both sub-conversations hanging off a parent, and
+  // neither may be marked as a channel — including a thread route saved before
+  // default routes stopped offering threads, which still reaches this list as
+  // the current configuration.
   if (kind === "topic" || kind === "thread") return "▸";
   return "#";
 }
@@ -157,10 +161,11 @@ function sectionFor(option: SurfaceOption, grouped: boolean): SurfaceSection {
   if (option.section) return option.section;
   if (!grouped) return "other";
   if (option.kind === "dm") return "dm";
-  // Threads share the topic heading rather than falling through to channels:
-  // `kindGlyph` already marks both as sub-conversations, and a row whose
-  // heading and glyph disagree is worse than one filed a little loosely.
-  if (option.kind === "topic" || option.kind === "thread") return "topic";
+  // Threads get their own heading rather than the topic one: "Telegram
+  // topics" is false of a Discord thread, and relabelling that bucket would
+  // silently merge the two for a caller that offers both.
+  if (option.kind === "topic") return "topic";
+  if (option.kind === "thread") return "thread";
   return "channel";
 }
 
@@ -170,6 +175,27 @@ export function MessagingSurfacePicker(props: {
   /** Group by conversation kind and drop the kinds a default route cannot target. */
   filterConversations: boolean;
   allowTopics?: boolean;
+  /**
+   * Keep threads when grouping by kind. A default route never targets one —
+   * it belongs to a binding — but a per-thread setting such as Discord's
+   * response mode exists precisely to single one out.
+   */
+  allowThreads?: boolean;
+  /**
+   * Offer the "Enter an ID manually..." action. Defaults to true. A list that
+   * adds only surfaces it already knows (so it can store a name beside the ID)
+   * has nothing to do with a typed one, and an action that silently does
+   * nothing is worse than none.
+   */
+  allowManual?: boolean;
+  /**
+   * Refuse to open. Rendered as `aria-disabled` rather than `disabled`: a
+   * focused button that becomes `disabled` drops focus to `<body>` in
+   * Chromium and does not get it back on re-enable. A caller that disables
+   * the field while the choice it just made is saving would otherwise lose
+   * the operator's place on every pick.
+   */
+  disabled?: boolean;
   /**
    * The field's name, e.g. "Surface" or "Destination channel". An
    * `aria-label` replaces the button's visible text, so the name has to carry
@@ -181,6 +207,11 @@ export function MessagingSurfacePicker(props: {
   placeholder?: string;
   /** Search-row placeholder. */
   searchPlaceholder?: string;
+  /**
+   * Search-row accessible name. The default, "Find a <field>", reads only
+   * when the field is named by a noun ("Surface", "Destination").
+   */
+  searchLabel?: string;
   /** Action-row text, and the label the trigger shows once it is chosen. */
   manualLabel?: string;
   /**
@@ -195,6 +226,7 @@ export function MessagingSurfacePicker(props: {
 }) {
   const placeholder = props.placeholder ?? "Choose a recently seen surface...";
   const manualLabel = props.manualLabel ?? "Enter an ID manually...";
+  const allowManual = props.allowManual ?? true;
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
@@ -226,7 +258,7 @@ export function MessagingSurfacePicker(props: {
     if (option.value !== props.value && props.filterConversations && option.kind) {
       // Default routes target durable destinations only; an ephemeral reply
       // thread belongs to a binding, and topics are a Telegram-only concept.
-      if (option.kind === "thread") return false;
+      if (option.kind === "thread" && !props.allowThreads) return false;
       if (option.kind === "topic" && !props.allowTopics) return false;
     }
     return `${option.label} ${option.detail ?? ""}`.toLowerCase().includes(trimmed);
@@ -322,7 +354,9 @@ export function MessagingSurfacePicker(props: {
         // before a choice is made.
         aria-label={`${props.fieldLabel}: ${triggerLabel}`}
         aria-haspopup="dialog" aria-expanded={open}
+        aria-disabled={props.disabled || undefined}
         onClick={() => {
+          if (props.disabled) return;
           if (open) {
             setOpen(false);
             return;
@@ -362,7 +396,7 @@ export function MessagingSurfacePicker(props: {
               type="text"
               className="project-picker__search-input"
               role="combobox"
-              aria-label={`Find a ${props.fieldLabel.toLowerCase()}`}
+              aria-label={props.searchLabel ?? `Find a ${props.fieldLabel.toLowerCase()}`}
               placeholder={props.searchPlaceholder ?? "Find a channel, DM, or ID"}
               aria-expanded="true"
               aria-controls={listId}
@@ -419,14 +453,18 @@ export function MessagingSurfacePicker(props: {
               {props.emptyLabel ?? "No matching surfaces."}
             </p>
           ) : null}
-          <div className="project-picker__separator" />
-          <button type="button" className="project-picker__row project-picker__row--action"
-            onClick={() => choose("manual")}
-          >
-            <span aria-hidden="true" className="project-picker__row-check" />
-            <span aria-hidden="true" className="project-picker__plus">+</span>
-            <span className="project-picker__row-name">{manualLabel}</span>
-          </button>
+          {allowManual ? (
+            <>
+              <div className="project-picker__separator" />
+              <button type="button" className="project-picker__row project-picker__row--action"
+                onClick={() => choose("manual")}
+              >
+                <span aria-hidden="true" className="project-picker__row-check" />
+                <span aria-hidden="true" className="project-picker__plus">+</span>
+                <span className="project-picker__row-name">{manualLabel}</span>
+              </button>
+            </>
+          ) : null}
         </div>
       ), document.body) : null}
     </div>

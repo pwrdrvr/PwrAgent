@@ -288,6 +288,73 @@ describe("MessagingSurfacePicker", () => {
     expect(screen.getByRole("listbox")).not.toContainElement(empty);
   });
 
+  it("offers threads under their own heading when the caller allows them", () => {
+    render(
+      <MessagingSurfacePicker fieldLabel="Surface" value="" options={options} filterConversations allowTopics allowThreads onChange={vi.fn()} />,
+    );
+    const trigger = screen.getByRole("button", { name: CLOSED_LABEL });
+    trigger.focus();
+    fireEvent.click(trigger);
+    // Not filed under the topic heading: "Telegram topics" is false of a
+    // Discord thread, and one shared bucket would merge the two kinds for a
+    // caller that offers both.
+    expect(sections()).toEqual(["Channels & groups", "Direct messages", "Telegram topics", "Threads"]);
+    const thread = within(screen.getByRole("group", { name: "Threads" })).getByRole("option");
+    expect(thread).toHaveTextContent("Harvest discussion");
+    expect(
+      thread.querySelector(".messaging-surface-picker__glyph")?.textContent,
+    ).toBe("▸");
+  });
+
+  it("names the search row from searchLabel when the field name is not a noun", () => {
+    render(
+      <MessagingSurfacePicker fieldLabel="Add a channel or thread" searchLabel="Find a channel or thread" value="" options={options} filterConversations onChange={vi.fn()} />,
+    );
+    const trigger = screen.getByRole("button", { name: /^Add a channel or thread: / });
+    trigger.focus();
+    fireEvent.click(trigger);
+    expect(screen.getByRole("combobox", { name: "Find a channel or thread" })).toHaveFocus();
+  });
+
+  it("leaves out manual entry when the caller cannot use a typed ID", () => {
+    const onChange = vi.fn();
+    render(
+      <MessagingSurfacePicker fieldLabel="Surface" value="" options={options} filterConversations allowManual={false} onChange={onChange} />,
+    );
+    const trigger = screen.getByRole("button", { name: CLOSED_LABEL });
+    trigger.focus();
+    fireEvent.click(trigger);
+    expect(screen.getByRole("dialog", { name: "Surface" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Enter an ID manually..." })).not.toBeInTheDocument();
+    // Nor does a search that matches nothing leave a way to choose "manual".
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "unknown" } });
+    fireEvent.keyDown(screen.getByRole("combobox"), { key: "Enter" });
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("refuses to open while disabled, and keeps focus through the flip", () => {
+    const props = { fieldLabel: "Surface", value: "", options, filterConversations: true, onChange: vi.fn() };
+    const { rerender } = render(<MessagingSurfacePicker {...props} disabled />);
+    const trigger = screen.getByRole("button", { name: CLOSED_LABEL });
+    expect(trigger).toHaveAttribute("aria-disabled", "true");
+    trigger.focus();
+    fireEvent.click(trigger);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+
+    // Never natively disabled: Chromium drops focus to <body> from a button
+    // the moment it becomes `disabled`, and does not return it. A caller that
+    // disables the field while its last pick saves would lose the operator's
+    // place every time. jsdom does not model that focus fixup, so the
+    // attribute is what this test can hold.
+    expect(trigger).not.toBeDisabled();
+    rerender(<MessagingSurfacePicker {...props} />);
+    expect(trigger).not.toHaveAttribute("aria-disabled");
+    expect(trigger).toHaveFocus();
+    fireEvent.click(trigger);
+    expect(screen.getByRole("dialog", { name: "Surface" })).toBeInTheDocument();
+  });
+
   it("drops the kind glyph for container scopes, which are not channels", () => {
     render(
       <MessagingSurfacePicker

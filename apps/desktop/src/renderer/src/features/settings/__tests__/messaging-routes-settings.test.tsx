@@ -3,6 +3,8 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   AppServerBackendKind,
+  DesktopAuthorizedContact,
+  DesktopMessagingObservedSurface,
   ListMessagingRoutesResponse,
   MessagingChannelKind,
 } from "@pwragent/shared";
@@ -35,6 +37,47 @@ function surfaceOptions(): HTMLElement[] {
 function chooseSurface(label: string) {
   openSurfacePicker();
   fireEvent.click(screen.getByRole("option", { name: new RegExp(label) }));
+}
+
+/** The Discord response-mode ADD picker. Its value never changes, so its
+ *  accessible name is "Add a channel or thread: <placeholder>". */
+function addTrigger(): HTMLElement {
+  return screen.getByRole("button", { name: /^Add a channel or thread: / });
+}
+
+/** Focus first: it is the only way jsdom reproduces the focus move a real
+ *  click makes, and a panel that closed in the frame it opened once passed
+ *  every test that skipped it. */
+function openAddPicker() {
+  const trigger = addTrigger();
+  trigger.focus();
+  fireEvent.click(trigger);
+}
+
+/** Row names as the operator reads them, without the ID and date columns. */
+function addPickerNames(): Array<string | null | undefined> {
+  return within(screen.getByRole("listbox"))
+    .queryAllByRole("option")
+    .map((option) => option.querySelector(".project-picker__row-name")?.textContent);
+}
+
+function addPickerSections(): Array<string | null> {
+  return within(screen.getByRole("listbox"))
+    .queryAllByRole("group")
+    .map((group) => group.getAttribute("aria-label"));
+}
+
+/** Invented Discord surfaces with obviously fake IDs. */
+function discordSurface(
+  conversation: DesktopMessagingObservedSurface["conversation"],
+  lastSeenAt: number,
+): DesktopMessagingObservedSurface {
+  return {
+    platform: "discord",
+    conversation: { workspaceId: "2222222222222222222", ...conversation },
+    firstSeenAt: 1000,
+    lastSeenAt,
+  };
 }
 
 function buildRoutes(): ListMessagingRoutesResponse {
@@ -224,13 +267,14 @@ describe("MessagingRoutesSettings", () => {
 
     // The picker offers the observed channel by name. An operator never types
     // a snowflake to set response behavior.
-    const picker = await screen.findByRole("combobox", {
-      name: "Add a channel or thread",
+    await screen.findByRole("button", {
+      name: "Add a channel or thread: Select a channel or thread...",
     });
-    await screen.findByRole("option", {
-      name: "Discord / Test server / general",
-    });
-    fireEvent.change(picker, { target: { value: "1480556454498009352" } });
+    openAddPicker();
+    expect(addPickerNames()).toEqual(["Discord / Test server / general"]);
+    fireEvent.click(screen.getByRole("option", {
+      name: /^Discord \/ Test server \/ general/,
+    }));
 
     const saved = [
       {
@@ -256,9 +300,9 @@ describe("MessagingRoutesSettings", () => {
       </MessagingRoutesProvider>,
     );
 
-    expect(
-      screen.queryByRole("option", { name: "Discord / Test server / general" }),
-    ).toBeNull();
+    expect(addTrigger()).toHaveAccessibleName(
+      "Add a channel or thread: No unconfigured Discord channels seen yet",
+    );
     const rowMode = screen.getByRole("combobox", {
       name: "Responds to for Discord / Test server / general",
     });
@@ -343,13 +387,166 @@ describe("MessagingRoutesSettings", () => {
       </MessagingRoutesProvider>,
     );
 
-    await screen.findByRole("combobox", { name: "Add a channel or thread" });
+    await screen.findByRole("button", {
+      name: "Add a channel or thread: Select a channel or thread...",
+    });
+    openAddPicker();
+    expect(addPickerNames()).not.toContain("Discord / Test server");
+    expect(addPickerNames()).toContain("Discord / 1480556454498009352");
+  });
+
+  it("offers native threads under their own heading, with no manual row", async () => {
+    const routes = buildRoutes();
+    routes.observedSurfaces.push(
+      discordSurface({
+        id: "1111111111111111111",
+        kind: "channel",
+        title: "orchard-planning",
+        ancestorTitle: "Orchard Collective",
+      }, 5000),
+      discordSurface({
+        id: "1111111111111111121",
+        kind: "thread",
+        title: "Cider press schedule",
+        parentConversationId: "1111111111111111111",
+        parentTitle: "orchard-planning",
+        ancestorTitle: "Orchard Collective",
+      }, 4000),
+    );
+    const api = buildDesktopApi(routes);
+    const onSave = vi.fn();
+
+    render(
+      <MessagingRoutesProvider desktopApi={api.desktopApi}>
+        <MessagingRoutesSettings
+          desktopApi={api.desktopApi}
+          discordResponseBehavior={{ source: "config", value: [], onSave }}
+        />
+      </MessagingRoutesProvider>,
+    );
+
+    await screen.findByRole("button", {
+      name: "Add a channel or thread: Select a channel or thread...",
+    });
+    openAddPicker();
+    // A native thread's own setting beats its parent channel's, so the list
+    // must keep threads: the default-route filter drops them.
+    expect(addPickerSections()).toEqual(["Channels", "Native threads"]);
     expect(
-      screen.queryByRole("option", { name: "Discord / Test server" }),
-    ).toBeNull();
-    expect(
-      screen.getByRole("option", { name: "Discord / 1480556454498009352" }),
-    ).toBeInTheDocument();
+      within(screen.getByRole("group", { name: "Native threads" }))
+        .getByRole("option", { name: /Cider press schedule/ }),
+    ).toHaveTextContent("1111111111111111121");
+    expect(screen.getByRole("combobox", { name: "Find a channel or thread" })).toHaveFocus();
+    // This list replaced a raw-ID editor on purpose, and `addSurface` has
+    // no candidate for a typed ID, so the action would silently do nothing.
+    expect(screen.queryByRole("button", { name: /manually/ })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("option", { name: /Cider press schedule/ }));
+    expect(onSave).toHaveBeenCalledWith([{
+      id: "1111111111111111121",
+      displayName: "Cider press schedule",
+      responseMode: "mention_only",
+    }]);
+  });
+
+  it("returns the add picker to its placeholder, focused, after each add", async () => {
+    const routes = buildRoutes();
+    routes.observedSurfaces.push(
+      discordSurface({
+        id: "1111111111111111111",
+        kind: "channel",
+        title: "orchard-planning",
+        ancestorTitle: "Orchard Collective",
+      }, 5000),
+      discordSurface({
+        id: "1111111111111111112",
+        kind: "channel",
+        title: "harvest-log",
+        ancestorTitle: "Orchard Collective",
+      }, 4000),
+    );
+    const api = buildDesktopApi(routes);
+    const onSave = vi.fn();
+    const renderSection = (
+      value: DesktopAuthorizedContact[],
+      disabled = false,
+    ) => (
+      <MessagingRoutesProvider desktopApi={api.desktopApi}>
+        <MessagingRoutesSettings
+          desktopApi={api.desktopApi}
+          discordResponseBehavior={{ disabled, source: "config", value, onSave }}
+        />
+      </MessagingRoutesProvider>
+    );
+
+    const { rerender } = render(renderSection([]));
+    await screen.findByRole("button", {
+      name: "Add a channel or thread: Select a channel or thread...",
+    });
+    openAddPicker();
+    fireEvent.click(screen.getByRole("option", { name: /orchard-planning/ }));
+    const saved = onSave.mock.calls[0]![0] as DesktopAuthorizedContact[];
+    expect(saved.map((entry) => entry.id)).toEqual(["1111111111111111111"]);
+
+    // Settings disables the section while that pick saves. The trigger has
+    // to survive it holding focus, or the operator loses their place on
+    // every add.
+    rerender(renderSection(saved, true));
+    expect(addTrigger()).toHaveAttribute("aria-disabled", "true");
+    expect(addTrigger()).toHaveFocus();
+    rerender(renderSection(saved));
+
+    // An add picker, not a value picker: nothing stays "selected", and the
+    // surface just added has left the list.
+    expect(addTrigger()).toHaveAccessibleName(
+      "Add a channel or thread: Select a channel or thread...",
+    );
+    expect(addTrigger()).toHaveFocus();
+    openAddPicker();
+    expect(addPickerNames()).toEqual(["Discord / Orchard Collective / harvest-log"]);
+  });
+
+  it("disables the add picker while loading and when every surface is configured", async () => {
+    const routes = buildRoutes();
+    routes.observedSurfaces.push(discordSurface({
+      id: "1111111111111111111",
+      kind: "channel",
+      title: "orchard-planning",
+      ancestorTitle: "Orchard Collective",
+    }, 5000));
+    let finishLoading: (value: ListMessagingRoutesResponse) => void = () => {};
+    const api = buildDesktopApi(routes);
+    api.listMessagingRoutes.mockImplementation(() => new Promise((resolve) => {
+      finishLoading = resolve;
+    }));
+
+    render(
+      <MessagingRoutesProvider desktopApi={api.desktopApi}>
+        <MessagingRoutesSettings
+          desktopApi={api.desktopApi}
+          discordResponseBehavior={{
+            source: "config",
+            value: [{ id: "1111111111111111111", displayName: "orchard-planning" }],
+            onSave: vi.fn(),
+          }}
+        />
+      </MessagingRoutesProvider>,
+    );
+
+    expect(addTrigger()).toHaveAccessibleName(
+      "Add a channel or thread: Loading channels...",
+    );
+    expect(addTrigger()).toHaveAttribute("aria-disabled", "true");
+    openAddPicker();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+
+    finishLoading(routes);
+    await screen.findByRole("button", {
+      name: "Add a channel or thread: No unconfigured Discord channels seen yet",
+    });
+    expect(addTrigger()).toHaveAttribute("aria-disabled", "true");
+    openAddPicker();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
   it("assigns a default Agent without writing response behavior", async () => {
