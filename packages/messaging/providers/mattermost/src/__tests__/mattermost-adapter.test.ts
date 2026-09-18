@@ -1628,3 +1628,110 @@ describe("Mattermost automation surfaces", () => {
     await adapter.stop();
   });
 });
+
+/**
+ * Before the observed set, a Mattermost channel automation fired only for
+ * authorized contacts: every other sender's post was dropped at the actor
+ * gate.
+ */
+describe("observed channels", () => {
+  const OPERATOR = "haroldabcdefghijklmnopqr12";
+  const OUTSIDER = "outsiderabcdefghijklmnop12";
+  const CHANNEL = "channelabcdefghijklmn12345";
+  const OTHER_CHANNEL = "otherchanabcdefghijklm1234";
+
+  const startObserved = async (observed: string[]) => {
+    const hooks = {} as WebSocketHooks;
+    const adapter = new MattermostAdapter({
+      client: fakeClient4({ createdPosts: [], patchedPosts: [] }),
+      websocketClient: fakeWebSocketClient(undefined, hooks),
+      callbackHandleStore: fakeStore,
+      callbackServer: { start: async () => {}, stop: async () => {}, signContext: () => ({ hmac: "x", issuedAt: 0 }) } as never,
+      config: {
+        ...baseConfig,
+        authorizedActorIds: [{ id: OPERATOR, displayName: "Operator" }],
+        authorizedConversationIds: [
+          { id: CHANNEL, displayName: "alerts" },
+          { id: OTHER_CHANNEL, displayName: "general" },
+        ],
+      },
+      logger: silentLogger,
+    });
+    adapter.updateObservedConversations(observed);
+    const events: MessagingInboundEvent[] = [];
+    const rejected: MessagingRejectedInboundEvent[] = [];
+    adapter.onInboundRejected((event) => { rejected.push(event); });
+    await adapter.start(async (event) => { events.push(event); });
+    let postNumber = 0;
+    const post = (params: { userId: string; message: string; channelId?: string; rootId?: string }) => {
+      postNumber += 1;
+      hooks.fireMessage({ event: "posted", data: {
+        channel_type: "O", sender_name: params.userId === OPERATOR ? "Operator" : "Alertbot",
+        post: JSON.stringify({
+          id: `post${String(postNumber).padStart(22, "0")}`,
+          channel_id: params.channelId ?? CHANNEL,
+          user_id: params.userId,
+          ...(params.rootId ? { root_id: params.rootId } : {}),
+          message: params.message,
+        }),
+      } });
+    };
+    return { adapter, events, post, rejected };
+  };
+
+  it("forwards an outside sender's post in a watched channel as observed only", async () => {
+    const { adapter, events, post, rejected } = await startObserved([CHANNEL]);
+
+    post({ userId: OUTSIDER, message: "Deploy failed on prod" });
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+
+    expect(events[0]).toMatchObject({
+      kind: "text",
+      observedOnly: true,
+      text: "Deploy failed on prod",
+      actor: { platformUserId: OUTSIDER },
+    });
+    expect(rejected).toEqual([]);
+    await adapter.stop();
+  });
+
+  it("drops an outside sender in a channel nothing watches, silently", async () => {
+    const { adapter, events, post, rejected } = await startObserved([CHANNEL]);
+
+    post({ userId: OUTSIDER, message: "chatter", channelId: OTHER_CHANNEL });
+    post({ userId: OPERATOR, message: "control", channelId: OTHER_CHANNEL });
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+
+    expect(events[0]).toMatchObject({ text: "control" });
+    expect(rejected).toEqual([]);
+    await adapter.stop();
+  });
+
+  it.each(["/status", "@pwragent"])(
+    "rejects an outside sender's command %j in a watched channel",
+    async (message) => {
+      // Observation is not authorization, and it must not hide the attempt.
+      const { adapter, events, post, rejected } = await startObserved([CHANNEL]);
+
+      post({ userId: OUTSIDER, message });
+      await vi.waitFor(() => expect(rejected).toHaveLength(1));
+
+      expect(events).toEqual([]);
+      expect(rejected[0]).toMatchObject({ kind: "command", reason: "unauthorized-actor" });
+      await adapter.stop();
+    },
+  );
+
+  it("keeps the channel gate: a watched but unauthorized channel stays silent", async () => {
+    const unauthorized = "strangerabcdefghijklmn1234";
+    const { adapter, events, post, rejected } = await startObserved([unauthorized]);
+
+    post({ userId: OUTSIDER, message: "alert", channelId: unauthorized });
+    post({ userId: OPERATOR, message: "control" });
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+
+    expect(events[0]).toMatchObject({ text: "control" });
+    expect(rejected).toEqual([]);
+    await adapter.stop();
+  });
+});

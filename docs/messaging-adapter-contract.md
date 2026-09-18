@@ -307,18 +307,45 @@ exists to watch.
 
 Observation is not authorization:
 
-- Conversation, workspace, and server allowlists still apply first.
-- A slash command from an observed-only sender is dropped, not forwarded.
+- Conversation, workspace, and server allowlists still apply first. An
+  observed conversation that fails them is dropped, not observed.
+- A command is never observed. A slash command — or whatever the adapter would
+  turn into one, such as a bare bot mention that becomes Help — is rejected and
+  reported exactly as in a conversation nothing watches. Observing it would
+  hide the attempt from the operator.
+- Direct messages are never observed. A 1:1 DM is gated by who sent it.
 - The runtime sends `observedOnly` events only to the editor preview and to
   matching automations — never to a binding, the command path, or a reply.
 
-Slack and Discord implement it. Discord matches a thread reply by the thread's
-parent channel as well as its own ID.
+All six providers implement it. How each matches a watched conversation:
 
-Telegram, Mattermost, Feishu, and LINE do not, and drop a sender outside the
-actor allowlist in every shared conversation — so an automation there fires
-only for authorized contacts. LINE's own `observedOnly` flag means something
-narrower: an unaddressed group or room message from an authorized sender.
+| Provider | Watched ID | Thread or topic under it |
+| --- | --- | --- |
+| Slack | Channel ID | Reply shares the channel ID; parent ID also checked |
+| Discord | Channel ID | Thread matched by its parent channel |
+| Telegram | Group or supergroup chat ID | A topic trigger pushes its group ID, which decides |
+| Mattermost | Channel ID | Reply shares the channel ID |
+| Feishu | Group `chat_id` | Threads are not normalized separately |
+| LINE | Group or room ID | No threads |
+
+LINE's `observedOnly` flag also marks unaddressed group and room messages from
+authorized senders, which automations may see but a bound thread must not take
+as input.
+
+Some platforms decide delivery before any adapter runs, and no adapter change
+can widen it:
+
+- **Telegram** delivers ordinary group messages to a bot only when its Group
+  Privacy is off (@BotFather) or it is a group admin. The adapter reads
+  `getMe().can_read_all_group_messages` and logs a warning when a watched group
+  exists while it is false.
+- **Feishu/Lark** delivers group messages that do not @mention the bot only when
+  the app holds `im:message.group_msg`.
+- **Mattermost** posts attributed to an incoming webhook (`from_webhook`) are
+  dropped before authorization as an anti-echo defense, observed or not. Most
+  webhook-posted alerts therefore cannot trigger an automation.
+
+The editor states the Telegram and Feishu rules where a group trigger is chosen.
 
 See [automation messaging surface verification](automation-messaging-surfaces.md)
 for the adapter evidence and remaining account-dependent limitations.

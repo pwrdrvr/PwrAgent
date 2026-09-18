@@ -1834,3 +1834,114 @@ describe("feishu automation DM addressing", () => {
     await adapter.stop();
   });
 });
+
+/**
+ * Before the observed set, a Feishu group automation fired only for
+ * authorized contacts: every other sender's message was rejected at the actor
+ * gate.
+ */
+describe("observed group chats", () => {
+  const startObserved = async (observed: string[]) => {
+    const adapter = new FeishuAdapter({
+      config: {
+        ...baseConfig,
+        authorizedChatIds: [
+          { id: "oc_chat", displayName: "Ops" },
+          { id: "oc_other", displayName: "Lab" },
+        ],
+      },
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({}),
+      now: () => 1_700_000_000_000,
+    });
+    adapter.updateObservedConversations(observed);
+    const events: MessagingInboundEvent[] = [];
+    const rejected: MessagingRejectedInboundEvent[] = [];
+    adapter.onInboundRejected((event) => {
+      rejected.push(event);
+    });
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+    let n = 0;
+    const send = async (params: { text: string; openId?: string; chatId?: string }) => {
+      n += 1;
+      await adapter.handleWebhookPayload({
+        header: {
+          event_id: `evt_observed_${n}`,
+          event_type: "im.message.receive_v1",
+          tenant_key: "tenant_1",
+          token: "verify-token",
+        },
+        event: {
+          sender: {
+            sender_id: { open_id: params.openId ?? "ou_outsider" },
+            tenant_key: "tenant_1",
+          },
+          message: {
+            chat_id: params.chatId ?? "oc_chat",
+            chat_type: "group",
+            content: JSON.stringify({ text: params.text }),
+            message_id: `om_observed_${n}`,
+            message_type: "text",
+          },
+        },
+      });
+    };
+    return { adapter, events, rejected, send };
+  };
+
+  it("forwards an outside sender's message in a watched chat as observed only", async () => {
+    const { adapter, events, rejected, send } = await startObserved(["oc_chat"]);
+
+    await send({ text: "Deploy failed on prod" });
+    await adapter.stop();
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        kind: "text",
+        observedOnly: true,
+        text: "Deploy failed on prod",
+        actor: expect.objectContaining({ platformUserId: "ou_outsider" }),
+      }),
+    ]);
+    expect(rejected).toEqual([]);
+  });
+
+  it("still rejects an outside sender in a chat nothing watches", async () => {
+    const { adapter, events, rejected, send } = await startObserved(["oc_chat"]);
+
+    await send({ text: "chatter", chatId: "oc_other" });
+    await adapter.stop();
+
+    expect(events).toEqual([]);
+    expect(rejected).toEqual([
+      expect.objectContaining({ reason: "unauthorized-actor" }),
+    ]);
+  });
+
+  it("rejects an outside sender's command in a watched chat", async () => {
+    // Observation is not authorization, and it must not hide the attempt.
+    const { adapter, events, rejected, send } = await startObserved(["oc_chat"]);
+
+    await send({ text: "/status" });
+    await adapter.stop();
+
+    expect(events).toEqual([]);
+    expect(rejected).toEqual([
+      expect.objectContaining({ kind: "command", reason: "unauthorized-actor" }),
+    ]);
+  });
+
+  it("keeps the chat gate: a watched but unauthorized chat is still rejected", async () => {
+    const { adapter, events, rejected, send } = await startObserved(["oc_stranger"]);
+
+    await send({ text: "alert", chatId: "oc_stranger" });
+    await adapter.stop();
+
+    expect(events).toEqual([]);
+    expect(rejected).toEqual([
+      expect.objectContaining({ reason: "unauthorized-actor" }),
+    ]);
+  });
+});

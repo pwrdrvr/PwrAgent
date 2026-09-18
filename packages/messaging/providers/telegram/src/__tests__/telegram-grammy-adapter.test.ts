@@ -18,6 +18,7 @@ import {
   type MessagingCallbackHandleRecord,
   type MessagingCallbackHandleStore,
   type MessagingInboundEvent,
+  type MessagingRejectedInboundEvent,
   type MessagingStatusIntent,
 } from "@pwragent/messaging-interface";
 
@@ -1040,6 +1041,130 @@ describe("telegram automation DM addressing", () => {
     expect(result.outcome).toMatch(/presented/);
     expect(send).toHaveBeenCalledWith(expect.objectContaining({ chat_id: 42 }));
     expect(await adapter.resolveDirectConversation("invalid recipient !")).toMatchObject({ outcome: "failed" });
+    await adapter.stop();
+  });
+});
+
+/**
+ * Before the observed set, a Telegram group automation fired only for
+ * authorized contacts: every other sender's message was dropped at the actor
+ * gate, including the alert bots such automations usually watch.
+ */
+describe("observed groups", () => {
+  const GROUP = { id: -100123, title: "Ops", type: "supergroup" as const };
+  const OUTSIDER = { first_name: "Alertbot", id: 777, is_bot: true, username: "alertbot" };
+
+  const startObserved = async (observed: string[]) => {
+    const adapter = new TelegramAdapter({
+      api: fakeTelegramApi(),
+      config: {
+        authorizedActorIds: [{ id: "42", displayName: "" }],
+        authorizedSupergroupIds: [{ id: "-100123", displayName: "Ops" }],
+        botToken: "token",
+        channel: "telegram",
+      },
+      now: () => 1_700_000_000_000,
+      store: fakeCallbackStore(),
+    });
+    const events: MessagingInboundEvent[] = [];
+    const rejected: MessagingRejectedInboundEvent[] = [];
+    adapter.onInboundRejected?.((event) => {
+      rejected.push(event);
+    });
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+    adapter.updateObservedConversations(observed);
+    let messageId = 900;
+    const send = async (text: string, chat: { id: number; title: string; type: "supergroup" } = GROUP) =>
+      await adapter.handleUpdate({
+        update_id: messageId,
+        message: { chat, date: 1_700_000_000, from: OUTSIDER, message_id: messageId++, text },
+      });
+    return { events, rejected, send };
+  };
+
+  it("forwards an outside sender's message in a watched group as observed only", async () => {
+    const { events, rejected, send } = await startObserved(["-100123"]);
+
+    await send("ERROR: disk full on db-3");
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        kind: "text",
+        observedOnly: true,
+        text: "ERROR: disk full on db-3",
+        actor: expect.objectContaining({ platformUserId: "777" }),
+      }),
+    ]);
+    expect(rejected).toEqual([]);
+  });
+
+  it("still drops an outside sender in a group nothing watches", async () => {
+    const { events, send } = await startObserved([]);
+
+    await send("chatter");
+
+    expect(events).toEqual([]);
+  });
+
+  // `fakeTelegramApi` answers getMe as @TestBot.
+  it.each(["/status", "@TestBot /status", "@TestBot"])(
+    "rejects an outside sender's command %j in a watched group",
+    async (text) => {
+      // Observation is not authorization, and it must not hide the attempt.
+      const { events, rejected, send } = await startObserved(["-100123"]);
+
+      await send(text);
+
+      expect(events).toEqual([]);
+      expect(rejected).toEqual([
+        expect.objectContaining({ kind: "command", reason: "unauthorized-actor" }),
+      ]);
+    },
+  );
+
+  it("keeps the group gate: a watched but unauthorized group stays dropped", async () => {
+    const { events, send } = await startObserved(["-100999"]);
+
+    await send("alert", { id: -100999, title: "Elsewhere", type: "supergroup" });
+
+    expect(events).toEqual([]);
+  });
+
+  it("warns once when group privacy hides a watched group's messages", async () => {
+    // With Group Privacy on, Telegram never delivers ordinary group messages
+    // to the bot at all. No adapter change fixes that, so it is logged.
+    const api = fakeTelegramApi();
+    api.getMe = vi.fn(async () => ({
+      id: 1,
+      is_bot: true,
+      username: "PwrAgentBot",
+      can_read_all_group_messages: false,
+    }));
+    const logger = { debug: vi.fn(), warn: vi.fn() };
+    const adapter = new TelegramAdapter({
+      api,
+      config: {
+        authorizedActorIds: [{ id: "42", displayName: "" }],
+        botToken: "token",
+        channel: "telegram",
+      },
+      logger,
+      now: () => 1_700_000_000_000,
+      store: fakeCallbackStore(),
+    });
+    await adapter.start(async () => undefined);
+    const privacyWarnings = () =>
+      logger.warn.mock.calls.filter(([message]) => String(message).includes("group privacy"));
+
+    adapter.updateObservedConversations(["42"]);
+    expect(privacyWarnings()).toHaveLength(0);
+    adapter.updateObservedConversations(["-100123"]);
+    adapter.updateObservedConversations(["-100123", "-100456"]);
+    expect(privacyWarnings()).toEqual([
+      [expect.stringContaining("group privacy is on"), { groupIds: ["-100123"] }],
+    ]);
     await adapter.stop();
   });
 });

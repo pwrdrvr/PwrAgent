@@ -373,6 +373,12 @@ export class MattermostAdapter implements MattermostProviderAdapter {
    */
   private readonly responseUrlPostIds = new Set<string>();
   private readonly unauthorizedConversationLogKeys = new Set<string>();
+  // Channels an enabled automation or open editor preview watches, pushed by
+  // the desktop runtime. There, a sender outside the actor allowlist is
+  // forwarded observedOnly instead of dropped; without it a Mattermost
+  // channel automation fired only for authorized contacts. Replies share
+  // their channel's ID, so a thread under a watched channel is watched too.
+  private observedConversationIds = new Set<string>();
   private readonly inboundRejectedListeners = new Set<MessagingInboundRejectedListener>();
   /**
    * Last reconciliation result per team, kept for diagnostics + future
@@ -427,6 +433,10 @@ export class MattermostAdapter implements MattermostProviderAdapter {
       ...(account ? { account } : {}),
       detail: hostFromUrl(this.config.serverUrl),
     };
+  }
+
+  updateObservedConversations(conversationIds: readonly string[]): void {
+    this.observedConversationIds = new Set(conversationIds);
   }
 
   async updateAuthorization(update: MessagingAdapterAuthorizationUpdate): Promise<void> {
@@ -939,7 +949,25 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     }
     const messageText = post.message ?? "";
     const isPairingMessage = Boolean(extractMessagingPairingToken(messageText));
-    if (!isPairingMessage && !this.authorizedActorIds.includes(post.user_id)) {
+    const fileIds: string[] = Array.isArray(post.file_ids) ? post.file_ids : [];
+    // Everything the dispatch below turns into a command: a slash command, or
+    // a bare `@bot`, which becomes Help. A post with files is always media.
+    const isCommand = fileIds.length === 0
+      && (messageText.startsWith("/")
+        || stripBotMention(messageText, this.botUsername) === "");
+    // A sender outside the actor allowlist, in a shared channel an enabled
+    // automation or open preview watches: forwarded for observation only. A
+    // command never is — it is rejected below exactly as anywhere else.
+    const observedOnly = !isPairingMessage
+      && !isCommand
+      && data.channel_type !== "D"
+      && !this.authorizedActorIds.includes(post.user_id)
+      && this.observedConversationIds.has(post.channel_id);
+    if (
+      !isPairingMessage
+      && !observedOnly
+      && !this.authorizedActorIds.includes(post.user_id)
+    ) {
       this.logUnauthorizedPostIfActionable(post, data);
       return;
     }
@@ -959,6 +987,10 @@ export class MattermostAdapter implements MattermostProviderAdapter {
       !isPairingMessage
       && !this.isAuthorizedMattermostConversation(channelRef, data.team_id)
     ) {
+      // Observation never widens the conversation gate, and an unaddressed
+      // post from a sender who was never authorized is not an actionable
+      // rejection either.
+      if (observedOnly) return;
       this.emitUnauthorizedConversation({
         actor,
         channel: channelRef,
@@ -968,8 +1000,6 @@ export class MattermostAdapter implements MattermostProviderAdapter {
       return;
     }
 
-    const fileIds: string[] = Array.isArray(post.file_ids) ? post.file_ids : [];
-
     if (fileIds.length > 0) {
       await this.dispatchMediaEvent({
         actor,
@@ -977,6 +1007,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
         eventId: post.id,
         fileIds,
         messageText,
+        observedOnly,
         receipt,
       });
       return;
@@ -1016,6 +1047,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
           botMention: true,
           channel: channelRef,
           eventId: post.id,
+          observedOnly,
           text: stripped,
           receipt,
         });
@@ -1027,6 +1059,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
       actor,
       channel: channelRef,
       eventId: post.id,
+      observedOnly,
       text: messageText,
       receipt,
     });
@@ -1354,6 +1387,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     botMention?: boolean;
     channel: MessagingChannelRef;
     eventId: string;
+    observedOnly?: boolean;
     receipt: MessagingInboundReceipt;
     text: string;
   }): Promise<void> {
@@ -1367,6 +1401,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
       actor: params.actor,
       channel: params.channel,
       ...(params.botMention ? { botMention: true } : {}),
+      ...(params.observedOnly ? { observedOnly: true } : {}),
       text: params.text,
     });
   }
@@ -1701,6 +1736,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     eventId: string;
     fileIds: string[];
     messageText: string;
+    observedOnly?: boolean;
     receipt: MessagingInboundReceipt;
   }): Promise<void> {
     if (!this.listener) {
@@ -1721,6 +1757,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
       text: params.messageText || undefined,
       attachments: descriptors,
       disposition: descriptors.length > 0 ? "available" : "unsupported",
+      ...(params.observedOnly ? { observedOnly: true } : {}),
     });
   }
 

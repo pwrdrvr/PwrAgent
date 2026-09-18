@@ -38,15 +38,23 @@ adapter, so a channel automation could never fire for an alert bot. The Discord
 adapter now implements the observed-conversation set described in the
 [adapter contract](messaging-adapter-contract.md#observed-conversations): in a
 channel an enabled automation or an open preview watches, other senders'
-messages are forwarded `observedOnly`, and their slash commands are dropped.
+messages are forwarded `observedOnly`, and their commands are rejected exactly
+as before.
 
-Only Slack and Discord forward those senders. Telegram, Mattermost, Feishu, and
-LINE still drop anyone outside the actor allowlist in a shared conversation, so
-a group automation on those providers fires only for authorized contacts —
-an alert bot posting into a Telegram group never triggers one unless it is
-authorized. Extending the observed set to each needs that platform's delivery
-rules checked first; Telegram's bot privacy mode, for one, keeps group messages
-from reaching the bot at all.
+Telegram, Mattermost, Feishu, and LINE dropped the same senders, so a group
+automation on them fired only for authorized contacts. All four now implement
+the observed set too, and Slack's was changed to match: a command from an
+observed sender is rejected and reported rather than silently dropped. Each
+adapter suite pins the forwarded case, an unwatched conversation, a command,
+and a watched conversation that fails the conversation allowlist.
+
+Two platform settings decide delivery before the adapter runs: Telegram's bot
+Group Privacy and Feishu's `im:message.group_msg` permission. Neither produces
+an error — the automation just never fires — so the editor says so where a
+group trigger is chosen, and the Telegram adapter logs a warning when it can
+tell. Mattermost's webhook-attributed posts remain excluded as an anti-echo
+defense, so webhook-posted alerts there cannot trigger an automation. See the
+[adapter contract](messaging-adapter-contract.md#observed-conversations).
 Telegram broadcast `channel_post` updates are not subscribed to by this adapter;
 the Telegram catalog therefore lists authorized groups/supergroups, not broadcast
 channels. LINE groups and rooms use separate allowlists and preserve their native
@@ -100,7 +108,7 @@ Provider delivery errors surface as failed output actions. No live account was
 used to test Discord channel listing or observed-channel delivery against a real
 server (including whether the application has the privileged Message Content
 intent enabled in the Developer Portal, which the adapter requests and which
-ambient channel text requires), blocked DMs, an unstarted Telegram bot chat, Slack scopes or group-DM
+ambient channel text requires), blocked DMs, an unstarted Telegram bot chat, Telegram group privacy, Slack scopes or group-DM
 access settings, Feishu tenant permissions/event subscriptions, Mattermost server
 permissions, or LINE membership and push eligibility. Native threaded Feishu
 messages are not separately normalized by this adapter; the verified Feishu

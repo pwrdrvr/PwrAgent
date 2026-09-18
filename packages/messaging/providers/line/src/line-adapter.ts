@@ -208,6 +208,11 @@ export class LineAdapter implements LineProviderAdapter {
   private started = false;
   private lifecycleGeneration = 0;
   private readonly inboundRejectedListeners = new Set<MessagingInboundRejectedListener>();
+  // Groups and rooms an enabled automation or open editor preview watches,
+  // pushed by the desktop runtime. There, a sender outside the actor
+  // allowlist is forwarded observedOnly instead of dropped; without it a LINE
+  // group automation fired only for authorized contacts. Empty by default.
+  private observedConversationIds = new Set<string>();
 
   constructor(options: LineAdapterOptions) {
     this.config = options.config;
@@ -227,6 +232,10 @@ export class LineAdapter implements LineProviderAdapter {
 
   get authorizedActorIds(): readonly string[] {
     return this.authorizedActorIdsValue;
+  }
+
+  updateObservedConversations(conversationIds: readonly string[]): void {
+    this.observedConversationIds = new Set(conversationIds);
   }
 
   async updateAuthorization(update: MessagingAdapterAuthorizationUpdate): Promise<void> {
@@ -684,26 +693,40 @@ export class LineAdapter implements LineProviderAdapter {
     const botMention =
       event.message.type === "text"
       && this.eventMentionsBot(event);
-    const observedOnly = channel.conversation.kind !== "dm"
+    // Unaddressed chatter in a group or room: automations may see it, but it
+    // is never ordinary input to a bound thread.
+    const ambient = channel.conversation.kind !== "dm"
       && !botMention && !isCommand && !isPairing;
-    if (observedOnly && (!this.authorizedActorIds.includes(actor.platformUserId)
-      || !this.isAuthorizedConversation(channel))) {
-      // Unaddressed chatter outside the allowlists is not an actionable rejection.
-      return;
-    }
-    if (!this.authorizeInbound({
-      actor,
-      botMention,
-      channel,
-      kind: isCommand
-        ? "command"
-        : event.message.type === "text"
-          ? "text"
-          : "media",
-      pairing: isPairing,
-      routingState,
-    })) {
-      return;
+    // A sender outside the actor allowlist, in an authorized group or room
+    // that an enabled automation or open preview watches. Forwarded for
+    // observation only — a command or pairing code never is, and a command
+    // is still rejected below exactly as it would be anywhere else.
+    const observedSender = channel.conversation.kind !== "dm"
+      && !isCommand && !isPairing
+      && this.observedConversationIds.has(channel.conversation.id)
+      && this.isAuthorizedConversation(channel)
+      && !this.authorizedActorIds.includes(actor.platformUserId);
+    const observedOnly = ambient || observedSender;
+    if (!observedSender) {
+      if (ambient && (!this.authorizedActorIds.includes(actor.platformUserId)
+        || !this.isAuthorizedConversation(channel))) {
+        // Unaddressed chatter outside the allowlists is not an actionable rejection.
+        return;
+      }
+      if (!this.authorizeInbound({
+        actor,
+        botMention,
+        channel,
+        kind: isCommand
+          ? "command"
+          : event.message.type === "text"
+            ? "text"
+            : "media",
+        pairing: isPairing,
+        routingState,
+      })) {
+        return;
+      }
     }
     if (event.message.type === "text") {
       if (text.startsWith("/")) {

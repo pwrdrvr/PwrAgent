@@ -696,6 +696,87 @@ describe("LineAdapter", () => {
     expect(api.pushMessage).toHaveBeenCalledWith(expect.objectContaining({ to: conversationId }));
   });
 
+  describe("observed groups", () => {
+    // Before the observed set, a LINE group automation fired only for
+    // authorized contacts: everyone else's messages were dropped here.
+    const GROUP_ID = "C0123456789abcdef0123456789abcdef";
+    const OTHER_GROUP_ID = "C1123456789abcdef0123456789abcdef";
+    const OUTSIDER = "U9999999999abcdef0123456789abcdef";
+
+    const startObserved = async (observed: string[]) => {
+      const port = await getFreePort();
+      const config = createConfig({
+        callbackBaseUrl: `http://127.0.0.1:${port}/`,
+        authorizedGroupIds: [
+          { id: GROUP_ID, displayName: "Ops" },
+          { id: OTHER_GROUP_ID, displayName: "Lab" },
+        ],
+      });
+      const adapter = new LineAdapter({
+        api: createApi(),
+        config,
+        callbackHandleStore: createCallbackStore(),
+      });
+      adapters.push(adapter);
+      adapter.updateObservedConversations(observed);
+      const events: MessagingInboundEvent[] = [];
+      const rejections: MessagingRejectedInboundEvent[] = [];
+      adapter.onInboundRejected((event) => { rejections.push(event); });
+      await adapter.start(async (event) => { events.push(event); });
+      const message = (params: { text: string; userId: string; groupId?: string }) => ({
+        ...(lineGroupTextEvent({ text: params.text }) as Record<string, unknown>),
+        source: { type: "group", userId: params.userId, groupId: params.groupId ?? GROUP_ID },
+      });
+      return { config, events, message, port, rejections };
+    };
+
+    it("forwards an outside sender's message in a watched group as observed only", async () => {
+      const { config, events, message, port } = await startObserved([GROUP_ID]);
+
+      await postLineWebhook(port, config.channelSecret, {
+        events: [message({ text: "Deploy failed on prod", userId: OUTSIDER })],
+      });
+      await waitFor(() => events.length === 1);
+
+      expect(events[0]).toMatchObject({
+        kind: "text",
+        observedOnly: true,
+        actor: { platformUserId: OUTSIDER },
+        channel: { conversation: { id: GROUP_ID } },
+      });
+    });
+
+    it("still drops an outside sender in a group nothing watches", async () => {
+      const { config, events, message, port, rejections } = await startObserved([GROUP_ID]);
+
+      // One webhook, processed in order: if the first were forwarded it would
+      // arrive before the authorized control message.
+      await postLineWebhook(port, config.channelSecret, {
+        events: [
+          message({ text: "chatter", userId: OUTSIDER, groupId: OTHER_GROUP_ID }),
+          message({ text: "control", userId: config.authorizedActorIds[0]!.id }),
+        ],
+      });
+      await waitFor(() => events.length === 1);
+
+      expect(events[0]).toMatchObject({ text: "control" });
+      expect(rejections).toEqual([]);
+    });
+
+    it("rejects an outside sender's command in a watched group", async () => {
+      // Observation is not authorization, and it must not hide the attempt.
+      const { config, events, message, port, rejections } = await startObserved([GROUP_ID]);
+
+      await postLineWebhook(port, config.channelSecret, {
+        events: [message({ text: "/status", userId: OUTSIDER })],
+      });
+      await waitFor(() => rejections.length === 1);
+
+      expect(events).toEqual([]);
+      expect(rejections[0]).toMatchObject({ kind: "command", reason: "unauthorized-actor" });
+    });
+  });
+
   it("rejects shared conversation events when no group allowlist is configured", async () => {
     const port = await getFreePort();
     const config = createConfig({ callbackBaseUrl: `http://127.0.0.1:${port}/` });
