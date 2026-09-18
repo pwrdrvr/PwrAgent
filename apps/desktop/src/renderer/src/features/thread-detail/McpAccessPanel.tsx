@@ -187,6 +187,12 @@ export function McpAccessPanel(props: McpAccessPanelProps) {
               const checked = props.selection.connectionIds.includes(
                 connection.id,
               );
+              // A selected connection keeps its switch even when it breaks.
+              // Its credentials can expire after it was chosen -- or after a
+              // new thread was seeded with it by default -- and a row offering
+              // only Authorize would leave it selected with no way to drop it
+              // from inside the thread.
+              const showSwitch = healthy || checked;
               return (
                 <li className="mcp-access-panel__row" key={connection.id}>
                   <div className="mcp-access-panel__row-body">
@@ -195,12 +201,14 @@ export function McpAccessPanel(props: McpAccessPanelProps) {
                     </span>
                     {!healthy ? (
                       <span className="mcp-access-panel__detail">
-                        {connection.detail
-                          ?? formatMcpConnectionState(connection)}
+                        {checked
+                          ? `${formatMcpConnectionState(connection)}. Fix it in Settings, or drop it here.`
+                          : connection.detail
+                            ?? formatMcpConnectionState(connection)}
                       </span>
                     ) : null}
                   </div>
-                  {healthy ? (
+                  {showSwitch ? (
                     <SettingsSwitch
                       checked={checked}
                       disabled={!backendSupported || busy}

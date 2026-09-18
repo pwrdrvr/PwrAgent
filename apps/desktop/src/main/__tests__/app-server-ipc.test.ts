@@ -9375,7 +9375,9 @@ describe("app server ipc", () => {
         directoryPath: "/repo/app",
         currentBranch: undefined,
       }),
-      { skipFilesystemInspection: true },
+      // A viewer's draft takes neither this machine's filesystem metadata
+      // nor its MCP defaults: connection ids are per machine.
+      { skipFilesystemInspection: true, skipMcpConnectionDefaults: true },
     );
     expect(updateDirectoryLaunchpad).not.toHaveBeenCalled();
     expect(response).toEqual(
@@ -9444,7 +9446,9 @@ describe("app server ipc", () => {
         directoryPath: "/owner/repo/app",
         currentBranch: undefined,
       }),
-      { skipFilesystemInspection: true },
+      // A viewer's draft takes neither this machine's filesystem metadata
+      // nor its MCP defaults: connection ids are per machine.
+      { skipFilesystemInspection: true, skipMcpConnectionDefaults: true },
     );
     expect(response).toEqual(
       expect.objectContaining({

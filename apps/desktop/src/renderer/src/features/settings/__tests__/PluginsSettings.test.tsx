@@ -52,7 +52,9 @@ function createSnapshot(options: {
   const codexHome = options.codexHome ?? CODEX_HOME;
   return {
     general: {
-      mcpGatewayEnabled: true,
+      // The setting's shape, not a bare boolean: the pane reads `.value`, so
+      // `true` here ran every test in this file with the gateway off.
+      mcpGatewayEnabled: { value: true, source: "default" },
     },
     runtime: {
       messaging: { disabled: false },
@@ -165,14 +167,20 @@ describe("PluginsSettings", () => {
     await waitFor(() => expect(invoked).toHaveBeenCalled());
   });
 
+  // The credential chip speaks the Codex list's vocabulary; only the setup
+  // states that list has no word for -- the app is missing or not running --
+  // keep a headline chip of their own. Until the app runs there is nothing to
+  // sign in to, so an empty credential says nothing the Get/Open action does
+  // not; credentials held from before still do.
   it.each([
-    ["not_installed", false, true, "Not installed"],
-    ["installed", false, true, "Not running"],
-    ["running", false, true, "Not set up"],
-    ["running", true, true, "Ready"],
+    ["not_installed", false, true, ["Not installed"]],
+    ["installed", false, true, ["Not running"]],
+    ["installed", true, true, ["Not running", "Signed in"]],
+    ["running", false, true, ["Sign-in required"]],
+    ["running", true, true, ["Signed in"]],
   ] as const)(
     "resolves one state line for %s (configured=%s, gateway=%s)",
-    async (availability, configured, gatewayEnabled, headline) => {
+    async (availability, configured, gatewayEnabled, chips) => {
       const api = createDesktopApi([]);
       const status = { connectionId: "pwrgit", displayName: "PwrGit", availability, configured } as const;
       api.readPwrGitConnectionStatus = vi.fn().mockResolvedValue(status);
@@ -196,8 +204,14 @@ describe("PluginsSettings", () => {
         />,
       );
       const endpoint = await screen.findByText("http://127.0.0.1:51731/mcp");
-      const row = within(endpoint.closest("article")!);
-      expect(await row.findByText(headline)).toBeInTheDocument();
+      const article = endpoint.closest("article")!;
+      const row = within(article);
+      expect(await row.findByText(chips[0])).toBeInTheDocument();
+      expect(
+        Array.from(
+          article.querySelectorAll(".settings-mcp-row__chips > .settings-pathrow__chip"),
+        ).map((chip) => chip.textContent),
+      ).toEqual(chips);
       // Exactly one claim: the chip pair that used to contradict itself is
       // gone.
       expect(row.queryByText("Not connected")).not.toBeInTheDocument();
@@ -671,5 +685,168 @@ describe("PluginsSettings", () => {
       "title",
       expect.stringContaining("entirely"),
     );
+  });
+
+  describe("PwrAgent-managed rows", () => {
+    function managed(
+      overrides: Partial<McpConnectionStatus> = {},
+    ): McpConnectionStatus {
+      return {
+        id: "datadog",
+        displayName: "Datadog",
+        serverUrl: "https://mcp.example.com/mcp",
+        kind: "remote",
+        authMode: "oauth",
+        enabled: true,
+        configured: true,
+        state: "ready",
+        createdAt: 0,
+        updatedAt: 0,
+        ...overrides,
+      };
+    }
+
+    function managedApi(
+      connections: McpConnectionStatus[],
+      tools: string[] = [],
+    ): DesktopApi {
+      const api = createDesktopApi([]);
+      api.listMcpConnections = vi.fn().mockResolvedValue({ connections });
+      api.listMcpConnectionTools = vi.fn(async (request) => ({
+        connectionId: request.connectionId,
+        tools,
+        fetchedAt: 1,
+      }));
+      api.setMcpConnectionEnabled = vi.fn();
+      api.setMcpConnectionSelectForNewThreads = vi.fn();
+      return api;
+    }
+
+    async function findRow(name: string) {
+      const endpoint = await screen.findByText("https://mcp.example.com/mcp");
+      const article = endpoint.closest("article")!;
+      expect(within(article).getByText(name)).toBeInTheDocument();
+      return article;
+    }
+
+    /**
+     * The Codex list below has always shown every tool of every server; a
+     * managed connection showed a name and a URL. The gateway can read the
+     * list itself, so the row now says what the Codex row says.
+     */
+    it("shows a managed connection's tools the way the Codex list does", async () => {
+      const tools = Array.from({ length: 15 }, (_, index) => `tool_${index + 1}`);
+      const api = managedApi([managed()], tools);
+      render(<PluginsSettings desktopApi={api} snapshot={createSnapshot()} />);
+
+      const article = await findRow("Datadog");
+      const row = within(article);
+      expect(await row.findByText("15 tools")).toBeInTheDocument();
+      const toggle = row.getByRole("button", { name: /^Datadog/ });
+      expect(article).toHaveAttribute("data-health", "ready");
+      expect(api.listMcpConnectionTools).toHaveBeenCalledWith({
+        connectionId: "datadog",
+      });
+
+      fireEvent.click(toggle);
+      expect(row.getByText(/tool_1, tool_2/)).toBeInTheDocument();
+      expect(
+        row.getByRole("button", { name: "Show 3 more Tools" }),
+      ).toBeInTheDocument();
+
+      // A managed list is read once and kept, so a server that gained a tool
+      // needs a way to be asked again.
+      fireEvent.click(row.getByRole("button", { name: "Refresh tools" }));
+      await waitFor(() => {
+        expect(api.listMcpConnectionTools).toHaveBeenLastCalledWith({
+          connectionId: "datadog",
+          refresh: true,
+        });
+      });
+    });
+
+    it("does not ask a connection that cannot answer", async () => {
+      const api = managedApi([
+        managed({ configured: false, state: "disconnected" }),
+      ]);
+      render(<PluginsSettings desktopApi={api} snapshot={createSnapshot()} />);
+
+      const row = within(await findRow("Datadog"));
+      // The same words the Codex list uses for a server in this state.
+      expect(row.getByText("no tools — sign-in required")).toBeInTheDocument();
+      expect(row.getByText("Sign-in required")).toBeInTheDocument();
+      expect(api.listMcpConnectionTools).not.toHaveBeenCalled();
+    });
+
+    it("says when a listing failed, instead of claiming an empty server", async () => {
+      const api = managedApi([managed()]);
+      api.listMcpConnectionTools = vi.fn(async () => {
+        throw new Error("upstream answered 502");
+      });
+      render(<PluginsSettings desktopApi={api} snapshot={createSnapshot()} />);
+
+      const article = await findRow("Datadog");
+      const row = within(article);
+      expect(
+        await row.findByText("no tools — could not list them"),
+      ).toBeInTheDocument();
+      expect(row.getByText("upstream answered 502")).toBeInTheDocument();
+      expect(article).toHaveAttribute("data-health", "failed");
+    });
+
+    /**
+     * Two switches on one row, one per question. Offer decides whether a
+     * thread may use the connection at all; the other decides whether a new
+     * thread starts with it already chosen.
+     */
+    it("keeps selecting for new threads apart from offering to threads", async () => {
+      const api = managedApi([managed()]);
+      render(<PluginsSettings desktopApi={api} snapshot={createSnapshot()} />);
+
+      const row = within(await findRow("Datadog"));
+      const offer = row.getByRole("switch", { name: "Offer Datadog to threads" });
+      const newThreads = row.getByRole("switch", {
+        name: "Select Datadog for new threads",
+      });
+      expect(offer).toBeChecked();
+      expect(newThreads).not.toBeChecked();
+      expect(row.getByText("Offer to threads")).toBeInTheDocument();
+      expect(row.getByText("Select for new threads")).toBeInTheDocument();
+
+      fireEvent.click(newThreads);
+      await waitFor(() => {
+        expect(api.setMcpConnectionSelectForNewThreads).toHaveBeenCalledWith({
+          connectionId: "datadog",
+          selectForNewThreads: true,
+        });
+      });
+      // New threads only: the notice says so, because the obvious fear is a
+      // running thread quietly gaining a server.
+      expect(
+        await screen.findByText(
+          "New threads start with Datadog selected. Existing threads are unchanged.",
+        ),
+      ).toBeInTheDocument();
+      expect(api.setMcpConnectionEnabled).not.toHaveBeenCalled();
+    });
+
+    it("never shows a parked connection as selected for new threads", async () => {
+      const api = managedApi([
+        managed({ enabled: false, selectForNewThreads: true }),
+      ]);
+      render(<PluginsSettings desktopApi={api} snapshot={createSnapshot()} />);
+
+      const row = within(await findRow("Datadog"));
+      const newThreads = row.getByRole("switch", {
+        name: "Select Datadog for new threads",
+      });
+      // The preference is kept for when the connection is offered again, but
+      // a parked connection is not seeded -- `On` here would be a promise the
+      // next thread breaks.
+      expect(newThreads).not.toBeChecked();
+      expect(newThreads).toBeDisabled();
+      expect(row.getByText("Offer it to threads first.")).toBeInTheDocument();
+      expect(row.getByText("Parked")).toBeInTheDocument();
+    });
   });
 });

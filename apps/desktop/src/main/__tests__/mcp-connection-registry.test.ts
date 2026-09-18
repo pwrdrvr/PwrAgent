@@ -281,6 +281,87 @@ describe("McpConnectionRegistry", () => {
     expect(fs.readFileSync(target, "utf8")).not.toContain("acme");
   });
 
+  it("selects a connection for new threads only when asked to", () => {
+    const target = configPath();
+    const registry = new McpConnectionRegistry({
+      configPath: target,
+      now: () => 1_723_456_789_000,
+    });
+    const created = registry.create({
+      displayName: "Datadog",
+      serverUrl: "https://mcp.datadoghq.com/mcp",
+    });
+    // Opt-in. A connection that started handing itself to every new thread
+    // the moment it was added would be the thing this switch exists to avoid.
+    expect(created.selectForNewThreads).toBe(false);
+
+    expect(
+      registry.setSelectForNewThreads(created.id, true).selectForNewThreads,
+    ).toBe(true);
+    expect(
+      new McpConnectionRegistry({ configPath: target }).get(created.id),
+    ).toMatchObject({ enabled: true, selectForNewThreads: true });
+
+    // Independent of availability: parking keeps the preference, so offering
+    // the connection again brings the default back without a second trip.
+    registry.setEnabled(created.id, false);
+    expect(registry.get(created.id)).toMatchObject({
+      enabled: false,
+      selectForNewThreads: true,
+    });
+
+    registry.setSelectForNewThreads(created.id, false);
+    expect(registry.get(created.id)?.selectForNewThreads).toBe(false);
+    expect(fs.readFileSync(target, "utf8")).not.toContain(
+      "select_for_new_threads",
+    );
+  });
+
+  it("keeps the new-thread key off rows that never set it", () => {
+    const target = configPath();
+    const registry = new McpConnectionRegistry({
+      configPath: target,
+      now: () => 2,
+    });
+    registry.create({
+      displayName: "Datadog",
+      serverUrl: "https://mcp.datadoghq.com/mcp",
+    });
+    // Nor onto a row as it is created: off is the absence of the key.
+    expect(fs.readFileSync(target, "utf8")).not.toContain(
+      "select_for_new_threads",
+    );
+    const acme = registry.create({
+      displayName: "Acme",
+      serverUrl: "https://mcp.acme.example/mcp",
+    });
+
+    // A rewrite of the block for one connection's sake must not stamp the
+    // key onto every other row it passes through.
+    registry.setSelectForNewThreads(acme.id, true);
+
+    const written = fs.readFileSync(target, "utf8");
+    expect(written.match(/select_for_new_threads/g)).toHaveLength(1);
+    expect(registry.get("datadog")?.selectForNewThreads).toBe(false);
+  });
+
+  it("selects a built-in for new threads through its own key", () => {
+    const target = configPath();
+    const registry = new McpConnectionRegistry({ configPath: target });
+
+    expect(registry.get("pwrgit")?.selectForNewThreads).toBe(false);
+    expect(
+      registry.setSelectForNewThreads("pwrgit", true).selectForNewThreads,
+    ).toBe(true);
+    expect(fs.readFileSync(target, "utf8")).toContain(
+      "pwrgit_select_for_new_threads = true",
+    );
+    const reread = new McpConnectionRegistry({ configPath: target });
+    expect(reread.get("pwrgit")?.selectForNewThreads).toBe(true);
+    // Each built-in has its own key; one does not carry the other along.
+    expect(reread.get("pwrsnap")?.selectForNewThreads).toBe(false);
+  });
+
   it("refuses to park a connection that no longer exists", () => {
     const registry = new McpConnectionRegistry({ configPath: configPath() });
     expect(() => registry.setEnabled("ghost", false))

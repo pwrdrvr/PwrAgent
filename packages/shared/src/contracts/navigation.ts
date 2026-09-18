@@ -854,6 +854,17 @@ export type NavigationLaunchpadDraft = NavigationLaunchpadDefaults & {
   /** MCP connections selected for the thread created from this launchpad. */
   mcpConnectionIds?: string[];
   /**
+   * True while `mcpConnectionIds` is exactly what the connections marked
+   * "Select for new threads" seeded, and the operator has not edited it.
+   *
+   * Drafts outlive a visit -- one per directory, kept until it is sent -- so
+   * without this a default set once would freeze into every draft it touched,
+   * and a later change in Settings would reach none of them. While it is true
+   * the draft is re-seeded each time it is opened; any edit to the selection
+   * clears it, and from then on the selection is the operator's.
+   */
+  mcpConnectionIdsFromDefaults?: boolean;
+  /**
    * Whether the backend's own configured MCP servers stay available to the
    * thread. Undefined means yes. Only Codex can honor `false`; see
    * `SetThreadMcpConnectionsRequest`.

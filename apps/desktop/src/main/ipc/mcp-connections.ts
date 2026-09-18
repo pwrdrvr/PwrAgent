@@ -11,6 +11,8 @@ import {
   type ProbeMcpConnectionResponse,
   type UpdateMcpConnectionRequest,
   type DisconnectMcpConnectionRequest,
+  type ListMcpConnectionToolsRequest,
+  type ListMcpConnectionToolsResponse,
   isRemoteFederationTarget,
   type ConnectPwrGitResponse,
   type ListMcpConnectionsResponse,
@@ -18,6 +20,7 @@ import {
   type MutateMcpConnectionResponse,
   type RemoveMcpConnectionRequest,
   type SetMcpConnectionEnabledRequest,
+  type SetMcpConnectionSelectForNewThreadsRequest,
   type ReadThreadMcpConnectionsRequest,
   type SetThreadMcpConnectionsRequest,
   type SetThreadMcpConnectionsResponse,
@@ -44,6 +47,8 @@ import {
   MCP_CONNECTION_PWRSNAP_STATUS_CHANNEL,
   MCP_CONNECTION_REMOVE_CHANNEL,
   MCP_CONNECTION_SET_ENABLED_CHANNEL,
+  MCP_CONNECTION_SET_SELECT_FOR_NEW_THREADS_CHANNEL,
+  MCP_CONNECTION_LIST_TOOLS_CHANNEL,
   MCP_CONNECTION_SET_THREAD_CHANNEL,
   MCP_CONNECTION_READ_THREAD_CHANNEL,
   MCP_CONNECTION_DESCRIBE_THREAD_CHANNEL,
@@ -158,6 +163,33 @@ export function registerMcpConnectionIpcHandlers(
           request.enabled,
         );
       return { connectionId: request.connectionId, connection };
+    },
+  );
+  ipcMain.removeHandler(MCP_CONNECTION_SET_SELECT_FOR_NEW_THREADS_CHANNEL);
+  ipcMain.handle(
+    MCP_CONNECTION_SET_SELECT_FOR_NEW_THREADS_CHANNEL,
+    async (
+      event,
+      request: SetMcpConnectionSelectForNewThreadsRequest,
+    ): Promise<MutateMcpConnectionResponse> => {
+      requireLocalOwner(event);
+      const connection: McpConnectionStatus =
+        await service.setConnectionSelectForNewThreads(
+          request.connectionId,
+          request.selectForNewThreads,
+        );
+      return { connectionId: request.connectionId, connection };
+    },
+  );
+  ipcMain.removeHandler(MCP_CONNECTION_LIST_TOOLS_CHANNEL);
+  ipcMain.handle(
+    MCP_CONNECTION_LIST_TOOLS_CHANNEL,
+    async (
+      event,
+      request: ListMcpConnectionToolsRequest,
+    ): Promise<ListMcpConnectionToolsResponse> => {
+      requireLocalOwner(event);
+      return await service.listConnectionTools(request);
     },
   );
   ipcMain.removeHandler(MCP_CONNECTION_SET_THREAD_CHANNEL);
@@ -342,6 +374,8 @@ function registerPwrGitHandlers(service: PwrGitConnectionService): void {
 
 export function disposeMcpConnectionIpcHandlers(): void {
   ipcMain.removeHandler(MCP_CONNECTION_LIST_CHANNEL);
+  ipcMain.removeHandler(MCP_CONNECTION_LIST_TOOLS_CHANNEL);
+  ipcMain.removeHandler(MCP_CONNECTION_SET_SELECT_FOR_NEW_THREADS_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_CREATE_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_AUTHORIZE_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_CANCEL_AUTHORIZE_CHANNEL);

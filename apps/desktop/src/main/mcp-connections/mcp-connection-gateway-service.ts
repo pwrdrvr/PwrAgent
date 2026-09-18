@@ -18,6 +18,8 @@ import {
   PWRGIT_MCP_CONNECTION_ID,
   PWRSNAP_SESSION_REVOKED_DETAIL,
   type CreateMcpConnectionRequest,
+  type ListMcpConnectionToolsRequest,
+  type ListMcpConnectionToolsResponse,
   type ProbeMcpConnectionRequest,
   type ProbeMcpConnectionResponse,
   type UpdateMcpConnectionRequest,
@@ -52,7 +54,10 @@ import {
 } from "./mcp-oauth-session-coordinator";
 import { createMcpSafeFetch } from "./mcp-safe-fetch";
 import { probeMcpConnectionUrl } from "./mcp-connection-probe";
-import { MCP_CONNECTION_TOOL_TIMEOUT_MS } from "./mcp-connection-timeouts";
+import {
+  MCP_CONNECTION_TOOL_LIST_TIMEOUT_MS,
+  MCP_CONNECTION_TOOL_TIMEOUT_MS,
+} from "./mcp-connection-timeouts";
 
 const connectionLog = getMainLogger("pwragent:mcp-connections");
 const PWRSNAP_MCP_URL = new URL("http://127.0.0.1:51729/mcp");
@@ -75,6 +80,14 @@ export const PWRSNAP_SESSION_REVOKED_ERROR =
 const OAUTH_CALLBACK_TIMEOUT_MS = 5 * 60_000;
 const MAX_RPC_LINE_BYTES = 1024 * 1024;
 const MAX_RPC_CONNECTIONS = 32;
+/**
+ * A server that keeps answering with a cursor is paging forever or paging
+ * something far larger than a Settings row can show. Either way the row gets
+ * what arrived rather than a spinner that never ends.
+ */
+const MAX_TOOL_LIST_PAGES = 20;
+const GATEWAY_OFF_ERROR =
+  "The PwrAgent MCP gateway is turned off. Turn it on in Settings → Plugins to use managed connections.";
 
 type BridgeGrant = {
   connectionId: string;
@@ -447,6 +460,24 @@ export class McpConnectionGatewayService {
    * an orphan can never be closed.
    */
   private readonly upstreamStarts = new Map<string, Promise<Client>>();
+  /**
+   * The last tool list read for each connection outside a thread.
+   *
+   * In memory, like the sessions: it describes what the server said to this
+   * process, and a restart has not asked it anything yet. A generation per
+   * connection keeps a read that was in flight across a disconnect, a
+   * re-point, or a fresh authorization from caching an answer that belongs to
+   * the credentials or the URL it started with.
+   */
+  private readonly toolInventories = new Map<
+    string,
+    ListMcpConnectionToolsResponse
+  >();
+  private readonly toolInventoryReads = new Map<
+    string,
+    Promise<ListMcpConnectionToolsResponse>
+  >();
+  private readonly toolInventoryGenerations = new Map<string, number>();
   private connectPromise?: Promise<ConnectPwrSnapResponse>;
   private sessionRevoked = false;
   private leaseHeld = false;
@@ -621,6 +652,8 @@ export class McpConnectionGatewayService {
         this.sessionRevoked = false;
         await this.settings.clearPwrSnapMcpCredential();
       }
+      // A different account can see a different set of tools.
+      this.invalidateConnectionTools(connectionId);
       callback.complete(
         "connected",
         `PwrAgent can now offer ${connection.displayName} to the agents and threads you choose.`,
@@ -711,6 +744,7 @@ export class McpConnectionGatewayService {
       await this.closeConnectionSessions(request.connectionId);
       await this.coordinatorFor(existing).disconnect();
       this.coordinators.delete(request.connectionId);
+      this.invalidateConnectionTools(request.connectionId);
     }
     return await this.connectionStatus(connection);
   }
@@ -778,6 +812,7 @@ export class McpConnectionGatewayService {
     const connection = this.requireConnection(connectionId);
     await this.closeConnectionSessions(connectionId);
     await this.coordinatorFor(connection).disconnect();
+    this.invalidateConnectionTools(connectionId);
     if (connection.id === PWRSNAP_MCP_CONNECTION_ID) {
       this.sessionRevoked = false;
       await this.settings.clearPwrSnapMcpCredential();
@@ -812,6 +847,123 @@ export class McpConnectionGatewayService {
     return await this.connectionStatus(connection);
   }
 
+  /**
+   * Choose whether a new thread starts with this connection selected.
+   *
+   * Nothing live changes: no session opens or closes, and no existing thread's
+   * selection is touched. The flag is read when a new-thread draft is seeded,
+   * which is where `mcpConnectionIdsForNewThread` also refuses a connection
+   * that is parked or has no working credentials.
+   */
+  async setConnectionSelectForNewThreads(
+    connectionId: string,
+    selectForNewThreads: boolean,
+  ): Promise<McpConnectionStatus> {
+    const ownership = await this.ensureOwnerBroker();
+    if (!ownership.owned) {
+      return await this.requestOwnerBroker<McpConnectionStatus>(
+        ownership.holder,
+        "broker/set-select-for-new-threads",
+        { connectionId, selectForNewThreads },
+      );
+    }
+    this.requireConnection(connectionId);
+    const connection = this.registry.setSelectForNewThreads(
+      connectionId,
+      selectForNewThreads,
+    );
+    return await this.connectionStatus(connection);
+  }
+
+  /**
+   * The tools a managed connection publishes, read outside any thread.
+   *
+   * A managed connection is only ever opened on a thread's behalf, so
+   * Settings could name it but not say what it offers -- the Codex list below
+   * it shows every tool because Codex has already started those servers. This
+   * opens a short-lived session of its own, pages through `tools/list`, and
+   * closes it again, keeping the answer until something that could change it
+   * happens.
+   *
+   * A parked connection is still listed: this is the operator inspecting a
+   * server, not a thread reaching one, and "what would I be offering?" is a
+   * fair question to ask before offering it. The gateway switch is honored,
+   * because turning it off is the operator saying PwrAgent should not be
+   * talking to these servers at all.
+   */
+  async listConnectionTools(
+    request: ListMcpConnectionToolsRequest,
+  ): Promise<ListMcpConnectionToolsResponse> {
+    const ownership = await this.ensureOwnerBroker();
+    if (!ownership.owned) {
+      return await this.requestOwnerBroker<ListMcpConnectionToolsResponse>(
+        ownership.holder,
+        "broker/list-tools",
+        request,
+      );
+    }
+    if (!this.gatewayEnabled()) throw new Error(GATEWAY_OFF_ERROR);
+    const connection = this.requireConnection(request.connectionId);
+    if (request.refresh) this.invalidateConnectionTools(connection.id);
+    const cached = this.toolInventories.get(connection.id);
+    if (cached) return cached;
+    const pending = this.toolInventoryReads.get(connection.id);
+    if (pending) return await pending;
+    const generation = this.toolInventoryGenerations.get(connection.id) ?? 0;
+    const read = this.readConnectionTools(connection, generation).finally(() => {
+      if (this.toolInventoryReads.get(connection.id) === read) {
+        this.toolInventoryReads.delete(connection.id);
+      }
+    });
+    this.toolInventoryReads.set(connection.id, read);
+    return await read;
+  }
+
+  private invalidateConnectionTools(connectionId: string): void {
+    this.toolInventories.delete(connectionId);
+    this.toolInventoryReads.delete(connectionId);
+    this.toolInventoryGenerations.set(
+      connectionId,
+      (this.toolInventoryGenerations.get(connectionId) ?? 0) + 1,
+    );
+  }
+
+  private async readConnectionTools(
+    connection: McpConnectionRecord,
+    generation: number,
+  ): Promise<ListMcpConnectionToolsResponse> {
+    const session = await this.connectUpstreamClient(connection, {
+      clientName: `pwragent-${connection.id}-settings`,
+      timeout: MCP_CONNECTION_TOOL_LIST_TIMEOUT_MS,
+    });
+    try {
+      const tools: string[] = [];
+      let cursor: string | undefined;
+      for (let page = 0; page < MAX_TOOL_LIST_PAGES; page += 1) {
+        const result = await session.client.listTools(
+          cursor ? { cursor } : undefined,
+          { timeout: MCP_CONNECTION_TOOL_LIST_TIMEOUT_MS },
+        );
+        tools.push(...result.tools.map((tool) => tool.name));
+        cursor = result.nextCursor;
+        if (!cursor) break;
+      }
+      const inventory: ListMcpConnectionToolsResponse = {
+        connectionId: connection.id,
+        tools,
+        fetchedAt: Date.now(),
+      };
+      if ((this.toolInventoryGenerations.get(connection.id) ?? 0) === generation) {
+        this.toolInventories.set(connection.id, inventory);
+      }
+      return inventory;
+    } finally {
+      await session.client.close().catch(async () => {
+        await session.transport.close().catch(() => undefined);
+      });
+    }
+  }
+
   async removeConnection(connectionId: string): Promise<boolean> {
     const ownership = await this.ensureOwnerBroker();
     if (!ownership.owned) {
@@ -828,6 +980,7 @@ export class McpConnectionGatewayService {
     await this.closeConnectionSessions(connectionId);
     await this.coordinatorFor(this.requireConnection(connectionId)).disconnect();
     this.coordinators.delete(connectionId);
+    this.invalidateConnectionTools(connectionId);
     return this.registry.remove(connectionId);
   }
 
@@ -1376,9 +1529,7 @@ export class McpConnectionGatewayService {
    */
   private requireAvailableConnection(connectionId: string): McpConnectionRecord {
     if (!this.gatewayEnabled()) {
-      throw new Error(
-        "The PwrAgent MCP gateway is turned off. Turn it on in Settings → Plugins to use managed connections.",
-      );
+      throw new Error(GATEWAY_OFF_ERROR);
     }
     const connection = this.requireConnection(connectionId);
     if (!connection.enabled) {
@@ -1488,6 +1639,37 @@ export class McpConnectionGatewayService {
     token: string,
     connection: McpConnectionRecord,
   ): Promise<Client> {
+    const session = await this.connectUpstreamClient(connection, {
+      clientName: `pwragent-${connection.id}-proxy`,
+      // A session evicts itself when it actually dies. Leaving that to the
+      // per-request error path would close a healthy session shared by every
+      // in-flight request on this token the first time one of them was
+      // cancelled or answered with an ordinary JSON-RPC error.
+      onClose: (client) => {
+        if (this.upstreamSessions.get(token)?.client === client) {
+          this.upstreamSessions.delete(token);
+        }
+      },
+    });
+    this.upstreamSessions.set(token, session);
+    return session.client;
+  }
+
+  /**
+   * Open an authorized MCP client for a connection.
+   *
+   * Shared by the per-thread proxy sessions and the Settings tool listing, so
+   * both get the same credential check and the same PwrSnap revocation
+   * handling rather than two copies that drift.
+   */
+  private async connectUpstreamClient(
+    connection: McpConnectionRecord,
+    options: {
+      clientName: string;
+      onClose?: (client: Client) => void;
+      timeout?: number;
+    },
+  ): Promise<UpstreamSession> {
     const coordinator = this.coordinatorFor(connection);
     if (!(await coordinator.configured())) {
       throw new Error(
@@ -1502,22 +1684,18 @@ export class McpConnectionGatewayService {
     );
     const client = new Client(
       {
-        name: `pwragent-${connection.id}-proxy`,
+        name: options.clientName,
         version: "1.0.0",
       },
       { capabilities: {} },
     );
-    // A session evicts itself when it actually dies. Leaving that to the
-    // per-request error path would close a healthy session shared by every
-    // in-flight request on this token the first time one of them was
-    // cancelled or answered with an ordinary JSON-RPC error.
-    client.onclose = () => {
-      if (this.upstreamSessions.get(token)?.client === client) {
-        this.upstreamSessions.delete(token);
-      }
-    };
+    const onClose = options.onClose;
+    if (onClose) client.onclose = () => onClose(client);
     try {
-      await client.connect(transport);
+      await client.connect(
+        transport,
+        options.timeout === undefined ? undefined : { timeout: options.timeout },
+      );
       if (connection.id === PWRSNAP_MCP_CONNECTION_ID) {
         await this.settings.clearPwrSnapMcpCredential();
       }
@@ -1532,8 +1710,7 @@ export class McpConnectionGatewayService {
       }
       throw error;
     }
-    this.upstreamSessions.set(token, { client, transport });
-    return client;
+    return { client, transport };
   }
 
   private async closeUpstreamSession(token: string): Promise<void> {
@@ -1757,6 +1934,27 @@ export class McpConnectionGatewayService {
         throw new Error("Invalid MCP connection probe request.");
       }
       return await this.probeConnection({ serverUrl: values.serverUrl });
+    }
+    if (operation === "broker/set-select-for-new-threads") {
+      if (
+        typeof values.connectionId !== "string"
+        || typeof values.selectForNewThreads !== "boolean"
+      ) {
+        throw new Error("Invalid MCP connection new-thread default request.");
+      }
+      return await this.setConnectionSelectForNewThreads(
+        values.connectionId,
+        values.selectForNewThreads,
+      );
+    }
+    if (operation === "broker/list-tools") {
+      if (typeof values.connectionId !== "string") {
+        throw new Error("Invalid MCP connection tool list request.");
+      }
+      return await this.listConnectionTools({
+        connectionId: values.connectionId,
+        ...(values.refresh === true ? { refresh: true } : {}),
+      });
     }
     if (operation === "broker/set-enabled") {
       if (

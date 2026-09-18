@@ -83,6 +83,7 @@ import {
   buildThreadMarkdownLink,
   buildThreadUrl,
   canIsolateMcpProviderServers,
+  mcpConnectionIdsForNewThread,
   mcpSelectionApplyTiming,
   resolveMcpConnectionSetup,
   estimateTokenUsageCost,
@@ -21177,6 +21178,14 @@ export class DesktopBackendRegistry {
        * is never a valid source of environment/filesystem metadata.
        */
       skipFilesystemInspection?: boolean;
+      /**
+       * The same viewer's draft must not take this machine's MCP defaults
+       * either. Connection ids are per machine and the two built-ins share
+       * theirs everywhere, so a local "PwrSnap for new threads" would select
+       * the *remote* machine's PwrSnap on a thread the operator never chose
+       * it for there.
+       */
+      skipMcpConnectionDefaults?: boolean;
     },
   ): Promise<EnsureDirectoryLaunchpadResponse> {
     const codexEnvironmentOptions = options?.skipFilesystemInspection
@@ -21189,6 +21198,9 @@ export class DesktopBackendRegistry {
       await this.overlayStore.getLaunchpadDefaults(),
       request.preferredBackend,
     );
+    const mcpSeed = options?.skipMcpConnectionDefaults
+      ? undefined
+      : await this.resolveLaunchpadMcpSeed(existing);
     if (existing) {
       const registeredAt = existing.registeredAt ?? request.registeredAt;
       const existingLaunchpad = projectNavigationLaunchpadProviderSettings(existing);
@@ -21250,6 +21262,7 @@ export class DesktopBackendRegistry {
           parentThreadInstanceId: requestParentThreadInstanceId,
           parentThreadTitle: requestParentThreadTitle,
           registeredAt,
+          ...mcpSeed,
           updatedAt: Date.now(),
         };
         return {
@@ -21270,7 +21283,8 @@ export class DesktopBackendRegistry {
         normalizedExisting.serviceTier !== existing.serviceTier ||
         normalizedExisting.fastMode !== existing.fastMode ||
         registeredAt !== existing.registeredAt ||
-        parentChanged
+        parentChanged ||
+        mcpSeed !== undefined
       ) {
         return {
           launchpad: withCodexEnvironmentOptions(
@@ -21284,6 +21298,7 @@ export class DesktopBackendRegistry {
               parentThreadInstanceId: requestParentThreadInstanceId,
               parentThreadTitle: requestParentThreadTitle,
               registeredAt,
+              ...mcpSeed,
               updatedAt: Date.now(),
             }),
             codexEnvironmentOptions,
@@ -21320,6 +21335,7 @@ export class DesktopBackendRegistry {
       parentThreadBackend: request.parentThreadBackend,
       parentThreadInstanceId: request.parentThreadInstanceId,
       parentThreadTitle: request.parentThreadTitle,
+      ...mcpSeed,
       createdAt: Date.now(),
       updatedAt: Date.now(),
     };
@@ -21347,6 +21363,12 @@ export class DesktopBackendRegistry {
     const patch = {
       ...request.patch,
       ...("fastMode" in request.patch ? { serviceTier: undefined } : {}),
+      // Any edit to the selection, including one that happens to reproduce
+      // the seeded set, makes it the operator's. Re-seeding after that would
+      // put back a connection they just turned off.
+      ...("mcpConnectionIds" in request.patch
+        ? { mcpConnectionIdsFromDefaults: undefined }
+        : {}),
     };
     const patchedLaunchpad: NavigationLaunchpadDraft = {
       ...applyNavigationLaunchpadProviderSettingsPatch(current, patch),
@@ -23129,6 +23151,58 @@ export class DesktopBackendRegistry {
       launchpadOptions,
       settings,
     );
+  }
+
+  /**
+   * What a new-thread draft's MCP selection should become, or undefined to
+   * leave it alone.
+   *
+   * A draft is seeded only while nobody has chosen for it: no selection yet,
+   * or one the defaults wrote themselves. A draft the operator has edited is
+   * theirs, including an edit down to nothing. The seed is recomputed each
+   * time rather than written once, because a draft sits open per directory
+   * until it is sent, and a default changed in Settings has to reach the
+   * drafts that already exist.
+   *
+   * Failing to read the connections leaves the draft as it is. A missing
+   * default is recoverable from the MCP access panel; a failed ensure is a
+   * New thread screen that will not open.
+   */
+  private async resolveLaunchpadMcpSeed(
+    existing: NavigationLaunchpadDraft | undefined,
+  ): Promise<
+    | Pick<
+        NavigationLaunchpadDraft,
+        "mcpConnectionIds" | "mcpConnectionIdsFromDefaults"
+      >
+    | undefined
+  > {
+    const seeded = existing?.mcpConnectionIdsFromDefaults === true;
+    if (existing?.mcpConnectionIds !== undefined && !seeded) return undefined;
+    const service = this.mcpConnectionService;
+    if (!service?.listConnections) return undefined;
+    let ids: string[];
+    try {
+      ids = mcpConnectionIdsForNewThread(await service.listConnections());
+    } catch (error) {
+      backendRegistryLog.warn("launchpad_mcp_defaults_unavailable", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return undefined;
+    }
+    if (ids.length === 0) {
+      return seeded
+        ? { mcpConnectionIds: undefined, mcpConnectionIdsFromDefaults: undefined }
+        : undefined;
+    }
+    if (
+      seeded
+      && existing?.mcpConnectionIds?.length === ids.length
+      && ids.every((id) => existing.mcpConnectionIds?.includes(id))
+    ) {
+      return undefined;
+    }
+    return { mcpConnectionIds: ids, mcpConnectionIdsFromDefaults: true };
   }
 
   private async resolveLaunchpadDefaults(
