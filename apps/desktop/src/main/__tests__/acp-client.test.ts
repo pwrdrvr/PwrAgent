@@ -3359,6 +3359,153 @@ describe("AcpAgentClient", () => {
     ).toMatchObject({ inInbox: false });
   });
 
+  describe.each(["acp:grok", "acp:gemini", "acp:kimi", "acp:qwen"] as const)(
+    "%s live/replay message boundaries",
+    (backendId) => {
+      it.each([
+        { sessionUpdate: "session_info_update", title: "Example title" },
+        { sessionUpdate: "available_commands_update", availableCommands: [] },
+        { sessionUpdate: "config_option_update", configOptions: [] },
+        { sessionUpdate: "current_mode_update", currentModeId: "default" },
+        { sessionUpdate: "model_changed", modelId: "example-model" },
+        { sessionUpdate: "session_summary_generated", session_summary: "Example title" },
+        { sessionUpdate: "memory_flush_started" },
+        { sessionUpdate: "future_provider_metadata" },
+        { sessionUpdate: "tool_call_delta_chunk" },
+        { sessionUpdate: "response_completed" },
+        { sessionUpdate: "last_turn_summary" },
+        {
+          sessionUpdate: "tool_call",
+          toolCallId: "topic-1",
+          title: 'Update topic to: "Example title"',
+        },
+      ])("preserves identity across $sessionUpdate", async (interleavedUpdate) => {
+        const promptResponse = createDeferred<unknown>();
+        const transport = new FakeAcpAgentTransport({
+          "session/prompt": promptResponse.promise,
+        });
+        const rolloutStore = new AcpRolloutStore(path.join(tempDir, "rollouts"));
+        const liveMessages = new Map<string | undefined, string>();
+        const client = new AcpAgentClient({
+          backendId,
+          store,
+          rolloutStore,
+          transport,
+          onSessionUpdate: ({ assistantMessageItemId, update }) => {
+            if (update.sessionUpdate === "agent_message_chunk") {
+              const text = (update.content as { text: string }).text;
+              liveMessages.set(
+                assistantMessageItemId,
+                (liveMessages.get(assistantMessageItemId) ?? "") + text,
+              );
+            }
+          },
+        });
+        await client.initialize();
+        const session = await client.startSession({ cwd: "/repo", executionMode: "default" });
+        client.startPrompt({ sessionId: session.sessionId, prompt: "Explain this", turnId: "turn-1" });
+        const emitText = (text: string) => transport.emitSessionUpdate(session.sessionId, {
+          sessionUpdate: "agent_message_chunk",
+          content: { type: "text", text },
+        });
+        emitText("One ");
+        transport.emitSessionUpdate(session.sessionId, interleavedUpdate);
+        // Whitespace is part of an existing message, not a new empty bubble.
+        emitText(" ");
+        emitText("paragraph.");
+        transport.emitSessionUpdate(session.sessionId, {
+          sessionUpdate: "tool_call",
+          toolCallId: "read-1",
+          title: "Read fixture",
+          status: "in_progress",
+        });
+        emitText("After ");
+        transport.emitSessionUpdate(session.sessionId, {
+          sessionUpdate: "tool_call_update",
+          toolCallId: "read-1",
+          status: "completed",
+        });
+        emitText("the tool.");
+
+        const replayMessages = client.readReplay(session.sessionId).messages
+          .filter((message) => message.role === "assistant")
+          .map(({ id, text }) => [id, text]);
+        expect(replayMessages).toEqual([
+          ["assistant:turn-1:0", "One  paragraph."],
+          ["assistant:turn-1:1", "After the tool."],
+        ]);
+        expect([...liveMessages]).toEqual(replayMessages);
+        promptResponse.resolve({});
+        await vi.waitFor(() => {
+          expect(store.getSession(backendId, session.sessionId)?.status).toBe("idle");
+        });
+        await client.dispose();
+        const reloadedClient = new AcpAgentClient({
+          backendId,
+          store,
+          rolloutStore,
+          transport: new FakeAcpAgentTransport(),
+        });
+        await reloadedClient.initialize();
+        const reloaded = await reloadedClient.loadSession(store.getSession(backendId, session.sessionId)!);
+        expect(reloaded.messages.filter((message) => message.role === "assistant")
+          .map(({ id, text }) => [id, text])).toEqual(replayMessages);
+        await reloadedClient.dispose();
+      });
+    },
+  );
+
+  it.each(["acp:grok", "acp:gemini", "acp:kimi", "acp:qwen"] as const)(
+    "keeps explicit IDs and visible thought boundaries aligned for %s",
+    async (backendId) => {
+      const promptResponse = createDeferred<unknown>();
+      const transport = new FakeAcpAgentTransport({ "session/prompt": promptResponse.promise });
+      const liveMessages = new Map<string, string>();
+      const client = new AcpAgentClient({
+        backendId,
+        store,
+        transport,
+        onSessionUpdate: ({ assistantMessageItemId, update }) => {
+          if (assistantMessageItemId) {
+            liveMessages.set(
+              assistantMessageItemId,
+              (liveMessages.get(assistantMessageItemId) ?? "") + update.content,
+            );
+          }
+        },
+      });
+      await client.initialize();
+      const session = await client.startSession({ cwd: "/repo", executionMode: "default" });
+      client.startPrompt({ sessionId: session.sessionId, prompt: "Explain this", turnId: "turn-1" });
+      for (const update of [
+        { sessionUpdate: "agent_message_chunk", content: "Before." },
+        { sessionUpdate: "agent_thought_chunk", content: "Considering." },
+        { sessionUpdate: "agent_message_chunk", content: "After." },
+        { sessionUpdate: "agent_message_chunk", messageId: "provider-1", content: "Explicit " },
+        { sessionUpdate: "agent_message_chunk", content: "continuation." },
+        { sessionUpdate: "agent_message_chunk", message_id: "provider-2", content: "New message." },
+      ]) {
+        transport.emitSessionUpdate(session.sessionId, update);
+      }
+      const visibleThoughts = backendId === "acp:gemini" || backendId === "acp:kimi";
+      const expected = [
+        ...(visibleThoughts ? [
+          ["assistant:turn-1:0", "Before."],
+          ["assistant:turn-1:1", "Considering."],
+          ["assistant:turn-1:2", "After."],
+        ] : [["assistant:turn-1:0", "Before.After."]]),
+        ["provider-1", "Explicit continuation."],
+        ["provider-2", "New message."],
+      ];
+      expect([...liveMessages]).toEqual(expected);
+      expect(client.readReplay(session.sessionId).messages
+        .filter((message) => message.role === "assistant")
+        .map(({ id, text }) => [id, text])).toEqual(expected);
+      promptResponse.resolve({});
+      await client.dispose();
+    },
+  );
+
   it("distinguishes known tool progress from standalone tool updates", async () => {
     const promptResponse = createDeferred<unknown>();
     const transport = new FakeAcpAgentTransport({

@@ -4,7 +4,6 @@ import type {
   AcpThreadRewindPoint,
   AppServerAvailableCommandSummary,
   AppServerPendingRequestNotification,
-  AppServerTranscriptPhase,
   AppServerThreadReplay,
   AppServerThreadMessagePart,
   BackendAcpRuntimeCapabilities,
@@ -17,8 +16,6 @@ import type {
 import {
   AcpSessionReplayNormalizer,
   isAcpUserBoilerplateMessage,
-  isGrokTransientUpdateKind,
-  readAcpToolCallId,
   readAcpContentText,
   readAcpTopicTitle,
   readAcpUpdateTimestamp,
@@ -131,11 +128,7 @@ type AcpRolloutStoreLike = {
 };
 
 type AcpActiveTurn = {
-  activeAssistantMessageItemId?: string;
-  activeAssistantMessagePhase?: AppServerTranscriptPhase;
   assistantText: string;
-  assistantMessageSequence: number;
-  knownToolCallIds: Set<string>;
   onTerminalUpdate?: () => void;
   terminalResponseGraceStarted?: boolean;
   turnId: string;
@@ -1174,37 +1167,28 @@ export class AcpAgentClient {
     if (!fromSessionLoad) {
       this.appendHistoryUpdate(sessionId, receivedAt, update);
     }
-    const isAssistantTextUpdate =
-      updateKind === "agent_message_chunk" || updateKind === "agent_thought_chunk";
+    const normalizer = this.normalizerFor(sessionId);
+    const replay = normalizer.apply({
+      sessionId,
+      update,
+      receivedAt,
+      deferTurnCompletion:
+        (updateKind === "turn_finished" || updateKind === "turn_completed")
+        && activeTurn !== undefined,
+    } satisfies AcpSessionUpdate);
     const shouldTrackAssistantTextUpdate =
       updateKind === "agent_message_chunk" ||
       (updateKind === "agent_thought_chunk" && this.surfaceThoughtsAsMessages);
     const text = readUpdateText(update);
-    const toolCallId = readAcpToolCallId(update);
-    const updatesKnownToolCall =
-      updateKind === "tool_call_update"
-      && toolCallId !== undefined
-      && activeTurn?.knownToolCallIds.has(toolCallId) === true;
-    let assistantMessageItemId: string | undefined;
-    const assistantTextPhase: AppServerTranscriptPhase =
-      updateKind === "agent_thought_chunk" ? "commentary" : "final";
-    const continuesActiveAssistantMessage =
-      activeTurn?.activeAssistantMessageItemId !== undefined
-      && activeTurn.activeAssistantMessagePhase === assistantTextPhase;
-    if (
-      shouldTrackAssistantTextUpdate
-      && activeTurn
-      && text
-      && (text.trim() || continuesActiveAssistantMessage)
-    ) {
-      assistantMessageItemId = assistantMessageItemIdForUpdate({
-        activeTurn,
-        phase: assistantTextPhase,
-        update,
-      });
-      if (updateKind === "agent_message_chunk") {
-        activeTurn.assistantText += text;
-      }
+    // Replay owns message boundaries, including metadata, late tool progress,
+    // explicit IDs, and phase changes. A second live-only tracker can split a
+    // paragraph that the normalizer correctly keeps together after reload.
+    const assistantMessageItemId =
+      activeTurn && shouldTrackAssistantTextUpdate && text
+        ? normalizer.readActiveAssistantMessageId()
+        : undefined;
+    if (activeTurn && assistantMessageItemId && updateKind === "agent_message_chunk") {
+      activeTurn.assistantText += text;
     } else if (
       activeTurn
       && text
@@ -1215,30 +1199,7 @@ export class AcpAgentClient {
       // instead of streaming agent_message_chunk events. Preserve that valid
       // response before the session/prompt result is checked for silence.
       activeTurn.assistantText = text;
-    } else if (
-      !isAssistantTextUpdate
-      && activeTurn
-      && !isGrokTransientUpdateKind(updateKind)
-      && !updatesKnownToolCall
-    ) {
-      activeTurn.activeAssistantMessageItemId = undefined;
-      activeTurn.activeAssistantMessagePhase = undefined;
     }
-    if (
-      activeTurn
-      && toolCallId
-      && (updateKind === "tool_call" || updateKind === "tool_call_update")
-    ) {
-      activeTurn.knownToolCallIds.add(toolCallId);
-    }
-    const replay = this.normalizerFor(sessionId).apply({
-      sessionId,
-      update,
-      receivedAt,
-      deferTurnCompletion:
-        (updateKind === "turn_finished" || updateKind === "turn_completed")
-        && activeTurn !== undefined,
-    } satisfies AcpSessionUpdate);
     void this.notifySessionUpdate({
       assistantMessageItemId,
       ...(fromSessionLoad ? { fromSessionLoad: true } : {}),
@@ -1585,8 +1546,6 @@ export class AcpAgentClient {
     }
     this.activeTurns.set(sessionId, {
       assistantText: "",
-      assistantMessageSequence: 0,
-      knownToolCallIds: new Set<string>(),
       turnId,
     });
     this.updateSessionStatus(sessionId, "active");
@@ -2135,33 +2094,6 @@ function selectPermissionOptionId(
 
 function textPrompt(text: string): AcpPromptContentBlock[] {
   return [{ type: "text", text }];
-}
-
-function assistantMessageItemIdForUpdate(params: {
-  activeTurn: AcpActiveTurn;
-  phase: AppServerTranscriptPhase;
-  update: Record<string, unknown>;
-}): string {
-  if (params.activeTurn.activeAssistantMessagePhase !== params.phase) {
-    params.activeTurn.activeAssistantMessageItemId = undefined;
-    params.activeTurn.activeAssistantMessagePhase = params.phase;
-  }
-  const explicitId =
-    typeof params.update.messageId === "string"
-      ? params.update.messageId
-      : typeof params.update.message_id === "string"
-        ? params.update.message_id
-        : undefined;
-  if (explicitId) {
-    params.activeTurn.activeAssistantMessageItemId = explicitId;
-    return explicitId;
-  }
-
-  if (!params.activeTurn.activeAssistantMessageItemId) {
-    params.activeTurn.activeAssistantMessageItemId =
-      `assistant:${params.activeTurn.turnId}:${params.activeTurn.assistantMessageSequence++}`;
-  }
-  return params.activeTurn.activeAssistantMessageItemId;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
