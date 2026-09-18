@@ -16,6 +16,7 @@ import type {
   DesktopMessagingSettingsProjection,
   InboundPreviewMessage,
   InboundTopicOption,
+  ListDiscordThreadPermissionChannelsResponse,
   MessagingChannelKind,
   MessagingConversationKind,
   MessagingSenderSuggestion,
@@ -127,6 +128,20 @@ type ProviderConversation = {
 };
 
 type ProviderGroups = Partial<Record<MessagingChannelKind, ProviderConversation[]>>;
+
+/** An authorized Discord server, from the settings snapshot. */
+type DiscordServer = { id: string; name?: string };
+
+/**
+ * Channels listed from Discord's API for the authorized servers. `key` is the
+ * server set it was listed for, so authorizing another server lists again.
+ */
+type DiscordChannelCatalog = {
+  key: string;
+  channels: ProviderConversation[];
+  /** One sentence per server whose channels Discord would not list. */
+  issues: string[];
+};
 
 const ACCESS_MODE_OPTIONS: Array<{ label: string; value: ThreadExecutionMode }> = [
   { label: "Default", value: "default" },
@@ -385,6 +400,8 @@ export function AutomationEditor(props: AutomationEditorProps) {
   );
   const [enabledProviders, setEnabledProviders] = useState<MessagingChannelKind[]>();
   const [providerGroups, setProviderGroups] = useState<ProviderGroups>({});
+  const [discordServers, setDiscordServers] = useState<DiscordServer[]>();
+  const [discordCatalog, setDiscordCatalog] = useState<DiscordChannelCatalog>();
 
   // The same backend catalog the composer reads: providers, their model lists,
   // and per-model reasoning efforts. Fetched once per editor mount.
@@ -418,6 +435,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
         if (cancelled) return;
         setEnabledProviders(readEnabledProviders(response.snapshot));
         setProviderGroups(readProviderGroups(response.snapshot));
+        setDiscordServers(readDiscordServers(response.snapshot));
       } catch {
         if (!cancelled) setEnabledProviders(DEFAULT_INBOUND_PROVIDERS);
       }
@@ -443,7 +461,80 @@ export function AutomationEditor(props: AutomationEditorProps) {
     }
   }, [availableProviders, inboundProvider]);
 
-  const telegramGroups = providerGroups[inboundProvider] ?? [];
+  // The destination needs the same correction, and never had it. Its default
+  // ("telegram", or the trigger's platform) may not be enabled, and a
+  // controlled select whose value matches no option DISPLAYS its first option
+  // while the state stays put — so the form showed "Slack", and a Slack
+  // channel ID typed under it saved as a Telegram target. Follow the trigger's
+  // provider when it is enabled. Only without a saved destination: silently
+  // moving a saved target to another platform would be the same bug.
+  useEffect(() => {
+    if (initialTargetSnapshot) return;
+    if (availableProviders.length === 0 || availableProviders.includes(destProvider)) {
+      return;
+    }
+    setDestProvider(
+      availableProviders.includes(inboundProvider) ? inboundProvider : availableProviders[0],
+    );
+    setDestGroupSelection("");
+    setDestGroupId("");
+    setDestTopicId("");
+  }, [availableProviders, destProvider, inboundProvider, initialTargetSnapshot]);
+
+  // Discord authorizes servers, not channels, so the settings snapshot has no
+  // channel list to read. The channels come from Discord itself, through the
+  // same lister Messaging Settings uses to inspect thread permissions: it
+  // returns a server's text and announcement channels — the two kinds that
+  // carry ordinary messages — named, categorized, and validated. Listed only
+  // once Discord is chosen on either side, since each server costs a request.
+  const discordWanted = inboundProvider === "discord" || destProvider === "discord";
+  const discordServerKey = discordServers?.map((server) => server.id).join(",");
+  useEffect(() => {
+    const list = props.desktopApi?.listDiscordThreadPermissionChannels;
+    if (!discordWanted || !list || !discordServers || discordServerKey === undefined) {
+      return;
+    }
+    if (discordCatalog?.key === discordServerKey) return;
+    let cancelled = false;
+    void Promise.all(
+      discordServers.map(async (server) => {
+        try {
+          return { server, response: await list({ guildId: server.id }) };
+        } catch (error) {
+          return {
+            server,
+            error: error instanceof Error ? error.message : String(error),
+          };
+        }
+      }),
+    ).then((results) => {
+      if (!cancelled) {
+        setDiscordCatalog(buildDiscordChannelCatalog(discordServerKey, results));
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    discordCatalog?.key,
+    discordServerKey,
+    discordServers,
+    discordWanted,
+    props.desktopApi,
+  ]);
+
+  const catalogGroups = useMemo<ProviderGroups>(
+    () =>
+      discordCatalog?.channels.length
+        ? {
+            ...providerGroups,
+            discord: [...discordCatalog.channels, ...(providerGroups.discord ?? [])],
+          }
+        : providerGroups,
+    [discordCatalog, providerGroups],
+  );
+
+  const telegramGroups = catalogGroups[inboundProvider] ?? [];
   const selectedGroup = telegramGroups.find(
     (group) => group.id === groupSelection,
   );
@@ -491,8 +582,8 @@ export function AutomationEditor(props: AutomationEditorProps) {
           : initialConversation.title)
       : undefined;
   const destGroups = useMemo(
-    () => providerGroups[destProvider] ?? [],
-    [destProvider, providerGroups],
+    () => catalogGroups[destProvider] ?? [],
+    [catalogGroups, destProvider],
   );
   const selectedDestGroup = destGroups.find(
     (group) => group.id === destGroupSelection,
@@ -625,7 +716,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
           .catch(() => {});
         setCaptureStatus("error");
         setCaptureError(
-          "For a DM trigger, choose an authorized contact above. Add new contacts in Messaging settings.",
+          "For a DM trigger, choose an authorized contact above. Add new contacts in Settings > Messaging.",
         );
         setCaptureEntryId(undefined);
         return;
@@ -642,6 +733,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
           const response = await readMessagingSettings?.();
           if (response) {
             setProviderGroups(readProviderGroups(response.snapshot));
+            setDiscordServers(readDiscordServers(response.snapshot));
           }
         } catch {
           // Capture still succeeded; authorization can be completed in Settings.
@@ -687,19 +779,24 @@ export function AutomationEditor(props: AutomationEditorProps) {
     props.desktopApi?.startInboundPreview &&
       props.desktopApi?.onInboundPreviewMessage,
   );
-  const previewScope = inboundProvider === "telegram" && telegramScope === "topic"
-    && !inboundGroupId.startsWith("dm:") && !inboundTopicId.trim()
-    ? undefined
-    : buildDestinationSnapshot({
-    provider: inboundProvider,
-    groupId: inboundGroupId,
-    topicId: telegramScope === "topic" ? inboundTopicId : "",
-  });
+  const previewScope =
+    inboundProvider === "telegram"
+    && telegramScope === "topic"
+    && !inboundGroupId.startsWith("dm:")
+    && !inboundTopicId.trim()
+      ? undefined
+      : buildDestinationSnapshot({
+          provider: inboundProvider,
+          groupId: inboundGroupId,
+          topicId: telegramScope === "topic" ? inboundTopicId : "",
+        });
   const previewConversationId = previewScope?.conversationId;
   const previewParentId = previewScope?.parentId;
   const previewRecipientUserId = previewScope?.recipientUserId;
   const previewConversationKind = previewScope?.conversationKind;
-  const [previewHistorySupported, setPreviewHistorySupported] = useState(false);
+  // Unknown until the main process answers. Starting at `false` made the panel
+  // assert "History is unavailable" for a frame on every provider that has it.
+  const [previewHistorySupported, setPreviewHistorySupported] = useState<boolean>();
 
   useEffect(() => {
     if (!previewOpen || !previewConversationId) return;
@@ -708,7 +805,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
     const subscribe = props.desktopApi?.onInboundPreviewMessage;
     if (!start || !subscribe) return;
     setPreviewMessages([]);
-    setPreviewHistorySupported(false);
+    setPreviewHistorySupported(undefined);
     let active = true;
     void start({
       subscriptionId: previewSubscriptionId,
@@ -1408,14 +1505,18 @@ export function AutomationEditor(props: AutomationEditorProps) {
                     </label>
                     {telegramGroups.length > 0 ? (
                       <div className="automation-field automation-field--picker">
-                        <span>{conversationPickerLabel(inboundProvider)}</span>
+                        {/* Not the provider's noun: this list holds DMs as well
+                            as rooms, and the picker composes its accessible
+                            name from this label — "Channel: Dana Okonkwo" was
+                            false for every DM row. */}
+                        <span>Conversation</span>
                         <MessagingSurfacePicker
                           key={`inbound:${inboundProvider}`}
-                          fieldLabel={conversationPickerLabel(inboundProvider)}
+                          fieldLabel="Conversation"
                           filterConversations
                           options={conversationOptions(telegramGroups)}
                           value={pickerValue(groupSelection)}
-                          {...conversationPickerLabels(inboundProvider)}
+                          {...conversationPickerLabels(inboundProvider, "trigger")}
                           onChange={(picked) => {
                             const value = selectionValue(picked);
                             setGroupSelection(value);
@@ -1428,6 +1529,14 @@ export function AutomationEditor(props: AutomationEditorProps) {
                       </div>
                     ) : null}
                   </div>
+
+                  {inboundProvider === "discord" ? (
+                    <DiscordChannelHint
+                      canList={Boolean(props.desktopApi?.listDiscordThreadPermissionChannels)}
+                      catalog={discordCatalog}
+                      servers={discordServers}
+                    />
+                  ) : null}
 
                   {telegramGroups.length === 0 ||
                   groupSelection === MANUAL_GROUP_VALUE ? (
@@ -1509,7 +1618,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
                             Paste this into the{" "}
                             {inboundProvider === "telegram"
                               ? "group or topic"
-                              : "channel"}{" "}
+                              : conversationPickerLabel(inboundProvider).toLowerCase()}{" "}
                             you want to watch. PwrAgent will detect it and fill in the
                             details.
                           </p>
@@ -1640,7 +1749,10 @@ export function AutomationEditor(props: AutomationEditorProps) {
           caption={
             triggerKind === "schedule"
               ? `fires ${selectedScheduleSummary} — no filtering or batching needed`
-              : `every message in ${inboundConversationLabel}`
+              : inboundGroupId.startsWith("dm:")
+                // A contact trigger matches on the sender, not the room.
+                ? `every direct message from ${inboundConversationLabel}`
+                : `every message in ${inboundConversationLabel}`
           }
         />
 
@@ -1688,14 +1800,19 @@ export function AutomationEditor(props: AutomationEditorProps) {
                         <p className="automation-field__hint">
                           Enter a conversation above to preview its incoming messages.
                         </p>
+                      ) : !previewOpen && previewScopeHistoryNote(previewScope) ? (
+                        <p className="automation-field__hint">
+                          {previewScopeHistoryNote(previewScope)}
+                        </p>
                       ) : null}
                       {previewOpen && previewConversationId ? (
                         <div className="automation-preview__panel" role="status">
                           <p className="automation-field__hint">
-                            {previewHistorySupported
-                              ? "Showing available recent history, then messages as they arrive."
-                              : "Showing messages as they arrive. History is unavailable for this destination."}
-                            {" Messages your filter would match are highlighted."}
+                            {previewHistorySupported === undefined
+                              ? "Messages your filter would match are highlighted."
+                              : previewHistorySupported
+                                ? "Showing available recent history, then messages as they arrive. Messages your filter would match are highlighted."
+                                : "Showing messages as they arrive; no history is available for this conversation. Messages your filter would match are highlighted."}
                           </p>
                           {previewMessages.length === 0 ? (
                             <p className="automation-preview__empty">
@@ -2529,17 +2646,14 @@ export function AutomationEditor(props: AutomationEditorProps) {
                             </label>
                             {destGroups.length > 0 ? (
                               <div className="automation-field automation-field--picker">
-                                <span>
-                                  Destination{" "}
-                                  {conversationPickerLabel(destProvider).toLowerCase()}
-                                </span>
+                                <span>Destination</span>
                                 <MessagingSurfacePicker
                                   key={`dest:${destProvider}`}
-                                  fieldLabel={`Destination ${conversationPickerLabel(destProvider).toLowerCase()}`}
+                                  fieldLabel="Destination"
                                   filterConversations
                                   options={conversationOptions(destGroups)}
                                   value={pickerValue(destGroupSelection)}
-                                  {...conversationPickerLabels(destProvider)}
+                                  {...conversationPickerLabels(destProvider, "destination")}
                                   onChange={(picked) => {
                                     const value = selectionValue(picked);
                                     setDestGroupSelection(value);
@@ -2630,9 +2744,19 @@ export function AutomationEditor(props: AutomationEditorProps) {
                               />
                             </label>
                           ) : null}
+                          {destProvider === "discord" ? (
+                            <DiscordChannelHint
+                              canList={Boolean(props.desktopApi?.listDiscordThreadPermissionChannels)}
+                              catalog={discordCatalog}
+                              servers={discordServers}
+                            />
+                          ) : null}
                           <p className="automation-field__hint">
-                            The result is posted here instead of back where the trigger
-                            fired.
+                            {contactUserId(destGroupId)
+                              ? `The result is sent to ${
+                                  selectedDestGroup?.title ?? contactUserId(destGroupId)
+                                } as a direct message, instead of back where the trigger fired.`
+                              : "The result is posted here instead of back where the trigger fired."}
                           </p>
                         </div>
                       ) : null}
@@ -3143,7 +3267,10 @@ function contactUserId(value: string): string | undefined {
  * operator's authorized conversations, not everything the bot has seen, so the
  * heading says so — a short list is then explained rather than suspicious.
  */
-function conversationPickerLabels(provider: MessagingChannelKind): {
+function conversationPickerLabels(
+  provider: MessagingChannelKind,
+  side: "trigger" | "destination",
+): {
   placeholder: string;
   searchPlaceholder: string;
   manualLabel: string;
@@ -3155,12 +3282,16 @@ function conversationPickerLabels(provider: MessagingChannelKind): {
     placeholder: `Choose a ${noun} or DM`,
     searchPlaceholder: `Find a ${noun}, DM, or ID`,
     manualLabel: `Enter ${conversationLabel(provider)} manually...`,
-    // Both headings say "authorized": this list is what the operator has let
-    // the bot talk to, not everything it has seen, and a short list is then
-    // explained rather than suspicious.
+    // The headings say what the list is drawn from, so a short list is
+    // explained rather than suspicious. Discord authorizes servers, not
+    // channels, so its channels are not "authorized" one by one. A contact
+    // row means messages FROM that person on the trigger side — the matcher
+    // compares the sender — and messages TO them on the destination side.
     sectionLabels: {
-      channel: `Authorized ${noun}s`,
-      dm: "Authorized direct messages",
+      channel: provider === "discord"
+        ? "Channels in authorized servers"
+        : `Authorized ${noun}s`,
+      dm: side === "trigger" ? "Direct messages from" : "Direct messages to",
     },
     emptyLabel: "No matching conversations.",
   };
@@ -3227,16 +3358,22 @@ function recipientHint(provider: MessagingChannelKind): string {
     return "The person's LINE user ID (starts with U). Not a group or room ID.";
   }
   if (provider === "mattermost") {
-    return "The Mattermost user ID — open their profile and copy the ID, or take it from the System Console. Not the DM channel ID.";
+    return "The Mattermost user ID, a 26-character lowercase string — not their @username, and not the DM channel ID.";
   }
   return "The platform user ID of the person whose direct messages should trigger this.";
 }
 
-/** Noun for the conversation-picker dropdown ("Group" / "Channel"). */
+/**
+ * The provider's own noun for a shared conversation. Feeds the picker's
+ * placeholder, search and section heading, and the manual switch's first
+ * button, so it has to be the word an operator of that platform would use.
+ */
 function conversationPickerLabel(provider: MessagingChannelKind): string {
   if (provider === "telegram") return "Group";
-  if (provider === "slack" || provider === "discord") return "Channel";
-  return "Conversation";
+  if (provider === "feishu") return "Group chat";
+  // LINE rooms share this list; the ID field and its hint say so.
+  if (provider === "line") return "Group";
+  return "Channel";
 }
 
 // Lowercase only the leading word so "Group ID" reads as "group ID" after a
@@ -3248,8 +3385,11 @@ function lowerLead(label: string): string {
 
 function conversationLabel(provider: MessagingChannelKind): string {
   if (provider === "telegram") return "Group ID";
-  if (provider === "slack") return "Channel ID";
-  if (provider === "discord") return "Channel ID";
+  if (provider === "feishu") return "Chat ID";
+  if (provider === "line") return "Group or room ID";
+  if (provider === "slack" || provider === "discord" || provider === "mattermost") {
+    return "Channel ID";
+  }
   return "Conversation ID";
 }
 
@@ -3257,6 +3397,9 @@ function conversationPlaceholder(provider: MessagingChannelKind): string {
   if (provider === "telegram") return "e.g. -1001234567890";
   if (provider === "slack") return "e.g. C0123ABCD";
   if (provider === "discord") return "e.g. 123456789012345678";
+  if (provider === "mattermost") return "e.g. 8f3k2j1h9g8f7d6s5a4q3w2e1r";
+  if (provider === "feishu") return "e.g. oc_a0553eda9014c201e6969b478895c230";
+  if (provider === "line") return "e.g. C4af4980629...";
   return "e.g. a conversation ID";
 }
 
@@ -3268,7 +3411,16 @@ function conversationHint(provider: MessagingChannelKind): string {
     return "The Slack channel ID. In Slack, open the channel details and copy the ID at the bottom, or copy a message link and take the C... segment.";
   }
   if (provider === "discord") {
-    return "The Discord channel ID. Enable Developer Mode, then right-click the channel and Copy Channel ID.";
+    return "The Discord channel ID. Enable Developer Mode, then right-click the channel and Copy Channel ID. The channel's server must be authorized in Settings > Messaging.";
+  }
+  if (provider === "mattermost") {
+    return "The Mattermost channel ID, a 26-character lowercase string — not the channel name in its URL.";
+  }
+  if (provider === "feishu") {
+    return "The Feishu/Lark group chat_id, which starts with oc_. Not a person's open_id.";
+  }
+  if (provider === "line") {
+    return "The LINE group ID (starts with C) or room ID (starts with R). Not a user ID.";
   }
   return "The conversation ID PwrAgent should watch.";
 }
@@ -3365,7 +3517,9 @@ function readEnabledProviders(
  * Those are DMs, and leaving them out meant an automation could never watch or
  * answer a direct message. The container lists (`authorizedGuilds`,
  * `authorizedWorkspaces`, `authorizedTeams`, `authorizedTenants`) are servers
- * and workspaces rather than conversations, so nothing here reads them.
+ * and workspaces rather than conversations, so nothing here reads them —
+ * Discord's channels are listed from its API per server instead
+ * (`readDiscordServers` / `buildDiscordChannelCatalog`).
  */
 function readProviderGroups(
   snapshot: DesktopMessagingSettingsProjection,
@@ -3428,6 +3582,125 @@ function readProviderGroups(
     }
   }
   return groups;
+}
+
+/** The Discord servers PwrAgent is authorized in, whose channels can be listed. */
+function readDiscordServers(
+  snapshot: DesktopMessagingSettingsProjection,
+): DiscordServer[] {
+  return (snapshot.messaging.discord?.authorizedGuilds?.value ?? []).map((server) => ({
+    id: server.id,
+    ...(server.displayName ? { name: server.displayName } : {}),
+  }));
+}
+
+/**
+ * Turn per-server listings into picker rows plus one sentence per server that
+ * Discord would not list. A server that fails still leaves the others usable
+ * and the manual field reachable, so a failure is reported, never fatal.
+ *
+ * Rows read "Server / channel", the separator Messaging Routes uses for the
+ * same surfaces: two servers routinely both have a `#general`, and the ID
+ * column alone is a poor way to tell which one an operator meant.
+ */
+function buildDiscordChannelCatalog(
+  key: string,
+  results: Array<
+    | { server: DiscordServer; response: ListDiscordThreadPermissionChannelsResponse }
+    | { server: DiscordServer; error: string }
+  >,
+): DiscordChannelCatalog {
+  const channels: ProviderConversation[] = [];
+  const issues: string[] = [];
+  let tokenMissing = false;
+  for (const result of results) {
+    const serverName = "response" in result
+      ? result.response.guildName ?? result.server.name ?? result.server.id
+      : result.server.name ?? result.server.id;
+    if (!("response" in result)) {
+      issues.push(`${serverName}: ${result.error}`);
+      continue;
+    }
+    if (result.response.status === "unset") {
+      tokenMissing = true;
+      continue;
+    }
+    if (result.response.status === "failed") {
+      issues.push(
+        `${serverName}: ${result.response.errorMessage ?? "Discord did not return its channels."}`,
+      );
+      continue;
+    }
+    for (const channel of result.response.channels) {
+      channels.push({
+        id: channel.id,
+        title: `${serverName} / ${channel.name}`,
+        kind: "channel",
+      });
+    }
+  }
+  if (tokenMissing) {
+    // Every server answers "unset" when there is no token, so say it once.
+    issues.unshift("Discord has no bot token, so no server's channels can be listed.");
+  }
+  return { key, channels, issues };
+}
+
+/**
+ * What the preview can say about history before it opens. Only the scope
+ * refusals are knowable here — `supportsPreviewHistory` in the main process
+ * refuses a contact recipient or a parented scope on every provider — so only
+ * they are stated up front. Whether the PROVIDER reads history is answered by
+ * the main process when the preview starts, and stated then.
+ */
+function previewScopeHistoryNote(
+  scope: AutomationMessagingConversationSnapshot | undefined,
+): string | undefined {
+  if (scope?.recipientUserId) {
+    return "History can't be read back for a contact's direct messages, so the preview shows new messages only.";
+  }
+  if (scope?.parentId) {
+    return "History is read for whole conversations, not one topic, so the preview shows new messages only.";
+  }
+  return undefined;
+}
+
+/**
+ * What the Discord list is drawn from, and what went wrong drawing it. Without
+ * this, a server whose channels failed to list looks like a server with no
+ * channels, and having no authorized server looks like a broken picker.
+ */
+function DiscordChannelHint(props: {
+  canList: boolean;
+  catalog: DiscordChannelCatalog | undefined;
+  servers: DiscordServer[] | undefined;
+}) {
+  if (!props.canList || !props.servers) return null;
+  if (props.servers.length === 0) {
+    return (
+      <p className="automation-field__hint">
+        PwrAgent lists channels from the Discord servers it is authorized in, and
+        none are authorized yet. Authorize a server in Settings &gt; Messaging, or
+        enter a channel ID.
+      </p>
+    );
+  }
+  if (!props.catalog) {
+    return (
+      <p className="automation-field__hint">
+        Listing channels from authorized servers...
+      </p>
+    );
+  }
+  if (props.catalog.issues.length === 0) return null;
+  const issues = props.catalog.issues
+    .map((issue) => (/[.!?]$/.test(issue) ? issue : `${issue}.`))
+    .join(" ");
+  return (
+    <p className="automation-field__hint">
+      Some channels could not be listed. {issues} You can still enter a channel ID.
+    </p>
+  );
 }
 
 function parseTimeOfDay(value: string): { hour: number; minute: number } | undefined {

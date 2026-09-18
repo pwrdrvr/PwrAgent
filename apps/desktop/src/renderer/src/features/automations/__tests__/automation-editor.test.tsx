@@ -44,6 +44,24 @@ async function pickConversation(field: string, option: RegExp) {
   fireEvent.click(await screen.findByRole("option", { name: option }));
 }
 
+/**
+ * Wait until the editor's state is actually on `provider`. It starts on
+ * Telegram and moves to the first enabled provider one render after the
+ * settings arrive, and the Provider select is no evidence of that: a
+ * controlled select whose value matches no option reports its first option.
+ * Telegram's scope control renders only while the state is Telegram, so its
+ * departure is. Without this, a picker opened in that gap is Telegram's, and
+ * it remounts — closing its panel — when the switch lands.
+ */
+async function waitForInboundProvider(provider: MessagingChannelKind): Promise<void> {
+  if (provider === "telegram") return;
+  await waitFor(() =>
+    expect(
+      screen.queryByRole("group", { name: "Telegram scope" }),
+    ).not.toBeInTheDocument(),
+  );
+}
+
 /** Manual entry is an action beside the list, not one of its options. */
 async function pickManualEntry(field: string, action: RegExp) {
   await openConversationPicker(field);
@@ -335,7 +353,7 @@ describe("AutomationEditor", () => {
     fireEvent.change(screen.getByLabelText("Provider"), {
       target: { value: "slack" },
     });
-    await pickConversation("Channel", /Alerts/);
+    await pickConversation("Conversation", /Alerts/);
     fireEvent.change(screen.getByLabelText("Value"), {
       target: { value: "ERROR" },
     });
@@ -386,13 +404,8 @@ describe("AutomationEditor", () => {
       target: { value: "Investigate the alert." },
     });
     fireEvent.click(screen.getByRole("button", { name: "Inbound message" }));
-    await waitFor(() =>
-      expect(screen.getByLabelText("Provider")).toHaveValue(provider),
-    );
-    const conversationLabel = provider === "telegram" ? "Group"
-      : provider === "slack" || provider === "discord" ? "Channel"
-      : "Conversation";
-    await pickConversation(conversationLabel, /Peer/);
+    await waitForInboundProvider(provider);
+    await pickConversation("Conversation", /Peer/);
     fireEvent.change(screen.getByLabelText("Value"), {
       target: { value: "ERROR" },
     });
@@ -402,10 +415,7 @@ describe("AutomationEditor", () => {
     fireEvent.change(screen.getByLabelText("Destination provider"), {
       target: { value: provider },
     });
-    const destinationLabel = provider === "telegram" ? "Destination group"
-      : provider === "slack" || provider === "discord" ? "Destination channel"
-      : "Destination conversation";
-    await pickConversation(destinationLabel, /Peer/);
+    await pickConversation("Destination", /Peer/);
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
@@ -477,7 +487,7 @@ describe("AutomationEditor", () => {
     expect(
       screen.getByRole("heading", { name: "Where results go" }),
     ).toBeInTheDocument();
-    await pickConversation("Group", /Ops Room/);
+    await pickConversation("Conversation", /Ops Room/);
     fireEvent.click(screen.getByRole("button", { name: "Specific topic" }));
     fireEvent.change(screen.getByLabelText("Topic ID"), {
       target: { value: "42" },
@@ -544,7 +554,7 @@ describe("AutomationEditor", () => {
     expect(screen.getByRole("option", { name: "Telegram" })).toBeInTheDocument();
     // The authorized group is a row inside the conversation picker, so it is
     // listed once the field is opened.
-    await openConversationPicker("Group");
+    await openConversationPicker("Conversation");
     expect(screen.getByRole("option", { name: /Ops Room/ })).toBeInTheDocument();
   });
 
@@ -567,13 +577,13 @@ describe("AutomationEditor", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Inbound message" }));
-    await openConversationPicker("Channel");
+    await openConversationPicker("Conversation");
     const listbox = screen.getByRole("listbox");
     expect(
       within(listbox)
         .getAllByRole("group")
         .map((group) => group.getAttribute("aria-label")),
-    ).toEqual(["Authorized channels", "Authorized direct messages"]);
+    ).toEqual(["Authorized channels", "Direct messages from"]);
     expect(
       within(listbox).getByRole("option", { name: /Avery Quill/ }),
     ).toBeInTheDocument();
@@ -603,7 +613,7 @@ describe("AutomationEditor", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Inbound message" }));
-    await openConversationPicker("Channel");
+    await openConversationPicker("Conversation");
     const listbox = screen.getByRole("listbox");
     expect(listbox.textContent).not.toContain("dm:");
     expect(
@@ -725,11 +735,11 @@ describe("AutomationEditor", () => {
     fireEvent.change(screen.getByLabelText("Where should the result go?"), {
       target: { value: "different" },
     });
-    await pickConversation("Destination group", /Ops Room/);
+    await pickConversation("Destination", /Ops Room/);
     expect(
       screen.getByLabelText("Destination topic ID (optional)"),
     ).toBeInTheDocument();
-    await pickConversation("Destination group", /Avery Quill/);
+    await pickConversation("Destination", /Avery Quill/);
     expect(
       screen.queryByLabelText("Destination topic ID (optional)"),
     ).not.toBeInTheDocument();
@@ -1054,7 +1064,7 @@ describe("AutomationEditor", () => {
       target: { value: "Investigate." },
     });
     fireEvent.click(screen.getByRole("button", { name: "Inbound message" }));
-    await pickConversation("Group", /Ops Room/);
+    await pickConversation("Conversation", /Ops Room/);
     fireEvent.click(screen.getByRole("button", { name: "Specific topic" }));
     await pickConversation("Topic", /Incidents/);
     fireEvent.change(screen.getByLabelText("Value"), {
@@ -1109,7 +1119,7 @@ describe("AutomationEditor", () => {
       target: { value: "Record the incident for later." },
     });
     fireEvent.click(screen.getByRole("button", { name: "Inbound message" }));
-    await pickConversation("Group", /Ops Room/);
+    await pickConversation("Conversation", /Ops Room/);
     fireEvent.change(screen.getByLabelText("Value"), {
       target: { value: "ERROR" },
     });
@@ -1159,11 +1169,11 @@ describe("AutomationEditor", () => {
       target: { value: "Investigate." },
     });
     fireEvent.click(screen.getByRole("button", { name: "Inbound message" }));
-    await pickConversation("Group", /Ops Room/);
+    await pickConversation("Conversation", /Ops Room/);
     fireEvent.click(screen.getByRole("button", { name: "Specific topic" }));
     await pickConversation("Topic", /Incidents/);
     // Switch the group to manual entry — the previously chosen topic must clear.
-    await pickManualEntry("Group", /Enter Group ID manually/);
+    await pickManualEntry("Conversation", /Enter Group ID manually/);
     fireEvent.change(screen.getByLabelText("Group ID"), {
       target: { value: "-200" },
     });
@@ -1206,14 +1216,14 @@ describe("AutomationEditor", () => {
       target: { value: "Investigate and report." },
     });
     fireEvent.click(screen.getByRole("button", { name: "Inbound message" }));
-    await pickConversation("Group", /Ops Room/);
+    await pickConversation("Conversation", /Ops Room/);
     fireEvent.change(screen.getByLabelText("Value"), {
       target: { value: "ERROR" },
     });
     fireEvent.change(screen.getByLabelText("Where should the result go?"), {
       target: { value: "different" },
     });
-    await pickManualEntry("Destination group", /Enter Group ID manually/);
+    await pickManualEntry("Destination", /Enter Group ID manually/);
     fireEvent.change(screen.getByLabelText("Destination group ID"), {
       target: { value: "-200" },
     });
@@ -1293,7 +1303,7 @@ describe("AutomationEditor", () => {
     // (not "Enter manually"), so selectedDestGroup resolves.
     await waitFor(() =>
       expect(
-        screen.getByRole("button", { name: /^Destination channel: / }),
+        screen.getByRole("button", { name: /^Destination: / }),
       ).toHaveAccessibleName(/Alerts/),
     );
 
@@ -1378,7 +1388,7 @@ describe("AutomationEditor", () => {
     // the raw platform id.
     await waitFor(() =>
       expect(
-        screen.getByRole("button", { name: /^Channel: / }),
+        screen.getByRole("button", { name: /^Conversation: / }),
       ).toHaveAccessibleName(/t-search-bots/),
     );
 
@@ -1753,6 +1763,301 @@ describe("AutomationEditor", () => {
   });
 });
 
+describe("AutomationEditor Discord channels", () => {
+  // Discord authorizes servers, not channels, so the settings snapshot has no
+  // channel list — before this the Discord picker offered DMs and nothing else.
+  const OPS_SERVER = "1480556454498009353";
+  const LAB_SERVER = "1480556454498009363";
+
+  const discordApi = (
+    listDiscordThreadPermissionChannels: DesktopApi["listDiscordThreadPermissionChannels"],
+    servers: Array<{ id: string; displayName?: string }> = [
+      { id: OPS_SERVER, displayName: "Ops" },
+    ],
+  ): DesktopApi => ({
+    ...fakeDesktopApi(
+      fakeSettings({ enabled: { discord: true }, discordServers: servers }),
+    ),
+    listDiscordThreadPermissionChannels,
+  });
+
+  it("lists channels from authorized servers and saves one as the trigger", async () => {
+    const onSubmit = vi.fn(async () => undefined);
+    const list = vi.fn(async ({ guildId }: { guildId: string }) => ({
+      guildId,
+      guildName: guildId === OPS_SERVER ? "Ops" : "Lab",
+      status: "ok" as const,
+      channels: [
+        { id: `${guildId.slice(0, -2)}71`, kind: "text" as const, name: "alerts" },
+        { id: `${guildId.slice(0, -2)}72`, kind: "text" as const, name: "general" },
+      ],
+    }));
+    render(
+      <AutomationEditor
+        desktopApi={discordApi(list, [
+          { id: OPS_SERVER, displayName: "Ops" },
+          { id: LAB_SERVER, displayName: "Lab" },
+        ])}
+        mode={{ assignment: { backend: "codex", threadId: "thread-1" }, kind: "create" }}
+        onCancel={() => undefined}
+        onSubmit={onSubmit}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Ops alerts" } });
+    fireEvent.change(screen.getByLabelText("Task prompt"), {
+      target: { value: "Triage the alert." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Inbound message" }));
+    await openConversationPicker("Conversation");
+    const listbox = screen.getByRole("listbox");
+    // Two servers both have a #general; the server name tells them apart.
+    expect(within(listbox).getByRole("option", { name: /Ops \/ general/ })).toBeInTheDocument();
+    expect(within(listbox).getByRole("option", { name: /Lab \/ general/ })).toBeInTheDocument();
+    expect(
+      within(listbox).getAllByRole("group").map((group) => group.getAttribute("aria-label")),
+    ).toEqual(["Channels in authorized servers"]);
+    fireEvent.click(within(listbox).getByRole("option", { name: /Ops \/ alerts/ }));
+    fireEvent.change(screen.getByLabelText("Value"), { target: { value: "ERROR" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(list).toHaveBeenCalledTimes(2);
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        request: expect.objectContaining({
+          triggers: [
+            expect.objectContaining({
+              conversation: {
+                channel: "discord",
+                conversationId: "148055645449800937" + "1",
+                conversationKind: "channel",
+                title: "Ops / alerts",
+              },
+            }),
+          ],
+        }),
+      }),
+    );
+  });
+
+  it("names the server Discord would not list, and keeps the others", async () => {
+    const list = vi.fn(async ({ guildId }: { guildId: string }) =>
+      guildId === OPS_SERVER
+        ? {
+            guildId,
+            guildName: "Ops",
+            status: "ok" as const,
+            channels: [{ id: "1480556454498009371", kind: "text" as const, name: "alerts" }],
+          }
+        : {
+            guildId,
+            status: "failed" as const,
+            channels: [],
+            errorMessage: "Missing Access",
+          });
+    render(
+      <AutomationEditor
+        desktopApi={discordApi(list, [
+          { id: OPS_SERVER, displayName: "Ops" },
+          { id: LAB_SERVER, displayName: "Lab" },
+        ])}
+        mode={{ kind: "create" }}
+        onCancel={() => undefined}
+        onSubmit={vi.fn(async () => undefined)}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Inbound message" }));
+    expect(
+      await screen.findByText(/Some channels could not be listed\. Lab: Missing Access\./),
+    ).toBeInTheDocument();
+    await openConversationPicker("Conversation");
+    expect(screen.getByRole("option", { name: /Ops \/ alerts/ })).toBeInTheDocument();
+  });
+
+  it("says once that there is no bot token, not once per server", async () => {
+    const list = vi.fn(async ({ guildId }: { guildId: string }) => ({
+      guildId,
+      status: "unset" as const,
+      channels: [],
+    }));
+    render(
+      <AutomationEditor
+        desktopApi={discordApi(list, [
+          { id: OPS_SERVER, displayName: "Ops" },
+          { id: LAB_SERVER, displayName: "Lab" },
+        ])}
+        mode={{ kind: "create" }}
+        onCancel={() => undefined}
+        onSubmit={vi.fn(async () => undefined)}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Inbound message" }));
+    const hint = await screen.findByText(/Discord has no bot token/);
+    expect(hint.textContent?.match(/no bot token/g)).toHaveLength(1);
+  });
+
+  it("explains an empty list when no server is authorized", async () => {
+    const list = vi.fn();
+    render(
+      <AutomationEditor
+        desktopApi={discordApi(list, [])}
+        mode={{ kind: "create" }}
+        onCancel={() => undefined}
+        onSubmit={vi.fn(async () => undefined)}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Inbound message" }));
+    expect(
+      await screen.findByText(/none are authorized yet/),
+    ).toBeInTheDocument();
+    expect(list).not.toHaveBeenCalled();
+  });
+
+  it("does not ask Discord for channels until Discord is chosen", async () => {
+    const list = vi.fn(async ({ guildId }: { guildId: string }) => ({
+      guildId,
+      status: "ok" as const,
+      channels: [],
+    }));
+    render(
+      <AutomationEditor
+        desktopApi={{
+          ...fakeDesktopApi(
+            fakeSettings({
+              enabled: { slack: true, discord: true },
+              discordServers: [{ id: OPS_SERVER, displayName: "Ops" }],
+            }),
+          ),
+          listDiscordThreadPermissionChannels: list,
+        }}
+        mode={{ kind: "create" }}
+        onCancel={() => undefined}
+        onSubmit={vi.fn(async () => undefined)}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Inbound message" }));
+    await screen.findByLabelText("Channel ID");
+    expect(list).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByLabelText("Provider"), { target: { value: "discord" } });
+    await waitFor(() => expect(list).toHaveBeenCalledTimes(1));
+  });
+});
+
+describe("AutomationEditor DM wording", () => {
+  it("describes a contact trigger by its sender and a contact result by its recipient", async () => {
+    render(
+      <AutomationEditor
+        desktopApi={{
+          ...fakeDesktopApi(
+            fakeSettings({
+              enabled: { slack: true },
+              slackUsers: [{ id: "U_AVERY", displayName: "Avery Quill" }],
+            }),
+          ),
+          startInboundPreview: vi.fn(async () => ({ ok: true })),
+          stopInboundPreview: vi.fn(async () => ({ ok: true })),
+          onInboundPreviewMessage: vi.fn(() => () => undefined),
+        } as unknown as DesktopApi}
+        mode={{ kind: "create" }}
+        onCancel={() => undefined}
+        onSubmit={vi.fn(async () => undefined)}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Inbound message" }));
+    await pickConversation("Conversation", /Avery Quill/);
+    // The matcher compares the sender, so the trigger is about who wrote it.
+    expect(screen.getByText("every direct message from Avery Quill")).toBeInTheDocument();
+    // History refusal for a contact DM is knowable before opening the preview.
+    expect(
+      screen.getByText(/History can't be read back for a contact's direct messages/),
+    ).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Where should the result go?"), {
+      target: { value: "different" },
+    });
+    await pickConversation("Destination", /Avery Quill/);
+    expect(
+      screen.getByText(
+        "The result is sent to Avery Quill as a direct message, instead of back where the trigger fired.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("points a new destination at an enabled provider, not the Telegram default", async () => {
+    // The destination started on "telegram" and nothing moved it. With
+    // Telegram disabled the select DISPLAYED Slack — its first option — while
+    // the state stayed Telegram, and a Slack channel ID saved as a Telegram
+    // target.
+    const onSubmit = vi.fn(async () => undefined);
+    render(
+      <AutomationEditor
+        desktopApi={fakeDesktopApi(fakeSettings({ enabled: { slack: true } }))}
+        mode={{ assignment: { backend: "codex", threadId: "thread-1" }, kind: "create" }}
+        onCancel={() => undefined}
+        onSubmit={onSubmit}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Relay" } });
+    fireEvent.change(screen.getByLabelText("Task prompt"), { target: { value: "Relay it." } });
+    fireEvent.click(screen.getByRole("button", { name: "Inbound message" }));
+    fireEvent.change(await screen.findByLabelText("Channel ID"), {
+      target: { value: "C0INBOUND" },
+    });
+    fireEvent.change(screen.getByLabelText("Value"), { target: { value: "ERROR" } });
+    fireEvent.change(screen.getByLabelText("Where should the result go?"), {
+      target: { value: "different" },
+    });
+    fireEvent.change(await screen.findByLabelText("Destination channel ID"), {
+      target: { value: "C0RESULTS" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        request: expect.objectContaining({
+          outputActions: expect.arrayContaining([
+            expect.objectContaining({
+              kind: "messaging_target",
+              target: expect.objectContaining({
+                channel: "slack",
+                conversationId: "C0RESULTS",
+              }),
+            }),
+          ]),
+        }),
+      }),
+    );
+  });
+
+  it("asks each provider for the ID it actually uses", async () => {
+    render(
+      <AutomationEditor
+        desktopApi={fakeDesktopApi(fakeSettings({ enabled: { feishu: true } }))}
+        mode={{ kind: "create" }}
+        onCancel={() => undefined}
+        onSubmit={vi.fn(async () => undefined)}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Inbound message" }));
+    // A Feishu group is addressed by chat_id; a person by open_id.
+    expect(await screen.findByLabelText("Chat ID")).toHaveAttribute(
+      "placeholder",
+      "e.g. oc_a0553eda9014c201e6969b478895c230",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Direct message" }));
+    expect(screen.getByLabelText("Open ID")).toBeInTheDocument();
+  });
+});
+
 function buildAutomation(overrides: Partial<AutomationDetail> = {}): AutomationDetail {
   return {
     backend: "codex",
@@ -1797,6 +2102,7 @@ function fakeSettings(params: {
   telegramGroups?: AuthorizedEntry[];
   slackChannels?: AuthorizedEntry[];
   slackUsers?: AuthorizedEntry[];
+  discordServers?: AuthorizedEntry[];
 }): ReadDesktopMessagingSettingsResponse {
   const provider = (kind: MessagingChannelKind) => ({
     enabled: { value: Boolean(params.enabled[kind]) },
@@ -1819,7 +2125,10 @@ function fakeSettings(params: {
           authorizedChannels: { value: params.slackChannels ?? [] },
           authorizedUserIds: { value: params.slackUsers ?? params.users ?? [] },
         },
-        discord: provider("discord"),
+        discord: {
+          ...provider("discord"),
+          authorizedGuilds: { value: params.discordServers ?? [] },
+        },
         mattermost: provider("mattermost"),
         feishu: provider("feishu"),
         line: provider("line"),
