@@ -391,7 +391,7 @@ test.describe("federation remote window", () => {
       await window.getByRole("button", { name: "Open settings" }).click();
       await window
         .getByRole("navigation", { name: "Settings sections" })
-        .getByRole("button", { name: "Federation" })
+        .getByRole("button", { name: "Federation", exact: true })
         .click();
       await window.getByLabel("Import invite").fill(gateway.invite);
       await window.getByRole("button", { name: "Import invite" }).click();
@@ -555,7 +555,7 @@ test.describe("federation remote window", () => {
       await window.getByRole("button", { name: "Open settings" }).click();
       await window
         .getByRole("navigation", { name: "Settings sections" })
-        .getByRole("button", { name: "Federation" })
+        .getByRole("button", { name: "Federation", exact: true })
         .click();
       await window.getByLabel("Import invite").fill(gateway.invite);
       await window.getByRole("button", { name: "Import invite" }).click();
@@ -760,7 +760,7 @@ test.describe("federation remote window", () => {
       await window.getByRole("button", { name: "Open settings" }).click();
       await window
         .getByRole("navigation", { name: "Settings sections" })
-        .getByRole("button", { name: "Federation" })
+        .getByRole("button", { name: "Federation", exact: true })
         .click();
       await window.getByLabel("Import invite").fill(gateway.invite);
       await window.getByRole("button", { name: "Import invite" }).click();
