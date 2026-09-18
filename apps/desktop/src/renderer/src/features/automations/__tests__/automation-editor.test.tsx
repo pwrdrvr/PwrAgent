@@ -2282,7 +2282,7 @@ describe("AutomationEditor with several watched conversations", () => {
         screen.getByRole("button", { name: /^Conversation: / }),
       ).toHaveAccessibleName(/f-alerts/),
     );
-    const watching = screen.getByRole("list", { name: "Also watching" });
+    const watching = screen.getByRole("list", { name: "Watching" });
     expect(within(watching).getByText("f-metrics")).toBeInTheDocument();
     expect(
       screen.getByText("every message in f-alerts, f-metrics", {
@@ -2331,7 +2331,7 @@ describe("AutomationEditor with several watched conversations", () => {
     fireEvent.click(
       await screen.findByRole("button", { name: "Stop watching f-metrics" }),
     );
-    expect(screen.queryByRole("list", { name: "Also watching" })).toBeNull();
+    expect(screen.queryByRole("list", { name: "Watching" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
@@ -2366,7 +2366,7 @@ describe("AutomationEditor with several watched conversations", () => {
     // The first conversation moves to the list and the fields clear for the next.
     expect(screen.getByLabelText("Channel ID")).toHaveValue("");
     expect(
-      within(screen.getByRole("list", { name: "Also watching" })).getByText("C1"),
+      within(screen.getByRole("list", { name: "Watching" })).getByText("C1"),
     ).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Channel ID"), {
       target: { value: "C2" },
@@ -2467,7 +2467,7 @@ describe("AutomationEditor with several watched conversations", () => {
     );
 
     // A person listed beside channels says it is a DM.
-    const watching = await screen.findByRole("list", { name: "Also watching" });
+    const watching = await screen.findByRole("list", { name: "Watching" });
     expect(within(watching).getByText("Avery (DM)")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Preview live messages" }));
@@ -2582,6 +2582,168 @@ describe("AutomationEditor with several watched conversations", () => {
         conversation: expect.objectContaining({ conversationId: "C0METRICS" }),
       }),
     ]);
+  });
+
+  it("opens a listed conversation for editing and keeps the list's order", async () => {
+    const onSubmit = vi.fn(async () => undefined);
+    render(
+      <AutomationEditor
+        desktopApi={slackCatalog()}
+        mode={{ kind: "edit", automation: multiSourceAutomation() }}
+        onCancel={() => undefined}
+        onSubmit={onSubmit}
+      />,
+    );
+
+    const watching = await screen.findByRole("list", { name: "Watching" });
+    fireEvent.click(within(watching).getByRole("button", { name: "Edit f-metrics" }));
+
+    // f-metrics is now the one in the fields; f-alerts went back into the list
+    // where it stood, and can be reopened the same way.
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: /^Conversation: / }),
+      ).toHaveAccessibleName(/f-metrics/),
+    );
+    expect(
+      within(watching).getByRole("button", { name: "Edit f-alerts" }),
+    ).toBeInTheDocument();
+    expect(
+      within(watching).getByText("f-metrics").closest("li"),
+    ).toHaveAttribute("aria-current", "true");
+
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(submittedTriggers(onSubmit)).toEqual([
+      expect.objectContaining({
+        id: "inbound-message",
+        conversation: expect.objectContaining({ title: "f-alerts" }),
+      }),
+      expect.objectContaining({
+        id: "inbound-message:slack::C0METRICS",
+        conversation: expect.objectContaining({ title: "f-metrics" }),
+      }),
+    ]);
+  });
+
+  it("cancels adding a conversation and reopens the one before it", async () => {
+    render(
+      <AutomationEditor
+        desktopApi={fakeDesktopApi(fakeSettings({ enabled: { slack: true } }))}
+        mode={{ assignment: { backend: "codex", threadId: "thread-1" }, kind: "create" }}
+        onCancel={() => undefined}
+        onSubmit={vi.fn(async () => undefined)}
+      />,
+    );
+    await startSlackInboundDraft();
+    fireEvent.change(screen.getByLabelText("Channel ID"), {
+      target: { value: "C1" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Watch another conversation" }));
+    expect(screen.getByLabelText("Channel ID")).toHaveValue("");
+    expect(
+      within(screen.getByRole("list", { name: "Watching" })).getByText(
+        "New conversation",
+      ),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Discard this conversation" }));
+
+    expect(screen.getByLabelText("Channel ID")).toHaveValue("C1");
+    // Back to one source, which needs no list.
+    expect(screen.queryByRole("list", { name: "Watching" })).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Watch another conversation" }),
+    ).toBeInTheDocument();
+  });
+
+  it("will not abandon a half-filled conversation to open another", async () => {
+    render(
+      <AutomationEditor
+        desktopApi={fakeDesktopApi(fakeSettings({ enabled: { telegram: true } }))}
+        mode={{ assignment: { backend: "codex", threadId: "thread-1" }, kind: "create" }}
+        onCancel={() => undefined}
+        onSubmit={vi.fn(async () => undefined)}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Inbound message" }));
+    fireEvent.change(await screen.findByLabelText("Group ID"), {
+      target: { value: "-100" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Watch another conversation" }));
+    fireEvent.change(screen.getByLabelText("Group ID"), {
+      target: { value: "-200" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Specific topic" }));
+
+    fireEvent.click(
+      within(screen.getByRole("list", { name: "Watching" })).getByRole("button", {
+        name: "Edit -100",
+      }),
+    );
+
+    expect(
+      await screen.findByText("Enter a topic ID or switch to Whole group."),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText("Group ID")).toHaveValue("-200");
+  });
+
+  it("keeps a reopened Telegram topic's names when it is saved again", async () => {
+    const automation = multiSourceAutomation();
+    automation.triggers = [
+      automation.triggers[0]!,
+      {
+        id: "inbound-message:telegram:-1001:680",
+        kind: "inbound_message",
+        name: "sender is spinnaker",
+        conversation: {
+          channel: "telegram",
+          conversationId: "680",
+          conversationKind: "topic",
+          parentId: "-1001",
+          parentTitle: "Ops Room",
+          title: "Deploys",
+        },
+        conditionGroup: senderFilter,
+      },
+    ];
+    const onSubmit = vi.fn(async () => undefined);
+    render(
+      <AutomationEditor
+        desktopApi={fakeDesktopApi(
+          fakeSettings({
+            enabled: { slack: true, telegram: true },
+            slackChannels: [{ displayName: "f-alerts", id: "C0ALERTS" }],
+          }),
+        )}
+        mode={{ kind: "edit", automation }}
+        onCancel={() => undefined}
+        onSubmit={onSubmit}
+      />,
+    );
+
+    const watching = await screen.findByRole("list", { name: "Watching" });
+    fireEvent.click(
+      within(watching).getByRole("button", { name: "Edit Telegram · Ops Room / Deploys" }),
+    );
+    // Neither catalog names this group or topic, so only the stored titles can.
+    expect(screen.getByLabelText("Topic ID")).toHaveValue("680");
+
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(submittedTriggers(onSubmit)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "inbound-message:telegram:-1001:680",
+          conversation: expect.objectContaining({
+            conversationId: "680",
+            parentId: "-1001",
+            parentTitle: "Ops Room",
+            title: "Deploys",
+          }),
+        }),
+      ]),
+    );
   });
 
   it("previews live messages from every watched conversation and says which one", async () => {

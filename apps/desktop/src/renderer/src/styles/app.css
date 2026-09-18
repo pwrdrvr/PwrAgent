@@ -26160,6 +26160,41 @@ a.transcript-message__messaging-origin:focus-visible {
   color: var(--text-primary);
 }
 
+/* An inbound trigger's source list. The source open in the fields keeps the
+   sender chip's accent; the others are neutral, so the one being edited is
+   the only accented chip, and their names are buttons that open them. */
+.automation-source-chip:not(.is-editing) {
+  border-color: var(--border-subtle);
+  background: var(--bg-panel);
+  color: var(--text-secondary);
+}
+
+.automation-source-chip:not(.is-editing):hover {
+  border-color: var(--accent-border);
+  color: var(--text-primary);
+}
+
+.automation-source-chip__label,
+.automation-source-chip__open {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.automation-source-chip__open {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.automation-source-chip__open:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 .automation-sender-picker__menu {
   position: absolute;
   top: 100%;

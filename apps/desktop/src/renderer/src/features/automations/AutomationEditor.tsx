@@ -239,7 +239,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
   const [validationError, setValidationError] = useState<string>();
   const agentLabelId = useId();
   const agentHelpId = useId();
-  const alsoWatchingLabelId = useId();
+  const watchingLabelId = useId();
   const promptLabelId = useId();
   const promptHelpId = useId();
   const canDeferAgent = props.mode.kind === "create";
@@ -283,6 +283,9 @@ export function AutomationEditor(props: AutomationEditorProps) {
   const [inboundTopicId, setInboundTopicId] = useState(
     initialIsTopic ? initialConversation?.conversationId ?? "" : "",
   );
+  // The sources NOT open in the conversation fields, in list order, and where
+  // the one that is open sits among them. The fields edit one source at a
+  // time; picking a listed source swaps it in, so every source stays editable.
   const [extraSources, setExtraSources] = useState<
     AutomationMessagingConversationSnapshot[]
   >(() =>
@@ -290,6 +293,12 @@ export function AutomationEditor(props: AutomationEditorProps) {
       initialInboundTriggers.slice(1).map((trigger) => trigger.conversation),
     ),
   );
+  const [editingIndex, setEditingIndex] = useState(0);
+  // The stored source the fields were last loaded from, whose titles keep
+  // naming it while the fields still point at it.
+  const [fieldOrigin, setFieldOrigin] = useState<
+    AutomationMessagingConversationSnapshot | undefined
+  >(initialConversation);
   // Editing an automation written before condition lists existed converts its
   // legacy sender/text filters forward, so the operator sees the same filter
   // they configured — just expressed as rows.
@@ -600,14 +609,28 @@ export function AutomationEditor(props: AutomationEditorProps) {
 
   // The title snapshot stored on the trigger keeps naming the conversation
   // even when the settings catalog does not list it (or has not loaded yet),
-  // as long as the operator has not pointed the trigger elsewhere.
-  const storedGroupTitle =
-    initialConversation
-    && inboundProvider === initialConversation.channel
-    && inboundGroupId.trim() === initialInboundGroupId
-      ? (initialIsTopic
-          ? initialConversation.parentTitle
-          : initialConversation.title)
+  // as long as the operator has not pointed the trigger elsewhere. It follows
+  // the source the fields were loaded from, so a source reopened from the
+  // list keeps its name too.
+  const originFields = fieldOrigin ? fieldValuesFor(fieldOrigin) : undefined;
+  const originIsTopic = originFields?.telegramScope === "topic";
+  const fieldsAtOrigin = Boolean(
+    fieldOrigin
+    && originFields?.groupId
+    && inboundProvider === fieldOrigin.channel
+    && inboundGroupId.trim() === originFields.groupId,
+  );
+  const storedGroupTitle = fieldsAtOrigin
+    ? (originIsTopic ? fieldOrigin?.parentTitle : fieldOrigin?.title)
+    : undefined;
+  // A topic's own name, likewise: the topic list loads per group and may not
+  // list it by the time the operator saves.
+  const storedTopicTitle =
+    fieldsAtOrigin
+    && originIsTopic
+    && telegramScope === "topic"
+    && inboundTopicId.trim() === originFields?.topicId
+      ? fieldOrigin?.title
       : undefined;
   const destGroups = useMemo(
     () => catalogGroups[destProvider] ?? [],
@@ -806,31 +829,43 @@ export function AutomationEditor(props: AutomationEditorProps) {
     provider: inboundProvider,
     telegramScope,
     topicId: inboundTopicId,
-    topicTitle: selectedTopic?.title,
+    topicTitle: selectedTopic?.title ?? storedTopicTitle,
   });
   const fieldSource =
     fieldConversation.kind === "complete" ? fieldConversation.conversation : undefined;
-  // Every conversation this automation will watch, fields first, without
-  // duplicates — picking a channel that is already a chip must not watch it
-  // twice.
-  const inboundSources = dedupeConversations([
-    ...(fieldSource ? [fieldSource] : []),
-    ...extraSources,
-  ]);
-  const multipleSources = inboundSources.length > 1;
-  // A chip for the conversation the fields already show would list it twice.
-  // It stays in `extraSources`, so pointing the fields elsewhere brings the
-  // chip back rather than silently dropping that source.
   const fieldSourceKey = fieldSource
     ? automationConversationKey(fieldSource)
     : undefined;
-  const alsoWatching = extraSources.filter(
-    (source) => automationConversationKey(source) !== fieldSourceKey,
+  // The list as the operator sees it: every source, with the one open in the
+  // fields in its place. A listed source identical to the one in the fields
+  // is left out rather than shown twice; it stays in `extraSources`, so
+  // pointing the fields elsewhere brings it back instead of dropping it.
+  const sourceSlots: Array<
+    | { kind: "editing" }
+    | { index: number; kind: "listed"; source: AutomationMessagingConversationSnapshot }
+  > = [];
+  extraSources.forEach((source, index) => {
+    if (index === editingIndex) sourceSlots.push({ kind: "editing" });
+    if (automationConversationKey(source) !== fieldSourceKey) {
+      sourceSlots.push({ index, kind: "listed", source });
+    }
+  });
+  if (editingIndex >= extraSources.length) sourceSlots.push({ kind: "editing" });
+  // Every conversation this automation will watch, in list order, without
+  // duplicates — picking a channel that is already listed must not watch it
+  // twice.
+  const inboundSources = dedupeConversations(
+    sourceSlots.flatMap((slot) =>
+      slot.kind === "listed" ? [slot.source] : fieldSource ? [fieldSource] : [],
+    ),
   );
+  const multipleSources = inboundSources.length > 1;
 
-  const watchAnotherConversation = (): void => {
-    if (!fieldSource) return;
-    setExtraSources((current) => dedupeConversations([...current, fieldSource]));
+  const clearFields = (): void => {
+    // The operator has moved off the conversation the picker was being
+    // reconciled to; a reconcile still pending from the catalog load would
+    // otherwise put it back.
+    inboundSelectionReconciledRef.current = true;
     // Back to the fields' defaults, as a fresh form would start.
     setGroupSelection("");
     setInboundGroupId("");
@@ -841,17 +876,91 @@ export function AutomationEditor(props: AutomationEditorProps) {
     setCapturedGroupTitle(undefined);
     setCapturedName(undefined);
     if (captureStatus === "captured") setCaptureStatus("idle");
+    setFieldOrigin(undefined);
     setValidationError(undefined);
   };
 
-  const removeExtraSource = (
+  const loadIntoFields = (
     conversation: AutomationMessagingConversationSnapshot,
   ): void => {
-    const key = automationConversationKey(conversation);
-    setExtraSources((current) =>
-      current.filter((entry) => automationConversationKey(entry) !== key),
+    const values = fieldValuesFor(conversation);
+    // See clearFields: a pending reconcile must not restore the old pick.
+    inboundSelectionReconciledRef.current = true;
+    setInboundProvider(conversation.channel);
+    setInboundGroupId(values.groupId);
+    // By name when the catalog lists it, else as a manual ID — the same two
+    // states an automation opened for editing starts in.
+    setGroupSelection(
+      (catalogGroups[conversation.channel] ?? []).some(
+        (group) => group.id === values.groupId,
+      )
+        ? values.groupId
+        : MANUAL_GROUP_VALUE,
     );
+    setInboundManualKind(values.manualKind);
+    setTelegramScope(values.telegramScope);
+    setTopicSelection(values.topicId ? MANUAL_GROUP_VALUE : "");
+    setInboundTopicId(values.topicId);
+    setCapturedGroupTitle(undefined);
+    setCapturedName(undefined);
+    if (captureStatus === "captured") setCaptureStatus("idle");
+    setFieldOrigin(conversation);
     setValidationError(undefined);
+  };
+
+  /** Park the fields' source where it stood and open a new, empty entry last. */
+  const watchAnotherConversation = (): void => {
+    if (!fieldSource) return;
+    const parked = [...extraSources];
+    parked.splice(editingIndex, 0, fieldSource);
+    const listed = dedupeConversations(parked);
+    setExtraSources(listed);
+    setEditingIndex(listed.length);
+    clearFields();
+  };
+
+  /** Swap a listed source into the fields, parking the one they held. */
+  const openListedSource = (index: number): void => {
+    // Parking a half-filled entry would lose what was typed, and so would
+    // abandoning it; say what is missing instead.
+    if (fieldConversation.kind === "incomplete") {
+      setValidationError(fieldConversation.error);
+      return;
+    }
+    const chosen = extraSources[index];
+    if (!chosen) return;
+    const parked = [...extraSources];
+    if (fieldSource) parked.splice(editingIndex, 0, fieldSource);
+    const listed = dedupeConversations(parked);
+    const position = listed.indexOf(chosen);
+    listed.splice(position, 1);
+    setExtraSources(listed);
+    setEditingIndex(position);
+    loadIntoFields(chosen);
+  };
+
+  const removeListedSource = (index: number): void => {
+    setExtraSources((current) => current.filter((_, entry) => entry !== index));
+    if (index < editingIndex) setEditingIndex(editingIndex - 1);
+    setValidationError(undefined);
+  };
+
+  /**
+   * Drop what the fields hold — a source, or a new entry not yet chosen,
+   * which is how an add is cancelled — and open its neighbor, so the fields
+   * never sit empty while other sources exist.
+   */
+  const removeEditedSource = (): void => {
+    const position = editingIndex > 0 ? editingIndex - 1 : 0;
+    const neighbor = extraSources[position];
+    if (!neighbor) {
+      clearFields();
+      setEditingIndex(0);
+      return;
+    }
+    setExtraSources(extraSources.filter((_, entry) => entry !== position));
+    setEditingIndex(position);
+    loadIntoFields(neighbor);
   };
 
   const previewSubscriptionId = useId();
@@ -1366,13 +1475,13 @@ export function AutomationEditor(props: AutomationEditorProps) {
       broadcast: sourceReplyBroadcast,
       conditionGroup: stampConditionLabels(inboundConditions, senderLabels),
       existingTriggers: initialInboundTriggers,
-      extraSources,
       fieldConversation,
       includeThreadReplies: inboundIncludeReplies,
       provider: inboundProvider,
       replyDestination,
       resultMode,
       schedule: selectedSchedule.ok ? selectedSchedule.schedule : undefined,
+      sources: inboundSources,
       target: buildDestinationSnapshot({
         groupId: destGroupId,
         groupTitle: selectedDestGroup?.title,
@@ -1605,6 +1714,88 @@ export function AutomationEditor(props: AutomationEditorProps) {
                       No messaging providers are enabled. Enable one in Settings &gt;
                       Messaging before creating an inbound trigger.
                     </p>
+                  ) : null}
+                  {sourceSlots.length > 1 ? (
+                    <div className="automation-sources__watching">
+                      <span
+                        className="automation-sources__label"
+                        id={watchingLabelId}
+                      >
+                        Watching
+                      </span>
+                      {/* The sender picker's chip markup, so a removable list
+                          reads the same everywhere in this editor. The chip
+                          open in the fields below is marked; any other opens
+                          there when picked. */}
+                      <ul
+                        aria-labelledby={watchingLabelId}
+                        className="automation-sender-picker__chips"
+                      >
+                        {sourceSlots.map((slot) => {
+                          if (slot.kind === "editing") {
+                            const label = fieldSource
+                              ? formatInboundSourceLabel(fieldSource, {
+                                  withProvider: false,
+                                })
+                              : fieldConversation.kind === "empty"
+                                ? "New conversation"
+                                : "Unfinished conversation";
+                            return (
+                              <li
+                                aria-current="true"
+                                className="chip automation-sender-chip automation-source-chip is-editing"
+                                key="editing"
+                              >
+                                <span className="automation-source-chip__label">
+                                  {label}
+                                </span>
+                                <button
+                                  aria-label={
+                                    fieldSource
+                                      ? `Stop watching ${label}`
+                                      : "Discard this conversation"
+                                  }
+                                  className="automation-sender-chip__remove"
+                                  type="button"
+                                  onClick={removeEditedSource}
+                                >
+                                  ×
+                                </button>
+                              </li>
+                            );
+                          }
+                          // The provider is named only where it differs from
+                          // the one selected below.
+                          const label = formatInboundSourceLabel(slot.source, {
+                            withProvider: slot.source.channel !== inboundProvider,
+                          });
+                          return (
+                            <li
+                              className="chip automation-sender-chip automation-source-chip"
+                              key={automationConversationKey(slot.source)}
+                            >
+                              <button
+                                aria-label={`Edit ${label}`}
+                                className="automation-source-chip__open"
+                                title="Edit this conversation"
+                                type="button"
+                                onClick={() => openListedSource(slot.index)}
+                              >
+                                {label}
+                              </button>
+                              <button
+                                aria-label={`Stop watching ${label}`}
+                                className="automation-sender-chip__remove"
+                                type="button"
+                                onClick={() => removeListedSource(slot.index)}
+                              >
+                                ×
+                              </button>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    </div>
                   ) : null}
                   <div className="automation-inline-fields">
                     <label className="automation-field">
@@ -1875,51 +2066,8 @@ export function AutomationEditor(props: AutomationEditorProps) {
                     </>
                   ) : null}
 
-                  {alsoWatching.length > 0 || fieldSource ? (
+                  {fieldSource || multipleSources ? (
                     <div className="automation-field-group automation-sources">
-                      {alsoWatching.length > 0 ? (
-                        <div className="automation-sources__watching">
-                          <span
-                            className="automation-sources__label"
-                            id={alsoWatchingLabelId}
-                          >
-                            Also watching
-                          </span>
-                          {/* The sender picker's chip markup, so a removable
-                              list of choices looks and behaves the same
-                              everywhere in this editor. */}
-                          <ul
-                            aria-labelledby={alsoWatchingLabelId}
-                            className="automation-sender-picker__chips"
-                          >
-                            {alsoWatching.map((source) => {
-                              // The provider is named only where it differs
-                              // from the one selected above.
-                              const label = formatInboundSourceLabel(source, {
-                                withProvider: source.channel !== inboundProvider,
-                              });
-                              return (
-                                <li
-                                  className="chip automation-sender-chip"
-                                  key={automationConversationKey(source)}
-                                >
-                                  <span className="automation-sender-chip__label">
-                                    {label}
-                                  </span>
-                                  <button
-                                    aria-label={`Stop watching ${label}`}
-                                    className="automation-sender-chip__remove"
-                                    type="button"
-                                    onClick={() => removeExtraSource(source)}
-                                  >
-                                    ×
-                                  </button>
-                                </li>
-                              );
-                            })}
-                          </ul>
-                        </div>
-                      ) : null}
                       {fieldSource ? (
                         <button
                           className="button button--ghost automation-sources__add"
@@ -3283,13 +3431,14 @@ function buildTriggerConfig(params: {
   conditionGroup: AutomationInboundConditionGroup;
   /** The automation's stored inbound triggers, whose ids a re-save keeps. */
   existingTriggers: readonly AutomationInboundMessageTriggerDefinition[];
-  extraSources: readonly AutomationMessagingConversationSnapshot[];
   fieldConversation: InboundConversationField;
   includeThreadReplies: boolean;
   provider: MessagingChannelKind;
   replyDestination: AutomationSourceMessageDestination;
   resultMode: ResultMode;
   schedule?: AutomationScheduleDefinition;
+  /** Every source to watch, in list order, the fields' one included. */
+  sources: readonly AutomationMessagingConversationSnapshot[];
   target?: AutomationMessagingConversationSnapshot;
   triggerKind: TriggerFormKind;
 }):
@@ -3325,7 +3474,7 @@ function buildTriggerConfig(params: {
   if (field.kind === "incomplete") {
     return { error: field.error, ok: false };
   }
-  if (field.kind === "empty" && params.extraSources.length === 0) {
+  if (field.kind === "empty" && params.sources.length === 0) {
     return {
       error:
         params.provider === "telegram"
@@ -3359,10 +3508,7 @@ function buildTriggerConfig(params: {
     };
   }
 
-  const sources = dedupeConversations([
-    ...(field.kind === "complete" ? [field.conversation] : []),
-    ...params.extraSources,
-  ]);
+  const sources = params.sources;
   const conditionGroup = params.conditionGroup;
   const name = formatAutomationInboundConditionGroup(conditionGroup);
 
@@ -3466,6 +3612,41 @@ function readInboundConversation(params: {
     return { error: "Choose a conversation or DM recipient.", kind: "incomplete" };
   }
   return { kind: "complete", conversation };
+}
+
+/**
+ * The field values that describe a stored conversation — the inverse of
+ * `readInboundConversation`, and the same derivation the editor's initial
+ * state uses for the automation's first source.
+ */
+function fieldValuesFor(conversation: AutomationMessagingConversationSnapshot): {
+  groupId: string;
+  manualKind: ManualSurfaceKind;
+  telegramScope: TelegramScope;
+  topicId: string;
+} {
+  if (conversation.conversationKind === "topic") {
+    return {
+      groupId: conversation.parentId ?? "",
+      manualKind: "channel",
+      telegramScope: "topic",
+      topicId: conversation.conversationId,
+    };
+  }
+  if (conversation.recipientUserId) {
+    return {
+      groupId: contactSelection(conversation.recipientUserId),
+      manualKind: "dm",
+      telegramScope: "group",
+      topicId: "",
+    };
+  }
+  return {
+    groupId: conversation.conversationId,
+    manualKind: "channel",
+    telegramScope: "group",
+    topicId: "",
+  };
 }
 
 /** First occurrence wins, so a source keeps its position and its title. */
