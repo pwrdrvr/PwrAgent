@@ -1178,6 +1178,9 @@ export class DiscordAdapter implements DiscordProviderAdapter {
           actionable:
             mentionRemainder !== undefined
             || Boolean(message.content?.startsWith("/")),
+          command:
+            mentionRemainder === undefined
+            && /^\/[A-Za-z0-9_]+/.test(message.content ?? ""),
           receipt,
         });
     if (authorization === false) {
@@ -1264,8 +1267,8 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     const commandMatch = mentionRemainder === undefined
       ? /^\/([A-Za-z0-9_]+)(?:\s+(.*))?$/.exec(message.content)
       : undefined;
-    // Observation is not authorization: a command from a sender who only
-    // passed the observed-channel gate must not execute.
+    // Unreachable while `isAuthorizedMessageSource` never observes a command;
+    // kept so that invariant failing can only drop a message, never run one.
     if (observedOnly && commandMatch) {
       return;
     }
@@ -1614,12 +1617,12 @@ export class DiscordAdapter implements DiscordProviderAdapter {
    * It is reachable just for a guild message in an authorized server, in a
    * channel (or a thread under one) that an enabled automation watches, from
    * a sender outside the actor allowlist. The runtime keeps observed traffic
-   * off every reply and command path, and `handleMessageCreate` drops an
-   * observed slash command before it becomes an event.
+   * off every reply and command path. A slash command is never observed: it
+   * is rejected and reported as it would be anywhere else.
    */
   private isAuthorizedMessageSource(
     message: DiscordMessageCreateDispatch,
-    options: { actionable: boolean; receipt: MessagingInboundReceipt },
+    options: { actionable: boolean; command: boolean; receipt: MessagingInboundReceipt },
   ): boolean | "observed" {
     if (
       !this.isAuthorizedDiscordConversation({
@@ -1638,7 +1641,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
       return false;
     }
     if (!this.isAuthorizedActor(message.author.id)) {
-      if (message.guild_id && this.isObservedChannel(message)) {
+      if (message.guild_id && !options.command && this.isObservedChannel(message)) {
         return "observed";
       }
       if (!message.guild_id || options.actionable) {

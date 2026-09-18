@@ -3277,10 +3277,14 @@ export class SlackAdapter implements SlackProviderAdapter {
     }
 
     const channelUserMode = slackChannelUserAccessMode(this.config);
-    const observed =
-      this.observedConversationIds.has(params.channel.conversation.id)
-      || (params.channel.conversation.parentId !== undefined
-        && this.observedConversationIds.has(params.channel.conversation.parentId));
+    // A command is never observed: it is an attempt to steer the bot, and a
+    // sender who may not do that is rejected — and reported — exactly as in a
+    // conversation nothing watches. Observing it silently swallowed the
+    // rejection the operator relies on to see who is trying.
+    const observed = params.kind !== "command"
+      && (this.observedConversationIds.has(params.channel.conversation.id)
+        || (params.channel.conversation.parentId !== undefined
+          && this.observedConversationIds.has(params.channel.conversation.parentId)));
     if (channelUserMode === "none") {
       return observed ? "observed" : reject("unauthorized-conversation");
     }

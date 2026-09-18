@@ -3088,9 +3088,11 @@ describe("observed channels", () => {
     await adapter.stop();
   });
 
-  it("never turns an observed sender's slash command into a command", async () => {
-    // Observation is not authorization.
-    const { adapter, events, gateway } = await startObservedAdapter([TEST_CHANNEL_ID]);
+  it("rejects an observed sender's slash command as it would anywhere", async () => {
+    // Observation is not authorization, and it must not hide the attempt: the
+    // rejection is how an operator sees who is trying to steer the bot.
+    const { adapter, events, gateway, rejectedEvents } =
+      await startObservedAdapter([TEST_CHANNEL_ID]);
 
     await gateway.emit({
       op: 0,
@@ -3099,6 +3101,9 @@ describe("observed channels", () => {
     });
 
     expect(events).toEqual([]);
+    expect(rejectedEvents).toEqual([
+      expect.objectContaining({ kind: "command", reason: "unauthorized-actor" }),
+    ]);
     await adapter.stop();
   });
 

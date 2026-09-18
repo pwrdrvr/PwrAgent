@@ -2253,6 +2253,47 @@ describe("SlackAdapter", () => {
     expect(botsInfoCalls).toEqual(["B012DATADOG"]);
   });
 
+  it("rejects an unauthorized sender's command in an observed conversation", async () => {
+    // Observation is for automations, not for steering: a command is rejected
+    // and reported exactly as in a conversation nothing watches. Observing it
+    // used to swallow the rejection, hiding the attempt from the operator.
+    const socket = fakeSocket();
+    const adapter = new SlackAdapter({
+      config: baseConfig,
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({}),
+      socketClient: socket,
+      now: () => 1_700_000_000_000,
+    });
+    const events: MessagingInboundEvent[] = [];
+    const rejected: MessagingRejectedInboundEvent[] = [];
+    adapter.onInboundRejected((event) => {
+      rejected.push(event);
+    });
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+    adapter.updateObservedConversations(["C012ABCDEF0"]);
+
+    await socket.emitEvent("slack_event", {
+      ack: async () => undefined,
+      event: {
+        type: "message",
+        channel: "C012ABCDEF0",
+        channel_type: "channel",
+        team: "T012ABCDEF0",
+        user: "U012OUTSIDER",
+        ts: "1712023032.001100",
+        text: "/status",
+      },
+    });
+
+    expect(events).toEqual([]);
+    expect(rejected).toEqual([
+      expect.objectContaining({ kind: "command", reason: "unauthorized-actor" }),
+    ]);
+  });
+
   it("drops unauthorized-sender messages in conversations nothing observes", async () => {
     const socket = fakeSocket();
     const adapter = new SlackAdapter({
