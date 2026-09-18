@@ -23488,6 +23488,101 @@ describe("MessagingController", () => {
     });
   });
 
+  it("pages project moves on the bound owner with a fixed SQLite write budget", async () => {
+    const navigation = buildLocalHandoffNavigationSnapshot();
+    navigation.directories.push(...Array.from({ length: 18 }, (_, index) => ({
+      ...navigation.directories[0]!, key: `directory:demo-${index}`, label: `Demo ${index}`, path: `/projects/demo-${index}`,
+    })));
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-project-picker-"));
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    const db = StateDb.open(path.join(tempDir, "state.db"));
+    const harness = await createHarness({
+      navigation, store: new SqliteMessagingStore(db),
+      capabilityProfile: { ...PERMISSIVE_CAPABILITY_PROFILE, actions: { ...PERMISSIVE_CAPABILITY_PROFILE.actions!, maxActions: 5 } },
+    });
+    try {
+      await bindThread(harness);
+      const binding = (await harness.store.findActiveBindingForChannel(buildCommandEvent("/status").channel))!;
+      await harness.store.upsertBinding({
+        ...binding, federatedThread: { backend: "codex", threadId: "thread-1", target: { scope: "remote", instanceId: "peer" } },
+      });
+      setHandoffDetailFixture(harness, navigation, false);
+      const { writes } = await measureSqliteWrites(async () => {
+        await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "handoff:projects" }));
+      });
+      expectSqliteWriteBudget({
+        scenario: "messaging-project-move-picker",
+        note: "one bounded project-picker page through the shared messaging controller, excluding binding setup",
+        writes,
+      });
+      expect(harness.getNavigationQueryPage).toHaveBeenLastCalledWith(expect.objectContaining({
+        pageSize: 2, federationTarget: { scope: "remote", instanceId: "peer" },
+      }));
+      const next = findChoice(harness.delivered.at(-1), "handoff:projects");
+      expect(next.label).toBe("Next");
+      await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: next.id, value: next.value }));
+      expect(harness.getNavigationQueryPage).toHaveBeenLastCalledWith(expect.objectContaining({
+        cursor: expect.any(String), federationTarget: { scope: "remote", instanceId: "peer" },
+      }));
+      expect(harness.handoffThreadWorkspace).not.toHaveBeenCalled();
+    } finally {
+      harness.controller.dispose();
+      db.close();
+      vi.unstubAllEnvs();
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([true, false])("moves a scratch thread to a project with native buttons=%s", async (buttons) => {
+    const navigation = buildLocalHandoffNavigationSnapshot();
+    navigation.threads[0] = {
+      ...navigation.threads[0]!, linkedDirectories: [], projectKey: "/scratch/research", gitBranch: undefined,
+    };
+    navigation.directories.push({
+      ...navigation.directories[0]!, key: "directory:demo", label: "Demo", path: "/projects/demo",
+    });
+    const harness = await createHarness({
+      navigation,
+      capabilityProfile: { ...PERMISSIVE_CAPABILITY_PROFILE, actions: buttons ? PERMISSIVE_CAPABILITY_PROFILE.actions : undefined },
+    });
+    await bindThread(harness);
+    harness.delivered.length = 0;
+    await harness.controller.handleInboundEvent(buildCommandEvent("/status handoff"));
+    const move = findChoice(harness.delivered.at(-1), "handoff:projects");
+    if (buttons) {
+      await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: move.id, value: move.value }));
+    } else {
+      await harness.controller.handleInboundEvent({ ...buildTextEvent(move.fallbackText!), id: "choose-move" });
+    }
+    expect(harness.getNavigationQueryPage).toHaveBeenCalledWith(expect.objectContaining({
+      protocol: 2, query: { kind: "messaging-projects" }, pageSize: 8,
+    }));
+    const picker = harness.delivered.at(-1);
+    if (!picker || picker.kind !== "single_select") throw new Error("Expected project picker");
+    const choice = picker.choices.find((candidate) => candidate.label.includes("Demo"))!;
+    expect(choice).toBeDefined();
+    if (buttons) {
+      await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: choice.id, value: choice.value }));
+    } else {
+      await harness.controller.handleInboundEvent({ ...buildTextEvent(choice.fallbackText!), id: "choose-demo" });
+    }
+    expect(harness.handoffThreadWorkspace).not.toHaveBeenCalled();
+    const confirmation = harness.delivered.at(-1);
+    expect(confirmation).toMatchObject({ kind: "confirmation", body: expect.stringContaining("/projects/demo") });
+    const confirm = findAction(confirmation, "handoff:confirm");
+    if (buttons) {
+      await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: confirm.id, value: confirm.value }));
+    } else {
+      await harness.controller.handleInboundEvent({ ...buildTextEvent("confirm"), id: "confirm-move" });
+    }
+    expect(harness.handoffThreadWorkspace).toHaveBeenCalledWith(expect.objectContaining({
+      backend: "codex", threadId: "thread-1", direction: "to-project",
+      sourcePath: "/scratch/research", targetPath: "/projects/demo",
+    }));
+    expect(harness.startTurn).not.toHaveBeenCalled();
+    harness.controller.dispose();
+  });
+
   it("runs a local-to-worktree handoff from the status menu", async () => {
     const harness = await createHarness();
     harness.getNavigationSnapshot.mockResolvedValue(buildLocalHandoffNavigationSnapshot());
@@ -23785,6 +23880,24 @@ describe("MessagingController", () => {
     expect(finalStatus.text).not.toContain("Worktree:");
   });
 
+  it("rejects a project move confirmation after the source directory changes", async () => {
+    const navigation = buildLocalHandoffNavigationSnapshot();
+    const harness = await createHarness({ navigation });
+    await bindThread(harness);
+    const value = {
+      backend: "codex", threadId: "thread-1", direction: "to-project",
+      repositoryPath: "/repo/pwragent", sourcePath: "/repo/pwragent", targetPath: "/projects/demo",
+    };
+    await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "handoff:select-project", value }));
+    const confirm = findAction(harness.delivered.at(-1), "handoff:confirm");
+    const changed = buildWorktreeHandoffNavigationSnapshot();
+    setHandoffDetailFixture(harness, changed, false);
+    await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: confirm.id, value: confirm.value }));
+    expect(harness.handoffThreadWorkspace).not.toHaveBeenCalled();
+    expect(harness.delivered.at(-1)).toMatchObject({ kind: "error", body: expect.stringContaining("stale") });
+    harness.controller.dispose();
+  });
+
   it("rejects stale handoff confirmations when workspace metadata changes", async () => {
     const harness = await createHarness();
     harness.getNavigationSnapshot.mockResolvedValue(buildLocalHandoffNavigationSnapshot());
@@ -23978,6 +24091,23 @@ function rbacProviderGranting(
 }
 
 describe("RBAC capability enforcement", () => {
+  it("gates /status handoff and project selection on handoff permission", async () => {
+    const harness = await createHarness({
+      rbacPolicy: rbacProviderGranting(["message.reply", "elicitation.answer", "thread.status.view"]),
+    });
+    for (const event of [
+      buildCommandEvent("/status handoff"),
+      buildCallbackEvent({ actionId: "handoff:projects" }),
+      buildCallbackEvent({ actionId: "handoff:select-project" }),
+    ]) {
+      await harness.controller.handleInboundEvent(event);
+      expect(harness.delivered.at(-1)).toMatchObject({ kind: "error", title: "Not permitted" });
+    }
+    expect(harness.getNavigationQueryPage).not.toHaveBeenCalled();
+    expect(harness.handoffThreadWorkspace).not.toHaveBeenCalled();
+    harness.controller.dispose();
+  });
+
   it("denies a command the actor lacks and delivers a reject notice", async () => {
     const records: unknown[] = [];
     const harness = await createHarness({

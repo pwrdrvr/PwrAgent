@@ -933,7 +933,7 @@ export function buildHandoffOverviewIntent(params: {
   id: string;
 }): MessagingSingleSelectIntent {
   const actions: MessagingSurfaceAction[] = [];
-  if (params.context.workspaceKind === "local") {
+  if (params.context.workspaceKind === "local" && params.context.branch) {
     if (params.context.leaveLocalBranches.length > 0) {
       actions.push({
         id: "handoff:move-branch",
@@ -956,7 +956,7 @@ export function buildHandoffOverviewIntent(params: {
         strategy: "detached-changes",
       },
     });
-  } else {
+  } else if (params.context.workspaceKind === "worktree" && params.context.branch) {
     actions.push({
       id: "handoff:worktree-to-local",
       label: "Handoff to Local",
@@ -965,6 +965,13 @@ export function buildHandoffOverviewIntent(params: {
       value: handoffValue(params.context),
     });
   }
+
+  actions.push({
+    id: "handoff:projects",
+    label: "Move to Project",
+    fallbackText: String(actions.length + 1),
+    style: "secondary",
+  });
 
   return {
     id: params.id,
@@ -1012,7 +1019,8 @@ export function buildHandoffOverviewIntent(params: {
           priority: 2,
         },
       ],
-      params.capabilityProfile,
+      params.capabilityProfile && capabilityProfileSupportsActionCount(params.capabilityProfile, 6)
+        ? params.capabilityProfile : undefined,
     ),
   };
 }
@@ -1212,6 +1220,49 @@ function clampPageIndex(pageIndex: number, totalPages: number): number {
   return Math.min(Math.max(0, Math.trunc(pageIndex)), totalPages - 1);
 }
 
+export function buildHandoffProjectPickerIntent(params: {
+  binding: MessagingBindingRecord;
+  capabilityProfile?: MessagingCapabilityProfile;
+  context: MessagingWorkspaceHandoffContext;
+  createdAt: number;
+  id: string;
+  projects: { label: string; path: string }[];
+  nextCursor?: string;
+}): MessagingSingleSelectIntent {
+  const choices: MessagingSurfaceAction[] = params.projects.map((project, index) => ({
+    id: "handoff:select-project",
+    label: `${index + 1}. ${project.label}`,
+    fallbackText: String(index + 1),
+    style: "secondary",
+    priority: 100 + index,
+    value: { ...handoffValue(params.context), direction: "to-project", targetPath: project.path },
+  }));
+  const prompt = [
+    "Move to Project",
+    "Choose a destination on this thread's owning instance. Files and branches stay in place.",
+    ...params.projects.map((project, index) => `${index + 1}. ${project.label} — ${project.path}`),
+    params.projects.length === 0 ? "No eligible projects on this page." : undefined,
+  ].filter(Boolean).join("\n");
+  return {
+    id: params.id, kind: "single_select", bindingId: params.binding.id,
+    createdAt: params.createdAt,
+    delivery: { mode: params.binding.statusSurface ? "update" : "present", fallback: "present_new" },
+    targetSurface: params.binding.statusSurface,
+    prompt,
+    fallbackText: `${prompt}\nReply with a number, ${params.nextCursor ? "Next, " : ""}Back, or Cancel.`,
+    choices: applyActionCapabilityLimits([
+      ...choices,
+      ...(params.nextCursor ? [{
+        id: "handoff:projects", label: "Next", fallbackText: "next",
+        style: "secondary" as const, priority: 3, value: { cursor: params.nextCursor },
+      }] : []),
+      { id: "status:handoff", label: "Back", fallbackText: "back", style: "secondary", priority: 1 },
+      { id: "handoff:cancel", label: "Cancel", fallbackText: "cancel", style: "secondary", priority: 2 },
+    ], params.capabilityProfile && capabilityProfileSupportsActionCount(params.capabilityProfile, 4)
+      ? params.capabilityProfile : undefined),
+  };
+}
+
 export function buildHandoffConfirmationIntent(params: {
   binding: MessagingBindingRecord;
   capabilityProfile?: MessagingCapabilityProfile;
@@ -1219,12 +1270,16 @@ export function buildHandoffConfirmationIntent(params: {
   createdAt: number;
   id: string;
   leaveLocalBranch?: string;
+  targetPath?: string;
   strategy?: HandoffThreadWorkspaceRequest["strategy"];
 }): MessagingConfirmationIntent {
   const direction =
-    params.context.workspaceKind === "local" ? "local-to-worktree" : "worktree-to-local";
+    params.targetPath ? "to-project"
+      : params.context.workspaceKind === "local" ? "local-to-worktree" : "worktree-to-local";
   const body = [
-    params.strategy === "detached-changes"
+    params.targetPath
+      ? "Confirm moving this conversation to another project. Files and branches stay in place."
+      : params.strategy === "detached-changes"
       ? "Confirm new detached-head worktree."
       : direction === "local-to-worktree"
         ? "Confirm moving this branch to a new worktree."
@@ -1234,6 +1289,7 @@ export function buildHandoffConfirmationIntent(params: {
     `Repository: ${params.context.repositoryPath}`,
     `Working directory: ${params.context.workingDirectoryPath}`,
     `Branch: ${params.context.branch ?? unavailable()}`,
+    params.targetPath ? `Destination: ${params.targetPath}` : undefined,
     params.leaveLocalBranch
       ? `Leave Local on: ${formatHandoffBranchChoiceLabel(params.leaveLocalBranch)}`
       : undefined,
@@ -1252,7 +1308,7 @@ export function buildHandoffConfirmationIntent(params: {
       fallback: "present_new",
     },
     targetSurface: params.binding.statusSurface,
-    title: "Confirm Handoff",
+    title: params.targetPath ? "Confirm Move to Project" : "Confirm Handoff",
     body,
     fallbackText: "Reply Confirm, Back, or Cancel.",
     actions: applyActionCapabilityLimits(
@@ -1265,6 +1321,7 @@ export function buildHandoffConfirmationIntent(params: {
           priority: 1,
           value: {
             ...handoffValue(params.context),
+            ...(params.targetPath ? { direction, targetPath: params.targetPath } : {}),
             ...(params.strategy ? { strategy: params.strategy } : {}),
             ...(params.leaveLocalBranch
               ? { leaveLocalBranch: params.leaveLocalBranch }
@@ -1272,7 +1329,7 @@ export function buildHandoffConfirmationIntent(params: {
           },
         },
         {
-          id: params.context.workspaceKind === "local"
+          id: params.targetPath ? "handoff:projects" : params.context.workspaceKind === "local"
             ? params.strategy === "move-branch"
               ? "handoff:move-branch"
               : "status:handoff"
@@ -1291,7 +1348,8 @@ export function buildHandoffConfirmationIntent(params: {
           priority: 3,
         },
       ],
-      params.capabilityProfile,
+      params.capabilityProfile && capabilityProfileSupportsActionCount(params.capabilityProfile, 3)
+        ? params.capabilityProfile : undefined,
     ),
   };
 }
@@ -1304,7 +1362,8 @@ export function handoffRequestFromValue(
   }
   if (
     value.direction !== "local-to-worktree" &&
-    value.direction !== "worktree-to-local"
+    value.direction !== "worktree-to-local" &&
+    value.direction !== "to-project"
   ) {
     return undefined;
   }
@@ -1318,10 +1377,15 @@ export function handoffRequestFromValue(
     return undefined;
   }
 
+  if (value.direction === "to-project" && (typeof value.targetPath !== "string" || !value.targetPath.trim())) {
+    return undefined;
+  }
+
   return {
     backend: value.backend,
     threadId: value.threadId,
     direction: value.direction,
+    ...(value.direction === "to-project" ? { targetPath: value.targetPath as string } : {}),
     strategy:
       value.strategy === "move-branch" ||
       value.strategy === "detached-changes" ||
