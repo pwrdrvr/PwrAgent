@@ -26195,6 +26195,14 @@ a.transcript-message__messaging-origin:focus-visible {
   outline-offset: 1px;
 }
 
+/* Why a listed source would not open: shown under the list the operator just
+   clicked, not at the foot of the form where Save's errors go. */
+.automation-sources__notice {
+  margin: 0;
+  color: var(--danger-text);
+  font-size: 12px;
+}
+
 .automation-sender-picker__menu {
   position: absolute;
   top: 100%;

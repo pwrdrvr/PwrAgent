@@ -2682,9 +2682,10 @@ describe("AutomationEditor with several watched conversations", () => {
       }),
     );
 
-    expect(
-      await screen.findByText("Enter a topic ID or switch to Whole group."),
-    ).toBeInTheDocument();
+    // Said beside the list that was clicked, not at the foot of the form.
+    const notice = await screen.findByRole("alert");
+    expect(notice).toHaveTextContent("Enter a topic ID or switch to Whole group.");
+    expect(notice.closest(".automation-sources__watching")).not.toBeNull();
     expect(screen.getByLabelText("Group ID")).toHaveValue("-200");
   });
 
@@ -2744,6 +2745,161 @@ describe("AutomationEditor with several watched conversations", () => {
         }),
       ]),
     );
+  });
+
+  it("lists a source on a disabled provider without opening it, and saves it as stored", async () => {
+    const telegramTopic = {
+      id: "inbound-message:telegram:-1001:680",
+      kind: "inbound_message" as const,
+      name: "sender is spinnaker",
+      conversation: {
+        channel: "telegram" as const,
+        conversationId: "680",
+        conversationKind: "topic" as const,
+        parentId: "-1001",
+        parentTitle: "Ops Room",
+        title: "Deploys",
+      },
+      conditionGroup: senderFilter,
+    };
+    const automation = multiSourceAutomation();
+    automation.triggers = [automation.triggers[0]!, telegramTopic];
+    const onSubmit = vi.fn(async () => undefined);
+    // Telegram is not enabled: opening the topic would move it onto Slack.
+    render(
+      <AutomationEditor
+        desktopApi={slackCatalog()}
+        mode={{ kind: "edit", automation }}
+        onCancel={() => undefined}
+        onSubmit={onSubmit}
+      />,
+    );
+
+    const watching = await screen.findByRole("list", { name: "Watching" });
+    await waitFor(() =>
+      expect(
+        within(watching).queryByRole("button", { name: /^Edit Telegram/ }),
+      ).toBeNull(),
+    );
+    expect(
+      within(watching).getByText("Telegram · Ops Room / Deploys"),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(submittedTriggers(onSubmit)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: telegramTopic.id,
+          conversation: telegramTopic.conversation,
+        }),
+      ]),
+    );
+  });
+
+  it("keeps the list order when a source before the edited one is removed", async () => {
+    const automation = multiSourceAutomation();
+    automation.triggers = [
+      ...automation.triggers,
+      {
+        id: "inbound-message:slack::C0DEPLOYS",
+        kind: "inbound_message",
+        name: "sender is spinnaker",
+        conversation: {
+          channel: "slack",
+          conversationId: "C0DEPLOYS",
+          conversationKind: "channel",
+          title: "f-deploys",
+        },
+        conditionGroup: senderFilter,
+      },
+    ];
+    const onSubmit = vi.fn(async () => undefined);
+    render(
+      <AutomationEditor
+        desktopApi={slackCatalog()}
+        mode={{ kind: "edit", automation }}
+        onCancel={() => undefined}
+        onSubmit={onSubmit}
+      />,
+    );
+
+    const watching = await screen.findByRole("list", { name: "Watching" });
+    fireEvent.click(within(watching).getByRole("button", { name: "Edit f-metrics" }));
+    fireEvent.click(
+      within(watching).getByRole("button", { name: "Stop watching f-alerts" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(
+      submittedTriggers(onSubmit).map(
+        (trigger) => (trigger.conversation as { title?: string }).title,
+      ),
+    ).toEqual(["f-metrics", "f-deploys"]);
+  });
+
+  it("stops watching the edited conversation even when it is also listed", async () => {
+    const automation = multiSourceAutomation();
+    automation.triggers = [
+      ...automation.triggers,
+      {
+        id: "inbound-message:slack::C0DEPLOYS",
+        kind: "inbound_message",
+        name: "sender is spinnaker",
+        conversation: {
+          channel: "slack",
+          conversationId: "C0DEPLOYS",
+          conversationKind: "channel",
+          title: "f-deploys",
+        },
+        conditionGroup: senderFilter,
+      },
+    ];
+    const onSubmit = vi.fn(async () => undefined);
+    render(
+      <AutomationEditor
+        desktopApi={slackCatalog()}
+        mode={{ kind: "edit", automation }}
+        onCancel={() => undefined}
+        onSubmit={onSubmit}
+      />,
+    );
+
+    // Point the fields at f-metrics, which is already listed.
+    await pickConversation("Conversation", /f-metrics/);
+    const watching = screen.getByRole("list", { name: "Watching" });
+    fireEvent.click(
+      within(watching).getByRole("button", { name: "Stop watching f-metrics" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(
+      submittedTriggers(onSubmit).map(
+        (trigger) => (trigger.conversation as { title?: string }).title,
+      ),
+    ).toEqual(["f-deploys"]);
+  });
+
+  it("moves focus to the fields when the clicked control goes away", async () => {
+    render(
+      <AutomationEditor
+        desktopApi={fakeDesktopApi(fakeSettings({ enabled: { slack: true } }))}
+        mode={{ assignment: { backend: "codex", threadId: "thread-1" }, kind: "create" }}
+        onCancel={() => undefined}
+        onSubmit={vi.fn(async () => undefined)}
+      />,
+    );
+    await startSlackInboundDraft();
+    fireEvent.change(screen.getByLabelText("Channel ID"), {
+      target: { value: "C1" },
+    });
+    const add = screen.getByRole("button", { name: "Watch another conversation" });
+    add.focus();
+    fireEvent.click(add);
+
+    await waitFor(() => expect(screen.getByLabelText("Provider")).toHaveFocus());
   });
 
   it("previews live messages from every watched conversation and says which one", async () => {

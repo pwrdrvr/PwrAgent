@@ -294,6 +294,19 @@ export function AutomationEditor(props: AutomationEditorProps) {
     ),
   );
   const [editingIndex, setEditingIndex] = useState(0);
+  // Set when switching away from a half-filled entry was refused; shown beside
+  // the list while the entry stays unfinished, not at the foot of the form.
+  const [unfinishedSourceNotice, setUnfinishedSourceNotice] = useState(false);
+  // Every list action unmounts the control that was clicked (a chip becomes
+  // the edited one, a button hides, a chip goes away), so focus moves to the
+  // first field of the source now being edited, after that render lands.
+  const providerSelectRef = useRef<HTMLSelectElement>(null);
+  const fieldsFocusPendingRef = useRef(false);
+  useEffect(() => {
+    if (!fieldsFocusPendingRef.current) return;
+    fieldsFocusPendingRef.current = false;
+    providerSelectRef.current?.focus();
+  });
   // The stored source the fields were last loaded from, whose titles keep
   // naming it while the fields still point at it.
   const [fieldOrigin, setFieldOrigin] = useState<
@@ -877,6 +890,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
     setCapturedName(undefined);
     if (captureStatus === "captured") setCaptureStatus("idle");
     setFieldOrigin(undefined);
+    setUnfinishedSourceNotice(false);
     setValidationError(undefined);
   };
 
@@ -905,8 +919,18 @@ export function AutomationEditor(props: AutomationEditorProps) {
     setCapturedName(undefined);
     if (captureStatus === "captured") setCaptureStatus("idle");
     setFieldOrigin(conversation);
+    setUnfinishedSourceNotice(false);
     setValidationError(undefined);
   };
+
+  // A source on a provider that is not enabled is listed and saved as stored,
+  // but never opened: the provider correction above would move the fields
+  // onto an enabled provider, and Save would then write this conversation's
+  // ID under it.
+  const canOpenSource = (
+    source: AutomationMessagingConversationSnapshot,
+  ): boolean =>
+    enabledProviders !== undefined && availableProviders.includes(source.channel);
 
   /** Park the fields' source where it stood and open a new, empty entry last. */
   const watchAnotherConversation = (): void => {
@@ -917,6 +941,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
     setExtraSources(listed);
     setEditingIndex(listed.length);
     clearFields();
+    fieldsFocusPendingRef.current = true;
   };
 
   /** Swap a listed source into the fields, parking the one they held. */
@@ -924,41 +949,60 @@ export function AutomationEditor(props: AutomationEditorProps) {
     // Parking a half-filled entry would lose what was typed, and so would
     // abandoning it; say what is missing instead.
     if (fieldConversation.kind === "incomplete") {
-      setValidationError(fieldConversation.error);
+      setUnfinishedSourceNotice(true);
       return;
     }
     const chosen = extraSources[index];
-    if (!chosen) return;
+    if (!chosen || !canOpenSource(chosen)) return;
     const parked = [...extraSources];
     if (fieldSource) parked.splice(editingIndex, 0, fieldSource);
     const listed = dedupeConversations(parked);
     const position = listed.indexOf(chosen);
+    if (position < 0) return;
     listed.splice(position, 1);
     setExtraSources(listed);
     setEditingIndex(position);
     loadIntoFields(chosen);
+    fieldsFocusPendingRef.current = true;
   };
 
   const removeListedSource = (index: number): void => {
     setExtraSources((current) => current.filter((_, entry) => entry !== index));
     if (index < editingIndex) setEditingIndex(editingIndex - 1);
     setValidationError(undefined);
+    fieldsFocusPendingRef.current = true;
   };
 
   /**
    * Drop what the fields hold — a source, or a new entry not yet chosen,
-   * which is how an add is cancelled — and open its neighbor, so the fields
-   * never sit empty while other sources exist.
+   * which is how an add is cancelled — and open the nearest entry that can be
+   * opened, the one before it first, so the fields never sit empty while an
+   * openable source exists.
    */
   const removeEditedSource = (): void => {
-    const position = editingIndex > 0 ? editingIndex - 1 : 0;
-    const neighbor = extraSources[position];
-    if (!neighbor) {
+    // A hidden listed copy of the removed conversation goes too, or the
+    // neighbor opened below could be that same conversation again.
+    const keep = (source: AutomationMessagingConversationSnapshot) =>
+      automationConversationKey(source) !== fieldSourceKey;
+    const kept = extraSources.filter(keep);
+    const slot = extraSources.slice(0, editingIndex).filter(keep).length;
+    const nearest = [
+      ...kept.slice(0, slot).map((_, offset) => slot - 1 - offset),
+      ...kept.slice(slot).map((_, offset) => slot + offset),
+    ];
+    const position = nearest.find((entry) => {
+      const source = kept[entry];
+      return source !== undefined && canOpenSource(source);
+    });
+    const neighbor = position === undefined ? undefined : kept[position];
+    fieldsFocusPendingRef.current = true;
+    if (position === undefined || !neighbor) {
+      setExtraSources(kept);
+      setEditingIndex(slot);
       clearFields();
-      setEditingIndex(0);
       return;
     }
-    setExtraSources(extraSources.filter((_, entry) => entry !== position));
+    setExtraSources(kept.filter((_, entry) => entry !== position));
     setEditingIndex(position);
     loadIntoFields(neighbor);
   };
@@ -1774,15 +1818,24 @@ export function AutomationEditor(props: AutomationEditorProps) {
                               className="chip automation-sender-chip automation-source-chip"
                               key={automationConversationKey(slot.source)}
                             >
-                              <button
-                                aria-label={`Edit ${label}`}
-                                className="automation-source-chip__open"
-                                title="Edit this conversation"
-                                type="button"
-                                onClick={() => openListedSource(slot.index)}
-                              >
-                                {label}
-                              </button>
+                              {canOpenSource(slot.source) ? (
+                                <button
+                                  aria-label={`Edit ${label}`}
+                                  className="automation-source-chip__open"
+                                  title="Edit this conversation"
+                                  type="button"
+                                  onClick={() => openListedSource(slot.index)}
+                                >
+                                  {label}
+                                </button>
+                              ) : (
+                                <span
+                                  className="automation-source-chip__label"
+                                  title={`Enable ${INBOUND_PROVIDER_LABELS[slot.source.channel] ?? slot.source.channel} in Settings > Messaging to edit this conversation.`}
+                                >
+                                  {label}
+                                </span>
+                              )}
                               <button
                                 aria-label={`Stop watching ${label}`}
                                 className="automation-sender-chip__remove"
@@ -1795,12 +1848,20 @@ export function AutomationEditor(props: AutomationEditorProps) {
                           );
                         })}
                       </ul>
+                      {unfinishedSourceNotice
+                      && fieldConversation.kind === "incomplete" ? (
+                        <p className="automation-sources__notice" role="alert">
+                          Finish this conversation or discard it first:{" "}
+                          {fieldConversation.error}
+                        </p>
+                      ) : null}
                     </div>
                   ) : null}
                   <div className="automation-inline-fields">
                     <label className="automation-field">
                       <span>Provider</span>
                       <select
+                        ref={providerSelectRef}
                         value={inboundProvider}
                         onChange={(event) => {
                           setInboundProvider(
