@@ -39,6 +39,7 @@ import {
   SettingsSection,
   SettingsSectionStack,
 } from "./SettingsLayout";
+import { SettingsSwitch } from "./SettingsSwitch";
 
 const DIAGNOSTIC_EVENT_LIMIT = 50;
 
@@ -1446,6 +1447,7 @@ export function FederationSettings(props: FederationSettingsProps) {
               sub="The one endpoint fronted by Cloudflare. Access tokens and client certificates are sent only to this host, because they travel in the WebSocket upgrade before the gateway's pinned keys are verified."
               control={
                 <input
+                  className="settings-input"
                   aria-label="Cloudflare endpoint"
                   value={cloudflareEndpoint}
                   placeholder="wss://federation.example.com"
@@ -1458,13 +1460,10 @@ export function FederationSettings(props: FederationSettingsProps) {
               label="mTLS"
               sub="Cloudflare edge certificate gate."
               control={
-                <input
-                  aria-label="mTLS"
-                  type="checkbox"
+                <SettingsSwitch
+                  label="mTLS"
                   checked={cloudflareMtlsEnabled}
-                  onChange={(event) =>
-                    setCloudflareMtlsEnabled(event.target.checked)
-                  }
+                  onChange={setCloudflareMtlsEnabled}
                 />
               }
             />
@@ -1475,6 +1474,7 @@ export function FederationSettings(props: FederationSettingsProps) {
               )}
               control={
                 <textarea
+                  className="settings-input cloudflare-setup__textarea"
                   aria-label="Client certificate"
                   rows={3}
                   value={cloudflareClientCertificate}
@@ -1492,6 +1492,7 @@ export function FederationSettings(props: FederationSettingsProps) {
               )}
               control={
                 <textarea
+                  className="settings-input cloudflare-setup__textarea"
                   aria-label="Client private key"
                   rows={3}
                   value={cloudflareClientPrivateKey}
@@ -1506,13 +1507,10 @@ export function FederationSettings(props: FederationSettingsProps) {
               label="Access service auth"
               sub="Cloudflare Access service-token gate."
               control={
-                <input
-                  aria-label="Access service auth"
-                  type="checkbox"
+                <SettingsSwitch
+                  label="Access service auth"
                   checked={cloudflareAccessServiceAuthEnabled}
-                  onChange={(event) =>
-                    setCloudflareAccessServiceAuthEnabled(event.target.checked)
-                  }
+                  onChange={setCloudflareAccessServiceAuthEnabled}
                 />
               }
             />
@@ -1523,6 +1521,7 @@ export function FederationSettings(props: FederationSettingsProps) {
               )}
               control={
                 <input
+                  className="settings-input"
                   aria-label="Access client ID"
                   type="password"
                   value={cloudflareAccessClientId}
@@ -1540,6 +1539,7 @@ export function FederationSettings(props: FederationSettingsProps) {
               )}
               control={
                 <input
+                  className="settings-input"
                   aria-label="Access client secret"
                   type="password"
                   value={cloudflareAccessClientSecret}
@@ -1554,13 +1554,10 @@ export function FederationSettings(props: FederationSettingsProps) {
               label="Access sign-in"
               sub="Cloudflare Access sign-in (Managed OAuth). Sign in from the Connect this client steps above."
               control={
-                <input
-                  aria-label="Access sign-in"
-                  type="checkbox"
+                <SettingsSwitch
+                  label="Access sign-in"
                   checked={cloudflareAccessOAuthEnabled}
-                  onChange={(event) =>
-                    setCloudflareAccessOAuthEnabled(event.target.checked)
-                  }
+                  onChange={setCloudflareAccessOAuthEnabled}
                 />
               }
             />

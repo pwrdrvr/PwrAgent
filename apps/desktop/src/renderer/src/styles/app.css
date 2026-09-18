@@ -9431,6 +9431,13 @@ a.button {
   color: var(--text-primary);
 }
 
+.cloudflare-setup__gate input {
+  width: 14px;
+  height: 14px;
+  margin: 3px 0 0;
+  accent-color: var(--accent);
+}
+
 .cloudflare-setup__gate:disabled label {
   opacity: 0.7;
 }
@@ -9544,7 +9551,7 @@ a.button {
   text-transform: uppercase;
 }
 
-.cloudflare-setup__emails {
+.cloudflare-setup__textarea {
   height: auto;
   min-height: 64px;
   padding: 8px 10px;

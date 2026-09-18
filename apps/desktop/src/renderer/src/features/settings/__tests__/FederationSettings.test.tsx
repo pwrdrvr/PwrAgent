@@ -672,20 +672,23 @@ describe("FederationSettings", () => {
   it("stores Cloudflare client credentials before enabling edge policy", async () => {
     const onReplaceSecret = vi.fn(async () => true);
     const onWriteConfig = vi.fn(async () => true);
+    const snapshot = settingsSnapshot();
+    snapshot.federation.cloudflareMtlsEnabled = { value: false, source: "default" };
     render(
       <FederationSettings
         onClearSecret={vi.fn(async () => true)}
         onReplaceSecret={onReplaceSecret}
         saving={false}
-        snapshot={settingsSnapshot()}
+        snapshot={snapshot}
         onSettingsChanged={vi.fn()}
         onWriteConfig={onWriteConfig}
       />,
     );
 
-    fireEvent.change(screen.getByRole("checkbox", { name: "mTLS" }), {
-      target: { checked: true },
-    });
+    const mtls = screen.getByRole("switch", { name: "mTLS" });
+    expect(mtls).toHaveAttribute("aria-checked", "false");
+    fireEvent.click(mtls);
+    expect(mtls).toHaveAttribute("aria-checked", "true");
     fireEvent.change(screen.getByPlaceholderText("PEM certificate"), {
       target: { value: "certificate-pem" },
     });

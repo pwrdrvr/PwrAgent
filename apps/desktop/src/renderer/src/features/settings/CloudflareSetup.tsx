@@ -334,7 +334,7 @@ export function CloudflareSetup(props: Props) {
               <div className="cloudflare-setup__endpoint"><code>wss://{status?.hostname}</code><span>{status?.phase}</span></div>
               {oauth ? <>
                 <SettingsField label="Who can sign in" sub="One email per line. Removed people lose access at their next token refresh, within 15 minutes; revoke the peer in Federation to end a live session now."
-                  control={<textarea className="settings-input cloudflare-setup__emails" aria-label="People who can sign in" value={allowlistText} rows={3}
+                  control={<textarea className="settings-input cloudflare-setup__textarea" aria-label="People who can sign in" value={allowlistText} rows={3}
                     onChange={(event) => setAllowlistText(event.target.value)} spellCheck={false} disabled={disabled} />} />
                 <div className="settings-button-row">
                   {action("Update allowlist", { action: "set-emails", emails: parseEmails(allowlistText) }, "Updating the Access policy…", false,
@@ -348,7 +348,7 @@ export function CloudflareSetup(props: Props) {
                 : "A new name directly under your domain, such as federation.example.com. Existing DNS records and Access policies are never changed."}
                 control={field("Cloudflare public hostname", hostname, setHostname, `federation.${status?.zoneName ?? "example.com"}`, { locked: created })} />
               {oauth ? <SettingsField label="Who can sign in" sub="One email per line. Each must match the email the person’s login method reports."
-                control={<textarea className="settings-input cloudflare-setup__emails" aria-label="People who can sign in" value={emailsText} rows={3}
+                control={<textarea className="settings-input cloudflare-setup__textarea" aria-label="People who can sign in" value={emailsText} rows={3}
                   placeholder="you@example.com" onChange={(event) => setEmailsText(event.target.value)} spellCheck={false} disabled={disabled || created} />} /> : null}
               <p>Creating the endpoint first saves the gateway listener as 127.0.0.1:{port}.{modeChange}{hostChange} PwrAgent then creates {oauth ? "the gateway’s validation token, an Access application with sign-in and an email allowlist," : mtls ? "a private certificate authority, an Access application with a certificate-only policy," : "the gateway’s validation token, an Access application with a token-only policy,"} and a tunnel — and publishes {hostname.trim() || "the hostname"} only after reading the policy back.</p>
               <div className="settings-button-row">

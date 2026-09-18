@@ -56,7 +56,7 @@ export class CloudflareSignInRequiredError extends Error {
 }
 
 export const CLOUDFLARE_SIGN_IN_REQUIRED =
-  "Cloudflare Access sign-in is required. Open Settings → Federation → Cloudflare and choose Sign in.";
+  "Cloudflare Access sign-in is required. Open Settings → Federation → Cloudflare Access and choose Sign in.";
 
 export type CloudflareAccessOAuthDependencies = {
   load: () => Promise<CloudflareAccessSession | undefined>;
