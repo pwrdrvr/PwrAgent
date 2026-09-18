@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  acpContextWindowNotification,
   AcpLiveToolUpdateResolver,
   acpToolUpdateNotifications,
   acpTurnCompletedUsageNotification,
@@ -893,5 +894,47 @@ describe("acpToolUpdateNotifications", () => {
         },
       }),
     ).toBeUndefined();
+  });
+});
+
+describe("acpContextWindowNotification", () => {
+  it("maps an ACP usage_update to a fill-only context window notification", () => {
+    expect(
+      acpContextWindowNotification({
+        threadId: "session-1",
+        update: { sessionUpdate: "usage_update", used: 20209, size: 262144 },
+      }),
+    ).toEqual({
+      method: "thread/contextWindow/updated",
+      params: {
+        threadId: "session-1",
+        usedTokens: 20209,
+        modelContextWindow: 262144,
+      },
+    });
+  });
+
+  it("keeps the turn when one is known", () => {
+    expect(
+      acpContextWindowNotification({
+        threadId: "session-1",
+        turnId: "turn-1",
+        update: { sessionUpdate: "usage_update", used: 0, size: 1000 },
+      })?.params,
+    ).toMatchObject({ turnId: "turn-1", usedTokens: 0 });
+  });
+
+  it("drops a report the indicator cannot draw", () => {
+    for (const update of [
+      { sessionUpdate: "usage_update", used: 10 },
+      { sessionUpdate: "usage_update", used: 10, size: 0 },
+      { sessionUpdate: "usage_update", used: -1, size: 1000 },
+      { sessionUpdate: "usage_update", used: "10", size: 1000 },
+      { sessionUpdate: "usage_update", used: Number.NaN, size: 1000 },
+    ]) {
+      expect(
+        acpContextWindowNotification({ threadId: "session-1", update }),
+      ).toBeUndefined();
+    }
   });
 });

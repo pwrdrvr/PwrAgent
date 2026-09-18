@@ -2594,6 +2594,38 @@ function buildPendingTurnUsage(params: {
   };
 }
 
+/**
+ * The fill fields every context indicator needs: how many tokens are in
+ * context against the window size. Token breakdowns are layered on top by the
+ * caller when a provider reports them.
+ */
+function contextWindowFill(
+  totalTokens: number,
+  modelContextWindow: number
+): Pick<
+  ThreadContextWindowState,
+  | "modelContextWindow"
+  | "phase"
+  | "remainingPercent"
+  | "remainingTokens"
+  | "totalTokens"
+  | "usedPercent"
+> {
+  const rawUsedPercent = (totalTokens / modelContextWindow) * 100;
+  const remainingTokens = Math.max(0, modelContextWindow - totalTokens);
+  return {
+    modelContextWindow,
+    phase: getContextWindowMoonPhase(rawUsedPercent),
+    remainingPercent: Math.max(
+      0,
+      Math.min(100, (remainingTokens / modelContextWindow) * 100)
+    ),
+    remainingTokens,
+    totalTokens,
+    usedPercent: Math.max(0, Math.min(100, rawUsedPercent)),
+  };
+}
+
 function normalizeThreadContextWindowState(
   tokenUsage: unknown
 ): ThreadContextWindowState | undefined {
@@ -2621,13 +2653,6 @@ function normalizeThreadContextWindowState(
     return undefined;
   }
 
-  const rawUsedPercent = (totalTokens / modelContextWindow) * 100;
-  const usedPercent = Math.max(0, Math.min(100, rawUsedPercent));
-  const remainingTokens = Math.max(0, modelContextWindow - totalTokens);
-  const remainingPercent = Math.max(
-    0,
-    Math.min(100, (remainingTokens / modelContextWindow) * 100)
-  );
   const hasDistinctCumulativeUsage =
     totalUsage?.totalTokens !== undefined && totalUsage.totalTokens !== totalTokens;
 
@@ -2645,14 +2670,9 @@ function normalizeThreadContextWindowState(
       : undefined,
     cumulativeTotalTokens: hasDistinctCumulativeUsage ? totalUsage.totalTokens : undefined,
     inputTokens: currentUsage.inputTokens,
-    modelContextWindow,
     outputTokens: currentUsage.outputTokens,
-    phase: getContextWindowMoonPhase(rawUsedPercent),
     reasoningOutputTokens: currentUsage.reasoningOutputTokens,
-    remainingPercent,
-    remainingTokens,
-    totalTokens,
-    usedPercent,
+    ...contextWindowFill(totalTokens, modelContextWindow),
   };
 }
 
@@ -3062,7 +3082,8 @@ function isThreadLocalTranscriptNotification(
     notification.method === "item/mcpToolCall/progress" ||
     notification.method === "item/commandExecution/outputDelta" ||
     notification.method === "item/fileChange/outputDelta" ||
-    notification.method === "thread/tokenUsage/updated"
+    notification.method === "thread/tokenUsage/updated" ||
+    notification.method === "thread/contextWindow/updated"
   );
 }
 
@@ -6665,6 +6686,21 @@ export function useThreadSessionState(params: {
                   toolAccounting: event.notification.params.toolAccounting,
                 }
               : current.response,
+          };
+        }
+
+        if (event.notification.method === "thread/contextWindow/updated") {
+          // A fill-only report (ACP usage_update). Replace the indicator
+          // without touching turn usage: leaving the cumulative fields unset
+          // keeps deriveTurnUsageBaseline on its total - last path.
+          const { modelContextWindow, usedTokens } = event.notification.params;
+          if (!(modelContextWindow > 0) || !(usedTokens >= 0)) {
+            return current;
+          }
+          return {
+            ...current,
+            contextWindow: contextWindowFill(usedTokens, modelContextWindow),
+            lastTouchedAt: nextLastTouchedAt,
           };
         }
 

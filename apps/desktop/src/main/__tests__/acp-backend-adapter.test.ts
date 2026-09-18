@@ -1507,6 +1507,96 @@ describe("AcpBackendAdapter", () => {
     await adapter.close();
   });
 
+  it("reports an ACP usage_update as context window fill, not token usage", async () => {
+    // Kimi Code 2.0.0 sends usage_update (context `used` of `size`) after the
+    // prompt response and reports no token counts anywhere on the wire.
+    const backendId = "acp:kimi" as AcpBackendId;
+    const transport = new FakeAcpAgentTransport();
+    const events: AgentEvent[] = [];
+    const sessions: AcpSessionMetadata[] = [];
+    const agent: AcpInstalledAgentRecord = {
+      ...buildInstalledAgent(),
+      backendId,
+      registryId: "kimi",
+      name: "Kimi Code CLI",
+      launchDescriptor: {
+        backendId,
+        registryId: "kimi",
+        distributionKind: "local",
+        command: "kimi",
+        args: ["acp"],
+        env: {},
+      },
+    };
+    const adapter = createTestAcpBackendAdapter({
+      acpAgentStore: {
+        getInstalledAgent: () => agent,
+        listInstalledAgents: () => [agent],
+        upsertInstalledAgent: vi.fn(),
+      },
+      acpSessionStore: {
+        listSessions: () => sessions,
+        getSession: (_backendId, sessionId) =>
+          sessions.find((session) => session.sessionId === sessionId),
+        upsertSession: (metadata) => {
+          const index = sessions.findIndex(
+            (session) => session.sessionId === metadata.sessionId,
+          );
+          if (index >= 0) {
+            sessions[index] = metadata;
+          } else {
+            sessions.push(metadata);
+          }
+        },
+      },
+      captureStores: [],
+      createAcpTransport: () => transport,
+      emit: async (event) => {
+        events.push(event);
+      },
+      handleServerRequest: async () => ({ decision: "accept" }),
+    });
+
+    const client = await adapter.getClient(backendId);
+    const session = await client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+    });
+    transport.emitSessionUpdate(session.sessionId, {
+      sessionUpdate: "usage_update",
+      used: 20209,
+      size: 262144,
+    });
+
+    await vi.waitFor(() => {
+      expect(
+        events.filter(
+          (event) =>
+            event.notification.method === "thread/contextWindow/updated",
+        ),
+      ).toEqual([
+        {
+          backend: backendId,
+          notification: {
+            method: "thread/contextWindow/updated",
+            params: {
+              threadId: session.sessionId,
+              usedTokens: 20209,
+              modelContextWindow: 262144,
+            },
+          },
+        },
+      ]);
+    });
+    expect(
+      events.filter(
+        (event) => event.notification.method === "thread/tokenUsage/updated",
+      ),
+    ).toEqual([]);
+
+    await adapter.close();
+  });
+
   it("emits cumulative Qwen usage across fixture-backed model calls", async () => {
     const backendId = "acp:qwen" as AcpBackendId;
     const transport = new FakeAcpAgentTransport();

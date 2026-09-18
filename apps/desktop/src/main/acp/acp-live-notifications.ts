@@ -223,6 +223,40 @@ export function acpUsageNotification(params: {
   } as AppServerNotification;
 }
 
+/**
+ * Map ACP `usage_update` (`used` of `size` tokens in context) to a context
+ * window notification. The optional cumulative `cost` is not surfaced yet.
+ * Kimi Code 2.0.0 sends this after the prompt response, so it must not
+ * require a live turn.
+ */
+export function acpContextWindowNotification(params: {
+  threadId: string;
+  turnId?: string;
+  update: Record<string, unknown>;
+}): AppServerNotification | undefined {
+  const usedTokens = params.update.used;
+  const modelContextWindow = params.update.size;
+  if (
+    typeof usedTokens !== "number"
+    || !Number.isFinite(usedTokens)
+    || usedTokens < 0
+    || typeof modelContextWindow !== "number"
+    || !Number.isFinite(modelContextWindow)
+    || modelContextWindow <= 0
+  ) {
+    return undefined;
+  }
+  return {
+    method: "thread/contextWindow/updated",
+    params: {
+      threadId: params.threadId,
+      ...(params.turnId ? { turnId: params.turnId } : {}),
+      usedTokens,
+      modelContextWindow,
+    },
+  };
+}
+
 export function acpTurnCompletedUsageNotification(params: {
   threadId: string;
   turnId?: string;

@@ -14315,6 +14315,67 @@ describe("useThreadSessionState", () => {
     });
   });
 
+  it("stores a fill-only context window without recording turn usage", async () => {
+    // ACP usage_update (Kimi Code 2.0.0) reports only how full the window is.
+    // It must light the same indicator Codex uses, and must not become a
+    // usage record or seed the cumulative fields deriveTurnUsageBaseline reads.
+    let agentEventHandler: Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0] | undefined;
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback;
+        return () => undefined;
+      },
+      readThread: vi.fn(async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      })),
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitFor(() => {
+      expect(desktopApi.readThread).toHaveBeenCalled();
+    });
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "thread/contextWindow/updated",
+          params: {
+            threadId: "thread-1",
+            usedTokens: 65_536,
+            modelContextWindow: 262_144,
+          },
+        },
+      });
+    });
+
+    expect(result.current.contextWindow).toEqual({
+      modelContextWindow: 262_144,
+      phase: 2,
+      remainingPercent: 75,
+      remainingTokens: 196_608,
+      totalTokens: 65_536,
+      usedPercent: 25,
+    });
+    expect(result.current.entries).toEqual([]);
+  });
+
   it("derives context window usage from captured input and output token breakdowns", async () => {
     let agentEventHandler: Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0] | undefined;
     const desktopApi: DesktopApi = {

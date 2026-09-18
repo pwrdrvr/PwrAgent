@@ -1767,6 +1767,31 @@ describe("AcpSessionReplayNormalizer", () => {
     ]);
   });
 
+  it("keeps a context usage update out of the transcript", () => {
+    // Kimi Code 2.0.0 sends usage_update after every turn. Unrecognized, it
+    // rendered as an "ACP update: usage_update" breadcrumb under each reply.
+    const normalizer = new AcpSessionReplayNormalizer();
+
+    normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1000,
+      update: { sessionUpdate: "agent_message_chunk", content: "Done." },
+    });
+    const replay = normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1001,
+      update: { sessionUpdate: "usage_update", used: 20209, size: 262144 },
+    });
+
+    expect(replay.entries).toEqual([
+      expect.objectContaining({
+        type: "message",
+        role: "assistant",
+        text: "Done.",
+      }),
+    ]);
+  });
+
   it("keeps an unrecognized update from splitting a streaming assistant message", () => {
     // Failing to classify an update is not evidence that it ended the
     // assistant's message. session_info_update and last_turn_summary were two

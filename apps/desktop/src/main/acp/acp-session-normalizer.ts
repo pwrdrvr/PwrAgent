@@ -66,6 +66,16 @@ export function isAcpSessionMetadataUpdateKind(
   return kind === "session_info_update";
 }
 
+/**
+ * ACP `SessionUpdate::UsageUpdate` reports how full the context window is
+ * (`used` of `size` tokens) and, optionally, the session's cumulative cost.
+ * It is session state for the context-usage indicator, never transcript
+ * content. Kimi Code 2.0.0 sends one after every turn.
+ */
+export function isAcpUsageUpdateKind(kind: string | undefined): boolean {
+  return kind === "usage_update";
+}
+
 export function readAcpToolCallId(
   update: Record<string, unknown>,
 ): string | undefined {
@@ -425,6 +435,9 @@ export class AcpSessionReplayNormalizer {
     } else if (isAcpSessionMetadataUpdateKind(kind)) {
       // Session title/timestamp metadata. The title is consumed by
       // readAcpTopicTitle on the acp-client side.
+    } else if (isAcpUsageUpdateKind(kind)) {
+      // Context-window fill. The backend adapter turns it into the thread's
+      // context usage; it has no place in the transcript.
     } else if (kind === "turn_completed" || kind === "turn_finished") {
       // Some agents persist a durable replay terminal before the live
       // session/prompt request resolves. The client defers the live idle

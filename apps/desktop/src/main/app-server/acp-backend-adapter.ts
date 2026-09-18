@@ -65,6 +65,7 @@ import {
 } from "../settings/config-store/provider-runtime-config";
 import {
   AcpLiveToolUpdateResolver,
+  acpContextWindowNotification,
   acpToolUpdateNotifications,
   acpUsageNotification,
 } from "../acp/acp-live-notifications";
@@ -91,6 +92,7 @@ import {
 import {
   AcpSessionReplayNormalizer,
   inferAcpReplayTurns,
+  isAcpUsageUpdateKind,
   readAcpContentText,
   shouldSurfaceAcpThoughtsAsMessages,
 } from "../acp/acp-session-normalizer";
@@ -2800,6 +2802,19 @@ export class AcpBackendAdapter {
           await this.emit({
             backend: agent.backendId,
             notification: usageNotification,
+          });
+        }
+        const contextWindowNotification = isAcpUsageUpdateKind(updateKind)
+          ? acpContextWindowNotification({
+              threadId: sessionId,
+              ...(turnId ? { turnId } : {}),
+              update,
+            })
+          : undefined;
+        if (contextWindowNotification) {
+          await this.emit({
+            backend: agent.backendId,
+            notification: contextWindowNotification,
           });
         }
         if (promptSettledTurnFinished && turnId) {
