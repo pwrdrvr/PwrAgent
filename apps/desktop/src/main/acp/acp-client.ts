@@ -210,6 +210,14 @@ export class AcpAgentClient {
   private readonly normalizers = new Map<string, AcpSessionReplayNormalizer>();
   private readonly activeTurns = new Map<string, AcpActiveTurn>();
   private readonly loadedSessionCwds = new Map<string, string | undefined>();
+  // The option menus each session's own latest reply reported, by protocol
+  // session id. On Kimi the model decides which thought levels exist and the
+  // agent refuses any other, so a level is checked against its session's menu,
+  // never the client-wide snapshot, which is whichever session wrote last.
+  private readonly sessionConfigOptions = new Map<
+    string,
+    BackendAcpRuntimeConfigOption[]
+  >();
   private readonly suppressedControlPromptSessions = new Map<
     string,
     AcpSuppressedControlPrompt
@@ -341,6 +349,7 @@ export class AcpAgentClient {
     this.appSessionIdsByAgentSessionId.clear();
     this.retainableSessionIds.clear();
     this.loadedSessionCwds.clear();
+    this.sessionConfigOptions.clear();
     await this.options.transport.close?.();
   }
 
@@ -584,6 +593,7 @@ export class AcpAgentClient {
     this.options.store.upsertSession(metadata);
     this.rememberSessionIds(metadata);
     this.loadedSessionCwds.set(sessionId, cwd);
+    this.rememberSessionConfigOptions(sessionId, result);
     await Promise.resolve(mcpRegistration.bindThread?.(appSessionId));
     this.notifyRuntimeCapabilities({
       sessionId: appSessionId,
@@ -898,13 +908,33 @@ export class AcpAgentClient {
     reasoningEffort?: string;
   }): Promise<BackendAcpSessionRuntimeState | undefined> {
     const protocolSessionId = this.protocolSessionIdFor(params.sessionId);
-    const result = await this.setRuntimeOptionOnTransport({
+    const write = await this.setRuntimeOptionOnTransport({
       protocolSessionId,
       source: params.source,
       optionId: params.optionId,
       value: params.value,
       reasoningEffort: params.reasoningEffort,
     });
+    if (write.unofferedThoughtLevel) {
+      acpClientLog.info("skipped a thought level the session's model does not offer", {
+        backendId: this.options.backendId,
+        source: params.source,
+        value:
+          params.source === "configOption"
+            ? params.value
+            : params.reasoningEffort,
+      });
+      if (params.source === "configOption") {
+        return this.options.store.getSession(
+          this.options.backendId,
+          params.sessionId,
+        )?.acpRuntime;
+      }
+    }
+    const result = write.result;
+    const reasoningEffort = write.unofferedThoughtLevel
+      ? undefined
+      : params.reasoningEffort;
     const now = this.now();
     const runtimeCapabilities = this.captureRuntimeCapabilities({
       source: "session-load",
@@ -933,10 +963,9 @@ export class AcpAgentClient {
                 ? {
                     configValues: {
                       [modelConfigOption.id]: params.value,
-                      ...(params.reasoningEffort && thoughtLevelConfigOption
+                      ...(reasoningEffort && thoughtLevelConfigOption
                         ? {
-                            [thoughtLevelConfigOption.id]:
-                              params.reasoningEffort,
+                            [thoughtLevelConfigOption.id]: reasoningEffort,
                           }
                         : {}),
                     },
@@ -944,7 +973,7 @@ export class AcpAgentClient {
                 : {}),
               reasoningEffort:
                 responseRuntimeState?.reasoningEffort ??
-                params.reasoningEffort,
+                reasoningEffort,
               updatedAt: now,
             };
     const runtimeState = mergeAcpRuntimeState(
@@ -980,25 +1009,51 @@ export class AcpAgentClient {
     optionId: string;
     value: string;
     reasoningEffort?: string;
-  }): Promise<unknown> {
+  }): Promise<{
+    result: unknown;
+    /** A thought level went unwritten: the session's model does not offer it. */
+    unofferedThoughtLevel?: true;
+  }> {
     if (params.source === "configOption") {
-      return await this.options.transport.request("session/set_config_option", {
-        sessionId: params.protocolSessionId,
-        configId: params.optionId,
-        value: params.value,
-      });
+      if (
+        !this.sessionOffersConfigValue(
+          params.protocolSessionId,
+          params.optionId,
+          params.value,
+        )
+      ) {
+        return { result: undefined, unofferedThoughtLevel: true };
+      }
+      return {
+        result: await this.requestSessionOption(
+          params.protocolSessionId,
+          "session/set_config_option",
+          {
+            sessionId: params.protocolSessionId,
+            configId: params.optionId,
+            value: params.value,
+          },
+        ),
+      };
     }
 
     if (params.source === "mode") {
-      return await this.options.transport.request("session/set_mode", {
-        sessionId: params.protocolSessionId,
-        modeId: params.value,
-      });
+      return {
+        result: await this.requestSessionOption(
+          params.protocolSessionId,
+          "session/set_mode",
+          {
+            sessionId: params.protocolSessionId,
+            modeId: params.value,
+          },
+        ),
+      };
     }
 
     const modelConfigOption = this.runtimeConfigOption("model");
     if (modelConfigOption) {
-      let result = await this.options.transport.request(
+      const result = await this.requestSessionOption(
+        params.protocolSessionId,
         "session/set_config_option",
         {
           sessionId: params.protocolSessionId,
@@ -1008,26 +1063,91 @@ export class AcpAgentClient {
       );
       const thoughtLevelConfigOption =
         this.runtimeConfigOption("thought_level");
-      if (params.reasoningEffort && thoughtLevelConfigOption) {
-        result = await this.options.transport.request(
+      if (!params.reasoningEffort || !thoughtLevelConfigOption) {
+        return { result };
+      }
+      // The model write can change which thought levels exist, and its reply
+      // is the new model's menu. The level may have been chosen for another
+      // model, as when a review child re-selects its parent's model.
+      if (
+        !this.sessionOffersConfigValue(
+          params.protocolSessionId,
+          thoughtLevelConfigOption.id,
+          params.reasoningEffort,
+        )
+      ) {
+        return { result, unofferedThoughtLevel: true };
+      }
+      return {
+        result: await this.requestSessionOption(
+          params.protocolSessionId,
           "session/set_config_option",
           {
             sessionId: params.protocolSessionId,
             configId: thoughtLevelConfigOption.id,
             value: params.reasoningEffort,
           },
-        );
-      }
-      return result;
+        ),
+      };
     }
 
-    return await this.options.transport.request("session/set_model", {
-      sessionId: params.protocolSessionId,
-      modelId: params.value,
-      ...(params.reasoningEffort
-        ? { _meta: { reasoningEffort: params.reasoningEffort } }
-        : {}),
-    });
+    return {
+      result: await this.requestSessionOption(
+        params.protocolSessionId,
+        "session/set_model",
+        {
+          sessionId: params.protocolSessionId,
+          modelId: params.value,
+          ...(params.reasoningEffort
+            ? { _meta: { reasoningEffort: params.reasoningEffort } }
+            : {}),
+        },
+      ),
+    };
+  }
+
+  private async requestSessionOption(
+    protocolSessionId: string,
+    method: string,
+    params: Record<string, unknown>,
+  ): Promise<unknown> {
+    const result = await this.options.transport.request(method, params);
+    this.rememberSessionConfigOptions(protocolSessionId, result);
+    return result;
+  }
+
+  // A reply without the menu leaves it unknown rather than stale, and an
+  // unknown menu leaves the decision to the agent.
+  private rememberSessionConfigOptions(
+    protocolSessionId: string,
+    result: unknown,
+  ): void {
+    const configOptions = normalizeAcpRuntimeCapabilities({
+      value: result,
+      now: this.now(),
+      source: "session-load",
+    })?.configOptions;
+    if (configOptions) {
+      this.sessionConfigOptions.set(protocolSessionId, configOptions);
+    } else {
+      this.sessionConfigOptions.delete(protocolSessionId);
+    }
+  }
+
+  /** False only for a thought level this session's current model does not
+   *  offer, by the menu its own latest reply reported. */
+  private sessionOffersConfigValue(
+    protocolSessionId: string,
+    optionId: string,
+    value: string,
+  ): boolean {
+    const option = this.sessionConfigOptions
+      .get(protocolSessionId)
+      ?.find((candidate) => candidate.id === optionId);
+    return (
+      option?.category !== "thought_level"
+      || option.values.some((candidate) => candidate.value === value)
+    );
   }
 
   readReplay(sessionId: string): AppServerThreadReplay {
@@ -1047,6 +1167,15 @@ export class AcpAgentClient {
     );
     if (!protocolSessionId || !update) {
       return;
+    }
+    const optionUpdateKind = readUpdateKind(update);
+    if (
+      optionUpdateKind === "config_option_update"
+      || optionUpdateKind === "model_changed"
+    ) {
+      // The agent changed this session's options, possibly on its own. The
+      // next reply reports the menu again; until then it is unknown.
+      this.sessionConfigOptions.delete(protocolSessionId);
     }
     const suppressedControlPrompt =
       this.suppressedControlPromptSessions.get(protocolSessionId);
@@ -1492,6 +1621,7 @@ export class AcpAgentClient {
       source: "session-load",
       result,
     });
+    this.rememberSessionConfigOptions(protocolSessionId, result);
     await Promise.resolve(mcpRegistration.bindThread?.(metadata.sessionId));
     const runtimeState = acpSessionRuntimeStateFromResponse(result, this.now());
     if (runtimeState) {

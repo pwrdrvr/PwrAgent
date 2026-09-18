@@ -51110,6 +51110,111 @@ script = "printf setup"
     await registry.close();
   });
 
+  it("does not borrow another session's thought levels for a monitor model without any", async () => {
+    // The agent record's thought-level option is whichever session wrote
+    // last. A K3 thread left K3's levels there; the monitor runs on K2.7
+    // Coding, which offers none of them and refuses `low`.
+    const acpBackendId = "acp:kimi" as AcpBackendId;
+    const parentThreadId = "acp-parent";
+    const { acpClient, registry } = createKimiAcpRegistry({
+      acpBackendId,
+      runtimeCapabilities: {
+        schemaVersion: 1,
+        status: "discovered",
+        source: "session-load",
+        configOptions: [
+          {
+            id: "model",
+            label: "Model",
+            type: "select",
+            category: "model",
+            currentValue: "kimi-code/k3",
+            values: [
+              { value: "kimi-code/kimi-for-coding" },
+              { value: "kimi-code/k3" },
+            ],
+          },
+          {
+            id: "thinking",
+            label: "Thinking",
+            type: "select",
+            category: "thought_level",
+            currentValue: "low",
+            values: [{ value: "low" }, { value: "high" }, { value: "max" }],
+          },
+        ],
+        models: {
+          currentModelId: "kimi-code/kimi-for-coding",
+          availableModels: [
+            {
+              id: "kimi-code/kimi-for-coding",
+              label: "K2.7 Coding",
+              supportsReasoning: false,
+            },
+            {
+              id: "kimi-code/k3",
+              label: "K3",
+              supportsReasoning: true,
+              reasoningEfforts: ["low", "high", "max"],
+              defaultReasoningEffort: "high",
+            },
+          ],
+        },
+      },
+      sessions: [
+        {
+          backendId: acpBackendId,
+          sessionId: parentThreadId,
+          title: "ACP Parent",
+          cwd: "/repo/app",
+          createdAt: 1000,
+          updatedAt: 1000,
+          executionMode: "default",
+          status: "idle",
+          acpRuntime: {
+            configValues: { model: "kimi-code/kimi-for-coding" },
+            updatedAt: 1000,
+          },
+        },
+      ],
+    });
+
+    await registry.publishLocalEvent({
+      backend: acpBackendId,
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: parentThreadId,
+          turnId: "parent-turn",
+          turn: { id: "parent-turn" },
+        },
+      },
+    });
+    const response = await callRegistryMcpTool({
+      registry,
+      backend: acpBackendId,
+      threadId: parentThreadId,
+      turnId: "parent-turn",
+      tool: "create_monitor_delegation",
+      args: {
+        task: "Watch the deployment until it finishes.",
+      },
+    });
+
+    expect(response).toMatchObject({
+      structuredContent: {
+        preferredModel: "kimi-code/kimi-for-coding",
+        preferredReasoningEffort: "provider-default",
+      },
+    });
+    for (const [params] of acpClient.setRuntimeOption.mock.calls) {
+      expect(params).not.toMatchObject({ optionId: "thinking" });
+      expect(params).not.toHaveProperty("reasoningEffort", "low");
+    }
+
+    await registry.close();
+  });
+
   it("recovers an ACP monitor once before a fallback wakes its parent", async () => {
     const acpBackendId = "acp:kimi" as AcpBackendId;
     const parentThreadId = "acp-parent";
