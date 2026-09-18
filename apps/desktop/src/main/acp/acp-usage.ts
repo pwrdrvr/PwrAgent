@@ -27,7 +27,9 @@ export type AcpUsageEnvelope = {
  * to per turn: Grok on `response_completed`, Qwen on
  * `agent_message_chunk._meta.usage`. Kimi Code 0.31.1 reports none at all —
  * `kimi-code-0-31-cereal.json` is a full captured turn with no usage anywhere,
- * so a Kimi thread cannot be priced. Gemini is still untested; the
+ * so a Kimi thread cannot be priced. Kimi Code 2.0.0 still cannot: a captured
+ * turn returns only `stopReason` from `session/prompt`, and its new
+ * `usage_update` carries context fill (`used` of `size`) with no cost. Gemini is still untested; the
  * `acp-transcripts` parity captures cannot answer it, since they hold no
  * completed turn (grok-build.json carries no usage either, and Grok certainly
  * reports). Codex is the outlier among the reporters: it sends this field
@@ -45,14 +47,14 @@ export type AcpUsageEnvelope = {
  * Two consequences of per-turn that the field name hides:
  *
  *  - `deriveTurnUsageBaseline` (renderer) prefers `contextWindow.cumulative*`
- *    over `total - last` when a context window is known. Nothing populates a
- *    context window from an ACP payload today, because these notifications
- *    carry no `modelContextWindow`. Adding one — the obvious shape of a Grok
- *    context-usage indicator — would feed a per-turn total into a baseline
- *    that expects a session-cumulative one, and the live turn usage would
- *    collapse toward zero. Fix that baseline preference before adding the
- *    field; committing to per-turn makes this the likelier trap, not a rarer
- *    one.
+ *    over `total - last` when a context window is known. These token usage
+ *    notifications carry no `modelContextWindow`, and must not start to:
+ *    adding one would feed a per-turn total into a baseline that expects a
+ *    session-cumulative one, and the live turn usage would collapse toward
+ *    zero. ACP context fill (`usage_update`) travels separately as
+ *    `thread/contextWindow/updated`, which sets no `cumulative*` field, so it
+ *    lights the indicator without reaching that baseline. Fix the baseline
+ *    preference before routing any context window through this payload.
  *  - `foldObservedContextReplay` keeps its cursor per THREAD and treats a
  *    total at or below the cursor as a stale re-emission. Per-turn totals
  *    restart below it, so after the first turn an ACP thread stops advancing
