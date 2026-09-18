@@ -3062,9 +3062,10 @@ function reviewDisplayText(item: Record<string, unknown>): string | undefined {
 
 function pushActivityDetail(
   details: AppServerThreadActivityDetail[],
+  detailsByLabel: Map<string, AppServerThreadActivityDetail>,
   detail: AppServerThreadActivityDetail
 ): void {
-  const existing = details.find((candidate) => candidate.label === detail.label);
+  const existing = detailsByLabel.get(detail.label);
   if (existing) {
     if (!existing.status || existing.status === "completed") {
       existing.status = detail.status ?? existing.status;
@@ -3072,6 +3073,7 @@ function pushActivityDetail(
     return;
   }
   details.push(detail);
+  detailsByLabel.set(detail.label, detail);
 }
 
 function normalizeFileChangeKind(
@@ -4301,31 +4303,6 @@ function mergeEntryMetadataIntoReplayMessages(
   });
 }
 
-function attachFunctionCallOutput(
-  items: Record<string, unknown>[],
-  output: { callId: string; output: string }
-): boolean {
-  for (let index = items.length - 1; index >= 0; index -= 1) {
-    const item = items[index];
-    if (!item) {
-      continue;
-    }
-    const itemIds = [
-      pickString(item, ["id"]),
-      pickString(item, ["itemId"]),
-      pickString(item, ["item_id"]),
-      pickString(item, ["call_id"]),
-      pickString(item, ["callId"]),
-    ].filter((value): value is string => Boolean(value));
-    if (!itemIds.includes(output.callId)) {
-      continue;
-    }
-    item.functionCallOutput = output.output;
-    return true;
-  }
-  return false;
-}
-
 function parseToolArguments(item: Record<string, unknown>): Record<string, unknown> | undefined {
   return (
     asRecord(parseStructuredValue(item.arguments)) ??
@@ -4436,6 +4413,7 @@ function summarizeActivityItems(
   }
 
   const details: AppServerThreadActivityDetail[] = [];
+  const detailsByLabel = new Map<string, AppServerThreadActivityDetail>();
   let inspectedFiles = 0;
   let commandsRun = 0;
   let changedFiles = 0;
@@ -4470,7 +4448,7 @@ function summarizeActivityItems(
 
       if (actions.length === 0) {
         commandsRun += 1;
-        pushActivityDetail(details, {
+        pushActivityDetail(details, detailsByLabel, {
           id: itemId,
           kind: "command",
           label: appendElapsedLabel(formatCommandLabel(command), elapsedMs),
@@ -4489,7 +4467,7 @@ function summarizeActivityItems(
 
         if (actionType === "read" && actionPath) {
           inspectedFiles += 1;
-          pushActivityDetail(details, {
+          pushActivityDetail(details, detailsByLabel, {
             id: detailId,
             kind: "read",
             label: appendElapsedLabel(
@@ -4504,7 +4482,7 @@ function summarizeActivityItems(
 
         if (actionType === "search") {
           inspectedFiles += 1;
-          pushActivityDetail(details, {
+          pushActivityDetail(details, detailsByLabel, {
             id: detailId,
             kind: "read",
             label: appendElapsedLabel(
@@ -4525,7 +4503,7 @@ function summarizeActivityItems(
           const label = actionPath
             ? `Listed ${path.basename(actionPath) || actionPath}`
             : "Listed files";
-          pushActivityDetail(details, {
+          pushActivityDetail(details, detailsByLabel, {
             id: detailId,
             kind: "read",
             label: appendElapsedLabel(label, elapsedMs),
@@ -4537,7 +4515,7 @@ function summarizeActivityItems(
 
         commandsRun += 1;
         const label = fallbackName?.trim() || formatCommandLabel(command);
-        pushActivityDetail(details, {
+        pushActivityDetail(details, detailsByLabel, {
           id: detailId,
           kind: "command",
           label: appendElapsedLabel(label, elapsedMs),
@@ -4578,7 +4556,7 @@ function summarizeActivityItems(
         changedFiles += 1;
         changedFileAdditions += diffSummary?.additions ?? 0;
         changedFileRemovals += diffSummary?.removals ?? 0;
-        pushActivityDetail(details, {
+        pushActivityDetail(details, detailsByLabel, {
           id: `${itemId}-${index + 1}`,
           kind: "write",
           label: `${changeType[0]?.toUpperCase() ?? "U"}${changeType.slice(1)} ${
@@ -4616,7 +4594,7 @@ function summarizeActivityItems(
       const commandDetail = functionName === "exec_command"
         ? buildCommandDetail({ item, command, elapsedMs })
         : undefined;
-      pushActivityDetail(details, {
+      pushActivityDetail(details, detailsByLabel, {
         id: itemId,
         kind: "command",
         label: appendElapsedLabel(
@@ -4648,7 +4626,7 @@ function summarizeActivityItems(
         receiverThreadIds,
         tool,
       });
-      pushActivityDetail(details, {
+      pushActivityDetail(details, detailsByLabel, {
         id: itemId,
         kind: "command",
         label: appendElapsedLabel(label, elapsedMs),
@@ -4698,7 +4676,7 @@ function summarizeActivityItems(
               toolName,
             )}`
           : toolName ?? "Used tool";
-      pushActivityDetail(details, {
+      pushActivityDetail(details, detailsByLabel, {
         id: itemId,
         kind: normalizedItemType === "websearch" ? "read" : "command",
         label: [
@@ -5124,6 +5102,7 @@ function extractThreadEntries(
       suppressedAssistantTexts.add(normalizeSuppressionText(text));
     }
     const pendingActivityItems: Record<string, unknown>[] = [];
+    const pendingActivityById = new Map<string, Record<string, unknown>>();
     let pendingActivityCreatedAt: number | undefined;
 
     const flushActivityItems = (): void => {
@@ -5133,6 +5112,7 @@ function extractThreadEntries(
         turnMetadata
       );
       pendingActivityItems.length = 0;
+      pendingActivityById.clear();
       pendingActivityCreatedAt = undefined;
       if (activity) {
         entries.push(activity);
@@ -5232,12 +5212,19 @@ function extractThreadEntries(
           pendingActivityCreatedAt = itemCreatedAt;
         }
         pendingActivityItems.push(activityItem);
+        // Match the former reverse search: any supported alias selects the
+        // most recent pending item, and a message/plan boundary resets scope.
+        for (const key of ["id", "itemId", "item_id", "call_id", "callId"]) {
+          const id = pickString(activityItem, [key]);
+          if (id) pendingActivityById.set(id, activityItem);
+        }
         continue;
       }
 
       const functionCallOutput = extractFunctionCallOutputFromReplayItem(item);
       if (functionCallOutput) {
-        attachFunctionCallOutput(pendingActivityItems, functionCallOutput);
+        const activityItem = pendingActivityById.get(functionCallOutput.callId);
+        if (activityItem) activityItem.functionCallOutput = functionCallOutput.output;
       }
     }
 
