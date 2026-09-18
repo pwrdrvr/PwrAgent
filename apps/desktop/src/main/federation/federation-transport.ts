@@ -1,5 +1,6 @@
 import { federationTrafficCaptureUntil, recordFederationTraffic } from "./federation-traffic-capture";
 import http from "node:http";
+import net from "node:net";
 import { CloudflareOriginProbes } from "./cloudflare-origin-probes";
 import { randomUUID } from "node:crypto";
 import type { Duplex } from "node:stream";
@@ -385,6 +386,34 @@ export type FederationGatewayWebSocketServerOptions = {
   }) => void;
 };
 
+const WILDCARD_HOSTS = new Set(["", "0.0.0.0", "::", "[::]"]);
+
+/**
+ * Refuse a specific-address listener that another process's wildcard
+ * listener would share the port with.
+ *
+ * On macOS and the BSDs a socket bound to 127.0.0.1 coexists with another
+ * process's `*:port`, and loopback connections then reach the more specific
+ * socket. A second profile's gateway on 127.0.0.1:47830 silently took the
+ * local traffic of a first profile listening on `*:47830`, including the
+ * Cloudflare tunnel pointed at that port, and no bind ever failed. A
+ * throwaway wildcard bind finds the other listener first. Only "in use"
+ * counts: a host without IPv6 fails the `::` probe for an unrelated reason.
+ */
+export async function assertNoWildcardListener(host: string, port: number): Promise<void> {
+  if (WILDCARD_HOSTS.has(host)) return;
+  for (const wildcard of ["0.0.0.0", "::"]) {
+    const inUse = await new Promise<boolean>((resolve) => {
+      const probe = net.createServer();
+      probe.once("error", (error: NodeJS.ErrnoException) => resolve(error.code === "EADDRINUSE"));
+      probe.listen({ host: wildcard, port, exclusive: true }, () => probe.close(() => resolve(false)));
+    });
+    if (inUse) {
+      throw new Error(`Port ${port} is already in use by another process. Choose a different federation listener port.`);
+    }
+  }
+}
+
 export class FederationGatewayWebSocketServer {
   readonly securityProbes = new CloudflareOriginProbes();
   private readonly envelopeDiagnostics = new FederationEnvelopeDiagnostics();
@@ -464,6 +493,9 @@ export class FederationGatewayWebSocketServer {
     }, keepaliveIntervalMs);
     this.sweepTimer.unref?.();
 
+    if (this.options.port !== 0) {
+      await assertNoWildcardListener(this.options.host, this.options.port);
+    }
     await new Promise<void>((resolve, reject) => {
       const server = this.httpServer;
       if (!server) {
