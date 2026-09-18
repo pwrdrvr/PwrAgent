@@ -10699,7 +10699,11 @@ a.button {
   box-shadow: 0 0 0 1px var(--accent-shadow);
 }
 
-.settings-select:disabled {
+/* The surface picker's trigger is a `.settings-select` that is never natively
+   disabled: Chromium drops focus from a button the moment it is. See the
+   `disabled` prop in MessagingSurfacePicker.tsx. */
+.settings-select:disabled,
+.messaging-surface-picker__trigger[aria-disabled="true"] {
   cursor: not-allowed;
   opacity: 0.55;
 }
@@ -35799,14 +35803,6 @@ details.launchpad-pending__output > summary .launchpad-pending__command-label {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-/* `.settings-select:disabled`, restated for `aria-disabled`. The trigger is
-   never natively disabled because Chromium drops focus from a button the
-   moment it is; see the `disabled` prop in MessagingSurfacePicker.tsx. */
-.messaging-surface-picker__trigger[aria-disabled="true"] {
-  cursor: not-allowed;
-  opacity: 0.55;
 }
 
 /* Portalled to `document.body` and positioned against the trigger's rect, so
