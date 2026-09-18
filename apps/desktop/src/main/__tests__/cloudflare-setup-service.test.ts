@@ -3,9 +3,9 @@ import { CloudflareSetupService, type CloudflareSetupState } from "../federation
 import { CloudflareApi } from "../federation/cloudflare-api";
 import { CloudflareOriginProbes } from "../federation/cloudflare-origin-probes";
 
-type Gate = "service-token" | "mtls";
+type Gate = "service-token" | "oauth" | "mtls";
 
-function harness(gate: Gate = "service-token") {
+function harness(gate: Gate = "service-token", emails: string[] = ["Operator@Example.com"]) {
   let stored: CloudflareSetupState | undefined;
   const calls: Array<{ method: string; path: string; body: Record<string, unknown> }> = [];
   const resources = new Map<string, Record<string, unknown>>();
@@ -56,12 +56,14 @@ function harness(gate: Gate = "service-token") {
   return { service, calls, resources, publishUrl, startConnector, verifyListener, gate,
     tamper: () => { tamper = true; }, state: () => stored,
     connect: () => service.connect("x".repeat(40), "a".repeat(32), "b".repeat(32)),
-    provision: () => service.provision("federation.example.com", 47830, gate),
+    provision: () => service.provision("federation.example.com", 47830, gate, gate === "oauth" ? emails : undefined),
   };
 }
 
 // Both gates ride the same provisioning order, audit, and revocation flow, so
 // every one of these runs twice. The credential is the only thing that differs.
+// `oauth` has its own block below: it issues no per-client credential, so the
+// issue-and-revoke half of this suite does not apply to it.
 describe.each<Gate>(["service-token", "mtls"])("Cloudflare provisioning (%s)", (gate) => {
   // Under mTLS the certificate authority is uploaded first; a service-token
   // endpoint has no CA to upload and mints its validator token before this.
@@ -188,6 +190,103 @@ describe("Cloudflare service-token admission", () => {
     expect(h.calls.some((call) => call.path.includes("/access/certificates") && call.method !== "GET")).toBe(false);
     expect(h.state()?.ca).toBeUndefined();
     expect(h.state()?.certificateId).toBeUndefined();
+  });
+});
+
+describe("Cloudflare sign-in (oauth) admission", () => {
+  const account = `/accounts/${"a".repeat(32)}`;
+  const app = (h: ReturnType<typeof harness>) => `${account}/access/apps/${h.state()?.applicationId}`;
+
+  it("enables Managed OAuth and both policies before DNS publication", async () => {
+    const h = harness("oauth");
+    await h.connect();
+    await h.provision();
+    const mutations = h.calls.filter((call) => call.method === "POST");
+    // Validator token, then a deny-all application, then both policies — all
+    // before the tunnel and long before the hostname resolves.
+    expect(mutations.map((call) => call.path.split("/").at(-1)))
+      .toEqual(["service_tokens", "apps", "policies", "policies", "cfd_tunnel", "dns_records"]);
+    const created = mutations.find((call) => call.path.endsWith("/apps"))!.body;
+    expect(created.policies).toEqual([]);
+    expect(created.oauth_configuration).toMatchObject({
+      enabled: true,
+      dynamic_client_registration: { enabled: true, allow_any_on_loopback: true, allowed_uris: [] },
+    });
+    const [identity, service] = mutations.filter((call) => call.path.endsWith("/policies")).map((call) => call.body);
+    expect(identity).toMatchObject({ decision: "allow", include: [{ email: { email: "operator@example.com" } }], require: [] });
+    // The Service Auth policy admits the validator alone; people sign in.
+    expect(service).toMatchObject({ decision: "non_identity", include: [{ service_token: { token_id: h.state()?.verifier.id } }] });
+    const checks = await h.service.audit();
+    expect(checks.every((check) => check.passed)).toBe(true);
+    expect(checks.map((check) => check.label)).toEqual(expect.arrayContaining(["Managed OAuth sign-in", "Allowed people", "Validator service token"]));
+    expect((await h.service.status()).emails).toEqual(["operator@example.com"]);
+    expect((await h.service.status()).gate).toBe("oauth");
+  });
+
+  it("rejects an unusable allowlist before touching Cloudflare", async () => {
+    for (const emails of [[], ["not an email"], ["a@b"]]) {
+      const h = harness("oauth", emails);
+      await h.connect();
+      await expect(h.provision()).rejects.toThrow(/email/);
+      expect(h.calls.some((call) => call.method !== "GET")).toBe(false);
+      expect(h.state()).toBeUndefined();
+    }
+  });
+
+  it("fails the audit when Managed OAuth is off or allows a third-party redirect", async () => {
+    for (const oauth of [
+      { ...{ enabled: false }, dynamic_client_registration: { enabled: true, allow_any_on_loopback: true } },
+      { enabled: true, dynamic_client_registration: { enabled: true, allow_any_on_loopback: true, allowed_uris: ["https://collector.example.net/*"] } },
+      { enabled: true, dynamic_client_registration: { enabled: true, allow_any_on_loopback: false } },
+    ]) {
+      const h = harness("oauth");
+      await h.connect();
+      await h.provision();
+      h.resources.set(app(h), { ...h.resources.get(app(h)), oauth_configuration: oauth });
+      const checks = await h.service.audit();
+      expect(checks.find((check) => check.label === "Managed OAuth sign-in")?.passed).toBe(false);
+    }
+  });
+
+  it("fails the audit when any other way in appears beside the two policies", async () => {
+    const h = harness("oauth");
+    await h.connect();
+    await h.provision();
+    h.resources.set(`${app(h)}/policies/extra`, { id: "extra", decision: "bypass", include: [{ everyone: {} }] });
+    const checks = await h.service.audit();
+    expect(checks.find((check) => check.label === "Allowed people")?.passed).toBe(false);
+    expect(checks.find((check) => check.label === "Validator service token")?.passed).toBe(false);
+  });
+
+  it("replaces the allowlist in Cloudflare first, then locally", async () => {
+    const h = harness("oauth");
+    await h.connect();
+    await h.provision();
+    await h.service.setEmails(["second@example.com", "SECOND@example.com", "third@example.com"]);
+    const update = h.calls.filter((call) => call.method === "PUT" && call.path.endsWith(`/policies/${h.state()?.identityPolicyId}`)).at(-1);
+    expect(update?.body.include).toEqual([{ email: { email: "second@example.com" } }, { email: { email: "third@example.com" } }]);
+    expect(h.state()?.emails).toEqual(["second@example.com", "third@example.com"]);
+    expect((await h.service.audit()).every((check) => check.passed)).toBe(true);
+    await expect(h.service.setEmails([])).rejects.toThrow("at least one email");
+    expect(h.state()?.emails).toEqual(["second@example.com", "third@example.com"]);
+  });
+
+  it("shares setups without minting a credential per client", async () => {
+    const h = harness("oauth");
+    await h.connect();
+    await h.provision();
+    await expect(h.service.issue("Travel laptop")).rejects.toThrow("sign in as themselves");
+    const tokensBefore = h.calls.filter((call) => call.method === "POST" && call.path.endsWith("/service_tokens")).length;
+    await expect(h.service.assertShareable()).resolves.toMatchObject({ gate: "oauth" });
+    expect(h.calls.filter((call) => call.method === "POST" && call.path.endsWith("/service_tokens"))).toHaveLength(tokensBefore);
+  });
+
+  it("keeps the allowlist out of the other gates", async () => {
+    const h = harness("service-token");
+    await h.connect();
+    await h.provision();
+    await expect(h.service.setEmails(["a@example.com"])).rejects.toThrow("Only a sign-in endpoint");
+    expect(h.calls.some((call) => call.body && JSON.stringify(call.body).includes("oauth_configuration"))).toBe(false);
   });
 });
 

@@ -7,6 +7,7 @@ import type { ConfigDomainMap } from "../settings/config-store/config-domains";
 export type FederationRuntimeConfig = Readonly<{
   advertisedEndpoints: readonly string[];
   cloudflareAccessServiceAuthEnabled: boolean;
+  cloudflareAccessOAuthEnabled: boolean;
   cloudflareEndpoint: string;
   cloudflareMtlsEnabled: boolean;
   gatewayEndpoints: readonly string[];
@@ -28,6 +29,7 @@ export function resolveFederationRuntimeConfig(
     )),
     cloudflareAccessServiceAuthEnabled:
       config.cloudflareAccessServiceAuthEnabled ?? false,
+    cloudflareAccessOAuthEnabled: config.cloudflareAccessOAuthEnabled ?? false,
     cloudflareEndpoint: config.cloudflareEndpoint?.trim() ?? "",
     cloudflareMtlsEnabled: config.cloudflareMtlsEnabled ?? false,
     gatewayEndpoints: Object.freeze(normalizeEndpoints(

@@ -1,6 +1,7 @@
 import https from "node:https";
 import { randomBytes } from "node:crypto";
 import type { CloudflareSecurityCheck } from "@pwragent/shared";
+import type { CloudflareGate } from "./cloudflare-api";
 import type { CloudflareOriginProbes } from "./cloudflare-origin-probes";
 
 /**
@@ -14,7 +15,7 @@ export type CloudflareProbeCredentials =
   | { certificate: string; privateKey: string }
   | { accessClientId: string; accessClientSecret: string };
 
-export type CloudflareProbeResponse = { status: number; proof?: string; ray?: string; cookie?: string };
+export type CloudflareProbeResponse = { status: number; proof?: string; ray?: string; cookie?: string; location?: string };
 export type CloudflareProbeRequest = {
   endpoint: string;
   id: string;
@@ -58,6 +59,7 @@ export async function requestCloudflareProbe(input: CloudflareProbeRequest): Pro
       resolve({ status,
         proof: typeof headers["x-pwragent-probe-proof"] === "string" ? headers["x-pwragent-probe-proof"] : undefined,
         ray: typeof headers["cf-ray"] === "string" ? headers["cf-ray"] : undefined,
+        location: typeof headers.location === "string" ? headers.location : undefined,
         cookie: Array.isArray(headers["set-cookie"])
           ? headers["set-cookie"].filter((value): value is string => typeof value === "string")
             .map((value) => value.split(";", 1)[0]).join("; ")
@@ -80,10 +82,30 @@ export async function requestCloudflareProbe(input: CloudflareProbeRequest): Pro
   });
 }
 
+/**
+ * Whether Cloudflare, not the gateway, answered a request that carried no
+ * credential.
+ *
+ * A Service Auth gate refuses with 403. A sign-in gate refuses a non-browser
+ * client with Managed OAuth's 401 — or, for anything Access takes for a
+ * browser, a redirect to its own login page. Either way the `cf-ray` header
+ * places the answer at the edge, and the origin probe separately proves the
+ * gateway never saw the request.
+ */
+export function refusedAtEdge(response: CloudflareProbeResponse, gate: CloudflareGate | undefined): boolean {
+  if (!response.ray || response.proof) return false;
+  if (gate !== "oauth") return response.status === 403;
+  if (response.status === 401 || response.status === 403) return true;
+  if (response.status !== 302 || !response.location) return false;
+  try { return new URL(response.location).hostname.endsWith(".cloudflareaccess.com"); }
+  catch { return false; }
+}
+
 export async function validateCloudflareBoundary(options: {
   endpoint: string;
   credentials: CloudflareProbeCredentials;
   probes: CloudflareOriginProbes;
+  gate?: CloudflareGate;
   request?: typeof requestCloudflareProbe;
 }): Promise<CloudflareSecurityCheck[]> {
   const request = options.request ?? requestCloudflareProbe;
@@ -91,6 +113,9 @@ export async function validateCloudflareBoundary(options: {
   // Name the credential the endpoint actually uses. A result reading "without
   // certificate" on a service-token endpoint would describe a test that never ran.
   const noun = "certificate" in options.credentials ? "certificate" : "service token";
+  // Under `oauth` the credentialed probe is the validator's token, but what a
+  // stranger lacks is a sign-in, so the negative label says that.
+  const missing = options.gate === "oauth" ? "sign-in" : noun;
   // The same URL and HTTP/upgrade shapes pass through the same Access/ingress
   // matchers. Only the credential and unpredictable correlation ID vary.
   for (const upgrade of [false, true]) {
@@ -103,19 +128,17 @@ export async function validateCloudflareBoundary(options: {
       checks.push({ label: `${label} with ${noun}`, passed: controlPassed,
         detail: controlPassed ? "Reached this gateway; private response proof matched." : "Could not prove that the credentialed request reached this gateway." });
       const rejected = await request({ endpoint: options.endpoint, id: negative.id, upgrade });
-      const passed = controlPassed && rejected.status === 403 && Boolean(rejected.ray)
-        && !negative.observed() && !rejected.proof;
-      checks.push({ label: `${label} without ${noun}`, passed,
+      const passed = controlPassed && refusedAtEdge(rejected, options.gate) && !negative.observed();
+      checks.push({ label: `${label} without ${missing}`, passed,
         detail: negative.observed()
-          ? `FAILED: the request without a ${noun} reached the gateway.`
-          : passed ? "Cloudflare returned 403; this gateway did not receive the probe."
+          ? `FAILED: the request without a ${missing} reached the gateway.`
+          : passed ? `Cloudflare returned ${rejected.status}; this gateway did not receive the probe.`
             : `HTTP ${rejected.status}; edge rejection was not proven.` });
       if (accepted.cookie) {
         const sessionProbe = options.probes.arm();
         try {
           const session = await request({ endpoint: options.endpoint, id: sessionProbe.id, upgrade, cookie: accepted.cookie });
-          const sessionPassed = controlPassed && session.status === 403 && Boolean(session.ray)
-            && !sessionProbe.observed() && !session.proof;
+          const sessionPassed = controlPassed && refusedAtEdge(session, options.gate) && !sessionProbe.observed();
           checks.push({ label: `${label} with session cookie only`, passed: sessionPassed,
             detail: sessionPassed ? `A previously issued cookie cannot replace the ${noun}.`
               : `Cookie reuse without a ${noun} was not rejected at the edge. Do not rely on this endpoint's admission gate.` });

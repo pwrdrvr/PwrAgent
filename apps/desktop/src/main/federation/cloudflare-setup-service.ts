@@ -1,6 +1,20 @@
 import { randomBytes, X509Certificate } from "node:crypto";
 import type { CloudflareSecurityCheck, CloudflareSetupStatus } from "@pwragent/shared";
-import { CloudflareApi, applicationCoversHostname, cloudflareAdmissionPolicy, cloudflareHostname, cloudflareScopeId, isExactAdmissionPolicy, type AccessApplication, type CloudflareGate } from "./cloudflare-api";
+import {
+  CLOUDFLARE_OAUTH_CONFIGURATION,
+  CloudflareApi,
+  applicationCoversHostname,
+  cloudflareAdmissionPolicy,
+  cloudflareEmails,
+  cloudflareHostname,
+  cloudflareIdentityPolicy,
+  cloudflareScopeId,
+  isExactAdmissionPolicy,
+  isExactIdentityPolicy,
+  isExpectedOAuthConfiguration,
+  type AccessApplication,
+  type CloudflareGate,
+} from "./cloudflare-api";
 import { createCloudflareCa, issueCloudflareClient, type CloudflareCertificate } from "./cloudflare-certificates";
 import type { CloudflareOriginProbes } from "./cloudflare-origin-probes";
 import { validateCloudflareBoundary, type CloudflareProbeCredentials } from "./cloudflare-security-validation";
@@ -37,10 +51,16 @@ export type CloudflareSetupState = {
   /** mTLS only. Service-token setups never generate a certificate authority. */
   ca?: CloudflareCertificate;
   verifier: Client;
+  /** Credential-holding clients; always empty under `oauth`, where people sign in. */
   clients: Client[];
+  /** `oauth` only: who the identity policy allows to sign in. */
+  emails?: string[];
   certificateId?: string;
   applicationId?: string;
+  /** The Service Auth policy: every credential, or under `oauth` the validator alone. */
   policyId?: string;
+  /** `oauth` only: the allow policy naming `emails`. */
+  identityPolicyId?: string;
   tunnelId?: string;
   tunnelToken?: string;
   dnsId?: string;
@@ -55,7 +75,7 @@ type ServiceTokenResult = {
 };
 
 export function cloudflareSetupGate(state: Pick<CloudflareSetupState, "gate">): CloudflareGate {
-  return state.gate === "service-token" ? "service-token" : "mtls";
+  return state.gate === "service-token" || state.gate === "oauth" ? state.gate : "mtls";
 }
 
 export type CloudflareSetupDependencies = {
@@ -67,6 +87,11 @@ export type CloudflareSetupDependencies = {
   startConnector: (token: string) => Promise<void>;
   stopConnector: () => Promise<void>;
   publishUrl: (url: string) => Promise<void>;
+  /**
+   * `oauth` only: fetch the endpoint's sign-in metadata the way a client will,
+   * returning the authorization server's host. Absent, validation skips it.
+   */
+  probeSignIn?: (endpoint: string) => Promise<string>;
   api?: (token: string) => CloudflareApi;
 };
 
@@ -93,6 +118,7 @@ export class CloudflareSetupService {
       connectorRunning: this.deps.connectorRunning(),
       connectorInstalled: await this.deps.connectorInstalled(),
       clients: state?.clients.map(({ id, label, expiresAt, revoked }) => ({ id, label, expiresAt, revoked })) ?? [],
+      emails: state?.emails,
       checks: this.checks,
       checkedAt: this.checkedAt,
     };
@@ -172,7 +198,12 @@ export class CloudflareSetupService {
     return [...new Map([...account, ...zone].filter((app) => applicationCoversHostname(app, state.hostname)).map((app) => [app.id, app])).values()];
   }
 
-  async provision(hostname: string, listenPort: number, gate: CloudflareGate = "service-token"): Promise<void> {
+  async provision(
+    hostname: string,
+    listenPort: number,
+    gate: CloudflareGate = "service-token",
+    emails?: string[],
+  ): Promise<void> {
     const api = this.apiClient();
     if (!this.scope) throw new Error("Connect Cloudflare first.");
     hostname = cloudflareHostname(hostname, this.scope.zoneName);
@@ -186,10 +217,14 @@ export class CloudflareSetupService {
     if (state && cloudflareSetupGate(state) !== gate) {
       throw new Error("This profile's endpoint already uses a different admission gate. Disconnect and recreate it to change gates.");
     }
+    // Checked before the first external call: an empty or malformed allowlist
+    // must not leave a minted validator token behind.
+    const allowed = gate === "oauth" && !state ? cloudflareEmails(emails) : undefined;
     if (!state) {
       const base = {
         version: 1 as const, gate, ...this.scope, hostname, listenPort,
         name: `PwrAgent ${hostname} ${randomBytes(6).toString("hex")}`,
+        ...(allowed ? { emails: allowed } : {}),
       };
       if (gate === "mtls") {
         const ca = await createCloudflareCa();
@@ -227,8 +262,16 @@ export class CloudflareSetupService {
         name: state.name, domain: hostname, type: "self_hosted",
         app_launcher_visible: false, service_auth_401_redirect: false,
         policies: [],
+        ...(cloudflareSetupGate(state) === "oauth" ? { oauth_configuration: CLOUDFLARE_OAUTH_CONFIGURATION } : {}),
       });
       state.applicationId = result.id;
+      await this.deps.save(state);
+    }
+    if (cloudflareSetupGate(state) === "oauth" && !state.identityPolicyId) {
+      if (!state.emails?.length) throw new Error("This setup has no sign-in allowlist. Recreate the protected endpoint.");
+      const result = await api.request<{ id: string }>(`${base}/access/apps/${state.applicationId}/policies`, "POST",
+        cloudflareIdentityPolicy(state.emails));
+      state.identityPolicyId = result.id;
       await this.deps.save(state);
     }
     if (!state.policyId) {
@@ -274,21 +317,32 @@ export class CloudflareSetupService {
     // A service-token endpoint has no certificate authority, so requiring a
     // certificateId here would report every one of them as half-created.
     if (!state.applicationId || !state.tunnelId
-      || (cloudflareSetupGate(state) === "mtls" && !state.certificateId)) {
+      || (cloudflareSetupGate(state) === "mtls" && !state.certificateId)
+      || (cloudflareSetupGate(state) === "oauth" && !state.identityPolicyId)) {
       throw new Error("Resume endpoint creation before auditing.");
     }
     const apps = await this.applications(state);
     const app = await api.request<AccessApplication>(`${base}/access/apps/${state.applicationId}`);
     const policies = await api.list<{ id: string }>(`${base}/access/apps/${state.applicationId}/policies`);
+    const servicePolicy = policies.find((policy) => policy.id === state.policyId);
+    const identityPolicy = policies.find((policy) => policy.id === state.identityPolicyId);
     const gate = cloudflareSetupGate(state);
     const admitted = this.admissionIds(state);
     const tunnel = await api.request<{ config: { ingress: Array<{ hostname?: string; path?: string; service: string }> } }>(`${base}/cfd_tunnel/${state.tunnelId}/configurations`);
     const expected = this.ingress(state);
     const checks: CloudflareSecurityCheck[] = [
       { label: "Dedicated Access application", passed: apps.length === 1 && apps[0].id === state.applicationId && app.domain === state.hostname && app.type === "self_hosted" && !(app.destinations?.length), detail: "Exact hostname, with no competing account or zone application." },
-      gate === "mtls"
-        ? { label: "Mandatory client certificate", passed: policies.length === 1 && policies[0].id === state.policyId && isExactAdmissionPolicy(gate, policies[0], admitted), detail: "Only Service Auth for issued client names, requiring a valid certificate; no bypass or alternative policy." }
-        : { label: "Mandatory service token", passed: policies.length === 1 && policies[0].id === state.policyId && isExactAdmissionPolicy(gate, policies[0], admitted), detail: "Only Service Auth for this setup's issued tokens; no bypass, alternative policy, or additional selector." },
+      ...(gate === "oauth" ? [
+        { label: "Managed OAuth sign-in", passed: isExpectedOAuthConfiguration(app.oauth_configuration), detail: "Clients are offered sign-in, and sign-in redirects are limited to 127.0.0.1 on the signing-in machine." },
+        // Exactly two policies: anything else — a bypass, an Everyone rule, a
+        // second allow list — is an alternative way in that this setup did not make.
+        { label: "Allowed people", passed: policies.length === 2 && isExactIdentityPolicy(identityPolicy, state.emails ?? []), detail: "Only the listed email addresses may sign in; no bypass or alternative policy." },
+        { label: "Validator service token", passed: policies.length === 2 && isExactAdmissionPolicy(gate, servicePolicy, admitted), detail: "Service Auth admits only this gateway's own validation token." },
+      ] : gate === "mtls" ? [
+        { label: "Mandatory client certificate", passed: policies.length === 1 && servicePolicy !== undefined && isExactAdmissionPolicy(gate, servicePolicy, admitted), detail: "Only Service Auth for issued client names, requiring a valid certificate; no bypass or alternative policy." },
+      ] : [
+        { label: "Mandatory service token", passed: policies.length === 1 && servicePolicy !== undefined && isExactAdmissionPolicy(gate, servicePolicy, admitted), detail: "Only Service Auth for this setup's issued tokens; no bypass, alternative policy, or additional selector." },
+      ]),
       { label: "Tunnel origin", passed: tunnel.config.ingress.length === 2 && tunnel.config.ingress.every((rule, index) => rule.hostname === expected[index].hostname && rule.service === expected[index].service && !rule.path), detail: "Exact hostname to the selected loopback listener, followed by a 404 catch-all." },
     ];
     if (gate === "mtls") {
@@ -324,10 +378,21 @@ export class CloudflareSetupService {
     const credentials = this.probeCredentials(state.verifier);
     if (!credentials) throw new Error("This setup has no validator credential. Recreate the protected endpoint.");
     const probes = this.deps.verifyListener(state.listenPort);
+    const gate = cloudflareSetupGate(state);
     try {
-      checks.push(...await validateCloudflareBoundary({ endpoint: `https://${state.hostname}/`, credentials, probes }));
+      checks.push(...await validateCloudflareBoundary({ endpoint: `https://${state.hostname}/`, credentials, probes, gate }));
     } catch (error) {
       checks.push({ label: "Live endpoint validation", passed: false, detail: error instanceof Error ? error.message : "Endpoint validation failed." });
+    }
+    if (gate === "oauth" && this.deps.probeSignIn) {
+      // The boundary probe proves strangers are refused; this proves a person
+      // will actually be offered a way to sign in, which is the other half.
+      try {
+        const server = await this.deps.probeSignIn(`wss://${state.hostname}`);
+        checks.push({ label: "Sign-in discovery", passed: true, detail: `Clients are directed to sign in at ${server}.` });
+      } catch (error) {
+        checks.push({ label: "Sign-in discovery", passed: false, detail: error instanceof Error ? error.message : "Sign-in metadata could not be read." });
+      }
     }
     this.checkedAt = new Date().toISOString();
   }
@@ -351,12 +416,26 @@ export class CloudflareSetupService {
     return undefined;
   }
 
-  async issue(label: string): Promise<Client> {
-    if (!label.trim() || label.length > 80) throw new Error("Enter a client name of up to 80 characters.");
+  /**
+   * The audit gate every client hand-off passes. Under `oauth` it is the whole
+   * of issuing: the file carries an endpoint and an invite, and the person
+   * brings their own identity.
+   */
+  async assertShareable(): Promise<CloudflareSetupState> {
     const state = await this.state();
     this.deps.verifyListener(state.listenPort);
-    if (state.clients.length >= 50) throw new Error("This setup supports up to 50 issued clients.");
-    if ((await this.audit()).some((check) => !check.passed)) throw new Error("Resolve the policy audit before issuing a client.");
+    if ((await this.audit()).some((check) => !check.passed)) throw new Error("Resolve the policy audit before sharing a client setup.");
+    return state;
+  }
+
+  async issue(label: string): Promise<Client> {
+    if (!label.trim() || label.length > 80) throw new Error("Enter a client name of up to 80 characters.");
+    const current = await this.state();
+    if (cloudflareSetupGate(current) === "oauth") {
+      throw new Error("Clients of a sign-in endpoint sign in as themselves; share a setup file instead of issuing a credential.");
+    }
+    if (current.clients.length >= 50) throw new Error("This setup supports up to 50 issued clients.");
+    const state = await this.assertShareable();
     const client = await this.mintCredential(state, label.trim());
     state.clients.push(client);
     // Save before admission so a failure can be recovered or revoked by id. A
@@ -386,6 +465,27 @@ export class CloudflareSetupService {
     await this.deps.save(state);
     this.checks = undefined;
   }
+  /**
+   * Replace an `oauth` endpoint's allowlist.
+   *
+   * Cloudflare is updated before local state, so a removal takes effect even if
+   * the save then fails. Access re-evaluates a person at each token refresh,
+   * so someone removed here loses access within one access-token lifetime.
+   */
+  async setEmails(emails: unknown): Promise<void> {
+    const state = await this.state();
+    if (cloudflareSetupGate(state) !== "oauth") throw new Error("Only a sign-in endpoint has an email allowlist.");
+    const allowed = cloudflareEmails(emails);
+    this.deps.verifyListener(state.listenPort);
+    if (!state.applicationId || !state.identityPolicyId) throw new Error("Complete endpoint creation first.");
+    await this.apiClient().request(
+      `/accounts/${state.accountId}/access/apps/${state.applicationId}/policies/${state.identityPolicyId}`, "PUT",
+      cloudflareIdentityPolicy(allowed));
+    state.emails = allowed;
+    await this.deps.save(state);
+    this.checks = undefined;
+  }
+
   private async updatePolicy(state: CloudflareSetupState): Promise<void> {
     if (!state.applicationId || !state.policyId) throw new Error("Complete endpoint creation first.");
     await this.apiClient().request(`/accounts/${state.accountId}/access/apps/${state.applicationId}/policies/${state.policyId}`, "PUT",

@@ -253,6 +253,10 @@ function createSnapshot(
         value: false,
         source: "default",
       },
+      cloudflareAccessOAuthEnabled: {
+        value: false,
+        source: "default",
+      },
       instancePrivateKey: {
         configured: false,
         source: "unset",

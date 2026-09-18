@@ -403,6 +403,7 @@ describe("DesktopSettingsService", () => {
       },
       cloudflareMtlsEnabled: { value: true, source: "config" },
       cloudflareAccessServiceAuthEnabled: { value: true, source: "config" },
+      cloudflareAccessOAuthEnabled: { value: false, source: "default" },
       instancePrivateKey: { configured: false, source: "unset", writable: true },
       noiseStaticPrivateKey: {
         configured: false,
@@ -856,6 +857,10 @@ describe("DesktopSettingsService", () => {
       gatewayUrl: { value: "", source: "default" },
       cloudflareMtlsEnabled: { value: false, source: "default" },
       cloudflareAccessServiceAuthEnabled: {
+        value: false,
+        source: "default",
+      },
+      cloudflareAccessOAuthEnabled: {
         value: false,
         source: "default",
       },

@@ -57,6 +57,9 @@ const AUTH_FAILURE_MESSAGE_PATTERNS = [
   "missing its pinned gateway",
   "federation key cannot be decrypted",
   "secret storage is unavailable",
+  // A lapsed Cloudflare Access sign-in. Retrying cannot fix it; the operator
+  // has to sign in, so it must read as rejected rather than connecting.
+  "Cloudflare Access sign-in is required",
 ];
 
 /**

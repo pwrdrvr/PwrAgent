@@ -710,6 +710,7 @@ describe("FederationSettings", () => {
           cloudflareEndpoint: "",
           cloudflareMtlsEnabled: true,
           cloudflareAccessServiceAuthEnabled: false,
+          cloudflareAccessOAuthEnabled: false,
         },
       });
     });
@@ -1202,6 +1203,7 @@ function settingsSnapshot(): DesktopSettingsSnapshot {
       cloudflareEndpoint: { value: "", source: "default" },
       cloudflareMtlsEnabled: { value: true, source: "config" },
       cloudflareAccessServiceAuthEnabled: { value: false, source: "config" },
+      cloudflareAccessOAuthEnabled: { value: false, source: "config" },
       instancePrivateKey: {
         configured: true,
         source: "keychain",

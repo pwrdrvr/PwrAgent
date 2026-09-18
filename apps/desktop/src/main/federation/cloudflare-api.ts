@@ -22,7 +22,7 @@ function describeCloudflareErrors(payload: unknown, token: string): string {
     if (!entry || typeof entry !== "object") continue;
     const { code, message } = entry as { code?: unknown; message?: unknown };
     if (typeof message !== "string" || !message) continue;
-    const clean = message.replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, 200);
+    const clean = message.replace(/\p{Cc}/gu, " ").trim().slice(0, 200);
     if (!clean || clean.includes(token)) continue;
     parts.push(typeof code === "number" ? `${clean} (code ${code})` : clean);
   }
@@ -134,6 +134,7 @@ export type AccessApplication = {
   domain?: string;
   type?: string;
   destinations?: Array<{ uri?: string; type?: string }>;
+  oauth_configuration?: unknown;
 };
 
 export function applicationCoversHostname(app: AccessApplication, hostname: string): boolean {
@@ -147,17 +148,107 @@ export function applicationCoversHostname(app: AccessApplication, hostname: stri
 }
 
 /**
- * The two credentials Cloudflare Access can admit a non-interactive client with.
+ * How Cloudflare Access admits this endpoint's clients.
  *
  * `service-token` is available on every Zero Trust plan, including Free.
  * `mtls` requires a paid plan and is confirmed unavailable on Free, so it is an
- * option rather than the default. Both ride the same Service Auth decision and
- * the same deny-by-default provisioning order; only the selector differs.
+ * option rather than the default. Both ride a Service Auth decision; only the
+ * selector differs.
+ *
+ * `oauth` admits people, not credentials: each one signs in through the
+ * organization's login methods and PwrAgent holds a refreshable OAuth grant.
+ * Its Service Auth policy admits only the endpoint validator's token, so the
+ * positive-control probe keeps working without a human in the loop.
+ *
+ * All three share the same deny-by-default provisioning order.
  */
-export type CloudflareGate = "service-token" | "mtls";
+export type CloudflareGate = "service-token" | "oauth" | "mtls";
 
+/**
+ * The Service Auth policy for a gate. Under `oauth` that is the validator's
+ * token alone; the people it admits live in `cloudflareIdentityPolicy`.
+ */
 export function cloudflareAdmissionPolicy(gate: CloudflareGate, ids: string[]) {
   return gate === "mtls" ? cloudflareMtlsPolicy(ids) : cloudflareServiceTokenPolicy(ids);
+}
+
+/**
+ * Managed OAuth turns Access into an OAuth 2.0 server for the application, so
+ * a non-browser client gets a 401 with discovery metadata instead of a login
+ * redirect it cannot follow.
+ *
+ * Dynamic registration is limited to loopback redirects: PwrAgent receives the
+ * authorization code on 127.0.0.1, and no https redirect is allowed that a
+ * third-party site could use to collect a grant. The 15-minute access token and
+ * two-week grant are Cloudflare's recommendation for CLI and agent clients —
+ * a person signs in again only after two weeks without PwrAgent refreshing.
+ */
+export const CLOUDFLARE_OAUTH_CONFIGURATION = {
+  enabled: true,
+  dynamic_client_registration: {
+    enabled: true,
+    allow_any_on_loopback: true,
+    allow_any_on_localhost: false,
+    allowed_uris: [] as string[],
+  },
+  grant: {
+    access_token_lifetime: "15m",
+    session_duration: "336h",
+  },
+};
+
+/**
+ * Whether an application's live Managed OAuth settings still let PwrAgent sign
+ * in and still refuse third-party redirects.
+ *
+ * Token lifetimes are not compared: they are the operator's to tune in the
+ * dashboard and change nothing about who can get in. An added https redirect
+ * does, so any `allowed_uris` entry fails the audit.
+ */
+export function isExpectedOAuthConfiguration(value: unknown): boolean {
+  if (!value || typeof value !== "object") return false;
+  const config = value as { enabled?: unknown; dynamic_client_registration?: unknown };
+  const registration = config.dynamic_client_registration as
+    | { enabled?: unknown; allow_any_on_loopback?: unknown; allowed_uris?: unknown }
+    | undefined;
+  return config.enabled === true
+    && registration?.enabled === true
+    && registration.allow_any_on_loopback === true
+    && (registration.allowed_uris === undefined
+      || (Array.isArray(registration.allowed_uris) && registration.allowed_uris.length === 0));
+}
+
+/** The people an `oauth` endpoint admits, by the email their login method verified. */
+export function cloudflareIdentityPolicy(emails: string[]) {
+  return {
+    name: "PwrAgent signed-in people",
+    decision: "allow",
+    include: emails.map((email) => ({ email: { email } })),
+    require: [],
+    exclude: [],
+  };
+}
+
+export function isExactIdentityPolicy(value: unknown, emails: string[]): boolean {
+  return emails.length > 0 && isExactPolicy(value, cloudflareIdentityPolicy(emails));
+}
+
+const EMAIL = /^[^\s@<>"',;]+@[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/;
+
+/**
+ * Normalizes the allowlist an operator typed: trimmed, lowercased, de-duplicated.
+ * Cloudflare compares emails case-insensitively, and storing one spelling keeps
+ * the policy audit an exact comparison.
+ */
+export function cloudflareEmails(value: unknown): string[] {
+  if (!Array.isArray(value)) throw new Error("Enter at least one email address that may sign in.");
+  const emails = [...new Set(value.map((entry) => typeof entry === "string" ? entry.trim().toLowerCase() : ""))]
+    .filter(Boolean);
+  if (emails.length === 0) throw new Error("Enter at least one email address that may sign in.");
+  if (emails.length > 50) throw new Error("A sign-in policy supports up to 50 email addresses.");
+  const invalid = emails.find((email) => email.length > 254 || !EMAIL.test(email));
+  if (invalid) throw new Error(`“${invalid.slice(0, 80)}” is not an email address.`);
+  return emails;
 }
 
 export function cloudflareServiceTokenPolicy(tokenIds: string[]) {
@@ -183,13 +274,19 @@ export function cloudflareMtlsPolicy(commonNames: string[]) {
 }
 
 export function isExactAdmissionPolicy(gate: CloudflareGate, value: unknown, ids: string[]): boolean {
-  if (!value || typeof value !== "object") return false;
-  const p = value as Record<string, unknown>;
-  const expected = cloudflareAdmissionPolicy(gate, ids);
   // A policy carrying no includes admits nobody, but it also cannot be
   // distinguished from one whose selectors were stripped. Refuse either way
   // rather than calling an empty allowlist a passing audit.
   if (ids.length === 0) return false;
+  return isExactPolicy(value, cloudflareAdmissionPolicy(gate, ids));
+}
+
+function isExactPolicy(
+  value: unknown,
+  expected: { decision: string; include: unknown[]; require: unknown[] },
+): boolean {
+  if (!value || typeof value !== "object") return false;
+  const p = value as Record<string, unknown>;
   // `require` is compared verbatim in both directions: a certificate
   // requirement appearing on a service-token policy, or disappearing from an
   // mTLS one, both have to fail.
@@ -197,7 +294,7 @@ export function isExactAdmissionPolicy(gate: CloudflareGate, value: unknown, ids
   return p.decision === expected.decision
     && requireMatches
     && Array.isArray(p.include)
-    && p.include.length === ids.length
+    && p.include.length === expected.include.length
     && p.include.every((rule) => expected.include.some((r) => JSON.stringify(r) === JSON.stringify(rule)))
     && (!p.exclude || (Array.isArray(p.exclude) && p.exclude.length === 0));
 }

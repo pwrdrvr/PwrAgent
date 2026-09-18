@@ -3,6 +3,7 @@ import {
   classifyFederationClientFailure,
   redactFederationDiagnostic,
 } from "../federation/federation-redaction";
+import { CLOUDFLARE_SIGN_IN_REQUIRED } from "../federation/cloudflare-access-oauth";
 
 describe("classifyFederationClientFailure", () => {
   it("classifies auth rejection codes as auth failures", () => {
@@ -41,6 +42,17 @@ describe("classifyFederationClientFailure", () => {
         "Federation client mode is missing its pinned gateway key.",
       ),
     ).toBe("auth");
+  });
+
+  it("classifies a lapsed Cloudflare sign-in as auth, not a retryable condition", () => {
+    // Retrying cannot fix it, so it must read as rejected rather than as an
+    // endless "connecting". The runtime's aggregated failure embeds it too.
+    expect(classifyFederationClientFailure(CLOUDFLARE_SIGN_IN_REQUIRED)).toBe("auth");
+    expect(classifyFederationClientFailure(
+      `Federation gateway is unreachable on every configured endpoint. wss://federation.example.com: ${CLOUDFLARE_SIGN_IN_REQUIRED}`,
+    )).toBe("auth");
+    // A refused upgrade alone stays transport: the next attempt refreshes.
+    expect(classifyFederationClientFailure("Unexpected server response: 401")).toBe("transport");
   });
 
   it("classifies network conditions as transport failures", () => {

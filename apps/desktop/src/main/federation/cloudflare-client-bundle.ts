@@ -5,14 +5,15 @@ const derive = promisify(scrypt);
 /**
  * The encrypted hand-off an operator carries to the client machine.
  *
- * It holds exactly one credential — a certificate and key under mTLS, or a
- * service token's id and secret otherwise — plus the endpoint and a
+ * It holds at most one credential — a certificate and key under mTLS, a
+ * service token's id and secret under `service-token`, and nothing at all under
+ * `oauth`, where the person signs in as themselves — plus the endpoint and a
  * short-lived enrollment invite. `gate` is absent in bundles written before
  * service tokens existed, and those were all certificates.
  */
 export type Bundle = {
   version: 1;
-  gate?: "service-token" | "mtls";
+  gate?: "service-token" | "oauth" | "mtls";
   endpoint: string;
   invite: string;
   certificate?: string;
@@ -21,8 +22,8 @@ export type Bundle = {
   accessClientSecret?: string;
 };
 
-export function bundleGate(bundle: Pick<Bundle, "gate">): "service-token" | "mtls" {
-  return bundle.gate === "service-token" ? "service-token" : "mtls";
+export function bundleGate(bundle: Pick<Bundle, "gate">): "service-token" | "oauth" | "mtls" {
+  return bundle.gate === "service-token" || bundle.gate === "oauth" ? bundle.gate : "mtls";
 }
 
 export async function encryptCloudflareBundle(bundle: Bundle, password: string): Promise<string> {
@@ -55,6 +56,12 @@ export async function decryptCloudflareBundle(text: string, password: string): P
     if (bundle.version !== 1 || url.protocol !== "wss:" || url.username || url.password || url.port
       || url.pathname !== "/" || url.search || url.hash || !/^[a-z0-9-]+\.[a-z0-9.-]+$/.test(url.hostname)
       || typeof bundle.invite !== "string") throw new Error();
+    if (bundleGate(bundle) === "oauth") {
+      // Nothing to carry but the endpoint and invite. A credential in an
+      // `oauth` bundle means it was not written by this code.
+      if (bundle.certificate || bundle.privateKey || bundle.accessClientId || bundle.accessClientSecret) throw new Error();
+      return bundle;
+    }
     if (bundleGate(bundle) === "service-token") {
       // A service-token secret is opaque, so the only checks available are that
       // both halves are present and plausibly shaped.

@@ -3,6 +3,8 @@ import { federationTrafficCaptureUntil, setFederationTrafficCapture, saveFederat
 import type { NavigationAttentionViewReleaseRequest } from "@pwragent/shared";
 import { cloudflareConnector } from "./cloudflare-connector";
 import { loadCloudflareSetup } from "./cloudflare-setup-storage";
+import { getCloudflareAccessSignIn } from "./cloudflare-access-sign-in";
+import { CloudflareSignInRequiredError } from "./cloudflare-access-oauth";
 import type { MarkNavigationDirectorySeenRequest, MarkNavigationDirectorySeenResponse } from "@pwragent/shared";
 import type { RemoveNavigationDirectoryRequest, RemoveNavigationDirectoryResponse } from "@pwragent/shared";
 import { markLocalNavigationDirectorySeen, removeLocalNavigationDirectory } from "../app-server/navigation-directory-actions";
@@ -2918,6 +2920,7 @@ export class DesktopFederationRuntime {
     // when the runtime is torn down.
     const walkEpoch = this.walkEpoch;
     const failures: string[] = [];
+    let signInRequired: Error | undefined;
     for (const endpoint of attempts) {
       if (this.stopping || this.walkEpoch !== walkEpoch) return;
       try {
@@ -2947,11 +2950,20 @@ export class DesktopFederationRuntime {
         // not of this path. Walking on would waste attempts and, worse, let
         // a later endpoint's network error mask a broken pin behind an
         // endless "connecting" retry instead of surfacing as "rejected".
+        //
+        // A lapsed Cloudflare sign-in is the exception: it belongs to the one
+        // Cloudflare endpoint, so a fallback path may still connect. It is
+        // reported only if nothing does, because it is the actionable failure.
+        if (error instanceof CloudflareSignInRequiredError) {
+          signInRequired = error;
+          continue;
+        }
         if (classifyFederationClientFailure(rawMessage) === "auth") {
           throw error;
         }
       }
     }
+    if (signInRequired) throw signInRequired;
     throw new Error(
       "Federation gateway is unreachable on every configured endpoint. "
       + failures.join("; "),
@@ -3010,10 +3022,14 @@ export class DesktopFederationRuntime {
     const cloudflareAccessEnabled =
       acceptsCloudflareCredentials
       && config.cloudflareAccessServiceAuthEnabled;
+    const cloudflareSignInEnabled =
+      acceptsCloudflareCredentials
+      && config.cloudflareAccessOAuthEnabled;
     if (
       !acceptsCloudflareCredentials
       && (config.cloudflareMtlsEnabled
-        || config.cloudflareAccessServiceAuthEnabled)
+        || config.cloudflareAccessServiceAuthEnabled
+        || config.cloudflareAccessOAuthEnabled)
     ) {
       log.info("federation endpoint is not the designated Cloudflare endpoint", {
         withheldCredentials: true,
@@ -3037,6 +3053,15 @@ export class DesktopFederationRuntime {
         "Cloudflare Access service auth is enabled but its credentials are missing.",
       );
     }
+    // Refreshed here, before the dial: an access token lives fifteen minutes,
+    // so a reconnect usually needs a new one. A lapsed grant throws the
+    // sign-in-required error, which classifies as auth and stops the walk.
+    const cloudflareSignIn = cloudflareSignInEnabled
+      ? getCloudflareAccessSignIn()
+      : undefined;
+    const cloudflareAccessToken = cloudflareSignIn
+      ? await cloudflareSignIn.accessToken(gatewayUrl)
+      : undefined;
     const noise =
       await settingsService.getOrCreateFederationNoiseStaticKeyPair();
     this.gatewayUrl = gatewayUrl;
@@ -3097,11 +3122,18 @@ export class DesktopFederationRuntime {
       },
       instanceLabel: (id) => this.diagnosticInstanceLabel(id),
       role: "client",
-      headers: cloudflareAccessEnabled
+      headers: cloudflareAccessEnabled || cloudflareAccessToken
         ? {
-            "CF-Access-Client-Id": cloudflareCredentials.accessClientId!,
-            "CF-Access-Client-Secret":
-              cloudflareCredentials.accessClientSecret!,
+            ...(cloudflareAccessEnabled
+              ? {
+                  "CF-Access-Client-Id": cloudflareCredentials.accessClientId!,
+                  "CF-Access-Client-Secret":
+                    cloudflareCredentials.accessClientSecret!,
+                }
+              : {}),
+            ...(cloudflareAccessToken
+              ? { Authorization: `Bearer ${cloudflareAccessToken}` }
+              : {}),
           }
         : undefined,
       clientCertificate: cloudflareMtlsEnabled
@@ -3189,7 +3221,17 @@ export class DesktopFederationRuntime {
       },
       onEnvelope: (envelope) =>
         void this.receiveEnvelope(envelope, gatewayInstanceId),
-    }).catch((error: unknown) => {
+    }).catch(async (error: unknown) => {
+      // Access refused a token that looked fresh here — revoked, or cut short
+      // by a policy change. Drop it so the next attempt refreshes, and let the
+      // refresh decide whether this person still gets in.
+      if (
+        cloudflareSignIn
+        && error instanceof Error
+        && /Unexpected server response: 40[13]/.test(error.message)
+      ) {
+        await cloudflareSignIn.invalidateAccessToken(gatewayUrl).catch(() => undefined);
+      }
       throw (
         sshFailure.error
         ?? (error instanceof Error ? error : new Error(String(error)))

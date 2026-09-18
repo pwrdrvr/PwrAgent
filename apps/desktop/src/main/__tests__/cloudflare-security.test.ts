@@ -3,7 +3,7 @@ import { X509Certificate, createPrivateKey } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import { createCloudflareCa, issueCloudflareClient } from "../federation/cloudflare-certificates";
 import { CloudflareOriginProbes } from "../federation/cloudflare-origin-probes";
-import { validateCloudflareBoundary } from "../federation/cloudflare-security-validation";
+import { refusedAtEdge, validateCloudflareBoundary } from "../federation/cloudflare-security-validation";
 import { encryptCloudflareBundle, decryptCloudflareBundle } from "../federation/cloudflare-client-bundle";
 import { applicationCoversHostname, cloudflareMtlsPolicy, isExactMtlsPolicy, cloudflareHostname, CloudflareApi } from "../federation/cloudflare-api";
 
@@ -169,5 +169,67 @@ describe("Cloudflare service-token admission proof", () => {
     const empty = await encryptCloudflareBundle(
       { version: 1, gate: "service-token", endpoint: bundle.endpoint, invite: "test-invite" }, "a-long-test-password");
     await expect(decryptCloudflareBundle(empty, "a-long-test-password")).rejects.toThrow("Could not open");
+  });
+});
+
+describe("Cloudflare sign-in (oauth) admission proof", () => {
+  // The positive control is still the validator's service token; what a
+  // stranger lacks under this gate is a sign-in.
+  const credentials = { accessClientId: "abc.access", accessClientSecret: "a-service-token-secret" };
+  const observe = (probes: CloudflareOriginProbes, id: string) =>
+    probes.observe({ headers: { "x-pwragent-security-probe": id } } as unknown as IncomingMessage);
+
+  it("accepts Managed OAuth's 401 as an edge refusal and labels what is missing", async () => {
+    const probes = new CloudflareOriginProbes();
+    const checks = await validateCloudflareBoundary({ endpoint: "https://federation.example.com/", probes, credentials, gate: "oauth",
+      request: async (input) => input.credentials
+        ? { status: 204, proof: observe(probes, input.id) }
+        : { status: 401, ray: "edge-ray" },
+    });
+    expect(checks.every((check) => check.passed)).toBe(true);
+    expect(checks.map((check) => check.label)).toEqual([
+      "HTTPS request with service token",
+      "HTTPS request without sign-in",
+      "WebSocket upgrade with service token",
+      "WebSocket upgrade without sign-in",
+    ]);
+    expect(checks[1].detail).toContain("Cloudflare returned 401");
+  });
+
+  it("still fails when an uncredentialed request reaches the gateway, whatever the status", async () => {
+    const probes = new CloudflareOriginProbes();
+    const checks = await validateCloudflareBoundary({ endpoint: "https://federation.example.com/", probes, credentials, gate: "oauth",
+      request: async (input) => {
+        const proof = observe(probes, input.id);
+        return input.credentials ? { status: 204, proof } : { status: 401, ray: "edge-ray" };
+      },
+    });
+    expect(checks.filter((check) => !check.passed)).toHaveLength(2);
+    expect(checks[1].detail).toContain("without a sign-in reached the gateway");
+  });
+
+  it("recognizes only Cloudflare's own refusals", () => {
+    const edge = { ray: "edge-ray" };
+    // Service Auth gates keep their exact 403.
+    expect(refusedAtEdge({ ...edge, status: 403 }, "service-token")).toBe(true);
+    expect(refusedAtEdge({ ...edge, status: 401 }, "service-token")).toBe(false);
+    expect(refusedAtEdge({ ...edge, status: 401 }, "mtls")).toBe(false);
+    // A sign-in gate refuses with 401, or sends a browser to its login page.
+    expect(refusedAtEdge({ ...edge, status: 401 }, "oauth")).toBe(true);
+    expect(refusedAtEdge({ ...edge, status: 302, location: "https://team.cloudflareaccess.com/cdn-cgi/access/login/x" }, "oauth")).toBe(true);
+    expect(refusedAtEdge({ ...edge, status: 302, location: "https://federation.example.com/elsewhere" }, "oauth")).toBe(false);
+    expect(refusedAtEdge({ ...edge, status: 302, location: "https://cloudflareaccess.com.example.net/" }, "oauth")).toBe(false);
+    expect(refusedAtEdge({ ...edge, status: 200 }, "oauth")).toBe(false);
+    // No cf-ray, or the gateway's private proof, means Cloudflare did not answer.
+    expect(refusedAtEdge({ status: 401 }, "oauth")).toBe(false);
+    expect(refusedAtEdge({ ...edge, status: 401, proof: "p" }, "oauth")).toBe(false);
+  });
+
+  it("carries no credential in a sign-in bundle and rejects one that does", async () => {
+    const bundle = { version: 1 as const, gate: "oauth" as const, endpoint: "wss://federation.example.com", invite: "test-invite" };
+    const encrypted = await encryptCloudflareBundle(bundle, "a-long-test-password");
+    expect(await decryptCloudflareBundle(encrypted, "a-long-test-password")).toEqual(bundle);
+    const smuggled = await encryptCloudflareBundle({ ...bundle, ...credentials }, "a-long-test-password");
+    await expect(decryptCloudflareBundle(smuggled, "a-long-test-password")).rejects.toThrow("Could not open");
   });
 });
