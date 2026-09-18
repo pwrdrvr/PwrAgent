@@ -22,14 +22,16 @@ Mockups for every finding below:
 | 2 | Manual entry cannot express a DM | Fixed on this branch |
 | 3 | Replay blames the provider for a scope limit | Fixed on this branch |
 | 4 | Discarded Telegram destination topic field | Fixed on this branch |
-| 5 | Discord's nouns promise channels that cannot appear | Open |
-| 6 | Three providers have no manual-entry guidance | Open |
-| 7 | The pipeline caption describes a room | Open |
-| 8 | Preview copy, and a limit stated too late | Open |
-| 9 | Smaller items | Open |
+| 5 | Discord offers no channels at all | Fixed on this branch |
+| 6 | Three providers have no manual-entry guidance | Fixed on this branch |
+| 7 | The pipeline caption describes a room | Fixed on this branch |
+| 8 | Preview copy, and a limit stated too late | Fixed on this branch |
+| 9 | Smaller items | Fixed, one withdrawn |
+| 10 | A new destination saved to a disabled provider | Fixed on this branch |
+| 11 | Four providers drop every sender outside the allowlist | Open |
 
-Findings 5–9 are a copy pass with no structural change. The mockup sheets
-draft every one of their strings; none of that wording is a decision yet.
+Finding 5 turned out to be structural, not copy — see its section. Findings 10
+and 11 came out of fixing it.
 
 ## Overall
 
@@ -42,8 +44,10 @@ will let an operator build a trigger that never fires, on four of six providers,
 without a word of feedback — the exact failure mode the handoff set out to
 eliminate.
 
-Nothing here is a plumbing defect. Every finding is a label, a guard, or a
-sentence.
+The first draft of this review said nothing here was a plumbing defect. Two
+were: Discord had no channel list to offer (finding 5), and four other providers
+drop the senders a channel automation mostly exists to watch (finding 11).
+Everything else is a label, a guard, or a sentence.
 
 ## Findings
 
@@ -123,21 +127,36 @@ Telegram DM, accepts input, and throws it away on save.
 
 Fixed: the same `dm:` test the trigger side already uses.
 
-### 5. The picker's nouns promise channels that can never appear — moderate
+### 5. Discord offers no channels at all — critical, fixed
 
 Discord's only authorized list is of guilds, which are servers rather than
-conversations, so `readProviderGroups` gives Discord `authorizedUserIds` and
-nothing else. Meanwhile `conversationPickerLabel("discord")` returns "Channel",
-so the field is labelled *Channel*, the trigger reads *"Choose a channel or
-DM"*, the search says *"Find a channel, DM, or ID"*, and the *"Authorized
-channels"* heading never renders.
+conversations, so `readProviderGroups` gave Discord `authorizedUserIds` and
+nothing else. Meanwhile `conversationPickerLabel("discord")` returned "Channel",
+so the field was labelled *Channel*, the trigger read *"Choose a channel or
+DM"*, and the *"Authorized channels"* heading never rendered.
 
-An operator looking for `#deploys` has no way to learn that it is not missing —
-it is structurally absent, and the only route to it is the manual field they
-have been given no reason to open.
+The first draft of this review proposed a banner pointing at manual entry.
+That was the wrong fix: channels are what a Discord operator picks, and the
+banner would have documented the gap instead of closing it. Two things were
+missing, one in each layer:
 
-Fix: one banner beside the Discord control saying PwrAgent authorizes servers
-rather than channels, and pointing at manual entry.
+- **No channel list.** Fixed: the editor lists each authorized server's text
+  and announcement channels from Discord's API, through the same lister
+  Messaging Settings already uses to inspect thread permissions. Rows read
+  "Server / channel", Messaging Routes' separator, because two servers
+  routinely both have a `#general`. They sit under *"Channels in authorized
+  servers"*, since Discord channels are not authorized one by one. A server
+  Discord will not list is named with its error, a missing bot token is said
+  once, and having no authorized server is explained rather than shown empty.
+  Listing waits until Discord is chosen, since each server costs a request.
+- **No way for most channel traffic to reach the matcher.** A Discord guild
+  message was dropped at the adapter unless its sender was on the actor
+  allowlist, so a channel automation could never fire for an alert bot or a
+  teammate. Picking channels would have produced automations that silently
+  never ran. Fixed: the Discord adapter now implements the observed-conversation
+  set Slack already had. In a channel an enabled automation watches, other
+  senders' messages are forwarded `observedOnly`, and their slash commands are
+  dropped. The server allowlist still applies first.
 
 ### 6. Three of six providers have no manual-entry guidance — moderate
 
@@ -148,8 +167,12 @@ for Mattermost, Feishu and LINE — *"Conversation"*, *"e.g. a conversation ID"*
 
 Those three are exactly the providers this PR made selectable, and they are the
 ones where the operator is most likely to need the manual path (Feishu `chat_id`
-versus `open_id`, LINE's separate group and room ID spaces). Fix: give each the
-noun and the "where do I find it" sentence the first three already have.
+versus `open_id`, LINE's separate group and room ID spaces). Fixed: each has its
+own noun (Mattermost *channel*, Feishu *group chat*, LINE *group*), ID label,
+example, and a sentence naming the wrong ID it is easily confused with.
+
+The first pass of finding 2 claimed a Mattermost UI path to a user ID that
+could not be verified; that hint now says only what is true on every server.
 
 ### 7. The pipeline caption describes a room — moderate
 
@@ -161,7 +184,13 @@ It is also imprecise about behaviour: `matchesAutomationConversation` requires
 that person, not on everything in the conversation. *"every direct message from
 Dana Okonkwo"* is both grammatical and true. The same applies to the picker's
 `dm` section heading and to the destination picker's `aria-label`, which
-currently announces *"Destination channel: Dana Okonkwo"*.
+announced *"Destination channel: Dana Okonkwo"*.
+
+Fixed: the caption says *from* for a contact; the contact heading reads
+*"Direct messages from"* on the trigger and *"Direct messages to"* on the
+destination; the two picker fields are named *Conversation* and *Destination*,
+since both lists hold rooms and people; and a contact destination's hint says
+*"The result is sent to Dana Okonkwo as a direct message"*.
 
 ### 8. Preview copy calls the trigger source a "destination" — moderate
 
@@ -179,17 +208,70 @@ Two adjacent points:
   Preview button, where it can change the operator's plan, rather than after
   they have opened the panel.
 
+Fixed: the panel says *conversation*, and says nothing about history until the
+main process answers. The two scope refusals — a contact DM, a topic — are the
+same on every provider, so they are stated under the button before opening. The
+provider refusal is not knowable in the renderer without copying the main
+process's adapter table, so it is still stated once the panel opens.
+
+A preview also showed less than the automation would see. The adapters'
+observed set came only from **enabled** automations, so previewing `#alerts`
+before saving showed nothing from the alert bot the automation was for — on
+Slack already, and on Discord once finding 5 landed. Fixed: an open preview
+adds its conversation to the observed set while it is open.
+
 ### 9. Smaller items — minor
 
-- "Include thread replies" is offered on 1:1 DM triggers, where there are no
-  thread replies. It is hidden for Telegram only.
-- The capture-by-code panel says *"Paste this into the channel you want to
-  watch"* for Mattermost, Feishu and LINE.
-- The capture-by-code DM error points to *"Messaging settings"* while the field
-  hint two elements above says *"Settings > Messaging"*. Pick one.
-- `previewScope`'s object literal in `AutomationEditor.tsx` is indented at the
-  wrong level for its `? :` — house style is hand-maintained, so this will not
-  be caught by tooling.
+- ~~"Include thread replies" is offered on 1:1 DM triggers, where there are no
+  thread replies.~~ **Withdrawn — this was wrong.** Slack and Mattermost DMs
+  have threads, and `matchesAutomationConversation` honours the flag for a
+  contact trigger. The checkbox stays.
+- The capture-by-code panel said *"Paste this into the channel you want to
+  watch"* for Mattermost, Feishu and LINE. Fixed: it uses the provider's noun.
+- The capture-by-code DM error pointed to *"Messaging settings"* while the field
+  hint two elements above said *"Settings > Messaging"*. Fixed: both say the
+  latter.
+- `previewScope`'s object literal in `AutomationEditor.tsx` was indented at the
+  wrong level for its `? :`. Fixed.
+
+### 10. A new destination saved to a disabled provider — critical, fixed
+
+Found while fixing finding 7, and older than this PR. The destination provider
+defaults to Telegram, or to the trigger's platform on edit, and only the
+select's `onChange` ever changed it. With Telegram disabled, the select
+*displayed* its first option (Slack) — a controlled select whose value matches
+no option does that — while the state stayed Telegram. An operator who chose
+"different conversation" and typed a Slack channel ID under it saved a Telegram
+target with a Slack ID in it.
+
+Fixed the way the trigger side already handled its own default: a new
+destination follows the trigger's provider when that is enabled, else the first
+enabled one. A saved destination is never moved, because silently re-pointing
+it at another platform would be the same bug.
+
+The trigger side's version of that correction still has an edge: editing an
+automation whose trigger provider has since been disabled moves the provider but
+keeps the old conversation ID. Not changed here.
+
+The same select behaviour caused a Windows-only test failure earlier on this
+branch. Tests that waited on the Provider select's value were waiting on a
+signal the state had not reached yet. They now wait for something only the
+target state renders.
+
+### 11. Four providers drop every sender outside the allowlist — open
+
+Only Slack and Discord forward a non-allowlisted sender in a watched
+conversation. Telegram, Mattermost, Feishu, and LINE drop that sender in every
+shared conversation, so an automation there fires only for authorized contacts
+— an alert bot posting into a Telegram group never triggers one unless the bot
+is itself authorized. The editor does not say so.
+
+This is the same silent-failure class as finding 5, and the fix is the same
+shape: each adapter implements `updateObservedConversations`. It is left open
+because each platform's own delivery rules need checking first. Telegram's bot
+privacy mode, for one, keeps ordinary group messages from reaching the bot at
+all, which no adapter change can fix. The contract is now written down in
+[messaging-adapter-contract.md](../messaging-adapter-contract.md#observed-conversations).
 
 ## Accessibility
 
@@ -219,10 +301,11 @@ with a room noun. Fixing the visible labels fixes the announced ones.
 
 ## Priority
 
-Findings 1–4 are fixed on this branch: each was a case where the form accepted
-input and then discarded or misrepresented it, and finding 2 in particular
-shipped the failure mode this work existed to remove.
+Findings 1–10 are fixed on this branch, except the one item in finding 9 that
+was withdrawn. Each blocking finding was a case where the form accepted input
+and then discarded or misrepresented it. Finding 2 in particular shipped the
+failure mode this work existed to remove.
 
-Findings 5–9 remain open and are a copy pass — labels, nouns, and one banner,
-with no structural change. Of them, finding 5 is the one worth doing next: a
-Discord operator is currently told to look for a section that cannot exist.
+Finding 11 is the one worth doing next. It is the same failure class as
+finding 5 on four more providers, and until it is fixed a group automation
+there fires only for authorized contacts, with nothing on screen to say so.

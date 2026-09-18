@@ -254,17 +254,17 @@
       <h1>Automation messaging surfaces — design pass</h1>
       <p>
         Six surfaces from the Automations editor, each shown as the review found
-        it (left) and as it reads after the fix (right). A green right-hand
-        column landed on <code>fix/automation-provider-surfaces</code>; an orange
-        one is still a proposal. Tokens and control geometry are transcribed from
+        it (left) and as it reads after the fix (right). Every right-hand column
+        is what <code>fix/automation-provider-surfaces</code> now renders. Tokens
+        and control geometry are transcribed from
         <code>apps/desktop/src/renderer/src/styles/app.css</code>.
         Append <code>?slide=&lt;id&gt;</code> to isolate one sheet.
       </p>
       <ol>
         <li><code>picker</code> — the DM rows in the surface picker <b class="fixed">fixed</b></li>
         <li><code>manual</code> — manual ID entry had no way to say “this is a DM” <b class="fixed">fixed</b></li>
-        <li><code>discord</code> — a provider whose channels are never in the list</li>
-        <li><code>preview</code> — history availability, stated before it is needed</li>
+        <li><code>discord</code> — a provider whose channels were never in the list <b class="fixed">fixed</b></li>
+        <li><code>preview</code> — history availability, stated before it is needed <b class="fixed">fixed</b></li>
         <li><code>destination</code> — a Telegram DM destination with a live topic field <b class="fixed">fixed</b></li>
         <li><code>replay</code> — the empty state blamed the provider for a scope limit <b class="fixed">fixed</b></li>
       </ol>
@@ -313,7 +313,7 @@
             <div class="panel__section">Authorized channels</div>
             <div class="row"><span class="row__check"></span><span class="row__glyph">#</span><span class="row__name">release-eng</span><span class="row__path">C04KJ8ZB2QT</span></div>
             <div class="row"><span class="row__check"></span><span class="row__glyph">#</span><span class="row__name">oncall-escalations</span><span class="row__path">C05RR1M4X8P</span></div>
-            <div class="panel__section">Authorized direct messages</div>
+            <div class="panel__section">Direct messages from</div>
             <div class="row is-cursor"><span class="row__check"></span><span class="row__glyph">@</span><span class="row__name">Dana Okonkwo</span><span class="row__path">U03QW7ELB19</span></div>
             <div class="row"><span class="row__check"></span><span class="row__glyph">@</span><span class="row__name">U08ZT4NKC22</span><span class="row__path"></span></div>
             <div class="panel__separator"></div>
@@ -321,12 +321,9 @@
           </div>
           <p class="note note--done">
             The sentinel stays in <code>value</code>; <code>detail</code> shows the
-            platform ID, and drops entirely when it would repeat the label.
-          </p>
-          <p class="note note--todo">
-            Still proposed: the heading should say <em>Direct messages from</em>,
-            because a contact DM trigger fires on messages that person sends —
-            not on everything in that conversation.
+            platform ID, and drops entirely when it would repeat the label. The heading
+            says <em>from</em>, because a contact trigger fires on messages that person
+            sends; the destination picker's says <em>to</em>.
           </p>
         </div>
       </div>
@@ -381,7 +378,7 @@
               The Slack member ID of the person whose DMs should trigger this — open
               their profile and copy the member ID. Not the D... conversation ID.
             </p>
-            <div class="flow">every message in U03QW7ELB19</div>
+            <div class="flow">every direct message from U03QW7ELB19</div>
           </div>
           <p class="note note--done">
             One switch decides the kind, so the saved snapshot carries
@@ -391,11 +388,7 @@
             what the matcher compares. Switching the kind re-encodes what is already
             typed rather than clearing it.
           </p>
-          <p class="note note--todo">
-            Still proposed: the connector caption. It reads "every message in
-            U03QW7ELB19" for a DM, which is both ungrammatical and imprecise — see
-            sheet 5's note and finding 7.
-          </p>
+
         </div>
       </div>
     </section>
@@ -403,70 +396,65 @@
     <!-- ============================================================= 3 -->
     <section class="sheet" data-slide="discord">
       <p class="sheet__eyebrow">Sheet 3 · Trigger → Discord</p>
-      <h2 class="sheet__title">A picker that promises channels it can never list</h2>
+      <h2 class="sheet__title">A picker that promised channels it could never list</h2>
       <p class="sheet__lede">
-        Discord's only authorized list is of guilds, which are servers rather than
-        conversations, so the editor offers DMs and nothing else. Every noun around
-        the control still says “channel”, and the “Authorized channels” heading
-        never renders. Three of six providers also get no manual-entry guidance at all.
+        PwrAgent authorizes Discord servers, not channels, so the settings snapshot has
+        no channel list and the editor offered DMs and nothing else. The first draft of
+        this sheet proposed a banner pointing at manual entry. That documented the gap
+        instead of closing it, and it hid a second one: a guild message from anyone off
+        the actor allowlist died at the adapter, so even a typed channel ID built an
+        automation that could never fire for an alert bot.
       </p>
       <div class="pair">
         <div>
-          <div class="col__head col__head--now">On the branch</div>
-          <div class="stage">
-            <div class="field picker-field">
-              <span>Channel</span>
-              <button type="button" class="picker-trigger">Choose a channel or DM</button>
+          <div class="col__head col__head--now">Before the fix</div>
+          <div class="panel">
+            <div class="panel__search">
+              <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5L14 14"/></svg>
+              <span>Find a channel, DM, or ID</span>
             </div>
-            <p class="hint">
-              The Discord channel ID. Enable Developer Mode, then right-click the
-              channel and Copy Channel ID.
-            </p>
-            <div style="height:14px"></div>
-            <div class="field picker-field">
-              <span>Conversation</span>
-              <button type="button" class="picker-trigger">Choose a conversation or DM</button>
-            </div>
-            <p class="hint">The conversation ID PwrAgent should watch.</p>
+            <div class="panel__section">Authorized direct messages</div>
+            <div class="row"><span class="row__check"></span><span class="row__glyph">@</span><span class="row__name">Dana Okonkwo</span><span class="row__path">801442719953526785</span></div>
+            <div class="panel__separator"></div>
+            <div class="row row--action"><span class="row__check"></span><span class="row__plus">+</span><span class="row__name">Enter Channel ID manually...</span></div>
           </div>
           <p class="note">
-            Top: Discord. No guild channel will ever appear under that trigger, and the
-            hint below is only reachable after the operator gives up on the picker.
-            Bottom: Mattermost, Feishu and LINE share one placeholder — the three
-            providers this change just made selectable.
+            The placeholder said “Choose a channel or DM” and the heading for channels
+            never rendered. Mattermost, Feishu and LINE, the providers this change made
+            selectable, all shared “The conversation ID PwrAgent should watch.”
           </p>
         </div>
         <div>
-          <div class="col__head col__head--next">Proposed</div>
-          <div class="stage">
-            <div class="field picker-field">
-              <span>Discord surface</span>
-              <button type="button" class="picker-trigger">Choose a DM, or enter a channel ID</button>
+          <div class="col__head col__head--done">Fixed on this branch</div>
+          <div class="panel">
+            <div class="panel__search">
+              <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5L14 14"/></svg>
+              <span>Find a channel, DM, or ID</span>
             </div>
-            <div class="banner">
-              <span class="banner__glyph">i</span>
-              <span>
-                PwrAgent authorizes Discord <b>servers</b>, not individual channels, so
-                only DMs can be listed here. For a server channel, choose
-                <b>Enter an ID manually</b> — Developer Mode → right-click the channel →
-                Copy Channel ID.
-              </span>
-            </div>
-            <div style="height:16px"></div>
-            <div class="field picker-field">
-              <span>Mattermost channel</span>
-              <button type="button" class="picker-trigger">Choose a channel or DM</button>
-            </div>
-            <p class="hint">
-              The Mattermost channel ID — open the channel, then <b>View Info</b> and
-              copy the ID. A 26-character lowercase string.
-            </p>
+            <div class="panel__section">Channels in authorized servers</div>
+            <div class="row is-cursor"><span class="row__check"></span><span class="row__glyph">#</span><span class="row__name">Ops / alerts</span><span class="row__path">1287364019266551818</span></div>
+            <div class="row"><span class="row__check"></span><span class="row__glyph">#</span><span class="row__name">Ops / general</span><span class="row__path">1287364019266551810</span></div>
+            <div class="row"><span class="row__check"></span><span class="row__glyph">#</span><span class="row__name">Lab / general</span><span class="row__path">1301928473640038402</span></div>
+            <div class="panel__section">Direct messages from</div>
+            <div class="row"><span class="row__check"></span><span class="row__glyph">@</span><span class="row__name">Dana Okonkwo</span><span class="row__path">801442719953526785</span></div>
+            <div class="panel__separator"></div>
+            <div class="row row--action"><span class="row__check"></span><span class="row__plus">+</span><span class="row__name">Enter Channel ID manually...</span></div>
           </div>
-          <p class="note note--ok">
-            The Discord banner is shown once, next to the control, so the operator
-            never hunts for a section that cannot exist. Mattermost, Feishu and LINE
-            each get the noun and the “where do I find it” sentence that Telegram,
-            Slack and Discord already have.
+          <p class="hint" style="max-width:440px">
+            Some channels could not be listed. Staging: Missing Access. You can still
+            enter a channel ID.
+          </p>
+          <p class="note note--done">
+            Each authorized server's text and announcement channels are listed from
+            Discord's API, through the lister Messaging Settings already uses. Rows read
+            “Server / channel” because two servers both have a <code>#general</code>. A
+            server Discord refuses is named with its error, not shown as empty.
+          </p>
+          <p class="note note--done">
+            In a channel an enabled automation or an open preview watches, the adapter
+            now forwards other senders' messages <code>observedOnly</code>, as Slack's
+            already did, and drops their slash commands. Mattermost, Feishu and LINE each
+            have their own noun, ID label and example.
           </p>
         </div>
       </div>
@@ -475,7 +463,7 @@
     <!-- ============================================================= 4 -->
     <section class="sheet" data-slide="preview">
       <p class="sheet__eyebrow">Sheet 4 · Filters → preview</p>
-      <h2 class="sheet__title">History support is known before the operator asks for it</h2>
+      <h2 class="sheet__title">A history limit stated too late, in the wrong noun</h2>
       <p class="sheet__lede">
         The main process decides <code>historySupported</code> synchronously from the
         provider and the scope. The editor only learns it after the panel opens, and
@@ -485,7 +473,7 @@
       </p>
       <div class="pair">
         <div>
-          <div class="col__head col__head--now">On the branch</div>
+          <div class="col__head col__head--now">Before the fix</div>
           <div class="stage">
             <button type="button" class="ghost">Stop preview</button>
             <div class="preview-panel">
@@ -510,17 +498,19 @@
           </p>
         </div>
         <div>
-          <div class="col__head col__head--next">Proposed</div>
+          <div class="col__head col__head--done">Fixed on this branch</div>
           <div class="stage">
             <button type="button" class="ghost">Preview live messages</button>
             <p class="hint">
-              Slack can replay recent history for a channel, but not for a contact's
-              DMs — this preview will show new messages only.
+              History can't be read back for a contact's direct messages, so the preview
+              shows new messages only.
             </p>
+            <div style="height:14px"></div>
+            <button type="button" class="ghost">Stop preview</button>
             <div class="preview-panel">
               <p class="hint" style="margin-top:0">
-                Waiting for new messages in this DM. Ones your filter would match are
-                highlighted.
+                Showing messages as they arrive; no history is available for this
+                conversation. Messages your filter would match are highlighted.
               </p>
               <div class="preview-item is-match">
                 <span class="preview-item__who"><b>Dana Okonkwo</b> · U03QW7ELB19 · 2m ago</span>
@@ -528,10 +518,16 @@
               </div>
             </div>
           </div>
-          <p class="note note--ok">
-            The limitation is stated under the button, where it can change the
-            operator's plan. Naming the provider and the scope separately keeps the
-            sentence true when a second adapter gains history.
+          <p class="note note--done">
+            The scope refusals are the same on every provider, so they are stated under
+            the button before opening. Whether the provider reads history is only
+            known to the main process, so the panel states it once it answers, and
+            says nothing until then instead of assuming “unavailable”.
+          </p>
+          <p class="note note--done">
+            An open preview now joins the adapter's observed set. Before, a preview
+            of <code>#alerts</code> before saving showed nothing from the alert bot the
+            automation was for.
           </p>
         </div>
       </div>
@@ -574,20 +570,22 @@
           <div class="stage">
             <div class="stage__legend"><span class="stage__verb">Then</span><span class="stage__name">Result</span></div>
             <div class="field picker-field">
-              <span>Destination group</span>
+              <span>Destination</span>
               <button type="button" class="picker-trigger">Dana Okonkwo</button>
             </div>
-            <p class="hint">The result is posted here instead of back where the trigger fired.</p>
+            <p class="hint">
+              The result is sent to Dana Okonkwo as a direct message, instead of back
+              where the trigger fired.
+            </p>
           </div>
           <p class="note note--done">
             The topic field is suppressed by the same <code>dm:</code> test the trigger
             side already uses, so there is no longer a field whose value Save drops.
           </p>
-          <p class="note note--todo">
-            Still proposed: the label. “Destination group” is a room noun for a 1:1
-            DM, and the picker composes its accessible name from it — so this still
-            announces “Destination group: Dana Okonkwo”. “Destination”, with the kind
-            trailing the name, would be true for every provider.
+          <p class="note note--done">
+            The field is named <em>Destination</em>, since the list holds rooms and
+            people; its accessible name was “Destination group: Dana Okonkwo”. The hint
+            says where a contact's result actually goes.
           </p>
         </div>
       </div>
