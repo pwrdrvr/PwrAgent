@@ -557,6 +557,179 @@ describe("AcpBackendAdapter", () => {
     await adapter.close();
   });
 
+  it("probes a changed runtime once at startup to restore its model catalog", async () => {
+    const backendId = "acp:kimi" as AcpBackendId;
+    const launchDescriptor = {
+      backendId,
+      registryId: "kimi",
+      distributionKind: "local" as const,
+      command: "/Users/test/.kimi-code/bin/kimi",
+      args: ["acp"],
+      env: {},
+    };
+    const previousCapabilities = {
+      schemaVersion: 1 as const,
+      status: "discovered" as const,
+      checkedAt: 1000,
+    };
+    const probedCapabilities = {
+      schemaVersion: 1 as const,
+      status: "discovered" as const,
+      checkedAt: 3000,
+      models: { availableModels: [{ id: "kimi-k3", label: "Kimi K3" }] },
+    };
+    const stored = new Map<AcpBackendId, AcpInstalledAgentRecord>([
+      [
+        backendId,
+        {
+          ...buildInstalledAgent(),
+          backendId,
+          registryId: "kimi",
+          name: "Kimi Code CLI",
+          version: "0.31.1",
+          launchDescriptor,
+          runtimeCapabilities: previousCapabilities,
+          lastDiscoveredAt: 1000,
+        },
+      ],
+    ]);
+    const discovered: AcpInstalledAgentRecord = {
+      ...stored.get(backendId)!,
+      version: "2.0.0",
+      runtimeCapabilities: undefined,
+      lastDiscoveredAt: undefined,
+      updatedAt: 2000,
+    };
+    const probe = vi.fn(async (agent: AcpInstalledAgentRecord) => ({
+      ...agent,
+      runtimeCapabilities: probedCapabilities,
+      lastDiscoveredAt: 3000,
+      updatedAt: 3000,
+    }));
+    const emit = vi.fn(async () => undefined);
+    const adapter = createTestAcpBackendAdapter({
+      acpAgentStore: {
+        getInstalledAgent: (id) => stored.get(id as AcpBackendId),
+        listInstalledAgents: () => [...stored.values()],
+        upsertInstalledAgent: (record) => {
+          stored.set(record.backendId, record);
+        },
+      },
+      acpSessionStore: null,
+      captureStores: [],
+      discoverLocalAcpAgents: async () => [discovered],
+      probeAcpRuntimeCapabilities: probe,
+      emit,
+      handleServerRequest: vi.fn(async () => ({ decision: "accept" })),
+    });
+
+    const [available] = await adapter.discoverAvailableAgents(
+      issueProviderDiscoveryPermit("startup"),
+    );
+    // The upgrade drops the 0.31.1 catalog; the probe must not see it.
+    expect(available?.runtimeCapabilities).toBeUndefined();
+    expect(probe).toHaveBeenCalledOnce();
+    expect(probe).toHaveBeenCalledWith(
+      expect.objectContaining({ backendId, version: "2.0.0" }),
+    );
+    await vi.waitFor(() => {
+      expect(emit).toHaveBeenCalledWith({
+        backend: backendId,
+        notification: {
+          method: "backend/acpRuntimeCapabilities/updated",
+          params: { backend: backendId },
+        },
+      });
+    });
+    expect(stored.get(backendId)).toMatchObject({
+      version: "2.0.0",
+      runtimeCapabilities: probedCapabilities,
+      lastDiscoveredAt: 3000,
+    });
+
+    // The next launch finds the same runtime already probed.
+    adapter.invalidateLocalAgentDiscovery();
+    const [relaunched] = await adapter.discoverAvailableAgents(
+      issueProviderDiscoveryPermit("startup"),
+    );
+    expect(relaunched?.runtimeCapabilities).toEqual(probedCapabilities);
+    expect(probe).toHaveBeenCalledOnce();
+
+    await adapter.close();
+  });
+
+  it("leaves capability probes to Settings outside the startup special case", async () => {
+    const backendId = "acp:kimi" as AcpBackendId;
+    const discovered: AcpInstalledAgentRecord = {
+      ...buildInstalledAgent(),
+      backendId,
+      registryId: "kimi",
+      name: "Kimi Code CLI",
+      version: "2.0.0",
+      launchDescriptor: {
+        backendId,
+        registryId: "kimi",
+        distributionKind: "local",
+        command: "/Users/test/.kimi-code/bin/kimi",
+        args: ["acp"],
+        env: {},
+      },
+    };
+    // The legacy diagnostic the misclassified 2.0.0 install was stored as.
+    const legacyRecord: AcpInstalledAgentRecord = {
+      ...discovered,
+      installStatus: "unavailable",
+      launchDescriptor: undefined,
+    };
+    const probeWith = async (params: {
+      stored: AcpInstalledAgentRecord[];
+      intent: "startup" | "settings-user-action";
+      enabled?: boolean;
+    }) => {
+      const stored = new Map(
+        params.stored.map((record) => [record.backendId, record]),
+      );
+      const probe = vi.fn(async (agent: AcpInstalledAgentRecord) => agent);
+      const adapter = createTestAcpBackendAdapter({
+        acpAgentStore: {
+          getInstalledAgent: (id) => stored.get(id as AcpBackendId),
+          listInstalledAgents: () => [...stored.values()],
+          upsertInstalledAgent: (record) => {
+            stored.set(record.backendId, record);
+          },
+        },
+        acpSessionStore: null,
+        captureStores: [],
+        discoverLocalAcpAgents: async () => [discovered],
+        isAcpAgentEnabled: () => params.enabled ?? true,
+        probeAcpRuntimeCapabilities: probe,
+        emit: vi.fn(async () => undefined),
+        handleServerRequest: vi.fn(async () => ({ decision: "accept" })),
+      });
+      await adapter.discoverAvailableAgents(
+        issueProviderDiscoveryPermit(params.intent),
+      );
+      await adapter.close();
+      return probe;
+    };
+
+    // The trigger itself: a legacy record giving way to a launchable install.
+    expect(
+      await probeWith({ stored: [legacyRecord], intent: "startup" }),
+    ).toHaveBeenCalledOnce();
+    // Settings runs its own probe; this path must not add a second one.
+    expect(
+      await probeWith({ stored: [legacyRecord], intent: "settings-user-action" }),
+    ).not.toHaveBeenCalled();
+    // First discovery of an agent belongs to Settings and setup.
+    expect(
+      await probeWith({ stored: [], intent: "startup" }),
+    ).not.toHaveBeenCalled();
+    expect(
+      await probeWith({ stored: [legacyRecord], intent: "startup", enabled: false }),
+    ).not.toHaveBeenCalled();
+  });
+
   it("keeps Grok update state for the same discovered executable", async () => {
     const backendId = "acp:grok" as AcpBackendId;
     const update = {

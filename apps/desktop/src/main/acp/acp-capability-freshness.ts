@@ -61,3 +61,39 @@ export function shouldReprobeAcpCapabilities(
   const maxAgeMs = options?.maxAgeMs ?? ACP_CAPABILITY_MAX_AGE_MS;
   return now - cached.lastDiscoveredAt > maxAgeMs;
 }
+
+/**
+ * Decide whether startup may probe an agent's runtime capabilities on its
+ * own, without a Settings or setup action.
+ *
+ * Probing is otherwise reserved for Settings and setup, so this covers only the
+ * case where a user action cannot be expected: an agent PwrAgent already knew
+ * whose runtime changed underneath it. Startup discovery drops cached
+ * capabilities whenever the CLI version or launch identity changes (an upgrade,
+ * or a legacy install giving way to a current one). Nothing refills them, and
+ * the composer builds its model and effort pickers only from capabilities.
+ *
+ * The rule never fires in steady state. It requires that no probe has
+ * run for the current runtime, and every probe outcome records one: a result
+ * sets `lastDiscoveredAt`, and a failure sets `lastDiscoveryError`. Each
+ * runtime is therefore probed at most once, and the next runtime change clears
+ * those fields and re-arms it. An agent seen for the first time is left to
+ * Settings and setup, which own first discovery.
+ *
+ * @param agent              The merged record startup discovery just persisted.
+ * @param previouslyRecorded Whether a durable record for this agent existed
+ *                           before this discovery pass.
+ */
+export function shouldProbeAcpCapabilitiesAtStartup(
+  agent: AcpInstalledAgentRecord,
+  previouslyRecorded: boolean,
+): boolean {
+  return (
+    previouslyRecorded
+    && agent.installStatus === "installed"
+    && agent.launchDescriptor !== undefined
+    && agent.runtimeCapabilities === undefined
+    && agent.lastDiscoveredAt === undefined
+    && agent.lastDiscoveryError === undefined
+  );
+}
