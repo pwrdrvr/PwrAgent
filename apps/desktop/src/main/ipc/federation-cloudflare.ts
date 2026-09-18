@@ -143,7 +143,7 @@ export function registerCloudflareSetupIpc(): void {
         case "save-draft":
           await saveCloudflareSetupDraft(request.draft);
           return describe("Draft saved. Nothing in Cloudflare or PwrAgent changes until you connect.");
-        case "connect": await setup.connect(request.token, request.accountId, request.zoneId); break;
+        case "connect": await setup.connect(request.token, request.accountId, request.zoneId, request.gate); break;
         case "disconnect": setup.disconnect(); break;
         case "provision":
           // The renderer has saved the listener config; wait for runtime ownership

@@ -124,7 +124,7 @@ export class CloudflareSetupService {
     };
   }
 
-  async connect(token: string, accountId: string, zoneId: string): Promise<void> {
+  async connect(token: string, accountId: string, zoneId: string, gate: CloudflareGate = "service-token"): Promise<void> {
     this.disconnect();
     cloudflareScopeId(accountId); cloudflareScopeId(zoneId);
     if (typeof token !== "string" || token.length < 20 || token.length > 4096 || /\s/.test(token)) throw new Error("Enter a Cloudflare API token.");
@@ -133,8 +133,12 @@ export class CloudflareSetupService {
     if (zone.account.id !== accountId || zone.status !== "active") throw new Error("The zone must be active and belong to the selected account.");
     const state = await this.deps.load();
     if (state && (state.accountId !== accountId || state.zoneId !== zoneId)) throw new Error("This profile already manages a tunnel in a different account or zone.");
+    // Probe the permission this gate will actually use. Listing certificates
+    // for every gate made a token scoped for service tokens — the default —
+    // fail here with a plan hint about mTLS it never needed.
+    const credentialPath = (state ? cloudflareSetupGate(state) : gate) === "mtls" ? "certificates" : "service_tokens";
     await api.list(`/accounts/${accountId}/access/apps`);
-    await api.list(`/accounts/${accountId}/access/certificates`);
+    await api.list(`/accounts/${accountId}/access/${credentialPath}`);
     await api.list(`/accounts/${accountId}/cfd_tunnel?is_deleted=false`);
     this.api = api;
     this.scope = { accountId, zoneId, zoneName: zone.name };

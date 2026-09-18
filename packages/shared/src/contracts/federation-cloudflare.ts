@@ -68,7 +68,14 @@ export type CloudflareSetupRequest =
   | { action: "install-link" }
   | { action: "open-link"; link: CloudflareSetupLink }
   | { action: "save-draft"; draft: CloudflareSetupDraft }
-  | { action: "connect"; token: string; accountId: string; zoneId: string }
+  | {
+      action: "connect";
+      token: string;
+      accountId: string;
+      zoneId: string;
+      /** The gate the operator chose; decides which Access permission is checked. */
+      gate?: CloudflareFederationGate;
+    }
   | { action: "disconnect" }
   | {
       action: "provision";

@@ -9380,11 +9380,6 @@ a.button {
 
 .cloudflare-setup p { margin: 0; color: var(--text-secondary); line-height: 1.5; }
 .cloudflare-setup__intro { max-width: 76ch; font-size: 14px; }
-.cloudflare-setup__steps { display: flex; flex-wrap: wrap; gap: 16px; margin: 0; padding: 12px 0; list-style: none; counter-reset: cloudflare-step; border-block: 1px solid var(--border-subtle); color: var(--text-muted); }
-.cloudflare-setup__steps li { display: flex; gap: 8px; align-items: center; counter-increment: cloudflare-step; }
-.cloudflare-setup__steps li::before { content: counter(cloudflare-step, decimal-leading-zero); font: 11px var(--font-mono); }
-.cloudflare-setup__steps .is-current { color: var(--accent-bright); font-weight: 600; }
-.cloudflare-setup__steps .is-complete { color: var(--text-primary); }
 .cloudflare-setup__help { color: var(--text-secondary); font-size: 12px; line-height: 1.6; }
 .cloudflare-setup__help summary { cursor: pointer; color: var(--text-primary); }
 .cloudflare-setup__account,
@@ -9492,6 +9487,85 @@ a.button {
   gap: 12px;
   font-size: 12px;
   color: var(--text-muted);
+}
+
+/* What the operator is starting, before any field: cost, installs, hand-off.
+   A term-and-sentence list rather than a paragraph, so the cost line can be
+   found at a glance. */
+.cloudflare-setup__facts {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.cloudflare-setup__facts strong {
+  display: inline-block;
+  min-width: 72px;
+  margin-right: 8px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 400;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+/* Where a half-finished setup stands. Names what is missing in words, so the
+   "Incomplete" chip is never the only signal. */
+.cloudflare-setup__state {
+  padding: 10px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-panel-elevated);
+  font-size: 12px;
+}
+
+.cloudflare-setup__state strong {
+  color: var(--text-primary);
+}
+
+.cloudflare-setup .cloudflare-setup__needs {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.cloudflare-setup__gate em {
+  margin-right: 2px;
+  color: var(--accent-bright);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-style: normal;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.cloudflare-setup__emails {
+  height: auto;
+  min-height: 64px;
+  padding: 8px 10px;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.cloudflare-setup__manual {
+  padding-top: 12px;
+  border-top: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.cloudflare-setup__manual > summary {
+  cursor: pointer;
+  color: var(--text-primary);
+}
+
+.cloudflare-setup__manual > p {
+  margin: 8px 0 4px;
 }
 
 .settings-section-controls {
@@ -25961,6 +26035,39 @@ a.transcript-message__messaging-origin:focus-visible {
   color: var(--text-primary);
   font-size: 14px;
   font-weight: 700;
+}
+
+/* Progress, for funnels walked in order (Cloudflare setup). The word carries
+   the state; the node only echoes it. */
+.automation-stage__progress {
+  margin-left: auto;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.automation-stage__progress--current {
+  color: var(--accent-bright);
+}
+
+.automation-stage__progress--done {
+  color: var(--success-text);
+}
+
+.automation-stage--done .automation-stage__node {
+  border-color: var(--success-border);
+  color: var(--success-text);
+}
+
+.automation-stage--done .automation-stage__node::after {
+  content: "\2713";
+}
+
+.automation-stage--waiting .automation-stage__node {
+  border-color: var(--border-subtle);
+  color: var(--text-muted);
 }
 
 .automation-flow {

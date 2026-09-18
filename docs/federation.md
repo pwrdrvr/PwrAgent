@@ -96,6 +96,49 @@ stable location. Verify the rule against the hostname before relying on it and
 remove or change it deliberately when the connecting laptop moves networks.
 PwrAgent enrollment remains mandatory whether or not the IP rule is active.
 
+### Guided Cloudflare Access setup
+
+Settings -> Federation -> Cloudflare Access walks a gateway through six
+numbered steps: choose how clients get in, connect a scoped API token, install
+`cloudflared`, create the protected endpoint, validate it, and share client
+setup files. Account ID, Zone ID, hostname, and the sign-in allowlist can be
+saved as a draft at any point; the API token is held only in memory. Creating
+the endpoint saves the federation listener as `127.0.0.1:<port>` (and changes
+`client` mode to `dual`) before anything is created in Cloudflare, and the
+DNS record is published only after the Access policy has been read back.
+
+The three admission choices:
+
+| Choice | Cloudflare plan | Client credential |
+|---|---|---|
+| Service token (default) | Any Zero Trust plan, including Free | One Access service token per client, inside its setup file |
+| Sign in with an identity | Any Zero Trust plan; Managed OAuth is Cloudflare Beta | None; each person signs in with an allowed email |
+| Client certificate (mTLS) | Contract (Enterprise) only; refused on Free | One certificate per client from a PwrAgent-generated CA |
+
+A client imports the encrypted `.pwrcf` file under "Connect this client". The
+file's enrollment invite expires after 1, 4, 8, or 24 hours, chosen when it
+is saved.
+
+### Cloudflare Access sign-in
+
+The sign-in choice enables
+[Managed OAuth](https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/managed-oauth/)
+on the Access application, with dynamic client registration limited to
+`127.0.0.1` redirects, and adds two policies: an allow policy naming the
+permitted emails, and a Service Auth policy admitting only the gateway's own
+validation token so endpoint validation can run with no person present. The
+audit fails if any third policy, an https redirect URI, or a changed email
+list appears.
+
+A client signs in in the system browser (authorization code with PKCE S256 and
+an RFC 8707 resource indicator) and stores the grant encrypted under the
+profile's `state/`. Before each connection it refreshes the 15-minute access
+token and sends it as `Authorization: Bearer`. A refused refresh — the
+two-week grant lapsed, or the person was removed from the allowlist — puts
+the client in a sign-in-required state that Federation health reports as
+rejected; Settings -> Federation -> Cloudflare Access offers Sign in. Config
+key: `federation.cloudflare_access_oauth_enabled`.
+
 ### Cloudflare Access Service Token
 
 Cloudflare Access service tokens use the
@@ -105,9 +148,11 @@ hostname. Cloudflare documents the current flow in
 [Service tokens](https://developers.cloudflare.com/cloudflare-one/access-controls/service-credentials/service-tokens/)
 and [Access policies](https://developers.cloudflare.com/cloudflare-one/access-controls/policies/).
 
-On every client profile, before importing its federation invite:
+The guided setup above issues these. To enter them by hand, on every client
+profile, before importing its federation invite:
 
-1. Open Settings -> Federation -> Cloudflare.
+1. Open Settings -> Federation -> Cloudflare Access -> Enter Cloudflare
+   credentials manually.
 2. Enable Access service auth.
 3. Enter the Access client ID and client secret.
 4. Select Save edge policy.
@@ -122,13 +167,16 @@ mode is enabled, the connector fails closed with a Settings diagnostic.
 Cloudflare Access can enforce a Service Auth policy with a Valid Certificate or
 Common Name selector. Its current setup and certificate requirements are in
 [Cloudflare Access mTLS](https://developers.cloudflare.com/cloudflare-one/access-controls/service-credentials/mutual-tls-authentication/).
-Availability depends on the Cloudflare account and product configuration; check
-the dashboard before treating mTLS as an available outer gate.
+Access mTLS requires a Contract (Enterprise) Zero Trust plan: on a Free plan
+the certificate authority upload is refused as "maximum number of certificates
+has been reached" with none stored. This is distinct from zone-level client
+certificates in the SSL/TLS product.
 
 Issue each client a certificate and private key from the CA associated with the
 federation hostname. On the client profile, before importing its invite:
 
-1. Open Settings -> Federation -> Cloudflare.
+1. Open Settings -> Federation -> Cloudflare Access -> Enter Cloudflare
+   credentials manually.
 2. Enable mTLS.
 3. Paste the PEM client certificate and matching PEM private key.
 4. Select Save edge policy.

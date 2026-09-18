@@ -53,6 +53,8 @@ type FederationSettingsProps = {
   onWriteConfig: (patch: DesktopSettingsConfigPatch) => Promise<boolean>;
   saving: boolean;
   snapshot: DesktopSettingsSnapshot;
+  /** Section slug from the Settings nav (`FEDERATION_NAV_SECTIONS`). */
+  focusSectionId?: string;
 };
 
 export function FederationSettings(props: FederationSettingsProps) {
@@ -131,6 +133,8 @@ export function FederationSettings(props: FederationSettingsProps) {
   ] = useState(
     props.snapshot.federation.cloudflareAccessServiceAuthEnabled.value,
   );
+  const [cloudflareAccessOAuthEnabled, setCloudflareAccessOAuthEnabled] =
+    useState(props.snapshot.federation.cloudflareAccessOAuthEnabled.value);
   const [cloudflareClientCertificate, setCloudflareClientCertificate] =
     useState("");
   const [cloudflareClientPrivateKey, setCloudflareClientPrivateKey] =
@@ -159,6 +163,9 @@ export function FederationSettings(props: FederationSettingsProps) {
     );
     setCloudflareAccessServiceAuthEnabled(
       props.snapshot.federation.cloudflareAccessServiceAuthEnabled.value,
+    );
+    setCloudflareAccessOAuthEnabled(
+      props.snapshot.federation.cloudflareAccessOAuthEnabled.value,
     );
   }, [props.snapshot]);
 
@@ -445,7 +452,11 @@ export function FederationSettings(props: FederationSettingsProps) {
     : undefined;
 
   return (
-    <SettingsSectionStack paneId="federation" aria-label="Federation settings">
+    <SettingsSectionStack
+      paneId="federation"
+      aria-label="Federation settings"
+      focusSectionId={props.focusSectionId}
+    >
       <SettingsPanelHead
         eyebrow="Federation"
         title="Instance Federation"
@@ -475,6 +486,7 @@ export function FederationSettings(props: FederationSettingsProps) {
       ) : null}
 
       <SettingsSection
+        sectionId="configuration"
         eyebrow="Setup"
         title="Configuration"
         chip={props.saving ? "Saving" : "Editable"}
@@ -712,6 +724,7 @@ export function FederationSettings(props: FederationSettingsProps) {
                     advertisedEndpoints,
                     cloudflareMtlsEnabled,
                     cloudflareAccessServiceAuthEnabled,
+                    cloudflareAccessOAuthEnabled,
                   },
                 }).then(async (written) => {
                   // A silent false here is how "I set it to client" turns
@@ -734,6 +747,7 @@ export function FederationSettings(props: FederationSettingsProps) {
       </SettingsSection>
 
       <SettingsSection
+        sectionId="encryption"
         eyebrow="End-to-end security"
         title="PwrAgent Encrypted Transport"
         chip="Required"
@@ -770,6 +784,7 @@ export function FederationSettings(props: FederationSettingsProps) {
       </SettingsSection>
 
       <SettingsSection
+        sectionId="invites"
         eyebrow="Enrollment"
         title="Invites"
         chip={generatedInvite ? "Generated" : "Ready"}
@@ -872,6 +887,7 @@ export function FederationSettings(props: FederationSettingsProps) {
 
       {dialsGateway || effectiveHealth.clientEnrollment ? (
         <SettingsSection
+          sectionId="enrollment"
           eyebrow="Pairing"
           title="Gateway Enrollment"
           chip={
@@ -1004,6 +1020,7 @@ export function FederationSettings(props: FederationSettingsProps) {
       ) : null}
 
       <SettingsSection
+        sectionId="connection"
         eyebrow="Runtime"
         title="Connection"
         chip={statusLabel(effectiveHealth.status)}
@@ -1079,6 +1096,7 @@ export function FederationSettings(props: FederationSettingsProps) {
       </SettingsSection>
 
       <SettingsSection
+        sectionId="instances"
         eyebrow="Peers"
         title="Federation Instances"
         chip={`${effectiveHealth.peers.length}`}
@@ -1251,6 +1269,7 @@ export function FederationSettings(props: FederationSettingsProps) {
       </SettingsSection>
 
       <SettingsSection
+        sectionId="activity"
         eyebrow="Diagnostics"
         title="Recent Federation Activity"
         chip={
@@ -1291,6 +1310,7 @@ export function FederationSettings(props: FederationSettingsProps) {
       </SettingsSection>
 
       <SettingsSection
+        sectionId="tailscale"
         eyebrow="Private network / public relay"
         title="Tailscale Serve / Funnel Setup"
         chip={
@@ -1404,249 +1424,264 @@ export function FederationSettings(props: FederationSettingsProps) {
         </div>
       </SettingsSection>
 
-      <CloudflareSetup api={props.desktopApi} listenPort={listenPort} mode={mode}
-        onWriteConfig={props.onWriteConfig} onSettingsChanged={props.onSettingsChanged} />
-
-      <SettingsSection
-        eyebrow="Manual client credentials"
-        title="Cloudflare"
-        chip={
-          cloudflareMtlsEnabled ||
-          cloudflareAccessServiceAuthEnabled
-            ? "Configured"
-            : "Optional"
+      {/* One Cloudflare section: the guided setup, with the manual credential
+          form folded inside it for endpoints configured by hand. Two sibling
+          sections both titled "Cloudflare" read as a duplicate. */}
+      <CloudflareSetup
+        api={props.desktopApi}
+        listenHost={listenHost}
+        listenPort={listenPort}
+        mode={mode}
+        onWriteConfig={props.onWriteConfig}
+        onSettingsChanged={props.onSettingsChanged}
+        manualConfigured={
+          cloudflareMtlsEnabled
+          || cloudflareAccessServiceAuthEnabled
+          || cloudflareAccessOAuthEnabled
         }
-        chipKind={
-          cloudflareMtlsEnabled ||
-          cloudflareAccessServiceAuthEnabled
-            ? "ok"
-            : "muted"
-        }
-      >
-        <div className="settings-fields">
-          <SettingsField
-            label="Cloudflare endpoint"
-            sub="The one endpoint fronted by Cloudflare. Access tokens and client certificates are sent only to this host, because they travel in the WebSocket upgrade before the gateway's pinned keys are verified."
-            control={
-              <input
-                aria-label="Cloudflare endpoint"
-                value={cloudflareEndpoint}
-                placeholder="wss://federation.example.com"
+        manual={
+          <div className="settings-fields">
+            <SettingsField
+              label="Cloudflare endpoint"
+              sub="The one endpoint fronted by Cloudflare. Access tokens and client certificates are sent only to this host, because they travel in the WebSocket upgrade before the gateway's pinned keys are verified."
+              control={
+                <input
+                  aria-label="Cloudflare endpoint"
+                  value={cloudflareEndpoint}
+                  placeholder="wss://federation.example.com"
+                  disabled={props.saving}
+                  onChange={(event) => setCloudflareEndpoint(event.target.value)}
+                />
+              }
+            />
+            <SettingsField
+              label="mTLS"
+              sub="Cloudflare edge certificate gate."
+              control={
+                <input
+                  aria-label="mTLS"
+                  type="checkbox"
+                  checked={cloudflareMtlsEnabled}
+                  onChange={(event) =>
+                    setCloudflareMtlsEnabled(event.target.checked)
+                  }
+                />
+              }
+            />
+            <SettingsField
+              label="Client certificate"
+              sub={secretStatus(
+                props.snapshot.federation.cloudflareClientCertificate.configured,
+              )}
+              control={
+                <textarea
+                  aria-label="Client certificate"
+                  rows={3}
+                  value={cloudflareClientCertificate}
+                  placeholder="PEM certificate"
+                  onChange={(event) =>
+                    setCloudflareClientCertificate(event.target.value)
+                  }
+                />
+              }
+            />
+            <SettingsField
+              label="Client private key"
+              sub={secretStatus(
+                props.snapshot.federation.cloudflareClientPrivateKey.configured,
+              )}
+              control={
+                <textarea
+                  aria-label="Client private key"
+                  rows={3}
+                  value={cloudflareClientPrivateKey}
+                  placeholder="PEM private key"
+                  onChange={(event) =>
+                    setCloudflareClientPrivateKey(event.target.value)
+                  }
+                />
+              }
+            />
+            <SettingsField
+              label="Access service auth"
+              sub="Cloudflare Access service-token gate."
+              control={
+                <input
+                  aria-label="Access service auth"
+                  type="checkbox"
+                  checked={cloudflareAccessServiceAuthEnabled}
+                  onChange={(event) =>
+                    setCloudflareAccessServiceAuthEnabled(event.target.checked)
+                  }
+                />
+              }
+            />
+            <SettingsField
+              label="Access client ID"
+              sub={secretStatus(
+                props.snapshot.federation.cloudflareAccessClientId.configured,
+              )}
+              control={
+                <input
+                  aria-label="Access client ID"
+                  type="password"
+                  value={cloudflareAccessClientId}
+                  placeholder="Cloudflare Access client ID"
+                  onChange={(event) =>
+                    setCloudflareAccessClientId(event.target.value)
+                  }
+                />
+              }
+            />
+            <SettingsField
+              label="Access client secret"
+              sub={secretStatus(
+                props.snapshot.federation.cloudflareAccessClientSecret.configured,
+              )}
+              control={
+                <input
+                  aria-label="Access client secret"
+                  type="password"
+                  value={cloudflareAccessClientSecret}
+                  placeholder="Cloudflare Access client secret"
+                  onChange={(event) =>
+                    setCloudflareAccessClientSecret(event.target.value)
+                  }
+                />
+              }
+            />
+            <SettingsField
+              label="Access sign-in"
+              sub="Cloudflare Access sign-in (Managed OAuth). Sign in from the Connect this client steps above."
+              control={
+                <input
+                  aria-label="Access sign-in"
+                  type="checkbox"
+                  checked={cloudflareAccessOAuthEnabled}
+                  onChange={(event) =>
+                    setCloudflareAccessOAuthEnabled(event.target.checked)
+                  }
+                />
+              }
+            />
+            <div className="settings-button-row">
+              <button
+                className="button button--secondary"
+                type="button"
                 disabled={props.saving}
-                onChange={(event) => setCloudflareEndpoint(event.target.value)}
-              />
-            }
-          />
-          <SettingsField
-            label="mTLS"
-            sub="Cloudflare edge certificate gate."
-            control={
-              <input
-                aria-label="mTLS"
-                type="checkbox"
-                checked={cloudflareMtlsEnabled}
-                onChange={(event) =>
-                  setCloudflareMtlsEnabled(event.target.checked)
-                }
-              />
-            }
-          />
-          <SettingsField
-            label="Client certificate"
-            sub={secretStatus(
-              props.snapshot.federation.cloudflareClientCertificate.configured,
-            )}
-            control={
-              <textarea
-                aria-label="Client certificate"
-                rows={3}
-                value={cloudflareClientCertificate}
-                placeholder="PEM certificate"
-                onChange={(event) =>
-                  setCloudflareClientCertificate(event.target.value)
-                }
-              />
-            }
-          />
-          <SettingsField
-            label="Client private key"
-            sub={secretStatus(
-              props.snapshot.federation.cloudflareClientPrivateKey.configured,
-            )}
-            control={
-              <textarea
-                aria-label="Client private key"
-                rows={3}
-                value={cloudflareClientPrivateKey}
-                placeholder="PEM private key"
-                onChange={(event) =>
-                  setCloudflareClientPrivateKey(event.target.value)
-                }
-              />
-            }
-          />
-          <SettingsField
-            label="Access service auth"
-            sub="Cloudflare Access service-token gate."
-            control={
-              <input
-                aria-label="Access service auth"
-                type="checkbox"
-                checked={cloudflareAccessServiceAuthEnabled}
-                onChange={(event) =>
-                  setCloudflareAccessServiceAuthEnabled(event.target.checked)
-                }
-              />
-            }
-          />
-          <SettingsField
-            label="Access client ID"
-            sub={secretStatus(
-              props.snapshot.federation.cloudflareAccessClientId.configured,
-            )}
-            control={
-              <input
-                aria-label="Access client ID"
-                type="password"
-                value={cloudflareAccessClientId}
-                placeholder="Cloudflare Access client ID"
-                onChange={(event) =>
-                  setCloudflareAccessClientId(event.target.value)
-                }
-              />
-            }
-          />
-          <SettingsField
-            label="Access client secret"
-            sub={secretStatus(
-              props.snapshot.federation.cloudflareAccessClientSecret.configured,
-            )}
-            control={
-              <input
-                aria-label="Access client secret"
-                type="password"
-                value={cloudflareAccessClientSecret}
-                placeholder="Cloudflare Access client secret"
-                onChange={(event) =>
-                  setCloudflareAccessClientSecret(event.target.value)
-                }
-              />
-            }
-          />
-          <div className="settings-button-row">
-            <button
-              className="button button--secondary"
-              type="button"
-              disabled={props.saving}
-              onClick={() => {
-                setActionError(undefined);
-                if (
-                  cloudflareEndpoint.trim()
-                  && !isFederationGatewayEndpointUrl(cloudflareEndpoint)
-                ) {
-                  setActionError(
-                    "Cloudflare endpoint must be a wss:// URL matching one of the gateway endpoints.",
-                  );
-                  return;
-                }
-                void saveCloudflareSettings({
-                  config: {
-                    cloudflareEndpoint: cloudflareEndpoint.trim(),
-                    cloudflareMtlsEnabled,
-                    cloudflareAccessServiceAuthEnabled,
-                  },
-                  secrets: [
-                    [
+                onClick={() => {
+                  setActionError(undefined);
+                  if (
+                    cloudflareEndpoint.trim()
+                    && !isFederationGatewayEndpointUrl(cloudflareEndpoint)
+                  ) {
+                    setActionError(
+                      "Cloudflare endpoint must be a wss:// URL matching one of the gateway endpoints.",
+                    );
+                    return;
+                  }
+                  void saveCloudflareSettings({
+                    config: {
+                      cloudflareEndpoint: cloudflareEndpoint.trim(),
+                      cloudflareMtlsEnabled,
+                      cloudflareAccessServiceAuthEnabled,
+                      cloudflareAccessOAuthEnabled,
+                    },
+                    secrets: [
+                      [
+                        "federationCloudflareClientCertificate",
+                        cloudflareClientCertificate,
+                      ],
+                      [
+                        "federationCloudflareClientPrivateKey",
+                        cloudflareClientPrivateKey,
+                      ],
+                      [
+                        "federationCloudflareAccessClientId",
+                        cloudflareAccessClientId,
+                      ],
+                      [
+                        "federationCloudflareAccessClientSecret",
+                        cloudflareAccessClientSecret,
+                      ],
+                    ],
+                    onReplaceSecret: props.onReplaceSecret,
+                    onWriteConfig: props.onWriteConfig,
+                  })
+                    .then(async () => {
+                      setCloudflareClientCertificate("");
+                      setCloudflareClientPrivateKey("");
+                      setCloudflareAccessClientId("");
+                      setCloudflareAccessClientSecret("");
+                      await props.onSettingsChanged();
+                      await loadHealth();
+                    })
+                    .catch((err: unknown) =>
+                      setActionError(
+                        err instanceof Error ? err.message : String(err),
+                      ),
+                    );
+                }}
+              >
+                Save edge policy
+              </button>
+              <button
+                className="button button--ghost"
+                type="button"
+                disabled={props.saving}
+                onClick={() => {
+                  setActionError(undefined);
+                  void Promise.all([
+                    props.onClearSecret(
                       "federationCloudflareClientCertificate",
-                      cloudflareClientCertificate,
-                    ],
-                    [
+                    ),
+                    props.onClearSecret(
                       "federationCloudflareClientPrivateKey",
-                      cloudflareClientPrivateKey,
-                    ],
-                    [
-                      "federationCloudflareAccessClientId",
-                      cloudflareAccessClientId,
-                    ],
-                    [
+                    ),
+                    props.onClearSecret("federationCloudflareAccessClientId"),
+                    props.onClearSecret(
                       "federationCloudflareAccessClientSecret",
-                      cloudflareAccessClientSecret,
-                    ],
-                  ],
-                  onReplaceSecret: props.onReplaceSecret,
-                  onWriteConfig: props.onWriteConfig,
-                })
-                  .then(async () => {
-                    setCloudflareClientCertificate("");
-                    setCloudflareClientPrivateKey("");
-                    setCloudflareAccessClientId("");
-                    setCloudflareAccessClientSecret("");
-                    await props.onSettingsChanged();
-                    await loadHealth();
-                  })
-                  .catch((err: unknown) =>
-                    setActionError(
-                      err instanceof Error ? err.message : String(err),
                     ),
-                  );
-              }}
-            >
-              Save edge policy
-            </button>
-            <button
-              className="button button--ghost"
-              type="button"
-              disabled={props.saving}
-              onClick={() => {
-                setActionError(undefined);
-                void Promise.all([
-                  props.onClearSecret(
-                    "federationCloudflareClientCertificate",
-                  ),
-                  props.onClearSecret(
-                    "federationCloudflareClientPrivateKey",
-                  ),
-                  props.onClearSecret("federationCloudflareAccessClientId"),
-                  props.onClearSecret(
-                    "federationCloudflareAccessClientSecret",
-                  ),
-                ])
-                  .then(async (cleared) => {
-                    if (cleared.some((result) => !result)) {
-                      throw new Error(
-                        "One or more Cloudflare credentials could not be cleared.",
-                      );
-                    }
-                    const written = await props.onWriteConfig({
-                      federation: {
-                        cloudflareEndpoint: "",
-                        cloudflareMtlsEnabled: false,
-                        cloudflareAccessServiceAuthEnabled: false,
-                      },
-                    });
-                    if (!written) {
-                      throw new Error(
-                        "Cloudflare edge policy could not be updated.",
-                      );
-                    }
-                    setCloudflareEndpoint("");
-                    setCloudflareMtlsEnabled(false);
-                    setCloudflareAccessServiceAuthEnabled(false);
-                    await props.onSettingsChanged();
-                    await loadHealth();
-                  })
-                  .catch((err: unknown) =>
-                    setActionError(
-                      err instanceof Error ? err.message : String(err),
-                    ),
-                  );
-              }}
-            >
-              Clear credentials
-            </button>
+                  ])
+                    .then(async (cleared) => {
+                      if (cleared.some((result) => !result)) {
+                        throw new Error(
+                          "One or more Cloudflare credentials could not be cleared.",
+                        );
+                      }
+                      const written = await props.onWriteConfig({
+                        federation: {
+                          cloudflareEndpoint: "",
+                          cloudflareMtlsEnabled: false,
+                          cloudflareAccessServiceAuthEnabled: false,
+                          cloudflareAccessOAuthEnabled: false,
+                        },
+                      });
+                      if (!written) {
+                        throw new Error(
+                          "Cloudflare edge policy could not be updated.",
+                        );
+                      }
+                      setCloudflareEndpoint("");
+                      setCloudflareMtlsEnabled(false);
+                      setCloudflareAccessServiceAuthEnabled(false);
+                      setCloudflareAccessOAuthEnabled(false);
+                      await props.onSettingsChanged();
+                      await loadHealth();
+                    })
+                    .catch((err: unknown) =>
+                      setActionError(
+                        err instanceof Error ? err.message : String(err),
+                      ),
+                    );
+                }}
+              >
+                Clear credentials
+              </button>
+            </div>
           </div>
-        </div>
-      </SettingsSection>
+        }
+      />
     </SettingsSectionStack>
   );
 }
@@ -1656,6 +1691,7 @@ async function saveCloudflareSettings(params: {
     cloudflareEndpoint: string;
     cloudflareMtlsEnabled: boolean;
     cloudflareAccessServiceAuthEnabled: boolean;
+    cloudflareAccessOAuthEnabled: boolean;
   };
   secrets: Array<[DesktopSettingsSecretName, string]>;
   onReplaceSecret: (

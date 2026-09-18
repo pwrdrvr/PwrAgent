@@ -55,7 +55,7 @@ function harness(gate: Gate = "service-token", emails: string[] = ["Operator@Exa
   });
   return { service, calls, resources, publishUrl, startConnector, verifyListener, gate,
     tamper: () => { tamper = true; }, state: () => stored,
-    connect: () => service.connect("x".repeat(40), "a".repeat(32), "b".repeat(32)),
+    connect: () => service.connect("x".repeat(40), "a".repeat(32), "b".repeat(32), gate),
     provision: () => service.provision("federation.example.com", 47830, gate, gate === "oauth" ? emails : undefined),
   };
 }
@@ -152,6 +152,18 @@ describe.each<Gate>(["service-token", "mtls"])("Cloudflare provisioning (%s)", (
     await expect(h.service.provision("federation.example.com", 47830, other))
       .rejects.toThrow("different admission gate");
   });
+});
+
+describe("Cloudflare connection permission checks", () => {
+  it.each<[Gate, string]>([["service-token", "service_tokens"], ["oauth", "service_tokens"], ["mtls", "certificates"]])(
+    "checks only the credential permission the %s gate uses",
+    async (gate, expected) => {
+      const h = harness(gate);
+      await h.connect();
+      const credentialReads = h.calls.filter((call) => /\/access\/(certificates|service_tokens)/.test(call.path));
+      expect(credentialReads.map((call) => call.path.split("/").at(-1))).toEqual([expected]);
+    },
+  );
 });
 
 describe("Cloudflare service-token admission", () => {

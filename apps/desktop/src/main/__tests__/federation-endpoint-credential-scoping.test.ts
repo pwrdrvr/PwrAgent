@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { generateFederationNoiseStaticKeyPair } from "../federation/federation-noise";
 import { DesktopFederationRuntime } from "../federation/federation-runtime";
+import { CloudflareSignInRequiredError } from "../federation/cloudflare-access-oauth";
 import type { FederationClientWebSocketClient } from "../federation/federation-transport";
 
 const metaStore = vi.hoisted(() => new Map<string, string>());
@@ -38,6 +39,17 @@ vi.mock("../federation/federation-transport", async (importOriginal) => ({
 }));
 
 const cloudflareEndpoint = vi.hoisted(() => ({ value: "" }));
+const signIn = vi.hoisted(() => ({
+  enabled: false,
+  accessToken: vi.fn(async (_endpoint: string): Promise<string> => "oauth:access-token"),
+}));
+
+vi.mock("../federation/cloudflare-access-sign-in", () => ({
+  getCloudflareAccessSignIn: () => ({
+    accessToken: signIn.accessToken,
+    invalidateAccessToken: async () => undefined,
+  }),
+}));
 
 vi.mock("../settings/desktop-settings-singleton", () => {
   const noise = generateFederationNoiseStaticKeyPair();
@@ -47,6 +59,7 @@ vi.mock("../settings/desktop-settings-singleton", () => {
         cloudflareEndpoint: cloudflareEndpoint.value,
         cloudflareMtlsEnabled: true,
         cloudflareAccessServiceAuthEnabled: true,
+        cloudflareAccessOAuthEnabled: signIn.enabled,
       }),
       resolveFederationCloudflareCredentials: async () => ({
         clientCertificate: "PEM-CERT",
@@ -82,6 +95,9 @@ describe("federation endpoint credential scoping", () => {
   beforeEach(() => {
     connectCalls.length = 0;
     cloudflareEndpoint.value = "";
+    signIn.enabled = false;
+    signIn.accessToken.mockReset();
+    signIn.accessToken.mockImplementation(async () => "oauth:access-token");
     metaStore.clear();
     metaStore.set("federation_instance_id", "pwr_client-under-test");
     metaStore.set("federation_gateway_instance_id", "gateway_one");
@@ -124,6 +140,61 @@ describe("federation endpoint credential scoping", () => {
     expect(connectCalls[0].headers).toBeUndefined();
     expect(connectCalls[0].clientCertificate).toBeUndefined();
     expect(connectCalls[0].clientPrivateKey).toBeUndefined();
+  });
+
+  it("presents a Cloudflare Access sign-in only to the designated endpoint", async () => {
+    signIn.enabled = true;
+    cloudflareEndpoint.value = "wss://federation.example.com";
+    const harness = createHarness([
+      "wss://attacker.example",
+      "wss://federation.example.com",
+    ]);
+    await harness.connectClient("wss://federation.example.com");
+    expect(connectCalls[0].headers).toMatchObject({ Authorization: "Bearer oauth:access-token" });
+    expect(signIn.accessToken).toHaveBeenCalledWith("wss://federation.example.com");
+
+    // A bearer token is as good as the person's sign-in for its lifetime; a
+    // fallback host must not even cause one to be minted.
+    signIn.accessToken.mockClear();
+    await harness.connectClient("wss://attacker.example");
+    expect(connectCalls[1].headers).toBeUndefined();
+    expect(signIn.accessToken).not.toHaveBeenCalled();
+  });
+
+  it("fails before dialing when the Cloudflare sign-in has lapsed", async () => {
+    signIn.enabled = true;
+    cloudflareEndpoint.value = "wss://federation.example.com";
+    signIn.accessToken.mockRejectedValue(new CloudflareSignInRequiredError());
+    await expect(
+      createHarness(["wss://federation.example.com"]).connectClient("wss://federation.example.com"),
+    ).rejects.toThrow("Cloudflare Access sign-in is required");
+    expect(connectCalls).toHaveLength(0);
+  });
+
+  it("walks on to a fallback endpoint when only the Cloudflare sign-in has lapsed", async () => {
+    signIn.enabled = true;
+    cloudflareEndpoint.value = "wss://federation.example.com";
+    signIn.accessToken.mockRejectedValue(new CloudflareSignInRequiredError());
+    const harness = createHarness([
+      "wss://federation.example.com",
+      "ws://192.168.1.20:47830",
+    ]) as CredentialHarness & { walkGatewayEndpoints: () => Promise<void> };
+    await harness.walkGatewayEndpoints();
+    // The Cloudflare path was tried first and refused locally; the LAN path
+    // still connected. A lapsed sign-in belongs to one endpoint, not the pairing.
+    expect(signIn.accessToken).toHaveBeenCalledTimes(1);
+    expect(connectCalls.map((call) => call.url)).toEqual(["ws://192.168.1.20:47830"]);
+  });
+
+  it("reports the lapsed sign-in when no endpoint connects", async () => {
+    signIn.enabled = true;
+    cloudflareEndpoint.value = "wss://federation.example.com";
+    signIn.accessToken.mockRejectedValue(new CloudflareSignInRequiredError());
+    const harness = createHarness([
+      "wss://federation.example.com",
+    ]) as CredentialHarness & { walkGatewayEndpoints: () => Promise<void> };
+    // The actionable failure, not "unreachable on every configured endpoint".
+    await expect(harness.walkGatewayEndpoints()).rejects.toBeInstanceOf(CloudflareSignInRequiredError);
   });
 
   it("withholds credentials from every host when several are configured and none is designated", async () => {

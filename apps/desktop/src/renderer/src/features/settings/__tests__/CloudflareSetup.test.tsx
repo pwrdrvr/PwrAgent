@@ -78,7 +78,7 @@ describe("Cloudflare setup flow", () => {
     fireEvent.click(screen.getByRole("radio", { name: /Client certificate/ }));
     fireEvent.change(screen.getByLabelText("Cloudflare public hostname"), { target: { value: "federation.example.com" } });
     fireEvent.click(screen.getByRole("button", { name: "Create protected endpoint" }));
-    await screen.findByRole("status");
+    await screen.findByText("Creating CA, Access policy, and tunnel…");
     // Reading the docs is exactly what an operator does while provisioning runs.
     expect(screen.getByRole("button", { name: "Access mTLS documentation" })).toBeEnabled();
     release();
@@ -105,6 +105,144 @@ describe("Cloudflare setup flow", () => {
     // so a provisioned endpoint must not offer to switch it.
     await waitFor(() => expect(screen.getByRole("radio", { name: /Client certificate/ })).toBeChecked());
     expect(screen.getByRole("radio", { name: /Service token/ })).toBeDisabled();
-    expect(screen.getByText(/Changing gate means recreating it/)).toBeInTheDocument();
+    expect(screen.getByText(/Changing how clients get in means recreating it/)).toBeInTheDocument();
+  });
+
+  it("saves a partial draft without connecting, validating, or enabling anything", async () => {
+    const events: CloudflareSetupRequest[] = [];
+    const empty: CloudflareSetupStatus = { connected: false, connectorInstalled: false, connectorRunning: false, clients: [] };
+    const call = vi.fn(async (request: CloudflareSetupRequest) => {
+      events.push(request);
+      return request.action === "save-draft" ? { ...empty, draft: request.draft, message: "Draft saved." } : empty;
+    });
+    const write = vi.fn(async () => true);
+    render(<CloudflareSetup api={{ configureFederationCloudflare: call } as DesktopApi}
+      listenPort="47830" onWriteConfig={write} onSettingsChanged={async () => {}} />);
+    const account = await screen.findByLabelText("Cloudflare account ID");
+    // Nothing typed yet: no draft to save, and no nagging about what is missing.
+    expect(screen.getAllByRole("button", { name: "Save draft" })[0]).toBeDisabled();
+    expect(screen.queryByText(/Incomplete\./)).toBeNull();
+
+    fireEvent.change(account, { target: { value: "not-even-an-id" } });
+    // The draft names what is still needed, in words, before anything is saved.
+    expect(screen.getByText(/Incomplete\./).parentElement).toHaveTextContent(
+      "Still needed: Zone ID, API token, cloudflared, public hostname.");
+    expect(screen.getByRole("button", { name: "Connect Cloudflare" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Create protected endpoint" })).toBeDisabled();
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Save draft" })[0]);
+    await screen.findByText("Draft saved.");
+    expect(events.filter((event) => event.action !== "status")).toEqual([
+      { action: "save-draft", draft: { accountId: "not-even-an-id", zoneId: "", hostname: "", gate: "service-token", emails: undefined } },
+    ]);
+    // Saving a draft never touches the federation listener.
+    expect(write).not.toHaveBeenCalled();
+    expect(screen.getAllByRole("button", { name: "Save draft" })[0]).toBeDisabled();
+  });
+
+  it("restores a saved draft as the starting point", async () => {
+    const call = vi.fn(async () => ({ connected: false, connectorInstalled: true, connectorRunning: false, clients: [],
+      draft: { accountId: "a".repeat(32), zoneId: "b".repeat(32), hostname: "federation.example.com", gate: "oauth" as const, emails: ["me@example.com"] } }));
+    render(<CloudflareSetup api={{ configureFederationCloudflare: call } as DesktopApi}
+      listenPort="47830" onWriteConfig={async () => true} onSettingsChanged={async () => {}} />);
+    await waitFor(() => expect(screen.getByLabelText("Cloudflare account ID")).toHaveValue("a".repeat(32)));
+    expect(screen.getByRole("radio", { name: /Sign in with an identity/ })).toBeChecked();
+    expect(screen.getByLabelText("People who can sign in")).toHaveValue("me@example.com");
+    // Unchanged since it was saved.
+    expect(screen.getAllByRole("button", { name: "Save draft" })[0]).toBeDisabled();
+    expect(screen.getByText(/Incomplete\./).parentElement).toHaveTextContent("Still needed: API token.");
+  });
+
+  it("marks exactly one stage as the current step", async () => {
+    const call = vi.fn(async () => ({ ...connected, connectorInstalled: false }));
+    const { container } = render(<CloudflareSetup api={{ configureFederationCloudflare: call } as DesktopApi}
+      listenPort="47830" onWriteConfig={async () => true} onSettingsChanged={async () => {}} />);
+    await screen.findByText("Connected · example.com");
+    const current = container.querySelectorAll('[aria-current="step"]');
+    expect(current).toHaveLength(1);
+    // Connected, so the next thing to do is install the connector.
+    expect(current[0]).toHaveTextContent("Tunnel connector");
+    expect(current[0]).toHaveTextContent("Next");
+  });
+
+  it("provisions a sign-in endpoint with its allowlist", async () => {
+    const events: CloudflareSetupRequest[] = [];
+    const call = vi.fn(async (request: CloudflareSetupRequest) => { events.push(request); return connected; });
+    render(<CloudflareSetup api={{ configureFederationCloudflare: call } as DesktopApi}
+      listenPort="47830" onWriteConfig={async () => true} onSettingsChanged={async () => {}} />);
+    await screen.findByLabelText("Cloudflare public hostname");
+    fireEvent.click(screen.getByRole("radio", { name: /Sign in with an identity/ }));
+    expect(screen.getByText(/Cloudflare marks Beta/)).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Cloudflare public hostname"), { target: { value: "federation.example.com" } });
+    // An endpoint nobody may sign in to is not a setup, so it cannot be created.
+    expect(screen.getByRole("button", { name: "Create protected endpoint" })).toBeDisabled();
+    fireEvent.change(screen.getByLabelText("People who can sign in"), { target: { value: "me@example.com, you@example.com\n" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create protected endpoint" }));
+    await waitFor(() => expect(events.some((event) => event.action === "provision")).toBe(true));
+    expect(events.find((event) => event.action === "provision")).toMatchObject({
+      gate: "oauth", emails: ["me@example.com", "you@example.com"],
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Open login methods in the dashboard" }));
+    await waitFor(() => expect(call).toHaveBeenCalledWith({ action: "open-link", link: "dash-login-methods" }));
+  });
+
+  it("says what creating the endpoint changes in the federation listener", async () => {
+    const call = vi.fn(async () => connected);
+    render(<CloudflareSetup api={{ configureFederationCloudflare: call } as DesktopApi}
+      listenPort="47830" listenHost="0.0.0.0" mode="client" onWriteConfig={async () => true} onSettingsChanged={async () => {}} />);
+    await screen.findByLabelText("Cloudflare public hostname");
+    const statement = screen.getByText(/Creating the endpoint first saves/);
+    expect(statement).toHaveTextContent("127.0.0.1:47830");
+    expect(statement).toHaveTextContent("changes from client to dual");
+    expect(statement).toHaveTextContent("moves from 0.0.0.0 to 127.0.0.1");
+  });
+
+  it("passes the chosen invite lifetime when issuing a client", async () => {
+    const events: CloudflareSetupRequest[] = [];
+    const published = { ...connected, gate: "service-token" as const, tunnelId: "t", hostname: "federation.example.com", phase: "Published" };
+    const call = vi.fn(async (request: CloudflareSetupRequest) => { events.push(request); return published; });
+    render(<CloudflareSetup api={{ configureFederationCloudflare: call } as DesktopApi}
+      listenPort="47830" onWriteConfig={async () => true} onSettingsChanged={async () => {}} />);
+    await screen.findByLabelText("Cloudflare client name");
+    fireEvent.change(screen.getByLabelText("Cloudflare client name"), { target: { value: "Travel laptop" } });
+    fireEvent.change(screen.getByLabelText("Cloudflare client transfer password"), { target: { value: "long-enough-password" } });
+    fireEvent.change(screen.getByLabelText("Invite lifetime"), { target: { value: "24" } });
+    fireEvent.click(screen.getByRole("button", { name: "Issue & save client setup" }));
+    await waitFor(() => expect(events.some((event) => event.action === "export-client")).toBe(true));
+    expect(events.find((event) => event.action === "export-client")).toMatchObject({ inviteTtlHours: 24, label: "Travel laptop" });
+  });
+
+  it("offers sign-in when a client's Cloudflare grant has lapsed, and can cancel it", async () => {
+    let finish = () => {};
+    const events: string[] = [];
+    const lapsed: CloudflareSetupStatus = { connected: false, connectorInstalled: false, connectorRunning: false, clients: [],
+      signIn: { endpoint: "wss://federation.example.com", state: "sign-in-required", signedInAt: "2026-09-01T00:00:00Z",
+        lastError: "Your Cloudflare sign-in expired or no longer passes the Access policy." } };
+    const call = vi.fn(async (request: CloudflareSetupRequest) => {
+      events.push(request.action);
+      if (request.action === "sign-in") await new Promise<void>((resolve) => { finish = resolve; });
+      return lapsed;
+    });
+    render(<CloudflareSetup api={{ configureFederationCloudflare: call } as DesktopApi}
+      listenPort="47830" onWriteConfig={async () => true} onSettingsChanged={async () => {}} />);
+    // A client-only instance opens on the half it uses, and says why it is stuck.
+    expect(await screen.findByText("Sign-in required.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Connect this client" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getAllByText("Sign-in required").length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Cancel sign-in" }));
+    await waitFor(() => expect(events).toContain("cancel-sign-in"));
+    finish();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Sign in" })).toBeEnabled());
+  });
+
+  it("keeps manual credentials inside the one Cloudflare section", async () => {
+    const call = vi.fn(async () => connected);
+    render(<CloudflareSetup api={{ configureFederationCloudflare: call } as DesktopApi}
+      listenPort="47830" onWriteConfig={async () => true} onSettingsChanged={async () => {}}
+      manual={<label>Manual endpoint field</label>} manualConfigured />);
+    await screen.findByLabelText("Cloudflare public hostname");
+    expect(screen.getByText("Enter Cloudflare credentials manually")).toBeInTheDocument();
+    expect(screen.getByText("Manual endpoint field")).toBeInTheDocument();
   });
 });

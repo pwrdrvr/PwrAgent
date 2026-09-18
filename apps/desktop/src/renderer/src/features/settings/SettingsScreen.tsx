@@ -118,8 +118,26 @@ const SETTINGS_NAV_GROUPS = new Set<SettingsSection>([
   "plugins",
   "models",
   "messaging",
+  "federation",
   "git",
 ]);
+
+/**
+ * Federation pane sections, in the order the pane renders them. Each `sub` is
+ * the `SettingsSection` `sectionId` it scrolls to. Gateway Enrollment is left
+ * out: it renders only while this instance dials a gateway, and a nav row
+ * that sometimes goes nowhere reads as broken.
+ */
+const FEDERATION_NAV_SECTIONS: ReadonlyArray<{ sub: string; label: string }> = [
+  { sub: "configuration", label: "Configuration" },
+  { sub: "encryption", label: "Encryption" },
+  { sub: "invites", label: "Invites" },
+  { sub: "connection", label: "Connection" },
+  { sub: "instances", label: "Instances" },
+  { sub: "activity", label: "Activity" },
+  { sub: "tailscale", label: "Tailscale" },
+  { sub: "cloudflare", label: "Cloudflare Access" },
+];
 
 /** Git pane sub-routes. These are `SettingsSection` `sectionId` slugs, so
  *  the nav child and the card it scrolls to share one identifier. */
@@ -429,6 +447,13 @@ export function SettingsScreen(props: {
       return GIT_NAV_CHILDREN.map((child) =>
         describeGitNavChild(child, snapshot, forgeStatuses),
       );
+    }
+    if (target === "federation") {
+      return FEDERATION_NAV_SECTIONS.map((child) => ({
+        key: child.sub,
+        label: child.label,
+        sub: child.sub,
+      }));
     }
     if (target === "messaging") {
       return [
@@ -1103,6 +1128,7 @@ function SettingsSectionBody(props: {
     return (
       <FederationSettings
         desktopApi={props.desktopApi}
+        focusSectionId={props.sub}
         saving={props.settings.saving}
         snapshot={props.snapshot}
         onClearSecret={props.settings.clearSecret}
