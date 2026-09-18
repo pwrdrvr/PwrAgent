@@ -939,6 +939,44 @@ describe("DesktopMessagingRuntime", () => {
     }]);
   });
 
+  it("observes a conversation while an editor preview watches it", async () => {
+    // Otherwise the preview shows only senders on the actor allowlist, and an
+    // operator previewing an alert channel before saving sees nothing.
+    await prepareRuntimeStore();
+    const updateObservedConversations = vi.fn();
+    const adapter = createAdapter("discord", { updateObservedConversations });
+    const { DesktopMessagingRuntime: Runtime } = await import(
+      "../messaging/messaging-runtime"
+    );
+    const { startInboundPreview, stopInboundPreview } = await import(
+      "../messaging/inbound-preview-bus"
+    );
+    const runtime = trackRuntime(new Runtime({
+      adapterFactory: () => [adapter],
+      backendBridge: createBackendBridge(),
+      config: {},
+    }));
+    await runtime.start();
+    updateObservedConversations.mockClear();
+
+    startInboundPreview("preview-alerts", {
+      provider: "discord",
+      conversationId: "1480556454498009352",
+    });
+    expect(updateObservedConversations).toHaveBeenLastCalledWith([
+      "1480556454498009352",
+    ]);
+    // Another platform's preview is not this adapter's business.
+    startInboundPreview("preview-slack", { provider: "slack", conversationId: "C1" });
+    expect(updateObservedConversations).toHaveBeenLastCalledWith([
+      "1480556454498009352",
+    ]);
+
+    stopInboundPreview("preview-alerts");
+    stopInboundPreview("preview-slack");
+    expect(updateObservedConversations).toHaveBeenLastCalledWith([]);
+  });
+
   it("keeps unmatched observed-only senders rejected", async () => {
     await prepareRuntimeStore();
     const automationInboundHandler = vi.fn(async () => true);

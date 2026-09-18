@@ -2999,3 +2999,152 @@ describe("Discord automation DM addressing", () => {
     await adapter.stop();
   });
 });
+
+/**
+ * A channel automation is fed mostly by senders who are not authorized
+ * contacts — an alert bot, a teammate. Before the observed set, every one of
+ * their messages died at the actor gate and a Discord channel automation could
+ * only ever fire for the people allowed to command the bot.
+ */
+describe("observed channels", () => {
+  const OBSERVED_THREAD_ID = "1480556454498009360";
+
+  const startObservedAdapter = async (observed: string[]) => {
+    const gateway = new TestDiscordGateway();
+    const events: MessagingInboundEvent[] = [];
+    const rejectedEvents: MessagingRejectedInboundEvent[] = [];
+    const adapter = new DiscordAdapter({
+      api: createApi(),
+      gateway,
+      config: {
+        channel: "discord",
+        botToken: "token",
+        applicationId: TEST_APPLICATION_ID,
+        authorizedActorIds: [{ id: TEST_OTHER_USER_ID, displayName: "" }],
+        authorizedGuildIds: TEST_AUTHORIZED_GUILD_IDS,
+      },
+    });
+    adapter.updateObservedConversations(observed);
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+    adapter.onInboundRejected((event) => {
+      rejectedEvents.push(event);
+    });
+    return { adapter, events, gateway, rejectedEvents };
+  };
+
+  it("forwards an unauthorized sender's message in a watched channel as observed only", async () => {
+    const { adapter, events, gateway, rejectedEvents } =
+      await startObservedAdapter([TEST_CHANNEL_ID]);
+
+    await gateway.emit({
+      op: 0,
+      t: "MESSAGE_CREATE",
+      d: messageDispatch({ authorBot: true, content: "ERROR build 4821", id: "observed-alert" }),
+    });
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        kind: "text",
+        observedOnly: true,
+        text: "ERROR build 4821",
+        actor: expect.objectContaining({ platformUserId: TEST_USER_ID, isBot: true }),
+      }),
+    ]);
+    expect(rejectedEvents).toEqual([]);
+    await adapter.stop();
+  });
+
+  it("forwards a reply in a thread under a watched channel", async () => {
+    const { adapter, events, gateway } = await startObservedAdapter([TEST_CHANNEL_ID]);
+
+    await gateway.emit({
+      op: 0,
+      t: "MESSAGE_CREATE",
+      d: {
+        ...messageDispatch({ authorBot: false, content: "same here", id: "observed-reply" }),
+        channel_id: OBSERVED_THREAD_ID,
+        channel_type: 11,
+        is_thread: true,
+        parent_id: TEST_CHANNEL_ID,
+      },
+    });
+
+    expect(events).toEqual([expect.objectContaining({ observedOnly: true })]);
+    await adapter.stop();
+  });
+
+  it("still drops an unauthorized sender in a channel nothing watches", async () => {
+    const { adapter, events, gateway } = await startObservedAdapter(["1480556454498009399"]);
+
+    await gateway.emit({
+      op: 0,
+      t: "MESSAGE_CREATE",
+      d: messageDispatch({ authorBot: false, content: "hello", id: "unwatched" }),
+    });
+
+    expect(events).toEqual([]);
+    await adapter.stop();
+  });
+
+  it("never turns an observed sender's slash command into a command", async () => {
+    // Observation is not authorization.
+    const { adapter, events, gateway } = await startObservedAdapter([TEST_CHANNEL_ID]);
+
+    await gateway.emit({
+      op: 0,
+      t: "MESSAGE_CREATE",
+      d: messageDispatch({ authorBot: false, content: "/status", id: "observed-command" }),
+    });
+
+    expect(events).toEqual([]);
+    await adapter.stop();
+  });
+
+  it("does not flag an authorized sender's message in a watched channel", async () => {
+    const { adapter, events, gateway } = await startObservedAdapter([TEST_CHANNEL_ID]);
+
+    await gateway.emit({
+      op: 0,
+      t: "MESSAGE_CREATE",
+      d: {
+        ...messageDispatch({ authorBot: false, content: "deploy", id: "authorized-in-watched" }),
+        author: { bot: false, id: TEST_OTHER_USER_ID, username: "operator" },
+      },
+    });
+
+    expect(events).toEqual([expect.objectContaining({ kind: "text", text: "deploy" })]);
+    expect(events[0]).not.toHaveProperty("observedOnly");
+    await adapter.stop();
+  });
+
+  it("keeps the server gate: a watched channel in an unauthorized server stays dropped", async () => {
+    const gateway = new TestDiscordGateway();
+    const events: MessagingInboundEvent[] = [];
+    const adapter = new DiscordAdapter({
+      api: createApi(),
+      gateway,
+      config: {
+        channel: "discord",
+        botToken: "token",
+        applicationId: TEST_APPLICATION_ID,
+        authorizedActorIds: [{ id: TEST_OTHER_USER_ID, displayName: "" }],
+        authorizedGuildIds: [{ id: "1480556454498009999", displayName: "" }],
+      },
+    });
+    adapter.updateObservedConversations([TEST_CHANNEL_ID]);
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+
+    await gateway.emit({
+      op: 0,
+      t: "MESSAGE_CREATE",
+      d: messageDispatch({ authorBot: true, content: "alert", id: "other-server" }),
+    });
+
+    expect(events).toEqual([]);
+    await adapter.stop();
+  });
+});

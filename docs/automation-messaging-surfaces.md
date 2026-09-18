@@ -12,7 +12,7 @@ webhook reachability, or ability to initiate a DM.
 | Provider | Inbound surfaces | Result destinations | History/replay implementation |
 | --- | --- | --- | --- |
 | Telegram | Authorized private chats, groups/supergroups, forum topics | Same, including contact IDs as private chats | None; live preview only |
-| Discord | Authorized 1:1 DMs, guild channels and threads | Contacts resolve through Create DM; native channels/threads deliver by channel ID | None; live preview only |
+| Discord | Authorized 1:1 DMs; text and announcement channels, and their threads, in authorized servers | Contacts resolve through Create DM; native channels/threads deliver by channel ID | None; live preview only |
 | Slack | Authorized 1:1 DMs and DM threads, channels/threads, group DMs when the group-DM access policy permits | Contacts use Slack's user-addressed DM delivery; native conversations retain their IDs | Recent top-level native conversations via `conversations.history`, subject to scopes |
 | Mattermost | Authorized 1:1 DMs and replies, authorized group DMs and replies, channels/threads | Contacts resolve through `createDirectChannel`; native conversation IDs deliver directly | None; live preview only |
 | Feishu/Lark | Authorized p2p chats and group chats | Contacts use `open_id`; group conversations use `chat_id` | None; live preview only |
@@ -26,6 +26,27 @@ allowlists or explicit group-DM policy, as well as the adapter's actor policy.
 Discord bots cannot join group DMs; the adapter rejects channel type 3 and the
 editor offers no group-DM catalog for Discord. Discord guild IDs are servers,
 not destinations. See [Discord OAuth2 documentation](https://docs.discord.com/developers/topics/oauth2).
+Because PwrAgent authorizes Discord servers rather than channels, the settings
+snapshot has no Discord channel list. The editor lists each authorized server's
+text and announcement channels from Discord's API — the same lister Messaging
+Settings uses to inspect thread permissions — and reports any server Discord
+would not list rather than showing it as empty.
+
+A Discord guild message must come from an authorized server and, before this
+change, from a sender on the actor allowlist; everything else was dropped at the
+adapter, so a channel automation could never fire for an alert bot. The Discord
+adapter now implements the observed-conversation set described in the
+[adapter contract](messaging-adapter-contract.md#observed-conversations): in a
+channel an enabled automation or an open preview watches, other senders'
+messages are forwarded `observedOnly`, and their slash commands are dropped.
+
+Only Slack and Discord forward those senders. Telegram, Mattermost, Feishu, and
+LINE still drop anyone outside the actor allowlist in a shared conversation, so
+a group automation on those providers fires only for authorized contacts —
+an alert bot posting into a Telegram group never triggers one unless it is
+authorized. Extending the observed set to each needs that platform's delivery
+rules checked first; Telegram's bot privacy mode, for one, keeps group messages
+from reaching the bot at all.
 Telegram broadcast `channel_post` updates are not subscribed to by this adapter;
 the Telegram catalog therefore lists authorized groups/supergroups, not broadcast
 channels. LINE groups and rooms use separate allowlists and preserve their native
@@ -56,6 +77,10 @@ IDs; [LINE documents both sources](https://developers.line.biz/en/docs/messaging
   reached the same target through the legacy-ID fallback above, so the same
   operator action behaved differently across providers.
 
+The observed set now also includes any conversation an open editor preview is
+watching, so a preview shows the senders the automation will see rather than
+only those on the actor allowlist.
+
 Ambient Slack group-DM and LINE group/room messages pass authorization and are
 marked `observedOnly`. The runtime sends these only to preview and matching
 automations, never ordinary bound-thread input. Existing authorization remains
@@ -72,7 +97,10 @@ live previews remain available and explicitly state that history is unavailable.
 Slack history errors (including missing scopes) remain best-effort empty results.
 
 Provider delivery errors surface as failed output actions. No live account was
-used to test blocked DMs, an unstarted Telegram bot chat, Slack scopes or group-DM
+used to test Discord channel listing or observed-channel delivery against a real
+server (including whether the application has the privileged Message Content
+intent enabled in the Developer Portal, which the adapter requests and which
+ambient channel text requires), blocked DMs, an unstarted Telegram bot chat, Slack scopes or group-DM
 access settings, Feishu tenant permissions/event subscriptions, Mattermost server
 permissions, or LINE membership and push eligibility. Native threaded Feishu
 messages are not separately normalized by this adapter; the verified Feishu

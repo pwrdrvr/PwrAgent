@@ -293,6 +293,33 @@ requires 1:1 DM semantics before comparing the contact with the inbound actor.
 Child matching uses `parentConversationId`, not a workspace/guild or thread root
 stored in `parentId`. Preview subscriptions use the same scope matcher.
 
+### Observed conversations
+
+An adapter may implement `updateObservedConversations(conversationIds)`. The
+desktop runtime pushes the conversations that enabled inbound automations
+watch, plus any conversation an open editor preview is watching, and re-pushes
+on every change. In an observed conversation that already passes the
+adapter's conversation and workspace/server gates, a message from a sender who
+fails the per-user gate is forwarded with `observedOnly: true` instead of
+dropped. Without this, an automation on a shared channel fires only for the
+people allowed to command the bot, and never for the alert bots it usually
+exists to watch.
+
+Observation is not authorization:
+
+- Conversation, workspace, and server allowlists still apply first.
+- A slash command from an observed-only sender is dropped, not forwarded.
+- The runtime sends `observedOnly` events only to the editor preview and to
+  matching automations — never to a binding, the command path, or a reply.
+
+Slack and Discord implement it. Discord matches a thread reply by the thread's
+parent channel as well as its own ID.
+
+Telegram, Mattermost, Feishu, and LINE do not, and drop a sender outside the
+actor allowlist in every shared conversation — so an automation there fires
+only for authorized contacts. LINE's own `observedOnly` flag means something
+narrower: an unaddressed group or room message from an authorized sender.
+
 See [automation messaging surface verification](automation-messaging-surfaces.md)
 for the adapter evidence and remaining account-dependent limitations.
 

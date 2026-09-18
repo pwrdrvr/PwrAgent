@@ -18,6 +18,11 @@ const MAX_PREVIEW_TEXT_CHARS = 600;
 
 const activeScopes = new Map<string, InboundPreviewScope>();
 let sink: ((message: InboundPreviewMessage) => void) | undefined;
+const scopeListeners = new Set<() => void>();
+
+function notifyScopesChanged(): void {
+  for (const listener of scopeListeners) listener();
+}
 
 /** Wire the transport that pushes preview messages to renderer windows. */
 export function setInboundPreviewSink(
@@ -31,10 +36,42 @@ export function startInboundPreview(
   scope: InboundPreviewScope,
 ): void {
   activeScopes.set(subscriptionId, scope);
+  notifyScopesChanged();
 }
 
 export function stopInboundPreview(subscriptionId: string): void {
-  activeScopes.delete(subscriptionId);
+  if (activeScopes.delete(subscriptionId)) notifyScopesChanged();
+}
+
+/** Called whenever a preview opens or closes. Returns an unsubscribe. */
+export function onInboundPreviewScopesChanged(listener: () => void): () => void {
+  scopeListeners.add(listener);
+  return () => {
+    scopeListeners.delete(listener);
+  };
+}
+
+/**
+ * Shared conversations an open preview is watching on one platform, for the
+ * adapters' observed sets. Without this, a preview only ever showed senders on
+ * the actor allowlist: an adapter forwards everyone else's messages only in
+ * conversations an ENABLED automation watches, so previewing `#alerts` before
+ * saving showed nothing from the alert bot the automation exists to catch.
+ *
+ * A contact-DM preview contributes nothing. A 1:1 DM is gated by who the
+ * sender is, not by which conversation it is in, and observing the contact's
+ * user ID would widen nothing an operator could see.
+ */
+export function activeInboundPreviewConversationIds(
+  provider: InboundPreviewScope["provider"],
+): string[] {
+  const ids = new Set<string>();
+  for (const scope of activeScopes.values()) {
+    if (scope.provider !== provider || scope.recipientUserId) continue;
+    ids.add(scope.conversationId);
+    if (scope.parentId) ids.add(scope.parentId);
+  }
+  return [...ids];
 }
 
 export function hasActiveInboundPreview(): boolean {
@@ -45,6 +82,7 @@ export function hasActiveInboundPreview(): boolean {
 export function resetInboundPreview(): void {
   activeScopes.clear();
   sink = undefined;
+  scopeListeners.clear();
 }
 
 /**

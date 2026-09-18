@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { InboundPreviewMessage } from "@pwragent/shared";
 import type { MessagingInboundEvent } from "@pwragent/messaging-interface";
 import {
+  activeInboundPreviewConversationIds,
+  onInboundPreviewScopesChanged,
   publishInboundPreview,
   resetInboundPreview,
   setInboundPreviewSink,
@@ -95,6 +97,35 @@ describe("inbound-preview-bus", () => {
     );
 
     expect(sink).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Adapters forward a sender outside the actor allowlist only in observed
+   * conversations. An open preview has to be one, or previewing `#alerts`
+   * before saving shows nothing from the alert bot the automation is for.
+   */
+  it("reports open previews' shared conversations for observation", () => {
+    const changed = vi.fn();
+    const unsubscribe = onInboundPreviewScopesChanged(changed);
+    startInboundPreview("s1", { provider: "discord", conversationId: "chan-1" });
+    startInboundPreview("s2", { provider: "telegram", conversationId: "42", parentId: "-100" });
+    // A contact DM is gated by its sender, not its conversation.
+    startInboundPreview("s3", {
+      provider: "discord",
+      conversationId: "U1",
+      conversationKind: "dm",
+      recipientUserId: "U1",
+    });
+
+    expect(activeInboundPreviewConversationIds("discord")).toEqual(["chan-1"]);
+    expect(activeInboundPreviewConversationIds("telegram")).toEqual(["42", "-100"]);
+
+    stopInboundPreview("s1");
+    // Stopping a scope that was never open is not a change.
+    stopInboundPreview("never-started");
+    expect(activeInboundPreviewConversationIds("discord")).toEqual([]);
+    expect(changed).toHaveBeenCalledTimes(4);
+    unsubscribe();
   });
 
   it("stops forwarding after the scope is removed", () => {

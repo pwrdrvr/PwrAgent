@@ -373,6 +373,13 @@ export class DiscordAdapter implements DiscordProviderAdapter {
   private readonly guildCache = new Map<string, DiscordGuildInfo>();
   private applicationId?: string;
   private readonly unauthorizedGuildLogKeys = new Set<string>();
+  // Channels an enabled inbound automation watches, pushed by the desktop
+  // runtime. In an authorized server, a message there from a sender outside
+  // the actor allowlist is forwarded flagged observedOnly instead of dropped —
+  // otherwise a channel automation fires only for authorized contacts, and an
+  // alert bot posting into `#alerts` can never trigger one. Same contract as
+  // the Slack adapter's set; empty by default.
+  private observedConversationIds = new Set<string>();
   private readonly inboundRejectedListeners = new Set<MessagingInboundRejectedListener>();
   private readonly inboundChannelMetadataListeners =
     new Set<MessagingInboundChannelMetadataListener>();
@@ -403,6 +410,10 @@ export class DiscordAdapter implements DiscordProviderAdapter {
 
   get authorizedActorIds(): readonly string[] {
     return this.options.config.authorizedActorIds.map((contact) => contact.id);
+  }
+
+  updateObservedConversations(conversationIds: readonly string[]): void {
+    this.observedConversationIds = new Set(conversationIds);
   }
 
   async updateAuthorization(update: MessagingAdapterAuthorizationUpdate): Promise<void> {
@@ -1161,18 +1172,18 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     const isPairingMessage = message.content !== undefined
       ? Boolean(extractMessagingPairingToken(message.content))
       : false;
-    if (
-      !isPairingMessage &&
-      !this.isAuthorizedMessageSource(message, {
-        actionable:
-          isPairingMessage
-          || mentionRemainder !== undefined
-          || Boolean(message.content?.startsWith("/")),
-        receipt,
-      })
-    ) {
+    const authorization = isPairingMessage
+      ? true
+      : this.isAuthorizedMessageSource(message, {
+          actionable:
+            mentionRemainder !== undefined
+            || Boolean(message.content?.startsWith("/")),
+          receipt,
+        });
+    if (authorization === false) {
       return;
     }
+    const observedOnly = authorization === "observed";
 
     const channel = this.immediateChannelFromDiscord(message.channel_id, message.guild_id, {
       channelType: message.channel_type,
@@ -1232,6 +1243,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
         sourceUrl,
         text: normalizedContent,
         ...(mentionRemainder !== undefined ? { botMention: true } : {}),
+        ...(observedOnly ? { observedOnly: true } : {}),
       };
       await this.dispatchWithBackgroundChannelEnrichment({
         channelId: message.channel_id,
@@ -1252,6 +1264,11 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     const commandMatch = mentionRemainder === undefined
       ? /^\/([A-Za-z0-9_]+)(?:\s+(.*))?$/.exec(message.content)
       : undefined;
+    // Observation is not authorization: a command from a sender who only
+    // passed the observed-channel gate must not execute.
+    if (observedOnly && commandMatch) {
+      return;
+    }
     const event = {
       id: `discord:message:${message.id}`,
       kind: commandMatch ? "command" : "text",
@@ -1266,6 +1283,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
         : {
             text: normalizedContent ?? "",
             ...(mentionRemainder !== undefined ? { botMention: true } : {}),
+            ...(observedOnly ? { observedOnly: true } : {}),
           }),
       ...receipt,
       routingState,
@@ -1591,10 +1609,18 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     return false;
   }
 
+  /**
+   * `"observed"` admits a message for automations and the editor preview only.
+   * It is reachable just for a guild message in an authorized server, in a
+   * channel (or a thread under one) that an enabled automation watches, from
+   * a sender outside the actor allowlist. The runtime keeps observed traffic
+   * off every reply and command path, and `handleMessageCreate` drops an
+   * observed slash command before it becomes an event.
+   */
   private isAuthorizedMessageSource(
     message: DiscordMessageCreateDispatch,
     options: { actionable: boolean; receipt: MessagingInboundReceipt },
-  ): boolean {
+  ): boolean | "observed" {
     if (
       !this.isAuthorizedDiscordConversation({
         channelType: message.channel_type,
@@ -1612,6 +1638,9 @@ export class DiscordAdapter implements DiscordProviderAdapter {
       return false;
     }
     if (!this.isAuthorizedActor(message.author.id)) {
+      if (message.guild_id && this.isObservedChannel(message)) {
+        return "observed";
+      }
       if (!message.guild_id || options.actionable) {
         this.options.logger?.warn?.("discord inbound ignored unauthorized actor", {
           actorId: message.author.id,
@@ -1662,6 +1691,12 @@ export class DiscordAdapter implements DiscordProviderAdapter {
       return false;
     }
     return true;
+  }
+
+  private isObservedChannel(message: DiscordMessageCreateDispatch): boolean {
+    return this.observedConversationIds.has(message.channel_id)
+      || (message.parent_id !== undefined
+        && this.observedConversationIds.has(message.parent_id));
   }
 
   private isAuthorizedActor(actorId: string): boolean {

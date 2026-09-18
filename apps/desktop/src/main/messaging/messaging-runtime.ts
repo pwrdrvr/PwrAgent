@@ -92,8 +92,10 @@ import { resolvePwragentRoot } from "../profile";
 import { getDesktopFederationRuntime } from "../federation/federation-runtime";
 import { getDesktopMessagingActivityLog } from "./desktop-messaging-activity-log";
 import {
+  activeInboundPreviewConversationIds,
   hasActiveInboundPreview,
   inboundEventToPreviewMessage,
+  onInboundPreviewScopesChanged,
   publishInboundPreview,
 } from "./inbound-preview-bus";
 import { getDesktopMessagingPairingStore } from "./desktop-messaging-pairing-store";
@@ -435,6 +437,7 @@ export type CredentialValidationRequest =
 export class DesktopMessagingRuntime implements MessagingAgentToolService {
   private adapters: DesktopMessagingAdapter[] = [];
   private automationsChangedUnsubscribe?: () => void;
+  private previewScopesChangedUnsubscribe?: () => void;
   private controllers: MessagingController[] = [];
   private readonly runningAdapters = new Map<
     MessagingChannelKind,
@@ -588,6 +591,8 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
   ): Promise<void> {
     this.automationsChangedUnsubscribe?.();
     this.automationsChangedUnsubscribe = undefined;
+    this.previewScopesChangedUnsubscribe?.();
+    this.previewScopesChangedUnsubscribe = undefined;
     if (!this.started) {
       if (!options.preserveStartupFailures) {
         this.clearRetainedStartupFailures();
@@ -977,13 +982,20 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     }
   }
 
-  /** Re-push the observed-conversation sets to every running adapter. */
+  /**
+   * Re-push the observed-conversation sets to every running adapter: what
+   * enabled automations watch, plus whatever an open editor preview is
+   * watching, so the preview shows the senders the automation will see.
+   */
   pushObservedConversations(): void {
     for (const adapter of this.adapters) {
       try {
-        adapter.updateObservedConversations?.(
-          this.collectAutomationObservedConversations(adapter.channel),
-        );
+        adapter.updateObservedConversations?.([
+          ...new Set([
+            ...this.collectAutomationObservedConversations(adapter.channel),
+            ...activeInboundPreviewConversationIds(adapter.channel),
+          ]),
+        ]);
       } catch (error) {
         messagingLog.warn("failed to push observed conversations", {
           platform: adapter.channel,
@@ -2002,6 +2014,11 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     const running = [...this.runningAdapters.values()];
     this.adapters = running.map((record) => record.adapter);
     this.controllers = running.map((record) => record.controller);
+    // Subscribed outside the try below: previews work with the automation
+    // service unavailable, and a preview's observation must not depend on it.
+    this.previewScopesChangedUnsubscribe ??= onInboundPreviewScopesChanged(
+      () => this.pushObservedConversations(),
+    );
     // The automation service may be unavailable (unit harnesses, an app
     // instance with automations disabled); messaging must start regardless —
     // observed sets simply stay empty.
