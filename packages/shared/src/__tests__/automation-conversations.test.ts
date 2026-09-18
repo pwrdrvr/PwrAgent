@@ -74,6 +74,40 @@ describe("automation conversation helpers", () => {
     ).toBe("a, b, c +1 more");
   });
 
+  it("attributes a Slack thread reply to the thread, in either order", () => {
+    // Slack reports a reply with the channel's ID and the thread in parentId.
+    const channel = {
+      channel: "slack" as const,
+      conversationId: "C1",
+      conversationKind: "channel" as const,
+    };
+    const thread = {
+      channel: "slack" as const,
+      conversationId: "C1",
+      conversationKind: "thread" as const,
+      parentId: "1712345678.000100",
+    };
+    const reply = {
+      actor: { platformUserId: "U1" },
+      provider: "slack" as const,
+      conversationId: "C1",
+      conversationKind: "thread" as const,
+      parentId: "1712345678.000100",
+      parentConversationId: "C1",
+    };
+    expect(findAutomationConversationIndexForMessage([channel, thread], reply)).toBe(1);
+    expect(findAutomationConversationIndexForMessage([thread, channel], reply)).toBe(0);
+    // A top-level post is the channel's alone.
+    expect(
+      findAutomationConversationIndexForMessage([thread, channel], {
+        actor: { platformUserId: "U1" },
+        provider: "slack",
+        conversationId: "C1",
+        conversationKind: "channel",
+      }),
+    ).toBe(1);
+  });
+
   it("finds the watched conversation a message belongs to", () => {
     const watched = [
       { channel: "slack" as const, conversationId: "C1", conversationKind: "channel" as const },

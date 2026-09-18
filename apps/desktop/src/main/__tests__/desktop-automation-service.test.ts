@@ -1752,6 +1752,51 @@ describe("multi-source inbound automations", () => {
     expect(response.sources).toHaveLength(3);
   });
 
+  it("names no automation-wide reason when every source is refused differently", async () => {
+    const service = new DesktopAutomationService({ registry, store });
+    const created = await service.create({
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Nothing replayable",
+      taskPrompt: "Investigate.",
+      triggers: [
+        {
+          id: "contact",
+          kind: "inbound_message",
+          conversation: {
+            channel: "slack",
+            conversationId: "U1",
+            conversationKind: "dm",
+            recipientUserId: "U1",
+          },
+        },
+        {
+          id: "telegram-group",
+          kind: "inbound_message",
+          conversation: {
+            channel: "telegram",
+            conversationId: "-100",
+            conversationKind: "channel",
+          },
+        },
+      ],
+      outputActions: [{ id: "agent-context", kind: "agent_context" }],
+    });
+
+    const response = await service.listReplayCandidates(
+      { automationId: created.automation.id },
+      { fetchRecent: vi.fn(async () => []), supportsHistory: (p) => p === "slack" },
+    );
+
+    // One sentence would blame one of them for both; each source says its own.
+    expect(response.supported).toBe(false);
+    expect(response.unsupportedReason).toBeUndefined();
+    expect(response.sources.map((source) => source.unsupportedReason)).toEqual([
+      "contact_dm",
+      "provider",
+    ]);
+  });
+
   it("replays a candidate as the trigger that owns its conversation", async () => {
     const service = new DesktopAutomationService({ registry, store });
     const automation = await createMultiSourceAutomation(service);
@@ -1768,6 +1813,61 @@ describe("multi-source inbound automations", () => {
       matchedTriggerName: "text contains \"p99\"",
       conversation: { conversationId: "C-METRICS", title: "f-metrics" },
     });
+  });
+
+  it("replays \"anyway\" as the trigger the candidate was listed under", async () => {
+    // A Slack DM saved as a channel: history lists its messages (as "no
+    // match"), but the matcher's conversation rule rejects a DM for a
+    // channel trigger, so ownership can only come from the listing.
+    const service = new DesktopAutomationService({ registry, store });
+    const created = await service.create({
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Mislabeled DM",
+      taskPrompt: "Investigate.",
+      triggers: [
+        {
+          id: "dm-as-channel",
+          kind: "inbound_message",
+          conversation: {
+            channel: "slack",
+            conversationId: "D123",
+            conversationKind: "channel",
+          },
+        },
+      ],
+      outputActions: [{ id: "agent-context", kind: "agent_context" }],
+    });
+    const message = {
+      ...previewMessage("D123", "d1", "ERROR"),
+      conversationKind: "dm" as const,
+    };
+
+    await expect(
+      service.replayInbound({ automationId: created.automation.id, message }),
+    ).rejects.toThrow(/not from a conversation this automation watches/);
+    await service.replayInbound({
+      automationId: created.automation.id,
+      message,
+      triggerId: "dm-as-channel",
+    });
+
+    const [run] = store.listRunsForAutomation(created.automation.id, 1);
+    expect(run?.source?.matchedTriggerId).toBe("dm-as-channel");
+  });
+
+  it("refuses a trigger id the automation no longer has", async () => {
+    const service = new DesktopAutomationService({ registry, store });
+    const automation = await createMultiSourceAutomation(service);
+
+    await expect(
+      service.replayInbound({
+        automationId: automation.id,
+        message: previewMessage("C-METRICS", "m1", "p99 high"),
+        triggerId: "removed-since-listing",
+      }),
+    ).rejects.toThrow(/no longer watches that conversation/);
+    expect(store.listRunsForAutomation(automation.id)).toEqual([]);
   });
 
   it("refuses to replay a message from a conversation the automation does not watch", async () => {

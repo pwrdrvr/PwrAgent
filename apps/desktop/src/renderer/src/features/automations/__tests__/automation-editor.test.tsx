@@ -2500,6 +2500,90 @@ describe("AutomationEditor with several watched conversations", () => {
     );
   });
 
+  it("keeps the direct-message caption when the only source is a contact chip", async () => {
+    const automation = multiSourceAutomation();
+    automation.triggers = [
+      {
+        id: "inbound-message:slack:dm:U0AVERY",
+        kind: "inbound_message",
+        conversation: {
+          channel: "slack",
+          conversationId: "U0AVERY",
+          conversationKind: "dm",
+          recipientUserId: "U0AVERY",
+          title: "Avery",
+        },
+        conditionGroup: senderFilter,
+      },
+    ];
+    render(
+      <AutomationEditor
+        desktopApi={slackCatalog()}
+        mode={{ kind: "edit", automation }}
+        onCancel={() => undefined}
+        onSubmit={vi.fn(async () => undefined)}
+      />,
+    );
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Watch another conversation" }),
+    );
+    // The fields are empty now; the contact lives only in the chips.
+    expect(
+      screen.getByText("every direct message from Avery", {
+        selector: ".automation-flow__caption",
+      }),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps a source's stored id even when a new source derives the same one", async () => {
+    // B's stored id is what the new manual C9 source would derive. B is
+    // unchanged, so B keeps it and the NEW source is the one that yields.
+    const automation = multiSourceAutomation();
+    automation.triggers = [
+      automation.triggers[0]!,
+      {
+        id: "inbound-message:slack::C9",
+        kind: "inbound_message",
+        name: "sender is spinnaker",
+        conversation: {
+          channel: "slack",
+          conversationId: "C0METRICS",
+          conversationKind: "channel",
+          title: "f-metrics",
+        },
+        conditionGroup: senderFilter,
+      },
+    ];
+    const onSubmit = vi.fn(async () => undefined);
+    render(
+      <AutomationEditor
+        desktopApi={slackCatalog()}
+        mode={{ kind: "edit", automation }}
+        onCancel={() => undefined}
+        onSubmit={onSubmit}
+      />,
+    );
+
+    await pickManualEntry("Conversation", /Enter Channel ID manually/);
+    fireEvent.change(screen.getByLabelText("Channel ID"), {
+      target: { value: "C9" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(submittedTriggers(onSubmit)).toEqual([
+      expect.objectContaining({
+        id: "inbound-message:slack::C9:2",
+        conversation: expect.objectContaining({ conversationId: "C9" }),
+      }),
+      expect.objectContaining({
+        id: "inbound-message:slack::C9",
+        conversation: expect.objectContaining({ conversationId: "C0METRICS" }),
+      }),
+    ]);
+  });
+
   it("previews live messages from every watched conversation and says which one", async () => {
     let previewListener: ((message: InboundPreviewMessage) => void) | undefined;
     const desktopApi = {

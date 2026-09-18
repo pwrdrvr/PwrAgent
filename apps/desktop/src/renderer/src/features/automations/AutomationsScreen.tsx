@@ -9,6 +9,7 @@ import {
 } from "react";
 import type {
   AutomationDetail,
+  AutomationInboundMessageTriggerDefinition,
   AutomationReplayCandidate,
   AutomationReplaySource,
   AutomationReplayUnsupportedReason,
@@ -16,10 +17,7 @@ import type {
   MessagingChannelKind,
   NavigationThreadSummary,
 } from "@pwragent/shared";
-import {
-  buildThreadIdentityKey,
-  formatAutomationConversationLabel,
-} from "@pwragent/shared";
+import { buildThreadIdentityKey } from "@pwragent/shared";
 import {
   CODEX_AGENT_THREAD_CREATION_NOTE,
   canChangeExistingThreadAgentDesignation,
@@ -41,6 +39,7 @@ import {
   AutomationEditor,
   type AutomationEditorSubmit,
   INBOUND_PROVIDER_LABELS,
+  formatInboundSourceLabel,
 } from "./AutomationEditor";
 import { AutomationRunHistoryItem } from "./ThreadAutomationsPanel";
 import { useAutomationRuns, useAutomations } from "./useAutomations";
@@ -303,20 +302,17 @@ function AutomationTableRow(props: {
   const [replayCandidates, setReplayCandidates] =
     useState<ListAutomationReplayCandidatesResponse>();
   const [replayError, setReplayError] = useState<string>();
-  const inboundSourceCount = props.automation.triggers.filter(
-    (trigger) => trigger.kind === "inbound_message",
-  ).length;
-  const inboundTriggered = inboundSourceCount > 0;
-  // Absent on a response from a build that predates per-source replay; the
-  // single-source path below then reads the automation's own trigger.
-  const replaySources = replayCandidates?.sources ?? [];
-  const firstInboundTrigger = props.automation.triggers.find(
-    (trigger) => trigger.kind === "inbound_message",
+  const inboundTriggers = props.automation.triggers.filter(
+    (trigger): trigger is AutomationInboundMessageTriggerDefinition =>
+      trigger.kind === "inbound_message",
   );
-  const firstInboundChannel =
-    firstInboundTrigger?.kind === "inbound_message"
-      ? firstInboundTrigger.conversation.channel
-      : undefined;
+  const inboundSourceCount = inboundTriggers.length;
+  const inboundTriggered = inboundSourceCount > 0;
+  // Main and renderer ship together, so `sources` is always present in
+  // practice. The fallback only keeps a refusal readable: with no sources,
+  // the single-source branch below names the automation's own provider.
+  const replaySources = replayCandidates?.sources ?? [];
+  const firstInboundChannel = inboundTriggers[0]?.conversation.channel;
 
   const toggleReplay = async (): Promise<void> => {
     if (replayOpen) {
@@ -338,10 +334,12 @@ function AutomationTableRow(props: {
 
   const replayMessage = async (
     candidate: AutomationReplayCandidate,
+    triggerId: string | undefined,
   ): Promise<void> => {
     await props.desktopApi?.replayAutomationInbound?.({
       automationId: props.automation.id,
       message: candidate.message,
+      ...(triggerId ? { triggerId } : {}),
     });
     setReplayOpen(false);
     await props.onReplayed?.();
@@ -508,7 +506,9 @@ function AutomationTableRow(props: {
                 candidates={replaySources[0]?.candidates ?? []}
                 emptyLabel="No recent messages in the trigger conversation."
                 onReplay={(candidate) =>
-                  void runAction("replay", () => replayMessage(candidate))
+                  void runAction("replay", () =>
+                    replayMessage(candidate, replaySources[0]?.triggerId),
+                  )
                 }
               />
             )
@@ -528,7 +528,9 @@ function AutomationTableRow(props: {
                       candidates={source.candidates}
                       emptyLabel="No recent messages here."
                       onReplay={(candidate) =>
-                        void runAction("replay", () => replayMessage(candidate))
+                        void runAction("replay", () =>
+                          replayMessage(candidate, source.triggerId),
+                        )
                       }
                     />
                   ) : (
@@ -730,13 +732,11 @@ function formatReplaySourceLabel(
   source: AutomationReplaySource,
   sources: AutomationReplaySource[],
 ): string {
-  const label = formatAutomationConversationLabel(source.conversation);
-  const mixed = sources.some(
-    (other) => other.conversation.channel !== source.conversation.channel,
-  );
-  return mixed
-    ? `${INBOUND_PROVIDER_LABELS[source.conversation.channel] ?? source.conversation.channel} · ${label}`
-    : label;
+  return formatInboundSourceLabel(source.conversation, {
+    withProvider: sources.some(
+      (other) => other.conversation.channel !== source.conversation.channel,
+    ),
+  });
 }
 
 function formatAutomationAgentLabel(props: {

@@ -849,6 +849,8 @@ describe("replay across watched conversations", () => {
       expect(desktopApi.replayAutomationInbound).toHaveBeenCalledWith({
         automationId: "automation-2",
         message: expect.objectContaining({ id: "m1", conversationId: "C-METRICS" }),
+        // The group it was listed under, so the main process need not guess.
+        triggerId: "inbound-message:slack::C-METRICS",
       }),
     );
   });

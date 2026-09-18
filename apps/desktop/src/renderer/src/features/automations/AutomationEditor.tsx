@@ -1049,7 +1049,11 @@ export function AutomationEditor(props: AutomationEditorProps) {
       ?? storedGroupTitle
       ?? (inboundGroupId.trim()
         || (inboundSources[0]
-          ? formatAutomationConversationLabel(inboundSources[0])
+          // The caption already says "direct message from" for a contact, so
+          // it takes the bare name rather than the "(DM)" list label.
+          ? inboundSources[0].recipientUserId
+            ? inboundSources[0].title ?? inboundSources[0].recipientUserId
+            : formatAutomationConversationLabel(inboundSources[0])
           : "this conversation"));
 
   const inboundFilterSummary =
@@ -1889,10 +1893,11 @@ export function AutomationEditor(props: AutomationEditorProps) {
                             className="automation-sender-picker__chips"
                           >
                             {alsoWatching.map((source) => {
-                              const label = formatSourceChipLabel(
-                                source,
-                                inboundProvider,
-                              );
+                              // The provider is named only where it differs
+                              // from the one selected above.
+                              const label = formatInboundSourceLabel(source, {
+                                withProvider: source.channel !== inboundProvider,
+                              });
                               return (
                                 <li
                                   className="chip automation-sender-chip"
@@ -1942,7 +1947,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
           caption={
             triggerKind === "schedule"
               ? `fires ${selectedScheduleSummary} — no filtering or batching needed`
-              : !multipleSources && isContactSelection(inboundGroupId)
+              : inboundSources.length === 1 && inboundSources[0]?.recipientUserId
                 // A contact trigger matches on the sender, not the room.
                 ? `every direct message from ${inboundConversationLabel}`
                 : `every message in ${inboundConversationLabel}`
@@ -3397,17 +3402,18 @@ function buildTriggerConfig(params: {
 }
 
 /**
- * An "Also watching" chip. The provider is named only when it differs from
- * the one selected above — otherwise every chip would repeat it.
+ * A watched conversation's name, prefixed with its provider when the list it
+ * appears in spans providers. Callers decide `withProvider`: naming it on every
+ * entry of a single-provider list repeats itself and says nothing.
  */
-function formatSourceChipLabel(
+export function formatInboundSourceLabel(
   source: AutomationMessagingConversationSnapshot,
-  selectedProvider: MessagingChannelKind,
+  options: { withProvider: boolean },
 ): string {
   const label = formatAutomationConversationLabel(source);
-  return source.channel === selectedProvider
-    ? label
-    : `${INBOUND_PROVIDER_LABELS[source.channel] ?? source.channel} · ${label}`;
+  return options.withProvider
+    ? `${INBOUND_PROVIDER_LABELS[source.channel] ?? source.channel} · ${label}`
+    : label;
 }
 
 /** Which watched conversation a previewed message arrived in. */
@@ -3490,13 +3496,17 @@ function assignInboundTriggerIds(
     const key = automationConversationKey(trigger.conversation);
     if (!storedIdByKey.has(key)) storedIdByKey.set(key, trigger.id);
   }
-  const used = new Set<string>();
-  return sources.map((conversation) => {
-    const base =
-      storedIdByKey.get(automationConversationKey(conversation))
-      ?? buildAutomationInboundTriggerId(conversation);
-    // Distinct conversations derive distinct ids, so this only guards a
-    // stored id that happens to equal another source's derived one.
+  // Every kept id is claimed before any new one is derived, so a derived id
+  // that happens to equal a kept one is the one that yields — never the
+  // source that already had it.
+  const stored = sources.map((conversation) =>
+    storedIdByKey.get(automationConversationKey(conversation)),
+  );
+  const used = new Set(stored.filter((id): id is string => id !== undefined));
+  return sources.map((conversation, index) => {
+    const kept = stored[index];
+    if (kept !== undefined) return kept;
+    const base = buildAutomationInboundTriggerId(conversation);
     let id = base;
     for (let suffix = 2; used.has(id); suffix += 1) id = `${base}:${suffix}`;
     used.add(id);

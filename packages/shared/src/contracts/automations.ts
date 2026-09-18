@@ -375,9 +375,13 @@ export function automationConversationKey(
  * Index of the watched conversation a message belongs to, or -1. Membership is
  * {@link matchesAutomationConversation} — the live matcher's rule — so this
  * can never attribute a message to a source the matcher would not fire for.
- * When several sources claim it, an exact conversation (or a contact's DM)
- * beats a parent, so a thread watched in its own right is not claimed by the
- * channel it lives in.
+ *
+ * When several sources claim it, the most specific wins, whatever the order:
+ * a contact's DMs or an exact match on a scoped conversation (a Slack thread,
+ * a Telegram topic), then an exact match, then a parent. Slack reports a
+ * thread reply with the CHANNEL's ID and the thread in `parentId`, so the
+ * conversation ID alone calls it exact for both the channel and a thread
+ * watched in its own right; the parent comparison is what tells them apart.
  *
  * Shared so the replay path (which trigger owns this message?) and the
  * editor's live preview (which source is this row from?) give one answer.
@@ -397,7 +401,8 @@ export function findAutomationConversationIndexForMessage(
   >,
 ): number {
   const actual = { ...message, channel: message.provider };
-  let childMatch = -1;
+  let best = -1;
+  let bestRank = 0;
   for (const [index, conversation] of conversations.entries()) {
     if (
       !matchesAutomationConversation(
@@ -408,15 +413,24 @@ export function findAutomationConversationIndexForMessage(
     ) {
       continue;
     }
-    if (
-      conversation.recipientUserId
-      || message.conversationId === conversation.conversationId
-    ) {
-      return index;
+    const exact =
+      message.conversationId === conversation.conversationId
+      && (
+        conversation.parentId === undefined
+        || message.parentId === conversation.parentId
+      );
+    const rank =
+      conversation.recipientUserId || (exact && conversation.parentId !== undefined)
+        ? 3
+        : exact
+          ? 2
+          : 1;
+    if (rank > bestRank) {
+      best = index;
+      bestRank = rank;
     }
-    if (childMatch < 0) childMatch = index;
   }
-  return childMatch;
+  return best;
 }
 
 /**
@@ -1279,6 +1293,14 @@ export type ListAutomationReplayCandidatesResponse = {
 export type ReplayAutomationInboundRequest = {
   automationId: string;
   message: InboundPreviewMessage;
+  /**
+   * The trigger whose source the candidate was listed under
+   * ({@link AutomationReplaySource.triggerId}). Authoritative when present:
+   * "Replay anyway" deliberately offers messages the trigger's own
+   * conversation rule rejects, so ownership cannot be re-derived from the
+   * message.
+   */
+  triggerId?: string;
 };
 
 export type CreateAutomationRequest = AutomationAgentAssignment & {

@@ -777,15 +777,23 @@ export class DesktopAutomationService {
     if (!automation.triggers.some((candidate) => candidate.kind === "inbound_message")) {
       throw new Error("This automation has no inbound trigger to replay.");
     }
-    // The candidate came from one specific conversation; replay it as that
-    // conversation's trigger, not whichever inbound trigger is listed first.
-    const trigger = resolveInboundTriggerForMessage(
-      automation.triggers,
-      request.message,
-    );
+    // The candidate came from one specific source; replay it as that source's
+    // trigger, not whichever inbound trigger is listed first. The listing
+    // names the source, and that is taken as given: a "Replay anyway"
+    // candidate can be one the trigger's conversation rule rejects (a Slack
+    // DM saved as a channel), so no trigger would claim it by conversation.
+    const trigger = request.triggerId
+      ? automation.triggers.find(
+          (candidate): candidate is AutomationInboundMessageTriggerDefinition =>
+            candidate.kind === "inbound_message"
+            && candidate.id === request.triggerId,
+        )
+      : resolveInboundTriggerForMessage(automation.triggers, request.message);
     if (!trigger) {
       throw new Error(
-        "This message is not from a conversation this automation watches.",
+        request.triggerId
+          ? "This automation no longer watches that conversation."
+          : "This message is not from a conversation this automation watches.",
       );
     }
     const result = await this.scheduler.replayInboundRun({
