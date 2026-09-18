@@ -71,6 +71,37 @@ afterEach(() => {
 });
 
 describe("sqlite write metrics", () => {
+  it("replaces project workspace and clears project runtime in one commit", async () => {
+    await store.replaceWorkspaceLinkedDirectory({
+      backend: "codex", threadId: "move-project", gitBranch: "old-branch",
+      directory: { id: "pwragent-handoff:codex:move-project", label: "old", path: "/old", kind: "local" },
+    });
+    await store.setThreadCodexEnvironmentRuntime({
+      backend: "codex", threadId: "move-project",
+      codexEnvironmentRuntime: {
+        environmentId: "old-env", environmentName: "Old project", executionTarget: "local",
+        cwd: "/old", shellEnvironment: { PATH: "/old/bin" },
+      },
+    });
+    const { writes } = await measureSqliteWrites(async () => {
+      await store.replaceWorkspaceLinkedDirectory({
+        backend: "codex", threadId: "move-project", gitBranch: "main", resetProjectState: true,
+        directory: { id: "pwragent-handoff:codex:move-project", label: "demo", path: "/demo", kind: "local" },
+      });
+    });
+    expectSqliteWriteBudget({
+      scenario: "move-thread-project",
+      note: "one operator project move replaces the workspace and clears project runtime atomically",
+      writes,
+    });
+    const overlay = await store.getThreadOverlayState({ backend: "codex", threadId: "move-project" });
+    expect(overlay?.codexEnvironmentRuntime).toBeUndefined();
+    expect(overlay?.gitBranch).toBe("main");
+    expect(overlay?.extraLinkedDirectories).toEqual([
+      { id: "pwragent-handoff:codex:move-project", label: "demo", path: "/demo", kind: "local" },
+    ]);
+  });
+
   it("finalizes usage in the successor transaction and ignores stale writes", async () => {
     const first: ThreadUsageLineRecord = {
       backend: "codex", provider: "openai", threadId: "sealed-thread",

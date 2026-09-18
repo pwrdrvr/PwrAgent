@@ -1346,6 +1346,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
   }
 
   async replaceWorkspaceLinkedDirectory(params: {
+    resetProjectState?: boolean;
     backend: ThreadOverlayState["backend"];
     directory: LinkedDirectorySummary;
     gitBranch?: string;
@@ -1371,6 +1372,12 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       gitBranch: params.gitBranch ?? current.gitBranch,
       observedGitBranch: params.gitBranch ?? current.observedGitBranch,
       extraLinkedDirectories: nextDirectories,
+      ...(params.resetProjectState ? {
+        codexEnvironmentRuntime: undefined,
+        retainedBranchDriftPairs: undefined,
+        gitBranch: params.gitBranch,
+        observedGitBranch: params.gitBranch,
+      } : {}),
     };
     this.putThread(threadKey, nextState);
     return nextState;

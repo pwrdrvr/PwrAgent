@@ -13750,6 +13750,32 @@ describe("Composer", () => {
     expect(screen.queryByRole("listbox", { name: "Commands" })).not.toBeInTheDocument();
   });
 
+  it("moves a scratch conversation to a project without requiring a source Git branch", async () => {
+    const onHandoffThreadWorkspace = vi.fn(async () => undefined);
+    render(
+      <Composer
+        backends={[]}
+        onHandoffThreadWorkspace={onHandoffThreadWorkspace}
+        skills={[]}
+        thread={{
+          id: "scratch-thread", title: "Research", titleSource: "explicit",
+          source: "acp:grok", projectKey: "/scratch/research", linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+    fireEvent.click(screen.getByLabelText("Workspace mode"));
+    expect(screen.getByRole("menuitem", { name: "Handoff to New Worktree" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Move to Project" }));
+    expect(screen.getByRole("dialog", { name: "Move to Project" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Move" })).toBeDisabled();
+    fireEvent.change(screen.getByLabelText("Destination project"), { target: { value: "/projects/demo" } });
+    fireEvent.click(screen.getByRole("button", { name: "Move" }));
+    await waitFor(() => expect(onHandoffThreadWorkspace).toHaveBeenCalledWith({
+      direction: "to-project", targetPath: "/projects/demo",
+    }));
+  });
+
   it("shows thread access in the composer and opens workspace handoff", async () => {
     const onSetExecutionMode = vi.fn(async () => undefined);
     const onHandoffThreadWorkspace = vi.fn(async () => undefined);
@@ -14260,14 +14286,9 @@ describe("Composer", () => {
       />
     );
 
-    const workspaceMode = screen.queryByLabelText("Workspace mode");
-    if (workspaceMode) {
-      fireEvent.click(workspaceMode);
-    }
-
-    expect(
-      screen.queryByRole("menuitem", { name: "Handoff to New Worktree" })
-    ).not.toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText("Workspace mode"));
+    expect(screen.getByRole("menuitem", { name: "Handoff to New Worktree" })).toBeDisabled();
+    expect(screen.getByRole("menuitem", { name: "Move to Project" })).toBeEnabled();
 
     fireEvent.click(screen.getByRole("button", { name: "VS Code" }));
     expect(openApplication).toHaveBeenCalledWith({

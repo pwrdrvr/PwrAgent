@@ -272,6 +272,13 @@
     "rowsChanged": 10,
     "statements": 10
   },
+  "move-thread-project": {
+    "commits": 1,
+    "note": "one operator project move replaces the workspace and clears project runtime atomically",
+    "observedWalBytes": 16480,
+    "rowsChanged": 1,
+    "statements": 1
+  },
   "native-subagent-discovery-backfill": {
     "commits": 2,
     "note": "one missing native child pricing row and parent sub-agent card discovered from the thread list",

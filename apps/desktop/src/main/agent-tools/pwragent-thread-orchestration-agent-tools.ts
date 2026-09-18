@@ -352,7 +352,7 @@ function inputSchemaForOperation(
           },
           direction: {
             type: "string",
-            enum: THREAD_WORKSPACE_HANDOFF_DIRECTIONS,
+            enum: THREAD_WORKSPACE_HANDOFF_DIRECTIONS.filter((direction) => direction !== "to-project"),
             description:
               "`local-to-worktree` is the default and first supported direction. `worktree-to-local` is reserved for compatible backends and may be rejected until implemented.",
           },

@@ -71,6 +71,64 @@ afterEach(async () => {
 });
 
 describe("GitWorkspaceHandoffService", () => {
+  it("moves a scratch thread to another project without touching either checkout", async () => {
+    const source = await createRepo();
+    const target = await createRepo();
+    await writeFile(path.join(source, "notes.txt"), "source changes");
+    await writeFile(path.join(target, "README.md"), "destination changes");
+    const before = await Promise.all([git(source, ["status", "--porcelain"]), git(target, ["status", "--porcelain"])]);
+    const service = new GitWorkspaceHandoffService();
+    const result = await service.handoff({
+      backend: "acp:grok",
+      threadId: "existing-conversation",
+      direction: "to-project",
+      targetPath: target,
+      now: 1000,
+    });
+    expect(result).toMatchObject({
+      threadId: "existing-conversation",
+      direction: "to-project",
+      workMode: "local",
+      targetPath: toForwardSlashes(await realpath(target)),
+      branch: "feature/handoff",
+    });
+    expect(result.archivedSourceWorktree).toBeUndefined();
+    expect(await Promise.all([git(source, ["status", "--porcelain"]), git(target, ["status", "--porcelain"])])).toEqual(before);
+    expect(await readFile(path.join(source, "notes.txt"), "utf8")).toBe("source changes");
+    expect(await readFile(path.join(target, "README.md"), "utf8")).toBe("destination changes");
+  });
+
+  it("resolves an existing destination worktree without creating or archiving one", async () => {
+    const repo = await createRepo();
+    const target = path.join(repo, ".worktrees", "destination");
+    await git(repo, ["worktree", "add", "--detach", target, "HEAD"]);
+    const result = await new GitWorkspaceHandoffService().handoff({
+      backend: "codex", threadId: "thread-1", direction: "to-project", targetPath: target,
+    });
+    expect(result.linkedDirectory).toMatchObject({
+      path: toForwardSlashes(await realpath(repo)),
+      worktreePath: toForwardSlashes(await realpath(target)),
+      kind: "worktree",
+    });
+    expect(result.branch).toBe("HEAD");
+  });
+
+  it("rejects missing, non-Git, and non-root destination directories", async () => {
+    const repo = await createRepo();
+    const service = new GitWorkspaceHandoffService();
+    const move = (targetPath?: string) => service.handoff({
+      backend: "codex", threadId: "thread-1", direction: "to-project", targetPath,
+    });
+    await expect(move()).rejects.toThrow("absolute");
+    await expect(move("relative")).rejects.toThrow("absolute");
+    await expect(move(path.join(repo, "missing"))).rejects.toThrow();
+    await expect(move(path.dirname(repo))).rejects.toThrow("Git project");
+    await expect(move(path.join(repo, "README.md"))).rejects.toThrow("existing directory");
+    await expect(move(path.join(repo, ".git"))).rejects.toThrow("Git project");
+    await mkdir(path.join(repo, "subdir"));
+    await expect(move(path.join(repo, "subdir"))).rejects.toThrow("root");
+  });
+
   it("moves a dirty local branch to a new worktree and leaves local on the selected branch", async () => {
     const repoPath = await createRepo();
     await writeFile(path.join(repoPath, "README.md"), "dirty local\n", "utf8");

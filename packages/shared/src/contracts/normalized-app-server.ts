@@ -950,6 +950,7 @@ export type ArchiveWorktreeResponse = {
 export const THREAD_WORKSPACE_HANDOFF_DIRECTIONS = [
   "local-to-worktree",
   "worktree-to-local",
+  "to-project",
 ] as const;
 
 export type ThreadWorkspaceHandoffDirection =
@@ -977,6 +978,8 @@ export type HandoffThreadWorkspaceRequest = {
   federationTarget?: FederationTarget;
   threadId: ThreadIdentifier;
   direction: ThreadWorkspaceHandoffDirection;
+  /** Existing destination project directory for to-project; no files are transferred. */
+  targetPath?: string;
   strategy?: ThreadWorkspaceHandoffStrategy;
   /** Repository/local checkout path that owns the worktree relationship. */
   repositoryPath?: string;

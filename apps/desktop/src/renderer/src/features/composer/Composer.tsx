@@ -2855,6 +2855,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     useState<LocalHandoffStrategy>("detached-changes");
   const [leaveLocalBranch, setLeaveLocalBranch] = useState("");
   const [newLocalBranch, setNewLocalBranch] = useState("");
+  const [projectTargetPath, setProjectTargetPath] = useState("");
   const [handoffError, setHandoffError] = useState<string | undefined>();
   const [handoffSubmitting, setHandoffSubmitting] = useState(false);
   const [sending, setSendingState] = useState(false);
@@ -9560,10 +9561,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     [sourceBranch, props.directory],
   );
   const branchOptions = leaveLocalBranchOptions.map((option) => option.name);
-  const canHandoffThreadWorkspace = Boolean(
+  const canMoveThreadProject = Boolean(
     props.thread &&
       threadWorkspace &&
-      isThreadWorkspaceHandoffEligible({ sourceBranch, threadWorkspace }) &&
       props.onHandoffThreadWorkspace &&
       props.thread.workspaceHandoff?.available !== false &&
       !sending &&
@@ -9575,6 +9575,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       !props.pendingUserInputActive &&
       !handoffSubmitting
   );
+
+  const canHandoffThreadWorkspace = canMoveThreadProject
+    && isThreadWorkspaceHandoffEligible({ sourceBranch, threadWorkspace });
 
   useEffect(() => {
     if (activeTurnId) {
@@ -9588,6 +9591,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     setWorkspaceMenuOpen(false);
     setHandoffError(undefined);
     setHandoffDialog(direction);
+    setProjectTargetPath("");
     if (direction === "local-to-worktree") {
       setLocalHandoffStrategy("detached-changes");
       setLeaveLocalBranch(branchOptions[0] ?? "");
@@ -9607,6 +9611,14 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         handoffDialog === "local-to-worktree"
           ? localHandoffStrategy
           : undefined;
+      if (handoffDialog === "to-project") {
+        await props.onHandoffThreadWorkspace({
+          direction: "to-project",
+          targetPath: projectTargetPath.trim(),
+        });
+        setHandoffDialog(undefined);
+        return;
+      }
       await props.onHandoffThreadWorkspace({
         direction: handoffDialog!,
         ...(handoffStrategy ? { strategy: handoffStrategy } : {}),
@@ -9660,7 +9672,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
 
   const handoffDisabled =
     handoffSubmitting ||
-    !sourceBranch ||
+    (handoffDialog === "to-project" ? !projectTargetPath.trim() : !sourceBranch) ||
     (handoffDialog === "local-to-worktree" &&
       ((localHandoffStrategy === "move-branch" && !leaveLocalBranch) ||
         (localHandoffStrategy === "new-branch" && !newLocalBranch.trim())));
@@ -10108,37 +10120,77 @@ export const Composer = memo(function Composer(props: ComposerProps) {
           <div className="workspace-handoff-modal">
             <div
               aria-label={
-                handoffDialog === "local-to-worktree"
-                  ? "Handoff to New Worktree"
-                  : "Handoff to Local"
+                handoffDialog === "to-project"
+                  ? "Move to Project"
+                  : handoffDialog === "local-to-worktree"
+                    ? "Handoff to New Worktree"
+                    : "Handoff to Local"
               }
               aria-modal="true"
               className="workspace-handoff-dialog"
               role="dialog"
             >
               <h2>
-                {handoffDialog === "local-to-worktree"
-                  ? "Handoff to New Worktree"
-                  : "Handoff to Local"}
+                {handoffDialog === "to-project"
+                  ? "Move to Project"
+                  : handoffDialog === "local-to-worktree"
+                    ? "Handoff to New Worktree"
+                    : "Handoff to Local"}
               </h2>
               <p>
-                {handoffDialog === "local-to-worktree"
-                  ? "Choose how this thread should move into a new worktree."
-                  : "Move this worktree branch back to Local. Dirty tracked and non-ignored files will be stashed and applied in Local, then the old worktree will be archived."}
+                {handoffDialog === "to-project"
+                  ? "Continue this conversation in another Git project. Files and branches stay in their current locations."
+                  : handoffDialog === "local-to-worktree"
+                    ? "Choose how this thread should move into a new worktree."
+                    : "Move this worktree branch back to Local. Dirty tracked and non-ignored files will be stashed and applied in Local, then the old worktree will be archived."}
               </p>
-              <dl className="workspace-handoff-dialog__summary">
-                <div>
-                  <dt>
-                    {handoffDialog === "worktree-to-local" && sourceBranch === "HEAD"
-                      ? "Detached HEAD to move"
-                      : handoffDialog === "local-to-worktree" &&
-                          localHandoffStrategy === "detached-changes"
-                        ? "Current branch"
-                        : "Branch to move"}
-                  </dt>
-                  <dd>{sourceBranch ?? "Unknown branch"}</dd>
-                </div>
-              </dl>
+              {handoffDialog === "to-project" ? (
+                <>
+                  <ProjectPicker
+                    value={props.directories?.find((directory) => directory.path === projectTargetPath)}
+                    directories={props.directories ?? []}
+                    disabled={handoffSubmitting}
+                    nativePickingDisabled={Boolean(filesystemFederationTarget)}
+                    onSelect={(directory) => setProjectTargetPath(directory.path ?? "")}
+                    onPickFromDisk={props.desktopApi?.pickDirectoryFromDisk && !filesystemFederationTarget
+                      ? () => {
+                          void props.desktopApi!.pickDirectoryFromDisk!().then((result) => {
+                            if (!result.canceled) setProjectTargetPath(result.path);
+                          }).catch((error: unknown) => {
+                            setHandoffError(error instanceof Error ? error.message : String(error));
+                          });
+                        }
+                      : undefined}
+                  />
+                  <label className="workspace-handoff-dialog__field">
+                    Destination project
+                    <input
+                      aria-label="Destination project"
+                      className="workspace-handoff-dialog__text-input"
+                      disabled={handoffSubmitting}
+                      placeholder="Absolute path to a Git checkout"
+                      spellCheck={false}
+                      type="text"
+                      value={projectTargetPath}
+                      onChange={(event) => setProjectTargetPath(event.target.value)}
+                    />
+                  </label>
+                </>
+              ) : (
+                <dl className="workspace-handoff-dialog__summary">
+                  <div>
+                    <dt>
+                      {handoffDialog === "worktree-to-local" && sourceBranch === "HEAD"
+                        ? "Detached HEAD to move"
+                        : handoffDialog === "local-to-worktree" &&
+                            localHandoffStrategy === "detached-changes"
+                          ? "Current branch"
+                          : "Branch to move"}
+                    </dt>
+                    <dd>{sourceBranch ?? "Unknown branch"}</dd>
+                  </div>
+                </dl>
+              )}
               {handoffDialog === "local-to-worktree" ? (
                 <>
                   <div
@@ -10252,9 +10304,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                   dirty non-ignored changes on top.
                 </p>
               ) : null}
-              <p className="workspace-handoff-dialog__note">
-                Ignored files are not moved by handoff.
-              </p>
+              {handoffDialog !== "to-project" ? (
+                <p className="workspace-handoff-dialog__note">
+                  Ignored files are not moved by handoff.
+                </p>
+              ) : null}
               {handoffError ? (
                 <p className="workspace-handoff-dialog__error">{handoffError}</p>
               ) : null}
@@ -10275,7 +10329,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                     void submitHandoff();
                   }}
                 >
-                  {handoffSubmitting ? "Handing off..." : "Handoff"}
+                  {handoffSubmitting ? "Handing off..." : handoffDialog === "to-project" ? "Move" : "Handoff"}
                 </button>
               </div>
             </div>
@@ -11744,8 +11798,8 @@ export const Composer = memo(function Composer(props: ComposerProps) {
           {props.launchpad &&
           (props.onSelectDirectoryFromPicker || props.onPickAndRegisterDirectory) ? (
             // Project picker (issue #223). Only render in the launchpad
-            // surface — once a thread exists, the directory binding is
-            // immutable. The current directory shows as the trigger
+            // surface. Existing threads move through the workspace menu.
+            // The current directory shows as the trigger
             // value when the launchpad is anchored to an actual
             // directory; the synthesized "workspace:new-thread"
             // launchpad reads as "No selected project" instead.
@@ -11880,7 +11934,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                 aria-haspopup="menu"
                 aria-label="Workspace mode"
                 className="composer-dropdown__button"
-                disabled={!canHandoffThreadWorkspace}
+                disabled={!canMoveThreadProject}
                 type="button"
                 value={threadWorkspace.mode}
                 onClick={() => setWorkspaceMenuOpen((open) => !open)}
@@ -11914,6 +11968,16 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                     {threadWorkspace.mode === "worktree"
                       ? "Handoff to Local"
                       : "Handoff to New Worktree"}
+                  </button>
+                  <button
+                    className="composer-dropdown__option"
+                    disabled={!canMoveThreadProject}
+                    role="menuitem"
+                    type="button"
+                    onClick={() => openHandoffDialog("to-project")}
+                  >
+                    <span aria-hidden="true" className="composer-dropdown__check" />
+                    Move to Project
                   </button>
                 </div>
               ) : null}
