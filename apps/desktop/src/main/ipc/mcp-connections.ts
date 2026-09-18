@@ -384,6 +384,9 @@ export function disposeMcpConnectionIpcHandlers(): void {
   ipcMain.removeHandler(MCP_CONNECTION_SET_ENABLED_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_SET_THREAD_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_READ_THREAD_CHANNEL);
+  ipcMain.removeHandler(MCP_CONNECTION_DESCRIBE_THREAD_CHANNEL);
+  ipcMain.removeHandler(MCP_CONNECTION_UPDATE_CHANNEL);
+  ipcMain.removeHandler(MCP_CONNECTION_PROBE_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_PWRSNAP_STATUS_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_PWRSNAP_CONNECT_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_PWRSNAP_OPEN_CHANNEL);
