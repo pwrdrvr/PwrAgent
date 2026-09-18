@@ -39,7 +39,7 @@
       },
       {
         "command": "/pwragent_status",
-        "description": "show the current binding and controls",
+        "description": "show binding and controls; /status handoff opens workspace moves",
         "should_escape": false
       },
       {
