@@ -49,6 +49,23 @@ const fullCapabilities: FederationCapability[] = [
 ];
 
 describe("useFederationThreadEventSubscriptions", () => {
+  it("supports multiple visible transcript panes and removes their demand when hidden", () => {
+    const selected = remoteThread({ capabilities: fullCapabilities, id: "A", instanceId: "owner_one" });
+    const visible = remoteThread({ capabilities: fullCapabilities, id: "B", instanceId: "owner_one" });
+    const background = remoteThread({ capabilities: fullCapabilities, id: "C", instanceId: "owner_one" });
+    const build = (visibleThreads: NavigationThreadSummary[]) => buildFederationThreadEventSubscriptions({
+      selectedThread: selected,
+      threads: [selected, visible, background],
+      visibleThreads,
+    })[0]!;
+    expect(build([visible, visible]).eventClassSelections?.transcript).toEqual({
+      kind: "threads", threads: [{ backend: "codex", threadId: "A" }, { backend: "codex", threadId: "B" }],
+    });
+    expect(build([]).eventClassSelections?.transcript).toEqual({
+      kind: "threads", threads: [{ backend: "codex", threadId: "A" }],
+    });
+  });
+
   it("does not subscribe other pins on the selected owner to detail payloads", () => {
     const selected = remoteThread({ capabilities: fullCapabilities, id: "A", instanceId: "owner_one" });
     const background = remoteThread({ capabilities: fullCapabilities, id: "B", instanceId: "owner_one" });

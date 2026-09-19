@@ -174,6 +174,7 @@ type ThreadSessionEntry = {
   hydratedInitialHistoryLimit?: number;
   hydratedUpdatedAt?: number;
   hydratedStreamRecoveryVersion?: number;
+  hydrationPendingInteraction?: Pick<ThreadSessionEntry, "pendingRequest" | "pendingUserInput" | "pendingMcpInteraction">;
   initialLoadDurationMs?: number;
   interacted: boolean;
   lastTouchedAt: number;
@@ -4609,7 +4610,6 @@ export function useThreadSessionState(params: {
   const inFlightHydrationsRef = useRef(new Map<string, number>());
   const streamRecoveryVersionsRef = useRef(new Map<string, number>());
   const remoteDetailInterestRef = useRef<string | undefined>(undefined);
-  const continuousRemoteInterestsRef = useRef(new Set<string>());
   const retainedRemoteThreadsRef = useRef(params.retainedRemoteThreads ?? []);
   retainedRemoteThreadsRef.current = params.retainedRemoteThreads ?? [];
   const managesRemoteRetentionRef = useRef(false);
@@ -4809,6 +4809,11 @@ export function useThreadSessionState(params: {
         failedHydrationVersion: undefined,
         lastTouchedAt: Date.now(),
         loading: true,
+        hydrationPendingInteraction: {
+          pendingRequest: current.pendingRequest,
+          pendingUserInput: current.pendingUserInput,
+          pendingMcpInteraction: current.pendingMcpInteraction,
+        },
         // A latest hydration supersedes any older-page read for the same
         // thread. Its request-version bump makes that page response stale, so
         // release the loading state here instead of waiting for a response
@@ -4895,7 +4900,16 @@ export function useThreadSessionState(params: {
             current.response,
             Boolean(current.loadedHistory),
           );
-          const hydratedPendingRequest = response.pendingRequest;
+          // Remote snapshots also report the absence of pending interactions.
+          // Preserve newer live state if a request changed while this read was in flight.
+          const pendingAtRead = current.hydrationPendingInteraction;
+          const preserveLivePendingInteraction = federationTarget?.scope === "remote"
+            && (current.pendingRequest !== pendingAtRead?.pendingRequest
+              || current.pendingUserInput !== pendingAtRead?.pendingUserInput
+              || current.pendingMcpInteraction !== pendingAtRead?.pendingMcpInteraction);
+          const reconcilePendingInteraction = federationTarget?.scope === "remote"
+            && !preserveLivePendingInteraction;
+          const hydratedPendingRequest = preserveLivePendingInteraction ? undefined : response.pendingRequest;
           const hydratedPendingUserInput =
             hydratedPendingRequest && isRequestUserInputNotification(hydratedPendingRequest)
               ? createQuestionnaireState(hydratedPendingRequest)
@@ -4913,6 +4927,16 @@ export function useThreadSessionState(params: {
             || hydratedPendingMcpInteraction
             || hydratedApprovalRequest
           );
+          const nextPendingInteraction = {
+            pendingRequest: reconcilePendingInteraction || hydratedPendingInteraction
+              ? hydratedApprovalRequest : current.pendingRequest,
+            pendingUserInput: reconcilePendingInteraction || hydratedPendingInteraction
+              ? hydratedPendingUserInput : current.pendingUserInput,
+            pendingMcpInteraction: reconcilePendingInteraction || hydratedPendingInteraction
+              ? hydratedPendingMcpInteraction : current.pendingMcpInteraction,
+          };
+          const clearedPendingInteraction = hasPendingInteraction(current)
+            && !hasPendingInteraction({ ...current, ...nextPendingInteraction });
           const hydratedPendingTurnId = hydratedPendingRequest
             ? readNotificationTurnId(hydratedPendingRequest)
             : undefined;
@@ -4957,7 +4981,7 @@ export function useThreadSessionState(params: {
           const shouldClearStaleThinking =
             responseThreadStatus === "idle"
             && thinkingReasons.length > 0
-            && !hasPendingInteraction(current)
+            && !hasPendingInteraction({ ...current, ...nextPendingInteraction })
             && !hydratedPendingInteraction
             && !ownUpdateStillSettling
             && !reviewUpdateStillSettling
@@ -5070,12 +5094,8 @@ export function useThreadSessionState(params: {
             pendingAssistantMessage: shouldClearStaleThinking
               ? undefined
               : current.pendingAssistantMessage,
-            pendingMcpInteraction: hydratedPendingInteraction
-              ? hydratedPendingMcpInteraction
-              : current.pendingMcpInteraction,
-            pendingRequest: hydratedPendingInteraction
-              ? hydratedApprovalRequest
-              : current.pendingRequest,
+            ...nextPendingInteraction,
+            hydrationPendingInteraction: undefined,
             pendingStatusText: hydratedPendingUserInput
               ? "Waiting for input"
               : hydratedPendingMcpInteraction
@@ -5084,10 +5104,9 @@ export function useThreadSessionState(params: {
                   ? "Waiting for approval"
                   : shouldClearStaleThinking
                     ? undefined
-                    : current.pendingStatusText,
-            pendingUserInput: hydratedPendingInteraction
-              ? hydratedPendingUserInput
-              : current.pendingUserInput,
+                    : clearedPendingInteraction
+                      ? backendReportedActive ? "Thinking" : undefined
+                      : current.pendingStatusText,
             response: responseWithRetainedTail,
             staleThinkingRecheckAt:
               federationTarget?.scope !== "remote" && (ownUpdateStillSettling || reviewUpdateStillSettling)
@@ -5161,11 +5180,11 @@ export function useThreadSessionState(params: {
     if (remoteDetailInterestRef.current !== remoteDetailInterest) {
       remoteDetailInterestRef.current = remoteDetailInterest;
       if (remoteDetailInterest
-        && !continuousRemoteInterestsRef.current.has(remoteDetailInterest)
         && (sessions[remoteDetailInterest] || inFlightHydrationsRef.current.has(remoteDetailInterest))) {
         // Another window can preserve the process-wide subscription while
         // this window misses events. Renewed local interest must catch up
         // independently of owner acknowledgements or navigation timestamps.
+        // Recent snapshots are cached without maintaining a transcript subscription.
         // Initial interest already gets an initial read. Giving it a recovery
         // version before its session exists lets Strict Mode's mount replay
         // prune that version and incorrectly invalidate the in-flight read.
@@ -5173,10 +5192,6 @@ export function useThreadSessionState(params: {
           (streamRecoveryVersionsRef.current.get(remoteDetailInterest) ?? 0) + 1);
       }
     }
-    // Read suspension also covers the health probe on every owner switch. It
-    // does not stop our retained subscriptions or the global event listener.
-    // Real disconnects/gaps invalidate these baselines through stream recovery.
-    continuousRemoteInterestsRef.current = new Set(JSON.parse(retainedRemoteKeysJson));
     if (!thread || !threadKey) {
       return;
     }

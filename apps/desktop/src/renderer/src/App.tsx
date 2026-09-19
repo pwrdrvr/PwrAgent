@@ -1533,7 +1533,6 @@ function DesktopAppShell(props: {
     enabled: true,
     selectedThread: navigation.selectedThread,
     threads: navigation.threads,
-    retainedRemoteThreads: recentRemoteThreads,
   });
   const selectedThreadFederationTarget =
     navigation.selectedThread?.federation?.ref.target;
