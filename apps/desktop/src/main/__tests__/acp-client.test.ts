@@ -89,7 +89,7 @@ class KimiConfigOptionTransport extends FakeAcpAgentTransport {
     return this.model === "kimi-code/k3" ? ["low", "high", "max"] : ["on"];
   }
 
-  private configOptions(): Array<Record<string, unknown>> {
+  configOptions(): Array<Record<string, unknown>> {
     const levels = this.levels().includes(this.thinking)
       ? this.levels()
       : [...this.levels(), this.thinking];
@@ -1959,6 +1959,46 @@ describe("AcpAgentClient", () => {
     expect(
       store.getSession("acp:kimi", session.sessionId)?.acpRuntime?.configValues,
     ).toMatchObject({ thinking: "on" });
+  });
+
+  it("forgets a session's thought levels when the agent changes its options", async () => {
+    // The agent can change a session's model on its own. The menu the last
+    // reply reported is then stale, and must not refuse a level the new
+    // model offers.
+    const transport = new KimiConfigOptionTransport();
+    const client = new AcpAgentClient({
+      backendId: "acp:kimi",
+      store,
+      transport,
+      now: () => 1000,
+    });
+
+    await client.initialize();
+    const session = await client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+    });
+    transport.model = "kimi-code/k3";
+    transport.emitSessionUpdate("kimi-session", {
+      sessionUpdate: "config_option_update",
+      configOptions: transport.configOptions(),
+    });
+
+    await client.setRuntimeOption({
+      sessionId: session.sessionId,
+      source: "configOption",
+      optionId: "thinking",
+      value: "high",
+    });
+    expect(transport.requests.at(-1)).toEqual({
+      method: "session/set_config_option",
+      params: {
+        sessionId: "kimi-session",
+        configId: "thinking",
+        value: "high",
+      },
+    });
+    expect(transport.thinking).toBe("high");
   });
 
   it("keeps requested ACP config-option mode when response reports stale current mode", async () => {

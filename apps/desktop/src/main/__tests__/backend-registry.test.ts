@@ -51207,6 +51207,7 @@ script = "printf setup"
         preferredReasoningEffort: "provider-default",
       },
     });
+    expect(acpClient.setRuntimeOption).toHaveBeenCalled();
     for (const [params] of acpClient.setRuntimeOption.mock.calls) {
       expect(params).not.toMatchObject({ optionId: "thinking" });
       expect(params).not.toHaveProperty("reasoningEffort", "low");

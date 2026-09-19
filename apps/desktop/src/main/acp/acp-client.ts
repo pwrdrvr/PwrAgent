@@ -916,7 +916,9 @@ export class AcpAgentClient {
       reasoningEffort: params.reasoningEffort,
     });
     if (write.unofferedThoughtLevel) {
-      acpClientLog.info("skipped a thought level the session's model does not offer", {
+      // Debug, not info: a composer effort the model does not offer is
+      // retried by every turn start, so this can repeat once per turn.
+      acpClientLog.debug("skipped a thought level the session's model does not offer", {
         backendId: this.options.backendId,
         source: params.source,
         value:
