@@ -23516,14 +23516,26 @@ describe("MessagingController", () => {
         writes,
       });
       expect(harness.getNavigationQueryPage).toHaveBeenLastCalledWith(expect.objectContaining({
-        pageSize: 2, federationTarget: { scope: "remote", instanceId: "peer" },
+        pageSize: 1, federationTarget: { scope: "remote", instanceId: "peer" },
       }));
-      const next = findChoice(harness.delivered.at(-1), "handoff:projects");
+      const first = harness.delivered.at(-1);
+      if (first?.kind !== "project_picker") throw new Error("Expected project picker");
+      const next = first.page.actions.find((action) => action.label === "Next")!;
       expect(next.label).toBe("Next");
       await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: next.id, value: next.value }));
       expect(harness.getNavigationQueryPage).toHaveBeenLastCalledWith(expect.objectContaining({
         cursor: expect.any(String), federationTarget: { scope: "remote", instanceId: "peer" },
       }));
+      const second = harness.delivered.at(-1);
+      if (second?.kind !== "project_picker") throw new Error("Expected project picker");
+      expect(second.page.pageIndex).toBe(1);
+      const choice = second.page.actions.find((action) => action.id === "handoff:select-project")!;
+      await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: choice.id, value: choice.value }));
+      const back = findAction(harness.delivered.at(-1), "handoff:projects");
+      await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: back.id, value: back.value }));
+      expect(harness.delivered.at(-1)).toMatchObject({ kind: "project_picker", page: { pageIndex: 1 } });
+      await harness.controller.handleInboundEvent({ ...buildTextEvent("back"), id: "previous-project-page" });
+      expect(harness.delivered.at(-1)).toMatchObject({ kind: "project_picker", page: { pageIndex: 0 } });
       expect(harness.handoffThreadWorkspace).not.toHaveBeenCalled();
     } finally {
       harness.controller.dispose();
@@ -23558,8 +23570,8 @@ describe("MessagingController", () => {
       protocol: 2, query: { kind: "messaging-projects" }, pageSize: 8,
     }));
     const picker = harness.delivered.at(-1);
-    if (!picker || picker.kind !== "single_select") throw new Error("Expected project picker");
-    const choice = picker.choices.find((candidate) => candidate.label.includes("Demo"))!;
+    if (!picker || picker.kind !== "project_picker") throw new Error("Expected project picker");
+    const choice = picker.page.actions.find((candidate) => candidate.label.includes("Demo"))!;
     expect(choice).toBeDefined();
     if (buttons) {
       await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: choice.id, value: choice.value }));

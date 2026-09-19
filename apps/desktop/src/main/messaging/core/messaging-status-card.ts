@@ -1,3 +1,5 @@
+import { buildProjectPageIntent, projectPickerPageActions, FOOTER_ROW } from "./messaging-resume-browser";
+import type { MessagingBrowsePage } from "./messaging-browse-query-pool";
 import type {
   AppServerBackendKind,
   BackendModelOption,
@@ -10,6 +12,7 @@ import type {
 } from "@pwragent/shared";
 import type {
   MessagingBindingRecord,
+  MessagingProjectPickerIntent,
   MessagingConfirmationIntent,
   MessagingJsonValue,
   MessagingResponseMode,
@@ -1226,41 +1229,35 @@ export function buildHandoffProjectPickerIntent(params: {
   context: MessagingWorkspaceHandoffContext;
   createdAt: number;
   id: string;
-  projects: { label: string; path: string }[];
-  nextCursor?: string;
-}): MessagingSingleSelectIntent {
-  const choices: MessagingSurfaceAction[] = params.projects.map((project, index) => ({
+  page: MessagingBrowsePage;
+}): MessagingProjectPickerIntent {
+  const page = params.page;
+  const itemActions: MessagingSurfaceAction[] = page.projects.map((project, index) => ({
     id: "handoff:select-project",
-    label: `${index + 1}. ${project.label}`,
+    label: `${page.pageIndex * page.pageSize + index + 1}. ${project.label} (${project.counts.total})`,
     fallbackText: String(index + 1),
-    style: "secondary",
-    priority: 100 + index,
-    value: { ...handoffValue(params.context), direction: "to-project", targetPath: project.path },
+    style: "primary",
+    value: { ...handoffValue(params.context), direction: "to-project", targetPath: project.path!, pageIndex: page.pageIndex },
   }));
-  const prompt = [
-    "Move to Project",
-    "Choose a destination on this thread's owning instance. Files and branches stay in place.",
-    ...params.projects.map((project, index) => `${index + 1}. ${project.label} — ${project.path}`),
-    params.projects.length === 0 ? "No eligible projects on this page." : undefined,
-  ].filter(Boolean).join("\n");
-  return {
-    id: params.id, kind: "single_select", bindingId: params.binding.id,
-    createdAt: params.createdAt,
-    delivery: { mode: params.binding.statusSurface ? "update" : "present", fallback: "present_new" },
+  const controls: MessagingSurfaceAction[] = [
+    ...projectPickerPageActions({ pageIndex: page.pageIndex, hasNext: page.hasNext, actionId: "handoff:projects" }),
+    { id: "status:handoff", label: "Handoff", fallbackText: "handoff", style: "navigation", layout: { row: FOOTER_ROW } },
+    { id: "handoff:cancel", label: "Cancel", fallbackText: "cancel", style: "secondary", layout: { row: FOOTER_ROW } },
+  ];
+  const totalPages = Math.max(page.pageIndex + 1 + Number(page.hasNext), Math.ceil(page.totalItems / page.pageSize));
+  return buildProjectPageIntent({
+    id: params.id, bindingId: params.binding.id, createdAt: params.createdAt,
     targetSurface: params.binding.statusSurface,
-    prompt,
-    fallbackText: `${prompt}\nReply with a number, ${params.nextCursor ? "Next, " : ""}Back, or Cancel.`,
-    choices: applyActionCapabilityLimits([
-      ...choices,
-      ...(params.nextCursor ? [{
-        id: "handoff:projects", label: "Next", fallbackText: "next",
-        style: "secondary" as const, priority: 3, value: { cursor: params.nextCursor },
-      }] : []),
-      { id: "status:handoff", label: "Back", fallbackText: "back", style: "secondary", priority: 1 },
-      { id: "handoff:cancel", label: "Cancel", fallbackText: "cancel", style: "secondary", priority: 2 },
-    ], params.capabilityProfile && capabilityProfileSupportsActionCount(params.capabilityProfile, 4)
-      ? params.capabilityProfile : undefined),
-  };
+    prompt: [
+      `Choose a project for this conversation. Page ${page.pageIndex + 1}/${totalPages}.`,
+      "Tap a project to continue there. Files and branches stay in place.",
+      ...page.notes,
+      page.projects.length === 0 ? "No eligible projects on this page." : undefined,
+    ].filter(Boolean).join("\n"),
+    page: { items: page.projects, actions: [], pageIndex: page.pageIndex, pageSize: page.pageSize,
+      totalItems: page.totalItems },
+    itemActions, controls,
+  });
 }
 
 export function buildHandoffConfirmationIntent(params: {
@@ -1271,6 +1268,7 @@ export function buildHandoffConfirmationIntent(params: {
   id: string;
   leaveLocalBranch?: string;
   targetPath?: string;
+  projectPageIndex?: number;
   strategy?: HandoffThreadWorkspaceRequest["strategy"];
 }): MessagingConfirmationIntent {
   const direction =
@@ -1338,7 +1336,7 @@ export function buildHandoffConfirmationIntent(params: {
           fallbackText: "back",
           style: "secondary",
           priority: 2,
-          value: handoffValue(params.context),
+          value: { ...handoffValue(params.context), ...(params.targetPath ? { pageIndex: params.projectPageIndex ?? 0 } : {}) },
         },
         {
           id: "handoff:cancel",

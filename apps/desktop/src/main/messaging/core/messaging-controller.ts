@@ -12412,23 +12412,25 @@ export class MessagingController {
       await this.deliverHandoffUnavailable(binding, event, "Project selection is unavailable. Use /status to refresh.");
       return;
     }
-    const page = await this.options.backend.getNavigationQueryPage({
-      protocol: 2,
-      consumer: "messaging-browse",
+    const bindingTarget = federationTargetForBinding(binding);
+    const target = bindingTarget?.scope === "remote" ? bindingTarget : undefined;
+    const pageIndex = branchPageIndexFromValue(event.value);
+    const sessionId = `handoff-projects:${binding.id}`;
+    if (pageIndex === 0) this.browseQueryPool.release(sessionId);
+    const page = await this.browseQueryPool.read({
+      sessionId,
       query: { kind: "messaging-projects" },
-      federationTarget: federationTargetForBinding(binding),
-      pageSize: Math.min(8, (this.capabilityProfile ? capabilityProfilePageSize(this.capabilityProfile, 3, 8) : 8) || 8),
-      cursor: readStringValue(event.value, "cursor"),
+      owners: [{ target, label: target?.instanceId ?? "Local" }],
+      pageSize: Math.min(8, (this.capabilityProfile ? capabilityProfilePageSize(this.capabilityProfile, 4, 8) : 8) || 8),
+      pageIndex,
     });
     await this.deliverAndStoreStatusSubmode({
       ...buildHandoffProjectPickerIntent({
         id: this.newIntentId("handoff-projects"),
         capabilityProfile: this.capabilityProfile,
         binding, context, createdAt: this.now(),
-        projects: (page.directories ?? []).flatMap((directory) =>
-          directory.kind === "directory" && directory.path && directory.path !== context.workingDirectoryPath
-            ? [{ label: directory.label, path: directory.path }] : []),
-        nextCursor: page.nextCursor,
+        page: { ...page, projects: page.projects.filter((directory) =>
+          directory.kind === "directory" && directory.path && directory.path !== context.workingDirectoryPath) },
       }),
       audit: this.buildHandoffAudit("handoff.projects", binding, event),
     }, binding, event);
@@ -12504,6 +12506,7 @@ export class MessagingController {
           context,
           createdAt: this.now(),
           targetPath: request.targetPath,
+          projectPageIndex: branchPageIndexFromValue(event.value),
           leaveLocalBranch: request.leaveLocalBranch,
           strategy: request.strategy,
         }),
