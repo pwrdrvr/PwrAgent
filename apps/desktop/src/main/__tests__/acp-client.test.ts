@@ -1994,7 +1994,8 @@ describe("AcpAgentClient", () => {
       store.getSession("acp:kimi", session.sessionId)?.acpRuntime?.configValues,
     ).toMatchObject({ thinking: "on" });
 
-    // A level the model offers is still written.
+    // The flag refuses an unoffered level, not every write: switching to K3,
+    // which offers `low`, and then setting it both go through.
     await client.setRuntimeOption({
       sessionId: session.sessionId,
       source: "configOption",

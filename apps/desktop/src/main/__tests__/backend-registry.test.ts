@@ -9246,7 +9246,10 @@ describe("DesktopBackendRegistry", () => {
         value: "low",
       }),
     ).rejects.toThrow('does not offer "low" for thinking');
-    expect(sessions[0]?.acpRuntime).toEqual(sessionRuntime);
+    expect(sessions[0]?.acpRuntime).toEqual({
+      configValues: { model: "kimi-code/kimi-for-coding", thinking: "on" },
+      updatedAt: 1000,
+    });
     expect(
       events.filter(
         (event) => event.notification.method === "thread/acpRuntime/updated",

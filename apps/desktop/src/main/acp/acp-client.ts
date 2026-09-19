@@ -921,27 +921,31 @@ export class AcpAgentClient {
       value: params.value,
       reasoningEffort: params.reasoningEffort,
     });
-    if (
-      write.unofferedThoughtLevel
-      && params.source === "configOption"
-      && params.rejectUnofferedThoughtLevel
-    ) {
-      // The refusal the agent would have sent, without the round trip.
-      throw new Error(
-        `The session's model does not offer "${params.value}" for ${params.optionId}`,
-      );
-    }
     if (write.unofferedThoughtLevel) {
+      const refused =
+        params.source === "configOption"
+        && params.rejectUnofferedThoughtLevel === true;
       // Debug, not info: a composer effort the model does not offer is
       // retried by every turn start, so this can repeat once per turn.
-      acpClientLog.debug("skipped a thought level the session's model does not offer", {
-        backendId: this.options.backendId,
-        source: params.source,
-        value:
-          params.source === "configOption"
-            ? params.value
-            : params.reasoningEffort,
-      });
+      acpClientLog.debug(
+        refused
+          ? "refused a thought level the session's model does not offer"
+          : "skipped a thought level the session's model does not offer",
+        {
+          backendId: this.options.backendId,
+          source: params.source,
+          value:
+            params.source === "configOption"
+              ? params.value
+              : params.reasoningEffort,
+        },
+      );
+      if (refused) {
+        // The refusal the agent would have sent, without the round trip.
+        throw new Error(
+          `The session's model does not offer "${params.value}" for ${params.optionId}`,
+        );
+      }
       if (params.source === "configOption") {
         return this.options.store.getSession(
           this.options.backendId,
