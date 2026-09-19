@@ -10174,6 +10174,20 @@ describe("DesktopBackendRegistry", () => {
       await registry.close();
     });
 
+    it("still writes a level when the session's menu is unknown", async () => {
+      // No menu has been reported for this session yet, so nothing can prove
+      // the write is a no-op. The client answers for a level it may yet apply.
+      const { acpBackendId, acpClient, registry } = createThinkingRegistry({
+        recorded: { model: k3, thinking: "high" },
+      });
+
+      await runTurns(registry, acpBackendId, { model: k3, reasoningEffort: "on" }, 2);
+
+      expect(acpClient.setRuntimeOption).toHaveBeenCalledTimes(2);
+
+      await registry.close();
+    });
+
     it("still writes a level the session offers", async () => {
       const { acpBackendId, acpClient, registry } = createThinkingRegistry({
         recorded: { model: k3, thinking: "high" },
