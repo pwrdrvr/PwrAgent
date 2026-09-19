@@ -12267,6 +12267,10 @@ export class DesktopBackendRegistry {
         source: params.source,
         optionId: params.optionId,
         value: params.value,
+        // Below, the requested value is recorded and broadcast as applied.
+        // A thought level the client skipped was never sent, so it must fail
+        // here instead, as the agent's own refusal did.
+        rejectUnofferedThoughtLevel: true,
       }),
     );
     const mergedRuntime = mergeAcpRuntimeState(session.acpRuntime, runtimeState);

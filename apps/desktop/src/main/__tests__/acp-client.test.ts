@@ -1961,6 +1961,57 @@ describe("AcpAgentClient", () => {
     ).toMatchObject({ thinking: "on" });
   });
 
+  it("refuses an explicit thought level the session's model does not offer", async () => {
+    // A skip resolves with the unchanged state. A caller recording an
+    // operator's explicit choice would report the level as applied, though
+    // it was never sent. K2.7 Coding offers only `on`.
+    const transport = new KimiConfigOptionTransport();
+    const client = new AcpAgentClient({
+      backendId: "acp:kimi",
+      store,
+      transport,
+      now: () => 1000,
+    });
+
+    await client.initialize();
+    const session = await client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+    });
+    const requestCount = transport.requests.length;
+
+    await expect(
+      client.setRuntimeOption({
+        sessionId: session.sessionId,
+        source: "configOption",
+        optionId: "thinking",
+        value: "low",
+        rejectUnofferedThoughtLevel: true,
+      }),
+    ).rejects.toThrow('does not offer "low" for thinking');
+    expect(transport.requests).toHaveLength(requestCount);
+    expect(
+      store.getSession("acp:kimi", session.sessionId)?.acpRuntime?.configValues,
+    ).toMatchObject({ thinking: "on" });
+
+    // A level the model offers is still written.
+    await client.setRuntimeOption({
+      sessionId: session.sessionId,
+      source: "configOption",
+      optionId: "model",
+      value: "kimi-code/k3",
+      rejectUnofferedThoughtLevel: true,
+    });
+    await client.setRuntimeOption({
+      sessionId: session.sessionId,
+      source: "configOption",
+      optionId: "thinking",
+      value: "low",
+      rejectUnofferedThoughtLevel: true,
+    });
+    expect(transport.thinking).toBe("low");
+  });
+
   it("forgets a session's thought levels when the agent changes its options", async () => {
     // The agent can change a session's model on its own. The menu the last
     // reply reported is then stale, and must not refuse a level the new

@@ -894,6 +894,11 @@ export class AcpAgentClient {
     optionId: string;
     value: string;
     reasoningEffort?: string;
+    /** Refuse, rather than skip, a `configOption` write of a thought level
+     *  the session's model does not offer. A skip resolves with the unchanged
+     *  state, which a caller recording an explicit choice would report as
+     *  applied. A replay of a remembered selection leaves this unset. */
+    rejectUnofferedThoughtLevel?: boolean;
   }): Promise<BackendAcpSessionRuntimeState | undefined> {
     return await this.withOperation(
       async () => await this.setRuntimeOptionOperation(params),
@@ -906,6 +911,7 @@ export class AcpAgentClient {
     optionId: string;
     value: string;
     reasoningEffort?: string;
+    rejectUnofferedThoughtLevel?: boolean;
   }): Promise<BackendAcpSessionRuntimeState | undefined> {
     const protocolSessionId = this.protocolSessionIdFor(params.sessionId);
     const write = await this.setRuntimeOptionOnTransport({
@@ -915,6 +921,16 @@ export class AcpAgentClient {
       value: params.value,
       reasoningEffort: params.reasoningEffort,
     });
+    if (
+      write.unofferedThoughtLevel
+      && params.source === "configOption"
+      && params.rejectUnofferedThoughtLevel
+    ) {
+      // The refusal the agent would have sent, without the round trip.
+      throw new Error(
+        `The session's model does not offer "${params.value}" for ${params.optionId}`,
+      );
+    }
     if (write.unofferedThoughtLevel) {
       // Debug, not info: a composer effort the model does not offer is
       // retried by every turn start, so this can repeat once per turn.
