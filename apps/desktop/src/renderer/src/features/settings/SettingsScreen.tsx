@@ -42,6 +42,10 @@ import {
 import { ArchivedThreadsSettings } from "./ArchivedThreadsSettings";
 import { ThreadManagementSettings } from "./ThreadManagementSettings";
 import { TroubleshootingSettings } from "./TroubleshootingSettings";
+import {
+  useUnsavedSettingsGuard,
+  type ConfirmSettingsLeave,
+} from "./UnsavedSettingsChanges";
 import { MessagingStatusBar } from "../messaging-status/MessagingStatusBar";
 import type { AppNoticeToastNotice } from "../notifications/AppNoticeToast";
 import { WorktreesSettings } from "./WorktreesSettings";
@@ -283,6 +287,10 @@ export function SettingsScreen(props: {
     threadId: string;
   }) => void;
   onShowNotice?: (notice: AppNoticeToastNotice) => void;
+  /** Receives the screen's leave check while it is mounted, so a route that
+   *  closes the overlay from outside (a menu command, a notification) asks
+   *  about unsaved edits first, the same as Exit Settings does. */
+  registerLeaveGuard?: (confirmLeave: ConfirmSettingsLeave | undefined) => void;
   /** Fired from the title-bar messaging controller.
    *  The App-level handler closes the Settings overlay and opens the
    *  Messaging Activity overlay (its own top-level mainView). */
@@ -322,7 +330,7 @@ export function SettingsScreen(props: {
   // Navigating always expands the destination group; only the caret
   // collapses one. Clicking a parent label therefore both routes to
   // the hub screen and reveals its children.
-  const openRoute = useCallback(
+  const showRoute = useCallback(
     (target: SettingsSection, sub?: string) => {
       setRoute((current) =>
         current.section === target && current.sub === sub
@@ -333,6 +341,34 @@ export function SettingsScreen(props: {
     },
     [expandGroup],
   );
+  // A route to another page unmounts the pane showing now, and with it any
+  // edits the operator has not saved, so it asks first. A jump to a section
+  // of the same page keeps the pane and goes straight through.
+  const unsaved = useUnsavedSettingsGuard();
+  const confirmLeave = unsaved.confirmLeave;
+  const routeRef = useRef(route);
+  useLayoutEffect(() => {
+    routeRef.current = route;
+  }, [route]);
+  const openRoute = useCallback(
+    (target: SettingsSection, sub?: string) => {
+      if (
+        settingsPageKey({ section: target, sub })
+        === settingsPageKey(routeRef.current)
+      ) {
+        showRoute(target, sub);
+        return;
+      }
+      confirmLeave(() => showRoute(target, sub));
+    },
+    [confirmLeave, showRoute],
+  );
+  const registerLeaveGuard = props.registerLeaveGuard;
+  useEffect(() => {
+    if (!registerLeaveGuard) return;
+    registerLeaveGuard(confirmLeave);
+    return () => registerLeaveGuard(undefined);
+  }, [confirmLeave, registerLeaveGuard]);
   // When the parent re-mounts with a different initialSection (e.g.
   // a future deep-link), follow it.
   useEffect(() => {
@@ -573,7 +609,7 @@ export function SettingsScreen(props: {
           <button
             className="settings-nav__exit"
             type="button"
-            onClick={props.onClose}
+            onClick={() => confirmLeave(() => props.onClose?.())}
           >
             <span aria-hidden="true">←</span> Exit Settings
           </button>
@@ -787,20 +823,22 @@ export function SettingsScreen(props: {
               </div>
             </div>
           ) : snapshot ? (
-            <SettingsSectionBody
-              appearanceController={props.appearanceController}
-              cachedBackends={props.cachedBackends}
-              desktopApi={props.desktopApi}
-              onForgeStatusChange={reportForgeStatus}
-              onOpenRoute={openRoute}
-              onOpenThread={props.onOpenThread}
-              onShowNotice={props.onShowNotice}
-              profiles={props.profiles}
-              section={section}
-              settings={props.settings}
-              snapshot={snapshot}
-              sub={route.sub}
-            />
+            unsaved.provide(
+              <SettingsSectionBody
+                appearanceController={props.appearanceController}
+                cachedBackends={props.cachedBackends}
+                desktopApi={props.desktopApi}
+                onForgeStatusChange={reportForgeStatus}
+                onOpenRoute={openRoute}
+                onOpenThread={props.onOpenThread}
+                onShowNotice={props.onShowNotice}
+                profiles={props.profiles}
+                section={section}
+                settings={props.settings}
+                snapshot={snapshot}
+                sub={route.sub}
+              />,
+            )
           ) : (
             <p className="settings-empty">Settings are unavailable.</p>
           )}
@@ -809,6 +847,7 @@ export function SettingsScreen(props: {
           ) : null}
         </div>
       </div>
+      {unsaved.dialog}
     </section>
   );
 }

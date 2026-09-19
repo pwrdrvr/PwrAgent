@@ -14,6 +14,7 @@ import {
   type ComponentType,
   type CSSProperties,
   type PointerEvent,
+  type SetStateAction,
 } from "react";
 import {
   buildThreadIdentityKey,
@@ -53,6 +54,7 @@ import { useFindHotkeys } from "./features/chrome/useFindHotkeys";
 import { useHistoryNavHotkeys } from "./features/chrome/useHistoryNavHotkeys";
 import { useLayoutChordHotkeys } from "./features/chrome/useLayoutChordHotkeys";
 import type { SettingsSection } from "./features/settings/SettingsScreen";
+import type { ConfirmSettingsLeave } from "./features/settings/UnsavedSettingsChanges";
 import {
   useDesktopSettings,
   type DesktopSettingsState,
@@ -196,6 +198,9 @@ const SETTINGS_SECTIONS = new Set<SettingsSection>([
   "about",
 ]);
 
+/** Which full-window surface the shell shows. */
+type MainView = "thread" | "settings" | "automations" | "search";
+
 const LazySettingsScreen = lazy(async () => ({
   default: (await import("./features/settings/SettingsScreen")).SettingsScreen,
 }));
@@ -338,9 +343,34 @@ function DesktopAppShell(props: {
   const [actionRunsDock, setActionRunsDock] = useState<ActionRunsDock>(
     DEFAULT_ACTION_RUNS_DOCK,
   );
-  const [mainView, setMainView] = useState<
-    "thread" | "settings" | "automations" | "search"
-  >("thread");
+  const [mainView, setMainViewState] = useState<MainView>("thread");
+  const mainViewRef = useRef<MainView>("thread");
+  // Settings can hold edits the operator has not saved. Every way out of the
+  // overlay (Exit, a menu command, a notification, history) asks Settings
+  // first, so those edits get a Save / Discard prompt instead of vanishing.
+  const settingsLeaveGuardRef = useRef<ConfirmSettingsLeave | undefined>(
+    undefined,
+  );
+  const registerSettingsLeaveGuard = useCallback(
+    (confirmLeave: ConfirmSettingsLeave | undefined) => {
+      settingsLeaveGuardRef.current = confirmLeave;
+    },
+    [],
+  );
+  const setMainView = useCallback((next: SetStateAction<MainView>) => {
+    const current = mainViewRef.current;
+    const target = typeof next === "function" ? next(current) : next;
+    const show = () => {
+      mainViewRef.current = target;
+      setMainViewState(target);
+    };
+    const confirmLeave = settingsLeaveGuardRef.current;
+    if (current === "settings" && target !== "settings" && confirmLeave) {
+      confirmLeave(show);
+      return;
+    }
+    show();
+  }, []);
   // In-thread find bar (⌘F). `manualFindOpen` is the ⌘F toggle; `findRequest`
   // is a deep-link from a search result (seeded query + its target thread).
   // The bar is open when either applies (see `threadFindOpen` below).
@@ -631,7 +661,7 @@ function DesktopAppShell(props: {
       setSettingsInitialSubsection(section ? subsection : undefined);
       setMainView("settings");
     },
-    [],
+    [setMainView],
   );
   const openMessagingSettings = useCallback(() => {
     openSettingsSection("messaging");
@@ -1783,7 +1813,7 @@ function DesktopAppShell(props: {
         threadId: request.threadId,
       });
     },
-    [desktopApi, queueMessageLinkRequest, showThread],
+    [desktopApi, queueMessageLinkRequest, setMainView, showThread],
   );
   const openRemoteViewerFromLink = useCallback(
     (request: {
@@ -1824,7 +1854,7 @@ function DesktopAppShell(props: {
         federationTarget: ref.ownerInstanceId ? { scope: "remote", instanceId: ref.ownerInstanceId } : undefined });
 
     },
-    [navigation, selectDirectoryLaunchpad],
+    [navigation, selectDirectoryLaunchpad, setMainView],
   );
   // Loaded navigation pages cannot prove a history entry was deleted.
   const history = useNavigationHistory({
@@ -2061,7 +2091,7 @@ function DesktopAppShell(props: {
       setMainView("thread");
       void navigation.createThread();
     });
-  }, [desktopApi, navigation]);
+  }, [desktopApi, navigation, setMainView]);
   useEffect(() => {
     if (!desktopApi?.onShowThreadRequested) {
       return;
@@ -2071,7 +2101,7 @@ function DesktopAppShell(props: {
       setMainView("thread");
       void navigation.showThread(request);
     });
-  }, [desktopApi, navigation, queueMessageLinkRequest]);
+  }, [desktopApi, navigation, queueMessageLinkRequest, setMainView]);
   useEffect(() => {
     // Subscribe to Help → Replay Onboarding push from the menu. Forces
     // the wizard overlay open in "replay" mode — dismissal does NOT
@@ -3078,6 +3108,7 @@ function DesktopAppShell(props: {
                 initialSection={settingsInitialSection}
                 initialSubsection={settingsInitialSubsection}
                 profiles={profiles}
+                registerLeaveGuard={registerSettingsLeaveGuard}
                 settings={settings}
                 onClose={() => setMainView("thread")}
                 onOpenMessagingActivity={openMessagingActivityWindow}
