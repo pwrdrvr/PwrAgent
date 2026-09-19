@@ -13750,6 +13750,100 @@ describe("Composer", () => {
     expect(screen.queryByRole("listbox", { name: "Commands" })).not.toBeInTheDocument();
   });
 
+  it.each([false, true])("loads move destinations from the thread owner (remote: %s)", async (remote) => {
+    const target = remote ? { scope: "remote" as const, instanceId: "remote-instance" } : undefined;
+    const ownerProject = { key: "/owner/demo", kind: "directory" as const, label: "Owner demo", path: "/owner/demo" };
+    const getNavigationQueryPage = vi.fn(async (request) => navigationQueryFixture(request, {
+      directories: [ownerProject],
+    }));
+    const onHandoffThreadWorkspace = vi.fn(async () => undefined);
+    render(<Composer
+      backends={[]}
+      skills={[]}
+      desktopApi={{ getNavigationQueryPage }}
+      directories={[{ key: "/viewer/wrong", kind: "directory", label: "Viewer project", path: "/viewer/wrong" }]}
+      onHandoffThreadWorkspace={onHandoffThreadWorkspace}
+      thread={{
+        id: "scratch-thread", title: "Research", titleSource: "explicit",
+        source: "codex", projectKey: "/scratch/research", linkedDirectories: [],
+        inbox: { inInbox: false },
+        ...(target ? { federation: {
+          instanceLabel: "Remote instance",
+          ref: { backend: "codex", threadId: "scratch-thread", target },
+        } } : {}),
+      }}
+    />);
+    fireEvent.click(screen.getByLabelText("Workspace mode"));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Move to Project" }));
+    fireEvent.click(screen.getByRole("button", { name: "Choose a project" }));
+    await screen.findByRole("option", { name: /Owner demo/ });
+    expect(screen.queryByRole("option", { name: /Viewer project/ })).not.toBeInTheDocument();
+    expect(getNavigationQueryPage).toHaveBeenCalledWith(expect.objectContaining({
+      federationTarget: target, query: { kind: "directory-index", filter: "" },
+    }), expect.any(String));
+    fireEvent.change(screen.getByPlaceholderText("Find a directory"), { target: { value: "demo" } });
+    await waitFor(() => expect(getNavigationQueryPage).toHaveBeenCalledWith(expect.objectContaining({
+      federationTarget: target, query: { kind: "directory-index", filter: "demo" },
+    }), expect.any(String)));
+    fireEvent.click(await screen.findByRole("option", { name: /Owner demo/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Move" }));
+    await waitFor(() => expect(onHandoffThreadWorkspace).toHaveBeenCalledWith({
+      direction: "to-project", targetPath: "/owner/demo",
+    }));
+  });
+
+  it("does not offer viewer projects when the destination owner is unavailable", async () => {
+    const getNavigationQueryPage = vi.fn(async () => { throw new Error("Peer unavailable"); });
+    render(<Composer
+      backends={[]}
+      skills={[]}
+      desktopApi={{ getNavigationQueryPage }}
+      directories={[{ key: "/viewer/wrong", kind: "directory", label: "Viewer project", path: "/viewer/wrong" }]}
+      onHandoffThreadWorkspace={vi.fn()}
+      thread={{
+        id: "scratch-thread", title: "Research", titleSource: "explicit",
+        source: "codex", projectKey: "/scratch/research", linkedDirectories: [],
+        inbox: { inInbox: false },
+        federation: {
+          instanceLabel: "Remote instance",
+          ref: { backend: "codex", threadId: "scratch-thread", target: { scope: "remote", instanceId: "remote-instance" } },
+        },
+      }}
+    />);
+    fireEvent.click(screen.getByLabelText("Workspace mode"));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Move to Project" }));
+    fireEvent.click(screen.getByRole("button", { name: "Choose a project" }));
+    await screen.findByText("Peer unavailable");
+    expect(screen.queryByRole("option", { name: /Viewer project/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Move" })).toBeDisabled();
+  });
+
+  it("moves a scratch conversation to a project without requiring a source Git branch", async () => {
+    const onHandoffThreadWorkspace = vi.fn(async () => undefined);
+    render(
+      <Composer
+        backends={[]}
+        onHandoffThreadWorkspace={onHandoffThreadWorkspace}
+        skills={[]}
+        thread={{
+          id: "scratch-thread", title: "Research", titleSource: "explicit",
+          source: "acp:grok", projectKey: "/scratch/research", linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+    fireEvent.click(screen.getByLabelText("Workspace mode"));
+    expect(screen.getByRole("menuitem", { name: "Handoff to New Worktree" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Move to Project" }));
+    expect(screen.getByRole("dialog", { name: "Move to Project" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Move" })).toBeDisabled();
+    fireEvent.change(screen.getByLabelText("Destination project"), { target: { value: "/projects/demo" } });
+    fireEvent.click(screen.getByRole("button", { name: "Move" }));
+    await waitFor(() => expect(onHandoffThreadWorkspace).toHaveBeenCalledWith({
+      direction: "to-project", targetPath: "/projects/demo",
+    }));
+  });
+
   it("shows thread access in the composer and opens workspace handoff", async () => {
     const onSetExecutionMode = vi.fn(async () => undefined);
     const onHandoffThreadWorkspace = vi.fn(async () => undefined);
@@ -14260,14 +14354,9 @@ describe("Composer", () => {
       />
     );
 
-    const workspaceMode = screen.queryByLabelText("Workspace mode");
-    if (workspaceMode) {
-      fireEvent.click(workspaceMode);
-    }
-
-    expect(
-      screen.queryByRole("menuitem", { name: "Handoff to New Worktree" })
-    ).not.toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText("Workspace mode"));
+    expect(screen.getByRole("menuitem", { name: "Handoff to New Worktree" })).toBeDisabled();
+    expect(screen.getByRole("menuitem", { name: "Move to Project" })).toBeEnabled();
 
     fireEvent.click(screen.getByRole("button", { name: "VS Code" }));
     expect(openApplication).toHaveBeenCalledWith({

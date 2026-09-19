@@ -47998,6 +47998,51 @@ script = "printf setup"
     }
   });
 
+  it.each(["local", "worktree"] as const)("moves a scratch Codex conversation to another project and starts its next turn there: %s", async (workMode) => {
+    const targetPath = workMode === "local" ? "/projects/demo" : "/worktrees/demo";
+    const thread: AppServerThreadSummary = {
+      id: "thread-1", title: "Research", titleSource: "explicit", source: "codex",
+      projectKey: "/scratch/research", linkedDirectories: [], updatedAt: 2,
+    };
+    const overlayStore = createOverlayStoreMock();
+    const codexClient = new MockBackendClient({ threads: [thread] });
+    const handoff = vi.fn(async () => ({
+      backend: "codex" as const, threadId: thread.id, direction: "to-project" as const,
+      workMode, branch: "main", repositoryPath: "/projects/demo",
+      targetPath,
+      linkedDirectory: {
+        id: "pwragent-handoff:codex:thread-1", label: "demo", path: "/projects/demo", kind: workMode,
+        ...(workMode === "worktree" ? { worktreePath: targetPath } : {}),
+      },
+      warnings: [], completedAt: 1000,
+    }));
+    const recordCodexWorktreeOwnerThread = vi.fn();
+    const registry = new DesktopBackendRegistry({
+      gitDirectoryService: { recordCodexWorktreeOwnerThread } as never,
+      codexClient, overlayStore, gitWorkspaceHandoffService: { handoff } as never,
+    });
+    try {
+      await registry.handoffThreadWorkspace({
+        backend: "codex", threadId: thread.id, direction: "to-project", targetPath,
+      });
+      expect(handoff).toHaveBeenCalledWith(expect.objectContaining({
+        direction: "to-project", targetPath,
+      }));
+      expect(codexClient.lastUpdateThreadWorkspaceParams).toEqual({
+        threadId: thread.id, cwd: targetPath,
+      });
+      expect(recordCodexWorktreeOwnerThread).not.toHaveBeenCalled();
+      await registry.startTurn({
+        backend: "codex", threadId: thread.id, input: [{ type: "text", text: "Continue" }],
+      });
+      expect(codexClient.lastStartTurnParams).toMatchObject({
+        threadId: thread.id, cwd: targetPath,
+      });
+    } finally {
+      await registry.close();
+    }
+  });
+
   it("hands off a local thread to a worktree and records the new workspace overlay", async () => {
     const thread: AppServerThreadSummary = {
       id: "thread-1",
@@ -48578,7 +48623,155 @@ script = "printf setup"
     await registry.close();
   });
 
-  it("rejects Gemini ACP workspace handoff after the first message", async () => {
+  it("reloads an existing Grok conversation in the destination project before the next turn", async () => {
+    const acpBackendId = "acp:grok" as AcpBackendId;
+    const sessionStore = createAcpSessionStoreMock([
+      {
+        backendId: acpBackendId,
+        sessionId: "session-1",
+        title: "ACP session",
+        cwd: "/repo/app",
+        createdAt: 1000,
+        updatedAt: 1000,
+        executionMode: "default",
+        status: "idle",
+        hasConversationHistory: true,
+        agentSessionId: "original-agent-session",
+      },
+    ]);
+    const startSession = vi.fn(async (params: {
+      sessionId?: string;
+      cwd?: string;
+      executionMode: ThreadExecutionMode;
+      title?: string;
+      createdAt?: number;
+    }) => {
+      const metadata: AcpSessionMetadata = {
+        backendId: acpBackendId,
+        sessionId: params.sessionId ?? "agent-session-2",
+        agentSessionId: "agent-session-2",
+        title: params.title ?? "ACP session",
+        cwd: params.cwd,
+        createdAt: params.createdAt ?? 1000,
+        updatedAt: 2000,
+        executionMode: params.executionMode,
+        status: "idle",
+      };
+      sessionStore.upsertSession(metadata);
+      return metadata;
+    });
+    const ensureSession = vi.fn(async () => undefined);
+    const startPrompt = vi.fn((params: {
+      sessionId: string;
+      prompt: string;
+      turnId?: string;
+    }) => ({
+      sessionId: params.sessionId,
+      turnId: params.turnId ?? "pending:session-1:1001",
+    }));
+    const acpClient = {
+      initialize: vi.fn(async () => undefined),
+      dispose: vi.fn(async () => undefined),
+      startSession,
+      ensureSession,
+      startPrompt,
+      cancelSession: vi.fn(),
+      readReplay: vi.fn(),
+      loadSession: vi.fn(),
+      refreshSession: vi.fn(async () => undefined),
+    };
+    const handoff = vi.fn(async () => ({
+      backend: acpBackendId,
+      threadId: "session-1",
+      direction: "to-project" as const,
+      workMode: "local" as const,
+      branch: "feature/handoff",
+      repositoryPath: "/projects/demo",
+      targetPath: "/projects/demo",
+      linkedDirectory: {
+        id: "pwragent-handoff:acp:grok:session-1",
+        label: "app",
+        path: "/projects/demo",
+        kind: "local" as const,
+      },
+      warnings: [],
+      completedAt: 1000,
+    }));
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock(),
+      acpAgentStore: createAcpAgentStoreMock([
+        {
+          backendId: acpBackendId,
+          registryId: "grok",
+          name: "Gemini CLI",
+          distributionKind: "local",
+          distributionSource: "gemini --acp --skip-trust",
+          runtimeCapabilities: {
+            schemaVersion: 1, status: "discovered", discoveredAt: 1000,
+            checkedAt: 1000, source: "initialize",
+            agentCapabilities: { loadSession: true },
+          },
+          installStatus: "installed",
+          authStatus: "not-required",
+          verificationStatus: "not-applicable",
+          allowlistRuleId: "local-gemini-cli",
+          installedAt: 1000,
+          updatedAt: 2000,
+          launchDescriptor: {
+            backendId: acpBackendId,
+            registryId: "grok",
+            distributionKind: "local",
+            command: "grok",
+            args: ["--acp", "--skip-trust"],
+            env: {},
+          },
+        },
+      ]),
+      acpSessionStore: sessionStore,
+      createAcpClient: () => acpClient,
+      gitDirectoryService: {
+        recordCodexWorktreeOwnerThread: vi.fn(async () => {}),
+      } as never,
+      gitWorkspaceHandoffService: {
+        handoff,
+      } as never,
+    });
+
+    await registry.handoffThreadWorkspace({
+      backend: acpBackendId,
+      threadId: "session-1",
+      direction: "to-project",
+      targetPath: "/projects/demo",
+    });
+    await registry.startTurn({
+      backend: acpBackendId,
+      threadId: "session-1",
+      input: [{ type: "text", text: "What is the CWD?" }],
+    });
+
+    expect(startSession).not.toHaveBeenCalled();
+    expect(ensureSession).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: "session-1", agentSessionId: "original-agent-session", cwd: "/projects/demo",
+    }));
+    expect(sessionStore.getSession(acpBackendId, "session-1")).toMatchObject({
+      agentSessionId: "original-agent-session", cwd: "/projects/demo",
+    });
+    expect(startPrompt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "session-1",
+        prompt: "What is the CWD?",
+      }),
+    );
+
+    await expect(registry.handoffThreadWorkspace({
+      backend: acpBackendId, threadId: "session-1", direction: "to-project", targetPath: "/projects/other",
+    })).rejects.toThrow("while a turn is in progress");
+
+    await registry.close();
+  });
+
+  it.each(["local-to-worktree", "to-project"] as const)("rejects Gemini ACP workspace handoff after the first message: %s", async (direction) => {
     const acpBackendId = "acp:gemini" as AcpBackendId;
     const handoff = vi.fn();
     const registry = new DesktopBackendRegistry({
@@ -48621,7 +48814,8 @@ script = "printf setup"
       registry.handoffThreadWorkspace({
         backend: acpBackendId,
         threadId: "session-1",
-        direction: "local-to-worktree",
+        direction,
+        targetPath: "/projects/demo",
         leaveLocalBranch: "main",
       }),
     ).rejects.toThrow("cannot hand off a workspace after the first message");

@@ -176,6 +176,51 @@ export function buildResumeIntent(params: {
   } : intent;
 }
 
+/** Shared project-browser presentation for browse and workspace moves. */
+export function buildProjectPageIntent(params: {
+  id: string;
+  bindingId?: string;
+  browseSessionId?: string;
+  createdAt: number;
+  targetSurface?: MessagingProjectPickerIntent["targetSurface"];
+  page: MessagingProjectPickerIntent["page"];
+  prompt: string;
+  itemActions: MessagingSurfaceAction[];
+  controls: MessagingSurfaceAction[];
+}): MessagingProjectPickerIntent {
+  const actions = [...params.itemActions, ...params.controls];
+  return {
+    id: params.id, kind: "project_picker", bindingId: params.bindingId,
+    browseSessionId: params.browseSessionId, createdAt: params.createdAt,
+    targetSurface: params.targetSurface,
+    delivery: { mode: params.targetSurface ? "update" : "present", fallback: "present_new" },
+    navigation: { backend: "all", fetchedAt: params.createdAt, unchanged: false },
+    prompt: params.prompt,
+    fallbackText: [params.prompt, ...params.itemActions.map((action) => action.label),
+      `Reply with a number, or reply ${formatControlList(params.controls.map((action) => action.fallbackText))}.`].join("\n"),
+    page: { ...params.page, actions },
+  };
+}
+
+export function projectPickerPageActions(params: {
+  pageIndex: number;
+  hasNext: boolean;
+  actionId?: string;
+}): MessagingSurfaceAction[] {
+  return [
+    ...(params.pageIndex > 0 ? [{
+      id: params.actionId ?? "browse:page:prev", label: "Previous",
+      style: "navigation" as const, fallbackText: "back", layout: { row: NAV_ROW },
+      ...(params.actionId ? { value: { pageIndex: params.pageIndex - 1 } } : {}),
+    }] : []),
+    ...(params.hasNext ? [{
+      id: params.actionId ?? "browse:page:next", label: "Next",
+      style: "navigation" as const, fallbackText: "next", layout: { row: NAV_ROW },
+      ...(params.actionId ? { value: { pageIndex: params.pageIndex + 1 } } : {}),
+    }] : []),
+  ];
+}
+
 /** Presentation consumes exactly the bounded page supplied by the owner query merge. */
 export function buildBoundedResumeIntent(params: {
   createdAt: number;
@@ -209,8 +254,10 @@ export function buildBoundedResumeIntent(params: {
     prompt, targetSurface: session.surface };
   const metadata = { actions, filter: session.query, pageIndex: page.pageIndex, pageSize: page.pageSize,
     totalItems: page.totalItems, totalItemsComplete: !incomplete };
-  return projects ? { ...common, kind: "project_picker", page: { ...metadata, items: page.projects } }
-    : { ...common, kind: "thread_picker", page: { ...metadata, items: page.threads } };
+  return projects ? buildProjectPageIntent({
+    ...common, page: { ...metadata, items: page.projects }, itemActions,
+    controls: actions.slice(itemActions.length),
+  }) : { ...common, kind: "thread_picker", page: { ...metadata, items: page.threads } };
 }
 
 export function selectProjectFromValue(
@@ -547,32 +594,14 @@ function formatProjectPickerLabel(
 // document-order-aware layout, the relative emit order is determined by
 // document position, not by numeric value.
 const NAV_ROW = 1;
-const FOOTER_ROW = 2;
+export const FOOTER_ROW = 2;
 
 function navigationActions(
   session: MessagingBrowseSessionRecord,
   pageIndex: number,
   totalPages: number,
 ): MessagingSurfaceAction[] {
-  const actions: MessagingSurfaceAction[] = [];
-  if (pageIndex > 0) {
-    actions.push({
-      id: "browse:page:prev",
-      label: "Previous",
-      style: "navigation",
-      fallbackText: "back",
-      layout: { row: NAV_ROW },
-    });
-  }
-  if (pageIndex < totalPages - 1) {
-    actions.push({
-      id: "browse:page:next",
-      label: "Next",
-      style: "navigation",
-      fallbackText: "next",
-      layout: { row: NAV_ROW },
-    });
-  }
+  const actions = projectPickerPageActions({ pageIndex, hasNext: pageIndex < totalPages - 1 });
   if (session.launchAction === "assign_default_agent") {
     actions.push({
       id: "browse:cancel",

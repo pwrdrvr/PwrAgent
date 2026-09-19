@@ -124,6 +124,7 @@ import type {
 } from "@pwragent/messaging-interface";
 import {
   applyActionCapabilityLimits,
+  capabilityProfilePageSize,
   evictStaleStreamAnchors,
   MESSAGING_CALLBACK_HANDLE_TTL_MS,
   messagingQuestionnaireAnswerComplete,
@@ -226,6 +227,7 @@ import {
   buildHandoffBranchPickerIntent,
   buildHandoffConfirmationIntent,
   buildHandoffOverviewIntent,
+  buildHandoffProjectPickerIntent,
   buildStatusModelPickerIntent,
   buildStatusPermissionsPickerIntent,
   buildStatusReasoningPickerIntent,
@@ -2524,6 +2526,14 @@ export class MessagingController {
       return;
     }
     if (verb === "status") {
+      if (event.args[0]?.toLowerCase() === "handoff") {
+        await this.handleStatusCallback({
+          ...event, kind: "callback",
+          interaction: { channel: event.channel.channel, id: event.id },
+          actionId: "status:handoff",
+        }, "status:handoff");
+        return;
+      }
       await this.presentStatus(event);
       return;
     }
@@ -11972,6 +11982,14 @@ export class MessagingController {
       await this.presentHandoffOverview(binding, event);
       return;
     }
+    if (actionId === "handoff:projects") {
+      await this.presentHandoffProjectPicker(binding, event);
+      return;
+    }
+    if (actionId === "handoff:select-project") {
+      await this.presentHandoffConfirmation(binding, event);
+      return;
+    }
     if (actionId === "handoff:cancel") {
       await this.clearActiveHandoffIntent(event);
       await this.renderBindingStatus(binding, event);
@@ -12409,6 +12427,43 @@ export class MessagingController {
     );
   }
 
+  private async presentHandoffProjectPicker(
+    binding: MessagingBindingRecord,
+    event: MessagingInboundCallbackEvent,
+  ): Promise<void> {
+    if (this.handoffBlockedByActiveTurn(binding)) {
+      await this.deliverHandoffUnavailable(binding, event, ACTIVE_TURN_HANDOFF_ERROR);
+      return;
+    }
+    const context = handoffContextForBinding(binding, await this.readBoundWorkspaceContext(binding));
+    if (!context || !this.options.backend.getNavigationQueryPage) {
+      await this.deliverHandoffUnavailable(binding, event, "Project selection is unavailable. Use /status to refresh.");
+      return;
+    }
+    const bindingTarget = federationTargetForBinding(binding);
+    const target = bindingTarget?.scope === "remote" ? bindingTarget : undefined;
+    const pageIndex = branchPageIndexFromValue(event.value);
+    const sessionId = `handoff-projects:${binding.id}`;
+    if (pageIndex === 0) this.browseQueryPool.release(sessionId);
+    const page = await this.browseQueryPool.read({
+      sessionId,
+      query: { kind: "messaging-projects" },
+      owners: [{ target, label: target?.instanceId ?? "Local" }],
+      pageSize: Math.min(8, (this.capabilityProfile ? capabilityProfilePageSize(this.capabilityProfile, 4, 8) : 8) || 8),
+      pageIndex,
+    });
+    await this.deliverAndStoreStatusSubmode({
+      ...buildHandoffProjectPickerIntent({
+        id: this.newIntentId("handoff-projects"),
+        capabilityProfile: this.capabilityProfile,
+        binding, context, createdAt: this.now(),
+        page: { ...page, projects: page.projects.filter((directory) =>
+          directory.kind === "directory" && directory.path && directory.path !== context.workingDirectoryPath) },
+      }),
+      audit: this.buildHandoffAudit("handoff.projects", binding, event),
+    }, binding, event);
+  }
+
   private async presentHandoffBranchPicker(
     binding: MessagingBindingRecord,
     event: MessagingInboundEvent,
@@ -12478,6 +12533,8 @@ export class MessagingController {
           binding,
           context,
           createdAt: this.now(),
+          targetPath: request.targetPath,
+          projectPageIndex: branchPageIndexFromValue(event.value),
           leaveLocalBranch: request.leaveLocalBranch,
           strategy: request.strategy,
         }),
@@ -19708,7 +19765,7 @@ function handoffContextForBinding(
   navigation: MessagingNavigationContext,
 ): MessagingWorkspaceHandoffContext | undefined {
   const thread = findThreadForBinding(navigation, binding);
-  if (!thread) {
+  if (!thread || thread.workspaceHandoff?.available === false) {
     return undefined;
   }
 
@@ -19719,7 +19776,7 @@ function handoffContextForBinding(
     const repositoryPath = worktreeDirectory.path;
     const workingDirectoryPath = worktreeDirectory.worktreePath ?? worktreeDirectory.path;
     const branch = thread.observedGitBranch ?? thread.gitBranch;
-    if (!repositoryPath || !workingDirectoryPath || !branch) {
+    if (!repositoryPath || !workingDirectoryPath) {
       return undefined;
     }
     return {
@@ -19738,17 +19795,13 @@ function handoffContextForBinding(
   const localDirectory =
     thread.linkedDirectories.find((directory) => directory.kind === "local") ??
     thread.linkedDirectories[0];
-  if (!localDirectory?.path) {
-    return undefined;
-  }
-  const directorySummary = isMessagingThreadContext(navigation) ? navigation.directory : findNavigationDirectory(navigation, localDirectory);
+  const sourcePath = localDirectory?.path ?? thread.projectKey;
+  if (!sourcePath) return undefined;
+  const directorySummary = isMessagingThreadContext(navigation) ? navigation.directory : localDirectory ? findNavigationDirectory(navigation, localDirectory) : undefined;
   const branch =
     thread.observedGitBranch ??
     thread.gitBranch ??
     directorySummary?.gitStatus?.currentBranch;
-  if (!branch) {
-    return undefined;
-  }
   const leaveLocalBranches = (
     directorySummary?.gitStatus?.handoffBranches ??
     directorySummary?.gitStatus?.branches?.filter((candidate) => candidate !== branch) ??
@@ -19757,17 +19810,17 @@ function handoffContextForBinding(
     (candidate, index, branches) =>
       candidate !== "HEAD" && candidate !== branch && branches.indexOf(candidate) === index,
   );
-  const leaveLocalBranchChoices = ["HEAD", ...leaveLocalBranches];
+  const leaveLocalBranchChoices = branch ? ["HEAD", ...leaveLocalBranches] : [];
 
   return {
     backend: binding.backend,
     branch,
     leaveLocalBranches: leaveLocalBranchChoices,
-    projectLabel: localDirectory.label,
-    repositoryPath: localDirectory.path,
+    projectLabel: localDirectory?.label,
+    repositoryPath: sourcePath,
     threadId: binding.threadId,
     threadTitle: thread.title,
-    workingDirectoryPath: localDirectory.path,
+    workingDirectoryPath: sourcePath,
     workspaceKind: "local",
   };
 }
@@ -19973,7 +20026,7 @@ function validateHandoffRequest(
   if (
     request.backend !== context.backend ||
     request.threadId !== context.threadId ||
-    request.direction !== expectedDirection ||
+    (request.direction !== "to-project" && request.direction !== expectedDirection) ||
     request.repositoryPath !== context.repositoryPath ||
     request.sourcePath !== context.workingDirectoryPath
   ) {
@@ -19981,6 +20034,14 @@ function validateHandoffRequest(
       valid: false,
       reason: "That handoff prompt is stale. Use /status to refresh.",
     };
+  }
+  if (request.direction === "to-project") {
+    return request.targetPath?.trim()
+      ? { valid: true }
+      : { valid: false, reason: "Choose a destination project before handoff." };
+  }
+  if (!context.branch) {
+    return { valid: false, reason: "This workspace has no Git branch available for handoff." };
   }
   if (context.branch && request.sourceBranch !== context.branch) {
     return {
@@ -20020,9 +20081,8 @@ function validateHandoffRequest(
 function formatHandoffDirection(
   direction: HandoffThreadWorkspaceRequest["direction"],
 ): string {
-  return direction === "local-to-worktree"
-    ? "Local to new worktree"
-    : "Worktree to Local";
+  return direction === "to-project" ? "Move to Project"
+    : direction === "local-to-worktree" ? "Local to new worktree" : "Worktree to Local";
 }
 
 function handoffSuccessText(result: HandoffThreadWorkspaceResponse): string {

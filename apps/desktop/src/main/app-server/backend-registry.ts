@@ -13024,7 +13024,7 @@ export class DesktopBackendRegistry {
   async handoffThreadWorkspace(
     request: HandoffThreadWorkspaceRequest,
   ): Promise<HandoffThreadWorkspaceResponse> {
-    if (request.backend === "codex" && this.threadHasActiveTurn(request.threadId)) {
+    if (this.threadHasActiveTurn(request.threadId, request.backend)) {
       throw new Error(ACTIVE_TURN_HANDOFF_ERROR);
     }
     if (isAcpBackendId(request.backend)) {
@@ -13038,7 +13038,23 @@ export class DesktopBackendRegistry {
       backend: request.backend,
       threadId: request.threadId,
     });
-    const candidate = this.resolveHandoffWorkspaceCandidate(thread, request);
+    if (!thread && request.direction === "to-project") {
+      throw new Error("Thread workspace metadata is unavailable for handoff.");
+    }
+    if (request.direction === "to-project") {
+      const overlay = await this.overlayStore.getThreadOverlayState(request);
+      const runtime = overlay?.codexEnvironmentRuntime;
+      if (runtime && (
+        runtime.executionTarget !== "local"
+        || runtime.actionStatus === "started"
+        || runtime.actionRuns?.some((run) => run.status === "started")
+      )) {
+        throw new Error("Stop environment actions and use a local runtime before moving to another project.");
+      }
+    }
+    const candidate = request.direction === "to-project"
+      ? {}
+      : this.resolveHandoffWorkspaceCandidate(thread, request);
     const result = await this.gitWorkspaceHandoffService.handoff({
       ...request,
       repositoryPath: request.repositoryPath ?? candidate.repositoryPath,
@@ -13057,6 +13073,7 @@ export class DesktopBackendRegistry {
       threadId: request.threadId,
       directory: result.linkedDirectory,
       gitBranch: resultBranch,
+      ...(request.direction === "to-project" ? { resetProjectState: true } : {}),
     });
     const workspaceCwd =
       result.linkedDirectory.worktreePath ?? result.targetPath;
@@ -13091,7 +13108,7 @@ export class DesktopBackendRegistry {
       threadId: request.threadId,
       cwd: result.linkedDirectory.worktreePath ?? result.targetPath,
     });
-    if (result.workMode === "worktree") {
+    if (result.workMode === "worktree" && request.direction !== "to-project") {
       await this.recordCodexWorktreeOwnerThread({
         backend: request.backend,
         threadId: request.threadId,
@@ -24249,6 +24266,7 @@ export class DesktopBackendRegistry {
    * directly, so a site added later cannot forget the second half.
    */
   private async replaceWorkspaceLinkedDirectory(params: {
+    resetProjectState?: boolean;
     backend: AppServerBackendKind;
     directory: LinkedDirectorySummary;
     gitBranch?: string;

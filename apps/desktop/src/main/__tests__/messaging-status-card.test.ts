@@ -12,6 +12,7 @@ import {
   buildHandoffBranchPickerIntent,
   buildHandoffConfirmationIntent,
   buildHandoffOverviewIntent,
+  buildHandoffProjectPickerIntent,
   handoffRequestFromValue,
   resolveMessagingToolUpdateMode,
   type MessagingWorkspaceHandoffContext,
@@ -1218,6 +1219,49 @@ describe("buildBindingStatusIntent", () => {
     });
   });
 
+  it("keeps project move choices and confirmation available without native buttons", () => {
+    const binding = buildBinding();
+    const context = { ...buildHandoffContext(), branch: undefined, leaveLocalBranches: [] };
+    const capabilityProfile = { ...PERMISSIVE_CAPABILITY_PROFILE, actions: undefined };
+    const overview = buildHandoffOverviewIntent({
+      id: "overview", binding, context, createdAt: 1000, capabilityProfile,
+    });
+    expect(overview.choices.map((choice) => choice.id)).toContain("handoff:projects");
+    expect(overview.choices.map((choice) => choice.id)).not.toContain("handoff:create-detached");
+    const picker = buildHandoffProjectPickerIntent({
+      id: "projects", binding, context, createdAt: 1000, capabilityProfile,
+      page: {
+        kind: "browse-page", threads: [], notes: [], pageIndex: 1, pageSize: 8,
+        totalItems: 20, totalItemsComplete: true, hasNext: true,
+        projects: [{ key: "demo", kind: "directory", label: "Demo", path: "/projects/demo",
+          counts: { total: 2, active: 0, unread: 0, review: 0 },
+          pinnedRootCount: 0, unpinnedRootCount: 2, launchpadPresent: false }],
+      },
+    });
+    expect(picker.page.actions[0]).toMatchObject({
+      id: "handoff:select-project", fallbackText: "1",
+      value: expect.objectContaining({ direction: "to-project", targetPath: "/projects/demo" }),
+    });
+    expect(picker.kind).toBe("project_picker");
+    expect(picker.prompt).toContain("Page 2/3");
+    expect(picker.prompt).not.toContain("Demo");
+    expect(picker.fallbackText).toContain("9. Demo (2)");
+    expect(picker.page.actions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ label: "Previous", fallbackText: "back", style: "navigation", layout: { row: 1 }, value: { pageIndex: 0 } }),
+      expect.objectContaining({ label: "Next", style: "navigation", layout: { row: 1 }, value: { pageIndex: 2 } }),
+      expect.objectContaining({ label: "Handoff", layout: { row: 2 } }),
+      expect.objectContaining({ label: "Cancel", layout: { row: 2 } }),
+    ]));
+    const request = handoffRequestFromValue(picker.page.actions[0]!.value)!;
+    const confirmation = buildHandoffConfirmationIntent({
+      id: "confirm", binding, context, createdAt: 1000, capabilityProfile,
+      targetPath: request.targetPath,
+    });
+    expect(confirmation.body).toContain("Destination: /projects/demo");
+    expect(handoffRequestFromValue(confirmation.actions![0]!.value)).toMatchObject(request);
+    expect(handoffRequestFromValue({ ...request, targetPath: "" })).toBeUndefined();
+  });
+
   it("offers detached handoff without move-branch choices", () => {
     const binding = buildBinding();
     const context = {
@@ -1242,7 +1286,7 @@ describe("buildBindingStatusIntent", () => {
         style: "primary",
       }),
     );
-    expect(overview.fallbackText).toContain("Reply with 1, Back, Refresh, or Cancel.");
+    expect(overview.fallbackText).toContain("Reply with 1 or 2, Back, Refresh, or Cancel.");
   });
 
   it("paginates handoff branch picker choices", () => {

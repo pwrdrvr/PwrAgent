@@ -272,6 +272,20 @@
     "rowsChanged": 10,
     "statements": 10
   },
+  "messaging-project-move-picker": {
+    "commits": 6,
+    "note": "one bounded project-picker page through the shared messaging controller, excluding binding setup",
+    "observedWalBytes": 78280,
+    "rowsChanged": 5,
+    "statements": 5
+  },
+  "move-thread-project": {
+    "commits": 1,
+    "note": "one operator project move replaces the workspace and clears project runtime atomically",
+    "observedWalBytes": 16480,
+    "rowsChanged": 1,
+    "statements": 1
+  },
   "native-subagent-discovery-backfill": {
     "commits": 2,
     "note": "one missing native child pricing row and parent sub-agent card discovered from the thread list",

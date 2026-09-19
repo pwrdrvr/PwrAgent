@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdir, realpath } from "node:fs/promises";
+import { mkdir, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import type {
@@ -16,6 +16,7 @@ import { DESKTOP_WORKTREE_STORAGE_DEFAULT } from "@pwragent/shared";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import {
   computeWorktreePath,
+  inspectGitWorkspace,
   releaseWorktreePathReservation,
 } from "./git-directory-service";
 import { WorktreeArchiveService } from "./worktree-archive-service";
@@ -87,6 +88,7 @@ type HandoffParams = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
   direction: ThreadWorkspaceHandoffDirection;
+  targetPath?: string;
   strategy?: ThreadWorkspaceHandoffStrategy;
   repositoryPath?: string;
   sourcePath?: string;
@@ -353,10 +355,58 @@ export class GitWorkspaceHandoffService {
 
   async handoff(params: HandoffParams): Promise<HandoffThreadWorkspaceResponse> {
     const response =
-      params.direction === "local-to-worktree"
-        ? await this.handoffLocalToWorktree(params)
-        : await this.handoffWorktreeToLocal(params);
+      params.direction === "to-project"
+        ? await this.handoffToProject(params)
+        : params.direction === "local-to-worktree"
+          ? await this.handoffLocalToWorktree(params)
+          : await this.handoffWorktreeToLocal(params);
     return normalizeHandoffResponseIdentifiers(response);
+  }
+
+  private async handoffToProject(params: HandoffParams): Promise<HandoffThreadWorkspaceResponse> {
+    if (!params.targetPath?.trim() || !path.isAbsolute(params.targetPath.trim())) {
+      throw new Error("Move to Project requires an absolute destination directory.");
+    }
+    const targetPath = await realpath(params.targetPath.trim());
+    if (!(await stat(targetPath)).isDirectory()) {
+      throw new Error("Move to Project requires an existing directory.");
+    }
+    const inspection = await inspectGitWorkspace(targetPath, { env: this.gitEnv });
+    if (inspection.kind !== "worktree") {
+      throw new Error("Select a Git project checkout or worktree as the destination.");
+    }
+    const worktrees = parseWorktreeList(
+      (await runGit(targetPath, ["worktree", "list", "--porcelain"], this.gitEnv)).stdout,
+    );
+    const repositoryPath = worktrees[0]?.path;
+    if (!repositoryPath) {
+      throw new Error("Cannot resolve the destination repository.");
+    }
+    const workspacePath = trim(
+      (await runGit(targetPath, ["rev-parse", "--show-toplevel"], this.gitEnv)).stdout,
+    );
+    if (path.resolve(workspacePath) !== path.resolve(targetPath)) {
+      throw new Error("Select the root of the destination checkout or worktree.");
+    }
+    const isWorktree = path.resolve(repositoryPath) !== path.resolve(targetPath);
+    return {
+      backend: params.backend,
+      threadId: params.threadId,
+      direction: "to-project",
+      workMode: isWorktree ? "worktree" : "local",
+      branch: inspection.branch,
+      repositoryPath,
+      targetPath,
+      linkedDirectory: {
+        id: `pwragent-handoff:${params.backend}:${params.threadId}`,
+        label: pathBaseName(repositoryPath),
+        path: repositoryPath,
+        kind: isWorktree ? "worktree" : "local",
+        ...(isWorktree ? { worktreePath: targetPath } : {}),
+      },
+      warnings: [],
+      completedAt: params.now ?? Date.now(),
+    };
   }
 
   private async buildContext(params: HandoffParams): Promise<HandoffContext> {

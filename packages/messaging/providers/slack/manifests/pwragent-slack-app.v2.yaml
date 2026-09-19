@@ -26,7 +26,7 @@ features:
       description: start a new thread from a project
       should_escape: false
     - command: /pwragent_status
-      description: show the current binding and controls
+      description: show binding and controls; /status handoff opens workspace moves
       should_escape: false
     - command: /pwragent_detach
       description: detach this conversation from its thread

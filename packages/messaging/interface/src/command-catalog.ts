@@ -29,7 +29,7 @@ export const MESSAGING_COMMAND_CATALOG = [
   },
   {
     verb: "status",
-    description: "show the current binding and controls",
+    description: "show binding and controls; /status handoff opens workspace moves",
     helpAction: true,
   },
   {
