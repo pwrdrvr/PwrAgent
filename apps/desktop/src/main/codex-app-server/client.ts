@@ -1,3 +1,4 @@
+import { ThreadListTextCache } from "./thread-list-text-cache";
 import { CODEX_SIGN_IN_REQUIRED, codexAuthState } from "../codex-auth-state";
 import { mkdir } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
@@ -1914,23 +1915,11 @@ function normalizeTitleForComparison(value: string): string {
   return value.replace(/\s+/g, " ").trim().toLowerCase();
 }
 
-function getThreadTitleInfo(record: Record<string, unknown>): {
+function getThreadTitleInfo(rawExplicitTitle: string | undefined, derivedTitle: string | undefined): {
   title: string;
   titleSource: AppServerThreadTitleSource;
 } {
-  const sessionRecord = asRecord(record.session);
-  const explicitTitle = normalizeExplicitThreadName(
-    pickString(record, ["title", "name", "headline"]) ??
-      pickString(sessionRecord ?? {}, ["title", "name", "headline"])
-  );
-  const derivedTitle =
-    pickString(record, ["preview", "snippet", "firstUserMessage", "first_user_message"]) ??
-    pickString(sessionRecord ?? {}, [
-      "preview",
-      "snippet",
-      "firstUserMessage",
-      "first_user_message",
-    ]);
+  const explicitTitle = normalizeExplicitThreadName(rawExplicitTitle);
   const shortenedDerivedTitle = shortenDerivedThreadTitle(derivedTitle) ?? derivedTitle;
 
   if (explicitTitle && !isPlaceholderThreadTitle(explicitTitle)) {
@@ -6047,7 +6036,7 @@ function isRequestTimeoutError(error: unknown, method: string): boolean {
   return text.toLowerCase().includes(`json-rpc timeout: ${method.toLowerCase()}`);
 }
 
-function extractThreadsFromValue(value: unknown): RawCodexThreadSummary[] {
+function extractThreadsFromValue(value: unknown, textCache: ThreadListTextCache): RawCodexThreadSummary[] {
   const items = extractThreadRecords(value);
   const summaries = new Map<string, RawCodexThreadSummary>();
 
@@ -6081,7 +6070,8 @@ function extractThreadsFromValue(value: unknown): RawCodexThreadSummary[] {
     const rolloutPath =
       pickString(record, ["path"]) ??
       pickString(sessionRecord ?? {}, ["path"]);
-    const titleInfo = getThreadTitleInfo(record);
+    const rawExplicitTitle = pickString(record, ["title", "name", "headline"])
+      ?? pickString(sessionRecord ?? {}, ["title", "name", "headline"]);
     const rawDerivedTitle =
       pickString(record, ["preview", "snippet", "firstUserMessage", "first_user_message"]) ??
       pickString(sessionRecord ?? {}, [
@@ -6090,7 +6080,7 @@ function extractThreadsFromValue(value: unknown): RawCodexThreadSummary[] {
         "firstUserMessage",
         "first_user_message",
       ]);
-    const summary = normalizeThreadSummary(
+    const rawSummary =
       pickString(record, [
         "summary",
         "preview",
@@ -6104,21 +6094,23 @@ function extractThreadsFromValue(value: unknown): RawCodexThreadSummary[] {
           "snippet",
           "firstUserMessage",
           "first_user_message",
-        ])
-    );
+        ]);
+    const text = textCache.read(threadId, [rawExplicitTitle, rawDerivedTitle, rawSummary], () => {
+      const titleInfo = getThreadTitleInfo(rawExplicitTitle, rawDerivedTitle);
+      const summary = normalizeThreadSummary(rawSummary);
+      return {
+        ...titleInfo,
+        summary: summary === titleInfo.title
+          || (titleInfo.titleSource === "derived" && summary === normalizeThreadSummary(rawDerivedTitle))
+          ? undefined : summary,
+      };
+    });
     const threadStatus = readThreadStatus(record);
 
     summaries.set(threadId, {
       id: threadId,
-      title: titleInfo.title,
-      titleSource: titleInfo.titleSource,
+      ...text,
       ...(threadStatus ? { threadStatus } : {}),
-      summary:
-        summary === titleInfo.title ||
-        (titleInfo.titleSource === "derived" &&
-          summary === normalizeThreadSummary(rawDerivedTitle))
-          ? undefined
-          : summary,
       originator,
       path: rolloutPath,
       projectKey,
@@ -6166,13 +6158,13 @@ function extractThreadsFromValue(value: unknown): RawCodexThreadSummary[] {
   );
 }
 
-function extractThreadListPage(value: unknown): RawCodexThreadListPage {
+function extractThreadListPage(value: unknown, textCache: ThreadListTextCache): RawCodexThreadListPage {
   const record = asRecord(value);
   return {
     nextCursor: record
       ? pickString(record, ["nextCursor", "next_cursor", "after"])
       : undefined,
-    threads: extractThreadsFromValue(value),
+    threads: extractThreadsFromValue(value, textCache),
   };
 }
 
@@ -7261,6 +7253,7 @@ async function requestWithFallbacks(params: {
 }
 
 async function requestThreadListPages(params: {
+  textCache: ThreadListTextCache;
   archived?: boolean;
   client: Pick<JsonRpcConnection, "request">;
   diagnostics?: JsonRpcObserverDiagnostics;
@@ -7302,7 +7295,7 @@ async function requestThreadListPages(params: {
       timeoutMs: params.requestTimeoutMs,
       deadlineAt: params.deadlineAt,
     });
-    const page = extractThreadListPage(result);
+    const page = extractThreadListPage(result, params.textCache);
     pages.push(...page.threads);
     pageCount += 1;
     rawThreadCount += page.threads.length;
@@ -7420,6 +7413,7 @@ export class CodexAppServerClient {
       }
     >
   >();
+  private readonly threadListTextCache = new ThreadListTextCache();
   private readonly pendingThreadListings = new Map<string, Promise<AppServerThreadSummary[]>>();
   private readonly recordedThreadNames = new Map<string, string>();
   private readonly requestListeners = new Set<
@@ -7671,6 +7665,7 @@ export class CodexAppServerClient {
     this.initializeResult = null;
     this.rejectHelperTurnWaiters(new Error("codex app server client closed"));
     this.pendingThreadListings.clear();
+    this.threadListTextCache.clear();
     this.pendingFirstTurnThreadResults.clear();
     this.pendingFirstTurnShellEnvironments.clear();
     this.recordedThreadNames.clear();
@@ -7721,6 +7716,7 @@ export class CodexAppServerClient {
       // resolved without guessing at Codex-owned storage paths.
       const matchingThreads = (
         await requestThreadListPages({
+          textCache: this.threadListTextCache,
           archived: false,
           client: this.rawConnection,
           requestTimeoutMs:
@@ -8299,6 +8295,7 @@ export class CodexAppServerClient {
     };
     if (params?.archived === true) {
       const archivedThreads = await requestThreadListPages({
+        textCache: this.threadListTextCache,
         archived: true,
         client: this.connection,
         diagnostics,
@@ -8315,6 +8312,7 @@ export class CodexAppServerClient {
 
     const activeThreads = filterVisibleCodexThreads(
       await requestThreadListPages({
+        textCache: this.threadListTextCache,
         archived: false,
         client: this.connection,
         diagnostics,
@@ -8355,6 +8353,7 @@ export class CodexAppServerClient {
     await this.ensureInitialized();
 
     const nativeThreads = await requestThreadListPages({
+      textCache: this.threadListTextCache,
       archived: false,
       client: this.connection,
       diagnostics,
@@ -8385,6 +8384,7 @@ export class CodexAppServerClient {
 
     const rawThreads = filterVisibleCodexThreads(
       await requestThreadListPages({
+        textCache: this.threadListTextCache,
         archived: params?.archived === true,
         client: this.connection,
         filter: params?.filter,
@@ -8444,6 +8444,7 @@ export class CodexAppServerClient {
     }
 
     const requestPromise = requestThreadListPages({
+      textCache: this.threadListTextCache,
       archived: true,
       client: this.connection,
       diagnostics: diagnostics
