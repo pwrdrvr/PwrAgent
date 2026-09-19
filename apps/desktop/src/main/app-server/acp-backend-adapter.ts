@@ -157,6 +157,7 @@ export type AcpRuntimeClient = Pick<
       | "hasActiveTurns"
       | "hasRetainableSessions"
       | "listRewindPoints"
+      | "offersThoughtLevel"
       | "ownsSession"
       | "readProviderStatus"
       | "sendControlPrompt"

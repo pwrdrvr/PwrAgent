@@ -2570,6 +2570,7 @@ function createKimiAcpRegistry(options?: {
   steerSession?: AcpSteerSession;
   rewindSession?: AcpRewindSession;
   configureWorkflowBudget?: AcpConfigureWorkflowBudget;
+  offersThoughtLevel?: (sessionId: string, level: string) => boolean;
 }) {
   const acpBackendId =
     options?.installedAgent?.backendId
@@ -2656,6 +2657,9 @@ function createKimiAcpRegistry(options?: {
     steerSession,
     rewindSession,
     configureWorkflowBudget,
+    ...(options?.offersThoughtLevel
+      ? { offersThoughtLevel: options.offersThoughtLevel }
+      : {}),
   };
   const registry = new DesktopBackendRegistry({
     codexClient: options?.codexClient ?? new MockBackendClient({ threads: [] }),
@@ -10038,6 +10042,157 @@ describe("DesktopBackendRegistry", () => {
     );
 
     await registry.close();
+  });
+
+  describe("Kimi turn-start model writes", () => {
+    // Measured on Kimi Code 2.0.0: a session keeps its thinking level across
+    // a model switch, and ignores a level its model does not offer. Either way
+    // the level it records never matches the composer's, so a comparison that
+    // counts it re-sends the model on every turn.
+    const k27 = "kimi-code/kimi-for-coding";
+    const k3 = "kimi-code/k3";
+    const sessionId = "kimi-session-1";
+
+    function createThinkingRegistry(params: {
+      recorded: { model: string; thinking: string };
+      offersThoughtLevel?: (sessionId: string, level: string) => boolean;
+    }) {
+      const acpBackendId = "acp:kimi" as AcpBackendId;
+      return createKimiAcpRegistry({
+        acpBackendId,
+        offersThoughtLevel: params.offersThoughtLevel,
+        runtimeCapabilities: {
+          schemaVersion: 1,
+          status: "discovered",
+          source: "session-load",
+          configOptions: [
+            {
+              id: "model",
+              label: "Model",
+              type: "select",
+              category: "model",
+              currentValue: params.recorded.model,
+              values: [{ value: k27 }, { value: k3 }],
+            },
+            {
+              id: "thinking",
+              label: "Thinking",
+              type: "select",
+              category: "thought_level",
+              currentValue: params.recorded.thinking,
+              values: [
+                { value: "low" },
+                { value: "high" },
+                { value: "max" },
+                { value: "on" },
+              ],
+            },
+          ],
+          models: {
+            currentModelId: params.recorded.model,
+            availableModels: [
+              { id: k27, label: "K2.7 Coding", supportsReasoning: false },
+              {
+                id: k3,
+                label: "K3",
+                supportsReasoning: true,
+                // Discovery's catalog pollution: K3 does not offer `on`.
+                reasoningEfforts: ["low", "high", "max", "on"],
+                defaultReasoningEffort: "high",
+              },
+            ],
+          },
+        },
+        sessions: [
+          {
+            backendId: acpBackendId,
+            sessionId,
+            title: "Breakfast plans",
+            cwd: "/repo/app",
+            createdAt: 1000,
+            updatedAt: 2000,
+            executionMode: "default",
+            status: "idle",
+            acpRuntime: {
+              configValues: {
+                model: params.recorded.model,
+                thinking: params.recorded.thinking,
+              },
+              reasoningEffort: params.recorded.thinking,
+              updatedAt: 2000,
+            },
+          },
+        ],
+      });
+    }
+
+    async function runTurns(
+      registry: DesktopBackendRegistry,
+      acpBackendId: AcpBackendId,
+      settings: { model: string; reasoningEffort?: string },
+      count: number,
+    ): Promise<void> {
+      for (let turn = 0; turn < count; turn += 1) {
+        await registry.startTurn({
+          backend: acpBackendId,
+          threadId: sessionId,
+          input: [{ type: "text", text: "Plan breakfast" }],
+          ...settings,
+        });
+        await emitCompletedTurn(registry, acpBackendId, sessionId);
+      }
+    }
+
+    it("does not re-send the model for a level kept from the previous model", async () => {
+      const { acpBackendId, acpClient, registry } = createThinkingRegistry({
+        recorded: { model: k27, thinking: "low" },
+      });
+
+      await runTurns(registry, acpBackendId, { model: k27 }, 2);
+
+      expect(acpClient.startPrompt).toHaveBeenCalledTimes(2);
+      expect(acpClient.setRuntimeOption).toHaveBeenCalledTimes(0);
+
+      await registry.close();
+    });
+
+    it("does not re-send the model for a level the session does not offer", async () => {
+      const offersThoughtLevel = vi.fn(
+        (_sessionId: string, level: string) => level !== "on",
+      );
+      const { acpBackendId, acpClient, registry } = createThinkingRegistry({
+        recorded: { model: k3, thinking: "high" },
+        offersThoughtLevel,
+      });
+
+      await runTurns(registry, acpBackendId, { model: k3, reasoningEffort: "on" }, 2);
+
+      expect(acpClient.startPrompt).toHaveBeenCalledTimes(2);
+      expect(acpClient.setRuntimeOption).toHaveBeenCalledTimes(0);
+      expect(offersThoughtLevel).toHaveBeenCalledWith(sessionId, "on");
+
+      await registry.close();
+    });
+
+    it("still writes a level the session offers", async () => {
+      const { acpBackendId, acpClient, registry } = createThinkingRegistry({
+        recorded: { model: k3, thinking: "high" },
+        offersThoughtLevel: (_sessionId, level) => level !== "on",
+      });
+
+      await runTurns(registry, acpBackendId, { model: k3, reasoningEffort: "max" }, 1);
+
+      expect(acpClient.setRuntimeOption).toHaveBeenCalledTimes(1);
+      expect(acpClient.setRuntimeOption).toHaveBeenCalledWith({
+        sessionId,
+        source: "model",
+        optionId: "model",
+        value: k3,
+        reasoningEffort: "max",
+      });
+
+      await registry.close();
+    });
   });
 
   it("runs Kimi ACP execution mode changes through slash control prompts", async () => {

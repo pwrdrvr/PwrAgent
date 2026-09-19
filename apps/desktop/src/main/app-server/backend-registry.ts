@@ -12048,12 +12048,21 @@ export class DesktopBackendRegistry {
           ]
         : undefined) ??
       sessionForTurn.acpRuntime?.reasoningEffort;
+    // A model write sends no level when none is requested, and the client
+    // drops one the session's own menu does not list. Kimi keeps a level
+    // across a model switch and ignores an unoffered one, so in both cases
+    // the recorded level never converges and the write would repeat forever.
+    const reasoningEffortNeedsWrite = Boolean(
+      params.reasoningEffort
+      && currentReasoningEffort !== params.reasoningEffort
+      && client.offersThoughtLevel?.(
+        params.threadId,
+        params.reasoningEffort,
+      ) !== false,
+    );
     if (
       params.model &&
-      (
-        currentModel !== params.model ||
-        currentReasoningEffort !== params.reasoningEffort
-      )
+      (currentModel !== params.model || reasoningEffortNeedsWrite)
     ) {
       await client.setRuntimeOption?.({
         sessionId: params.threadId,

@@ -1136,6 +1136,20 @@ export class AcpAgentClient {
     }
   }
 
+  /** False only when a model write would drop `level` for this session: its
+   *  own latest reply reported a thought-level menu without it. */
+  offersThoughtLevel(sessionId: string, level: string): boolean {
+    const thoughtLevelConfigOption = this.runtimeConfigOption("thought_level");
+    return (
+      !thoughtLevelConfigOption
+      || this.sessionOffersConfigValue(
+        this.protocolSessionIdFor(sessionId),
+        thoughtLevelConfigOption.id,
+        level,
+      )
+    );
+  }
+
   /** False only for a thought level this session's current model does not
    *  offer, by the menu its own latest reply reported. */
   private sessionOffersConfigValue(
