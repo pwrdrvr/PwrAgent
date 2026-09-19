@@ -1,3 +1,4 @@
+import { activityDetailsMatch } from "./activity-detail-match";
 import { useThreadUsageDisplay } from "./useThreadUsageDisplay";
 import {
   reconcileCompletedTurnUsageEntries,
@@ -1336,6 +1337,34 @@ function getThreadHydrationVersion(
   ].join(":");
 }
 
+// Both replay and optimistic entries are immutable. Output chunks replace one
+// live entry, so retain reconciliation results for all the unchanged entries.
+// Weak keys release these results when a thread or replay snapshot is evicted.
+const replayActivityMatches = new WeakMap<
+  AppServerThreadEntry[],
+  WeakMap<AppServerThreadActivityEntry, boolean>
+>();
+
+function hasMatchingReplayActivity(
+  entries: AppServerThreadEntry[],
+  optimistic: AppServerThreadActivityEntry,
+): boolean {
+  let matches = replayActivityMatches.get(entries);
+  if (!matches) {
+    matches = new WeakMap();
+    replayActivityMatches.set(entries, matches);
+  }
+  const cached = matches.get(optimistic);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const matched = entries.some((candidate) =>
+    candidate.type === "activity" && activityEntriesMatch(candidate, optimistic),
+  );
+  matches.set(optimistic, matched);
+  return matched;
+}
+
 function pruneOptimisticEntries(
   optimisticEntries: AppServerThreadEntry[],
   response: AppServerReadThreadResponse | undefined,
@@ -1389,11 +1418,7 @@ function pruneOptimisticEntries(
         return false;
       }
 
-      return !response.replay.entries.some(
-        (candidate) =>
-          candidate.type === "activity" &&
-          activityEntriesMatch(candidate, entry)
-      );
+      return !hasMatchingReplayActivity(response.replay.entries, entry);
     }
 
     return !response.replay.entries.some((candidate) => candidate.id === entry.id);
@@ -1461,22 +1486,10 @@ function activityEntriesMatch(
     return false;
   }
 
-  return optimisticEntry.details.every((detail) =>
-    candidate.details.some((candidateDetail) => {
-      if (candidateDetail.id === detail.id) {
-        return true;
-      }
-      if (tokenUsageMatch && candidateDetail.label === detail.label) {
-        return true;
-      }
-      if (detail.command?.displayCommand) {
-        return candidateDetail.command?.displayCommand === detail.command.displayCommand;
-      }
-      if (detail.fileDiff?.diff) {
-        return candidateDetail.fileDiff?.diff === detail.fileDiff.diff;
-      }
-      return false;
-    })
+  return activityDetailsMatch(
+    candidate.details,
+    optimisticEntry.details,
+    tokenUsageMatch,
   );
 }
 
