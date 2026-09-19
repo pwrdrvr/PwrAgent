@@ -4835,12 +4835,51 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     backend: ThreadOverlayState["backend"];
     threadIds: string[];
   }): Promise<Record<string, ThreadOverlayState | undefined>> {
-    return Object.fromEntries(
-      params.threadIds.map((threadId) => {
-        const threadKey = buildThreadIdentityKey(params.backend, threadId);
-        return [threadId, this.getThread(threadKey)];
-      }),
-    );
+    const threadIds = [...new Set(params.threadIds)];
+    const entries: Array<[string, ThreadOverlayState | undefined]> = [];
+    // Keep result materialization bounded and use indexed identity lookups.
+    // No retained overlays: callers may mutate them and other connections may
+    // update either table between listings.
+    for (let offset = 0; offset < threadIds.length; offset += 500) {
+      const requested = threadIds.slice(offset, offset + 500).map((id) => ({
+        id,
+        key: encodeThreadIdentityKeyForStorage(buildThreadIdentityKey(params.backend, id)),
+      }));
+      const rows = this.stateDb.raw.prepare(`
+        SELECT json_extract(requested.value, '$.id') AS id, threads.payload
+        FROM json_each(?) AS requested
+        LEFT JOIN threads ON threads.thread_id = json_extract(requested.value, '$.key')
+      `).all(JSON.stringify(requested)) as Array<{ id: string; payload: string | null }>;
+      const overlays = rows.map((row) => ({
+        id: row.id,
+        overlay: row.payload === null ? undefined : normalizeThreadOverlayState(JSON.parse(row.payload)),
+      }));
+      // Read pending claims using the decoded identity, as getThread does.
+      // Do not json_extract the full overlay in SQLite: histories can be large
+      // and the JavaScript consumer already needs to parse that payload once.
+      const identities = overlays.flatMap(({ overlay }) => overlay
+        ? [{ backend: overlay.backend, threadId: overlay.threadId }] : []);
+      const pendingRows = identities.length === 0 ? [] : this.stateDb.raw.prepare(`
+        SELECT json_extract(requested.value, '$.backend') AS backend,
+          json_extract(requested.value, '$.threadId') AS thread_id, claims.payload
+        FROM json_each(?) AS requested
+        LEFT JOIN pr_auto_dispatch_claims AS claims
+          ON claims.backend = json_extract(requested.value, '$.backend')
+          AND claims.thread_id = json_extract(requested.value, '$.threadId')
+          AND claims.status = 'pending'
+      `).all(JSON.stringify(identities)) as Array<{
+        backend: ThreadOverlayState["backend"]; thread_id: string; payload: string | null;
+      }>;
+      const pendingByKey = new Map(pendingRows.map((row) => [
+        buildThreadIdentityKey(row.backend, row.thread_id),
+        row.payload ? parsePrAutoDispatchPendingRecord(row.payload) : undefined,
+      ]));
+      for (const { id, overlay } of overlays) {
+        const pending = overlay && pendingByKey.get(buildThreadIdentityKey(overlay.backend, overlay.threadId));
+        entries.push([id, overlay && pending ? { ...overlay, prAutoDispatchPending: pending.pending } : overlay]);
+      }
+    }
+    return Object.fromEntries(entries);
   }
 
   async upsertWorktreeSnapshot(params: {

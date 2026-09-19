@@ -2212,6 +2212,40 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it.each([10, 100, 1_000])("reuses unchanged text for %i fresh provider rows while updating metadata", async (count) => {
+    const shared = await import("@pwragent/shared");
+    const normalize = vi.spyOn(shared, "shortenDerivedThreadTitle");
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const rows = Array.from({ length: count }, (_, index) => ({
+      id: `text-${index}`, name: `Title ${index}`, preview: `Please investigate fixture ${index}`,
+      summary: `Summary ${index}`, source: "vscode", updatedAt: 100,
+    }));
+    MockTransport.threadListResultBySearchTerm.set("text-work", rows);
+    const client = new CodexAppServerClient({ command: "codex" });
+    const params = { filter: "text-work", enrichDirectories: false, skipArchivedMetadataRefresh: true };
+    try {
+      for (let refresh = 0; refresh < 4; refresh++) await client.listThreads(params);
+      expect(normalize).toHaveBeenCalledTimes(count);
+      rows[0]!.updatedAt = 200;
+      const updated = await client.listThreads(params);
+      expect(updated.find((row) => row.id === "text-0")?.updatedAt).toBe(200_000);
+      expect(normalize).toHaveBeenCalledTimes(count);
+      rows[0]!.name = "External rename";
+      rows[1]!.summary = "External summary";
+      rows[2]!.preview = "External preview";
+      const changed = await client.listThreads(params);
+      expect(changed.find((row) => row.id === "text-0")?.title).toBe("External rename");
+      expect(changed.find((row) => row.id === "text-1")?.summary).toBe("External summary");
+      expect(normalize).toHaveBeenCalledTimes(count + 3);
+      const transport = MockTransport.instances.at(-1)!;
+      expect(transport.sentMessages.map((message) => JSON.parse(message))
+        .filter((message) => message.method === "thread/list")).toHaveLength(6);
+    } finally {
+      normalize.mockRestore();
+      await client.close();
+    }
+  });
+
   it("shares provider scans and enrichment across concurrent listing consumers", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     MockTransport.threadListResultBySearchTerm.set("shared-list", Array.from(
