@@ -142,7 +142,12 @@ it("materializes hard-linked Windows toolchain files before validating the extra
       .not.toBe(statSync(join(cache, "index.js")).ino);
 
     const archive = join(temp, "input.tgz");
-    const packed = spawnSync("tar", ["-czf", archive, "-C", materialized, ...paths], { encoding: "utf8" });
+    // Git for Windows' tar treats an absolute C:\\ path as a remote-host
+    // archive name, so keep the test fixture's archive path relative.
+    const packed = spawnSync("tar", ["-czf", "../input.tgz", ...paths], {
+      cwd: materialized,
+      encoding: "utf8",
+    });
     expect(packed.status, packed.stderr).toBe(0);
     const verified = verifyWindowsSigningInputArchive(archive);
     expect(verified.status, verified.stderr).toBe(0);
