@@ -256,6 +256,21 @@ describe("federation endpoint credential scoping", () => {
     expect(classifyFederationClientFailure((failure as Error).message)).toBe("auth");
   });
 
+  it("walks on to a fallback endpoint when Cloudflare refuses only its own credential", async () => {
+    cloudflareEndpoint.value = "wss://federation.example.com";
+    connectFailure.next = new Error("Unexpected server response: 403");
+    const harness = createHarness([
+      "wss://federation.example.com",
+      "ws://192.168.1.20:47830",
+    ]) as CredentialHarness & { walkGatewayEndpoints: () => Promise<void> };
+    // A revoked service token closes the Cloudflare path, not the pairing.
+    await harness.walkGatewayEndpoints();
+    expect(connectCalls.map((call) => call.url)).toEqual([
+      "wss://federation.example.com",
+      "ws://192.168.1.20:47830",
+    ]);
+  });
+
   it("leaves a 403 from a host that got no Cloudflare credential as it was", async () => {
     connectFailure.next = new Error("Unexpected server response: 403");
     await expect(createHarness(["ws://192.168.1.20:47830"]).connectClient("ws://192.168.1.20:47830"))

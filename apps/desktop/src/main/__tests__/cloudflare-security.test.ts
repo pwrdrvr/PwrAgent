@@ -5,7 +5,7 @@ import { createCloudflareCa, issueCloudflareClient } from "../federation/cloudfl
 import { CloudflareOriginProbes } from "../federation/cloudflare-origin-probes";
 import { refusedAtEdge, validateCloudflareBoundary } from "../federation/cloudflare-security-validation";
 import { encryptCloudflareBundle, decryptCloudflareBundle } from "../federation/cloudflare-client-bundle";
-import { applicationCoversHostname, cloudflareMtlsPolicy, isExactMtlsPolicy, cloudflareHostname, CloudflareApi } from "../federation/cloudflare-api";
+import { applicationCoversHostname, cloudflareMtlsPolicy, isExactAdmissionPolicy, cloudflareHostname, CloudflareApi } from "../federation/cloudflare-api";
 
 describe("Cloudflare client certificates", () => {
   it("issues a client-auth certificate under a local CA and protects its transfer bundle", async () => {
@@ -104,11 +104,14 @@ describe("Cloudflare admission proof", () => {
 
 describe("Cloudflare policy audit", () => {
   it("requires both a valid certificate and the exact client allowlist", () => {
+    // The comparison the audit ships with, not a copy of it.
     const policy = cloudflareMtlsPolicy(["client-a"]);
-    expect(isExactMtlsPolicy(policy, ["client-a"])).toBe(true);
-    expect(isExactMtlsPolicy({ ...policy, decision: "bypass" }, ["client-a"])).toBe(false);
-    expect(isExactMtlsPolicy({ ...policy, require: [] }, ["client-a"])).toBe(false);
-    expect(isExactMtlsPolicy({ ...policy, include: [...policy.include, { everyone: {} }] }, ["client-a"])).toBe(false);
+    expect(isExactAdmissionPolicy("mtls", policy, ["client-a"])).toBe(true);
+    expect(isExactAdmissionPolicy("mtls", { ...policy, decision: "bypass" }, ["client-a"])).toBe(false);
+    expect(isExactAdmissionPolicy("mtls", { ...policy, require: [] }, ["client-a"])).toBe(false);
+    expect(isExactAdmissionPolicy("mtls", { ...policy, include: [...policy.include, { everyone: {} }] }, ["client-a"])).toBe(false);
+    // An empty allowlist admits nobody, and must not pass as an exact match either.
+    expect(isExactAdmissionPolicy("mtls", cloudflareMtlsPolicy([]), [])).toBe(false);
   });
   it("detects wildcard and path-specific applications that can override the endpoint", () => {
     for (const domain of ["*.example.com", "federation.example.com/private", "federation.example.com"]) {

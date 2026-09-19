@@ -148,7 +148,7 @@ describe.each<Gate>(["service-token", "mtls"])("Cloudflare provisioning (%s)", (
     const client = await h.service.issue("Travel laptop");
     await h.service.recordEnrollment(client.id, "federation-enrollment:one");
     expect(JSON.stringify(await h.service.status())).not.toContain("federation-enrollment:one");
-    await h.service.revoke(client.id);
+    expect(await h.service.revoke(client.id)).toBe(true);
     // Access checks a credential only when a connection opens; the open one
     // ends only because the peer its file enrolled is revoked.
     expect(h.revokeEnrollment).toHaveBeenCalledWith("federation-enrollment:one");
@@ -178,7 +178,10 @@ describe.each<Gate>(["service-token", "mtls"])("Cloudflare provisioning (%s)", (
     const callsAfterIssue = JSON.stringify(h.calls.filter((call) => call.method !== "POST" || !call.path.endsWith("/service_tokens")));
     expect(callsAfterIssue).not.toContain(secret);
     expect(JSON.stringify(await h.service.status())).not.toContain(secret);
-    await h.service.revoke(client.id);
+    // No enrollment was recorded for this client, so no peer was ended, and
+    // the revoke says so rather than claiming its session closed.
+    expect(await h.service.revoke(client.id)).toBe(false);
+    expect(h.revokeEnrollment).not.toHaveBeenCalled();
     expect(h.state()?.clients[0].revoked).toBe(true);
     const policyUpdate = h.calls.filter((call) => call.method === "PUT" && call.path.includes("/policies/")).at(-1);
     expect(JSON.stringify(policyUpdate?.body)).not.toContain(client.id);

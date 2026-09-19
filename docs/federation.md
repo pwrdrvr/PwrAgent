@@ -129,16 +129,20 @@ Access checks a credential only when a connection opens, so removing it from
 the policy alone would leave an open session running. Revoking an issued
 client therefore also revokes the federation peer that enrolled with its
 setup file, which closes that session; an invite nobody has used yet is
-retired instead.
+retired instead. A client issued before PwrAgent recorded which invite went
+with it has no known peer, and the revoke says so: revoke its peer under
+Federation Instances to end a session that is already open.
 
 On a client, "Connect this client" leads with the connection through the
 Cloudflare endpoint, in the same terms as Federation health, and folds the
 import steps away once a setup file has been imported. An import reports
 whether the connection came up. When Cloudflare refuses the client's service
 token or certificate, the error says so, rather than calling the gateway
-unreachable. That refusal, and a sign-in that is required, stop the client
-from redialing when the Cloudflare endpoint is its only path. Signing in,
-importing a setup file, or changing settings starts it again. On the gateway,
+unreachable. That refusal, like a sign-in that is required, belongs to the
+Cloudflare path alone: a client with other endpoints tries them next, and
+reports it only if none connects. When the Cloudflare endpoint is the only
+path, the client stops redialing. Signing in, importing a setup file, or
+changing settings starts it again. On the gateway,
 a peer that arrived through the tunnel is listed as "via Cloudflare Tunnel",
 with the client address Cloudflare reports, instead of as the connector's
 loopback socket.

@@ -666,6 +666,7 @@ import {
   STAR_MAP_WRITE_WORKSPACE_CHANNEL,
   FEDERATION_TAILSCALE_CONFIGURE_CHANNEL,
   FEDERATION_TAILSCALE_STATUS_CHANNEL,
+  FEDERATION_CLOUDFLARE_SETUP_CHANNEL,
   CODEX_ENVIRONMENT_SETUP_PROGRESS_CHANNEL,
   COMPOSER_DRAFT_CLEAR_CHANNEL,
   COMPOSER_DRAFT_LIST_CANDIDATES_CHANNEL,
@@ -1278,7 +1279,7 @@ const desktopApi = Object.freeze({
   configureFederationCloudflare: async (
     request: import("@pwragent/shared").CloudflareSetupRequest,
   ): Promise<import("@pwragent/shared").CloudflareSetupStatus> =>
-    await ipcRenderer.invoke("federation:cloudflare-setup", request),
+    await ipcRenderer.invoke(FEDERATION_CLOUDFLARE_SETUP_CHANNEL, request),
   configureFederationTailscale: async (
     request: ConfigureFederationTailscaleRequest,
   ): Promise<ConfigureFederationTailscaleResponse> =>

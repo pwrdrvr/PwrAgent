@@ -297,6 +297,7 @@ describe("Cloudflare setup flow", () => {
     const call = vi.fn(async (request: CloudflareSetupRequest) => {
       if (request.action === "sign-in") return new Promise<CloudflareSetupStatus>((resolve) => { finish = resolve; });
       if (request.action === "sign-out") throw new Error("Error invoking remote method 'federation:cloudflare-setup': Error: Cloudflare refused.");
+      if (request.action === "reopen-sign-in") return { ...connected, signIn, message: "No sign-in is waiting. Choose Sign in, or open the client setup file again." };
       return { ...connected, signIn };
     });
     render(<CloudflareSetup api={{ configureFederationCloudflare: call } as DesktopApi}
@@ -305,6 +306,9 @@ describe("Cloudflare setup flow", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Sign in" }));
     fireEvent.click(await screen.findByRole("button", { name: "Open the sign-in page again" }));
     await waitFor(() => expect(call).toHaveBeenCalledWith({ action: "reopen-sign-in" }));
+    // The answer shows beside the button while the sign-in still waits; the
+    // stage's outcome line is busy reporting the wait itself.
+    expect(await screen.findByText("No sign-in is waiting. Choose Sign in, or open the client setup file again.")).toBeInTheDocument();
     expect(screen.getByText(/one-time PIN works with any address/)).toBeInTheDocument();
     finish({ ...connected, signIn: { ...signIn, state: "signed-in" } });
     fireEvent.click(await screen.findByRole("button", { name: "Sign out" }));

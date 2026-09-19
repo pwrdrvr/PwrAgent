@@ -57,11 +57,26 @@ function logFailedChecks(run: string, checks: CloudflareSetupStatus["checks"]): 
 const latestCloudflared = createCloudflaredReleaseCheck();
 
 /**
+ * A lookup's answer if it arrives within 750 ms, else undefined. The release
+ * check can take its whole 4-second timeout on a slow network, and a status
+ * read must not wait on GitHub; a lookup still running lands in the check's
+ * cache for the next read.
+ */
+async function briefly<T>(lookup: Promise<T | undefined>): Promise<T | undefined> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<undefined>((resolve) => { timer = setTimeout(() => resolve(undefined), 750); });
+  try { return await Promise.race([lookup, late]); } finally { clearTimeout(timer); }
+}
+
+/**
  * The gateway setup plus what only this profile knows: the unsaved draft, the
  * installed connector's version and any newer release, and, when this instance
  * connects through a sign-in endpoint, its own sign-in.
  */
 async function describe(message?: string, options: { refreshConnector?: boolean } = {}): Promise<CloudflareSetupStatus> {
+  // "Check again" looks for the connector now, installed or not; otherwise a
+  // lookup from the last 30 seconds answers.
+  if (options.refreshConnector) await cloudflareConnector.version({ refresh: true }).catch(() => undefined);
   const status = await setup.status();
   const draft = await loadCloudflareSetupDraft().catch(() => undefined);
   const federation = getDesktopSettingsService().readFederationConfig();
@@ -72,9 +87,9 @@ async function describe(message?: string, options: { refreshConnector?: boolean 
   const clientConnection = endpoint ? getDesktopFederationRuntime().cloudflareClientConnection(endpoint) : undefined;
   const signInPending = getCloudflareAccessSignIn().pending() || undefined;
   const connectorVersion = status.connectorInstalled
-    ? await cloudflareConnector.version({ refresh: options.refreshConnector }).catch(() => undefined)
+    ? await cloudflareConnector.version().catch(() => undefined)
     : undefined;
-  const latest = connectorVersion ? await latestCloudflared() : undefined;
+  const latest = connectorVersion ? await briefly(latestCloudflared()) : undefined;
   const connectorUpdate = connectorVersion && latest && compareCloudflaredVersions(latest, connectorVersion) === 1
     ? latest
     : undefined;
@@ -119,6 +134,23 @@ export function registerCloudflareSetupIpc(): void {
         ? "Sign-in page reopened in your browser."
         : "No sign-in is waiting. Choose Sign in, or open the client setup file again.");
     }
+    // Also outside it: reference links stay usable while an operation runs —
+    // reading the docs mid-setup, or while a sign-in waits, is what they are for.
+    if (request.action === "open-link") {
+      const template = Object.prototype.hasOwnProperty.call(CLOUDFLARE_LINKS, request.link)
+        ? CLOUDFLARE_LINKS[request.link]
+        : undefined;
+      if (!template) throw new Error("Unknown Cloudflare reference link.");
+      const state = await loadCloudflareSetup().catch(() => undefined);
+      const status = await setup.status().catch(() => undefined);
+      const draft = await loadCloudflareSetupDraft().catch(() => undefined);
+      await shell.openExternal(resolveCloudflareLink(template, {
+        accountId: state?.accountId ?? status?.accountId ?? draft?.accountId,
+        zoneId: state?.zoneId ?? status?.zoneId ?? draft?.zoneId,
+        applicationId: state?.applicationId ?? status?.applicationId,
+      }));
+      return describe();
+    }
     if (busy) throw new Error("A Cloudflare setup operation is already running.");
     busy = true;
     try {
@@ -135,21 +167,6 @@ export function registerCloudflareSetupIpc(): void {
         case "install-link":
           await shell.openExternal("https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/downloads/");
           break;
-        case "open-link": {
-          const template = Object.prototype.hasOwnProperty.call(CLOUDFLARE_LINKS, request.link)
-            ? CLOUDFLARE_LINKS[request.link]
-            : undefined;
-          if (!template) throw new Error("Unknown Cloudflare reference link.");
-          const state = await loadCloudflareSetup().catch(() => undefined);
-          const status = await setup.status().catch(() => undefined);
-          const draft = await loadCloudflareSetupDraft().catch(() => undefined);
-          await shell.openExternal(resolveCloudflareLink(template, {
-            accountId: state?.accountId ?? status?.accountId ?? draft?.accountId,
-            zoneId: state?.zoneId ?? status?.zoneId ?? draft?.zoneId,
-            applicationId: state?.applicationId ?? status?.applicationId,
-          }));
-          break;
-        }
         case "save-draft":
           await saveCloudflareSetupDraft(request.draft);
           return describe("Draft saved. Nothing in Cloudflare or PwrAgent changes until you connect.");
@@ -199,8 +216,9 @@ export function registerCloudflareSetupIpc(): void {
         case "start": await setup.start(); break;
         case "stop": await setup.stop(); break;
         case "revoke-client":
-          await setup.revoke(request.id);
-          return describe("Client revoked. Cloudflare no longer admits its credential, and the federation session its setup file opened was closed.");
+          return describe(await setup.revoke(request.id)
+            ? "Client revoked. Cloudflare no longer admits its credential, and the federation peer its setup file enrolled was revoked, which ends its session."
+            : "Client revoked. Cloudflare no longer admits its credential. PwrAgent has no record of the peer its setup file enrolled, so a session already open continues until you revoke that peer under Federation Instances.");
         case "sign-in": {
           try {
             await getCloudflareAccessSignIn().signIn(signInEndpoint());

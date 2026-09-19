@@ -97,6 +97,7 @@ const CALLBACK_PATH = "/callback";
 export class CloudflareAccessOAuth {
   private refreshing?: Promise<string>;
   private signingIn = false;
+  private cancelRequested = false;
   private cancelSignIn?: () => void;
   private pendingSignIn?: { authorizeUrl: string; extend: () => void };
   private metadata?: { host: string; value: Metadata; expires: number };
@@ -186,15 +187,19 @@ export class CloudflareAccessOAuth {
   async signIn(endpoint: string): Promise<void> {
     if (this.signingIn) throw new Error("A Cloudflare sign-in is already waiting in your browser.");
     this.signingIn = true;
-    const host = new URL(resourceFor(endpoint)).hostname;
+    this.cancelRequested = false;
     try {
+      // Inside the try: an endpoint this refuses must still release the latch,
+      // or every later sign-in reads as already waiting until a restart.
       const resource = resourceFor(endpoint);
+      const host = new URL(resource).hostname;
       const metadata = await this.discover(endpoint);
       const previous = await this.deps.load().catch(() => undefined);
       const reuse = previous && sameEndpoint(previous.endpoint, endpoint) ? previous : undefined;
       const listener = await listenForCallback(reuse?.redirectUri);
       this.cancelSignIn = listener.cancel;
       try {
+        if (this.cancelRequested) throw new CloudflareSignInCancelledError();
         // A registered client is bound to its exact redirect URI. Reusing the
         // previous port keeps one registration per machine; a port someone else
         // now holds means registering again rather than failing.
@@ -220,7 +225,10 @@ export class CloudflareAccessOAuth {
         // Handled below; this only keeps a failed browser launch from leaving
         // the pending wait as an unhandled rejection.
         callback.catch(() => undefined);
-        this.pendingSignIn = { authorizeUrl: authorize.toString(), extend: () => listener.extend(timeoutMs) };
+        // A cancel that arrived during discovery or registration ends the
+        // sign-in here, before a browser opens for a person who said no.
+        if (this.cancelRequested) throw new CloudflareSignInCancelledError();
+        this.pendingSignIn ={ authorizeUrl: authorize.toString(), extend: () => listener.extend(timeoutMs) };
         await this.deps.openExternal(authorize.toString());
         this.deps.log?.("Cloudflare sign-in opened the browser", { host });
         const { code, returnedState } = await callback.catch((error: unknown) => {
@@ -265,8 +273,13 @@ export class CloudflareAccessOAuth {
     return Boolean(this.pendingSignIn);
   }
 
-  /** Abandon a sign-in waiting on the browser, e.g. after its tab was closed. */
+  /**
+   * Abandon a sign-in, e.g. after its tab was closed. One still discovering or
+   * registering, before it waits on the browser, stops before opening it.
+   */
   cancel(): void {
+    if (!this.signingIn) return;
+    this.cancelRequested = true;
     this.cancelSignIn?.();
   }
 

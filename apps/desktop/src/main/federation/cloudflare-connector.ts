@@ -11,8 +11,15 @@ export class CloudflareConnector {
   private generation = 0;
   running() { return Boolean(this.child && this.child.exitCode === null && !this.child.killed); }
 
+  /**
+   * Whether cloudflared is on this computer. A missing one is looked for again
+   * at most every 30 seconds: discovery tries to run it, and absent is the
+   * usual answer on a client machine, whose setup pane reads status each second
+   * while a sign-in waits. `version({ refresh: true })` looks right away.
+   */
   async installed(): Promise<boolean> {
     if (this.command) return true;
+    if (this.discoveredAt && Date.now() - this.discoveredAt <= 30_000) return false;
     return this.discover();
   }
 
@@ -23,7 +30,7 @@ export class CloudflareConnector {
    * and started again.
    */
   async version(options: { refresh?: boolean } = {}): Promise<string | undefined> {
-    if (options.refresh || !this.command || Date.now() - this.discoveredAt > 30_000) await this.discover();
+    if (options.refresh || Date.now() - this.discoveredAt > 30_000) await this.discover();
     return this.installedVersion;
   }
 

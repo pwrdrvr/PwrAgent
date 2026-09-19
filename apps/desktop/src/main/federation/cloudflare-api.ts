@@ -351,20 +351,6 @@ function isExactPolicy(
     && (!p.exclude || (Array.isArray(p.exclude) && p.exclude.length === 0));
 }
 
-export function isExactMtlsPolicy(value: unknown, names: string[]): boolean {
-  if (!value || typeof value !== "object") return false;
-  const p = value as Record<string, unknown>;
-  const expected = cloudflareMtlsPolicy(names);
-  // Unknown selectors, a second include alternative, or a missing require must
-  // never be mistaken for mandatory certificate authentication.
-  return p.decision === expected.decision
-    && JSON.stringify(p.require) === JSON.stringify(expected.require)
-    && Array.isArray(p.include)
-    && p.include.length === names.length
-    && p.include.every((rule) => expected.include.some((r) => JSON.stringify(r) === JSON.stringify(rule)))
-    && (!p.exclude || (Array.isArray(p.exclude) && p.exclude.length === 0));
-}
-
 export function cloudflareScopeId(value: unknown): string {
   if (typeof value !== "string" || !/^[a-f0-9]{32}$/.test(value)) throw new Error("Enter a valid Cloudflare account and zone ID.");
   return value;

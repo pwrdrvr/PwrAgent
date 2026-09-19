@@ -227,6 +227,34 @@ describe("Cloudflare Access sign-in", () => {
     await expect(retry).rejects.toThrow("cancelled");
   });
 
+  it("releases the latch when the endpoint itself is refused", async () => {
+    const h = harness();
+    await expect(h.oauth.signIn("wss://federation.example.com:8443")).rejects.toThrow("standard endpoint address");
+    // A corrected endpoint signs in, rather than reading as already waiting.
+    await h.oauth.signIn(ENDPOINT);
+    expect(h.stored()?.refreshToken).toBe("refresh-2");
+  });
+
+  // The person cancels while a slow step runs, before the browser is opened.
+  it.each([
+    ["metadata discovery", "/oauth-authorization-server"],
+    ["registration", "/register"],
+  ])("opens no browser for a sign-in cancelled during %s", async (_step, slowPath) => {
+    let release = () => {};
+    const access = fakeAccess();
+    const held = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      if (String(input).endsWith(slowPath)) await new Promise<void>((resolve) => { release = resolve; });
+      return access.fetch(input, init);
+    });
+    const h = harness({ access: { ...access, fetch: held as unknown as typeof globalThis.fetch } });
+    const pending = h.oauth.signIn(ENDPOINT);
+    await vi.waitFor(() => expect(held.mock.calls.some(([input]) => String(input).endsWith(slowPath))).toBe(true));
+    h.oauth.cancel();
+    release();
+    await expect(pending).rejects.toBeInstanceOf(CloudflareSignInCancelledError);
+    expect(h.openExternal).not.toHaveBeenCalled();
+  });
+
   it("reports a cancel as its own outcome, so it is not shown as a failure", async () => {
     const h = harness({ browser: async () => undefined });
     const pending = h.oauth.signIn(ENDPOINT);

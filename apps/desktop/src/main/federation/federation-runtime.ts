@@ -2991,7 +2991,7 @@ export class DesktopFederationRuntime {
     // when the runtime is torn down.
     const walkEpoch = this.walkEpoch;
     const failures: string[] = [];
-    let signInRequired: Error | undefined;
+    let cloudflareRefusal: Error | undefined;
     for (const endpoint of attempts) {
       if (this.stopping || this.walkEpoch !== walkEpoch) return;
       try {
@@ -3022,11 +3022,15 @@ export class DesktopFederationRuntime {
         // a later endpoint's network error mask a broken pin behind an
         // endless "connecting" retry instead of surfacing as "rejected".
         //
-        // A lapsed Cloudflare sign-in is the exception: it belongs to the one
-        // Cloudflare endpoint, so a fallback path may still connect. It is
-        // reported only if nothing does, because it is the actionable failure.
-        if (error instanceof CloudflareSignInRequiredError) {
-          signInRequired = error;
+        // A lapsed Cloudflare sign-in, or a credential Cloudflare refused, is
+        // the exception: it belongs to the one Cloudflare endpoint, so a
+        // fallback path may still connect. It is reported only if nothing
+        // does, because it is the actionable failure.
+        if (
+          error instanceof CloudflareSignInRequiredError
+          || error instanceof CloudflareAccessRefusedError
+        ) {
+          cloudflareRefusal = error;
           continue;
         }
         if (classifyFederationClientFailure(rawMessage) === "auth") {
@@ -3034,7 +3038,7 @@ export class DesktopFederationRuntime {
         }
       }
     }
-    if (signInRequired) throw signInRequired;
+    if (cloudflareRefusal) throw cloudflareRefusal;
     throw new Error(
       "Federation gateway is unreachable on every configured endpoint. "
       + failures.join("; "),

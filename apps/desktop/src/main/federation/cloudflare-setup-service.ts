@@ -271,8 +271,10 @@ export class CloudflareSetupService {
 
   private async allApplications(scope: { accountId: string; zoneId: string }): Promise<AccessApplication[]> {
     const api = this.apiClient();
-    const account = await api.list<AccessApplication>(`/accounts/${scope.accountId}/access/apps`);
-    const zone = await api.list<AccessApplication>(`/zones/${scope.zoneId}/access/apps`);
+    const [account, zone] = await Promise.all([
+      api.list<AccessApplication>(`/accounts/${scope.accountId}/access/apps`),
+      api.list<AccessApplication>(`/zones/${scope.zoneId}/access/apps`),
+    ]);
     return [...new Map([...account, ...zone].map((app) => [app.id, app])).values()];
   }
 
@@ -470,14 +472,23 @@ export class CloudflareSetupService {
       || (cloudflareSetupGate(state) === "oauth" && !state.identityPolicyId)) {
       throw new Error("Resume endpoint creation before auditing.");
     }
-    const apps = await this.applications(state);
-    const app = await api.request<AccessApplication>(`${base}/access/apps/${state.applicationId}`);
-    const policies = await api.list<{ id: string }>(`${base}/access/apps/${state.applicationId}/policies`);
+    const gate = cloudflareSetupGate(state);
+    // None of these reads depends on another, so they run together.
+    const [apps, app, policies, tunnel, credentials, dns] = await Promise.all([
+      this.applications(state),
+      api.request<AccessApplication>(`${base}/access/apps/${state.applicationId}`),
+      api.list<{ id: string }>(`${base}/access/apps/${state.applicationId}/policies`),
+      api.request<{ config: { ingress: Array<{ hostname?: string; path?: string; service: string }> } }>(`${base}/cfd_tunnel/${state.tunnelId}/configurations`),
+      // The certificate list under mTLS, the service-token list otherwise.
+      api.list<{ id: string; associated_hostnames?: string[]; expires_on?: string }>(
+        `${base}/access/${gate === "mtls" ? "certificates" : "service_tokens"}`),
+      requireDns
+        ? api.list<{ id: string; type: string; content: string; proxied: boolean }>(`/zones/${state.zoneId}/dns_records?name=${state.hostname}`)
+        : Promise.resolve(undefined),
+    ]);
     const servicePolicy = policies.find((policy) => policy.id === state.policyId);
     const identityPolicy = policies.find((policy) => policy.id === state.identityPolicyId);
-    const gate = cloudflareSetupGate(state);
     const admitted = this.admissionIds(state);
-    const tunnel = await api.request<{ config: { ingress: Array<{ hostname?: string; path?: string; service: string }> } }>(`${base}/cfd_tunnel/${state.tunnelId}/configurations`);
     const checks: CloudflareSecurityCheck[] = [
       { label: "Dedicated Access application", passed: apps.length === 1 && apps[0].id === state.applicationId && isDedicatedApplication(app, state.hostname), detail: "Exact hostname, with no competing account or zone application." },
       ...(gate === "oauth" ? [
@@ -495,18 +506,15 @@ export class CloudflareSetupService {
       this.originCheck(state, tunnel.config.ingress),
     ];
     if (gate === "mtls") {
-      const certificates = await api.list<{ id: string; associated_hostnames?: string[]; expires_on?: string }>(`${base}/access/certificates`);
-      const matchingCas = certificates.filter((cert) => cert.associated_hostnames?.includes(state.hostname));
+      const matchingCas = credentials.filter((cert) => cert.associated_hostnames?.includes(state.hostname));
       checks.push({ label: "Certificate authority", passed: matchingCas.length === 1 && matchingCas[0].id === state.certificateId && Date.parse(matchingCas[0].expires_on ?? "") > Date.now(), detail: "Only this setup's unexpired CA is associated with the hostname." });
     } else {
       // Every id the policy admits has to still exist as a live token. A policy
       // naming a deleted token would otherwise read as a passing allowlist.
-      const tokens = await api.list<{ id: string }>(`${base}/access/service_tokens`);
-      const live = new Set(tokens.map((token) => token.id));
+      const live = new Set(credentials.map((token) => token.id));
       checks.push({ label: "Issued service tokens", passed: admitted.length > 0 && admitted.every((id) => live.has(id)), detail: "Every token the policy admits still exists in this account." });
     }
-    if (requireDns) {
-      const dns = await api.list<{ id: string; type: string; content: string; proxied: boolean }>(`/zones/${state.zoneId}/dns_records?name=${state.hostname}`);
+    if (dns) {
       checks.push({ label: "Proxied DNS", passed: dns.length === 1 && dns[0].id === state.dnsId && dns[0].type === "CNAME" && dns[0].proxied && dns[0].content === `${state.tunnelId}.cfargotunnel.com`, detail: "The hostname routes through Cloudflare to this tunnel." });
     }
     this.checks = checks;
@@ -659,7 +667,12 @@ export class CloudflareSetupService {
     return client;
   }
 
-  async revoke(id: string): Promise<void> {
+  /**
+   * Revoke one client's credential, and the federation peer its setup file
+   * enrolled. Resolves whether that peer was ended too: a client with no
+   * recorded enrollment has an open session only its peer can close.
+   */
+  async revoke(id: string): Promise<boolean> {
     const state = await this.state();
     this.deps.verifyListener(state.listenPort);
     const client = state.clients.find((entry) => entry.id === id);
@@ -680,7 +693,9 @@ export class CloudflareSetupService {
     // Access checks a credential only when a connection opens, so a session
     // that is already open outlives everything above. Revoking the peer the
     // file enrolled is what closes it.
-    if (client.enrollmentId) await this.deps.revokeEnrollment?.(client.enrollmentId);
+    if (!client.enrollmentId || !this.deps.revokeEnrollment) return false;
+    await this.deps.revokeEnrollment(client.enrollmentId);
+    return true;
   }
 
   /** Remember which federation invite went out with an issued credential. */

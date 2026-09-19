@@ -114,6 +114,8 @@ export function CloudflareSetup(props: Props) {
   const [error, setError] = useState<{ message: string; action?: CloudflareSetupRequest["action"]; stage?: Stage }>();
   // Which stage the current status message answers.
   const [messageStage, setMessageStage] = useState<Stage>();
+  // The answer to a sign-in help button, for as long as that sign-in waits.
+  const [signInNote, setSignInNote] = useState<string>();
   const [tab, setTab] = useState<"gateway" | "client">("gateway");
   // Service tokens work on every Zero Trust plan, so they are the default.
   // A provisioned endpoint reports its own gate and the choice is fixed.
@@ -245,7 +247,10 @@ export function CloudflareSetup(props: Props) {
         }
       }
       setError({ message, action: request.action, stage });
-    } finally { setBusy(undefined); }
+    } finally {
+      setBusy(undefined);
+      setSignInNote(undefined);
+    }
   };
 
   // What stands between this form and a published endpoint, in the order the
@@ -322,11 +327,12 @@ export function CloudflareSetup(props: Props) {
       : null}
   </>;
   // Reference links stay enabled while an operation runs: an operator reading the
-  // docs mid-setup is the case they exist for. They carry no request payload, so
-  // they cannot collide with the main-process busy latch.
+  // docs mid-setup is the case they exist for. The main process opens them
+  // outside its busy latch, so they neither wait on nor block an operation.
   const link = (name: string, target: CloudflareSetupLink) => (
     <button type="button" className="cloudflare-setup__link" disabled={!api?.configureFederationCloudflare}
-      onClick={() => void api?.configureFederationCloudflare?.({ action: "open-link", link: target })}>{name}</button>
+      onClick={() => void api?.configureFederationCloudflare?.({ action: "open-link", link: target })
+        .catch((err: unknown) => setError({ message: errorText(err, "Could not open the Cloudflare page.") }))}>{name}</button>
   );
   const saveDraft = (stage: Stage) => action("Save draft", { action: "save-draft", draft }, "Saving draft…", false, !dirty, stage);
   const needs = (items: string[]) => items.length
@@ -346,16 +352,19 @@ export function CloudflareSetup(props: Props) {
   const connection = status?.clientConnection;
   // Waiting on the browser. A login method that refuses the person strands the
   // browser on a blank page, so the way back is offered up front rather than
-  // after the wait times out. Both buttons work outside the busy latch.
-  const signInHelp = (lead: string, stage: Stage) => <div className="cloudflare-setup__notice" role="note">
+  // after the wait times out. Both buttons work outside the busy latch, and
+  // answer here: the stage's own outcome line shows the wait's progress.
+  const signInHelp = (lead: string) => <div className="cloudflare-setup__notice" role="note">
     <p>{lead} If Cloudflare says &ldquo;That account does not have access&rdquo; or leaves a blank page, open the sign-in page again and use an email the gateway allows; one-time PIN works with any address.</p>
     <div className="settings-button-row">
       <button type="button" className="button button--secondary"
         onClick={() => void api?.configureFederationCloudflare?.({ action: "reopen-sign-in" })
-          .then((next) => { adopt(next); setMessageStage(stage); }, () => undefined)}>Open the sign-in page again</button>
+          .then((next) => setSignInNote(next.message), (err: unknown) => setSignInNote(errorText(err, "Could not reopen the sign-in page.")))}>Open the sign-in page again</button>
       <button type="button" className="button button--secondary"
-        onClick={() => void api?.configureFederationCloudflare?.({ action: "cancel-sign-in" })}>Cancel sign-in</button>
+        onClick={() => void api?.configureFederationCloudflare?.({ action: "cancel-sign-in" })
+          .catch((err: unknown) => setSignInNote(errorText(err, "Could not cancel sign-in.")))}>Cancel sign-in</button>
     </div>
+    {signInNote ? <p role="status">{signInNote}</p> : null}
   </div>;
 
   const importSteps = <div className="automation-funnel cloudflare-setup__funnel">
@@ -369,7 +378,7 @@ export function CloudflareSetup(props: Props) {
       <div className="settings-button-row">
         {action("Open client setup file", { action: "import-client", password }, "Decrypting client setup and connecting…", true, !password)}
       </div>
-      {importing && signInPending ? signInHelp("Finish signing in in your browser.", "import") : null}
+      {importing && signInPending ? signInHelp("Finish signing in in your browser.") : null}
       {outcome("import")}
     </AutomationStage>
   </div>;
@@ -624,7 +633,7 @@ export function CloudflareSetup(props: Props) {
                     ? <><strong>Sign-in required.</strong> {status.signIn.lastError ?? "Your Cloudflare sign-in expired."} Federation reconnects once you sign in.</>
                     : <><strong>Signed out.</strong> Sign in to connect to <code>{status.signIn.endpoint}</code>.</>}
               </p>
-              {signingIn ? signInHelp("Finish signing in in your browser.", "sign-in") : <div className="settings-button-row">
+              {signingIn ? signInHelp("Finish signing in in your browser.") : <div className="settings-button-row">
                 {status.signIn.state === "signed-in"
                   ? action("Sign out", { action: "sign-out" }, "Signing out…")
                   : action("Sign in", { action: "sign-in" }, "Finish signing in in your browser…", true)}
