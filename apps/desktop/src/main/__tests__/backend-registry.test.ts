@@ -27804,6 +27804,112 @@ command = "pnpm dev"
     await followup.registry.close();
   });
 
+  it("replays the parent's model with the parent's own level in a review child", async () => {
+    // On Kimi the model decides which thought levels exist: K2.7 Highspeed
+    // offers only `on`, and K3 offers low/high/max. A K3/high review of a
+    // Highspeed thread must not send Highspeed with `high`, which Kimi
+    // refuses with -32602 "Unknown thinking value".
+    const acpBackendId = "acp:kimi" as AcpBackendId;
+    const parentThreadId = "kimi-parent";
+    const highspeed = "kimi-code/kimi-for-coding-highspeed";
+    const sessions: AcpSessionMetadata[] = [{
+      backendId: acpBackendId,
+      sessionId: parentThreadId,
+      title: "ACP session",
+      cwd: "/repo/worktree",
+      createdAt: 1000,
+      updatedAt: 1000,
+      executionMode: "default",
+      acpRuntime: {
+        configValues: { model: highspeed, thinking: "on" },
+        currentModelId: highspeed,
+        reasoningEffort: "on",
+        updatedAt: 1000,
+      },
+      status: "idle",
+    }];
+    const startPrompt = vi.fn((params: Parameters<KimiStartPrompt>[0]) => ({
+      sessionId: params.sessionId,
+      turnId: params.turnId ?? `turn-${startPrompt.mock.calls.length}`,
+    }));
+    const { acpClient, registry } = createKimiAcpRegistry({
+      acpBackendId,
+      sessionId: parentThreadId,
+      sessions,
+      startPrompt,
+      runtimeCapabilities: {
+        schemaVersion: 1,
+        status: "discovered",
+        source: "session-load",
+        configOptions: [
+          {
+            id: "model",
+            label: "Model",
+            type: "select",
+            category: "model",
+            currentValue: highspeed,
+            values: [{ value: highspeed }, { value: "kimi-code/k3" }],
+          },
+          {
+            id: "thinking",
+            label: "Thinking",
+            type: "select",
+            category: "thought_level",
+            currentValue: "on",
+            values: [{ value: "on" }],
+          },
+        ],
+        models: {
+          currentModelId: highspeed,
+          availableModels: [
+            {
+              id: highspeed,
+              label: "K2.7 Coding Highspeed",
+              supportsReasoning: true,
+              reasoningEfforts: ["on"],
+              defaultReasoningEffort: "on",
+            },
+            {
+              id: "kimi-code/k3",
+              label: "K3",
+              supportsReasoning: true,
+              reasoningEfforts: ["low", "high", "max"],
+              defaultReasoningEffort: "high",
+            },
+          ],
+        },
+      },
+    });
+
+    const response = await registry.startReview({
+      backend: acpBackendId,
+      threadId: parentThreadId,
+      target: { type: "baseBranch", branch: "main" },
+      delivery: "inline",
+      model: "kimi-code/k3",
+      reasoningEffort: "high",
+    });
+
+    const modelWrites = acpClient.setRuntimeOption.mock.calls
+      .map(([params]) => params as {
+        sessionId: string;
+        source?: string;
+        value?: string;
+        reasoningEffort?: string;
+      })
+      .filter((params) =>
+        params.sessionId === response.reviewThreadId
+        && params.source === "model"
+      )
+      .map((params) => [params.value, params.reasoningEffort]);
+    expect(modelWrites).toEqual([
+      [highspeed, "on"],
+      ["kimi-code/k3", "high"],
+    ]);
+
+    await registry.close();
+  });
+
   it("keys an ACP managed review on the ids its usage notifications carry", async () => {
     // Live sub-agent pricing depends on one join: recordTaskMonitorUsage looks
     // the review up by (backend, notification.threadId, notification.turnId),
@@ -51806,6 +51912,122 @@ script = "printf setup"
     for (const [params] of acpClient.setRuntimeOption.mock.calls) {
       expect(params).not.toMatchObject({ optionId: "thinking" });
       expect(params).not.toHaveProperty("reasoningEffort", "low");
+    }
+
+    await registry.close();
+  });
+
+  it("replays the parent's model with the parent's own level in a monitor on another model", async () => {
+    // Kimi's model config option leaves the parent's `currentModelId` in the
+    // monitor's runtime, so the replay re-selects Highspeed, which offers only
+    // `on`. The monitor asked for K3, whose lowest level is `low`.
+    const acpBackendId = "acp:kimi" as AcpBackendId;
+    const parentThreadId = "acp-parent";
+    const highspeed = "kimi-code/kimi-for-coding-highspeed";
+    const { acpClient, registry } = createKimiAcpRegistry({
+      acpBackendId,
+      runtimeCapabilities: {
+        schemaVersion: 1,
+        status: "discovered",
+        source: "session-load",
+        configOptions: [
+          {
+            id: "model",
+            label: "Model",
+            type: "select",
+            category: "model",
+            currentValue: highspeed,
+            values: [{ value: highspeed }, { value: "kimi-code/k3" }],
+          },
+          {
+            id: "thinking",
+            label: "Thinking",
+            type: "select",
+            category: "thought_level",
+            currentValue: "on",
+            values: [{ value: "on" }],
+          },
+        ],
+        models: {
+          currentModelId: highspeed,
+          availableModels: [
+            {
+              id: highspeed,
+              label: "K2.7 Coding Highspeed",
+              supportsReasoning: true,
+              reasoningEfforts: ["on"],
+              defaultReasoningEffort: "on",
+            },
+            {
+              id: "kimi-code/k3",
+              label: "K3",
+              supportsReasoning: true,
+              reasoningEfforts: ["low", "high", "max"],
+              defaultReasoningEffort: "high",
+            },
+          ],
+        },
+      },
+      sessions: [
+        {
+          backendId: acpBackendId,
+          sessionId: parentThreadId,
+          title: "ACP Parent",
+          cwd: "/repo/app",
+          createdAt: 1000,
+          updatedAt: 1000,
+          executionMode: "default",
+          status: "idle",
+          acpRuntime: {
+            configValues: { model: highspeed, thinking: "on" },
+            currentModelId: highspeed,
+            reasoningEffort: "on",
+            updatedAt: 1000,
+          },
+        },
+      ],
+    });
+
+    await registry.publishLocalEvent({
+      backend: acpBackendId,
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: parentThreadId,
+          turnId: "parent-turn",
+          turn: { id: "parent-turn" },
+        },
+      },
+    });
+    await callRegistryMcpTool({
+      registry,
+      backend: acpBackendId,
+      threadId: parentThreadId,
+      turnId: "parent-turn",
+      tool: "create_monitor_delegation",
+      args: {
+        task: "Watch the deployment until it finishes.",
+        preferredModel: "kimi-code/k3",
+      },
+    });
+
+    const offeredLevels: Record<string, string[]> = {
+      [highspeed]: ["on"],
+      "kimi-code/k3": ["low", "high", "max"],
+    };
+    const modelWrites = acpClient.setRuntimeOption.mock.calls
+      .map(([params]) => params as {
+        sessionId: string;
+        source?: string;
+        value?: string;
+        reasoningEffort?: string;
+      })
+      .filter((params) => params.source === "model");
+    expect(modelWrites).not.toHaveLength(0);
+    for (const params of modelWrites) {
+      expect(offeredLevels[params.value ?? ""]).toContain(
+        params.reasoningEffort,
+      );
     }
 
     await registry.close();

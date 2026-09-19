@@ -12153,6 +12153,9 @@ export class DesktopBackendRegistry {
     }
   }
 
+  // `reasoningEffort` is sent with `runtime.currentModelId`, so it must be a
+  // level of that model. On Kimi the model decides which levels exist, and a
+  // level chosen for another model is refused with -32602.
   private async applyAcpRuntimeSelection(
     client: AcpRuntimeClient,
     sessionId: string,
@@ -17576,9 +17579,10 @@ export class DesktopBackendRegistry {
         cwd: params.cwd,
         executionMode,
         acpRuntime,
-        reasoningEffort:
-          params.modelSettings.reasoningEffort
-          ?? acpRuntime?.reasoningEffort,
+        // The replay re-selects the parent's model, so it carries the parent's
+        // level. The review's level belongs to the review's model, and the
+        // turn below applies the two together.
+        reasoningEffort: acpRuntime?.reasoningEffort,
         hidden: true,
       });
       const turn = await this.startAcpTurn({
@@ -35770,7 +35774,13 @@ export class DesktopBackendRegistry {
         cwd,
         executionMode,
         acpRuntime: selectedRuntime,
-        reasoningEffort,
+        // A model config option leaves the parent's model in `currentModelId`,
+        // and the replay re-selects it with the parent's level. The turn below
+        // then applies the monitor's model and level together.
+        reasoningEffort:
+          selectedRuntime?.currentModelId === params.runtimeModel
+            ? reasoningEffort
+            : parentSession?.acpRuntime?.reasoningEffort,
         hidden: true,
       });
       const turn = await this.startAcpTurn({
