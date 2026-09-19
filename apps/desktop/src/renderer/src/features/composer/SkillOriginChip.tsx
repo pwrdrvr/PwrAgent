@@ -110,6 +110,12 @@ export type SkillOriginCardController = {
     onPointerEnter: (event: ReactPointerEvent<HTMLElement>) => void;
     onPointerLeave: () => void;
   };
+  /**
+   * The same hover for an anchor React does not render: a `$skill` chip in
+   * the composer's editor, whose DOM belongs to Tiptap.
+   */
+  hoverAnchor: (anchor: HTMLElement, skill: AppServerSkillSummary) => void;
+  leaveAnchor: () => void;
   close: () => void;
   /** The portal. Render it once, outside every option row. */
   cardNode: ReactNode;
@@ -181,36 +187,40 @@ export function useSkillOriginCard(options: {
     }, CARD_CLOSE_GRACE_MS);
   }, [clearTimer, commitState]);
 
+  const hoverAnchor = useCallback<SkillOriginCardController["hoverAnchor"]>(
+    (anchor, skill) => {
+      const origin = skill.origin;
+      const path = skill.path?.trim();
+      if (!origin || !path) {
+        return;
+      }
+      clearTimer(closeTimerRef);
+      clearTimer(openTimerRef);
+      const current = stateRef.current;
+      if (current?.anchor === anchor) {
+        return;
+      }
+      const next: CardState = { anchor, skill: { ...skill, origin, path } };
+      // Moving between chips while a card is up swaps it at once, the way
+      // a menu bar does; only the first card waits.
+      if (current) {
+        commitState(next);
+        return;
+      }
+      openTimerRef.current = window.setTimeout(() => {
+        openTimerRef.current = null;
+        commitState(next);
+      }, CARD_OPEN_DELAY_MS);
+    },
+    [clearTimer, commitState],
+  );
+
   const chipHandlers = useCallback<SkillOriginCardController["chipHandlers"]>(
     (skill) => ({
-      onPointerEnter: (event) => {
-        const origin = skill.origin;
-        const path = skill.path?.trim();
-        if (!origin || !path) {
-          return;
-        }
-        const anchor = event.currentTarget;
-        clearTimer(closeTimerRef);
-        clearTimer(openTimerRef);
-        const current = stateRef.current;
-        if (current?.anchor === anchor) {
-          return;
-        }
-        const next: CardState = { anchor, skill: { ...skill, origin, path } };
-        // Moving between chips while a card is up swaps it at once, the way
-        // a menu bar does; only the first card waits.
-        if (current) {
-          commitState(next);
-          return;
-        }
-        openTimerRef.current = window.setTimeout(() => {
-          openTimerRef.current = null;
-          commitState(next);
-        }, CARD_OPEN_DELAY_MS);
-      },
+      onPointerEnter: (event) => hoverAnchor(event.currentTarget, skill),
       onPointerLeave: scheduleClose,
     }),
-    [clearTimer, commitState, scheduleClose],
+    [hoverAnchor, scheduleClose],
   );
 
   // Place below the chip, or above when the viewport has no room. Measured
@@ -353,7 +363,13 @@ export function useSkillOriginCard(options: {
     )
     : null;
 
-  return { cardNode, chipHandlers, close };
+  return {
+    cardNode,
+    chipHandlers,
+    close,
+    hoverAnchor,
+    leaveAnchor: scheduleClose,
+  };
 }
 
 /**

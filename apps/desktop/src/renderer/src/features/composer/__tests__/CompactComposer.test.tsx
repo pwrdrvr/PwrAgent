@@ -838,6 +838,45 @@ describe("CompactComposer markdown", () => {
       expect(screen.getByRole("listbox").contains(card)).toBe(false);
     });
 
+    it("keeps a picked same-named skill's origin on its chip, and out of the sent text", async () => {
+      const { container, onSend } = renderComposer({
+        mentionSources: {
+          skills: [
+            {
+              name: "release",
+              description: "Release Northwind",
+              path: "/src/Northwind/.agents/skills/release/SKILL.md",
+              origin: { kind: "project", label: "Northwind", directoryIndex: 0 },
+            },
+            {
+              name: "release",
+              description: "Release Harbor",
+              path: "/src/Harbor/.agents/skills/release/SKILL.md",
+              origin: { kind: "project", label: "Harbor", directoryIndex: 1 },
+            },
+          ],
+        },
+      });
+      const input = openPicker("run $rel");
+      fireEvent.click(screen.getAllByRole("option")[1]!);
+
+      const chip = container.querySelector<HTMLElement>(
+        ".composer-tiptap-input__mention",
+      )!;
+      expect(chip.querySelector(".skill-chip__origin")?.textContent).toBe("Harbor");
+
+      // The popover is closed; the chip's card has to live somewhere else.
+      expect(screen.queryByRole("listbox")).toBeNull();
+      fireEvent.pointerOver(chip);
+      const card = await screen.findByRole("group", { name: "Where $release comes from" });
+      expect(card.textContent).toContain("/src/Harbor/.agents/skills/release/SKILL.md");
+
+      fireEvent.keyDown(input, { key: "Enter" });
+      expect(onSend).toHaveBeenCalledWith(
+        "run [$release](/src/Harbor/.agents/skills/release/SKILL.md)",
+      );
+    });
+
     it("keeps a trigger with no matches as literal text", () => {
       const { onSend } = renderComposer({
         mentionSources: { skills: SKILLS },

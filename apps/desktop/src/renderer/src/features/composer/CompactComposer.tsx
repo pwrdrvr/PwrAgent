@@ -897,6 +897,8 @@ export function CompactComposer(props: CompactComposerProps) {
           onDrop={onDrop}
           onKeyDown={onKeyDown}
           onPaste={onPaste}
+          onSkillChipPointerEnter={mentions.onSkillChipPointerEnter}
+          onSkillChipPointerLeave={mentions.onSkillChipPointerLeave}
           placeholder={props.placeholder ?? "Reply…"}
           skillTokens={mentions.skillTokens}
           value={mentions.draft}
@@ -905,6 +907,7 @@ export function CompactComposer(props: CompactComposerProps) {
             that is what keeps the list within `.star-map-chat-card`, the
             selector every camera-gesture guard tests against. */}
         {mentions.popover}
+        {mentions.originCard}
       </div>
 
       {imageAttachments.length > 0 ? (

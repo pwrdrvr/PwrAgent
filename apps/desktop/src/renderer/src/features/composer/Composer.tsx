@@ -7922,7 +7922,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         nextDraft,
         skillTokens,
       }),
-      createComposerSkillToken(skill, tokenIndex),
+      createComposerSkillToken(skill, tokenIndex, props.skills),
     ];
 
     pendingProgrammaticComposerChangeRef.current = {
@@ -11318,8 +11318,23 @@ export const Composer = memo(function Composer(props: ComposerProps) {
             onDrop={handleDrop}
             onClick={handleComposerClick}
             onKeyDown={handleTiptapComposerKeyDown}
+            onSkillChipPointerEnter={(skill, anchor) => {
+              // A chip minted before origins existed, or restored from plain
+              // Markdown, finds its origin in the catalog by path.
+              skillOriginCard.hoverAnchor(anchor, {
+                ...skill,
+                origin:
+                  skill.origin
+                  ?? props.skills?.find((entry) => entry.path === skill.path)?.origin,
+              });
+            }}
+            onSkillChipPointerLeave={skillOriginCard.leaveAnchor}
           />
         )}
+        {/* One card for the picker's origin chips and the draft's `$skill`
+          chips. It portals to the body, so where it sits here only decides
+          that it outlives the picker. */}
+        {skillOriginCard.cardNode}
 
         {/* The draft is deliberately still on screen and still selectable, so
           the only thing distinguishing it from a live input is this line and
@@ -11382,7 +11397,6 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                 </span>
               </button>
             ))}
-            {skillOriginCard.cardNode}
           </div>
         ) : autocompleteKind === "slash" ? (
           <div

@@ -46,9 +46,14 @@ export function hydrateComposerDraft(
         continue;
       }
 
+      // The path is the link's identity. A name alone may only stand in for
+      // it when exactly one skill has that name: with a `$release` in each
+      // linked project, the first one found is a different project's
+      // release, and the restored chip would silently run it.
+      const sameName = skills.filter((skill) => skill.name === part.name);
       const matchingSkill =
-        skills.find((skill) => skill.path === part.path) ??
-        skills.find((skill) => skill.name === part.name);
+        skills.find((skill) => skill.path === part.path)
+        ?? (sameName.length === 1 ? sameName[0] : undefined);
       skillTokens.push(
         createComposerSkillToken(
           matchingSkill ?? {
@@ -56,6 +61,7 @@ export function hydrateComposerDraft(
             path: part.path,
           },
           draft.length,
+          skills,
         ),
       );
     }

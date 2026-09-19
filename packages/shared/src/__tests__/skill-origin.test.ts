@@ -4,6 +4,7 @@ import {
   classifySkillOrigin,
   compareSkillOrigins,
   describeSkillOriginKind,
+  readSkillOrigin,
   skillOriginMarketplace,
   withSkillOrigins,
   type SkillOriginDirectory,
@@ -238,5 +239,38 @@ describe("describeSkillOriginKind", () => {
     expect(
       describeSkillOriginKind({ kind: "project", label: "PwrSnap", directoryIndex: 0, worktree: true }),
     ).toBe("Project skill · worktree");
+  });
+});
+
+describe("readSkillOrigin", () => {
+  it("keeps a well-formed origin, field for field", () => {
+    const origin = {
+      kind: "project",
+      label: "PwrSnap",
+      directoryIndex: 0,
+      worktree: true,
+    };
+    expect(readSkillOrigin(origin)).toEqual(origin);
+    expect(
+      readSkillOrigin({
+        kind: "plugin",
+        label: "documents",
+        pluginId: "documents@openai-primary-runtime",
+      }),
+    ).toEqual({
+      kind: "plugin",
+      label: "documents",
+      pluginId: "documents@openai-primary-runtime",
+    });
+  });
+
+  it("drops anything it did not produce", () => {
+    expect(readSkillOrigin(undefined)).toBeUndefined();
+    expect(readSkillOrigin("PwrSnap")).toBeUndefined();
+    expect(readSkillOrigin({ kind: "toString", label: "PwrSnap" })).toBeUndefined();
+    expect(readSkillOrigin({ kind: "project", label: "  " })).toBeUndefined();
+    expect(
+      readSkillOrigin({ kind: "project", label: "PwrSnap", directoryIndex: -1, worktree: "yes" }),
+    ).toEqual({ kind: "project", label: "PwrSnap" });
   });
 });

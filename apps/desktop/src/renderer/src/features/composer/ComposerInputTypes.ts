@@ -33,6 +33,13 @@ export type ComposerSkillToken = AppServerSkillSummary & {
    * carried their status; those keep rendering the gray "unknown" dot.
    */
   prChipModifiers?: string[];
+  /**
+   * Skill chips only: draw `origin.label` inside the chip. Set when the chip
+   * was minted and the catalog held another skill of the same name, which is
+   * the only time `$release` alone cannot say which file it runs. `origin`
+   * itself rides on every skill chip that has one, for the hover card.
+   */
+  showOrigin?: boolean;
 };
 
 export type ComposerInputChangeMetadata = {

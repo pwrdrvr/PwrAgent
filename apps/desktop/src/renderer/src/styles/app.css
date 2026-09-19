@@ -28770,6 +28770,20 @@ button.pricing-token-miser__folded:focus-visible {
   cursor: default;
 }
 
+/* A `$skill` chip whose name another skill in the catalog shares keeps the
+   picker's origin after the name: `$release · PwrSnap`. Secondary, not
+   muted, because it sits on the accent tint. The dot is decoration, so it
+   stays out of the accessible name. */
+.composer-tiptap-input__mention .skill-chip__origin {
+  color: var(--text-secondary);
+  font-size: 0.9em;
+}
+
+.composer-tiptap-input__mention .skill-chip__origin::before {
+  content: "\00b7" / "";
+  margin-inline-end: 0.35em;
+}
+
 /* The PR pill is the one mention chip with a border, so it is the one whose
    padding is visible — the others read as a tint behind the text and hide
    however tight they are. Sizing its label off the paragraph (14px) put

@@ -17693,6 +17693,111 @@ describe("Composer", () => {
     expect(within(card).queryByRole("button", { name: "Open SKILL.md" })).toBeNull();
   });
 
+  it("keeps a picked skill's origin on its chip when another skill shares the name", async () => {
+    const startTurn = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    }));
+    const releasePath = (project: string) =>
+      `/Users/fixture-user/pwrdrvr/${project}/.agents/skills/release/SKILL.md`;
+    const notesPath = "/Users/fixture-user/.agents/skills/release-notes/SKILL.md";
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startTurn,
+        }}
+        disabled={false}
+        skills={[
+          {
+            name: "release",
+            description: "Release PwrSnap",
+            path: releasePath("PwrSnap"),
+            scope: "repo",
+            origin: { kind: "project", label: "PwrSnap", directoryIndex: 0 },
+          },
+          {
+            name: "release",
+            description: "Release PwrAgent",
+            path: releasePath("PwrAgnt"),
+            scope: "repo",
+            origin: { kind: "project", label: "PwrAgnt", directoryIndex: 1 },
+          },
+          {
+            name: "release-notes",
+            description: "Draft release notes",
+            path: notesPath,
+            scope: "user",
+            origin: { kind: "personal", label: "Personal" },
+          },
+        ]}
+        thread={{
+          id: "thread-1",
+          title: "PwrSnap - Release",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    const textarea = screen.getByLabelText("Reply");
+    const richInput = screen.getByTestId("composer-tiptap-input");
+    fireEvent.change(textarea, { target: { value: "Use $rel" } });
+    fireEvent.mouseDown(
+      within(screen.getByRole("listbox", { name: "Skills" })).getAllByRole("option")[1]!,
+    );
+
+    const release = richInput.querySelector<HTMLElement>('[data-skill-name="release"]')!;
+    // Two `$release` chips would read the same, so this one says whose it is.
+    expect(release).toHaveAttribute("data-skill-origin-shown");
+    expect(release.querySelector(".skill-chip__origin")).toHaveTextContent("PwrAgnt");
+    expect(release).toHaveAttribute("data-skill-path", releasePath("PwrAgnt"));
+
+    // The picker is closed, and the chip still opens the path card.
+    expect(screen.queryByRole("listbox", { name: "Skills" })).toBeNull();
+    fireEvent.pointerOver(release);
+    const card = await screen.findByRole("group", { name: "Where $release comes from" });
+    expect(card).toHaveTextContent("Project skill · linked");
+    expect(card).toHaveTextContent(releasePath("PwrAgnt"));
+    fireEvent.pointerOut(release);
+    await waitFor(() => {
+      expect(screen.queryByRole("group", { name: "Where $release comes from" })).toBeNull();
+    });
+
+    // The label is drawn, not typed: the outgoing text is the plain link.
+    await clickButton("Send");
+    await waitFor(() => {
+      expect(startTurn).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-1",
+        input: [
+          {
+            type: "text",
+            text: `Use [$release](${releasePath("PwrAgnt")})`,
+          },
+        ],
+      });
+    });
+
+    // `$release-notes` has no twin: a bare chip, and the card still answers.
+    fireEvent.change(textarea, { target: { value: "$release-n" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+    const notes = await waitFor(() => {
+      const chip = richInput.querySelector<HTMLElement>('[data-skill-name="release-notes"]');
+      expect(chip).not.toBeNull();
+      return chip!;
+    });
+    expect(notes).not.toHaveAttribute("data-skill-origin-shown");
+    expect(notes.querySelector(".skill-chip__origin")).toBeNull();
+    fireEvent.pointerOver(notes);
+    expect(
+      await screen.findByRole("group", { name: "Where $release-notes comes from" }),
+    ).toHaveTextContent("Personal skill");
+  });
+
   it("filters skill autocomplete from the reported multi-line draft body", () => {
     renderComposerWithRegressionSkills();
 

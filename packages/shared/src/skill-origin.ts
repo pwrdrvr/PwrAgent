@@ -168,6 +168,42 @@ export function skillOriginMarketplace(origin: AppServerSkillOrigin): string | u
   return marketplace || undefined;
 }
 
+/**
+ * An origin read back from somewhere it was stored: a saved composer
+ * document, or a chip's `data-skill-origin` in pasted HTML. Anything that is
+ * not a well-formed origin is dropped, not repaired, so a chip never shows a
+ * label this module did not produce the shape of.
+ */
+export function readSkillOrigin(value: unknown): AppServerSkillOrigin | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const { kind, label } = record;
+  if (
+    typeof kind !== "string"
+    || !Object.prototype.hasOwnProperty.call(ORIGIN_KIND_RANK, kind)
+    || typeof label !== "string"
+    || !label.trim()
+  ) {
+    return undefined;
+  }
+  const directoryIndex = record.directoryIndex;
+  return {
+    kind: kind as AppServerSkillOrigin["kind"],
+    label,
+    ...(typeof directoryIndex === "number"
+      && Number.isInteger(directoryIndex)
+      && directoryIndex >= 0
+      ? { directoryIndex }
+      : {}),
+    ...(record.worktree === true ? { worktree: true } : {}),
+    ...(typeof record.pluginId === "string" && record.pluginId
+      ? { pluginId: record.pluginId }
+      : {}),
+  };
+}
+
 function matchLinkedDirectory(
   skillPath: string,
   directories: readonly SkillOriginDirectory[],

@@ -128,7 +128,19 @@ export type ComposerMentions = {
   inputRef: RefObject<ComposerInputHandle | null>;
   /** `aria-controls` for the editor while a popover is open. */
   listboxId?: string;
+  /** Hover for the draft's `$skill` chips; pass both to the editor. */
+  onSkillChipPointerEnter: (
+    skill: AppServerSkillSummary,
+    anchor: HTMLElement,
+  ) => void;
+  onSkillChipPointerLeave: () => void;
   open: boolean;
+  /**
+   * The origin card behind both the popover's chips and the draft's. Render
+   * it whether or not a popover is open: it portals to the body, and a draft
+   * chip's card has no popover to live in.
+   */
+  originCard: ReactNode;
   popover: ReactNode;
   /** Put a failed send's draft back, unless the operator has typed since. */
   restore: (snapshot: ComposerMentionDraft) => void;
@@ -576,7 +588,7 @@ export function useComposerMentions(params: {
     if (kind === "skills" && skillTrigger) {
       const skill = skillOptions[index] ?? skillOptions[0];
       if (skill) {
-        insertToken(skillTrigger, (at) => createComposerSkillToken(skill, at));
+        insertToken(skillTrigger, (at) => createComposerSkillToken(skill, at, skills));
       }
       return;
     }
@@ -815,7 +827,6 @@ export function useComposerMentions(params: {
       role="listbox"
     >
       {options}
-      {kind === "skills" ? skillOriginCard.cardNode : null}
     </div>
   ) : null;
   const activeCommand =
@@ -839,7 +850,17 @@ export function useComposerMentions(params: {
     handleKeyDown,
     inputRef,
     listboxId: open ? listboxId : undefined,
+    onSkillChipPointerEnter: (skill, anchor) => {
+      skillOriginCard.hoverAnchor(anchor, {
+        ...skill,
+        origin:
+          skill.origin
+          ?? skills.find((entry) => entry.path === skill.path)?.origin,
+      });
+    },
+    onSkillChipPointerLeave: skillOriginCard.leaveAnchor,
     open,
+    originCard: skillOriginCard.cardNode,
     popover,
     restore: (previous) => {
       // Only if the operator has not started something new in the meantime;

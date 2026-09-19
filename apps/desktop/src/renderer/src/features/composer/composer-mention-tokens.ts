@@ -36,14 +36,25 @@ import type { ComposerSkillToken } from "./ComposerInputTypes";
  * insert — stay with the surface that owns the editor.
  */
 
+/**
+ * `catalog` is the skill list the chip was picked from. When it holds another
+ * skill of the same name, the chip carries its origin label so the draft still
+ * says which `$release` it is after the picker closes.
+ */
 export function createComposerSkillToken(
   skill: AppServerSkillSummary,
   index: number,
+  catalog?: readonly AppServerSkillSummary[],
 ): ComposerSkillToken {
+  const showOrigin = Boolean(
+    skill.origin
+    && catalog?.some((entry) => entry.name === skill.name && entry.path !== skill.path),
+  );
   return {
     ...skill,
     id: `${skill.path ?? skill.name}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`,
     index,
+    ...(showOrigin ? { showOrigin } : {}),
   };
 }
 
