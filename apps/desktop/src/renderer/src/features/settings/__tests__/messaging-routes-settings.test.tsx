@@ -1104,6 +1104,56 @@ describe("MessagingRoutesSettings", () => {
     expect(pickerNames()).toEqual(["T1"]);
   });
 
+  it("names Discord containers by what they are, not by what sits under them", async () => {
+    const routes = buildRoutes();
+    routes.defaultAgents = [];
+    routes.bindings = [];
+    // Invented surfaces with obviously fake IDs, in the adapter's own shape:
+    // `parentTitle` is `parentChannelName ?? guildName`, and `ancestorTitle`
+    // is set only when a parent channel (or a category) resolved.
+    routes.observedSurfaces = [
+      discordSurface({
+        id: "1111111111111111131",
+        kind: "channel",
+        title: "cider-orders",
+        parentTitle: "Text Channels",
+        ancestorTitle: "Orchard Collective",
+      }, 5000),
+      discordSurface({
+        id: "1111111111111111141",
+        kind: "thread",
+        title: "Pressing rota",
+        parentConversationId: "1111111111111111151",
+        parentTitle: "Orchard Collective",
+      }, 4000),
+    ];
+    const api = buildDesktopApi(routes);
+    renderRoutes(api.desktopApi, undefined, ["discord"]);
+    await screen.findByText("No default Agents configured.");
+    fireEvent.click(screen.getByRole("button", { name: "Add default" }));
+
+    fireEvent.change(screen.getByLabelText("Default scope"), {
+      target: { value: "workspace" },
+    });
+    openSurfacePicker();
+    // The server, not the category its channel happens to sit in.
+    expect(pickerNames()).toEqual(["Orchard Collective"]);
+    fireEvent.keyDown(screen.getByLabelText("Find a surface"), { key: "Escape" });
+
+    fireEvent.change(screen.getByLabelText("Default scope"), {
+      target: { value: "parent" },
+    });
+    openSurfacePicker();
+    // The parent lookup failed, so the only name in hand is the server's.
+    // The ID is honest, and a row named by it does not repeat it.
+    expect(pickerNames()).toEqual(["1111111111111111151"]);
+    expect(
+      within(screen.getByRole("listbox"))
+        .getByRole("option")
+        .querySelector(".project-picker__row-path"),
+    ).toBeNull();
+  });
+
   it("selects durable Telegram topics with their group identity and excludes reply threads", async () => {
     const routes = buildRoutes();
     routes.observedSurfaces = [

@@ -127,7 +127,8 @@ type SurfaceOption = {
    * Matched by the search as a path ahead of the name.
    */
   context?: string;
-  /** Durable identifier, right-aligned in mono. Also matched by the search. */
+  /** Durable identifier, right-aligned in mono. Also matched by the search.
+   *  Not shown when it is the label, as it is for a surface nobody named. */
   detail?: string;
   /** Trailing recency label. */
   seen?: string;
@@ -474,7 +475,12 @@ export function MessagingSurfacePicker(props: {
                       {option.context ? (
                         <span className="messaging-surface-picker__context">{option.context}</span>
                       ) : null}
-                      {option.detail ? <span className="project-picker__row-path">{option.detail}</span> : null}
+                      {/* A surface nobody named is labelled with its ID, and
+                          the same ID again beside it reads as a second
+                          identifier rather than a repeat. */}
+                      {option.detail && option.detail !== option.label ? (
+                        <span className="project-picker__row-path">{option.detail}</span>
+                      ) : null}
                       {option.seen ? <span className="messaging-surface-picker__seen">{option.seen}</span> : null}
                     </button>
                   );

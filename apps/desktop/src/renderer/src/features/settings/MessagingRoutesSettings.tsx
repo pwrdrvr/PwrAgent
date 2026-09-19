@@ -1006,17 +1006,22 @@ function observedSurfaceCandidates(
     } else if (form.scopeKind === "parent") {
       const parentConversationId = conversation.parentConversationId;
       if (!parentConversationId) continue;
+      // Discord sets `parentTitle` to `parentChannelName ?? guildName` and
+      // marks a resolved parent channel by also setting `ancestorTitle`.
+      // Without that marker the name in hand is the SERVER's, which would
+      // offer this channel under its server's name; the ID is honest.
+      const parentNames = surface.platform === "discord"
+        && !conversation.ancestorTitle?.trim()
+        ? []
+        : [conversation.ancestorTitle, conversation.parentTitle];
       candidateForm = {
         ...EMPTY_FORM,
         scopeKind: "parent",
         platform: surface.platform,
         parentConversationId,
-        title: conversation.parentTitle ?? "",
+        title: parentNames.length > 0 ? conversation.parentTitle ?? "" : "",
       };
-      name = containerSurfaceName(parentConversationId, [
-        conversation.ancestorTitle,
-        conversation.parentTitle,
-      ]);
+      name = containerSurfaceName(parentConversationId, parentNames);
     } else {
       const workspaceId = conversation.workspaceId;
       if (!workspaceId) continue;
@@ -1026,12 +1031,15 @@ function observedSurfaceCandidates(
         platform: surface.platform,
         workspaceId,
       };
-      name = containerSurfaceName(workspaceId, [
-        conversation.ancestorTitle,
-        conversation.kind === "thread" || conversation.kind === "topic"
+      // The workspace is the OUTERMOST container, so it takes the outermost
+      // name, never one under it: a Discord channel in a category reports the
+      // category as `parentTitle` and the server as `ancestorTitle`.
+      const workspaceName = conversation.ancestorTitle?.trim()
+        ? conversation.ancestorTitle
+        : conversation.kind === "thread" || conversation.kind === "topic"
           ? undefined
-          : conversation.parentTitle,
-      ]);
+          : conversation.parentTitle;
+      name = containerSurfaceName(workspaceId, [workspaceName]);
     }
     const value = encodeSurfaceForm(candidateForm);
     if (candidates.has(value)) continue;

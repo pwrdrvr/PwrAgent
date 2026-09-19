@@ -472,6 +472,24 @@ describe("MessagingSurfacePicker", () => {
     });
   });
 
+  it("does not repeat an ID that is also the row's name", () => {
+    render(
+      <MessagingSurfacePicker
+        fieldLabel="Surface"
+        value=""
+        filterConversations={false}
+        onChange={vi.fn()}
+        options={[
+          { value: "named", label: "Orchard Co", detail: "T012AB" },
+          // Nobody named this one, so its ID is its label.
+          { value: "unnamed", label: "T034CD", detail: "T034CD" },
+        ]}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: CLOSED_LABEL }));
+    expect(labels()).toEqual(["Orchard CoT012AB", "T034CD"]);
+  });
+
   it("drops the kind glyph for container scopes, which are not channels", () => {
     render(
       <MessagingSurfacePicker
