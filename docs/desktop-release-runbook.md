@@ -479,8 +479,11 @@ holds the names. `release.mjs` imports them for its packaging checks and the
 release workflow runs the same file as a CLI for its publication checks, so the
 two cannot drift. Neither signing job checks out the repository — each gets an
 explicit allowlist of scripts in `scripts/release/signing-input-paths.json`.
-Both archive producers validate local module imports against that manifest
-before archiving; add any new helper to each platform that needs it.
+Both archive producers validate local module imports against that manifest,
+materialize its files before archiving so hard links cannot point outside the
+archive, then load the extracted electron-builder and ASAR toolchain before a
+protected signing environment can be requested. Add any new helper to each
+platform that needs it.
 
 Three checks guard this, so a dropped asset fails the release instead of
 shipping a broken updater:

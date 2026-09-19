@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { dirname, posix, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import * as vm from "node:vm";
@@ -28,6 +29,14 @@ const requiredPaths = {
   ],
 };
 
+// The protected jobs do not install dependencies. These are the CommonJS
+// entry points release.mjs uses from the extracted signing input, so loading
+// them proves the staged package manager closure survived archiving.
+const runtimeModules = {
+  macos: ["electron-builder", "@electron/asar"],
+  windows: ["electron-builder", "@electron/asar"],
+};
+
 // Parse without executing release entry points (which package apps or exit).
 // Node's module parser handles multiline imports and re-exports, including
 // transitive imports: every explicitly staged module is inspected.
@@ -51,10 +60,32 @@ export function checkSigningInput(paths, readSource = (path) => readFileSync(res
 
 // Archive producers and release:check use this complete platform contract,
 // including roots that an import-closure check cannot discover.
-export function checkPlatformSigningInput(platform, paths = signingInputPaths[platform]) {
-  checkSigningInput(paths);
+export function checkPlatformSigningInput(
+  platform,
+  paths = signingInputPaths[platform],
+  sourceRoot = repoRoot,
+) {
+  checkSigningInput(paths, (path) => readFileSync(resolve(sourceRoot, path), "utf8"));
   for (const path of requiredPaths[platform]) {
     if (!paths.includes(path)) throw new Error(`Signing input omits required entry point ${path}`);
+  }
+}
+
+export function checkPlatformRuntimeClosure(platform, sourceRoot = repoRoot) {
+  const modules = runtimeModules[platform];
+  if (!modules) throw new Error(`Unknown signing-input platform ${platform}`);
+  const require = createRequire(resolve(
+    sourceRoot,
+    "apps/desktop/release-stage/package.json",
+  ));
+  for (const module of modules) {
+    try {
+      require(module);
+    } catch (error) {
+      throw new Error(
+        `${platform} signing input cannot load ${module} from the staged toolchain: ${error.message}`,
+      );
+    }
   }
 }
 
