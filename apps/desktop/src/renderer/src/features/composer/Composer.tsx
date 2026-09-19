@@ -184,6 +184,7 @@ import {
   useDismissableMenu,
 } from "./ComposerDropdown";
 import { ReferencePicker, type ReferencePickerFile } from "./ReferencePicker";
+import { SkillOriginChip, useSkillOriginCard } from "./SkillOriginChip";
 import { REMOTE_NATIVE_PICKER_TOOLTIP } from "./native-picker-boundary";
 import { TranscriptCopyButton } from "../thread-detail/TranscriptCopyButton";
 import {
@@ -4483,6 +4484,12 @@ export const Composer = memo(function Composer(props: ComposerProps) {
 
     return filterSkillAutocompleteCandidates(props.skills, trigger.query);
   }, [props.skills, trigger]);
+  const skillOriginCard = useSkillOriginCard({
+    desktopApi: props.desktopApi,
+    remoteInstanceLabel: filesystemFederationTarget?.scope === "remote"
+      ? props.thread?.federation?.instanceLabel ?? "the peer instance"
+      : undefined,
+  });
   const slashCommandSuggestions = useMemo(() => {
     const commands =
       props.providerCommands?.map((command) =>
@@ -11363,12 +11370,19 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                     label={`$${skill.name}`}
                     query={trigger?.query ? `$${trigger.query}` : "$"}
                   />
+                  {skill.origin ? (
+                    <SkillOriginChip
+                      origin={skill.origin}
+                      {...skillOriginCard.chipHandlers(skill)}
+                    />
+                  ) : null}
                 </span>
                 <span className="composer__autocomplete-meta">
                   {skill.shortDescription || skill.description || skill.path}
                 </span>
               </button>
             ))}
+            {skillOriginCard.cardNode}
           </div>
         ) : autocompleteKind === "slash" ? (
           <div

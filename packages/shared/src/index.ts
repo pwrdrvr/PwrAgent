@@ -48,6 +48,7 @@ export * from "./pending-request-response";
 export * from "./path-display";
 export * from "./release-notes";
 export * from "./review-branches";
+export * from "./skill-origin";
 export * from "./subagent-visibility";
 export * from "./subthreads";
 export * from "./thread-jump-match";

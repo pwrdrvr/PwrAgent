@@ -31980,6 +31980,183 @@ button.pricing-token-miser__folded:focus-visible {
    so there is deliberately no `--provider` rule; the dynamic
    `--${command.source}` class in Composer.tsx still emits it as a hook. */
 
+/* Where a `$skill` row came from (SkillOriginChip.tsx). The base badge's
+   outline-only treatment, for the same hole-in-the-tint reason, but mixed case
+   with the directory chip's folder icon, so "PwrSnap" here reads as the
+   "PwrSnap" on the thread row. It stays neutral on the active row: the accent
+   there belongs to the selection tint and the typed run. The primary project
+   takes the stronger neutral, as `--pwragent` does for first-party commands. */
+.skill-origin-chip {
+  display: inline-flex;
+  max-width: 160px;
+  min-width: 0;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 7px 1px 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 16px;
+  white-space: nowrap;
+}
+
+.skill-origin-chip > svg {
+  flex: none;
+  color: var(--text-muted);
+}
+
+.skill-origin-chip__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.skill-origin-chip--primary {
+  border-color: var(--border-strong);
+  color: var(--text-primary);
+}
+
+.skill-origin-chip:hover {
+  border-color: var(--border-strong);
+  color: var(--text-primary);
+}
+
+/* The Star Map card's picker runs a size smaller throughout. */
+.compact-composer__mention-title .skill-origin-chip {
+  padding: 0 5px;
+  font-size: 10px;
+  line-height: 14px;
+}
+
+/* The chip's hover card. Built to `.pr-status-card`'s measurements so the
+   app's hover cards stay one family, but it takes the pointer: its point is
+   the Copy path button. 140 for the same reason as that card — the composer
+   also renders inside the Star Map window's stacking context.
+
+   Opaque, unlike `--popover-bg`: this card lands on the picker's rows, and
+   2% of their accent-colored text showing through reads as a ghost line
+   under the card's header. It takes the picker's own surface instead. */
+.skill-origin-card {
+  position: fixed;
+  z-index: 140;
+  display: flex;
+  width: 340px;
+  max-width: calc(100vw - 16px);
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+  box-shadow: 0 12px 28px var(--shadow-tint-soft);
+  color: var(--text-primary);
+  text-align: left;
+}
+
+.skill-origin-card__header {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.skill-origin-card__header > svg {
+  flex: none;
+  color: var(--text-muted);
+}
+
+.skill-origin-card__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.skill-origin-card__kind {
+  flex: none;
+  margin-left: auto;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.skill-origin-card__path {
+  padding: 7px 9px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-sidebar);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.skill-origin-card__note {
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.skill-origin-card__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.skill-origin-card__action {
+  display: inline-flex;
+  min-height: 26px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--bg-panel-elevated);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.skill-origin-card__action > svg {
+  flex: none;
+  color: var(--text-muted);
+}
+
+.skill-origin-card__action:hover,
+.skill-origin-card__action:focus-visible {
+  background: var(--bg-panel-hover);
+}
+
+.skill-origin-card__action:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.skill-origin-card__action--quiet {
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+.skill-origin-card__action.is-copied {
+  border-color: var(--success-border);
+  background: var(--success-soft);
+  color: var(--success-text);
+}
+
+.skill-origin-card__action.is-copied > svg {
+  color: var(--success-text);
+}
+
 .composer__autocomplete-meta {
   color: var(--text-secondary);
   font-size: 12px;

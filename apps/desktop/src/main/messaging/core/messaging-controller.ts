@@ -12166,7 +12166,10 @@ export class MessagingController {
           binding,
           capabilityProfile: this.capabilityProfile,
           createdAt: this.now(),
-          entries: flattenSkillEntries(response.data),
+          entries: flattenSkillEntries(
+            response.data,
+            threadState.thread?.linkedDirectories,
+          ),
           pageIndex: options.pageIndex,
           query: options.query,
           targetSurface,
