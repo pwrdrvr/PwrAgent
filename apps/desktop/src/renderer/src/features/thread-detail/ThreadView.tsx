@@ -2186,6 +2186,15 @@ export function ThreadView(props: ThreadViewProps) {
     }
   };
 
+  const handleBeforeStartTurn = useEventCallback(async (signal?: AbortSignal) => {
+    const drifted = await checkSelectedThreadBranchDrift("turn", signal);
+    // An aborted check reports no drift. It must still prevent sending.
+    return !drifted && !signal?.aborted;
+  });
+  const handleBeforeSendTurn = useEventCallback(() => {
+    setTranscriptReglueRequestKey((current) => current + 1);
+  });
+
   useEffect(() => {
     setBranchDriftDialog(undefined);
     setBranchDriftError(undefined);
@@ -3912,20 +3921,10 @@ export function ThreadView(props: ThreadViewProps) {
             onHandoffThreadWorkspace={props.onHandoffThreadWorkspace}
             onBeforeStartTurn={
               selectedThread?.gitBranch && props.desktopApi?.checkThreadBranchDrift
-                ? async (signal) => {
-                    const drifted = await checkSelectedThreadBranchDrift("turn", signal);
-                    // An aborted check reports "no drift" so it does not raise
-                    // a dialog on the way out, and negating that alone would
-                    // read as "proceed". Say no explicitly: the composer's
-                    // race already discards the payload, but the answer must
-                    // not depend on which promise settles first.
-                    return !drifted && !signal?.aborted;
-                  }
+                ? handleBeforeStartTurn
                 : undefined
             }
-            onBeforeSendTurn={() => {
-              setTranscriptReglueRequestKey((current) => current + 1);
-            }}
+            onBeforeSendTurn={handleBeforeSendTurn}
             onMoveEnvActionsToSidebar={
               actionRunsDock === "above" && envActionRuns.length > 0
                 ? moveActionRunsToSidebar
