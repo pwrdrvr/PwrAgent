@@ -4673,7 +4673,8 @@ a.button {
      read as touching. 11 lines the cluster's right edge up with the
      content edge every chip and the timestamp already respect, giving
      the same visible air the row's left side keeps. The pinned-row
-     heading reserve below derives from this offset — move both. */
+     timestamp-lane reserve below derives from this offset — move
+     both. */
   right: 11px;
   z-index: 3;
   display: flex;
@@ -4713,27 +4714,41 @@ a.button {
 }
 
 .thread-row__overflow-button {
-  /* 26px is the pinned cluster-side literal the pinned-row heading
-     reserve derives from, and the 24px-tall button reads as a
-     slightly wider pill next to the square 24px add-reaction chip on
-     purpose. */
+  /* 26px is the pinned cluster-side literal the pinned-row
+     timestamp-lane reserve derives from, and the 24px-tall button
+     reads as a slightly wider pill next to the square 24px
+     add-reaction chip on purpose. */
   width: 26px;
 }
 
 /* The hover-only add-reaction chip rides in the same cluster; match the
    24px cluster height so the three controls read as one unit (and stay
-   on the WCAG 2.5.8 target floor together). */
+   on the WCAG 2.5.8 target floor together). The square is explicit:
+   `min-width` is only a floor, so the base chip's `0 8px` padding around
+   the 14px glyph kept painting a 32px stadium — 8px wider than the
+   "square 24px chip" the kebab's width was chosen against, and 8px more
+   of the title line the revealed cluster covers.
+
+   `justify-content` comes with the square, not as decoration: the base
+   chip is a flex container with no justification, so its `0 8px` padding
+   was what centered the 14px glyph. Take the padding away and the glyph
+   falls to flex-start — 1px from the left border, 9px from the right —
+   beside a kebab whose dots ARE centered. `.thread-row__chip--reaction`
+   centers itself for the same reason. */
 .thread-row__actions .thread-row__chip--add-reaction {
+  width: 24px;
   height: 24px;
   min-width: 24px;
+  justify-content: center;
+  padding: 0;
 }
 
 /* Timestamp fade — the union of every state that reveals a cluster
    control over the time's lane. Adding a reveal state here? The pinned
-   rows' heading-reserve rule below keeps the in-title unpin pin clear
-   of the revealed cluster and mirrors this state set (minus the
-   cluster pin, which pinned rows never render) — extend it in the same
-   commit or the new state re-covers the pin. */
+   rows' lane-reserve rule below keeps the in-title unpin pin clear of
+   the revealed cluster and mirrors this state set (minus the cluster
+   pin, which pinned rows never render) — extend it in the same commit
+   or the new state re-covers the pin. */
 .thread-row-shell:has(.thread-row__pin-button:focus-visible) .thread-row__time,
 .thread-row-shell:hover .thread-row__time,
 .thread-row-shell:has(.thread-row__overflow-button:focus-visible) .thread-row__time,
@@ -4743,7 +4758,7 @@ a.button {
 }
 
 /* Cluster reveal. New reveal states must also join the fade list above
-   and the pinned-row heading-reserve rule below — see the fade list's
+   and the pinned-row lane-reserve rule below — see the fade list's
    comment. */
 .thread-row-shell:hover .thread-row__pin-button,
 .thread-row__pin-button:focus-visible,
@@ -4757,45 +4772,62 @@ a.button {
    shown. The pin sits after the title, so a long (truncated) title
    parks it at the heading's right edge — exactly where the revealed
    add-reaction + kebab cluster paints, covering the unpin control at
-   the moment the pointer arrives to use it. Reserving heading padding
-   during the reveal re-truncates the title and docks the pin left of
-   the cluster. Short titles never reach the boundary, so nothing moves
-   for them; the transition on `.thread-row__heading` glides the dock
-   in step with the cluster's 120ms fade.
+   the moment the pointer arrives to use it.
 
-   46px derivation, all border-box worst case. The cluster zone spans
-   71px from the card's right border: 11px offset + 26px kebab + 4px
-   gap + the add-reaction chip's RENDERED width of 30px (its
-   `min-width: 24px` is a floor — the 14px smiley plus the base chip's
-   0 8px padding is what actually paints). The pin's border box must
-   clear that zone: card padding 10px + header gap 12px + timestamp +
-   reserve − the pin's 3px `margin-right: -3px` overhang ≥ 71px + 4px
-   air. The narrowest timestamp ("1h"/"2d") measures ~13px at its fixed
-   12px font, giving reserve ≥ 43px; 46px leaves 3px of real slack at
-   every title-size notch. The cluster-side literals in this arithmetic
-   are pinned by theme-contract next to this rule's own pin, so a
-   cluster resize fails a test instead of silently re-covering the pin.
+   The cluster paints over the TIMESTAMP's lane, and the timestamp is
+   faded out in exactly these states, so widen that lane instead of
+   padding the heading: the title line then gives back what the cluster
+   actually needs and nothing more, whatever the timestamp string
+   measures. Padding the heading reserved on TOP of the lane, so it had
+   to be sized for the narrowest timestamp ("1h", ~13px at the fixed
+   12px font) and docked the pin up to 27px further left than the
+   cluster needed on every wider one — and the dock's distance IS the
+   reserve, so that slack was the jump the operator sees. The lane form
+   docks "1h", "59m" and "Aug 8" at the same 4px, and drops a font
+   metric out of the derivation. Short titles never reach the boundary,
+   so nothing moves for them; the `min-width` transition on
+   `.thread-row__time` glides the dock in step with the cluster's 120ms
+   fade, and that rule's `text-align: right` keeps the fading timestamp
+   still while its lane grows.
+
+   53px derivation, all border-box, measured from the card's right
+   content edge — where the cluster's `right: 11px` offset lands it
+   (10px card padding + 1px border). The cluster spans 54px back from
+   there: 26px kebab + 4px gap + 24px add-reaction chip. The pin's
+   border box must clear that by 4px of air, and it ends one header gap
+   inside the lane's left edge less its own `margin-right: -7px`
+   overhang: lane + 12 − 7 ≥ 54 + 4. Note what that last term means —
+   the reserve IS the hover shift (jump = lane − timestamp width), so
+   tightening the pin's resting position against the timestamp by
+   widening that overhang is paid for one-for-one here. The cluster-side
+   literals in this arithmetic are pinned by theme-contract next to this
+   rule's own pin, so a cluster resize fails a test instead of silently
+   re-covering the pin.
 
    Scoped by the row's `--pinned` or `--retained` modifier (set by
    ThreadRow when it renders an in-title pin — a plain class match instead
    of a per-hover `:has()` subtree scan, same optimization as the
    directory-row header modifiers). The selector list mirrors the
-   cluster's reveal states in the fade/reveal rules above (the cluster
-   pin's states are absent because pinned rows never render it).
-   Deliberate over-reserve: on a surface without a reaction handler the
-   revealed cluster is kebab-only (37px zone) and the rest-state gap
-   already clears it, so the reserve protects nothing there — accepted,
-   since every production surface wires reactions and a narrower
-   conditional would re-add the `:has()` scan this class avoids. */
-.thread-row-shell:hover .thread-row--retained .thread-row__heading,
-.thread-row-shell:has(.thread-row__overflow-button:focus-visible) .thread-row--retained .thread-row__heading,
-.thread-row-shell:has(.thread-row__chip--add-reaction:focus-visible) .thread-row--retained .thread-row__heading,
-.thread-row-shell:has(.thread-row__chip--add-reaction.is-open) .thread-row--retained .thread-row__heading,
-.thread-row-shell:hover .thread-row--pinned .thread-row__heading,
-.thread-row-shell:has(.thread-row__overflow-button:focus-visible) .thread-row--pinned .thread-row__heading,
-.thread-row-shell:has(.thread-row__chip--add-reaction:focus-visible) .thread-row--pinned .thread-row__heading,
-.thread-row-shell:has(.thread-row__chip--add-reaction.is-open) .thread-row--pinned .thread-row__heading {
-  padding-right: 46px;
+   cluster's reveal states in the fade rule above (the cluster pin's
+   states are absent because pinned rows never render it). Deliberate
+   over-reserve: on a surface without a reaction handler the revealed
+   cluster is kebab-only, 26px instead of 54px, so this lane hands back
+   28px more than that surface needs — accepted, since every production
+   surface wires reactions and a narrower conditional would re-add the
+   `:has()` scan this class avoids. (Do not read that as "a kebab-only
+   cluster needs no reserve at all": the rest-state pin ends only
+   `timestamp + 5px` inside the content edge, so it clears even a 26px
+   kebab only once the timestamp measures ≥21px, and "1h"/"2d" measure
+   ~13px.) */
+.thread-row-shell:hover .thread-row--retained .thread-row__time,
+.thread-row-shell:has(.thread-row__overflow-button:focus-visible) .thread-row--retained .thread-row__time,
+.thread-row-shell:has(.thread-row__chip--add-reaction:focus-visible) .thread-row--retained .thread-row__time,
+.thread-row-shell:has(.thread-row__chip--add-reaction.is-open) .thread-row--retained .thread-row__time,
+.thread-row-shell:hover .thread-row--pinned .thread-row__time,
+.thread-row-shell:has(.thread-row__overflow-button:focus-visible) .thread-row--pinned .thread-row__time,
+.thread-row-shell:has(.thread-row__chip--add-reaction:focus-visible) .thread-row--pinned .thread-row__time,
+.thread-row-shell:has(.thread-row__chip--add-reaction.is-open) .thread-row--pinned .thread-row__time {
+  min-width: 53px;
 }
 
 .thread-row__pin-button:hover,
@@ -5117,12 +5149,6 @@ a.button {
      brings the two surfaces to parity. */
   gap: 2px;
   flex: 1 1 auto;
-  /* Glides the pinned-row hover reserve (see the `--pinned` rule near
-     the reveal lists) in step with the cluster's 120ms opacity fade,
-     instead of the title/pin snapping while the buttons are still
-     fading in. Inert on unpinned rows — nothing changes their
-     padding. */
-  transition: padding-right 120ms ease;
 }
 
 /* Always-visible in-title pin on pinned rows — and since the
@@ -5135,8 +5161,8 @@ a.button {
    does not extend the inline exception to a flex-item button, so an
    18px box would fail the a11y gate the first time an audited fixture
    pins a thread. The negative margins collapse the layout footprint
-   back to the 18px line slot the title line was tuned around
-   (footprint: -1 + 24 - 3 = 20px wide, 24 - 3 - 3 = 18px tall, icon
+   back under the 18px line slot the title line was tuned around
+   (footprint: -4 + 24 - 7 = 13px wide, 24 - 3 - 3 = 18px tall, icon
    center unchanged), so the heading's height and spacing don't move. */
 .thread-row__heading-pin {
   display: inline-flex;
@@ -5145,10 +5171,31 @@ a.button {
   flex: 0 0 auto;
   align-items: center;
   justify-content: center;
-  /* The heading gap is tuned for the status-indicator lane's slack;
-     this control has none, so give it back a little air after the
-     title (2px slot air = 2px margin-left on the old 18px box). */
-  margin: -3px -3px -3px -1px;
+  /* The 24px target box carries 6.5px of centering slack around its 11px
+     glyph on EACH side, and the box is invisible — so both horizontal
+     margins exist to cancel slack the design never asked for, not to
+     add air.
+
+     Left (-4px): the heading's own 2px gap plus 6.5px of slack painted
+     7.5px of title→pin air, wider than the ~5px the cookie sits from
+     the same title, and wide enough that a truncated title — which
+     leaves up to a character of its own slack before the ellipsis —
+     read as a detached pin. -4px lands it at 4.5px; the 2px the box
+     then overlaps the title's (non-interactive, overflow-hidden) box
+     costs nothing.
+
+     Right (-7px): the pin ends the title group, so the air after it
+     should be the header's 12px gap and nothing else — what an UNPINNED
+     row already puts between its title and its timestamp. At -3px the
+     leftover slack added 3.5px on top (15.5px painted, against 4.5px on
+     the pin's other side), which read as the pin floating off the title
+     toward the clock. -7px puts the glyph's right edge on the heading's
+     content edge, so the painted gap is the 12px one (11.5px measured).
+     This is the one margin the hover reserve pays for: it moves the pin
+     right at rest, and the pin's hover dock is fixed by the cluster, so
+     every pixel here is a pixel further to travel — see the `min-width`
+     reserve's derivation, which carries this literal. */
+  margin: -3px -7px -3px -4px;
   padding: 0;
   border: 0;
   border-radius: 4px;
@@ -5224,8 +5271,25 @@ a.button {
      taller than every row beside it. The heading is a 1-1-auto flex item
      with an ellipsized title and absorbs the squeeze on its own. */
   flex: 0 0 auto;
+  /* Load-bearing for the transition below, not for layout: `flex-shrink: 0`
+     above is what keeps "Aug 8" from collapsing, so this floor moves
+     nothing at rest. It exists because `min-width`'s initial value is the
+     KEYWORD `auto` — `auto` and `53px` are not an interpolable pair, so
+     Chromium creates no transition for the reserve at all and the lane
+     (with the pin docked against it) jumps the full ~40px in one frame
+     while the cluster is still fading in. Measured on the real stylesheet:
+     without this line the element reports only an `opacity` animation and
+     reads `min-width: 53px` at the first sampled frame. Starting from a
+     length makes the pair interpolable. */
+  min-width: 0;
   white-space: nowrap;
-  transition: opacity 120ms ease;
+  /* The lane widens under the pinned-row reserve above; right-aligning
+     the label keeps it still while it fades instead of sliding left
+     with its box's left edge. */
+  text-align: right;
+  transition:
+    min-width 120ms ease,
+    opacity 120ms ease;
 }
 
 .thread-row__status-indicator {
