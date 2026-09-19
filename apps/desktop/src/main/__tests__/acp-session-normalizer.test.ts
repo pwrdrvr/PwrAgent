@@ -1869,6 +1869,55 @@ describe("AcpSessionReplayNormalizer", () => {
     ]);
   });
 
+  it.each([false, true])("keeps Grok memory flushes out of the transcript and turn lifecycle (idle: %s)", (idle) => {
+    const normalizer = new AcpSessionReplayNormalizer();
+    normalizer.recordUserPrompt({
+      sessionId: "session-1",
+      prompt: "Inspect this",
+      turnId: "turn-1",
+      receivedAt: 1000,
+      waitingForAgent: true,
+    });
+    normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1001,
+      update: { sessionUpdate: "agent_message_chunk", content: "Inspection " },
+    });
+    if (idle) {
+      normalizer.recordTurnFinished(undefined, 1002);
+    }
+    const before = structuredClone(normalizer.replay());
+
+    // Grok runs these before compaction and in the background while idle.
+    // Completion may report a written file, or omit the optional path.
+    for (const update of [
+      { sessionUpdate: "memory_flush_started" },
+      {
+        sessionUpdate: "memory_flush_completed",
+        result: "written",
+        path: "/fixture/.grok/memory/project/sessions/log.md",
+      },
+      { sessionUpdate: "memory_flush_completed", result: "skipped" },
+    ]) {
+      expect(normalizer.apply({
+        sessionId: "session-1",
+        receivedAt: 1003,
+        update,
+      })).toEqual(before);
+    }
+
+    if (!idle) {
+      const replay = normalizer.apply({
+        sessionId: "session-1",
+        receivedAt: 1004,
+        update: { sessionUpdate: "agent_message_chunk", content: "complete." },
+      });
+      expect(replay.messages.filter((message) => message.role === "assistant"))
+        .toEqual([expect.objectContaining({ text: "Inspection complete." })]);
+      expect(replay.threadStatus).toBe("active");
+    }
+  });
+
   it("updates known tool progress without splitting a streaming assistant message", () => {
     const normalizer = new AcpSessionReplayNormalizer();
 
