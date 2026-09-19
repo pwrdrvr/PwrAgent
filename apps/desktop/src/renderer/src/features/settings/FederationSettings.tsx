@@ -1430,9 +1430,12 @@ export function FederationSettings(props: FederationSettingsProps) {
           sections both titled "Cloudflare" read as a duplicate. */}
       <CloudflareSetup
         api={props.desktopApi}
-        listenHost={listenHost}
-        listenPort={listenPort}
-        mode={mode}
+        // The saved listener, not the form's unsaved edits: Create writes
+        // exactly these, and a settings refresh would silently revert an
+        // unsaved port between reading it here and creating the endpoint.
+        listenHost={props.snapshot.federation.listenHost.value}
+        listenPort={String(props.snapshot.federation.listenPort.value)}
+        mode={props.snapshot.federation.mode.value}
         onWriteConfig={props.onWriteConfig}
         onSettingsChanged={props.onSettingsChanged}
         manualConfigured={

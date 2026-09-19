@@ -35,6 +35,12 @@ const GATE_NAMES: Record<CloudflareFederationGate, string> = {
 const INVITE_HOURS = [1, 4, 8, 24];
 
 /** Emails as typed: any mix of commas, semicolons, spaces, and newlines. */
+/** An IPC failure's own message, without Electron's "Error invoking remote method" wrapper. */
+function errorText(err: unknown, fallback: string): string {
+  if (!(err instanceof Error)) return fallback;
+  return err.message.replace(/^Error invoking remote method '[^']*': (?:Error: )?/, "") || fallback;
+}
+
 function parseEmails(text: string): string[] {
   return text.split(/[\s,;]+/).map((entry) => entry.trim()).filter(Boolean);
 }
@@ -86,7 +92,7 @@ export function CloudflareSetup(props: Props) {
       // An instance that only connects through a sign-in endpoint has nothing
       // to set up as a gateway; open on the half it actually uses.
       if (value.signIn && !value.hostname) setTab("client");
-    }).catch((err: unknown) => { if (active) setError(err instanceof Error ? err.message : "Could not read Cloudflare setup."); });
+    }).catch((err: unknown) => { if (active) setError(errorText(err, "Could not read Cloudflare setup.")); });
     return () => { active = false; };
   }, [api]);
 
@@ -100,12 +106,14 @@ export function CloudflareSetup(props: Props) {
   const disabled = Boolean(busy) || !api?.configureFederationCloudflare;
   const created = Boolean(status?.hostname);
   const published = status?.phase === "Published";
-  // Once the zone is known, offer the conventional name as a real value. As a
-  // placeholder it read as already filled in, while Create stayed disabled.
-  const zoneName = status?.zoneName;
+  // Once the account is connected, offer a free conventional name as a real
+  // value. As a placeholder it read as already filled in, while Create stayed
+  // disabled. The main process picks one nothing in the zone uses yet, since
+  // another profile's endpoint often holds the first choice.
+  const suggestedHostname = status?.suggestedHostname;
   useEffect(() => {
-    if (zoneName && !created) setHostname((current) => current.trim() ? current : `federation.${zoneName}`);
-  }, [zoneName, created]);
+    if (suggestedHostname && !created) setHostname((current) => current.trim() ? current : suggestedHostname);
+  }, [suggestedHostname, created]);
   // The tunnel sends traffic to the port the setup recorded; the listener may
   // have moved since, typically off a port another process already held.
   const livePort = Number(listenPort);
@@ -123,6 +131,14 @@ export function CloudflareSetup(props: Props) {
   const dirty = !created && currentDraftKey !== savedDraft;
   const started = created || Boolean(accountId || zoneId || hostname || token || emails.length);
 
+  // The published allowlist box follows the endpoint's list until someone edits
+  // it. Creating the endpoint is what first gives it a list.
+  const allowlistPristine = parseEmails(allowlistText).join("\n") === (status?.emails ?? []).join("\n");
+  const adopt = (next: CloudflareSetupStatus, replaceAllowlist = false) => {
+    setStatus(next);
+    if (replaceAllowlist || allowlistPristine) setAllowlistText((next.emails ?? []).join("\n"));
+  };
+
   const run = async (request: CloudflareSetupRequest, progress: string) => {
     if (!api?.configureFederationCloudflare || busy) return;
     setBusy({ action: request.action, progress });
@@ -135,15 +151,17 @@ export function CloudflareSetup(props: Props) {
         if (!saved) throw new Error("The gateway listener could not be enabled.");
       }
       const next = await api.configureFederationCloudflare(request);
-      setStatus(next);
+      adopt(next, request.action === "set-emails");
       if (request.action === "connect") setToken("");
       if (request.action === "save-draft") setSavedDraft(currentDraftKey);
-      if (request.action === "set-emails") setAllowlistText((next.emails ?? []).join("\n"));
+      // A removed setup's hostname goes with it, so the field takes the next
+      // free name rather than offering the one just given up.
+      if (request.action === "remove" && !next.hostname) setHostname("");
       if (request.action === "export-client" || request.action === "import-client") setPassword("");
       await onSettingsChanged();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Cloudflare setup failed.");
-      try { setStatus(await api.configureFederationCloudflare({ action: "status" })); } catch { /* Preserve the original error. */ }
+      setError(errorText(err, "Cloudflare setup failed."));
+      try { adopt(await api.configureFederationCloudflare({ action: "status" })); } catch { /* Preserve the original error. */ }
     } finally { setBusy(undefined); }
   };
 
@@ -228,6 +246,18 @@ export function CloudflareSetup(props: Props) {
     ? ` The listener moves from ${props.listenHost} to 127.0.0.1, so it is reachable only through the tunnel.`
     : "";
   const signingIn = busy?.action === "sign-in";
+  // Waiting on the browser. A login method that refuses the person strands the
+  // browser on a blank page, so the way back is offered up front rather than
+  // after the wait times out. Both buttons work outside the busy latch.
+  const signInHelp = (lead: string) => <div className="cloudflare-setup__notice" role="note">
+    <p>{lead} If Cloudflare says &ldquo;That account does not have access&rdquo; or leaves a blank page, open the sign-in page again and use an email the gateway allows; one-time PIN works with any address.</p>
+    <div className="settings-button-row">
+      <button type="button" className="button button--secondary"
+        onClick={() => void api?.configureFederationCloudflare?.({ action: "reopen-sign-in" }).then(adopt, () => undefined)}>Open the sign-in page again</button>
+      <button type="button" className="button button--secondary"
+        onClick={() => void api?.configureFederationCloudflare?.({ action: "cancel-sign-in" })}>Cancel sign-in</button>
+    </div>
+  </div>;
 
   return <SettingsSection sectionId="cloudflare" eyebrow="Private access over the Internet" title="Cloudflare Access" chip={chip} chipKind={chipKind}>
     <div className="cloudflare-setup">
@@ -361,12 +391,12 @@ export function CloudflareSetup(props: Props) {
                 {!connected ? <p className="cloudflare-setup__hint">Connect the Cloudflare account in step 2 to move the tunnel.</p> : null}
               </div> : null}
               {oauth ? <>
-                <SettingsField label="Who can sign in" sub="One email per line. Removed people lose access at their next token refresh, within 15 minutes; revoke the peer in Federation to end a live session now."
+                <SettingsField label="Who can sign in" sub="One email per line. A removed person&rsquo;s PwrAgent disconnects at its next access refresh, within 15 minutes; revoke their peer in Federation to end the session now."
                   control={<textarea className="settings-input cloudflare-setup__textarea" aria-label="People who can sign in" value={allowlistText} rows={3}
                     onChange={(event) => setAllowlistText(event.target.value)} spellCheck={false} disabled={disabled} />} />
                 <div className="settings-button-row">
                   {action("Update allowlist", { action: "set-emails", emails: parseEmails(allowlistText) }, "Updating the Access policy…", false,
-                    !connected || parseEmails(allowlistText).join("\n") === (status?.emails ?? []).join("\n"))}
+                    !connected || allowlistPristine || parseEmails(allowlistText).length === 0)}
                 </div>
                 {!connected ? <p className="cloudflare-setup__hint">Connect the Cloudflare account in step 2 to change the allowlist.</p> : null}
               </> : null}
@@ -388,7 +418,7 @@ export function CloudflareSetup(props: Props) {
               {oauth ? <SettingsField label="Who can sign in" sub="One email per line. Each must match the email the person’s login method reports."
                 control={<textarea className="settings-input cloudflare-setup__textarea" aria-label="People who can sign in" value={emailsText} rows={3}
                   placeholder="you@example.com" onChange={(event) => setEmailsText(event.target.value)} spellCheck={false} disabled={disabled || created} />} /> : null}
-              <p>Creating the endpoint first saves the gateway listener as 127.0.0.1:{port}.{modeChange}{hostChange} PwrAgent then creates {oauth ? "the gateway’s validation token, an Access application with sign-in and an email allowlist," : mtls ? "a private certificate authority, an Access application with a certificate-only policy," : "the gateway’s validation token, an Access application with a token-only policy,"} and a tunnel — and publishes {hostname.trim() || "the hostname"} only after reading the policy back.</p>
+              <p>Creating the endpoint uses this profile&rsquo;s saved listener port, so the gateway listens on 127.0.0.1:{port}; to use another port, change it in Configuration and save it first.{modeChange}{hostChange} PwrAgent then creates {oauth ? "the gateway’s validation token, an Access application with sign-in and an email allowlist," : mtls ? "a private certificate authority, an Access application with a certificate-only policy," : "the gateway’s validation token, an Access application with a token-only policy,"} and a tunnel — and publishes {hostname.trim() || "the hostname"} only after reading the policy back.</p>
               <div className="settings-button-row">
                 {action(created ? "Resume endpoint creation" : "Create protected endpoint",
                   { action: "provision", hostname, listenPort: Number(listenPort), gate: effectiveGate, emails: oauth ? emails : undefined },
@@ -449,7 +479,7 @@ export function CloudflareSetup(props: Props) {
                 {!client.revoked && action(mtls ? "Revoke certificate" : "Revoke service token", { action: "revoke-client", id: client.id },
                   mtls ? "Revoking certificate admission…" : "Revoking service token…", false, !connected)}
               </div>)}
-              {status?.clients.length ? <p className="cloudflare-setup__hint">Revoking blocks new connections. Revoke the peer in Federation to end an existing session immediately.</p> : null}
+              {status?.clients.length ? <p className="cloudflare-setup__hint">Revoking removes the credential from the Access policy{mtls ? "" : " and deletes it in Cloudflare"}, and revokes the federation peer that enrolled with its setup file, which ends that peer&rsquo;s open session.</p> : null}
             </> : <p className="cloudflare-setup__hint">Available once the endpoint is published.</p>}
           </AutomationStage>
         </div>
@@ -463,9 +493,8 @@ export function CloudflareSetup(props: Props) {
           <SettingsField label="Transfer password" control={field("Cloudflare client import password", password, setPassword, "Password from the gateway", { secret: true })} />
           <div className="settings-button-row">
             {action("Open client setup file", { action: "import-client", password }, "Decrypting client setup and connecting…", true, !password)}
-            {busy?.action === "import-client" ? <button type="button" className="button button--secondary"
-              onClick={() => void api?.configureFederationCloudflare?.({ action: "cancel-sign-in" })}>Cancel browser sign-in</button> : null}
           </div>
+          {busy?.action === "import-client" ? signInHelp("If this file uses sign-in, finish it in your browser.") : null}
         </AutomationStage>
         {status?.signIn ? <>
           <AutomationFlow caption="Access refreshes quietly while PwrAgent runs" />
@@ -477,14 +506,11 @@ export function CloudflareSetup(props: Props) {
                   ? <><strong>Sign-in required.</strong> {status.signIn.lastError ?? "Your Cloudflare sign-in expired."} Federation reconnects once you sign in.</>
                   : <><strong>Signed out.</strong> Sign in to connect to <code>{status.signIn.endpoint}</code>.</>}
             </p>
-            <div className="settings-button-row">
-              {signingIn
-                ? <button type="button" className="button button--secondary"
-                  onClick={() => void api?.configureFederationCloudflare?.({ action: "cancel-sign-in" })}>Cancel sign-in</button>
-                : status.signIn.state === "signed-in"
-                  ? action("Sign out", { action: "sign-out" }, "Signing out…")
-                  : action("Sign in", { action: "sign-in" }, "Finish signing in in your browser…", true)}
-            </div>
+            {signingIn ? signInHelp("Finish signing in in your browser.") : <div className="settings-button-row">
+              {status.signIn.state === "signed-in"
+                ? action("Sign out", { action: "sign-out" }, "Signing out…")
+                : action("Sign in", { action: "sign-in" }, "Finish signing in in your browser…", true)}
+            </div>}
           </AutomationStage>
         </> : null}
       </div>}

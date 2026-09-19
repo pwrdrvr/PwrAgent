@@ -125,6 +125,18 @@ A client imports the encrypted `.pwrcf` file under "Connect this client". The
 file's enrollment invite expires after 1, 4, 8, or 24 hours, chosen when it
 is saved.
 
+Access checks a credential only when a connection opens, so removing it from
+the policy alone would leave an open session running. Revoking an issued
+client therefore also revokes the federation peer that enrolled with its
+setup file, which closes that session; an invite nobody has used yet is
+retired instead.
+
+Creating the endpoint uses the saved federation listener port, not an unsaved
+edit in Configuration. The hostname is checked against existing Access
+applications and DNS records before anything is created, and Connect suggests
+the first of `federation.<zone>`, `federation-2.<zone>`, and so on that is
+free; a second profile in the same account commonly holds the first.
+
 A creation that stops partway lists what it has made in Cloudflare so far.
 Resume finishes with those resources. If the listener port changed in the
 meantime, Resume points the tunnel at the new port. Start over deletes exactly
@@ -155,11 +167,24 @@ list appears.
 A client signs in in the system browser (authorization code with PKCE S256 and
 an RFC 8707 resource indicator) and stores the grant encrypted under the
 profile's `state/`. Before each connection it refreshes the 15-minute access
-token and sends it as `Authorization: Bearer`. A refused refresh — the
-two-week grant lapsed, or the person was removed from the allowlist — puts
-the client in a sign-in-required state that Federation health reports as
-rejected; Settings -> Federation -> Cloudflare Access offers Sign in. Config
-key: `federation.cloudflare_access_oauth_enabled`.
+token and sends it as `Authorization: Bearer`, and while connected it
+refreshes again a minute before each token expires, because Access checks the
+token only at the WebSocket upgrade. A refused refresh — the two-week grant
+lapsed, or the person was removed from the allowlist — closes the connection
+and puts the client in a sign-in-required state that Federation health reports
+as rejected; Settings -> Federation -> Cloudflare Access offers Sign in. A
+modified client could ignore that, so revoke the peer to end its session at
+once. Config key: `federation.cloudflare_access_oauth_enabled`.
+
+The Access application's session duration is 15 minutes. On an application
+with an identity policy, Access accepts its own session cookie in place of a
+sign-in until that duration ends (24 hours by default), so the audit checks
+it; endpoint validation does not replay the cookie on this gate.
+
+If a login method refuses the person (GitHub reporting an email that is not
+on the allowlist, for example), Access continues with an ordinary login for
+the application and the browser never returns to PwrAgent. "Open the sign-in
+page again" sends the browser back to the same waiting sign-in.
 
 ### Cloudflare Access Service Token
 

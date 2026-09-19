@@ -334,6 +334,17 @@ export class FederationStore {
     return row ? rowToEnrollment(row) : undefined;
   }
 
+  /** Retire an invite nobody has used yet, so it can never enroll a peer. */
+  revokePendingEnrollment(enrollmentId: string): void {
+    this.stateDb.raw
+      .prepare(
+        `UPDATE federation_enrollment_tokens
+         SET status = 'revoked'
+         WHERE enrollment_id = ? AND status = 'pending'`,
+      )
+      .run(enrollmentId);
+  }
+
   expireEnrollments(now: number): void {
     this.stateDb.raw
       .prepare(

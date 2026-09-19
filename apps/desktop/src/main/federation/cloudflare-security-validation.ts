@@ -134,7 +134,11 @@ export async function validateCloudflareBoundary(options: {
           ? `FAILED: the request without a ${missing} reached the gateway.`
           : passed ? `Cloudflare returned ${rejected.status}; this gateway did not receive the probe.`
             : `HTTP ${rejected.status}; edge rejection was not proven.` });
-      if (accepted.cookie) {
+      // Access honors its own session cookie in place of a sign-in on an
+      // application with an identity policy, so under `oauth` a replay is
+      // admitted by design. What bounds it there is the session duration,
+      // which the audit reads back instead.
+      if (accepted.cookie && options.gate !== "oauth") {
         const sessionProbe = options.probes.arm();
         try {
           const session = await request({ endpoint: options.endpoint, id: sessionProbe.id, upgrade, cookie: accepted.cookie });

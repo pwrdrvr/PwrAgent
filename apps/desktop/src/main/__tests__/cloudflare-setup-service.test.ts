@@ -55,6 +55,7 @@ function harness(gate: Gate = "service-token", emails: string[] = ["Operator@Exa
   const startConnector = vi.fn(async () => undefined);
   const stopConnector = vi.fn(async () => undefined);
   const verifyListener = vi.fn(() => new CloudflareOriginProbes());
+  const revokeEnrollment = vi.fn(async (_enrollmentId: string) => undefined);
   const service = new CloudflareSetupService({
     load: async () => stored ? structuredClone(stored) : undefined,
     save: async (state) => { stored = structuredClone(state); },
@@ -68,8 +69,9 @@ function harness(gate: Gate = "service-token", emails: string[] = ["Operator@Exa
     stopConnector,
     publishUrl,
     unpublishUrl,
+    revokeEnrollment,
   });
-  return { service, calls, resources, publishUrl, unpublishUrl, startConnector, stopConnector, verifyListener, gate,
+  return { service, calls, resources, publishUrl, unpublishUrl, startConnector, stopConnector, verifyListener, revokeEnrollment, gate,
     tamper: () => { tamper = true; }, state: () => stored,
     fail: (method: string, path: RegExp, status: number) => { failures.push({ method, path, status }); },
     listenOn: (port: number | undefined) => { listening = port; },
@@ -125,11 +127,33 @@ describe.each<Gate>(["service-token", "mtls"])("Cloudflare provisioning (%s)", (
     h.resources.set(`/accounts/${"a".repeat(32)}/access/apps/existing`, { id: "existing", domain: "*.example.com" });
     await h.connect();
     await expect(h.provision()).rejects.toThrow("already covers");
-    // The validator credential is minted before the conflict check, so a
-    // service-token run has exactly one create to its name and no more.
-    const mutations = h.calls.filter((call) => call.method !== "GET");
-    expect(mutations.map((call) => call.path.split("/").at(-1)))
-      .toEqual(gate === "mtls" ? [] : ["service_tokens"]);
+    // Checked before anything is minted, so a taken name leaves nothing behind
+    // to clean up: no validator token, and no local record to start over from.
+    expect(h.calls.filter((call) => call.method !== "GET")).toEqual([]);
+    expect(h.state()).toBeUndefined();
+  });
+
+  it("refuses a hostname that already has DNS before minting anything", async () => {
+    const h = harness(gate);
+    h.resources.set(`/zones/${"b".repeat(32)}/dns_records/existing`, { id: "existing", name: "federation.example.com" });
+    await h.connect();
+    await expect(h.provision()).rejects.toThrow("DNS already exists for federation.example.com");
+    expect(h.calls.filter((call) => call.method !== "GET")).toEqual([]);
+  });
+
+  it("ends the enrolled peer's session when a client is revoked", async () => {
+    const h = harness(gate);
+    await h.connect();
+    await h.provision();
+    const client = await h.service.issue("Travel laptop");
+    await h.service.recordEnrollment(client.id, "federation-enrollment:one");
+    expect(JSON.stringify(await h.service.status())).not.toContain("federation-enrollment:one");
+    await h.service.revoke(client.id);
+    // Access checks a credential only when a connection opens; the open one
+    // ends only because the peer its file enrolled is revoked.
+    expect(h.revokeEnrollment).toHaveBeenCalledWith("federation-enrollment:one");
+    const policyUpdate = h.calls.findLastIndex((call) => call.method === "PUT" && call.path.includes("/policies/"));
+    expect(policyUpdate).toBeGreaterThan(-1);
   });
 
   it("does not mutate Cloudflare without local listener ownership", async () => {
@@ -182,6 +206,26 @@ describe("Cloudflare connection permission checks", () => {
       expect(credentialReads.map((call) => call.path.split("/").at(-1))).toEqual([expected]);
     },
   );
+});
+
+describe("Cloudflare hostname suggestion", () => {
+  it("suggests the first conventional name nothing in the zone covers", async () => {
+    const h = harness();
+    // Another profile's endpoint in the same account holds the first choice.
+    h.resources.set(`/accounts/${"a".repeat(32)}/access/apps/other`, { id: "other", domain: "federation.example.com" });
+    await h.connect();
+    expect((await h.service.status()).suggestedHostname).toBe("federation-2.example.com");
+  });
+
+  it("suggests nothing once this profile has an endpoint, and a free name again after removal", async () => {
+    const h = harness();
+    await h.connect();
+    expect((await h.service.status()).suggestedHostname).toBe("federation.example.com");
+    await h.provision();
+    expect((await h.service.status()).suggestedHostname).toBeUndefined();
+    await h.service.remove();
+    expect((await h.service.status()).suggestedHostname).toBe("federation.example.com");
+  });
 });
 
 describe("Cloudflare endpoint recovery", () => {
@@ -371,9 +415,12 @@ describe("Cloudflare sign-in (oauth) admission", () => {
     expect(identity).toMatchObject({ decision: "allow", include: [{ email: { email: "operator@example.com" } }], require: [] });
     // The Service Auth policy admits the validator alone; people sign in.
     expect(service).toMatchObject({ decision: "non_identity", include: [{ service_token: { token_id: h.state()?.verifier.id } }] });
+    // Access honors its own session cookie in place of a sign-in until this
+    // ends, so it is what bounds a removed person's browser session.
+    expect(created.session_duration).toBe("15m");
     const checks = await h.service.audit();
     expect(checks.every((check) => check.passed)).toBe(true);
-    expect(checks.map((check) => check.label)).toEqual(expect.arrayContaining(["Managed OAuth sign-in", "Allowed people", "Validator service token"]));
+    expect(checks.map((check) => check.label)).toEqual(expect.arrayContaining(["Managed OAuth sign-in", "Allowed people", "Validator service token", "Browser session length"]));
     expect((await h.service.status()).emails).toEqual(["operator@example.com"]);
     expect((await h.service.status()).gate).toBe("oauth");
   });
@@ -400,6 +447,18 @@ describe("Cloudflare sign-in (oauth) admission", () => {
       h.resources.set(app(h), { ...h.resources.get(app(h)), oauth_configuration: oauth });
       const checks = await h.service.audit();
       expect(checks.find((check) => check.label === "Managed OAuth sign-in")?.passed).toBe(false);
+    }
+  });
+
+  it("fails the audit when a browser session outlasts a sign-in", async () => {
+    for (const duration of ["24h", undefined, "not a duration"]) {
+      const h = harness("oauth");
+      await h.connect();
+      await h.provision();
+      h.resources.set(app(h), { ...h.resources.get(app(h)), session_duration: duration });
+      const check = (await h.service.audit()).find((entry) => entry.label === "Browser session length");
+      expect(check?.passed).toBe(false);
+      expect(check?.detail).toContain(duration === undefined ? "24h, its default" : duration);
     }
   });
 

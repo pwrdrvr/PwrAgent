@@ -5,6 +5,7 @@ import { CloudflareSignInRequiredError } from "../federation/cloudflare-access-o
 import type { FederationClientWebSocketClient } from "../federation/federation-transport";
 
 const metaStore = vi.hoisted(() => new Map<string, string>());
+const clientClose = vi.hoisted(() => vi.fn());
 const connectCalls = vi.hoisted(
   () =>
     [] as Array<{
@@ -33,7 +34,7 @@ vi.mock("../federation/federation-transport", async (importOriginal) => ({
       capabilities: [],
       startReceiving: () => undefined,
       sendEnvelope: () => undefined,
-      close: () => undefined,
+      close: clientClose,
     };
   },
 }));
@@ -42,11 +43,14 @@ const cloudflareEndpoint = vi.hoisted(() => ({ value: "" }));
 const signIn = vi.hoisted(() => ({
   enabled: false,
   accessToken: vi.fn(async (_endpoint: string): Promise<string> => "oauth:access-token"),
+  // Due now: the refresh timer then waits its one-minute floor.
+  refreshDueAt: vi.fn(async (_endpoint: string): Promise<number | undefined> => Date.now()),
 }));
 
 vi.mock("../federation/cloudflare-access-sign-in", () => ({
   getCloudflareAccessSignIn: () => ({
     accessToken: signIn.accessToken,
+    refreshDueAt: signIn.refreshDueAt,
     invalidateAccessToken: async () => undefined,
   }),
 }));
@@ -98,6 +102,7 @@ describe("federation endpoint credential scoping", () => {
     signIn.enabled = false;
     signIn.accessToken.mockReset();
     signIn.accessToken.mockImplementation(async () => "oauth:access-token");
+    clientClose.mockReset();
     metaStore.clear();
     metaStore.set("federation_instance_id", "pwr_client-under-test");
     metaStore.set("federation_gateway_instance_id", "gateway_one");
@@ -195,6 +200,41 @@ describe("federation endpoint credential scoping", () => {
     ]) as CredentialHarness & { walkGatewayEndpoints: () => Promise<void> };
     // The actionable failure, not "unreachable on every configured endpoint".
     await expect(harness.walkGatewayEndpoints()).rejects.toBeInstanceOf(CloudflareSignInRequiredError);
+  });
+
+  // Access checks the bearer token only at the upgrade. Without a refresh
+  // while connected, a person removed from the allowlist stayed connected for
+  // hours in the live test, until the client happened to restart.
+  it("ends a signed-in session when Access refuses its refresh", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      signIn.enabled = true;
+      cloudflareEndpoint.value = "wss://federation.example.com";
+      await createHarness(["wss://federation.example.com"]).connectClient("wss://federation.example.com");
+      signIn.accessToken.mockRejectedValue(new CloudflareSignInRequiredError());
+      await vi.advanceTimersByTimeAsync(59_000);
+      expect(clientClose).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(clientClose).toHaveBeenCalledTimes(1);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("keeps a signed-in session through a refresh that fails for another reason", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      signIn.enabled = true;
+      cloudflareEndpoint.value = "wss://federation.example.com";
+      await createHarness(["wss://federation.example.com"]).connectClient("wss://federation.example.com");
+      signIn.accessToken.mockClear();
+      signIn.accessToken.mockRejectedValueOnce(new Error("fetch failed"));
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(signIn.accessToken).toHaveBeenCalledTimes(1);
+      expect(clientClose).not.toHaveBeenCalled();
+      // Retried on the next schedule, and a successful refresh keeps it going.
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(signIn.accessToken).toHaveBeenCalledTimes(2);
+      expect(clientClose).not.toHaveBeenCalled();
+    } finally { vi.useRealTimers(); }
   });
 
   it("withholds credentials from every host when several are configured and none is designated", async () => {

@@ -3,6 +3,7 @@ import http from "node:http";
 import { describe, expect, it, vi } from "vitest";
 import {
   CloudflareAccessOAuth,
+  CloudflareSignInCancelledError,
   CloudflareSignInRequiredError,
   pkceChallenge,
   pkceVerifier,
@@ -92,6 +93,7 @@ function harness(options: {
   session?: CloudflareAccessSession;
   now?: () => number;
   browser?: (authorize: URL, access: ReturnType<typeof fakeAccess>) => Promise<void>;
+  log?: (message: string, fields?: Record<string, unknown>) => void;
 } = {}) {
   const access = options.access ?? fakeAccess();
   let stored = options.session ? structuredClone(options.session) : undefined;
@@ -114,6 +116,7 @@ function harness(options: {
     fetch: access.fetch,
     now: options.now,
     signInTimeoutMs: 5_000,
+    log: options.log,
   });
   return { oauth, access, openExternal, opened, pages, stored: () => stored };
 }
@@ -210,6 +213,48 @@ describe("Cloudflare Access sign-in", () => {
     h.oauth.cancel();
     await expect(retry).rejects.toThrow("cancelled");
   });
+
+  it("reports a cancel as its own outcome, so it is not shown as a failure", async () => {
+    const h = harness({ browser: async () => undefined });
+    const pending = h.oauth.signIn(ENDPOINT);
+    await vi.waitFor(() => expect(h.openExternal).toHaveBeenCalled());
+    h.oauth.cancel();
+    await expect(pending).rejects.toBeInstanceOf(CloudflareSignInCancelledError);
+  });
+
+  it("reopens a waiting sign-in's page, which completes it after a refused login method", async () => {
+    // First visit: a login method refused the person and Access continued with
+    // an ordinary login for the application, so the redirect never came back.
+    let attempts = 0;
+    const log = vi.fn();
+    const h = harness({
+      browser: async (authorize) => {
+        attempts += 1;
+        if (attempts === 1) return;
+        const redirect = new URL(authorize.searchParams.get("redirect_uri")!);
+        redirect.searchParams.set("code", "code-1");
+        redirect.searchParams.set("state", authorize.searchParams.get("state")!);
+        await visit(redirect.toString());
+      },
+      log,
+    });
+    await expect(h.oauth.reopen()).resolves.toBe(false);
+    const pending = h.oauth.signIn(ENDPOINT);
+    await vi.waitFor(() => expect(h.openExternal).toHaveBeenCalledTimes(1));
+    await expect(h.oauth.reopen()).resolves.toBe(true);
+    await pending;
+    // The same authorization, not a second registration or a new PKCE pair.
+    expect(h.opened[1].toString()).toBe(h.opened[0].toString());
+    expect(h.access.calls.filter((call) => call.url.endsWith("/register"))).toHaveLength(1);
+    expect(h.stored()).toMatchObject({ accessToken: "oauth:access-2" });
+    await expect(h.oauth.reopen()).resolves.toBe(false);
+    // Progress is logged without a code or a token.
+    expect(log.mock.calls.map(([message]) => message)).toEqual(expect.arrayContaining([
+      "Cloudflare sign-in opened the browser", "Cloudflare sign-in reopened the browser",
+      "Cloudflare sign-in returned to PwrAgent", "Cloudflare sign-in completed",
+    ]));
+    expect(JSON.stringify(log.mock.calls)).not.toMatch(/code-1|access-2|refresh-2/);
+  });
 });
 
 describe("Cloudflare Access tokens", () => {
@@ -218,6 +263,12 @@ describe("Cloudflare Access tokens", () => {
     version: 1, endpoint: ENDPOINT, clientId: "client-1", redirectUri: "http://127.0.0.1:1/callback",
     refreshToken: "refresh-1", accessToken: "oauth:access-1", accessExpiresAt: now + 10 * 60_000, signedInAt: now - 1000,
     ...overrides,
+  });
+
+  it("schedules the next refresh a minute before the access token expires", async () => {
+    const h = harness({ session: session(), now: () => now });
+    await expect(h.oauth.refreshDueAt(ENDPOINT)).resolves.toBe(now + 9 * 60_000);
+    await expect(h.oauth.refreshDueAt("wss://other.example.com")).resolves.toBeUndefined();
   });
 
   it("returns a fresh access token without touching the network", async () => {

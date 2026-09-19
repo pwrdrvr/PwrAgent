@@ -107,6 +107,8 @@ export type CloudflareSetupRequest =
   | { action: "revoke-client"; id: string }
   | { action: "sign-in" }
   | { action: "cancel-sign-in" }
+  /** Send the browser back to a waiting sign-in's authorization page. */
+  | { action: "reopen-sign-in" }
   | { action: "sign-out" };
 
 export type CloudflareSecurityCheck = {
@@ -123,6 +125,11 @@ export type CloudflareSetupStatus = {
   zoneId?: string;
   zoneName?: string;
   hostname?: string;
+  /**
+   * Before an endpoint exists: a conventional hostname nothing in the zone uses
+   * yet, found when the account was connected.
+   */
+  suggestedHostname?: string;
   /** The loopback port the tunnel sends traffic to, as recorded by the setup. */
   listenPort?: number;
   tunnelId?: string;

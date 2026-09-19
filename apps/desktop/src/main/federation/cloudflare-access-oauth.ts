@@ -55,6 +55,11 @@ export class CloudflareSignInRequiredError extends Error {
   }
 }
 
+/** The person abandoned a sign-in; nothing was saved, so an existing grant stands. */
+export class CloudflareSignInCancelledError extends Error {
+  constructor() { super("Cloudflare sign-in was cancelled."); }
+}
+
 export const CLOUDFLARE_SIGN_IN_REQUIRED =
   "Cloudflare Access sign-in is required. Open Settings → Federation → Cloudflare Access and choose Sign in.";
 
@@ -66,6 +71,8 @@ export type CloudflareAccessOAuthDependencies = {
   fetch?: typeof fetch;
   now?: () => number;
   signInTimeoutMs?: number;
+  /** Sign-in progress, for the log. Never given a code, token, or secret. */
+  log?: (message: string, fields?: Record<string, unknown>) => void;
 };
 
 const REFRESH_MARGIN_MS = 60_000;
@@ -76,6 +83,7 @@ export class CloudflareAccessOAuth {
   private refreshing?: Promise<string>;
   private signingIn = false;
   private cancelSignIn?: () => void;
+  private pendingSignIn?: { authorizeUrl: string; extend: () => void };
   private metadata?: { host: string; value: Metadata; expires: number };
   private readonly fetcher: typeof fetch;
   private readonly now: () => number;
@@ -118,6 +126,17 @@ export class CloudflareAccessOAuth {
   }
 
   /**
+   * When `endpoint`'s access token next needs a refresh, or undefined without
+   * one. A connection that stays open refreshes on this schedule, because the
+   * refresh is where Access re-evaluates whether the person may still get in.
+   */
+  async refreshDueAt(endpoint: string): Promise<number | undefined> {
+    const session = await this.deps.load().catch(() => undefined);
+    if (!session || !sameEndpoint(session.endpoint, endpoint) || !session.accessExpiresAt) return undefined;
+    return session.accessExpiresAt - REFRESH_MARGIN_MS;
+  }
+
+  /**
    * Forget the cached access token after the edge refused it, so the next
    * connection refreshes instead of presenting it again. The grant is kept:
    * the refresh itself is what tells an expired token from a revoked person.
@@ -152,6 +171,7 @@ export class CloudflareAccessOAuth {
   async signIn(endpoint: string): Promise<void> {
     if (this.signingIn) throw new Error("A Cloudflare sign-in is already waiting in your browser.");
     this.signingIn = true;
+    const host = new URL(resourceFor(endpoint)).hostname;
     try {
       const resource = resourceFor(endpoint);
       const metadata = await this.discover(endpoint);
@@ -168,6 +188,7 @@ export class CloudflareAccessOAuth {
         let clientId = reuse?.clientId;
         if (!clientId || reuse?.redirectUri !== listener.redirectUri) {
           clientId = await this.register(metadata, listener.redirectUri, resource);
+          this.deps.log?.("Cloudflare sign-in registered this computer", { host, redirectUri: listener.redirectUri });
         }
         const verifier = pkceVerifier();
         const state = base64url(randomBytes(32));
@@ -179,12 +200,21 @@ export class CloudflareAccessOAuth {
         authorize.searchParams.set("code_challenge_method", "S256");
         authorize.searchParams.set("state", state);
         authorize.searchParams.set("resource", resource);
-        const callback = listener.next(this.deps.signInTimeoutMs ?? 5 * 60_000);
+        const timeoutMs = this.deps.signInTimeoutMs ?? 5 * 60_000;
+        const callback = listener.next(timeoutMs);
         // Handled below; this only keeps a failed browser launch from leaving
         // the pending wait as an unhandled rejection.
         callback.catch(() => undefined);
+        this.pendingSignIn = { authorizeUrl: authorize.toString(), extend: () => listener.extend(timeoutMs) };
         await this.deps.openExternal(authorize.toString());
-        const { code, returnedState } = await callback;
+        this.deps.log?.("Cloudflare sign-in opened the browser", { host });
+        const { code, returnedState } = await callback.catch((error: unknown) => {
+          this.deps.log?.("Cloudflare sign-in ended without a code", {
+            host, reason: error instanceof Error ? error.message : String(error),
+          });
+          throw error;
+        });
+        this.deps.log?.("Cloudflare sign-in returned to PwrAgent", { host });
         if (returnedState !== state) throw new Error("Cloudflare sign-in returned a mismatched state. Try again.");
         const tokens = await this.exchange(metadata.tokenEndpoint, {
           grant_type: "authorization_code",
@@ -204,8 +234,10 @@ export class CloudflareAccessOAuth {
           refreshToken: tokens.refreshToken, accessToken: tokens.accessToken,
           accessExpiresAt: tokens.expiresAt, signedInAt: this.now(),
         });
+        this.deps.log?.("Cloudflare sign-in completed", { host });
       } finally {
         this.cancelSignIn = undefined;
+        this.pendingSignIn = undefined;
         listener.close();
       }
     } finally {
@@ -216,6 +248,25 @@ export class CloudflareAccessOAuth {
   /** Abandon a sign-in waiting on the browser, e.g. after its tab was closed. */
   cancel(): void {
     this.cancelSignIn?.();
+  }
+
+  /**
+   * Send the browser back to the waiting sign-in's authorization page, and give
+   * it a fresh wait.
+   *
+   * When a login method refuses the person (GitHub reporting an email the
+   * allowlist lacks), Access continues with an ordinary login for the
+   * application's own domain, and the redirect back to PwrAgent is lost. The
+   * pending sign-in is still valid: reopening its authorization page with the
+   * browser's new Access session goes straight to consent and returns here.
+   */
+  async reopen(): Promise<boolean> {
+    const pending = this.pendingSignIn;
+    if (!pending) return false;
+    pending.extend();
+    await this.deps.openExternal(pending.authorizeUrl);
+    this.deps.log?.("Cloudflare sign-in reopened the browser");
+    return true;
   }
 
   /**
@@ -470,6 +521,9 @@ function page(title: string, detail: string): string {
  * Bound to 127.0.0.1 only, so nothing off this machine can deliver a code.
  * Unrelated paths (a favicon fetch) get a 404 and do not consume the wait.
  */
+const SIGN_IN_TIMED_OUT = "Cloudflare sign-in timed out waiting for the browser. Try again, and sign in with an email "
+  + "the gateway allows; one-time PIN works with any address.";
+
 async function listenForCallback(previousRedirect: string | undefined) {
   let settle: ((value: { code: string; returnedState: string }) => void) | undefined;
   let fail: ((error: Error) => void) | undefined;
@@ -508,20 +562,28 @@ async function listenForCallback(previousRedirect: string | undefined) {
   }
   const port = (server.address() as AddressInfo).port;
   let timer: NodeJS.Timeout | undefined;
+  let expire: (() => void) | undefined;
   return {
     redirectUri: `http://127.0.0.1:${port}${CALLBACK_PATH}`,
     next: (timeoutMs: number) => new Promise<{ code: string; returnedState: string }>((resolve, reject) => {
       if (cancelled) {
-        reject(new Error("Cloudflare sign-in was cancelled."));
+        reject(new CloudflareSignInCancelledError());
         return;
       }
-      timer = setTimeout(() => reject(new Error("Cloudflare sign-in timed out. Choose Sign in to try again.")), timeoutMs);
+      expire = () => reject(new Error(SIGN_IN_TIMED_OUT));
+      timer = setTimeout(expire, timeoutMs);
       settle = (value) => { clearTimeout(timer); resolve(value); };
       fail = (error) => { clearTimeout(timer); reject(error); };
     }),
+    /** Restart the wait, for a person who is still trying. */
+    extend: (timeoutMs: number) => {
+      if (!expire) return;
+      clearTimeout(timer);
+      timer = setTimeout(expire, timeoutMs);
+    },
     cancel: () => {
       cancelled = true;
-      fail?.(new Error("Cloudflare sign-in was cancelled."));
+      fail?.(new CloudflareSignInCancelledError());
     },
     close: () => {
       clearTimeout(timer);

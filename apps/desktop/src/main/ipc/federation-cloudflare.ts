@@ -14,6 +14,7 @@ import { cloudflareConnector } from "../federation/cloudflare-connector";
 import { CLOUDFLARE_LINKS, resolveCloudflareLink } from "../federation/cloudflare-links";
 import { compareCloudflaredVersions, createCloudflaredReleaseCheck } from "../federation/cloudflared-release";
 import { getCloudflareAccessSignIn } from "../federation/cloudflare-access-sign-in";
+import { CloudflareSignInCancelledError } from "../federation/cloudflare-access-oauth";
 import { getDesktopFederationRuntime } from "../federation/federation-runtime";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
 import { bundleGate, decryptCloudflareBundle, encryptCloudflareBundle } from "../federation/cloudflare-client-bundle";
@@ -40,6 +41,7 @@ const setup = new CloudflareSetupService({
     await getDesktopFederationRuntime().restart();
   },
   probeSignIn: (endpoint) => getCloudflareAccessSignIn().probe(endpoint),
+  revokeEnrollment: (enrollmentId) => getDesktopFederationRuntime().revokeEnrollment(enrollmentId),
 });
 
 let busy = false;
@@ -87,6 +89,12 @@ export function registerCloudflareSetupIpc(): void {
     if (request.action === "cancel-sign-in") {
       getCloudflareAccessSignIn().cancel();
       return describe();
+    }
+    // Also outside it: the sign-in it resumes is what holds the latch.
+    if (request.action === "reopen-sign-in") {
+      return describe(await getCloudflareAccessSignIn().reopen()
+        ? "Sign-in page reopened in your browser."
+        : "No sign-in is waiting. Choose Sign in, or open the client setup file again.");
     }
     if (busy) throw new Error("A Cloudflare setup operation is already running.");
     busy = true;
@@ -155,18 +163,32 @@ export function registerCloudflareSetupIpc(): void {
           });
           if (confirm.response !== 1) break;
           const hostname = await setup.remove();
-          return describe(`${hostname} was removed from Cloudflare and this profile.`);
+          // Name what was deleted. A setup that stopped before publishing never
+          // owned the hostname, which may be another profile's live endpoint.
+          return describe(published
+            ? `${hostname} is no longer published. Deleted in Cloudflare: ${resources.join(", ")}.`
+            : resources.length
+              ? `Deleted what this setup had created in Cloudflare: ${resources.join(", ")}. Nothing else changed.`
+              : "Cleared this profile's setup. Nothing had been created in Cloudflare.");
         }
         case "set-emails":
           await setup.setEmails(request.emails);
-          return describe("Sign-in allowlist updated. Removed people lose access at their next token refresh, within 15 minutes.");
+          return describe("Sign-in allowlist updated. A removed person's PwrAgent disconnects at its next access refresh, within 15 minutes.");
         case "audit": await setup.audit(); break;
         case "validate": await setup.validate(); break;
         case "start": await setup.start(); break;
         case "stop": await setup.stop(); break;
-        case "revoke-client": await setup.revoke(request.id); break;
+        case "revoke-client":
+          await setup.revoke(request.id);
+          return describe("Client revoked. Cloudflare no longer admits its credential, and the federation session its setup file opened was closed.");
         case "sign-in": {
-          await getCloudflareAccessSignIn().signIn(signInEndpoint());
+          try {
+            await getCloudflareAccessSignIn().signIn(signInEndpoint());
+          } catch (error) {
+            // Cancelling is an outcome, not a failure: nothing was saved.
+            if (error instanceof CloudflareSignInCancelledError) return describe("Sign-in cancelled. Your previous sign-in is unchanged.");
+            throw error;
+          }
           await getDesktopFederationRuntime().restart();
           return describe("Signed in. Federation is reconnecting.");
         }
@@ -189,6 +211,7 @@ export function registerCloudflareSetupIpc(): void {
           const state = await loadCloudflareSetup();
           if (!state) throw new Error("Cloudflare setup is unavailable.");
           const generated = await getDesktopFederationRuntime().generateInvite({ label: request.label, ttlMs: hours * 3_600_000 });
+          if (client) await setup.recordEnrollment(client.id, generated.enrollmentId);
           const endpoint = `wss://${state.hostname}`;
           const invite = encodeFederationInvite({ ...decodeFederationInvite(generated.invite), gatewayUrl: endpoint, gatewayEndpoints: [endpoint] });
           await fs.writeFile(destination.filePath, await encryptCloudflareBundle({
@@ -226,7 +249,12 @@ export function registerCloudflareSetupIpc(): void {
           if (importGate === "oauth") {
             // Sign in before changing any setting: if the person cannot sign
             // in, this profile's federation config is left as it was.
-            await getCloudflareAccessSignIn().signIn(bundle.endpoint);
+            try {
+              await getCloudflareAccessSignIn().signIn(bundle.endpoint);
+            } catch (error) {
+              if (error instanceof CloudflareSignInCancelledError) return describe("Sign-in cancelled. Nothing on this profile changed.");
+              throw error;
+            }
           } else {
             const previous = await settings.resolveFederationCloudflareCredentials();
             // Which two secrets this writes is the whole difference between the

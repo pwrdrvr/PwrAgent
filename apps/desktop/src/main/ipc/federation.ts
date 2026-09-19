@@ -344,11 +344,13 @@ export function registerFederationIpcHandlers(): void {
     async (
       _event,
       request: GenerateFederationInviteRequest = {},
-    ): Promise<GenerateFederationInviteResponse> =>
-      await getDesktopFederationRuntime().generateInvite({
+    ): Promise<GenerateFederationInviteResponse> => {
+      const { invite, expiresAt } = await getDesktopFederationRuntime().generateInvite({
         ...request,
         readTailscaleAdvertisement: readInviteTailscaleAdvertisement,
-      }),
+      });
+      return { invite, expiresAt };
+    },
   );
   ipcMain.handle(
     FEDERATION_IMPORT_INVITE_CHANNEL,

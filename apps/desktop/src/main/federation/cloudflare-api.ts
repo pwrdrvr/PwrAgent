@@ -144,6 +144,8 @@ export type AccessApplication = {
   destinations?: Array<{ uri?: string; type?: string }>;
   self_hosted_domains?: string[];
   oauth_configuration?: unknown;
+  /** How long Access honors its own session cookie for this application; Cloudflare's default is 24h. */
+  session_duration?: string;
 };
 
 export function applicationCoversHostname(app: AccessApplication, hostname: string): boolean {
@@ -225,6 +227,27 @@ export const CLOUDFLARE_OAUTH_CONFIGURATION = {
     session_duration: "336h",
   },
 };
+
+/**
+ * How long a sign-in endpoint's browser session lasts.
+ *
+ * On an application with an identity policy, Access accepts its own session
+ * cookie in place of a sign-in until the application's session duration ends —
+ * 24 hours by default. Matching the access-token lifetime means a person
+ * removed from the allowlist loses a browser session when their sign-in lapses.
+ * Managed OAuth's token lifetimes are set separately, in `grant`.
+ */
+export const CLOUDFLARE_SIGN_IN_SESSION_DURATION = "15m";
+export const CLOUDFLARE_SIGN_IN_SESSION_LIMIT_MS = 15 * 60_000;
+
+/** A Go duration string, as Cloudflare reports `session_duration` ("15m", "1h30m", "300ms"), in milliseconds. */
+export function parseCloudflareDuration(value: unknown): number | undefined {
+  if (typeof value !== "string" || !/^(?:\d+(?:\.\d+)?(?:ns|us|µs|ms|s|m|h))+$/.test(value)) return undefined;
+  const unit: Record<string, number> = { ns: 1e-6, us: 1e-3, "µs": 1e-3, ms: 1, s: 1_000, m: 60_000, h: 3_600_000 };
+  let total = 0;
+  for (const [, amount, name] of value.matchAll(/(\d+(?:\.\d+)?)(ns|us|µs|ms|s|m|h)/g)) total += Number(amount) * unit[name];
+  return total;
+}
 
 /**
  * Whether an application's live Managed OAuth settings still let PwrAgent sign

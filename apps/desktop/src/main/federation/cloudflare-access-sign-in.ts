@@ -1,6 +1,9 @@
 import { shell } from "electron";
 import { CloudflareAccessOAuth } from "./cloudflare-access-oauth";
 import { loadCloudflareAccessSession, saveCloudflareAccessSession } from "./cloudflare-setup-storage";
+import { getMainLogger } from "../log";
+
+const log = getMainLogger("pwragent:federation-cloudflare");
 
 let instance: CloudflareAccessOAuth | undefined;
 
@@ -15,6 +18,7 @@ export function getCloudflareAccessSignIn(): CloudflareAccessOAuth {
     load: loadCloudflareAccessSession,
     save: saveCloudflareAccessSession,
     openExternal: (url) => shell.openExternal(url),
+    log: (message, fields) => log.info(message, fields),
   });
   return instance;
 }

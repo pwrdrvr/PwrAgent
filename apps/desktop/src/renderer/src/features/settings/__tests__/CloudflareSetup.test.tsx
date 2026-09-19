@@ -191,8 +191,9 @@ describe("Cloudflare setup flow", () => {
     render(<CloudflareSetup api={{ configureFederationCloudflare: call } as DesktopApi}
       listenPort="47830" listenHost="0.0.0.0" mode="client" onWriteConfig={async () => true} onSettingsChanged={async () => {}} />);
     await screen.findByLabelText("Cloudflare public hostname");
-    const statement = screen.getByText(/Creating the endpoint first saves/);
+    const statement = screen.getByText(/Creating the endpoint uses this profile’s saved listener port/);
     expect(statement).toHaveTextContent("127.0.0.1:47830");
+    expect(statement).toHaveTextContent("change it in Configuration and save it first");
     expect(statement).toHaveTextContent("changes from client to dual");
     expect(statement).toHaveTextContent("moves from 0.0.0.0 to 127.0.0.1");
   });
@@ -246,13 +247,68 @@ describe("Cloudflare setup flow", () => {
     expect(screen.getByText("Manual endpoint field")).toBeInTheDocument();
   });
 
-  it("fills in the conventional hostname once the zone is known", async () => {
-    const call = vi.fn(async (_request: CloudflareSetupRequest) => connected);
+  it("fills in the free hostname the main process found", async () => {
+    const call = vi.fn(async (_request: CloudflareSetupRequest) => ({ ...connected, suggestedHostname: "federation-2.example.com" }));
     render(<CloudflareSetup api={{ configureFederationCloudflare: call } as DesktopApi}
       listenPort="47830" onWriteConfig={async () => true} onSettingsChanged={async () => {}} />);
-    // A placeholder read as already filled in while Create stayed disabled.
-    await waitFor(() => expect(screen.getByLabelText("Cloudflare public hostname")).toHaveValue("federation.example.com"));
+    // A placeholder read as already filled in while Create stayed disabled, and
+    // the first conventional name is often another profile's endpoint.
+    await waitFor(() => expect(screen.getByLabelText("Cloudflare public hostname")).toHaveValue("federation-2.example.com"));
     expect(screen.getByRole("button", { name: "Create protected endpoint" })).toBeEnabled();
+  });
+
+  it("offers the next free name after starting over", async () => {
+    const stopped: CloudflareSetupStatus = { ...connected, hostname: "federation.example.com", listenPort: 47830,
+      phase: "Setup incomplete — resume creation", resources: ["1 service token"] };
+    const call = vi.fn(async (request: CloudflareSetupRequest) => request.action === "remove"
+      ? { ...connected, suggestedHostname: "federation-2.example.com", message: "Deleted what this setup had created in Cloudflare: 1 service token. Nothing else changed." }
+      : stopped);
+    render(<CloudflareSetup api={{ configureFederationCloudflare: call } as DesktopApi}
+      listenPort="47830" onWriteConfig={async () => true} onSettingsChanged={async () => {}} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Start over" }));
+    await waitFor(() => expect(screen.getByLabelText("Cloudflare public hostname")).toHaveValue("federation-2.example.com"));
+  });
+
+  it("shows the published allowlist after creating a sign-in endpoint, and never offers to empty it", async () => {
+    const published: CloudflareSetupStatus = { ...connected, hostname: "federation.example.com", listenPort: 47830,
+      tunnelId: "tunnel", phase: "Published", gate: "oauth", emails: ["operator@example.com"] };
+    let current: CloudflareSetupStatus = connected;
+    const call = vi.fn(async (request: CloudflareSetupRequest) => {
+      if (request.action === "provision") current = published;
+      return current;
+    });
+    render(<CloudflareSetup api={{ configureFederationCloudflare: call } as DesktopApi}
+      listenPort="47830" onWriteConfig={async () => true} onSettingsChanged={async () => {}} />);
+    await screen.findByLabelText("Cloudflare public hostname");
+    fireEvent.click(screen.getByRole("radio", { name: /Sign in with an identity/ }));
+    fireEvent.change(screen.getByLabelText("People who can sign in"), { target: { value: "operator@example.com" } });
+    fireEvent.change(screen.getByLabelText("Cloudflare public hostname"), { target: { value: "federation.example.com" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create protected endpoint" }));
+    await screen.findByRole("button", { name: "Update allowlist" });
+    expect(screen.getByLabelText("People who can sign in")).toHaveValue("operator@example.com");
+    expect(screen.getByRole("button", { name: "Update allowlist" })).toBeDisabled();
+    fireEvent.change(screen.getByLabelText("People who can sign in"), { target: { value: "" } });
+    expect(screen.getByRole("button", { name: "Update allowlist" })).toBeDisabled();
+  });
+
+  it("offers to reopen a waiting sign-in, and shows an IPC error without Electron's wrapper", async () => {
+    let finish: (value: CloudflareSetupStatus) => void = () => undefined;
+    const signIn = { endpoint: "wss://federation.example.com", state: "signed-out" as const };
+    const call = vi.fn(async (request: CloudflareSetupRequest) => {
+      if (request.action === "sign-in") return new Promise<CloudflareSetupStatus>((resolve) => { finish = resolve; });
+      if (request.action === "sign-out") throw new Error("Error invoking remote method 'federation:cloudflare-setup': Error: Cloudflare refused.");
+      return { ...connected, signIn };
+    });
+    render(<CloudflareSetup api={{ configureFederationCloudflare: call } as DesktopApi}
+      listenPort="47830" onWriteConfig={async () => true} onSettingsChanged={async () => {}} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Connect this client" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Sign in" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Open the sign-in page again" }));
+    await waitFor(() => expect(call).toHaveBeenCalledWith({ action: "reopen-sign-in" }));
+    expect(screen.getByText(/one-time PIN works with any address/)).toBeInTheDocument();
+    finish({ ...connected, signIn: { ...signIn, state: "signed-in" } });
+    fireEvent.click(await screen.findByRole("button", { name: "Sign out" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/^Cloudflare refused\.$/);
   });
 
   it("lists what a stopped creation left and offers to resume on the moved port or start over", async () => {

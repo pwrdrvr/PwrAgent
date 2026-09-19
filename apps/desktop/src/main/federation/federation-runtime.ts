@@ -930,6 +930,7 @@ export class DesktopFederationRuntime {
   private restartPromise: Promise<void> | undefined;
   private remoteThreadSummaryCache: RemoteThreadSummaryCache | undefined;
   private reconnectTimer?: ReturnType<typeof setTimeout>;
+  private accessRefreshTimer?: ReturnType<typeof setTimeout>;
   private connectionAttempt?: symbol;
   private reconnectAttempt = 0;
   private connectionGeneration = 0;
@@ -1204,6 +1205,8 @@ export class DesktopFederationRuntime {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = undefined;
     }
+    clearTimeout(this.accessRefreshTimer);
+    this.accessRefreshTimer = undefined;
     this.unsubscribeLocalBackendEvents?.();
     this.unsubscribeLocalBackendEvents = undefined;
     this.remoteThreadSummaryCache?.dispose();
@@ -1671,7 +1674,7 @@ export class DesktopFederationRuntime {
     readTailscaleAdvertisement?: () => Promise<
       FederationTailscaleAdvertisement | undefined
     >;
-  }): Promise<{ invite: string; expiresAt: number }> {
+  }): Promise<{ invite: string; expiresAt: number; enrollmentId: string }> {
     const config = this.readRuntimeConfig();
     const mode = config.mode;
     if (mode !== "gateway" && mode !== "dual") {
@@ -1719,7 +1722,25 @@ export class DesktopFederationRuntime {
         expiresAt,
       }),
       expiresAt,
+      enrollmentId: entry.id,
     };
+  }
+
+  /**
+   * End whatever one invite led to: revoke the peer that enrolled with it,
+   * which closes its live session, or retire the invite if nobody used it.
+   */
+  async revokeEnrollment(enrollmentId: string): Promise<void> {
+    const store = this.store();
+    const enrollment = store.getEnrollment(enrollmentId);
+    if (!enrollment) return;
+    if (enrollment.status === "pending") {
+      store.revokePendingEnrollment(enrollmentId);
+      return;
+    }
+    if (!enrollment.peerId) return;
+    const peer = store.getPeer(enrollment.peerId);
+    if (peer && peer.status !== "revoked") await this.revokePeer(enrollment.peerId);
   }
 
   /**
@@ -3302,6 +3323,63 @@ export class DesktopFederationRuntime {
     // restored local subscription state before any queued envelope is handled.
     client.startReceiving();
     log.info("federation client connected", { gatewayUrl });
+    if (cloudflareSignIn) {
+      this.scheduleAccessRefresh(cloudflareSignIn, gatewayUrl, client, connectionGeneration);
+    }
+  }
+
+  /**
+   * Keep a signed-in connection's Cloudflare Access grant current while it
+   * stays open.
+   *
+   * Access checks the bearer token only at the WebSocket upgrade, so without
+   * this an open connection outlives the token and the person's place on the
+   * allowlist until it happens to reconnect. The refresh is where Access
+   * re-evaluates the policy. A refused one ends the session here, and the
+   * reconnect that follows reports that sign-in is required. A refresh that
+   * fails for any other reason (offline) leaves the grant standing and is
+   * retried a minute later.
+   */
+  private scheduleAccessRefresh(
+    signIn: ReturnType<typeof getCloudflareAccessSignIn>,
+    gatewayUrl: string,
+    client: FederationClientWebSocketClient,
+    connectionGeneration: number,
+  ): void {
+    clearTimeout(this.accessRefreshTimer);
+    this.accessRefreshTimer = undefined;
+    const current = () =>
+      !this.stopping
+      && this.client === client
+      && connectionGeneration === this.connectionGeneration;
+    void Promise.resolve()
+      .then(() => signIn.refreshDueAt(gatewayUrl))
+      .catch(() => undefined)
+      .then((dueAt) => {
+        if (!current()) return;
+        const delayMs = Math.max(60_000, (dueAt ?? 0) - Date.now());
+        this.accessRefreshTimer = setTimeout(() => {
+          this.accessRefreshTimer = undefined;
+          if (!current()) return;
+          void signIn.accessToken(gatewayUrl).then(
+            () => this.scheduleAccessRefresh(signIn, gatewayUrl, client, connectionGeneration),
+            (error: unknown) => {
+              if (!current()) return;
+              if (error instanceof CloudflareSignInRequiredError) {
+                log.info("federation client closing: Cloudflare Access refused the sign-in refresh", { gatewayUrl });
+                client.close();
+                return;
+              }
+              log.warn("federation client could not refresh Cloudflare Access", {
+                gatewayUrl,
+                error: redactFederationDiagnostic(error instanceof Error ? error.message : String(error)),
+              });
+              this.scheduleAccessRefresh(signIn, gatewayUrl, client, connectionGeneration);
+            },
+          );
+        }, delayMs);
+        this.accessRefreshTimer.unref?.();
+      });
   }
 
   // Track the active connection without changing configured endpoint priority.

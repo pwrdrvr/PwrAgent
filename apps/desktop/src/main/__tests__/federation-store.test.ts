@@ -180,6 +180,19 @@ describe("FederationStore", () => {
     });
   });
 
+  it("retires an unused invite so it can never enroll, and leaves a used one alone", () => {
+    const pendingToken = "pendingpendingpendingpendingpen1";
+    const pending = store.createEnrollment({ token: pendingToken, generatedAt: 1_000, expiresAt: 9_000 });
+    store.revokePendingEnrollment(pending.id);
+    expect(store.findMatchingPendingEnrollment({ token: pendingToken, now: 2_000 })).toBeUndefined();
+    expect(store.getEnrollment(pending.id)).toMatchObject({ status: "revoked" });
+
+    const used = store.createEnrollment({ token: "usedusedusedusedusedusedusedused", generatedAt: 1_000, expiresAt: 9_000 });
+    store.markEnrollmentUsed({ enrollmentId: used.id, peerId: "desktop_one", usedAt: 1_500 });
+    store.revokePendingEnrollment(used.id);
+    expect(store.getEnrollment(used.id)).toMatchObject({ status: "used", peerId: "desktop_one" });
+  });
+
   it("parameterizes token and audit lookups", () => {
     const token = "123456789ABCDEFGHJKLMNPQRSTUVWX";
     const enrollment = store.createEnrollment({

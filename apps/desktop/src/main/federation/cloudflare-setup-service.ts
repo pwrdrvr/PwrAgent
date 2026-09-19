@@ -2,6 +2,8 @@ import { randomBytes, X509Certificate } from "node:crypto";
 import type { CloudflareSecurityCheck, CloudflareSetupStatus } from "@pwragent/shared";
 import {
   CLOUDFLARE_OAUTH_CONFIGURATION,
+  CLOUDFLARE_SIGN_IN_SESSION_DURATION,
+  CLOUDFLARE_SIGN_IN_SESSION_LIMIT_MS,
   CloudflareApi,
   CloudflareApiError,
   applicationCoversHostname,
@@ -14,6 +16,7 @@ import {
   isExactIdentityPolicy,
   isDedicatedApplication,
   isExpectedOAuthConfiguration,
+  parseCloudflareDuration,
   type AccessApplication,
   type CloudflareGate,
 } from "./cloudflare-api";
@@ -38,6 +41,8 @@ type Client = {
   privateKey?: string;
   clientId?: string;
   clientSecret?: string;
+  /** The federation invite shipped with this credential, so Revoke can end its peer too. */
+  enrollmentId?: string;
 };
 
 export type CloudflareSetupState = {
@@ -119,12 +124,37 @@ export type CloudflareSetupDependencies = {
    * returning the authorization server's host. Absent, validation skips it.
    */
   probeSignIn?: (endpoint: string) => Promise<string>;
+  /**
+   * End what a revoked client's federation invite led to: its peer and that
+   * peer's open session, or the invite itself if it was never used.
+   */
+  revokeEnrollment?: (enrollmentId: string) => Promise<void>;
   api?: (token: string) => CloudflareApi;
 };
+
+/**
+ * A sign-in endpoint's browser session must end when a sign-in would.
+ *
+ * Access honors its own session cookie in place of a sign-in until the
+ * application's session duration ends, so this, not a cookie-replay probe, is
+ * what bounds a removed person's browser session.
+ */
+function sessionLengthCheck(sessionDuration: string | undefined): CloudflareSecurityCheck {
+  const duration = parseCloudflareDuration(sessionDuration);
+  const passed = duration !== undefined && duration <= CLOUDFLARE_SIGN_IN_SESSION_LIMIT_MS;
+  return {
+    label: "Browser session length",
+    passed,
+    detail: passed
+      ? "Access honors a browser session on this hostname for at most 15 minutes, so a removed person's session ends as their sign-in does."
+      : `Access honors a browser session on this hostname for ${sessionDuration ?? "24h, its default"}, so a removed person stays signed in that long in a browser. Set the Access application's session duration to 15 minutes.`,
+  };
+}
 
 export class CloudflareSetupService {
   private api?: CloudflareApi;
   private scope?: { accountId: string; zoneId: string; zoneName: string };
+  private suggestedHostname?: string;
   private checks?: CloudflareSecurityCheck[];
   private checkedAt?: string;
   constructor(private readonly deps: CloudflareSetupDependencies) {}
@@ -138,6 +168,7 @@ export class CloudflareSetupService {
       zoneId: state?.zoneId ?? this.scope?.zoneId,
       zoneName: state?.zoneName ?? this.scope?.zoneName,
       hostname: state?.hostname,
+      suggestedHostname: state ? undefined : this.suggestedHostname,
       listenPort: state?.listenPort,
       tunnelId: state?.tunnelId,
       applicationId: state?.applicationId,
@@ -171,9 +202,14 @@ export class CloudflareSetupService {
     await api.list(`/accounts/${accountId}/cfd_tunnel?is_deleted=false`);
     this.api = api;
     this.scope = { accountId, zoneId, zoneName: zone.name };
+    // Only a setup still to be created needs a name; a failed lookup just
+    // leaves the field to the operator.
+    this.suggestedHostname = state ? undefined : await this.freeHostname().catch(() => undefined);
   }
 
-  disconnect(): void { this.api = undefined; this.scope = undefined; this.checks = undefined; this.checkedAt = undefined; }
+  disconnect(): void {
+    this.api = undefined; this.scope = undefined; this.checks = undefined; this.checkedAt = undefined; this.suggestedHostname = undefined;
+  }
   private apiClient(): CloudflareApi {
     if (!this.api) throw new Error("Connect a Cloudflare API token to audit or manage this tunnel.");
     return this.api;
@@ -224,11 +260,52 @@ export class CloudflareSetupService {
       revoked: false,
     };
   }
-  private async applications(state: CloudflareSetupState): Promise<AccessApplication[]> {
+  private async applications(target: { accountId: string; zoneId: string; hostname: string }): Promise<AccessApplication[]> {
+    return (await this.allApplications(target)).filter((app) => applicationCoversHostname(app, target.hostname));
+  }
+
+  private async allApplications(scope: { accountId: string; zoneId: string }): Promise<AccessApplication[]> {
     const api = this.apiClient();
-    const account = await api.list<AccessApplication>(`/accounts/${state.accountId}/access/apps`);
-    const zone = await api.list<AccessApplication>(`/zones/${state.zoneId}/access/apps`);
-    return [...new Map([...account, ...zone].filter((app) => applicationCoversHostname(app, state.hostname)).map((app) => [app.id, app])).values()];
+    const account = await api.list<AccessApplication>(`/accounts/${scope.accountId}/access/apps`);
+    const zone = await api.list<AccessApplication>(`/zones/${scope.zoneId}/access/apps`);
+    return [...new Map([...account, ...zone].map((app) => [app.id, app])).values()];
+  }
+
+  /**
+   * Why `hostname` cannot be this setup's endpoint, or undefined when it can.
+   * Anything this setup itself created (`owned`) does not count against it.
+   */
+  private async hostnameConflict(
+    target: { accountId: string; zoneId: string; hostname: string },
+    owned?: { applicationId?: string; dnsId?: string },
+  ): Promise<string | undefined> {
+    const apps = await this.applications(target);
+    if (apps.some((app) => app.id !== owned?.applicationId)) {
+      return `An Access application already covers ${target.hostname}. Choose a dedicated hostname; existing policies were not changed.`;
+    }
+    const dns = await this.apiClient().list<{ id: string }>(`/zones/${target.zoneId}/dns_records?name=${target.hostname}`);
+    if (dns.some((entry) => entry.id !== owned?.dnsId)) {
+      return `DNS already exists for ${target.hostname}. Existing records were not changed.`;
+    }
+    return undefined;
+  }
+
+  /**
+   * A conventional name nothing in the zone uses yet: `federation.<zone>`, then
+   * `federation-2.<zone>` and so on. Another profile's endpoint in the same
+   * account commonly holds the first one.
+   */
+  private async freeHostname(): Promise<string | undefined> {
+    const scope = this.scope;
+    if (!scope) return undefined;
+    const apps = await this.allApplications(scope);
+    for (let index = 1; index <= 5; index++) {
+      const hostname = `${index === 1 ? "federation" : `federation-${index}`}.${scope.zoneName}`;
+      if (apps.some((app) => applicationCoversHostname(app, hostname))) continue;
+      const dns = await this.apiClient().list<{ id: string }>(`/zones/${scope.zoneId}/dns_records?name=${hostname}`);
+      if (!dns.length) return hostname;
+    }
+    return undefined;
   }
 
   async provision(
@@ -259,6 +336,10 @@ export class CloudflareSetupService {
     if (state && cloudflareSetupGate(state) !== gate) {
       throw new Error("This profile's endpoint already uses a different admission gate. Disconnect and recreate it to change gates.");
     }
+    // Before anything is minted: a name that is already taken must fail with
+    // nothing to clean up, not after a validator token exists.
+    const conflict = await this.hostnameConflict({ ...this.scope, hostname }, state);
+    if (conflict) throw new Error(conflict);
     // Checked before the first external call: an empty or malformed allowlist
     // must not leave a minted validator token behind.
     const allowed = gate === "oauth" && !state ? cloudflareEmails(emails) : undefined;
@@ -286,10 +367,6 @@ export class CloudflareSetupService {
       await this.deps.save(state);
     }
     const base = `/accounts/${state.accountId}`;
-    const conflicts = await this.applications(state);
-    if (conflicts.some((app) => app.id !== state.applicationId)) throw new Error("An Access application already covers this hostname. Choose a dedicated hostname; existing policies were not changed.");
-    const dns = await api.list<{ id: string }>(`/zones/${state.zoneId}/dns_records?name=${hostname}`);
-    if (dns.some((entry) => entry.id !== state.dnsId)) throw new Error("DNS already exists for this hostname. Existing records were not changed.");
     if (cloudflareSetupGate(state) === "mtls" && !state.certificateId) {
       if (!state.ca) throw new Error("This setup has no certificate authority. Recreate the protected endpoint.");
       const result = await api.request<{ id: string }>(`${base}/access/certificates`, "POST", {
@@ -304,7 +381,9 @@ export class CloudflareSetupService {
         name: state.name, domain: hostname, type: "self_hosted",
         app_launcher_visible: false, service_auth_401_redirect: false,
         policies: [],
-        ...(cloudflareSetupGate(state) === "oauth" ? { oauth_configuration: CLOUDFLARE_OAUTH_CONFIGURATION } : {}),
+        ...(cloudflareSetupGate(state) === "oauth"
+          ? { oauth_configuration: CLOUDFLARE_OAUTH_CONFIGURATION, session_duration: CLOUDFLARE_SIGN_IN_SESSION_DURATION }
+          : {}),
       });
       state.applicationId = result.id;
       await this.deps.save(state);
@@ -400,6 +479,7 @@ export class CloudflareSetupService {
         // second allow list — is an alternative way in that this setup did not make.
         { label: "Allowed people", passed: policies.length === 2 && isExactIdentityPolicy(identityPolicy, state.emails ?? []), detail: "Only the listed email addresses may sign in; no bypass or alternative policy." },
         { label: "Validator service token", passed: policies.length === 2 && isExactAdmissionPolicy(gate, servicePolicy, admitted), detail: "Service Auth admits only this gateway's own validation token." },
+        sessionLengthCheck(app.session_duration),
       ] : gate === "mtls" ? [
         { label: "Mandatory client certificate", passed: policies.length === 1 && servicePolicy !== undefined && isExactAdmissionPolicy(gate, servicePolicy, admitted), detail: "Only Service Auth for issued client names, requiring a valid certificate; no bypass or alternative policy." },
       ] : [
@@ -527,6 +607,7 @@ export class CloudflareSetupService {
     }
     await this.deps.unpublishUrl?.(`wss://${state.hostname}`);
     await this.deps.clear();
+    this.suggestedHostname = await this.freeHostname().catch(() => undefined);
     return state.hostname;
   }
 
@@ -589,6 +670,19 @@ export class CloudflareSetupService {
     }
     await this.deps.save(state);
     this.checks = undefined;
+    // Access checks a credential only when a connection opens, so a session
+    // that is already open outlives everything above. Revoking the peer the
+    // file enrolled is what closes it.
+    if (client.enrollmentId) await this.deps.revokeEnrollment?.(client.enrollmentId);
+  }
+
+  /** Remember which federation invite went out with an issued credential. */
+  async recordEnrollment(clientId: string, enrollmentId: string): Promise<void> {
+    const state = await this.state();
+    const client = state.clients.find((entry) => entry.id === clientId);
+    if (!client) throw new Error("Client credential was not found.");
+    client.enrollmentId = enrollmentId;
+    await this.deps.save(state);
   }
   /**
    * Replace an `oauth` endpoint's allowlist.

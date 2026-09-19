@@ -79,6 +79,21 @@ describe("Cloudflare admission proof", () => {
     expect(JSON.stringify(checks)).not.toContain("CF_Authorization=secret");
   });
 
+  it("does not replay the cookie on a sign-in endpoint, where Access admits it by design", async () => {
+    // An identity application honors its own session cookie in place of a
+    // sign-in; the audit bounds that with the session duration instead.
+    const probes = new CloudflareOriginProbes();
+    const checks = await validateCloudflareBoundary({ endpoint: "https://federation.example.com/", probes, credentials, gate: "oauth",
+      request: async (input) => {
+        if (!input.credentials && !input.cookie) return { status: 401, ray: "edge" };
+        const proof = probes.observe({ headers: { "x-pwragent-security-probe": input.id } } as unknown as IncomingMessage);
+        return { status: 204, proof, cookie: "CF_Authorization=secret" };
+      },
+    });
+    expect(checks.some((check) => check.label.includes("cookie"))).toBe(false);
+    expect(checks.every((check) => check.passed)).toBe(true);
+  });
+
   it("cannot arm probes from public input and bounds local probe allocations", () => {
     const probes = new CloudflareOriginProbes();
     expect(probes.observe({ headers: { "x-pwragent-security-probe": "attacker" } } as unknown as IncomingMessage)).toBeUndefined();
