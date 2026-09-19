@@ -226,6 +226,15 @@ describe("discoverAcpRuntimeCapabilities", () => {
       model: "kimi-code/kimi-for-coding",
       thinking: "on",
     });
+    expect(kimi.writes).toEqual([
+      "model=kimi-code/kimi-for-coding-highspeed",
+      "model=kimi-code/k3",
+      "thinking=on",
+      "model=kimi-code/k3-256k",
+      "thinking=high",
+      "model=kimi-code/kimi-for-coding",
+      "thinking=on",
+    ]);
   });
 
   it("does not give K2.7 the level a K3 default session carries into it", async () => {
@@ -281,6 +290,17 @@ describe("discoverAcpRuntimeCapabilities", () => {
       model: "kimi-code/k3",
       thinking: "high",
     });
+    expect(kimi.writes).toEqual([
+      "model=kimi-code/kimi-for-coding",
+      "thinking=high refused",
+      "model=kimi-code/kimi-for-coding-highspeed",
+      "thinking=high refused",
+      "model=kimi-code/k3",
+      "thinking=high",
+      "model=kimi-code/k3-256k",
+      "thinking=high",
+      "model=kimi-code/k3",
+    ]);
   });
 });
 
@@ -288,8 +308,9 @@ describe("discoverAcpRuntimeCapabilities", () => {
 // probes. The model decides which thought levels exist. A model switch keeps
 // the session's level, and the new model's menu lists that level after its
 // own even when the model does not offer it. K2.7 refuses a level it does not
-// offer, and K3 replaces one with its default. A fresh session starts at
-// `default_model` from Kimi's config.toml.
+// offer, and K3 replaces one with its default. Every successful write is
+// announced with a `config_option_update` before the reply. A fresh session
+// starts at `default_model` from Kimi's config.toml.
 const KIMI_CODE_2_MODELS = [
   {
     value: "kimi-code/kimi-for-coding",
@@ -333,6 +354,10 @@ function createKimiCode2Transport(defaultModel: string) {
     model: defaultModel,
     thinking: findKimiCode2Model(defaultModel).defaultThinking,
   };
+  const writes: string[] = [];
+  const listeners = new Set<
+    (method: string, params: Record<string, unknown>) => void
+  >();
   const request = vi.fn(
     async (
       method: string,
@@ -355,6 +380,7 @@ function createKimiCode2Transport(defaultModel: string) {
       }
       if (method === "session/set_config_option") {
         const value = String(params?.value);
+        const write = `${String(params?.configId)}=${value}`;
         if (params?.configId === "model") {
           state.model = value;
         } else if (params?.configId === "thinking") {
@@ -362,6 +388,7 @@ function createKimiCode2Transport(defaultModel: string) {
           if (model.thinking.includes(value)) {
             state.thinking = value;
           } else if (model.refusesUnofferedThinking) {
+            writes.push(`${write} refused`);
             throw new Error(
               `Invalid params: Unknown thinking value: ${value}`,
             );
@@ -369,9 +396,18 @@ function createKimiCode2Transport(defaultModel: string) {
             state.thinking = model.defaultThinking;
           }
         }
-        return {
-          configOptions: buildKimiCode2ConfigOptions(state),
-        };
+        writes.push(write);
+        const configOptions = buildKimiCode2ConfigOptions(state);
+        for (const listener of listeners) {
+          listener("session/update", {
+            sessionId: "kimi-session",
+            update: {
+              sessionUpdate: "config_option_update",
+              configOptions,
+            },
+          });
+        }
+        return { configOptions };
       }
       return {};
     },
@@ -379,9 +415,12 @@ function createKimiCode2Transport(defaultModel: string) {
   const transport: AcpJsonRpcTransport = {
     request,
     close: async () => undefined,
-    onNotification: () => () => undefined,
+    onNotification: (listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
   };
-  return { state, transport };
+  return { state, transport, writes };
 }
 
 function findKimiCode2Model(value: string) {

@@ -72,11 +72,15 @@ export async function discoverAcpRuntimeCapabilities(
   }
 }
 
-async function discoverModelReasoningCapabilities(params: {
+type DiscoverySession = {
   client: AcpAgentClient;
   readRuntimeCapabilities: () => BackendAcpRuntimeCapabilities | undefined;
   sessionId: string;
-}): Promise<BackendAcpRuntimeCapabilities | undefined> {
+};
+
+async function discoverModelReasoningCapabilities(
+  params: DiscoverySession,
+): Promise<BackendAcpRuntimeCapabilities | undefined> {
   const initial = params.readRuntimeCapabilities();
   const modelOption = findConfigOption(initial, "model");
   const thoughtLevelOption = findConfigOption(initial, "thought_level");
@@ -116,7 +120,10 @@ async function discoverModelReasoningCapabilities(params: {
           });
           continue;
         }
-        thoughtLevels = await settleCarriedThoughtLevel(params);
+        thoughtLevels = await settleCarriedThoughtLevel(
+          params,
+          thoughtLevelOption.id,
+        );
       } else {
         thoughtLevels = readThoughtLevels(params.readRuntimeCapabilities());
       }
@@ -186,18 +193,14 @@ type ModelThoughtLevels = {
 // does not offer the level refuses the write (K2.7), and one that accepts it
 // replies with the level it applied, with the carried level gone from the
 // menu once it is no longer current (K3 turns "on" into its own "high").
-async function settleCarriedThoughtLevel(params: {
-  client: AcpAgentClient;
-  readRuntimeCapabilities: () => BackendAcpRuntimeCapabilities | undefined;
-  sessionId: string;
-}): Promise<ModelThoughtLevels> {
-  const capabilities = params.readRuntimeCapabilities();
-  const option = findConfigOption(capabilities, "thought_level");
-  const switched = readThoughtLevels(capabilities);
+async function settleCarriedThoughtLevel(
+  params: DiscoverySession,
+  thoughtLevelOptionId: string,
+): Promise<ModelThoughtLevels> {
+  const switched = readThoughtLevels(params.readRuntimeCapabilities());
   const carried = switched.currentValue;
   if (
-    !option
-    || !carried
+    !carried
     || !switched.values.includes(carried)
     || switched.values.length < 2
   ) {
@@ -208,7 +211,7 @@ async function settleCarriedThoughtLevel(params: {
     await params.client.setRuntimeOption({
       sessionId: params.sessionId,
       source: "configOption",
-      optionId: option.id,
+      optionId: thoughtLevelOptionId,
       value: carried,
     });
   } catch {
