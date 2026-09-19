@@ -39,6 +39,8 @@ import type {
   UpdateMcpConnectionRequest,
   ProbeMcpConnectionRequest,
   ProbeMcpConnectionResponse,
+  ListMcpConnectionToolsRequest,
+  ListMcpConnectionToolsResponse,
   DescribeThreadMcpConnectionsRequest,
   DescribeThreadMcpConnectionsResponse,
   DesktopAppearanceDensity,
@@ -87,6 +89,7 @@ import type {
   MutateMcpConnectionResponse,
   RemoveMcpConnectionRequest,
   SetMcpConnectionEnabledRequest,
+  SetMcpConnectionSelectForNewThreadsRequest,
   ReadThreadMcpConnectionsRequest,
   SetThreadMcpConnectionsRequest,
   SetThreadMcpConnectionsResponse,
@@ -693,6 +696,8 @@ import {
   MCP_CONNECTION_LIST_CHANNEL,
   MCP_CONNECTION_REMOVE_CHANNEL,
   MCP_CONNECTION_SET_ENABLED_CHANNEL,
+  MCP_CONNECTION_SET_SELECT_FOR_NEW_THREADS_CHANNEL,
+  MCP_CONNECTION_LIST_TOOLS_CHANNEL,
   MCP_CONNECTION_SET_THREAD_CHANNEL,
   MCP_CONNECTION_READ_THREAD_CHANNEL,
   MCP_CONNECTION_DESCRIBE_THREAD_CHANNEL,
@@ -1010,6 +1015,17 @@ const desktopApi = Object.freeze({
     request: SetMcpConnectionEnabledRequest,
   ): Promise<MutateMcpConnectionResponse> =>
     await ipcRenderer.invoke(MCP_CONNECTION_SET_ENABLED_CHANNEL, request),
+  setMcpConnectionSelectForNewThreads: async (
+    request: SetMcpConnectionSelectForNewThreadsRequest,
+  ): Promise<MutateMcpConnectionResponse> =>
+    await ipcRenderer.invoke(
+      MCP_CONNECTION_SET_SELECT_FOR_NEW_THREADS_CHANNEL,
+      request,
+    ),
+  listMcpConnectionTools: async (
+    request: ListMcpConnectionToolsRequest,
+  ): Promise<ListMcpConnectionToolsResponse> =>
+    await ipcRenderer.invoke(MCP_CONNECTION_LIST_TOOLS_CHANNEL, request),
   setThreadMcpConnections: async (
     request: SetThreadMcpConnectionsRequest,
   ): Promise<SetThreadMcpConnectionsResponse> =>

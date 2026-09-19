@@ -7187,6 +7187,7 @@ class DesktopAppServerService {
         },
         {
           skipFilesystemInspection: true,
+          skipMcpConnectionDefaults: true,
         },
       );
       const branchName = reconcileRemoteLaunchpadBranch(

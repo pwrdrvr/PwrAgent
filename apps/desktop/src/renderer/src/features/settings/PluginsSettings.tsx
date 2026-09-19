@@ -9,6 +9,7 @@ import {
 import type {
   CodexMcpServerSummary,
   DesktopSettingsSnapshot,
+  McpConnectionSetupState,
   McpConnectionStatus,
   ProbeMcpConnectionResponse,
   PwrSnapConnectionStatus,
@@ -16,6 +17,8 @@ import type {
 } from "@pwragent/shared";
 import {
   describeMcpAuthStatus,
+  describeMcpConnectionAuth,
+  mcpConnectionIdsForNewThread,
   resolveMcpConnectionSetup,
   summarizeMcpConnectionReadiness,
 } from "@pwragent/shared";
@@ -33,8 +36,11 @@ import {
 } from "./SettingsLayout";
 import {
   countMcpServerHealth,
+  describeManagedMcpConnectionTools,
   describeMcpServerTools,
+  readManagedMcpConnectionHealth,
   readMcpServerHealth,
+  type ManagedMcpToolInventory,
 } from "./mcp-server-health";
 import { SettingsCopyValue } from "./SettingsCopyValue";
 import { SettingsSwitch } from "./SettingsSwitch";
@@ -57,6 +63,7 @@ type ConnectionPendingAction = {
     | "availability"
     | "create"
     | "disconnect"
+    | "newThreadDefault"
     | "probe"
     | "remove"
     | "update";
@@ -88,6 +95,13 @@ type StartupResult = {
   status: "ready" | "failed" | "cancelled";
   error?: string;
 };
+
+/**
+ * The pane's two sections, by the ids the Settings nav deep-links to. Shared
+ * so the nav child and the section it scrolls to cannot drift apart.
+ */
+export const PLUGINS_MCP_GATEWAY_SECTION_ID = "managed-mcp-connections";
+export const PLUGINS_CODEX_MCP_SECTION_ID = "mcp-servers";
 
 const LOGIN_STARTUP_WAIT_MS = 5_000;
 const OAUTH_LOGIN_WAIT_MS = 120_000;
@@ -135,6 +149,8 @@ function matchesMcpFilter(
 
 export function PluginsSettings(props: {
   desktopApi?: DesktopApi;
+  /** Section the Settings nav asked to open, by `sectionId`. */
+  focusSectionId?: string;
   saving?: boolean;
   snapshot: DesktopSettingsSnapshot;
   onMcpGatewayEnabledChange: (enabled: boolean) => Promise<void>;
@@ -166,6 +182,10 @@ export function PluginsSettings(props: {
    * notice -- or, worse, re-disable the card it was just released from.
    */
   const authorizationEpochRef = useRef(0);
+  // Counts completed sign-ins per connection. A reauthorization can switch
+  // accounts without changing anything else the row can see, so the row
+  // re-reads its tools when this moves.
+  const [signIns, setSignIns] = useState<Record<string, number>>({});
   const [connectionNotice, setConnectionNotice] = useState<ActionNotice>();
   const [connectionName, setConnectionName] = useState("");
   const [connectionUrl, setConnectionUrl] = useState("");
@@ -734,6 +754,10 @@ export function PluginsSettings(props: {
       }
       await loadConnections();
       if (!isCurrent()) return;
+      setSignIns((current) => ({
+        ...current,
+        [connection.id]: (current[connection.id] ?? 0) + 1,
+      }));
       setConnectionNotice({
         kind: "success",
         text: `${connection.displayName} is connected through PwrAgent.`,
@@ -899,6 +923,43 @@ export function PluginsSettings(props: {
     }
   };
 
+  const setConnectionSelectForNewThreads = async (
+    connection: McpConnectionStatus,
+    selectForNewThreads: boolean,
+  ) => {
+    if (
+      connectionPending
+      || !props.desktopApi?.setMcpConnectionSelectForNewThreads
+    ) return;
+    setConnectionPending({
+      kind: "newThreadDefault",
+      connectionId: connection.id,
+    });
+    try {
+      await props.desktopApi.setMcpConnectionSelectForNewThreads({
+        connectionId: connection.id,
+        selectForNewThreads,
+      });
+      await loadConnections();
+      setConnectionNotice({
+        kind: "success",
+        // Both halves of "new threads only" are worth saying: a thread that
+        // exists already does not suddenly gain a server, and one that is
+        // about to be started does not lose one the operator picked.
+        text: selectForNewThreads
+          ? `New threads start with ${connection.displayName} selected. Existing threads are unchanged.`
+          : `New threads start without ${connection.displayName}. Existing threads are unchanged.`,
+      });
+    } catch (error) {
+      setConnectionNotice({
+        kind: "error",
+        text: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      setConnectionPending(undefined);
+    }
+  };
+
   const removeConnection = async () => {
     const connection = connectionRemoveCandidate;
     if (
@@ -941,7 +1002,11 @@ export function PluginsSettings(props: {
         : undefined;
 
   return (
-    <SettingsSectionStack paneId="plugins" aria-label="Plugin settings">
+    <SettingsSectionStack
+      paneId="plugins"
+      aria-label="Plugin settings"
+      focusSectionId={props.focusSectionId}
+    >
       <SettingsPanelHead
         eyebrow="Plugins"
         title="MCP connections"
@@ -965,7 +1030,7 @@ export function PluginsSettings(props: {
       <SettingsSection
         eyebrow="PwrAgent gateway"
         title="PwrAgent-managed connections"
-        sectionId="managed-mcp-connections"
+        sectionId={PLUGINS_MCP_GATEWAY_SECTION_ID}
         description="PwrAgent keeps OAuth credentials encrypted in this profile, refreshes them centrally, and gives selected threads a local proxy instead of copying tokens into each agent process."
         chip={readinessChip}
         chipKind={readiness.ready === 0 && readiness.total > 0 ? "warn" : "default"}
@@ -1037,11 +1102,21 @@ export function PluginsSettings(props: {
                   desktopApi={props.desktopApi}
                   disabled={Boolean(connectionPending)}
                   gatewayEnabled={gatewayEnabled}
+                  signIns={signIns[connection.id] ?? 0}
                   onAuthorize={() => void authorizeConnection(connection)}
                   onAvailabilityChange={
                     props.desktopApi?.setMcpConnectionEnabled
                       ? (enabled) =>
                           void setConnectionAvailability(connection, enabled)
+                      : undefined
+                  }
+                  onSelectForNewThreadsChange={
+                    props.desktopApi?.setMcpConnectionSelectForNewThreads
+                      ? (selectForNewThreads) =>
+                          void setConnectionSelectForNewThreads(
+                            connection,
+                            selectForNewThreads,
+                          )
                       : undefined
                   }
                   onChanged={() => void loadConnections()}
@@ -1151,7 +1226,7 @@ export function PluginsSettings(props: {
       <SettingsSection
         eyebrow="Codex only"
         title="Codex-managed servers"
-        sectionId="mcp-servers"
+        sectionId={PLUGINS_CODEX_MCP_SECTION_ID}
         description="Codex reads these from its own configuration file and holds their credentials itself; PwrAgent reports them but cannot offer them to an ACP thread. Sign-in replaces expired OAuth credentials. Remove deletes only this server's configuration from the selected Codex profile."
         chip={
           loading
@@ -1501,13 +1576,115 @@ function useLocalConnectionStatus(
 }
 
 /**
- * One connection, one claim.
+ * Setup states the row names with a chip of their own.
  *
- * The shipped row rendered the credential state and the availability switch
- * as peers, so a never-authorized PwrSnap read `Not connected` beside an
- * `On` switch. `resolveMcpConnectionSetup` collapses that stack into a
- * single state, and the switch is withheld entirely until there is something
- * for it to be about.
+ * The auth chip and the health dot carry the credential and the server's
+ * answer, in the same vocabulary as the Codex list below. What they cannot
+ * say is why a signed-in connection still reaches no thread -- the gateway is
+ * off, the app is not installed or not running, or the operator parked it --
+ * so those states keep the headline `resolveMcpConnectionSetup` gives them.
+ */
+const AVAILABILITY_CHIP_STATES: ReadonlySet<McpConnectionSetupState> = new Set([
+  "gateway_off",
+  "app_not_installed",
+  "app_not_running",
+  "parked",
+]);
+
+function chipToneClass(tone: "ok" | "warn" | "err" | "idle" | "neutral"): string {
+  return tone === "idle" || tone === "neutral"
+    ? ""
+    : ` settings-pathrow__chip--${tone}`;
+}
+
+/**
+ * Read a managed connection's tools while its row is on screen.
+ *
+ * Only a connection that can answer is asked: one that is signed in and
+ * either offered or parked. Anything else already has a reason on the row,
+ * and a request would only fail with that reason restated. `identity`
+ * changes when the server or the credentials might have, which is when a
+ * list read earlier stops describing this row.
+ */
+function useManagedConnectionTools(params: {
+  connectionId: string;
+  desktopApi?: DesktopApi;
+  identity: string;
+  listable: boolean;
+  /** Completed sign-ins; a change forces a fresh read past any cache. */
+  signIns: number;
+}): {
+  inventory: ManagedMcpToolInventory | undefined;
+  refresh: () => void;
+} {
+  const { connectionId, identity, listable, signIns } = params;
+  const list = params.desktopApi?.listMcpConnectionTools;
+  const [inventory, setInventory] = useState<ManagedMcpToolInventory>();
+  // A refresh can overtake the read the row started on mount, and the two can
+  // resolve in either order. The later request is the one the operator asked
+  // for, so an earlier answer arriving second is dropped.
+  const latestRead = useRef(0);
+  // PwrSnap and PwrGit connect outside the gateway's own authorization, so
+  // the main process may still hold the list the old credentials read. The
+  // read after a sign-in skips that cache; later re-reads use it again.
+  const readSignIns = useRef(signIns);
+
+  const read = useCallback(async (refresh: boolean): Promise<void> => {
+    if (!list) return;
+    const sequence = latestRead.current + 1;
+    latestRead.current = sequence;
+    setInventory({ status: "loading" });
+    try {
+      const response = await list({
+        connectionId,
+        ...(refresh ? { refresh: true } : {}),
+      });
+      if (latestRead.current !== sequence) return;
+      setInventory({
+        status: "loaded",
+        tools: response.tools,
+        fetchedAt: response.fetchedAt,
+      });
+    } catch (cause) {
+      if (latestRead.current !== sequence) return;
+      setInventory({
+        status: "failed",
+        error: cause instanceof Error ? cause.message : String(cause),
+      });
+    }
+  }, [connectionId, list]);
+
+  useEffect(() => {
+    if (!listable || !list) {
+      latestRead.current += 1;
+      setInventory(listable ? { status: "unavailable" } : undefined);
+      return;
+    }
+    const signedInAgain = readSignIns.current !== signIns;
+    readSignIns.current = signIns;
+    void read(signedInAgain);
+    return () => {
+      latestRead.current += 1;
+    };
+  }, [identity, list, listable, read, signIns]);
+
+  return {
+    inventory,
+    refresh: () => {
+      void read(true);
+    },
+  };
+}
+
+/**
+ * One managed connection, told in the Codex list's vocabulary.
+ *
+ * It used to be a name, a URL, and one chip resolved from the whole setup
+ * stack, beside a Codex list that showed every server's health, its sign-in
+ * state, and every tool it publishes. The row now carries the same three
+ * things the same way -- the health dot, the tool line, and the auth chip
+ * come from the helpers the Codex row uses -- and keeps what only a managed
+ * connection has: the setup remedy, its actions, and the two switches.
  */
 function ManagedMcpConnectionRow(props: {
   busy: boolean;
@@ -1515,8 +1692,11 @@ function ManagedMcpConnectionRow(props: {
   desktopApi?: DesktopApi;
   disabled: boolean;
   gatewayEnabled: boolean;
+  /** Completed sign-ins for this connection in this pane. */
+  signIns: number;
   onAuthorize: () => void;
   onAvailabilityChange?: (enabled: boolean) => void;
+  onSelectForNewThreadsChange?: (selectForNewThreads: boolean) => void;
   onChanged: () => void;
   onDisconnect: () => void;
   onEdit: () => void;
@@ -1524,6 +1704,8 @@ function ManagedMcpConnectionRow(props: {
   onRemove: () => void;
 }) {
   const connection = props.connection;
+  const drawerId = useId();
+  const [expanded, setExpanded] = useState(false);
   const app = connection.kind === "pwrgit"
     ? "PwrGit"
     : connection.kind === "pwrsnap" ? "PwrSnap" : undefined;
@@ -1534,24 +1716,146 @@ function ManagedMcpConnectionRow(props: {
     gatewayEnabled: props.gatewayEnabled,
     ...(localStatus ? { localAvailability: localStatus.availability } : {}),
   });
+  const listable = setup.state === "ready" || setup.state === "parked";
+  const { inventory, refresh: refreshTools } = useManagedConnectionTools({
+    connectionId: connection.id,
+    desktopApi: props.desktopApi,
+    identity: `${connection.serverUrl}\n${connection.configured}`,
+    listable,
+    signIns: props.signIns,
+  });
+  const health = readManagedMcpConnectionHealth(setup, inventory);
+  const auth = describeMcpConnectionAuth(connection);
+  // An app that is missing or not running has nothing to sign in to yet: its
+  // Get/Open action is the next step, and `Sign-in required` beside it would
+  // point at the wrong one. Credentials held from before still say something.
+  const showAuthChip =
+    connection.configured
+    || (setup.state !== "app_not_installed" && setup.state !== "app_not_running");
+  const selectedForNewThreads =
+    connection.enabled && connection.selectForNewThreads === true;
+  // Whether seeding would take it today, asked of the same predicate the
+  // seeding uses, so the hint cannot promise a thread something it skips.
+  const seedable =
+    mcpConnectionIdsForNewThread([{ ...connection, selectForNewThreads: true }])
+      .length > 0;
   return (
-    <article className="settings-mcp-row settings-mcp-row--managed">
-      <div className="settings-mcp-row__body">
-        <div className="settings-mcp-row__title">
-          <strong>{connection.displayName}</strong>
-          {/*
-            * One chip, toned by the resolved state. The pair this replaced
-            * could contradict itself — `Not connected` beside an `On` switch —
-            * and a row carries its state better in color than in a sentence.
-            */}
-          <span
-            className={`settings-pathrow__chip${
-              setup.tone === "idle" ? "" : ` settings-pathrow__chip--${setup.tone}`
-            }`}
-          >
-            {setup.headline}
+    <article
+      className="settings-mcp-row settings-mcp-row--managed"
+      data-health={health}
+    >
+      <div className="settings-mcp-row__main">
+        <button
+          aria-controls={expanded ? drawerId : undefined}
+          aria-expanded={expanded}
+          className="settings-mcp-row__toggle"
+          type="button"
+          onClick={() => setExpanded((current) => !current)}
+        >
+          <span aria-hidden="true" className="settings-mcp-row__health" />
+          <span aria-hidden="true" className="settings-mcp-row__chevron" />
+          <span className="settings-mcp-row__name">
+            {connection.displayName}
           </span>
+          <span className="settings-mcp-row__meta">
+            {describeManagedMcpConnectionTools(setup, inventory)}
+          </span>
+        </button>
+        <div className="settings-mcp-row__chips">
+          {AVAILABILITY_CHIP_STATES.has(setup.state) ? (
+            <span className={`settings-pathrow__chip${chipToneClass(setup.tone)}`}>
+              {setup.headline}
+            </span>
+          ) : null}
+          {showAuthChip ? (
+            <span
+              className={`settings-pathrow__chip${chipToneClass(auth.tone)}`}
+              title={auth.description}
+            >
+              {auth.label}
+            </span>
+          ) : null}
         </div>
+        <div className="settings-mcp-row__actions">
+          {app ? (
+            <LocalConnectionActions
+              app={app}
+              busy={props.busy}
+              configured={connection.configured}
+              desktopApi={props.desktopApi}
+              disabled={props.disabled}
+              status={localStatus}
+              onAuthorize={props.onAuthorize}
+              onChanged={() => {
+                void refreshLocal();
+                props.onChanged();
+              }}
+              onNotice={props.onNotice}
+            />
+          ) : (
+            <button
+              className="button button--secondary"
+              disabled={props.disabled}
+              title={
+                connection.configured
+                  ? `Sign in to ${connection.displayName} again and replace the credentials PwrAgent holds. Use this when it stops working or you want a different account.`
+                  : `Sign in to ${connection.displayName} in your browser. PwrAgent stores the credentials encrypted in this profile.`
+              }
+              type="button"
+              onClick={props.onAuthorize}
+            >
+              {props.busy
+                ? "Working..."
+                : connection.configured ? "Reauthorize" : "Authorize"}
+            </button>
+          )}
+          {/*
+            * Disconnect and Remove differ only in whether the row survives, and
+            * nothing on screen said so -- two destructive-looking buttons side
+            * by side with no way to tell which one you wanted.
+            */}
+          {connection.configured ? (
+            <button
+              className="button button--ghost"
+              disabled={props.disabled}
+              title={`Discard the credentials PwrAgent holds for ${connection.displayName} and close its open sessions. The connection stays in this list, so you can authorize it again without retyping its URL.`}
+              type="button"
+              onClick={props.onDisconnect}
+            >
+              Disconnect
+            </button>
+          ) : null}
+          {connection.kind === "remote" ? (
+            <>
+              {/*
+                * A connection's URL is not a write-once field. `create`
+                * persists before authorization is attempted, so without Edit a
+                * single mistyped character left a dead row whose only exit was
+                * Remove and retype.
+                */}
+              <button
+                className="button button--ghost"
+                disabled={props.disabled}
+                title={`Rename ${connection.displayName} or point it at a different URL. A changed URL discards the stored credentials, because they were issued by the old server.`}
+                type="button"
+                onClick={props.onEdit}
+              >
+                Edit
+              </button>
+              <button
+                className="button button--ghost settings-mcp-row__remove"
+                disabled={props.disabled}
+                title={`Delete ${connection.displayName} from PwrAgent entirely -- the row, its URL, and its credentials. Threads that selected it lose access to it.`}
+                type="button"
+                onClick={props.onRemove}
+              >
+                Remove
+              </button>
+            </>
+          ) : null}
+        </div>
+      </div>
+      <div className="settings-mcp-row__detail">
         {/*
           * The endpoint is the one thing in this row an operator has to hand
           * to something else verbatim -- a `curl`, a bug report, the agent's
@@ -1566,94 +1870,64 @@ function ManagedMcpConnectionRow(props: {
           value={connection.serverUrl}
         />
         <p className="settings-mcp-row__state">{setup.detail}</p>
-      </div>
-      <div className="settings-mcp-row__actions">
-        {app ? (
-          <LocalConnectionActions
-            app={app}
-            busy={props.busy}
-            configured={connection.configured}
-            desktopApi={props.desktopApi}
-            disabled={props.disabled}
-            status={localStatus}
-            onAuthorize={props.onAuthorize}
-            onChanged={() => {
-              void refreshLocal();
-              props.onChanged();
-            }}
-            onNotice={props.onNotice}
-          />
-        ) : (
-          <button
-            className="button button--secondary"
-            disabled={props.disabled}
-            title={
-              connection.configured
-                ? `Sign in to ${connection.displayName} again and replace the credentials PwrAgent holds. Use this when it stops working or you want a different account.`
-                : `Sign in to ${connection.displayName} in your browser. PwrAgent stores the credentials encrypted in this profile.`
-            }
-            type="button"
-            onClick={props.onAuthorize}
-          >
-            {props.busy
-              ? "Working..."
-              : connection.configured ? "Reauthorize" : "Authorize"}
-          </button>
-        )}
-        {/*
-          * Disconnect and Remove differ only in whether the row survives, and
-          * nothing on screen said so -- two destructive-looking buttons side
-          * by side with no way to tell which one you wanted.
-          */}
-        {connection.configured ? (
-          <button
-            className="button button--ghost"
-            disabled={props.disabled}
-            title={`Discard the credentials PwrAgent holds for ${connection.displayName} and close its open sessions. The connection stays in this list, so you can authorize it again without retyping its URL.`}
-            type="button"
-            onClick={props.onDisconnect}
-          >
-            Disconnect
-          </button>
-        ) : null}
-        {connection.kind === "remote" ? (
-          <>
-            {/*
-              * A connection's URL is not a write-once field. `create`
-              * persists before authorization is attempted, so without Edit a
-              * single mistyped character left a dead row whose only exit was
-              * Remove and retype.
-              */}
-            <button
-              className="button button--ghost"
-              disabled={props.disabled}
-              title={`Rename ${connection.displayName} or point it at a different URL. A changed URL discards the stored credentials, because they were issued by the old server.`}
-              type="button"
-              onClick={props.onEdit}
-            >
-              Edit
-            </button>
-            <button
-              className="button button--ghost settings-mcp-row__remove"
-              disabled={props.disabled}
-              title={`Delete ${connection.displayName} from PwrAgent entirely -- the row, its URL, and its credentials. Threads that selected it lose access to it.`}
-              type="button"
-              onClick={props.onRemove}
-            >
-              Remove
-            </button>
-          </>
+        {listable && inventory?.status === "failed" ? (
+          <p className="settings-mcp-row__error">{inventory.error}</p>
         ) : null}
       </div>
+      {expanded ? (
+        <div className="settings-mcp-row__drawer" id={drawerId}>
+          {inventory?.status === "loaded" ? (
+            <McpInventoryLine
+              className="settings-mcp-row__tools"
+              label="Tools"
+              previewLimit={TOOL_PREVIEW_LIMIT}
+              values={inventory.tools}
+            />
+          ) : (
+            <p className="settings-mcp-row__drawer-note">
+              {!listable
+                ? "Tools are listed once this connection can be reached."
+                : inventory?.status === "failed"
+                  ? "PwrAgent could not read this server's tools."
+                  : inventory?.status === "unavailable"
+                    ? "Tool lists aren't available for this connection."
+                    : "Reading tools..."}
+            </p>
+          )}
+          {/*
+            * Codex re-reads its servers when its configuration reloads. A
+            * managed connection has no such moment -- its list is read once
+            * and kept -- so a server that gained or lost a tool needs a way
+            * to be asked again.
+            */}
+          {listable && inventory?.status !== "unavailable" ? (
+            <button
+              className="button button--ghost settings-mcp-row__refresh"
+              disabled={inventory?.status === "loading"}
+              title={`Ask ${connection.displayName} for its tools again.`}
+              type="button"
+              onClick={refreshTools}
+            >
+              {inventory?.status === "loading" ? "Refreshing..." : "Refresh tools"}
+            </button>
+          ) : null}
+        </div>
+      ) : null}
       {/*
-        * The cell is always emitted, even when the switch is withheld. Each
-        * row is its own grid, so an omitted child would let the remaining
-        * columns resolve against that row's own content and leave the
-        * switches at a different x on every row.
+        * The two switches answer different questions, and side by side with
+        * one-word labels they read as a pair of the same thing. Offer decides
+        * whether a thread may use the connection at all; the second decides
+        * whether a thread that does not exist yet starts with it chosen. Each
+        * says so under its name, and the second follows the first: a
+        * connection no thread may use cannot be pre-selected on one.
+        *
+        * Withheld until PwrAgent holds credentials -- a switch claiming a
+        * connection is on while it cannot serve a single tool was the defect
+        * `resolveMcpConnectionSetup` exists to prevent.
         */}
-      <div className="settings-mcp-row__availability">
-        {props.onAvailabilityChange && setup.offersAvailabilitySwitch ? (
-          <>
+      {props.onAvailabilityChange && setup.offersAvailabilitySwitch ? (
+        <div className="settings-mcp-row__policy">
+          <div className="settings-mcp-row__policy-item">
             <SettingsSwitch
               checked={connection.enabled}
               // The gateway switch above already states the reason every
@@ -1663,13 +1937,47 @@ function ManagedMcpConnectionRow(props: {
               label={`Offer ${connection.displayName} to threads`}
               onChange={props.onAvailabilityChange}
             />
-            <span className="settings-mcp-row__availability-label">
-              Offer to threads
+            <span className="settings-mcp-row__policy-text">
+              <span className="settings-mcp-row__policy-label">
+                Offer to threads
+              </span>
+              <span className="settings-mcp-row__policy-hint">
+                Any thread can choose it under MCP access.
+              </span>
             </span>
-          </>
-        ) : null}
-      </div>
-
+          </div>
+          {props.onSelectForNewThreadsChange ? (
+            <div className="settings-mcp-row__policy-item">
+              <SettingsSwitch
+                // Shown as what a new thread will actually get. A parked
+                // connection keeps the stored preference -- offering it again
+                // brings the default back -- but it is not seeded, so an `On`
+                // here would be a promise the next thread breaks.
+                checked={selectedForNewThreads}
+                disabled={
+                  props.disabled
+                  || !props.gatewayEnabled
+                  || !connection.enabled
+                }
+                label={`Select ${connection.displayName} for new threads`}
+                onChange={props.onSelectForNewThreadsChange}
+              />
+              <span className="settings-mcp-row__policy-text">
+                <span className="settings-mcp-row__policy-label">
+                  Select for new threads
+                </span>
+                <span className="settings-mcp-row__policy-hint">
+                  {!connection.enabled
+                    ? "Offer it to threads first."
+                    : seedable
+                      ? "New threads start with it selected. Existing threads keep theirs."
+                      : "New threads skip it until it is signed in again."}
+                </span>
+              </span>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
     </article>
   );
 }
@@ -1869,13 +2177,7 @@ function McpServerRow(props: {
         </button>
         <div className="settings-mcp-row__chips">
           <span
-            className={`settings-pathrow__chip${
-              auth.tone === "ok"
-                ? " settings-pathrow__chip--ok"
-                : auth.tone === "warn"
-                  ? " settings-pathrow__chip--warn"
-                  : ""
-            }`}
+            className={`settings-pathrow__chip${chipToneClass(auth.tone)}`}
             title={auth.description}
           >
             {auth.label}

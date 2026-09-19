@@ -34,7 +34,11 @@ import { ModelsSettings } from "./ModelsSettings";
 import { ProfilesSettings } from "./ProfilesSettings";
 import { PricingSettings } from "./PricingSettings";
 import { ApplicationsSettings } from "./ApplicationsSettings";
-import { PluginsSettings } from "./PluginsSettings";
+import {
+  PLUGINS_CODEX_MCP_SECTION_ID,
+  PLUGINS_MCP_GATEWAY_SECTION_ID,
+  PluginsSettings,
+} from "./PluginsSettings";
 import { ArchivedThreadsSettings } from "./ArchivedThreadsSettings";
 import { ThreadManagementSettings } from "./ThreadManagementSettings";
 import { TroubleshootingSettings } from "./TroubleshootingSettings";
@@ -134,9 +138,11 @@ function messagingPlatformFromSub(
 type SettingsNavChild = {
   key: string;
   label: string;
-  /** Sub-route id; undefined = the child re-targets the parent section
-   *  (Plugins → MCPs, which IS the plugins pane). */
+  /** Sub-route id; undefined = the child re-targets the parent section. */
   sub?: string;
+  /** Also the child for the group's bare route, because its section is the
+   *  top of the pane (Plugins → MCP Gateway). */
+  bareRoute?: boolean;
   /** Status dot tone; omitted when the snapshot can't say. */
   dot?: "ok" | "off" | "warn" | "bad";
   /** Tiny trailing chip, e.g. "off" on a disabled provider. */
@@ -400,7 +406,31 @@ export function SettingsScreen(props: {
   }, [desktopApi, enabledForges, reportForgeStatus]);
   const navChildren = (target: SettingsSection): SettingsNavChild[] => {
     if (target === "plugins") {
-      return [{ key: "mcps", label: "MCPs" }];
+      // One child per section of the pane, because the two hold very
+      // different things: connections PwrAgent manages and every thread can
+      // be offered, and servers Codex manages for Codex threads alone. Each
+      // names its section so a click scrolls there, and the gateway child also
+      // answers for a bare Plugins route, which opens at the top of the pane.
+      // The Codex child appears only when there is a Codex to report servers
+      // from; without one the section can say nothing but that it is empty.
+      const codexConfigured = Boolean(
+        snapshot?.models.codex.discovery.selectedCommand,
+      );
+      return [
+        {
+          key: "mcp-gateway",
+          label: "MCP Gateway",
+          sub: PLUGINS_MCP_GATEWAY_SECTION_ID,
+          bareRoute: true,
+        },
+        ...(codexConfigured
+          ? [{
+              key: "codex-mcps",
+              label: "Codex MCPs",
+              sub: PLUGINS_CODEX_MCP_SECTION_ID,
+            }]
+          : []),
+      ];
     }
     if (target === "models") {
       const codexConfigured = Boolean(
@@ -507,21 +537,28 @@ export function SettingsScreen(props: {
             const isGroup = SETTINGS_NAV_GROUPS.has(item.id);
             const open = openGroups[item.id] === true;
             const sublistId = `settings-nav-sublist-${item.id}`;
-            // Plugins keeps its long-standing contract: the MCPs child —
-            // the pane's whole content — carries the active state, not
-            // the parent row.
+            // Plugins keeps its long-standing contract: a child carries the
+            // active state, not the parent row -- the gateway child for the
+            // bare route, the Codex child for its section. The parent takes
+            // the marker back only when no child matches, which is a Codex
+            // route after Codex stopped being configured.
             const groupHoldsRoute = section === item.id;
+            const children = isGroup ? navChildren(item.id) : [];
+            const childHoldsRoute = (child: SettingsNavChild): boolean =>
+              groupHoldsRoute
+              && (route.sub === child.sub
+                || (route.sub === undefined && child.bareRoute === true));
             const parentActive =
               groupHoldsRoute
-              && route.sub === undefined
-              && item.id !== "plugins";
+              && (item.id === "plugins"
+                ? !children.some(childHoldsRoute)
+                : route.sub === undefined);
             // A collapsed group hides its aria-current child inside an
             // aria-hidden, inert sublist, so the parent row takes over
             // the marker — the nav must always show where the operator
             // is (this also covers collapsed Plugins).
             const parentMarksRoute =
               parentActive || (isGroup && !open && groupHoldsRoute);
-            const children = isGroup ? navChildren(item.id) : [];
             return (
               <Fragment key={item.id}>
                 <div
@@ -565,8 +602,7 @@ export function SettingsScreen(props: {
                   >
                     <div className="settings-nav__sublist-clip">
                       {children.map((child) => {
-                        const childActive =
-                          section === item.id && route.sub === child.sub;
+                        const childActive = childHoldsRoute(child);
                         return (
                           <button
                             key={child.key}
@@ -1178,6 +1214,7 @@ function SettingsSectionBody(props: {
     return (
       <PluginsSettings
         desktopApi={props.desktopApi}
+        focusSectionId={props.sub}
         saving={props.settings.saving}
         snapshot={props.snapshot}
         onMcpGatewayEnabledChange={async (mcpGatewayEnabled: boolean) => {

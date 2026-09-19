@@ -12,3 +12,12 @@ export const MCP_CONNECTION_TOOL_TIMEOUT_SECONDS =
  * patience rather than by what a tool call might legitimately need.
  */
 export const MCP_CONNECTION_PROBE_TIMEOUT_MS = 8_000;
+
+/**
+ * How long Settings waits for a managed connection to list its tools.
+ *
+ * Longer than the probe, because this one has to finish an initialize and
+ * possibly page through a large inventory, but still bounded by someone
+ * looking at a row that says "reading tools".
+ */
+export const MCP_CONNECTION_TOOL_LIST_TIMEOUT_MS = 20_000;
