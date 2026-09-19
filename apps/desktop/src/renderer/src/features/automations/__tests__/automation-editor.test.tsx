@@ -1813,13 +1813,23 @@ describe("AutomationEditor Discord channels", () => {
     fireEvent.click(screen.getByRole("button", { name: "Inbound message" }));
     await openConversationPicker("Conversation");
     const listbox = screen.getByRole("listbox");
-    // Two servers both have a #general; the server name tells them apart.
-    expect(within(listbox).getByRole("option", { name: /Ops \/ general/ })).toBeInTheDocument();
-    expect(within(listbox).getByRole("option", { name: /Lab \/ general/ })).toBeInTheDocument();
+    // Two servers both have a #general; the server trailing each name tells
+    // them apart, and the channel's own name leads so a long server name
+    // cannot push it out of the row.
+    const rows = within(listbox).getAllByRole("option").map((option) => [
+      option.querySelector(".project-picker__row-name")?.textContent,
+      option.querySelector(".messaging-surface-picker__context")?.textContent,
+    ]);
+    expect(rows).toEqual(expect.arrayContaining([["general", "Ops"], ["general", "Lab"]]));
     expect(
       within(listbox).getAllByRole("group").map((group) => group.getAttribute("aria-label")),
     ).toEqual(["Channels in authorized servers"]);
-    fireEvent.click(within(listbox).getByRole("option", { name: /Ops \/ alerts/ }));
+    fireEvent.click(within(listbox).getByRole("option", { name: /^alerts\s*Ops/ }));
+    // The closed field reads like the row: the name alone would not say which
+    // server's channel was chosen.
+    expect(
+      screen.getByRole("button", { name: "Conversation: alerts, Ops" }),
+    ).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Value"), { target: { value: "ERROR" } });
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
 
@@ -1875,7 +1885,7 @@ describe("AutomationEditor Discord channels", () => {
       await screen.findByText(/Some channels could not be listed\. Lab: Missing Access\./),
     ).toBeInTheDocument();
     await openConversationPicker("Conversation");
-    expect(screen.getByRole("option", { name: /Ops \/ alerts/ })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: /^alerts\s*Ops/ })).toBeInTheDocument();
   });
 
   it("says once that there is no bot token, not once per server", async () => {

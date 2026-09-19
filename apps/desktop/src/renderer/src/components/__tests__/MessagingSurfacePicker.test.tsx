@@ -391,6 +391,105 @@ describe("MessagingSurfacePicker", () => {
     expect(screen.getByRole("dialog", { name: "Surface" })).toBeInTheDocument();
   });
 
+  describe("a surface nested in containers", () => {
+    // Invented surfaces, obviously fake IDs. Two threads with one name under
+    // different parents: the case a single "server / parent / thread" label
+    // could not show, because the part that differs came last and was cut.
+    const nested = [
+      {
+        value: "thread-a",
+        label: "Cider press schedule",
+        context: "Orchard Collective / orchard-planning",
+        kind: "thread" as const,
+        detail: "1111111111111111121",
+        seen: "Sep 16",
+      },
+      {
+        value: "thread-b",
+        label: "Cider press schedule",
+        context: "Orchard Collective / harvest-log",
+        kind: "thread" as const,
+        detail: "1111111111111111122",
+        seen: "Sep 15",
+      },
+    ];
+
+    function openNested(value = "") {
+      const onChange = vi.fn();
+      render(
+        <MessagingSurfacePicker fieldLabel="Surface" value={value} options={nested} filterConversations allowThreads onChange={onChange} />,
+      );
+      const trigger = screen.getByRole("button", { name: ANY_TRIGGER });
+      trigger.focus();
+      fireEvent.click(trigger);
+      return onChange;
+    }
+
+    it("leads each row with its own name and dims the containers after it", () => {
+      openNested();
+      const rows = within(screen.getByRole("listbox")).getAllByRole("option");
+      expect(
+        rows.map((row) => row.querySelector(".project-picker__row-name")?.textContent),
+      ).toEqual(["Cider press schedule", "Cider press schedule"]);
+      expect(
+        rows.map((row) => row.querySelector(".messaging-surface-picker__context")?.textContent),
+      ).toEqual(["Orchard Collective / orchard-planning", "Orchard Collective / harvest-log"]);
+      // The anatomy is the layout contract: app.css lets the context give way
+      // first and never the ID, and both rules depend on this order.
+      expect([...rows[0]!.children].map((child) => child.className)).toEqual([
+        "project-picker__row-check",
+        "messaging-surface-picker__glyph",
+        "project-picker__row-name",
+        "messaging-surface-picker__context",
+        "project-picker__row-path",
+        "messaging-surface-picker__seen",
+      ]);
+    });
+
+    it("searches the containers as the path they abbreviate", () => {
+      const onChange = openNested();
+      const input = screen.getByRole("combobox");
+      // Typed the way these surfaces are written everywhere else in Settings.
+      fireEvent.change(input, { target: { value: "harvest-log / cider" } });
+      expect(
+        within(screen.getByRole("listbox")).getByRole("option"),
+      ).toHaveTextContent("1111111111111111122");
+      fireEvent.keyDown(input, { key: "Enter" });
+      expect(onChange).toHaveBeenCalledWith("thread-b");
+    });
+
+    it("carries the chosen row's containers onto the closed field", () => {
+      openNested("thread-b");
+      fireEvent.keyDown(screen.getByRole("combobox"), { key: "Escape" });
+      // Both rows share a name, so the name alone would not say which one the
+      // field holds. The containers follow it in the order they are drawn.
+      const trigger = screen.getByRole("button", {
+        name: "Surface: Cider press schedule, Orchard Collective / harvest-log",
+      });
+      expect(
+        trigger.querySelector(".messaging-surface-picker__context")?.textContent,
+      ).toBe("Orchard Collective / harvest-log");
+    });
+  });
+
+  it("does not repeat an ID that is also the row's name", () => {
+    render(
+      <MessagingSurfacePicker
+        fieldLabel="Surface"
+        value=""
+        filterConversations={false}
+        onChange={vi.fn()}
+        options={[
+          { value: "named", label: "Orchard Co", detail: "T012AB" },
+          // Nobody named this one, so its ID is its label.
+          { value: "unnamed", label: "T034CD", detail: "T034CD" },
+        ]}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: CLOSED_LABEL }));
+    expect(labels()).toEqual(["Orchard CoT012AB", "T034CD"]);
+  });
+
   it("drops the kind glyph for container scopes, which are not channels", () => {
     render(
       <MessagingSurfacePicker
