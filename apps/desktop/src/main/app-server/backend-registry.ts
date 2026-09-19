@@ -35580,6 +35580,16 @@ export class DesktopBackendRegistry {
       selectedModel?.id ??
       requestedModel ??
       parentSession?.acpRuntime?.currentModelId;
+    // The catalog answers for a model it says has no reasoning levels. The
+    // agent-wide thought-level menu below is whichever session wrote last: on
+    // Kimi, a K3 thread's levels, which K2.7 Coding refuses.
+    if (selectedModel?.supportsReasoning === false) {
+      return {
+        preferredModel,
+        preferredReasoningEffort: "provider-default",
+        runtimeModel,
+      };
+    }
     const reasoningEfforts =
       selectedModel?.reasoningEfforts ??
       options?.reasoningEfforts ??
