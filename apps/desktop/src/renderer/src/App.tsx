@@ -1942,8 +1942,11 @@ function DesktopAppShell(props: {
   // already marked the thread seen on focus by the time a reply lands. Shared
   // by every surface that can send on the operator's behalf — the composer
   // (send and steer) and the deferred release of a turn they queued earlier.
+  const handleUserRepliedToThread = useEventCallback((thread: NavigationThreadSummary) => {
+    void navigation.markThreadsSeen([thread]);
+  });
   const reportUserRepliedToThread = desktopApi?.markThreadSeen
-    ? (thread: NavigationThreadSummary) => void navigation.markThreadsSeen([thread])
+    ? handleUserRepliedToThread
     : undefined;
   useQueuedTurnRelease({
     backends: backendSummaries.backends,
@@ -2371,6 +2374,64 @@ function DesktopAppShell(props: {
     }
   });
 
+  // These event props cross the memoized Composer boundary on every shell update.
+  const handleAttachDirectoryReferences = useEventCallback((
+    paths: string[],
+    target: {
+      backend: AppServerBackendKind;
+      federationTarget?: FederationTarget;
+      threadId: string;
+    },
+  ) => {
+    void navigation.attachDirectoryPathsToThread(target, paths);
+  });
+  const handleHandoffThreadWorkspace = useEventCallback(async (
+    request: Parameters<NonNullable<ThreadViewProps["onHandoffThreadWorkspace"]>>[0],
+  ) => {
+    const thread = navigation.selectedThread;
+    if (thread) await navigation.handoffThreadWorkspace(thread, request);
+  });
+  const handleSetExecutionMode = useEventCallback(async (
+    executionMode: Parameters<NonNullable<ThreadViewProps["onSetExecutionMode"]>>[0],
+  ) => {
+    const thread = navigation.selectedThread;
+    if (thread) await navigation.setThreadExecutionMode(thread, executionMode);
+  });
+  const handleSetAcpRuntimeOption = useEventCallback(async (
+    params: Parameters<NonNullable<ThreadViewProps["onSetAcpRuntimeOption"]>>[0],
+  ) => {
+    const thread = navigation.selectedThread;
+    if (thread) await navigation.setAcpSessionRuntimeOption(thread, params);
+  });
+  const handleCancelExecutionModeQueue = useEventCallback(async () => {
+    const thread = navigation.selectedThread;
+    if (thread) await navigation.cancelThreadExecutionModeQueue(thread);
+  });
+  const handleSetThreadModelSettings = useEventCallback(async (
+    patch: Parameters<NonNullable<ThreadViewProps["onSetThreadModelSettings"]>>[0],
+  ) => {
+    const thread = navigation.selectedThread;
+    if (thread) await navigation.setThreadModelSettings(thread, patch);
+  });
+  const handleSetThreadPrAutoDispatch = useEventCallback(async (
+    enabled: Parameters<NonNullable<ThreadViewProps["onSetThreadPrAutoDispatch"]>>[0],
+  ) => {
+    const thread = navigation.selectedThread;
+    if (thread) await navigation.setThreadPrAutoDispatch(thread, enabled);
+  });
+  const handleCancelThreadPrAutoDispatch = useEventCallback(async (
+    fingerprint: Parameters<NonNullable<ThreadViewProps["onCancelThreadPrAutoDispatch"]>>[0],
+  ) => {
+    const thread = navigation.selectedThread;
+    if (thread) await navigation.cancelThreadPrAutoDispatch(thread, fingerprint);
+  });
+  const handleSendThreadPrAutoDispatchNow = useEventCallback(async (
+    fingerprint: Parameters<NonNullable<ThreadViewProps["onSendThreadPrAutoDispatchNow"]>>[0],
+  ) => {
+    const thread = navigation.selectedThread;
+    if (thread) await navigation.sendThreadPrAutoDispatchNow(thread, fingerprint);
+  });
+
   const threadViewProps = {
     pendingLaunchpadCreation: navigation.pendingLaunchpadCreations.find(
       (creation) => creation.selectionKey === navigation.selectedItemKey,
@@ -2484,16 +2545,7 @@ function DesktopAppShell(props: {
     onPickAndRegisterDirectory: handlePickAndRegisterDirectory,
     onPickAndAttachDirectoryToThread: handlePickAndAttachDirectoryToThread,
     onPickDirectoryForReference: handlePickDirectoryForReference,
-    onAttachDirectoryReferences: (
-      paths: string[],
-      target: {
-        backend: AppServerBackendKind;
-        federationTarget?: FederationTarget;
-        threadId: string;
-      }
-    ) => {
-      void navigation.attachDirectoryPathsToThread(target, paths);
-    },
+    onAttachDirectoryReferences: handleAttachDirectoryReferences,
     onClearPickDirectoryError: navigation.clearPickDirectoryError,
     setExecutionModeError: navigation.setThreadExecutionModeError,
     setThreadModelSettingsError: navigation.setThreadModelSettingsError,
@@ -2561,13 +2613,7 @@ function DesktopAppShell(props: {
         setFindRequest(undefined);
       }
     },
-    onHandoffThreadWorkspace: navigation.selectedThread
-      ? async (request) =>
-          await navigation.handoffThreadWorkspace(
-            navigation.selectedThread!,
-            request
-          )
-      : undefined,
+    onHandoffThreadWorkspace: navigation.selectedThread ? handleHandoffThreadWorkspace : undefined,
     onLoadOlder: session.loadOlder,
     onLiveTranscriptEntry: session.upsertLiveTranscriptEntry,
     onCancelLaunchpad: handleCancelLaunchpad,
@@ -2595,49 +2641,13 @@ function DesktopAppShell(props: {
     onPendingStatusChange: session.setPendingStatusText,
     onRefreshNavigation: navigation.refresh,
     onUserRepliedToThread: reportUserRepliedToThread,
-    onSetExecutionMode: navigation.selectedThread
-      ? async (executionMode) =>
-          await navigation.setThreadExecutionMode(
-            navigation.selectedThread!,
-            executionMode
-          )
-      : undefined,
-    onSetAcpRuntimeOption: navigation.selectedThread
-      ? async (params) =>
-          await navigation.setAcpSessionRuntimeOption(
-            navigation.selectedThread!,
-            params,
-          )
-      : undefined,
-    onCancelExecutionModeQueue: navigation.selectedThread
-      ? async () =>
-          await navigation.cancelThreadExecutionModeQueue(navigation.selectedThread!)
-      : undefined,
-    onSetThreadModelSettings: navigation.selectedThread
-      ? async (patch) =>
-          await navigation.setThreadModelSettings(navigation.selectedThread!, patch)
-      : undefined,
-    onSetThreadPrAutoDispatch: navigation.selectedThread
-      ? async (enabled) =>
-          await navigation.setThreadPrAutoDispatch(
-            navigation.selectedThread!,
-            enabled,
-          )
-      : undefined,
-    onCancelThreadPrAutoDispatch: navigation.selectedThread
-      ? async (fingerprint) =>
-          await navigation.cancelThreadPrAutoDispatch(
-            navigation.selectedThread!,
-            fingerprint,
-          )
-      : undefined,
-    onSendThreadPrAutoDispatchNow: navigation.selectedThread
-      ? async (fingerprint) =>
-          await navigation.sendThreadPrAutoDispatchNow(
-            navigation.selectedThread!,
-            fingerprint,
-          )
-      : undefined,
+    onSetExecutionMode: navigation.selectedThread ? handleSetExecutionMode : undefined,
+    onSetAcpRuntimeOption: navigation.selectedThread ? handleSetAcpRuntimeOption : undefined,
+    onCancelExecutionModeQueue: navigation.selectedThread ? handleCancelExecutionModeQueue : undefined,
+    onSetThreadModelSettings: navigation.selectedThread ? handleSetThreadModelSettings : undefined,
+    onSetThreadPrAutoDispatch: navigation.selectedThread ? handleSetThreadPrAutoDispatch : undefined,
+    onCancelThreadPrAutoDispatch: navigation.selectedThread ? handleCancelThreadPrAutoDispatch : undefined,
+    onSendThreadPrAutoDispatchNow: navigation.selectedThread ? handleSendThreadPrAutoDispatchNow : undefined,
     onRestoreWorktree: navigation.restoreWorktree,
     onTranscriptViewportChange: session.setViewport,
     onExpandedTranscriptActivityIdsChange:
