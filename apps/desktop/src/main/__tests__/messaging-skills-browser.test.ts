@@ -7,6 +7,7 @@ import { PERMISSIVE_CAPABILITY_PROFILE } from "@pwragent/messaging-interface/tes
 import {
   buildSkillsBrowserIntent,
   filterSkillEntries,
+  flattenSkillEntries,
 } from "../messaging/core/messaging-skills-browser";
 
 const binding: MessagingBindingRecord = {
@@ -193,5 +194,100 @@ describe("messaging skills browser", () => {
       "No skills matched.",
       "Reply Back, Search, or Cancel.",
     ].join("\n"));
+  });
+
+  describe("same-named skills across linked projects", () => {
+    const directories = [
+      { label: "PwrSnap", path: "/repo/PwrSnap" },
+      { label: "PwrAgnt", path: "/repo/PwrAgnt" },
+    ];
+    const personal = {
+      name: "slidev",
+      description: "Slide decks",
+      path: "/home/fixture/.agents/skills/slidev/SKILL.md",
+      scope: "user",
+      enabled: true,
+    };
+    // Codex answers per cwd and repeats personal skills under every one.
+    const data = [
+      {
+        cwd: "/repo/PwrSnap",
+        skills: [
+          {
+            name: "release",
+            description: "Release PwrSnap",
+            path: "/repo/PwrSnap/.agents/skills/release/SKILL.md",
+            scope: "repo",
+            enabled: true,
+          },
+          personal,
+        ],
+      },
+      {
+        cwd: "/repo/PwrAgnt",
+        skills: [
+          {
+            name: "release",
+            description: "Release PwrAgent",
+            path: "/repo/PwrAgnt/.agents/skills/release/SKILL.md",
+            scope: "repo",
+            enabled: true,
+          },
+          personal,
+        ],
+      },
+    ];
+
+    it("keeps one entry per skill file, projects first", () => {
+      const entries = flattenSkillEntries(data, directories);
+
+      // Deduping by name kept PwrSnap's `release` and dropped PwrAgnt's.
+      expect(entries.map((entry) => [entry.name, entry.origin?.label, entry.cwd])).toEqual([
+        ["release", "PwrSnap", "/repo/PwrSnap"],
+        ["release", "PwrAgnt", "/repo/PwrAgnt"],
+        ["slidev", "Personal", "/repo/PwrSnap"],
+      ]);
+    });
+
+    it("qualifies only the names that more than one skill shares", () => {
+      const intent = buildSkillsBrowserIntent({
+        binding,
+        createdAt: 1000,
+        entries: flattenSkillEntries(data, directories),
+        id: "skills-browser-1",
+      });
+
+      expect(
+        intent.choices
+          .filter((choice) => choice.id === "skills:select")
+          .map((choice) => [choice.label, (choice.value as { path?: string }).path]),
+      ).toEqual([
+        ["1. $release · PwrSnap", "/repo/PwrSnap/.agents/skills/release/SKILL.md"],
+        ["2. $release · PwrAgnt", "/repo/PwrAgnt/.agents/skills/release/SKILL.md"],
+        ["3. $slidev", "/home/fixture/.agents/skills/slidev/SKILL.md"],
+      ]);
+      expect(intent.fallbackText).toBe([
+        "1. $release · PwrSnap - Release PwrSnap",
+        "2. $release · PwrAgnt - Release PwrAgent",
+        "3. $slidev - Slide decks",
+        "Reply with a number, Search, Back, Next, Prev, or Cancel.",
+      ].join("\n"));
+    });
+
+    it("keeps a row's qualifier when search narrows the list to one twin", () => {
+      const intent = buildSkillsBrowserIntent({
+        binding,
+        createdAt: 1000,
+        entries: flattenSkillEntries(data, directories),
+        id: "skills-browser-1",
+        query: "pwragnt",
+      });
+
+      expect(
+        intent.choices
+          .filter((choice) => choice.id === "skills:select")
+          .map((choice) => choice.label),
+      ).toEqual(["1. $release · PwrAgnt"]);
+    });
   });
 });

@@ -58,6 +58,7 @@ import {
   type ComposerSlashCommand,
 } from "./composer-slash-commands";
 import { HighlightedAutocompleteLabel } from "./HighlightedAutocompleteLabel";
+import { SkillOriginChip, useSkillOriginCard } from "./SkillOriginChip";
 
 /**
  * The populations a compact composer's mention popovers pick from.
@@ -185,6 +186,12 @@ export function useComposerMentions(params: {
   const { sources } = params;
   const inputRef = useRef<ComposerInputHandle | null>(null);
   const listboxId = useId();
+  const currentFederation = sources?.currentThread?.federation;
+  const skillOriginCard = useSkillOriginCard({
+    remoteInstanceLabel: currentFederation?.ref.target.scope === "remote"
+      ? currentFederation.instanceLabel
+      : undefined,
+  });
   // One state, not two: an insert has to move the draft and its tokens in
   // the same commit, and a bounced send has to put both back or neither.
   const [content, setContent] = useState<ComposerMentionDraft>(() => ({
@@ -693,6 +700,12 @@ export function useComposerMentions(params: {
               label={`$${skill.name}`}
               query={query ? `$${query}` : "$"}
             />
+            {skill.origin ? (
+              <SkillOriginChip
+                origin={skill.origin}
+                {...skillOriginCard.chipHandlers(skill)}
+              />
+            ) : null}
           </span>
           <span className="compact-composer__mention-meta">
             {skill.shortDescription || skill.description || skill.path}
@@ -802,6 +815,7 @@ export function useComposerMentions(params: {
       role="listbox"
     >
       {options}
+      {kind === "skills" ? skillOriginCard.cardNode : null}
     </div>
   ) : null;
   const activeCommand =

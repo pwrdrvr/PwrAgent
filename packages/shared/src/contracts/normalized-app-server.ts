@@ -97,6 +97,42 @@ export type AppServerSkillSummary = {
   path?: string;
   enabled?: boolean;
   scope?: string;
+  /** Owning plugin, `<plugin>@<marketplace>`, when the skill ships in one. */
+  pluginId?: string;
+  /**
+   * Where the skill came from, in the terms of the thread that listed it.
+   * No backend sends this. The surface that shows the skill derives it with
+   * `classifySkillOrigin`, because only that surface knows which linked
+   * directory is the thread's primary project and what it is called.
+   */
+  origin?: AppServerSkillOrigin;
+};
+
+export type AppServerSkillOriginKind =
+  /** Inside one of the thread's linked directories. */
+  | "project"
+  /** A repository skill outside every linked directory. */
+  | "repository"
+  /** `~/.agents/skills`. */
+  | "personal"
+  /** `$CODEX_HOME/skills`. */
+  | "codex-home"
+  | "plugin"
+  /** Bundled with Codex (`scope: "system"`). */
+  | "built-in"
+  | "admin"
+  | "other";
+
+export type AppServerSkillOrigin = {
+  kind: AppServerSkillOriginKind;
+  /** Chip text: a project label, a plugin name, or the kind's own name. */
+  label: string;
+  /** Index into the thread's linked directories, for `project`. */
+  directoryIndex?: number;
+  /** True when a `project` skill was found through the worktree checkout. */
+  worktree?: boolean;
+  /** The full `<plugin>@<marketplace>` id, for `plugin`. */
+  pluginId?: string;
 };
 
 export type AppServerAvailableCommandSummary = {

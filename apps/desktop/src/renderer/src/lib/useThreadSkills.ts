@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type {
-  AppServerAvailableCommandSummary,
-  AppServerListSkillsResponse,
-  AppServerSkillSummary,
-  NavigationLaunchpadDraft,
-  NavigationThreadSummary,
+import {
+  compareSkillOrigins,
+  withSkillOrigins,
+  type AppServerAvailableCommandSummary,
+  type AppServerListSkillsResponse,
+  type AppServerSkillSummary,
+  type NavigationLaunchpadDraft,
+  type NavigationThreadSummary,
+  type SkillOriginDirectory,
 } from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
 import {
@@ -260,6 +263,17 @@ export function useThreadSkills(params: {
     await loadTarget();
   }, [loadTarget]);
 
+  // Keyed on the directories' content, not the thread's identity: the summary
+  // is replaced on every streamed item, and `skills` feeds memoized transcript
+  // and composer consumers that should not rebuild for a turn's progress.
+  const originDirectoriesKey = JSON.stringify(
+    readSkillOriginDirectories(thread, launchpad),
+  );
+  const originDirectories = useMemo(
+    (): SkillOriginDirectory[] => JSON.parse(originDirectoriesKey),
+    [originDirectoriesKey],
+  );
+
   const skills = useMemo(() => {
     const deduped = new Map<string, AppServerSkillSummary>();
 
@@ -270,10 +284,14 @@ export function useThreadSkills(params: {
       }
     }
 
-    return [...deduped.values()].sort((left, right) =>
-      left.name.localeCompare(right.name)
+    // Same-named skills from different linked projects sort by origin, so the
+    // primary project's `$release` is the one Enter takes.
+    return withSkillOrigins([...deduped.values()], originDirectories).sort(
+      (left, right) =>
+        left.name.localeCompare(right.name)
+        || compareSkillOrigins(left.origin, right.origin)
     );
-  }, [state?.response?.data]);
+  }, [originDirectories, state?.response?.data]);
 
   const providerCommands = useMemo(() => {
     const deduped = new Map<string, AppServerAvailableCommandSummary>();
@@ -300,4 +318,21 @@ export function useThreadSkills(params: {
     response: state?.response,
     skills,
   };
+}
+
+function readSkillOriginDirectories(
+  thread: NavigationThreadSummary | undefined,
+  launchpad: NavigationLaunchpadDraft | undefined,
+): SkillOriginDirectory[] {
+  if (thread) {
+    return thread.linkedDirectories.map((directory) => ({
+      label: directory.label,
+      path: directory.path,
+      ...(directory.worktreePath ? { worktreePath: directory.worktreePath } : {}),
+    }));
+  }
+  const directoryPath = launchpad?.directoryPath?.trim();
+  return launchpad && directoryPath
+    ? [{ label: launchpad.directoryLabel, path: directoryPath }]
+    : [];
 }

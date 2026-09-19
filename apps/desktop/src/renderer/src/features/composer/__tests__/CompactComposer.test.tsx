@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   NavigationDirectorySummary,
@@ -802,6 +802,40 @@ describe("CompactComposer markdown", () => {
       expect(onSend).toHaveBeenCalledWith(
         "about [#118](https://github.com/pwrdrvr/PwrAgnt/pull/118)",
       );
+    });
+
+    it("labels each skill row with its origin and opens the path card from the chip", async () => {
+      renderComposer({
+        mentionSources: {
+          skills: [
+            {
+              name: "release",
+              description: "Release Northwind",
+              path: "/src/Northwind/.agents/skills/release/SKILL.md",
+              origin: { kind: "project", label: "Northwind", directoryIndex: 0 },
+            },
+            {
+              name: "release",
+              description: "Release Harbor",
+              path: "/src/Harbor/.agents/skills/release/SKILL.md",
+              origin: { kind: "project", label: "Harbor", directoryIndex: 1 },
+            },
+          ],
+        },
+      });
+      openPicker("run $rel");
+      const options = screen.getAllByRole("option");
+      expect(options.map((option) => option.textContent)).toEqual([
+        "$releaseNorthwindRelease Northwind",
+        "$releaseHarborRelease Harbor",
+      ]);
+
+      fireEvent.pointerEnter(options[1]!.querySelector(".skill-origin-chip")!);
+      const card = await screen.findByRole("group", { name: "Where $release comes from" });
+      expect(card.textContent).toContain("/src/Harbor/.agents/skills/release/SKILL.md");
+      expect(within(card).getByRole("button", { name: "Copy path" })).toBeTruthy();
+      // Outside the Star Map card's DOM, so no camera guard has to learn it.
+      expect(screen.getByRole("listbox").contains(card)).toBe(false);
     });
 
     it("keeps a trigger with no matches as literal text", () => {

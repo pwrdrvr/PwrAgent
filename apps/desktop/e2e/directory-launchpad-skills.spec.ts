@@ -369,9 +369,13 @@ test("directory launchpad skill autocomplete supports active keyboard selection"
       .not.toBe(firstActiveOptionId);
     const secondActiveOptionId = await secondActiveOption.getAttribute("id");
     expect(secondActiveOptionId).toBeTruthy();
+    // The title's first span is the `$name` label. The origin chip beside it
+    // ("Codex home") runs straight on in `textContent`, so reading the whole
+    // title would capture `$ce:brainstormCodex`.
     const secondActiveSkillLabel = (
       (await secondActiveOption
-        .locator(".composer__autocomplete-title")
+        .locator(".composer__autocomplete-title > span")
+        .first()
         .textContent())?.match(/\$[A-Za-z0-9:_-]+/)?.[0] ??
       ""
     );
