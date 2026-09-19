@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import type { AgentEvent } from "@pwragent/shared";
+import type { AgentEvent, AppServerBackendScope } from "@pwragent/shared";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 
 const mocks = vi.hoisted(() => ({
   store: {
-    readNavigationSourceVersion: () => "unchanged",
+    readNavigationSourceVersion: vi.fn(() => "unchanged"),
     readNavigationQueryIndex: vi.fn(() => ({ threads: [], directories: [] })),
     readDirectoryGitStatusCache: async () => ({}),
   },
@@ -31,7 +31,7 @@ function createSource() {
   } as unknown as DesktopBackendRegistry;
   return {
     finish, listThreads, listeners,
-    read: () => loadLocalNavigationQueryIndex({ registry, callerReason: "source-event-regression" }),
+    read: (backend?: AppServerBackendScope) => loadLocalNavigationQueryIndex({ registry, backend, callerReason: "source-event-regression" }),
     emit: (method: string) => {
       const event = { backend: "codex", notification: { method, params: { threadId: "thread" } } } as AgentEvent;
       for (const listener of listeners) listener(event);
@@ -57,6 +57,40 @@ describe("owner index source event admission", () => {
     expect(source.listeners.size).toBe(1);
     source.emit("thread/name/updated");
     expect(source.listeners.size).toBe(0);
+  });
+
+  it("keeps repeated unchanged reads stable, but refreshes after a durable source version change", async () => {
+    const source = createSource();
+    source.finish();
+    try {
+      const first = await source.read();
+      for (let index = 0; index < 20; index++) expect(await source.read()).toBe(first);
+      expect(source.listThreads).toHaveBeenCalledTimes(1);
+      mocks.store.readNavigationSourceVersion.mockReturnValue("external-change");
+      const changed = await source.read();
+      expect(changed).not.toBe(first);
+      expect(source.listThreads).toHaveBeenCalledTimes(2);
+      expect(await source.read()).toBe(changed);
+    } finally {
+      mocks.store.readNavigationSourceVersion.mockReturnValue("unchanged");
+      source.emit("thread/name/updated");
+    }
+  });
+
+  it("does not share owner work across registries or provider scopes", async () => {
+    const first = createSource();
+    const second = createSource();
+    first.finish(); second.finish();
+    try {
+      await Promise.all([first.read(), first.read("codex"), second.read()]);
+      expect(first.listThreads).toHaveBeenCalledTimes(2);
+      expect(second.listThreads).toHaveBeenCalledTimes(1);
+      await Promise.all([first.read(), first.read("codex"), second.read()]);
+      expect(first.listThreads).toHaveBeenCalledTimes(2);
+      expect(second.listThreads).toHaveBeenCalledTimes(1);
+    } finally {
+      first.emit("thread/name/updated"); second.emit("thread/name/updated");
+    }
   });
 
   it("starts fresh owner work after a canonical navigation event", async () => {
