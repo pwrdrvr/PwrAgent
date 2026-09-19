@@ -1,6 +1,6 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { NavigationThreadSummary } from "@pwragent/shared";
+import type { FederationTarget, NavigationQueryPage, NavigationQueryRequest, NavigationThreadSummary } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { navigationQueryFixture } from "../../../test/navigation-query-fixture";
 import {
@@ -49,4 +49,89 @@ describe("bounded composer mention sources", () => {
     act(() => result.current.release());
     expect(releaseNavigationQuery).toHaveBeenCalledTimes(2);
   });
+
+  function ownerPage(request: NavigationQueryRequest): NavigationQueryPage {
+    const owner = request.federationTarget?.scope === "remote" ? request.federationTarget.instanceId : "local";
+    return navigationQueryFixture(request, {
+      directories: [{ key: owner, kind: "directory", label: `microapps-${owner}`, path: `/${owner}/microapps` }],
+      threads: [{ id: owner, source: "codex", title: `microapps-${owner}`, titleSource: "explicit",
+        linkedDirectories: [], inbox: { inInbox: false } }],
+    });
+  }
+
+  it("routes only demanded queries to the selected owner and reuses its cache", async () => {
+    const getNavigationQueryPage = vi.fn(async (request: NavigationQueryRequest) => ownerPage(request));
+    const desktopApi: DesktopApi = { getNavigationQueryPage };
+    const target: FederationTarget = { scope: "remote", instanceId: "m2-max" };
+    const { result, rerender } = renderHook(({ federationTarget }) => useComposerMentionSources({
+      desktopApi, federationTarget,
+    }), { initialProps: { federationTarget: target } });
+    expect(getNavigationQueryPage).not.toHaveBeenCalled();
+    act(() => result.current.ensureLoaded("microapps"));
+    await waitFor(() => expect(result.current.settledQuery).toBe("microapps"));
+    expect(result.current.directories.map((row) => row.path)).toEqual(["/m2-max/microapps"]);
+    expect(result.current.threads.map((row) => row.id)).toEqual(["m2-max"]);
+    expect(getNavigationQueryPage).toHaveBeenCalledTimes(2);
+    expect(getNavigationQueryPage.mock.calls.every(([request]) =>
+      request.federationTarget?.scope === "remote" && request.federationTarget.instanceId === "m2-max")).toBe(true);
+    rerender({ federationTarget: { ...target } });
+    act(() => result.current.release());
+    act(() => result.current.ensureLoaded("microapps"));
+    expect(getNavigationQueryPage).toHaveBeenCalledTimes(2);
+  });
+
+  it("isolates local and remote caches even when the bridge and query are identical", async () => {
+    const getNavigationQueryPage = vi.fn(async (request: NavigationQueryRequest) => ownerPage(request));
+    const desktopApi: DesktopApi = { getNavigationQueryPage };
+    const { result, rerender } = renderHook(({ federationTarget }: { federationTarget?: FederationTarget }) =>
+      useComposerMentionSources({ desktopApi, federationTarget }), { initialProps: {} });
+    for (const owner of ["local", "m2-max", "other-peer", "local", "m2-max"]) {
+      rerender({ federationTarget: owner === "local" ? undefined : { scope: "remote", instanceId: owner } });
+      act(() => result.current.ensureLoaded("microapps"));
+      await waitFor(() => expect(result.current.directories.map((row) => row.path)).toEqual([`/${owner}/microapps`]));
+      expect(result.current.threads.map((row) => row.id)).toEqual([owner]);
+    }
+    expect(getNavigationQueryPage).toHaveBeenCalledTimes(6);
+  });
+
+  it("clears the previous owner's rows while the next owner is pending or unavailable", async () => {
+    let rejectRemote!: (error: Error) => void;
+    const desktopApi: DesktopApi = {
+      getNavigationQueryPage: (request) => request.federationTarget?.scope === "remote"
+        ? new Promise((_resolve, reject) => { rejectRemote = reject; })
+        : Promise.resolve(ownerPage(request)),
+    };
+    const { result, rerender } = renderHook(({ federationTarget }: { federationTarget?: FederationTarget }) =>
+      useComposerMentionSources({ desktopApi, federationTarget }), { initialProps: {} });
+    act(() => result.current.ensureLoaded("microapps"));
+    await waitFor(() => expect(result.current.directories).toHaveLength(1));
+    rerender({ federationTarget: { scope: "remote", instanceId: "offline-peer" } });
+    expect(result.current.directories).toEqual([]);
+    expect(result.current.threads).toEqual([]);
+    expect(result.current.settledQuery).toBeUndefined();
+    await act(async () => rejectRemote(new Error("Peer disconnected")));
+    expect(result.current.directories).toEqual([]);
+    expect(result.current.threads).toEqual([]);
+  });
+
+  it("ignores a late response from an owner after switching away", async () => {
+    const pending: Array<() => void> = [];
+    const releaseNavigationQuery = vi.fn(async () => undefined);
+    const desktopApi: DesktopApi = {
+      getNavigationQueryPage: (request) => request.federationTarget?.scope === "remote"
+        ? new Promise((resolve) => pending.push(() => resolve(ownerPage(request))))
+        : Promise.resolve(ownerPage(request)),
+      releaseNavigationQuery,
+    };
+    const { result, rerender } = renderHook(({ federationTarget }: { federationTarget?: FederationTarget }) =>
+      useComposerMentionSources({ desktopApi, federationTarget }),
+    { initialProps: { federationTarget: { scope: "remote", instanceId: "slow-peer" } } });
+    act(() => result.current.ensureLoaded("microapps"));
+    rerender({ federationTarget: undefined });
+    await waitFor(() => expect(result.current.directories.map((row) => row.path)).toEqual(["/local/microapps"]));
+    await act(async () => pending.forEach((resolve) => resolve()));
+    expect(result.current.directories.map((row) => row.path)).toEqual(["/local/microapps"]);
+    expect(releaseNavigationQuery).toHaveBeenCalledTimes(2);
+  });
+
 });

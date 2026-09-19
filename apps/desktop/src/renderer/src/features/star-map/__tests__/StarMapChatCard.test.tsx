@@ -2381,6 +2381,20 @@ describe("StarMapChatCard mentions", () => {
     ).toContain("$deploy");
   });
 
+  it("routes @ suggestions to the remote card owner on demand", async () => {
+    const desktopApi = mentionApi();
+    const thread = remoteThread();
+    renderCard({ desktopApi, thread });
+    const input = await findReadyTextbox({ name: "Message Remote work" });
+    expect(desktopApi.getNavigationQueryPage).not.toHaveBeenCalled();
+    fireEvent.change(input, { target: { value: "check @ap" } });
+    await screen.findByRole("option");
+    expect(desktopApi.getNavigationQueryPage).toHaveBeenCalledWith(expect.objectContaining({
+      federationTarget: thread.federation!.ref.target,
+      query: { kind: "directory-index", filter: "ap" },
+    }), expect.any(String));
+  });
+
   it("offers tracked directories on @ and links them as markdown", async () => {
     const desktopApi = mentionApi();
     renderCard({ desktopApi, thread: localThread() });

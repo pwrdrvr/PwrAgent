@@ -571,7 +571,10 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
    * is usually open *because* of another instance.
    */
   const threadSkills = useThreadSkills({ desktopApi: props.active === false ? undefined : desktopApi, thread });
-  const navigationSources = useComposerMentionSources({ desktopApi: props.active === false ? undefined : desktopApi });
+  const navigationSources = useComposerMentionSources({
+    desktopApi: props.active === false ? undefined : desktopApi,
+    federationTarget,
+  });
   const ensureSkillsLoaded = threadSkills.ensureLoaded;
   const ensureNavigationLoaded = navigationSources.ensureLoaded;
   const mentionSources = useMemo<ComposerMentionSources>(
