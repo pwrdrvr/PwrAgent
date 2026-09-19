@@ -1,5 +1,6 @@
 import { setFederationTrafficCapture, snapshotFederationTrafficHistory } from "../federation/federation-traffic-capture";
 import net from "node:net";
+import http from "node:http";
 import WebSocket, { WebSocketServer } from "ws";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -65,6 +66,41 @@ afterEach(async () => {
 });
 
 describe("federation transport", () => {
+  it("observes armed HTTP and upgrade probes before federation admission", async () => {
+    const onEnvelope = vi.fn();
+    server = new FederationGatewayWebSocketServer({
+      gatewayInstanceId: "gateway_one",
+      gatewayPrivateKeyPem: gatewayKeyPair.privateKeyPem,
+      gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem,
+      host: "127.0.0.1",
+      port: 0,
+      store,
+      onEnvelope,
+    });
+    const { port } = await server.start();
+    for (const upgrade of [false, true]) {
+      const probe = server.securityProbes.arm();
+      try {
+        const response = await new Promise<{ status?: number; proof?: string | string[] }>((resolve, reject) => {
+          const request = http.get({ host: "127.0.0.1", port, headers: {
+            "X-PwrAgent-Security-Probe": probe.id,
+            ...(upgrade ? { Connection: "Upgrade", Upgrade: "websocket" } : {}),
+          } }, (incoming) => {
+            resolve({ status: incoming.statusCode, proof: incoming.headers["x-pwragent-probe-proof"] });
+            incoming.resume();
+          });
+          request.on("error", reject);
+        });
+        expect(response).toEqual({ status: 204, proof: probe.proof });
+        expect(probe.observed()).toBe(true);
+        expect(onEnvelope).not.toHaveBeenCalled();
+      } finally { probe.close(); }
+    }
+    const ordinary = await fetch(`http://127.0.0.1:${port}/`, { headers: { "X-PwrAgent-Security-Probe": "unarmed" } });
+    expect(ordinary.status).toBe(404);
+    expect(ordinary.headers.has("x-pwragent-probe-proof")).toBe(false);
+  });
+
   it("encodes blob bytes as a binary tail and rejects blob JSON envelopes", () => {
     const data = Buffer.from([0, 1, 2, 0xff]);
     const envelope = {
@@ -1015,7 +1051,16 @@ describe("federation transport", () => {
     );
   });
 
-  it("closes an established session after encrypted frame authentication fails", async () => {
+  // The second run arrives the way cloudflared delivers a tunnelled client:
+  // over loopback, with Cloudflare's request headers on the upgrade.
+  it.each([
+    { path: "direct", headers: undefined, marked: {} },
+    {
+      path: "through a Cloudflare tunnel",
+      headers: { "cf-ray": "8c1f0000aaaa-SJC", "cf-connecting-ip": "203.0.113.7" },
+      marked: { via: "cloudflare-tunnel", reportedClientAddress: "203.0.113.7" },
+    },
+  ])("closes an established session after encrypted frame authentication fails ($path)", async ({ headers, marked }) => {
     const gatewayNoise = generateNoiseStaticKeyPair();
     const clientNoise = generateNoiseStaticKeyPair();
     const clientKeyPair = generateFederationIdentityKeyPair();
@@ -1050,7 +1095,7 @@ describe("federation transport", () => {
       onDisconnect: () => resolveDisconnected?.(),
     });
     const { url } = await server.start();
-    const socket = new WebSocket(url);
+    const socket = new WebSocket(url, headers ? { headers } : undefined);
     const reader = new TestSocketReader(socket);
     await waitForSocketOpen(socket);
     await reader.next();
@@ -1105,6 +1150,7 @@ describe("federation transport", () => {
       direction: "incoming",
       remoteAddress: expect.stringMatching(/^127\.0\.0\.1:\d+$/),
       localAddress: new URL(url).host,
+      ...marked,
     }]);
 
 

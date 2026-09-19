@@ -96,6 +96,118 @@ stable location. Verify the rule against the hostname before relying on it and
 remove or change it deliberately when the connecting laptop moves networks.
 PwrAgent enrollment remains mandatory whether or not the IP rule is active.
 
+### Guided Cloudflare Access setup
+
+Settings -> Federation -> Cloudflare Access walks a gateway through six
+numbered steps: choose how clients get in, connect a scoped API token, install
+`cloudflared`, create the protected endpoint, validate it, and share client
+setup files. Account ID, Zone ID, hostname, and the sign-in allowlist can be
+saved as a draft at any point; the API token is held only in memory. Creating
+the endpoint saves the federation listener as `127.0.0.1:<port>` (and changes
+`client` mode to `dual`) before anything is created in Cloudflare, and the
+DNS record is published only after the Access policy has been read back.
+
+PwrAgent runs `cloudflared` with `--no-autoupdate`, so the install step
+compares the installed version with Cloudflare's latest GitHub release (checked
+at most once a day) and names a newer one. Update it the way it was installed
+(`brew upgrade cloudflared` for Homebrew), then stop and start the connector:
+the running process keeps the old binary until it restarts.
+
+The three admission choices:
+
+| Choice | Cloudflare plan | Client credential |
+|---|---|---|
+| Service token (default) | Any Zero Trust plan, including Free | One Access service token per client, inside its setup file |
+| Sign in with an identity | Any Zero Trust plan; Managed OAuth is Cloudflare Beta | None; each person signs in with an allowed email |
+| Client certificate (mTLS) | Contract (Enterprise) only; refused on Free | One certificate per client from a PwrAgent-generated CA |
+
+A client imports the encrypted `.pwrcf` file under "Connect this client". The
+file's enrollment invite expires after 1, 4, 8, or 24 hours, chosen when it
+is saved.
+
+Access checks a credential only when a connection opens, so removing it from
+the policy alone would leave an open session running. Revoking an issued
+client therefore also revokes the federation peer that enrolled with its
+setup file, which closes that session; an invite nobody has used yet is
+retired instead. A client issued before PwrAgent recorded which invite went
+with it has no known peer, and the revoke says so: revoke its peer under
+Federation Instances to end a session that is already open.
+
+On a client, "Connect this client" leads with the connection through the
+Cloudflare endpoint, in the same terms as Federation health, and folds the
+import steps away once a setup file has been imported. An import reports
+whether the connection came up. When Cloudflare refuses the client's service
+token or certificate, the error says so, rather than calling the gateway
+unreachable. That refusal, like a sign-in that is required, belongs to the
+Cloudflare path alone: a client with other endpoints tries them next, and
+reports it only if none connects. When the Cloudflare endpoint is the only
+path, the client stops redialing. Signing in, importing a setup file, or
+changing settings starts it again. On the gateway,
+a peer that arrived through the tunnel is listed as "via Cloudflare Tunnel",
+with the client address Cloudflare reports, instead of as the connector's
+loopback socket.
+
+Creating the endpoint uses the saved federation listener port, not an unsaved
+edit in Configuration. If Create fails before recording anything, the
+listener mode and address it changed are put back. The hostname is checked against existing Access
+applications and DNS records before anything is created, and Connect suggests
+the first of `federation.<zone>`, `federation-2.<zone>`, and so on that is
+free; a second profile in the same account commonly holds the first.
+
+A creation that stops partway lists what it has made in Cloudflare so far.
+Resume finishes with those resources. If the listener port changed in the
+meantime, Resume points the tunnel at the new port. Start over deletes exactly
+those resources and clears the setup record. A published endpoint offers
+Remove endpoint, which deletes the DNS record first, then the tunnel, the
+Access application, and the credentials the setup issued. Both ask for
+confirmation and delete only resources the setup recorded. After a failure a
+retry picks up where the last attempt stopped, and a resource already deleted
+by hand counts as gone.
+
+A gateway bound to a specific address refuses a port that another process
+holds on every interface. On macOS such a bind succeeds and silently takes the
+other listener's loopback traffic, including a Cloudflare tunnel aimed at it.
+The endpoint audit also fails when the tunnel's recorded port is not the port
+the gateway is listening on.
+
+### Cloudflare Access sign-in
+
+The sign-in choice enables
+[Managed OAuth](https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/managed-oauth/)
+on the Access application, with dynamic client registration limited to
+`127.0.0.1` redirects, and adds two policies: an allow policy naming the
+permitted emails, and a Service Auth policy admitting only the gateway's own
+validation token so endpoint validation can run with no person present. The
+audit fails if any third policy, an https redirect URI, or a changed email
+list appears.
+
+A client signs in in the system browser (authorization code with PKCE S256 and
+an RFC 8707 resource indicator) and stores the grant encrypted under the
+profile's `state/`. Before each connection it refreshes the 15-minute access
+token and sends it as `Authorization: Bearer`, and while connected it
+refreshes again a minute before each token expires, because Access checks the
+token only at the WebSocket upgrade. A refused refresh — the two-week grant
+lapsed, or the person was removed from the allowlist — closes the connection
+and puts the client in a sign-in-required state that Federation health reports
+as rejected; Settings -> Federation -> Cloudflare Access offers Sign in. A
+modified client could ignore that, so revoke the peer to end its session at
+once. Config key: `federation.cloudflare_access_oauth_enabled`.
+
+A new hostname can fail validation for a while on a computer that looked it
+up before it existed, because the "not found" answer is cached for the zone's
+negative TTL (30 minutes by default). Validation and sign-in discovery say so,
+rather than reporting a missing feature.
+
+The Access application's session duration is 15 minutes. On an application
+with an identity policy, Access accepts its own session cookie in place of a
+sign-in until that duration ends (24 hours by default), so the audit checks
+it; endpoint validation does not replay the cookie on this gate.
+
+If a login method refuses the person (GitHub reporting an email that is not
+on the allowlist, for example), Access continues with an ordinary login for
+the application and the browser never returns to PwrAgent. "Open the sign-in
+page again" sends the browser back to the same waiting sign-in.
+
 ### Cloudflare Access Service Token
 
 Cloudflare Access service tokens use the
@@ -105,9 +217,11 @@ hostname. Cloudflare documents the current flow in
 [Service tokens](https://developers.cloudflare.com/cloudflare-one/access-controls/service-credentials/service-tokens/)
 and [Access policies](https://developers.cloudflare.com/cloudflare-one/access-controls/policies/).
 
-On every client profile, before importing its federation invite:
+The guided setup above issues these. To enter them by hand, on every client
+profile, before importing its federation invite:
 
-1. Open Settings -> Federation -> Cloudflare.
+1. Open Settings -> Federation -> Cloudflare Access -> Enter Cloudflare
+   credentials manually.
 2. Enable Access service auth.
 3. Enter the Access client ID and client secret.
 4. Select Save edge policy.
@@ -122,13 +236,16 @@ mode is enabled, the connector fails closed with a Settings diagnostic.
 Cloudflare Access can enforce a Service Auth policy with a Valid Certificate or
 Common Name selector. Its current setup and certificate requirements are in
 [Cloudflare Access mTLS](https://developers.cloudflare.com/cloudflare-one/access-controls/service-credentials/mutual-tls-authentication/).
-Availability depends on the Cloudflare account and product configuration; check
-the dashboard before treating mTLS as an available outer gate.
+Access mTLS requires a Contract (Enterprise) Zero Trust plan: on a Free plan
+the certificate authority upload is refused as "maximum number of certificates
+has been reached" with none stored. This is distinct from zone-level client
+certificates in the SSL/TLS product.
 
 Issue each client a certificate and private key from the CA associated with the
 federation hostname. On the client profile, before importing its invite:
 
-1. Open Settings -> Federation -> Cloudflare.
+1. Open Settings -> Federation -> Cloudflare Access -> Enter Cloudflare
+   credentials manually.
 2. Enable mTLS.
 3. Paste the PEM client certificate and matching PEM private key.
 4. Select Save edge policy.

@@ -1,4 +1,5 @@
 import { BrowserWindow, ipcMain } from "electron";
+import { registerCloudflareSetupIpc } from "./federation-cloudflare";
 import type {
   ReadFederationActivityRequest,
   ConfigureFederationTailscaleRequest,
@@ -92,6 +93,7 @@ function peerAllowsEventClass(
 let activityToggle: Promise<unknown> = Promise.resolve();
 
 export function registerFederationIpcHandlers(): void {
+  registerCloudflareSetupIpc();
   for (const channel of [
     FEDERATION_READ_ACTIVITY_CHANNEL,
     FEDERATION_RESET_ACTIVITY_CHANNEL,
@@ -342,11 +344,13 @@ export function registerFederationIpcHandlers(): void {
     async (
       _event,
       request: GenerateFederationInviteRequest = {},
-    ): Promise<GenerateFederationInviteResponse> =>
-      await getDesktopFederationRuntime().generateInvite({
+    ): Promise<GenerateFederationInviteResponse> => {
+      const { invite, expiresAt } = await getDesktopFederationRuntime().generateInvite({
         ...request,
         readTailscaleAdvertisement: readInviteTailscaleAdvertisement,
-      }),
+      });
+      return { invite, expiresAt };
+    },
   );
   ipcMain.handle(
     FEDERATION_IMPORT_INVITE_CHANNEL,

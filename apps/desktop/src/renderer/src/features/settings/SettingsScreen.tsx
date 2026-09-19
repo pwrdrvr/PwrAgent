@@ -122,8 +122,26 @@ const SETTINGS_NAV_GROUPS = new Set<SettingsSection>([
   "plugins",
   "models",
   "messaging",
+  "federation",
   "git",
 ]);
+
+/**
+ * Federation pane sections, in the order the pane renders them. Each `sub` is
+ * the `SettingsSection` `sectionId` it scrolls to. Gateway Enrollment is left
+ * out: it renders only while this instance dials a gateway, and a nav row
+ * that sometimes goes nowhere reads as broken.
+ */
+const FEDERATION_NAV_SECTIONS: ReadonlyArray<{ sub: string; label: string }> = [
+  { sub: "configuration", label: "Configuration" },
+  { sub: "encryption", label: "Encryption" },
+  { sub: "invites", label: "Invites" },
+  { sub: "connection", label: "Connection" },
+  { sub: "instances", label: "Instances" },
+  { sub: "activity", label: "Activity" },
+  { sub: "tailscale", label: "Tailscale" },
+  { sub: "cloudflare", label: "Cloudflare Access" },
+];
 
 /** Git pane sub-routes. These are `SettingsSection` `sectionId` slugs, so
  *  the nav child and the card it scrolls to share one identifier. */
@@ -133,6 +151,24 @@ function messagingPlatformFromSub(
   sub: string | undefined,
 ): MessagingSettingsFocus | undefined {
   return MESSAGING_SETTINGS_PLATFORMS.find((platform) => platform === sub);
+}
+
+/**
+ * The page a route renders. A nav child's `sub` either opens its own page (a
+ * Models agent, a Messaging platform) or names a section of the pane already
+ * showing (Federation, Git, Messaging → Routes).
+ */
+function settingsPageKey(route: {
+  section: SettingsSection;
+  sub?: string;
+}): string {
+  if (route.section === "models") {
+    return `models:${route.sub ?? ""}`;
+  }
+  if (route.section === "messaging") {
+    return `messaging:${messagingPlatformFromSub(route.sub) ?? ""}`;
+  }
+  return route.section;
 }
 
 type SettingsNavChild = {
@@ -305,14 +341,26 @@ export function SettingsScreen(props: {
     }
   }, [openRoute, props.initialSection, props.initialSubsection]);
   const contentRef = useRef<HTMLDivElement | null>(null);
-  // Reset the pane scroll on every route change. Runs in a layout
-  // effect so the stack's own visited-section focus restore (a plain
+  const scrolledRouteRef = useRef(route);
+  // Reset the pane scroll when the route opens a different page. Runs in a
+  // layout effect so the stack's own visited-section focus restore (a plain
   // effect) can still win afterwards by scrolling its header into view.
+  // A nav child that jumps to a section of the page already showing keeps the
+  // scroll: resetting first made every jump fly to the top and back down.
   useLayoutEffect(() => {
+    const previous = scrolledRouteRef.current;
+    scrolledRouteRef.current = route;
+    if (
+      previous !== route
+      && route.sub !== undefined
+      && settingsPageKey(previous) === settingsPageKey(route)
+    ) {
+      return;
+    }
     if (contentRef.current) {
       contentRef.current.scrollTop = 0;
     }
-  }, [route.section, route.sub]);
+  }, [route]);
   const scrollClampFrameRef = useRef<number | undefined>(undefined);
   useEffect(() => {
     const clampDocumentScroll = () => {
@@ -459,6 +507,13 @@ export function SettingsScreen(props: {
       return GIT_NAV_CHILDREN.map((child) =>
         describeGitNavChild(child, snapshot, forgeStatuses),
       );
+    }
+    if (target === "federation") {
+      return FEDERATION_NAV_SECTIONS.map((child) => ({
+        key: child.sub,
+        label: child.label,
+        sub: child.sub,
+      }));
     }
     if (target === "messaging") {
       return [
@@ -1139,6 +1194,7 @@ function SettingsSectionBody(props: {
     return (
       <FederationSettings
         desktopApi={props.desktopApi}
+        focusSectionId={props.sub}
         saving={props.settings.saving}
         snapshot={props.snapshot}
         onClearSecret={props.settings.clearSecret}

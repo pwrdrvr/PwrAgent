@@ -181,6 +181,7 @@ describe("desktop settings contracts", () => {
         cloudflareEndpoint: { value: "", source: "default" },
         cloudflareMtlsEnabled: { value: false, source: "default" },
         cloudflareAccessServiceAuthEnabled: { value: false, source: "default" },
+        cloudflareAccessOAuthEnabled: { value: false, source: "default" },
         instancePrivateKey: {
           configured: false,
           source: "unset",

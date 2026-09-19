@@ -1,5 +1,7 @@
 import { federationTrafficCaptureUntil, recordFederationTraffic } from "./federation-traffic-capture";
 import http from "node:http";
+import net from "node:net";
+import { CloudflareOriginProbes } from "./cloudflare-origin-probes";
 import { randomUUID } from "node:crypto";
 import type { Duplex } from "node:stream";
 import WebSocket, { WebSocketServer } from "ws";
@@ -312,6 +314,8 @@ type FederationSocketMessage =
 export type FederationGatewayConnection = {
   remoteAddress?: string;
   localAddress?: string;
+  via?: "cloudflare-tunnel";
+  reportedClientAddress?: string;
   peerDirectoryPaging?: boolean;
   navigationQueryProtocol?: 2;
   peerId: FederationInstanceId;
@@ -384,7 +388,40 @@ export type FederationGatewayWebSocketServerOptions = {
   }) => void;
 };
 
+const WILDCARD_HOSTS = new Set(["", "0.0.0.0", "::", "[::]"]);
+
+function isLoopbackAddress(address: string | undefined): boolean {
+  return Boolean(address && (address === "::1" || /^(?:::ffff:)?127\./.test(address)));
+}
+
+/**
+ * Refuse a specific-address listener that another process's wildcard
+ * listener would share the port with.
+ *
+ * On macOS and the BSDs a socket bound to 127.0.0.1 coexists with another
+ * process's `*:port`, and loopback connections then reach the more specific
+ * socket. A second profile's gateway on 127.0.0.1:47830 silently took the
+ * local traffic of a first profile listening on `*:47830`, including the
+ * Cloudflare tunnel pointed at that port, and no bind ever failed. A
+ * throwaway wildcard bind finds the other listener first. Only "in use"
+ * counts: a host without IPv6 fails the `::` probe for an unrelated reason.
+ */
+export async function assertNoWildcardListener(host: string, port: number): Promise<void> {
+  if (WILDCARD_HOSTS.has(host)) return;
+  for (const wildcard of ["0.0.0.0", "::"]) {
+    const inUse = await new Promise<boolean>((resolve) => {
+      const probe = net.createServer();
+      probe.once("error", (error: NodeJS.ErrnoException) => resolve(error.code === "EADDRINUSE"));
+      probe.listen({ host: wildcard, port, exclusive: true }, () => probe.close(() => resolve(false)));
+    });
+    if (inUse) {
+      throw new Error(`Port ${port} is already in use by another process. Choose a different federation listener port.`);
+    }
+  }
+}
+
 export class FederationGatewayWebSocketServer {
+  readonly securityProbes = new CloudflareOriginProbes();
   private readonly envelopeDiagnostics = new FederationEnvelopeDiagnostics();
   private httpServer?: http.Server;
   private wsServer?: WebSocketServer;
@@ -410,14 +447,31 @@ export class FederationGatewayWebSocketServer {
       return { url: `ws://${this.options.host}:${port}`, port };
     }
     this.stopping = false;
-    this.httpServer = http.createServer();
+    this.httpServer = http.createServer((request, response) => {
+      const proof = this.securityProbes.observe(request);
+      response.writeHead(proof ? 204 : 404, {
+        "Cache-Control": "no-store",
+        ...(proof ? { "X-PwrAgent-Probe-Proof": proof } : {}),
+      });
+      response.end();
+    });
     this.wsServer = new WebSocketServer({
-      server: this.httpServer,
+      noServer: true,
       maxPayload: this.options.maxFrameBytes ?? FEDERATION_MAX_FRAME_BYTES,
       // In Noise mode ws sees incompressible ciphertext. Tunnel mode uses the
       // same negotiated inner codec so maxPayload continues to protect wire
       // bytes while the codec separately limits decompressed bytes.
       perMessageDeflate: false,
+    });
+    this.httpServer.on("upgrade", (request, socket, head) => {
+      const proof = this.securityProbes.observe(request);
+      if (proof) {
+        socket.end(`HTTP/1.1 204 No Content\r\nConnection: close\r\nCache-Control: no-store\r\nX-PwrAgent-Probe-Proof: ${proof}\r\n\r\n`);
+        return;
+      }
+      this.wsServer?.handleUpgrade(request, socket, head, (client) => {
+        this.wsServer?.emit("connection", client, request);
+      });
     });
     this.wsServer.on("connection", (socket, request) => void this.handleSocket(socket, request));
     // Belt-and-suspenders behind the per-socket keepalive: sweep sessions
@@ -445,6 +499,9 @@ export class FederationGatewayWebSocketServer {
     }, keepaliveIntervalMs);
     this.sweepTimer.unref?.();
 
+    if (this.options.port !== 0) {
+      await assertNoWildcardListener(this.options.host, this.options.port);
+    }
     await new Promise<void>((resolve, reject) => {
       const server = this.httpServer;
       if (!server) {
@@ -504,6 +561,8 @@ export class FederationGatewayWebSocketServer {
       direction: "incoming",
       remoteAddress: connection.remoteAddress,
       localAddress: connection.localAddress,
+      via: connection.via,
+      reportedClientAddress: connection.reportedClientAddress,
     }));
   }
 
@@ -684,9 +743,20 @@ export class FederationGatewayWebSocketServer {
     };
     const socketAddress = (address: string | undefined, port: number | undefined) =>
       address && port !== undefined ? `${address.includes(":") ? `[${address}]` : address}:${port}` : undefined;
+    // cloudflared dials the listener over loopback and adds Cloudflare's
+    // request headers, so its own socket is the observed remote. Mark it for
+    // the connection list rather than letting it read as a local peer. Any
+    // local process could send these headers too; nothing here grants trust.
+    const tunnelled = typeof request.headers["cf-ray"] === "string"
+      && isLoopbackAddress(request.socket.remoteAddress);
+    const reportedClient = request.headers["cf-connecting-ip"];
     const connection: FederationGatewayConnection = {
       remoteAddress: socketAddress(request.socket.remoteAddress, request.socket.remotePort),
       localAddress: socketAddress(request.socket.localAddress, request.socket.localPort),
+      ...(tunnelled ? {
+        via: "cloudflare-tunnel" as const,
+        reportedClientAddress: typeof reportedClient === "string" && net.isIP(reportedClient) ? reportedClient : undefined,
+      } : {}),
       peerDirectoryPaging: message.peerDirectoryPaging === true,
       navigationQueryProtocol:
         message.navigationQueryProtocol === 2 ? 2 : undefined,

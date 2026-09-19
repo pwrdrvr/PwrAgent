@@ -103,6 +103,20 @@ describe("Federation activity surfaces", () => {
     expect(screen.getByText("Not connected")).toBeInTheDocument();
   });
 
+  it("says a tunnelled peer came through Cloudflare, not from this computer", () => {
+    const health = fixture().health;
+    health.role = "gateway";
+    health.peers = [{ id: "client", label: "Travel laptop", role: "client", status: "connected", capabilities: [] }];
+    health.activeConnections = [{ peerId: "client", direction: "incoming", remoteAddress: "127.0.0.1:61876",
+      localAddress: "127.0.0.1:47831", via: "cloudflare-tunnel", reportedClientAddress: "203.0.113.7" }];
+    render(<FederationConnections health={health} />);
+    // The remote socket is this computer's own cloudflared, which read as a local peer.
+    expect(screen.getByText(/Incoming · via Cloudflare Tunnel/)).toBeInTheDocument();
+    expect(screen.getByText("203.0.113.7")).toBeInTheDocument();
+    expect(screen.queryByText("127.0.0.1:61876")).not.toBeInTheDocument();
+    expect(screen.queryByText(/incoming tunnels or proxies may appear as the remote/)).not.toBeInTheDocument();
+  });
+
   it.each(["popup", "activity"])("shows the actual gateway and follows reconnects in the %s", async (surface) => {
     const snapshot = fixture();
     snapshot.configuredMode = "client";

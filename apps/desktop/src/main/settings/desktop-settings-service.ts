@@ -1114,6 +1114,10 @@ export class DesktopSettingsService {
           config.federation?.cloudflareAccessServiceAuthEnabled,
           false,
         ),
+        cloudflareAccessOAuthEnabled: this.resolveConfigBoolean(
+          config.federation?.cloudflareAccessOAuthEnabled,
+          false,
+        ),
         instancePrivateKey: federationInstancePrivateKey,
         noiseStaticPrivateKey: federationNoiseStaticPrivateKey,
         cloudflareClientCertificate: federationCloudflareClientCertificate,
@@ -2016,6 +2020,10 @@ export class DesktopSettingsService {
     return () => {
       this.configWriteListeners.delete(listener);
     };
+  }
+
+  readSecretStorageState() {
+    return { ...this.options.secretStore.describe() };
   }
 
   async replaceSecret(

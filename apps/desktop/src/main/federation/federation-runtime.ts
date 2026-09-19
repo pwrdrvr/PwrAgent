@@ -1,6 +1,10 @@
 import { projectThreadDisplayEvent } from "../app-server/thread-display-events";
 import { federationTrafficCaptureUntil, setFederationTrafficCapture, saveFederationTrafficHistory } from "./federation-traffic-capture";
-import type { NavigationAttentionViewReleaseRequest } from "@pwragent/shared";
+import type { CloudflareClientConnection, NavigationAttentionViewReleaseRequest } from "@pwragent/shared";
+import { cloudflareConnector } from "./cloudflare-connector";
+import { loadCloudflareSetup } from "./cloudflare-setup-storage";
+import { getCloudflareAccessSignIn } from "./cloudflare-access-sign-in";
+import { CloudflareAccessRefusedError, CloudflareSignInRequiredError } from "./cloudflare-access-oauth";
 import type { MarkNavigationDirectorySeenRequest, MarkNavigationDirectorySeenResponse } from "@pwragent/shared";
 import type { RemoveNavigationDirectoryRequest, RemoveNavigationDirectoryResponse } from "@pwragent/shared";
 import { markLocalNavigationDirectorySeen, removeLocalNavigationDirectory } from "../app-server/navigation-directory-actions";
@@ -926,6 +930,14 @@ export class DesktopFederationRuntime {
   private restartPromise: Promise<void> | undefined;
   private remoteThreadSummaryCache: RemoteThreadSummaryCache | undefined;
   private reconnectTimer?: ReturnType<typeof setTimeout>;
+  private accessRefreshTimer?: ReturnType<typeof setTimeout>;
+  /**
+   * Dialing stopped on a failure no retry can fix: a lapsed Cloudflare sign-in
+   * or a credential Cloudflare refused, on the only configured endpoint.
+   * Signing in, importing a setup file, or changing settings restarts the
+   * runtime, which dials again.
+   */
+  private parked = false;
   private connectionAttempt?: symbol;
   private reconnectAttempt = 0;
   private connectionGeneration = 0;
@@ -1181,6 +1193,8 @@ export class DesktopFederationRuntime {
 
   async stop(): Promise<void> {
     this.stopping = true;
+    this.parked = false;
+    await cloudflareConnector.stop();
     this.connectionAttempt = undefined;
     this.connectionGeneration += 1;
     this.walkEpoch += 1;
@@ -1199,6 +1213,8 @@ export class DesktopFederationRuntime {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = undefined;
     }
+    clearTimeout(this.accessRefreshTimer);
+    this.accessRefreshTimer = undefined;
     this.unsubscribeLocalBackendEvents?.();
     this.unsubscribeLocalBackendEvents = undefined;
     this.remoteThreadSummaryCache?.dispose();
@@ -1257,8 +1273,57 @@ export class DesktopFederationRuntime {
       configuredMode: resolveFederationRuntimeConfig(
         getDesktopSettingsService().readFederationConfig(),
       ).mode,
-      running: Boolean(this.listenUrl || this.client || this.reconnectTimer || this.connectionAttempt),
+      running: Boolean(this.listenUrl || this.client || this.reconnectTimer || this.connectionAttempt || this.parked),
     };
+  }
+
+  cloudflareSecurityProbes(listenPort: number) {
+    if (!Number.isInteger(listenPort) || listenPort < 1 || listenPort > 65535
+      || this.stopping || !this.server || this.listenUrl !== `ws://127.0.0.1:${listenPort}`) {
+      // Say why when the runtime knows: "enable the gateway" reads as a missing
+      // setting when the listener is enabled and failed to bind.
+      throw new Error(this.gatewayListenerError
+        ? `The gateway is not listening on 127.0.0.1:${listenPort}: ${this.gatewayListenerError}`
+        : "Enable the gateway on the selected loopback port before Cloudflare setup or validation.");
+    }
+    return this.server.securityProbes;
+  }
+
+  /**
+   * This client's connection through its Cloudflare endpoint, for the setup
+   * pane: the state Federation health reports, narrowed to that one path.
+   */
+  cloudflareClientConnection(endpoint: string): CloudflareClientConnection {
+    const host = (url: string | undefined) => {
+      try { return url ? new URL(url).host.toLowerCase() : undefined; } catch { return undefined; }
+    };
+    const target = host(endpoint);
+    const gateway = this.gatewayInstanceId ? this.diagnosticInstanceLabel(this.gatewayInstanceId) : undefined;
+    if (this.client && this.gatewayUrl) {
+      const lastConnectedAt = this.endpointStatuses.get(this.gatewayUrl)?.lastConnectedAt;
+      return {
+        endpoint,
+        state: host(this.gatewayUrl) === target ? "connected" : "elsewhere",
+        gateway,
+        since: lastConnectedAt ? new Date(lastConnectedAt).toISOString() : undefined,
+      };
+    }
+    const endpointError = [...this.endpointStatuses].find(([url]) => host(url) === target)?.[1].lastError;
+    return {
+      endpoint,
+      state: this.lastConnectionFailureKind === "auth"
+        ? "rejected"
+        : this.reconnectTimer || this.connectionAttempt ? "connecting" : "disconnected",
+      gateway,
+      detail: this.lastConnectionError ?? endpointError,
+    };
+  }
+
+  /** The port of a gateway listening on 127.0.0.1 right now, or undefined. */
+  loopbackListenPort(): number | undefined {
+    if (this.stopping || !this.server) return undefined;
+    const match = /^ws:\/\/127\.0\.0\.1:(\d+)$/.exec(this.listenUrl ?? "");
+    return match ? Number(match[1]) : undefined;
   }
 
   async health(): Promise<FederationHealthStatus> {
@@ -1647,7 +1712,7 @@ export class DesktopFederationRuntime {
     readTailscaleAdvertisement?: () => Promise<
       FederationTailscaleAdvertisement | undefined
     >;
-  }): Promise<{ invite: string; expiresAt: number }> {
+  }): Promise<{ invite: string; expiresAt: number; enrollmentId: string }> {
     const config = this.readRuntimeConfig();
     const mode = config.mode;
     if (mode !== "gateway" && mode !== "dual") {
@@ -1695,7 +1760,25 @@ export class DesktopFederationRuntime {
         expiresAt,
       }),
       expiresAt,
+      enrollmentId: entry.id,
     };
+  }
+
+  /**
+   * End whatever one invite led to: revoke the peer that enrolled with it,
+   * which closes its live session, or retire the invite if nobody used it.
+   */
+  async revokeEnrollment(enrollmentId: string): Promise<void> {
+    const store = this.store();
+    const enrollment = store.getEnrollment(enrollmentId);
+    if (!enrollment) return;
+    if (enrollment.status === "pending") {
+      store.revokePendingEnrollment(enrollmentId);
+      return;
+    }
+    if (!enrollment.peerId) return;
+    const peer = store.getPeer(enrollment.peerId);
+    if (peer && peer.status !== "revoked") await this.revokePeer(enrollment.peerId);
   }
 
   /**
@@ -2834,6 +2917,16 @@ export class DesktopFederationRuntime {
         }
         this.listenUrl = started.url;
         log.info("federation gateway listening", { url: started.url });
+        try {
+          const cloudflare = await loadCloudflareSetup();
+          if (cloudflare?.dnsId && cloudflare.tunnelToken
+            && started.url === `ws://127.0.0.1:${cloudflare.listenPort}`
+            && !startupAborted()) {
+            await cloudflareConnector.start(cloudflare.tunnelToken);
+          }
+        } catch {
+          log.warn("Cloudflare connector was not started. Check Federation settings.");
+        }
       } catch (error) {
         this.gatewayListenerError = redactFederationDiagnostic(
           error instanceof Error ? error.message : String(error),
@@ -2878,6 +2971,7 @@ export class DesktopFederationRuntime {
     if (this.stopping || this.configuredEndpoints.length === 0) return;
     const attempt = Symbol("federation connection attempt");
     this.connectionAttempt = attempt;
+    this.parked = false;
     try {
       await this.walkGatewayEndpoints();
     } finally {
@@ -2897,6 +2991,7 @@ export class DesktopFederationRuntime {
     // when the runtime is torn down.
     const walkEpoch = this.walkEpoch;
     const failures: string[] = [];
+    let cloudflareRefusal: Error | undefined;
     for (const endpoint of attempts) {
       if (this.stopping || this.walkEpoch !== walkEpoch) return;
       try {
@@ -2926,11 +3021,24 @@ export class DesktopFederationRuntime {
         // not of this path. Walking on would waste attempts and, worse, let
         // a later endpoint's network error mask a broken pin behind an
         // endless "connecting" retry instead of surfacing as "rejected".
+        //
+        // A lapsed Cloudflare sign-in, or a credential Cloudflare refused, is
+        // the exception: it belongs to the one Cloudflare endpoint, so a
+        // fallback path may still connect. It is reported only if nothing
+        // does, because it is the actionable failure.
+        if (
+          error instanceof CloudflareSignInRequiredError
+          || error instanceof CloudflareAccessRefusedError
+        ) {
+          cloudflareRefusal = error;
+          continue;
+        }
         if (classifyFederationClientFailure(rawMessage) === "auth") {
           throw error;
         }
       }
     }
+    if (cloudflareRefusal) throw cloudflareRefusal;
     throw new Error(
       "Federation gateway is unreachable on every configured endpoint. "
       + failures.join("; "),
@@ -2989,10 +3097,14 @@ export class DesktopFederationRuntime {
     const cloudflareAccessEnabled =
       acceptsCloudflareCredentials
       && config.cloudflareAccessServiceAuthEnabled;
+    const cloudflareSignInEnabled =
+      acceptsCloudflareCredentials
+      && config.cloudflareAccessOAuthEnabled;
     if (
       !acceptsCloudflareCredentials
       && (config.cloudflareMtlsEnabled
-        || config.cloudflareAccessServiceAuthEnabled)
+        || config.cloudflareAccessServiceAuthEnabled
+        || config.cloudflareAccessOAuthEnabled)
     ) {
       log.info("federation endpoint is not the designated Cloudflare endpoint", {
         withheldCredentials: true,
@@ -3016,6 +3128,15 @@ export class DesktopFederationRuntime {
         "Cloudflare Access service auth is enabled but its credentials are missing.",
       );
     }
+    // Refreshed here, before the dial: an access token lives fifteen minutes,
+    // so a reconnect usually needs a new one. A lapsed grant throws the
+    // sign-in-required error, which classifies as auth and stops the walk.
+    const cloudflareSignIn = cloudflareSignInEnabled
+      ? getCloudflareAccessSignIn()
+      : undefined;
+    const cloudflareAccessToken = cloudflareSignIn
+      ? await cloudflareSignIn.accessToken(gatewayUrl)
+      : undefined;
     const noise =
       await settingsService.getOrCreateFederationNoiseStaticKeyPair();
     this.gatewayUrl = gatewayUrl;
@@ -3076,11 +3197,18 @@ export class DesktopFederationRuntime {
       },
       instanceLabel: (id) => this.diagnosticInstanceLabel(id),
       role: "client",
-      headers: cloudflareAccessEnabled
+      headers: cloudflareAccessEnabled || cloudflareAccessToken
         ? {
-            "CF-Access-Client-Id": cloudflareCredentials.accessClientId!,
-            "CF-Access-Client-Secret":
-              cloudflareCredentials.accessClientSecret!,
+            ...(cloudflareAccessEnabled
+              ? {
+                  "CF-Access-Client-Id": cloudflareCredentials.accessClientId!,
+                  "CF-Access-Client-Secret":
+                    cloudflareCredentials.accessClientSecret!,
+                }
+              : {}),
+            ...(cloudflareAccessToken
+              ? { Authorization: `Bearer ${cloudflareAccessToken}` }
+              : {}),
           }
         : undefined,
       clientCertificate: cloudflareMtlsEnabled
@@ -3168,7 +3296,27 @@ export class DesktopFederationRuntime {
       },
       onEnvelope: (envelope) =>
         void this.receiveEnvelope(envelope, gatewayInstanceId),
-    }).catch((error: unknown) => {
+    }).catch(async (error: unknown) => {
+      // Access refused a token that looked fresh here — revoked, or cut short
+      // by a policy change. Drop it so the next attempt refreshes, and let the
+      // refresh decide whether this person still gets in.
+      if (
+        cloudflareSignIn
+        && error instanceof Error
+        && /Unexpected server response: 40[13]/.test(error.message)
+      ) {
+        await cloudflareSignIn.invalidateAccessToken(gatewayUrl).catch(() => undefined);
+      }
+      // The edge answered and refused the service token or certificate this
+      // client presented. "Unreachable" would send the operator after the
+      // network; the credential is what a new setup file has to replace.
+      if (
+        (cloudflareAccessEnabled || cloudflareMtlsEnabled)
+        && error instanceof Error
+        && /Unexpected server response: 403/.test(error.message)
+      ) {
+        throw new CloudflareAccessRefusedError(new URL(gatewayUrl).host);
+      }
       throw (
         sshFailure.error
         ?? (error instanceof Error ? error : new Error(String(error)))
@@ -3228,6 +3376,63 @@ export class DesktopFederationRuntime {
     // restored local subscription state before any queued envelope is handled.
     client.startReceiving();
     log.info("federation client connected", { gatewayUrl });
+    if (cloudflareSignIn) {
+      this.scheduleAccessRefresh(cloudflareSignIn, gatewayUrl, client, connectionGeneration);
+    }
+  }
+
+  /**
+   * Keep a signed-in connection's Cloudflare Access grant current while it
+   * stays open.
+   *
+   * Access checks the bearer token only at the WebSocket upgrade, so without
+   * this an open connection outlives the token and the person's place on the
+   * allowlist until it happens to reconnect. The refresh is where Access
+   * re-evaluates the policy. A refused one ends the session here, and the
+   * reconnect that follows reports that sign-in is required. A refresh that
+   * fails for any other reason (offline) leaves the grant standing and is
+   * retried a minute later.
+   */
+  private scheduleAccessRefresh(
+    signIn: ReturnType<typeof getCloudflareAccessSignIn>,
+    gatewayUrl: string,
+    client: FederationClientWebSocketClient,
+    connectionGeneration: number,
+  ): void {
+    clearTimeout(this.accessRefreshTimer);
+    this.accessRefreshTimer = undefined;
+    const current = () =>
+      !this.stopping
+      && this.client === client
+      && connectionGeneration === this.connectionGeneration;
+    void Promise.resolve()
+      .then(() => signIn.refreshDueAt(gatewayUrl))
+      .catch(() => undefined)
+      .then((dueAt) => {
+        if (!current()) return;
+        const delayMs = Math.max(60_000, (dueAt ?? 0) - Date.now());
+        this.accessRefreshTimer = setTimeout(() => {
+          this.accessRefreshTimer = undefined;
+          if (!current()) return;
+          void signIn.accessToken(gatewayUrl).then(
+            () => this.scheduleAccessRefresh(signIn, gatewayUrl, client, connectionGeneration),
+            (error: unknown) => {
+              if (!current()) return;
+              if (error instanceof CloudflareSignInRequiredError) {
+                log.info("federation client closing: Cloudflare Access refused the sign-in refresh", { gatewayUrl });
+                client.close();
+                return;
+              }
+              log.warn("federation client could not refresh Cloudflare Access", {
+                gatewayUrl,
+                error: redactFederationDiagnostic(error instanceof Error ? error.message : String(error)),
+              });
+              this.scheduleAccessRefresh(signIn, gatewayUrl, client, connectionGeneration);
+            },
+          );
+        }, delayMs);
+        this.accessRefreshTimer.unref?.();
+      });
   }
 
   // Track the active connection without changing configured endpoint priority.
@@ -3297,6 +3502,16 @@ export class DesktopFederationRuntime {
       endpoints: this.configuredEndpoints.length,
       error: this.lastConnectionError,
     });
+    // Nothing a retry changes, and no other path to try: stop instead of
+    // logging the same local failure every thirty seconds, indefinitely.
+    if (
+      (error instanceof CloudflareSignInRequiredError || error instanceof CloudflareAccessRefusedError)
+      && this.configuredEndpoints.length === 1
+    ) {
+      this.parked = true;
+      log.info("federation client stopped dialing until sign-in or settings change");
+      return;
+    }
     this.scheduleReconnect();
   }
 

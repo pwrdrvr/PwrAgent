@@ -16,9 +16,20 @@ export function AutomationStage(props: {
   children: ReactNode;
   title: string;
   verb: string;
+  /**
+   * Where a guided setup stands at this stage, for funnels walked in order
+   * (Cloudflare setup). The label is rendered as a word, not only as a node
+   * color: "Done" versus "Next" is the thing the stage exists to say. The
+   * automation editor omits it — every one of its stages is editable at once.
+   */
+  progress?: { state: "done" | "current" | "waiting"; label: string };
 }) {
+  const state = props.progress?.state;
   return (
-    <section className="automation-stage">
+    <section
+      aria-current={state === "current" ? "step" : undefined}
+      className={`automation-stage${state ? ` automation-stage--${state}` : ""}`}
+    >
       <div className="automation-stage__rail" aria-hidden="true">
         <span className="automation-stage__node" />
       </div>
@@ -26,6 +37,13 @@ export function AutomationStage(props: {
         <div className="automation-stage__head">
           <span className="automation-stage__verb">{props.verb}</span>
           <h3 className="automation-stage__title">{props.title}</h3>
+          {props.progress ? (
+            <span
+              className={`automation-stage__progress automation-stage__progress--${state}`}
+            >
+              {props.progress.label}
+            </span>
+          ) : null}
         </div>
         {props.children}
       </div>

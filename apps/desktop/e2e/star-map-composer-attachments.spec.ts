@@ -374,7 +374,7 @@ test("rejects a local file on a remote Star Map chat card", async () => {
     await app.window.getByRole("button", { name: "Open settings" }).click();
     await app.window
       .getByRole("navigation", { name: "Settings sections" })
-      .getByRole("button", { name: "Federation" })
+      .getByRole("button", { name: "Federation", exact: true })
       .click();
     await app.window.getByLabel("Import invite").fill(gateway.invite);
     await app.window.getByRole("button", { name: "Import invite" }).click();

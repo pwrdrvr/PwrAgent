@@ -8,6 +8,7 @@ describe("resolveFederationRuntimeConfig", () => {
   it("normalizes the credential-free runtime projection", () => {
     const config = resolveFederationRuntimeConfig({
       advertisedEndpoints: [" ", " wss://public.example/federation "],
+      cloudflareAccessOAuthEnabled: true,
       cloudflareAccessServiceAuthEnabled: true,
       cloudflareEndpoint: " wss://edge.example/federation ",
       gatewayEndpoints: [],
@@ -22,6 +23,7 @@ describe("resolveFederationRuntimeConfig", () => {
 
     expect(config).toEqual({
       advertisedEndpoints: ["wss://public.example/federation"],
+      cloudflareAccessOAuthEnabled: true,
       cloudflareAccessServiceAuthEnabled: true,
       cloudflareEndpoint: "wss://edge.example/federation",
       cloudflareMtlsEnabled: false,
@@ -41,6 +43,7 @@ describe("resolveFederationRuntimeConfig", () => {
   it("uses safe defaults without consulting secrets or discovery", () => {
     expect(resolveFederationRuntimeConfig({})).toEqual({
       advertisedEndpoints: [],
+      cloudflareAccessOAuthEnabled: false,
       cloudflareAccessServiceAuthEnabled: false,
       cloudflareEndpoint: "",
       cloudflareMtlsEnabled: false,

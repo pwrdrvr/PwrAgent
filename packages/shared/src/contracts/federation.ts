@@ -382,6 +382,13 @@ export type FederationActiveConnection = {
   /** Observed socket addresses, including ports; a proxy/tunnel may be the remote. */
   remoteAddress?: string;
   localAddress?: string;
+  /**
+   * An incoming connection that arrived through the local Cloudflare Tunnel
+   * connector, whose own socket is then the observed remote. Display only.
+   */
+  via?: "cloudflare-tunnel";
+  /** The client address Cloudflare reported for a tunnelled connection. Display only; never trusted. */
+  reportedClientAddress?: string;
 };
 
 export type FederationHealthStatus = {

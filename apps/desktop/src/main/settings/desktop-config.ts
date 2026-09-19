@@ -174,6 +174,7 @@ export type DesktopSettingsConfig = {
     cloudflareEndpoint?: string;
     cloudflareMtlsEnabled?: boolean;
     cloudflareAccessServiceAuthEnabled?: boolean;
+    cloudflareAccessOAuthEnabled?: boolean;
   };
   messaging?: {
     enabled?: boolean;
@@ -1106,6 +1107,16 @@ export function desktopSettingsPatchToEdits(
       });
     }
   }
+  if (patch.federation?.cloudflareAccessOAuthEnabled !== undefined) {
+    if (patch.federation.cloudflareAccessOAuthEnabled) {
+      set(["federation", "cloudflare_access_oauth_enabled"], true);
+    } else {
+      edits.push({
+        op: "delete",
+        path: ["federation", "cloudflare_access_oauth_enabled"],
+      });
+    }
+  }
 
   if (patch.messaging?.inputDebounceMs !== undefined) {
     set(["messaging", "input_debounce_ms"], patch.messaging.inputDebounceMs);
@@ -1857,6 +1868,9 @@ function normalizeDesktopConfig(
       ),
       cloudflareAccessServiceAuthEnabled: readBoolean(
         federation?.cloudflare_access_service_auth_enabled,
+      ),
+      cloudflareAccessOAuthEnabled: readBoolean(
+        federation?.cloudflare_access_oauth_enabled,
       ),
     },
     messaging: {

@@ -86,6 +86,7 @@ type StartupHarness = {
 const fakeSettings = {
   advertisedEndpoints: [],
   cloudflareAccessServiceAuthEnabled: false,
+  cloudflareAccessOAuthEnabled: false,
   cloudflareEndpoint: "",
   cloudflareMtlsEnabled: false,
   gatewayEndpoints: [],

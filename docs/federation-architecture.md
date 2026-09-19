@@ -39,6 +39,7 @@ profile config:
 - `gateway_url`
 - `cloudflare_mtls_enabled`
 - `cloudflare_access_service_auth_enabled`
+- `cloudflare_access_oauth_enabled`
 
 Secrets are stored separately under the desktop secret-store names defined by
 `DesktopSettingsSecretName`.

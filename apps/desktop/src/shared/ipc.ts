@@ -18,6 +18,7 @@ export const FEDERATION_RESET_ENROLLMENT_CHANNEL =
   "federation:reset-enrollment";
 export const FEDERATION_PIN_IMPACT_CHANNEL = "federation:pin-impact";
 export const FEDERATION_TAILSCALE_STATUS_CHANNEL = "federation:tailscale-status";
+export const FEDERATION_CLOUDFLARE_SETUP_CHANNEL = "federation:cloudflare-setup";
 export const FEDERATION_TAILSCALE_CONFIGURE_CHANNEL =
   "federation:tailscale-configure";
 export const FEDERATION_SET_CELESTIAL_ICON_CHANNEL =

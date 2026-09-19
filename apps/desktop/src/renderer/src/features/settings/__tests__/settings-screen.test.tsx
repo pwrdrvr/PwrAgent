@@ -253,6 +253,10 @@ function createSnapshot(
         value: false,
         source: "default",
       },
+      cloudflareAccessOAuthEnabled: {
+        value: false,
+        source: "default",
+      },
       instancePrivateKey: {
         configured: false,
         source: "unset",
@@ -6524,9 +6528,10 @@ describe("SettingsScreen", () => {
       "Troubleshooting",
       "About",
     ]);
-    // The four group sections expand; every other row keeps the caret
+    // The five group sections expand; every other row keeps the caret
     // gutter so labels stay aligned. Git joined them when its Git /
-    // GitHub / GitLab children landed.
+    // GitHub / GitLab children landed, and Federation when its pane grew
+    // long enough to need section jumps.
     const caretLabels = Array.from(
       nav.querySelectorAll(".settings-nav__caret"),
     ).map((button) => button.getAttribute("aria-label"));
@@ -6534,6 +6539,7 @@ describe("SettingsScreen", () => {
       "Expand Plugins",
       "Expand AI Providers",
       "Expand Messaging",
+      "Expand Federation",
       "Expand Git",
     ]);
     // Collapsed sublists keep their children out of the accessibility
@@ -6678,6 +6684,122 @@ describe("SettingsScreen", () => {
     expect(
       within(nav).getByRole("button", { name: "Routes" }),
     ).toHaveAttribute("aria-current", "page");
+  });
+
+  it("jumps from a Federation nav child to its section", () => {
+    render(
+      <SettingsScreen
+        settings={createSettingsState()}
+        onClose={() => undefined}
+      />,
+    );
+    const nav = screen.getByRole("navigation", { name: "Settings sections" });
+    fireEvent.click(
+      within(nav).getByRole("button", { name: "Expand Federation" }),
+    );
+    const sublist = nav.querySelector("#settings-nav-sublist-federation");
+    expect(
+      Array.from(sublist?.querySelectorAll(".settings-nav__sublabel") ?? []).map(
+        (label) => label.textContent,
+      ),
+    ).toEqual([
+      "Configuration",
+      "Encryption",
+      "Invites",
+      "Connection",
+      "Instances",
+      "Activity",
+      "Tailscale",
+      "Cloudflare Access",
+    ]);
+
+    fireEvent.click(
+      within(nav).getByRole("button", { name: "Cloudflare Access" }),
+    );
+    // Every child's `sub` must name a section the pane actually renders; a
+    // mismatch would route without moving, which reads as a dead link.
+    expect(document.activeElement).toBe(
+      document.querySelector(
+        '[aria-controls="settings-section-federation-cloudflare-body"]',
+      ),
+    );
+    expect(
+      within(nav).getByRole("button", { name: "Cloudflare Access" }),
+    ).toHaveAttribute("aria-current", "page");
+    for (const sub of ["configuration", "encryption", "invites", "connection", "instances", "activity", "tailscale"]) {
+      expect(
+        document.querySelector(`[aria-controls="settings-section-federation-${sub}-body"]`),
+      ).not.toBeNull();
+    }
+  });
+
+  it("keeps the pane scroll when a nav child jumps within the same page", () => {
+    // Resetting to the top before the section scroll made every jump fly up
+    // to the top of the pane and back down, even to the next section.
+    render(
+      <SettingsScreen
+        settings={createSettingsState()}
+        onClose={() => undefined}
+      />,
+    );
+    const nav = screen.getByRole("navigation", { name: "Settings sections" });
+    fireEvent.click(
+      within(nav).getByRole("button", { name: "Expand Federation" }),
+    );
+    fireEvent.click(within(nav).getByRole("button", { name: "Tailscale" }));
+    const content = document.querySelector(".settings-content") as HTMLElement;
+    const writes: number[] = [];
+    let top = 900;
+    Object.defineProperty(content, "scrollTop", {
+      configurable: true,
+      get: () => top,
+      set: (value: number) => {
+        writes.push(value);
+        top = value;
+      },
+    });
+
+    fireEvent.click(
+      within(nav).getByRole("button", { name: "Cloudflare Access" }),
+    );
+    expect(writes).toEqual([]);
+
+    // The pane's own label and a different page both start at the top.
+    fireEvent.click(within(nav).getByRole("button", { name: "Federation" }));
+    expect(writes).toEqual([0]);
+    fireEvent.click(
+      within(nav).getByRole("button", { name: "Expand AI Providers" }),
+    );
+    fireEvent.click(within(nav).getByRole("button", { name: "Codex" }));
+    expect(writes).toEqual([0, 0]);
+  });
+
+  it("jumps to a Federation section again after visiting the pane's label", () => {
+    render(
+      <SettingsScreen
+        settings={createSettingsState()}
+        onClose={() => undefined}
+      />,
+    );
+    const nav = screen.getByRole("navigation", { name: "Settings sections" });
+    fireEvent.click(
+      within(nav).getByRole("button", { name: "Expand Federation" }),
+    );
+    const cloudflareHeader = () =>
+      document.querySelector(
+        '[aria-controls="settings-section-federation-cloudflare-body"]',
+      );
+
+    fireEvent.click(
+      within(nav).getByRole("button", { name: "Cloudflare Access" }),
+    );
+    expect(document.activeElement).toBe(cloudflareHeader());
+    fireEvent.click(within(nav).getByRole("button", { name: "Federation" }));
+    (document.activeElement as HTMLElement | null)?.blur();
+    fireEvent.click(
+      within(nav).getByRole("button", { name: "Cloudflare Access" }),
+    );
+    expect(document.activeElement).toBe(cloudflareHeader());
   });
 
   it("lands on the Routes section again after visiting a platform", () => {

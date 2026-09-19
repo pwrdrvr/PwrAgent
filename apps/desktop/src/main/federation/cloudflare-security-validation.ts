@@ -1,0 +1,164 @@
+import https from "node:https";
+import { randomBytes } from "node:crypto";
+import type { CloudflareSecurityCheck } from "@pwragent/shared";
+import type { CloudflareGate } from "./cloudflare-api";
+import { isUnresolvedHost, unresolvedHostMessage } from "./cloudflare-dns";
+import type { CloudflareOriginProbes } from "./cloudflare-origin-probes";
+
+/**
+ * Whichever credential the endpoint's Access policy admits.
+ *
+ * A certificate rides the TLS handshake; a service token rides two headers.
+ * Both are presented to Cloudflare's edge and neither reaches the origin, so
+ * the boundary test is identical either way — only this shape differs.
+ */
+export type CloudflareProbeCredentials =
+  | { certificate: string; privateKey: string }
+  | { accessClientId: string; accessClientSecret: string };
+
+export type CloudflareProbeResponse = { status: number; proof?: string; ray?: string; cookie?: string; location?: string };
+export type CloudflareProbeRequest = {
+  endpoint: string;
+  id: string;
+  upgrade: boolean;
+  credentials?: CloudflareProbeCredentials;
+  cookie?: string;
+};
+
+export async function requestCloudflareProbe(input: CloudflareProbeRequest): Promise<CloudflareProbeResponse> {
+  const url = new URL(input.endpoint);
+  if (url.protocol !== "https:" || url.username || url.password || url.port) {
+    throw new Error("Security validation requires a standard HTTPS endpoint.");
+  }
+  return new Promise((resolve, reject) => {
+    const certificate = input.credentials && "certificate" in input.credentials ? input.credentials : undefined;
+    const serviceToken = input.credentials && "accessClientId" in input.credentials ? input.credentials : undefined;
+    const request = https.request(url, {
+      method: "GET",
+      agent: false, // No TLS session/cookie reuse between positive and negative probes.
+      cert: certificate?.certificate,
+      key: certificate?.privateKey,
+      headers: {
+        "X-PwrAgent-Security-Probe": input.id,
+        "Cache-Control": "no-cache, no-store",
+        ...(serviceToken ? {
+          "CF-Access-Client-Id": serviceToken.accessClientId,
+          "CF-Access-Client-Secret": serviceToken.accessClientSecret,
+        } : {}),
+        ...(input.cookie ? { Cookie: input.cookie } : {}),
+        ...(input.upgrade ? {
+          Connection: "Upgrade",
+          Upgrade: "websocket",
+          "Sec-WebSocket-Version": "13",
+          "Sec-WebSocket-Key": randomBytes(16).toString("base64"),
+        } : {}),
+      },
+    });
+    const deadline = setTimeout(() => request.destroy(new Error("Endpoint probe timed out.")), 15_000);
+    const finish = (status: number, headers: Record<string, unknown>) => {
+      clearTimeout(deadline);
+      resolve({ status,
+        proof: typeof headers["x-pwragent-probe-proof"] === "string" ? headers["x-pwragent-probe-proof"] : undefined,
+        ray: typeof headers["cf-ray"] === "string" ? headers["cf-ray"] : undefined,
+        location: typeof headers.location === "string" ? headers.location : undefined,
+        cookie: Array.isArray(headers["set-cookie"])
+          ? headers["set-cookie"].filter((value): value is string => typeof value === "string")
+            .map((value) => value.split(";", 1)[0]).join("; ")
+          : undefined,
+      });
+    };
+    request.on("response", (response) => {
+      finish(response.statusCode ?? 0, response.headers);
+      response.destroy(); // Do not read or reflect arbitrary HTML, or follow redirects.
+    });
+    request.on("upgrade", (response, socket) => {
+      finish(response.statusCode ?? 101, response.headers);
+      socket.destroy();
+    });
+    request.on("error", (error) => {
+      clearTimeout(deadline);
+      if (isUnresolvedHost(error)) {
+        reject(new Error(`${unresolvedHostMessage(url.hostname)} This is not a security pass.`));
+        return;
+      }
+      const code = (error as { code?: unknown }).code;
+      reject(new Error(`Endpoint probe failed${typeof code === "string" ? ` (${code})` : ""}. `
+        + "Check TLS and connector health; this is not a security pass."));
+    });
+    request.end();
+  });
+}
+
+/**
+ * Whether Cloudflare, not the gateway, answered a request that carried no
+ * credential.
+ *
+ * A Service Auth gate refuses with 403. A sign-in gate refuses a non-browser
+ * client with Managed OAuth's 401 — or, for anything Access takes for a
+ * browser, a redirect to its own login page. Either way the `cf-ray` header
+ * places the answer at the edge, and the origin probe separately proves the
+ * gateway never saw the request.
+ */
+export function refusedAtEdge(response: CloudflareProbeResponse, gate: CloudflareGate | undefined): boolean {
+  if (!response.ray || response.proof) return false;
+  if (gate !== "oauth") return response.status === 403;
+  if (response.status === 401 || response.status === 403) return true;
+  if (response.status !== 302 || !response.location) return false;
+  try { return new URL(response.location).hostname.endsWith(".cloudflareaccess.com"); }
+  catch { return false; }
+}
+
+export async function validateCloudflareBoundary(options: {
+  endpoint: string;
+  credentials: CloudflareProbeCredentials;
+  probes: CloudflareOriginProbes;
+  gate?: CloudflareGate;
+  request?: typeof requestCloudflareProbe;
+}): Promise<CloudflareSecurityCheck[]> {
+  const request = options.request ?? requestCloudflareProbe;
+  const checks: CloudflareSecurityCheck[] = [];
+  // Name the credential the endpoint actually uses. A result reading "without
+  // certificate" on a service-token endpoint would describe a test that never ran.
+  const noun = "certificate" in options.credentials ? "certificate" : "service token";
+  // Under `oauth` the credentialed probe is the validator's token, but what a
+  // stranger lacks is a sign-in, so the negative label says that.
+  const missing = options.gate === "oauth" ? "sign-in" : noun;
+  // The same URL and HTTP/upgrade shapes pass through the same Access/ingress
+  // matchers. Only the credential and unpredictable correlation ID vary.
+  for (const upgrade of [false, true]) {
+    const label = upgrade ? "WebSocket upgrade" : "HTTPS request";
+    const positive = options.probes.arm();
+    const negative = options.probes.arm();
+    try {
+      const accepted = await request({ endpoint: options.endpoint, id: positive.id, upgrade, credentials: options.credentials });
+      const controlPassed = accepted.status === 204 && accepted.proof === positive.proof && positive.observed();
+      checks.push({ label: `${label} with ${noun}`, passed: controlPassed,
+        detail: controlPassed ? "Reached this gateway; private response proof matched." : "Could not prove that the credentialed request reached this gateway." });
+      const rejected = await request({ endpoint: options.endpoint, id: negative.id, upgrade });
+      const passed = controlPassed && refusedAtEdge(rejected, options.gate) && !negative.observed();
+      checks.push({ label: `${label} without ${missing}`, passed,
+        detail: negative.observed()
+          ? `FAILED: the request without a ${missing} reached the gateway.`
+          : passed ? `Cloudflare returned ${rejected.status}; this gateway did not receive the probe.`
+            : `HTTP ${rejected.status}; edge rejection was not proven.` });
+      // Access honors its own session cookie in place of a sign-in on an
+      // application with an identity policy, so under `oauth` a replay is
+      // admitted by design. What bounds it there is the session duration,
+      // which the audit reads back instead.
+      if (accepted.cookie && options.gate !== "oauth") {
+        const sessionProbe = options.probes.arm();
+        try {
+          const session = await request({ endpoint: options.endpoint, id: sessionProbe.id, upgrade, cookie: accepted.cookie });
+          const sessionPassed = controlPassed && refusedAtEdge(session, options.gate) && !sessionProbe.observed();
+          checks.push({ label: `${label} with session cookie only`, passed: sessionPassed,
+            detail: sessionPassed ? `A previously issued cookie cannot replace the ${noun}.`
+              : `Cookie reuse without a ${noun} was not rejected at the edge. Do not rely on this endpoint's admission gate.` });
+        } finally { sessionProbe.close(); }
+      }
+    } finally {
+      positive.close();
+      negative.close();
+    }
+  }
+  return checks;
+}

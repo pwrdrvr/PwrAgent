@@ -9392,6 +9392,221 @@ a.button {
   border-bottom: 1px solid var(--border-subtle);
 }
 
+.cloudflare-setup {
+  display: grid;
+  gap: 16px;
+  padding: 18px;
+  font-size: 13px;
+}
+
+.cloudflare-setup p { margin: 0; color: var(--text-secondary); line-height: 1.5; }
+.cloudflare-setup__intro { max-width: 76ch; font-size: 14px; }
+.cloudflare-setup__help { color: var(--text-secondary); font-size: 12px; line-height: 1.6; }
+.cloudflare-setup__help summary { cursor: pointer; color: var(--text-primary); }
+.cloudflare-setup__account,
+.cloudflare-setup__endpoint,
+.cloudflare-setup__client { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding-block: 12px; border-bottom: 1px solid var(--border-subtle); }
+.cloudflare-setup__endpoint code { overflow-wrap: anywhere; }
+.cloudflare-setup__hint,
+.cloudflare-setup small { font-size: 12px; color: var(--text-muted); }
+.cloudflare-setup__client small { display: block; margin-top: 4px; }
+.cloudflare-setup__checks { display: grid; gap: 12px; }
+.cloudflare-setup__checks > div { display: grid; grid-template-columns: 48px 1fr; gap: 12px; }
+.cloudflare-setup__checks > div > span { font: 11px var(--font-mono); padding-top: 3px; }
+.cloudflare-setup__checks .is-pass > span { color: var(--success-text); }
+.cloudflare-setup__checks .is-fail > span,
+.cloudflare-setup .cloudflare-setup__error { color: var(--danger-text); }
+.cloudflare-setup__checks p { font-size: 12px; }
+
+/* Admission-credential choice. A fieldset because the two options are one
+   decision, and it locks itself once an endpoint exists. */
+.cloudflare-setup__gate {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+}
+
+.cloudflare-setup__gate legend {
+  padding: 0 6px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.cloudflare-setup__gate label {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+.cloudflare-setup__gate label strong {
+  color: var(--text-primary);
+}
+
+.cloudflare-setup__gate input {
+  width: 14px;
+  height: 14px;
+  margin: 3px 0 0;
+  accent-color: var(--accent);
+}
+
+.cloudflare-setup__gate:disabled label {
+  opacity: 0.7;
+}
+
+/* Plan/prerequisite notice. Reads as a caution rather than an error: the plan
+   requirement is a fact about the account, not something the operator did. */
+.cloudflare-setup__notice {
+  display: grid;
+  gap: 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--border-subtle);
+  border-left: 2px solid var(--accent-border);
+  border-radius: 6px;
+  background: var(--bg-panel-elevated);
+}
+
+.cloudflare-setup__notice strong {
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.cloudflare-setup__notice p {
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+/* Reference links. Rendered as buttons because opening one is an IPC call, not
+   a navigation, but they must read as links beside the real actions. */
+.cloudflare-setup__link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent-bright);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.cloudflare-setup__link:hover:not(:disabled) {
+  color: var(--text-primary);
+}
+
+.cloudflare-setup__link:disabled {
+  color: var(--text-muted);
+  cursor: default;
+  text-decoration: none;
+}
+
+.cloudflare-setup__dash {
+  align-items: baseline;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+/* What the operator is starting, before any field: cost, installs, hand-off.
+   A term-and-sentence list rather than a paragraph, so the cost line can be
+   found at a glance. */
+.cloudflare-setup__facts {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.cloudflare-setup__facts strong {
+  display: inline-block;
+  min-width: 72px;
+  margin-right: 8px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 400;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+/* Where a half-finished setup stands. Names what is missing in words, so the
+   "Incomplete" chip is never the only signal. */
+.cloudflare-setup__state {
+  padding: 10px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-panel-elevated);
+  font-size: 12px;
+}
+
+.cloudflare-setup__state strong {
+  color: var(--text-primary);
+}
+
+.cloudflare-setup .cloudflare-setup__needs {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.cloudflare-setup__gate em {
+  margin-right: 2px;
+  color: var(--accent-bright);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-style: normal;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.cloudflare-setup__textarea {
+  height: auto;
+  min-height: 64px;
+  padding: 8px 10px;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.cloudflare-setup__manual {
+  padding-top: 12px;
+  border-top: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.cloudflare-setup__manual > summary {
+  cursor: pointer;
+  color: var(--text-primary);
+}
+
+.cloudflare-setup__manual > p {
+  margin: 8px 0 4px;
+}
+
+/* A connected client's import steps, folded below its live status. */
+.cloudflare-setup__reimport > summary {
+  cursor: pointer;
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.cloudflare-setup__reimport[open] > summary {
+  margin-bottom: 12px;
+}
+
 .settings-section-controls {
   display: inline-flex;
   align-items: center;
@@ -25924,6 +26139,39 @@ a.transcript-message__messaging-origin:focus-visible {
   color: var(--text-primary);
   font-size: 14px;
   font-weight: 700;
+}
+
+/* Progress, for funnels walked in order (Cloudflare setup). The word carries
+   the state; the node only echoes it. */
+.automation-stage__progress {
+  margin-left: auto;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.automation-stage__progress--current {
+  color: var(--accent-bright);
+}
+
+.automation-stage__progress--done {
+  color: var(--success-text);
+}
+
+.automation-stage--done .automation-stage__node {
+  border-color: var(--success-border);
+  color: var(--success-text);
+}
+
+.automation-stage--done .automation-stage__node::after {
+  content: "\2713";
+}
+
+.automation-stage--waiting .automation-stage__node {
+  border-color: var(--border-subtle);
+  color: var(--text-muted);
 }
 
 .automation-flow {

@@ -127,7 +127,7 @@ test.describe("star map chat card history", () => {
     await window.getByRole("button", { name: "Open settings" }).click();
     await window
       .getByRole("navigation", { name: "Settings sections" })
-      .getByRole("button", { name: "Federation" })
+      .getByRole("button", { name: "Federation", exact: true })
       .click();
     await window.getByLabel("Import invite").fill(gateway.invite);
     await window.getByRole("button", { name: "Import invite" }).click();

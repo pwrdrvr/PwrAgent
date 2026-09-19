@@ -985,6 +985,11 @@ export type DesktopFederationSettingsSnapshot = {
   cloudflareEndpoint: DesktopSettingsValue<string>;
   cloudflareMtlsEnabled: DesktopSettingsValue<boolean>;
   cloudflareAccessServiceAuthEnabled: DesktopSettingsValue<boolean>;
+  /**
+   * Present a Cloudflare Access sign-in (Managed OAuth) on the Cloudflare
+   * endpoint. The grant itself lives in this instance's encrypted state.
+   */
+  cloudflareAccessOAuthEnabled: DesktopSettingsValue<boolean>;
   instancePrivateKey: DesktopSettingsSecretState;
   noiseStaticPrivateKey: DesktopSettingsSecretState;
   cloudflareClientCertificate: DesktopSettingsSecretState;
@@ -1425,6 +1430,7 @@ export type DesktopSettingsConfigPatch = {
     cloudflareEndpoint?: string;
     cloudflareMtlsEnabled?: boolean;
     cloudflareAccessServiceAuthEnabled?: boolean;
+    cloudflareAccessOAuthEnabled?: boolean;
   };
   messaging?: {
     enabled?: boolean;
