@@ -47,6 +47,56 @@ describe("FederationSettings", () => {
       expect.objectContaining({ federation: expect.objectContaining({ compressionEnabled: false }) }),
     ));
   });
+  // The pane shipped on browser-default controls once. Nothing else here
+  // reads a class, so without this the next bare <input> passes every test
+  // and only shows up by eye.
+  it("keeps every editable control on the settings control classes", async () => {
+    const health: FederationHealthStatus = {
+      enabled: true,
+      role: "gateway",
+      status: "listening",
+      peers: [
+        {
+          id: "client_one",
+          label: "Studio Mac",
+          role: "client",
+          status: "connected",
+          capabilities: ["thread_navigation"],
+        },
+      ],
+    };
+    render(
+      <FederationSettings
+        desktopApi={{ readFederationHealth: vi.fn(async () => ({ health })) }}
+        onClearSecret={vi.fn(async () => true)}
+        onReplaceSecret={vi.fn(async () => true)}
+        saving={false}
+        snapshot={settingsSnapshot()}
+        onSettingsChanged={vi.fn()}
+        onWriteConfig={vi.fn(async () => true)}
+      />,
+    );
+    // The peer row's celestial picker only exists once health resolves.
+    expect(
+      await screen.findByLabelText("Celestial icon for Studio Mac"),
+    ).toBeInTheDocument();
+
+    const controls = Array.from(
+      document.querySelectorAll<HTMLElement>("input, select, textarea"),
+    ).filter((control) => {
+      // Checkboxes and radios are acknowledgements and choices, not fields:
+      // they carry their own tinted styling, not `settings-input`.
+      const type = control.getAttribute("type");
+      return type !== "checkbox" && type !== "radio";
+    });
+    expect(controls.length).toBeGreaterThan(0);
+    for (const control of controls) {
+      expect(
+        `${control.tagName.toLowerCase()}[${control.getAttribute("aria-label")}]: ${control.className}`,
+      ).toMatch(/\bsettings-(input|select)\b/);
+    }
+  });
+
   it("renders configured endpoints and sanitized peer health", async () => {
     const health: FederationHealthStatus = {
       enabled: true,

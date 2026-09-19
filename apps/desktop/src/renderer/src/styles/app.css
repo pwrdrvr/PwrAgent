@@ -9572,14 +9572,6 @@ a.button {
   text-transform: uppercase;
 }
 
-.cloudflare-setup__textarea {
-  height: auto;
-  min-height: 64px;
-  padding: 8px 10px;
-  line-height: 1.5;
-  resize: vertical;
-}
-
 .cloudflare-setup__manual {
   padding-top: 12px;
   border-top: 1px solid var(--border-subtle);
@@ -17030,7 +17022,7 @@ a.button {
 
 /* The Funnel acknowledgement stays a checkbox: it reads as part of the
    sentence, not as a setting. Tint it like the thread-management toggles. */
-.federation-tailscale-actions label input {
+.federation-tailscale-actions label input[type="checkbox"] {
   width: 14px;
   height: 14px;
   margin: 0;

@@ -1487,7 +1487,7 @@ export function FederationSettings(props: FederationSettingsProps) {
               )}
               control={
                 <textarea
-                  className="settings-input cloudflare-setup__textarea"
+                  className="settings-input settings-input--multiline"
                   aria-label="Client certificate"
                   rows={3}
                   value={cloudflareClientCertificate}
@@ -1505,7 +1505,7 @@ export function FederationSettings(props: FederationSettingsProps) {
               )}
               control={
                 <textarea
-                  className="settings-input cloudflare-setup__textarea"
+                  className="settings-input settings-input--multiline"
                   aria-label="Client private key"
                   rows={3}
                   value={cloudflareClientPrivateKey}
