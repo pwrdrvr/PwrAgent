@@ -31,6 +31,8 @@ export type ProjectPickerProps = {
   value?: NavigationDirectorySummary;
   /** All tracked directories from the navigation snapshot. */
   directories: NavigationDirectorySummary[];
+  /** Optional owner-side search for a bounded directory page. */
+  onQueryChange?: (query: string) => void;
   /** Disabled while a thread is being materialized, etc. */
   disabled?: boolean;
   /** Inline error string from the most-recent register attempt. */
@@ -155,7 +157,10 @@ export function ProjectPicker(props: ProjectPickerProps): ReactElement {
               placeholder="Find a directory"
               className="project-picker__search-input"
               value={query}
-              onChange={(event) => setQuery(event.target.value)}
+              onChange={(event) => {
+                setQuery(event.target.value);
+                props.onQueryChange?.(event.target.value);
+              }}
             />
           </div>
 

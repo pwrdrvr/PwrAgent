@@ -178,6 +178,7 @@ import { HighlightedAutocompleteLabel } from "./HighlightedAutocompleteLabel";
 import { findSlashCommandTrigger } from "./composer-slash-commands";
 import { ComposerTiptapInput } from "./ComposerTiptapInput";
 import { ProjectPicker } from "./ProjectPicker";
+import { useNavigationQueryResource } from "../../lib/useNavigationQueryResource";
 import {
   ComposerDropdown,
   useDismissableMenu,
@@ -2856,6 +2857,28 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const [leaveLocalBranch, setLeaveLocalBranch] = useState("");
   const [newLocalBranch, setNewLocalBranch] = useState("");
   const [projectTargetPath, setProjectTargetPath] = useState("");
+  const [projectSearch, setProjectSearch] = useState("");
+  const projectDestinations = useNavigationQueryResource({
+    desktopApi: props.desktopApi,
+    active: handoffDialog === "to-project",
+    request: {
+      protocol: 2,
+      consumer: "mentions",
+      query: { kind: "directory-index", filter: projectSearch },
+      pageSize: 10,
+      federationTarget: filesystemFederationTarget,
+    },
+  });
+  const destinationOwner = projectDestinations.state?.request.federationTarget;
+  const destinationOwnerKey = destinationOwner?.scope === "remote"
+    ? `remote:${destinationOwner.instanceId}` : "local";
+  const projectDirectories = destinationOwnerKey === filesystemAuthorityKey
+    ? projectDestinations.state?.page?.directories ?? [] : [];
+  useEffect(() => {
+    setHandoffDialog(undefined);
+    setProjectTargetPath("");
+  }, [filesystemAuthorityKey]);
+
   const [handoffError, setHandoffError] = useState<string | undefined>();
   const [handoffSubmitting, setHandoffSubmitting] = useState(false);
   const [sending, setSendingState] = useState(false);
@@ -9592,6 +9615,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     setHandoffError(undefined);
     setHandoffDialog(direction);
     setProjectTargetPath("");
+    setProjectSearch("");
     if (direction === "local-to-worktree") {
       setLocalHandoffStrategy("detached-changes");
       setLeaveLocalBranch(branchOptions[0] ?? "");
@@ -10147,8 +10171,10 @@ export const Composer = memo(function Composer(props: ComposerProps) {
               {handoffDialog === "to-project" ? (
                 <>
                   <ProjectPicker
-                    value={props.directories?.find((directory) => directory.path === projectTargetPath)}
-                    directories={props.directories ?? []}
+                    value={projectDirectories.find((directory) => directory.path === projectTargetPath)}
+                    directories={projectDirectories}
+                    onQueryChange={setProjectSearch}
+                    pickError={projectDestinations.state?.error}
                     disabled={handoffSubmitting}
                     nativePickingDisabled={Boolean(filesystemFederationTarget)}
                     onSelect={(directory) => setProjectTargetPath(directory.path ?? "")}
