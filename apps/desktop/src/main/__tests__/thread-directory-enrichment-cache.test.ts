@@ -195,13 +195,15 @@ describe("directory enrichment invalidation", () => {
   });
 
   it("keeps a confirmed mapping across a day of repeated reads without Git", async () => {
+    // Own the fixture path locally: a timed-out body keeps looping past `repo`'s reassignment.
+    const fixtureRepo = repo;
     const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
     const enrich = createThreadDirectoryEnricher({ now: Date.now });
-    const first = await enrich(repo);
+    const first = await enrich(fixtureRepo);
     git.mockClear();
     for (let round = 1; round <= budgets.directoryEnrichment.repeatedListings; round += 1) {
       now.mockReturnValue(1_000 + round * 86_400_000);
-      expect(await enrich(repo)).toEqual(first);
+      expect(await enrich(fixtureRepo)).toEqual(first);
     }
     expect(git).toHaveBeenCalledTimes(budgets.directoryEnrichment.warmGitCommands);
   });
@@ -379,9 +381,13 @@ describe("directory enrichment invalidation", () => {
   });
 
   it("shares one Git worktree inventory across 216 cold sibling checkouts", async () => {
+    // Vitest abandons a timed-out body but cannot stop it, so this loop can still be
+    // running while the next test's beforeEach reassigns `repo`. Own the fixture path
+    // locally; a zombie iteration must never write into a sibling test's fixture.
+    const fixtureRepo = repo;
     const worktrees = Array.from({ length: 216 }, (_, index) => path.join(root, `linked-${index}`));
     for (const [index, cwd] of worktrees.entries()) {
-      const admin = path.join(repo, ".git", "worktrees", `${index}`);
+      const admin = path.join(fixtureRepo, ".git", "worktrees", `${index}`);
       await fs.mkdir(admin, { recursive: true });
       await fs.mkdir(cwd);
       await fs.writeFile(path.join(cwd, ".git"), `gitdir: ${admin}\n`);
@@ -392,7 +398,7 @@ describe("directory enrichment invalidation", () => {
       callback: (error: Error | null, result: { stdout: string; stderr: string }) => void) => {
       callback(null, { stdout: args.includes("--show-toplevel")
         ? args.includes("--abbrev-ref") ? `${args[1]}\nmain` : args[1]
-        : args.includes("--abbrev-ref") ? "main" : [repo, ...worktrees].map((cwd) => `worktree ${cwd}`).join("\n"), stderr: "" });
+        : args.includes("--abbrev-ref") ? "main" : [fixtureRepo, ...worktrees].map((cwd) => `worktree ${cwd}`).join("\n"), stderr: "" });
     });
     const enrich = createExpiredEnricher();
     // Separate batches exercise both pending coalescing and settled reuse.
@@ -401,7 +407,7 @@ describe("directory enrichment invalidation", () => {
       const values = await Promise.all(batch.map((cwd) => enrich(cwd, "selected-thread")));
       values.forEach((value, index) => expect(value).toMatchObject({
         observedGitBranch: "main", linkedDirectories: [{
-          path: repo.replace(/\\/g, "/"), worktreePath: batch[index].replace(/\\/g, "/"), kind: "worktree",
+          path: fixtureRepo.replace(/\\/g, "/"), worktreePath: batch[index].replace(/\\/g, "/"), kind: "worktree",
         }],
       }));
     }
