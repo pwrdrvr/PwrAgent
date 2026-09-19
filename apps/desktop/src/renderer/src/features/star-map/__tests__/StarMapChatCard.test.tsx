@@ -2480,6 +2480,35 @@ describe("StarMapChatCard mentions", () => {
     });
   });
 
+  it("preserves local threads and PRs alongside peer matches in a remote card's # picker", async () => {
+    const local = localThread({ title: "Local reference work 123", prs: [{
+      provider: "github.com", org: "example", repo: "demo", number: 123, state: "passing",
+      title: "Local reference PR", url: "https://github.com/example/demo/pull/123",
+    }] });
+    const remote = remoteThread({ title: "Remote reference work 123" });
+    const current = remoteThread({ id: "current", federation: {
+      instanceLabel: "Studio Mac", ref: { backend: "codex", threadId: "current",
+        target: { scope: "remote", instanceId: "pwr_peer" } },
+    } });
+    const desktopApi = mentionApi({
+      getNavigationQueryPage: vi.fn(async (request) => mentionPage(request, {
+        ...SNAPSHOT, threads: request.federationTarget?.scope === "remote" ? [remote] : [local],
+      })),
+      jumpSearchRemoteThreads: vi.fn(async () => ({ results: [remote] })),
+    });
+    renderCard({ desktopApi, thread: current });
+    const input = await findReadyTextbox({ name: "Message Remote work" });
+    expect(desktopApi.getNavigationQueryPage).not.toHaveBeenCalled();
+    expect(desktopApi.jumpSearchRemoteThreads).not.toHaveBeenCalled();
+    fireEvent.change(input, { target: { value: "See #123" } });
+    await screen.findByRole("option", { name: /Remote reference work/ });
+    const localOption = await screen.findByRole("option", { name: /Local reference work/ });
+    expect(screen.getByRole("option", { name: /Local reference PR/ })).not.toBeNull();
+    expect(desktopApi.jumpSearchRemoteThreads).toHaveBeenCalledTimes(1);
+    fireEvent.click(localOption);
+    expect(within(input).getByText("#Local reference work 123").closest("[data-mention-kind]")?.getAttribute("data-mention-kind")).toBe("thread");
+  });
+
   it("never offers the thread the card is already on", async () => {
     // On a bare `#` the current thread would otherwise take the first row,
     // and referencing it tells the agent nothing it does not have.

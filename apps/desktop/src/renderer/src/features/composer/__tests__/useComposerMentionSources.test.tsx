@@ -59,7 +59,7 @@ describe("bounded composer mention sources", () => {
     });
   }
 
-  it("routes only demanded queries to the selected owner and reuses its cache", async () => {
+  it.each(["", "microapps"])("routes directories to the owner but keeps thread query %j local", async (query) => {
     const getNavigationQueryPage = vi.fn(async (request: NavigationQueryRequest) => ownerPage(request));
     const desktopApi: DesktopApi = { getNavigationQueryPage };
     const target: FederationTarget = { scope: "remote", instanceId: "m2-max" };
@@ -67,16 +67,16 @@ describe("bounded composer mention sources", () => {
       desktopApi, federationTarget,
     }), { initialProps: { federationTarget: target } });
     expect(getNavigationQueryPage).not.toHaveBeenCalled();
-    act(() => result.current.ensureLoaded("microapps"));
-    await waitFor(() => expect(result.current.settledQuery).toBe("microapps"));
+    act(() => result.current.ensureLoaded(query));
+    await waitFor(() => expect(result.current.settledQuery).toBe(query));
     expect(result.current.directories.map((row) => row.path)).toEqual(["/m2-max/microapps"]);
-    expect(result.current.threads.map((row) => row.id)).toEqual(["m2-max"]);
+    expect(result.current.threads.map((row) => row.id)).toEqual(["local"]);
     expect(getNavigationQueryPage).toHaveBeenCalledTimes(2);
-    expect(getNavigationQueryPage.mock.calls.every(([request]) =>
-      request.federationTarget?.scope === "remote" && request.federationTarget.instanceId === "m2-max")).toBe(true);
+    expect(getNavigationQueryPage.mock.calls[0]![0].federationTarget).toEqual(target);
+    expect(getNavigationQueryPage.mock.calls[1]![0].federationTarget).toBeUndefined();
     rerender({ federationTarget: { ...target } });
     act(() => result.current.release());
-    act(() => result.current.ensureLoaded("microapps"));
+    act(() => result.current.ensureLoaded(query));
     expect(getNavigationQueryPage).toHaveBeenCalledTimes(2);
   });
 
@@ -89,7 +89,7 @@ describe("bounded composer mention sources", () => {
       rerender({ federationTarget: owner === "local" ? undefined : { scope: "remote", instanceId: owner } });
       act(() => result.current.ensureLoaded("microapps"));
       await waitFor(() => expect(result.current.directories.map((row) => row.path)).toEqual([`/${owner}/microapps`]));
-      expect(result.current.threads.map((row) => row.id)).toEqual([owner]);
+      expect(result.current.threads.map((row) => row.id)).toEqual(["local"]);
     }
     expect(getNavigationQueryPage).toHaveBeenCalledTimes(6);
   });

@@ -3519,6 +3519,41 @@ describe("Composer", () => {
     });
   });
 
+  it("preserves local threads and PRs alongside peer matches in a remote composer's # picker", async () => {
+    const target = { scope: "remote" as const, instanceId: "m2-max" };
+    const local: NavigationThreadSummary = {
+      id: "local-reference", title: "Local reference work", source: "codex", titleSource: "explicit",
+      linkedDirectories: [], inbox: { inInbox: false },
+      prs: [{ provider: "github.com", org: "example", repo: "demo", number: 123, state: "passing",
+        title: "Local reference PR", url: "https://github.com/example/demo/pull/123" }],
+    };
+    const remote: NavigationThreadSummary = {
+      ...local, id: "remote-reference", title: "Remote reference work 123", prs: [],
+      federation: { instanceLabel: "M2 Max", ref: { backend: "codex", threadId: "remote-reference", target } },
+    };
+    const getNavigationQueryPage = vi.fn(async (request) => navigationQueryFixture(request, {
+      threads: request.federationTarget?.scope === "remote" ? [remote] : [local],
+    }));
+    const jumpSearchRemoteThreads = vi.fn(async () => ({ results: [remote] }));
+    render(<Composer
+      desktopApi={{ getNavigationQueryPage, jumpSearchRemoteThreads }}
+      draftStore={createComposerDraftStore()}
+      skills={[]}
+      thread={{ ...remote, id: "current", title: "Current work",
+        federation: { instanceLabel: "M2 Max", ref: { backend: "codex", threadId: "current", target } } }}
+    />);
+    expect(getNavigationQueryPage).not.toHaveBeenCalled();
+    expect(jumpSearchRemoteThreads).not.toHaveBeenCalled();
+    const textbox = screen.getByRole("textbox", { name: "Reply" });
+    fireEvent.change(textbox, { target: { value: "See #123" } });
+    await screen.findByRole("option", { name: /Remote reference work/ });
+    const localOption = await screen.findByRole("option", { name: /Local reference work/ });
+    expect(screen.getByRole("option", { name: /Local reference PR/ })).toBeInTheDocument();
+    expect(jumpSearchRemoteThreads).toHaveBeenCalledTimes(1);
+    fireEvent.click(localOption);
+    expect(within(textbox).getByText("#Local reference work").closest("[data-mention-kind]")).toHaveAttribute("data-mention-kind", "thread");
+  });
+
   it("offers matching threads and a precise PR link for a numeric hash query", async () => {
     const earlierPullRequest = {
       provider: "github.com" as const,

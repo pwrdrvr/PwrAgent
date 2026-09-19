@@ -25,7 +25,7 @@ export function resetComposerMentionSourcesCache(): void {
   caches = new WeakMap();
 }
 
-/** Owner-filtered autocomplete pages. A new query can reach any owner member. */
+/** Owner-scoped directories and local threads for the shared mention pickers. */
 export function useComposerMentionSources(params: {
   desktopApi?: DesktopApi;
   federationTarget?: FederationTarget;
@@ -108,10 +108,11 @@ export function useComposerMentionSources(params: {
         query: { kind: "directory-index", filter: demand },
         pageSize: 10,
       }, directoryConsumer),
+      // The # picker combines local threads with a separate peer search.
+      // Scoping this page to the directory owner would remove local references.
       desktopApi.getNavigationQueryPage({
         protocol: 2,
         consumer: "mentions",
-        federationTarget,
         query: demand ? { kind: "search", text: demand } : { kind: "lens", lens: "inbox" },
         pageSize: 10,
       }, threadConsumer),
