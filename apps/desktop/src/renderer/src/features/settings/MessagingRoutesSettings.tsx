@@ -1433,7 +1433,6 @@ export type DiscordResponseBehaviorProps = {
 };
 
 function DiscordResponseBehavior(props: DiscordResponseBehaviorProps) {
-  const selectId = useId();
   const configured = props.value;
   // Built once and shared with every row. Recomputing per row made the section
   // O(rows x surfaces log surfaces) on every render, and `observedSurfaces` is
@@ -1492,32 +1491,43 @@ function DiscordResponseBehavior(props: DiscordResponseBehaviorProps) {
         <span className="settings-source">{props.source}</span>
       </div>
       <div className="messaging-routes__response-add">
-        <label className="settings-authorized-list__policy-label" htmlFor={selectId}>
+        {/* Plain text, not a <label>: the trigger names itself from
+            `fieldLabel`, and a label pointing at a button would name it
+            twice. */}
+        <span className="settings-authorized-list__policy-label">
           Add a channel or thread
-        </label>
-        <select
-          className="settings-input"
-          disabled={props.disabled || props.loading || unconfigured.length === 0}
-          id={selectId}
+        </span>
+        {/* An add picker, not a value picker: `value` stays empty, so the
+            trigger returns to its placeholder after every pick, and the
+            surface just added drops out of `unconfigured` on the next render.
+            It keeps native threads, whose own setting beats the parent
+            channel's, and has no manual row: `addSurface` accepts only a
+            surface it has seen, so a typed ID would silently add nothing. */}
+        <MessagingSurfacePicker
+          fieldLabel="Add a channel or thread"
           value=""
-          onChange={(event) => {
-            const id = event.currentTarget.value;
-            if (id) addSurface(id);
-          }}
-        >
-          <option value="">
-            {props.loading
-              ? "Loading channels..."
-              : unconfigured.length === 0
-                ? "No unconfigured Discord channels seen yet"
-                : "Select a channel or thread..."}
-          </option>
-          {unconfigured.map((candidate) => (
-            <option key={candidate.id} value={candidate.id}>
-              {candidate.label}
-            </option>
-          ))}
-        </select>
+          filterConversations
+          allowThreads
+          allowManual={false}
+          disabled={props.disabled || props.loading || unconfigured.length === 0}
+          placeholder={props.loading
+            ? "Loading channels..."
+            : unconfigured.length === 0
+              ? "No unconfigured Discord channels seen yet"
+              : "Select a channel or thread..."}
+          searchPlaceholder="Find a channel, thread, or ID"
+          searchLabel="Find a channel or thread"
+          emptyLabel="No matching channels or threads."
+          sectionLabels={{ channel: "Channels", thread: "Native threads" }}
+          options={unconfigured.map((candidate) => ({
+            value: candidate.id,
+            label: candidate.label,
+            kind: candidate.kind,
+            detail: candidate.id,
+            seen: formatSeenDate(candidate.lastSeenAt),
+          }))}
+          onChange={addSurface}
+        />
       </div>
       <div
         className="messaging-routes__list"
@@ -1571,7 +1581,9 @@ function DiscordResponseRow(props: {
         <div className="messaging-route-row__main">
           <div className="messaging-route-row__title">{label}</div>
           <div className="messaging-route-row__meta">
-            {props.observed ? props.observed.kindLabel : "Not seen recently"}
+            {props.observed
+              ? (props.observed.kind === "thread" ? "Native thread" : "Channel")
+              : "Not seen recently"}
             {" / ID "}
             {props.entry.id}
           </div>
@@ -1622,7 +1634,7 @@ type DiscordResponseSurfaceCandidate = {
   derived: boolean;
   displayName: string;
   id: string;
-  kindLabel: string;
+  kind: "channel" | "thread";
   label: string;
   lastSeenAt: number;
 };
@@ -1660,7 +1672,7 @@ function discordResponseSurfaceCandidates(
         derived: false,
         displayName: conversation.title ?? "",
         id: conversation.id,
-        kindLabel: conversation.kind === "thread" ? "Native thread" : "Channel",
+        kind: conversation.kind,
         label: formatConversationLabel("discord", conversation),
         lastSeenAt: surface.lastSeenAt,
       });
@@ -1677,7 +1689,7 @@ function discordResponseSurfaceCandidates(
         derived: true,
         displayName: parentName ?? "",
         id: parentConversationId,
-        kindLabel: "Channel",
+        kind: "channel",
         label: formatObservedContainerLabel({
           platform: "discord",
           id: parentConversationId,
@@ -1694,8 +1706,9 @@ function discordResponseSurfaceCandidates(
 
 /**
  * Discord does not enforce unique channel or thread names, so two surfaces can
- * format to the same label. The picker shows label text only, so a collision
- * would leave the operator unable to tell which snowflake they selected.
+ * format to the same label. The picker's ID column tells them apart, but a
+ * configured row's controls are named from the label ("Responds to for ..."),
+ * and two rows that announce identically cannot be told apart by ear.
  */
 function disambiguateCandidateLabels(
   candidates: Map<string, DiscordResponseSurfaceCandidate>,
