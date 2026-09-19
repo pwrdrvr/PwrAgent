@@ -2,8 +2,7 @@
 
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   checkPlatformRuntimeClosure,
@@ -23,12 +22,17 @@ export function verifySigningInputArchive(
   archivePath,
   paths = signingInputPaths[platform],
 ) {
-  const extractionRoot = mkdtempSync(join(tmpdir(), `pwragent-${platform}-signing-input-`));
+  const archive = resolve(archivePath);
+  const archiveDirectory = dirname(archive);
+  const extractionRoot = mkdtempSync(join(
+    archiveDirectory,
+    `pwragent-${platform}-signing-input-`,
+  ));
   try {
     const expanded = spawnSync(
       tarCommand(),
-      ["-xzf", resolve(archivePath), "-C", extractionRoot],
-      { encoding: "utf8" },
+      ["-xzf", basename(archive), "-C", basename(extractionRoot)],
+      { cwd: archiveDirectory, encoding: "utf8" },
     );
     if (expanded.error || expanded.status !== 0) {
       throw new Error(
