@@ -8219,6 +8219,27 @@ a.button {
   font-size: 12px;
 }
 
+/* One group per watched conversation when an automation has several. The
+   heading is the conversation's own name, so it is not case-transformed:
+   "f-alerts" shown as "F-ALERTS" would misstate a channel name. */
+.automations-table__replay-source {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.automations-table__replay-source + .automations-table__replay-source {
+  padding-top: 8px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.automations-table__replay-source-title {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
 .automation-preview__badge--muted {
   color: var(--text-muted);
 }
@@ -12122,13 +12143,6 @@ a.button {
   margin-bottom: 10px;
 }
 
-.settings-mcp-row--managed {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
-  align-items: center;
-  gap: 12px;
-}
-
 .settings-mcp-filter {
   flex: 1 1 220px;
   min-width: 0;
@@ -12159,69 +12173,33 @@ a.button {
   background: var(--bg-panel-elevated);
 }
 
-.settings-mcp-row__body {
+/*
+ * A managed row opens with the same disclosure line as a Codex row -- health
+ * dot, name, tool line, chips, actions -- so the two lists read alike. What
+ * only a managed connection has sits under that line, indented to the
+ * drawer's edge: the endpoint, the setup remedy, and the two switches.
+ */
+.settings-mcp-row__detail {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
   min-width: 0;
+  margin: 0 0 2px 26px;
 }
 
-.settings-mcp-row__body strong,
-.settings-mcp-row__body > span {
-  display: block;
-}
-
-.settings-mcp-row__body strong {
-  overflow: hidden;
-  color: var(--text-primary);
-  font-family: var(--font-mono);
-  font-size: 13px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.settings-mcp-row__body > span {
-  margin-top: 3px;
-  color: var(--text-muted);
-  font-size: 11px;
-}
-
-/* The endpoint line is a `SettingsCopyValue` rather than a bare span, so it
-   opts out of the `display: block` above and lays its own value and button
-   out. `min-width: 0` has to reach it for the URL to be allowed to ellipsize
-   instead of widening the row's first column. */
-.settings-mcp-row__body > .settings-copyvalue {
+/* `min-width: 0` has to reach the copy value for the URL to ellipsize instead
+   of widening the row. */
+.settings-mcp-row__detail > .settings-copyvalue {
   display: flex;
   max-width: 100%;
 }
 
-.settings-mcp-row--managed .settings-mcp-row__error {
-  margin: 6px 0 0;
-}
-
-/* The managed rows carry one control the Codex rows do not. It is the last
- * column and keeps a fixed basis, so every switch lands on the same edge and
- * every action group ends on the same edge -- each row is its own grid, so an
- * `auto` column would resolve against that row's own content and leave both
- * ragged. The cell is emitted even where the switch is withheld. */
-.settings-mcp-row--managed {
-  grid-template-columns: minmax(0, 1fr) auto 104px;
+.settings-mcp-row--managed .settings-mcp-row__detail .settings-mcp-row__error {
+  margin: 4px 0 0;
 }
 
 /*
- * One resolved claim per row.
- *
- * The row used to render the credential state and the availability switch as
- * peers, so an unauthorized connection read `Not connected` beside an `On`
- * switch. The state line carries the whole stack in precedence order, and the
- * switch is withheld until there is something for it to be about.
- */
-.settings-mcp-row__title {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  min-width: 0;
-}
-
-/*
- * The remedy for whatever the row's chip claims. Capped to a reading measure:
+ * The remedy for whatever the row's chips claim. Capped to a reading measure:
  * left unbounded it ran the full width of the pane and the row read as a
  * paragraph rather than a status.
  */
@@ -12282,20 +12260,48 @@ a.button {
   font-size: 11px;
 }
 
-.settings-mcp-row__availability {
+/*
+ * The two per-connection switches, each named for the question it answers.
+ *
+ * They sat in a narrow column beside the actions with a one-word label, which
+ * was room for one switch. Two there read as a pair of the same thing. Here
+ * each gets its name and a line saying what it changes, and they share one
+ * edge on every row because every row starts them at the same indent.
+ */
+.settings-mcp-row__policy {
   display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  min-height: 1px;
+  flex-wrap: wrap;
+  gap: 10px 28px;
+  margin: 8px 0 2px 26px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-subtle);
 }
 
-.settings-mcp-row__availability-label {
+.settings-mcp-row__policy-item {
+  display: flex;
+  flex: 0 1 280px;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+}
+
+.settings-mcp-row__policy-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.settings-mcp-row__policy-label {
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.settings-mcp-row__policy-hint {
   color: var(--text-muted);
-  font-size: 10px;
-  line-height: 1;
-  white-space: nowrap;
+  font-size: 11px;
+  line-height: 1.4;
 }
 
 .settings-mcp-row__remove {
@@ -12432,6 +12438,31 @@ a.button {
 
 .settings-mcp-row__tools {
   align-items: baseline;
+}
+
+/* A managed connection's list is read on demand, so its drawer also says
+   when there is nothing to show yet and offers the re-read. */
+.settings-mcp-row--managed .settings-mcp-row__drawer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px 12px;
+}
+
+.settings-mcp-row--managed .settings-mcp-row__tools {
+  flex: 1 1 320px;
+  min-width: 0;
+}
+
+.settings-mcp-row__drawer-note {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 11.5px;
+}
+
+.settings-mcp-row__refresh {
+  flex: 0 0 auto;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -21625,6 +21656,15 @@ a.transcript-message__messaging-origin:focus-visible {
   flex: 0 0 auto;
 }
 
+/* A selected connection that needs a sign-in carries its remedy beside the
+   switch that can drop it, as one group at the row's end. */
+.mcp-access-panel__row-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+}
+
 .mcp-access-panel__empty {
   display: flex;
   flex-direction: column;
@@ -25186,6 +25226,31 @@ a.transcript-message__messaging-origin:focus-visible {
   font-size: 12px;
 }
 
+/* The other conversations an inbound trigger watches, beside the one the
+   fields above describe. The chips themselves are the sender picker's. */
+.automation-sources {
+  gap: 8px;
+}
+
+.automation-sources__watching {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* Worded and weighted like an .automation-field label; a span, not a
+   <label>, because it names a list rather than a single control. */
+.automation-sources__label {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.automation-sources__add {
+  align-self: flex-start;
+  font-size: 12px;
+}
+
 .automation-capture__panel {
   display: flex;
   flex-direction: column;
@@ -25328,6 +25393,18 @@ a.transcript-message__messaging-origin:focus-visible {
 .automation-preview__sender-id {
   color: var(--text-muted);
   font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  font-weight: 400;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Which watched conversation the message arrived in. Rendered only when the
+   trigger watches more than one, where rows from different conversations
+   interleave by arrival. */
+.automation-preview__source {
+  color: var(--text-muted);
   font-size: 11px;
   font-weight: 400;
   overflow: hidden;
@@ -26109,6 +26186,49 @@ a.transcript-message__messaging-origin:focus-visible {
 
 .automation-sender-chip__remove:hover {
   color: var(--text-primary);
+}
+
+/* An inbound trigger's source list. The source open in the fields keeps the
+   sender chip's accent; the others are neutral, so the one being edited is
+   the only accented chip, and their names are buttons that open them. */
+.automation-source-chip:not(.is-editing) {
+  border-color: var(--border-subtle);
+  background: var(--bg-panel);
+  color: var(--text-secondary);
+}
+
+.automation-source-chip:not(.is-editing):hover {
+  border-color: var(--accent-border);
+  color: var(--text-primary);
+}
+
+.automation-source-chip__label,
+.automation-source-chip__open {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.automation-source-chip__open {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.automation-source-chip__open:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* Why a listed source would not open: shown under the list the operator just
+   clicked, not at the foot of the form where Save's errors go. */
+.automation-sources__notice {
+  margin: 0;
+  color: var(--danger-text);
+  font-size: 12px;
 }
 
 .automation-sender-picker__menu {

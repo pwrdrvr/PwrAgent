@@ -35,6 +35,21 @@ export type McpConnectionRecord = {
   authMode: McpConnectionAuthMode;
   kind: McpConnectionKind;
   enabled: boolean;
+  /**
+   * Whether a new thread starts with this connection already selected.
+   *
+   * This is a second layer on top of `enabled`, not a stronger form of it.
+   * `enabled` decides whether a connection may be offered to threads at all;
+   * this decides whether the offer is pre-accepted on a thread that does not
+   * exist yet. It seeds a new-thread draft and nothing else: existing threads
+   * keep the selection they have, and the seeded one stays editable in the
+   * thread's MCP access panel. A connection that is not `enabled` is never
+   * seeded, whatever this says.
+   *
+   * Optional because an owner broker from an older build answers without it;
+   * absent reads as `false`.
+   */
+  selectForNewThreads?: boolean;
   createdAt: number;
   updatedAt: number;
 };
@@ -105,8 +120,63 @@ export type SetMcpConnectionEnabledRequest = {
   enabled: boolean;
 };
 
+/** See `McpConnectionRecord.selectForNewThreads`. */
+export type SetMcpConnectionSelectForNewThreadsRequest = {
+  connectionId: McpConnectionId;
+  selectForNewThreads: boolean;
+};
+
+/**
+ * The connections a new thread starts with.
+ *
+ * Only a connection the thread could actually use is seeded: offered to
+ * threads, holding credentials, and not waiting on a fresh sign-in. The
+ * thread's MCP access panel offers a healthy connection as a switch and an
+ * unhealthy one as an Authorize button, so seeding an unhealthy one would put
+ * the operator's default on a row with no way to turn it off.
+ *
+ * The profile-wide gateway switch is deliberately not consulted. It parks
+ * every selection rather than rewriting them, and turning it back on restores
+ * each thread's selection, so a thread started while it is off gets the same
+ * defaults it would have got a minute earlier.
+ */
+export function mcpConnectionIdsForNewThread(
+  connections: readonly McpConnectionStatus[],
+): McpConnectionId[] {
+  return connections
+    .filter((connection) =>
+      connection.selectForNewThreads === true
+      && connection.enabled
+      && connection.configured
+      && connection.state !== "disconnected"
+      && connection.state !== "reauthorization_required")
+    .map((connection) => connection.id);
+}
+
 export type RemoveMcpConnectionRequest = {
   connectionId: McpConnectionId;
+};
+
+/**
+ * Read the tools a managed connection publishes, outside any thread.
+ *
+ * The Codex-managed list gets this for free -- Codex has already started those
+ * servers -- but a managed connection is only ever opened on a thread's
+ * behalf, so Settings had nothing to show but a name. The gateway opens a
+ * short-lived session of its own for this and caches the answer; `refresh`
+ * discards the cache first.
+ */
+export type ListMcpConnectionToolsRequest = {
+  connectionId: McpConnectionId;
+  refresh?: boolean;
+};
+
+export type ListMcpConnectionToolsResponse = {
+  connectionId: McpConnectionId;
+  /** Tool names, in the order the server listed them. */
+  tools: string[];
+  /** When the gateway read this list from the server, in epoch ms. */
+  fetchedAt: number;
 };
 
 export type MutateMcpConnectionResponse = {
@@ -424,7 +494,9 @@ export function resolveMcpConnectionSetup(
   return build(
     "ready",
     "Ready",
-    "Offered to threads. Choose it per thread under MCP access.",
+    connection.selectForNewThreads
+      ? "Offered to threads and selected on every new one. Turn it off per thread under MCP access."
+      : "Offered to threads. Choose it per thread under MCP access.",
     "ok",
   );
 }

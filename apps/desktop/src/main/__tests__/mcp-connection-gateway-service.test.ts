@@ -448,4 +448,226 @@ describe("McpConnectionGatewayService", () => {
     await service.cancelAuthorization(connection.id);
     expect(String(await secondFailure)).toContain("cancelled");
   });
+
+  /**
+   * A managed connection is only ever opened on a thread's behalf, so
+   * Settings could name one but never say what it offered -- while the Codex
+   * list beneath it showed every tool of every server.
+   */
+  describe("listConnectionTools", () => {
+    type ListTools = (
+      params?: { cursor?: string },
+      options?: { timeout?: number },
+    ) => Promise<{ tools: { name: string }[]; nextCursor?: string }>;
+
+    function fakeUpstream(listTools: ListTools) {
+      const close = vi.fn(async () => undefined);
+      const connect = vi.fn(async () => ({
+        client: { listTools: vi.fn(listTools), close },
+        transport: { close: vi.fn(async () => undefined) },
+      }));
+      return { close, connect };
+    }
+
+    function serviceWith(params: {
+      gatewayEnabled?: () => boolean;
+      upstream: ReturnType<typeof fakeUpstream>;
+    }) {
+      const registry = temporaryRegistry();
+      const connection = registry.create({
+        displayName: "Datadog",
+        serverUrl: "https://mcp.datadoghq.com/mcp",
+      });
+      const service = new McpConnectionGatewayService({
+        gatewayEnabled: params.gatewayEnabled ?? (() => true),
+        registry,
+        settings: createSettings(),
+        leaseManager: null,
+      });
+      services.push(service);
+      // The session opener is the one seam with a network behind it; the
+      // PwrSnap case below drives the real one.
+      Object.assign(service, { connectUpstreamClient: params.upstream.connect });
+      return { connection, registry, service };
+    }
+
+    it("pages through the server's list, closes its session, and keeps the answer", async () => {
+      const upstream = fakeUpstream(async (params) =>
+        params?.cursor === "page-2"
+          ? { tools: [{ name: "search_logs" }] }
+          : {
+              tools: [{ name: "aggregate_spans" }, { name: "get_trace" }],
+              nextCursor: "page-2",
+            });
+      const { connection, service } = serviceWith({ upstream });
+
+      await expect(
+        service.listConnectionTools({ connectionId: connection.id }),
+      ).resolves.toMatchObject({
+        connectionId: connection.id,
+        tools: ["aggregate_spans", "get_trace", "search_logs"],
+      });
+      // Its own short-lived session: nothing is left open for a thread to
+      // inherit or for the server to hold.
+      expect(upstream.close).toHaveBeenCalledOnce();
+
+      // A Settings visit should not cost a round trip per row per render.
+      await service.listConnectionTools({ connectionId: connection.id });
+      expect(upstream.connect).toHaveBeenCalledOnce();
+
+      // Until the operator asks again.
+      await service.listConnectionTools({
+        connectionId: connection.id,
+        refresh: true,
+      });
+      expect(upstream.connect).toHaveBeenCalledTimes(2);
+    });
+
+    it("gives the whole read one time budget, not one per page", async () => {
+      let now = 1_000_000;
+      const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+      try {
+        const timeouts: (number | undefined)[] = [];
+        // Each page takes 15 s and names another one. Two fit the budget;
+        // the third would be past it.
+        const upstream = fakeUpstream(async (params, options) => {
+          timeouts.push(options?.timeout);
+          now += 15_000;
+          const page = Number(params?.cursor ?? "1");
+          return { tools: [{ name: `tool_${page}` }], nextCursor: String(page + 1) };
+        });
+        const { connection, service } = serviceWith({ upstream });
+
+        await expect(
+          service.listConnectionTools({ connectionId: connection.id }),
+        ).rejects.toThrow("Datadog did not list its tools within 20 seconds.");
+        expect(timeouts).toEqual([20_000, 5_000]);
+        expect(upstream.close).toHaveBeenCalledOnce();
+      } finally {
+        clock.mockRestore();
+      }
+    });
+
+    it("lists a parked connection, but not while the gateway is off", async () => {
+      let gatewayEnabled = true;
+      const upstream = fakeUpstream(async () => ({ tools: [{ name: "a" }] }));
+      const { connection, registry, service } = serviceWith({
+        gatewayEnabled: () => gatewayEnabled,
+        upstream,
+      });
+
+      // Parking withholds a connection from threads. Asking what it would
+      // offer before offering it again is the operator's question, not a
+      // thread's.
+      registry.setEnabled(connection.id, false);
+      await expect(
+        service.listConnectionTools({ connectionId: connection.id }),
+      ).resolves.toMatchObject({ tools: ["a"] });
+
+      // Off means PwrAgent does not talk to these servers at all.
+      gatewayEnabled = false;
+      await expect(
+        service.listConnectionTools({
+          connectionId: connection.id,
+          refresh: true,
+        }),
+      ).rejects.toThrow("MCP gateway is turned off");
+    });
+
+    it("does not cache a list that was in flight when the credentials went away", async () => {
+      const answers: Array<(value: { tools: { name: string }[] }) => void> = [];
+      const upstream = fakeUpstream(
+        async () =>
+          await new Promise((resolve) => {
+            answers.push(resolve);
+          }),
+      );
+      const { connection, service } = serviceWith({ upstream });
+
+      const first = service.listConnectionTools({ connectionId: connection.id });
+      await vi.waitFor(() => expect(answers).toHaveLength(1));
+      await service.disconnectConnection(connection.id);
+      answers[0]({ tools: [{ name: "from_the_old_account" }] });
+      await first;
+
+      // The list above belongs to credentials that no longer exist. Serving
+      // it from cache would describe a server this row cannot reach.
+      const second = service.listConnectionTools({ connectionId: connection.id });
+      await vi.waitFor(() => expect(answers).toHaveLength(2));
+      answers[1]({ tools: [{ name: "fresh" }] });
+      await expect(second).resolves.toMatchObject({ tools: ["fresh"] });
+      expect(upstream.connect).toHaveBeenCalledTimes(2);
+    });
+
+    it("reports PwrSnap's revocation through the same session opener threads use", async () => {
+      const settings = createSettings(createAuthorizedCredential());
+      const service = new McpConnectionGatewayService({
+        fetchFn: vi.fn(async () => new Response("unauthorized", { status: 401 })),
+        resolveInstallPaths: () => [],
+        settings,
+        leaseManager: null,
+      });
+      services.push(service);
+
+      await expect(
+        service.listConnectionTools({ connectionId: "pwrsnap" }),
+      ).rejects.toThrow(PWRSNAP_SESSION_REVOKED_ERROR);
+      expect(settings.clearPwrSnapMcpCredential).toHaveBeenCalled();
+    });
+
+    it("answers for the profile's owner broker", async () => {
+      const upstream = fakeUpstream(async () => ({ tools: [{ name: "a" }] }));
+      const { connection, service } = serviceWith({ upstream });
+      const broker = service as unknown as {
+        dispatchBrokerOperation: (op: unknown, params: unknown) => Promise<unknown>;
+      };
+
+      await broker.dispatchBrokerOperation("broker/list-tools", {
+        connectionId: connection.id,
+      });
+      await broker.dispatchBrokerOperation("broker/list-tools", {
+        connectionId: connection.id,
+        refresh: true,
+      });
+      expect(upstream.connect).toHaveBeenCalledTimes(2);
+      await expect(
+        broker.dispatchBrokerOperation("broker/list-tools", {}),
+      ).rejects.toThrow("Invalid MCP connection tool list request.");
+    });
+  });
+
+  it("marks a connection for new threads without touching live sessions", async () => {
+    const registry = temporaryRegistry();
+    const connection = registry.create({
+      displayName: "Datadog",
+      serverUrl: "https://mcp.datadoghq.com/mcp",
+    });
+    const service = new McpConnectionGatewayService({
+      registry,
+      settings: createSettings(),
+      leaseManager: null,
+    });
+    services.push(service);
+    const closeConnectionSessions = vi.fn(async () => undefined);
+    Object.assign(service, { closeConnectionSessions });
+    const broker = service as unknown as {
+      dispatchBrokerOperation: (op: unknown, params: unknown) => Promise<unknown>;
+    };
+
+    await expect(
+      service.setConnectionSelectForNewThreads(connection.id, true),
+    ).resolves.toMatchObject({ id: connection.id, selectForNewThreads: true });
+    await expect(
+      broker.dispatchBrokerOperation("broker/set-select-for-new-threads", {
+        connectionId: connection.id,
+        selectForNewThreads: false,
+      }),
+    ).resolves.toMatchObject({ selectForNewThreads: false });
+    // It changes what a thread that does not exist yet starts with. Nothing
+    // running is affected, so nothing running is closed.
+    expect(closeConnectionSessions).not.toHaveBeenCalled();
+    await expect(
+      service.setConnectionSelectForNewThreads("ghost", true),
+    ).rejects.toThrow("Unknown MCP connection");
+  });
 });

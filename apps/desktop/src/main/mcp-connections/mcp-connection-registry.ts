@@ -20,6 +20,12 @@ const CONNECTIONS_TABLE = ["mcp_connections", "connections"] as const;
 // state the operator owns, without a phantom row that `create` and `remove`
 // would have to preserve on every rewrite.
 const PWRSNAP_ENABLED_PATH = ["mcp_connections", "pwrsnap_enabled"] as const;
+// The same reasoning covers the new-thread default, which is the second piece
+// of built-in state the operator owns.
+const BUILT_IN_SELECT_FOR_NEW_THREADS_KEYS = {
+  [PWRSNAP_MCP_CONNECTION_ID]: "pwrsnap_select_for_new_threads",
+  [PWRGIT_MCP_CONNECTION_ID]: "pwrgit_select_for_new_threads",
+} as const;
 const CONNECTION_ID_PATTERN = /^[a-z][a-z0-9_-]{0,63}$/;
 const PWRSNAP_SERVER_URL = "http://127.0.0.1:51729/mcp";
 
@@ -97,6 +103,49 @@ export class McpConnectionRegistry {
     return updated;
   }
 
+  /**
+   * Choose whether a new thread starts with this connection selected.
+   *
+   * Independent of `setEnabled` on purpose: parking a connection must not
+   * forget that the operator wanted it on new threads, so re-offering it
+   * restores the default without a second trip to this switch. The seeding
+   * side is what refuses a parked connection.
+   */
+  setSelectForNewThreads(
+    connectionId: string,
+    selectForNewThreads: boolean,
+  ): McpConnectionRecord {
+    if (
+      connectionId === PWRSNAP_MCP_CONNECTION_ID
+      || connectionId === PWRGIT_MCP_CONNECTION_ID
+    ) {
+      this.writeScalar(
+        ["mcp_connections", BUILT_IN_SELECT_FOR_NEW_THREADS_KEYS[connectionId]],
+        selectForNewThreads,
+      );
+      return connectionId === PWRGIT_MCP_CONNECTION_ID
+        ? this.pwrGitConnection()
+        : this.pwrSnapConnection();
+    }
+    const current = this.readStoredConnections();
+    const target = current.find((connection) => connection.id === connectionId);
+    if (!target) {
+      throw new Error("That MCP connection no longer exists.");
+    }
+    if (target.selectForNewThreads === selectForNewThreads) return target;
+    const updated: McpConnectionRecord = {
+      ...target,
+      selectForNewThreads,
+      updatedAt: this.now(),
+    };
+    this.writeStoredConnections(
+      current.map((connection) =>
+        connection.id === connectionId ? updated : connection,
+      ),
+    );
+    return updated;
+  }
+
   /** The `[mcp_connections]` table, or undefined when there is no config yet. */
   private readConnectionsTable(): Record<string, unknown> | undefined {
     if (!fs.existsSync(this.configPath)) return undefined;
@@ -112,6 +161,7 @@ export class McpConnectionRegistry {
     return {
       ...builtInPwrSnapConnection(),
       enabled: table?.pwrsnap_enabled !== false,
+      selectForNewThreads: table?.pwrsnap_select_for_new_threads === true,
     };
   }
 
@@ -125,6 +175,7 @@ export class McpConnectionRegistry {
       authMode: "oauth",
       kind: "pwrgit",
       enabled: table?.pwrgit_enabled !== false,
+      selectForNewThreads: table?.pwrgit_select_for_new_threads === true,
       createdAt: 0,
       updatedAt: 0,
     };
@@ -168,6 +219,7 @@ export class McpConnectionRegistry {
       authMode: "oauth",
       kind: "remote",
       enabled: true,
+      selectForNewThreads: false,
       createdAt: now,
       updatedAt: now,
     };
@@ -294,7 +346,13 @@ export class McpConnectionRegistry {
       // connection on the next read.
       if (!next || emitted.has(parsed.id)) continue;
       emitted.add(parsed.id);
-      rows.push({ ...row, ...connectionToRow(next) });
+      const merged: StoredConnectionRow = { ...row, ...connectionToRow(next) };
+      // `connectionToRow` omits the new-thread default when it is off, so a
+      // toggle of some other connection does not stamp the key onto every
+      // row. That means an off has to be removed explicitly, or the merge
+      // would keep the `true` this row carried before.
+      if (!next.selectForNewThreads) delete merged.select_for_new_threads;
+      rows.push(merged);
     }
     for (const connection of connections) {
       if (emitted.has(connection.id)) continue;
@@ -372,6 +430,7 @@ function builtInPwrSnapConnection(): McpConnectionRecord {
     authMode: "oauth",
     kind: "pwrsnap",
     enabled: true,
+    selectForNewThreads: false,
     createdAt: 0,
     updatedAt: 0,
   };
@@ -405,6 +464,7 @@ function connectionToRow(
     server_url: connection.serverUrl,
     auth_mode: connection.authMode,
     enabled: connection.enabled,
+    ...(connection.selectForNewThreads ? { select_for_new_threads: true } : {}),
     created_at: connection.createdAt,
     updated_at: connection.updatedAt,
   };
@@ -430,6 +490,9 @@ function connectionFromRow(
       authMode: "oauth",
       kind: "remote",
       enabled: row.enabled !== false,
+      // Opt-in: a row written before this key existed, or by hand without it,
+      // must not start handing a server to every new thread.
+      selectForNewThreads: row.select_for_new_threads === true,
       createdAt: typeof row.created_at === "number" ? row.created_at : 0,
       updatedAt: typeof row.updated_at === "number" ? row.updated_at : 0,
     };

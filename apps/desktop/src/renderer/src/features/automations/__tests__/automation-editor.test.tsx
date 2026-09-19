@@ -213,7 +213,9 @@ describe("AutomationEditor", () => {
               conversationId: "C123",
               conversationKind: "channel",
             },
-            id: "inbound-message",
+            // Derived from the conversation, so a second source gets its own
+            // id and re-saving this one writes the same id again.
+            id: "inbound-message:slack::C123",
             includeThreadReplies: false,
             kind: "inbound_message",
             name: 'text contains "Datadog monitor alert"',
@@ -2180,6 +2182,807 @@ function buildAutomation(overrides: Partial<AutomationDetail> = {}): AutomationD
     ...overrides,
   };
 }
+
+describe("AutomationEditor with several watched conversations", () => {
+  const senderFilter = {
+    join: "any" as const,
+    conditions: [
+      {
+        id: "c1",
+        field: "sender" as const,
+        operator: "is_one_of" as const,
+        values: ["B1"],
+        valueLabels: { B1: "spinnaker" },
+      },
+    ],
+  };
+
+  function multiSourceAutomation(): AutomationDetail {
+    return {
+      backend: "codex",
+      threadId: "thread-1",
+      id: "auto-1",
+      name: "Alerts and metrics",
+      status: "enabled",
+      triggers: [
+        {
+          // The id every automation written before multi-source carries.
+          id: "inbound-message",
+          kind: "inbound_message",
+          name: "sender is spinnaker",
+          conversation: {
+            channel: "slack",
+            conversationId: "C0ALERTS",
+            conversationKind: "channel",
+            title: "f-alerts",
+          },
+          conditionGroup: senderFilter,
+        },
+        {
+          id: "inbound-message:slack::C0METRICS",
+          kind: "inbound_message",
+          name: "sender is spinnaker",
+          conversation: {
+            channel: "slack",
+            conversationId: "C0METRICS",
+            conversationKind: "channel",
+            title: "f-metrics",
+          },
+          conditionGroup: senderFilter,
+        },
+      ],
+      scheduleSummary: "inbound from f-alerts, f-metrics: sender is spinnaker",
+      backlogPolicy: "coalesce",
+      updatedAt: 1,
+      createdAt: 1,
+      taskPrompt: "Investigate.",
+      outputActions: [{ id: "agent-context", kind: "agent_context" }],
+    };
+  }
+
+  const slackCatalog = () =>
+    fakeDesktopApi(
+      fakeSettings({
+        enabled: { slack: true },
+        slackChannels: [
+          { displayName: "f-alerts", id: "C0ALERTS" },
+          { displayName: "f-metrics", id: "C0METRICS" },
+        ],
+      }),
+    );
+
+  function submittedTriggers(onSubmit: ReturnType<typeof vi.fn>) {
+    const [submission] = onSubmit.mock.calls[0] as Array<{
+      request: { triggers: Array<Record<string, unknown>> };
+    }>;
+    return submission.request.triggers;
+  }
+
+  async function startSlackInboundDraft(): Promise<void> {
+    fireEvent.change(screen.getByLabelText("Name"), {
+      target: { value: "Alerts and metrics" },
+    });
+    fireEvent.change(screen.getByLabelText("Task prompt"), {
+      target: { value: "Investigate." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Inbound message" }));
+    await waitFor(() =>
+      expect(screen.getByRole("option", { name: "Slack" })).toBeInTheDocument(),
+    );
+    fireEvent.change(screen.getByLabelText("Provider"), {
+      target: { value: "slack" },
+    });
+  }
+
+  it("keeps every watched conversation, its id, and its title when re-saved", async () => {
+    const onSubmit = vi.fn(async () => undefined);
+    render(
+      <AutomationEditor
+        desktopApi={slackCatalog()}
+        mode={{ kind: "edit", automation: multiSourceAutomation() }}
+        onCancel={() => undefined}
+        onSubmit={onSubmit}
+      />,
+    );
+
+    // The first conversation fills the picker; the second is listed beside it
+    // instead of being silently dropped.
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: /^Conversation: / }),
+      ).toHaveAccessibleName(/f-alerts/),
+    );
+    const watching = screen.getByRole("list", { name: "Watching" });
+    expect(within(watching).getByText("f-metrics")).toBeInTheDocument();
+    expect(
+      screen.getByText("every message in f-alerts, f-metrics", {
+        selector: ".automation-flow__caption",
+      }),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    const triggers = submittedTriggers(onSubmit);
+    expect(triggers).toHaveLength(2);
+    // Unchanged sources keep their stored ids, including the legacy fixed one.
+    expect(triggers).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "inbound-message",
+          conversation: expect.objectContaining({
+            conversationId: "C0ALERTS",
+            title: "f-alerts",
+          }),
+          conditionGroup: senderFilter,
+        }),
+        expect.objectContaining({
+          id: "inbound-message:slack::C0METRICS",
+          conversation: expect.objectContaining({
+            conversationId: "C0METRICS",
+            title: "f-metrics",
+          }),
+          conditionGroup: senderFilter,
+        }),
+      ]),
+    );
+  });
+
+  it("stops watching a conversation removed from the list", async () => {
+    const onSubmit = vi.fn(async () => undefined);
+    render(
+      <AutomationEditor
+        desktopApi={slackCatalog()}
+        mode={{ kind: "edit", automation: multiSourceAutomation() }}
+        onCancel={() => undefined}
+        onSubmit={onSubmit}
+      />,
+    );
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Stop watching f-metrics" }),
+    );
+    expect(screen.queryByRole("list", { name: "Watching" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(submittedTriggers(onSubmit)).toEqual([
+      expect.objectContaining({
+        id: "inbound-message",
+        conversation: expect.objectContaining({ conversationId: "C0ALERTS" }),
+      }),
+    ]);
+  });
+
+  it("watches another channel and saves one trigger per conversation with one filter", async () => {
+    const onSubmit = vi.fn(async () => undefined);
+    render(
+      <AutomationEditor
+        desktopApi={fakeDesktopApi(fakeSettings({ enabled: { slack: true } }))}
+        mode={{ assignment: { backend: "codex", threadId: "thread-1" }, kind: "create" }}
+        onCancel={() => undefined}
+        onSubmit={onSubmit}
+      />,
+    );
+    await startSlackInboundDraft();
+
+    // Nothing to add until the fields name a conversation.
+    expect(
+      screen.queryByRole("button", { name: "Watch another conversation" }),
+    ).toBeNull();
+    fireEvent.change(screen.getByLabelText("Channel ID"), {
+      target: { value: "C1" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Watch another conversation" }));
+    // The first conversation moves to the list and the fields clear for the next.
+    expect(screen.getByLabelText("Channel ID")).toHaveValue("");
+    expect(
+      within(screen.getByRole("list", { name: "Watching" })).getByText("C1"),
+    ).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Channel ID"), {
+      target: { value: "C2" },
+    });
+    fireEvent.change(screen.getByLabelText("Value"), {
+      target: { value: "ERROR" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    const triggers = submittedTriggers(onSubmit);
+    expect(triggers).toHaveLength(2);
+    const shared = {
+      kind: "inbound_message",
+      name: 'text contains "ERROR"',
+      includeThreadReplies: false,
+      conditionGroup: expect.objectContaining({
+        conditions: [expect.objectContaining({ values: ["ERROR"] })],
+      }),
+    };
+    expect(triggers).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          ...shared,
+          id: "inbound-message:slack::C1",
+          conversation: expect.objectContaining({ conversationId: "C1" }),
+        }),
+        expect.objectContaining({
+          ...shared,
+          id: "inbound-message:slack::C2",
+          conversation: expect.objectContaining({ conversationId: "C2" }),
+        }),
+      ]),
+    );
+  });
+
+  it("saves the watched list when the fields are left empty after Watch another", async () => {
+    const onSubmit = vi.fn(async () => undefined);
+    render(
+      <AutomationEditor
+        desktopApi={fakeDesktopApi(fakeSettings({ enabled: { slack: true } }))}
+        mode={{ assignment: { backend: "codex", threadId: "thread-1" }, kind: "create" }}
+        onCancel={() => undefined}
+        onSubmit={onSubmit}
+      />,
+    );
+    await startSlackInboundDraft();
+    fireEvent.change(screen.getByLabelText("Channel ID"), {
+      target: { value: "C1" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Watch another conversation" }));
+    fireEvent.change(screen.getByLabelText("Value"), {
+      target: { value: "ERROR" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText("Conversation ID is required.")).toBeNull();
+    expect(submittedTriggers(onSubmit)).toEqual([
+      expect.objectContaining({
+        conversation: expect.objectContaining({ conversationId: "C1" }),
+      }),
+    ]);
+  });
+
+  it("watches a contact's DMs beside a channel, subscribing each by its own identity", async () => {
+    const automation = multiSourceAutomation();
+    automation.triggers = [
+      automation.triggers[0]!,
+      {
+        id: "inbound-message:slack:dm:U0AVERY",
+        kind: "inbound_message",
+        name: "sender is spinnaker",
+        conversation: {
+          channel: "slack",
+          conversationId: "U0AVERY",
+          conversationKind: "dm",
+          recipientUserId: "U0AVERY",
+          title: "Avery",
+        },
+        conditionGroup: senderFilter,
+      },
+    ];
+    const onSubmit = vi.fn(async () => undefined);
+    const desktopApi = {
+      ...slackCatalog(),
+      startInboundPreview: vi.fn(async () => ({ ok: true })),
+      stopInboundPreview: vi.fn(async () => undefined),
+      onInboundPreviewMessage: () => () => undefined,
+    } as unknown as DesktopApi;
+    render(
+      <AutomationEditor
+        desktopApi={desktopApi}
+        mode={{ kind: "edit", automation }}
+        onCancel={() => undefined}
+        onSubmit={onSubmit}
+      />,
+    );
+
+    // A person listed beside channels says it is a DM.
+    const watching = await screen.findByRole("list", { name: "Watching" });
+    expect(within(watching).getByText("Avery (DM)")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Preview live messages" }));
+    await waitFor(() =>
+      expect(desktopApi.startInboundPreview).toHaveBeenCalledTimes(2),
+    );
+    // The contact is previewed as a contact — by sender — not as a
+    // conversation whose ID happens to be a user ID.
+    expect(desktopApi.startInboundPreview).toHaveBeenCalledWith(
+      expect.objectContaining({
+        conversationId: "U0AVERY",
+        conversationKind: "dm",
+        recipientUserId: "U0AVERY",
+      }),
+    );
+    expect(desktopApi.startInboundPreview).toHaveBeenCalledWith(
+      expect.objectContaining({ conversationId: "C0ALERTS", provider: "slack" }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(submittedTriggers(onSubmit)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "inbound-message" }),
+        expect.objectContaining({
+          id: "inbound-message:slack:dm:U0AVERY",
+          conversation: expect.objectContaining({ recipientUserId: "U0AVERY" }),
+        }),
+      ]),
+    );
+  });
+
+  it("keeps the direct-message caption when the only source is a contact chip", async () => {
+    const automation = multiSourceAutomation();
+    automation.triggers = [
+      {
+        id: "inbound-message:slack:dm:U0AVERY",
+        kind: "inbound_message",
+        conversation: {
+          channel: "slack",
+          conversationId: "U0AVERY",
+          conversationKind: "dm",
+          recipientUserId: "U0AVERY",
+          title: "Avery",
+        },
+        conditionGroup: senderFilter,
+      },
+    ];
+    render(
+      <AutomationEditor
+        desktopApi={slackCatalog()}
+        mode={{ kind: "edit", automation }}
+        onCancel={() => undefined}
+        onSubmit={vi.fn(async () => undefined)}
+      />,
+    );
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Watch another conversation" }),
+    );
+    // The fields are empty now; the contact lives only in the chips.
+    expect(
+      screen.getByText("every direct message from Avery", {
+        selector: ".automation-flow__caption",
+      }),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps a source's stored id even when a new source derives the same one", async () => {
+    // B's stored id is what the new manual C9 source would derive. B is
+    // unchanged, so B keeps it and the NEW source is the one that yields.
+    const automation = multiSourceAutomation();
+    automation.triggers = [
+      automation.triggers[0]!,
+      {
+        id: "inbound-message:slack::C9",
+        kind: "inbound_message",
+        name: "sender is spinnaker",
+        conversation: {
+          channel: "slack",
+          conversationId: "C0METRICS",
+          conversationKind: "channel",
+          title: "f-metrics",
+        },
+        conditionGroup: senderFilter,
+      },
+    ];
+    const onSubmit = vi.fn(async () => undefined);
+    render(
+      <AutomationEditor
+        desktopApi={slackCatalog()}
+        mode={{ kind: "edit", automation }}
+        onCancel={() => undefined}
+        onSubmit={onSubmit}
+      />,
+    );
+
+    await pickManualEntry("Conversation", /Enter Channel ID manually/);
+    fireEvent.change(screen.getByLabelText("Channel ID"), {
+      target: { value: "C9" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(submittedTriggers(onSubmit)).toEqual([
+      expect.objectContaining({
+        id: "inbound-message:slack::C9:2",
+        conversation: expect.objectContaining({ conversationId: "C9" }),
+      }),
+      expect.objectContaining({
+        id: "inbound-message:slack::C9",
+        conversation: expect.objectContaining({ conversationId: "C0METRICS" }),
+      }),
+    ]);
+  });
+
+  it("opens a listed conversation for editing and keeps the list's order", async () => {
+    const onSubmit = vi.fn(async () => undefined);
+    render(
+      <AutomationEditor
+        desktopApi={slackCatalog()}
+        mode={{ kind: "edit", automation: multiSourceAutomation() }}
+        onCancel={() => undefined}
+        onSubmit={onSubmit}
+      />,
+    );
+
+    const watching = await screen.findByRole("list", { name: "Watching" });
+    fireEvent.click(within(watching).getByRole("button", { name: "Edit f-metrics" }));
+
+    // f-metrics is now the one in the fields; f-alerts went back into the list
+    // where it stood, and can be reopened the same way.
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: /^Conversation: / }),
+      ).toHaveAccessibleName(/f-metrics/),
+    );
+    expect(
+      within(watching).getByRole("button", { name: "Edit f-alerts" }),
+    ).toBeInTheDocument();
+    expect(
+      within(watching).getByText("f-metrics").closest("li"),
+    ).toHaveAttribute("aria-current", "true");
+
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(submittedTriggers(onSubmit)).toEqual([
+      expect.objectContaining({
+        id: "inbound-message",
+        conversation: expect.objectContaining({ title: "f-alerts" }),
+      }),
+      expect.objectContaining({
+        id: "inbound-message:slack::C0METRICS",
+        conversation: expect.objectContaining({ title: "f-metrics" }),
+      }),
+    ]);
+  });
+
+  it("cancels adding a conversation and reopens the one before it", async () => {
+    render(
+      <AutomationEditor
+        desktopApi={fakeDesktopApi(fakeSettings({ enabled: { slack: true } }))}
+        mode={{ assignment: { backend: "codex", threadId: "thread-1" }, kind: "create" }}
+        onCancel={() => undefined}
+        onSubmit={vi.fn(async () => undefined)}
+      />,
+    );
+    await startSlackInboundDraft();
+    fireEvent.change(screen.getByLabelText("Channel ID"), {
+      target: { value: "C1" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Watch another conversation" }));
+    expect(screen.getByLabelText("Channel ID")).toHaveValue("");
+    expect(
+      within(screen.getByRole("list", { name: "Watching" })).getByText(
+        "New conversation",
+      ),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Discard this conversation" }));
+
+    expect(screen.getByLabelText("Channel ID")).toHaveValue("C1");
+    // Back to one source, which needs no list.
+    expect(screen.queryByRole("list", { name: "Watching" })).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Watch another conversation" }),
+    ).toBeInTheDocument();
+  });
+
+  it("will not abandon a half-filled conversation to open another", async () => {
+    render(
+      <AutomationEditor
+        desktopApi={fakeDesktopApi(fakeSettings({ enabled: { telegram: true } }))}
+        mode={{ assignment: { backend: "codex", threadId: "thread-1" }, kind: "create" }}
+        onCancel={() => undefined}
+        onSubmit={vi.fn(async () => undefined)}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Inbound message" }));
+    fireEvent.change(await screen.findByLabelText("Group ID"), {
+      target: { value: "-100" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Watch another conversation" }));
+    fireEvent.change(screen.getByLabelText("Group ID"), {
+      target: { value: "-200" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Specific topic" }));
+
+    fireEvent.click(
+      within(screen.getByRole("list", { name: "Watching" })).getByRole("button", {
+        name: "Edit -100",
+      }),
+    );
+
+    // Said beside the list that was clicked, not at the foot of the form.
+    const notice = await screen.findByRole("alert");
+    expect(notice).toHaveTextContent("Enter a topic ID or switch to Whole group.");
+    expect(notice.closest(".automation-sources__watching")).not.toBeNull();
+    expect(screen.getByLabelText("Group ID")).toHaveValue("-200");
+  });
+
+  it("keeps a reopened Telegram topic's names when it is saved again", async () => {
+    const automation = multiSourceAutomation();
+    automation.triggers = [
+      automation.triggers[0]!,
+      {
+        id: "inbound-message:telegram:-1001:680",
+        kind: "inbound_message",
+        name: "sender is spinnaker",
+        conversation: {
+          channel: "telegram",
+          conversationId: "680",
+          conversationKind: "topic",
+          parentId: "-1001",
+          parentTitle: "Ops Room",
+          title: "Deploys",
+        },
+        conditionGroup: senderFilter,
+      },
+    ];
+    const onSubmit = vi.fn(async () => undefined);
+    render(
+      <AutomationEditor
+        desktopApi={fakeDesktopApi(
+          fakeSettings({
+            enabled: { slack: true, telegram: true },
+            slackChannels: [{ displayName: "f-alerts", id: "C0ALERTS" }],
+          }),
+        )}
+        mode={{ kind: "edit", automation }}
+        onCancel={() => undefined}
+        onSubmit={onSubmit}
+      />,
+    );
+
+    const watching = await screen.findByRole("list", { name: "Watching" });
+    fireEvent.click(
+      within(watching).getByRole("button", { name: "Edit Telegram · Ops Room / Deploys" }),
+    );
+    // Neither catalog names this group or topic, so only the stored titles can.
+    expect(screen.getByLabelText("Topic ID")).toHaveValue("680");
+
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(submittedTriggers(onSubmit)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "inbound-message:telegram:-1001:680",
+          conversation: expect.objectContaining({
+            conversationId: "680",
+            parentId: "-1001",
+            parentTitle: "Ops Room",
+            title: "Deploys",
+          }),
+        }),
+      ]),
+    );
+  });
+
+  it("lists a source on a disabled provider without opening it, and saves it as stored", async () => {
+    const telegramTopic = {
+      id: "inbound-message:telegram:-1001:680",
+      kind: "inbound_message" as const,
+      name: "sender is spinnaker",
+      conversation: {
+        channel: "telegram" as const,
+        conversationId: "680",
+        conversationKind: "topic" as const,
+        parentId: "-1001",
+        parentTitle: "Ops Room",
+        title: "Deploys",
+      },
+      conditionGroup: senderFilter,
+    };
+    const automation = multiSourceAutomation();
+    automation.triggers = [automation.triggers[0]!, telegramTopic];
+    const onSubmit = vi.fn(async () => undefined);
+    // Telegram is not enabled: opening the topic would move it onto Slack.
+    render(
+      <AutomationEditor
+        desktopApi={slackCatalog()}
+        mode={{ kind: "edit", automation }}
+        onCancel={() => undefined}
+        onSubmit={onSubmit}
+      />,
+    );
+
+    const watching = await screen.findByRole("list", { name: "Watching" });
+    await waitFor(() =>
+      expect(
+        within(watching).queryByRole("button", { name: /^Edit Telegram/ }),
+      ).toBeNull(),
+    );
+    expect(
+      within(watching).getByText("Telegram · Ops Room / Deploys"),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(submittedTriggers(onSubmit)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: telegramTopic.id,
+          conversation: telegramTopic.conversation,
+        }),
+      ]),
+    );
+  });
+
+  it("keeps the list order when a source before the edited one is removed", async () => {
+    const automation = multiSourceAutomation();
+    automation.triggers = [
+      ...automation.triggers,
+      {
+        id: "inbound-message:slack::C0DEPLOYS",
+        kind: "inbound_message",
+        name: "sender is spinnaker",
+        conversation: {
+          channel: "slack",
+          conversationId: "C0DEPLOYS",
+          conversationKind: "channel",
+          title: "f-deploys",
+        },
+        conditionGroup: senderFilter,
+      },
+    ];
+    const onSubmit = vi.fn(async () => undefined);
+    render(
+      <AutomationEditor
+        desktopApi={slackCatalog()}
+        mode={{ kind: "edit", automation }}
+        onCancel={() => undefined}
+        onSubmit={onSubmit}
+      />,
+    );
+
+    const watching = await screen.findByRole("list", { name: "Watching" });
+    fireEvent.click(within(watching).getByRole("button", { name: "Edit f-metrics" }));
+    fireEvent.click(
+      within(watching).getByRole("button", { name: "Stop watching f-alerts" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(
+      submittedTriggers(onSubmit).map(
+        (trigger) => (trigger.conversation as { title?: string }).title,
+      ),
+    ).toEqual(["f-metrics", "f-deploys"]);
+  });
+
+  it("stops watching the edited conversation even when it is also listed", async () => {
+    const automation = multiSourceAutomation();
+    automation.triggers = [
+      ...automation.triggers,
+      {
+        id: "inbound-message:slack::C0DEPLOYS",
+        kind: "inbound_message",
+        name: "sender is spinnaker",
+        conversation: {
+          channel: "slack",
+          conversationId: "C0DEPLOYS",
+          conversationKind: "channel",
+          title: "f-deploys",
+        },
+        conditionGroup: senderFilter,
+      },
+    ];
+    const onSubmit = vi.fn(async () => undefined);
+    render(
+      <AutomationEditor
+        desktopApi={slackCatalog()}
+        mode={{ kind: "edit", automation }}
+        onCancel={() => undefined}
+        onSubmit={onSubmit}
+      />,
+    );
+
+    // Point the fields at f-metrics, which is already listed.
+    await pickConversation("Conversation", /f-metrics/);
+    const watching = screen.getByRole("list", { name: "Watching" });
+    fireEvent.click(
+      within(watching).getByRole("button", { name: "Stop watching f-metrics" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(
+      submittedTriggers(onSubmit).map(
+        (trigger) => (trigger.conversation as { title?: string }).title,
+      ),
+    ).toEqual(["f-deploys"]);
+  });
+
+  it("moves focus to the fields when the clicked control goes away", async () => {
+    render(
+      <AutomationEditor
+        desktopApi={fakeDesktopApi(fakeSettings({ enabled: { slack: true } }))}
+        mode={{ assignment: { backend: "codex", threadId: "thread-1" }, kind: "create" }}
+        onCancel={() => undefined}
+        onSubmit={vi.fn(async () => undefined)}
+      />,
+    );
+    await startSlackInboundDraft();
+    fireEvent.change(screen.getByLabelText("Channel ID"), {
+      target: { value: "C1" },
+    });
+    const add = screen.getByRole("button", { name: "Watch another conversation" });
+    add.focus();
+    fireEvent.click(add);
+
+    await waitFor(() => expect(screen.getByLabelText("Provider")).toHaveFocus());
+  });
+
+  it("previews live messages from every watched conversation and says which one", async () => {
+    let previewListener: ((message: InboundPreviewMessage) => void) | undefined;
+    const desktopApi = {
+      readMessagingSettings: async () => fakeSettings({ enabled: { slack: true } }),
+      startInboundPreview: vi.fn(async () => ({ ok: true })),
+      stopInboundPreview: vi.fn(async () => undefined),
+      onInboundPreviewMessage: (
+        callback: (message: InboundPreviewMessage) => void,
+      ) => {
+        previewListener = callback;
+        return () => undefined;
+      },
+    } as unknown as DesktopApi;
+    render(
+      <AutomationEditor
+        desktopApi={desktopApi}
+        mode={{ assignment: { backend: "codex", threadId: "thread-1" }, kind: "create" }}
+        onCancel={() => undefined}
+        onSubmit={vi.fn(async () => undefined)}
+      />,
+    );
+    await startSlackInboundDraft();
+    fireEvent.change(screen.getByLabelText("Channel ID"), {
+      target: { value: "C1" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Watch another conversation" }));
+    fireEvent.change(screen.getByLabelText("Channel ID"), {
+      target: { value: "C2" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Preview live messages" }));
+
+    await waitFor(() =>
+      expect(desktopApi.startInboundPreview).toHaveBeenCalledTimes(2),
+    );
+    expect(desktopApi.startInboundPreview).toHaveBeenCalledWith(
+      expect.objectContaining({ conversationId: "C1", provider: "slack" }),
+    );
+    expect(desktopApi.startInboundPreview).toHaveBeenCalledWith(
+      expect.objectContaining({ conversationId: "C2", provider: "slack" }),
+    );
+
+    const post = (id: string, conversationId: string, text: string) => ({
+      actor: { displayName: "Datadog", platformUserId: "B1" },
+      conversationId,
+      id,
+      provider: "slack" as const,
+      receivedAt: 1,
+      text,
+    });
+    act(() => {
+      previewListener?.(post("m1", "C1", "disk full"));
+      previewListener?.(post("m2", "C2", "p99 over budget"));
+      previewListener?.(post("m3", "C9", "not watched"));
+    });
+
+    const fromC1 = (await screen.findByText("disk full")).closest(
+      ".automation-preview__item",
+    );
+    const fromC2 = screen.getByText("p99 over budget").closest(
+      ".automation-preview__item",
+    );
+    expect(fromC1).toHaveTextContent("in C1");
+    expect(fromC2).toHaveTextContent("in C2");
+    expect(screen.queryByText("not watched")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Stop preview" }));
+    await waitFor(() =>
+      expect(desktopApi.stopInboundPreview).toHaveBeenCalledTimes(2),
+    );
+  });
+});
 
 /** `displayName` is optional in the real snapshot: PwrAgent does not always
  *  have a name for an authorized contact, and a row for one it cannot name is

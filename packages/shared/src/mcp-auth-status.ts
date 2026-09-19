@@ -1,4 +1,5 @@
 import type { CodexMcpAuthStatus } from "./contracts/agent";
+import type { McpConnectionStatus } from "./contracts/mcp-connections";
 
 /**
  * One wording for the Codex MCP sign-in enum, shared by every surface that
@@ -74,4 +75,39 @@ export function describeMcpAuthStatus(
 
 export function formatMcpAuthStatus(status: CodexMcpAuthStatus): string {
   return describeMcpAuthStatus(status).label;
+}
+
+/**
+ * The same chip for a PwrAgent-managed connection.
+ *
+ * Settings → Plugins lists both kinds of server one above the other, and they
+ * used to describe one state in two dialects: a Codex server with no
+ * credentials read `Sign-in required` while a managed one in the same position
+ * read `Not set up`, and a working one read `Signed in` in one list and
+ * `Ready` in the other. A managed connection is always OAuth, so it maps onto
+ * two of the Codex states and takes their label and tone verbatim.
+ *
+ * Only the description differs, because it names who holds the credential:
+ * PwrAgent here, Codex there.
+ */
+export function describeMcpConnectionAuth(
+  connection: Pick<McpConnectionStatus, "configured" | "state">,
+): McpAuthStatusPresentation {
+  const signedIn =
+    connection.configured
+    && connection.state !== "disconnected"
+    && connection.state !== "reauthorization_required";
+  if (signedIn) {
+    return {
+      ...PRESENTATIONS.oAuth,
+      description:
+        "PwrAgent holds OAuth credentials for this server, encrypted in this profile, and refreshes them itself.",
+    };
+  }
+  return {
+    ...PRESENTATIONS.notLoggedIn,
+    description: connection.configured
+      ? "The credentials PwrAgent holds stopped working. Authorize this connection again."
+      : "PwrAgent holds no credentials for this server yet. Authorize it to sign in.",
+  };
 }

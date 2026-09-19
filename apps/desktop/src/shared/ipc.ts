@@ -188,6 +188,9 @@ export const MCP_CONNECTION_UPDATE_CHANNEL = "mcp-connection:update";
 export const MCP_CONNECTION_PROBE_CHANNEL = "mcp-connection:probe";
 export const MCP_CONNECTION_SET_ENABLED_CHANNEL =
   "mcp-connection:set-enabled";
+export const MCP_CONNECTION_SET_SELECT_FOR_NEW_THREADS_CHANNEL =
+  "mcp-connection:set-select-for-new-threads";
+export const MCP_CONNECTION_LIST_TOOLS_CHANNEL = "mcp-connection:list-tools";
 export const MCP_CONNECTION_SET_THREAD_CHANNEL =
   "mcp-connection:set-thread";
 export const MCP_CONNECTION_READ_THREAD_CHANNEL =

@@ -83,6 +83,7 @@ import {
   buildThreadMarkdownLink,
   buildThreadUrl,
   canIsolateMcpProviderServers,
+  mcpConnectionIdsForNewThread,
   mcpSelectionApplyTiming,
   resolveMcpConnectionSetup,
   estimateTokenUsageCost,
@@ -6027,6 +6028,15 @@ type MessagingArchiveCleanupResult = {
   revokedCount: number;
 };
 
+/** Same connections, in any order; two absent selections are the same. */
+function sameMcpConnectionIds(
+  a: readonly string[] | undefined,
+  b: readonly string[] | undefined,
+): boolean {
+  if (a === undefined || b === undefined) return a === b;
+  return a.length === b.length && a.every((id) => b.includes(id));
+}
+
 function isEmptyDirectoryLaunchpadDraft(launchpad: NavigationLaunchpadDraft): boolean {
   return (
     launchpad.prompt.trim().length === 0 &&
@@ -7874,6 +7884,14 @@ const ACP_AVAILABLE_COMMAND_PROBE_BUDGET_MS = 20_000;
  * relaunch away.
  */
 const ACP_AVAILABLE_COMMAND_PROBE_COOLDOWN_MS = 1_800_000;
+
+/**
+ * How long opening a new-thread draft waits for the MCP connections that seed
+ * it. On a second instance the read crosses the owner broker, whose own
+ * timeout is sized for a ten-minute tool call; a wedged owner must cost the
+ * draft its defaults, not hold the New thread screen for that long.
+ */
+const LAUNCHPAD_MCP_SEED_BUDGET_MS = 2_000;
 
 /**
  * Match the forward-slashed directory identifiers
@@ -21177,6 +21195,14 @@ export class DesktopBackendRegistry {
        * is never a valid source of environment/filesystem metadata.
        */
       skipFilesystemInspection?: boolean;
+      /**
+       * The same viewer's draft must not take this machine's MCP defaults
+       * either. Connection ids are per machine and the two built-ins share
+       * theirs everywhere, so a local "PwrSnap for new threads" would select
+       * the *remote* machine's PwrSnap on a thread the operator never chose
+       * it for there.
+       */
+      skipMcpConnectionDefaults?: boolean;
     },
   ): Promise<EnsureDirectoryLaunchpadResponse> {
     const codexEnvironmentOptions = options?.skipFilesystemInspection
@@ -21189,6 +21215,9 @@ export class DesktopBackendRegistry {
       await this.overlayStore.getLaunchpadDefaults(),
       request.preferredBackend,
     );
+    const mcpSeed = options?.skipMcpConnectionDefaults
+      ? undefined
+      : await this.resolveLaunchpadMcpSeed(existing);
     if (existing) {
       const registeredAt = existing.registeredAt ?? request.registeredAt;
       const existingLaunchpad = projectNavigationLaunchpadProviderSettings(existing);
@@ -21250,6 +21279,7 @@ export class DesktopBackendRegistry {
           parentThreadInstanceId: requestParentThreadInstanceId,
           parentThreadTitle: requestParentThreadTitle,
           registeredAt,
+          ...mcpSeed,
           updatedAt: Date.now(),
         };
         return {
@@ -21270,7 +21300,8 @@ export class DesktopBackendRegistry {
         normalizedExisting.serviceTier !== existing.serviceTier ||
         normalizedExisting.fastMode !== existing.fastMode ||
         registeredAt !== existing.registeredAt ||
-        parentChanged
+        parentChanged ||
+        mcpSeed !== undefined
       ) {
         return {
           launchpad: withCodexEnvironmentOptions(
@@ -21284,6 +21315,7 @@ export class DesktopBackendRegistry {
               parentThreadInstanceId: requestParentThreadInstanceId,
               parentThreadTitle: requestParentThreadTitle,
               registeredAt,
+              ...mcpSeed,
               updatedAt: Date.now(),
             }),
             codexEnvironmentOptions,
@@ -21320,6 +21352,7 @@ export class DesktopBackendRegistry {
       parentThreadBackend: request.parentThreadBackend,
       parentThreadInstanceId: request.parentThreadInstanceId,
       parentThreadTitle: request.parentThreadTitle,
+      ...mcpSeed,
       createdAt: Date.now(),
       updatedAt: Date.now(),
     };
@@ -21347,6 +21380,17 @@ export class DesktopBackendRegistry {
     const patch = {
       ...request.patch,
       ...("fastMode" in request.patch ? { serviceTier: undefined } : {}),
+      // An edit to the selection makes it the operator's. Re-seeding after
+      // that would put back a connection they just turned off. A patch that
+      // only repeats the current ids is not an edit: the MCP access panel
+      // sends them along with its agent-servers switch.
+      ...("mcpConnectionIds" in request.patch
+        && !sameMcpConnectionIds(
+          request.patch.mcpConnectionIds,
+          current.mcpConnectionIds,
+        )
+        ? { mcpConnectionIdsFromDefaults: undefined }
+        : {}),
     };
     const patchedLaunchpad: NavigationLaunchpadDraft = {
       ...applyNavigationLaunchpadProviderSettingsPatch(current, patch),
@@ -23129,6 +23173,69 @@ export class DesktopBackendRegistry {
       launchpadOptions,
       settings,
     );
+  }
+
+  /**
+   * What a new-thread draft's MCP selection should become, or undefined to
+   * leave it alone.
+   *
+   * A draft is seeded only while nobody has chosen for it: no selection yet,
+   * or one the defaults wrote themselves. A draft the operator has edited is
+   * theirs, including an edit down to nothing. The seed is recomputed each
+   * time rather than written once, because a draft sits open per directory
+   * until it is sent, and a default changed in Settings has to reach the
+   * drafts that already exist.
+   *
+   * Failing to read the connections, or not reading them within
+   * `LAUNCHPAD_MCP_SEED_BUDGET_MS`, leaves the draft as it is. A missing
+   * default is recoverable from the MCP access panel; a failed or stalled
+   * ensure is a New thread screen that will not open.
+   */
+  private async resolveLaunchpadMcpSeed(
+    existing: NavigationLaunchpadDraft | undefined,
+  ): Promise<
+    | Pick<
+        NavigationLaunchpadDraft,
+        "mcpConnectionIds" | "mcpConnectionIdsFromDefaults"
+      >
+    | undefined
+  > {
+    const seeded = existing?.mcpConnectionIdsFromDefaults === true;
+    if (existing?.mcpConnectionIds !== undefined && !seeded) return undefined;
+    const service = this.mcpConnectionService;
+    if (!service?.listConnections) return undefined;
+    let ids: string[];
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const deadline = new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(
+            `No answer within ${LAUNCHPAD_MCP_SEED_BUDGET_MS} ms.`,
+          )),
+          LAUNCHPAD_MCP_SEED_BUDGET_MS,
+        );
+        timer.unref?.();
+      });
+      ids = mcpConnectionIdsForNewThread(
+        await Promise.race([service.listConnections(), deadline]),
+      );
+    } catch (error) {
+      backendRegistryLog.warn("launchpad_mcp_defaults_unavailable", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return undefined;
+    } finally {
+      clearTimeout(timer);
+    }
+    if (ids.length === 0) {
+      return seeded
+        ? { mcpConnectionIds: undefined, mcpConnectionIdsFromDefaults: undefined }
+        : undefined;
+    }
+    if (seeded && sameMcpConnectionIds(existing?.mcpConnectionIds, ids)) {
+      return undefined;
+    }
+    return { mcpConnectionIds: ids, mcpConnectionIdsFromDefaults: true };
   }
 
   private async resolveLaunchpadDefaults(

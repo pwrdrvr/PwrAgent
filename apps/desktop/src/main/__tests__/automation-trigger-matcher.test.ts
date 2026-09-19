@@ -11,6 +11,7 @@ import {
   buildReplayRunSourceMetadata,
   buildSourceEventKey,
   matchAutomationInboundEvent,
+  resolveInboundTriggerForMessage,
 } from "../automations/automation-trigger-matcher";
 
 describe("automation trigger matcher", () => {
@@ -659,5 +660,83 @@ describe("normalized automation conversation identity", () => {
     const shared = { channel, conversationId: "shared", conversationKind: "channel" } as const;
     expect(matchesAutomationConversation(shared, shared, "peer")).toBe(true);
     expect(matchesAutomationConversation(shared, { ...shared, conversationId: "other" }, "peer")).toBe(false);
+  });
+});
+
+describe("multi-source inbound triggers", () => {
+  const source = (id: string, channel: "slack" | "telegram", conversationId: string) => ({
+    id,
+    kind: "inbound_message" as const,
+    conversation: { channel, conversationId },
+  });
+  /** A captured message; a thread reply names the channel it was posted under. */
+  const message = (
+    provider: "slack" | "telegram",
+    conversationId: string,
+    parentConversationId?: string,
+  ) => ({
+    id: "m1",
+    provider,
+    conversationId,
+    ...(parentConversationId
+      ? { conversationKind: "thread" as const, parentConversationId }
+      : {}),
+    receivedAt: 1,
+    actor: { platformUserId: "U1" },
+    text: "ERROR",
+  });
+
+  it("fires for a message in any watched conversation, naming the one it came from", () => {
+    const record = {
+      ...automation(),
+      triggers: [
+        source("t-alerts", "slack", "C-ALERTS"),
+        source("t-metrics", "slack", "C-METRICS"),
+      ],
+    };
+    const [match] = matchAutomationInboundEvent({
+      automations: [record],
+      event: slackTextEvent({
+        channel: {
+          channel: "slack",
+          conversation: { id: "C-METRICS", kind: "channel", title: "f-metrics" },
+        },
+      }),
+    });
+    expect(match?.trigger.id).toBe("t-metrics");
+    expect(match?.source.conversation).toMatchObject({
+      conversationId: "C-METRICS",
+      title: "f-metrics",
+    });
+  });
+
+  it("resolves the trigger that owns a replayed message by its conversation", () => {
+    const triggers = [
+      { id: "schedule", kind: "schedule" as const, schedule: { kind: "interval" as const, every: 5, unit: "minutes" as const } },
+      source("t-alerts", "slack", "C-ALERTS"),
+      source("t-metrics", "slack", "C-METRICS"),
+      source("t-ops", "telegram", "C-METRICS"),
+    ];
+    expect(resolveInboundTriggerForMessage(triggers, message("slack", "C-METRICS"))?.id)
+      .toBe("t-metrics");
+    // Same conversation id on another provider is another conversation.
+    expect(resolveInboundTriggerForMessage(triggers, message("telegram", "C-METRICS"))?.id)
+      .toBe("t-ops");
+    // A thread reply belongs to the channel it was posted under.
+    expect(
+      resolveInboundTriggerForMessage(triggers, message("slack", "T-1", "C-ALERTS"))?.id,
+    ).toBe("t-alerts");
+    expect(resolveInboundTriggerForMessage(triggers, message("slack", "C-OTHER")))
+      .toBeUndefined();
+  });
+
+  it("prefers a thread watched in its own right over the channel it lives in", () => {
+    const triggers = [
+      source("t-channel", "slack", "C-ALERTS"),
+      source("t-thread", "slack", "T-1"),
+    ];
+    expect(
+      resolveInboundTriggerForMessage(triggers, message("slack", "T-1", "C-ALERTS"))?.id,
+    ).toBe("t-thread");
   });
 });

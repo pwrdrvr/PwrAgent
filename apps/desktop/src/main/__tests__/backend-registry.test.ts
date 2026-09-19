@@ -32,6 +32,7 @@ import {
 import type {
   AcpBackendId,
   AgentEvent,
+  McpConnectionStatus,
   AppServerBackendKind,
   AppServerNotification,
   AppServerAvailableCommandSummary,
@@ -17744,6 +17745,237 @@ command = "pnpm grok"
     });
 
     await registry.close();
+  });
+
+  describe("MCP connections selected for new threads", () => {
+    function mcpConnection(
+      overrides: Partial<McpConnectionStatus> & { id: string },
+    ): McpConnectionStatus {
+      return {
+        displayName: overrides.id,
+        serverUrl: `https://${overrides.id}.example/mcp`,
+        authMode: "oauth",
+        kind: "remote",
+        enabled: true,
+        selectForNewThreads: true,
+        configured: true,
+        state: "ready",
+        createdAt: 0,
+        updatedAt: 0,
+        ...overrides,
+      };
+    }
+
+    function registryWith(connections: () => McpConnectionStatus[]) {
+      const listConnections = vi.fn(async () => connections());
+      const registry = new DesktopBackendRegistry({
+        codexClient: new MockBackendClient({
+          initializeResult: { methods: ["thread/start"] },
+        }),
+        overlayStore: createOverlayStoreMock(),
+        mcpConnectionService: {
+          registerBridge: vi.fn(),
+          listConnections,
+        },
+      });
+      const ensure = async (
+        options?: Parameters<typeof registry.ensureDirectoryLaunchpad>[1],
+      ) => (await registry.ensureDirectoryLaunchpad({
+        directoryKey: "directory:/repo-a",
+        directoryKind: "directory",
+        directoryLabel: "Repo A",
+        directoryPath: "/repo-a",
+      }, options)).launchpad;
+      return { ensure, listConnections, registry };
+    }
+
+    it("seeds a new draft with the defaults a thread could actually use", async () => {
+      const { ensure, registry } = registryWith(() => [
+        mcpConnection({ id: "datadog" }),
+        mcpConnection({ id: "linear", selectForNewThreads: false }),
+        // Marked for new threads but withheld from every thread: `enabled`
+        // is the outer gate and wins.
+        mcpConnection({ id: "parked", enabled: false }),
+        mcpConnection({ id: "expired", state: "reauthorization_required" }),
+      ]);
+
+      const launchpad = await ensure();
+
+      expect(launchpad.mcpConnectionIds).toEqual(["datadog"]);
+      expect(launchpad.mcpConnectionIdsFromDefaults).toBe(true);
+
+      await registry.close();
+    });
+
+    it("follows the defaults until the operator edits the selection", async () => {
+      let connections = [mcpConnection({ id: "datadog" })];
+      const { ensure, registry } = registryWith(() => connections);
+
+      expect((await ensure()).mcpConnectionIds).toEqual(["datadog"]);
+
+      // A draft is kept per directory until it is sent. A default changed in
+      // Settings in the meantime has to reach it -- including one the operator
+      // has started typing into, since the prompt is not the selection.
+      await registry.updateDirectoryLaunchpad({
+        directoryKey: "directory:/repo-a",
+        patch: { prompt: "look at the failing spans" },
+      });
+      connections = [
+        mcpConnection({ id: "datadog" }),
+        mcpConnection({ id: "linear" }),
+      ];
+      expect((await ensure()).mcpConnectionIds).toEqual(["datadog", "linear"]);
+
+      // Once the operator turns one off, the selection is theirs. Re-seeding
+      // would put back a connection they just removed.
+      await registry.updateDirectoryLaunchpad({
+        directoryKey: "directory:/repo-a",
+        patch: { mcpConnectionIds: ["linear"] },
+      });
+      connections = [
+        mcpConnection({ id: "datadog" }),
+        mcpConnection({ id: "linear" }),
+        mcpConnection({ id: "sentry" }),
+      ];
+      const edited = await ensure();
+      expect(edited.mcpConnectionIds).toEqual(["linear"]);
+      expect(edited.mcpConnectionIdsFromDefaults).toBeUndefined();
+
+      await registry.close();
+    });
+
+    it("keeps an operator's empty selection empty", async () => {
+      const { ensure, registry } = registryWith(() => [
+        mcpConnection({ id: "datadog" }),
+      ]);
+      await ensure();
+      await registry.updateDirectoryLaunchpad({
+        directoryKey: "directory:/repo-a",
+        patch: { mcpConnectionIds: [] },
+      });
+
+      expect((await ensure()).mcpConnectionIds).toEqual([]);
+
+      await registry.close();
+    });
+
+    it("withdraws a seed whose default was turned off", async () => {
+      let connections = [mcpConnection({ id: "datadog" })];
+      const { ensure, registry } = registryWith(() => connections);
+      await ensure();
+
+      connections = [mcpConnection({ id: "datadog", selectForNewThreads: false })];
+      const launchpad = await ensure();
+
+      expect(launchpad.mcpConnectionIds).toBeUndefined();
+      expect(launchpad.mcpConnectionIdsFromDefaults).toBeUndefined();
+
+      await registry.close();
+    });
+
+    it("gives a remote viewer's draft none of this machine's defaults", async () => {
+      const { ensure, listConnections, registry } = registryWith(() => [
+        mcpConnection({ id: "pwrsnap", kind: "pwrsnap" }),
+      ]);
+
+      const launchpad = await ensure({
+        skipFilesystemInspection: true,
+        skipMcpConnectionDefaults: true,
+      });
+
+      // PwrSnap has the same id on every machine, so a local default would
+      // select the remote owner's PwrSnap on a thread nobody chose it for.
+      expect(launchpad.mcpConnectionIds).toBeUndefined();
+      expect(listConnections).not.toHaveBeenCalled();
+
+      await registry.close();
+    });
+
+    it("opens the draft without defaults when the owner does not answer", async () => {
+      vi.useFakeTimers();
+      try {
+        // A wedged owner broker answers nothing; its own timeout is sized for
+        // a ten-minute tool call, far past what a New thread screen can wait.
+        const listConnections = vi.fn(
+          () => new Promise<McpConnectionStatus[]>(() => undefined),
+        );
+        const registry = new DesktopBackendRegistry({
+          codexClient: new MockBackendClient({
+            initializeResult: { methods: ["thread/start"] },
+          }),
+          overlayStore: createOverlayStoreMock(),
+          mcpConnectionService: { registerBridge: vi.fn(), listConnections },
+        });
+
+        const ensured = registry.ensureDirectoryLaunchpad({
+          directoryKey: "directory:/repo-a",
+          directoryKind: "directory",
+          directoryLabel: "Repo A",
+          directoryPath: "/repo-a",
+        });
+        // The deadline starts only once the read does, after the ensure's
+        // own earlier awaits.
+        await vi.waitFor(() => expect(listConnections).toHaveBeenCalled());
+        await vi.advanceTimersByTimeAsync(2_000);
+        const { launchpad } = await ensured;
+
+        expect(launchpad.mcpConnectionIds).toBeUndefined();
+
+        await registry.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("keeps following the defaults when a patch only repeats the seeded ids", async () => {
+      let connections = [mcpConnection({ id: "datadog" })];
+      const { ensure, registry } = registryWith(() => connections);
+      const seeded = await ensure();
+
+      // The MCP access panel sends the ids with its agent-servers switch.
+      // Turning that switch is not a choice about connections.
+      await registry.updateDirectoryLaunchpad({
+        directoryKey: "directory:/repo-a",
+        patch: {
+          mcpConnectionIds: seeded.mcpConnectionIds,
+          mcpProviderServersEnabled: false,
+        },
+      });
+      connections = [
+        mcpConnection({ id: "datadog" }),
+        mcpConnection({ id: "linear" }),
+      ];
+
+      expect((await ensure()).mcpConnectionIds).toEqual(["datadog", "linear"]);
+
+      await registry.close();
+    });
+
+    it("opens the draft anyway when the connections cannot be read", async () => {
+      const listConnections = vi.fn(async (): Promise<McpConnectionStatus[]> => {
+        throw new Error("owner broker went away");
+      });
+      const registry = new DesktopBackendRegistry({
+        codexClient: new MockBackendClient({
+          initializeResult: { methods: ["thread/start"] },
+        }),
+        overlayStore: createOverlayStoreMock(),
+        mcpConnectionService: { registerBridge: vi.fn(), listConnections },
+      });
+
+      const { launchpad } = await registry.ensureDirectoryLaunchpad({
+        directoryKey: "directory:/repo-a",
+        directoryKind: "directory",
+        directoryLabel: "Repo A",
+        directoryPath: "/repo-a",
+      });
+
+      expect(listConnections).toHaveBeenCalled();
+      expect(launchpad.directoryKey).toBe("directory:/repo-a");
+      expect(launchpad.mcpConnectionIds).toBeUndefined();
+
+      await registry.close();
+    });
   });
 
   it("keeps workspace launchpads in workspace mode even when directory drafts prefer worktrees", async () => {

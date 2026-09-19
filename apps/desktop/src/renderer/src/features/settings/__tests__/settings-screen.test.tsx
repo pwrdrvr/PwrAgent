@@ -6537,19 +6537,117 @@ describe("SettingsScreen", () => {
       "Expand Git",
     ]);
     // Collapsed sublists keep their children out of the accessibility
-    // tree — MCPs only appears once Plugins expands.
+    // tree — MCP Gateway only appears once Plugins expands.
     expect(
-      within(nav).queryByRole("button", { name: "MCPs" }),
+      within(nav).queryByRole("button", { name: "MCP Gateway" }),
     ).not.toBeInTheDocument();
     fireEvent.click(
       within(nav).getByRole("button", { name: "Expand Plugins" }),
     );
     expect(
-      within(nav).getByRole("button", { name: "MCPs" }),
+      within(nav).getByRole("button", { name: "MCP Gateway" }),
     ).toBeInTheDocument();
     expect(within(nav).getByRole("separator")).toHaveClass(
       "settings-nav__divider",
     );
+  });
+
+  /**
+   * Plugins used to have one child, "MCPs", for a pane holding two very
+   * different lists: connections PwrAgent manages for every thread, and
+   * servers Codex manages for Codex threads alone. Each now has its own child,
+   * and each child jumps to its own section.
+   */
+  it("splits Plugins into a child per MCP section and jumps to each", () => {
+    render(
+      <SettingsScreen
+        settings={createSettingsState()}
+        onClose={() => undefined}
+      />,
+    );
+    const nav = screen.getByRole("navigation", { name: "Settings sections" });
+    fireEvent.click(
+      within(nav).getByRole("button", { name: "Expand Plugins" }),
+    );
+    const sublist = document.getElementById("settings-nav-sublist-plugins")!;
+    expect(
+      Array.from(sublist.querySelectorAll(".settings-nav__sublabel")).map(
+        (label) => label.textContent,
+      ),
+    ).toEqual(["MCP Gateway", "Codex MCPs"]);
+
+    const sectionHeader = (sectionId: string) =>
+      document.querySelector(
+        `[aria-controls="settings-section-plugins-${sectionId}-body"]`,
+      );
+    fireEvent.click(within(nav).getByRole("button", { name: "Codex MCPs" }));
+    expect(document.activeElement).toBe(sectionHeader("mcp-servers"));
+    expect(
+      within(nav).getByRole("button", { name: "Codex MCPs" }),
+    ).toHaveAttribute("aria-current", "page");
+
+    fireEvent.click(within(nav).getByRole("button", { name: "MCP Gateway" }));
+    expect(document.activeElement).toBe(
+      sectionHeader("managed-mcp-connections"),
+    );
+    expect(
+      within(nav).getByRole("button", { name: "MCP Gateway" }),
+    ).toHaveAttribute("aria-current", "page");
+    expect(
+      within(nav).getByRole("button", { name: "Codex MCPs" }),
+    ).not.toHaveAttribute("aria-current");
+  });
+
+  it("keeps a bare Plugins route on a child, not the parent row", () => {
+    render(
+      <SettingsScreen
+        settings={createSettingsState()}
+        onClose={() => undefined}
+      />,
+    );
+    const nav = screen.getByRole("navigation", { name: "Settings sections" });
+    fireEvent.click(
+      within(nav).getByRole("button", { name: "Expand Plugins" }),
+    );
+    fireEvent.click(within(nav).getByRole("button", { name: "Plugins" }));
+
+    // The pane opens at the gateway section, so that child holds the marker
+    // -- the contract Plugins has always had, with two children now.
+    expect(
+      within(nav).getByRole("button", { name: "MCP Gateway" }),
+    ).toHaveAttribute("aria-current", "page");
+    expect(
+      within(nav).getByRole("button", { name: "Plugins" }),
+    ).not.toHaveAttribute("aria-current");
+  });
+
+  it("offers the Codex MCPs child only when there is a Codex to report", () => {
+    const snapshot = createSnapshot();
+    const settings = createSettingsState({
+      ...snapshot,
+      models: {
+        ...snapshot.models,
+        codex: {
+          ...snapshot.models.codex,
+          discovery: {
+            ...snapshot.models.codex.discovery,
+            selectedCommand: undefined,
+          },
+        },
+      },
+    });
+    render(<SettingsScreen settings={settings} onClose={() => undefined} />);
+    const nav = screen.getByRole("navigation", { name: "Settings sections" });
+    fireEvent.click(
+      within(nav).getByRole("button", { name: "Expand Plugins" }),
+    );
+
+    expect(
+      within(nav).getByRole("button", { name: "MCP Gateway" }),
+    ).toBeInTheDocument();
+    expect(
+      within(nav).queryByRole("button", { name: "Codex MCPs" }),
+    ).not.toBeInTheDocument();
   });
 
   it("routes the Messaging nav's Routes child to the hub's Routes section", () => {
@@ -7027,7 +7125,8 @@ describe("SettingsScreen", () => {
     const row = screen.getByText("Datadog")
       .closest<HTMLElement>(".settings-mcp-row");
     expect(row).not.toBeNull();
-    expect(within(row!).getByText("Ready")).toBeInTheDocument();
+    // The credential chip reads as the Codex list's does for the same state.
+    expect(within(row!).getByText("Signed in")).toBeInTheDocument();
   });
 
   it("refuses to save a URL the gateway cannot hold, and says where it belongs", async () => {

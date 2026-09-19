@@ -142,6 +142,25 @@ describe("MCP connection IPC", () => {
     expect(response).toMatchObject({ configured: true, availability: "running" });
   });
 
+  /**
+   * Dispose used to be a hand-kept copy of the registration list, and three
+   * channels (describe-thread, update, probe) never made it in: they stayed
+   * bound to the disposed service. Derive the expectation from what register
+   * installed, so the next channel cannot drift the same way.
+   */
+  it("removes every handler it registered", async () => {
+    const {
+      disposeMcpConnectionIpcHandlers,
+      registerMcpConnectionIpcHandlers,
+    } = await import("../ipc/mcp-connections");
+    registerMcpConnectionIpcHandlers(service as never, pwrGit as never);
+    expect(mocks.handlers.size).toBeGreaterThan(0);
+
+    disposeMcpConnectionIpcHandlers();
+
+    expect([...mocks.handlers.keys()]).toEqual([]);
+  });
+
   it("preserves local PwrSnap status and pairing behavior", async () => {
     const { registerMcpConnectionIpcHandlers } = await import(
       "../ipc/mcp-connections"

@@ -187,6 +187,32 @@ export function McpAccessPanel(props: McpAccessPanelProps) {
               const checked = props.selection.connectionIds.includes(
                 connection.id,
               );
+              // A selected connection keeps its switch even when it breaks.
+              // Its credentials can expire after it was chosen -- or after a
+              // new thread was seeded with it by default -- and a row offering
+              // only Authorize would leave it selected with no way to drop it
+              // from inside the thread. It keeps the remedy too, beside the
+              // switch, whenever the remedy is a sign-in; a server that is
+              // only briefly away has nothing to authorize.
+              const showSwitch = healthy || checked;
+              const needsSignIn =
+                !connection.configured
+                || connection.state === "disconnected"
+                || connection.state === "reauthorization_required";
+              const showAuthorize = !healthy && (!checked || needsSignIn);
+              const authorize = showAuthorize ? (
+                // An unhealthy connection keeps its row and gets the one
+                // action that can fix it. A bare disabled switch would
+                // state a problem and withhold the remedy.
+                <button
+                  className="button button--secondary"
+                  disabled={!props.onOpenSettings}
+                  type="button"
+                  onClick={props.onOpenSettings}
+                >
+                  Authorize
+                </button>
+              ) : null;
               return (
                 <li className="mcp-access-panel__row" key={connection.id}>
                   <div className="mcp-access-panel__row-body">
@@ -200,43 +226,34 @@ export function McpAccessPanel(props: McpAccessPanelProps) {
                       </span>
                     ) : null}
                   </div>
-                  {healthy ? (
-                    <SettingsSwitch
-                      checked={checked}
-                      disabled={!backendSupported || busy}
-                      label={`Use ${connection.displayName} in this thread`}
-                      onChange={(enabled) => {
-                        void apply(
-                          (current) => ({
-                            ...current,
-                            connectionIds: enabled
-                              ? [
-                                  ...new Set([
-                                    ...current.connectionIds,
-                                    connection.id,
-                                  ]),
-                                ]
-                              : current.connectionIds.filter(
-                                  (id) => id !== connection.id,
-                                ),
-                          }),
-                          connection.id,
-                        );
-                      }}
-                    />
-                  ) : (
-                    // An unhealthy connection keeps its row and gets the one
-                    // action that can fix it. A bare disabled switch would
-                    // state a problem and withhold the remedy.
-                    <button
-                      className="button button--secondary"
-                      disabled={!props.onOpenSettings}
-                      type="button"
-                      onClick={props.onOpenSettings}
-                    >
-                      Authorize
-                    </button>
-                  )}
+                  {showSwitch ? (
+                    <div className="mcp-access-panel__row-actions">
+                      {authorize}
+                      <SettingsSwitch
+                        checked={checked}
+                        disabled={!backendSupported || busy}
+                        label={`Use ${connection.displayName} in this thread`}
+                        onChange={(enabled) => {
+                          void apply(
+                            (current) => ({
+                              ...current,
+                              connectionIds: enabled
+                                ? [
+                                    ...new Set([
+                                      ...current.connectionIds,
+                                      connection.id,
+                                    ]),
+                                  ]
+                                : current.connectionIds.filter(
+                                    (id) => id !== connection.id,
+                                  ),
+                            }),
+                            connection.id,
+                          );
+                        }}
+                      />
+                    </div>
+                  ) : authorize}
                 </li>
               );
             })}

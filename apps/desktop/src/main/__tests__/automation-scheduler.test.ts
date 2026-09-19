@@ -831,6 +831,160 @@ describe("AutomationScheduler", () => {
     ]);
   });
 
+  it("keeps each batched follow-up's conversation when it came from another watched source", async () => {
+    const automation = store.createAutomation({
+      id: "automation-1",
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Alerts and metrics",
+      taskPrompt: "Investigate.",
+      inboundCoalesceWindowMs: 60_000,
+      triggers: [
+        {
+          id: "t-alerts",
+          kind: "inbound_message",
+          conversation: { channel: "slack", conversationId: "C-ALERTS", title: "f-alerts" },
+        },
+        {
+          id: "t-metrics",
+          kind: "inbound_message",
+          conversation: { channel: "slack", conversationId: "C-METRICS", title: "f-metrics" },
+        },
+      ],
+      now: 0,
+    });
+    let windowCallback: (() => void) | undefined;
+    const scheduler = new AutomationScheduler({
+      store,
+      runner: new ThreadQueueAutomationRunner(queue),
+      now: () => now,
+      setTimer: ((callback: () => void) => {
+        windowCallback = callback;
+        return 1;
+      }) as unknown as typeof setTimeout,
+      clearTimer: () => undefined,
+    });
+    const src = (key: string, triggerId: string, conversationId: string, title: string) => ({
+      kind: "messaging" as const,
+      sourceEventKey: key,
+      receivedAt: now,
+      matchedTriggerId: triggerId,
+      actor: { platformUserId: "B123", isBot: true },
+      conversation: { channel: "slack" as const, conversationId, title },
+      message: { text: key },
+    });
+
+    now = 1_000;
+    await scheduler.runFromInboundEvent({
+      automation,
+      source: src("k1", "t-alerts", "C-ALERTS", "f-alerts"),
+      now,
+    });
+    now = 1_100;
+    await scheduler.runFromInboundEvent({
+      automation,
+      source: src("k2", "t-alerts", "C-ALERTS", "f-alerts"),
+      now,
+    });
+    now = 1_200;
+    await scheduler.runFromInboundEvent({
+      automation,
+      source: src("k3", "t-metrics", "C-METRICS", "f-metrics"),
+      now,
+    });
+    now = 1_300;
+    await scheduler.runFromInboundEvent({
+      automation,
+      source: src("k4", "t-alerts", "C-ALERTS", "f-alerts"),
+      now,
+    });
+
+    const leading = store.listRunsForAutomation("automation-1")[0];
+    now = 2_000;
+    await scheduler.handleTurnQueueUpdate({
+      automationRunId: leading?.id,
+      status: "terminal",
+      terminalStatus: "turn/completed",
+      now,
+    });
+    now = 61_000;
+    windowCallback?.();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const [batched] = store.listRunsForAutomation("automation-1");
+    expect(batched?.source?.sourceEventKey).toBe("k2");
+    // k3 was posted in f-metrics, not in f-alerts where the batch's primary
+    // message was; k4 shares the primary's source, so it carries nothing extra.
+    expect(batched?.source?.batchedEvents).toEqual([
+      expect.objectContaining({
+        sourceEventKey: "k3",
+        conversation: expect.objectContaining({ conversationId: "C-METRICS" }),
+      }),
+      expect.not.objectContaining({ conversation: expect.anything() }),
+    ]);
+    expect(batched?.source?.batchedEvents?.[1]?.sourceEventKey).toBe("k4");
+  });
+
+  it("shares one hourly run cap across every watched conversation", async () => {
+    // The cap is a backstop on the automation's total spend. Per-source
+    // buckets would multiply the operator's configured cap by the number of
+    // conversations watched.
+    const automation = store.createAutomation({
+      id: "automation-shared-cap",
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Alerts and metrics",
+      taskPrompt: "Triage.",
+      inboundCoalesceWindowMs: 0,
+      maxRunsPerHour: 2,
+      triggers: [
+        {
+          id: "t-alerts",
+          kind: "inbound_message",
+          conversation: { channel: "slack", conversationId: "C-ALERTS" },
+        },
+        {
+          id: "t-metrics",
+          kind: "inbound_message",
+          conversation: { channel: "slack", conversationId: "C-METRICS" },
+        },
+      ],
+      now: 0,
+    });
+    const scheduler = buildScheduler();
+    const src = (key: string, triggerId: string, conversationId: string) => ({
+      kind: "messaging" as const,
+      sourceEventKey: key,
+      receivedAt: now,
+      matchedTriggerId: triggerId,
+      actor: { platformUserId: "B123", isBot: true },
+      conversation: { channel: "slack" as const, conversationId },
+      message: { text: "ERROR" },
+    });
+
+    now = 1_000;
+    await scheduler.runFromInboundEvent({
+      automation,
+      source: src("a1", "t-alerts", "C-ALERTS"),
+      now,
+    });
+    await scheduler.runFromInboundEvent({
+      automation,
+      source: src("m1", "t-metrics", "C-METRICS"),
+      now,
+    });
+    await scheduler.runFromInboundEvent({
+      automation,
+      source: src("m2", "t-metrics", "C-METRICS"),
+      now,
+    });
+
+    const started = store
+      .listRunsForAutomation("automation-shared-cap")
+      .filter((run) => run.status !== "skipped");
+    expect(started).toHaveLength(2);
+  });
+
   it("caps inbound run starts at the per-hour rolling limit", async () => {
     const automation = store.createAutomation({
       id: "automation-rl",
