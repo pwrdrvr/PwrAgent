@@ -29,8 +29,9 @@ export type AcpUsageEnvelope = {
  * `kimi-code-0-31-cereal.json` is a full captured turn with no usage anywhere,
  * so a Kimi thread cannot be priced. Kimi Code 2.0.0 still cannot: a captured
  * turn returns only `stopReason` from `session/prompt`, and its new
- * `usage_update` carries context fill (`used` of `size`) with no cost. Gemini is still untested; the
- * `acp-transcripts` parity captures cannot answer it, since they hold no
+ * `usage_update` carries context fill (`used` of `size`) with no cost.
+ * Gemini is still untested; the `acp-transcripts` parity captures cannot
+ * answer it, since they hold no
  * completed turn (grok-build.json carries no usage either, and Grok certainly
  * reports). Codex is the outlier among the reporters: it sends this field
  * meaning a session-cumulative total, which is why

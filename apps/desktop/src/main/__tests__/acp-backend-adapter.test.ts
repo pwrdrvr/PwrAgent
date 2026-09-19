@@ -1673,6 +1673,7 @@ describe("AcpBackendAdapter", () => {
       cwd: "/repo",
       executionMode: "default",
     });
+    const lookupsBeforeUpdates = getInstalledAgent.mock.calls.length;
     for (const [text, totalTokens] of [
       ["Thinking", 1817],
       ["more", 1817],
@@ -1708,6 +1709,8 @@ describe("AcpBackendAdapter", () => {
         modelContextWindow: 500000,
       },
     ]);
+    // The window is looked up once per count change, not once per update.
+    expect(getInstalledAgent.mock.calls.length - lookupsBeforeUpdates).toBe(2);
     expect(
       events.filter(
         (event) => event.notification.method === "thread/tokenUsage/updated",

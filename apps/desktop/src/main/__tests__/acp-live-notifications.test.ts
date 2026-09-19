@@ -908,6 +908,14 @@ describe("ACP context window fill", () => {
         size: 262144,
       }),
     ).toEqual({ usedTokens: 20209, modelContextWindow: 262144 });
+    // Every other update-kind reader accepts the snake_case discriminator.
+    expect(
+      readAcpContextTokens({
+        session_update: "usage_update",
+        used: 20209,
+        size: 262144,
+      }),
+    ).toEqual({ usedTokens: 20209, modelContextWindow: 262144 });
   });
 
   it("reads Grok's envelope token count, leaving the window to the caller", () => {

@@ -244,7 +244,7 @@ export function acpUsageNotification(params: {
 export function readAcpContextTokens(
   update: Record<string, unknown>,
 ): { usedTokens: unknown; modelContextWindow?: unknown } | undefined {
-  if (isAcpUsageUpdateKind(readString(update, "sessionUpdate"))) {
+  if (isAcpUsageUpdateKind(readKind(update))) {
     return { usedTokens: update.used, modelContextWindow: update.size };
   }
   const usedTokens = readRecord(update._meta)?.totalTokens;

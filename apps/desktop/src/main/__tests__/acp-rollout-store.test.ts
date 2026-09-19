@@ -416,6 +416,26 @@ describe("AcpRolloutStore", () => {
     expect(store.readUpdates({ backendId, sessionId: "session-1" })).toEqual([]);
   });
 
+  it("does not persist context usage updates", () => {
+    // Kimi Code 2.x sends one after every turn. It is session state for the
+    // context indicator, and replay discards it.
+    const store = new AcpRolloutStore(tempDir);
+    const backendId = "acp:kimi" as AcpBackendId;
+
+    store.appendUpdate({
+      backendId,
+      sessionId: "session-1",
+      receivedAt: 1000,
+      update: {
+        sessionUpdate: "usage_update",
+        used: 20209,
+        size: 262144,
+      },
+    });
+
+    expect(store.readUpdates({ backendId, sessionId: "session-1" })).toEqual([]);
+  });
+
   it("keeps Grok thoughts in the rollout but omits them from replay", () => {
     const store = new AcpRolloutStore(tempDir);
     const backendId = "acp:grok" as AcpBackendId;

@@ -2206,18 +2206,21 @@ export class AcpBackendAdapter {
       // Keep the revision check and all consumption synchronous. An
       // invalidation queued after discovery settles must run before this
       // point or after stale results have been fully merged and persisted.
-      const recordedBackendIds = new Set(
-        (this.acpAgentStore?.listInstalledAgents() ?? []).map(
-          (agent) => agent.backendId,
-        ),
-      );
+      // Only the startup probe asks which agents were known before this pass.
+      const recordedBackendIds = permit.intent === "startup"
+        ? new Set(
+            (this.acpAgentStore?.listInstalledAgents() ?? []).map(
+              (agent) => agent.backendId,
+            ),
+          )
+        : undefined;
       const agents = this.mergeAndPersistDiscoveredAgents(discovery.agents);
       for (const agent of agents) {
         if (agent.registryId === "grok" && agent.installStatus === "installed") {
           this.refreshGrokUpdateStatusInBackground(agent);
         }
       }
-      if (permit.intent === "startup") {
+      if (recordedBackendIds) {
         const discoveredBackendIds = new Set(
           discovery.agents.map((agent) => agent.backendId),
         );
