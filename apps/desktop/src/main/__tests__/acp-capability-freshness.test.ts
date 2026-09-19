@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   ACP_CAPABILITY_MAX_AGE_MS,
+  shouldProbeAcpCapabilitiesAtStartup,
   shouldReprobeAcpCapabilities,
 } from "../acp/acp-capability-freshness";
 import type { AcpInstalledAgentRecord } from "../acp/acp-registry-types";
@@ -93,5 +94,77 @@ describe("shouldReprobeAcpCapabilities", () => {
     expect(shouldReprobeAcpCapabilities(rec, "0.2.3", NOW, { maxAgeMs: 10_000 })).toBe(
       false,
     );
+  });
+});
+
+describe("shouldProbeAcpCapabilitiesAtStartup", () => {
+  // The state startup discovery leaves behind when a known agent's runtime
+  // changed: installed and launchable, with every probe field cleared.
+  function changedRuntime(
+    overrides: Partial<AcpInstalledAgentRecord> = {},
+  ): AcpInstalledAgentRecord {
+    return record({
+      launchDescriptor: {
+        backendId: "acp:grok",
+        registryId: "grok",
+        distributionKind: "local",
+        command: "/usr/local/bin/grok",
+        args: ["agent", "stdio"],
+        env: {},
+      },
+      runtimeCapabilities: undefined,
+      lastDiscoveredAt: undefined,
+      lastDiscoveryError: undefined,
+      ...overrides,
+    });
+  }
+
+  it("probes a known agent whose runtime has never been probed", () => {
+    expect(shouldProbeAcpCapabilitiesAtStartup(changedRuntime(), true)).toBe(
+      true,
+    );
+  });
+
+  it("leaves an agent seen for the first time to Settings and setup", () => {
+    expect(shouldProbeAcpCapabilitiesAtStartup(changedRuntime(), false)).toBe(
+      false,
+    );
+  });
+
+  it("does not repeat once any probe outcome is recorded", () => {
+    expect(
+      shouldProbeAcpCapabilitiesAtStartup(
+        changedRuntime({ runtimeCapabilities: { discoveredAt: NOW } as never }),
+        true,
+      ),
+    ).toBe(false);
+    // A probe that yielded no capabilities still stamps the runtime.
+    expect(
+      shouldProbeAcpCapabilitiesAtStartup(
+        changedRuntime({ lastDiscoveredAt: NOW }),
+        true,
+      ),
+    ).toBe(false);
+    expect(
+      shouldProbeAcpCapabilitiesAtStartup(
+        changedRuntime({ lastDiscoveryError: "timed out" }),
+        true,
+      ),
+    ).toBe(false);
+  });
+
+  it("never probes an agent that cannot be launched", () => {
+    expect(
+      shouldProbeAcpCapabilitiesAtStartup(
+        changedRuntime({ installStatus: "unavailable" }),
+        true,
+      ),
+    ).toBe(false);
+    expect(
+      shouldProbeAcpCapabilitiesAtStartup(
+        changedRuntime({ launchDescriptor: undefined }),
+        true,
+      ),
+    ).toBe(false);
   });
 });

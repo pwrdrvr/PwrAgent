@@ -295,6 +295,48 @@ describe("discoverLocalAcpAgentRecords", () => {
         version: "0.34.0",
       }),
     ).toBe(false);
+    // Kimi Code jumped from 0.x to 2.x and prints a bare version, so only
+    // 1.x may be treated as legacy when the output carries no product prefix.
+    expect(
+      isLegacyPythonKimiCli({
+        output: "2.0.0",
+        version: "2.0.0",
+      }),
+    ).toBe(false);
+    expect(
+      isLegacyPythonKimiCli({
+        output: undefined,
+        version: "2.0.0",
+      }),
+    ).toBe(false);
+    expect(
+      isLegacyPythonKimiCli({
+        output: "1.46.0",
+        version: "1.46.0",
+      }),
+    ).toBe(true);
+  });
+
+  it("selects a Kimi Code 2.x install that prints a bare version", async () => {
+    const current = "/Users/me/.kimi-code/bin/kimi";
+    const discover = vi.fn(async () => [
+      group("kimi", [instance(current, "fallback", "2.0.0")]),
+    ]);
+
+    const [record, ...rest] = await discoverLocalAcpAgentRecords({
+      discover,
+      readVersionOutput: async () => "2.0.0",
+    });
+
+    expect(rest).toHaveLength(0);
+    expect(record).toMatchObject({
+      installStatus: "installed",
+      version: "2.0.0",
+      activeCommand: current,
+      instances: [expect.objectContaining({ command: current })],
+      launchDescriptor: { command: current },
+    });
+    expect(record).not.toHaveProperty("incompatibleInstances");
   });
 
   it("ignores legacy Kimi on PATH and selects a side-by-side Kimi Code install", async () => {

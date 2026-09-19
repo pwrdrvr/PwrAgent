@@ -2,8 +2,6 @@ import { codexAuthState } from "../codex-auth-state";
 import { CodexAppServerClient } from "../codex-app-server/client";
 import { validateGlabCommand } from "../settings/glab-discovery";
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
-import { mkdir } from "node:fs/promises";
-import path from "node:path";
 import type {
   AcpAgentPreference,
   AcpAgentSettingsEntry,
@@ -132,7 +130,10 @@ import { BUILT_IN_ACP_STRATEGIES, type AcpAgentStrategy } from "@pwrdrvr/agent-a
 import { AcpAgentStore } from "../acp/acp-agent-store";
 import { isBannedAcpRegistryId } from "../acp/acp-agent-allowlist";
 import { discoverLocalAcpAgentRecords } from "../acp/acp-instance-discovery";
-import { discoverAcpRuntimeCapabilities } from "../acp/acp-runtime-discovery";
+import {
+  ensureAcpRuntimeDiscoveryWorkspace,
+  refreshAcpRuntimeCapabilities,
+} from "../acp/acp-capability-probe";
 import { shouldReprobeAcpCapabilities } from "../acp/acp-capability-freshness";
 import { describeDistributionSource } from "../acp/acp-install-provenance";
 import { isPwrAgentOwnedGrokRuntime } from "../acp/grok-cli-update";
@@ -153,13 +154,9 @@ import type {
   AcpRegistryDistribution,
   AcpRegistrySnapshot,
 } from "../acp/acp-registry-types";
-import { getAppStateDb, getAppStateMode } from "../state/app-state";
+import { getAppStateDb } from "../state/app-state";
 import { resolveWindowsCodexLaunchCommand } from "../codex-windows-launch";
-import {
-  normalizeProfileName,
-  resolveActiveProfileDir,
-  resolveBootstrapProfileDir,
-} from "../profile";
+import { normalizeProfileName } from "../profile";
 
 const settingsIpcLog = getMainLogger("pwragent:settings");
 const ACP_UPDATE_SNOOZE_MS = 24 * 60 * 60_000;
@@ -768,51 +765,6 @@ async function listInstalledAndLocalAcpAgents(
         !isBannedAcpRegistryId(record.registryId),
     ),
   ];
-}
-
-async function refreshAcpRuntimeCapabilities(
-  record: AcpInstalledAgentRecord,
-  cwd: string,
-  requestTimeoutMs?: number,
-): Promise<AcpInstalledAgentRecord> {
-  const now = Date.now();
-  try {
-    const result = await discoverAcpRuntimeCapabilities(record, {
-      cwd,
-      ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
-    });
-    return {
-      ...record,
-      ...(result.runtimeCapabilities
-        ? {
-            runtimeCapabilities: result.runtimeCapabilities,
-            lastDiscoveredAt: result.runtimeCapabilities.discoveredAt ?? now,
-            lastDiscoveryError: undefined,
-          }
-        : {
-            lastDiscoveredAt: now,
-          }),
-      updatedAt: Math.max(record.updatedAt, now),
-    };
-  } catch (error) {
-    return {
-      ...record,
-      lastDiscoveryError: error instanceof Error ? error.message : String(error),
-      updatedAt: Math.max(record.updatedAt, now),
-    };
-  }
-}
-
-async function ensureAcpRuntimeDiscoveryWorkspace(): Promise<string> {
-  const directory = path.join(
-    getAppStateMode() === "bootstrap"
-      ? resolveBootstrapProfileDir()
-      : resolveActiveProfileDir(),
-    "state",
-    "acp-discovery-workspace",
-  );
-  await mkdir(directory, { recursive: true });
-  return directory;
 }
 
 function acpAgentSettingsEntry(params: {

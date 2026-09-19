@@ -105,6 +105,60 @@ describe("discoverAcpRuntimeCapabilities", () => {
     expect(selectedModel).toBe("kimi-code/kimi-for-coding");
     expect(close).toHaveBeenCalledOnce();
   });
+
+  it("keeps an advertised context window when rebuilding models from config options", async () => {
+    // Grok Build advertises both a model list (carrying each window) and
+    // model + thought_level config options, which the probe rebuilds from.
+    const models = {
+      currentModelId: "kimi-code/kimi-for-coding",
+      availableModels: [
+        {
+          modelId: "kimi-code/kimi-for-coding",
+          name: "K2.7 Coding",
+          _meta: { totalContextTokens: 262144 },
+        },
+        {
+          modelId: "kimi-code/k3",
+          name: "K3",
+          _meta: { totalContextTokens: 500000 },
+        },
+      ],
+    };
+    const transport: AcpJsonRpcTransport = {
+      request: vi.fn(async (method: string): Promise<unknown> => {
+        if (method === "initialize") {
+          return { protocolVersion: 1 };
+        }
+        if (method === "session/new") {
+          return {
+            sessionId: "session-1",
+            models,
+            configOptions: buildKimiConfigOptions("kimi-code/kimi-for-coding"),
+          };
+        }
+        return {};
+      }),
+      close: vi.fn(async () => undefined),
+      onNotification: () => () => undefined,
+    };
+
+    const result = await discoverAcpRuntimeCapabilities(buildKimiAgent(), {
+      cwd: "/repo",
+      now: () => 1000,
+      transportFactory: () => transport,
+    });
+
+    expect(
+      result.runtimeCapabilities?.models?.availableModels.map((model) => [
+        model.id,
+        model.contextWindow,
+      ]),
+    ).toEqual([
+      ["kimi-code/kimi-for-coding", 262144],
+      ["kimi-code/k3", 500000],
+      ["kimi-code/k3-256k", undefined],
+    ]);
+  });
 });
 
 function buildKimiConfigOptions(selectedModel: string) {

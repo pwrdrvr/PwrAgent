@@ -405,11 +405,13 @@ export function isLegacyPythonKimiCli(params: {
     return true;
   }
 
-  // The current TypeScript Kimi Code line is 0.x; the deprecated Python
-  // kimi-cli line is 1.x. This fallback covers wrappers that suppress the
-  // product prefix while preserving the parsed discovery version.
+  // The deprecated Python kimi-cli line is 1.x. Kimi Code skipped 1.x and
+  // went from 0.x straight to 2.x, and 2.x prints a bare version with no
+  // product prefix, so 1.x is the only range the version alone can call
+  // legacy. This fallback covers wrappers that suppress the product prefix
+  // while preserving the parsed discovery version.
   const major = Number.parseInt(params.version?.split(".")[0] ?? "", 10);
-  return Number.isFinite(major) && major >= 1;
+  return major === 1;
 }
 
 async function defaultReadVersionOutput(

@@ -312,11 +312,17 @@ function readModel(value: unknown): BackendAcpRuntimeModel[] {
     readBoolean(meta, "supportsReasoningEffort") ??
     readBoolean(meta, "supports_reasoning_effort") ??
     (reasoningEffortOptions.values.length > 0 ? true : undefined);
+  const contextWindow = meta?.totalContextTokens;
   return [
     {
       id,
       label: readString(record, "name") ?? readString(record, "label"),
       description: readString(record, "description"),
+      ...(typeof contextWindow === "number"
+        && Number.isFinite(contextWindow)
+        && contextWindow > 0
+        ? { contextWindow }
+        : {}),
       ...(reasoningEffortOptions.defaultValue
         ? { defaultReasoningEffort: reasoningEffortOptions.defaultValue }
         : {}),

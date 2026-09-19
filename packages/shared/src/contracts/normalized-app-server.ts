@@ -1809,6 +1809,21 @@ export type AppServerNotification =
       };
     }
   | {
+      /**
+       * How full a thread's context window is, with no token breakdown. ACP
+       * `usage_update` reports only this. It is not usage: nothing here can
+       * be priced or folded into turn totals, so it must never travel as
+       * `thread/tokenUsage/updated`.
+       */
+      method: "thread/contextWindow/updated";
+      params: {
+        threadId: string;
+        turnId?: string;
+        usedTokens: number;
+        modelContextWindow: number;
+      };
+    }
+  | {
       method: "thread/pricing/updated";
       params: {
         displayInvalidated?: true;

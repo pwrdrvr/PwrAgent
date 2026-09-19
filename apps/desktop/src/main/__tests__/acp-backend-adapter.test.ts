@@ -557,6 +557,179 @@ describe("AcpBackendAdapter", () => {
     await adapter.close();
   });
 
+  it("probes a changed runtime once at startup to restore its model catalog", async () => {
+    const backendId = "acp:kimi" as AcpBackendId;
+    const launchDescriptor = {
+      backendId,
+      registryId: "kimi",
+      distributionKind: "local" as const,
+      command: "/Users/test/.kimi-code/bin/kimi",
+      args: ["acp"],
+      env: {},
+    };
+    const previousCapabilities = {
+      schemaVersion: 1 as const,
+      status: "discovered" as const,
+      checkedAt: 1000,
+    };
+    const probedCapabilities = {
+      schemaVersion: 1 as const,
+      status: "discovered" as const,
+      checkedAt: 3000,
+      models: { availableModels: [{ id: "kimi-k3", label: "Kimi K3" }] },
+    };
+    const stored = new Map<AcpBackendId, AcpInstalledAgentRecord>([
+      [
+        backendId,
+        {
+          ...buildInstalledAgent(),
+          backendId,
+          registryId: "kimi",
+          name: "Kimi Code CLI",
+          version: "0.31.1",
+          launchDescriptor,
+          runtimeCapabilities: previousCapabilities,
+          lastDiscoveredAt: 1000,
+        },
+      ],
+    ]);
+    const discovered: AcpInstalledAgentRecord = {
+      ...stored.get(backendId)!,
+      version: "2.0.0",
+      runtimeCapabilities: undefined,
+      lastDiscoveredAt: undefined,
+      updatedAt: 2000,
+    };
+    const probe = vi.fn(async (agent: AcpInstalledAgentRecord) => ({
+      ...agent,
+      runtimeCapabilities: probedCapabilities,
+      lastDiscoveredAt: 3000,
+      updatedAt: 3000,
+    }));
+    const emit = vi.fn(async () => undefined);
+    const adapter = createTestAcpBackendAdapter({
+      acpAgentStore: {
+        getInstalledAgent: (id) => stored.get(id as AcpBackendId),
+        listInstalledAgents: () => [...stored.values()],
+        upsertInstalledAgent: (record) => {
+          stored.set(record.backendId, record);
+        },
+      },
+      acpSessionStore: null,
+      captureStores: [],
+      discoverLocalAcpAgents: async () => [discovered],
+      probeAcpRuntimeCapabilities: probe,
+      emit,
+      handleServerRequest: vi.fn(async () => ({ decision: "accept" })),
+    });
+
+    const [available] = await adapter.discoverAvailableAgents(
+      issueProviderDiscoveryPermit("startup"),
+    );
+    // The upgrade drops the 0.31.1 catalog; the probe must not see it.
+    expect(available?.runtimeCapabilities).toBeUndefined();
+    expect(probe).toHaveBeenCalledOnce();
+    expect(probe).toHaveBeenCalledWith(
+      expect.objectContaining({ backendId, version: "2.0.0" }),
+    );
+    await vi.waitFor(() => {
+      expect(emit).toHaveBeenCalledWith({
+        backend: backendId,
+        notification: {
+          method: "backend/acpRuntimeCapabilities/updated",
+          params: { backend: backendId },
+        },
+      });
+    });
+    expect(stored.get(backendId)).toMatchObject({
+      version: "2.0.0",
+      runtimeCapabilities: probedCapabilities,
+      lastDiscoveredAt: 3000,
+    });
+
+    // The next launch finds the same runtime already probed.
+    adapter.invalidateLocalAgentDiscovery();
+    const [relaunched] = await adapter.discoverAvailableAgents(
+      issueProviderDiscoveryPermit("startup"),
+    );
+    expect(relaunched?.runtimeCapabilities).toEqual(probedCapabilities);
+    expect(probe).toHaveBeenCalledOnce();
+
+    await adapter.close();
+  });
+
+  it("leaves capability probes to Settings outside the startup special case", async () => {
+    const backendId = "acp:kimi" as AcpBackendId;
+    const discovered: AcpInstalledAgentRecord = {
+      ...buildInstalledAgent(),
+      backendId,
+      registryId: "kimi",
+      name: "Kimi Code CLI",
+      version: "2.0.0",
+      launchDescriptor: {
+        backendId,
+        registryId: "kimi",
+        distributionKind: "local",
+        command: "/Users/test/.kimi-code/bin/kimi",
+        args: ["acp"],
+        env: {},
+      },
+    };
+    // The legacy diagnostic the misclassified 2.0.0 install was stored as.
+    const legacyRecord: AcpInstalledAgentRecord = {
+      ...discovered,
+      installStatus: "unavailable",
+      launchDescriptor: undefined,
+    };
+    const probeWith = async (params: {
+      stored: AcpInstalledAgentRecord[];
+      intent: "startup" | "settings-user-action";
+      enabled?: boolean;
+    }) => {
+      const stored = new Map(
+        params.stored.map((record) => [record.backendId, record]),
+      );
+      const probe = vi.fn(async (agent: AcpInstalledAgentRecord) => agent);
+      const adapter = createTestAcpBackendAdapter({
+        acpAgentStore: {
+          getInstalledAgent: (id) => stored.get(id as AcpBackendId),
+          listInstalledAgents: () => [...stored.values()],
+          upsertInstalledAgent: (record) => {
+            stored.set(record.backendId, record);
+          },
+        },
+        acpSessionStore: null,
+        captureStores: [],
+        discoverLocalAcpAgents: async () => [discovered],
+        isAcpAgentEnabled: () => params.enabled ?? true,
+        probeAcpRuntimeCapabilities: probe,
+        emit: vi.fn(async () => undefined),
+        handleServerRequest: vi.fn(async () => ({ decision: "accept" })),
+      });
+      await adapter.discoverAvailableAgents(
+        issueProviderDiscoveryPermit(params.intent),
+      );
+      await adapter.close();
+      return probe;
+    };
+
+    // The trigger itself: a legacy record giving way to a launchable install.
+    expect(
+      await probeWith({ stored: [legacyRecord], intent: "startup" }),
+    ).toHaveBeenCalledOnce();
+    // Settings runs its own probe; this path must not add a second one.
+    expect(
+      await probeWith({ stored: [legacyRecord], intent: "settings-user-action" }),
+    ).not.toHaveBeenCalled();
+    // First discovery of an agent belongs to Settings and setup.
+    expect(
+      await probeWith({ stored: [], intent: "startup" }),
+    ).not.toHaveBeenCalled();
+    expect(
+      await probeWith({ stored: [legacyRecord], intent: "startup", enabled: false }),
+    ).not.toHaveBeenCalled();
+  });
+
   it("keeps Grok update state for the same discovered executable", async () => {
     const backendId = "acp:grok" as AcpBackendId;
     const update = {
@@ -1328,6 +1501,219 @@ describe("AcpBackendAdapter", () => {
         (event) =>
           event.notification.method === "item/agentMessage/delta" &&
           event.notification.params.delta === "I should run the build first.",
+      ),
+    ).toEqual([]);
+
+    await adapter.close();
+  });
+
+  it("reports an ACP usage_update as context window fill, not token usage", async () => {
+    // Kimi Code 2.0.0 sends usage_update (context `used` of `size`) after the
+    // prompt response and reports no token counts anywhere on the wire.
+    const backendId = "acp:kimi" as AcpBackendId;
+    const transport = new FakeAcpAgentTransport();
+    const events: AgentEvent[] = [];
+    const sessions: AcpSessionMetadata[] = [];
+    const agent: AcpInstalledAgentRecord = {
+      ...buildInstalledAgent(),
+      backendId,
+      registryId: "kimi",
+      name: "Kimi Code CLI",
+      launchDescriptor: {
+        backendId,
+        registryId: "kimi",
+        distributionKind: "local",
+        command: "kimi",
+        args: ["acp"],
+        env: {},
+      },
+    };
+    const adapter = createTestAcpBackendAdapter({
+      acpAgentStore: {
+        getInstalledAgent: () => agent,
+        listInstalledAgents: () => [agent],
+        upsertInstalledAgent: vi.fn(),
+      },
+      acpSessionStore: {
+        listSessions: () => sessions,
+        getSession: (_backendId, sessionId) =>
+          sessions.find((session) => session.sessionId === sessionId),
+        upsertSession: (metadata) => {
+          const index = sessions.findIndex(
+            (session) => session.sessionId === metadata.sessionId,
+          );
+          if (index >= 0) {
+            sessions[index] = metadata;
+          } else {
+            sessions.push(metadata);
+          }
+        },
+      },
+      captureStores: [],
+      createAcpTransport: () => transport,
+      emit: async (event) => {
+        events.push(event);
+      },
+      handleServerRequest: async () => ({ decision: "accept" }),
+    });
+
+    const client = await adapter.getClient(backendId);
+    const session = await client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+    });
+    transport.emitSessionUpdate(session.sessionId, {
+      sessionUpdate: "usage_update",
+      used: 20209,
+      size: 262144,
+    });
+
+    await vi.waitFor(() => {
+      expect(
+        events.filter(
+          (event) =>
+            event.notification.method === "thread/contextWindow/updated",
+        ),
+      ).toEqual([
+        {
+          backend: backendId,
+          notification: {
+            method: "thread/contextWindow/updated",
+            params: {
+              threadId: session.sessionId,
+              usedTokens: 20209,
+              modelContextWindow: 262144,
+            },
+          },
+        },
+      ]);
+    });
+    expect(
+      events.filter(
+        (event) => event.notification.method === "thread/tokenUsage/updated",
+      ),
+    ).toEqual([]);
+
+    await adapter.close();
+  });
+
+  it("reports Grok's envelope token count against the selected model's window", async () => {
+    // Grok Build sends no usage_update. It stamps the session's context size
+    // on every session/update envelope as `_meta.totalTokens`, repeating one
+    // value across a turn's chunks, and lists each model's window.
+    const backendId = "acp:grok" as AcpBackendId;
+    const transport = new FakeAcpAgentTransport();
+    const events: AgentEvent[] = [];
+    const sessions: AcpSessionMetadata[] = [];
+    const agent: AcpInstalledAgentRecord = {
+      ...buildInstalledAgent(),
+      backendId,
+      registryId: "grok",
+      name: "Grok",
+      launchDescriptor: {
+        backendId,
+        registryId: "grok",
+        distributionKind: "local",
+        command: "grok",
+        args: ["agent", "stdio"],
+        env: {},
+      },
+      runtimeCapabilities: {
+        schemaVersion: 1,
+        status: "discovered",
+        checkedAt: 1000,
+        models: {
+          currentModelId: "grok-4.6",
+          availableModels: [
+            { id: "grok-4.6", label: "Grok 4.6", contextWindow: 500000 },
+            { id: "grok-4.5", label: "Grok 4.5", contextWindow: 256000 },
+          ],
+        },
+      },
+    };
+    const getInstalledAgent = vi.fn(() => agent);
+    const adapter = createTestAcpBackendAdapter({
+      acpAgentStore: {
+        getInstalledAgent,
+        listInstalledAgents: () => [agent],
+        upsertInstalledAgent: vi.fn(),
+      },
+      acpSessionStore: {
+        listSessions: () => sessions,
+        getSession: (_backendId, sessionId) =>
+          sessions.find((session) => session.sessionId === sessionId),
+        upsertSession: (metadata) => {
+          const index = sessions.findIndex(
+            (session) => session.sessionId === metadata.sessionId,
+          );
+          if (index >= 0) {
+            sessions[index] = metadata;
+          } else {
+            sessions.push(metadata);
+          }
+        },
+      },
+      captureStores: [],
+      createAcpTransport: () => transport,
+      emit: async (event) => {
+        events.push(event);
+      },
+      handleServerRequest: async () => ({ decision: "accept" }),
+    });
+    const contextEvents = () =>
+      events
+        .filter(
+          (event) =>
+            event.notification.method === "thread/contextWindow/updated",
+        )
+        .map((event) => event.notification.params);
+
+    const client = await adapter.getClient(backendId);
+    const session = await client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+    });
+    const lookupsBeforeUpdates = getInstalledAgent.mock.calls.length;
+    for (const [text, totalTokens] of [
+      ["Thinking", 1817],
+      ["more", 1817],
+      ["ok", 1817],
+    ] as const) {
+      transport.emitSessionUpdate(
+        session.sessionId,
+        {
+          sessionUpdate: "agent_thought_chunk",
+          content: { type: "text", text },
+        },
+        { totalTokens, eventId: `event-${text}` },
+      );
+    }
+    transport.emitSessionUpdate(
+      session.sessionId,
+      { sessionUpdate: "available_commands_update", availableCommands: [] },
+      { totalTokens: 17962 },
+    );
+
+    await vi.waitFor(() => {
+      expect(contextEvents()).toHaveLength(2);
+    });
+    expect(contextEvents()).toEqual([
+      {
+        threadId: session.sessionId,
+        usedTokens: 1817,
+        modelContextWindow: 500000,
+      },
+      {
+        threadId: session.sessionId,
+        usedTokens: 17962,
+        modelContextWindow: 500000,
+      },
+    ]);
+    // The window is looked up once per count change, not once per update.
+    expect(getInstalledAgent.mock.calls.length - lookupsBeforeUpdates).toBe(2);
+    expect(
+      events.filter(
+        (event) => event.notification.method === "thread/tokenUsage/updated",
       ),
     ).toEqual([]);
 

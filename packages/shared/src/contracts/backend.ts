@@ -63,6 +63,11 @@ export type BackendAcpRuntimeModel = {
   label?: string;
   description?: string;
   current?: boolean;
+  /**
+   * Tokens the model's context window holds, when the agent advertises it
+   * (Grok Build: the model's `_meta.totalContextTokens`).
+   */
+  contextWindow?: number;
   defaultReasoningEffort?: string;
   reasoningEfforts?: string[];
   supportsReasoning?: boolean;

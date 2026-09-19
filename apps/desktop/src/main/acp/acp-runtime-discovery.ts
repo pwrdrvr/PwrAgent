@@ -87,6 +87,14 @@ async function discoverModelReasoningCapabilities(params: {
   const originalModel = modelOption.currentValue;
   let selectedModel = originalModel;
   const models: BackendAcpRuntimeModel[] = [];
+  // Rebuilding the list from config values must keep what only the agent's
+  // own model list carries, such as Grok's context window size.
+  const contextWindowFor = (modelId: string) => {
+    const contextWindow = initial?.models?.availableModels.find(
+      (model) => model.id === modelId,
+    )?.contextWindow;
+    return contextWindow !== undefined ? { contextWindow } : {};
+  };
   try {
     for (const model of modelOption.values) {
       if (model.value !== selectedModel) {
@@ -102,6 +110,7 @@ async function discoverModelReasoningCapabilities(params: {
           models.push({
             id: model.value,
             label: model.label,
+            ...contextWindowFor(model.value),
           });
           continue;
         }
@@ -117,6 +126,7 @@ async function discoverModelReasoningCapabilities(params: {
         id: model.value,
         label: model.label,
         current: model.value === originalModel,
+        ...contextWindowFor(model.value),
         ...(supportsReasoning
           ? {
               supportsReasoning: true,

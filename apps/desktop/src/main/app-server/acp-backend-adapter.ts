@@ -65,8 +65,11 @@ import {
 } from "../settings/config-store/provider-runtime-config";
 import {
   AcpLiveToolUpdateResolver,
+  acpContextWindowFill,
+  acpContextWindowNotification,
   acpToolUpdateNotifications,
   acpUsageNotification,
+  readAcpContextTokens,
 } from "../acp/acp-live-notifications";
 import {
   foldAcpTurnUsage,
@@ -95,6 +98,11 @@ import {
   shouldSurfaceAcpThoughtsAsMessages,
 } from "../acp/acp-session-normalizer";
 import { AcpStdioJsonRpcTransport } from "../acp/acp-stdio-transport";
+import { shouldProbeAcpCapabilitiesAtStartup } from "../acp/acp-capability-freshness";
+import {
+  ensureAcpRuntimeDiscoveryWorkspace,
+  refreshAcpRuntimeCapabilities,
+} from "../acp/acp-capability-probe";
 import {
   checkGrokCliUpdate,
   grokUpdateChecksDisabled,
@@ -266,6 +274,10 @@ export type AcpPromptPayload = {
   parts: AppServerThreadMessagePart[];
 };
 
+export type AcpRuntimeCapabilityProbe = (
+  agent: AcpInstalledAgentRecord,
+) => Promise<AcpInstalledAgentRecord>;
+
 export type AcpBackendAdapterOptions = {
   acpAgentStore?: Pick<
     AcpAgentStoreLike,
@@ -288,6 +300,13 @@ export type AcpBackendAdapterOptions = {
     registryId: string,
   ) => string | undefined;
   checkGrokCliUpdate?: typeof checkGrokCliUpdate | null;
+  /**
+   * Probes one agent's runtime capabilities over ACP and returns its record
+   * with the outcome folded in. Startup uses it only for an agent whose runtime
+   * changed (see `shouldProbeAcpCapabilitiesAtStartup`). Defaults to the real
+   * probe once app state is initialized; `null` disables it.
+   */
+  probeAcpRuntimeCapabilities?: AcpRuntimeCapabilityProbe | null;
   resolveMcpConnectionServers?: (context: {
     backendId: AcpBackendId;
     sessionId?: string;
@@ -1127,10 +1146,18 @@ export class AcpBackendAdapter {
   private readonly providerStatusRefreshes = new Map<AcpBackendId, Promise<void>>();
   private readonly grokUpdateChecker?: typeof checkGrokCliUpdate;
   private readonly grokUpdateRefreshes = new Map<AcpBackendId, Promise<void>>();
+  private readonly runtimeCapabilityProbe?: AcpRuntimeCapabilityProbe;
+  private startupCapabilityProbe?: Promise<void>;
   private closed = false;
   private closePromise?: Promise<void>;
   private readonly closeTimeoutMs: number;
   private readonly liveTurnUsage = new Map<string, AcpLiveTurnUsage>();
+  // Last context fill sent per session this turn. Grok repeats the same
+  // count on every streamed update, so this keeps one emit per change.
+  private readonly liveContextWindows = new Map<
+    string,
+    { usedTokens: unknown; modelContextWindow: unknown }
+  >();
   private localAcpAgentsRevision = 0;
   private localAcpAgentsPromise?: Promise<AcpInstalledAgentRecord[]>;
   private localAgentSnapshot: AcpInstalledAgentRecord[] = [];
@@ -1150,6 +1177,16 @@ export class AcpBackendAdapter {
         ?? (isAppStateInitialized()
             && !grokUpdateChecksDisabled({ isPackaged: app?.isPackaged === true })
           ? checkGrokCliUpdate
+          : undefined);
+    this.runtimeCapabilityProbe = options.probeAcpRuntimeCapabilities === null
+      ? undefined
+      : options.probeAcpRuntimeCapabilities
+        ?? (isAppStateInitialized()
+          ? async (agent) =>
+              await refreshAcpRuntimeCapabilities(
+                agent,
+                await ensureAcpRuntimeDiscoveryWorkspace(),
+              )
           : undefined);
     this.acpAgentStore =
       options.acpAgentStore === null
@@ -2169,14 +2206,181 @@ export class AcpBackendAdapter {
       // Keep the revision check and all consumption synchronous. An
       // invalidation queued after discovery settles must run before this
       // point or after stale results have been fully merged and persisted.
+      // Only the startup probe asks which agents were known before this pass.
+      const recordedBackendIds = permit.intent === "startup"
+        ? new Set(
+            (this.acpAgentStore?.listInstalledAgents() ?? []).map(
+              (agent) => agent.backendId,
+            ),
+          )
+        : undefined;
       const agents = this.mergeAndPersistDiscoveredAgents(discovery.agents);
       for (const agent of agents) {
         if (agent.registryId === "grok" && agent.installStatus === "installed") {
           this.refreshGrokUpdateStatusInBackground(agent);
         }
       }
+      if (recordedBackendIds) {
+        const discoveredBackendIds = new Set(
+          discovery.agents.map((agent) => agent.backendId),
+        );
+        this.probeChangedRuntimesInBackground(
+          agents.filter(
+            (agent) =>
+              discoveredBackendIds.has(agent.backendId)
+              && (this.isAcpAgentEnabled?.(agent.registryId) ?? true)
+              && shouldProbeAcpCapabilitiesAtStartup(
+                agent,
+                recordedBackendIds.has(agent.backendId),
+              ),
+          ),
+        );
+      }
       return agents;
     }
+  }
+
+  /**
+   * Refill the capabilities that startup discovery dropped when an agent's
+   * runtime changed. Without them the composer offers no model or effort
+   * picker, and nothing else probes outside Settings and setup. The agents are
+   * already filtered by `shouldProbeAcpCapabilitiesAtStartup`, so this runs at
+   * most once per runtime.
+   */
+  private probeChangedRuntimesInBackground(
+    agents: AcpInstalledAgentRecord[],
+  ): void {
+    const probe = this.runtimeCapabilityProbe;
+    if (
+      !probe
+      || agents.length === 0
+      || this.closed
+      || this.startupCapabilityProbe
+    ) {
+      return;
+    }
+
+    // One agent at a time: each probe launches a real agent process while
+    // startup is still refreshing provider threads.
+    const run = (async () => {
+      for (const agent of agents) {
+        if (this.closed) return;
+        const probed = await probe(agent);
+        if (this.closed) return;
+        const current = this.acpAgentStore?.getInstalledAgent(agent.backendId);
+        // A Settings probe or a newer discovery may have written this record
+        // while the probe ran. Only fill a runtime that is still unprobed.
+        if (
+          !current
+          || current.version !== agent.version
+          || acpAgentLaunchIdentity(current) !== acpAgentLaunchIdentity(agent)
+          || !shouldProbeAcpCapabilitiesAtStartup(current, true)
+        ) {
+          continue;
+        }
+        this.acpAgentStore?.upsertInstalledAgent({
+          ...current,
+          ...(probed.runtimeCapabilities
+            ? { runtimeCapabilities: probed.runtimeCapabilities }
+            : {}),
+          ...(probed.lastDiscoveredAt !== undefined
+            ? { lastDiscoveredAt: probed.lastDiscoveredAt }
+            : {}),
+          ...(probed.lastDiscoveryError !== undefined
+            ? { lastDiscoveryError: probed.lastDiscoveryError }
+            : {}),
+          updatedAt: Math.max(current.updatedAt, probed.updatedAt),
+        });
+        acpBackendAdapterLog.info("startup_acp_capability_probe_completed", {
+          backend: agent.backendId,
+          version: agent.version,
+          discovered: probed.runtimeCapabilities !== undefined,
+          ...(probed.lastDiscoveryError
+            ? { error: probed.lastDiscoveryError }
+            : {}),
+        });
+        await this.emit({
+          backend: agent.backendId,
+          notification: {
+            method: "backend/acpRuntimeCapabilities/updated",
+            params: { backend: agent.backendId },
+          },
+        });
+      }
+    })()
+      .catch((error) => {
+        acpBackendAdapterLog.warn("startup_acp_capability_probe_failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      })
+      .finally(() => {
+        if (this.startupCapabilityProbe === run) {
+          this.startupCapabilityProbe = undefined;
+        }
+      });
+    this.startupCapabilityProbe = run;
+  }
+
+  /**
+   * Turn an update's context token count into a fill-only notification,
+   * once per change. The window size comes from the update itself
+   * (`usage_update`) or from the session's selected model, which is only
+   * looked up once the count has actually moved.
+   */
+  private liveContextWindowNotification(params: {
+    agent: AcpInstalledAgentRecord;
+    sessionId: string;
+    turnId?: string;
+    update: Record<string, unknown>;
+  }): AppServerNotification | undefined {
+    const reported = readAcpContextTokens(params.update);
+    if (!reported) {
+      return undefined;
+    }
+    const key = [params.agent.backendId, params.sessionId].join(":");
+    const previous = this.liveContextWindows.get(key);
+    if (
+      previous !== undefined
+      && previous.usedTokens === reported.usedTokens
+      && (
+        reported.modelContextWindow === undefined
+        || previous.modelContextWindow === reported.modelContextWindow
+      )
+    ) {
+      return undefined;
+    }
+    const modelContextWindow =
+      reported.modelContextWindow
+      ?? this.selectedModelContextWindow(params.agent, params.sessionId);
+    // Remember the count even when it cannot be drawn, so an agent that
+    // reports no window costs one lookup per change, not one per update.
+    this.liveContextWindows.set(key, {
+      usedTokens: reported.usedTokens,
+      modelContextWindow,
+    });
+    const fill = acpContextWindowFill(reported.usedTokens, modelContextWindow);
+    if (!fill) {
+      return undefined;
+    }
+    return acpContextWindowNotification({
+      threadId: params.sessionId,
+      ...(params.turnId ? { turnId: params.turnId } : {}),
+      fill,
+    });
+  }
+
+  private selectedModelContextWindow(
+    agent: AcpInstalledAgentRecord,
+    sessionId: string,
+  ): number | undefined {
+    const current = this.getInstalledAgent(agent.backendId) ?? agent;
+    const modelId = selectedAcpModel(
+      current,
+      this.getSession(agent.backendId, sessionId),
+    );
+    return current.runtimeCapabilities?.models?.availableModels.find(
+      (model) => model.id === modelId,
+    )?.contextWindow;
   }
 
   private mergeAndPersistDiscoveredAgents(
@@ -2283,7 +2487,9 @@ export class AcpBackendAdapter {
     this.providerStatusRefreshAttempts.clear();
     this.providerStatusRefreshes.clear();
     this.grokUpdateRefreshes.clear();
+    this.startupCapabilityProbe = undefined;
     this.liveTurnUsage.clear();
+    this.liveContextWindows.clear();
     this.localAgentSnapshot = [];
     this.closePromise = this.closeResources(acpClients);
     return await this.closePromise;
@@ -2670,6 +2876,25 @@ export class AcpBackendAdapter {
             backend: agent.backendId,
             notification: usageNotification,
           });
+        }
+        const contextWindowNotification = this.liveContextWindowNotification({
+          agent,
+          sessionId,
+          turnId,
+          update,
+        });
+        if (contextWindowNotification) {
+          await this.emit({
+            backend: agent.backendId,
+            notification: contextWindowNotification,
+          });
+        }
+        if (promptSettledTurnFinished) {
+          // The next turn reports again even if the count did not move, so a
+          // window that missed this turn's update still catches up.
+          this.liveContextWindows.delete(
+            [agent.backendId, sessionId].join(":"),
+          );
         }
         if (promptSettledTurnFinished && turnId) {
           this.liveTurnUsage.delete(
