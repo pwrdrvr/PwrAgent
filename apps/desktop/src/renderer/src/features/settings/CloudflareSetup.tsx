@@ -1,10 +1,12 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import type {
+  CloudflareClientConnection,
   CloudflareFederationGate,
   CloudflareSetupDraft,
   CloudflareSetupLink,
   CloudflareSetupRequest,
   CloudflareSetupStatus,
+  DesktopFederationMode,
   DesktopSettingsConfigPatch,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
@@ -15,7 +17,7 @@ type Props = {
   api?: DesktopApi;
   listenPort: string;
   listenHost?: string;
-  mode?: string;
+  mode?: DesktopFederationMode;
   onWriteConfig: (patch: DesktopSettingsConfigPatch) => Promise<boolean>;
   onSettingsChanged: () => Promise<void>;
   /** The manual credential form, for an endpoint set up outside this guide. */
@@ -34,13 +36,60 @@ const GATE_NAMES: Record<CloudflareFederationGate, string> = {
 
 const INVITE_HOURS = [1, 4, 8, 24];
 
-/** Emails as typed: any mix of commas, semicolons, spaces, and newlines. */
+/**
+ * The stage a button lives in. An action's progress, result, and failure show
+ * in that stage, next to the button; at the foot of the section a failure in
+ * step 4 rendered a screen away from the click, and off-screen in a short window.
+ */
+type Stage = "account" | "connector" | "endpoint" | "verify" | "share" | "import" | "sign-in";
+
+const ACTION_STAGE: Partial<Record<CloudflareSetupRequest["action"], Stage>> = {
+  connect: "account", disconnect: "account", "token-link": "account", "save-draft": "account",
+  "install-link": "connector", status: "connector",
+  provision: "endpoint", remove: "endpoint", "set-emails": "endpoint",
+  audit: "verify", validate: "verify", start: "verify", stop: "verify",
+  "export-client": "share", "revoke-client": "share",
+  "import-client": "import",
+  "sign-in": "sign-in", "sign-out": "sign-in",
+};
+
+/** The section badge while an action's failure stands, so it reads from the header too. */
+const ACTION_FAILED: Partial<Record<CloudflareSetupRequest["action"], string>> = {
+  connect: "Connect failed", "save-draft": "Save failed", provision: "Create failed", remove: "Removal failed",
+  "set-emails": "Allowlist update failed", audit: "Audit failed", validate: "Validation failed",
+  start: "Connector failed", stop: "Connector failed", "export-client": "Issue failed", "revoke-client": "Revoke failed",
+  "import-client": "Import failed", "sign-in": "Sign-in failed", "sign-out": "Sign-out failed",
+};
+
+const CONNECTION_LABEL: Record<CloudflareClientConnection["state"], string> = {
+  connected: "Connected",
+  elsewhere: "Not in use",
+  connecting: "Connecting",
+  rejected: "Refused",
+  disconnected: "Not connected",
+};
+
+function connectionText(connection: CloudflareClientConnection): string {
+  const gateway = connection.gateway ?? "the gateway";
+  switch (connection.state) {
+    case "connected":
+      return `Federation is connected to ${gateway} through this endpoint${connection.since ? ` since ${new Date(connection.since).toLocaleString()}` : ""}.`;
+    case "elsewhere":
+      return `Federation is connected to ${gateway} through another of its endpoints, so this one is not in use right now.`;
+    case "connecting":
+      return `Federation is connecting through this endpoint.${connection.detail ? ` Last attempt: ${connection.detail}` : ""}`;
+    default:
+      return `Federation is not connected.${connection.detail ? ` ${connection.detail}` : ""}`;
+  }
+}
+
 /** An IPC failure's own message, without Electron's "Error invoking remote method" wrapper. */
 function errorText(err: unknown, fallback: string): string {
   if (!(err instanceof Error)) return fallback;
   return err.message.replace(/^Error invoking remote method '[^']*': (?:Error: )?/, "") || fallback;
 }
 
+/** Emails as typed: any mix of commas, semicolons, spaces, and newlines. */
 function parseEmails(text: string): string[] {
   return text.split(/[\s,;]+/).map((entry) => entry.trim()).filter(Boolean);
 }
@@ -61,8 +110,10 @@ export function CloudflareSetup(props: Props) {
   const [label, setLabel] = useState("");
   const [password, setPassword] = useState("");
   const [inviteHours, setInviteHours] = useState(1);
-  const [busy, setBusy] = useState<{ action: CloudflareSetupRequest["action"]; progress: string }>();
-  const [error, setError] = useState<string>();
+  const [busy, setBusy] = useState<{ action: CloudflareSetupRequest["action"]; progress: string; stage?: Stage }>();
+  const [error, setError] = useState<{ message: string; action?: CloudflareSetupRequest["action"]; stage?: Stage }>();
+  // Which stage the current status message answers.
+  const [messageStage, setMessageStage] = useState<Stage>();
   const [tab, setTab] = useState<"gateway" | "client">("gateway");
   // Service tokens work on every Zero Trust plan, so they are the default.
   // A provisioned endpoint reports its own gate and the choice is fixed.
@@ -91,8 +142,8 @@ export function CloudflareSetup(props: Props) {
       setSavedDraft(draftKey(loaded.accountId, loaded.zoneId, loaded.hostname, loaded.gate, loaded.emails));
       // An instance that only connects through a sign-in endpoint has nothing
       // to set up as a gateway; open on the half it actually uses.
-      if (value.signIn && !value.hostname) setTab("client");
-    }).catch((err: unknown) => { if (active) setError(errorText(err, "Could not read Cloudflare setup.")); });
+      if ((value.signIn || value.clientConnection) && !value.hostname) setTab("client");
+    }).catch((err: unknown) => { if (active) setError({ message: errorText(err, "Could not read Cloudflare setup.") }); });
     return () => { active = false; };
   }, [api]);
 
@@ -131,6 +182,20 @@ export function CloudflareSetup(props: Props) {
   const dirty = !created && currentDraftKey !== savedDraft;
   const started = created || Boolean(accountId || zoneId || hostname || token || emails.length);
 
+  // An import only opens a browser for a sign-in file, and the gate is known
+  // only after the main process decrypts it, so ask while the import runs
+  // rather than offering sign-in help for a service-token file.
+  const importing = busy?.action === "import-client";
+  const [signInPending, setSignInPending] = useState(false);
+  useEffect(() => {
+    const configure = api?.configureFederationCloudflare;
+    if (!importing || !configure) { setSignInPending(false); return; }
+    const timer = setInterval(() => {
+      void configure({ action: "status" }).then((next) => setSignInPending(Boolean(next.signInPending)), () => undefined);
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [importing, api]);
+
   // The published allowlist box follows the endpoint's list until someone edits
   // it. Creating the endpoint is what first gives it a list.
   const allowlistPristine = parseEmails(allowlistText).join("\n") === (status?.emails ?? []).join("\n");
@@ -139,16 +204,25 @@ export function CloudflareSetup(props: Props) {
     if (replaceAllowlist || allowlistPristine) setAllowlistText((next.emails ?? []).join("\n"));
   };
 
-  const run = async (request: CloudflareSetupRequest, progress: string) => {
+  const run = async (request: CloudflareSetupRequest, progress: string, stage = ACTION_STAGE[request.action]) => {
     if (!api?.configureFederationCloudflare || busy) return;
-    setBusy({ action: request.action, progress });
+    setBusy({ action: request.action, progress, stage });
     setError(undefined);
+    setMessageStage(stage);
+    // What Create changed in the federation listener, to put back if it fails
+    // before recording anything — otherwise a refused port leaves the profile a
+    // loopback gateway that cannot bind.
+    let restore: DesktopSettingsConfigPatch | undefined;
     try {
       if (request.action === "provision") {
         const port = Number(listenPort);
         if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("Enter a valid federation listener port above.");
-        const saved = await onWriteConfig({ federation: { mode: props.mode === "client" || props.mode === "dual" ? "dual" : "gateway", listenHost: "127.0.0.1", listenPort: port } });
+        const mode: DesktopFederationMode = props.mode === "client" || props.mode === "dual" ? "dual" : "gateway";
+        const saved = await onWriteConfig({ federation: { mode, listenHost: "127.0.0.1", listenPort: port } });
         if (!saved) throw new Error("The gateway listener could not be enabled.");
+        if (!created && props.mode && props.listenHost !== undefined && (props.mode !== mode || props.listenHost !== "127.0.0.1")) {
+          restore = { federation: { mode: props.mode, listenHost: props.listenHost } };
+        }
       }
       const next = await api.configureFederationCloudflare(request);
       adopt(next, request.action === "set-emails");
@@ -160,8 +234,17 @@ export function CloudflareSetup(props: Props) {
       if (request.action === "export-client" || request.action === "import-client") setPassword("");
       await onSettingsChanged();
     } catch (err) {
-      setError(errorText(err, "Cloudflare setup failed."));
-      try { adopt(await api.configureFederationCloudflare({ action: "status" })); } catch { /* Preserve the original error. */ }
+      let message = errorText(err, "Cloudflare setup failed.");
+      let next: CloudflareSetupStatus | undefined;
+      try { next = await api.configureFederationCloudflare({ action: "status" }); adopt(next); } catch { /* Preserve the original error. */ }
+      if (restore && next && !next.hostname) {
+        const restored = await onWriteConfig(restore).catch(() => false);
+        if (restored) {
+          await onSettingsChanged();
+          message += " The federation listener was put back as it was.";
+        }
+      }
+      setError({ message, action: request.action, stage });
     } finally { setBusy(undefined); }
   };
 
@@ -206,8 +289,10 @@ export function CloudflareSetup(props: Props) {
         : { state: "waiting", label: "Waiting" };
 
   const failedChecks = Boolean(status?.checks?.some((check) => !check.passed));
+  const failedAction = error?.action ? ACTION_FAILED[error.action] : undefined;
   const [chip, chipKind]: [string, SettingsChipTone] =
-    status?.signIn?.state === "sign-in-required" ? ["Sign-in required", "warn"]
+    failedAction ? [failedAction, "err"]
+    : status?.signIn?.state === "sign-in-required" ? ["Sign-in required", "warn"]
       : verified ? ["Verified", "ok"]
         : failedChecks ? ["Check failed", "err"]
           : published ? [GATE_NAMES[effectiveGate], "ok"]
@@ -220,10 +305,22 @@ export function CloudflareSetup(props: Props) {
     <input className="settings-input" aria-label={name} value={value} onChange={(event) => change(event.target.value)} placeholder={placeholder}
       type={options.secret ? "password" : "text"} autoComplete="off" spellCheck={false} disabled={disabled || options.locked} />
   );
-  const action = (name: string, request: CloudflareSetupRequest, progressText: string, primary = false, blocked = false) => (
+  const action = (name: string, request: CloudflareSetupRequest, progressText: string, primary = false, blocked = false, stage?: Stage) => (
     <button type="button" className={`button button--${primary ? "primary" : "secondary"}`} disabled={disabled || blocked}
-      onClick={() => void run(request, progressText)}>{name}</button>
+      onClick={() => void run(request, progressText, stage)}>{name}</button>
   );
+  // A new failure scrolls itself into view; the key remounts it per message,
+  // and a stable ref runs once per mount rather than on every render.
+  const reveal = useCallback((node: HTMLElement | null) => {
+    node?.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
+  }, []);
+  const outcome = (stage: Stage) => <>
+    {busy?.stage === stage ? <p role="status" aria-live="polite">{busy.progress}</p> : null}
+    {!busy && status?.message && messageStage === stage ? <p role="status">{status.message}</p> : null}
+    {error?.stage === stage
+      ? <p className="cloudflare-setup__error" role="alert" key={error.message} ref={reveal}>{error.message}</p>
+      : null}
+  </>;
   // Reference links stay enabled while an operation runs: an operator reading the
   // docs mid-setup is the case they exist for. They carry no request payload, so
   // they cannot collide with the main-process busy latch.
@@ -231,7 +328,7 @@ export function CloudflareSetup(props: Props) {
     <button type="button" className="cloudflare-setup__link" disabled={!api?.configureFederationCloudflare}
       onClick={() => void api?.configureFederationCloudflare?.({ action: "open-link", link: target })}>{name}</button>
   );
-  const saveDraft = action("Save draft", { action: "save-draft", draft }, "Saving draft…", false, !dirty);
+  const saveDraft = (stage: Stage) => action("Save draft", { action: "save-draft", draft }, "Saving draft…", false, !dirty, stage);
   const needs = (items: string[]) => items.length
     ? <p className="cloudflare-setup__needs">Still needed: {items.join(", ")}.</p>
     : null;
@@ -246,17 +343,35 @@ export function CloudflareSetup(props: Props) {
     ? ` The listener moves from ${props.listenHost} to 127.0.0.1, so it is reachable only through the tunnel.`
     : "";
   const signingIn = busy?.action === "sign-in";
+  const connection = status?.clientConnection;
   // Waiting on the browser. A login method that refuses the person strands the
   // browser on a blank page, so the way back is offered up front rather than
   // after the wait times out. Both buttons work outside the busy latch.
-  const signInHelp = (lead: string) => <div className="cloudflare-setup__notice" role="note">
+  const signInHelp = (lead: string, stage: Stage) => <div className="cloudflare-setup__notice" role="note">
     <p>{lead} If Cloudflare says &ldquo;That account does not have access&rdquo; or leaves a blank page, open the sign-in page again and use an email the gateway allows; one-time PIN works with any address.</p>
     <div className="settings-button-row">
       <button type="button" className="button button--secondary"
-        onClick={() => void api?.configureFederationCloudflare?.({ action: "reopen-sign-in" }).then(adopt, () => undefined)}>Open the sign-in page again</button>
+        onClick={() => void api?.configureFederationCloudflare?.({ action: "reopen-sign-in" })
+          .then((next) => { adopt(next); setMessageStage(stage); }, () => undefined)}>Open the sign-in page again</button>
       <button type="button" className="button button--secondary"
         onClick={() => void api?.configureFederationCloudflare?.({ action: "cancel-sign-in" })}>Cancel sign-in</button>
     </div>
+  </div>;
+
+  const importSteps = <div className="automation-funnel cloudflare-setup__funnel">
+    <AutomationStage verb="Get" title="Setup file from the gateway">
+      <p>On the gateway, open Settings → Federation → Cloudflare Access and save a client setup file. Bring the <code>.pwrcf</code> file to this computer, and get its password from the person who made it.</p>
+    </AutomationStage>
+    <AutomationFlow caption="The file names the endpoint and carries a one-time enrollment invite" />
+    <AutomationStage verb="Open" title="Connect with the file">
+      <p>PwrAgent decrypts the file, installs the credential it carries — or opens your browser to sign in, if the endpoint uses sign-in — and enrolls this profile with the gateway.</p>
+      <SettingsField label="Transfer password" control={field("Cloudflare client import password", password, setPassword, "Password from the gateway", { secret: true })} />
+      <div className="settings-button-row">
+        {action("Open client setup file", { action: "import-client", password }, "Decrypting client setup and connecting…", true, !password)}
+      </div>
+      {importing && signInPending ? signInHelp("Finish signing in in your browser.", "import") : null}
+      {outcome("import")}
+    </AutomationStage>
   </div>;
 
   return <SettingsSection sectionId="cloudflare" eyebrow="Private access over the Internet" title="Cloudflare Access" chip={chip} chipKind={chipKind}>
@@ -267,6 +382,7 @@ export function CloudflareSetup(props: Props) {
         <li><strong>Installs</strong> The gateway runs <code>cloudflared</code>. Client machines need only PwrAgent.</li>
         <li><strong>Hand-off</strong> Each client gets one encrypted setup file, and a password you send separately.</li>
       </ul>
+      {error && !error.stage ? <p className="cloudflare-setup__error" role="alert">{error.message}</p> : null}
       <div className="settings-button-row" role="group" aria-label="Cloudflare setup role">
         <button type="button" className={`button button--${tab === "gateway" ? "primary" : "secondary"}`} aria-pressed={tab === "gateway"} disabled={disabled} onClick={() => setTab("gateway")}>Set up this gateway</button>
         <button type="button" className={`button button--${tab === "client" ? "primary" : "secondary"}`} aria-pressed={tab === "client"} disabled={disabled} onClick={() => setTab("client")}>Connect this client</button>
@@ -329,12 +445,12 @@ export function CloudflareSetup(props: Props) {
               {created ? <p>The API token is held only in memory, so it is needed again after PwrAgent restarts — to audit, validate, or issue clients. The published endpoint keeps working without it.</p>
                 : <p>Use a domain already active on Cloudflare. The API token is held in memory until you disconnect or quit PwrAgent; the account and zone IDs can be saved as a draft.</p>}
               <div className="settings-button-row">
-                {action("Create API token in Cloudflare", { action: "token-link" }, "Opening Cloudflare…")}
+                {action("Create API token in Cloudflare", { action: "token-link", accountId: accountId.trim(), zoneId: zoneId.trim() }, "Opening Cloudflare…")}
                 {link("Open your domain’s Overview for the IDs", "dash-zone-overview")}
               </div>
               <details className="cloudflare-setup__help">
                 <summary>Token permissions</summary>
-                <p>The link fills in every permission below except the two marked Add, which Cloudflare cannot prefill. Add those, scope the token to your account and this domain, and choose an expiry.</p>
+                <p>The link fills in every permission below except the two marked Add, which Cloudflare cannot prefill. Enter the account and zone IDs first and it also scopes the token to them. Add the two marked permissions and choose an expiry.</p>
                 <ul>
                   <li>Account → Cloudflare Tunnel → Edit</li>
                   <li>Account → Access: Apps and Policies → Edit</li>
@@ -352,10 +468,11 @@ export function CloudflareSetup(props: Props) {
               <SettingsField label="API token" sub="Not saved to disk." control={field("Cloudflare setup API token", token, setToken, "Paste scoped API token", { secret: true })} />
               <div className="settings-button-row">
                 {action("Connect Cloudflare", { action: "connect", token, accountId, zoneId, gate: effectiveGate }, "Checking account and permissions…", true, connectMissing.length > 0)}
-                {created ? null : saveDraft}
+                {created ? null : saveDraft("account")}
               </div>
               {needs(connectMissing)}
             </>}
+            {outcome("account")}
           </AutomationStage>
           <AutomationFlow caption="The tunnel connects outward from this computer; no inbound port opens" />
 
@@ -365,16 +482,17 @@ export function CloudflareSetup(props: Props) {
                 : "Install cloudflared on this computer, then check again. PwrAgent runs it for you; there is nothing to configure in it."}</p>
             {!installed ? <div className="settings-button-row">
               {action("Install cloudflared", { action: "install-link" }, "Opening installation guide…")}
-              {action("Check again", { action: "status" }, "Checking connector…")}
+              {action("Check again", { action: "status", refresh: true }, "Checking connector…")}
             </div> : null}
             {installed && status?.connectorUpdate ? <div className="cloudflare-setup__notice" role="note">
               <strong>cloudflared {status.connectorUpdate} is available.</strong>
               <p>Update it the way you installed it; with Homebrew, run <code>brew upgrade cloudflared</code>.{status.connectorRunning ? " The running connector keeps the old version until you stop and start it in step 5." : ""}</p>
               <div className="settings-button-row">
                 {link("How to update cloudflared", "cloudflared-update-docs")}
-                {action("Check again", { action: "status" }, "Checking connector…")}
+                {action("Check again", { action: "status", refresh: true }, "Checking connector…")}
               </div>
             </div> : null}
+            {outcome("connector")}
           </AutomationStage>
           <AutomationFlow caption={oauth ? "Cloudflare admits only the people on your allowlist" : mtls ? "Cloudflare admits only certificates from this gateway’s authority" : "Cloudflare admits only tokens this gateway issued"} />
 
@@ -407,8 +525,9 @@ export function CloudflareSetup(props: Props) {
             </> : <>
               {created ? <div className="cloudflare-setup__notice" role="note">
                 <strong>Creation stopped before the endpoint was published.</strong>
-                <p>{status?.resources?.length ? `Created in Cloudflare so far: ${status.resources.join(", ")}.` : "Nothing was created in Cloudflare yet."}
-                  {portMoved ? ` The tunnel was set up for 127.0.0.1:${status?.listenPort}; the gateway listener is now ${livePort}, and resuming moves the tunnel there.` : ""}</p>
+                <p>{status?.resources?.length ? `Created in Cloudflare so far: ${status.resources.join(", ")}.` : "Nothing was created in Cloudflare yet."}</p>
+                {/* Its own line: appended to the inventory, it read as part of the list and was missed. */}
+                {portMoved ? <p><strong>The gateway listener moved to {livePort}.</strong> The tunnel was set up for 127.0.0.1:{status?.listenPort}; resuming moves it to {livePort}.</p> : null}
                 <p>Resume to finish with these, or start over to delete exactly these and begin again. Nothing else in the account is touched.</p>
               </div> : null}
               <SettingsField label="Public hostname" sub={status?.zoneName
@@ -420,14 +539,15 @@ export function CloudflareSetup(props: Props) {
                   placeholder="you@example.com" onChange={(event) => setEmailsText(event.target.value)} spellCheck={false} disabled={disabled || created} />} /> : null}
               <p>Creating the endpoint uses this profile&rsquo;s saved listener port, so the gateway listens on 127.0.0.1:{port}; to use another port, change it in Configuration and save it first.{modeChange}{hostChange} PwrAgent then creates {oauth ? "the gateway’s validation token, an Access application with sign-in and an email allowlist," : mtls ? "a private certificate authority, an Access application with a certificate-only policy," : "the gateway’s validation token, an Access application with a token-only policy,"} and a tunnel — and publishes {hostname.trim() || "the hostname"} only after reading the policy back.</p>
               <div className="settings-button-row">
-                {action(created ? "Resume endpoint creation" : "Create protected endpoint",
+                {action(created ? portMoved ? `Resume and move tunnel to ${livePort}` : "Resume endpoint creation" : "Create protected endpoint",
                   { action: "provision", hostname, listenPort: Number(listenPort), gate: effectiveGate, emails: oauth ? emails : undefined },
                   oauth ? "Creating validation token, sign-in policy, and tunnel…" : mtls ? "Creating CA, Access policy, and tunnel…" : "Creating service token, Access policy, and tunnel…",
                   true, createMissing.length > 0)}
-                {created ? action("Start over", { action: "remove" }, "Deleting what this setup created…", false, !connected) : saveDraft}
+                {created ? action("Start over", { action: "remove" }, "Deleting what this setup created…", false, !connected) : saveDraft("endpoint")}
               </div>
               {needs(createMissing)}
             </>}
+            {outcome("endpoint")}
           </AutomationStage>
           <AutomationFlow caption="Validation proves strangers are refused at Cloudflare and never reach this computer" />
 
@@ -452,6 +572,7 @@ export function CloudflareSetup(props: Props) {
                 {link("Tunnels", "dash-tunnels")}
               </div>
             </> : <p className="cloudflare-setup__hint">Available once the endpoint exists.</p>}
+            {outcome("verify")}
           </AutomationStage>
           <AutomationFlow caption="Each client receives one encrypted file; its password travels separately" />
 
@@ -481,43 +602,42 @@ export function CloudflareSetup(props: Props) {
               </div>)}
               {status?.clients.length ? <p className="cloudflare-setup__hint">Revoking removes the credential from the Access policy{mtls ? "" : " and deletes it in Cloudflare"}, and revokes the federation peer that enrolled with its setup file, which ends that peer&rsquo;s open session.</p> : null}
             </> : <p className="cloudflare-setup__hint">Available once the endpoint is published.</p>}
+            {outcome("share")}
           </AutomationStage>
         </div>
-      </> : <div className="automation-funnel cloudflare-setup__funnel">
-        <AutomationStage verb="Get" title="Setup file from the gateway">
-          <p>On the gateway, open Settings → Federation → Cloudflare Access and save a client setup file. Bring the <code>.pwrcf</code> file to this computer, and get its password from the person who made it.</p>
-        </AutomationStage>
-        <AutomationFlow caption="The file names the endpoint and carries a one-time enrollment invite" />
-        <AutomationStage verb="Open" title="Connect with the file">
-          <p>PwrAgent decrypts the file, installs the credential it carries — or opens your browser to sign in, if the endpoint uses sign-in — and enrolls this profile with the gateway.</p>
-          <SettingsField label="Transfer password" control={field("Cloudflare client import password", password, setPassword, "Password from the gateway", { secret: true })} />
-          <div className="settings-button-row">
-            {action("Open client setup file", { action: "import-client", password }, "Decrypting client setup and connecting…", true, !password)}
-          </div>
-          {busy?.action === "import-client" ? signInHelp("If this file uses sign-in, finish it in your browser.") : null}
-        </AutomationStage>
-        {status?.signIn ? <>
-          <AutomationFlow caption="Access refreshes quietly while PwrAgent runs" />
-          <AutomationStage verb="Sign in" title="Cloudflare Access sign-in">
-            <p className="cloudflare-setup__state" role="status">
-              {status.signIn.state === "signed-in"
-                ? <><strong>Signed in</strong>{status.signIn.signedInAt ? ` since ${new Date(status.signIn.signedInAt).toLocaleString()}` : ""}. Access refreshes automatically; you sign in again after two weeks, or sooner if you are removed from the allowlist.</>
-                : status.signIn.state === "sign-in-required"
-                  ? <><strong>Sign-in required.</strong> {status.signIn.lastError ?? "Your Cloudflare sign-in expired."} Federation reconnects once you sign in.</>
-                  : <><strong>Signed out.</strong> Sign in to connect to <code>{status.signIn.endpoint}</code>.</>}
-            </p>
-            {signingIn ? signInHelp("Finish signing in in your browser.") : <div className="settings-button-row">
-              {status.signIn.state === "signed-in"
-                ? action("Sign out", { action: "sign-out" }, "Signing out…")
-                : action("Sign in", { action: "sign-in" }, "Finish signing in in your browser…", true)}
-            </div>}
-          </AutomationStage>
-        </> : null}
-      </div>}
-
-      {busy ? <p role="status" aria-live="polite">{busy.progress}</p> : null}
-      {status?.message ? <p role="status">{status.message}</p> : null}
-      {error ? <p className="cloudflare-setup__error" role="alert">{error}</p> : null}
+      </> : <>
+        {/* Once this profile is a client, lead with whether it is connected; the
+            first-time import steps are what it did once, not what it needs now. */}
+        {connection || status?.signIn ? <div className="automation-funnel cloudflare-setup__funnel">
+          {connection ? <AutomationStage verb="Status" title="Connection"
+            progress={{ state: connection.state === "connected" ? "done" : "current", label: CONNECTION_LABEL[connection.state] }}>
+            <div className="cloudflare-setup__endpoint"><code>{connection.endpoint}</code></div>
+            <p className="cloudflare-setup__state" role="status" aria-label="Cloudflare client connection">{connectionText(connection)}</p>
+          </AutomationStage> : null}
+          {status?.signIn ? <>
+            {connection ? <AutomationFlow caption="Access refreshes quietly while PwrAgent runs" /> : null}
+            <AutomationStage verb="Sign in" title="Cloudflare Access sign-in">
+              <p className="cloudflare-setup__state" role="status">
+                {status.signIn.state === "signed-in"
+                  ? <><strong>Signed in</strong>{status.signIn.signedInAt ? ` since ${new Date(status.signIn.signedInAt).toLocaleString()}` : ""}. Access refreshes automatically; you sign in again after two weeks, or sooner if you are removed from the allowlist.</>
+                  : status.signIn.state === "sign-in-required"
+                    ? <><strong>Sign-in required.</strong> {status.signIn.lastError ?? "Your Cloudflare sign-in expired."} Federation reconnects once you sign in.</>
+                    : <><strong>Signed out.</strong> Sign in to connect to <code>{status.signIn.endpoint}</code>.</>}
+              </p>
+              {signingIn ? signInHelp("Finish signing in in your browser.", "sign-in") : <div className="settings-button-row">
+                {status.signIn.state === "signed-in"
+                  ? action("Sign out", { action: "sign-out" }, "Signing out…")
+                  : action("Sign in", { action: "sign-in" }, "Finish signing in in your browser…", true)}
+              </div>}
+              {outcome("sign-in")}
+            </AutomationStage>
+          </> : null}
+        </div> : null}
+        {connection ? <details className="cloudflare-setup__reimport" open={busy?.action === "import-client" || error?.stage === "import" || messageStage === "import"}>
+          <summary>Connect with a different setup file</summary>
+          {importSteps}
+        </details> : importSteps}
+      </>}
 
       {props.manual ? <details className="cloudflare-setup__manual">
         <summary>Enter Cloudflare credentials manually</summary>

@@ -131,8 +131,21 @@ client therefore also revokes the federation peer that enrolled with its
 setup file, which closes that session; an invite nobody has used yet is
 retired instead.
 
+On a client, "Connect this client" leads with the connection through the
+Cloudflare endpoint, in the same terms as Federation health, and folds the
+import steps away once a setup file has been imported. An import reports
+whether the connection came up. When Cloudflare refuses the client's service
+token or certificate, the error says so, rather than calling the gateway
+unreachable. That refusal, and a sign-in that is required, stop the client
+from redialing when the Cloudflare endpoint is its only path. Signing in,
+importing a setup file, or changing settings starts it again. On the gateway,
+a peer that arrived through the tunnel is listed as "via Cloudflare Tunnel",
+with the client address Cloudflare reports, instead of as the connector's
+loopback socket.
+
 Creating the endpoint uses the saved federation listener port, not an unsaved
-edit in Configuration. The hostname is checked against existing Access
+edit in Configuration. If Create fails before recording anything, the
+listener mode and address it changed are put back. The hostname is checked against existing Access
 applications and DNS records before anything is created, and Connect suggests
 the first of `federation.<zone>`, `federation-2.<zone>`, and so on that is
 free; a second profile in the same account commonly holds the first.
@@ -175,6 +188,11 @@ and puts the client in a sign-in-required state that Federation health reports
 as rejected; Settings -> Federation -> Cloudflare Access offers Sign in. A
 modified client could ignore that, so revoke the peer to end its session at
 once. Config key: `federation.cloudflare_access_oauth_enabled`.
+
+A new hostname can fail validation for a while on a computer that looked it
+up before it existed, because the "not found" answer is cached for the zone's
+negative TTL (30 minutes by default). Validation and sign-in discovery say so,
+rather than reporting a missing feature.
 
 The Access application's session duration is 15 minutes. On an application
 with an identity policy, Access accepts its own session cookie in place of a

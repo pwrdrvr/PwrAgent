@@ -12,14 +12,19 @@ export function FederationConnections({ health }: { health: FederationHealthStat
         return <li key={`${connection.direction}:${connection.peerId}`}>
           <span>{peer ? formatFederationPeerDisplayLabel(peer, health.peers) : connection.peerId}</span>
           {connection.direction === "outgoing" ? <p>Outgoing · <code>{connection.endpoint ?? "Endpoint unavailable"}</code></p>
-            : <>
+            : connection.via === "cloudflare-tunnel" ? <>
+              {/* The remote socket is this computer's own cloudflared, which read as a local peer. */}
+              <p>Incoming · via Cloudflare Tunnel{connection.reportedClientAddress
+                ? <> · client <code>{connection.reportedClientAddress}</code> (reported by Cloudflare)</> : null}</p>
+              <p>Local socket: <code>{connection.localAddress ?? "Unavailable"}</code></p>
+            </> : <>
               <p>Incoming · Remote socket: <code>{connection.remoteAddress ?? "Unavailable"}</code></p>
               <p>Local socket: <code>{connection.localAddress ?? "Unavailable"}</code></p>
             </>}
         </li>;
       })}
     </ul>}
-    {connections.some((connection) => connection.direction === "incoming")
+    {connections.some((connection) => connection.direction === "incoming" && !connection.via)
       ? <p>Socket addresses show this hop; incoming tunnels or proxies may appear as the remote.</p> : null}
   </div>;
 }

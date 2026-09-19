@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import "@testing-library/jest-dom/vitest";
 import { describe, expect, it, vi } from "vitest";
 import { CloudflareSetup } from "../CloudflareSetup";
@@ -320,8 +320,9 @@ describe("Cloudflare setup flow", () => {
       listenPort="47831" onWriteConfig={async () => true} onSettingsChanged={async () => {}} />);
     await screen.findByText("Creation stopped before the endpoint was published.");
     expect(screen.getByText(/Created in Cloudflare so far: 1 service token, Access application, Service Auth policy, Tunnel\./)).toBeInTheDocument();
-    expect(screen.getByText(/set up for 127\.0\.0\.1:47830; the gateway listener is now 47831/)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Resume endpoint creation" }));
+    expect(screen.getByText(/set up for 127\.0\.0\.1:47830; resuming moves it to 47831/)).toBeInTheDocument();
+    // The button says what it does to the tunnel, not only the sentence above it.
+    fireEvent.click(screen.getByRole("button", { name: "Resume and move tunnel to 47831" }));
     await waitFor(() => expect(call).toHaveBeenCalledWith(expect.objectContaining({ action: "provision", listenPort: 47831 })));
     fireEvent.click(screen.getByRole("button", { name: "Start over" }));
     await waitFor(() => expect(call).toHaveBeenCalledWith({ action: "remove" }));
@@ -347,6 +348,118 @@ describe("Cloudflare setup flow", () => {
       listenPort="47830" onWriteConfig={async () => true} onSettingsChanged={async () => {}} />);
     await screen.findByRole("button", { name: "Remove endpoint" });
     expect(screen.queryByText("The tunnel points at a port the gateway no longer uses.")).toBeNull();
+  });
+
+  const stage = (title: string) => screen.getByRole("heading", { name: title }).closest("section") as HTMLElement;
+
+  it("shows a failure in the stage whose button was clicked, and names it on the section badge", async () => {
+    const call = vi.fn(async (request: CloudflareSetupRequest) => {
+      if (request.action === "provision") throw new Error("Error invoking remote method 'federation:cloudflare-setup': Error: An Access application already covers federation.example.com.");
+      return connected;
+    });
+    render(<CloudflareSetup api={{ configureFederationCloudflare: call } as DesktopApi}
+      listenPort="47830" onWriteConfig={async () => true} onSettingsChanged={async () => {}} />);
+    await screen.findByLabelText("Cloudflare public hostname");
+    fireEvent.change(screen.getByLabelText("Cloudflare public hostname"), { target: { value: "federation.example.com" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create protected endpoint" }));
+    // Beside the button in step 4, not a screen away at the foot of the section.
+    const alert = await within(stage("Protected endpoint")).findByRole("alert");
+    expect(alert).toHaveTextContent(/^An Access application already covers federation\.example\.com\.$/);
+    expect(within(stage("Cloudflare account")).queryByRole("alert")).toBeNull();
+    expect(screen.getByText("Create failed")).toBeInTheDocument();
+  });
+
+  it("shows a result in the stage that produced it", async () => {
+    const call = vi.fn(async (request: CloudflareSetupRequest) => request.action === "save-draft"
+      ? { ...connected, connected: false, message: "Draft saved." }
+      : { ...connected, connected: false });
+    render(<CloudflareSetup api={{ configureFederationCloudflare: call } as DesktopApi}
+      listenPort="47830" onWriteConfig={async () => true} onSettingsChanged={async () => {}} />);
+    fireEvent.change(await screen.findByLabelText("Cloudflare account ID"), { target: { value: "a".repeat(32) } });
+    // Save draft appears in steps 2 and 4; the one clicked answers.
+    fireEvent.click(within(stage("Protected endpoint")).getByRole("button", { name: "Save draft" }));
+    expect(await within(stage("Protected endpoint")).findByText("Draft saved.")).toBeInTheDocument();
+    expect(within(stage("Cloudflare account")).queryByText("Draft saved.")).toBeNull();
+  });
+
+  it("puts the listener back when Create fails before recording anything", async () => {
+    const writes: unknown[] = [];
+    const call = vi.fn(async (request: CloudflareSetupRequest) => {
+      if (request.action === "provision") throw new Error("The gateway is not listening on 127.0.0.1:47830: Port 47830 is already in use by another process.");
+      return connected;
+    });
+    render(<CloudflareSetup api={{ configureFederationCloudflare: call } as DesktopApi}
+      listenPort="47830" listenHost="0.0.0.0" mode="client" onWriteConfig={async (patch) => { writes.push(patch); return true; }} onSettingsChanged={async () => {}} />);
+    await screen.findByLabelText("Cloudflare public hostname");
+    fireEvent.change(screen.getByLabelText("Cloudflare public hostname"), { target: { value: "federation.example.com" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create protected endpoint" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("The federation listener was put back as it was.");
+    expect(writes).toEqual([
+      { federation: { mode: "dual", listenHost: "127.0.0.1", listenPort: 47830 } },
+      { federation: { mode: "client", listenHost: "0.0.0.0" } },
+    ]);
+  });
+
+  it("keeps the listener when a failed Create already recorded resources on it", async () => {
+    const writes: unknown[] = [];
+    let current: CloudflareSetupStatus = connected;
+    const call = vi.fn(async (request: CloudflareSetupRequest) => {
+      if (request.action === "provision") {
+        current = { ...connected, hostname: "federation.example.com", listenPort: 47830, resources: ["1 service token"] };
+        throw new Error("Cloudflare refused the tunnel.");
+      }
+      return current;
+    });
+    render(<CloudflareSetup api={{ configureFederationCloudflare: call } as DesktopApi}
+      listenPort="47830" listenHost="0.0.0.0" mode="client" onWriteConfig={async (patch) => { writes.push(patch); return true; }} onSettingsChanged={async () => {}} />);
+    await screen.findByLabelText("Cloudflare public hostname");
+    fireEvent.change(screen.getByLabelText("Cloudflare public hostname"), { target: { value: "federation.example.com" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create protected endpoint" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/^Cloudflare refused the tunnel\.$/);
+    expect(writes).toHaveLength(1);
+  });
+
+  it("leads a connected client with its connection, and folds away the import steps", async () => {
+    const call = vi.fn(async (_request: CloudflareSetupRequest) => ({ ...connected, zoneName: undefined, connected: false,
+      clientConnection: { endpoint: "wss://federation.example.com", state: "connected" as const, gateway: "Mac mini / dev" } }));
+    render(<CloudflareSetup api={{ configureFederationCloudflare: call } as DesktopApi}
+      listenPort="47830" onWriteConfig={async () => true} onSettingsChanged={async () => {}} />);
+    expect(await screen.findByRole("status", { name: "Cloudflare client connection" }))
+      .toHaveTextContent("Federation is connected to Mac mini / dev through this endpoint.");
+    expect(screen.getByText("Connect with a different setup file").closest("details")).not.toHaveAttribute("open");
+  });
+
+  it("says why a client is not connected", async () => {
+    const detail = "Cloudflare Access refused this client's credential for federation.example.com. It may have been revoked or expired; ask the gateway's operator for a new client setup file.";
+    const call = vi.fn(async (_request: CloudflareSetupRequest) => ({ ...connected, zoneName: undefined, connected: false,
+      clientConnection: { endpoint: "wss://federation.example.com", state: "rejected" as const, detail } }));
+    render(<CloudflareSetup api={{ configureFederationCloudflare: call } as DesktopApi}
+      listenPort="47830" onWriteConfig={async () => true} onSettingsChanged={async () => {}} />);
+    const connection = await screen.findByRole("status", { name: "Cloudflare client connection" });
+    expect(connection).toHaveTextContent(`Federation is not connected. ${detail}`);
+    expect(screen.getAllByText("Refused").length).toBeGreaterThan(0);
+  });
+
+  it("offers sign-in help during an import only once a browser sign-in is waiting", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      let pending = false;
+      const call = vi.fn(async (request: CloudflareSetupRequest) => {
+        if (request.action === "import-client") return new Promise<CloudflareSetupStatus>(() => undefined);
+        return { ...connected, signInPending: pending || undefined };
+      });
+      render(<CloudflareSetup api={{ configureFederationCloudflare: call } as DesktopApi}
+        listenPort="47830" onWriteConfig={async () => true} onSettingsChanged={async () => {}} />);
+      fireEvent.click(await screen.findByRole("button", { name: "Connect this client" }));
+      fireEvent.change(screen.getByLabelText("Cloudflare client import password"), { target: { value: "transfer-password" } });
+      fireEvent.click(screen.getByRole("button", { name: "Open client setup file" }));
+      await act(async () => { vi.advanceTimersByTime(1000); });
+      // A service-token file never opens a browser; nothing to cancel.
+      expect(screen.queryByRole("button", { name: "Open the sign-in page again" })).toBeNull();
+      pending = true;
+      await act(async () => { vi.advanceTimersByTime(1000); });
+      expect(await screen.findByRole("button", { name: "Open the sign-in page again" })).toBeInTheDocument();
+    } finally { vi.useRealTimers(); }
   });
 
   it("names a newer cloudflared release and how to update to it", async () => {

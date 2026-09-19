@@ -314,6 +314,8 @@ type FederationSocketMessage =
 export type FederationGatewayConnection = {
   remoteAddress?: string;
   localAddress?: string;
+  via?: "cloudflare-tunnel";
+  reportedClientAddress?: string;
   peerDirectoryPaging?: boolean;
   navigationQueryProtocol?: 2;
   peerId: FederationInstanceId;
@@ -387,6 +389,10 @@ export type FederationGatewayWebSocketServerOptions = {
 };
 
 const WILDCARD_HOSTS = new Set(["", "0.0.0.0", "::", "[::]"]);
+
+function isLoopbackAddress(address: string | undefined): boolean {
+  return Boolean(address && (address === "::1" || /^(?:::ffff:)?127\./.test(address)));
+}
 
 /**
  * Refuse a specific-address listener that another process's wildcard
@@ -555,6 +561,8 @@ export class FederationGatewayWebSocketServer {
       direction: "incoming",
       remoteAddress: connection.remoteAddress,
       localAddress: connection.localAddress,
+      via: connection.via,
+      reportedClientAddress: connection.reportedClientAddress,
     }));
   }
 
@@ -735,9 +743,20 @@ export class FederationGatewayWebSocketServer {
     };
     const socketAddress = (address: string | undefined, port: number | undefined) =>
       address && port !== undefined ? `${address.includes(":") ? `[${address}]` : address}:${port}` : undefined;
+    // cloudflared dials the listener over loopback and adds Cloudflare's
+    // request headers, so its own socket is the observed remote. Mark it for
+    // the connection list rather than letting it read as a local peer. Any
+    // local process could send these headers too; nothing here grants trust.
+    const tunnelled = typeof request.headers["cf-ray"] === "string"
+      && isLoopbackAddress(request.socket.remoteAddress);
+    const reportedClient = request.headers["cf-connecting-ip"];
     const connection: FederationGatewayConnection = {
       remoteAddress: socketAddress(request.socket.remoteAddress, request.socket.remotePort),
       localAddress: socketAddress(request.socket.localAddress, request.socket.localPort),
+      ...(tunnelled ? {
+        via: "cloudflare-tunnel" as const,
+        reportedClientAddress: typeof reportedClient === "string" && net.isIP(reportedClient) ? reportedClient : undefined,
+      } : {}),
       peerDirectoryPaging: message.peerDirectoryPaging === true,
       navigationQueryProtocol:
         message.navigationQueryProtocol === 2 ? 2 : undefined,

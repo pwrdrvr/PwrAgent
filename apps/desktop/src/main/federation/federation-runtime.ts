@@ -1,10 +1,10 @@
 import { projectThreadDisplayEvent } from "../app-server/thread-display-events";
 import { federationTrafficCaptureUntil, setFederationTrafficCapture, saveFederationTrafficHistory } from "./federation-traffic-capture";
-import type { NavigationAttentionViewReleaseRequest } from "@pwragent/shared";
+import type { CloudflareClientConnection, NavigationAttentionViewReleaseRequest } from "@pwragent/shared";
 import { cloudflareConnector } from "./cloudflare-connector";
 import { loadCloudflareSetup } from "./cloudflare-setup-storage";
 import { getCloudflareAccessSignIn } from "./cloudflare-access-sign-in";
-import { CloudflareSignInRequiredError } from "./cloudflare-access-oauth";
+import { CloudflareAccessRefusedError, CloudflareSignInRequiredError } from "./cloudflare-access-oauth";
 import type { MarkNavigationDirectorySeenRequest, MarkNavigationDirectorySeenResponse } from "@pwragent/shared";
 import type { RemoveNavigationDirectoryRequest, RemoveNavigationDirectoryResponse } from "@pwragent/shared";
 import { markLocalNavigationDirectorySeen, removeLocalNavigationDirectory } from "../app-server/navigation-directory-actions";
@@ -931,6 +931,13 @@ export class DesktopFederationRuntime {
   private remoteThreadSummaryCache: RemoteThreadSummaryCache | undefined;
   private reconnectTimer?: ReturnType<typeof setTimeout>;
   private accessRefreshTimer?: ReturnType<typeof setTimeout>;
+  /**
+   * Dialing stopped on a failure no retry can fix: a lapsed Cloudflare sign-in
+   * or a credential Cloudflare refused, on the only configured endpoint.
+   * Signing in, importing a setup file, or changing settings restarts the
+   * runtime, which dials again.
+   */
+  private parked = false;
   private connectionAttempt?: symbol;
   private reconnectAttempt = 0;
   private connectionGeneration = 0;
@@ -1186,6 +1193,7 @@ export class DesktopFederationRuntime {
 
   async stop(): Promise<void> {
     this.stopping = true;
+    this.parked = false;
     await cloudflareConnector.stop();
     this.connectionAttempt = undefined;
     this.connectionGeneration += 1;
@@ -1265,7 +1273,7 @@ export class DesktopFederationRuntime {
       configuredMode: resolveFederationRuntimeConfig(
         getDesktopSettingsService().readFederationConfig(),
       ).mode,
-      running: Boolean(this.listenUrl || this.client || this.reconnectTimer || this.connectionAttempt),
+      running: Boolean(this.listenUrl || this.client || this.reconnectTimer || this.connectionAttempt || this.parked),
     };
   }
 
@@ -1279,6 +1287,36 @@ export class DesktopFederationRuntime {
         : "Enable the gateway on the selected loopback port before Cloudflare setup or validation.");
     }
     return this.server.securityProbes;
+  }
+
+  /**
+   * This client's connection through its Cloudflare endpoint, for the setup
+   * pane: the state Federation health reports, narrowed to that one path.
+   */
+  cloudflareClientConnection(endpoint: string): CloudflareClientConnection {
+    const host = (url: string | undefined) => {
+      try { return url ? new URL(url).host.toLowerCase() : undefined; } catch { return undefined; }
+    };
+    const target = host(endpoint);
+    const gateway = this.gatewayInstanceId ? this.diagnosticInstanceLabel(this.gatewayInstanceId) : undefined;
+    if (this.client && this.gatewayUrl) {
+      const lastConnectedAt = this.endpointStatuses.get(this.gatewayUrl)?.lastConnectedAt;
+      return {
+        endpoint,
+        state: host(this.gatewayUrl) === target ? "connected" : "elsewhere",
+        gateway,
+        since: lastConnectedAt ? new Date(lastConnectedAt).toISOString() : undefined,
+      };
+    }
+    const endpointError = [...this.endpointStatuses].find(([url]) => host(url) === target)?.[1].lastError;
+    return {
+      endpoint,
+      state: this.lastConnectionFailureKind === "auth"
+        ? "rejected"
+        : this.reconnectTimer || this.connectionAttempt ? "connecting" : "disconnected",
+      gateway,
+      detail: this.lastConnectionError ?? endpointError,
+    };
   }
 
   /** The port of a gateway listening on 127.0.0.1 right now, or undefined. */
@@ -2933,6 +2971,7 @@ export class DesktopFederationRuntime {
     if (this.stopping || this.configuredEndpoints.length === 0) return;
     const attempt = Symbol("federation connection attempt");
     this.connectionAttempt = attempt;
+    this.parked = false;
     try {
       await this.walkGatewayEndpoints();
     } finally {
@@ -3264,6 +3303,16 @@ export class DesktopFederationRuntime {
       ) {
         await cloudflareSignIn.invalidateAccessToken(gatewayUrl).catch(() => undefined);
       }
+      // The edge answered and refused the service token or certificate this
+      // client presented. "Unreachable" would send the operator after the
+      // network; the credential is what a new setup file has to replace.
+      if (
+        (cloudflareAccessEnabled || cloudflareMtlsEnabled)
+        && error instanceof Error
+        && /Unexpected server response: 403/.test(error.message)
+      ) {
+        throw new CloudflareAccessRefusedError(new URL(gatewayUrl).host);
+      }
       throw (
         sshFailure.error
         ?? (error instanceof Error ? error : new Error(String(error)))
@@ -3449,6 +3498,16 @@ export class DesktopFederationRuntime {
       endpoints: this.configuredEndpoints.length,
       error: this.lastConnectionError,
     });
+    // Nothing a retry changes, and no other path to try: stop instead of
+    // logging the same local failure every thirty seconds, indefinitely.
+    if (
+      (error instanceof CloudflareSignInRequiredError || error instanceof CloudflareAccessRefusedError)
+      && this.configuredEndpoints.length === 1
+    ) {
+      this.parked = true;
+      log.info("federation client stopped dialing until sign-in or settings change");
+      return;
+    }
     this.scheduleReconnect();
   }
 

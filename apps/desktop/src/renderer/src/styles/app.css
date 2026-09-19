@@ -9575,6 +9575,17 @@ a.button {
   margin: 8px 0 4px;
 }
 
+/* A connected client's import steps, folded below its live status. */
+.cloudflare-setup__reimport > summary {
+  cursor: pointer;
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.cloudflare-setup__reimport[open] > summary {
+  margin-bottom: 12px;
+}
+
 .settings-section-controls {
   display: inline-flex;
   align-items: center;

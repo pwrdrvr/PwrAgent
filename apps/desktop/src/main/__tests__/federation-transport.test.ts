@@ -1051,7 +1051,16 @@ describe("federation transport", () => {
     );
   });
 
-  it("closes an established session after encrypted frame authentication fails", async () => {
+  // The second run arrives the way cloudflared delivers a tunnelled client:
+  // over loopback, with Cloudflare's request headers on the upgrade.
+  it.each([
+    { path: "direct", headers: undefined, marked: {} },
+    {
+      path: "through a Cloudflare tunnel",
+      headers: { "cf-ray": "8c1f0000aaaa-SJC", "cf-connecting-ip": "203.0.113.7" },
+      marked: { via: "cloudflare-tunnel", reportedClientAddress: "203.0.113.7" },
+    },
+  ])("closes an established session after encrypted frame authentication fails ($path)", async ({ headers, marked }) => {
     const gatewayNoise = generateNoiseStaticKeyPair();
     const clientNoise = generateNoiseStaticKeyPair();
     const clientKeyPair = generateFederationIdentityKeyPair();
@@ -1086,7 +1095,7 @@ describe("federation transport", () => {
       onDisconnect: () => resolveDisconnected?.(),
     });
     const { url } = await server.start();
-    const socket = new WebSocket(url);
+    const socket = new WebSocket(url, headers ? { headers } : undefined);
     const reader = new TestSocketReader(socket);
     await waitForSocketOpen(socket);
     await reader.next();
@@ -1141,6 +1150,7 @@ describe("federation transport", () => {
       direction: "incoming",
       remoteAddress: expect.stringMatching(/^127\.0\.0\.1:\d+$/),
       localAddress: new URL(url).host,
+      ...marked,
     }]);
 
 

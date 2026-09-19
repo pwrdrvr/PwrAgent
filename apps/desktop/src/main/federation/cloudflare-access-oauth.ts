@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import type { CloudflareSignInStatus } from "@pwragent/shared";
+import { isUnresolvedHost, unresolvedHostMessage } from "./cloudflare-dns";
 
 /**
  * Client half of the `oauth` gate: this instance signing a person in to a
@@ -54,6 +55,20 @@ export class CloudflareSignInRequiredError extends Error {
     super(`${CLOUDFLARE_SIGN_IN_REQUIRED}${detail ? ` ${detail}` : ""}`);
   }
 }
+
+/**
+ * Cloudflare's edge answered and refused this client's service token or
+ * certificate: the gateway is reachable, and the credential is what failed.
+ * Retrying cannot fix it, so like a lapsed sign-in it reads as rejected.
+ */
+export class CloudflareAccessRefusedError extends Error {
+  constructor(host: string) {
+    super(`${CLOUDFLARE_ACCESS_REFUSED} for ${host}. It may have been revoked or expired; `
+      + "ask the gateway's operator for a new client setup file.");
+  }
+}
+
+export const CLOUDFLARE_ACCESS_REFUSED = "Cloudflare Access refused this client's credential";
 
 /** The person abandoned a sign-in; nothing was saved, so an existing grant stands. */
 export class CloudflareSignInCancelledError extends Error {
@@ -245,6 +260,11 @@ export class CloudflareAccessOAuth {
     }
   }
 
+  /** Whether a sign-in is waiting on the browser right now. */
+  pending(): boolean {
+    return Boolean(this.pendingSignIn);
+  }
+
   /** Abandon a sign-in waiting on the browser, e.g. after its tab was closed. */
   cancel(): void {
     this.cancelSignIn?.();
@@ -338,17 +358,24 @@ export class CloudflareAccessOAuth {
   }
 
   private async fetchMetadata(host: string): Promise<Metadata> {
-    let document = await this.getJson(`https://${host}/.well-known/oauth-authorization-server`).catch(() => undefined);
+    const failures: unknown[] = [];
+    const fetched = (error: unknown) => { failures.push(error); return undefined; };
+    let document = await this.getJson(`https://${host}/.well-known/oauth-authorization-server`).catch(fetched);
     if (!hasOAuthEndpoints(document)) {
-      const resource = await this.getJson(`https://${host}/.well-known/cloudflare-access-protected-resource/`).catch(() => undefined);
+      const resource = await this.getJson(`https://${host}/.well-known/cloudflare-access-protected-resource/`).catch(fetched);
       const server = Array.isArray((resource as { authorization_servers?: unknown })?.authorization_servers)
         ? (resource as { authorization_servers: unknown[] }).authorization_servers[0]
         : undefined;
       if (typeof server === "string" && trustedOAuthUrl(server, host)) {
-        document = await this.getJson(`${server.replace(/\/$/, "")}/.well-known/oauth-authorization-server`).catch(() => undefined);
+        document = await this.getJson(`${server.replace(/\/$/, "")}/.well-known/oauth-authorization-server`).catch(fetched);
       }
     }
     if (!hasOAuthEndpoints(document)) {
+      this.deps.log?.("Cloudflare sign-in metadata unavailable", {
+        host, reasons: failures.map((error) => error instanceof Error ? error.message : String(error)),
+      });
+      // Only a host that answered can be said to lack sign-in.
+      if (failures.some(isUnresolvedHost)) throw new Error(unresolvedHostMessage(host));
       throw new Error("This Cloudflare endpoint does not offer sign-in. Managed OAuth may be off on its Access application.");
     }
     const metadata = {
@@ -433,8 +460,9 @@ export class CloudflareAccessOAuth {
       // No redirects: a bearer or refresh token must only go where discovery,
       // after its host check, said to send it.
       response = await this.fetcher(url, { ...init, redirect: "error", signal: AbortSignal.timeout(20_000) });
-    } catch {
-      throw new Error("Cloudflare Access could not be reached. Check your connection and try again.");
+    } catch (error) {
+      // Kept as the cause so a failed lookup can still be told apart.
+      throw new Error("Cloudflare Access could not be reached. Check your connection and try again.", { cause: error });
     }
     const text = (await response.text()).slice(0, RESPONSE_LIMIT);
     let body: unknown;

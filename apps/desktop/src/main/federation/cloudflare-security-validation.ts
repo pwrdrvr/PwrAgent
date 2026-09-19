@@ -2,6 +2,7 @@ import https from "node:https";
 import { randomBytes } from "node:crypto";
 import type { CloudflareSecurityCheck } from "@pwragent/shared";
 import type { CloudflareGate } from "./cloudflare-api";
+import { isUnresolvedHost, unresolvedHostMessage } from "./cloudflare-dns";
 import type { CloudflareOriginProbes } from "./cloudflare-origin-probes";
 
 /**
@@ -74,9 +75,15 @@ export async function requestCloudflareProbe(input: CloudflareProbeRequest): Pro
       finish(response.statusCode ?? 101, response.headers);
       socket.destroy();
     });
-    request.on("error", () => {
+    request.on("error", (error) => {
       clearTimeout(deadline);
-      reject(new Error("Endpoint probe failed. Check DNS, TLS, and connector health; this is not a security pass."));
+      if (isUnresolvedHost(error)) {
+        reject(new Error(`${unresolvedHostMessage(url.hostname)} This is not a security pass.`));
+        return;
+      }
+      const code = (error as { code?: unknown }).code;
+      reject(new Error(`Endpoint probe failed${typeof code === "string" ? ` (${code})` : ""}. `
+        + "Check TLS and connector health; this is not a security pass."));
     });
     request.end();
   });

@@ -132,6 +132,11 @@ export type CloudflareSetupDependencies = {
   api?: (token: string) => CloudflareApi;
 };
 
+/** The Access application's name, which Cloudflare's login page shows people. */
+export function cloudflareApplicationName(hostname: string): string {
+  return `PwrAgent federation · ${hostname}`;
+}
+
 /**
  * A sign-in endpoint's browser session must end when a sign-in would.
  *
@@ -378,7 +383,9 @@ export class CloudflareSetupService {
     if (!state.applicationId) {
       // Empty policy list denies all access while the certificate rule is added.
       const result = await api.request<{ id: string }>(`${base}/access/apps`, "POST", {
-        name: state.name, domain: hostname, type: "self_hosted",
+        // People see this name on Cloudflare's login page, so it names the
+        // endpoint and leaves out the random suffix the other resources carry.
+        name: cloudflareApplicationName(hostname), domain: hostname, type: "self_hosted",
         app_launcher_visible: false, service_auth_401_redirect: false,
         policies: [],
         ...(cloudflareSetupGate(state) === "oauth"

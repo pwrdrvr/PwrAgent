@@ -180,6 +180,19 @@ describe("Cloudflare Access sign-in", () => {
     expect(access.calls.some((call) => call.method === "POST")).toBe(false);
   });
 
+  it("says a name that does not resolve yet, rather than blaming Managed OAuth", async () => {
+    const log = vi.fn();
+    const oauth = new CloudflareAccessOAuth({
+      load: async () => undefined,
+      save: async () => undefined,
+      openExternal: async () => undefined,
+      fetch: async () => { throw Object.assign(new TypeError("fetch failed"), { cause: { code: "ENOTFOUND" } }); },
+      log,
+    });
+    await expect(oauth.probe(ENDPOINT)).rejects.toThrow("federation.example.com does not resolve on this computer yet.");
+    expect(log).toHaveBeenCalledWith("Cloudflare sign-in metadata unavailable", expect.objectContaining({ host: "federation.example.com" }));
+  });
+
   it("finds the authorization server through the protected-resource document", async () => {
     const access = fakeAccess({ metadata: null, protectedResource: { authorization_servers: [TEAM] } });
     const h = harness({ access });

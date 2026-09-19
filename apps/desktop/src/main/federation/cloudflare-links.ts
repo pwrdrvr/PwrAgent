@@ -68,3 +68,31 @@ export function resolveCloudflareLink(
     .replace(":zone", zone ?? "")
     .replace(":application", application ?? "");
 }
+
+const CLOUDFLARE_ID = /^[a-f0-9]{32}$/;
+
+/**
+ * The dashboard's API-token form, pre-filled with the permissions setup uses.
+ *
+ * `argotunnel` is Cloudflare Tunnel. Cloudflare publishes no template key for
+ * Access: Service Tokens or zone-level Access apps, so the setup's permission
+ * list names those for the operator to add. The token is scoped to the first
+ * well-formed account and zone id among the candidates — the setup record's,
+ * then the form's, then the saved draft's — and to all of them only when none
+ * is known; an unvalidated id never narrows it to the wrong place.
+ */
+export function cloudflareTokenTemplateUrl(
+  accountIds: Array<string | undefined>,
+  zoneIds: Array<string | undefined>,
+): string {
+  const first = (ids: Array<string | undefined>) => ids.find((id) => id !== undefined && CLOUDFLARE_ID.test(id));
+  const url = new URL("https://dash.cloudflare.com/profile/api-tokens");
+  url.searchParams.set("permissionGroupKeys", JSON.stringify([
+    { key: "argotunnel", type: "edit" }, { key: "access", type: "edit" },
+    { key: "dns", type: "edit" }, { key: "zone", type: "read" },
+  ]));
+  url.searchParams.set("accountId", first(accountIds) ?? "*");
+  url.searchParams.set("zoneId", first(zoneIds) ?? "all");
+  url.searchParams.set("name", "PwrAgent Federation setup");
+  return url.toString();
+}

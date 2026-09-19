@@ -11,12 +11,13 @@ import {
   saveCloudflareSetupDraft,
 } from "../federation/cloudflare-setup-storage";
 import { cloudflareConnector } from "../federation/cloudflare-connector";
-import { CLOUDFLARE_LINKS, resolveCloudflareLink } from "../federation/cloudflare-links";
+import { CLOUDFLARE_LINKS, cloudflareTokenTemplateUrl, resolveCloudflareLink } from "../federation/cloudflare-links";
 import { compareCloudflaredVersions, createCloudflaredReleaseCheck } from "../federation/cloudflared-release";
 import { getCloudflareAccessSignIn } from "../federation/cloudflare-access-sign-in";
 import { CloudflareSignInCancelledError } from "../federation/cloudflare-access-oauth";
 import { getDesktopFederationRuntime } from "../federation/federation-runtime";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
+import { getMainLogger } from "../log";
 import { bundleGate, decryptCloudflareBundle, encryptCloudflareBundle } from "../federation/cloudflare-client-bundle";
 import { decodeFederationInvite, encodeFederationInvite } from "../federation/federation-enrollment";
 
@@ -44,7 +45,15 @@ const setup = new CloudflareSetupService({
   revokeEnrollment: (enrollmentId) => getDesktopFederationRuntime().revokeEnrollment(enrollmentId),
 });
 
+const log = getMainLogger("pwragent:federation-cloudflare");
 let busy = false;
+
+/** The pane shows each failed check; the log keeps why, for a report after the fact. */
+function logFailedChecks(run: string, checks: CloudflareSetupStatus["checks"]): void {
+  for (const check of checks ?? []) {
+    if (!check.passed) log.info("Cloudflare endpoint check failed", { run, check: check.label, detail: check.detail });
+  }
+}
 const latestCloudflared = createCloudflaredReleaseCheck();
 
 /**
@@ -60,6 +69,8 @@ async function describe(message?: string, options: { refreshConnector?: boolean 
   const signIn = federation.cloudflareAccessOAuthEnabled && endpoint
     ? await getCloudflareAccessSignIn().status(endpoint)
     : undefined;
+  const clientConnection = endpoint ? getDesktopFederationRuntime().cloudflareClientConnection(endpoint) : undefined;
+  const signInPending = getCloudflareAccessSignIn().pending() || undefined;
   const connectorVersion = status.connectorInstalled
     ? await cloudflareConnector.version({ refresh: options.refreshConnector }).catch(() => undefined)
     : undefined;
@@ -67,7 +78,20 @@ async function describe(message?: string, options: { refreshConnector?: boolean 
   const connectorUpdate = connectorVersion && latest && compareCloudflaredVersions(latest, connectorVersion) === 1
     ? latest
     : undefined;
-  return { ...status, connectorVersion, connectorUpdate, draft, signIn, ...(message ? { message } : {}) };
+  return {
+    ...status, connectorVersion, connectorUpdate, draft, signIn, clientConnection, signInPending,
+    ...(message ? { message } : {}),
+  };
+}
+
+/** The client's connection through `endpoint` once it settles, or its state after ten seconds. */
+async function awaitCloudflareConnection(endpoint: string) {
+  const deadline = Date.now() + 10_000;
+  for (;;) {
+    const connection = getDesktopFederationRuntime().cloudflareClientConnection(endpoint);
+    if (connection.state === "connected" || connection.state === "rejected" || Date.now() >= deadline) return connection;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
 }
 
 function signInEndpoint(): string {
@@ -83,8 +107,7 @@ export function registerCloudflareSetupIpc(): void {
   ipcMain.removeHandler(FEDERATION_CLOUDFLARE_SETUP_CHANNEL);
   ipcMain.handle(FEDERATION_CLOUDFLARE_SETUP_CHANNEL, async (_event, request: CloudflareSetupRequest): Promise<CloudflareSetupStatus> => {
     if (!request || typeof request !== "object") throw new Error("Invalid Cloudflare setup request.");
-    // Also the pane's "Check again", so it re-reads the installed connector.
-    if (request.action === "status") return describe(undefined, { refreshConnector: true });
+    if (request.action === "status") return describe(undefined, { refreshConnector: request.refresh === true });
     // Outside the latch: it exists to release a sign-in that holds it.
     if (request.action === "cancel-sign-in") {
       getCloudflareAccessSignIn().cancel();
@@ -101,18 +124,12 @@ export function registerCloudflareSetupIpc(): void {
     try {
       switch (request.action) {
         case "token-link": {
-          const url = new URL("https://dash.cloudflare.com/profile/api-tokens");
-          // `argotunnel` is Cloudflare Tunnel. Cloudflare publishes no template
-          // key for Access: Service Tokens or zone-level Access apps, so the
-          // setup's permission list names those for the operator to add.
-          url.searchParams.set("permissionGroupKeys", JSON.stringify([
-            { key: "argotunnel", type: "edit" }, { key: "access", type: "edit" },
-            { key: "dns", type: "edit" }, { key: "zone", type: "read" },
-          ]));
-          url.searchParams.set("accountId", "*");
-          url.searchParams.set("zoneId", "all");
-          url.searchParams.set("name", "PwrAgent Federation setup");
-          await shell.openExternal(url.toString());
+          const current = await loadCloudflareSetup().catch(() => undefined);
+          const draft = await loadCloudflareSetupDraft().catch(() => undefined);
+          await shell.openExternal(cloudflareTokenTemplateUrl(
+            [current?.accountId, request.accountId, draft?.accountId],
+            [current?.zoneId, request.zoneId, draft?.zoneId],
+          ));
           break;
         }
         case "install-link":
@@ -174,8 +191,11 @@ export function registerCloudflareSetupIpc(): void {
         case "set-emails":
           await setup.setEmails(request.emails);
           return describe("Sign-in allowlist updated. A removed person's PwrAgent disconnects at its next access refresh, within 15 minutes.");
-        case "audit": await setup.audit(); break;
-        case "validate": await setup.validate(); break;
+        case "audit": logFailedChecks("audit", await setup.audit()); break;
+        case "validate":
+          await setup.validate();
+          logFailedChecks("validation", (await setup.status()).checks);
+          break;
         case "start": await setup.start(); break;
         case "stop": await setup.stop(); break;
         case "revoke-client":
@@ -290,9 +310,12 @@ export function registerCloudflareSetupIpc(): void {
           } });
           await getDesktopFederationRuntime().restart();
           await getDesktopFederationRuntime().importInvite(bundle.invite);
-          return describe(importGate === "oauth"
-            ? "Signed in and gateway invite imported."
-            : "Client credentials installed and gateway invite imported.");
+          // Say whether it worked, not only that the file was read: enrollment
+          // happens on the first connection, so wait briefly for it.
+          const connection = await awaitCloudflareConnection(bundle.endpoint);
+          return describe(connection.state === "connected"
+            ? `Connected to ${connection.gateway ?? "the gateway"} through ${host}.`
+            : `Setup imported, but not connected to ${host} yet${connection.detail ? `: ${connection.detail}` : "."}`);
         }
         default: throw new Error("Unknown Cloudflare setup action.");
       }

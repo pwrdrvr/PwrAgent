@@ -418,6 +418,8 @@ describe("Cloudflare sign-in (oauth) admission", () => {
     // Access honors its own session cookie in place of a sign-in until this
     // ends, so it is what bounds a removed person's browser session.
     expect(created.session_duration).toBe("15m");
+    // Cloudflare's login page shows this name to the person signing in.
+    expect(created.name).toBe("PwrAgent federation · federation.example.com");
     const checks = await h.service.audit();
     expect(checks.every((check) => check.passed)).toBe(true);
     expect(checks.map((check) => check.label)).toEqual(expect.arrayContaining(["Managed OAuth sign-in", "Allowed people", "Validator service token", "Browser session length"]));

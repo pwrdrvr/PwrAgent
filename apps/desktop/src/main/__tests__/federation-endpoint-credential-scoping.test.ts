@@ -1,11 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { generateFederationNoiseStaticKeyPair } from "../federation/federation-noise";
 import { DesktopFederationRuntime } from "../federation/federation-runtime";
-import { CloudflareSignInRequiredError } from "../federation/cloudflare-access-oauth";
+import { CloudflareAccessRefusedError, CloudflareSignInRequiredError } from "../federation/cloudflare-access-oauth";
+import { classifyFederationClientFailure } from "../federation/federation-redaction";
 import type { FederationClientWebSocketClient } from "../federation/federation-transport";
 
 const metaStore = vi.hoisted(() => new Map<string, string>());
 const clientClose = vi.hoisted(() => vi.fn());
+// An upgrade refusal to answer instead of connecting, once.
+const connectFailure = vi.hoisted(() => ({ next: undefined as Error | undefined }));
 const connectCalls = vi.hoisted(
   () =>
     [] as Array<{
@@ -29,6 +32,9 @@ vi.mock("../federation/federation-transport", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   connectFederationClient: async (params: (typeof connectCalls)[number]): Promise<FederationClientWebSocketClient> => {
     connectCalls.push(params);
+    const failure = connectFailure.next;
+    connectFailure.next = undefined;
+    if (failure) throw failure;
     return {
       sessionId: "federation-session:test",
       capabilities: [],
@@ -103,6 +109,7 @@ describe("federation endpoint credential scoping", () => {
     signIn.accessToken.mockReset();
     signIn.accessToken.mockImplementation(async () => "oauth:access-token");
     clientClose.mockReset();
+    connectFailure.next = undefined;
     metaStore.clear();
     metaStore.set("federation_instance_id", "pwr_client-under-test");
     metaStore.set("federation_gateway_instance_id", "gateway_one");
@@ -235,6 +242,63 @@ describe("federation endpoint credential scoping", () => {
       expect(signIn.accessToken).toHaveBeenCalledTimes(2);
       expect(clientClose).not.toHaveBeenCalled();
     } finally { vi.useRealTimers(); }
+  });
+
+  // Cloudflare answered and refused the credential; "unreachable" sent the
+  // operator after the network when a new setup file is what fixes it.
+  it("reports a Cloudflare refusal of the client's credential, not an unreachable gateway", async () => {
+    cloudflareEndpoint.value = "wss://federation.example.com";
+    connectFailure.next = new Error("Unexpected server response: 403");
+    const failure = await createHarness(["wss://federation.example.com"])
+      .connectClient("wss://federation.example.com").catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(CloudflareAccessRefusedError);
+    expect((failure as Error).message).toContain("refused this client's credential for federation.example.com");
+    expect(classifyFederationClientFailure((failure as Error).message)).toBe("auth");
+  });
+
+  it("leaves a 403 from a host that got no Cloudflare credential as it was", async () => {
+    connectFailure.next = new Error("Unexpected server response: 403");
+    await expect(createHarness(["ws://192.168.1.20:47830"]).connectClient("ws://192.168.1.20:47830"))
+      .rejects.toThrow("Unexpected server response: 403");
+  });
+
+  it("stops dialing a hopeless Cloudflare endpoint only when it is the one path", () => {
+    type Parking = CredentialHarness & {
+      handleClientConnectionFailure: (error: unknown) => void;
+      reconnectTimer?: ReturnType<typeof setTimeout>;
+      parked: boolean;
+      disconnectAdvertisedPeers: () => void;
+    };
+    for (const [endpoints, parks] of [[["wss://federation.example.com"], true], [["wss://federation.example.com", "ws://192.168.1.20:47830"], false]] as const) {
+      for (const error of [new CloudflareSignInRequiredError(), new CloudflareAccessRefusedError("federation.example.com")]) {
+        const harness = createHarness([...endpoints]) as Parking;
+        harness.disconnectAdvertisedPeers = () => undefined;
+        harness.handleClientConnectionFailure(error);
+        // Signing in or importing a setup file restarts the runtime, which dials again.
+        expect(harness.parked).toBe(parks);
+        expect(Boolean(harness.reconnectTimer)).toBe(!parks);
+        clearTimeout(harness.reconnectTimer);
+      }
+    }
+  });
+
+  it("reports the connection through the Cloudflare endpoint for the setup pane", async () => {
+    signIn.enabled = true;
+    cloudflareEndpoint.value = "wss://federation.example.com";
+    const runtime = createHarness(["wss://federation.example.com"]) as CredentialHarness & {
+      cloudflareClientConnection: (endpoint: string) => { state: string; detail?: string };
+      handleClientConnectionFailure: (error: unknown) => void;
+      disconnectAdvertisedPeers: () => void;
+    };
+    runtime.disconnectAdvertisedPeers = () => undefined;
+    expect(runtime.cloudflareClientConnection("wss://federation.example.com").state).toBe("disconnected");
+    await runtime.connectClient("wss://federation.example.com");
+    expect(runtime.cloudflareClientConnection("wss://federation.example.com/").state).toBe("connected");
+    expect(runtime.cloudflareClientConnection("wss://other.example.com").state).toBe("elsewhere");
+    runtime.handleClientConnectionFailure(new CloudflareSignInRequiredError());
+    expect(runtime.cloudflareClientConnection("wss://federation.example.com")).toMatchObject({
+      state: "rejected", detail: expect.stringContaining("sign-in is required"),
+    });
   });
 
   it("withholds credentials from every host when several are configured and none is designated", async () => {

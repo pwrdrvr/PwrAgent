@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CLOUDFLARE_LINKS, resolveCloudflareLink } from "../federation/cloudflare-links";
+import { CLOUDFLARE_LINKS, cloudflareTokenTemplateUrl, resolveCloudflareLink } from "../federation/cloudflare-links";
 
 const accountId = "0123456789abcdef0123456789abcdef";
 const zoneId = "fedcba9876543210fedcba9876543210";
@@ -24,6 +24,16 @@ describe("Cloudflare dashboard links", () => {
       .toBe(`https://dash.cloudflare.com/${accountId}/one/access-controls/apps`);
     expect(resolveCloudflareLink(CLOUDFLARE_LINKS["dash-endpoint-application"], { accountId, applicationId: "../../billing" }))
       .toBe(`https://dash.cloudflare.com/${accountId}/one/access-controls/apps`);
+  });
+
+  it("scopes the API token to the first well-formed account and zone it knows", () => {
+    const scoped = new URL(cloudflareTokenTemplateUrl([undefined, "not-an-id", accountId], [zoneId]));
+    expect(scoped.searchParams.get("accountId")).toBe(accountId);
+    expect(scoped.searchParams.get("zoneId")).toBe(zoneId);
+    expect(JSON.parse(scoped.searchParams.get("permissionGroupKeys")!)).toContainEqual({ key: "argotunnel", type: "edit" });
+    const open = new URL(cloudflareTokenTemplateUrl(["", undefined], ["zone"]));
+    expect(open.searchParams.get("accountId")).toBe("*");
+    expect(open.searchParams.get("zoneId")).toBe("all");
   });
 
   it("falls back to the dashboard root rather than interpolating an unvalidated id", () => {

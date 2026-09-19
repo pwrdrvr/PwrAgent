@@ -63,8 +63,10 @@ export type CloudflareSignInStatus = {
 };
 
 export type CloudflareSetupRequest =
-  | { action: "status" }
-  | { action: "token-link" }
+  /** `refresh` re-reads the installed connector, for the pane's "Check again". */
+  | { action: "status"; refresh?: boolean }
+  /** The form's IDs, when entered, scope the token template to them. */
+  | { action: "token-link"; accountId?: string; zoneId?: string }
   | { action: "install-link" }
   | { action: "open-link"; link: CloudflareSetupLink }
   | { action: "save-draft"; draft: CloudflareSetupDraft }
@@ -111,6 +113,20 @@ export type CloudflareSetupRequest =
   | { action: "reopen-sign-in" }
   | { action: "sign-out" };
 
+export type CloudflareClientConnection = {
+  endpoint: string;
+  /**
+   * `elsewhere`: federation is connected to the gateway through a different
+   * configured endpoint, so this one is not in use right now.
+   */
+  state: "connected" | "elsewhere" | "connecting" | "rejected" | "disconnected";
+  /** The gateway's display label, once it is known. */
+  gateway?: string;
+  /** Why it is not connected, when there is a reason. */
+  detail?: string;
+  since?: string;
+};
+
 export type CloudflareSecurityCheck = {
   label: string;
   passed: boolean;
@@ -151,6 +167,13 @@ export type CloudflareSetupStatus = {
   connectorUpdate?: string;
   phase?: string;
   clients: Array<{ id: string; label: string; expiresAt: string; revoked: boolean }>;
+  /**
+   * This instance as a client of a Cloudflare endpoint: whether federation is
+   * connected through it, in the terms Federation health uses.
+   */
+  clientConnection?: CloudflareClientConnection;
+  /** A browser sign-in is waiting for the person to finish it. */
+  signInPending?: boolean;
   /** `oauth` gate only: the people the Access policy lets sign in. */
   emails?: string[];
   draft?: CloudflareSetupDraft;
