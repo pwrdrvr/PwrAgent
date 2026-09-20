@@ -192,6 +192,8 @@ function formatReviewMetadata(model: ReviewClipboardModel): string[] {
   push("Base", context?.baseBranch);
   push("Tip commit", context?.headCommit);
   push("Base commit", context?.baseCommit);
+  push("PR base tip", context?.pullRequestSnapshot?.baseCommit);
+  push("PR merge base", context?.pullRequestSnapshot?.mergeBaseCommit);
   const pullRequest = context?.pullRequest;
   if (pullRequest) {
     const title = pullRequest.title?.trim();

@@ -13179,6 +13179,102 @@ describe("useThreadSessionState", () => {
     });
   });
 
+  it("retains all pinned PR commits on a live inline scope card", async () => {
+    let agentEventHandler:
+      | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+      | undefined;
+    const snapshot = {
+      pullRequest: { provider: "github.com", org: "pwrdrvr", repo: "PwrAgent", number: 1918, url: "https://github.com/pwrdrvr/PwrAgent/pull/1918" },
+      baseCommit: "c".repeat(40), headCommit: "b".repeat(40), mergeBaseCommit: "a".repeat(40), capturedAt: 1,
+    };
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (listener) => {
+        agentEventHandler = listener;
+        return () => undefined;
+      },
+      readThread: async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      }),
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitForThreadHydration(result);
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            item: {
+              id: "turn-review-2-item",
+              type: "enteredReviewMode",
+              review: "One finding.",
+              data: {
+                reviewer: { backend: "codex", model: "gpt-5.6-sol" },
+                // The registry freezes this onto the live item beside
+                // `reviewer`; dropping it here is what once made the
+                // provenance row invisible on the native review path.
+                context: {
+                  headCommit: snapshot.headCommit, baseCommit: snapshot.mergeBaseCommit, pullRequestSnapshot: snapshot,
+                  workspacePath: "/Users/dev/pwrdrvr/PwrAgent",
+                  projectLabel: "PwrAgent",
+                  gitBranch: "fix/dock-icon",
+                  baseBranch: "origin/main",
+                  pullRequest: {
+                    provider: "github.com",
+                    org: "pwrdrvr",
+                    repo: "PwrAgent",
+                    number: 1918,
+                    baseRefName: "main",
+                    url: "https://github.com/pwrdrvr/PwrAgent/pull/1918",
+                  },
+                },
+              },
+            },
+          },
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(result.current.entries).toHaveLength(1);
+    });
+    expect(result.current.entries[0]).toMatchObject({
+      type: "review",
+      context: {
+        headCommit: snapshot.headCommit, baseCommit: snapshot.mergeBaseCommit, pullRequestSnapshot: snapshot,
+        workspacePath: "/Users/dev/pwrdrvr/PwrAgent",
+        projectLabel: "PwrAgent",
+        gitBranch: "fix/dock-icon",
+        baseBranch: "origin/main",
+        pullRequest: {
+          number: 1918,
+          baseRefName: "main",
+        },
+      },
+      reviewer: { backend: "codex", model: "gpt-5.6-sol" },
+    });
+    expect(result.current.entries[0].turn).toBeUndefined();
+  });
+
   it.each([
     ["semantic review match", "review-start-live"],
     ["exact item-ID replacement", "review-start"],

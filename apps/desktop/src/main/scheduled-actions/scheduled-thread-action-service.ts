@@ -186,14 +186,17 @@ export class ScheduledThreadActionService {
       const samePullRequest = current.review?.target.type === "pullRequest"
         && current.review.target.url === request.review.target.url
         && (!request.review.cwd || request.review.cwd === current.review.cwd);
+      const review = samePullRequest
+        ? { ...current.review, ...request.review, runMode: request.review.runMode ?? current.review?.runMode }
+        : request.review;
       const prepared = await this.options.registry.prepareReviewRequest({
-        ...request.review, backend: current.backend, threadId: current.threadId,
+        ...review, backend: current.backend, threadId: current.threadId,
         ...(samePullRequest ? { target: current.review!.target, cwd: current.review!.cwd } : {}),
       }, samePullRequest);
       request = {
         ...request,
         displayText: `Review ${request.review.target.url} at ${prepared.target.type === "pullRequest" ? prepared.target.snapshot!.headCommit.slice(0, 10) : ""}`,
-        review: { ...request.review, target: prepared.target, cwd: prepared.cwd },
+        review: { ...review, target: prepared.target, cwd: prepared.cwd },
       };
     }
     const updated = this.options.store.update(request.id, {
