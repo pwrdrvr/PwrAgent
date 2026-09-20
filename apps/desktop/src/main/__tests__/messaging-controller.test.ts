@@ -949,6 +949,32 @@ describe("MessagingController", () => {
     expect(harness.submitReview).toHaveBeenCalledWith(expect.objectContaining({ runMode }));
   });
 
+  it.each([false, true])("retains an explicit messaging mode after owner downgrade and blocks Start (rebuild: %s)", async (rebuild) => {
+    let supported = true;
+    const harness = await createHarness({ listBackends: async () => ({
+      fetchedAt: 1000, backends: [buildBackendSummary({ capabilities: {
+        ...buildBackendSummary().capabilities, reviewRunner: true,
+        reviewRunMode: supported, reviewCodexInline: true, reviewCodexSubAgent: true,
+      } })],
+    }) });
+    await bindThread(harness);
+    await harness.controller.handleInboundEvent(buildCommandEvent("/review"));
+    await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "review:summary:mode" }));
+    await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "review:mode:codex-inline" }));
+    supported = false;
+    if (rebuild) {
+      await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "review:summary:target" }));
+      await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "review:back" }));
+      expect(harness.delivered.at(-1)).toMatchObject({
+        review: { runMode: "codex-inline" },
+        body: expect.stringContaining("Update"),
+      });
+    }
+    await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "review:summary:start" }));
+    expect(harness.submitReview).not.toHaveBeenCalled();
+    expect(harness.delivered.at(-1)).toMatchObject({ kind: "error", body: expect.stringContaining("Update") });
+  });
+
   it("picks a reviewer through the configurator buttons", async () => {
     const harness = await createHarness({
       listBackends: async (): Promise<ListBackendsResponse> => ({

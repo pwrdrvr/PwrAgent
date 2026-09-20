@@ -47,6 +47,33 @@ describe("federation backend bridge", () => {
     expect(request).toHaveBeenLastCalledWith({ method: FEDERATION_BACKEND_METHODS.startReview, params: review });
   });
 
+  it.each(["codex", "acp:legacy", undefined])("checks the scheduled review target backend %s rather than unrelated backend capabilities", async (backend) => {
+    const request = vi.fn(async ({ method, params }: { method: string; params?: { cursor?: string } }) => {
+      if (method === FEDERATION_BACKEND_METHODS.listBackends) return { backends: [
+        { kind: "codex", capabilities: { reviewRunMode: true } },
+        { kind: "acp:legacy", capabilities: {} },
+      ] };
+      if (method === FEDERATION_BACKEND_METHODS.listScheduledThreadActions) return {
+        actions: params?.cursor ? (backend ? [{ id: "queued-review", backend }] : []) : [],
+        nextCursor: params?.cursor ? undefined : "page-2",
+      };
+      return {};
+    });
+    const client = new FederationRemoteBackendClient({ request } as unknown as FederationRpcEndpoint);
+    const update = { id: "queued-review", review: {
+      target: { type: "uncommittedChanges" as const }, runMode: "codex-inline" as const,
+    } };
+    if (backend === "codex") {
+      await client.updateScheduledThreadAction(update);
+      expect(request).toHaveBeenLastCalledWith({ method: FEDERATION_BACKEND_METHODS.updateScheduledThreadAction, params: update });
+    } else {
+      await expect(client.updateScheduledThreadAction(update)).rejects.toThrow(
+        backend ? "does not support explicit review modes" : "Scheduled review action was not found",
+      );
+      expect(request.mock.calls.some(([args]) => args.method === FEDERATION_BACKEND_METHODS.updateScheduledThreadAction)).toBe(false);
+    }
+  });
+
   it("coalesces concurrent identical transcript reads and releases settled results", async () => {
     let finish!: (response: AppServerReadThreadResponse) => void;
     const request = vi.fn(() => new Promise<AppServerReadThreadResponse>((resolve) => { finish = resolve; }));

@@ -3055,8 +3055,11 @@ export class MessagingController {
         : params.cwd && primaryCwd && !reviewWorkspaceMatches(params.cwd, primaryCwd)
           ? "PwrAgent Sub Agent is required for a secondary workspace."
           : undefined;
-    const runMode = modeSupported
-      ? managedReason ? "pwragent-sub-agent" : params.runMode ?? "codex-sub-agent"
+    const runMode = !modeSupported
+      ? params.runMode
+      : managedReason ? "pwragent-sub-agent" : params.runMode ?? "codex-sub-agent";
+    const modeUnavailable = !modeSupported && runMode !== undefined
+      ? "This owner no longer supports explicit review modes. Update that PwrAgent instance before starting this review."
       : undefined;
     const modeOptions: { label: string; value: ReviewRunMode; supported: boolean }[] = [
       { label: "Codex Inline", value: "codex-inline", supported: owner?.capabilities?.reviewCodexInline === true && !managedReason },
@@ -3109,7 +3112,8 @@ export class MessagingController {
           `Reviewer: ${reviewerSummaryLabel}${params.reviewer ? "" : " (thread default)"}`,
         );
       }
-      if (modeSupported) summaryLines.push(`Mode: ${modeLabel}`);
+      if (runMode) summaryLines.push(`Mode: ${modeLabel}`);
+      if (modeUnavailable) summaryLines.push(modeUnavailable);
       if (modeSupported && managedReason) summaryLines.push(managedReason);
       body = summaryLines.join("\n");
       actions = [
@@ -3171,7 +3175,7 @@ export class MessagingController {
       ];
     } else if (params.phase === "run_mode") {
       title = "Review mode";
-      body = managedReason ?? "Choose how to run this review.";
+      body = modeUnavailable ?? managedReason ?? "Choose how to run this review.";
       actions = [
         ...modeOptions.filter((option) => modeSupported && option.supported).map((option) => ({
           id: `review:mode:${option.value}`,
@@ -6082,9 +6086,7 @@ export class MessagingController {
         : {
             reviewer: review.reviewer ?? pendingIntent.intent.review.reviewer,
           }),
-      reviewerBackends:
-        pendingIntent.intent.review.reviewerBackends
-        ?? await this.listReviewerBackends(),
+      reviewerBackends: await this.listReviewerBackends(),
       id: pendingIntent.intent.id,
       createdAt: pendingIntent.intent.createdAt,
       targetSurface,
@@ -6183,6 +6185,12 @@ export class MessagingController {
     }
 
     try {
+      if (params.runMode !== undefined) {
+        const owner = await this.getBackendSummary(params.binding.backend);
+        if (owner?.capabilities.reviewRunMode !== true) {
+          throw new Error("This owner no longer supports explicit review modes. Update that PwrAgent instance before starting this review.");
+        }
+      }
       const navigation = await this.readBoundThreadConfiguration(params.binding);
       const settings = turnSettingsForBinding(params.binding, navigation);
       const result = await submitReview({

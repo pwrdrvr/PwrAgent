@@ -2108,7 +2108,9 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
   private async assertReviewModeOwner(backend?: AppServerBackendKind): Promise<void> {
     const response = await this.listBackends({ includeUnavailable: true });
     const owners = backend ? response.backends.filter((entry) => entry.kind === backend) : response.backends;
-    if (!owners.length || owners.some((entry) => entry.capabilities.reviewRunMode !== true)) {
+    if (!owners.length || (backend
+      ? owners.some((entry) => entry.capabilities.reviewRunMode !== true)
+      : owners.every((entry) => entry.capabilities.reviewRunMode !== true))) {
       throw new Error("This Federation owner does not support explicit review modes. Update that PwrAgent instance before choosing a mode.");
     }
   }
@@ -2172,7 +2174,20 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
   async updateScheduledThreadAction(
     request: UpdateScheduledThreadActionRequest,
   ): Promise<ScheduledThreadActionMutationResponse> {
-    if (request.review?.runMode !== undefined) await this.assertReviewModeOwner();
+    if (request.review?.runMode !== undefined) {
+      // The update contract carries only an action id. Resolve its owner backend
+      // rather than requiring unrelated backend summaries to support review modes.
+      await this.assertReviewModeOwner();
+      let cursor: string | undefined;
+      let backend: AppServerBackendKind | undefined;
+      do {
+        const page = await this.listScheduledThreadActions({ projectionProtocol: 2, cursor });
+        backend = page.actions.find((action) => action.id === request.id)?.backend;
+        cursor = page.nextCursor;
+      } while (!backend && cursor);
+      if (!backend) throw new Error("Scheduled review action was not found; refresh scheduled actions before updating it.");
+      await this.assertReviewModeOwner(backend);
+    }
     return await this.rpc.request<ScheduledThreadActionMutationResponse>({
       method: FEDERATION_BACKEND_METHODS.updateScheduledThreadAction,
       params: request,
