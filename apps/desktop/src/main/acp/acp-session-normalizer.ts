@@ -51,6 +51,10 @@ export function isGrokTransientUpdateKind(kind: string | undefined): boolean {
     // Grok publishes this after its canonical `turn_completed` update as
     // session metadata. It is not a second lifecycle event or transcript item.
     || kind === "last_turn_summary"
+    // Memory flushes save durable notes before compaction or while idle.
+    // They are background bookkeeping, not user turns or transcript items.
+    || kind === "memory_flush_started"
+    || kind === "memory_flush_completed"
   );
 }
 

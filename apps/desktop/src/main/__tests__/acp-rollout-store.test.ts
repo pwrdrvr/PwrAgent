@@ -416,6 +416,56 @@ describe("AcpRolloutStore", () => {
     expect(store.readUpdates({ backendId, sessionId: "session-1" })).toEqual([]);
   });
 
+  it("does not persist Grok memory flush notifications", () => {
+    const store = new AcpRolloutStore(tempDir);
+    const backendId = "acp:grok" as AcpBackendId;
+
+    for (const update of [
+      { sessionUpdate: "memory_flush_started" },
+      {
+        sessionUpdate: "memory_flush_completed",
+        result: "written",
+        path: "/fixture/.grok/memory/project/sessions/log.md",
+      },
+    ]) {
+      store.appendUpdate({
+        backendId,
+        sessionId: "session-1",
+        receivedAt: 1000,
+        update,
+      });
+    }
+
+    expect(store.readUpdates({ backendId, sessionId: "session-1" })).toEqual([]);
+  });
+
+  it("omits memory flush notifications already stored by older versions", () => {
+    const store = new AcpRolloutStore(tempDir);
+    const backendId = "acp:grok" as AcpBackendId;
+    const rolloutPath = path.join(tempDir, "acp_grok", "session-1", "rollout.jsonl");
+    const updates = [
+      { sessionUpdate: "agent_message_chunk", content: "Done." },
+      { sessionUpdate: "turn_completed" },
+      { sessionUpdate: "memory_flush_started" },
+      { sessionUpdate: "memory_flush_completed", result: "written" },
+    ];
+    const contents = updates.map((update, index) => JSON.stringify({
+      type: "update",
+      receivedAt: 1000 + index,
+      update,
+    })).join("\n") + "\n";
+    fs.mkdirSync(path.dirname(rolloutPath), { recursive: true });
+    fs.writeFileSync(rolloutPath, contents);
+
+    const replay = store.readReplay({ backendId, sessionId: "session-1" });
+
+    expect(replay.entries).toEqual([
+      expect.objectContaining({ type: "message", role: "assistant", text: "Done." }),
+    ]);
+    expect(replay.threadStatus).toBe("idle");
+    expect(fs.readFileSync(rolloutPath, "utf8")).toBe(contents);
+  });
+
   it("does not persist context usage updates", () => {
     // Kimi Code 2.x sends one after every turn. It is session state for the
     // context indicator, and replay discards it.
