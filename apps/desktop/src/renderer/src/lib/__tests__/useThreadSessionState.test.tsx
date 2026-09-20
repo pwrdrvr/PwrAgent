@@ -12587,16 +12587,19 @@ describe("useThreadSessionState", () => {
           fetchedAt: Date.now(),
           threadId,
           replay: {
-            entries: hydratedEntries,
+            entries: threadId === "thread-1" ? hydratedEntries : [],
             messages: [],
             pagination: { supportsPagination, hasPreviousPage: false },
           },
         }),
       };
-      const { result } = renderHook(() => useThreadSessionState({
+      const { result, rerender } = renderHook(({ thread }) => useThreadSessionState({
         desktopApi,
-        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
-      }));
+        liveTranscriptEventFiltering: true,
+        thread,
+      }), {
+        initialProps: { thread: buildThread({ id: "thread-1", updatedAt: 1_000 }) },
+      });
       await waitForThreadHydration(result);
 
       act(() => {
@@ -12645,8 +12648,16 @@ describe("useThreadSessionState", () => {
       expect(result.current.entries.map((entry) => entry.id)).toEqual([
         "enteredReviewMode",
       ]);
+      rerender({ thread: buildThread({ id: "thread-2", updatedAt: 1_000 }) });
+      await waitForThreadHydration(result, "thread-2");
+      expect(result.current.entries).toEqual([]);
       hydratedEntries = [];
+      rerender({ thread: buildThread({ id: "thread-1", updatedAt: 2_000 }) });
       await act(async () => { await result.current.reload(); });
+      await waitFor(() => {
+        expect(result.current.response?.threadId).toBe("thread-1");
+        expect(result.current.response?.replay.entries).toEqual([]);
+      });
       expect(result.current.entries.map((entry) => entry.id)).toEqual([
         "enteredReviewMode",
       ]);
