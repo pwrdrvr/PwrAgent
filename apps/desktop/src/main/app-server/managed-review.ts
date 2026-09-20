@@ -41,7 +41,6 @@ export function buildManagedReviewContextInput(outputs: string[]): string {
       output.trim(),
     ].filter((line): line is string => Boolean(line)).join("\n")),
     MANAGED_REVIEW_CONTEXT_CLOSE_MARKER,
-  reviewTargetInstructions,
   ].join("\n\n");
 }
 

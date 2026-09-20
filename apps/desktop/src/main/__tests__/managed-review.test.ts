@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildManagedReviewContextInput,
   buildManagedReviewPrompt,
   formatManagedReviewOutput,
   parseManagedReviewOutput,
@@ -7,6 +8,15 @@ import {
 import grokReviewSession from "./fixtures/grok-managed-review-session.json";
 
 describe("managed review", () => {
+  it("returns only the context envelope and intended review output", () => {
+    expect(buildManagedReviewContextInput(["  Review result.  "])).toBe(
+      "[PwrAgent review sub-agent results — context for this turn]\n\nReview result.\n\n[End PwrAgent review sub-agent results]",
+    );
+    expect(buildManagedReviewContextInput([" First result. ", " Second result. "])).toBe(
+      "[PwrAgent review sub-agent results — context for this turn]\n\nReview 1:\nFirst result.\n\nReview 2:\nSecond result.\n\n[End PwrAgent review sub-agent results]",
+    );
+  });
+
   it.each([
     [
       { type: "uncommittedChanges" as const },
