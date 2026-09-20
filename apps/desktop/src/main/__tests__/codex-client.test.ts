@@ -7003,6 +7003,17 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("suppresses explicitly marked inline review instructions without native review events", async () => {
+    const { extractThreadReplayFromReadResult } = await import("../codex-app-server/client");
+    const text = "<pwragent-inline-review-instructions>\nInspect this diff and report findings.\n</pwragent-inline-review-instructions>";
+    const replay = extractThreadReplayFromReadResult({ thread: { turns: [{ id: "inline-turn", items: [
+      { type: "userMessage", id: "internal", content: [{ type: "text", text }] },
+      { type: "userMessage", id: "authored", content: [{ type: "text", text: `Explain this marker: ${text}` }] },
+    ] }] } });
+    expect(replay.entries.map((entry) => entry.id)).toEqual(["authored"]);
+    expect(replay.messages.map((message) => message.id)).toEqual(["authored"]);
+  });
+
   it.each(["userMessage", "message"])("suppresses native review instructions on replay with %s shape", async (type) => {
     const { extractThreadReplayFromReadResult } = await import("../codex-app-server/client");
     const text = "Review the code changes against the base branch 'origin/main'. The merge base commit for this comparison is abc123. Run git diff abc123 to inspect the changes relative to origin/main. Provide prioritized, actionable findings.";

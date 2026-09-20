@@ -12611,11 +12611,19 @@ describe("useThreadSessionState", () => {
     }
     emitItem("item/completed", "user-turn", { type: "userMessage", id: "authored", content: [{ type: "text", text }] });
     expect(result.current.messages.some((message) => message.id === "authored")).toBe(true);
+    const inlineText = "<pwragent-inline-review-instructions>\nInspect this diff and report findings.\n</pwragent-inline-review-instructions>";
+    for (const method of ["item/started", "item/completed"] as const) {
+      emitItem(method, "inline-turn", { type: "userMessage", id: "inline-internal", content: [{ type: "text", text: inlineText }] });
+      expect(result.current.entries.some((entry) => entry.id === "inline-internal")).toBe(false);
+      expect(result.current.messages.some((message) => message.id === "inline-internal")).toBe(false);
+    }
+
     entries = [
       { type: "review", id: "review", review: "Review changes against origin/main", displayText: "Review changes against origin/main", turn: { id: "review-turn", status: "in_progress" } },
       { type: "message", id: "generated", role: "user", text, turn: { id: "review-turn", status: "in_progress" } },
       { type: "message", id: "authored", role: "user", text, turn: { id: "user-turn", status: "completed" } },
     ];
+    entries.push({ type: "message", id: "inline-internal", role: "user", text: inlineText, turn: { id: "inline-turn", status: "completed" } });
     await act(async () => { await result.current.reload(); });
     expect(result.current.entries.map((entry) => entry.id)).toEqual(["review", "authored"]);
     expect(result.current.messages.map((message) => message.id)).toEqual(["authored"]);

@@ -115,6 +115,7 @@ import {
 } from "../app-server/thread-directory-enricher";
 import {
   isCodexReviewPromptText,
+  isPwrAgentInlineReviewPrompt,
   normalizeReviewDisplayText,
   normalizeReviewOutputRecord,
 } from "../../shared/review-command";
@@ -2184,6 +2185,7 @@ function shouldSuppressConversationMessage(
   );
   return (
     isReviewActionText(text) ||
+    (role === "user" && isPwrAgentInlineReviewPrompt(text)) ||
     (nativeReviewTurn && role === "user" && !record.origin && isCodexReviewPromptText(text)) ||
     (role === "assistant" && suppressedAssistantTexts.has(normalizeSuppressionText(text)))
   );

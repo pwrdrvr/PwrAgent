@@ -4,7 +4,10 @@ import type {
   AppServerThreadMessageEntry,
   AppServerThreadReviewEntry,
 } from "@pwragent/shared";
-import { isCodexReviewPromptText } from "../../../shared/review-command";
+import {
+  isCodexReviewPromptText,
+  isPwrAgentInlineReviewPrompt,
+} from "../../../shared/review-command";
 
 export type TranscriptReviewEvent =
   | AppServerThreadMessageEntry
@@ -126,7 +129,7 @@ export function summarizeTranscriptReviewSegment(
     if (
       entryType === "message"
       && entry.role === "user"
-      && isCodexReviewPromptText(entry.text)
+      && (isCodexReviewPromptText(entry.text) || isPwrAgentInlineReviewPrompt(entry.text))
     ) {
       events.push(entry);
     }
@@ -216,7 +219,8 @@ function reviewEvent(entry: AppServerThreadEntry): TranscriptReviewEvent | undef
   if (
     entry.type === "message"
     && ((entry.role === "assistant" && isPlainReviewFindingText(entry.text))
-      || (entry.role === "user" && isCodexReviewPromptText(entry.text)))
+      || (entry.role === "user"
+        && (isCodexReviewPromptText(entry.text) || isPwrAgentInlineReviewPrompt(entry.text))))
   ) {
     return entry;
   }
@@ -354,7 +358,10 @@ export function deriveTranscriptReviewPresentation(params: {
   );
   const excludedPromptIds = new Set<string>();
   for (const { entry, source } of userPrompts) {
-    if (!entry.turn?.id || !reviewTurnIds.has(entry.turn.id) || entry.origin) {
+    if (
+      !isPwrAgentInlineReviewPrompt(entry.text)
+      && (!entry.turn?.id || !reviewTurnIds.has(entry.turn.id) || entry.origin)
+    ) {
       continue;
     }
     excludedPromptIds.add(entry.id);
