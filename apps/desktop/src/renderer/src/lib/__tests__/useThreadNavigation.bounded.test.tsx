@@ -280,6 +280,10 @@ it("renders admitted owner rows in the real Sidebar and requests more only after
   // clicking, scrolling to the button and clicking again.
   await screen.findByRole("button", { name: "thread-109" });
   expect(screen.getAllByRole("button", { name: /^thread-\d+$/ })).toHaveLength(110);
+  // A click reveals a block; it does not retire the control. This owner has
+  // more rows, so the operator can ask for the next block without hunting
+  // for a button that quietly left.
+  expect(screen.getByRole("button", { name: "Load more threads" })).toBeTruthy();
   expect(f.legacy).not.toHaveBeenCalled();
   mounted.unmount();
 });
