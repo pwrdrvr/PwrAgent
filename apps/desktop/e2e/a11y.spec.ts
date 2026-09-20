@@ -402,6 +402,40 @@ for (const theme of AUDIT_THEMES) {
           await expect(smokeThread).toBeVisible();
         });
 
+        // The four-tile release matrix is the densest ARIA surface in
+        // Settings — a radiogroup with a roving tabindex, an arrow-key
+        // walk, and two status chips whose contrast is theme-dependent. It
+        // used to ride along in the "settings overlay" scan because it was
+        // a card inside General; moving it to its own nav row took it out
+        // of every audit, so it gets its own step.
+        await test.step("settings → updates", async () => {
+          await app.window.getByRole("button", { name: "Open settings" }).click();
+          const settingsNav = app.window.getByRole("navigation", {
+            name: "Settings sections",
+          });
+          await expect(settingsNav).toBeVisible();
+          await settingsNav
+            .getByRole("button", { name: /^Updates$/ })
+            .click();
+          const updateSettings = app.window.getByRole("region", {
+            name: "Update settings",
+          });
+          await expect(updateSettings).toBeVisible();
+          // The tiles render before any release data lands, falling through
+          // to "Unavailable", so the audit never waits on the network.
+          await expect(
+            app.window.getByRole("radiogroup", { name: "Release channel" }),
+          ).toBeVisible();
+          await runAxe(app.window, "settings → updates");
+
+          await settingsNav
+            .getByRole("button", { name: /Exit Settings/i })
+            .click();
+          await expect(updateSettings).toBeHidden();
+          await expect(settingsNav).toBeHidden();
+          await expect(smokeThread).toBeVisible();
+        });
+
         await test.step("settings → messaging", async () => {
           await app.window.getByRole("button", { name: "Open settings" }).click();
           const settingsNav = app.window.getByRole("navigation", {

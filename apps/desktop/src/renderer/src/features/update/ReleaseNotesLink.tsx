@@ -2,7 +2,7 @@
 // published GitHub release page.
 //
 // Every update surface renders it (the banner's live and offer cards, the
-// settled outcome notice, Settings -> General -> Updates' slot matrix and
+// settled outcome notice, Settings -> Updates' slot matrix and
 // status line, Settings -> About) and they share this component rather than
 // each writing their own control, for the same reason they share
 // `updateProgressCopy`: the wording and the behavior must not drift. Only
