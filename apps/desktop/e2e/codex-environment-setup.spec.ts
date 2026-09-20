@@ -6,15 +6,16 @@ import path from "node:path";
 import { expect, test } from "@playwright/test";
 import { launchElectronApp } from "./fixtures/electron-app";
 
-/**
- * Put a path the "Capture CWD" action wrote beside one Node produced.
- *
- * Environment actions always run through a POSIX login shell (`-lc`), which on
- * Windows is Git for Windows' bash — so `pwd -P` answers in MSYS form,
- * `/c/Users/...`, while `realpath` answers `C:\Users\...`. Both name the same
- * directory; only the spelling differs, and comparing the raw strings asserted
- * the spelling. Fold both to one form instead: drive letter, forward slashes.
- */
+const POSIX_SETUP_COMMAND = "printf setup-output && sleep 2";
+const WINDOWS_SETUP_COMMAND = "Write-Output setup-output; Start-Sleep -Seconds 2";
+const setupCommand = process.platform === "win32"
+  ? WINDOWS_SETUP_COMMAND
+  : POSIX_SETUP_COMMAND;
+const captureCwdCommand = process.platform === "win32"
+  ? "[System.IO.File]::WriteAllText('.pwragent-e2e-action-cwd', (Get-Location).Path)"
+  : "pwd -P > .pwragent-e2e-action-cwd";
+
+/** Compare command and Node paths with consistent separators and drive casing. */
 function comparableCommandCwd(value: string): string {
   const trimmed = value.trim().replace(/\\/g, "/");
   const msysDrive = trimmed.match(/^\/([A-Za-z])\/(.*)$/);
@@ -62,11 +63,14 @@ version = 1
 name = "Fixture Env"
 
 [setup]
-script = "printf setup-output && sleep 2"
+script = ${JSON.stringify(POSIX_SETUP_COMMAND)}
+
+[setup.win32]
+script = ${JSON.stringify(WINDOWS_SETUP_COMMAND)}
 
 [[actions]]
 name = "Capture CWD"
-command = "pwd -P > .pwragent-e2e-action-cwd"
+command = ${JSON.stringify(captureCwdCommand)}
 `,
     "utf8",
   );
@@ -424,7 +428,7 @@ test("selected environments run setup and show transcript output", async () => {
     await expect(
       app.window
         .locator('[aria-label="Setup command"]')
-        .getByText("$ printf setup-output && sleep 2"),
+        .getByText(`$ ${setupCommand}`),
     ).toBeVisible();
     await expect(app.window.locator('[aria-label="Setup output"]')).toContainText(
       "setup-output",
