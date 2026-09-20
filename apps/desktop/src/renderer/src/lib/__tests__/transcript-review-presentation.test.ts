@@ -56,8 +56,8 @@ describe("native review prompt presentation", () => {
       historyEvents: iterateTranscriptReviewHistoryEvents(index), historyIndex: index,
       tailEntries, tailMessages,
     });
-    expect([...result.excludedHistoryEntryIds]).toEqual(promptInHistory ? ["prompt"] : []);
-    expect([...result.excludedHistoryMessageIds]).toEqual(promptInHistory ? ["prompt"] : []);
+    expect([...result.excludedHistoryEntryIds]).toEqual(["prompt"]);
+    expect([...result.excludedHistoryMessageIds]).toEqual(["prompt"]);
     expect(result.tailEntries.map((entry) => entry.id)).toEqual(promptInHistory ? ["review"] : ["authored", "sourced", "steer"]);
     expect(result.tailMessages.map((entry) => entry.id)).toEqual(promptInHistory ? [] : ["authored", "sourced", "steer"]);
   });
