@@ -3519,6 +3519,41 @@ describe("Composer", () => {
     });
   });
 
+  it("preserves local threads and PRs alongside peer matches in a remote composer's # picker", async () => {
+    const target = { scope: "remote" as const, instanceId: "m2-max" };
+    const local: NavigationThreadSummary = {
+      id: "local-reference", title: "Local reference work", source: "codex", titleSource: "explicit",
+      linkedDirectories: [], inbox: { inInbox: false },
+      prs: [{ provider: "github.com", org: "example", repo: "demo", number: 123, state: "passing",
+        title: "Local reference PR", url: "https://github.com/example/demo/pull/123" }],
+    };
+    const remote: NavigationThreadSummary = {
+      ...local, id: "remote-reference", title: "Remote reference work 123", prs: [],
+      federation: { instanceLabel: "M2 Max", ref: { backend: "codex", threadId: "remote-reference", target } },
+    };
+    const getNavigationQueryPage = vi.fn(async (request) => navigationQueryFixture(request, {
+      threads: request.federationTarget?.scope === "remote" ? [remote] : [local],
+    }));
+    const jumpSearchRemoteThreads = vi.fn(async () => ({ results: [remote] }));
+    render(<Composer
+      desktopApi={{ getNavigationQueryPage, jumpSearchRemoteThreads }}
+      draftStore={createComposerDraftStore()}
+      skills={[]}
+      thread={{ ...remote, id: "current", title: "Current work",
+        federation: { instanceLabel: "M2 Max", ref: { backend: "codex", threadId: "current", target } } }}
+    />);
+    expect(getNavigationQueryPage).not.toHaveBeenCalled();
+    expect(jumpSearchRemoteThreads).not.toHaveBeenCalled();
+    const textbox = screen.getByRole("textbox", { name: "Reply" });
+    fireEvent.change(textbox, { target: { value: "See #123" } });
+    await screen.findByRole("option", { name: /Remote reference work/ });
+    const localOption = await screen.findByRole("option", { name: /Local reference work/ });
+    expect(screen.getByRole("option", { name: /Local reference PR/ })).toBeInTheDocument();
+    expect(jumpSearchRemoteThreads).toHaveBeenCalledTimes(1);
+    fireEvent.click(localOption);
+    expect(within(textbox).getByText("#Local reference work").closest("[data-mention-kind]")).toHaveAttribute("data-mention-kind", "thread");
+  });
+
   it("offers matching threads and a precise PR link for a numeric hash query", async () => {
     const earlierPullRequest = {
       provider: "github.com" as const,
@@ -16098,6 +16133,53 @@ describe("Composer", () => {
         })
       );
     });
+  });
+
+  it.each(["thread", "viewer", "launchpad", "local"] as const)("routes @ autocomplete to the %s owner only after typing", async (source) => {
+    const viewer = window as typeof window & { __pwragentFederationTarget?: { scope: "remote"; instanceId: string } };
+    const previousTarget = viewer.__pwragentFederationTarget;
+    viewer.__pwragentFederationTarget = { scope: "remote", instanceId: "viewer-peer" };
+    const target = source === "local" ? { scope: "local" as const }
+      : { scope: "remote" as const, instanceId: source === "viewer" ? "viewer-peer" : "m2-max" };
+    const expectedOwner = target.scope === "remote" ? target.instanceId : "local";
+    const getNavigationQueryPage = vi.fn(async (request) => {
+      const owner = request.federationTarget?.scope === "remote" ? request.federationTarget.instanceId : "local";
+      return navigationQueryFixture(request, { directories: [{
+        key: owner, kind: "directory", label: `microapps-${owner}`, path: `/${owner}/microapps`,
+      }] });
+    });
+    try {
+      render(<Composer
+        desktopApi={{ getNavigationQueryPage }}
+        draftStore={createComposerDraftStore()}
+        skills={[]}
+        {...(source === "launchpad" ? {
+          directory: { key: "directory:/repo", kind: "directory" as const, label: "Repo", path: "/repo" },
+          launchpad: {
+          directoryKey: "directory:/repo", directoryKind: "directory" as const, directoryLabel: "Repo",
+          directoryPath: "/repo", backend: "codex" as const, executionMode: "default" as const,
+          prompt: "", workMode: "local" as const, branchName: "main", createdAt: 1, updatedAt: 1,
+          federationTarget: target,
+        } } : { thread: {
+          id: "mention-owner", title: "Owner work", titleSource: "explicit" as const, source: "codex" as const,
+          linkedDirectories: [], inbox: { inInbox: false },
+          ...(source === "viewer" ? {} : { federation: {
+            instanceLabel: expectedOwner, ref: { backend: "codex" as const, threadId: "mention-owner", target },
+          } }),
+        } })}
+      />);
+      expect(getNavigationQueryPage).not.toHaveBeenCalled();
+      fireEvent.change(screen.getByLabelText(source === "launchpad" ? "New thread" : "Reply"), {
+        target: { value: "Read @microapps" },
+      });
+      await screen.findByRole("option", { name: new RegExp(`microapps-${expectedOwner}`) });
+      expect(getNavigationQueryPage).toHaveBeenCalledWith(expect.objectContaining({
+        federationTarget: target, query: { kind: "directory-index", filter: "microapps" },
+      }), expect.any(String));
+      expect(getNavigationQueryPage).toHaveBeenCalledTimes(2);
+    } finally {
+      viewer.__pwragentFederationTarget = previousTarget;
+    }
   });
 
   it("inserts a tilde path from the @ directory autocomplete and links it on start", async () => {

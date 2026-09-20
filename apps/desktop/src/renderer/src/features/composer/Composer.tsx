@@ -4463,7 +4463,10 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     !federatedHashSearchAvailable
     || (!federatedHashSearchLoading
       && federatedHashSearchSettledQuery === (rawHashReferenceQuery ?? "").trim());
-  const mentionNavigation = useComposerMentionSources({ desktopApi: props.desktopApi });
+  const mentionNavigation = useComposerMentionSources({
+    desktopApi: props.desktopApi,
+    federationTarget: filesystemFederationTarget,
+  });
   const mentionNavigationQuery = directoryRefTrigger?.query ?? rawHashReferenceQuery;
   const ensureMentionNavigation = mentionNavigation.ensureLoaded;
   const releaseMentionNavigation = mentionNavigation.release;
