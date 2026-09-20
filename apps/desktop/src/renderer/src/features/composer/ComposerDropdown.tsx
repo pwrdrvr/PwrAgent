@@ -1,5 +1,6 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import type { ReactNode } from "react";
+import { useViewportTooltip } from "../../lib/useViewportTooltip";
 
 /**
  * Extracted from Composer.tsx so surfaces beyond the composer footer (the
@@ -69,6 +70,19 @@ export function ComposerDropdown(props: {
     props.options.find((option) => option.value === props.value) ?? props.options[0];
   const ref = useDismissableMenu<HTMLDivElement>(open, () => setOpen(false));
   const Icon = props.icon;
+  const getTooltipHorizontalBounds = useCallback((target: HTMLElement) => {
+    const composerSetup = target.closest<HTMLElement>(".composer__setup");
+    if (!composerSetup) {
+      return undefined;
+    }
+    const { left, right } = composerSetup.getBoundingClientRect();
+    return { left, right };
+  }, []);
+  const { tooltipId, show, showAfterDelay, hide, visible, tooltipNode } =
+    useViewportTooltip({
+      className: "viewport-tooltip",
+      getHorizontalBounds: getTooltipHorizontalBounds,
+    });
 
   return (
     <div
@@ -77,17 +91,22 @@ export function ComposerDropdown(props: {
         props.compact ? "composer-dropdown--compact" : "",
         props.kind === "branch" ? "composer-dropdown--branch" : "",
         props.tone === "danger" ? "composer-dropdown--danger" : "",
-        props.tooltip ? "tooltip-target" : "",
         open ? "composer-dropdown--open" : "",
       ]
         .filter(Boolean)
         .join(" ")}
-      data-tooltip={props.tooltip}
       onPointerEnter={props.onPointerEnter}
+      onMouseEnter={(event) => {
+        if (!open && props.tooltip) {
+          showAfterDelay(event.currentTarget, props.tooltip);
+        }
+      }}
+      onMouseLeave={hide}
       ref={ref}
     >
       <button
         aria-description={props.tooltip}
+        aria-describedby={visible ? tooltipId : undefined}
         aria-controls={open ? listboxId : undefined}
         aria-expanded={open}
         aria-haspopup="listbox"
@@ -98,7 +117,16 @@ export function ComposerDropdown(props: {
         id={props.id}
         type="button"
         value={props.value}
-        onClick={() => setOpen((current) => !current)}
+        onBlur={hide}
+        onClick={() => {
+          hide();
+          setOpen((current) => !current);
+        }}
+        onFocus={(event) => {
+          if (!open && props.tooltip) {
+            show(event.currentTarget, props.tooltip);
+          }
+        }}
       >
         {Icon ? (
           <span aria-hidden="true" className="composer-dropdown__icon">
@@ -138,6 +166,7 @@ export function ComposerDropdown(props: {
           ))}
         </div>
       ) : null}
+      {tooltipNode}
     </div>
   );
 }

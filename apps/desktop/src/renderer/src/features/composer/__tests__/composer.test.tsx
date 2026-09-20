@@ -14824,7 +14824,7 @@ describe("Composer", () => {
     expect(screen.queryByRole("option", { name: "New worktree" })).not.toBeInTheDocument();
   });
 
-  it("keeps unpublished unborn repositories local and refreshes Git status on hover", () => {
+  it("keeps unpublished unborn repositories local and refreshes Git status on hover", async () => {
     const unavailableReason =
       "Worktrees are unavailable because this repository has no published base branch yet. Create the initial commit in the Local checkout and publish the default branch. Worktrees will be enabled once a remote base branch is available.";
     const refreshDirectoryGitStatuses = vi.fn(async () => ({ scheduledCount: 1 }));
@@ -14870,10 +14870,8 @@ describe("Composer", () => {
     expect(workspaceMode).toHaveValue("local");
     expect(workspaceMode).toHaveTextContent("Local");
     expect(workspaceMode).toHaveAttribute("aria-description", unavailableReason);
-    expect(workspaceMode.closest(".composer-dropdown")).toHaveAttribute(
-      "data-tooltip",
-      unavailableReason,
-    );
+    fireEvent.mouseEnter(workspaceMode.closest(".composer-dropdown")!);
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(unavailableReason);
     fireEvent.pointerEnter(workspaceMode.closest(".composer-dropdown")!);
     expect(refreshDirectoryGitStatuses).toHaveBeenCalledExactlyOnceWith({
       directoryKeys: ["directory:/Users/fixture-user/pwrdrvr/UnbornRepo"],
