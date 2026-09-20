@@ -458,10 +458,89 @@ describe("buildBindingStatusIntent", () => {
     });
 
     expect(intent.text).toContain(
-      "Rate limits: Credits: $100; 5h limit: 95% left, resets 6:02 PM; Weekly limit: 73% left, resets Jun 10; Individual limit: 3,500/100,000 used, 96% left; Spark 5h limit: 100% left, resets 7:20 PM; Spark Weekly limit: 100% left, resets Jun 12",
+      "Rate limits: Credits: 100; 5h limit: 95% left, resets 6:02 PM; Weekly limit: 73% left, resets Jun 10; Individual limit: 3,500/100,000 used, 96% left; Spark 5h limit: 100% left, resets 7:20 PM; Spark Weekly limit: 100% left, resets Jun 12",
     );
     expect(intent.text).not.toContain("GPT-5.3-Codex-Spark");
     expect(intent.text).not.toContain("95 remaining");
+  });
+
+  it.each([
+    "telegram",
+    "discord",
+    "slack",
+    "mattermost",
+    "feishu",
+    "line",
+  ] as const)(
+    "formats credits as a whole-number balance for %s status cards",
+    (channel) => {
+      const binding = {
+        ...buildBinding(),
+        channel: {
+          channel,
+          conversation: {
+            id: "chat-1",
+            kind: "dm" as const,
+          },
+        },
+      } satisfies MessagingBindingRecord;
+      const navigation = buildNavigationSnapshot();
+      const intent = buildBindingStatusIntent({
+        id: `status-credits-${channel}`,
+        backendSummary: buildCodexBackendSummary([
+          {
+            name: "Credits",
+            limitId: "credits",
+            windowKey: "credits",
+            hasCredits: true,
+            remaining: 1226.02,
+          },
+        ]),
+        createdAt: 1000,
+        binding,
+        threadState: resolveMessagingThreadState({ binding, navigation }),
+      });
+
+      expect(intent.text).toContain("Rate limits: Credits: 1,226");
+      expect(intent.text).not.toMatch(/Credits: \$|Credits: 1,226\.02/);
+    },
+  );
+
+  it("preserves unlimited, available, and absent credit states", () => {
+    const binding = buildBinding();
+    const navigation = buildNavigationSnapshot();
+    const buildIntent = (
+      rateLimits: NonNullable<BackendSummary["rateLimits"]>,
+    ) => buildBindingStatusIntent({
+      id: "status-credit-state",
+      backendSummary: buildCodexBackendSummary(rateLimits),
+      createdAt: 1000,
+      binding,
+      threadState: resolveMessagingThreadState({ binding, navigation }),
+    });
+
+    expect(buildIntent([
+      {
+        name: "Credits",
+        windowKey: "credits",
+        unlimited: true,
+      },
+    ]).text).toContain("Credits: unlimited");
+    expect(buildIntent([
+      {
+        name: "Credits",
+        windowKey: "credits",
+        hasCredits: true,
+      },
+    ]).text).toContain("Credits: available");
+    expect(buildIntent([
+      {
+        name: "Credits",
+        windowKey: "credits",
+        hasCredits: false,
+        unlimited: false,
+      },
+    ]).text).not.toContain("Rate limits:");
   });
 
   it("hides Fast mode when the backend says it is not available", () => {
@@ -1383,6 +1462,33 @@ function buildBinding(): MessagingBindingRecord {
     createdAt: 1000,
     threadId: "thread-1",
     updatedAt: 1000,
+  };
+}
+
+function buildCodexBackendSummary(
+  rateLimits: NonNullable<BackendSummary["rateLimits"]>,
+): BackendSummary {
+  return {
+    kind: "codex",
+    label: "Codex",
+    available: true,
+    methods: [],
+    capabilities: {
+      listThreads: true,
+      createThread: true,
+      resumeThread: true,
+      renameThread: true,
+      readThread: true,
+      startTurn: true,
+      interruptTurn: true,
+      steerTurn: false,
+      transcriptPagination: false,
+      toolUse: true,
+      approvalRequests: true,
+      multiDirectoryThreads: true,
+    },
+    executionModes: [],
+    rateLimits,
   };
 }
 
