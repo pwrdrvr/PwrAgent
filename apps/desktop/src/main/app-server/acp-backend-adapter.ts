@@ -710,13 +710,19 @@ export function withAcpModelRuntimeSelection(params: {
     ) ?? false;
   const shouldSetCurrentModelId =
     !modelConfigOption && (hasAdvertisedModel || !hasModelList);
-  // `model` is what this runtime selects. A `currentModelId` naming another
-  // model is stale once a config option or an unadvertised id carries the
-  // selection instead: `readAcpSelectedModel` answers with it ahead of the
-  // config value, and replaying the runtime into a session would re-select
-  // that model — with this runtime's thought level, which it may not offer.
+  // `model` is what this runtime selects. A `currentModelId` left from an
+  // earlier selection is stale once a config option or an unadvertised id
+  // carries this one: `readAcpSelectedModel` answers with it ahead of the
+  // config value, and replaying the runtime would re-select that model — with
+  // this runtime's thought level, which the other model may not offer.
+  //
+  // A config option owns the selection outright, so the id stays out of the
+  // runtime even when it agrees; carrying it only makes the replay write the
+  // same model twice. Without one, an id that already names this model is a
+  // true selection the agent never advertised, so it is kept.
   const currentModelId =
-    shouldSetCurrentModelId || params.runtime?.currentModelId === model
+    shouldSetCurrentModelId
+    || (!modelConfigOption && params.runtime?.currentModelId === model)
       ? model
       : undefined;
   const configValues = modelConfigOption
@@ -738,6 +744,8 @@ export function withAcpModelRuntimeSelection(params: {
 
   return {
     ...params.runtime,
+    // Written unconditionally, including as `undefined`: the key has to
+    // override the spread above, which still holds the previous selection.
     currentModelId,
     ...(params.reasoningEffort
       ? { reasoningEffort: params.reasoningEffort }
