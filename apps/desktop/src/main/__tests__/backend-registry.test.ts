@@ -25791,7 +25791,7 @@ command = "pnpm dev"
     { runMode: "pwragent-sub-agent", methods: ["review/start"], error: "thread/start" },
   ] as const)("rejects unsupported explicit $runMode without substituting engines", async ({ runMode, methods, error }) => {
     const codexClient = new MockBackendClient({ initializeResult: { methods: [...methods] } });
-    const registry = new DesktopBackendRegistry({ codexClient });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
     await expect(registry.startReview({ backend: "codex", threadId: "parent", target: { type: "uncommittedChanges" }, runMode })).rejects.toThrow(error);
     expect(codexClient.lastStartReviewParams).toBeUndefined();
     expect(codexClient.lastStartTurnParams).toBeUndefined();
@@ -25800,7 +25800,7 @@ command = "pnpm dev"
 
   it.each(["codex-inline", "codex-sub-agent", "pwragent-sub-agent"] as const)("rejects detached delivery with explicit %s", async (runMode) => {
     const codexClient = new MockBackendClient({});
-    const registry = new DesktopBackendRegistry({ codexClient });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
     await expect(registry.startReview({ backend: "codex", threadId: "parent", target: { type: "uncommittedChanges" }, runMode, delivery: "detached" })).rejects.toThrow("detached delivery");
     await registry.close();
   });

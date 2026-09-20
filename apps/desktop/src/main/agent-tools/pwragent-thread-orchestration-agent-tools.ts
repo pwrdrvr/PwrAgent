@@ -441,7 +441,7 @@ function inputSchemaForOperation(
           runMode: {
             type: "string",
             enum: ["codex-inline", "codex-sub-agent", "pwragent-sub-agent"],
-            description: "Codex Inline runs a parent-context turn; Codex Sub Agent (default) uses the native reviewer; PwrAgent Sub Agent uses an ephemeral managed reviewer. ACP and secondary workspaces require PwrAgent Sub Agent.",
+            description: "Codex Inline runs a parent-context turn. Codex Sub Agent (default) uses the native reviewer. PwrAgent Sub Agent uses an ephemeral managed reviewer. ACP and secondary workspaces require PwrAgent Sub Agent.",
           },
           cwd: {
             type: "string",
