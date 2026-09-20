@@ -1,5 +1,23 @@
 # Changelog
 
+## v1.1.0-beta.3 - 2026-09-20
+
+This beta includes the unshipped beta.2 changes and the following work.
+
+- Apple Silicon Updates - Added signed Apple Silicon macOS packages and native updater routing alongside universal downloads.
+- Managed MCP Connections - Select operator-authorized MCP connections when creating threads, discover gateway tools, support internal servers, and recover from stuck authorizations.
+- Messaging Automations - Use a searchable surface picker, let an inbound automation watch several conversations, and keep triggers and results consistent across provider surfaces.
+- Messaging - Added Discord response-mode destinations to the picker and improved Slack connection diagnostics and default-route search.
+- Thread Organization - Move threads between projects across desktop, messaging, and remote-work surfaces.
+- Cloudflare Access Federation - Configure Cloudflare Access endpoints with guided service-token and sign-in flows.
+- Agent Models and Context - Added Kimi Code 2.x support, surfaced Kimi and Grok context usage, and corrected ACP model and thought-level selection.
+- Star Map and Remote Terminals - Reduced pan and terminal-resize work, preserved responsive loading controls, and eliminated duplicate remote resize traffic.
+- Streaming Performance - Bounded transcript, activity, Token Miser, and tool-output reconciliation work so active threads remain responsive.
+- Updates - Link every version named in update surfaces directly to its release notes.
+- Reliability - Preserved unsaved Federation settings, retained failed task-monitor context, recognized Grok memory-flush updates, and reduced disconnected federation noise.
+- Distribution - Closed the Windows signing archive dependency set so release signing can load its full electron-builder toolchain.
+- Minor - Improved image-lightbox dismissal, surface-picker labels, Federation control theming, and general navigation polish.
+
 ## v1.1.0-beta.2 - 2026-09-15
 
 - Managed MCP Gateway - Added a PwrAgent-managed gateway for operator-authorized MCP connections.
