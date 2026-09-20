@@ -29,6 +29,13 @@ let root: string;
 let repo: string;
 let branch: string;
 let fail: boolean;
+// Vitest abandons a timed-out body but cannot stop it, so a long body here can still
+// be running once the next test owns `root`, `repo` and the mocks this module shares.
+// `afterEach` retires the fixture by bumping this counter; a body that captured an
+// earlier generation stops at its next iteration instead of writing into the fixture
+// or the shared mocks that now belong to another test. A body that stops this way has
+// already failed its own timeout, so it cannot pass vacuously.
+let fixtureGeneration = 0;
 
 beforeEach(async () => {
   root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "pwragent-directory-cache-")));
@@ -54,11 +61,15 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  fixtureGeneration += 1;
   vi.restoreAllMocks();
   await fs.rm(root, { recursive: true, force: true });
 });
 
 async function initializeRealGit(initOptions: string[] = []) {
+  const generation = fixtureGeneration;
+  const fixtureRoot = root;
+  const fixtureRepo = repo;
   const { execFile } = await vi.importActual<typeof import("node:child_process")>("node:child_process");
   const run = (args: string[]) => new Promise<string>((resolve, reject) => {
     execFile("git", args, { encoding: "utf8" }, (error, stdout) => {
@@ -66,11 +77,12 @@ async function initializeRealGit(initOptions: string[] = []) {
       else resolve(stdout);
     });
   });
-  await fs.rm(path.join(repo, ".git"), { recursive: true });
-  await run(["init", "--initial-branch=main", ...initOptions, repo]);
-  await run(["-C", repo, "config", "core.hooksPath", path.join(root, "empty-hooks")]);
-  await run(["-C", repo, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+  await fs.rm(path.join(fixtureRepo, ".git"), { recursive: true, force: true });
+  await run(["init", "--initial-branch=main", ...initOptions, fixtureRepo]);
+  await run(["-C", fixtureRepo, "config", "core.hooksPath", path.join(fixtureRoot, "empty-hooks")]);
+  await run(["-C", fixtureRepo, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
     "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-m", "fixture"]);
+  if (generation !== fixtureGeneration) return run;
   git.mockImplementation((
     command: string, args: string[], options: object,
     callback: (error: Error | null, result: { stdout: string; stderr: string }) => void,
@@ -95,6 +107,7 @@ describe("directory enrichment invalidation", () => {
   it.each(["repository", "missing", "failed-git"])(
     "serves 120 sequential %s reads without filesystem probes or Git after the first read",
     async (kind) => {
+      const generation = fixtureGeneration;
       const enrich = createThreadDirectoryEnricher({ now: () => 0 });
       const cwd = kind === "missing" ? path.join(root, "missing") : repo;
       fail = kind === "failed-git";
@@ -105,6 +118,7 @@ describe("directory enrichment invalidation", () => {
       readPointer.mockClear();
       git.mockClear();
       for (let index = 0; index < budgets.directoryEnrichment.burstReads; index += 1) {
+        if (generation !== fixtureGeneration) return;
         expect(await enrich(cwd, "thread-list")).toEqual(first);
       }
       expect({
@@ -195,13 +209,16 @@ describe("directory enrichment invalidation", () => {
   });
 
   it("keeps a confirmed mapping across a day of repeated reads without Git", async () => {
+    const generation = fixtureGeneration;
+    const fixtureRepo = repo;
     const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
     const enrich = createThreadDirectoryEnricher({ now: Date.now });
-    const first = await enrich(repo);
+    const first = await enrich(fixtureRepo);
     git.mockClear();
     for (let round = 1; round <= budgets.directoryEnrichment.repeatedListings; round += 1) {
+      if (generation !== fixtureGeneration) return;
       now.mockReturnValue(1_000 + round * 86_400_000);
-      expect(await enrich(repo)).toEqual(first);
+      expect(await enrich(fixtureRepo)).toEqual(first);
     }
     expect(git).toHaveBeenCalledTimes(budgets.directoryEnrichment.warmGitCommands);
   });
@@ -379,29 +396,35 @@ describe("directory enrichment invalidation", () => {
   });
 
   it("shares one Git worktree inventory across 216 cold sibling checkouts", async () => {
-    const worktrees = Array.from({ length: 216 }, (_, index) => path.join(root, `linked-${index}`));
+    const generation = fixtureGeneration;
+    const fixtureRoot = root;
+    const fixtureRepo = repo;
+    const worktrees = Array.from({ length: 216 }, (_, index) => path.join(fixtureRoot, `linked-${index}`));
     for (const [index, cwd] of worktrees.entries()) {
-      const admin = path.join(repo, ".git", "worktrees", `${index}`);
+      if (generation !== fixtureGeneration) return;
+      const admin = path.join(fixtureRepo, ".git", "worktrees", `${index}`);
       await fs.mkdir(admin, { recursive: true });
       await fs.mkdir(cwd);
       await fs.writeFile(path.join(cwd, ".git"), `gitdir: ${admin}\n`);
       await fs.writeFile(path.join(admin, "commondir"), "../..\n");
       await fs.writeFile(path.join(admin, "HEAD"), "ref: refs/heads/main\n");
     }
+    if (generation !== fixtureGeneration) return;
     git.mockImplementation((_command: string, args: string[], _options: unknown,
       callback: (error: Error | null, result: { stdout: string; stderr: string }) => void) => {
       callback(null, { stdout: args.includes("--show-toplevel")
         ? args.includes("--abbrev-ref") ? `${args[1]}\nmain` : args[1]
-        : args.includes("--abbrev-ref") ? "main" : [repo, ...worktrees].map((cwd) => `worktree ${cwd}`).join("\n"), stderr: "" });
+        : args.includes("--abbrev-ref") ? "main" : [fixtureRepo, ...worktrees].map((cwd) => `worktree ${cwd}`).join("\n"), stderr: "" });
     });
     const enrich = createExpiredEnricher();
     // Separate batches exercise both pending coalescing and settled reuse.
     for (let offset = 0; offset < worktrees.length; offset += 8) {
+      if (generation !== fixtureGeneration) return;
       const batch = worktrees.slice(offset, offset + 8);
       const values = await Promise.all(batch.map((cwd) => enrich(cwd, "selected-thread")));
       values.forEach((value, index) => expect(value).toMatchObject({
         observedGitBranch: "main", linkedDirectories: [{
-          path: repo.replace(/\\/g, "/"), worktreePath: batch[index].replace(/\\/g, "/"), kind: "worktree",
+          path: fixtureRepo.replace(/\\/g, "/"), worktreePath: batch[index].replace(/\\/g, "/"), kind: "worktree",
         }],
       }));
     }
