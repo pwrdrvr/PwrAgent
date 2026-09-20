@@ -278,6 +278,7 @@ export type WorktreeSnapshotSummary = {
 export type CodexEnvironmentExecutionTarget = "local" | "remote";
 
 export type CodexEnvironmentAction = {
+  shell?: "powershell";
   id: string;
   name: string;
   icon?: string;

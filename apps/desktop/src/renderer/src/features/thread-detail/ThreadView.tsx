@@ -1397,7 +1397,8 @@ export function ThreadView(props: ThreadViewProps) {
 
   useEffect(() => {
     const directoryKey =
-      selectedLaunchpad?.directoryKey ?? pendingForkEnvironmentSetup?.directoryKey;
+      selectedLaunchpad?.directoryKey ?? pendingForkEnvironmentSetup?.directoryKey
+      ?? (selectedThread ? `thread:${selectedThread.source}:${selectedThread.id}` : undefined);
     if (!directoryKey || !props.desktopApi?.onCodexEnvironmentSetupProgress) {
       return;
     }
@@ -1415,6 +1416,8 @@ export function ThreadView(props: ThreadViewProps) {
     props.desktopApi,
     pendingForkEnvironmentSetup?.directoryKey,
     selectedLaunchpad?.directoryKey,
+    selectedThread?.source,
+    selectedThread?.id,
   ]);
 
   const [branchDriftDialog, setBranchDriftDialog] =
@@ -3688,6 +3691,24 @@ export function ThreadView(props: ThreadViewProps) {
               the header moves `.thread-view__layout`, and the context rail
               is anchored to it. See `ThreadWarnings`. */}
           {selectedThread ? <ThreadWarnings thread={selectedThread} /> : null}
+          {selectedThread && launchpadSetupProgress?.directoryKey === `thread:${selectedThread.source}:${selectedThread.id}` ? (
+            <div>
+              <LaunchpadEnvironmentSetupPending
+                command={launchpadSetupProgress.command}
+                confirmedCwd={launchpadSetupProgress.cwd}
+                cwd={launchpadSetupProgress.cwd}
+                desktopApi={props.desktopApi}
+                directoryLabel={props.selectedDirectory?.label ?? selectedThread.title}
+                environmentName={launchpadSetupProgress.environmentName}
+                progress={launchpadSetupProgress}
+              />
+              {launchpadSetupProgress.status === "completed" || launchpadSetupProgress.status === "failed" ? (
+                <button className="button button--ghost" onClick={() => setLaunchpadSetupProgress(undefined)} type="button">
+                  Dismiss setup output
+                </button>
+              ) : null}
+            </div>
+          ) : null}
           {showSetupFailureChoice && selectedThread && selectedThreadKey ? (
             <EnvironmentSetupFailureChoice
               archiving={setupFailureArchiving}

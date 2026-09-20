@@ -1317,7 +1317,7 @@ export function registerAgentIpcHandlers(): void {
   ipcMain.handle(
     AGENT_SET_CODEX_THREAD_ENVIRONMENT_CHANNEL,
     async (
-      _event,
+      event,
       request: SetCodexThreadEnvironmentRequest,
     ): Promise<SetCodexThreadEnvironmentResponse> => {
       if (
@@ -1328,7 +1328,9 @@ export function registerAgentIpcHandlers(): void {
           .remoteBackend(request.federationTarget)
           .setCodexThreadEnvironment(stripFederationTarget(request));
       }
-      return await registry.setCodexThreadEnvironment(request);
+      return await registry.setCodexThreadEnvironment(request, (progress) => {
+        event.sender?.send?.(CODEX_ENVIRONMENT_SETUP_PROGRESS_CHANNEL, progress);
+      });
     },
   );
 
