@@ -274,6 +274,18 @@ export function useThreadSkills(params: {
     [originDirectoriesKey],
   );
 
+  // A thread with more than one linked project can hold two skills of the
+  // same name, and the transcript's sent chips say which project each
+  // `$release` ran from. That answer is in the catalog, so it cannot wait
+  // for the operator to open the `$` picker. `loadTarget` is cached per
+  // thread key, so this is one request per thread, and single-project
+  // threads — which have nothing to disambiguate — still pay nothing.
+  useEffect(() => {
+    if (originDirectories.length > 1) {
+      void loadTarget();
+    }
+  }, [loadTarget, originDirectories.length]);
+
   const skills = useMemo(() => {
     const deduped = new Map<string, AppServerSkillSummary>();
 

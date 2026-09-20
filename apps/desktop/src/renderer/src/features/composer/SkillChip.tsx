@@ -21,6 +21,12 @@ type SkillChipProps = {
   onOpenInEditor?: (skill: SkillChipActionTarget) => void;
   onRemove?: () => void;
   onViewMarkdown?: (skill: SkillChipActionTarget) => void;
+  /**
+   * Draw `skill.origin.label` after the name. The caller decides: it is set
+   * when another skill in the same catalog has this name, which is the only
+   * time `$release` alone cannot say which file it ran.
+   */
+  showOrigin?: boolean;
   skill: AppServerSkillSummary;
   target?: {
     column?: number;
@@ -139,6 +145,9 @@ export function SkillChip(props: SkillChipProps) {
         <span className="skill-chip__label">
           {props.label ?? `$${props.skill.name}`}
         </span>
+        {props.showOrigin && props.skill.origin ? (
+          <span className="skill-chip__origin">{props.skill.origin.label}</span>
+        ) : null}
         {props.onRemove ? (
           <button
             aria-label={`Remove $${props.skill.name}`}

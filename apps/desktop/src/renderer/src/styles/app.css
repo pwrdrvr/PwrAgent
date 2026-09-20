@@ -24673,6 +24673,22 @@ a.transcript-message__messaging-origin:focus-visible {
   text-overflow: ellipsis;
 }
 
+/* A `$skill` chip whose name another skill in the catalog shares keeps the
+   picker's origin after the name: `$release · PwrSnap`. It rides on both the
+   composer's draft chips and the transcript's sent ones. Secondary, not
+   muted, because it sits on the accent tint. The dot is decoration, so it
+   stays out of the accessible name. */
+.skill-chip__origin {
+  flex: none;
+  color: var(--text-secondary);
+  font-size: 0.9em;
+}
+
+.skill-chip__origin::before {
+  content: "\00b7" / "";
+  margin-inline-end: 0.35em;
+}
+
 .skill-chip__remove {
   display: inline-flex;
   width: 18px;
@@ -28770,19 +28786,6 @@ button.pricing-token-miser__folded:focus-visible {
   cursor: default;
 }
 
-/* A `$skill` chip whose name another skill in the catalog shares keeps the
-   picker's origin after the name: `$release · PwrSnap`. Secondary, not
-   muted, because it sits on the accent tint. The dot is decoration, so it
-   stays out of the accessible name. */
-.composer-tiptap-input__mention .skill-chip__origin {
-  color: var(--text-secondary);
-  font-size: 0.9em;
-}
-
-.composer-tiptap-input__mention .skill-chip__origin::before {
-  content: "\00b7" / "";
-  margin-inline-end: 0.35em;
-}
 
 /* The PR pill is the one mention chip with a border, so it is the one whose
    padding is visible — the others read as a tint behind the text and hide

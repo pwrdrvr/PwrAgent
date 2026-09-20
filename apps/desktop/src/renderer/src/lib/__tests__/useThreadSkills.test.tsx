@@ -655,6 +655,32 @@ describe("useThreadSkills", () => {
       });
     });
 
+    it("loads the catalog itself for a multi-project thread, and not for one project", async () => {
+      // The transcript's sent chips need the catalog to know that two skills
+      // answer to `$release`, and nothing in a transcript opens the picker.
+      listSkills.mockClear();
+      const { result } = renderHook(() =>
+        useThreadSkills({ desktopApi: { listSkills }, thread: createThread() })
+      );
+      await waitFor(() => {
+        expect(result.current.skills).toHaveLength(4);
+      });
+      expect(listSkills).toHaveBeenCalledTimes(1);
+
+      listSkills.mockClear();
+      renderHook(() =>
+        useThreadSkills({
+          desktopApi: { listSkills },
+          thread: createThread([linkedDirectories[0]!]),
+        })
+      );
+      // One project cannot hold two `$release`s, so it waits for the picker.
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(listSkills).not.toHaveBeenCalled();
+    });
+
     it("keeps the skill list's identity while the thread streams", async () => {
       const { result, rerender } = renderHook(
         ({ thread }) => useThreadSkills({ desktopApi: { listSkills }, thread }),
