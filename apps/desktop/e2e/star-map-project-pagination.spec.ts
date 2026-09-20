@@ -212,6 +212,9 @@ test("discovers all project clouds and continues one project's cards in Electron
         );
       });
     await more.press("Enter");
+    // One press asks for a block of rows, not one owner page. The rest of
+    // this project arrives under that press rather than returning the button
+    // and a scroll for every page the owner serves.
     await expect(map.locator('[data-thread-key$="project-0-card-19"]')).toHaveCount(1)
       .catch(async (error: unknown) => {
         throw new Error(
@@ -223,8 +226,6 @@ test("discovers all project clouds and continues one project's cards in Electron
           { cause: error },
         );
       });
-    await expect(more).toBeEnabled();
-    await more.press("Enter");
     await expect(map.locator('[data-thread-key$="project-0-card-22"]')).toHaveCount(1)
       .catch(async (error: unknown) => {
         throw new Error(
