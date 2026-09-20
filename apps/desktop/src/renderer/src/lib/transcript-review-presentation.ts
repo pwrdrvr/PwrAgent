@@ -4,6 +4,7 @@ import type {
   AppServerThreadMessageEntry,
   AppServerThreadReviewEntry,
 } from "@pwragent/shared";
+import { isCodexReviewPromptText } from "../../../shared/review-command";
 
 export type TranscriptReviewEvent =
   | AppServerThreadMessageEntry
@@ -122,6 +123,13 @@ export function summarizeTranscriptReviewSegment(
       events.push(entry);
       continue;
     }
+    if (
+      entryType === "message"
+      && entry.role === "user"
+      && isCodexReviewPromptText(entry.text)
+    ) {
+      events.push(entry);
+    }
     if (entryType !== "message" || entry.role !== "assistant") {
       continue;
     }
@@ -207,8 +215,8 @@ function reviewEvent(entry: AppServerThreadEntry): TranscriptReviewEvent | undef
   }
   if (
     entry.type === "message"
-    && entry.role === "assistant"
-    && isPlainReviewFindingText(entry.text)
+    && ((entry.role === "assistant" && isPlainReviewFindingText(entry.text))
+      || (entry.role === "user" && isCodexReviewPromptText(entry.text)))
   ) {
     return entry;
   }
@@ -283,6 +291,10 @@ export function deriveTranscriptReviewPresentation(params: {
     ...params.tailMessages.map((message) => message.id),
   ]);
   const candidates: ReviewCandidate[] = [];
+  const userPrompts: {
+    entry: AppServerThreadMessageEntry;
+    source: ReviewCandidate["source"];
+  }[] = [];
   const excludedHistoryEntryIds = new Set<string>();
   const excludedHistoryMessageIds = new Set<string>();
   const excludedTailEntryIds = new Set<string>();
@@ -298,6 +310,10 @@ export function deriveTranscriptReviewPresentation(params: {
       return;
     }
 
+    if (event.role === "user") {
+      userPrompts.push({ entry: event, source });
+      return;
+    }
     const candidate = matchingReviewCandidate(candidates, event);
     if (!candidate) {
       return;
@@ -328,6 +344,25 @@ export function deriveTranscriptReviewPresentation(params: {
     const event = reviewEvent(entry);
     if (event) {
       consumeEvent(event, "tail");
+    }
+  }
+
+  // Correlate by turn, after collecting all markers: replay pages and live
+  // items may deliver the generated prompt before the review start marker.
+  const reviewTurnIds = new Set(
+    candidates.flatMap(({ entry }) => entry.turn?.id ? [entry.turn.id] : []),
+  );
+  const excludedPromptIds = new Set<string>();
+  for (const { entry, source } of userPrompts) {
+    if (!entry.turn?.id || !reviewTurnIds.has(entry.turn.id) || entry.origin) {
+      continue;
+    }
+    excludedPromptIds.add(entry.id);
+    if (source === "history") {
+      excludedHistoryEntryIds.add(entry.id);
+      excludedHistoryMessageIds.add(entry.id);
+    } else {
+      excludedTailEntryIds.add(entry.id);
     }
   }
 
@@ -364,7 +399,7 @@ export function deriveTranscriptReviewPresentation(params: {
       return [tailEntryOverrides.get(entry.id) ?? entry];
     }),
     tailMessages: params.tailMessages.filter(
-      (message) => !isDuplicateReviewMessage(message, reviewTexts),
+      (message) => !excludedPromptIds.has(message.id) && !isDuplicateReviewMessage(message, reviewTexts),
     ),
   };
 }

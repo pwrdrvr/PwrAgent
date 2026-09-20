@@ -273,3 +273,10 @@ export function normalizeReviewOutputRecord(
       : { overall_confidence_score: confidenceScore }),
   };
 }
+
+/** Wording is only a candidate; callers must also establish a native review turn. */
+export function isCodexReviewPromptText(text: string): boolean {
+  const normalized = text.trim().replace(/\s+/g, " ");
+  return /^review the (?:current )?code changes\b/i.test(normalized)
+    && /provide prioritized(?:, actionable)? findings\.$/i.test(normalized);
+}

@@ -114,6 +114,7 @@ import {
   type DirectoryEnrichmentCaller,
 } from "../app-server/thread-directory-enricher";
 import {
+  isCodexReviewPromptText,
   normalizeReviewDisplayText,
   normalizeReviewOutputRecord,
 } from "../../shared/review-command";
@@ -2080,21 +2081,6 @@ function shouldUseAssistantReviewText(params: {
   );
 }
 
-function isCodexInternalReviewPrompt(
-  record: Record<string, unknown>,
-  text: string
-): boolean {
-  const normalizedType = normalizeItemType(pickString(record, ["type"]));
-  const normalizedText = text.trim().toLowerCase();
-  return (
-    normalizedType === "usermessage" &&
-    normalizedText.startsWith("review ") &&
-    normalizedText.includes("code changes") &&
-    normalizedText.includes("prioritized") &&
-    normalizedText.includes("findings")
-  );
-}
-
 function normalizeSuppressionText(value: string): string {
   return value.trim().replace(/\s+/g, " ").toLowerCase();
 }
@@ -2189,7 +2175,8 @@ function collectAssistantReviewTexts(items: Record<string, unknown>[]): string[]
 
 function shouldSuppressConversationMessage(
   record: Record<string, unknown>,
-  suppressedAssistantTexts = new Set<string>()
+  suppressedAssistantTexts = new Set<string>(),
+  nativeReviewTurn = false,
 ): boolean {
   const text = collectLegacyMessageText(record);
   const role = normalizeConversationRole(
@@ -2197,7 +2184,7 @@ function shouldSuppressConversationMessage(
   );
   return (
     isReviewActionText(text) ||
-    isCodexInternalReviewPrompt(record, text) ||
+    (nativeReviewTurn && role === "user" && !record.origin && isCodexReviewPromptText(text)) ||
     (role === "assistant" && suppressedAssistantTexts.has(normalizeSuppressionText(text)))
   );
 }
@@ -2538,9 +2525,9 @@ function extractConversationMessages(value: unknown): AppServerThreadReplay["mes
     "time",
   ];
 
-  const visit = (node: unknown, inheritedCreatedAt?: number): void => {
+  const visit = (node: unknown, inheritedCreatedAt?: number, nativeReviewTurn = false): void => {
     if (Array.isArray(node)) {
-      node.forEach((entry) => visit(entry, inheritedCreatedAt));
+      node.forEach((entry) => visit(entry, inheritedCreatedAt, nativeReviewTurn));
       return;
     }
 
@@ -2553,6 +2540,11 @@ function extractConversationMessages(value: unknown): AppServerThreadReplay["mes
     );
     const createdAt = recordCreatedAt ?? inheritedCreatedAt;
 
+    const items = Array.isArray(record.items) ? record.items : [];
+    const isReviewTurn = nativeReviewTurn || items.some((item) => {
+      const candidate = asRecord(item);
+      return candidate && normalizeReviewEventItem(candidate) !== undefined;
+    });
     const role = normalizeConversationRole(
       pickString(record, ["role", "author", "speaker", "source", "type"])
     );
@@ -2560,7 +2552,7 @@ function extractConversationMessages(value: unknown): AppServerThreadReplay["mes
     if (
       role &&
       (content.text || content.parts?.length) &&
-      !shouldSuppressConversationMessage(record, suppressedAssistantTexts)
+      !shouldSuppressConversationMessage(record, suppressedAssistantTexts, isReviewTurn)
     ) {
       appendConversationMessage(output, {
         id:
@@ -2590,7 +2582,7 @@ function extractConversationMessages(value: unknown): AppServerThreadReplay["mes
       "response",
       "result"
     ]) {
-      visit(record[key], createdAt);
+      visit(record[key], createdAt, isReviewTurn);
     }
   };
 
@@ -5085,6 +5077,7 @@ function extractThreadEntries(
         ...extractMcpToolResultImagePartsFromReplayItem(item),
       ]),
     );
+    const nativeReviewTurn = rawItems.some((item) => normalizeReviewEventItem(item) !== undefined);
     const assistantReviewTexts = collectAssistantReviewTexts(rawItems);
     const suppressedAssistantTexts = collectReviewSuppressionTexts(rawItems);
     for (const text of assistantReviewTexts) {
@@ -5114,7 +5107,7 @@ function extractThreadEntries(
       const role = normalizeConversationRole(itemType);
       if (role) {
         flushActivityItems();
-        if (shouldSuppressConversationMessage(item, suppressedAssistantTexts)) {
+        if (shouldSuppressConversationMessage(item, suppressedAssistantTexts, nativeReviewTurn)) {
           continue;
         }
         const content = buildMessageContent(item);
