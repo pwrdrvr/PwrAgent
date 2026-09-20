@@ -9538,6 +9538,7 @@ export class DesktopBackendRegistry {
                         ?? session.acpRuntime?.currentModelId
                         ?? session.acpRuntime?.configValues?.model;
                       await this.applyAcpRuntimeSelection(
+                        backend,
                         client,
                         session.sessionId,
                         model ? { currentModelId: model } : undefined,
@@ -11991,6 +11992,7 @@ export class DesktopBackendRegistry {
       });
     }
     await this.applyAcpRuntimeSelection(
+      params.backend,
       client,
       session.sessionId,
       params.acpRuntime,
@@ -12153,13 +12155,29 @@ export class DesktopBackendRegistry {
     }
   }
 
+  // `reasoningEffort` is sent with `runtime.currentModelId`, so it must be a
+  // level of that model. On Kimi the model decides which levels exist, and a
+  // level chosen for another model is refused with -32602.
   private async applyAcpRuntimeSelection(
+    backend: AcpBackendId,
     client: AcpRuntimeClient,
     sessionId: string,
     runtime: BackendAcpSessionRuntimeState | undefined,
     reasoningEffort?: string,
   ): Promise<void> {
-    for (const [optionId, value] of Object.entries(runtime?.configValues ?? {})) {
+    // A thought level is only valid for the model the session holds, so the
+    // model's option has to be written first. `configValues` carries whatever
+    // insertion order earlier merges left, and a level measured against the
+    // agent's default model is dropped by the session's own menu.
+    const thoughtLevelOptionId = findAcpThoughtLevelConfigOption(
+      this.acpBackend.getInstalledAgent(backend)?.runtimeCapabilities,
+    )?.id;
+    const configValues = Object.entries(runtime?.configValues ?? {}).sort(
+      ([left], [right]) =>
+        Number(left === thoughtLevelOptionId)
+        - Number(right === thoughtLevelOptionId),
+    );
+    for (const [optionId, value] of configValues) {
       await client.setRuntimeOption?.({
         sessionId,
         source: "configOption",
@@ -17576,9 +17594,10 @@ export class DesktopBackendRegistry {
         cwd: params.cwd,
         executionMode,
         acpRuntime,
-        reasoningEffort:
-          params.modelSettings.reasoningEffort
-          ?? acpRuntime?.reasoningEffort,
+        // The replay re-selects the parent's model, so it carries the parent's
+        // level. The review's level belongs to the review's model, and the
+        // turn below applies the two together.
+        reasoningEffort: acpRuntime?.reasoningEffort,
         hidden: true,
       });
       const turn = await this.startAcpTurn({

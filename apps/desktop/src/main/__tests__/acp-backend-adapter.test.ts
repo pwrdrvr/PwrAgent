@@ -284,6 +284,100 @@ describe("describeInstalledAcpBackend", () => {
     });
   });
 
+  it("drops a currentModelId the config-option selection leaves behind", () => {
+    // Kimi selects through the config option, so `currentModelId` keeps naming
+    // whichever model the session held before. Readers answer with it ahead of
+    // the config value, and replaying this runtime would re-select that model
+    // with the level chosen for this one.
+    const selection = withAcpModelRuntimeSelection({
+      runtime: {
+        configValues: {
+          model: "kimi-code/kimi-for-coding-highspeed",
+          thinking: "on",
+        },
+        currentModelId: "kimi-code/kimi-for-coding-highspeed",
+        reasoningEffort: "on",
+        updatedAt: 500,
+      },
+      runtimeCapabilities: {
+        schemaVersion: 1,
+        status: "discovered",
+        checkedAt: 1000,
+        configOptions: [
+          {
+            id: "model",
+            label: "Model",
+            category: "model",
+            type: "select",
+            currentValue: "kimi-code/kimi-for-coding-highspeed",
+            values: [
+              {
+                value: "kimi-code/kimi-for-coding-highspeed",
+                label: "K2.7 Coding Highspeed",
+              },
+              { value: "kimi-code/k3", label: "K3" },
+            ],
+          },
+          {
+            id: "thinking",
+            label: "Thinking",
+            category: "thought_level",
+            type: "select",
+            currentValue: "on",
+            values: [
+              { value: "low", label: "Low" },
+              { value: "high", label: "High" },
+              { value: "max", label: "Max" },
+            ],
+          },
+        ],
+      },
+      model: "kimi-code/k3",
+      reasoningEffort: "low",
+      now: 1000,
+    });
+
+    expect(selection?.currentModelId).toBeUndefined();
+    expect(selection).toEqual({
+      configValues: {
+        model: "kimi-code/k3",
+        thinking: "low",
+      },
+      reasoningEffort: "low",
+      updatedAt: 1000,
+    });
+  });
+
+  it("keeps a currentModelId that already names the selected model", () => {
+    // An unadvertised model is not ours to claim through the models API, but
+    // the runtime already holds this one, so dropping it would lose a true
+    // selection rather than a stale one.
+    expect(
+      withAcpModelRuntimeSelection({
+        runtime: {
+          currentModelId: "grok-4.5",
+          updatedAt: 500,
+        },
+        runtimeCapabilities: {
+          schemaVersion: 1,
+          status: "discovered",
+          checkedAt: 1000,
+          models: {
+            currentModelId: "grok-4.5",
+            availableModels: [],
+          },
+        },
+        model: "grok-4.5",
+        reasoningEffort: "high",
+        now: 1000,
+      }),
+    ).toEqual({
+      currentModelId: "grok-4.5",
+      reasoningEffort: "high",
+      updatedAt: 1000,
+    });
+  });
+
   it("suppresses hardcoded execution modes for Kimi once it advertises runtime modes (#658)", () => {
     // Kimi exposes its own Default/Plan/Auto/Yolo runtime modes. Surfacing the
     // hardcoded Default/Full Access modes too produced a second, overlapping
