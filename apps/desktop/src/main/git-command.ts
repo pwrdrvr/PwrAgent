@@ -37,4 +37,3 @@ export function getConfiguredGitCommand(): string | undefined {
     return undefined;
   }
 }
-
