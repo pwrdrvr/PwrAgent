@@ -9264,6 +9264,48 @@ describe("DesktopBackendRegistry", () => {
       )?.permissionTransitionLog,
     ).toBeUndefined();
 
+    // The same request during a turn is queued, and its flush must record
+    // nothing either. The queue's own retry decides what happens next.
+    await registry.publishLocalEvent({
+      backend: acpBackendId,
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "kimi-session-1",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+    await registry.setAcpSessionRuntimeOption({
+      backend: acpBackendId,
+      threadId: "kimi-session-1",
+      source: "configOption",
+      optionId: "thinking",
+      value: "low",
+    });
+    await emitCompletedTurn(registry, acpBackendId, "kimi-session-1");
+
+    expect(sessions[0]?.acpRuntime).toEqual({
+      configValues: { model: "kimi-code/kimi-for-coding", thinking: "on" },
+      updatedAt: 1000,
+    });
+    expect(
+      events.filter(
+        (event) => event.notification.method === "thread/acpRuntime/updated",
+      ),
+    ).toEqual([]);
+    expect(
+      (
+        await overlayStore.getThreadOverlayState({
+          backend: acpBackendId,
+          threadId: "kimi-session-1",
+        })
+      )?.permissionTransitionLog?.map((transition) => transition.status),
+    ).toEqual(["queued"]);
+    // The flush ran and was refused: the direct write plus one attempt.
+    expect(acpClient.setRuntimeOption).toHaveBeenCalledTimes(2);
+
     unsubscribe();
     await registry.close();
   });
