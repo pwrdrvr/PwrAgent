@@ -12570,6 +12570,65 @@ describe("useThreadSessionState", () => {
     ]);
   });
 
+  it.each([[false, false], [true, false], [false, true], [true, true]])("hides native review instructions live and on reload (remote: %s, prompt first: %s)", async (remote, promptFirst) => {
+    const text = "Review the code changes against the base branch 'origin/main'. The merge base commit for this comparison is abc123. Run git diff abc123 to inspect the changes relative to origin/main. Provide prioritized, actionable findings.";
+    let emit: (event: AgentEvent) => void = () => undefined;
+    let entries: AppServerThreadEntry[] = [];
+    const target = { scope: "remote" as const, instanceId: "owner-m5" };
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (listener) => { emit = listener; return () => undefined; },
+      readThread: async () => ({
+        backend: "codex", threadId: "thread-1", fetchedAt: Date.now(),
+        replay: {
+          entries,
+          messages: entries.flatMap((entry) => entry.type === "message" ? [entry] : []),
+          pagination: { supportsPagination: false, hasPreviousPage: false },
+        },
+      }),
+    };
+    const thread: NavigationThreadSummary = {
+      ...buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      ...(remote ? { federation: {
+        ref: { backend: "codex" as const, target, threadId: "thread-1" },
+        instanceLabel: "Remote", capabilities: ["thread_detail", "event_subscriptions"],
+      } } : {}),
+    };
+    const { result } = renderHook(() => useThreadSessionState({ desktopApi, thread }));
+    await waitForThreadHydration(result);
+    const emitItem = (method: "item/started" | "item/completed", turnId: string, item: Record<string, unknown>) => {
+      act(() => emit({ backend: "codex", ...(remote ? { federationTarget: target } : {}),
+        notification: { method, params: { threadId: "thread-1", turnId, item } },
+      } as AgentEvent));
+    };
+    if (promptFirst) {
+      emitItem("item/started", "review-turn", { type: "userMessage", id: "generated", content: [{ type: "text", text }] });
+    }
+    emitItem("item/completed", "review-turn", { type: "enteredReviewMode", id: "review", review: "changes against 'origin/main'" });
+    for (const method of ["item/started", "item/completed"] as const) {
+      emitItem(method, "review-turn", { type: "userMessage", id: "generated", content: [{ type: "text", text }] });
+      expect(result.current.entries.some((entry) => entry.id === "generated")).toBe(false);
+      expect(result.current.messages.some((message) => message.id === "generated")).toBe(false);
+    }
+    emitItem("item/completed", "user-turn", { type: "userMessage", id: "authored", content: [{ type: "text", text }] });
+    expect(result.current.messages.some((message) => message.id === "authored")).toBe(true);
+    const inlineText = "<pwragent-inline-review-instructions>\nInspect this diff and report findings.\n</pwragent-inline-review-instructions>";
+    for (const method of ["item/started", "item/completed"] as const) {
+      emitItem(method, "inline-turn", { type: "userMessage", id: "inline-internal", content: [{ type: "text", text: inlineText }] });
+      expect(result.current.entries.some((entry) => entry.id === "inline-internal")).toBe(false);
+      expect(result.current.messages.some((message) => message.id === "inline-internal")).toBe(false);
+    }
+
+    entries = [
+      { type: "review", id: "review", review: "Review changes against origin/main", displayText: "Review changes against origin/main", turn: { id: "review-turn", status: "in_progress" } },
+      { type: "message", id: "generated", role: "user", text, turn: { id: "review-turn", status: "in_progress" } },
+      { type: "message", id: "authored", role: "user", text, turn: { id: "user-turn", status: "completed" } },
+    ];
+    entries.push({ type: "message", id: "inline-internal", role: "user", text: inlineText, turn: { id: "inline-turn", status: "completed" } });
+    await act(async () => { await result.current.reload(); });
+    expect(result.current.entries.map((entry) => entry.id)).toEqual(["review", "authored"]);
+    expect(result.current.messages.map((message) => message.id)).toEqual(["authored"]);
+  });
+
   it.each([false, true])(
     "retains live review cards through lagging refreshes (pagination: %s)",
     async (supportsPagination) => {

@@ -273,3 +273,17 @@ export function normalizeReviewOutputRecord(
       : { overall_confidence_score: confidenceScore }),
   };
 }
+
+/** Wording is only a candidate; callers must also establish a native review turn. */
+export function isCodexReviewPromptText(text: string): boolean {
+  const normalized = text.trim().replace(/\s+/g, " ");
+  return /^review the (?:current )?code changes\b/i.test(normalized)
+    && /provide prioritized(?:, actionable)? findings\.$/i.test(normalized);
+}
+
+/** Explicit persisted envelope for an ordinary turn/start used as an inline review. */
+export function isPwrAgentInlineReviewPrompt(text: string): boolean {
+  const normalized = text.trim();
+  return normalized.startsWith("<pwragent-inline-review-instructions>\n")
+    && normalized.endsWith("\n</pwragent-inline-review-instructions>");
+}

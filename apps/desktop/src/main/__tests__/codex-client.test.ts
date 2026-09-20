@@ -7003,7 +7003,33 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
-  it("suppresses review prompts without legacy image metadata", async () => {
+  it("suppresses explicitly marked inline review instructions without native review events", async () => {
+    const { extractThreadReplayFromReadResult } = await import("../codex-app-server/client");
+    const text = "<pwragent-inline-review-instructions>\nInspect this diff and report findings.\n</pwragent-inline-review-instructions>";
+    const replay = extractThreadReplayFromReadResult({ thread: { turns: [{ id: "inline-turn", items: [
+      { type: "userMessage", id: "internal", content: [{ type: "text", text }] },
+      { type: "userMessage", id: "authored", content: [{ type: "text", text: `Explain this marker: ${text}` }] },
+    ] }] } });
+    expect(replay.entries.map((entry) => entry.id)).toEqual(["authored"]);
+    expect(replay.messages.map((message) => message.id)).toEqual(["authored"]);
+  });
+
+  it.each(["userMessage", "message"])("suppresses native review instructions on replay with %s shape", async (type) => {
+    const { extractThreadReplayFromReadResult } = await import("../codex-app-server/client");
+    const text = "Review the code changes against the base branch 'origin/main'. The merge base commit for this comparison is abc123. Run git diff abc123 to inspect the changes relative to origin/main. Provide prioritized, actionable findings.";
+    const replay = extractThreadReplayFromReadResult({ thread: { turns: [
+      { id: "user-turn", items: [{ type: "userMessage", id: "authored", content: [{ type: "text", text }] }] },
+      { id: "review-turn", items: [
+        { type, role: "user", id: "generated", content: [{ type: "text", text }] },
+        { type: "enteredReviewMode", id: "review", review: "changes against 'origin/main'" },
+        { type: "userMessage", id: "steer", content: [{ type: "text", text: "Review these code changes for security and provide prioritized findings." }] },
+      ] },
+    ] } });
+    expect(replay.entries.map((entry) => entry.id)).toEqual(["authored", "review", "steer"]);
+    expect(replay.messages.map((message) => message.id)).toEqual(["authored", "steer"]);
+  });
+
+  it("retains user-authored review instructions without a native review marker", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     MockTransport.readThreadResultByThreadId.set("thread-review-prompt", {
       thread: {
@@ -7040,6 +7066,7 @@ describe("CodexAppServerClient", () => {
     });
 
     expect(replay.entries).toEqual([
+      expect.objectContaining({ id: "hidden-review-prompt", role: "user" }),
       expect.objectContaining({
         type: "message",
         id: "visible-user-message",
@@ -7048,6 +7075,7 @@ describe("CodexAppServerClient", () => {
       }),
     ]);
     expect(replay.messages).toEqual([
+      expect.objectContaining({ id: "hidden-review-prompt", role: "user" }),
       expect.objectContaining({
         id: "visible-user-message",
         role: "user",
