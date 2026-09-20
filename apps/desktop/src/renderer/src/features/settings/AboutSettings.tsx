@@ -4,7 +4,6 @@ import type {
   AppLicenseDocument,
   AppLicenseDocumentKind,
   AppMetadata,
-  AppUpdateCheckResult,
 } from "../../../../shared/app-metadata";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { ReleaseNotesLink } from "../update/ReleaseNotesLink";
@@ -19,10 +18,6 @@ import {
 export function AboutSettings(props: { desktopApi?: DesktopApi }) {
   const [metadata, setMetadata] = useState<AppMetadata | undefined>(undefined);
   const [error, setError] = useState<string | undefined>(undefined);
-  const [updateChecking, setUpdateChecking] = useState(false);
-  const [updateResult, setUpdateResult] = useState<
-    AppUpdateCheckResult | undefined
-  >(undefined);
   const [licenseDocument, setLicenseDocument] = useState<
     AppLicenseDocument | undefined
   >(undefined);
@@ -54,26 +49,6 @@ export function AboutSettings(props: { desktopApi?: DesktopApi }) {
       cancelled = true;
     };
   }, [props.desktopApi]);
-
-  const checkForUpdates = props.desktopApi?.checkForAppUpdates;
-  const handleCheckForUpdates = async () => {
-    if (!checkForUpdates) {
-      return;
-    }
-    setUpdateChecking(true);
-    setUpdateResult(undefined);
-    try {
-      const result = await checkForUpdates();
-      setUpdateResult(result);
-    } catch (err) {
-      setUpdateResult({
-        status: "error",
-        message: err instanceof Error ? err.message : String(err),
-      });
-    } finally {
-      setUpdateChecking(false);
-    }
-  };
 
   const readLicenseDocument = props.desktopApi?.readLicenseDocument;
   const openChangelogWindow = props.desktopApi?.openChangelogWindow;
@@ -130,20 +105,6 @@ export function AboutSettings(props: { desktopApi?: DesktopApi }) {
         eyebrow="About"
         title={metadata.applicationName}
         help="Thread-centric coding agent. Built by PwrDrvr LLC."
-        action={
-          checkForUpdates ? (
-            <button
-              className="button button--secondary"
-              type="button"
-              disabled={updateChecking}
-              onClick={() => {
-                void handleCheckForUpdates();
-              }}
-            >
-              {updateChecking ? "Checking…" : "Check for updates"}
-            </button>
-          ) : null
-        }
       />
 
       <SettingsSection eyebrow="About" title="Build">
@@ -288,54 +249,7 @@ export function AboutSettings(props: { desktopApi?: DesktopApi }) {
           ) : null}
         </div>
       </SettingsSection>
-
-      {updateResult ? <UpdateResultStatus result={updateResult} /> : null}
     </SettingsSectionStack>
   );
 }
 
-function UpdateResultStatus({ result }: { result: AppUpdateCheckResult }) {
-  if (result.status === "skipped") {
-    return <p className="settings-empty">{result.reason}</p>;
-  }
-  if (result.status === "error") {
-    return <p className="settings-row__error">Update check failed: {result.message}</p>;
-  }
-  if (result.status === "checking") {
-    return <p className="settings-empty">Checking for updates…</p>;
-  }
-  // Every branch below names a version, so every branch below carries the
-  // way out to what is in it. The three above name none.
-  const notes = (
-    <ReleaseNotesLink
-      ariaLabel={`Release notes for v${result.version}`}
-      className="settings-update-channel__notes"
-      url={releaseNotesUrl(result.version)}
-    />
-  );
-  if (result.status === "no-update") {
-    return (
-      <p className="settings-empty">
-        You're up to date (v{result.version}).{notes}
-      </p>
-    );
-  }
-  if (result.status === "downloaded") {
-    return (
-      <p className="settings-empty">
-        {result.direction === "downgrade"
-          ? `Switch ready: v${result.version}. Restart to switch.`
-          : `Update ready: v${result.version}. Restart to install.`}
-        {notes}
-      </p>
-    );
-  }
-  return (
-    <p className="settings-empty">
-      {result.direction === "downgrade"
-        ? `Switch to v${result.version}. Downloading in the background.`
-        : `Update available: v${result.version}. Downloading in the background.`}
-      {notes}
-    </p>
-  );
-}

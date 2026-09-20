@@ -626,7 +626,7 @@ GH_TOKEN=ghp_fine_grained_PAT open /Applications/PwrAgent.app
 Or persist it in `~/.zshrc` (or equivalent) so opening from Spotlight / dock
 Just Works. A LaunchAgent plist is also possible but is overkill at Phase 1.
 
-The "Check for updates" button in **Settings → About** invokes
+The "Check for Update" button in **Settings → Updates** invokes
 `autoUpdater.checkForUpdates()` — useful for verifying the feed is reachable
 without waiting for the auto-check on next launch.
 

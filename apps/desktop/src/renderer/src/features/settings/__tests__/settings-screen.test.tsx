@@ -6215,12 +6215,22 @@ describe("SettingsScreen", () => {
       />,
     );
 
-    // The Build table's row, named for the version it sits beside.
+    // The Build table's row, named for the version it sits beside. Awaited
+    // first: About renders "Loading…" until its metadata read settles, and
+    // every assertion below needs the settled page.
     fireEvent.click(
       await screen.findByRole("button", {
         name: "Release notes for this build, v1.0.6",
       }),
     );
+
+    // There is one place to check for an update, and it is Settings →
+    // Updates. About carried a second button that answered the same
+    // question in its own wording, which PwrGit and PwrSnap both do
+    // without.
+    expect(
+      screen.queryByRole("button", { name: /check for update/i }),
+    ).toBeNull();
     // And the Changelog section's, named to mirror "Open changelog" — the
     // two buttons there do neighboring jobs and differ only in which copy
     // of the notes they open.
