@@ -50,6 +50,12 @@ import {
   type MessagingSurfaceIntent,
 } from "@pwragent/messaging-interface";
 import { PERMISSIVE_CAPABILITY_PROFILE } from "@pwragent/messaging-interface/testing";
+import { textForDiscordIntent } from "@pwragent/messaging-provider-discord";
+import { textForFeishuIntent } from "@pwragent/messaging-provider-feishu";
+import { textForLineIntent } from "@pwragent/messaging-provider-line";
+import { textForMattermostIntent } from "@pwragent/messaging-provider-mattermost";
+import { textForSlackIntent } from "@pwragent/messaging-provider-slack";
+import { textForTelegramIntent } from "@pwragent/messaging-provider-telegram";
 import {
   MessagingController,
   messagingDeliveryPriority,
@@ -58,6 +64,9 @@ import {
   updateWorkingCardActivities,
   type MessagingControllerOptions,
 } from "../messaging/core/messaging-controller";
+import {
+  buildReviewStartConfirmationIntent,
+} from "../messaging/core/messaging-renderer";
 import { SqliteMessagingStore } from "../state/messaging-store-sqlite";
 import {
   measureSqliteWrites,
@@ -1027,6 +1036,99 @@ describe("MessagingController", () => {
         reasoningEffort: "high",
       }),
     );
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Review started",
+      body: [
+        "Review against main is now running.",
+        "",
+        "Reviewer: Kimi (acp:kimi)",
+        "Model: kimi-k2-thinking",
+        "Reasoning: high",
+      ].join("\n"),
+      fallbackText: [
+        "Review started",
+        "",
+        "Review against main is now running.",
+        "",
+        "Reviewer: Kimi (acp:kimi)",
+        "Model: kimi-k2-thinking",
+        "Reasoning: high",
+      ].join("\n"),
+      reviewStart: {
+        status: "started",
+        target: { type: "baseBranch", branch: "main" },
+        reviewer: {
+          backend: "acp:kimi",
+          label: "Kimi",
+          model: "kimi-k2-thinking",
+          reasoningEffort: "high",
+          source: "override",
+        },
+      },
+    });
+  });
+
+  it("keeps review-start context in every supported transport formatter", () => {
+    const intent = buildReviewStartConfirmationIntent({
+      id: "review-start-1",
+      createdAt: 1000,
+      notification: {
+        status: "started",
+        target: { type: "baseBranch", branch: "origin/main" },
+        reviewer: {
+          backend: "acp:kimi",
+          label: "Kimi",
+          model: "kimi-k2-thinking",
+          reasoningEffort: "high",
+          source: "override",
+        },
+      },
+    });
+    const expectedContext = [
+      "Review against origin/main is now running.",
+      "Reviewer: Kimi (acp:kimi)",
+      "Model: kimi-k2-thinking",
+      "Reasoning: high",
+    ];
+
+    for (const [transport, render] of [
+      ["Discord", textForDiscordIntent],
+      ["Feishu", textForFeishuIntent],
+      ["LINE", textForLineIntent],
+      ["Mattermost", textForMattermostIntent],
+      ["Slack", textForSlackIntent],
+      ["Telegram", textForTelegramIntent],
+    ] as const) {
+      const rendered = render(intent);
+      for (const line of expectedContext) {
+        expect(rendered, transport).toContain(line);
+      }
+    }
+  });
+
+  it("does not guess unavailable review settings in the start notification", () => {
+    const intent = buildReviewStartConfirmationIntent({
+      id: "review-start-unknown-reviewer",
+      createdAt: 1000,
+      notification: {
+        status: "started",
+        target: { type: "commit", sha: "d546632494f2dde38a9088cc" },
+        reviewer: {
+          backend: "acp:unknown",
+          source: "override",
+        },
+      },
+    });
+
+    expect(intent.body).toBe([
+      "Review of commit d546632494f2dde38a9088cc is now running.",
+      "",
+      "Reviewer: acp:unknown",
+    ].join("\n"));
+    expect(intent.body).not.toContain("Model:");
+    expect(intent.body).not.toContain("Reasoning:");
+    expect(intent.body).not.toContain("default");
   });
 
   it("restores the thread default reviewer from the configurator", async () => {

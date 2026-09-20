@@ -1279,12 +1279,48 @@ export type MessagingApprovalIntent = MessagingBaseSurfaceIntent & {
   >;
 };
 
+/**
+ * Stable, transport-neutral context for a review that has been accepted or
+ * queued. Providers may render the confirmation body directly today, while
+ * preserving this structure lets future cards present the same facts without
+ * reparsing user-facing copy.
+ *
+ * The target deliberately keeps only a safe target/ref descriptor. Raw custom
+ * instructions, commit titles, workspace paths, and other review internals do
+ * not belong in a messaging notification. Omitted model, reasoning effort,
+ * and label values are intentionally unknown and must not be replaced with a
+ * provider's guessed default.
+ */
+export type MessagingReviewStartTarget =
+  | { type: "uncommittedChanges" }
+  | { type: "baseBranch"; branch: string }
+  | { type: "commit"; sha: string }
+  | { type: "custom" };
+
+export type MessagingReviewStartNotification = {
+  status: "started" | "scheduled";
+  target: MessagingReviewStartTarget;
+  reviewer: {
+    /** The backend that will run the review, including an `acp:` prefix. */
+    backend: AppServerBackendKind;
+    /** Human-facing label from the owner's backend inventory, when known. */
+    label?: string;
+    /** Exact model id selected for this review or inherited from the thread. */
+    model?: string;
+    reasoningEffort?: string;
+    /** Whether the reviewer came from the one-review override or the thread. */
+    source: "override" | "thread_default";
+  };
+};
+
 export type MessagingConfirmationIntent = MessagingBaseSurfaceIntent & {
   kind: "confirmation";
   browseSessionId?: string;
   title: string;
   body: string;
   actions: MessagingSurfaceAction[];
+  /** Present only for the durable review-start notification contract. */
+  reviewStart?: MessagingReviewStartNotification;
 };
 
 export type MessagingErrorIntent = MessagingBaseSurfaceIntent & {
