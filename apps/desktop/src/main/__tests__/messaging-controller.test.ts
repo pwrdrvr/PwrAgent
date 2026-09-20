@@ -66,6 +66,7 @@ import {
 } from "../messaging/core/messaging-controller";
 import {
   buildReviewStartConfirmationIntent,
+  messagingReviewStartTarget,
 } from "../messaging/core/messaging-renderer";
 import { SqliteMessagingStore } from "../state/messaging-store-sqlite";
 import {
@@ -1155,6 +1156,34 @@ describe("MessagingController", () => {
         expect(rendered, transport).toContain(line);
       }
     }
+  });
+
+  it("retains captured PR scope with reviewer context in review-start notifications", () => {
+    const url = "https://github.com/fixture/project/pull/1";
+    const pullRequest = { provider: "github.com", org: "fixture", repo: "project", number: 1, url };
+    const target = messagingReviewStartTarget({
+      type: "pullRequest", url,
+      snapshot: {
+        pullRequest, headCommit: "b".repeat(40), baseCommit: "a".repeat(40),
+        mergeBaseCommit: "a".repeat(40), capturedAt: 1,
+      },
+    });
+    expect(target).toEqual({ type: "pullRequest", url, headCommit: "b".repeat(40) });
+    for (const status of ["started", "scheduled"] as const) {
+      const intent = buildReviewStartConfirmationIntent({
+        id: "pr-review-start", createdAt: 1000,
+        notification: { status, target, reviewer: { backend: "acp:kimi", label: "Kimi", source: "override" } },
+      });
+      for (const render of [textForDiscordIntent, textForFeishuIntent, textForLineIntent,
+        textForMattermostIntent, textForSlackIntent, textForTelegramIntent]) {
+        const rendered = render(intent);
+        expect(rendered).toContain(`Review ${url} at bbbbbbbbbb`);
+        expect(rendered).toContain("Reviewer: Kimi (acp:kimi)");
+      }
+    }
+    expect(messagingReviewStartTarget({ type: "pullRequest", url })).toEqual({
+      type: "pullRequest", url, headCommit: undefined,
+    });
   });
 
   it("does not guess unavailable review settings in the start notification", () => {
