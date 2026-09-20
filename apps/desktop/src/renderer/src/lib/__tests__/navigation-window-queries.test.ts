@@ -10,6 +10,25 @@ function page(patch: Partial<NavigationQueryPage> = {}): NavigationQueryPage {
   return { protocol: 2, queryKey: "query", generation: "generation", ownerEpoch: "owner", countsRevision: "revision",
     counts: { total: 100, active: 0, unread: 0, review: 0 }, coverage: { state: "complete" }, entries: [], complete: false, nextCursor: "next", ...patch };
 }
+function directoryRows(start: number, end: number) {
+  return Array.from({ length: end - start }, (_, index) => ({
+    key: String(start + index), label: String(start + index), kind: "directory" as const,
+    counts: { total: 0, active: 0, unread: 0, review: 0 },
+    pinnedRootCount: 0, unpinnedRootCount: 0, launchpadPresent: false,
+  }));
+}
+/** An owner serves the rows a request asks for, from its cursor's offset. */
+function owner(revision: string, total: number, expiredCursor?: string) {
+  return async (request: NavigationQueryRequest): Promise<NavigationQueryPage> => {
+    if (expiredCursor && request.cursor === expiredCursor) {
+      throw new Error("[navigation_cursor_expired] Navigation cursor expired");
+    }
+    const start = request.cursor ? Number(request.cursor.split(":")[1]) : 0;
+    const end = Math.min(total, start + (request.pageSize ?? 10));
+    return page({ generation: revision, countsRevision: revision, complete: end >= total,
+      nextCursor: end < total ? `${revision}:${end}` : undefined, directories: directoryRows(start, end) });
+  };
+}
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((done) => { resolve = done; });
@@ -62,7 +81,8 @@ it("requests only demanded first pages and loads continuation only on explicit d
   expect(read.mock.calls[0]?.[0]).toMatchObject({ pageSize: 10, cursor: undefined });
   read.mockResolvedValue(page({ complete: true, nextCursor: undefined }));
   await queries.loadMore("lens");
-  expect(read.mock.calls[1]?.[0]).toMatchObject({ cursor: "next" });
+  // One click is a block of rows, not one transport page.
+  expect(read.mock.calls[1]?.[0]).toMatchObject({ cursor: "next", pageSize: 100 });
   queries.setDemand(new Map());
   expect(release).toHaveBeenCalledTimes(1);
   expect(queries.getSnapshot().resources.size).toBe(0);
@@ -238,36 +258,128 @@ it("retains a range with a removed anchor until explicit recovery and does not c
 
 
 it("preserves loaded rows through refresh and transparently rebuilds an evicted continuation", async () => {
-  const directories = (start: number, end: number, revision: string, nextCursor?: string) => page({
-    generation: revision, countsRevision: revision, complete: !nextCursor, nextCursor,
-    directories: Array.from({ length: end - start }, (_, i) => ({ key: String(start + i), label: String(start + i),
-      kind: "directory" as const, counts: { total: 0, active: 0, unread: 0, review: 0 },
-      pinnedRootCount: 0, unpinnedRootCount: 0, launchpadPresent: false })),
-  });
-  const read = vi.fn()
-    .mockResolvedValueOnce(directories(0, 10, "old", "old-10"))
-    .mockResolvedValueOnce(directories(10, 20, "old", "old-20"))
-    .mockResolvedValueOnce(directories(0, 10, "fresh", "fresh-10"))
-    .mockResolvedValueOnce(directories(10, 20, "fresh", "fresh-20"))
-    .mockRejectedValueOnce(new Error("[navigation_cursor_expired] Navigation cursor expired"))
-    .mockResolvedValueOnce(directories(0, 10, "rebuilt", "rebuilt-10"))
-    .mockResolvedValueOnce(directories(10, 20, "rebuilt", "rebuilt-20"))
-    .mockResolvedValueOnce(directories(20, 30, "rebuilt"));
+  let serve = owner("old", 130);
+  const read = vi.fn(async (request: NavigationQueryRequest) => serve(request));
   const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
   queries.setDemand(new Map([["directory-index", request()]]));
   await vi.waitFor(() => expect(queries.getSnapshot().resources.get("directory-index")?.loading).toBe(false));
   await queries.loadMore("directory-index");
+  expect(queries.getSnapshot().resources.get("directory-index")?.state.page?.directories).toHaveLength(110);
   const sizes: number[] = [];
   queries.subscribe(() => sizes.push(queries.getSnapshot().resources.get("directory-index")?.state.page?.directories?.length ?? 0));
+  serve = owner("fresh", 130);
   queries.invalidate();
   await queries.refresh();
-  expect(queries.getSnapshot().resources.get("directory-index")?.state.page?.directories).toHaveLength(20);
+  expect(queries.getSnapshot().resources.get("directory-index")?.state.page?.directories).toHaveLength(110);
+  serve = owner("rebuilt", 130, "fresh:110");
   await queries.loadMore("directory-index");
   const state = queries.getSnapshot().resources.get("directory-index")!.state;
-  expect(state.page?.directories?.map((directory) => directory.key)).toEqual(Array.from({ length: 30 }, (_, i) => String(i)));
+  expect(state.page?.directories?.map((directory) => directory.key)).toEqual(Array.from({ length: 130 }, (_, index) => String(index)));
   expect(state.error).toBeUndefined();
-  expect(Math.min(...sizes)).toBe(20);
+  expect(Math.min(...sizes)).toBe(110);
+  // Demand, one continuation, two to restore the range, then the expired
+  // cursor, its rebaseline and two more to rebuild the range with the block.
   expect(read).toHaveBeenCalledTimes(8);
+  queries.dispose();
+});
+
+it("finishes one click across a clamped owner's pages instead of returning the button", async () => {
+  let clamped = 0;
+  const read = vi.fn(async (request: NavigationQueryRequest) => {
+    const start = request.cursor ? Number(request.cursor.split(":")[1]) : 0;
+    const end = start + Math.min(25, request.pageSize ?? 10);
+    clamped += 1;
+    return page({ nextCursor: `owner:${end}`, directories: directoryRows(start, end) });
+  });
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+  queries.setDemand(new Map([["directory-index", request()]]));
+  await vi.waitFor(() => expect(queries.getSnapshot().resources.get("directory-index")?.loading).toBe(false));
+  expect(clamped).toBe(1);
+  await queries.loadMore("directory-index");
+  const state = queries.getSnapshot().resources.get("directory-index")!.state;
+  expect(state.page?.directories).toHaveLength(110);
+  expect(state.error).toBeUndefined();
+  // Four owner pages of 25 rows, asked for in one click; the last asks for
+  // exactly the rows the block still wants.
+  expect(read).toHaveBeenCalledTimes(5);
+  expect(read.mock.calls.map(([sent]) => sent.pageSize)).toEqual([10, 100, 75, 50, 25]);
+  queries.dispose();
+});
+
+it("halves an oversized page instead of failing the same way on every press", async () => {
+  // The owner clamps a page to its own copy of the byte budget; a remote page
+  // is then stamped with federation metadata on every row it served, so it can
+  // arrive here over that budget. The request is deterministic, so without the
+  // retry the operator's only continuation control fails forever.
+  const fat = (start: number, end: number) => Array.from({ length: end - start }, (_, index) => ({
+    key: String(start + index), label: "x".repeat(4_000), kind: "directory" as const,
+    counts: { total: 0, active: 0, unread: 0, review: 0 },
+    pinnedRootCount: 0, unpinnedRootCount: 0, launchpadPresent: false,
+  }));
+  const read = vi.fn(async (request: NavigationQueryRequest) => {
+    const start = request.cursor ? Number(request.cursor.split(":")[1]) : 0;
+    const end = start + (request.pageSize ?? 100);
+    return page({ nextCursor: `owner:${end}`, directories: fat(start, end) });
+  });
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+  queries.setDemand(new Map([["directory-index", request()]]));
+  await vi.waitFor(() => expect(queries.getSnapshot().resources.get("directory-index")?.loading).toBe(false));
+  await queries.loadMore("directory-index");
+  const state = queries.getSnapshot().resources.get("directory-index")!.state;
+  expect(state.error).toBeUndefined();
+  // 100 rows of these do not fit; 50 do, and that halved page is what lands.
+  // The block is still delivered, in one more read than an owner that clamps
+  // itself would have needed.
+  expect(read.mock.calls.slice(1).map(([sent]) => sent.pageSize)).toEqual([100, 50, 50]);
+  expect(state.page?.directories).toHaveLength(110);
+  queries.dispose();
+});
+
+it("ends a click on its time budget with the rows it delivered", async () => {
+  // Only Date is faked: the reads below still settle on real microtasks.
+  vi.useFakeTimers({ toFake: ["Date"] });
+  try {
+    let served = 0;
+    const read = vi.fn(async () => {
+      served += 1;
+      // A slow owner. The first continuation lands inside the budget; the
+      // next one carries the click past it.
+      if (served > 1) vi.advanceTimersByTime(6_000);
+      return page({ nextCursor: `owner:${served}`, directories: directoryRows(served, served + 1) });
+    });
+    const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+    queries.setDemand(new Map([["directory-index", request()]]));
+    await vi.waitFor(() => expect(queries.getSnapshot().resources.get("directory-index")?.loading).toBe(false));
+    await queries.loadMore("directory-index");
+    const state = queries.getSnapshot().resources.get("directory-index")!.state;
+    // Demand, then two extensions: the second ends the budget, and the read
+    // cap of eight is never reached.
+    expect(read).toHaveBeenCalledTimes(3);
+    expect(state.page?.directories).toHaveLength(3);
+    expect(state.page?.nextCursor).toBeDefined();
+    expect(state.error).toBeUndefined();
+    queries.dispose();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("bounds one click to a few reads when an owner serves one row at a time", async () => {
+  let served = 0;
+  const read = vi.fn(async () => {
+    served += 1;
+    return page({ nextCursor: `owner:${served}`, directories: directoryRows(served, served + 1) });
+  });
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+  queries.setDemand(new Map([["directory-index", request()]]));
+  await vi.waitFor(() => expect(queries.getSnapshot().resources.get("directory-index")?.loading).toBe(false));
+  await queries.loadMore("directory-index");
+  const state = queries.getSnapshot().resources.get("directory-index")!.state;
+  // A degenerate owner never reaches the block. The click stops at a bounded
+  // number of reads and leaves the button rather than scanning the owner.
+  expect(read).toHaveBeenCalledTimes(10);
+  expect(state.page?.nextCursor).toBeDefined();
+  expect(state.error).toBeUndefined();
   queries.dispose();
 });
 

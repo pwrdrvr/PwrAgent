@@ -12,11 +12,14 @@ const row = (id: string): NavigationRow => ({ id, source: "codex", title: id, ti
 function fixture() {
   const read = vi.fn<NonNullable<DesktopApi["getNavigationQueryPage"]>>(async (request): Promise<NavigationQueryPage> => {
     const offset = Number(request.cursor ?? 0);
-    const entries = request.query.kind === "lens" ? Array.from({ length: 10 }, (_, i) => row(`thread-${offset + i}`))
+    // An owner serves the rows a request asks for: a paced first page, then
+    // the block an explicit continuation asks for.
+    const size = request.pageSize ?? 10;
+    const entries = request.query.kind === "lens" ? Array.from({ length: size }, (_, i) => row(`thread-${offset + i}`))
       : request.query.kind === "exact" ? request.query.identities.map((ref) => row(ref.threadId)) : [];
     return { protocol: 2, queryKey: JSON.stringify(request.query), generation: "g", ownerEpoch: "owner", countsRevision: "r",
       coverage: { state: "complete" }, counts, entries: entries.map((row) => ({ row, placement: { kind: "root" }, orderKey: row.id })),
-      directories: [], complete: request.query.kind !== "lens", nextCursor: request.query.kind === "lens" ? String(offset + 10) : undefined };
+      directories: [], complete: request.query.kind !== "lens", nextCursor: request.query.kind === "lens" ? String(offset + size) : undefined };
   });
   const detail = vi.fn<NonNullable<DesktopApi["getNavigationSelectedDetail"]>>(async (request) => ({
     protocol: 2, ref: request.ref, revision: "detail", readiness: "ready", identity: "present", thread: row(request.ref.threadId),
@@ -46,14 +49,14 @@ it("returns to the loaded lens range without a loading or missing-row frame", as
   const { result, unmount } = renderHook(() => useThreadNavigation(f.api));
   await waitFor(() => expect(result.current.threads.length).toBe(10));
   await act(() => result.current.pagedNavigation.loadMore("lens"));
-  expect(result.current.threads.length).toBe(20);
+  expect(result.current.threads.length).toBe(110);
   act(() => result.current.setBrowseMode("recents"));
   await waitFor(() => expect(result.current.pagedNavigation.resources.get("lens")?.loading).toBe(false));
   hold = true;
   act(() => result.current.setBrowseMode("inbox"));
   expect(result.current.loading).toBe(false);
-  expect(result.current.threads).toHaveLength(20);
-  expect(result.current.pagedNavigation.resources.get("lens")?.state.page?.entries).toHaveLength(20);
+  expect(result.current.threads).toHaveLength(110);
+  expect(result.current.pagedNavigation.resources.get("lens")?.state.page?.entries).toHaveLength(110);
   await act(async () => { hold = false; release(); await pending; });
   unmount();
 });
@@ -183,7 +186,7 @@ it("loads one owner lens page and exact selection, preserving complete counts in
   expect(result.current.pagedNavigation.resources.get("directory-index")?.state.page?.counts).toEqual(counts);
   expect(f.read.mock.calls.filter(([r]) => r.query.kind === "lens")).toHaveLength(1);
   await act(() => result.current.pagedNavigation.loadMore("lens"));
-  expect(result.current.pagedNavigation.resources.get("lens")?.state.page?.entries).toHaveLength(20);
+  expect(result.current.pagedNavigation.resources.get("lens")?.state.page?.entries).toHaveLength(110);
   unmount();
   expect(f.release).toHaveBeenCalled();
 });
@@ -273,8 +276,14 @@ it("renders admitted owner rows in the real Sidebar and requests more only after
   await screen.findByRole("button", { name: "thread-0" });
   expect(screen.getAllByRole("button", { name: /^thread-\d+$/ })).toHaveLength(10);
   fireEvent.click(screen.getByRole("button", { name: "Load more threads" }));
-  await screen.findByRole("button", { name: "thread-19" });
-  expect(screen.getAllByRole("button", { name: /^thread-\d+$/ })).toHaveLength(20);
+  // One click is a block of rows. The operator reaches row 109 without
+  // clicking, scrolling to the button and clicking again.
+  await screen.findByRole("button", { name: "thread-109" });
+  expect(screen.getAllByRole("button", { name: /^thread-\d+$/ })).toHaveLength(110);
+  // A click reveals a block; it does not retire the control. This owner has
+  // more rows, so the operator can ask for the next block without hunting
+  // for a button that quietly left.
+  expect(screen.getByRole("button", { name: "Load more threads" })).toBeTruthy();
   expect(f.legacy).not.toHaveBeenCalled();
   mounted.unmount();
 });

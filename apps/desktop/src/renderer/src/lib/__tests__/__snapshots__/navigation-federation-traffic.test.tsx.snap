@@ -55,11 +55,11 @@ exports[`budgets federation navigation traffic for 10 visible mounts 1`] = `
 exports[`budgets federation navigation traffic for 101 visible mounts 1`] = `
 {
   "cold": {
-    "duplicates": 550,
-    "requestBytes": 46499,
-    "requests": 12,
-    "responseBytes": 555314,
-    "rows": 651,
+    "duplicates": 10,
+    "requestBytes": 8114,
+    "requests": 3,
+    "responseBytes": 94874,
+    "rows": 111,
   },
   "refresh": {
     "duplicates": 0,

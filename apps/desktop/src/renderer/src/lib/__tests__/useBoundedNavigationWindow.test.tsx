@@ -182,8 +182,11 @@ it.each([5, 35])("restores selected root %s without discarding the first page wh
     if (request.query.kind === "exact") return page({ entries: [{ row: row(index), placement: { kind: "root" }, orderKey: "selected" }] });
     if (request.query.kind === "directory" && request.query.roots === "pinned") return page({ entries: [{ row: row(0), placement: { kind: "root" }, orderKey: "0" }] });
     const offset = request.cursor ? Number(request.cursor) : request.anchor?.kind === "thread" ? Number(request.anchor.ref.threadId.slice("thread-".length)) : 1;
-    return page({ complete: false, nextCursor: String(offset + 10), ...(offset ? { rangeStart: offset } : {}),
-      entries: Array.from({ length: 10 }, (_, i) => ({ row: row(offset + i), placement: { kind: "root" as const }, orderKey: String(offset + i) })),
+    // An owner serves the rows a request asks for: a paced first page, then
+    // the block an explicit continuation asks for.
+    const size = request.pageSize ?? 10;
+    return page({ complete: false, nextCursor: String(offset + size), ...(offset ? { rangeStart: offset } : {}),
+      entries: Array.from({ length: size }, (_, i) => ({ row: row(offset + i), placement: { kind: "root" as const }, orderKey: String(offset + i) })),
     });
   });
   const { result, unmount } = renderHook(() => useBoundedNavigationWindow({ ...base, desktopApi: fixture.desktopApi,
@@ -200,15 +203,15 @@ it.each([5, 35])("restores selected root %s without discarding the first page wh
   const pins = () => result.current.resources.get(pinsId)?.state.page?.entries.map((entry) => entry.row.id);
   expect(pins()).toEqual(["thread-0"]);
   await act(() => result.current.loadMore(id));
-  expect(result.current.resources.get(id)?.state.page?.entries).toHaveLength(20);
+  expect(result.current.resources.get(id)?.state.page?.entries).toHaveLength(110);
   expect(pins()).toEqual(["thread-0"]);
   await act(() => result.current.refresh());
-  expect(result.current.resources.get(id)?.state.page?.entries).toHaveLength(20);
+  expect(result.current.resources.get(id)?.state.page?.entries).toHaveLength(110);
   expect(pins()).toEqual(["thread-0"]);
   unmount();
 });
 
-it("retains twelve loaded pages while a new selection in an explicitly expanded folder resolves", async () => {
+it("retains every loaded page while a new selection in an explicitly expanded folder resolves", async () => {
   const fixture = api();
   const row = (position: number): NavigationRow => ({ id: `thread-${position}`, source: "codex", title: `Thread ${position}`,
     titleSource: "fallback", ref: { backend: "codex", threadId: `thread-${position}` }, rowRevision: "r", linkedDirectories: [],
@@ -224,7 +227,8 @@ it("retains twelve loaded pages while a new selection in an explicitly expanded 
     }
     if (request.query.kind === "directory" && request.query.roots === "pinned") return page();
     const offset = Number(request.cursor ?? 0);
-    return page({ complete: false, nextCursor: String(offset + 10), entries: Array.from({ length: 10 }, (_, i) => ({
+    const size = request.pageSize ?? 10;
+    return page({ complete: false, nextCursor: String(offset + size), entries: Array.from({ length: size }, (_, i) => ({
       row: row(offset + i), placement: { kind: "root" as const }, orderKey: String(offset + i),
     })) });
   });
@@ -234,9 +238,9 @@ it("retains twelve loaded pages while a new selection in an explicitly expanded 
   }), { initialProps: { selected: 0 } });
   const id = `directory:${directory.key}`;
   await waitFor(() => expect(result.current.resources.get(id)?.state.page?.entries).toHaveLength(10));
-  for (let i = 0; i < 11; i++) await act(() => result.current.loadMore(id));
+  for (let i = 0; i < 2; i++) await act(() => result.current.loadMore(id));
   const retained = result.current.resources.get(id)?.state.page;
-  expect(retained?.entries).toHaveLength(120);
+  expect(retained?.entries).toHaveLength(210);
   fixture.release.mockClear();
   rerender({ selected: 119 });
   expect(result.current.resources.get(id)?.state.page).toBe(retained);
@@ -321,7 +325,7 @@ it("coalesces canonical owner row changes and ignores stream events and another 
   unmount();
 });
 
-it.each([false, true])("preserves thirty loaded pins when selecting a new last pin during refresh=%s", async (race) => {
+it.each([false, true])("preserves the loaded pin range when selecting a new last pin during refresh=%s", async (race) => {
   const fixture = api();
   const row = (position: number): NavigationRow => ({ id: `pin-${position}`, source: "codex", title: `Pin ${position}`,
     titleSource: "explicit", ref: { backend: "codex", threadId: `pin-${position}` }, rowRevision: "r",
@@ -339,8 +343,8 @@ it.each([false, true])("preserves thirty loaded pins when selecting a new last p
     if (request.query.kind !== "directory" || request.query.roots !== "pinned") return page();
     if (hold && !request.cursor) { hold = false; await gate; }
     const start = request.anchor?.kind === "thread" ? Number(request.anchor.ref.threadId.slice(4)) : Number(request.cursor ?? 0);
-    const end = Math.min(start + 10, 31);
-    return page({ rangeStart: start, complete: end === 31, nextCursor: end < 31 ? String(end) : undefined,
+    const end = Math.min(start + (request.pageSize ?? 10), 131);
+    return page({ rangeStart: start, complete: end === 131, nextCursor: end < 131 ? String(end) : undefined,
       entries: Array.from({ length: end - start }, (_, i) => ({ row: row(start + i), placement: { kind: "root" as const }, orderKey: String(start + i) })) });
   });
   const { result, rerender, unmount } = renderHook(({ selected }) => useBoundedNavigationWindow({ ...base,
@@ -350,18 +354,17 @@ it.each([false, true])("preserves thirty loaded pins when selecting a new last p
   const id = `directory-pins:${directory.key}`;
   await waitFor(() => expect(result.current.resources.get(id)?.state.page?.entries).toHaveLength(10));
   await act(() => result.current.loadMore(id));
-  await act(() => result.current.loadMore(id));
   let refreshing: Promise<void> | undefined;
   if (race) { hold = true; act(() => { refreshing = result.current.refresh(); }); }
-  rerender({ selected: 30 });
-  await waitFor(() => expect(result.current.resources.get("selected-context")?.state.page?.entries[0]?.row.id).toBe("pin-30"));
+  rerender({ selected: 130 });
+  await waitFor(() => expect(result.current.resources.get("selected-context")?.state.page?.entries[0]?.row.id).toBe("pin-130"));
   if (race) await act(async () => { finishRefresh(); await refreshing; });
   await waitFor(() => expect(result.current.resources.get(id)?.loading).toBe(false));
-  expect(result.current.resources.get(id)?.state.page?.entries.map((entry) => entry.row.id)).toEqual(Array.from({ length: 30 }, (_, i) => `pin-${i}`));
-  expect(result.current.resources.get(id)?.state.page?.nextCursor).toBe("30");
+  expect(result.current.resources.get(id)?.state.page?.entries.map((entry) => entry.row.id)).toEqual(Array.from({ length: 110 }, (_, i) => `pin-${i}`));
+  expect(result.current.resources.get(id)?.state.page?.nextCursor).toBe("110");
   expect(fixture.read.mock.calls.some(([request]) => request.query.kind === "directory" && request.anchor)).toBe(false);
   await act(() => result.current.loadMore(id));
-  expect(result.current.resources.get(id)?.state.page?.entries).toHaveLength(31);
+  expect(result.current.resources.get(id)?.state.page?.entries).toHaveLength(131);
   unmount();
 });
 
