@@ -15,6 +15,7 @@ export const PERMISSION_TRANSITION_ENTRY_PREFIX = "permission-transition-";
 
 const EXECUTION_MODE_LABELS: Record<ThreadExecutionMode, string> = {
   default: "Default Access",
+  auto: "Auto",
   "full-access": "Full Access",
 };
 

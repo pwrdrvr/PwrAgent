@@ -2118,7 +2118,7 @@ function applyThreadExecutionModeUpdate(
   params: {
     backend: AppServerBackendKind;
     threadId: string;
-    executionMode: "default" | "full-access";
+    executionMode: ThreadExecutionMode;
   }
 ): NavigationLoadedRows | undefined {
   if (!snapshot) {
@@ -2155,7 +2155,7 @@ function applyThreadExecutionModeQueued(
   params: {
     backend: AppServerBackendKind;
     threadId: string;
-    queuedExecutionMode: "default" | "full-access";
+    queuedExecutionMode: ThreadExecutionMode;
     queuedAt: number;
   }
 ): NavigationLoadedRows | undefined {
@@ -4022,7 +4022,7 @@ export function useThreadNavigation(
       if (method === "thread/executionMode/updated") {
         const { threadId, executionMode } = event.notification.params as {
           threadId: string;
-          executionMode: "default" | "full-access";
+          executionMode: ThreadExecutionMode;
         };
         setState((current) => ({
           ...current,
@@ -4048,7 +4048,7 @@ export function useThreadNavigation(
         const { threadId, queuedExecutionMode, queuedAt } = event.notification
           .params as {
           threadId: string;
-          queuedExecutionMode: "default" | "full-access";
+          queuedExecutionMode: ThreadExecutionMode;
           queuedAt: number;
         };
         setState((current) => ({

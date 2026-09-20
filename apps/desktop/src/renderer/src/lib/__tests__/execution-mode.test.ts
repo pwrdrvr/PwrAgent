@@ -3,6 +3,7 @@ import type { BackendSummary, NavigationThreadSummary } from "@pwragent/shared";
 import {
   acpRuntimeModeRequiresFullAccess,
   formatAccessModeLabel,
+  formatExecutionModeLabel,
   getAcpRuntimeModeControl,
 } from "../execution-mode";
 
@@ -109,4 +110,10 @@ describe("ACP execution mode labels", () => {
 
     expect(getAcpRuntimeModeControl(singleModeBackend, thread)).toBeUndefined();
   });
+});
+
+it("labels Codex Auto separately from Default and Full Access", () => {
+  expect(formatExecutionModeLabel("auto")).toBe("Auto");
+  expect(formatExecutionModeLabel("default")).toBe("Default Access");
+  expect(formatExecutionModeLabel("full-access")).toBe("Full Access");
 });

@@ -406,7 +406,7 @@ import {
   isCodexInvalidResponseMessageIdError,
   type CodexInvalidResponseMessageIdRecoveryResult,
 } from "../codex-app-server/invalid-response-message-id-recovery";
-import { codexVersionFromUserAgent } from "../codex-app-server/protocol-compatibility";
+import { codexVersionFromUserAgent, resolveCodexProtocolCompatibility } from "../codex-app-server/protocol-compatibility";
 import { ProviderTranscriptThreadSearchAdapter } from "../thread-search/thread-search-provider-adapters";
 import { ThreadSearchService } from "../thread-search/thread-search-service";
 import { ThreadSearchStore } from "../thread-search/thread-search-store";
@@ -864,6 +864,7 @@ type BackendClient = {
     ephemeral?: boolean;
     model?: string;
     approvalPolicy?: string;
+    approvalsReviewer?: "user" | "auto_review";
     sandbox?: string;
     serviceTier?: string;
     reasoningEffort?: string;
@@ -881,6 +882,7 @@ type BackendClient = {
     cwd?: string;
     model?: string;
     approvalPolicy?: string;
+    approvalsReviewer?: "user" | "auto_review";
     sandbox?: string;
     serviceTier?: string;
     fastMode?: boolean;
@@ -892,6 +894,7 @@ type BackendClient = {
     input: AppServerTurnInputItem[];
     cwd?: string;
     approvalPolicy?: string;
+    approvalsReviewer?: "user" | "auto_review";
     sandbox?: string;
     model?: string;
     collaborationMode?: AppServerCollaborationModeRequest;
@@ -953,11 +956,17 @@ type BackendClient = {
     input: AppServerTurnInputItem[];
     expectedTurnId: string;
   }): Promise<{ threadId: string; turnId: string }>;
+  setTurnApprovalReviewer?(params: {
+    threadId: string;
+    turnId: string;
+    approvalsReviewer: "user" | "auto_review";
+  }): Promise<{ status: "applied" | "targetUnavailable" }>;
   setThreadPermissions?(params: {
     threadId: string;
     cwd?: string;
     model?: string;
     approvalPolicy?: string;
+    approvalsReviewer?: "user" | "auto_review";
     sandbox?: string;
     serviceTier?: string;
     reasoningEffort?: string;
@@ -2005,20 +2014,39 @@ const EXECUTION_MODE_SUMMARIES: Record<
   {
     label: string;
     approvalPolicy: string;
+    approvalsReviewer: "user" | "auto_review";
     sandbox: string;
   }
 > = {
   default: {
     label: "Default Access",
+    approvalsReviewer: "user",
     approvalPolicy: "on-request",
+    sandbox: "workspace-write",
+  },
+  auto: {
+    label: "Auto",
+    approvalPolicy: "on-request",
+    approvalsReviewer: "auto_review",
     sandbox: "workspace-write",
   },
   "full-access": {
     label: "Full Access",
+    approvalsReviewer: "user",
     approvalPolicy: "never",
     sandbox: "danger-full-access",
   },
 };
+
+function codexAutoExecutionMode(available: boolean, version?: string): BackendSummary["executionModes"][number] {
+  const supported = resolveCodexProtocolCompatibility(version).supportsAutoReview;
+  return {
+    mode: "auto",
+    label: EXECUTION_MODE_SUMMARIES.auto.label,
+    available: available && supported,
+    ...(!supported ? { unavailableReason: "Auto access requires Codex 0.153.0 or later." } : {}),
+  };
+}
 
 const GEMINI_PRIVILEGED_APPROVAL_MODES = new Set([
   "yolo",
@@ -2457,7 +2485,7 @@ function executionModeQueueKey(
 }
 
 function formatExecutionModeForError(mode: ThreadExecutionMode): string {
-  return mode === "full-access" ? "Full Access" : "Default Access";
+  return mode === "auto" ? "Auto" : mode === "full-access" ? "Full Access" : "Default Access";
 }
 
 function buildActiveTurnModeKey(threadId: string, turnId: string): string {
@@ -2635,7 +2663,9 @@ function prependAutomationRuntimeContext(params: {
   sandbox: string;
 }): AppServerTurnInputItem[] {
   const accessNote =
-    params.sandbox === "danger-full-access"
+    params.executionMode === "auto"
+      ? "Shell commands run in the workspace-write sandbox. Eligible permission requests are reviewed automatically by Codex. Human approval prompts are unavailable in this automation; report actions that require a person."
+      : params.sandbox === "danger-full-access"
       ? "Shell commands may run with Full Access. Permission prompts are unavailable; do not ask the user for approval."
       : "Shell commands run in the Default Access workspace-write sandbox. Shell network access is unavailable, and permission prompts are unavailable; do not ask the user for approval or wait for one. Use built-in hosted tools such as web search when available, or return a concise failure explaining that the automation needs Full Access.";
 
@@ -8706,6 +8736,7 @@ export class DesktopBackendRegistry {
     }
   >();
   private readonly queuedExecutionModeFlushes = new Map<string, Promise<void>>();
+  private readonly executionModeSelectionLocks = new PerKeyAsyncLock();
   private readonly acpSessionPromptLocks = new PerKeyAsyncLock();
   private readonly activeTurnControlLocks = new PerKeyAsyncLock();
   private readonly queuedAcpRuntimeOptions = new Map<
@@ -10107,7 +10138,7 @@ export class DesktopBackendRegistry {
     });
     const executionMode = params.executionMode ?? overlay?.executionMode ?? "default";
     const modeSettings = EXECUTION_MODE_SUMMARIES[executionMode];
-    const approvalPolicy = "never";
+    const approvalPolicy = executionMode === "auto" ? "on-request" : "never";
     const sandbox = modeSettings.sandbox;
     const modelSettings = await this.resolveModelSettings(params.backend, {
       model: params.model ?? overlay?.model,
@@ -10153,6 +10184,7 @@ export class DesktopBackendRegistry {
       ...(cwd ? { cwd } : {}),
       ...modelSettings,
       approvalPolicy,
+      approvalsReviewer: modeSettings.approvalsReviewer,
       ephemeral: params.backend === "codex" ? true : undefined,
       sandbox,
     });
@@ -10170,6 +10202,7 @@ export class DesktopBackendRegistry {
       ...(cwd ? { cwd } : {}),
       ...modelSettings,
       approvalPolicy,
+      approvalsReviewer: modeSettings.approvalsReviewer,
       sandbox,
     });
     const queueEntryId = `headless:${params.automationRunId}`;
@@ -11979,6 +12012,9 @@ export class DesktopBackendRegistry {
     mcpRegistration?: AcpMcpServerRegistration;
     hidden?: boolean;
   }): Promise<{ threadId: string }> {
+    if (params.executionMode === "auto") {
+      throw new Error("Auto access is supported only by Codex.");
+    }
     const client = await this.acpBackend.getClient(params.backend);
     const initialExecutionMode = this.usesSlashControlledAcpExecutionModes(
       params.backend,
@@ -15192,6 +15228,7 @@ export class DesktopBackendRegistry {
             ...modelSettings,
             cwd,
             approvalPolicy: request.approvalPolicy ?? modeSettings.approvalPolicy,
+            approvalsReviewer: modeSettings.approvalsReviewer,
             sandbox: request.sandbox ?? modeSettings.sandbox,
             codexEnvironmentRuntime,
             ...(backend === "codex"
@@ -15590,6 +15627,7 @@ export class DesktopBackendRegistry {
         cwd,
         ...modelSettings,
         approvalPolicy: request.approvalPolicy ?? modeSettings.approvalPolicy,
+        approvalsReviewer: modeSettings.approvalsReviewer,
         sandbox: request.sandbox ?? modeSettings.sandbox,
         codexEnvironmentRuntime: forkedCodexEnvironmentRuntime,
         ...(codexThreadConfig ? { config: codexThreadConfig } : {}),
@@ -16826,6 +16864,7 @@ export class DesktopBackendRegistry {
             collaborationMode: params.collaborationMode,
             ...turnParams,
             approvalPolicy: params.approvalPolicy ?? modeSettings.approvalPolicy,
+            approvalsReviewer: modeSettings.approvalsReviewer,
             sandbox: params.sandbox ?? modeSettings.sandbox,
             ...(overlay?.codexEnvironmentRuntime
               ? { codexEnvironmentRuntime: overlay.codexEnvironmentRuntime }
@@ -17703,6 +17742,7 @@ export class DesktopBackendRegistry {
       // Progress, results, and usage remain on the parent's sub-agent record.
       ephemeral: true,
       threadSource: "subagent" as CodexThreadSource,
+      approvalsReviewer: modeSettings.approvalsReviewer,
       sandbox: modeSettings.sandbox,
       ...params.modelSettings,
       ...(params.codexEnvironmentRuntime
@@ -17729,6 +17769,7 @@ export class DesktopBackendRegistry {
         input: [{ type: "text", text: buildManagedReviewPrompt(params.target) }],
         ...(params.cwd ? { cwd: params.cwd } : {}),
         approvalPolicy: modeSettings.approvalPolicy,
+        approvalsReviewer: modeSettings.approvalsReviewer,
         sandbox: modeSettings.sandbox,
         ...params.modelSettings,
         ...(params.codexEnvironmentRuntime
@@ -19152,7 +19193,19 @@ export class DesktopBackendRegistry {
   async setThreadExecutionMode(
     params: SetThreadExecutionModeRequest
   ): Promise<SetThreadExecutionModeResponse> {
+    return await this.executionModeSelectionLocks.run(
+      executionModeQueueKey(params.backend, params.threadId),
+      () => this.setThreadExecutionModeOnce(params),
+    );
+  }
+
+  private async setThreadExecutionModeOnce(
+    params: SetThreadExecutionModeRequest,
+  ): Promise<SetThreadExecutionModeResponse> {
     if (params.backend !== "codex") {
+      if (params.executionMode === "auto") {
+        throw new Error("Auto access is supported only by Codex.");
+      }
       if (
         isAcpBackendId(params.backend) &&
         this.usesSlashControlledAcpExecutionModes(params.backend)
@@ -19185,6 +19238,7 @@ export class DesktopBackendRegistry {
       };
     }
 
+    await this.queuedExecutionModeFlushes.get(executionModeQueueKey("codex", params.threadId));
     const overlay = await this.overlayStore.getThreadOverlayState({
       backend: "codex",
       threadId: params.threadId,
@@ -19209,6 +19263,37 @@ export class DesktopBackendRegistry {
       };
     }
 
+    if (hasActiveTurn && params.executionMode === currentApplied) {
+      return { backend: "codex", threadId: params.threadId, executionMode: currentApplied };
+    }
+    const active = this.getActiveTurnForThread(params);
+    const activeStart = this.codexRetryableTurnStarts.get(params.threadId);
+    const customBoundary = activeStart?.turnId === active?.turnId
+      && ((activeStart?.params.sandbox && activeStart.params.sandbox !== "workspace-write")
+        || (activeStart?.params.approvalPolicy && activeStart.params.approvalPolicy !== "on-request"));
+    if (
+      active
+      && !customBoundary
+      && this.findActiveCodexThreadMode(params.threadId) !== "full-access"
+      && params.executionMode !== currentApplied
+      && params.executionMode !== "full-access"
+      && currentApplied !== "full-access"
+    ) {
+      const applying = this.applyThreadExecutionMode(params, { activeTurnId: active.turnId });
+      // Turn completion and a following start must observe the saved reviewer.
+      // The requester receives errors; later turns continue with the old mode.
+      const settled = applying.then(() => undefined, () => undefined);
+      this.queuedExecutionModeFlushes.set(queueKey, settled);
+      try {
+        return await applying;
+      } finally {
+        if (this.queuedExecutionModeFlushes.get(queueKey) === settled) {
+          this.queuedExecutionModeFlushes.delete(queueKey);
+        }
+      }
+    }
+
+    // Sandbox changes and starts without a published turn id must wait.
     // Active turn → queue. No codex call, no overlay executionMode flip.
     if (hasActiveTurn && params.executionMode !== currentApplied) {
       const queued = await this.queueThreadExecutionMode(params);
@@ -19587,9 +19672,12 @@ export class DesktopBackendRegistry {
    */
   private async applyThreadExecutionMode(
     params: SetThreadExecutionModeRequest,
-    options?: { fromQueue?: boolean; queueId?: string },
+    options?: { fromQueue?: boolean; queueId?: string; activeTurnId?: string },
   ): Promise<SetThreadExecutionModeResponse> {
     if (params.backend !== "codex") {
+      if (params.executionMode === "auto") {
+        throw new Error("Auto access is supported only by Codex.");
+      }
       if (
         isAcpBackendId(params.backend) &&
         this.usesSlashControlledAcpExecutionModes(params.backend)
@@ -19623,6 +19711,26 @@ export class DesktopBackendRegistry {
     const result = await this.withCodexThreadClient(
       params.threadId,
       async (client) => {
+        if (options?.activeTurnId) {
+          if (!client.setTurnApprovalReviewer) {
+            throw new Error("This Codex runtime cannot change the approval reviewer during a turn.");
+          }
+          const result = await client.setTurnApprovalReviewer({
+            threadId: params.threadId,
+            turnId: options.activeTurnId,
+            approvalsReviewer: modeSettings.approvalsReviewer,
+          });
+          if (result.status !== "applied") {
+            throw new Error("The active turn changed before Auto access could be updated. Select the access mode again.");
+          }
+          // Every future turn receives the persisted mode's reviewer explicitly.
+          // Do not resume the thread or change its sandbox during a running turn.
+          const key = buildActiveTurnModeKey(params.threadId, options.activeTurnId);
+          if (this.activeCodexTurnModes.has(key)) {
+            this.activeCodexTurnModes.set(key, params.executionMode);
+          }
+          return { threadId: params.threadId };
+        }
         if (!client.setThreadPermissions) {
           throw new Error(
             "Selected backend does not support execution mode updates",
@@ -19631,12 +19739,16 @@ export class DesktopBackendRegistry {
         return await client.setThreadPermissions({
           threadId: params.threadId,
           approvalPolicy: modeSettings.approvalPolicy,
+          approvalsReviewer: modeSettings.approvalsReviewer,
           sandbox: modeSettings.sandbox,
         });
       },
     );
 
     const resolvedThreadId = result.threadId;
+    if (options?.activeTurnId && this.queuedExecutionModes.has(executionModeQueueKey("codex", params.threadId))) {
+      await this.cancelThreadExecutionModeQueue(params);
+    }
 
     await this.overlayStore.setThreadExecutionMode({
       backend: "codex",
@@ -25678,6 +25790,7 @@ export class DesktopBackendRegistry {
           isDefault: true,
           ...(available ? {} : { unavailableReason }),
         },
+        codexAutoExecutionMode(available, lastKnownGood?.selectedVersion),
         {
           mode: "full-access",
           label: EXECUTION_MODE_SUMMARIES["full-access"].label,
@@ -25997,6 +26110,13 @@ export class DesktopBackendRegistry {
                 : String(initializeResult.reason)
               : undefined,
         },
+        codexAutoExecutionMode(
+          available,
+          successful[0]?.serverInfo?.version
+            ?? codexVersionFromUserAgent(successful[0]?.userAgent)
+            ?? runtimeCommand?.version
+            ?? lastKnownGood?.selectedVersion,
+        ),
         {
           mode: "full-access",
           label: EXECUTION_MODE_SUMMARIES["full-access"].label,
@@ -35941,6 +36061,7 @@ export class DesktopBackendRegistry {
       ephemeral: true,
       model: params.preferredModel,
       reasoningEffort: params.preferredReasoningEffort,
+      approvalsReviewer: modeSettings.approvalsReviewer,
       sandbox: modeSettings.sandbox,
       threadSource: "subagent" as CodexThreadSource,
       ...(sourceOverlay?.codexEnvironmentRuntime
@@ -35957,6 +36078,7 @@ export class DesktopBackendRegistry {
         approvalPolicy: modeSettings.approvalPolicy,
         model: params.preferredModel,
         reasoningEffort: params.preferredReasoningEffort,
+        approvalsReviewer: modeSettings.approvalsReviewer,
         sandbox: modeSettings.sandbox,
         ...(sourceOverlay?.codexEnvironmentRuntime
           ? {
@@ -36461,6 +36583,7 @@ export class DesktopBackendRegistry {
         approvalPolicy: modeSettings.approvalPolicy,
         model: record.preferredModel,
         reasoningEffort: record.preferredReasoningEffort,
+        approvalsReviewer: modeSettings.approvalsReviewer,
         sandbox: modeSettings.sandbox,
         ...(overlay?.codexEnvironmentRuntime
           ? { codexEnvironmentRuntime: overlay.codexEnvironmentRuntime }
@@ -37632,7 +37755,7 @@ export class DesktopBackendRegistry {
           ok: false,
           error: {
             code: "invalid_arguments",
-            message: "executionMode must be default or full-access when provided.",
+            message: "executionMode must be default, auto, or full-access when provided.",
           },
         };
       }
@@ -39926,7 +40049,7 @@ function buildThreadMessageLinks(
 function isThreadMutationExecutionMode(
   value: unknown,
 ): value is ThreadExecutionMode {
-  return value === "default" || value === "full-access";
+  return value === "default" || value === "auto" || value === "full-access";
 }
 
 function readThreadMutationModelSettings(

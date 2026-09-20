@@ -11784,6 +11784,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
           (props.launchpad || (props.thread && props.onSetExecutionMode)) ? (
             <ComposerDropdown
               ariaLabel="Access mode"
+              tooltip="Auto keeps the workspace sandbox and lets Codex review eligible permission requests. Changing reviewers applies to new requests; pending approvals keep their original reviewer."
               compact
               tone={
                 (props.launchpad?.executionMode ??

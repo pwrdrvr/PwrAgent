@@ -33,7 +33,7 @@ export type AppServerBuiltinBackendKind = "codex";
 export type AcpBackendId = `acp:${string}`;
 export type AppServerBackendKind = AppServerBuiltinBackendKind | AcpBackendId;
 export type AppServerBackendScope = AppServerBackendKind | "all";
-export type ThreadExecutionMode = "default" | "full-access";
+export type ThreadExecutionMode = "default" | "auto" | "full-access";
 
 export type ThreadIdentifier = string;
 

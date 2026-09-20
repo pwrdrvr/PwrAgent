@@ -940,3 +940,14 @@ describe("Windows command rendering", () => {
     expect(summary).toContain("powershell.exe");
   });
 });
+
+it("renders Auto review decisions with their rationale and stable identity", () => {
+  const details = buildLiveToolDetails({
+    id: "auto-review-1", type: "autoApprovalReview", text: "Auto review: Denied",
+    data: { status: "failed", detail: "The action exceeds the authorized scope." },
+  });
+  expect(details).toEqual([{
+    id: "auto-review-1", kind: "command", label: "Auto review: Denied",
+    status: "failed", markdown: "The action exceeds the authorized scope.",
+  }]);
+});

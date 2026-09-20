@@ -484,7 +484,7 @@ function multiProjectThread(params: {
 }
 
 function createOverlayStoreMock(params?: {
-  executionMode?: "default" | "full-access";
+  executionMode?: "default" | "auto" | "full-access";
   launchpadDefaults?: NavigationLaunchpadDefaults;
   overlays?: Record<string, ThreadOverlayState>;
   remotePinnedRanks?: string[];
@@ -845,7 +845,7 @@ function createOverlayStoreMock(params?: {
     }: {
       backend: ThreadOverlayState["backend"];
       threadId: string;
-      executionMode: "default" | "full-access";
+      executionMode: "default" | "auto" | "full-access";
     }) => {
       const key = `${backend}:${threadId}`;
       const next = {
@@ -1672,7 +1672,7 @@ class MockBackendClient {
     backend?: AppServerBackendKind;
     threadId: string;
     input: AppServerTurnInputItem[];
-    executionMode?: "default" | "full-access";
+    executionMode?: "default" | "auto" | "full-access";
     cwd?: string;
     approvalPolicy?: string;
     sandbox?: string;
@@ -2120,7 +2120,7 @@ class MockBackendClient {
     backend?: AppServerBackendKind;
     threadId: string;
     input: AppServerTurnInputItem[];
-    executionMode?: "default" | "full-access";
+    executionMode?: "default" | "auto" | "full-access";
     cwd?: string;
     approvalPolicy?: string;
     sandbox?: string;
@@ -2199,6 +2199,12 @@ class MockBackendClient {
       turnId: "turn-review-1",
     };
   }
+
+  setTurnApprovalReviewer = vi.fn(async (_params: {
+    threadId: string;
+    turnId: string;
+    approvalsReviewer: "user" | "auto_review";
+  }): Promise<{ status: "applied" | "targetUnavailable" }> => ({ status: "applied" }));
 
   async setThreadPermissions(params: {
     threadId: string;
@@ -2562,7 +2568,7 @@ type KimiSendControlPrompt = (params: {
 type KimiStartSession = (params: {
   acpRuntime?: BackendAcpSessionRuntimeState;
   cwd?: string;
-  executionMode: "default" | "full-access";
+  executionMode: "default" | "auto" | "full-access";
   hidden?: boolean;
   title?: string;
 }) => Promise<AcpSessionMetadata>;
@@ -2667,7 +2673,7 @@ function createKimiAcpRegistry(options?: {
     startSession: vi.fn(async (params: {
       acpRuntime?: BackendAcpSessionRuntimeState;
       cwd?: string;
-      executionMode: "default" | "full-access";
+      executionMode: "default" | "auto" | "full-access";
       hidden?: boolean;
       title?: string;
     }) => {
@@ -6456,6 +6462,11 @@ describe("DesktopBackendRegistry", () => {
             isDefault: true,
           },
           {
+            mode: "auto",
+            label: "Auto",
+            available: true,
+          },
+          {
             mode: "full-access",
             label: "Full Access",
             available: true,
@@ -9549,7 +9560,7 @@ describe("DesktopBackendRegistry", () => {
       dispose: vi.fn(),
       startSession: vi.fn(async (params: {
         cwd?: string;
-        executionMode: "default" | "full-access";
+        executionMode: "default" | "auto" | "full-access";
         title?: string;
       }) => {
         const metadata: AcpSessionMetadata = {
@@ -10482,7 +10493,7 @@ describe("DesktopBackendRegistry", () => {
       dispose: vi.fn(),
       startSession: vi.fn(async (params: {
         cwd?: string;
-        executionMode: "default" | "full-access";
+        executionMode: "default" | "auto" | "full-access";
       }) => {
         const metadata: AcpSessionMetadata = {
           backendId: acpBackendId,
@@ -10627,7 +10638,7 @@ describe("DesktopBackendRegistry", () => {
     const acpClient = {
       initialize: vi.fn(async () => undefined),
       dispose: vi.fn(),
-      startSession: vi.fn(async (params: { cwd?: string; executionMode: "default" | "full-access" }) => {
+      startSession: vi.fn(async (params: { cwd?: string; executionMode: "default" | "auto" | "full-access" }) => {
         const metadata: AcpSessionMetadata = {
           backendId: acpBackendId,
           sessionId: "kimi-session-1",
@@ -10779,7 +10790,7 @@ describe("DesktopBackendRegistry", () => {
       dispose: vi.fn(),
       startSession: vi.fn(async (params: {
         cwd?: string;
-        executionMode: "default" | "full-access";
+        executionMode: "default" | "auto" | "full-access";
       }) => {
         const metadata: AcpSessionMetadata = {
           backendId: acpBackendId,
@@ -11052,7 +11063,7 @@ describe("DesktopBackendRegistry", () => {
       dispose: vi.fn(),
       startSession: vi.fn(async (params: {
         cwd?: string;
-        executionMode: "default" | "full-access";
+        executionMode: "default" | "auto" | "full-access";
         acpRuntime?: BackendAcpSessionRuntimeState;
       }) => {
         const metadata: AcpSessionMetadata = {
@@ -13375,7 +13386,7 @@ script = "echo setup"
       dispose: vi.fn(),
       startSession: vi.fn(async (params: {
         cwd?: string;
-        executionMode: "default" | "full-access";
+        executionMode: "default" | "auto" | "full-access";
         title?: string;
         acpRuntime?: BackendAcpSessionRuntimeState;
       }) => {
@@ -13499,7 +13510,7 @@ script = "echo setup"
       dispose: vi.fn(),
       startSession: vi.fn(async (params: {
         cwd?: string;
-        executionMode: "default" | "full-access";
+        executionMode: "default" | "auto" | "full-access";
         title?: string;
         acpRuntime?: BackendAcpSessionRuntimeState;
       }) => {
@@ -43608,7 +43619,7 @@ script = "printf setup"
             {
               code: "invalid_arguments",
               message:
-                "executionMode must be default or full-access when provided.",
+                "executionMode must be default, auto, or full-access when provided.",
             },
             null,
             2,
@@ -46253,6 +46264,7 @@ script = "printf setup"
     expect(codexClient.lastSetThreadPermissionsParams).toEqual({
       threadId: "thread-1",
       approvalPolicy: "never",
+        approvalsReviewer: "user",
       sandbox: "danger-full-access",
     });
 
@@ -51213,7 +51225,7 @@ script = "printf setup"
 
   describe("queued permission-mode changes", () => {
     function buildIdleRegistry(options?: {
-      executionMode?: "default" | "full-access";
+      executionMode?: "default" | "auto" | "full-access";
     }) {
       const codexClient = new MockBackendClient({
         initializeResult: { methods: ["thread/resume"] },
@@ -51258,6 +51270,108 @@ script = "printf setup"
       });
     }
 
+    it("switches Default to Auto during a turn and uses Auto on the following turn", async () => {
+      const { codexClient, overlayStore, registry } = buildIdleRegistry();
+      const turnId = await startActiveTurn(registry, "thread-1");
+      await registry.setThreadExecutionMode({ backend: "codex", threadId: "thread-1", executionMode: "auto" });
+      expect(codexClient.setTurnApprovalReviewer).toHaveBeenCalledWith({
+        threadId: "thread-1", turnId, approvalsReviewer: "auto_review",
+      });
+      expect(codexClient.lastSetThreadPermissionsParams).toBeUndefined();
+      expect(registry.getQueuedExecutionModeForThread({ backend: "codex", threadId: "thread-1" })).toBeUndefined();
+      expect((await overlayStore.getThreadOverlayState({ backend: "codex", threadId: "thread-1" }))?.executionMode).toBe("auto");
+      expect(await getLog(overlayStore, "thread-1")).toEqual([
+        expect.objectContaining({ fromExecutionMode: "default", toExecutionMode: "auto", status: "applied" }),
+      ]);
+      await codexClient.emit({ method: "turn/completed", params: {
+        threadId: "thread-1", turnId, turn: { id: turnId, status: "completed", output: [] },
+      } });
+      await startActiveTurn(registry, "thread-1");
+      expect(codexClient.lastStartTurnParams).toMatchObject({
+        approvalPolicy: "on-request", sandbox: "workspace-write", approvalsReviewer: "auto_review",
+      });
+      await registry.setThreadExecutionMode({ backend: "codex", threadId: "thread-1", executionMode: "default" });
+      expect(codexClient.setTurnApprovalReviewer).toHaveBeenLastCalledWith({
+        threadId: "thread-1", turnId: expect.any(String), approvalsReviewer: "user",
+      });
+      await registry.close();
+    });
+
+    it.each(["targetUnavailable", "rejected"])("preserves the mode when live Auto update is %s", async (outcome) => {
+      const { codexClient, overlayStore, registry } = buildIdleRegistry();
+      await startActiveTurn(registry, "thread-1");
+      if (outcome === "rejected") {
+        codexClient.setTurnApprovalReviewer.mockRejectedValueOnce(new Error("Reviewer disallowed by organization"));
+      } else {
+        codexClient.setTurnApprovalReviewer.mockResolvedValueOnce({ status: "targetUnavailable" });
+      }
+      await expect(registry.setThreadExecutionMode({ backend: "codex", threadId: "thread-1", executionMode: "auto" })).rejects.toThrow();
+      expect((await overlayStore.getThreadOverlayState({ backend: "codex", threadId: "thread-1" }))?.executionMode).toBe("default");
+      expect(await getLog(overlayStore, "thread-1")).toEqual([]);
+      expect(codexClient.lastSetThreadPermissionsParams).toBeUndefined();
+      await registry.close();
+    });
+
+    it("serializes opposite live selections so the last selection wins", async () => {
+      const { codexClient, overlayStore, registry } = buildIdleRegistry();
+      await startActiveTurn(registry, "thread-1");
+      let finish!: () => void;
+      const gate = new Promise<void>((resolve) => { finish = resolve; });
+      codexClient.setTurnApprovalReviewer.mockImplementationOnce(async () => {
+        await gate;
+        return { status: "applied" };
+      });
+      const auto = registry.setThreadExecutionMode({ backend: "codex", threadId: "thread-1", executionMode: "auto" });
+      await vi.waitFor(() => expect(codexClient.setTurnApprovalReviewer).toHaveBeenCalledOnce());
+      const human = registry.setThreadExecutionMode({ backend: "codex", threadId: "thread-1", executionMode: "default" });
+      expect(codexClient.setTurnApprovalReviewer).toHaveBeenCalledOnce();
+      finish();
+      await Promise.all([auto, human]);
+      expect(codexClient.setTurnApprovalReviewer.mock.calls.map(([request]) => request.approvalsReviewer)).toEqual(["auto_review", "user"]);
+      expect((await overlayStore.getThreadOverlayState({ backend: "codex", threadId: "thread-1" }))?.executionMode).toBe("default");
+      await registry.close();
+    });
+
+    it("queues Full Access to Auto until the sandbox can change", async () => {
+      const { codexClient, overlayStore, registry } = buildIdleRegistry({ executionMode: "full-access" });
+      const turnId = await startActiveTurn(registry, "thread-1");
+      await registry.setThreadExecutionMode({ backend: "codex", threadId: "thread-1", executionMode: "auto" });
+      expect(codexClient.setTurnApprovalReviewer).not.toHaveBeenCalled();
+      expect((await overlayStore.getThreadOverlayState({ backend: "codex", threadId: "thread-1" }))?.executionMode).toBe("full-access");
+      expect(registry.getQueuedExecutionModeForThread({ backend: "codex", threadId: "thread-1" })?.mode).toBe("auto");
+      await codexClient.emit({ method: "turn/completed", params: {
+        threadId: "thread-1", turnId, turn: { id: turnId, status: "completed", output: [] },
+      } });
+      await vi.waitFor(async () => {
+        expect((await overlayStore.getThreadOverlayState({ backend: "codex", threadId: "thread-1" }))?.executionMode).toBe("auto");
+      });
+      expect(codexClient.lastSetThreadPermissionsParams).toMatchObject({
+        approvalPolicy: "on-request", sandbox: "workspace-write", approvalsReviewer: "auto_review",
+      });
+      await registry.close();
+    });
+
+    it("replaces a queued Full Access request with a live Auto switch", async () => {
+      const { codexClient, overlayStore, registry } = buildIdleRegistry();
+      await startActiveTurn(registry, "thread-1");
+      await registry.setThreadExecutionMode({ backend: "codex", threadId: "thread-1", executionMode: "full-access" });
+      await registry.setThreadExecutionMode({ backend: "codex", threadId: "thread-1", executionMode: "auto" });
+      expect(codexClient.setTurnApprovalReviewer).toHaveBeenCalledOnce();
+      expect(registry.getQueuedExecutionModeForThread({ backend: "codex", threadId: "thread-1" })).toBeUndefined();
+      expect((await getLog(overlayStore, "thread-1")).map((entry) => entry.status)).toEqual(["queued", "cancelled", "applied"]);
+      await registry.close();
+    });
+
+    it("applies Auto while idle and rejects it for ACP backends", async () => {
+      const { codexClient, registry } = buildIdleRegistry();
+      await registry.setThreadExecutionMode({ backend: "codex", threadId: "thread-1", executionMode: "auto" });
+      expect(codexClient.lastSetThreadPermissionsParams).toEqual({
+        threadId: "thread-1", approvalPolicy: "on-request", sandbox: "workspace-write", approvalsReviewer: "auto_review",
+      });
+      await expect(registry.setThreadExecutionMode({ backend: "acp:gemini", threadId: "thread-1", executionMode: "auto" })).rejects.toThrow("only by Codex");
+      await registry.close();
+    });
+
     it("toggle while idle applies immediately and logs a single applied entry", async () => {
       const { codexClient, overlayStore, registry } = buildIdleRegistry();
 
@@ -51275,6 +51389,7 @@ script = "printf setup"
       expect(codexClient.lastSetThreadPermissionsParams).toEqual({
         threadId: "thread-1",
         approvalPolicy: "never",
+        approvalsReviewer: "user",
         sandbox: "danger-full-access",
       });
 
@@ -51501,6 +51616,7 @@ script = "printf setup"
       expect(codexClient.lastSetThreadPermissionsParams).toEqual({
         threadId: "thread-1",
         approvalPolicy: "never",
+        approvalsReviewer: "user",
         sandbox: "danger-full-access",
       });
 
@@ -51571,6 +51687,7 @@ script = "printf setup"
       expect(codexClient.lastSetThreadPermissionsParams).toEqual({
         threadId: "thread-1",
         approvalPolicy: "never",
+        approvalsReviewer: "user",
         sandbox: "danger-full-access",
       });
 
@@ -51630,6 +51747,7 @@ script = "printf setup"
       expect(codexClient.lastSetThreadPermissionsParams).toEqual({
         threadId: "thread-1",
         approvalPolicy: "never",
+        approvalsReviewer: "user",
         sandbox: "danger-full-access",
       });
       expect(codexClient.lastStartReviewParams).toEqual({
