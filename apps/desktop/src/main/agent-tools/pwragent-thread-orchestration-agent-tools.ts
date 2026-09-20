@@ -463,7 +463,7 @@ function inputSchemaForOperation(
                   "custom",
                 ],
               },
-              url: { type: "string", description: "Attached pull request URL; base and head commits are pinned at submission." },
+              url: { type: "string", description: "Attached pull request URL. Base and head commits are pinned at submission." },
               branch: { type: "string" },
               sha: { type: "string" },
               title: {
