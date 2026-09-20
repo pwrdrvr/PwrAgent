@@ -41,6 +41,7 @@ import type {
 } from "./ComposerInputTypes";
 import {
   adjustSkillTokenIndexesForTextChange,
+  applySkillOriginVisibility,
   createComposerDirectoryToken,
   createComposerPullRequestToken,
   createComposerSkillToken,
@@ -58,6 +59,7 @@ import {
   type ComposerSlashCommand,
 } from "./composer-slash-commands";
 import { HighlightedAutocompleteLabel } from "./HighlightedAutocompleteLabel";
+import { SkillOriginChip, useSkillOriginCard } from "./SkillOriginChip";
 
 /**
  * The populations a compact composer's mention popovers pick from.
@@ -127,7 +129,19 @@ export type ComposerMentions = {
   inputRef: RefObject<ComposerInputHandle | null>;
   /** `aria-controls` for the editor while a popover is open. */
   listboxId?: string;
+  /** Hover for the draft's `$skill` chips; pass both to the editor. */
+  onSkillChipPointerEnter: (
+    skill: AppServerSkillSummary,
+    anchor: HTMLElement,
+  ) => void;
+  onSkillChipPointerLeave: () => void;
   open: boolean;
+  /**
+   * The origin card behind both the popover's chips and the draft's. Render
+   * it whether or not a popover is open: it portals to the body, and a draft
+   * chip's card has no popover to live in.
+   */
+  originCard: ReactNode;
   popover: ReactNode;
   /** Put a failed send's draft back, unless the operator has typed since. */
   restore: (snapshot: ComposerMentionDraft) => void;
@@ -185,6 +199,13 @@ export function useComposerMentions(params: {
   const { sources } = params;
   const inputRef = useRef<ComposerInputHandle | null>(null);
   const listboxId = useId();
+  const currentFederation = sources?.currentThread?.federation;
+  const skillOriginCard = useSkillOriginCard({
+    remoteInstanceLabel: currentFederation?.ref.target.scope === "remote"
+      ? currentFederation.instanceLabel
+      : undefined,
+    skills: sources?.skills,
+  });
   // One state, not two: an insert has to move the draft and its tokens in
   // the same commit, and a bounced send has to put both back or neither.
   const [content, setContent] = useState<ComposerMentionDraft>(() => ({
@@ -569,7 +590,7 @@ export function useComposerMentions(params: {
     if (kind === "skills" && skillTrigger) {
       const skill = skillOptions[index] ?? skillOptions[0];
       if (skill) {
-        insertToken(skillTrigger, (at) => createComposerSkillToken(skill, at));
+        insertToken(skillTrigger, (at) => createComposerSkillToken(skill, at, skills));
       }
       return;
     }
@@ -652,9 +673,11 @@ export function useComposerMentions(params: {
   const optionId = (index: number): string => `${listboxId}-option-${index}`;
 
   const renderOption = (index: number, content: ReactNode, extra?: {
+    describedBy?: string;
     title?: string;
   }): ReactNode => (
     <button
+      aria-describedby={extra?.describedBy}
       aria-selected={index === activeOption}
       className={`compact-composer__mention-option${
         index === activeOption ? " is-active" : ""
@@ -693,12 +716,21 @@ export function useComposerMentions(params: {
               label={`$${skill.name}`}
               query={query ? `$${query}` : "$"}
             />
+            {skill.origin ? (
+              <SkillOriginChip
+                origin={skill.origin}
+                {...skillOriginCard.chipHandlers(skill)}
+              />
+            ) : null}
           </span>
           <span className="compact-composer__mention-meta">
             {skill.shortDescription || skill.description || skill.path}
           </span>
         </>,
-        { title: buildSkillTooltip(skill) || undefined },
+        {
+          describedBy: skillOriginCard.describedBy(skill),
+          title: buildSkillTooltip(skill) || undefined,
+        },
       ),
     );
   } else if (kind === "commands") {
@@ -825,7 +857,10 @@ export function useComposerMentions(params: {
     handleKeyDown,
     inputRef,
     listboxId: open ? listboxId : undefined,
+    onSkillChipPointerEnter: skillOriginCard.hoverAnchor,
+    onSkillChipPointerLeave: skillOriginCard.leaveAnchor,
     open,
+    originCard: skillOriginCard.cardNode,
     popover,
     restore: (previous) => {
       // Only if the operator has not started something new in the meantime;
@@ -836,7 +871,9 @@ export function useComposerMentions(params: {
           : previous,
       );
     },
-    skillTokens,
+    // Chips minted before the catalog loaded learn whether their name is
+    // shared as soon as it does; the draft's own state is untouched.
+    skillTokens: applySkillOriginVisibility(skillTokens, skills),
     snapshot: content,
     text: serializeDraftWithSkillTokens(draft, skillTokens),
   };

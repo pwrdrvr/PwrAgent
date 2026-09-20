@@ -1,6 +1,11 @@
-import type {
-  AppServerListSkillsResponse,
-  AppServerSkillSummary,
+import {
+  compareSkillOrigins,
+  findSharedSkillNames,
+  isSharedSkillName,
+  withSkillOrigins,
+  type AppServerListSkillsResponse,
+  type AppServerSkillSummary,
+  type SkillOriginDirectory,
 } from "@pwragent/shared";
 import type {
   MessagingBindingRecord,
@@ -24,15 +29,29 @@ export type MessagingSkillBrowserEntry = AppServerSkillSummary & {
   cwd?: string;
 };
 
+/**
+ * One entry per skill file, labelled with where it came from.
+ *
+ * Deduped by path, as the desktop picker is. Codex repeats every personal
+ * and built-in skill under each cwd, and those collapse here. Two linked
+ * projects that each ship `release` stay two skills: keying on the name kept
+ * whichever cwd Codex listed first and silently hid the others.
+ *
+ * Sorted by origin, and stable within one, so Codex's own name order
+ * survives: the primary project's skills, then each linked project's, then
+ * personal, plugin, and built-in ones. Without the sort, the second
+ * project's skills would trail the first cwd's built-ins.
+ */
 export function flattenSkillEntries(
   data: AppServerListSkillsResponse["data"],
+  directories: readonly SkillOriginDirectory[] = [],
 ): MessagingSkillBrowserEntry[] {
   const deduped = new Map<string, MessagingSkillBrowserEntry>();
   for (const entry of data) {
     for (const skill of entry.skills) {
       const name = skill.name.trim();
       if (!name) continue;
-      const key = name.toLowerCase();
+      const key = skill.path?.trim() || `${entry.cwd ?? ""}:${name.toLowerCase()}`;
       if (deduped.has(key)) continue;
       deduped.set(key, {
         ...skill,
@@ -41,7 +60,13 @@ export function flattenSkillEntries(
       });
     }
   }
-  return [...deduped.values()];
+  return withSkillOrigins([...deduped.values()], directories)
+    .map((entry, index) => ({ entry, index }))
+    .sort((left, right) =>
+      compareSkillOrigins(left.entry.origin, right.entry.origin)
+      || left.index - right.index
+    )
+    .map(({ entry }) => entry);
 }
 
 export function filterSkillEntries(
@@ -84,6 +109,11 @@ export function buildSkillsBrowserIntent(params: {
   targetSurface?: MessagingSurfaceRef;
 }): MessagingSingleSelectIntent {
   const filtered = filterSkillEntries(params.entries, params.query);
+  // Only rows whose name another skill answers to carry their origin: a chat
+  // button has little room, and a unique name needs no qualifier. Counted
+  // over the whole list, not the page, so a row does not change its label
+  // when its twin pages out of view.
+  const sharedNames = findSharedSkillNames(params.entries);
   const navActionCount = filtered.length > SKILLS_BROWSER_PAGE_SIZE ? 5 : 3;
   const pageSize = params.capabilityProfile
     ? capabilityProfilePageSize(
@@ -103,7 +133,7 @@ export function buildSkillsBrowserIntent(params: {
         const skillNumber = pageStart + index + 1;
         return {
           id: "skills:select",
-          label: `${skillNumber}. $${entry.name}`,
+          label: `${skillNumber}. ${skillEntryTitle(entry, sharedNames)}`,
           description: skillDescription(entry),
           fallbackText: String(skillNumber),
           style: "secondary" as const,
@@ -177,6 +207,7 @@ export function buildSkillsBrowserIntent(params: {
       pageIndex,
       pageStart,
       query: params.query,
+      sharedNames,
       totalPages,
     }),
     prompt: skillsBrowserPrompt({
@@ -419,6 +450,7 @@ function skillsBrowserFallbackText(params: {
   pageIndex: number;
   pageStart: number;
   query?: string;
+  sharedNames: ReadonlySet<string>;
   totalPages: number;
 }): string {
   const lines = [
@@ -426,11 +458,22 @@ function skillsBrowserFallbackText(params: {
     ...params.pageEntries.map((entry, index) => {
       const number = params.pageStart + index + 1;
       const description = skillDescription(entry);
-      return `${number}. $${entry.name}${description ? ` - ${description}` : ""}`;
+      const title = skillEntryTitle(entry, params.sharedNames);
+      return `${number}. ${title}${description ? ` - ${description}` : ""}`;
     }),
     params.filteredCount === 0 ? "Reply Back, Search, or Cancel." : "Reply with a number, Search, Back, Next, Prev, or Cancel.",
   ];
   return lines.filter((line): line is string => Boolean(line)).join("\n");
+}
+
+function skillEntryTitle(
+  entry: MessagingSkillBrowserEntry,
+  sharedNames: ReadonlySet<string>,
+): string {
+  const origin = isSharedSkillName(sharedNames, entry.name)
+    ? entry.origin?.label
+    : undefined;
+  return origin ? `$${entry.name} · ${origin}` : `$${entry.name}`;
 }
 
 function skillDescription(entry: MessagingSkillBrowserEntry): string | undefined {
@@ -449,6 +492,7 @@ function scoreSkillEntry(
     entry.shortDescription,
     entry.path,
     entry.cwd,
+    entry.origin?.label,
   ]
     .filter(Boolean)
     .join("\n")

@@ -154,6 +154,7 @@ import {
 } from "./ComposerInputTypes";
 import {
   adjustSkillTokenIndexesForTextChange,
+  applySkillOriginVisibility,
   createComposerDirectoryToken,
   createComposerFileToken,
   createComposerPullRequestToken,
@@ -184,6 +185,7 @@ import {
   useDismissableMenu,
 } from "./ComposerDropdown";
 import { ReferencePicker, type ReferencePickerFile } from "./ReferencePicker";
+import { SkillOriginChip, useSkillOriginCard } from "./SkillOriginChip";
 import { REMOTE_NATIVE_PICKER_TOOLTIP } from "./native-picker-boundary";
 import { TranscriptCopyButton } from "../thread-detail/TranscriptCopyButton";
 import {
@@ -4486,6 +4488,19 @@ export const Composer = memo(function Composer(props: ComposerProps) {
 
     return filterSkillAutocompleteCandidates(props.skills, trigger.query);
   }, [props.skills, trigger]);
+  // Chips minted before the catalog loaded learn whether their name is
+  // shared as soon as it does.
+  const displaySkillTokens = useMemo(
+    () => applySkillOriginVisibility(skillTokens, props.skills),
+    [props.skills, skillTokens],
+  );
+  const skillOriginCard = useSkillOriginCard({
+    desktopApi: props.desktopApi,
+    remoteInstanceLabel: filesystemFederationTarget?.scope === "remote"
+      ? props.thread?.federation?.instanceLabel ?? "the peer instance"
+      : undefined,
+    skills: props.skills,
+  });
   const slashCommandSuggestions = useMemo(() => {
     const commands =
       props.providerCommands?.map((command) =>
@@ -7918,7 +7933,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         nextDraft,
         skillTokens,
       }),
-      createComposerSkillToken(skill, tokenIndex),
+      createComposerSkillToken(skill, tokenIndex, props.skills),
     ];
 
     pendingProgrammaticComposerChangeRef.current = {
@@ -11306,7 +11321,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
             }}
             selectionRequest={composerSelectionRequest}
             editorDocument={editorDocument}
-            skillTokens={skillTokens}
+            skillTokens={displaySkillTokens}
             value={draft}
             onChange={handleComposerChange}
             onPaste={handlePaste}
@@ -11314,8 +11329,14 @@ export const Composer = memo(function Composer(props: ComposerProps) {
             onDrop={handleDrop}
             onClick={handleComposerClick}
             onKeyDown={handleTiptapComposerKeyDown}
+            onSkillChipPointerEnter={skillOriginCard.hoverAnchor}
+            onSkillChipPointerLeave={skillOriginCard.leaveAnchor}
           />
         )}
+        {/* One card for the picker's origin chips and the draft's `$skill`
+          chips. It portals to the body, so where it sits here only decides
+          that it outlives the picker. */}
+        {skillOriginCard.cardNode}
 
         {/* The draft is deliberately still on screen and still selectable, so
           the only thing distinguishing it from a live input is this line and
@@ -11344,6 +11365,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                 ref={(node) => {
                   autocompleteOptionRefs.current[index] = node;
                 }}
+                aria-describedby={skillOriginCard.describedBy(skill)}
                 aria-selected={index === activeSkillIndex}
                 className={`composer__autocomplete-option${index === activeSkillIndex ? " is-active" : ""}`}
                 role="option"
@@ -11366,6 +11388,12 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                     label={`$${skill.name}`}
                     query={trigger?.query ? `$${trigger.query}` : "$"}
                   />
+                  {skill.origin ? (
+                    <SkillOriginChip
+                      origin={skill.origin}
+                      {...skillOriginCard.chipHandlers(skill)}
+                    />
+                  ) : null}
                 </span>
                 <span className="composer__autocomplete-meta">
                   {skill.shortDescription || skill.description || skill.path}

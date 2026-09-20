@@ -18,6 +18,8 @@ import { closeHistory } from "prosemirror-history";
 import { EditorContent, useEditor, type JSONContent } from "@tiptap/react";
 import {
   parseThreadUrl,
+  readSkillOrigin,
+  type AppServerSkillOrigin,
   type AppServerSkillSummary,
   type ThreadLinkRef,
 } from "@pwragent/shared";
@@ -68,6 +70,15 @@ type ComposerTiptapInputProps = {
   onDrop?: (event: DragEvent<HTMLDivElement>) => void;
   onKeyDown?: (event: KeyboardEvent<HTMLDivElement>) => void;
   onPaste?: (event: ClipboardEvent<HTMLDivElement>) => void;
+  /**
+   * The pointer entered a `$skill` chip. The chip is Tiptap DOM, not React,
+   * so the host's hover card is anchored to the element handed over here.
+   */
+  onSkillChipPointerEnter?: (
+    skill: AppServerSkillSummary,
+    anchor: HTMLElement,
+  ) => void;
+  onSkillChipPointerLeave?: () => void;
   placeholder: string;
   resolveThreadLink?: (link: ThreadLinkRef) => ThreadChipMenuLink | undefined;
   selectionRequest?: {
@@ -140,6 +151,19 @@ const SkillMention = Mention.extend({
       kind: {
         default: null,
         parseHTML: (element) => element.getAttribute("data-mention-kind"),
+      },
+      // Skill chips only: where the skill lives, and whether the chip names
+      // it. Both round-trip through the chip's `data-skill-origin*`
+      // attributes, so a pasted chip still says which `$release` it is.
+      origin: {
+        default: null,
+        parseHTML: (element) =>
+          parseSkillOriginAttribute(element.getAttribute("data-skill-origin")),
+      },
+      showOrigin: {
+        default: null,
+        parseHTML: (element) =>
+          element.hasAttribute("data-skill-origin-shown") ? true : null,
       },
       // Pull-request chips only. The dot color is a fact about the PR, and
       // Tiptap's DOM specs cannot mount `PrChip` to look it up, so the
@@ -278,6 +302,7 @@ const SkillMention = Mention.extend({
     }
     const skill = getSkillSummary(node.attrs);
     const tooltip = buildSkillTooltip(skill);
+    const shownOrigin = node.attrs.showOrigin === true ? skill.origin : undefined;
     return [
       "span",
       {
@@ -294,9 +319,18 @@ const SkillMention = Mention.extend({
         ...(skill.shortDescription
           ? { "data-skill-short-description": skill.shortDescription }
           : {}),
+        ...(skill.origin
+          ? { "data-skill-origin": JSON.stringify(skill.origin) }
+          : {}),
+        ...(shownOrigin ? { "data-skill-origin-shown": "" } : {}),
         ...(tooltip ? { "data-tooltip": tooltip } : {}),
       },
       `$${skill.name}`,
+      // After the name, and outside the draft text: `renderText`
+      // still reads `$name`, so nothing here reaches the outgoing message.
+      ...(shownOrigin
+        ? [["span", { class: "skill-chip__origin" }, shownOrigin.label]]
+        : []),
     ];
   },
   renderText: ({ node }) => {
@@ -1160,6 +1194,7 @@ function mentionAttrsToSkill(
         : undefined,
     ...(kind ? { kind } : {}),
     ...(prChipModifiers ? { prChipModifiers } : {}),
+    ...readMentionSkillOrigin(attrs),
   };
 }
 
@@ -2178,6 +2213,7 @@ function getPositionAtDraftIndex(
 
 function getSkillSummary(attrs: Record<string, unknown>): AppServerSkillSummary {
   const name = typeof attrs.name === "string" ? attrs.name : String(attrs.id ?? "skill");
+  const origin = readSkillOrigin(attrs.origin);
   return {
     name,
     path: typeof attrs.path === "string" ? attrs.path : undefined,
@@ -2187,6 +2223,7 @@ function getSkillSummary(attrs: Record<string, unknown>): AppServerSkillSummary 
       typeof attrs.shortDescription === "string"
         ? attrs.shortDescription
         : undefined,
+    ...(origin ? { origin } : {}),
   };
 }
 
@@ -2199,7 +2236,40 @@ function getSkillMentionAttrs(skill: ComposerSkillToken): Record<string, unknown
     shortDescription: skill.shortDescription ?? null,
     kind: skill.kind ?? null,
     prChipModifiers: skill.prChipModifiers ?? null,
+    origin: skill.kind ? null : skill.origin ?? null,
+    showOrigin: !skill.kind && skill.showOrigin && skill.origin ? true : null,
   };
+}
+
+/**
+ * A skill chip's stored origin, and whether the chip names it. Only a skill
+ * chip carries either; they come back as the token fields they were minted
+ * from, which `getContentSignature` compares.
+ */
+function readMentionSkillOrigin(
+  attrs: Record<string, unknown>,
+): Pick<ComposerSkillToken, "origin" | "showOrigin"> {
+  if (attrs.kind) {
+    return {};
+  }
+  const origin = readSkillOrigin(attrs.origin);
+  if (!origin) {
+    return {};
+  }
+  return attrs.showOrigin === true ? { origin, showOrigin: true } : { origin };
+}
+
+function parseSkillOriginAttribute(
+  value: string | null,
+): AppServerSkillOrigin | null {
+  if (!value) {
+    return null;
+  }
+  try {
+    return readSkillOrigin(JSON.parse(value)) ?? null;
+  } catch {
+    return null;
+  }
 }
 
 /** The stored `pr-chip--*` modifiers on a mention node, when it has any. */
@@ -2232,6 +2302,10 @@ function getContentSignature(params: {
       // is a content change — without it the rebuilt document compares equal
       // to the rendered one and the dot keeps the status it was minted with.
       prChipModifiers: token.prChipModifiers,
+      // The same for a skill chip that starts naming its origin once the
+      // catalog arrives and shows a second skill of the same name.
+      shownOrigin:
+        !token.kind && token.showOrigin ? token.origin?.label : undefined,
     })),
   });
 }
@@ -3046,6 +3120,52 @@ export const ComposerTiptapInput = forwardRef<
     );
   }, [editor, props.selectionRequest, readMode]);
 
+  // `$skill` chips are Tiptap DOM, so their hover is delegated from the editor
+  // root instead of wired per chip. `pointerover` and `pointerout` bubble; a
+  // move between one chip's own children is neither an enter nor a leave.
+  useEffect(() => {
+    if (!editor) {
+      return;
+    }
+    const root = editor.view.dom;
+    const skillChipAt = (target: EventTarget | null): HTMLElement | null =>
+      target instanceof Element
+        ? target.closest<HTMLElement>(".skill-chip.composer-tiptap-input__mention")
+        : null;
+    const onPointerOver = (event: PointerEvent): void => {
+      const chip = skillChipAt(event.target);
+      const name = chip?.getAttribute("data-skill-name");
+      if (!chip || !name || chip === skillChipAt(event.relatedTarget)) {
+        return;
+      }
+      const path = chip.getAttribute("data-skill-path");
+      const origin = parseSkillOriginAttribute(
+        chip.getAttribute("data-skill-origin"),
+      );
+      propsRef.current.onSkillChipPointerEnter?.(
+        {
+          name,
+          ...(path ? { path } : {}),
+          ...(origin ? { origin } : {}),
+        },
+        chip,
+      );
+    };
+    const onPointerOut = (event: PointerEvent): void => {
+      const chip = skillChipAt(event.target);
+      if (!chip || chip === skillChipAt(event.relatedTarget)) {
+        return;
+      }
+      propsRef.current.onSkillChipPointerLeave?.();
+    };
+    root.addEventListener("pointerover", onPointerOver);
+    root.addEventListener("pointerout", onPointerOut);
+    return () => {
+      root.removeEventListener("pointerover", onPointerOver);
+      root.removeEventListener("pointerout", onPointerOut);
+    };
+  }, [editor]);
+
   useEffect(() => {
     if (!editor) {
       return;
@@ -3084,9 +3204,11 @@ export const ComposerTiptapInput = forwardRef<
           }
           return;
         }
+        // `data-skill-name`, not the text: a chip that names its origin
+        // carries the origin label after the name.
         const tooltip = buildSkillTooltip(
           getSkillSummary({
-            name: node.textContent?.replace(/^\$/, ""),
+            name: attrs["data-skill-name"] || node.textContent?.replace(/^\$/, ""),
             path: attrs["data-skill-path"],
           }),
         );

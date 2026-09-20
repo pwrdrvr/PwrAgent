@@ -666,6 +666,88 @@ describe("ThreadMarkdown", () => {
     expect(screen.queryByRole("link", { name: "$frontend-design" })).not.toBeInTheDocument();
   });
 
+  it("names the project on a sent chip when two skills share the name", () => {
+    const releasePath = (project: string) =>
+      `/Users/fixture-user/pwrdrvr/${project}/.agents/skills/release/SKILL.md`;
+    render(
+      <ThreadMarkdown
+        desktopApi={{
+          // Only present so the chip becomes the button that carries the
+          // accessible name; this test never opens the viewer.
+          readMarkdownFile: vi.fn(async (request: { path: string }) => ({
+            path: request.path,
+            content: "",
+          })),
+        }}
+        skills={[
+          {
+            name: "release",
+            description: "Release PwrSnap",
+            path: releasePath("PwrSnap"),
+            origin: { kind: "project", label: "PwrSnap", directoryIndex: 0 },
+          },
+          {
+            name: "release",
+            description: "Release PwrAgent",
+            path: releasePath("PwrAgnt"),
+            origin: { kind: "project", label: "PwrAgnt", directoryIndex: 1 },
+          },
+          {
+            name: "slidev",
+            description: "Build a deck",
+            path: "/Users/fixture-user/.agents/skills/slidev/SKILL.md",
+            origin: { kind: "personal", label: "Personal" },
+          },
+        ]}
+        text={[
+          `Ran [$release](${releasePath("PwrAgnt")})`,
+          "and [$slidev](/Users/fixture-user/.agents/skills/slidev/SKILL.md)",
+        ].join(" ")}
+      />
+    );
+
+    const release = screen.getByText("$release").closest("[data-skill-chip]");
+    expect(release).toHaveTextContent("PwrAgnt");
+    // An `aria-label` replaces the contents it labels, so the project has to
+    // be in it too - otherwise both chips announce as "View skill release".
+    expect(release).toHaveAttribute(
+      "aria-label",
+      "View skill release from PwrAgnt",
+    );
+    // Nothing else answers to `$slidev`, so its chip stays bare.
+    const slidev = screen.getByText("$slidev").closest("[data-skill-chip]");
+    expect(slidev).not.toHaveTextContent("Personal");
+    expect(slidev).toHaveAttribute("aria-label", "View skill slidev");
+  });
+
+  it("leaves a bare `$name` code span alone when several skills share the name", () => {
+    const releasePath = (project: string) =>
+      `/Users/fixture-user/pwrdrvr/${project}/.agents/skills/release/SKILL.md`;
+    render(
+      <ThreadMarkdown
+        skills={[
+          {
+            name: "release",
+            description: "Release PwrSnap",
+            path: releasePath("PwrSnap"),
+            origin: { kind: "project", label: "PwrSnap", directoryIndex: 0 },
+          },
+          {
+            name: "release",
+            description: "Release PwrAgent",
+            path: releasePath("PwrAgnt"),
+            origin: { kind: "project", label: "PwrAgnt", directoryIndex: 1 },
+          },
+        ]}
+        text={"I will run `$release` next."}
+      />
+    );
+
+    // The text names no file. A chip here would offer to open one of the two
+    // at random, and half the time it would be the wrong project's.
+    expect(screen.getByText("$release").closest("[data-skill-chip]")).toBeNull();
+  });
+
   it("hydrates inline-code skill tokens from the live skill inventory", () => {
     const inspectSkillPath = [
       "/Users/fixture-user/github/PwrSuiteLab/.agents/skills",

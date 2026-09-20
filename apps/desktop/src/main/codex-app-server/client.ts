@@ -5370,13 +5370,23 @@ function extractSkillSummary(value: unknown): AppServerSkillSummary | undefined 
     return undefined;
   }
 
+  // Codex reads SKILL.json's `interface.short_description` and marks the
+  // top-level `shortDescription` (from SKILL.md) legacy. Prefer the interface
+  // one: it is the one-line summary the skill's author wrote for a picker.
+  const skillInterface = asRecord(record.interface);
+  const pluginId = pickString(record, ["pluginId", "plugin_id"]);
   return {
     name,
     description: pickString(record, ["description", "summary"]),
-    shortDescription: pickString(record, ["shortDescription", "short_description"]),
+    shortDescription:
+      (skillInterface
+        ? pickString(skillInterface, ["shortDescription", "short_description"])
+        : undefined)
+      ?? pickString(record, ["shortDescription", "short_description"]),
     path: pickString(record, ["path", "skillPath", "skill_path"]),
     enabled: pickBoolean(record, ["enabled"]),
-    scope: pickString(record, ["scope"])
+    scope: pickString(record, ["scope"]),
+    ...(pluginId ? { pluginId } : {}),
   };
 }
 

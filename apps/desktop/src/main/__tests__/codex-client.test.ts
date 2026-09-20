@@ -1254,6 +1254,21 @@ class MockTransport implements JsonRpcTransport {
                     scope: "user",
                     enabled: true,
                   },
+                  {
+                    name: "documents:documents",
+                    description: "Create, edit, and review Word documents and Google Docs in depth.",
+                    shortDescription: "Legacy SKILL.md summary.",
+                    interface: {
+                      displayName: "Documents",
+                      shortDescription: "Create and edit Word and Google Docs files",
+                      iconSmallUrl: null,
+                      iconLargeUrl: null,
+                    },
+                    path: "/Users/fixture-user/.codex/plugins/cache/openai-primary-runtime/documents/26.904.11930/skills/documents/SKILL.md",
+                    scope: "user",
+                    enabled: true,
+                    pluginId: "documents@openai-primary-runtime",
+                  },
                 ],
                 commands: [
                   {
@@ -8521,6 +8536,17 @@ describe("CodexAppServerClient", () => {
             path: "/Users/fixture-user/.codex/skills/frontend-design/SKILL.md",
             scope: "user",
             enabled: true,
+          },
+          {
+            // SKILL.json's interface summary wins over the legacy SKILL.md
+            // one, and the owning plugin comes through for the origin chip.
+            name: "documents:documents",
+            description: "Create, edit, and review Word documents and Google Docs in depth.",
+            shortDescription: "Create and edit Word and Google Docs files",
+            path: "/Users/fixture-user/.codex/plugins/cache/openai-primary-runtime/documents/26.904.11930/skills/documents/SKILL.md",
+            scope: "user",
+            enabled: true,
+            pluginId: "documents@openai-primary-runtime",
           },
         ],
       },

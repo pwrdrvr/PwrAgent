@@ -566,4 +566,175 @@ describe("useThreadSkills", () => {
     });
     expect(listSkills).toHaveBeenCalledTimes(1);
   });
+
+  describe("skill origins", () => {
+    const linkedDirectories: NavigationThreadSummary["linkedDirectories"] = [
+      {
+        id: "dir-snap",
+        kind: "local",
+        label: "PwrSnap",
+        path: "/Users/fixture-user/pwrdrvr/PwrSnap",
+      },
+      {
+        id: "dir-agent",
+        kind: "local",
+        label: "PwrAgnt",
+        path: "/Users/fixture-user/pwrdrvr/PwrAgnt",
+      },
+      {
+        id: "dir-git",
+        kind: "local",
+        label: "PwrGit",
+        path: "/Users/fixture-user/pwrdrvr/PwrGit",
+      },
+    ];
+    const createThread = (
+      directories = linkedDirectories,
+    ): NavigationThreadSummary => ({
+      id: "thread-release",
+      title: "PwrSnap - Release",
+      titleSource: "explicit",
+      source: "codex",
+      executionMode: "default",
+      // Fresh objects, as a rebuilt navigation summary carries.
+      linkedDirectories: directories.map((directory) => ({ ...directory })),
+      inbox: { inInbox: false },
+    });
+    const releaseSkill = (project: string) => ({
+      name: "release",
+      description: `Release ${project}`,
+      path: `/Users/fixture-user/pwrdrvr/${project}/.agents/skills/release/SKILL.md`,
+      scope: "repo",
+      enabled: true,
+    });
+    // Codex answers per cwd, in the order it scanned, so the linked projects'
+    // skills arrive in whatever order the cwds were sent - not thread order.
+    const listSkills = vi.fn(async (): Promise<AppServerListSkillsResponse> => ({
+      backend: "codex",
+      fetchedAt: 1,
+      data: [
+        { cwd: "/Users/fixture-user/pwrdrvr/PwrGit", skills: [releaseSkill("PwrGit")] },
+        {
+          cwd: "/Users/fixture-user/pwrdrvr/PwrAgnt",
+          skills: [
+            releaseSkill("PwrAgnt"),
+            {
+              name: "slidev",
+              path: "/Users/fixture-user/.agents/skills/slidev/SKILL.md",
+              scope: "user",
+            },
+          ],
+        },
+        { cwd: "/Users/fixture-user/pwrdrvr/PwrSnap", skills: [releaseSkill("PwrSnap")] },
+      ],
+    }));
+
+    it("labels each same-named skill with its project and puts the primary first", async () => {
+      const { result } = renderHook(() =>
+        useThreadSkills({ desktopApi: { listSkills }, thread: createThread() })
+      );
+
+      await act(async () => {
+        await result.current.ensureLoaded();
+      });
+
+      await waitFor(() => {
+        expect(
+          result.current.skills.map((skill) => [skill.name, skill.origin?.label]),
+        ).toEqual([
+          ["release", "PwrSnap"],
+          ["release", "PwrAgnt"],
+          ["release", "PwrGit"],
+          ["slidev", "Personal"],
+        ]);
+      });
+      expect(result.current.skills[0]?.origin).toEqual({
+        kind: "project",
+        label: "PwrSnap",
+        directoryIndex: 0,
+      });
+    });
+
+    it("loads the catalog itself for a multi-project thread, and not for one project", async () => {
+      // The transcript's sent chips need the catalog to know that two skills
+      // answer to `$release`, and nothing in a transcript opens the picker.
+      listSkills.mockClear();
+      const { result } = renderHook(() =>
+        useThreadSkills({ desktopApi: { listSkills }, thread: createThread() })
+      );
+      await waitFor(() => {
+        expect(result.current.skills).toHaveLength(4);
+      });
+      expect(listSkills).toHaveBeenCalledTimes(1);
+
+      listSkills.mockClear();
+      renderHook(() =>
+        useThreadSkills({
+          desktopApi: { listSkills },
+          thread: createThread([linkedDirectories[0]!]),
+        })
+      );
+      // One project cannot hold two `$release`s, so it waits for the picker.
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(listSkills).not.toHaveBeenCalled();
+    });
+
+    it("does not re-ask for a whole turn when the first request failed", async () => {
+      // `loadTarget`'s own guard lets an error through, and its identity
+      // changes with the thread summary - which a streamed item replaces.
+      // Without a per-thread record, a failed catalog load would re-request
+      // on every delta of the turn.
+      const failing = vi.fn(async () => {
+        throw new Error("app server is restarting");
+      });
+      const { rerender } = renderHook(
+        ({ thread }) => useThreadSkills({ desktopApi: { listSkills: failing }, thread }),
+        { initialProps: { thread: createThread() } },
+      );
+      await waitFor(() => {
+        expect(failing).toHaveBeenCalledTimes(1);
+      });
+
+      for (let updatedAt = 2; updatedAt <= 6; updatedAt += 1) {
+        rerender({ thread: { ...createThread(), updatedAt } });
+      }
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(failing).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps the skill list's identity while the thread streams", async () => {
+      const { result, rerender } = renderHook(
+        ({ thread }) => useThreadSkills({ desktopApi: { listSkills }, thread }),
+        { initialProps: { thread: createThread() } },
+      );
+
+      await act(async () => {
+        await result.current.ensureLoaded();
+      });
+      await waitFor(() => {
+        expect(result.current.skills).toHaveLength(4);
+      });
+      const before = result.current.skills;
+
+      // A streamed item replaces the summary; the directories are unchanged.
+      rerender({ thread: { ...createThread(), updatedAt: 2 } });
+      expect(result.current.skills).toBe(before);
+
+      // Reordering the linked projects is a real change.
+      rerender({
+        thread: createThread([linkedDirectories[2]!, linkedDirectories[0]!, linkedDirectories[1]!]),
+      });
+      expect(result.current.skills).not.toBe(before);
+      expect(
+        result.current.skills
+          .filter((skill) => skill.name === "release")
+          .map((skill) => skill.origin?.label),
+      ).toEqual(["PwrGit", "PwrSnap", "PwrAgnt"]);
+    });
+  });
 });

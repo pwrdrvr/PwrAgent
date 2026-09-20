@@ -1,4 +1,8 @@
-import type { AppServerSkillSummary } from "@pwragent/shared";
+import {
+  findSharedSkillNames,
+  isSharedSkillName,
+  type AppServerSkillSummary,
+} from "@pwragent/shared";
 import { decodeMarkdownDestination } from "../../lib/directory-references";
 import { expandTildePath } from "../../lib/tildify-path";
 import { parseSkillMentionParts } from "../../lib/skill-mentions";
@@ -18,6 +22,7 @@ export function hydrateComposerDraft(
 } {
   let draft = "";
   const skillTokens: ComposerSkillToken[] = [];
+  const sharedSkillNames = findSharedSkillNames(skills);
 
   const hydrateSkillAndDirectoryParts = (text: string): void => {
     for (const part of parseSkillMentionParts(text)) {
@@ -46,9 +51,15 @@ export function hydrateComposerDraft(
         continue;
       }
 
+      // The path is the link's identity. A name alone may only stand in for
+      // it when exactly one skill has that name: with a `$release` in each
+      // linked project, the first one found is a different project's
+      // release, and the restored chip would silently run it.
       const matchingSkill =
-        skills.find((skill) => skill.path === part.path) ??
-        skills.find((skill) => skill.name === part.name);
+        skills.find((skill) => skill.path === part.path)
+        ?? (isSharedSkillName(sharedSkillNames, part.name)
+          ? undefined
+          : skills.find((skill) => skill.name === part.name));
       skillTokens.push(
         createComposerSkillToken(
           matchingSkill ?? {
@@ -56,6 +67,7 @@ export function hydrateComposerDraft(
             path: part.path,
           },
           draft.length,
+          skills,
         ),
       );
     }

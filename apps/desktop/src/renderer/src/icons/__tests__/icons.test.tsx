@@ -17,13 +17,17 @@ import {
   MattermostIcon,
   MoreVerticalIcon,
   NewThreadIcon,
+  PackageIcon,
   PinIcon,
+  PlugIcon,
   PopoutIcon,
   SettingsIcon,
+  ShieldIcon,
   SkillIcon,
   SmileyIcon,
   TelegramIcon,
   UnlinkedDotIcon,
+  UserIcon,
   WorktreeIcon,
 } from "../index";
 
@@ -53,6 +57,10 @@ const ALL_ICONS = [
   ["HistoryIcon", HistoryIcon],
   ["CalendarPlusIcon", CalendarPlusIcon],
   ["DraftIcon", DraftIcon],
+  ["UserIcon", UserIcon],
+  ["PlugIcon", PlugIcon],
+  ["PackageIcon", PackageIcon],
+  ["ShieldIcon", ShieldIcon],
 ] as const;
 
 describe("icon library", () => {

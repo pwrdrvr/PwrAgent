@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type {
-  AppServerAvailableCommandSummary,
-  AppServerListSkillsResponse,
-  AppServerSkillSummary,
-  NavigationLaunchpadDraft,
-  NavigationThreadSummary,
+import {
+  compareSkillOrigins,
+  withSkillOrigins,
+  type AppServerAvailableCommandSummary,
+  type AppServerListSkillsResponse,
+  type AppServerSkillSummary,
+  type NavigationLaunchpadDraft,
+  type NavigationThreadSummary,
+  type SkillOriginDirectory,
 } from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
 import {
@@ -260,6 +263,49 @@ export function useThreadSkills(params: {
     await loadTarget();
   }, [loadTarget]);
 
+  // Keyed on the directories' content, not the thread's identity: the summary
+  // is replaced on every streamed item, and `skills` feeds memoized transcript
+  // and composer consumers that should not rebuild for a turn's progress.
+  const currentOriginDirectories = readSkillOriginDirectories(thread, launchpad);
+  const originDirectoriesKey = currentOriginDirectories
+    .map((directory) => [
+      directory.label,
+      directory.path,
+      directory.worktreePath ?? "",
+    ].join("\u0000"))
+    .join("\u001f");
+  const originDirectories = useMemo(
+    (): SkillOriginDirectory[] => currentOriginDirectories,
+    // The key is the dependency: the array is rebuilt every render and only
+    // its content decides whether consumers see a new one.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [originDirectoriesKey],
+  );
+
+  // A thread with more than one linked project can hold two skills of the
+  // same name, and the transcript's sent chips say which project each
+  // `$release` ran from. That answer is in the catalog, so it cannot wait
+  // for the operator to open the `$` picker. Single-project threads — which
+  // have nothing to disambiguate — still pay nothing.
+  //
+  // Asked once per thread, tracked here rather than left to `loadTarget`'s
+  // guard: that guard lets an error state through, and `loadTarget`'s
+  // identity changes with the thread summary, which is replaced on every
+  // streamed item. Without this ref a thread whose first `listSkills` failed
+  // would re-request on every delta of the turn.
+  const autoLoadedKeysRef = useRef<Set<string>>(new Set());
+  const autoLoadKey = originDirectories.length > 1 ? skillTarget?.key : undefined;
+  useEffect(() => {
+    if (!autoLoadKey || autoLoadedKeysRef.current.has(autoLoadKey)) {
+      return;
+    }
+    autoLoadedKeysRef.current.add(autoLoadKey);
+    void loadTarget();
+    // `loadTarget` is deliberately not a dependency: it is re-created for
+    // every thread summary, and the key is what decides whether to ask.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoLoadKey]);
+
   const skills = useMemo(() => {
     const deduped = new Map<string, AppServerSkillSummary>();
 
@@ -270,10 +316,14 @@ export function useThreadSkills(params: {
       }
     }
 
-    return [...deduped.values()].sort((left, right) =>
-      left.name.localeCompare(right.name)
+    // Same-named skills from different linked projects sort by origin, so the
+    // primary project's `$release` is the one Enter takes.
+    return withSkillOrigins([...deduped.values()], originDirectories).sort(
+      (left, right) =>
+        left.name.localeCompare(right.name)
+        || compareSkillOrigins(left.origin, right.origin)
     );
-  }, [state?.response?.data]);
+  }, [originDirectories, state?.response?.data]);
 
   const providerCommands = useMemo(() => {
     const deduped = new Map<string, AppServerAvailableCommandSummary>();
@@ -300,4 +350,21 @@ export function useThreadSkills(params: {
     response: state?.response,
     skills,
   };
+}
+
+function readSkillOriginDirectories(
+  thread: NavigationThreadSummary | undefined,
+  launchpad: NavigationLaunchpadDraft | undefined,
+): SkillOriginDirectory[] {
+  if (thread) {
+    return thread.linkedDirectories.map((directory) => ({
+      label: directory.label,
+      path: directory.path,
+      ...(directory.worktreePath ? { worktreePath: directory.worktreePath } : {}),
+    }));
+  }
+  const directoryPath = launchpad?.directoryPath?.trim();
+  return launchpad && directoryPath
+    ? [{ label: launchpad.directoryLabel, path: directoryPath }]
+    : [];
 }

@@ -1,4 +1,6 @@
 import {
+  findSharedSkillNames,
+  isSharedSkillName,
   isThreadUrl,
   PWRAGENT_URL_SCHEME,
   type AppServerSkillSummary,
@@ -297,16 +299,33 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
       ),
     [props.skills]
   );
+  /**
+   * Names more than one skill in the catalog answers to. A chip for one of
+   * those says which project it came from, the way the picker and the
+   * composer's own chips do.
+   *
+   * This component renders once per transcript message, so the answer is
+   * cached on the catalog itself rather than derived per message.
+   */
+  const sharedSkillNames = useMemo(
+    () => findSharedSkillNames(props.skills ?? []),
+    [props.skills],
+  );
+  // A bare `$release` in a code span names no file. With one `release` in
+  // the catalog it can only mean that one; with several, any pick would be a
+  // guess, and the chip would offer to open some other project's file — so
+  // those stay plain code.
   const skillsByToken = useMemo(
     () =>
       new Map(
         (props.skills ?? [])
           .filter(
-            (skill): skill is AppServerSkillSummary & { path: string } => Boolean(skill.path)
+            (skill): skill is AppServerSkillSummary & { path: string } =>
+              Boolean(skill.path) && !isSharedSkillName(sharedSkillNames, skill.name)
           )
           .map((skill) => [`$${skill.name}`, skill])
       ),
-    [props.skills]
+    [props.skills, sharedSkillNames]
   );
 
   const openLocalFileInEditor = useCallback(
@@ -502,6 +521,7 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
               onViewMarkdown={props.desktopApi?.readMarkdownFile
                 ? viewSkillMarkdown
                 : undefined}
+              showOrigin={isSharedSkillName(sharedSkillNames, skill.name)}
               skill={skill}
               target={localTarget}
               transcript={true}
