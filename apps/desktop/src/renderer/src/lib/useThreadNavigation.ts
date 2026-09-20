@@ -484,6 +484,18 @@ function upsertLaunchpadDirectory(
       : [
           ...nextDirectories,
           {
+            ...(normalizedLaunchpad.directoryKey === ROOT_NEW_THREAD_WORKSPACE_LAUNCHPAD_KEY
+              ? {
+                  counts: {
+                    total: 0,
+                    active: 0,
+                    activeRemote: 0,
+                    pinned: 0,
+                    unread: 0,
+                    review: 0,
+                  },
+                }
+              : {}),
             ...(fallbackWorkspaceDirectory ?? {}),
             key: normalizedLaunchpad.directoryKey,
             kind: normalizedLaunchpad.directoryKind,
