@@ -2,7 +2,7 @@ import { FORGE_PRODUCTS, forgeKindForRemoteHost, type ForgeKind } from "@pwragen
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
-import { getGitCommand } from "../git-command";
+import { runGitCommand } from "../app-server/git-executable";
 
 const execFileAsync = promisify(execFile);
 const GIT_REMOTE_TIMEOUT_MS = 2_000;
@@ -255,8 +255,7 @@ async function loadParsedGitRemotes(
 
 async function defaultReadRemotes(cwd: string): Promise<GitRemote[]> {
   const childEnv = buildPwrAgentChildProcessEnv(process.env);
-  const { stdout } = await execFileAsync(getGitCommand(), ["remote"], {
-    cwd,
+  const { stdout } = await runGitCommand(cwd, ["remote"], {
     env: childEnv,
     maxBuffer: 64 * 1024,
     timeout: GIT_REMOTE_TIMEOUT_MS,
@@ -265,11 +264,10 @@ async function defaultReadRemotes(cwd: string): Promise<GitRemote[]> {
   const entries = await Promise.all(
     names.map(async (name): Promise<GitRemote[]> => {
       try {
-        const result = await execFileAsync(
-          getGitCommand(),
+        const result = await runGitCommand(
+          cwd,
           ["remote", "get-url", "--all", name],
           {
-            cwd,
             env: childEnv,
             maxBuffer: 64 * 1024,
             timeout: GIT_REMOTE_TIMEOUT_MS,

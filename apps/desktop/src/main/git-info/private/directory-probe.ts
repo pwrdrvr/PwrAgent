@@ -1,19 +1,16 @@
-import { execFile as execFileCallback } from "node:child_process";
 import { access, readFile } from "node:fs/promises";
 import path from "node:path";
-import { promisify } from "node:util";
 import type { LinkedDirectorySummary } from "@pwragent/shared";
 import { isToolManagedWorktreePath } from "@pwragent/shared";
 import { buildPwrAgentChildProcessEnv } from "../../child-process-env";
 import { getMainLogger } from "../../log";
-import { getGitCommand } from "../../git-command";
+import { runGitCommand } from "../../app-server/git-executable";
 
 import {
   directoryEnrichmentDiagnostics,
   type DirectoryEnrichmentContext,
 } from "../../diagnostics/directory-enrichment-diagnostics";
 
-const execFile = promisify(execFileCallback);
 const threadDirectoryLog = getMainLogger("pwragent:thread-directory-enricher");
 const GIT_DIRECTORY_PROBE_TIMEOUT_MS = 2_000;
 const GIT_DIRECTORY_PROBE_MAX_BUFFER_BYTES = 1024 * 1024;
@@ -50,7 +47,7 @@ export async function runGit(
 ): Promise<string> {
   const finish = directoryEnrichmentDiagnostics.startGit(context, args);
   try {
-    const result = await execFile(getGitCommand(), ["-C", projectKey, ...args], {
+    const result = await runGitCommand(projectKey, args, {
       env: buildPwrAgentChildProcessEnv(process.env),
       maxBuffer: GIT_DIRECTORY_PROBE_MAX_BUFFER_BYTES,
       timeout: GIT_DIRECTORY_PROBE_TIMEOUT_MS,

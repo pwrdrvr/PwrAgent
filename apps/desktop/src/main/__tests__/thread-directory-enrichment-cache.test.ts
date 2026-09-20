@@ -19,8 +19,14 @@ vi.mock("node:fs/promises", async (importOriginal) => {
   observeAccess.mockImplementation(actual.access);
   return { ...actual, readFile: readPointer, stat: observeStat, realpath: observeRealpath, access: observeAccess };
 });
-vi.mock("node:child_process", () => ({ execFile: git }));
-vi.mock("../git-command", () => ({ getGitCommand: () => "git" }));
+vi.mock("../app-server/git-executable", () => ({
+  runGitCommand: (cwd: string, args: string[], options: unknown) => new Promise((resolve, reject) => {
+    git("git", ["-C", cwd, ...args], options, (error: Error | null, result: unknown) => {
+      if (error) reject(error);
+      else resolve(result);
+    });
+  }),
+}));
 vi.mock("../log", () => ({
   getMainLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));

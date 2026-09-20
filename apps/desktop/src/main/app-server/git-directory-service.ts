@@ -77,7 +77,7 @@ async function defaultRunGit(
   args: string[],
   env?: NodeJS.ProcessEnv,
 ): Promise<string> {
-  return (await runGitCommand(cwd, args, { env })).stdout;
+  return (await runGitCommand(cwd, args, { env })).stdout.trim();
 }
 
 function errorText(error: unknown): string {
