@@ -7,7 +7,9 @@ import type {
 import {
   buildThreadMarkdownLink,
   buildThreadUrl,
+  findSharedSkillNames,
   isRemoteFederationTarget,
+  isSharedSkillName,
   parseThreadUrl,
 } from "@pwragent/shared";
 import { buildDirectoryReferenceMarkdown } from "../../lib/directory-references";
@@ -48,7 +50,8 @@ export function createComposerSkillToken(
 ): ComposerSkillToken {
   const showOrigin = Boolean(
     skill.origin
-    && catalog?.some((entry) => entry.name === skill.name && entry.path !== skill.path),
+    && catalog
+    && isSharedSkillName(findSharedSkillNames(catalog), skill.name),
   );
   return {
     ...skill,
@@ -56,6 +59,52 @@ export function createComposerSkillToken(
     index,
     ...(showOrigin ? { showOrigin } : {}),
   };
+}
+
+/**
+ * Re-answers "does another skill share this name?" for the chips already in
+ * a draft.
+ *
+ * `showOrigin` is minted from the catalog the chip was picked from, and a
+ * chip restored on launch was minted before anything called `listSkills` —
+ * it would otherwise stay a bare `$release` for the rest of the draft's life
+ * even once the catalog says there are three of them. This runs on the way
+ * into the editor, the same way a PR chip's dot picks up a status that
+ * arrives after the chip was minted.
+ *
+ * An empty catalog means "not loaded", never "no collisions", so it changes
+ * nothing. The input array is returned unchanged when no chip moves, because
+ * a new array would rebuild the editor's document.
+ */
+export function applySkillOriginVisibility(
+  skillTokens: ComposerSkillToken[],
+  catalog: readonly AppServerSkillSummary[] | undefined,
+): ComposerSkillToken[] {
+  if (!catalog?.length || skillTokens.length === 0) {
+    return skillTokens;
+  }
+  const sharedNames = findSharedSkillNames(catalog);
+  let changed = false;
+  const next = skillTokens.map((token) => {
+    if (token.kind || !token.path) {
+      return token;
+    }
+    const origin =
+      token.origin ?? catalog.find((entry) => entry.path === token.path)?.origin;
+    const showOrigin = Boolean(
+      origin && isSharedSkillName(sharedNames, token.name),
+    );
+    if (origin === token.origin && showOrigin === Boolean(token.showOrigin)) {
+      return token;
+    }
+    changed = true;
+    return {
+      ...token,
+      ...(origin ? { origin } : {}),
+      showOrigin: showOrigin ? true : undefined,
+    };
+  });
+  return changed ? next : skillTokens;
 }
 
 export function createComposerDirectoryToken(

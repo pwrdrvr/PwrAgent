@@ -17611,6 +17611,10 @@ describe("Composer", () => {
     // Portaled beside the list: a control inside a `role="option"` button is
     // invalid and unreachable.
     expect(listbox).not.toContainElement(card);
+    // ...which is why the row has to point at it: the path is in the card,
+    // and nothing else in the document references the portal.
+    expect(options[1]!).toHaveAttribute("aria-describedby", card.id);
+    expect(options[0]!).not.toHaveAttribute("aria-describedby");
 
     fireEvent.click(within(card).getByRole("button", { name: "Copy path" }));
     await waitFor(() => {

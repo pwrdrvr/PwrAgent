@@ -154,6 +154,7 @@ import {
 } from "./ComposerInputTypes";
 import {
   adjustSkillTokenIndexesForTextChange,
+  applySkillOriginVisibility,
   createComposerDirectoryToken,
   createComposerFileToken,
   createComposerPullRequestToken,
@@ -4484,11 +4485,18 @@ export const Composer = memo(function Composer(props: ComposerProps) {
 
     return filterSkillAutocompleteCandidates(props.skills, trigger.query);
   }, [props.skills, trigger]);
+  // Chips minted before the catalog loaded learn whether their name is
+  // shared as soon as it does.
+  const displaySkillTokens = useMemo(
+    () => applySkillOriginVisibility(skillTokens, props.skills),
+    [props.skills, skillTokens],
+  );
   const skillOriginCard = useSkillOriginCard({
     desktopApi: props.desktopApi,
     remoteInstanceLabel: filesystemFederationTarget?.scope === "remote"
       ? props.thread?.federation?.instanceLabel ?? "the peer instance"
       : undefined,
+    skills: props.skills,
   });
   const slashCommandSuggestions = useMemo(() => {
     const commands =
@@ -11310,7 +11318,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
             }}
             selectionRequest={composerSelectionRequest}
             editorDocument={editorDocument}
-            skillTokens={skillTokens}
+            skillTokens={displaySkillTokens}
             value={draft}
             onChange={handleComposerChange}
             onPaste={handlePaste}
@@ -11318,16 +11326,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
             onDrop={handleDrop}
             onClick={handleComposerClick}
             onKeyDown={handleTiptapComposerKeyDown}
-            onSkillChipPointerEnter={(skill, anchor) => {
-              // A chip minted before origins existed, or restored from plain
-              // Markdown, finds its origin in the catalog by path.
-              skillOriginCard.hoverAnchor(anchor, {
-                ...skill,
-                origin:
-                  skill.origin
-                  ?? props.skills?.find((entry) => entry.path === skill.path)?.origin,
-              });
-            }}
+            onSkillChipPointerEnter={skillOriginCard.hoverAnchor}
             onSkillChipPointerLeave={skillOriginCard.leaveAnchor}
           />
         )}
@@ -11363,6 +11362,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                 ref={(node) => {
                   autocompleteOptionRefs.current[index] = node;
                 }}
+                aria-describedby={skillOriginCard.describedBy(skill)}
                 aria-selected={index === activeSkillIndex}
                 className={`composer__autocomplete-option${index === activeSkillIndex ? " is-active" : ""}`}
                 role="option"

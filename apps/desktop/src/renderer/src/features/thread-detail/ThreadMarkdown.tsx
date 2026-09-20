@@ -1,4 +1,6 @@
 import {
+  findSharedSkillNames,
+  isSharedSkillName,
   isThreadUrl,
   PWRAGENT_URL_SCHEME,
   type AppServerSkillSummary,
@@ -301,23 +303,14 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
    * Names more than one skill in the catalog answers to. A chip for one of
    * those says which project it came from, the way the picker and the
    * composer's own chips do.
+   *
+   * This component renders once per transcript message, so the answer is
+   * cached on the catalog itself rather than derived per message.
    */
-  const sharedSkillNames = useMemo(() => {
-    const pathsByName = new Map<string, Set<string>>();
-    for (const skill of props.skills ?? []) {
-      if (!skill.path) {
-        continue;
-      }
-      const paths = pathsByName.get(skill.name) ?? new Set<string>();
-      paths.add(skill.path);
-      pathsByName.set(skill.name, paths);
-    }
-    return new Set(
-      [...pathsByName]
-        .filter(([, paths]) => paths.size > 1)
-        .map(([name]) => name),
-    );
-  }, [props.skills]);
+  const sharedSkillNames = useMemo(
+    () => findSharedSkillNames(props.skills ?? []),
+    [props.skills],
+  );
   // A bare `$release` in a code span names no file. With one `release` in
   // the catalog it can only mean that one; with several, any pick would be a
   // guess, and the chip would offer to open some other project's file — so
@@ -328,7 +321,7 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
         (props.skills ?? [])
           .filter(
             (skill): skill is AppServerSkillSummary & { path: string } =>
-              Boolean(skill.path) && !sharedSkillNames.has(skill.name)
+              Boolean(skill.path) && !isSharedSkillName(sharedSkillNames, skill.name)
           )
           .map((skill) => [`$${skill.name}`, skill])
       ),
@@ -528,7 +521,7 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
               onViewMarkdown={props.desktopApi?.readMarkdownFile
                 ? viewSkillMarkdown
                 : undefined}
-              showOrigin={sharedSkillNames.has(skill.name)}
+              showOrigin={isSharedSkillName(sharedSkillNames, skill.name)}
               skill={skill}
               target={localTarget}
               transcript={true}

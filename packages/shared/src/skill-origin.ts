@@ -99,6 +99,75 @@ export function withSkillOrigins<T extends AppServerSkillSummary>(
   });
 }
 
+/**
+ * The result is cached on the list itself, because every surface that labels
+ * a chip asks this of the same catalog: the transcript asks once per rendered
+ * message, and the composer once per chip it mints. Skill catalogs here are
+ * always freshly built and never mutated in place — a caller that does mutate
+ * one has to hand over a new array.
+ */
+const sharedSkillNameCache = new WeakMap<object, ReadonlySet<string>>();
+
+/**
+ * The names more than one skill answers to, case-folded.
+ *
+ * This is the one question behind every origin label: `$release` alone says
+ * which file it runs unless some other skill is also called `$release`. The
+ * composer's picker, a picked chip, a restored draft, the transcript's sent
+ * chips and the messaging `/skills` browser all ask it, so they ask it here
+ * — four copies of the rule had already drifted to three different answers.
+ *
+ * Two skills at the same path are one skill listed twice, not a collision.
+ * Names are folded because `$Release` and `$release` are at least as easy to
+ * confuse as two identical ones. A skill without a path is not counted: no
+ * surface can link to one, so it cannot be what a `$name` meant.
+ */
+export function findSharedSkillNames(
+  skills: readonly { name: string; path?: string }[],
+): ReadonlySet<string> {
+  const cached = sharedSkillNameCache.get(skills);
+  if (cached) {
+    return cached;
+  }
+  const pathsByName = new Map<string, Set<string>>();
+  for (const skill of skills) {
+    const path = skill.path?.trim();
+    if (!path) {
+      continue;
+    }
+    const key = foldSkillName(skill.name);
+    const paths = pathsByName.get(key);
+    if (paths) {
+      paths.add(path);
+    } else {
+      pathsByName.set(key, new Set([path]));
+    }
+  }
+  const shared = new Set<string>();
+  for (const [name, paths] of pathsByName) {
+    if (paths.size > 1) {
+      shared.add(name);
+    }
+  }
+  sharedSkillNameCache.set(skills, shared);
+  return shared;
+}
+
+/**
+ * Whether `name` is one of `findSharedSkillNames`'s answers. Go through this
+ * rather than `set.has(name)`: the set holds folded names.
+ */
+export function isSharedSkillName(
+  sharedNames: ReadonlySet<string>,
+  name: string,
+): boolean {
+  return sharedNames.has(foldSkillName(name));
+}
+
+function foldSkillName(name: string): string {
+  return name.trim().toLowerCase();
+}
+
 const ORIGIN_KIND_RANK: Record<AppServerSkillOrigin["kind"], number> = {
   project: 0,
   repository: 1,

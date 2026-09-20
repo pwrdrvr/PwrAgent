@@ -681,6 +681,32 @@ describe("useThreadSkills", () => {
       expect(listSkills).not.toHaveBeenCalled();
     });
 
+    it("does not re-ask for a whole turn when the first request failed", async () => {
+      // `loadTarget`'s own guard lets an error through, and its identity
+      // changes with the thread summary - which a streamed item replaces.
+      // Without a per-thread record, a failed catalog load would re-request
+      // on every delta of the turn.
+      const failing = vi.fn(async () => {
+        throw new Error("app server is restarting");
+      });
+      const { rerender } = renderHook(
+        ({ thread }) => useThreadSkills({ desktopApi: { listSkills: failing }, thread }),
+        { initialProps: { thread: createThread() } },
+      );
+      await waitFor(() => {
+        expect(failing).toHaveBeenCalledTimes(1);
+      });
+
+      for (let updatedAt = 2; updatedAt <= 6; updatedAt += 1) {
+        rerender({ thread: { ...createThread(), updatedAt } });
+      }
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(failing).toHaveBeenCalledTimes(1);
+    });
+
     it("keeps the skill list's identity while the thread streams", async () => {
       const { result, rerender } = renderHook(
         ({ thread }) => useThreadSkills({ desktopApi: { listSkills }, thread }),

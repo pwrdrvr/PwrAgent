@@ -41,6 +41,7 @@ import type {
 } from "./ComposerInputTypes";
 import {
   adjustSkillTokenIndexesForTextChange,
+  applySkillOriginVisibility,
   createComposerDirectoryToken,
   createComposerPullRequestToken,
   createComposerSkillToken,
@@ -203,6 +204,7 @@ export function useComposerMentions(params: {
     remoteInstanceLabel: currentFederation?.ref.target.scope === "remote"
       ? currentFederation.instanceLabel
       : undefined,
+    skills: sources?.skills,
   });
   // One state, not two: an insert has to move the draft and its tokens in
   // the same commit, and a bounced send has to put both back or neither.
@@ -671,9 +673,11 @@ export function useComposerMentions(params: {
   const optionId = (index: number): string => `${listboxId}-option-${index}`;
 
   const renderOption = (index: number, content: ReactNode, extra?: {
+    describedBy?: string;
     title?: string;
   }): ReactNode => (
     <button
+      aria-describedby={extra?.describedBy}
       aria-selected={index === activeOption}
       className={`compact-composer__mention-option${
         index === activeOption ? " is-active" : ""
@@ -723,7 +727,10 @@ export function useComposerMentions(params: {
             {skill.shortDescription || skill.description || skill.path}
           </span>
         </>,
-        { title: buildSkillTooltip(skill) || undefined },
+        {
+          describedBy: skillOriginCard.describedBy(skill),
+          title: buildSkillTooltip(skill) || undefined,
+        },
       ),
     );
   } else if (kind === "commands") {
@@ -850,14 +857,7 @@ export function useComposerMentions(params: {
     handleKeyDown,
     inputRef,
     listboxId: open ? listboxId : undefined,
-    onSkillChipPointerEnter: (skill, anchor) => {
-      skillOriginCard.hoverAnchor(anchor, {
-        ...skill,
-        origin:
-          skill.origin
-          ?? skills.find((entry) => entry.path === skill.path)?.origin,
-      });
-    },
+    onSkillChipPointerEnter: skillOriginCard.hoverAnchor,
     onSkillChipPointerLeave: skillOriginCard.leaveAnchor,
     open,
     originCard: skillOriginCard.cardNode,
@@ -871,7 +871,9 @@ export function useComposerMentions(params: {
           : previous,
       );
     },
-    skillTokens,
+    // Chips minted before the catalog loaded learn whether their name is
+    // shared as soon as it does; the draft's own state is untouched.
+    skillTokens: applySkillOriginVisibility(skillTokens, skills),
     snapshot: content,
     text: serializeDraftWithSkillTokens(draft, skillTokens),
   };

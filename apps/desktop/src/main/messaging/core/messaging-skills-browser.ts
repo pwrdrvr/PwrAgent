@@ -1,5 +1,7 @@
 import {
   compareSkillOrigins,
+  findSharedSkillNames,
+  isSharedSkillName,
   withSkillOrigins,
   type AppServerListSkillsResponse,
   type AppServerSkillSummary,
@@ -107,6 +109,10 @@ export function buildSkillsBrowserIntent(params: {
   targetSurface?: MessagingSurfaceRef;
 }): MessagingSingleSelectIntent {
   const filtered = filterSkillEntries(params.entries, params.query);
+  // Only rows whose name another skill answers to carry their origin: a chat
+  // button has little room, and a unique name needs no qualifier. Counted
+  // over the whole list, not the page, so a row does not change its label
+  // when its twin pages out of view.
   const sharedNames = findSharedSkillNames(params.entries);
   const navActionCount = filtered.length > SKILLS_BROWSER_PAGE_SIZE ? 5 : 3;
   const pageSize = params.capabilityProfile
@@ -460,32 +466,11 @@ function skillsBrowserFallbackText(params: {
   return lines.filter((line): line is string => Boolean(line)).join("\n");
 }
 
-/**
- * Names that more than one listed skill answers to. Only those rows carry
- * their origin: a chat button has little room, and a name that is already
- * unique needs no qualifier. Counted over the whole list, not the page, so
- * a row does not change its label when its twin pages out of view.
- */
-function findSharedSkillNames(
-  entries: readonly MessagingSkillBrowserEntry[],
-): Set<string> {
-  const seen = new Set<string>();
-  const shared = new Set<string>();
-  for (const entry of entries) {
-    const key = entry.name.toLowerCase();
-    if (seen.has(key)) {
-      shared.add(key);
-    }
-    seen.add(key);
-  }
-  return shared;
-}
-
 function skillEntryTitle(
   entry: MessagingSkillBrowserEntry,
   sharedNames: ReadonlySet<string>,
 ): string {
-  const origin = sharedNames.has(entry.name.toLowerCase())
+  const origin = isSharedSkillName(sharedNames, entry.name)
     ? entry.origin?.label
     : undefined;
   return origin ? `$${entry.name} · ${origin}` : `$${entry.name}`;

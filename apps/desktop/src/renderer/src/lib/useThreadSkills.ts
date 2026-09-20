@@ -266,25 +266,45 @@ export function useThreadSkills(params: {
   // Keyed on the directories' content, not the thread's identity: the summary
   // is replaced on every streamed item, and `skills` feeds memoized transcript
   // and composer consumers that should not rebuild for a turn's progress.
-  const originDirectoriesKey = JSON.stringify(
-    readSkillOriginDirectories(thread, launchpad),
-  );
+  const currentOriginDirectories = readSkillOriginDirectories(thread, launchpad);
+  const originDirectoriesKey = currentOriginDirectories
+    .map((directory) => [
+      directory.label,
+      directory.path,
+      directory.worktreePath ?? "",
+    ].join("\u0000"))
+    .join("\u001f");
   const originDirectories = useMemo(
-    (): SkillOriginDirectory[] => JSON.parse(originDirectoriesKey),
+    (): SkillOriginDirectory[] => currentOriginDirectories,
+    // The key is the dependency: the array is rebuilt every render and only
+    // its content decides whether consumers see a new one.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [originDirectoriesKey],
   );
 
   // A thread with more than one linked project can hold two skills of the
   // same name, and the transcript's sent chips say which project each
   // `$release` ran from. That answer is in the catalog, so it cannot wait
-  // for the operator to open the `$` picker. `loadTarget` is cached per
-  // thread key, so this is one request per thread, and single-project
-  // threads — which have nothing to disambiguate — still pay nothing.
+  // for the operator to open the `$` picker. Single-project threads — which
+  // have nothing to disambiguate — still pay nothing.
+  //
+  // Asked once per thread, tracked here rather than left to `loadTarget`'s
+  // guard: that guard lets an error state through, and `loadTarget`'s
+  // identity changes with the thread summary, which is replaced on every
+  // streamed item. Without this ref a thread whose first `listSkills` failed
+  // would re-request on every delta of the turn.
+  const autoLoadedKeysRef = useRef<Set<string>>(new Set());
+  const autoLoadKey = originDirectories.length > 1 ? skillTarget?.key : undefined;
   useEffect(() => {
-    if (originDirectories.length > 1) {
-      void loadTarget();
+    if (!autoLoadKey || autoLoadedKeysRef.current.has(autoLoadKey)) {
+      return;
     }
-  }, [loadTarget, originDirectories.length]);
+    autoLoadedKeysRef.current.add(autoLoadKey);
+    void loadTarget();
+    // `loadTarget` is deliberately not a dependency: it is re-created for
+    // every thread summary, and the key is what decides whether to ask.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoLoadKey]);
 
   const skills = useMemo(() => {
     const deduped = new Map<string, AppServerSkillSummary>();

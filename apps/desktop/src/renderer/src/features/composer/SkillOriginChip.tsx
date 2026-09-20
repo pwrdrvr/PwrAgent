@@ -111,10 +111,17 @@ export type SkillOriginCardController = {
     onPointerLeave: () => void;
   };
   /**
-   * The same hover for an anchor React does not render: a `$skill` chip in
-   * the composer's editor, whose DOM belongs to Tiptap.
+   * The card's id while it belongs to this skill, for the picker row's
+   * `aria-describedby`. The card holds the path, and nothing else in the
+   * document points at the portal.
    */
-  hoverAnchor: (anchor: HTMLElement, skill: AppServerSkillSummary) => void;
+  describedBy: (skill: AppServerSkillSummary) => string | undefined;
+  /**
+   * The same hover for an anchor React does not render: a `$skill` chip in
+   * the composer's editor, whose DOM belongs to Tiptap. Takes the skill
+   * first, so it is the editor's `onSkillChipPointerEnter` as it stands.
+   */
+  hoverAnchor: (skill: AppServerSkillSummary, anchor: HTMLElement) => void;
   leaveAnchor: () => void;
   close: () => void;
   /** The portal. Render it once, outside every option row. */
@@ -144,8 +151,16 @@ export function useSkillOriginCard(options: {
    * document viewer is not offered for it.
    */
   remoteInstanceLabel?: string;
+  /**
+   * The skill catalog, for chips that carry no origin of their own: one
+   * minted before origins existed, or restored from plain Markdown. Both
+   * composer surfaces hover the same way, so the lookup lives here.
+   */
+  skills?: readonly AppServerSkillSummary[];
 } = {}): SkillOriginCardController {
   const { remoteInstanceLabel } = options;
+  const skillsRef = useRef(options.skills);
+  skillsRef.current = options.skills;
   const desktopApi = options.desktopApi ?? getDesktopApi();
   const cardRef = useRef<HTMLDivElement>(null);
   const openTimerRef = useRef<number | null>(null);
@@ -188,9 +203,13 @@ export function useSkillOriginCard(options: {
   }, [clearTimer, commitState]);
 
   const hoverAnchor = useCallback<SkillOriginCardController["hoverAnchor"]>(
-    (anchor, skill) => {
-      const origin = skill.origin;
+    (skill, anchor) => {
       const path = skill.path?.trim();
+      const origin =
+        skill.origin
+        ?? (path
+          ? skillsRef.current?.find((entry) => entry.path === path)?.origin
+          : undefined);
       if (!origin || !path) {
         return;
       }
@@ -217,7 +236,7 @@ export function useSkillOriginCard(options: {
 
   const chipHandlers = useCallback<SkillOriginCardController["chipHandlers"]>(
     (skill) => ({
-      onPointerEnter: (event) => hoverAnchor(event.currentTarget, skill),
+      onPointerEnter: (event) => hoverAnchor(skill, event.currentTarget),
       onPointerLeave: scheduleClose,
     }),
     [hoverAnchor, scheduleClose],
@@ -367,6 +386,10 @@ export function useSkillOriginCard(options: {
     cardNode,
     chipHandlers,
     close,
+    describedBy: (skill) =>
+      state && state.left !== undefined && state.skill.path === skill.path
+        ? cardId
+        : undefined,
     hoverAnchor,
     leaveAnchor: scheduleClose,
   };

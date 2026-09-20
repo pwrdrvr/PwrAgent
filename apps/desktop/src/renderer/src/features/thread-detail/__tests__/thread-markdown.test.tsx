@@ -671,6 +671,7 @@ describe("ThreadMarkdown", () => {
       `/Users/fixture-user/pwrdrvr/${project}/.agents/skills/release/SKILL.md`;
     render(
       <ThreadMarkdown
+        desktopApi={{ readMarkdownFile: vi.fn(async () => undefined) }}
         skills={[
           {
             name: "release",
@@ -700,9 +701,16 @@ describe("ThreadMarkdown", () => {
 
     const release = screen.getByText("$release").closest("[data-skill-chip]");
     expect(release).toHaveTextContent("PwrAgnt");
+    // An `aria-label` replaces the contents it labels, so the project has to
+    // be in it too - otherwise both chips announce as "View skill release".
+    expect(release).toHaveAttribute(
+      "aria-label",
+      "View skill release from PwrAgnt",
+    );
     // Nothing else answers to `$slidev`, so its chip stays bare.
-    expect(screen.getByText("$slidev").closest("[data-skill-chip]"))
-      .not.toHaveTextContent("Personal");
+    const slidev = screen.getByText("$slidev").closest("[data-skill-chip]");
+    expect(slidev).not.toHaveTextContent("Personal");
+    expect(slidev).toHaveAttribute("aria-label", "View skill slidev");
   });
 
   it("leaves a bare `$name` code span alone when several skills share the name", () => {
