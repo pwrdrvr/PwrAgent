@@ -27,7 +27,30 @@ foreach ($path in $paths) {
   }
 }
 
-& tar.exe -czf $ArchivePath @paths
-if ($LASTEXITCODE -ne 0) {
-  throw "Failed to archive Windows signing input (exit code $LASTEXITCODE)."
+$archiveDirectory = Split-Path -Parent $ArchivePath
+$materializedRoot = Join-Path $archiveDirectory "pwragent-windows-signing-input-$([guid]::NewGuid().ToString('N'))"
+try {
+  node --experimental-vm-modules scripts/release/materialize-signing-input.mjs windows $materializedRoot
+  if ($LASTEXITCODE -ne 0) {
+    throw "Failed to materialize Windows signing input (exit code $LASTEXITCODE)."
+  }
+
+  Push-Location $materializedRoot
+  try {
+    & tar.exe -czf $ArchivePath @paths
+    if ($LASTEXITCODE -ne 0) {
+      throw "Failed to archive Windows signing input (exit code $LASTEXITCODE)."
+    }
+  } finally {
+    Pop-Location
+  }
+
+  node --experimental-vm-modules scripts/release/verify-signing-input-archive.mjs windows $ArchivePath
+  if ($LASTEXITCODE -ne 0) {
+    throw "Windows signing input archive validation failed (exit code $LASTEXITCODE)."
+  }
+} finally {
+  if (Test-Path -LiteralPath $materializedRoot) {
+    Remove-Item -LiteralPath $materializedRoot -Recurse -Force
+  }
 }
