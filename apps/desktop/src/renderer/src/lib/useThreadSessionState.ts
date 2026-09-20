@@ -1370,6 +1370,7 @@ function pruneOptimisticEntries(
   response: AppServerReadThreadResponse | undefined,
   reconciledLaunchpadMessageId?: string,
   launchpadMessageCandidate?: LaunchpadMessageCandidate,
+  options: { retainInProgressReviews?: boolean } = {},
 ): AppServerThreadEntry[] {
   if (!response) {
     return optimisticEntries;
@@ -1403,8 +1404,12 @@ function pruneOptimisticEntries(
     if (entry.type === "review") {
       return !response.replay.entries.some(
         (candidate) =>
-          candidate.type === "review" &&
-          reviewEntriesMatch(candidate, entry)
+          candidate.type === "review"
+          && reviewEntriesMatch(candidate, entry)
+          // Running snapshots can regress. Keep the live fallback until a
+          // terminal snapshot acknowledges it; presentation still deduplicates
+          // against whichever snapshot is currently visible.
+          && !(options.retainInProgressReviews && candidate.turn?.status === "in_progress")
       );
     }
 
@@ -5066,6 +5071,7 @@ export function useThreadSessionState(params: {
               launchpadMessageCandidateRef.current?.threadKey === targetThreadKey
                 ? launchpadMessageCandidateRef.current.candidate
                 : undefined,
+              { retainInProgressReviews: true },
             ),
             pendingAssistantMessage: shouldClearStaleThinking
               ? undefined
@@ -6194,7 +6200,7 @@ export function useThreadSessionState(params: {
               lastTouchedAt: nextLastTouchedAt,
               // The live item replaces the placeholder, but a thread/read
               // snapshot can still omit it. Retain it until hydration returns
-              // a matching review; pruneOptimisticEntries then retires it.
+              // a matching terminal review; pruning then retires it.
               // Merge only the pending entries here, never the full transcript.
               optimisticEntries: mergeTranscriptEntries(
                 current.optimisticEntries,
