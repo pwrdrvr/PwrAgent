@@ -146,6 +146,91 @@ describe("readPackage", () => {
   });
 });
 
+describe("pnpm.overrides and resolutions", () => {
+  // An override is not a dependency field, so nothing above scans it — but pnpm
+  // resolves its value exactly like a spec. It is also the quietest injection
+  // point in the manifest: an override repoints a *transitive* package, so it
+  // shows up in no dependency block at all.
+  const OVERRIDE_OWNERS = ["pwragent-workspace", "@pwragent/desktop"];
+
+  // Values pnpm legitimately accepts here, including its
+  // reference-a-declared-dependency form. None may trip the git regex.
+  const LEGITIMATE_OVERRIDES = [
+    "0.5.1",
+    "7.29.6",
+    "^1.16.0",
+    ">=4.0.0",
+    "$some-dep",
+    "npm:other@1.0.0",
+    "workspace:*",
+  ];
+
+  it.each(OVERRIDE_OWNERS)("blocks a git spec in %s's pnpm.overrides", (name) => {
+    for (const spec of GIT_SPECS) {
+      expect(() =>
+        readPackage({ name, pnpm: { overrides: { "is-number": spec } } }),
+      ).toThrow(/Blocked git dependency/);
+    }
+  });
+
+  it("names pnpm.overrides in the diagnostic, not the bare field", () => {
+    // The whole point of scanning here rather than leaning on the fetcher: the
+    // fetcher's error names neither the package nor where it was declared.
+    expect(() =>
+      readPackage({
+        name: "pwragent-workspace",
+        pnpm: { overrides: { "is-number": "github:user/repo" } },
+      }),
+    ).toThrow(
+      "Blocked git dependency is-number@github:user/repo (in pwragent-workspace.pnpm.overrides)",
+    );
+  });
+
+  it.each(OVERRIDE_OWNERS)("blocks a git spec in %s's resolutions", (name) => {
+    for (const spec of GIT_SPECS) {
+      expect(() => readPackage({ name, resolutions: { "is-number": spec } })).toThrow(
+        /Blocked git dependency/,
+      );
+    }
+  });
+
+  it.each(LEGITIMATE_OVERRIDES)("allows the override value %s", (spec) => {
+    expect(() =>
+      readPackage({
+        name: "pwragent-workspace",
+        pnpm: { overrides: { "is-number": spec } },
+        resolutions: { "is-number": spec },
+      }),
+    ).not.toThrow();
+  });
+
+  it("allows every override this repository actually declares", () => {
+    // Guards the fix against the live manifest: a false positive here fails
+    // \`pnpm install\` for everyone.
+    const root = require("../package.json");
+    expect(() => readPackage(structuredClone(root))).not.toThrow();
+    expect(Object.keys(root.pnpm?.overrides ?? {}).length).toBeGreaterThan(0);
+  });
+
+  it("ignores a transitive package's own overrides", () => {
+    // pnpm only honours overrides declared by the workspace root, so a registry
+    // package's copy is inert; blocking on it is a false positive with nothing
+    // behind it.
+    expect(() =>
+      readPackage({
+        name: "some-registry-package",
+        pnpm: { overrides: { lodash: "github:a/b" } },
+        resolutions: { lodash: "github:a/b" },
+      }),
+    ).not.toThrow();
+  });
+
+  it("tolerates a manifest with no pnpm block", () => {
+    expect(() => readPackage({ name: "pwragent-workspace" })).not.toThrow();
+    expect(() => readPackage({ name: "pwragent-workspace", pnpm: null })).not.toThrow();
+  });
+});
+
 describe("fetchers", () => {
   it("hands pnpm both git fetcher blocks as factories returning a thrower", async () => {
     const { fetchers } = pnpmfile.hooks;

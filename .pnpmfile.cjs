@@ -37,12 +37,16 @@ function isGitSpec(spec) {
   return typeof spec === 'string' && gitSpecPattern.test(spec)
 }
 
-function scanField(pkg, field) {
-  const dependencies = pkg[field]
-  if (!dependencies) return
-  for (const [name, spec] of Object.entries(dependencies)) {
+// `owner` and `label` are separate from `container` so a nested block can be
+// scanned without losing the diagnostic: `pnpm.overrides` lives one level down,
+// where there is no `name` to report and where `field` alone would print the
+// misleading `.overrides`.
+function scanField(container, field, owner = container.name, label = field) {
+  const specs = container[field]
+  if (!specs) return
+  for (const [name, spec] of Object.entries(specs)) {
     if (isGitSpec(spec)) {
-      throw new Error(`Blocked git dependency ${name}@${spec} (in ${pkg.name ?? '<unknown>'}.${field})`)
+      throw new Error(`Blocked git dependency ${name}@${spec} (in ${owner ?? '<unknown>'}.${label})`)
     }
   }
 }
@@ -71,6 +75,21 @@ function readPackage(pkg) {
     // to gate them here and the false positive on legitimate upstream
     // packages (e.g. axe-core's axe-test-fixtures) goes away.
     scanField(pkg, 'devDependencies')
+    // Neither of these is a dependency field, but pnpm resolves their values
+    // exactly like a spec — so a git spec here bypasses every scan above while
+    // still being fetched. It is also the quietest place to hide one: an
+    // override repoints a TRANSITIVE package, so it appears in no dependency
+    // block and a reviewer scanning the diff for a git URL under
+    // `dependencies` will not see it. Without this, the install is still
+    // stopped, but only by the fetcher, whose error names neither the package
+    // nor where it was declared.
+    //
+    // First-party only, like devDependencies above: pnpm honours overrides
+    // declared by the workspace root, so a registry package's own copy is
+    // inert and blocking on it would be a false positive with nothing behind
+    // it. `resolutions` is the yarn-style spelling pnpm also reads.
+    scanField(pkg.pnpm ?? {}, 'overrides', pkg.name, 'pnpm.overrides')
+    scanField(pkg, 'resolutions')
   }
   return pkg
 }
