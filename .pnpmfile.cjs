@@ -20,7 +20,18 @@ function isFirstParty(pkg) {
   return pkg.name.startsWith(firstPartyPackagePrefix)
 }
 
-const gitSpecPattern = /^(?:git(?:\+|:)|git@|ssh:\/\/git@|github:|gitlab:|bitbucket:|https?:\/\/(?:www\.)?(?:github|gitlab|bitbucket)\.com\/|[^/@\s]+\/[^/\s]+(?:#.*)?$)/
+// The spec shapes pnpm itself treats as a git fetch. The final alternation is
+// the bare `user/repo#ref` GitHub shortcut, which pnpm resolves the same way
+// as `github:user/repo`.
+//
+// That last branch is spelled `[^/@\s:]+` rather than `[^/@\s]+`. Excluding
+// `:` is a fix, not a style change: without it, any protocol spec whose path
+// has exactly one segment is read as a `user/repo` shortcut and blocked.
+// `file:../local` parses as `file:..` + `/` + `local` and throws, as do
+// `link:../local` and `workspace:../pkg`. A spec with two or more path
+// segments (`file:./packages/x`) escaped only because the trailing class
+// cannot match a second `/`.
+const gitSpecPattern = /^(?:git(?:\+|:)|git@|ssh:\/\/git@|github:|gitlab:|bitbucket:|https?:\/\/(?:www\.)?(?:github|gitlab|bitbucket)\.com\/|[^/@\s:]+\/[^/\s]+(?:#.*)?$)/
 
 function isGitSpec(spec) {
   return typeof spec === 'string' && gitSpecPattern.test(spec)
@@ -78,4 +89,11 @@ module.exports = {
       gitHostedTarball: blockGitFetcher,
     },
   },
+}
+
+// Exported for tests only. pnpm reads `hooks` and ignores everything else.
+module.exports.__testing = {
+  isGitSpec,
+  isFirstParty,
+  readPackage,
 }
