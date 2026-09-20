@@ -1,10 +1,14 @@
 // Covers the root `.pnpmfile.cjs` git-dependency policy. It lives under
 // `scripts/` because that is the directory the root Vitest project already
 // globs for repository-tooling tests (`scripts/**/*.test.mjs`); the subject is
-// the repository root file two levels up.
+// the repository root file one level up.
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { createRequire } from "node:module";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const require = createRequire(import.meta.url);
 const pnpmfile = require("../.pnpmfile.cjs");
 const { isGitSpec, isFirstParty, readPackage } = pnpmfile.__testing;
@@ -143,6 +147,101 @@ describe("readPackage", () => {
     expect(isFirstParty({})).toBe(false);
     expect(isFirstParty(undefined)).toBe(false);
     expect(() => readPackage({ devDependencies: { evil: "github:a/b" } })).not.toThrow();
+  });
+});
+
+describe("first-party coverage", () => {
+  // `isFirstParty` gates devDependency scanning and the `pnpm.overrides` /
+  // `resolutions` scan, so a workspace package the check misses silently loses
+  // both. The name set is hand-maintained, which is exactly the kind of thing
+  // that drifts, so this derives the expected list from the workspace globs in
+  // `pnpm-workspace.yaml` instead of hardcoding paths — a hardcoded
+  // `packages/` walk reports full coverage while an `apps/*` package sits
+  // unscanned.
+  function workspaceGlobs() {
+    const text = readFileSync(join(repoRoot, "pnpm-workspace.yaml"), "utf8");
+    const lines = text.split(/\r?\n/);
+    const start = lines.findIndex((line) => /^packages:\s*$/.test(line));
+    if (start === -1) {
+      throw new Error("pnpm-workspace.yaml has no `packages:` block");
+    }
+    const globs = [];
+    for (const line of lines.slice(start + 1)) {
+      if (/^\s*$/.test(line) || /^\s*#/.test(line)) continue;
+      // A non-indented line is the next top-level key, so the block is done.
+      if (!/^\s/.test(line)) break;
+      const entry = /^\s+-\s+(.*?)\s*$/.exec(line);
+      if (!entry) throw new Error(`unparsed line in packages block: ${line}`);
+      globs.push(entry[1].replace(/^["']|["']$/g, ""));
+    }
+    return globs;
+  }
+
+  function subdirectories(dir, { recursive }) {
+    const absolute = join(repoRoot, dir);
+    if (!existsSync(absolute)) return [];
+    const found = [];
+    for (const entry of readdirSync(absolute, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      // Without this a `dir/**` walk descends into every installed package.
+      if (entry.name === "node_modules" || entry.name.startsWith(".")) continue;
+      const child = `${dir}/${entry.name}`;
+      found.push(child);
+      if (recursive) found.push(...subdirectories(child, { recursive }));
+    }
+    return found;
+  }
+
+  function expandGlob(glob) {
+    if (!glob.includes("*") && !glob.startsWith("!")) return [glob];
+    if (glob.endsWith("/**")) {
+      return subdirectories(glob.slice(0, -3), { recursive: true });
+    }
+    if (glob.endsWith("/*")) {
+      return subdirectories(glob.slice(0, -2), { recursive: false });
+    }
+    // Refuse rather than match nothing: a pattern that quietly expands to []
+    // turns this whole test into a no-op that still reports success.
+    throw new Error(
+      `pnpm-workspace.yaml uses a glob this test cannot expand: ${glob}. `
+        + "Teach expandGlob about it rather than letting it match nothing.",
+    );
+  }
+
+  function workspacePackageNames() {
+    const names = [JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8")).name];
+    for (const glob of workspaceGlobs()) {
+      for (const dir of expandGlob(glob)) {
+        // Intermediate directories of a nested glob legitimately have no
+        // manifest — `packages/messaging` is exactly that case here.
+        const manifest = join(repoRoot, dir, "package.json");
+        if (!existsSync(manifest)) continue;
+        names.push(JSON.parse(readFileSync(manifest, "utf8")).name);
+      }
+    }
+    return [...new Set(names)];
+  }
+
+  it("enumerates the workspace from pnpm-workspace.yaml", () => {
+    // A typo in the parser would otherwise read as "nothing to check, all
+    // covered", which is the failure mode this whole block exists to prevent.
+    expect(workspaceGlobs().length).toBeGreaterThan(0);
+    expect(workspacePackageNames().length).toBeGreaterThan(1);
+  });
+
+  it("covers every workspace package", () => {
+    const uncovered = workspacePackageNames().filter(
+      (name) => !isFirstParty({ name }),
+    );
+    expect(uncovered).toEqual([]);
+  });
+
+  it("does not treat an unrelated registry package as first party", () => {
+    // The prefix is `@pwragent/`, which is exclusively ours — but a name that
+    // merely starts with the letters must not slip through.
+    for (const name of ["pwragent-cli", "@pwragentfoo/bar", "lodash", "@types/node"]) {
+      expect(isFirstParty({ name })).toBe(false);
+    }
   });
 });
 

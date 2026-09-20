@@ -11,7 +11,14 @@ const dependencyFields = [
   'peerDependencies',
 ]
 
-const firstPartyPackageNames = new Set(['pwragent-workspace'])
+// Workspace packages whose name the `@pwragent/` prefix below does not catch.
+// `pwragent-workspace` is the repository root; `packages/pwragent` is published
+// unscoped. A name missed here loses devDependency scanning AND the
+// `pnpm.overrides` / `resolutions` scan, since both sit behind `isFirstParty` —
+// two holes from one drifted string, which is why the enumeration test in
+// `scripts/pnpmfile.test.mjs` derives this list from the workspace globs rather
+// than trusting it by eye.
+const firstPartyPackageNames = new Set(['pwragent-workspace', 'pwragent'])
 const firstPartyPackagePrefix = '@pwragent/'
 
 function isFirstParty(pkg) {
