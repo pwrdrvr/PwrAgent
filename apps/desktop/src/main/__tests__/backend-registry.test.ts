@@ -9251,6 +9251,124 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  it("does not record an explicit thought level the session's model does not offer", async () => {
+    // K2.7 Coding offers only `on`. The client skips any other level unless
+    // told to refuse it, and a skip resolves with the unchanged state.
+    const acpBackendId = "acp:kimi" as AcpBackendId;
+    const sessionRuntime: BackendAcpSessionRuntimeState = {
+      configValues: { model: "kimi-code/kimi-for-coding", thinking: "on" },
+      updatedAt: 1000,
+    };
+    const overlayStore = createOverlayStoreMock();
+    const { acpClient, registry, sessions } = createKimiAcpRegistry({
+      acpBackendId,
+      overlayStore,
+      sessions: [
+        {
+          backendId: acpBackendId,
+          sessionId: "kimi-session-1",
+          title: "ACP session",
+          cwd: "/repo/project",
+          createdAt: 1000,
+          updatedAt: 1000,
+          executionMode: "default",
+          status: "idle",
+          acpRuntime: sessionRuntime,
+        },
+      ],
+    });
+    acpClient.setRuntimeOption.mockImplementation(async (params: {
+      sessionId: string;
+      optionId?: string;
+      value?: string;
+      rejectUnofferedThoughtLevel?: boolean;
+    }) => {
+      if (params.optionId === "thinking" && params.value !== "on") {
+        if (params.rejectUnofferedThoughtLevel) {
+          throw new Error(
+            `The session's model does not offer "${params.value}" for thinking`,
+          );
+        }
+        return sessionRuntime;
+      }
+      throw new Error(`unexpected write: ${params.optionId}=${params.value}`);
+    });
+    const events: AgentEvent[] = [];
+    const unsubscribe = registry.onEvent((event) => { events.push(event); });
+
+    await expect(
+      registry.setAcpSessionRuntimeOption({
+        backend: acpBackendId,
+        threadId: "kimi-session-1",
+        source: "configOption",
+        optionId: "thinking",
+        value: "low",
+      }),
+    ).rejects.toThrow('does not offer "low" for thinking');
+    expect(sessions[0]?.acpRuntime).toEqual({
+      configValues: { model: "kimi-code/kimi-for-coding", thinking: "on" },
+      updatedAt: 1000,
+    });
+    expect(
+      events.filter(
+        (event) => event.notification.method === "thread/acpRuntime/updated",
+      ),
+    ).toEqual([]);
+    expect(
+      (
+        await overlayStore.getThreadOverlayState({
+          backend: acpBackendId,
+          threadId: "kimi-session-1",
+        })
+      )?.permissionTransitionLog,
+    ).toBeUndefined();
+
+    // The same request during a turn is queued, and its flush must record
+    // nothing either. The queue's own retry decides what happens next.
+    await registry.publishLocalEvent({
+      backend: acpBackendId,
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "kimi-session-1",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+    await registry.setAcpSessionRuntimeOption({
+      backend: acpBackendId,
+      threadId: "kimi-session-1",
+      source: "configOption",
+      optionId: "thinking",
+      value: "low",
+    });
+    await emitCompletedTurn(registry, acpBackendId, "kimi-session-1");
+
+    expect(sessions[0]?.acpRuntime).toEqual({
+      configValues: { model: "kimi-code/kimi-for-coding", thinking: "on" },
+      updatedAt: 1000,
+    });
+    expect(
+      events.filter(
+        (event) => event.notification.method === "thread/acpRuntime/updated",
+      ),
+    ).toEqual([]);
+    expect(
+      (
+        await overlayStore.getThreadOverlayState({
+          backend: acpBackendId,
+          threadId: "kimi-session-1",
+        })
+      )?.permissionTransitionLog?.map((transition) => transition.status),
+    ).toEqual(["queued"]);
+    // The flush ran and was refused: the direct write plus one attempt.
+    expect(acpClient.setRuntimeOption).toHaveBeenCalledTimes(2);
+
+    unsubscribe();
+    await registry.close();
+  });
+
   it("archives and restores persisted ACP sessions locally", async () => {
     const acpBackendId = "acp:gemini" as AcpBackendId;
     const sessions: AcpSessionMetadata[] = [
@@ -10546,6 +10664,7 @@ describe("DesktopBackendRegistry", () => {
       source: "configOption",
       optionId: "approval-mode",
       value: "yolo",
+      rejectUnofferedThoughtLevel: true,
     });
     await expect(
       overlayStore.getThreadOverlayState({
