@@ -664,6 +664,12 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     referencedStorageKeys: Set<string>;
     groupedStorageKeys: Set<string>;
   };
+  private navigationOverlayCache?: {
+    dataVersion: number;
+    threadChanges: number;
+    rows: Map<string, string | null>;
+    bytes: number;
+  };
   private remotePinNavigationCache?: { version: string; expires: number; rows: NavigationThreadSummary[] };
   private backendReadCache?: {
     payload: string;
@@ -894,53 +900,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     const keys = providerRows.map((thread) => encodeThreadIdentityKeyForStorage(buildThreadIdentityKey(thread.source, thread.id)));
     const overlays: Record<string, ThreadOverlayState | undefined> = {};
     const handoffSources = new Map<string, { sourceBackend: AppServerBackendKind; sourceThreadId: string }>();
-    const rows = this.stateDb.raw.prepare(`
-      SELECT thread_id, json_object(
-          'backend', json_extract(payload, '$.backend'),
-          'threadId', json_extract(payload, '$.threadId'),
-          'executionMode', json_extract(payload, '$.executionMode'),
-          'executionModeUpdatedAt', json_extract(payload, '$.executionModeUpdatedAt'),
-          'model', json_extract(payload, '$.model'),
-          'reasoningEffort', json_extract(payload, '$.reasoningEffort'),
-          'serviceTier', json_extract(payload, '$.serviceTier'),
-          'fastMode', json(CASE json_type(payload, '$.fastMode') WHEN 'true' THEN 'true' WHEN 'false' THEN 'false' END),
-          'modelMigrationRevision', json_extract(payload, '$.modelMigrationRevision'),
-          'modelSettingsManuallyUpdatedAt', json_extract(payload, '$.modelSettingsManuallyUpdatedAt'),
-          'gitBranch', json_extract(payload, '$.gitBranch'),
-          'observedGitBranch', json_extract(payload, '$.observedGitBranch'),
-          'snoozedUntil', json_extract(payload, '$.snoozedUntil'),
-          'dismissedAt', json_extract(payload, '$.dismissedAt'),
-          'lastSeenAt', json_extract(payload, '$.lastSeenAt'),
-          'lastSeenUpdatedAt', json_extract(payload, '$.lastSeenUpdatedAt'),
-          'extraLinkedDirectories', json_extract(payload, '$.extraLinkedDirectories'),
-          'pinnedRank', json_extract(payload, '$.pinnedRank'),
-          'parentThreadId', json_extract(payload, '$.parentThreadId'),
-          'parentThreadBackend', json_extract(payload, '$.parentThreadBackend'),
-          'parentThreadInstanceId', json_extract(payload, '$.parentThreadInstanceId'),
-          'handoffGroupSource', CASE WHEN json_extract(payload, '$.handoffOrigin.groupingMode') = 'subthread' THEN json_object(
-            'sourceBackend', json_extract(payload, '$.handoffOrigin.sourceBackend'),
-            'sourceThreadId', json_extract(payload, '$.handoffOrigin.sourceThreadId')
-          ) END,
-          'subthreadOrder', json_extract(payload, '$.subthreadOrder'),
-          'subthreadsCollapsed', json(CASE json_type(payload, '$.subthreadsCollapsed') WHEN 'true' THEN 'true' WHEN 'false' THEN 'false' END),
-          'prs', json_extract(payload, '$.prs'),
-          'reactions', json_extract(payload, '$.reactions'),
-          'scheduledStart', json_extract(payload, '$.scheduledStart'),
-          'prAutoDispatchEnabled', json(CASE json_type(payload, '$.prAutoDispatchEnabled') WHEN 'true' THEN 'true' WHEN 'false' THEN 'false' END),
-          'agent', CASE WHEN json_type(payload, '$.agent') = 'object'
-            AND NOT COALESCE(json_extract(payload, '$.agent.instructions') = ?
-              AND json_type(payload, '$.handoffOrigin') = 'object'
-              AND (json_extract(payload, '$.handoffOrigin.taskTitle') IS NULL
-                OR json_extract(payload, '$.agent.name') = json_extract(payload, '$.handoffOrigin.taskTitle')), 0) THEN json_object(
-            'name', json_extract(payload, '$.agent.name'),
-            'instructions', '',
-            'instructionLineCount', json_extract(payload, '$.agent.instructionLineCount'),
-            'instructionsTooLong', json(CASE json_type(payload, '$.agent.instructionsTooLong') WHEN 'true' THEN 'true' WHEN 'false' THEN 'false' END),
-            'createdAt', json_extract(payload, '$.agent.createdAt'),
-            'updatedAt', json_extract(payload, '$.agent.updatedAt')
-          ) END
-      ) AS compact FROM threads WHERE thread_id IN (SELECT value FROM json_each(?))
-    `).iterate(LEGACY_HANDOFF_AGENT_INSTRUCTIONS, JSON.stringify(keys)) as Iterable<{ thread_id: string; compact: string }>;
+    const rows = this.readNavigationOverlayRows(keys, 32 * 1024 * 1024 - inputBytes);
     for (const row of rows) {
       inputBytes += Buffer.byteLength(row.compact, "utf8");
       if (inputBytes > 32 * 1024 * 1024) throw new Error("Owner navigation overlay index exceeds its 32 MiB admission budget.");
@@ -1008,6 +968,99 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     const directories = buildDirectorySummaries({ threads, launchpadsByKey: launchpads, launchpadPresenceKeys,
       directoryOverlayByKey: this.readAllDirectoryOverlaysSync(), workspaceRoots: params.workspaceRoots });
     return { threads, directories };
+  }
+
+  /** Cache only the durable compact projection, never provider rows or mutable
+   * materialized navigation objects. External commits and unknown local writes
+   * invalidate the generation; putThread invalidates just its own identity.
+   * Transactions bypass reuse so rolled-back projections cannot escape.
+   */
+  private readNavigationOverlayRows(keys: string[], byteBudget = 32 * 1024 * 1024): Array<{ thread_id: string; compact: string }> {
+    const generation = {
+      dataVersion: this.stateDb.raw.pragma("data_version", { simple: true }) as number,
+      threadChanges: sqliteThreadChangeVersion(this.stateDb.raw),
+    };
+    const inTransaction = this.stateDb.raw.inTransaction;
+    if (!inTransaction && (this.navigationOverlayCache?.dataVersion !== generation.dataVersion
+      || this.navigationOverlayCache.threadChanges !== generation.threadChanges)) {
+      this.navigationOverlayCache = { ...generation, rows: new Map(), bytes: 0 };
+    }
+    const cache = inTransaction ? undefined : this.navigationOverlayCache;
+    const missing = [...new Set(keys)].filter((key) => !cache?.rows.has(key));
+    const values = new Map<string, string | null>();
+    let inputBytes = 0;
+    const admit = (key: string, compact: string | null) => {
+      inputBytes += Buffer.byteLength(compact ?? "", "utf8");
+      if (inputBytes > byteBudget) throw new Error("Owner navigation overlay index exceeds its 32 MiB admission budget.");
+      values.set(key, compact);
+    };
+    for (const key of new Set(keys)) {
+      if (cache?.rows.has(key)) admit(key, cache.rows.get(key)!);
+    }
+    if (missing.length > 0) {
+      for (const key of missing) values.set(key, null);
+      const rows = this.stateDb.raw.prepare(`
+        SELECT thread_id, json_object(
+            'backend', json_extract(payload, '$.backend'),
+            'threadId', json_extract(payload, '$.threadId'),
+            'executionMode', json_extract(payload, '$.executionMode'),
+            'executionModeUpdatedAt', json_extract(payload, '$.executionModeUpdatedAt'),
+            'model', json_extract(payload, '$.model'),
+            'reasoningEffort', json_extract(payload, '$.reasoningEffort'),
+            'serviceTier', json_extract(payload, '$.serviceTier'),
+            'fastMode', json(CASE json_type(payload, '$.fastMode') WHEN 'true' THEN 'true' WHEN 'false' THEN 'false' END),
+            'modelMigrationRevision', json_extract(payload, '$.modelMigrationRevision'),
+            'modelSettingsManuallyUpdatedAt', json_extract(payload, '$.modelSettingsManuallyUpdatedAt'),
+            'gitBranch', json_extract(payload, '$.gitBranch'),
+            'observedGitBranch', json_extract(payload, '$.observedGitBranch'),
+            'snoozedUntil', json_extract(payload, '$.snoozedUntil'),
+            'dismissedAt', json_extract(payload, '$.dismissedAt'),
+            'lastSeenAt', json_extract(payload, '$.lastSeenAt'),
+            'lastSeenUpdatedAt', json_extract(payload, '$.lastSeenUpdatedAt'),
+            'extraLinkedDirectories', json_extract(payload, '$.extraLinkedDirectories'),
+            'pinnedRank', json_extract(payload, '$.pinnedRank'),
+            'parentThreadId', json_extract(payload, '$.parentThreadId'),
+            'parentThreadBackend', json_extract(payload, '$.parentThreadBackend'),
+            'parentThreadInstanceId', json_extract(payload, '$.parentThreadInstanceId'),
+            'handoffGroupSource', CASE WHEN json_extract(payload, '$.handoffOrigin.groupingMode') = 'subthread' THEN json_object(
+              'sourceBackend', json_extract(payload, '$.handoffOrigin.sourceBackend'),
+              'sourceThreadId', json_extract(payload, '$.handoffOrigin.sourceThreadId')
+            ) END,
+            'subthreadOrder', json_extract(payload, '$.subthreadOrder'),
+            'subthreadsCollapsed', json(CASE json_type(payload, '$.subthreadsCollapsed') WHEN 'true' THEN 'true' WHEN 'false' THEN 'false' END),
+            'prs', json_extract(payload, '$.prs'),
+            'reactions', json_extract(payload, '$.reactions'),
+            'scheduledStart', json_extract(payload, '$.scheduledStart'),
+            'prAutoDispatchEnabled', json(CASE json_type(payload, '$.prAutoDispatchEnabled') WHEN 'true' THEN 'true' WHEN 'false' THEN 'false' END),
+            'agent', CASE WHEN json_type(payload, '$.agent') = 'object'
+              AND NOT COALESCE(json_extract(payload, '$.agent.instructions') = ?
+                AND json_type(payload, '$.handoffOrigin') = 'object'
+                AND (json_extract(payload, '$.handoffOrigin.taskTitle') IS NULL
+                  OR json_extract(payload, '$.agent.name') = json_extract(payload, '$.handoffOrigin.taskTitle')), 0) THEN json_object(
+              'name', json_extract(payload, '$.agent.name'),
+              'instructions', '',
+              'instructionLineCount', json_extract(payload, '$.agent.instructionLineCount'),
+              'instructionsTooLong', json(CASE json_type(payload, '$.agent.instructionsTooLong') WHEN 'true' THEN 'true' WHEN 'false' THEN 'false' END),
+              'createdAt', json_extract(payload, '$.agent.createdAt'),
+              'updatedAt', json_extract(payload, '$.agent.updatedAt')
+            ) END
+        ) AS compact FROM threads WHERE thread_id IN (SELECT value FROM json_each(?))
+      `).iterate(LEGACY_HANDOFF_AGENT_INSTRUCTIONS, JSON.stringify(missing)) as Iterable<{ thread_id: string; compact: string }>;
+      for (const row of rows) admit(row.thread_id, row.compact);
+      if (cache) {
+        for (const key of missing) {
+          const compact = values.get(key)!;
+          const bytes = Buffer.byteLength(key, "utf8") + Buffer.byteLength(compact ?? "", "utf8");
+          // Bound retained serialized metadata and missing identities alike.
+          if (bytes > 8 * 1024 * 1024) continue;
+          if (cache.bytes + bytes > 8 * 1024 * 1024 || cache.rows.size >= 10_000) {
+            cache.rows.clear(); cache.bytes = 0;
+          }
+          cache.rows.set(key, compact); cache.bytes += bytes;
+        }
+      }
+    }
+    return [...values].flatMap(([thread_id, compact]) => compact === null ? [] : [{ thread_id, compact }]);
   }
 
   async reconcileNavigationSnapshot(params: {
@@ -7264,7 +7317,8 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     } = state;
     const storageKey = encodeThreadIdentityKeyForStorage(threadKey);
     const cache = this.managedSubAgentCache;
-    const previousThreadChanges = cache ? sqliteThreadChangeVersion(this.stateDb.raw) : undefined;
+    const navigationCache = this.navigationOverlayCache;
+    const previousThreadChanges = cache || navigationCache ? sqliteThreadChangeVersion(this.stateDb.raw) : undefined;
     this.stateDb.raw
       .prepare(
         `INSERT OR REPLACE INTO threads(thread_id, directory_path, last_seen_at, dismissed_at, snoozed_until, payload)
@@ -7278,6 +7332,17 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
         persistable.snoozedUntil ?? null,
         JSON.stringify(persistable),
       );
+    if (navigationCache && !this.stateDb.raw.inTransaction
+      && navigationCache.threadChanges === previousThreadChanges) {
+      const threadChanges = sqliteThreadChangeVersion(this.stateDb.raw);
+      if (threadChanges === previousThreadChanges + 1) {
+        const compact = navigationCache.rows.get(storageKey);
+        if (navigationCache.rows.delete(storageKey)) {
+          navigationCache.bytes -= Buffer.byteLength(storageKey, "utf8") + Buffer.byteLength(compact ?? "", "utf8");
+        }
+        navigationCache.threadChanges = threadChanges;
+      }
+    }
     // The write already has these fields in memory. A status/title/usage write
     // must not discard the complete relationship set and cause another scan.
     // Never mask an earlier untracked write, a failed write, or extra writes
