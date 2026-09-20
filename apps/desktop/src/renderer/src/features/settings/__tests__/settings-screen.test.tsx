@@ -28,6 +28,7 @@ import type {
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { SettingsScreen } from "../SettingsScreen";
+import type { ConfirmSettingsLeave } from "../UnsavedSettingsChanges";
 import type { DesktopSettingsState } from "../useDesktopSettings";
 
 const originalScrollTo = window.scrollTo;
@@ -8012,6 +8013,98 @@ describe("SettingsScreen", () => {
 
 });
 
+
+describe("SettingsScreen unsaved changes", () => {
+  // Federation is the pane with explicit-save forms: leaving it used to throw
+  // away whatever had been typed without saying so.
+  const openFederation = async (): Promise<HTMLElement> => {
+    const nav = screen.getByRole("navigation", { name: "Settings sections" });
+    fireEvent.click(within(nav).getByRole("button", { name: "Federation" }));
+    fireEvent.change(await screen.findByLabelText("Instance name"), {
+      target: { value: "Studio Mac" },
+    });
+    return nav;
+  };
+
+  it("asks before a route leaves unsaved Federation edits behind", async () => {
+    const settings = createSettingsState();
+    render(<SettingsScreen settings={settings} onClose={() => undefined} />);
+    const nav = await openFederation();
+
+    // A jump to another section of the same pane keeps the form mounted.
+    fireEvent.click(within(nav).getByRole("button", { name: "Tailscale" }));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+
+    fireEvent.click(within(nav).getByRole("button", { name: "General" }));
+    const dialog = await screen.findByRole("alertdialog", {
+      name: "Save changes to Federation?",
+    });
+    expect(screen.getByLabelText("Instance name")).toHaveValue("Studio Mac");
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Keep editing" }));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(screen.getByLabelText("Instance name")).toHaveValue("Studio Mac");
+
+    fireEvent.click(within(nav).getByRole("button", { name: "General" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Discard changes" }),
+    );
+    await waitFor(() =>
+      expect(screen.queryByLabelText("Instance name")).toBeNull(),
+    );
+    fireEvent.click(within(nav).getByRole("button", { name: "Federation" }));
+    expect(await screen.findByLabelText("Instance name")).toHaveValue("");
+    expect(settings.writeConfig).not.toHaveBeenCalled();
+  });
+
+  it("saves on the way out, and stays put when the save fails", async () => {
+    const writeConfig = vi.fn(async () => false);
+    const settings = { ...createSettingsState(), writeConfig };
+    const onClose = vi.fn();
+    render(<SettingsScreen settings={settings} onClose={onClose} />);
+    await openFederation();
+
+    fireEvent.click(screen.getByRole("button", { name: /Exit Settings/ }));
+    const dialog = await screen.findByRole("alertdialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
+
+    await screen.findByText(/The changes were not saved/);
+    expect(writeConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        federation: expect.objectContaining({ instanceLabel: "Studio Mac" }),
+      }),
+    );
+    expect(onClose).not.toHaveBeenCalled();
+
+    writeConfig.mockResolvedValue(true);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+  });
+
+  it("hands the same check to the shell for routes outside Settings", async () => {
+    // What App asks before a menu command, a notification, or history closes
+    // the overlay from outside the pane.
+    let confirmLeave: ConfirmSettingsLeave | undefined;
+    render(
+      <SettingsScreen
+        registerLeaveGuard={(guard) => {
+          confirmLeave = guard;
+        }}
+        settings={createSettingsState()}
+        onClose={() => undefined}
+      />,
+    );
+    await openFederation();
+
+    const leave = vi.fn();
+    act(() => confirmLeave?.(leave));
+    await screen.findByRole("alertdialog");
+    expect(leave).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Discard changes" }));
+    await waitFor(() => expect(leave).toHaveBeenCalled());
+  });
+});
 
 function settingsQueryPage<T extends {
   directories: Array<{ key: string; label: string; kind: NavigationDirectoryRow["kind"]; launchpad?: { backend: NavigationModelInventoryRow["backend"] } }>;

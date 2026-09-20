@@ -13132,7 +13132,8 @@ a.button {
   width: min(620px, calc(100vw - 48px));
 }
 
-.settings-thread-migration-dialog:focus {
+.settings-thread-migration-dialog:focus,
+.settings-unsaved-dialog:focus {
   outline: none;
 }
 

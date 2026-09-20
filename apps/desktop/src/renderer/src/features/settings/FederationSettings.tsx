@@ -40,6 +40,8 @@ import {
   SettingsSectionStack,
 } from "./SettingsLayout";
 import { SettingsSwitch } from "./SettingsSwitch";
+import { useUnsavedSettingsChanges } from "./UnsavedSettingsChanges";
+import { useSettingsDraft } from "./useSettingsDraft";
 
 const DIAGNOSTIC_EVENT_LIMIT = 50;
 
@@ -95,80 +97,88 @@ export function FederationSettings(props: FederationSettingsProps) {
   const [forgetPinImpact, setForgetPinImpact] =
     useState<ReadFederationPinImpactResponse>();
   const forgetImpactGenerationRef = useRef(0);
-  const [mode, setMode] = useState<DesktopFederationMode>(
-    props.snapshot.federation.mode.value,
-  );
-  const [instanceLabel, setInstanceLabel] = useState(
-    props.snapshot.federation.instanceLabel.value,
-  );
-  const [compressionEnabled, setCompressionEnabled] = useState(
-    props.snapshot.federation.compressionEnabled.value,
-  );
-  const [instanceNotes, setInstanceNotes] = useState(
-    props.snapshot.federation.instanceNotes.value,
-  );
-  const [listenHost, setListenHost] = useState(
-    props.snapshot.federation.listenHost.value,
-  );
-  const [listenPort, setListenPort] = useState(
-    String(props.snapshot.federation.listenPort.value),
-  );
-  const [publicUrl, setPublicUrl] = useState(
-    props.snapshot.federation.publicUrl.value,
-  );
-  const [gatewayEndpointsText, setGatewayEndpointsText] = useState(
-    props.snapshot.federation.gatewayEndpoints.value.join("\n"),
-  );
-  const [advertisedEndpointsText, setAdvertisedEndpointsText] = useState(
-    props.snapshot.federation.advertisedEndpoints.value.join("\n"),
-  );
-  const [cloudflareEndpoint, setCloudflareEndpoint] = useState(
-    props.snapshot.federation.cloudflareEndpoint.value,
-  );
-  const [cloudflareMtlsEnabled, setCloudflareMtlsEnabled] = useState(
-    props.snapshot.federation.cloudflareMtlsEnabled.value,
-  );
-  const [
+  const federation = props.snapshot.federation;
+  // The pane's two explicit-save forms. Each field follows the saved value
+  // until the operator edits it; a settings refresh (any write, from any
+  // section or window) leaves an unsaved edit alone.
+  const configuration = useSettingsDraft({
+    mode: federation.mode.value,
+    instanceLabel: federation.instanceLabel.value,
+    compressionEnabled: federation.compressionEnabled.value,
+    instanceNotes: federation.instanceNotes.value,
+    listenHost: federation.listenHost.value,
+    listenPort: String(federation.listenPort.value),
+    publicUrl: federation.publicUrl.value,
+    gatewayEndpointsText: federation.gatewayEndpoints.value.join("\n"),
+    advertisedEndpointsText: federation.advertisedEndpoints.value.join("\n"),
+  });
+  const edgePolicy = useSettingsDraft({
+    cloudflareEndpoint: federation.cloudflareEndpoint.value,
+    cloudflareMtlsEnabled: federation.cloudflareMtlsEnabled.value,
+    cloudflareAccessServiceAuthEnabled:
+      federation.cloudflareAccessServiceAuthEnabled.value,
+    cloudflareAccessOAuthEnabled: federation.cloudflareAccessOAuthEnabled.value,
+    // Stored credentials never come back to the renderer, so these start
+    // empty and anything typed is an edit.
+    cloudflareClientCertificate: "",
+    cloudflareClientPrivateKey: "",
+    cloudflareAccessClientId: "",
+    cloudflareAccessClientSecret: "",
+  });
+  const {
+    mode,
+    instanceLabel,
+    compressionEnabled,
+    instanceNotes,
+    listenHost,
+    listenPort,
+    publicUrl,
+    gatewayEndpointsText,
+    advertisedEndpointsText,
+  } = configuration.values;
+  const setMode = (value: DesktopFederationMode) =>
+    configuration.set("mode", value);
+  const setInstanceLabel = (value: string) =>
+    configuration.set("instanceLabel", value);
+  const setCompressionEnabled = (value: boolean) =>
+    configuration.set("compressionEnabled", value);
+  const setInstanceNotes = (value: string) =>
+    configuration.set("instanceNotes", value);
+  const setListenHost = (value: string) =>
+    configuration.set("listenHost", value);
+  const setListenPort = (value: string) =>
+    configuration.set("listenPort", value);
+  const setPublicUrl = (value: string) => configuration.set("publicUrl", value);
+  const setGatewayEndpointsText = (value: string) =>
+    configuration.set("gatewayEndpointsText", value);
+  const setAdvertisedEndpointsText = (value: string) =>
+    configuration.set("advertisedEndpointsText", value);
+  const {
+    cloudflareEndpoint,
+    cloudflareMtlsEnabled,
     cloudflareAccessServiceAuthEnabled,
-    setCloudflareAccessServiceAuthEnabled,
-  ] = useState(
-    props.snapshot.federation.cloudflareAccessServiceAuthEnabled.value,
-  );
-  const [cloudflareAccessOAuthEnabled, setCloudflareAccessOAuthEnabled] =
-    useState(props.snapshot.federation.cloudflareAccessOAuthEnabled.value);
-  const [cloudflareClientCertificate, setCloudflareClientCertificate] =
-    useState("");
-  const [cloudflareClientPrivateKey, setCloudflareClientPrivateKey] =
-    useState("");
-  const [cloudflareAccessClientId, setCloudflareAccessClientId] = useState("");
-  const [cloudflareAccessClientSecret, setCloudflareAccessClientSecret] =
-    useState("");
-
-  useEffect(() => {
-    setMode(props.snapshot.federation.mode.value);
-    setCompressionEnabled(props.snapshot.federation.compressionEnabled.value);
-    setInstanceLabel(props.snapshot.federation.instanceLabel.value);
-    setInstanceNotes(props.snapshot.federation.instanceNotes.value);
-    setListenHost(props.snapshot.federation.listenHost.value);
-    setListenPort(String(props.snapshot.federation.listenPort.value));
-    setPublicUrl(props.snapshot.federation.publicUrl.value);
-    setGatewayEndpointsText(
-      props.snapshot.federation.gatewayEndpoints.value.join("\n"),
-    );
-    setAdvertisedEndpointsText(
-      props.snapshot.federation.advertisedEndpoints.value.join("\n"),
-    );
-    setCloudflareEndpoint(props.snapshot.federation.cloudflareEndpoint.value);
-    setCloudflareMtlsEnabled(
-      props.snapshot.federation.cloudflareMtlsEnabled.value,
-    );
-    setCloudflareAccessServiceAuthEnabled(
-      props.snapshot.federation.cloudflareAccessServiceAuthEnabled.value,
-    );
-    setCloudflareAccessOAuthEnabled(
-      props.snapshot.federation.cloudflareAccessOAuthEnabled.value,
-    );
-  }, [props.snapshot]);
+    cloudflareAccessOAuthEnabled,
+    cloudflareClientCertificate,
+    cloudflareClientPrivateKey,
+    cloudflareAccessClientId,
+    cloudflareAccessClientSecret,
+  } = edgePolicy.values;
+  const setCloudflareEndpoint = (value: string) =>
+    edgePolicy.set("cloudflareEndpoint", value);
+  const setCloudflareMtlsEnabled = (value: boolean) =>
+    edgePolicy.set("cloudflareMtlsEnabled", value);
+  const setCloudflareAccessServiceAuthEnabled = (value: boolean) =>
+    edgePolicy.set("cloudflareAccessServiceAuthEnabled", value);
+  const setCloudflareAccessOAuthEnabled = (value: boolean) =>
+    edgePolicy.set("cloudflareAccessOAuthEnabled", value);
+  const setCloudflareClientCertificate = (value: string) =>
+    edgePolicy.set("cloudflareClientCertificate", value);
+  const setCloudflareClientPrivateKey = (value: string) =>
+    edgePolicy.set("cloudflareClientPrivateKey", value);
+  const setCloudflareAccessClientId = (value: string) =>
+    edgePolicy.set("cloudflareAccessClientId", value);
+  const setCloudflareAccessClientSecret = (value: string) =>
+    edgePolicy.set("cloudflareAccessClientSecret", value);
 
   const loadHealth = async () => {
     const diagnosticsReader = props.desktopApi?.readFederationDiagnostics;
@@ -293,9 +303,8 @@ export function FederationSettings(props: FederationSettingsProps) {
           "Tailscale was configured, but its Public URL could not be saved.",
         );
       }
-      setMode(gatewayMode);
-      setListenHost("127.0.0.1");
-      setPublicUrl(response.gatewayUrl);
+      // Those fields are saved now; show what was written.
+      configuration.discard("mode", "listenHost", "listenPort", "publicUrl");
       setTailscaleStatus(response.status);
       await props.onSettingsChanged();
       await loadHealth();
@@ -440,6 +449,113 @@ export function FederationSettings(props: FederationSettingsProps) {
       .finally(() => setForgetting(false));
   };
 
+  const saveConfiguration = async (): Promise<boolean> => {
+    setActionError(undefined);
+    const gatewayEndpoints = parseGatewayEndpoints(gatewayEndpointsText);
+    const advertisedEndpoints = parseGatewayEndpoints(advertisedEndpointsText);
+    const invalidEndpoint = [
+      ...gatewayEndpoints,
+      ...advertisedEndpoints,
+    ].find((endpoint) => !isFederationGatewayEndpointUrl(endpoint));
+    if (invalidEndpoint) {
+      setActionError(
+        `Endpoint "${invalidEndpoint}" must be a ws://, wss://, or ssh:// URL without an embedded password.`,
+      );
+      return false;
+    }
+    const written = await props.onWriteConfig({
+      federation: {
+        mode,
+        compressionEnabled,
+        instanceLabel,
+        instanceNotes,
+        listenHost,
+        listenPort: Number.parseInt(listenPort, 10) || 0,
+        publicUrl,
+        gatewayEndpoints,
+        advertisedEndpoints,
+        cloudflareMtlsEnabled,
+        cloudflareAccessServiceAuthEnabled,
+        cloudflareAccessOAuthEnabled,
+      },
+    });
+    // A silent false here is how "I set it to client" turns
+    // into a disabled-mode surprise on the next launch.
+    if (!written) {
+      setActionError("Federation settings could not be saved to config.toml.");
+      return false;
+    }
+    // What was typed and what was saved can differ ("047831", blank endpoint
+    // lines), so show the saved values rather than keep the typed ones.
+    configuration.discard();
+    await props.onSettingsChanged();
+    await loadHealth();
+    return true;
+  };
+
+  const saveEdgePolicy = async (): Promise<boolean> => {
+    setActionError(undefined);
+    if (
+      cloudflareEndpoint.trim()
+      && !isFederationGatewayEndpointUrl(cloudflareEndpoint)
+    ) {
+      setActionError(
+        "Cloudflare endpoint must be a wss:// URL matching one of the gateway endpoints.",
+      );
+      return false;
+    }
+    try {
+      await saveCloudflareSettings({
+        config: {
+          cloudflareEndpoint: cloudflareEndpoint.trim(),
+          cloudflareMtlsEnabled,
+          cloudflareAccessServiceAuthEnabled,
+          cloudflareAccessOAuthEnabled,
+        },
+        secrets: [
+          [
+            "federationCloudflareClientCertificate",
+            cloudflareClientCertificate,
+          ],
+          [
+            "federationCloudflareClientPrivateKey",
+            cloudflareClientPrivateKey,
+          ],
+          ["federationCloudflareAccessClientId", cloudflareAccessClientId],
+          [
+            "federationCloudflareAccessClientSecret",
+            cloudflareAccessClientSecret,
+          ],
+        ],
+        onReplaceSecret: props.onReplaceSecret,
+        onWriteConfig: props.onWriteConfig,
+      });
+      edgePolicy.discard();
+      await props.onSettingsChanged();
+      await loadHealth();
+      return true;
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err));
+      return false;
+    }
+  };
+
+  // Leaving the pane unmounts both forms, so Settings asks first.
+  useUnsavedSettingsChanges(
+    configuration.dirty || edgePolicy.dirty
+      ? {
+          label: "Federation",
+          save: async () =>
+            (!configuration.dirty || await saveConfiguration())
+            && (!edgePolicy.dirty || await saveEdgePolicy()),
+          discard: () => {
+            configuration.discard();
+            edgePolicy.discard();
+          },
+        }
+      : undefined,
+  );
+
   const connectionRemediation = effectiveHealth.unavailableReason
     ? remediationForConnectionFailure(effectiveHealth.unavailableReason)
     : undefined;
@@ -490,8 +606,14 @@ export function FederationSettings(props: FederationSettingsProps) {
         sectionId="configuration"
         eyebrow="Setup"
         title="Configuration"
-        chip={props.saving ? "Saving" : "Editable"}
-        chipKind={props.saving ? "warn" : "muted"}
+        chip={
+          props.saving
+            ? "Saving"
+            : configuration.dirty
+              ? "Unsaved"
+              : "Editable"
+        }
+        chipKind={props.saving || configuration.dirty ? "warn" : "muted"}
       >
         <div className="settings-fields">
           <SettingsField
@@ -702,52 +824,7 @@ export function FederationSettings(props: FederationSettingsProps) {
               className="button button--primary"
               type="button"
               disabled={props.saving}
-              onClick={() => {
-                setActionError(undefined);
-                const gatewayEndpoints = parseGatewayEndpoints(
-                  gatewayEndpointsText,
-                );
-                const advertisedEndpoints = parseGatewayEndpoints(
-                  advertisedEndpointsText,
-                );
-                const invalidEndpoint = [
-                  ...gatewayEndpoints,
-                  ...advertisedEndpoints,
-                ].find((endpoint) => !isFederationGatewayEndpointUrl(endpoint));
-                if (invalidEndpoint) {
-                  setActionError(
-                    `Endpoint "${invalidEndpoint}" must be a ws://, wss://, or ssh:// URL without an embedded password.`,
-                  );
-                  return;
-                }
-                void props.onWriteConfig({
-                  federation: {
-                    mode,
-                    compressionEnabled,
-                    instanceLabel,
-                    instanceNotes,
-                    listenHost,
-                    listenPort: Number.parseInt(listenPort, 10) || 0,
-                    publicUrl,
-                    gatewayEndpoints,
-                    advertisedEndpoints,
-                    cloudflareMtlsEnabled,
-                    cloudflareAccessServiceAuthEnabled,
-                    cloudflareAccessOAuthEnabled,
-                  },
-                }).then(async (written) => {
-                  // A silent false here is how "I set it to client" turns
-                  // into a disabled-mode surprise on the next launch.
-                  if (!written) {
-                    setActionError(
-                      "Federation settings could not be saved to config.toml.",
-                    );
-                    return;
-                  }
-                  await props.onSettingsChanged();
-                  await loadHealth();
-                });
-              }}
+              onClick={() => void saveConfiguration()}
             >
               Save federation settings
             </button>
@@ -1449,9 +1526,9 @@ export function FederationSettings(props: FederationSettingsProps) {
         onWriteConfig={props.onWriteConfig}
         onSettingsChanged={props.onSettingsChanged}
         manualConfigured={
-          cloudflareMtlsEnabled
-          || cloudflareAccessServiceAuthEnabled
-          || cloudflareAccessOAuthEnabled
+          federation.cloudflareMtlsEnabled.value
+          || federation.cloudflareAccessServiceAuthEnabled.value
+          || federation.cloudflareAccessOAuthEnabled.value
         }
         manual={
           <div className="settings-fields">
@@ -1579,59 +1656,7 @@ export function FederationSettings(props: FederationSettingsProps) {
                 className="button button--secondary"
                 type="button"
                 disabled={props.saving}
-                onClick={() => {
-                  setActionError(undefined);
-                  if (
-                    cloudflareEndpoint.trim()
-                    && !isFederationGatewayEndpointUrl(cloudflareEndpoint)
-                  ) {
-                    setActionError(
-                      "Cloudflare endpoint must be a wss:// URL matching one of the gateway endpoints.",
-                    );
-                    return;
-                  }
-                  void saveCloudflareSettings({
-                    config: {
-                      cloudflareEndpoint: cloudflareEndpoint.trim(),
-                      cloudflareMtlsEnabled,
-                      cloudflareAccessServiceAuthEnabled,
-                      cloudflareAccessOAuthEnabled,
-                    },
-                    secrets: [
-                      [
-                        "federationCloudflareClientCertificate",
-                        cloudflareClientCertificate,
-                      ],
-                      [
-                        "federationCloudflareClientPrivateKey",
-                        cloudflareClientPrivateKey,
-                      ],
-                      [
-                        "federationCloudflareAccessClientId",
-                        cloudflareAccessClientId,
-                      ],
-                      [
-                        "federationCloudflareAccessClientSecret",
-                        cloudflareAccessClientSecret,
-                      ],
-                    ],
-                    onReplaceSecret: props.onReplaceSecret,
-                    onWriteConfig: props.onWriteConfig,
-                  })
-                    .then(async () => {
-                      setCloudflareClientCertificate("");
-                      setCloudflareClientPrivateKey("");
-                      setCloudflareAccessClientId("");
-                      setCloudflareAccessClientSecret("");
-                      await props.onSettingsChanged();
-                      await loadHealth();
-                    })
-                    .catch((err: unknown) =>
-                      setActionError(
-                        err instanceof Error ? err.message : String(err),
-                      ),
-                    );
-                }}
+                onClick={() => void saveEdgePolicy()}
               >
                 Save edge policy
               </button>
@@ -1672,10 +1697,12 @@ export function FederationSettings(props: FederationSettingsProps) {
                           "Cloudflare edge policy could not be updated.",
                         );
                       }
-                      setCloudflareEndpoint("");
-                      setCloudflareMtlsEnabled(false);
-                      setCloudflareAccessServiceAuthEnabled(false);
-                      setCloudflareAccessOAuthEnabled(false);
+                      edgePolicy.discard(
+                        "cloudflareEndpoint",
+                        "cloudflareMtlsEnabled",
+                        "cloudflareAccessServiceAuthEnabled",
+                        "cloudflareAccessOAuthEnabled",
+                      );
                       await props.onSettingsChanged();
                       await loadHealth();
                     })
