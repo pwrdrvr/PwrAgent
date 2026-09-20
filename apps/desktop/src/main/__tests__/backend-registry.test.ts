@@ -51297,6 +51297,100 @@ script = "printf setup"
       await registry.close();
     });
 
+    it.each([
+      { from: "default", to: "auto", reviewer: "auto_review" },
+      { from: "auto", to: "default", reviewer: "user" },
+    ] as const)("queues $from to $to until the managed review finishes", async ({ from, to, reviewer }) => {
+      const codexClient = new MockBackendClient({
+        initializeResult: { methods: ["thread/start", "turn/start"] },
+        startThreadResult: { threadId: "managed-review-child" },
+      });
+      const overlayStore = createOverlayStoreMock({
+        overlays: {
+          "codex:thread-parent": {
+            backend: "codex",
+            threadId: "thread-parent",
+            executionMode: from,
+            extraLinkedDirectories: [],
+          },
+        },
+      });
+      const registry = new DesktopBackendRegistry({
+        codexClient,
+        overlayStore,
+        resolveManagedReviewEnabled: () => true,
+      });
+      const review = await registry.startReview({
+        backend: "codex",
+        threadId: "thread-parent",
+        target: { type: "baseBranch", branch: "main" },
+        delivery: "inline",
+      });
+      expect(review.reviewThreadId).toBe("managed-review-child");
+
+      await registry.setThreadExecutionMode({
+        backend: "codex", threadId: "thread-parent", executionMode: to,
+      });
+
+      expect(codexClient.setTurnApprovalReviewer).not.toHaveBeenCalled();
+      expect(codexClient.lastSetThreadPermissionsParams).toBeUndefined();
+      expect((await overlayStore.getThreadOverlayState({
+        backend: "codex", threadId: "thread-parent",
+      }))?.executionMode).toBe(from);
+      expect(registry.getQueuedExecutionModeForThread({
+        backend: "codex", threadId: "thread-parent",
+      })?.mode).toBe(to);
+      expect(await getLog(overlayStore, "thread-parent")).toEqual([
+        expect.objectContaining({
+          fromExecutionMode: from, toExecutionMode: to, status: "queued",
+        }),
+      ]);
+
+      await codexClient.emit({
+        method: "item/completed",
+        params: {
+          threadId: review.reviewThreadId,
+          turnId: review.turnId,
+          item: {
+            id: "review-output",
+            type: "agentMessage",
+            text: JSON.stringify({
+              findings: [],
+              overall_correctness: "patch is correct",
+              overall_explanation: "No blocking findings.",
+              overall_confidence_score: 0.96,
+            }),
+          },
+        },
+      });
+      await codexClient.emit({
+        method: "turn/completed",
+        params: {
+          threadId: review.reviewThreadId,
+          turnId: review.turnId,
+          turn: { id: review.turnId, status: "completed", output: [] },
+        },
+      });
+      await vi.waitFor(async () => {
+        expect((await overlayStore.getThreadOverlayState({
+          backend: "codex", threadId: "thread-parent",
+        }))?.executionMode).toBe(to);
+        expect(registry.getQueuedExecutionModeForThread({
+          backend: "codex", threadId: "thread-parent",
+        })).toBeUndefined();
+        expect((await getLog(overlayStore, "thread-parent")).map((entry) => entry.status))
+          .toEqual(["queued", "applied"]);
+      });
+      expect(codexClient.lastSetThreadPermissionsParams).toEqual({
+        threadId: "thread-parent",
+        approvalPolicy: "on-request",
+        sandbox: "workspace-write",
+        approvalsReviewer: reviewer,
+      });
+      expect(codexClient.setTurnApprovalReviewer).not.toHaveBeenCalled();
+      await registry.close();
+    });
+
     it.each(["targetUnavailable", "rejected"])("preserves the mode when live Auto update is %s", async (outcome) => {
       const { codexClient, overlayStore, registry } = buildIdleRegistry();
       await startActiveTurn(registry, "thread-1");
