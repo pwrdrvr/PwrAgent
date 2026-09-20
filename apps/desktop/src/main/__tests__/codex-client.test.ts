@@ -12668,6 +12668,34 @@ describe("CodexAppServerClient", () => {
     }
   });
 
+  it("translates a pinned PR target to native custom instructions without leaking its discriminant", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+    const headCommit = "b".repeat(40);
+    const baseCommit = "a".repeat(40);
+    try {
+      await client.startReview({
+        threadId: "thread-2",
+        target: {
+          type: "pullRequest", url: "https://github.com/fixture/project/pull/1",
+          snapshot: {
+            pullRequest: { provider: "github.com", org: "fixture", repo: "project", number: 1, url: "https://github.com/fixture/project/pull/1" },
+            headCommit, baseCommit, mergeBaseCommit: baseCommit, capturedAt: 1,
+          },
+        },
+      });
+      const request = MockTransport.instances.at(-1)!.sentMessages
+        .map((message) => JSON.parse(message))
+        .find((message) => message.method === "review/start");
+      expect(request.params.target).toEqual({
+        type: "custom", instructions: expect.stringContaining(`git diff --no-ext-diff ${baseCommit} ${headCommit}`),
+      });
+      expect(request.params.target.instructions).toContain(`git show '${headCommit}:path/to/file'`);
+    } finally {
+      await client.close();
+    }
+  });
+
   it("best-effort resumes an existing thread before starting a review", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
 

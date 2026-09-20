@@ -1296,6 +1296,7 @@ export type MessagingApprovalIntent = MessagingBaseSurfaceIntent & {
  * provider's guessed default.
  */
 export type MessagingReviewStartTarget =
+  | { type: "pullRequest"; url: string; headCommit?: string }
   | { type: "uncommittedChanges" }
   | { type: "baseBranch"; branch: string }
   | { type: "commit"; sha: string }

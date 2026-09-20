@@ -1,4 +1,5 @@
 import { ReviewLocationDropdown } from "./ReviewLocationDropdown";
+import { attachedPullRequestsForWorkspace } from "../../../../shared/pull-request-review";
 import { hydrateComposerDraft } from "./composer-draft-hydration";
 import type { NavigationDirectoryView as NavigationDirectorySummary } from "../../lib/navigation-loaded-rows";
 import {
@@ -602,6 +603,7 @@ const CONTEXT_MOON_PHASES = [
 ] as const;
 
 type ReviewConfigState = {
+  pullRequestUrl?: string;
   branch: string;
   branchSource?: "auto" | "user";
   commit: string;
@@ -793,6 +795,11 @@ const REVIEW_TARGET_OPTIONS: Array<{
   target: ReviewTargetChoice;
 }> = [
   {
+    target: "pullRequest",
+    label: "Attached PR",
+    description: "Review the selected pull request at its published head",
+  },
+  {
     target: "baseBranch",
     label: "Base branch",
     description: "Compare this branch with a base branch",
@@ -979,6 +986,9 @@ function createReviewConfig(params: {
   if (!target) {
     return config;
   }
+  if (target.type === "pullRequest") {
+    return { ...config, target: "pullRequest", pullRequestUrl: target.url };
+  }
   if (target.type === "uncommittedChanges") {
     return { ...config, target: "uncommittedChanges" };
   }
@@ -1112,6 +1122,14 @@ function buildConfiguredReviewCommand(
     return undefined;
   }
   const cwd = config.workspaceCwd?.trim() || undefined;
+
+  if (config.target === "pullRequest") {
+    return config.pullRequestUrl ? {
+      ...(cwd ? { cwd } : {}),
+      target: { type: "pullRequest", url: config.pullRequestUrl },
+      displayText: `Review ${config.pullRequestUrl}`,
+    } : undefined;
+  }
 
   if (config.target === "uncommittedChanges") {
     return {
@@ -4742,6 +4760,14 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     [props.thread],
   );
   const reviewWorkspaceSelectionRequired = reviewWorkspaceOptions.length > 1;
+  const reviewPullRequests = attachedPullRequestsForWorkspace({
+    prs: props.thread?.prs ?? [],
+    cwd: reviewConfig?.workspaceCwd ?? reviewWorkspaceOptions[0]?.cwd,
+    repository: reviewDirectory?.gitStatus?.originRepository,
+  });
+  const selectedReviewPullRequest = reviewPullRequests.find(
+    (pr) => pr.url === reviewConfig?.pullRequestUrl,
+  );
   const parsedReviewCommand = supportsReview ? parseReviewCommand(draft) : undefined;
   const isBareReviewCommand = draft.trim() === "/review";
   const isCompactCommand = supportsCompactCommand && draft.trim() === "/compact";
@@ -6050,6 +6076,10 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const submitReviewConfig = async (
     config: ReviewConfigState | undefined,
   ): Promise<void> => {
+    if (config?.target === "pullRequest" && !reviewPullRequests.some((pr) => pr.url === config.pullRequestUrl)) {
+      setSendError("Choose an attached pull request for this project.");
+      return;
+    }
     const configuredReviewCommand = buildConfiguredReviewCommand(config);
     if (!configuredReviewCommand) {
       return;
@@ -11110,6 +11140,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                       branch,
                       branchSource: "auto",
                       workspaceCwd,
+                      pullRequestUrl: undefined,
                     }));
                     setSendError(undefined);
                   }}
@@ -11133,6 +11164,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                     reviewOptionRefs.current[index] = element;
                   }}
                   type="button"
+                  disabled={option.target === "pullRequest" && props.thread?.codexEnvironmentRuntime?.executionTarget === "remote"}
+                  title={option.target === "pullRequest" ? "GitHub.com pull requests in local execution workspaces" : undefined}
+                  data-review-target={option.target}
                   aria-pressed={reviewConfig?.target === option.target}
                   className={`composer__review-option${reviewConfig?.target === option.target ? " is-active" : ""}`}
                   tabIndex={reviewConfig?.target === option.target ? 0 : -1}
@@ -11149,6 +11183,38 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                 </button>
               ))}
             </div>
+
+            {props.thread?.codexEnvironmentRuntime?.executionTarget === "remote" ? (
+              <small>Attached PR review requires a local execution workspace on the owning instance.</small>
+            ) : null}
+            {reviewConfig?.target === "pullRequest" ? (
+              <label className="composer__review-field">
+                <span>Attached pull request (GitHub.com)</span>
+                <select
+                  aria-label="Attached pull request"
+                  className="composer__review-input"
+                  value={selectedReviewPullRequest?.url ?? ""}
+                  onChange={(event) => setReviewConfig((current) => current
+                    ? { ...current, pullRequestUrl: event.target.value }
+                    : current)}
+                >
+                  <option value="" disabled>Choose pull request</option>
+                  {reviewPullRequests.map((pr) => (
+                    <option key={pr.url} value={pr.url} disabled={!pr.url.startsWith("https://github.com/")}>
+                      {pr.url.replace("https://", "").replace("/pull/", "#")} — {pr.title ?? "Untitled pull request"}
+                    </option>
+                  ))}
+                </select>
+                {selectedReviewPullRequest ? (
+                  <small>
+                    Base: {selectedReviewPullRequest.baseRefName ?? "Unavailable"}
+                    {" · Head: "}{selectedReviewPullRequest.headRefName ?? "Unavailable"}
+                    {" @ "}{selectedReviewPullRequest.headSha?.slice(0, 10) ?? "Unavailable"}
+                    {" · Refreshed and pinned when submitted"}
+                  </small>
+                ) : <small>{reviewPullRequests.length ? "Select the PR to review." : "No attached GitHub.com pull requests for this project."}</small>}
+              </label>
+            ) : null}
 
             {reviewConfig?.target === "baseBranch" ? (
               <div className="composer__review-field">

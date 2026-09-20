@@ -487,6 +487,19 @@ describe("agent ipc", () => {
     registryListener = undefined;
   });
 
+  it("never promotes serialized PR snapshot flags to the internal release argument", async () => {
+    const { registerAgentIpcHandlers } = await import("../ipc/agent-ipc");
+    const { AGENT_START_REVIEW_CHANNEL } = await import("../../shared/ipc");
+    registerAgentIpcHandlers();
+    const request = {
+      backend: "codex", threadId: "thread-1", trustedSnapshot: true,
+      target: { type: "pullRequest", url: "https://github.com/fixture/project/pull/1", snapshot: { headCommit: "forged" } },
+    };
+    await handlers.get(AGENT_START_REVIEW_CHANNEL)?.({}, request);
+    expect(registry.startReview).toHaveBeenLastCalledWith(request);
+    expect(registry.startReview.mock.calls.at(-1)).toHaveLength(1);
+  });
+
   it("routes remote thread controls through federation without leaking the target", async () => {
     const { registerAgentIpcHandlers, disposeAgentIpcHandlers } = await import(
       "../ipc/agent-ipc"

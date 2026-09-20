@@ -103,6 +103,44 @@ function createHarness(now = 1_000) {
 }
 
 describe("ScheduledThreadActionService", () => {
+  it("captures PR commits before persistence and reuses them after metadata changes", async () => {
+    const harness = createHarness();
+    const url = "https://github.com/fixture/project/pull/1";
+    const target = {
+      type: "pullRequest" as const, url,
+      snapshot: {
+        pullRequest: { provider: "github.com", org: "fixture", repo: "project", number: 1, url },
+        baseCommit: "a".repeat(40), headCommit: "b".repeat(40), mergeBaseCommit: "a".repeat(40), capturedAt: 1,
+      },
+    };
+    const prepare = vi.fn(async (request) => ({ ...request, cwd: "/fixture", target }));
+    harness.registry.prepareReviewRequest = prepare;
+    const request = {
+      backend: "codex" as const, threadId: "thread-1", kind: "review" as const,
+      scheduledFor: 20_000, displayText: `Review ${url}`,
+      review: { target: { type: "pullRequest" as const, url } },
+    };
+    const result = await harness.service.create(request, { id: "pr-queue" });
+    expect(store.get(result.action.id)?.review?.target).toEqual(target);
+    expect(result.action.displayText).toContain("bbbbbbbbbb");
+    expect(prepare).toHaveBeenCalledOnce();
+    expect((await harness.service.create(request, { id: "pr-queue" })).action).toEqual(result.action);
+    expect(prepare).toHaveBeenCalledOnce();
+    await harness.service.update({
+      id: result.action.id, scheduledFor: 30_000,
+      review: { target: { ...target, snapshot: { ...target.snapshot, headCommit: "forged" } } },
+    });
+    expect(prepare).toHaveBeenLastCalledWith(expect.objectContaining({ target }), true);
+    expect(store.get(result.action.id)?.review?.target).toEqual(target);
+    prepare.mockImplementation(async () => { throw new Error("provider has changed"); });
+    // A fresh scheduler instance must read the persisted capture, not resolve
+    // the branch again after restart or a push.
+    const restarted = createHarness();
+    await restarted.service.sendNow({ id: result.action.id });
+    expect(restarted.submitReview).toHaveBeenCalledWith(expect.objectContaining({ target }), true);
+    expect(prepare).toHaveBeenCalledTimes(2);
+  });
+
   it("persists future turns without dispatching them", async () => {
     const harness = createHarness();
     const response = await harness.service.create({
@@ -687,6 +725,7 @@ describe("ScheduledThreadActionService", () => {
       expect.objectContaining({
         idempotencyKey: response.action.id,
       }),
+      true,
     );
     await Promise.all([...harness.listeners].map((listener) => listener({
       backend: "codex",

@@ -5783,6 +5783,51 @@ describe("Composer", () => {
     expect(screen.queryByRole("button", { name: "Send now" })).not.toBeInTheDocument();
   });
 
+  it("selects the attached stacked PR and clears it when the project changes", async () => {
+    const startReview = vi.fn(async (request: StartReviewRequest) => ({
+      backend: request.backend, threadId: request.threadId,
+      reviewThreadId: request.threadId, turnId: "review-pr-1",
+    }));
+    const prs = [1, 2].map((number) => ({
+      provider: "github.com", org: "fixture", repo: "project", number,
+      title: `Stack ${number}`, url: `https://github.com/fixture/project/pull/${number}`,
+      state: "passing" as const, headRefName: `stack-${number}`,
+      baseRefName: number === 1 ? "main" : "stack-1", headSha: String(number).repeat(40),
+      ...(number === 2 ? { linkedDirectoryPaths: ["/repo/project"] } : {}),
+    }));
+    render(<Composer
+      desktopApi={{ onAgentEvent: () => () => undefined, startReview }}
+      disabled={false} skills={[]}
+      thread={{
+        id: "thread-1", title: "Stacked review", titleSource: "explicit",
+        source: "codex", executionMode: "default", inbox: { inInbox: false },
+        linkedDirectories: [
+          { id: "one", kind: "local", label: "Project", path: "/repo/project" },
+          { id: "two", kind: "local", label: "Other", path: "/repo/other" },
+        ],
+        prs: [...prs, { ...prs[0], number: 3, repo: "other", url: "https://github.com/fixture/other/pull/3", linkedDirectoryPaths: ["/repo/other"] }],
+      }}
+    />);
+    fireEvent.change(screen.getByLabelText("Reply"), { target: { value: "/review" } });
+    fireEvent.keyDown(screen.getByLabelText("Reply"), { key: "Enter" });
+    fireEvent.change(screen.getByLabelText("Review project"), { target: { value: "/repo/project" } });
+    fireEvent.click(screen.getByRole("button", { name: /Attached PR/ }));
+    const picker = screen.getByLabelText("Attached pull request");
+    expect(within(picker).getByRole("option", { name: /#1/ })).toBeInTheDocument();
+    expect(within(picker).getByRole("option", { name: /#2/ })).toBeInTheDocument();
+    expect(within(picker).queryByRole("option", { name: /#3/ })).not.toBeInTheDocument();
+    fireEvent.change(picker, { target: { value: prs[0].url } });
+    expect(screen.getByText(/Base: main/)).toHaveTextContent("Head: stack-1 @ 1111111111");
+    fireEvent.change(screen.getByLabelText("Review project"), { target: { value: "/repo/other" } });
+    expect(screen.getByLabelText("Attached pull request")).toHaveValue("");
+    fireEvent.change(screen.getByLabelText("Review project"), { target: { value: "/repo/project" } });
+    fireEvent.change(screen.getByLabelText("Attached pull request"), { target: { value: prs[0].url } });
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Start review" })); });
+    expect(startReview).toHaveBeenCalledWith(expect.objectContaining({
+      cwd: "/repo/project", target: { type: "pullRequest", url: prs[0].url },
+    }));
+  });
+
   it("preserves schedule selection through bare review configuration", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-10T12:00:00Z"));

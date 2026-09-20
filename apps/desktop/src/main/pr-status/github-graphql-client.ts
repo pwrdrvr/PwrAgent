@@ -170,6 +170,8 @@ fragment PrStatus on PullRequest {
   isDraft
   mergeable
   baseRefName
+  baseRefOid
+  headRefOid
   headRefName
   additions
   deletions
@@ -240,6 +242,8 @@ export type GraphqlPrNode = {
   isDraft: boolean;
   mergeable?: string | null;
   baseRefName?: string | null;
+  baseRefOid?: string | null;
+  headRefOid?: string | null;
   headRefName?: string | null;
   additions?: number | null;
   deletions?: number | null;
@@ -455,7 +459,7 @@ export function mapGraphqlPrNode(
     mergeStateStatus: null,
   };
   const commitShas = normalizeCommitShas([headCommit?.oid]);
-  const headSha = commitShas[0];
+  const headSha = node.headRefOid?.trim() || commitShas[0];
 
   return {
     provider: parsePullRequestProvider(node.url),
@@ -465,6 +469,7 @@ export function mapGraphqlPrNode(
     org: node.headRepositoryOwner?.login ?? "",
     repo: node.headRepository?.name ?? "",
     ...(node.title?.trim() ? { title: node.title.trim() } : {}),
+    ...(node.baseRefOid ? { baseSha: node.baseRefOid } : {}),
     ...(node.baseRefName?.trim() ? { baseRefName: node.baseRefName.trim() } : {}),
     ...(node.headRefName?.trim() ? { headRefName: node.headRefName.trim() } : {}),
     state: checkState,

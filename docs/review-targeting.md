@@ -1,0 +1,40 @@
+# Attached pull-request review targets
+
+An attached PR target identifies the PR by URL. It is separate from a base-branch
+review, which compares the active checkout. This lets a thread review an earlier
+PR in a stack while its checkout contains later commits or uncommitted work.
+
+The owning PwrAgent instance resolves the attachment and selected repository,
+requests fresh provider metadata, and captures the base tip, head tip, and unique
+merge base before scheduling. Incoming snapshot fields are not authoritative.
+Only internal scheduler release passes the separate trusted-snapshot argument;
+IPC, Federation, messaging, and agent-tool requests cannot supply that argument.
+Rescheduling the same captured PR preserves its commits. Create a new review to
+capture a newer head.
+
+Missing objects are fetched by exact SHA without destination branch refs or
+FETCH_HEAD writes. Private `refs/pwragent/review-objects/<sha>` refs protect the
+captured objects from pruning after a force push. These retention refs currently
+have no automatic cleanup. A missing object or ambiguous merge base fails the
+review instead of substituting HEAD. No checkout, reset, stash, or worktree
+switch occurs.
+
+At the Codex adapter boundary, the target becomes a supported custom review
+request with the immutable merge-base-to-head diff and `git show <head>:<path>`
+file-reading instructions. The original identity and snapshot remain in review
+provenance. This retains the selected native review engine; it does not use a
+single-commit review for the whole PR. As with other custom reviews, adherence to
+file-reading instructions depends on the reviewer. The application does not
+isolate the review in a separate filesystem.
+
+The initial provider scope is GitHub.com. Other providers keep the generic Base
+branch, Current changes, Commit, and Custom targets. Codex remote execution
+workspaces are explicitly unsupported for attached-PR review. A Federation peer
+owning a local workspace is supported: resolution and Git commands run on that
+owner, never against a same-named path on the viewer. Separate Federation PR
+routes make older owners reject the request instead of downgrading the target.
+
+Regression coverage includes two multi-commit stacked PRs with a dirty newer
+checkout, queued snapshots after provider-head changes, exact-object fetching
+after branch movement, repository scoping, forged incoming snapshots and flags,
+native wire translation, and UI selection across linked projects.

@@ -464,6 +464,8 @@ export type PrSummary = {
    * PR's actual target, including stacked pull requests.
    */
   baseRefName?: string;
+  /** Authoritative base tip from the same provider response as the head. */
+  baseSha?: string;
   /** Branch containing the PR changes, when the provider returns one. */
   headRefName?: string;
   /**

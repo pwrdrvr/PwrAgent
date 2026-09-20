@@ -32313,6 +32313,10 @@ button.pricing-token-miser__folded:focus-visible {
   gap: 8px;
 }
 
+.composer__review-option[data-review-target="pullRequest"] {
+  grid-column: 1 / -1;
+}
+
 .composer__review-option {
   display: flex;
   min-width: 0;

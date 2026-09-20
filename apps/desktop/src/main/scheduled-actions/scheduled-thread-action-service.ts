@@ -147,6 +147,16 @@ export class ScheduledThreadActionService {
       }
       return mutationResponseForAction(existing);
     }
+    if (request.review?.target.type === "pullRequest") {
+      const prepared = await this.options.registry.prepareReviewRequest({
+        ...request.review, backend: request.backend, threadId: request.threadId,
+      });
+      request = {
+        ...request,
+        displayText: `Review ${prepared.target.type === "pullRequest" ? prepared.target.url : "pull request"} at ${prepared.target.type === "pullRequest" ? prepared.target.snapshot!.headCommit.slice(0, 10) : ""}`,
+        review: { ...request.review, target: prepared.target, cwd: prepared.cwd },
+      };
+    }
     const action = this.options.store.create({
       ...request,
       id,
@@ -172,6 +182,20 @@ export class ScheduledThreadActionService {
       ...request,
     };
     validateScheduledActionRequest(candidate);
+    if (request.review?.target.type === "pullRequest") {
+      const samePullRequest = current.review?.target.type === "pullRequest"
+        && current.review.target.url === request.review.target.url
+        && (!request.review.cwd || request.review.cwd === current.review.cwd);
+      const prepared = await this.options.registry.prepareReviewRequest({
+        ...request.review, backend: current.backend, threadId: current.threadId,
+        ...(samePullRequest ? { target: current.review!.target, cwd: current.review!.cwd } : {}),
+      }, samePullRequest);
+      request = {
+        ...request,
+        displayText: `Review ${request.review.target.url} at ${prepared.target.type === "pullRequest" ? prepared.target.snapshot!.headCommit.slice(0, 10) : ""}`,
+        review: { ...request.review, target: prepared.target, cwd: prepared.cwd },
+      };
+    }
     const updated = this.options.store.update(request.id, {
       scheduledFor: request.scheduledFor,
       displayText: request.displayText,
@@ -295,7 +319,7 @@ export class ScheduledThreadActionService {
           reasoningEffort: action.review.reasoningEffort,
           serviceTier: action.review.serviceTier,
           fastMode: action.review.fastMode,
-        });
+        }, true);
         const updated = response.status === "started"
           ? this.options.store.markStarted(
               action.id,
@@ -721,13 +745,27 @@ function matchesCreateRequest(
     && action.kind === request.kind
     && action.origin === (request.origin ?? "desktop")
     && action.manualReleaseRequired === request.manualReleaseRequired
-    && action.displayText === request.displayText
+    && (action.displayText === request.displayText
+      || (action.review?.target.type === "pullRequest" && request.review?.target.type === "pullRequest"))
     && JSON.stringify(action.imageAttachments)
       === JSON.stringify(request.imageAttachments)
     && JSON.stringify(action.fileAttachments)
       === JSON.stringify(request.fileAttachments)
     && JSON.stringify(action.turn) === JSON.stringify(request.turn)
-    && JSON.stringify(action.review) === JSON.stringify(request.review);
+    && JSON.stringify(reviewAdmissionIdentity(action.review, request.review))
+      === JSON.stringify(reviewAdmissionIdentity(request.review, request.review));
+}
+
+function reviewAdmissionIdentity(
+  review: ScheduledThreadAction["review"],
+  incoming: ScheduledThreadAction["review"],
+): ScheduledThreadAction["review"] {
+  if (review?.target.type !== "pullRequest") return review;
+  return {
+    ...review,
+    cwd: incoming?.cwd ? review.cwd : undefined,
+    target: { type: "pullRequest", url: review.target.url },
+  };
 }
 
 function actionIdFromQueueEntryId(queueEntryId: string): string | undefined {

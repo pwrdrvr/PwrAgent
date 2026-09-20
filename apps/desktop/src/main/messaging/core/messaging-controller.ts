@@ -2884,7 +2884,7 @@ export class MessagingController {
             createdAt: this.now(),
             title: "Invalid review command",
             body:
-              "Use /review, /review <base branch>, /review --commit <sha>, or /review --custom <instructions>.",
+              "Use /review, /review <base branch>, /review --pr <attached GitHub.com PR URL>, /review --commit <sha>, or /review --custom <instructions>.",
             recoverable: true,
           }),
           binding,
@@ -20086,6 +20086,8 @@ function messagingReviewBranchOptions(params: {
 
 function formatMessagingReviewScope(target: AppServerReviewTarget): string {
   switch (target.type) {
+    case "pullRequest":
+      return "Attached Pull Request";
     case "uncommittedChanges":
       return "Current Changes";
     case "baseBranch":
@@ -20096,6 +20098,7 @@ function formatMessagingReviewScope(target: AppServerReviewTarget): string {
       return "Custom";
   }
 }
+
 
 function validateHandoffRequest(
   request: HandoffThreadWorkspaceRequest,

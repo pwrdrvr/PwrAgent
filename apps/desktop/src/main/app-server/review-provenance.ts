@@ -210,6 +210,19 @@ export async function resolveReviewProvenance(params: {
   ) {
     context.repositoryPath = directory.path.trim();
   }
+  if (params.target.type === "pullRequest") {
+    const snapshot = params.target.snapshot;
+    if (!snapshot) throw new Error("Missing pull request review snapshot.");
+    return {
+      ...context,
+      gitBranch: snapshot.pullRequest.headRefName,
+      baseBranch: snapshot.pullRequest.baseRefName,
+      headCommit: snapshot.headCommit,
+      baseCommit: snapshot.mergeBaseCommit,
+      pullRequest: snapshot.pullRequest,
+      pullRequestSnapshot: snapshot,
+    };
+  }
   if (params.target.type === "baseBranch") {
     context.baseBranch = params.target.branch;
   }
