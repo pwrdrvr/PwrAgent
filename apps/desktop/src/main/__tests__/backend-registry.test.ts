@@ -51917,10 +51917,11 @@ script = "printf setup"
     await registry.close();
   });
 
-  it("replays the parent's model with the parent's own level in a monitor on another model", async () => {
-    // Kimi's model config option leaves the parent's `currentModelId` in the
-    // monitor's runtime, so the replay re-selects Highspeed, which offers only
-    // `on`. The monitor asked for K3, whose lowest level is `low`.
+  it("selects a monitor's own model without re-selecting the parent's", async () => {
+    // Kimi selects the model through a config option, so the monitor's runtime
+    // carries K3 there while `currentModelId` still named the parent's
+    // Highspeed. Replaying that id re-selected Highspeed after K3, and paired
+    // it with K3's `low` — a level Highspeed does not offer.
     const acpBackendId = "acp:kimi" as AcpBackendId;
     const parentThreadId = "acp-parent";
     const highspeed = "kimi-code/kimi-for-coding-highspeed";
@@ -52011,24 +52012,20 @@ script = "printf setup"
       },
     });
 
-    const offeredLevels: Record<string, string[]> = {
-      [highspeed]: ["on"],
-      "kimi-code/k3": ["low", "high", "max"],
-    };
-    const modelWrites = acpClient.setRuntimeOption.mock.calls
-      .map(([params]) => params as {
-        sessionId: string;
-        source?: string;
-        value?: string;
-        reasoningEffort?: string;
-      })
-      .filter((params) => params.source === "model");
-    expect(modelWrites).not.toHaveLength(0);
-    for (const params of modelWrites) {
-      expect(offeredLevels[params.value ?? ""]).toContain(
-        params.reasoningEffort,
-      );
-    }
+    expect(
+      acpClient.setRuntimeOption.mock.calls.map(([params]) => params),
+    ).toEqual([
+      expect.objectContaining({
+        source: "configOption",
+        optionId: "model",
+        value: "kimi-code/k3",
+      }),
+      expect.objectContaining({
+        source: "configOption",
+        optionId: "thinking",
+        value: "low",
+      }),
+    ]);
 
     await registry.close();
   });

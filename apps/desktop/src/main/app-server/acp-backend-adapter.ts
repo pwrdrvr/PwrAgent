@@ -710,6 +710,15 @@ export function withAcpModelRuntimeSelection(params: {
     ) ?? false;
   const shouldSetCurrentModelId =
     !modelConfigOption && (hasAdvertisedModel || !hasModelList);
+  // `model` is what this runtime selects. A `currentModelId` naming another
+  // model is stale once a config option or an unadvertised id carries the
+  // selection instead: `readAcpSelectedModel` answers with it ahead of the
+  // config value, and replaying the runtime into a session would re-select
+  // that model — with this runtime's thought level, which it may not offer.
+  const currentModelId =
+    shouldSetCurrentModelId || params.runtime?.currentModelId === model
+      ? model
+      : undefined;
   const configValues = modelConfigOption
     ? {
         ...(params.runtime?.configValues ?? {}),
@@ -729,7 +738,7 @@ export function withAcpModelRuntimeSelection(params: {
 
   return {
     ...params.runtime,
-    ...(shouldSetCurrentModelId ? { currentModelId: model } : {}),
+    currentModelId,
     ...(params.reasoningEffort
       ? { reasoningEffort: params.reasoningEffort }
       : {}),

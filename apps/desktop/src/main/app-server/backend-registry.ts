@@ -35774,13 +35774,7 @@ export class DesktopBackendRegistry {
         cwd,
         executionMode,
         acpRuntime: selectedRuntime,
-        // A model config option leaves the parent's model in `currentModelId`,
-        // and the replay re-selects it with the parent's level. The turn below
-        // then applies the monitor's model and level together.
-        reasoningEffort:
-          selectedRuntime?.currentModelId === params.runtimeModel
-            ? reasoningEffort
-            : parentSession?.acpRuntime?.reasoningEffort,
+        reasoningEffort,
         hidden: true,
       });
       const turn = await this.startAcpTurn({
