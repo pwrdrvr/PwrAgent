@@ -7010,9 +7010,10 @@ describe("CodexAppServerClient", () => {
     const replay = extractThreadReplayFromReadResult({ thread: { turns: [{ id: "inline-turn", items: [
       { type: "userMessage", id: "internal", content: [{ type: "text", text }] },
       { type: "userMessage", id: "authored", content: [{ type: "text", text: "Check error handling." }] },
+      { type: "userMessage", id: "authored-envelope", content: [{ type: "text", text: `Explain this marker: ${text}` }] },
     ] }] } });
-    expect(replay.entries.map((entry) => entry.id)).toEqual(["authored"]);
-    expect(replay.messages.map((message) => message.id)).toEqual(["authored"]);
+    expect(replay.entries.map((entry) => entry.id)).toEqual(["authored", "authored-envelope"]);
+    expect(replay.messages.map((message) => message.id)).toEqual(["authored", "authored-envelope"]);
   });
 
   it.each(["userMessage", "message"])("suppresses native review instructions on replay with %s shape", async (type) => {

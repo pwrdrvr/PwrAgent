@@ -181,6 +181,8 @@ import {
   buildConfirmationIntent,
   buildErrorIntent,
   buildQuestionnaireIntent,
+  buildReviewStartConfirmationIntent,
+  messagingReviewStartTarget,
   buildStatusIntent,
   buildToolUpdateBatchMessageIntent,
   buildToolUpdateMessageIntent,
@@ -6143,12 +6145,17 @@ export class MessagingController {
     }
 
     const reviewer = pendingIntent.intent.review.reviewer;
+    const reviewerBackends = pendingIntent.intent.review.reviewerBackends;
+    const reviewerBackend = reviewer?.backend ?? binding.backend;
     await this.submitMessagingReview({
       binding,
       event,
       target,
       cwd: pendingIntent.intent.review.cwd,
       runMode: pendingIntent.intent.review.runMode,
+      reviewerLabel: reviewerBackends?.find(
+        (candidate) => candidate.backend === reviewerBackend,
+      )?.label,
       ...(reviewer
         ? {
             reviewBackend: reviewer.backend,
@@ -6171,6 +6178,8 @@ export class MessagingController {
     runMode?: ReviewRunMode;
     /** Reviewer override typed on the command; absent means inherit. */
     reviewBackend?: AppServerBackendKind;
+    /** Human-facing reviewer label resolved by the picker, when known. */
+    reviewerLabel?: string;
     model?: string;
     reasoningEffort?: string;
     targetSurface?: MessagingSurfaceRef;
@@ -6193,6 +6202,25 @@ export class MessagingController {
       }
       const navigation = await this.readBoundThreadConfiguration(params.binding);
       const settings = turnSettingsForBinding(params.binding, navigation);
+      const reviewer = {
+        backend: params.reviewBackend ?? params.binding.backend,
+        ...(params.reviewerLabel ? { label: params.reviewerLabel } : {}),
+        ...(params.reviewBackend
+          ? {
+              ...(params.model ? { model: params.model } : {}),
+              ...(params.reasoningEffort
+                ? { reasoningEffort: params.reasoningEffort }
+                : {}),
+              source: "override" as const,
+            }
+          : {
+              ...(settings.model ? { model: settings.model } : {}),
+              ...(settings.reasoningEffort
+                ? { reasoningEffort: settings.reasoningEffort }
+                : {}),
+              source: "thread_default" as const,
+            }),
+      };
       const result = await submitReview({
         backend: params.binding.backend,
         threadId: params.binding.threadId,
@@ -6227,19 +6255,15 @@ export class MessagingController {
         await this.options.store.deletePendingIntent(params.pendingIntentId);
       }
       await this.deliver(
-        buildConfirmationIntent({
+        buildReviewStartConfirmationIntent({
           id: this.newIntentId("review-submitted"),
           capabilityProfile: this.capabilityProfile,
           createdAt: this.now(),
-          title: result.status === "scheduled" ? "Review queued" : "Review started",
-          body:
-            result.status === "scheduled"
-              ? `${formatReviewTarget(params.target)} will start after the active turn completes successfully.`
-              : `${formatReviewTarget(params.target)} is now running.`,
-          fallbackText:
-            result.status === "scheduled"
-              ? "Review queued until the active turn completes."
-              : "Review started.",
+          notification: {
+            status: result.status,
+            target: messagingReviewStartTarget(params.target),
+            reviewer,
+          },
           ...(params.targetSurface
             ? {
                 targetSurface: params.targetSurface,
@@ -20071,19 +20095,6 @@ function formatMessagingReviewScope(target: AppServerReviewTarget): string {
       return "Commit";
     case "custom":
       return "Custom";
-  }
-}
-
-function formatReviewTarget(target: AppServerReviewTarget): string {
-  switch (target.type) {
-    case "uncommittedChanges":
-      return "Current changes review";
-    case "baseBranch":
-      return `Review against ${target.branch}`;
-    case "commit":
-      return `Review of commit ${target.sha}`;
-    case "custom":
-      return "Custom review";
   }
 }
 

@@ -1027,15 +1027,18 @@ describe("SettingsScreen", () => {
       "page",
     );
 
-    expect(screen.getByRole("heading", { name: "Updates" })).toBeInTheDocument();
-    expect(
-      await screen.findByRole("radio", { name: "Stable Latest — v1.0.0" }),
-    ).toHaveAttribute("aria-checked", "true");
+    // General is on screen — asserted before the two negatives below, which
+    // would otherwise also pass against a pane that had not rendered yet.
     expect(
       screen.getByRole("switch", {
         name: "Confirm quit when threads or terminals are active",
       }),
     ).toHaveAttribute("aria-checked", "true");
+    // Updates is its own nav row now — General holds no release controls.
+    expect(screen.queryByRole("heading", { name: "Updates" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Check for Update" }),
+    ).toBeNull();
     fireEvent.click(
       screen.getByRole("switch", {
         name: "Confirm quit when threads or terminals are active",
@@ -1154,6 +1157,9 @@ describe("SettingsScreen", () => {
       });
     });
 
+    // Release controls are a nav row of their own, so the walk leaves General
+    // to reach them and comes back for the rest of the page.
+    fireEvent.click(within(sections).getByRole("button", { name: "Updates" }));
     expect(await screen.findByText("v1.0.0-beta.7")).toBeInTheDocument();
     expect(
       screen.getByRole("radio", { name: "Stable Latest — v1.0.0" }),
@@ -1191,6 +1197,7 @@ describe("SettingsScreen", () => {
       await screen.findByText(/Update available: v1.0.0-beta.8/),
     ).toBeInTheDocument();
 
+    fireEvent.click(within(sections).getByRole("button", { name: "General" }));
     expect(screen.getByRole("heading", { name: "Pasted images" })).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: "1536 patches" })).toHaveAttribute(
       "aria-checked",
@@ -6201,12 +6208,22 @@ describe("SettingsScreen", () => {
       />,
     );
 
-    // The Build table's row, named for the version it sits beside.
+    // The Build table's row, named for the version it sits beside. Awaited
+    // first: About renders "Loading…" until its metadata read settles, and
+    // every assertion below needs the settled page.
     fireEvent.click(
       await screen.findByRole("button", {
         name: "Release notes for this build, v1.0.6",
       }),
     );
+
+    // There is one place to check for an update, and it is Settings →
+    // Updates. About carried a second button that answered the same
+    // question in its own wording, which PwrGit and PwrSnap both do
+    // without.
+    expect(
+      screen.queryByRole("button", { name: /check for update/i }),
+    ).toBeNull();
     // And the Changelog section's, named to mirror "Open changelog" — the
     // two buttons there do neighboring jobs and differ only in which copy
     // of the notes they open.
@@ -6248,6 +6265,7 @@ describe("SettingsScreen", () => {
 
     render(
       <SettingsScreen
+        initialSection="updates"
         desktopApi={desktopApi}
         settings={createSettingsState()}
         onClose={() => undefined}
@@ -6293,6 +6311,7 @@ describe("SettingsScreen", () => {
 
     render(
       <SettingsScreen
+        initialSection="updates"
         desktopApi={desktopApi}
         settings={createSettingsState()}
         onClose={() => undefined}
@@ -6504,6 +6523,7 @@ describe("SettingsScreen", () => {
     expect(buttons).toEqual([
       "← Exit Settings",
       "General",
+      "Updates",
       "Applications",
       "Plugins",
       "Profiles",
@@ -6548,6 +6568,64 @@ describe("SettingsScreen", () => {
     expect(within(nav).getByRole("separator")).toHaveClass(
       "settings-nav__divider",
     );
+  });
+
+  /**
+   * The release controls used to be the largest card on Settings -> General,
+   * a page otherwise made of one-line toggles. PwrGit and PwrSnap each give
+   * Updates its own nav row; this locks PwrAgent to the same shape, in both
+   * directions — the row exists AND General no longer carries the card.
+   */
+  it("gives Updates its own nav row instead of a card inside General", async () => {
+    const desktopApi = {
+      readAppUpdateReleaseVersions: vi.fn(async () => ({
+        fetchedAt: 1,
+        stable: {
+          latest: { version: "v1.0.0" },
+          prerelease: { version: "v1.0.0-beta.7" },
+        },
+        beta: {
+          latest: { version: "v1.1.0-beta.2" },
+          prerelease: { version: "v1.1.0-alpha.7" },
+        },
+      })),
+    } as unknown as Parameters<typeof SettingsScreen>[0]["desktopApi"];
+    render(
+      <SettingsScreen
+        desktopApi={desktopApi}
+        settings={createSettingsState()}
+        onClose={() => undefined}
+      />,
+    );
+
+    // General opens first and holds none of it.
+    expect(
+      screen.getByRole("heading", { name: "General settings" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Release channel" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Check for Update" }),
+    ).toBeNull();
+
+    const nav = screen.getByRole("navigation", { name: "Settings sections" });
+    fireEvent.click(within(nav).getByRole("button", { name: "Updates" }));
+
+    expect(within(nav).getByRole("button", { name: "Updates" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+    expect(
+      screen.getByRole("region", { name: "Update settings" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Release channel" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Check for Update" }),
+    ).toBeInTheDocument();
+    expect(
+      await screen.findByRole("radio", { name: "Stable Latest — v1.0.0" }),
+    ).toHaveAttribute("aria-checked", "true");
   });
 
   /**
@@ -7529,6 +7607,7 @@ describe("SettingsScreen", () => {
 
     render(
       <SettingsScreen
+        initialSection="updates"
         desktopApi={desktopApi}
         settings={settings}
         onClose={() => undefined}
@@ -7586,6 +7665,7 @@ describe("SettingsScreen", () => {
 
     render(
       <SettingsScreen
+        initialSection="updates"
         desktopApi={desktopApi}
         settings={settings}
         onClose={() => undefined}
@@ -7872,6 +7952,7 @@ describe("SettingsScreen", () => {
 
     render(
       <SettingsScreen
+        initialSection="updates"
         desktopApi={desktopApi}
         settings={settings}
         onClose={() => undefined}

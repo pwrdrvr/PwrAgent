@@ -186,6 +186,7 @@ import {
 
 const SETTINGS_SECTIONS = new Set<SettingsSection>([
   "general",
+  "updates",
   "applications",
   "plugins",
   "git",

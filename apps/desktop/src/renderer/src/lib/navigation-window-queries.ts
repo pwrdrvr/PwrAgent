@@ -1,4 +1,4 @@
-import { NAVIGATION_QUERY_MAX_RESULT_BYTES, navigationInvalidationMayChangeMembership, navigationWorkingStatePath } from "@pwragent/shared";
+import { NAVIGATION_QUERY_MAX_PAGE_ROWS, NAVIGATION_QUERY_MAX_RESULT_BYTES, navigationInvalidationMayChangeMembership, navigationWorkingStatePath } from "@pwragent/shared";
 import type { AgentEvent, FederationTarget, NavigationQueryAnchor, NavigationQueryPage, NavigationQueryRequest } from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
 import { federationTargetsEqual } from "./federated-thread-events";
@@ -10,6 +10,17 @@ import {
 const MAX_CONCURRENT_READS = 4;
 const MAX_DEMAND_BYTES = 1024 * 1024;
 const MAX_RETAINED_BYTES = 8 * 1024 * 1024;
+/** One click loads a block of rows. Demand page sizes pace a first paint; an
+ * explicit continuation is the operator asking for the rest, and answering it
+ * with one transport page costs a click and a scroll for every page. */
+const LOAD_MORE_ROWS = 100;
+/** An owner that clamps a page to the byte budget still finishes a click in a
+ * few reads. The chain is bounded so it can never become an unbounded scan. */
+const MAX_LOAD_MORE_READS = 8;
+/** A click also spends at most one read deadline chasing the rest of its
+ * block. A slow owner ends it with the rows it did deliver and the button
+ * still in place, rather than with a spinner whose length nobody can bound. */
+const MAX_LOAD_MORE_MS = 10_000;
 let nextWindow = 0;
 
 export type NavigationWindowResource = {
@@ -305,19 +316,42 @@ export class NavigationWindowQueries {
           if (retainedBytes > MAX_RETAINED_BYTES) throw new Error("Navigation retained-page budget reached. Collapse a directory or change lens to release pages.");
         };
         const readPage = async (request: NavigationQueryRequest) => {
-          const page = await this.api.getNavigationQueryPage!({ ...request,
-            readReason: continuation ? "continuation" : explicitAnchor || fromStart ? "rebaseline" : reason,
-          }, resource.token);
-          if (new TextEncoder().encode(JSON.stringify(page)).byteLength > NAVIGATION_QUERY_MAX_RESULT_BYTES) {
-            throw new Error("Navigation page exceeds the bounded response size.");
+          // An owner fills a page up to its own copy of this budget, and a
+          // remote one is then stamped with federation metadata on every row
+          // it served. A page of fat rows can therefore arrive here over a
+          // budget its owner honored — and the request that produced it is
+          // deterministic, so a control that hits this could never succeed
+          // again. Halve the rows and ask again instead of handing the
+          // operator a button that fails identically on every press.
+          let rows = request.pageSize ?? NAVIGATION_QUERY_MAX_PAGE_ROWS;
+          for (;;) {
+            const page = await this.api.getNavigationQueryPage!({ ...request, pageSize: rows,
+              readReason: continuation ? "continuation" : explicitAnchor || fromStart ? "rebaseline" : reason,
+            }, resource.token);
+            if (new TextEncoder().encode(JSON.stringify(page)).byteLength <= NAVIGATION_QUERY_MAX_RESULT_BYTES) return page;
+            // One row over the budget is the owner's own error to raise.
+            if (rows <= 1) throw new Error("Navigation page exceeds the bounded response size.");
+            rows = Math.floor(rows / 2);
           }
-          return page;
         };
         let page: NavigationQueryPage;
         let pageCursor = cursor;
-        let wanted = explicitAnchor || fromStart ? 0 : size(started.page);
+        const wanted = explicitAnchor || fromStart ? 0 : size(started.page) + (continuation ? LOAD_MORE_ROWS : 0);
+        // A cursor read serves rows this window has already committed to: the
+        // block an explicit click asked for, or the range a refresh must
+        // restore. Neither is paced by the demand page size that bounds a
+        // first paint, so read exactly what is still wanted in as few round
+        // trips as the protocol allows. Owners clamp to their byte budget.
+        const cursorPageSize = (loaded: number) =>
+          Math.max(1, Math.min(NAVIGATION_QUERY_MAX_PAGE_ROWS, wanted - loaded));
+        // Measured from the click, not from its first page: an owner slow
+        // enough to spend the budget on one read has already made the
+        // operator wait, and a second wait of the same length is not an
+        // improvement on the button they still have.
+        const extendUntil = Date.now() + MAX_LOAD_MORE_MS;
         try {
           page = await readPage({ ...started.request, cursor, anchor,
+            ...(cursor ? { pageSize: cursorPageSize(size(started.page)) } : {}),
             completeBaselineRevision: !fromStart && !anchor && !cursor && !started.stale && started.page?.complete && (started.page.rangeStart ?? 0) === 0 ? started.page.countsRevision : undefined,
             retainedRange: !fromStart && !explicitAnchor && !cursor
               && (anchor || !started.page?.complete || (started.page.rangeStart ?? 0) !== 0)
@@ -326,9 +360,9 @@ export class NavigationWindowQueries {
         } catch (error) {
           if (!cursor || !isNavigationCursorExpired(error)) throw error;
           // Cursor cache eviction is ordinary pressure, not a broken folder.
-          // Rebuild only the already displayed range plus this explicit page.
+          // Rebuild only the already displayed range plus the block this
+          // click asked for; `wanted` already counts that block.
           pageCursor = undefined;
-          wanted += started.request.pageSize ?? 10;
           const previous = started.page;
           const firstDirectory = previous?.directories?.[0];
           const firstThread = previous?.entries[0]?.row.ref;
@@ -340,14 +374,33 @@ export class NavigationWindowQueries {
         if (!this.isCurrent(resource) || resource.value.state.pendingSequence !== started.pendingSequence) return;
         let next = applyNavigationPage({ state: resource.value.state, sequence: started.pendingSequence, page, cursor: pageCursor });
         assertRetained(next);
-        while (!pageCursor && next.page?.nextCursor && size(next.page) < wanted) {
+        let extensions = 0;
+        // A range rebuild reads until it has restored everything the window
+        // displays; cutting it short would shrink the list under the
+        // operator. A continuation reads until it has delivered its block,
+        // and gives up on reads or on time, whichever comes first.
+        while (next.page?.nextCursor && size(next.page) < wanted
+          && (!pageCursor || (extensions < MAX_LOAD_MORE_READS && Date.now() < extendUntil))) {
           const nextCursor = next.page.nextCursor;
-          const continuationPage = await readPage({ ...started.request, cursor: nextCursor });
-          if (!this.isCurrent(resource) || resource.value.state.pendingSequence !== started.pendingSequence) return;
           const before = size(next.page);
-          next = applyNavigationPage({ state: next, sequence: started.pendingSequence, page: continuationPage, cursor: nextCursor });
-          if (size(next.page) <= before) throw new Error("Navigation range refresh did not advance.");
-          assertRetained(next);
+          try {
+            const continuationPage = await readPage({ ...started.request, cursor: nextCursor, pageSize: cursorPageSize(before) });
+            if (!this.isCurrent(resource) || resource.value.state.pendingSequence !== started.pendingSequence) return;
+            const extended = applyNavigationPage({ state: next, sequence: started.pendingSequence, page: continuationPage, cursor: nextCursor });
+            if (size(extended.page) <= before) throw new Error("Navigation range refresh did not advance.");
+            assertRetained(extended);
+            next = extended;
+          } catch (error) {
+            // A rebuild owes the window every row it already displays, so a
+            // failed extension discards the partial range. A continuation
+            // owes it only the requested block: commit the rows this click
+            // did deliver, then report what stopped it. A silent stop would
+            // leave the button looking inert at the retained-page budget.
+            if (!pageCursor) throw error;
+            resource.value = { ...resource.value, state: next, restoredFromCache: false };
+            throw error;
+          }
+          extensions += 1;
         }
         resource.value = { ...resource.value, state: next, restoredFromCache: false };
       } catch (error) {

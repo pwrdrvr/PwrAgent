@@ -6,8 +6,10 @@ import type {
 import { describe, expect, it } from "vitest";
 import {
   combineTranscriptEntries,
+  combineTranscriptMessages,
   combineTranscriptResponse,
   createTranscriptHistoryIndex,
+  createTranscriptReviewPresentation,
   prependTranscriptHistoryPage,
   type LoadedTranscriptHistory,
   type TranscriptHistoryPage,
@@ -63,6 +65,39 @@ function historyPages(
 }
 
 describe("segmented transcript history", () => {
+  it.each(["inline", "native"])("keeps suppressed %s prompts hidden when a refreshed tail overlaps history", (mode) => {
+    const prompt: AppServerThreadMessageEntry = {
+      type: "message", id: "internal", role: "user",
+      text: mode === "inline"
+        ? "<pwragent-inline-review-instructions>\nInspect this diff.\n</pwragent-inline-review-instructions>"
+        : "Review the code changes against the base branch 'main'. Provide prioritized, actionable findings.",
+      turn: { id: "review-turn", status: "completed" },
+    };
+    const review: AppServerThreadEntry = {
+      type: "review", id: "review", review: "No findings.", turn: prompt.turn,
+    };
+    const authored: AppServerThreadMessageEntry = {
+      ...prompt, id: "authored", text: "Please check the renderer too.",
+    };
+    const historyEntries = mode === "native" ? [review, prompt, authored] : [prompt, authored];
+    const index = createTranscriptHistoryIndex();
+    const history = prependTranscriptHistoryPage({
+      history: undefined, index, page: response(historyEntries), tailEntries: [],
+    });
+
+    // Hidden in retained history, still hidden while the refreshed tail
+    // overlaps it, and hidden again after that tail window moves forward.
+    for (const tailEntries of [[], [prompt, authored], []]) {
+      const presentation = createTranscriptReviewPresentation({
+        history, index, tailEntries, tailMessages: response(tailEntries).replay.messages,
+      });
+      expect(combineTranscriptEntries(history, index, presentation.tailEntries, presentation)
+        .map((entry) => entry.id)).toEqual(mode === "native" ? ["review", "authored"] : ["authored"]);
+      expect(combineTranscriptMessages(history, index, presentation.tailMessages, presentation)
+        .map((entry) => entry.id)).toEqual(["authored"]);
+    }
+  });
+
   it("keeps array behavior while the tail remains authoritative by exact id", () => {
     const index = createTranscriptHistoryIndex();
     const tail = [message("tail", "Authoritative tail")];

@@ -7,7 +7,8 @@ import { useThreadNavigation } from "../useThreadNavigation";
 
 // Measures uncompressed query request/response JSON at the desktop API boundary.
 // Excludes transport envelopes, TLS, selected configuration, and history pages.
-// Cold includes incremental 10-row sidebar pages and existing owner-batch rebuilds.
+// Cold includes the paced 10-row first page, the 100-row blocks an explicit
+// "Load more" asks for, and existing owner-batch rebuilds.
 // Selection includes its one-time batch replacement; refresh must have no overlap.
 // Full responses deliberately bound the changed-data case; unchanged responses
 // can be smaller. Keep identities and revisions deterministic for byte budgets.

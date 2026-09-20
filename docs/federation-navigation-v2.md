@@ -107,8 +107,11 @@ a removed anchor returns `navigation_anchor_missing` instead of silently
 returning the first page. `NavigationQueryPage.rangeStart` distinguishes a tail
 from a complete collection baseline. The window query controller retains a
 displayed range while rebuilding its admitted rows around the visible anchor.
-An explicit Load more includes one additional page in that replacement. A
-removed anchor requires an explicit restart; consumers must supply their visible
+An explicit Load more includes the block of rows it asked for in that
+replacement. Demand page sizes pace a first paint; a continuation reads the
+rows the operator asked for, chaining a clamped owner's pages under one click
+instead of returning the button and a scroll. A removed anchor requires an
+explicit restart; consumers must supply their visible
 anchor when wiring the controller. Routine refresh rebuilds the displayed range
 atomically rather than replacing a multi-page list with only its first page.
 

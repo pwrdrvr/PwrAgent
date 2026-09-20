@@ -310,7 +310,7 @@ export function SettingsPanelHead(props: {
   eyebrow: string;
   title: ReactNode;
   help?: ReactNode;
-  /** Optional right-side action (e.g. "Check for updates" button). */
+  /** Optional right-side action (e.g. Profiles' "New profile" button). */
   action?: ReactNode;
 }) {
   const pane = useContext(SettingsSectionPaneContext);

@@ -23,6 +23,7 @@ import { AccessControlSettings } from "./AccessControlSettings";
 import { ExperimentalSettings } from "./ExperimentalSettings";
 import { FederationSettings } from "./FederationSettings";
 import { GeneralSettings } from "./GeneralSettings";
+import { UpdatesSettings } from "./UpdatesSettings";
 import { GitSettings } from "./GitSettings";
 import {
   MESSAGING_SETTINGS_PLATFORMS,
@@ -73,6 +74,7 @@ import {
 
 export type SettingsSection =
   | "general"
+  | "updates"
   | "git"
   | "experimental"
   | "messaging"
@@ -91,6 +93,7 @@ export type SettingsSection =
 
 const SECTIONS: Array<{ id: SettingsSection; label: string }> = [
   { id: "general", label: "General" },
+  { id: "updates", label: "Updates" },
   { id: "applications", label: "Applications" },
   { id: "plugins", label: "Plugins" },
   { id: "profiles", label: "Profiles" },
@@ -110,6 +113,7 @@ const SECTIONS: Array<{ id: SettingsSection; label: string }> = [
 
 const PRIMARY_SECTIONS: SettingsSection[] = [
   "general",
+  "updates",
   "applications",
   "plugins",
   "profiles",
@@ -878,6 +882,22 @@ function SettingsSectionBody(props: {
     return <AboutSettings desktopApi={props.desktopApi} />;
   }
 
+  if (props.section === "updates") {
+    return (
+      <UpdatesSettings
+        desktopApi={props.desktopApi}
+        saving={props.settings.saving}
+        snapshot={props.snapshot}
+        onUpdateSelectionChange={async (updates: {
+          channel: DesktopUpdateChannel;
+          train: DesktopUpdateTrain;
+        }) => {
+          await props.settings.writeConfig({ updates });
+        }}
+      />
+    );
+  }
+
   if (props.section === "general") {
     return (
       <GeneralSettings
@@ -903,12 +923,6 @@ function SettingsSectionBody(props: {
           await props.settings.writeConfig({
             general: { pdfAnalysisEnabled },
           });
-        }}
-        onUpdateSelectionChange={async (updates: {
-          channel: DesktopUpdateChannel;
-          train: DesktopUpdateTrain;
-        }) => {
-          await props.settings.writeConfig({ updates });
         }}
         onPastedImageMaxPatchesChange={async (pastedImageMaxPatches) => {
           await props.settings.writeConfig({

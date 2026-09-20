@@ -10,13 +10,16 @@ afterEach(() => window.localStorage.clear());
 
 it.each(["local", "remote"])("renders 15 complete project clouds and three independent card pages for %s", async (owner) => {
   window.localStorage.setItem("pwragent.starMap.viewPreferences", JSON.stringify({ layout: "orbit" }));
+  // Project 0 outruns one click's block, so a second click continues an
+  // already-continued range. Every other project fits in one.
   const threads: NavigationThreadSummary[] = Array.from({ length: 15 }, (_, project) =>
-    Array.from({ length: 23 }, (_, card) => ({
+    Array.from({ length: project === 0 ? 123 : 23 }, (_, card) => ({
       id: `p${project}-c${card}`, source: "codex" as const, title: `Project ${project} card ${card}`,
       titleSource: "derived" as const, inbox: { inInbox: false }, updatedAt: 1000 - card,
       linkedDirectories: [{ id: `d${project}`, kind: "local" as const, path: `/repos/project-${project}`, label: `project-${project}` }],
     }))).flat();
-  const directories = Array.from({ length: 15 }, (_, index) => classifyDirectory(threads[index * 23]!.linkedDirectories[0]!));
+  const directories = Array.from({ length: 15 }, (_, index) => classifyDirectory(threads.find((thread) =>
+    thread.linkedDirectories[0]!.label === `project-${index}`)!.linkedDirectories[0]!));
   let expired = false;
   const read = vi.fn(async (request: NavigationQueryRequest) => {
     if (request.query.kind === "star-map" && request.query.projectKey === directories[0]!.key && request.cursor && !expired) {
@@ -43,14 +46,17 @@ it.each(["local", "remote"])("renders 15 complete project clouds and three indep
   expect(read.mock.calls.filter(([request]) => request.query.kind === "star-map" && request.query.projectKey).length).toBe(15);
   const before = read.mock.calls.length;
   fireEvent.click(view.container.querySelector('button[aria-label="Load more project-0 threads"]')!);
-  await waitFor(() => expect(view.container.querySelectorAll('[data-thread-key$="p0-c19"]')).toHaveLength(1));
+  await waitFor(() => expect(view.container.querySelectorAll('[data-thread-key$="p0-c109"]')).toHaveLength(1));
   fireEvent.click(view.container.querySelector('button[aria-label="Load more project-0 threads"]')!);
-  await waitFor(() => expect(view.container.querySelectorAll('[data-thread-key$="p0-c22"]')).toHaveLength(1));
+  await waitFor(() => expect(view.container.querySelectorAll('[data-thread-key$="p0-c122"]')).toHaveLength(1));
   expect(view.container.querySelector('button[aria-label="Load more project-0 threads"]')).toBeNull();
   expect(view.container.querySelectorAll('[data-thread-key$="p0-c0"]')).toHaveLength(1);
   expect(expired).toBe(true);
+  // A click asks for its block; only the rebaseline after the evicted cursor
+  // falls back to the demand page size that paces a first paint.
   expect(read.mock.calls.slice(before).every(([request]) => request.query.kind === "star-map"
-    && request.query.projectKey === directories[0]!.key && request.pageSize === 10)).toBe(true);
+    && request.query.projectKey === directories[0]!.key
+    && request.pageSize === (request.cursor ? 100 : 10))).toBe(true);
   expect(view.container.querySelectorAll(".star-map__cluster-label")).toHaveLength(15);
   view.unmount();
 });

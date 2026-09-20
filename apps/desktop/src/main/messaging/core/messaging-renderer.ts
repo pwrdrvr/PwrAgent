@@ -1,4 +1,5 @@
 import type {
+  AppServerReviewTarget,
   AppServerToolRequestUserInputNotification,
   NavigationSnapshot,
 } from "@pwragent/shared";
@@ -11,6 +12,8 @@ import type {
   MessagingStatusIntent,
   MessagingSurfaceAction,
   MessagingMessageIntent,
+  MessagingReviewStartNotification,
+  MessagingReviewStartTarget,
   MessagingThreadPickerIntent,
   MessagingWorkingCardIntent,
 } from "@pwragent/messaging-interface";
@@ -277,6 +280,7 @@ export function buildConfirmationIntent(params: {
   delivery?: MessagingConfirmationIntent["delivery"];
   fallbackText?: string;
   id: string;
+  reviewStart?: MessagingConfirmationIntent["reviewStart"];
   targetSurface?: MessagingConfirmationIntent["targetSurface"];
   title: string;
 }): MessagingConfirmationIntent {
@@ -289,9 +293,97 @@ export function buildConfirmationIntent(params: {
     createdAt: params.createdAt,
     delivery: params.delivery,
     fallbackText: params.fallbackText,
+    ...(params.reviewStart ? { reviewStart: params.reviewStart } : {}),
     targetSurface: params.targetSurface,
     title: params.title,
   };
+}
+
+/**
+ * Build the generic confirmation delivered by every messaging adapter when a
+ * review is accepted. Keep the structured contract and its visible text
+ * together so fallback-only transports cannot lose reviewer context.
+ */
+export function buildReviewStartConfirmationIntent(params: {
+  capabilityProfile?: MessagingCapabilityProfile;
+  createdAt: number;
+  delivery?: MessagingConfirmationIntent["delivery"];
+  id: string;
+  notification: MessagingReviewStartNotification;
+  targetSurface?: MessagingConfirmationIntent["targetSurface"];
+}): MessagingConfirmationIntent {
+  const title = params.notification.status === "scheduled"
+    ? "Review queued"
+    : "Review started";
+  const body = formatReviewStartNotification(params.notification);
+  return buildConfirmationIntent({
+    id: params.id,
+    capabilityProfile: params.capabilityProfile,
+    createdAt: params.createdAt,
+    title,
+    body,
+    fallbackText: [title, body].join("\n\n"),
+    reviewStart: params.notification,
+    ...(params.targetSurface
+      ? {
+          targetSurface: params.targetSurface,
+          delivery: params.delivery,
+        }
+      : {}),
+  });
+}
+
+export function formatReviewStartNotification(
+  notification: MessagingReviewStartNotification,
+): string {
+  const reviewer = notification.reviewer;
+  return [
+    notification.status === "scheduled"
+      ? `${formatReviewStartTarget(notification.target)} will start after the active turn completes successfully.`
+      : `${formatReviewStartTarget(notification.target)} is now running.`,
+    "",
+    `Reviewer: ${formatReviewerLabel(reviewer)}`,
+    ...(reviewer.model ? [`Model: ${reviewer.model}`] : []),
+    ...(reviewer.reasoningEffort
+      ? [`Reasoning: ${reviewer.reasoningEffort}`]
+      : []),
+  ].join("\n");
+}
+
+export function messagingReviewStartTarget(
+  target: AppServerReviewTarget,
+): MessagingReviewStartTarget {
+  switch (target.type) {
+    case "uncommittedChanges":
+      return { type: "uncommittedChanges" };
+    case "baseBranch":
+      return { type: "baseBranch", branch: target.branch };
+    case "commit":
+      return { type: "commit", sha: target.sha };
+    case "custom":
+      return { type: "custom" };
+  }
+}
+
+function formatReviewStartTarget(target: MessagingReviewStartTarget): string {
+  switch (target.type) {
+    case "uncommittedChanges":
+      return "Current changes review";
+    case "baseBranch":
+      return `Review against ${target.branch}`;
+    case "commit":
+      return `Review of commit ${target.sha}`;
+    case "custom":
+      return "Custom review";
+  }
+}
+
+function formatReviewerLabel(
+  reviewer: MessagingReviewStartNotification["reviewer"],
+): string {
+  const label = reviewer.label?.trim();
+  const backend = reviewer.backend;
+  return label && label !== backend ? `${label} (${backend})` : backend;
 }
 
 export function buildErrorIntent(params: {

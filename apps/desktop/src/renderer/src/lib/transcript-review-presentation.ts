@@ -365,10 +365,11 @@ export function deriveTranscriptReviewPresentation(params: {
       continue;
     }
     excludedPromptIds.add(entry.id);
-    if (source === "history") {
-      excludedHistoryEntryIds.add(entry.id);
-      excludedHistoryMessageIds.add(entry.id);
-    } else {
+    // Filtering the tail removes its overlap IDs from the combined view.
+    // Exclude retained copies too, even when we collected only the tail copy.
+    excludedHistoryEntryIds.add(entry.id);
+    excludedHistoryMessageIds.add(entry.id);
+    if (source === "tail") {
       excludedTailEntryIds.add(entry.id);
     }
   }
