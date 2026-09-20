@@ -17540,6 +17540,7 @@ export class DesktopBackendRegistry {
         }
       }
 
+
       const startWithClient = async (
         client: BackendClient,
       ): Promise<{ threadId: string; reviewThreadId: string; turnId: string }> => {

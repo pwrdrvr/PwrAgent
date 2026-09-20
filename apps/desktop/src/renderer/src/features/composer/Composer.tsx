@@ -1126,6 +1126,7 @@ function buildConfiguredReviewCommand(
   if (config.target === "pullRequest") {
     return config.pullRequestUrl ? {
       ...(cwd ? { cwd } : {}),
+      runMode: config.runMode,
       target: { type: "pullRequest", url: config.pullRequestUrl },
       displayText: `Review ${config.pullRequestUrl}`,
     } : undefined;

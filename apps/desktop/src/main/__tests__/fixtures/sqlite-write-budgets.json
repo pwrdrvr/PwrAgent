@@ -209,6 +209,13 @@
     "rowsChanged": 0,
     "statements": 0
   },
+  "inline-pr-review-context": {
+    "commits": 1,
+    "note": "One captured PR scope card for an ordinary parent turn; no sub-agent, streamed writes, or completion rewrite",
+    "observedWalBytes": 16480,
+    "rowsChanged": 1,
+    "statements": 1
+  },
   "live-thread-token-usage": {
     "commits": 1,
     "note": "500 cumulative usage observations across 10 turns, then one terminal flush",

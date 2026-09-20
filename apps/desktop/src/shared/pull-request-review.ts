@@ -38,6 +38,7 @@ export function nativeReviewTarget(
     type: "custom",
     instructions: [
       `Review the complete pull request diff at the following immutable commits.`,
+      `Pull request: ${snapshot.pullRequest.url}; base branch: ${snapshot.pullRequest.baseRefName}; head branch: ${snapshot.pullRequest.headRefName}; captured at: ${snapshot.capturedAt}.`,
       `Base tip: ${snapshot.baseCommit}; head: ${snapshot.headCommit}; merge base: ${snapshot.mergeBaseCommit}.`,
       `Inspect git diff --no-ext-diff ${snapshot.mergeBaseCommit} ${snapshot.headCommit} --`,
       `Read every target file and surrounding context using git show '${snapshot.headCommit}:path/to/file' (substitute the actual path).`,
