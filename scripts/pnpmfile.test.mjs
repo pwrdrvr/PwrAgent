@@ -2,11 +2,20 @@
 // `scripts/` because that is the directory the root Vitest project already
 // globs for repository-tooling tests (`scripts/**/*.test.mjs`); the subject is
 // the repository root file one level up.
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const require = createRequire(import.meta.url);
@@ -158,8 +167,8 @@ describe("first-party coverage", () => {
   // `pnpm-workspace.yaml` instead of hardcoding paths — a hardcoded
   // `packages/` walk reports full coverage while an `apps/*` package sits
   // unscanned.
-  function workspaceGlobs() {
-    const text = readFileSync(join(repoRoot, "pnpm-workspace.yaml"), "utf8");
+  function workspaceGlobs(root = repoRoot) {
+    const text = readFileSync(join(root, "pnpm-workspace.yaml"), "utf8");
     const lines = text.split(/\r?\n/);
     const start = lines.findIndex((line) => /^packages:\s*$/.test(line));
     if (start === -1) {
@@ -177,28 +186,48 @@ describe("first-party coverage", () => {
     return globs;
   }
 
-  function subdirectories(dir, { recursive }) {
-    const absolute = join(repoRoot, dir);
+  function subdirectories(root, dir, { recursive }) {
+    const absolute = join(root, dir);
     if (!existsSync(absolute)) return [];
     const found = [];
     for (const entry of readdirSync(absolute, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue;
-      // Without this a `dir/**` walk descends into every installed package.
+      // Without this a `dir/**` walk descends into every installed package and
+      // reports their names as workspace packages. Exercised by the fixture
+      // below, which puts a `node_modules` *inside* the recursively walked
+      // path — beside it, the walk never reaches it and the assertion passes
+      // whether or not this line exists.
       if (entry.name === "node_modules" || entry.name.startsWith(".")) continue;
       const child = `${dir}/${entry.name}`;
       found.push(child);
-      if (recursive) found.push(...subdirectories(child, { recursive }));
+      if (recursive) found.push(...subdirectories(root, child, { recursive }));
     }
     return found;
   }
 
-  function expandGlob(glob) {
-    if (!glob.includes("*") && !glob.startsWith("!")) return [glob];
-    if (glob.endsWith("/**")) {
-      return subdirectories(glob.slice(0, -3), { recursive: true });
+  function expandGlob(root, glob) {
+    // Checked before anything else, and deliberately a refusal rather than a
+    // silent skip. Routing `!x` through the branches below would let
+    // `!packages/legacy/*` match the `/*` branch, find no directory named
+    // `!packages/legacy`, and return [] — which does not exclude anything, so
+    // the excluded packages stay in the set and this test over-reports what it
+    // has checked. Nothing here declares an exclusion today; teach this
+    // function real exclusion semantics rather than letting one through.
+    if (glob.startsWith("!")) {
+      throw new Error(
+        `pnpm-workspace.yaml declares the exclusion ${glob}, which this test `
+          + "does not implement. Teach expandGlob to subtract it.",
+      );
     }
-    if (glob.endsWith("/*")) {
-      return subdirectories(glob.slice(0, -2), { recursive: false });
+    if (!glob.includes("*")) return [glob];
+    const recursive = glob.endsWith("/**");
+    if (recursive || glob.endsWith("/*")) {
+      const prefix = glob.slice(0, recursive ? -3 : -2);
+      // The suffix test alone is not enough. An interior wildcard such as
+      // `pack*ges/*` ends in `/*` but names no real directory, so the walk
+      // would find nothing and return [] — the silent no-op this function
+      // exists to refuse. Only expand when the prefix is a literal path.
+      if (!prefix.includes("*")) return subdirectories(root, prefix, { recursive });
     }
     // Refuse rather than match nothing: a pattern that quietly expands to []
     // turns this whole test into a no-op that still reports success.
@@ -208,19 +237,122 @@ describe("first-party coverage", () => {
     );
   }
 
-  function workspacePackageNames() {
-    const names = [JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8")).name];
-    for (const glob of workspaceGlobs()) {
-      for (const dir of expandGlob(glob)) {
+  function workspacePackageNames(root = repoRoot) {
+    const names = [JSON.parse(readFileSync(join(root, "package.json"), "utf8")).name];
+    for (const glob of workspaceGlobs(root)) {
+      for (const dir of expandGlob(root, glob)) {
         // Intermediate directories of a nested glob legitimately have no
         // manifest — `packages/messaging` is exactly that case here.
-        const manifest = join(repoRoot, dir, "package.json");
+        const manifest = join(root, dir, "package.json");
         if (!existsSync(manifest)) continue;
         names.push(JSON.parse(readFileSync(manifest, "utf8")).name);
       }
     }
     return [...new Set(names)];
   }
+
+  // The helpers above are exercised against a throwaway workspace as well as
+  // the real one. Asserting only against this repository would leave every
+  // guard in them unexercised until the day someone adds the glob it guards.
+  describe("against a synthetic workspace", () => {
+    let fixtureRoot;
+
+    function write(relative, contents) {
+      const absolute = join(fixtureRoot, relative);
+      mkdirSync(dirname(absolute), { recursive: true });
+      writeFileSync(absolute, contents);
+    }
+
+    function seed(globs) {
+      fixtureRoot = mkdtempSync(join(tmpdir(), "pwragent-pnpmfile-"));
+      write("package.json", JSON.stringify({ name: "fixture-root" }));
+      write(
+        "pnpm-workspace.yaml",
+        `packages:\n${globs.map((g) => `  - ${g}`).join("\n")}\n`,
+      );
+      return fixtureRoot;
+    }
+
+    afterEach(() => {
+      if (fixtureRoot) rmSync(fixtureRoot, { recursive: true, force: true });
+      fixtureRoot = undefined;
+    });
+
+    it("never walks into node_modules under a recursive glob", () => {
+      // The node_modules goes INSIDE the walked path. Beside it — at the
+      // fixture root, next to `nested/` — the walk never reaches it and this
+      // assertion passes identically with the skip present or removed, which
+      // makes it decorative.
+      const root = seed(["nested/**"]);
+      write("nested/one/package.json", JSON.stringify({ name: "real-package" }));
+      write(
+        "nested/one/node_modules/evil/package.json",
+        JSON.stringify({ name: "installed-dependency" }),
+      );
+
+      const names = workspacePackageNames(root);
+      expect(names).toContain("real-package");
+      expect(names).not.toContain("installed-dependency");
+    });
+
+    it("sees a package outside the packages/ directory", () => {
+      // The blindness a hardcoded `packages/` walk has: it reports full
+      // coverage while an apps/* package sits unscanned.
+      const root = seed(["apps/*", "packages/*"]);
+      write("apps/tool/package.json", JSON.stringify({ name: "unscoped-tool" }));
+      write("packages/lib/package.json", JSON.stringify({ name: "@scope/lib" }));
+
+      expect(workspacePackageNames(root)).toEqual(
+        expect.arrayContaining(["unscoped-tool", "@scope/lib"]),
+      );
+    });
+
+    it("tolerates an intermediate directory with no manifest", () => {
+      // `packages/messaging` in the real workspace.
+      const root = seed(["packages/*", "packages/group/*"]);
+      write("packages/group/member/package.json", JSON.stringify({ name: "member" }));
+
+      expect(workspacePackageNames(root)).toContain("member");
+    });
+
+    it.each([
+      ["!packages/legacy", "exclusion without a wildcard"],
+      ["!packages/legacy/*", "exclusion that would otherwise match the /* branch"],
+      ["!packages/legacy/**", "exclusion that would otherwise match the /** branch"],
+    ])("refuses the exclusion %s (%s)", (glob) => {
+      // Every one of these silently returned [] before the `!` check moved to
+      // the top of expandGlob: an ignored exclusion leaves the excluded
+      // packages in the set, so the test claims to have checked more than it
+      // did.
+      const root = seed(["packages/*", glob]);
+      expect(() => workspacePackageNames(root)).toThrow(/does not implement/);
+    });
+
+    it("refuses a glob shape it cannot expand rather than matching nothing", () => {
+      const root = seed(["pack*ges/*"]);
+      expect(() => workspacePackageNames(root)).toThrow(/cannot expand/);
+    });
+
+    it("refuses a workspace file with no packages block", () => {
+      fixtureRoot = mkdtempSync(join(tmpdir(), "pwragent-pnpmfile-"));
+      write("package.json", JSON.stringify({ name: "fixture-root" }));
+      write("pnpm-workspace.yaml", "minimumReleaseAge: 10080\n");
+
+      expect(() => workspacePackageNames(fixtureRoot)).toThrow(/no `packages:` block/);
+    });
+
+    it("stops the packages block at the next top-level key", () => {
+      const root = seed(["packages/*"]);
+      write(
+        "pnpm-workspace.yaml",
+        "packages:\n  # a comment\n  - packages/*\n\nminimumReleaseAge: 10080\nonlyBuiltDependencies:\n  - esbuild\n",
+      );
+      write("packages/lib/package.json", JSON.stringify({ name: "only-me" }));
+
+      expect(workspaceGlobs(root)).toEqual(["packages/*"]);
+      expect(workspacePackageNames(root)).toEqual(["fixture-root", "only-me"]);
+    });
+  });
 
   it("enumerates the workspace from pnpm-workspace.yaml", () => {
     // A typo in the parser would otherwise read as "nothing to check, all
