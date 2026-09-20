@@ -3,6 +3,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useId,
   useRef,
   useState,
   type ReactNode,
@@ -21,6 +22,12 @@ export type UnsavedSettingsChanges = {
 export type ConfirmSettingsLeave = (leave: () => void) => void;
 
 type Register = (changes: UnsavedSettingsChanges) => () => void;
+
+type PendingLeave = {
+  label: string;
+  leave: () => void;
+  returnFocus: Element | null;
+};
 
 const UnsavedSettingsContext = createContext<Register>(() => () => undefined);
 
@@ -47,11 +54,18 @@ export function useUnsavedSettingsGuard(): {
   dialog: ReactNode;
 } {
   const changesRef = useRef<UnsavedSettingsChanges | undefined>(undefined);
-  const [pending, setPending] = useState<{
-    label: string;
-    leave: () => void;
-    returnFocus: Element | null;
-  }>();
+  const [pending, setPending] = useState<PendingLeave>();
+  // The prompt outlives a render: a save runs across an await, and a second
+  // leave request can replace the destination while it does. Read both
+  // through the ref so neither acts on a request that is already gone.
+  const pendingRef = useRef<PendingLeave | undefined>(undefined);
+  const setPendingLeave = useCallback(
+    (next: PendingLeave | undefined) => {
+      pendingRef.current = next;
+      setPending(next);
+    },
+    [],
+  );
   const [saving, setSaving] = useState(false);
   const [failed, setFailed] = useState(false);
 
@@ -69,18 +83,19 @@ export function useUnsavedSettingsGuard(): {
       return;
     }
     setFailed(false);
-    setPending((current) => ({
+    const current = pendingRef.current;
+    setPendingLeave({
       label: changes.label,
       leave,
       // A second request while the prompt is open replaces where it goes,
       // not where focus returns to.
       returnFocus: current ? current.returnFocus : document.activeElement,
-    }));
-  }, []);
+    });
+  }, [setPendingLeave]);
 
   const keepEditing = () => {
-    const returnFocus = pending?.returnFocus;
-    setPending(undefined);
+    const returnFocus = pendingRef.current?.returnFocus;
+    setPendingLeave(undefined);
     if (returnFocus instanceof HTMLElement && returnFocus.isConnected) {
       returnFocus.focus();
     }
@@ -88,9 +103,9 @@ export function useUnsavedSettingsGuard(): {
   // Forget the edits before leaving: the pane unmounts, and an outer caller
   // (App closing the overlay) asks again on the way out.
   const leaveNow = () => {
-    const leave = pending?.leave;
+    const leave = pendingRef.current?.leave;
     changesRef.current = undefined;
-    setPending(undefined);
+    setPendingLeave(undefined);
     leave?.();
   };
   const discard = () => {
@@ -100,9 +115,17 @@ export function useUnsavedSettingsGuard(): {
   const save = async () => {
     setSaving(true);
     setFailed(false);
-    // The pane re-registers on every render; ask the current one.
-    const saved = await (changesRef.current?.save() ?? Promise.resolve(true));
-    setSaving(false);
+    let saved: boolean;
+    try {
+      // The pane re-registers on every render; ask the current one.
+      saved = await (changesRef.current?.save() ?? Promise.resolve(true));
+    } catch {
+      // A pane whose save rejects still has to leave the prompt usable;
+      // without this the dialog stays disabled and even Escape is ignored.
+      saved = false;
+    } finally {
+      setSaving(false);
+    }
     if (saved) {
       leaveNow();
     } else {
@@ -139,6 +162,8 @@ function UnsavedSettingsDialog(props: {
   onSave: () => void;
 }) {
   const dialogRef = useRef<HTMLDivElement | null>(null);
+  const headingId = useId();
+  const descriptionId = useId();
   const { onKeepEditing, saving } = props;
   useEffect(() => {
     dialogRef.current?.focus();
@@ -158,15 +183,15 @@ function UnsavedSettingsDialog(props: {
     <div className="settings-confirm-modal" role="presentation">
       <div
         ref={dialogRef}
-        aria-describedby="unsaved-settings-description"
-        aria-labelledby="unsaved-settings-heading"
+        aria-describedby={descriptionId}
+        aria-labelledby={headingId}
         aria-modal="true"
         className="settings-confirm-dialog settings-unsaved-dialog"
         role="alertdialog"
         tabIndex={-1}
       >
-        <h2 id="unsaved-settings-heading">Save changes to {props.label}?</h2>
-        <p id="unsaved-settings-description">
+        <h2 id={headingId}>Save changes to {props.label}?</h2>
+        <p id={descriptionId}>
           {props.failed
             ? "The changes were not saved. Keep editing to see what needs fixing, or discard them."
             : `Your ${props.label} settings have edits that are not saved. Leaving without saving discards them.`}

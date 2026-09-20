@@ -344,7 +344,7 @@ function DesktopAppShell(props: {
     DEFAULT_ACTION_RUNS_DOCK,
   );
   const [mainView, setMainViewState] = useState<MainView>("thread");
-  const mainViewRef = useRef<MainView>("thread");
+  const mainViewRef = useRef<MainView>(mainView);
   // Settings can hold edits the operator has not saved. Every way out of the
   // overlay (Exit, a menu command, a notification, history) asks Settings
   // first, so those edits get a Save / Discard prompt instead of vanishing.
@@ -357,20 +357,28 @@ function DesktopAppShell(props: {
     },
     [],
   );
-  const setMainView = useCallback((next: SetStateAction<MainView>) => {
-    const current = mainViewRef.current;
-    const target = typeof next === "function" ? next(current) : next;
-    const show = () => {
-      mainViewRef.current = target;
-      setMainViewState(target);
-    };
-    const confirmLeave = settingsLeaveGuardRef.current;
-    if (current === "settings" && target !== "settings" && confirmLeave) {
-      confirmLeave(show);
-      return;
-    }
-    show();
-  }, []);
+  // `onShown` runs with the switch, not before it. A caller that pairs the
+  // two — open a thread, create one, restore a history entry — would
+  // otherwise act on a window the operator is still deciding whether to
+  // leave, and "Keep editing" would cancel only half of it.
+  const setMainView = useCallback(
+    (next: SetStateAction<MainView>, onShown?: () => void) => {
+      const current = mainViewRef.current;
+      const target = typeof next === "function" ? next(current) : next;
+      const show = () => {
+        mainViewRef.current = target;
+        setMainViewState(target);
+        onShown?.();
+      };
+      const confirmLeave = settingsLeaveGuardRef.current;
+      if (current === "settings" && target !== "settings" && confirmLeave) {
+        confirmLeave(show);
+        return;
+      }
+      show();
+    },
+    [],
+  );
   // In-thread find bar (⌘F). `manualFindOpen` is the ⌘F toggle; `findRequest`
   // is a deep-link from a search result (seeded query + its target thread).
   // The bar is open when either applies (see `threadFindOpen` below).
@@ -1844,15 +1852,15 @@ function DesktopAppShell(props: {
         setMainView("search");
         return;
       }
-      setMainView("thread");
-      if (location.view === "launchpad") {
-        selectDirectoryLaunchpad(location.directoryKey);
-        return;
-      }
-      const ref = navigationIdentityFromThreadKey(location.threadKey);
-      if (ref) void navigation.showThread({ backend: ref.backend, threadId: ref.threadId,
-        federationTarget: ref.ownerInstanceId ? { scope: "remote", instanceId: ref.ownerInstanceId } : undefined });
-
+      setMainView("thread", () => {
+        if (location.view === "launchpad") {
+          selectDirectoryLaunchpad(location.directoryKey);
+          return;
+        }
+        const ref = navigationIdentityFromThreadKey(location.threadKey);
+        if (ref) void navigation.showThread({ backend: ref.backend, threadId: ref.threadId,
+          federationTarget: ref.ownerInstanceId ? { scope: "remote", instanceId: ref.ownerInstanceId } : undefined });
+      });
     },
     [navigation, selectDirectoryLaunchpad, setMainView],
   );
@@ -2088,8 +2096,7 @@ function DesktopAppShell(props: {
       return;
     }
     return desktopApi.onOpenNewThreadRequested(() => {
-      setMainView("thread");
-      void navigation.createThread();
+      setMainView("thread", () => void navigation.createThread());
     });
   }, [desktopApi, navigation, setMainView]);
   useEffect(() => {
@@ -2097,9 +2104,10 @@ function DesktopAppShell(props: {
       return;
     }
     return desktopApi.onShowThreadRequested((request) => {
-      queueMessageLinkRequest(request);
-      setMainView("thread");
-      void navigation.showThread(request);
+      setMainView("thread", () => {
+        queueMessageLinkRequest(request);
+        void navigation.showThread(request);
+      });
     });
   }, [desktopApi, navigation, queueMessageLinkRequest, setMainView]);
   useEffect(() => {
