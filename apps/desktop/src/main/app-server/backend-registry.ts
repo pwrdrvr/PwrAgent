@@ -39335,16 +39335,22 @@ export class DesktopBackendRegistry {
           errorMessage: errorMessageFromTerminalNotification(event.notification),
         });
       }
+      // Inline review waiters use the returned outer turn ID, even when
+      // Codex terminates the observed inner interrupt turn.
+      const lifecycleTurnId = managedReview?.mode === "native"
+        && managedReview.reviewThreadId === managedReview.parentThreadId
+        ? managedReview.turnId
+        : turnId;
       await this.drainPendingReviewStartsForTerminalTurn({
         backend: event.backend,
         threadId: notification.params.threadId,
-        turnId,
+        turnId: lifecycleTurnId,
         method: event.notification.method,
       });
       this.drainPendingThreadWorkspaceMovesForTerminalTurn({
         backend: event.backend,
         threadId: notification.params.threadId,
-        turnId,
+        turnId: lifecycleTurnId,
       });
       if (event.backend === "codex") {
         // Turn-end is the resume boundary — flush any queued mode change
@@ -39377,7 +39383,7 @@ export class DesktopBackendRegistry {
       void this.threadTurnQueue.releaseThread({
         backend: event.backend,
         threadId: notification.params.threadId,
-        turnId,
+        turnId: lifecycleTurnId,
         status: event.notification.method,
         ...(event.notification.method === "turn/failed"
           ? {

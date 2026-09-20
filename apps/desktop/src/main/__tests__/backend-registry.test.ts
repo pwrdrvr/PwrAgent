@@ -31262,6 +31262,82 @@ command = "pnpm dev"
     },
   );
 
+  it.each(["cancelled", "failed", "completed"] as const)(
+    "settles scheduled inline reviews when the inner turn is %s",
+    async (status) => {
+      const codexClient = new MockBackendClient({
+        initializeResult: { methods: ["review/start"] },
+      });
+      const registry = new DesktopBackendRegistry({
+        codexClient,
+        overlayStore: createOverlayStoreMock(),
+      });
+      const events: AgentEvent[] = [];
+      registry.onEvent((event) => { events.push(event); });
+      const start = vi.spyOn(codexClient, "startReview")
+        .mockImplementationOnce(async () => {
+          await codexClient.emit({
+            method: "turn/started",
+            params: {
+              threadId: "thread-parent",
+              turnId: "inner",
+              turn: { id: "inner", status: "in_progress" },
+            },
+          });
+          return { threadId: "thread-parent", reviewThreadId: "thread-parent", turnId: "outer" };
+        })
+        .mockResolvedValue({ threadId: "thread-parent", reviewThreadId: "thread-parent", turnId: "next-review" });
+      const request = {
+        backend: "codex" as const,
+        threadId: "thread-parent",
+        target: { type: "uncommittedChanges" as const },
+      };
+      try {
+        await registry.startReview(request);
+        const scheduled = await registry.submitReview(request);
+        expect(scheduled).toMatchObject({ status: "scheduled", invokingTurnId: "outer" });
+        if (scheduled.status !== "scheduled") throw new Error("Expected a scheduled review");
+        const params = { threadId: "thread-parent", turnId: "inner" };
+        const terminal: AppServerNotification = status === "failed"
+          ? {
+              method: "turn/failed",
+              params: { ...params, turn: { id: "inner", status, error: { message: "Review failed" } } },
+            }
+          : status === "cancelled"
+            ? {
+                method: "turn/cancelled",
+                params: { ...params, turn: { id: "inner", status } },
+              }
+            : {
+                method: "turn/completed",
+                params: { ...params, turn: { id: "inner", status, output: [] } },
+              };
+        await codexClient.emit(terminal);
+        await codexClient.emit(terminal);
+        const updates = events.filter((event) =>
+          event.notification.method === "thread/reviewStart/updated"
+          && event.notification.params.pendingReviewId === scheduled.pendingReviewId
+          && event.notification.params.status !== "scheduled"
+        );
+        expect(updates).toEqual([{
+          backend: "codex",
+          notification: {
+            method: "thread/reviewStart/updated",
+            params: expect.objectContaining({
+              threadId: "thread-parent",
+              pendingReviewId: scheduled.pendingReviewId,
+              status: status === "completed" ? "started" : "cancelled",
+            }),
+          },
+        }]);
+        expect(start).toHaveBeenCalledTimes(status === "completed" ? 2 : 1);
+        expect(registry.cancelPendingReview(scheduled.pendingReviewId, "Must already be settled")).toBe(false);
+      } finally {
+        await registry.close();
+      }
+    },
+  );
+
   it.each(["thread-parent", "thread-review"])(
     "does not resurrect a native review completed before its response (%s)",
     async (reviewThreadId) => {
