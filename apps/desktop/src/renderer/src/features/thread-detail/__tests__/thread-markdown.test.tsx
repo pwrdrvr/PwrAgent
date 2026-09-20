@@ -671,7 +671,14 @@ describe("ThreadMarkdown", () => {
       `/Users/fixture-user/pwrdrvr/${project}/.agents/skills/release/SKILL.md`;
     render(
       <ThreadMarkdown
-        desktopApi={{ readMarkdownFile: vi.fn(async () => undefined) }}
+        desktopApi={{
+          // Only present so the chip becomes the button that carries the
+          // accessible name; this test never opens the viewer.
+          readMarkdownFile: vi.fn(async (request: { path: string }) => ({
+            path: request.path,
+            content: "",
+          })),
+        }}
         skills={[
           {
             name: "release",
