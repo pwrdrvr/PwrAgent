@@ -2227,12 +2227,14 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
-  it.each([10, 100, 1_000])("reuses unchanged text for %i fresh provider rows while updating metadata", async (count) => {
+  it.each([
+    [10, 1], [100, 1], [1_000, 1], [1_000, 200],
+  ])("reuses unchanged text for %i fresh provider rows with preview multiplier %i while updating metadata", async (count, previewMultiplier) => {
     const shared = await import("@pwragent/shared");
     const normalize = vi.spyOn(shared, "shortenDerivedThreadTitle");
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     const rows = Array.from({ length: count }, (_, index) => ({
-      id: `text-${index}`, name: `Title ${index}`, preview: `Please investigate fixture ${index}`,
+      id: `text-${index}`, name: `Title ${index}`, preview: `Please investigate fixture ${index}`.repeat(previewMultiplier),
       summary: `Summary ${index}`, source: "vscode", updatedAt: 100,
     }));
     MockTransport.threadListResultBySearchTerm.set("text-work", rows);
