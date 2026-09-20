@@ -6990,6 +6990,37 @@ function selectLowestMonitorReasoningEffort(
   return reasoningEfforts[0];
 }
 
+/**
+ * Whether re-sending the model would carry a thought level the session does
+ * not already hold.
+ *
+ * A model write sends no level when none is requested, and the client drops
+ * one the session's own menu does not list. Kimi keeps a level across a model
+ * switch and ignores one its model does not offer, so in both cases the level
+ * a thread records never converges on the request, and a comparison that
+ * counted it would re-send the model on every turn for no change.
+ */
+function acpModelWriteWouldApplyThoughtLevel(params: {
+  client: AcpRuntimeClient;
+  currentReasoningEffort: string | undefined;
+  reasoningEffort: string | undefined;
+  threadId: string;
+}): boolean {
+  if (
+    !params.reasoningEffort
+    || params.currentReasoningEffort === params.reasoningEffort
+  ) {
+    return false;
+  }
+  // An unknown menu answers true, leaving the decision to the agent.
+  return (
+    params.client.offersThoughtLevel?.(
+      params.threadId,
+      params.reasoningEffort,
+    ) !== false
+  );
+}
+
 function resolveModelSettingsFromOptions(
   backend: AppServerBackendKind,
   options: BackendLaunchpadOptions | undefined,
@@ -12049,10 +12080,15 @@ export class DesktopBackendRegistry {
         : undefined) ??
       sessionForTurn.acpRuntime?.reasoningEffort;
     if (
-      params.model &&
-      (
-        currentModel !== params.model ||
-        currentReasoningEffort !== params.reasoningEffort
+      params.model
+      && (
+        currentModel !== params.model
+        || acpModelWriteWouldApplyThoughtLevel({
+          client,
+          currentReasoningEffort,
+          reasoningEffort: params.reasoningEffort,
+          threadId: params.threadId,
+        })
       )
     ) {
       await client.setRuntimeOption?.({

@@ -98,7 +98,10 @@ import {
   shouldSurfaceAcpThoughtsAsMessages,
 } from "../acp/acp-session-normalizer";
 import { AcpStdioJsonRpcTransport } from "../acp/acp-stdio-transport";
-import { shouldProbeAcpCapabilitiesAtStartup } from "../acp/acp-capability-freshness";
+import {
+  recordWithSessionRuntimeCapabilities,
+  shouldProbeAcpCapabilitiesAtStartup,
+} from "../acp/acp-capability-freshness";
 import {
   ensureAcpRuntimeDiscoveryWorkspace,
   refreshAcpRuntimeCapabilities,
@@ -157,6 +160,7 @@ export type AcpRuntimeClient = Pick<
       | "hasActiveTurns"
       | "hasRetainableSessions"
       | "listRewindPoints"
+      | "offersThoughtLevel"
       | "ownsSession"
       | "readProviderStatus"
       | "sendControlPrompt"
@@ -2987,13 +2991,9 @@ export class AcpBackendAdapter {
       }) => {
         const now = Date.now();
         const current = this.getInstalledAgent(agent.backendId) ?? agent;
-        this.acpAgentStore?.upsertInstalledAgent({
-          ...current,
-          runtimeCapabilities,
-          lastDiscoveredAt: runtimeCapabilities.discoveredAt ?? now,
-          lastDiscoveryError: runtimeCapabilities.lastError,
-          updatedAt: Math.max(current.updatedAt, now),
-        });
+        this.acpAgentStore?.upsertInstalledAgent(
+          recordWithSessionRuntimeCapabilities(current, runtimeCapabilities, now),
+        );
         await this.emit({
           backend: agent.backendId,
           notification: {

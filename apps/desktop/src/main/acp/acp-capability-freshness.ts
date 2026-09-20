@@ -97,3 +97,31 @@ export function shouldProbeAcpCapabilitiesAtStartup(
     && agent.lastDiscoveryError === undefined
   );
 }
+
+/**
+ * The record update for capabilities learned from a live session rather than a
+ * probe.
+ *
+ * A session reply reports that session's own menus. It never re-derives the
+ * model catalog — `normalizeAcpRuntimeCapabilities` carries `models` forward
+ * from the capabilities the client started with — so it is not a probe result
+ * and must not stamp the probe clock. Stamping it keeps a catalog the last
+ * probe got wrong permanently fresh for an agent in daily use, because every
+ * turn renews the 48-hour window before it can expire: a Kimi record
+ * catalogued before #2219 still listed `on` among K3's thought levels, and
+ * named it K3's default, a day after the fix shipped.
+ *
+ * `lastDiscoveryError` is preserved for the same reason. It records what the
+ * last probe did, and no session reply can answer for a probe.
+ */
+export function recordWithSessionRuntimeCapabilities(
+  current: AcpInstalledAgentRecord,
+  runtimeCapabilities: AcpInstalledAgentRecord["runtimeCapabilities"],
+  now: number,
+): AcpInstalledAgentRecord {
+  return {
+    ...current,
+    runtimeCapabilities,
+    updatedAt: Math.max(current.updatedAt, now),
+  };
+}

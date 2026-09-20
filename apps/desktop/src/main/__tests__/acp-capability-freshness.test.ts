@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   ACP_CAPABILITY_MAX_AGE_MS,
+  recordWithSessionRuntimeCapabilities,
   shouldProbeAcpCapabilitiesAtStartup,
   shouldReprobeAcpCapabilities,
 } from "../acp/acp-capability-freshness";
@@ -166,5 +167,30 @@ describe("shouldProbeAcpCapabilitiesAtStartup", () => {
         true,
       ),
     ).toBe(false);
+  });
+});
+
+describe("recordWithSessionRuntimeCapabilities", () => {
+  it("does not let a live session renew the probe clock", () => {
+    // Measured: a Kimi record catalogued before #2219 still listed `on` among
+    // K3's thought levels, and named it K3's default, a day after that fix
+    // shipped. Every turn re-stamped the 48-hour window, so the re-probe that
+    // would have corrected the catalog never came due.
+    const stale = record({
+      lastDiscoveredAt: NOW - ACP_CAPABILITY_MAX_AGE_MS - 1,
+      lastDiscoveryError: "probe failed",
+    });
+
+    const updated = recordWithSessionRuntimeCapabilities(
+      stale,
+      { discoveredAt: NOW, source: "session-load" } as never,
+      NOW,
+    );
+
+    expect(updated.lastDiscoveredAt).toBe(stale.lastDiscoveredAt);
+    expect(updated.lastDiscoveryError).toBe("probe failed");
+    expect(updated.runtimeCapabilities).toMatchObject({ source: "session-load" });
+    expect(updated.updatedAt).toBe(NOW);
+    expect(shouldReprobeAcpCapabilities(updated, "0.2.3", NOW)).toBe(true);
   });
 });

@@ -2001,6 +2001,41 @@ describe("AcpAgentClient", () => {
     expect(transport.thinking).toBe("high");
   });
 
+  it("answers whether a model write would keep a thought level by the session's own menu", async () => {
+    // The registry skips a turn-start model write whose only change would be
+    // a level this client drops.
+    const transport = new KimiConfigOptionTransport();
+    const client = new AcpAgentClient({
+      backendId: "acp:kimi",
+      store,
+      transport,
+      now: () => 1000,
+    });
+
+    await client.initialize();
+    const session = await client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+    });
+    await client.setRuntimeOption({
+      sessionId: session.sessionId,
+      source: "model",
+      optionId: "model",
+      value: "kimi-code/k3",
+      reasoningEffort: "high",
+    });
+
+    expect(client.offersThoughtLevel(session.sessionId, "max")).toBe(true);
+    expect(client.offersThoughtLevel(session.sessionId, "on")).toBe(false);
+
+    // An unknown menu leaves the decision to the agent.
+    transport.emitSessionUpdate("kimi-session", {
+      sessionUpdate: "config_option_update",
+      configOptions: transport.configOptions(),
+    });
+    expect(client.offersThoughtLevel(session.sessionId, "on")).toBe(true);
+  });
+
   it("keeps requested ACP config-option mode when response reports stale current mode", async () => {
     const transport = new FakeAcpAgentTransport({
       "session/new": {
