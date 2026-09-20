@@ -1,3 +1,4 @@
+import type { ReviewRunMode, BackendCapabilities } from "@pwragent/shared";
 import type {
   AppServerBackendKind,
   AppServerReviewTarget,
@@ -1041,6 +1042,7 @@ export type MessagingQuestionnaireIntent = MessagingBaseSurfaceIntent & {
 };
 
 export type MessagingReviewPhase =
+  | "run_mode"
   | "summary"
   | "workspace"
   | "target"
@@ -1062,6 +1064,7 @@ export type MessagingReviewIntent = MessagingBaseSurfaceIntent & {
     backend: AppServerBackendKind;
     threadId: ThreadIdentifier;
     phase: MessagingReviewPhase;
+    runMode?: ReviewRunMode;
     cwd?: string;
     repositoryPath?: string;
     workspaceSelectionRequired?: boolean;
@@ -1081,6 +1084,7 @@ export type MessagingReviewIntent = MessagingBaseSurfaceIntent & {
      * button off the summary rather than offering a choice that cannot land.
      */
     reviewerBackends?: {
+      capabilities?: BackendCapabilities;
       backend: AppServerBackendKind;
       label: string;
       models: { id: string; label: string; reasoningEfforts: string[] }[];

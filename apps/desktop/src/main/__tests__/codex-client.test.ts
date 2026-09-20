@@ -1,3 +1,4 @@
+import { buildInlineReviewPrompt } from "../../shared/review-command";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -7005,10 +7006,10 @@ describe("CodexAppServerClient", () => {
 
   it("suppresses explicitly marked inline review instructions without native review events", async () => {
     const { extractThreadReplayFromReadResult } = await import("../codex-app-server/client");
-    const text = "<pwragent-inline-review-instructions>\nInspect this diff and report findings.\n</pwragent-inline-review-instructions>";
+    const text = buildInlineReviewPrompt({ type: "custom", instructions: "Check error handling." });
     const replay = extractThreadReplayFromReadResult({ thread: { turns: [{ id: "inline-turn", items: [
       { type: "userMessage", id: "internal", content: [{ type: "text", text }] },
-      { type: "userMessage", id: "authored", content: [{ type: "text", text: `Explain this marker: ${text}` }] },
+      { type: "userMessage", id: "authored", content: [{ type: "text", text: "Check error handling." }] },
     ] }] } });
     expect(replay.entries.map((entry) => entry.id)).toEqual(["authored"]);
     expect(replay.messages.map((message) => message.id)).toEqual(["authored"]);

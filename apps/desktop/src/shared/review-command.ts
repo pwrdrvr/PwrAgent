@@ -287,3 +287,26 @@ export function isPwrAgentInlineReviewPrompt(text: string): boolean {
   return normalized.startsWith("<pwragent-inline-review-instructions>\n")
     && normalized.endsWith("\n</pwragent-inline-review-instructions>");
 }
+
+export function buildInlineReviewPrompt(target: AppServerReviewTarget): string {
+  return [
+    "<pwragent-inline-review-instructions>",
+    "Perform a code review in this thread. Focus on concrete correctness regressions. Do not modify files.",
+    reviewTargetInstructions(target),
+    "Report actionable findings with file paths and line numbers, followed by a concise verdict.",
+    "</pwragent-inline-review-instructions>",
+  ].join("\n\n");
+}
+
+export function reviewTargetInstructions(target: AppServerReviewTarget): string {
+  switch (target.type) {
+    case "baseBranch":
+      return `Review the current checkout against base branch '${target.branch}'. Find the merge base and inspect the resulting diff.`;
+    case "commit":
+      return `Review commit ${target.sha}${target.title ? ` (${target.title})` : ""}.`;
+    case "custom":
+      return target.instructions.trim() || "Review the current code changes.";
+    case "uncommittedChanges":
+      return "Review all staged, unstaged, and untracked changes in the current checkout.";
+  }
+}

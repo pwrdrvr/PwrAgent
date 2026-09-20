@@ -1116,10 +1116,7 @@ export type DesktopSettingsSnapshot = {
      * outside Plan mode when the installed Codex build supports it.
      */
     codexDefaultModeRequestUserInput: DesktopSettingsValue<boolean>;
-    /**
-     * Runs reviews as PwrAgent-managed Codex child turns instead of calling
-     * Codex App Server review/start. Disabled by default.
-     */
+    /** Legacy round-trip field; per-review runMode now selects the engine. */
     managedReview?: DesktopSettingsValue<boolean>;
     /**
      * Diff condensation (a.k.a. "diff eliding") gates whether the configured
@@ -1388,6 +1385,7 @@ export type DesktopSettingsConfigPatch = {
     tokenMiserDefaultEnabled?: boolean;
     threadToolAccounting?: boolean;
     codexDefaultModeRequestUserInput?: boolean;
+    /** Legacy round-trip field; per-review runMode now selects the engine. */
     managedReview?: boolean;
     diffCondensation?: {
       enabled?: boolean;

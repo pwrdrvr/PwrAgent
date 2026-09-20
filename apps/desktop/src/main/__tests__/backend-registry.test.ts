@@ -5495,7 +5495,7 @@ describe("DesktopBackendRegistry", () => {
     const registry = new DesktopBackendRegistry({
       codexClient,
       overlayStore,
-      resolveManagedReviewEnabled: () => true,
+      resolveManagedReviewEnabled: () => true, // Legacy config no longer selects the engine.
     });
     const tokenMiserStateDir = path.join(
       "/tmp",
@@ -5532,6 +5532,7 @@ describe("DesktopBackendRegistry", () => {
 
     try {
       await registry.startReview({
+      runMode: "pwragent-sub-agent",
         backend: "codex",
         threadId: "thread-1",
         target: { type: "custom", instructions: "Review the current change." },
@@ -5637,7 +5638,7 @@ describe("DesktopBackendRegistry", () => {
     const registry = new DesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
-      resolveManagedReviewEnabled: () => true,
+      resolveManagedReviewEnabled: () => true, // Legacy config no longer selects the engine.
     });
     const tokenMiserStateDir = path.join(
       "/tmp",
@@ -5660,6 +5661,7 @@ describe("DesktopBackendRegistry", () => {
 
     try {
       await registry.startReview({
+      runMode: "pwragent-sub-agent",
         backend: "codex",
         threadId: "thread-1",
         target: { type: "custom", instructions: "Review the current change." },
@@ -25696,6 +25698,113 @@ command = "pnpm dev"
       }
     }
   });
+  it("does not restore an inline review as active when its terminal event precedes turn/start", async () => {
+    const startTurnDelay = createDeferred<void>();
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+      startTurnDelay: startTurnDelay.promise,
+      startTurnResults: [{ threadId: "thread-parent", turnId: "turn-fast-review" }],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    const review = registry.startReview({
+      backend: "codex",
+      threadId: "thread-parent",
+      target: { type: "baseBranch", branch: "main" },
+      delivery: "inline",
+      runMode: "codex-inline",
+    });
+    await vi.waitFor(() => {
+      expect(codexClient.startTurnCallCount).toBe(1);
+    });
+
+    await codexClient.emit({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-parent",
+        turnId: "turn-fast-review",
+        turn: {
+          id: "turn-fast-review",
+          status: "completed",
+          output: [],
+        },
+      },
+    });
+    startTurnDelay.resolve();
+
+    await expect(review).resolves.toMatchObject({
+      threadId: "thread-parent",
+      reviewThreadId: "thread-parent",
+      turnId: "turn-fast-review",
+    });
+    expect(registry.getInProgressThreadSnapshotForQuit()).toEqual({
+      count: 0,
+      threadIds: [],
+    });
+    await expect(registry.startTurn({
+      backend: "codex",
+      threadId: "thread-parent",
+      input: [{ type: "text", text: "Continue after the fast review" }],
+    })).resolves.toMatchObject({ threadId: "thread-parent" });
+
+    await registry.close();
+  });
+
+  it.each([undefined, "codex-sub-agent"] as const)("preserves native review for mode %s despite the legacy experiment", async (runMode) => {
+    const codexClient = new MockBackendClient({ initializeResult: { methods: ["review/start", "turn/start", "thread/start"] } });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(), resolveManagedReviewEnabled: () => true });
+    await registry.startReview({ backend: "codex", threadId: "parent", target: { type: "uncommittedChanges" }, runMode });
+    expect(codexClient.lastStartReviewParams).toMatchObject({ threadId: "parent", delivery: "inline" });
+    expect(codexClient.lastStartTurnParams).toBeUndefined();
+    await registry.close();
+  });
+
+  it("runs Codex Inline through an ordinary parent turn without persisting reviewer settings", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start", "thread/start"] },
+      models: [{ id: "gpt-5.5", label: "GPT-5.5", current: true }, { id: "gpt-5.2", label: "GPT-5.2" }],
+    });
+    const overlayStore = createOverlayStoreMock({ overlays: {
+      "codex:parent": { backend: "codex", threadId: "parent", model: "gpt-5.5", extraLinkedDirectories: [] },
+    } });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+    const result = await registry.startReview({
+      backend: "codex", threadId: "parent", target: { type: "custom", instructions: "Check error handling." },
+      runMode: "codex-inline", model: "gpt-5.2", reviewBackend: "codex",
+    });
+    expect(result.reviewThreadId).toBe("parent");
+    expect(codexClient.lastStartReviewParams).toBeUndefined();
+    expect(codexClient.lastStartTurnParams).toMatchObject({
+      threadId: "parent", model: "gpt-5.2", suppressThreadTitleDerivation: true,
+      input: [{ type: "text", text: expect.stringContaining("<pwragent-inline-review-instructions>") }],
+    });
+    expect((await overlayStore.getThreadOverlayState({ backend: "codex", threadId: "parent" }))?.model).toBe("gpt-5.5");
+    await registry.close();
+  });
+
+  it.each([
+    { runMode: "codex-sub-agent", methods: ["turn/start"], error: "review/start" },
+    { runMode: "codex-inline", methods: ["review/start"], error: "turn/start" },
+    { runMode: "pwragent-sub-agent", methods: ["review/start"], error: "thread/start" },
+  ] as const)("rejects unsupported explicit $runMode without substituting engines", async ({ runMode, methods, error }) => {
+    const codexClient = new MockBackendClient({ initializeResult: { methods: [...methods] } });
+    const registry = new DesktopBackendRegistry({ codexClient });
+    await expect(registry.startReview({ backend: "codex", threadId: "parent", target: { type: "uncommittedChanges" }, runMode })).rejects.toThrow(error);
+    expect(codexClient.lastStartReviewParams).toBeUndefined();
+    expect(codexClient.lastStartTurnParams).toBeUndefined();
+    await registry.close();
+  });
+
+  it.each(["codex-inline", "codex-sub-agent", "pwragent-sub-agent"] as const)("rejects detached delivery with explicit %s", async (runMode) => {
+    const codexClient = new MockBackendClient({});
+    const registry = new DesktopBackendRegistry({ codexClient });
+    await expect(registry.startReview({ backend: "codex", threadId: "parent", target: { type: "uncommittedChanges" }, runMode, delivery: "detached" })).rejects.toThrow("detached delivery");
+    await registry.close();
+  });
+
   it("passes persisted Codex environment hydration when starting reviews", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["review/start"] },
@@ -26230,9 +26339,10 @@ command = "pnpm dev"
     const registry = new DesktopBackendRegistry({
       codexClient,
       overlayStore,
-      resolveManagedReviewEnabled: () => true,
+      resolveManagedReviewEnabled: () => true, // Legacy config no longer selects the engine.
     });
     await registry.startReview({
+      runMode: "pwragent-sub-agent",
       backend: "codex",
       threadId: "thread-parent",
       target: { type: "baseBranch", branch: "main" },
@@ -26297,9 +26407,10 @@ command = "pnpm dev"
     const registry = new DesktopBackendRegistry({
       codexClient,
       overlayStore: overlayStore as never,
-      resolveManagedReviewEnabled: () => true,
+      resolveManagedReviewEnabled: () => true, // Legacy config no longer selects the engine.
     });
     await registry.startReview({
+      runMode: "pwragent-sub-agent",
       backend: "codex",
       threadId: "thread-parent",
       target: { type: "baseBranch", branch: "main" },
@@ -27011,9 +27122,10 @@ command = "pnpm dev"
     const registry = new DesktopBackendRegistry({
       codexClient,
       overlayStore,
-      resolveManagedReviewEnabled: () => true,
+      resolveManagedReviewEnabled: () => true, // Legacy config no longer selects the engine.
     });
     await registry.startReview({
+      runMode: "pwragent-sub-agent",
       backend: "codex",
       threadId: "thread-parent",
       target: { type: "baseBranch", branch: "main" },
@@ -27056,7 +27168,7 @@ command = "pnpm dev"
     await registry.close();
   });
 
-  it("runs the managed review experiment as one child turn and attributes usage to it", async () => {
+  it("runs explicit PwrAgent Sub Agent as one child turn and attributes usage to it", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/start", "turn/start"] },
       models: [
@@ -27100,7 +27212,7 @@ command = "pnpm dev"
     const registry = new DesktopBackendRegistry({
       codexClient,
       overlayStore,
-      resolveManagedReviewEnabled: () => true,
+      resolveManagedReviewEnabled: () => true, // Legacy config no longer selects the engine.
     });
     const events: AgentEvent[] = [];
     registry.onEvent((event) => {
@@ -27113,6 +27225,7 @@ command = "pnpm dev"
     expect(codexBackend?.capabilities.startReview).toBe(true);
 
     const response = await registry.startReview({
+      runMode: "pwragent-sub-agent",
       backend: "codex",
       threadId: "thread-parent",
       target: { type: "baseBranch", branch: "main" },
@@ -27324,10 +27437,11 @@ command = "pnpm dev"
     const registry = new DesktopBackendRegistry({
       codexClient,
       overlayStore,
-      resolveManagedReviewEnabled: () => true,
+      resolveManagedReviewEnabled: () => true, // Legacy config no longer selects the engine.
     });
 
     const response = await registry.startReview({
+      runMode: "pwragent-sub-agent",
       backend: "codex",
       threadId: "thread-parent",
       target: { type: "baseBranch", branch: "main" },
@@ -27402,14 +27516,14 @@ command = "pnpm dev"
 
   it("terminal-gates failed managed reviews and holds the parent queue for retry", async () => {
     const codexClient = new MockBackendClient({
-      initializeResult: { methods: ["turn/start", "review/start"] },
+      initializeResult: { methods: ["thread/start", "turn/start", "review/start"] },
       startThreadResult: { threadId: "managed-review-child" },
     });
     const overlayStore = createOverlayStoreMock();
     const registry = new DesktopBackendRegistry({
       codexClient,
       overlayStore,
-      resolveManagedReviewEnabled: () => true,
+      resolveManagedReviewEnabled: () => true, // Legacy config no longer selects the engine.
     });
     const events: AgentEvent[] = [];
     registry.onEvent((event) => {
@@ -27417,6 +27531,7 @@ command = "pnpm dev"
     });
 
     await registry.startReview({
+      runMode: "pwragent-sub-agent",
       backend: "codex",
       threadId: "thread-parent",
       target: { type: "uncommittedChanges" },
@@ -27539,6 +27654,12 @@ command = "pnpm dev"
       }),
       resolveManagedReviewEnabled: () => false,
     });
+
+    for (const runMode of ["codex-inline", "codex-sub-agent"] as const) {
+      await expect(registry.startReview({ backend: "codex", threadId: "thread-parent",
+        target: { type: "baseBranch", branch: "origin/main" }, cwd: "/repo/selected", runMode,
+      })).rejects.toThrow("PwrAgent Sub Agent is required for a secondary workspace");
+    }
 
     const response = await registry.startReview({
       backend: "codex",
@@ -37326,7 +37447,7 @@ script = "printf setup"
   it("schedules a dynamic-tool review until the invoking turn completes", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: {
-        methods: ["turn/start", "review/start", "thread/resume"],
+        methods: ["thread/start", "turn/start", "review/start", "thread/resume"],
       },
     });
     const registry = new DesktopBackendRegistry({

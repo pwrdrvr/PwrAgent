@@ -1,3 +1,4 @@
+import { buildInlineReviewPrompt } from "../../shared/review-command";
 import { navigationWorkingStatePath as resolveThreadWorkingStatePath } from "@pwragent/shared";
 import {
   buildPullRequestReferenceUrl,
@@ -902,6 +903,7 @@ type BackendClient = {
     defaultModeRequestUserInput?: boolean;
     dynamicTools?: CodexDynamicToolSpec[];
     pwrdrvrTokenMiser?: CodexPwrdrvrTokenMiserActivation | null;
+    suppressThreadTitleDerivation?: boolean;
   }): Promise<{
     threadId: string;
     turnId: string;
@@ -2146,7 +2148,10 @@ function buildCapabilities(methods: string[], backend: AppServerBackendKind): Ba
     renameThread: supported.has("thread/name/set") || assumeCodexAppServerSurface,
     readThread: supported.has("thread/read") || assumeCodexAppServerSurface,
     startTurn: supported.has("turn/start") || assumeCodexAppServerSurface,
-    startReview: supported.has("review/start") || assumeCodexAppServerSurface,
+    startReview: supported.has("review/start") || supported.has("turn/start") || assumeCodexAppServerSurface,
+    reviewRunMode: true,
+    reviewCodexInline: supported.has("turn/start") || assumeCodexAppServerSurface,
+    reviewCodexSubAgent: supported.has("review/start") || assumeCodexAppServerSurface,
     // A managed review child is an ephemeral thread plus one turn, so Codex
     // can review for another provider's thread even on builds whose native
     // review/start is absent.
@@ -7977,6 +7982,8 @@ type CodexRetryableTurnStart = {
     reasoningEffort?: string;
     fastMode?: boolean;
     messageOrigin?: AppServerThreadMessageOrigin;
+    persistModelSettings?: boolean;
+    suppressThreadTitleDerivation?: boolean;
   };
   terminalObserved?: boolean;
   turnId?: string;
@@ -8745,7 +8752,6 @@ export class DesktopBackendRegistry {
    */
   private readonly isCodexBootstrapDeferredFn: () => boolean;
   private readonly resolveCodexDefaultModeRequestUserInputFn: () => boolean;
-  private readonly resolveManagedReviewEnabledFn: () => boolean;
   private readonly resolveDefaultPrAutoDispatchEnabledFn: () => boolean;
   private readonly resolveProviderModelDefaultsFn: () => Record<
     string,
@@ -8865,6 +8871,7 @@ export class DesktopBackendRegistry {
     isCodexBootstrapDeferred?: () => boolean;
     isBootstrapMode?: () => boolean;
     resolveCodexDefaultModeRequestUserInput?: () => boolean;
+    /** Legacy injection accepted for older callers; runMode owns routing. */
     resolveManagedReviewEnabled?: () => boolean;
     resolveDefaultPrAutoDispatchEnabled?: () => boolean;
     resolveProviderModelDefaults?: () => Record<
@@ -8976,23 +8983,6 @@ export class DesktopBackendRegistry {
         } catch (error) {
           backendRegistryLog.warn(
             "failed to resolve Codex default-mode request_user_input setting",
-            {
-              error: error instanceof Error ? error.message : String(error),
-            },
-          );
-          return false;
-        }
-      });
-    this.resolveManagedReviewEnabledFn =
-      options?.resolveManagedReviewEnabled ??
-      (() => {
-        try {
-          return (
-            settingsService ?? getDesktopSettingsService()
-          ).resolveManagedReviewEnabled();
-        } catch (error) {
-          backendRegistryLog.warn(
-            "failed to resolve managed review experiment setting",
             {
               error: error instanceof Error ? error.message : String(error),
             },
@@ -16429,6 +16419,9 @@ export class DesktopBackendRegistry {
     fastMode?: boolean;
     messageOrigin?: AppServerThreadMessageOrigin;
     invalidIdRecoveryAttempted?: boolean;
+    persistModelSettings?: boolean;
+    preReservedCodexStart?: boolean;
+    suppressThreadTitleDerivation?: boolean;
   }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
     if (!this.tokenMiserServerCapabilitiesForTurn.getStore()) {
       return await this.tokenMiserServerCapabilitiesForTurn.run(
@@ -16588,7 +16581,7 @@ export class DesktopBackendRegistry {
     let input: AppServerTurnInputItem[] = [];
     let pdfAttachments: PendingPdfAttachment[];
     const reserveCodexStart = params.backend === "codex";
-    if (reserveCodexStart) {
+    if (reserveCodexStart && !params.preReservedCodexStart) {
       if (this.threadHasActiveTurn(params.threadId)) {
         throw new Error("A turn is already active for this thread.");
       }
@@ -16735,10 +16728,13 @@ export class DesktopBackendRegistry {
       params.backend,
       params.threadId,
     );
+    const generateThreadTitle = !params.suppressThreadTitleDerivation;
     // Title generation can be scheduled from a lifecycle event before this
     // turn/start call resolves. It must receive the same prepared input that
     // goes to the agent, not raw local PDF references from the composer.
-    this.pendingTitleGenerationInputs.set(titleGenerationKey, input);
+    if (generateThreadTitle) {
+      this.pendingTitleGenerationInputs.set(titleGenerationKey, input);
+    }
     const pendingMessageContextId = await this.registerPendingThreadMessageContext({
       backend: params.backend,
       input,
@@ -16764,6 +16760,9 @@ export class DesktopBackendRegistry {
               reasoningEffort: params.reasoningEffort,
               fastMode: params.fastMode,
               messageOrigin: params.messageOrigin,
+              persistModelSettings: params.persistModelSettings,
+              suppressThreadTitleDerivation:
+                params.suppressThreadTitleDerivation,
             },
           }
         : undefined;
@@ -16821,6 +16820,8 @@ export class DesktopBackendRegistry {
             ...(pwrdrvrTokenMiser !== undefined
               ? { pwrdrvrTokenMiser }
               : {}),
+            suppressThreadTitleDerivation:
+              params.suppressThreadTitleDerivation,
           });
           activeTurnMode = effectiveMode;
           return started;
@@ -16852,7 +16853,9 @@ export class DesktopBackendRegistry {
       if (reserveCodexStart) {
         this.reservedCodexStartThreadIds.delete(params.threadId);
       }
-      this.pendingTitleGenerationInputs.delete(titleGenerationKey);
+      if (generateThreadTitle) {
+        this.pendingTitleGenerationInputs.delete(titleGenerationKey);
+      }
       this.forgetPendingThreadMessageContext(pendingMessageContextId);
       if (
         retryableCodexTurnStart
@@ -16930,10 +16933,13 @@ export class DesktopBackendRegistry {
     }
 
     if (
-      turnParams.model !== undefined ||
-      turnParams.reasoningEffort !== undefined ||
-      turnParams.serviceTier !== undefined ||
-      turnParams.fastMode !== undefined
+      params.persistModelSettings !== false
+      && (
+        turnParams.model !== undefined
+        || turnParams.reasoningEffort !== undefined
+        || turnParams.serviceTier !== undefined
+        || turnParams.fastMode !== undefined
+      )
     ) {
       await this.overlayStore.setThreadModelSettings({
         backend: params.backend,
@@ -16965,12 +16971,14 @@ export class DesktopBackendRegistry {
       turnId: result.turnId,
     });
     if (!isAcpBackendId(params.backend)) {
-      this.pendingTitleGenerationInputs.delete(titleGenerationKey);
-      this.scheduleThreadTitleGeneration({
-        backend: params.backend,
-        threadId: result.threadId,
-        input,
-      });
+      if (generateThreadTitle) {
+        this.pendingTitleGenerationInputs.delete(titleGenerationKey);
+        this.scheduleThreadTitleGeneration({
+          backend: params.backend,
+          threadId: result.threadId,
+          input,
+        });
+      }
     }
 
     return response;
@@ -17298,10 +17306,19 @@ export class DesktopBackendRegistry {
     if (reviewBackendDiffers) {
       this.assertReviewBackendSupported(reviewBackend);
     }
-    const managedReviewExperiment =
-      params.backend === "codex" && this.resolveManagedReviewEnabledFn();
-    let managedMode =
-      acpManagedMode || managedReviewExperiment || reviewBackendDiffers;
+    if (params.runMode !== undefined && ![
+      "codex-inline", "codex-sub-agent", "pwragent-sub-agent",
+    ].includes(params.runMode)) {
+      throw new Error("Unknown review run mode.");
+    }
+    if (params.runMode && params.delivery === "detached") {
+      throw new Error("Explicit review modes do not support detached delivery.");
+    }
+    const requiresManaged = acpManagedMode || reviewBackendDiffers;
+    if (requiresManaged && params.runMode && params.runMode !== "pwragent-sub-agent") {
+      throw new Error("PwrAgent Sub Agent is required for ACP or cross-provider reviews.");
+    }
+    let managedMode = requiresManaged || params.runMode === "pwragent-sub-agent";
     const reserveCodexReviewStart = params.backend === "codex";
     const acpReviewReservationKey = isAcpBackendId(params.backend)
       ? buildTurnStartReservationKey(params.backend, params.threadId)
@@ -17365,6 +17382,9 @@ export class DesktopBackendRegistry {
         // linked project other than the parent thread's workspace, start the
         // review as a managed child so both thread/start and turn/start are
         // explicitly rooted in the selected project.
+        if (usesSelectedSecondaryWorkspace && params.runMode && params.runMode !== "pwragent-sub-agent") {
+          throw new Error("PwrAgent Sub Agent is required for a secondary workspace.");
+        }
         managedMode ||= usesSelectedSecondaryWorkspace;
         if (
           usesSelectedSecondaryWorkspace
@@ -17425,10 +17445,38 @@ export class DesktopBackendRegistry {
           )
         : {};
 
+      if (managedMode) {
+        this.assertReviewBackendSupported(reviewBackend);
+        if (reviewBackend === "codex") {
+          const client = this.getClient("codex");
+          if (!buildCapabilities((await client.getInitializeResult()).methods ?? [], "codex").reviewRunner) {
+            throw new Error("PwrAgent Sub Agent requires thread/start and turn/start support.");
+          }
+        }
+      }
+      if (!managedMode && params.runMode === "codex-inline") {
+        const supported = await this.withCodexThreadClient(params.threadId, async (client) =>
+          buildCapabilities((await client.getInitializeResult()).methods ?? [], "codex").reviewCodexInline,
+        );
+        if (!supported) throw new Error("Codex Inline requires turn/start support.");
+        const turn = await this.startTurnNow({
+          backend: "codex",
+          threadId: params.threadId,
+          input: [{ type: "text", text: buildInlineReviewPrompt(params.target) }],
+          ...modelSettings,
+          persistModelSettings: false,
+          preReservedCodexStart: true,
+          suppressThreadTitleDerivation: true,
+        });
+        return { ...turn, reviewThreadId: turn.threadId };
+      }
+
       const startWithClient = async (
         client: BackendClient,
       ): Promise<{ threadId: string; reviewThreadId: string; turnId: string }> => {
-        if (!client.startReview) {
+        if (!client.startReview || !buildCapabilities(
+          (await client.getInitializeResult()).methods ?? [], "codex",
+        ).reviewCodexSubAgent) {
           throw new Error("Selected backend does not support review/start");
         }
         const tokenMiserConfig =
@@ -25567,13 +25615,6 @@ export class DesktopBackendRegistry {
     const available = Boolean(lastKnownGood?.selectedCommand);
     const methods: string[] = [];
     const capabilities = buildCapabilities(methods, "codex");
-    if (
-      this.resolveManagedReviewEnabledFn()
-      && capabilities.createThread
-      && capabilities.startTurn
-    ) {
-      capabilities.startReview = true;
-    }
     // Only claim discovery is outstanding when it actually is. A discovery
     // that ran and selected nothing records no `validation.error`, so this
     // default used to describe a completed discovery as incomplete — and the
@@ -25857,13 +25898,6 @@ export class DesktopBackendRegistry {
       );
     }
     const capabilities = buildCapabilities(methods, "codex");
-    if (
-      this.resolveManagedReviewEnabledFn()
-      && capabilities.createThread
-      && capabilities.startTurn
-    ) {
-      capabilities.startReview = true;
-    }
 
     const discoveredRateLimits =
       rateLimitsResult.status === "fulfilled"
@@ -32478,6 +32512,7 @@ export class DesktopBackendRegistry {
           backend: request.context.backend,
           threadId: request.context.threadId,
           target: request.args.target,
+          runMode: request.args.runMode,
           delivery: "inline",
           ...(request.args.cwd ? { cwd: request.args.cwd } : {}),
         },

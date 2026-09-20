@@ -365,6 +365,7 @@ describe("pwragent thread orchestration agent tools", () => {
             branch: " main ",
           },
           cwd: " /repo/app ",
+          runMode: "codex-inline",
         },
       },
     });
@@ -383,6 +384,7 @@ describe("pwragent thread orchestration agent tools", () => {
           branch: "main",
         },
         cwd: "/repo/app",
+        runMode: "codex-inline",
       },
     });
 

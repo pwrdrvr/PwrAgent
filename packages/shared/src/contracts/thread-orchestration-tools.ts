@@ -11,6 +11,7 @@ import type {
 import type { FederationInstanceId } from "./federation";
 import type {
   CodexEnvironmentStartupFailure,
+  ReviewRunMode,
   ThreadAutoPinFailure,
 } from "./agent";
 import type { MessagingChannelKind, MessagingConversationKind } from "./messaging";
@@ -175,6 +176,7 @@ export type SteerThreadToolArgs = ThreadTurnControlToolTargetArgs & {
 };
 
 export type StartReviewToolArgs = {
+  runMode?: ReviewRunMode;
   target: AppServerReviewTarget;
   /**
    * Optional linked workspace to review when the invoking thread has more than

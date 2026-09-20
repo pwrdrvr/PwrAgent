@@ -924,6 +924,31 @@ describe("MessagingController", () => {
     });
   });
 
+  it.each([
+    ["codex-inline", "Codex Inline"],
+    ["codex-sub-agent", "Codex Sub Agent"],
+    ["pwragent-sub-agent", "PwrAgent Sub Agent"],
+  ])("captures the %s choice from messaging", async (runMode, label) => {
+    const harness = await createHarness({ listBackends: async () => ({
+      fetchedAt: 1000, backends: [buildBackendSummary({ capabilities: {
+        ...buildBackendSummary().capabilities, reviewRunner: true, reviewRunMode: true,
+        reviewCodexInline: true, reviewCodexSubAgent: true,
+      } })],
+    }) });
+    await bindThread(harness);
+    await harness.controller.handleInboundEvent(buildCommandEvent("/review"));
+    await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "review:summary:mode" }));
+    expect(harness.delivered.at(-1)).toMatchObject({ actions: expect.arrayContaining([
+      expect.objectContaining({ label: "Codex Inline" }),
+      expect.objectContaining({ label: "Codex Sub Agent" }),
+      expect.objectContaining({ label: "PwrAgent Sub Agent" }),
+    ]) });
+    await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: `review:mode:${runMode}` }));
+    expect(harness.delivered.at(-1)).toMatchObject({ review: { runMode }, body: expect.stringContaining(label) });
+    await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "review:summary:start" }));
+    expect(harness.submitReview).toHaveBeenCalledWith(expect.objectContaining({ runMode }));
+  });
+
   it("picks a reviewer through the configurator buttons", async () => {
     const harness = await createHarness({
       listBackends: async (): Promise<ListBackendsResponse> => ({

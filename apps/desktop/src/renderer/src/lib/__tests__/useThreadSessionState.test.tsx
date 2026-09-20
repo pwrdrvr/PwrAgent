@@ -1,3 +1,4 @@
+import { buildInlineReviewPrompt } from "../../../../shared/review-command";
 import "@testing-library/jest-dom/vitest";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import type {
@@ -12611,7 +12612,9 @@ describe("useThreadSessionState", () => {
     }
     emitItem("item/completed", "user-turn", { type: "userMessage", id: "authored", content: [{ type: "text", text }] });
     expect(result.current.messages.some((message) => message.id === "authored")).toBe(true);
-    const inlineText = "<pwragent-inline-review-instructions>\nInspect this diff and report findings.\n</pwragent-inline-review-instructions>";
+    const inlineText = buildInlineReviewPrompt({ type: "custom", instructions: "Check error handling." });
+    emitItem("item/completed", "custom-user-turn", { type: "userMessage", id: "authored-custom", content: [{ type: "text", text: "Check error handling." }] });
+    expect(result.current.messages.some((message) => message.id === "authored-custom")).toBe(true);
     for (const method of ["item/started", "item/completed"] as const) {
       emitItem(method, "inline-turn", { type: "userMessage", id: "inline-internal", content: [{ type: "text", text: inlineText }] });
       expect(result.current.entries.some((entry) => entry.id === "inline-internal")).toBe(false);

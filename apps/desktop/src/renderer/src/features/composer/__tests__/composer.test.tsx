@@ -6132,6 +6132,30 @@ describe("Composer", () => {
     expect(screen.queryByText("Queued next")).not.toBeInTheDocument();
   });
 
+  it.each([
+    ["codex-inline", "Codex Inline"],
+    ["codex-sub-agent", "Codex Sub Agent"],
+    ["pwragent-sub-agent", "PwrAgent Sub Agent"],
+  ])("submits the explicit %s from a compact Reviewer chip", async (runMode, label) => {
+    const startReview = vi.fn(async () => ({ backend: "codex" as const, threadId: "thread-1", reviewThreadId: "thread-1", turnId: "review" }));
+    const backend = backendSummary("codex");
+    backend.capabilities = { ...backend.capabilities, startReview: true, reviewRunMode: true, reviewRunner: true, reviewCodexInline: true, reviewCodexSubAgent: true };
+    render(<Composer backends={[backend]} desktopApi={{ startReview, onAgentEvent: () => () => undefined }} disabled={false} skills={[]} thread={{
+      id: "thread-1", title: "Review", titleSource: "explicit", source: "codex", executionMode: "default", linkedDirectories: [], inbox: { inInbox: false },
+    }} />);
+    fireEvent.change(screen.getByRole("textbox", { name: "Reply" }), { target: { value: "/review" } });
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "Reply" }), { key: "Enter" });
+    const group = await screen.findByRole("group", { name: "Review target" });
+    const chip = within(group).getByRole("button", { name: "Review mode" });
+    expect(chip.closest(".composer__review-reviewer")).not.toBeNull();
+    expect(chip).toHaveTextContent("Codex Sub Agent");
+    fireEvent.click(chip);
+    fireEvent.click(within(group).getByRole("option", { name: label }));
+    fireEvent.click(within(group).getByRole("button", { name: /Current changes/ }));
+    fireEvent.click(within(group).getByRole("button", { name: "Start review" }));
+    await waitFor(() => expect(startReview).toHaveBeenCalledWith(expect.objectContaining({ runMode, delivery: "inline" })));
+  });
+
   it("runs a review on a picked reviewer without touching the thread's settings", async () => {
     const startReview = vi.fn(async () => ({
       backend: "codex" as const,
@@ -6165,6 +6189,9 @@ describe("Composer", () => {
           ...summary.capabilities,
           startReview: true,
           reviewRunner: true,
+          reviewRunMode: true,
+          reviewCodexInline: kind === "codex",
+          reviewCodexSubAgent: kind === "codex",
         },
       };
     };
@@ -6234,6 +6261,7 @@ describe("Composer", () => {
       expect.objectContaining({
         backend: "codex",
         reviewBackend: "acp:grok",
+        runMode: "pwragent-sub-agent",
         model: "grok-4",
         reasoningEffort: "high",
       })

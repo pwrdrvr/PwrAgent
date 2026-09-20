@@ -4,6 +4,7 @@ import type {
 } from "@pwragent/shared";
 import {
   MANAGED_REVIEW_CONTEXT_CLOSE_MARKER,
+  reviewTargetInstructions,
   MANAGED_REVIEW_CONTEXT_OPEN_MARKER,
   normalizeReviewConfidenceScore,
 } from "../../shared/review-command";
@@ -40,20 +41,8 @@ export function buildManagedReviewContextInput(outputs: string[]): string {
       output.trim(),
     ].filter((line): line is string => Boolean(line)).join("\n")),
     MANAGED_REVIEW_CONTEXT_CLOSE_MARKER,
+  reviewTargetInstructions,
   ].join("\n\n");
-}
-
-function reviewTargetInstructions(target: AppServerReviewTarget): string {
-  switch (target.type) {
-    case "baseBranch":
-      return `Review the current checkout against base branch '${target.branch}'. Find the merge base and inspect the resulting diff.`;
-    case "commit":
-      return `Review commit ${target.sha}${target.title ? ` (${target.title})` : ""}.`;
-    case "custom":
-      return target.instructions.trim() || "Review the current code changes.";
-    case "uncommittedChanges":
-      return "Review all staged, unstaged, and untracked changes in the current checkout.";
-  }
 }
 
 export function parseManagedReviewOutput(

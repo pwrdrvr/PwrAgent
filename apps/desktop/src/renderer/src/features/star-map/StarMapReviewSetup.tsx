@@ -1,3 +1,5 @@
+import { resolveReviewRunMode } from "../../lib/review-run-mode";
+import { ReviewLocationDropdown } from "../composer/ReviewLocationDropdown";
 import type { NavigationDirectoryView as NavigationDirectorySummary } from "../../lib/navigation-loaded-rows";
 import {
   useEffect,
@@ -11,6 +13,8 @@ import {
   buildReviewBranchOptions,
   findPreferredReviewWorkspaceCwd,
   type AppServerReviewTarget,
+  type BackendSummary,
+  type ReviewRunMode,
   type NavigationThreadSummary,
 } from "@pwragent/shared";
 
@@ -20,12 +24,14 @@ type ReviewDirectory = Pick<NavigationDirectorySummary, "key" | "path"> & {
 };
 
 export type StarMapReviewRequest = {
+  runMode?: ReviewRunMode;
   cwd?: string;
   target: AppServerReviewTarget;
 };
 
 type StarMapReviewSetupProps = {
   busy: boolean;
+  backend?: BackendSummary;
   directories: readonly ReviewDirectory[];
   error?: string;
   onCancel: () => void;
@@ -126,6 +132,7 @@ function buildReviewRequest(params: {
   branch: string;
   commit: string;
   customInstructions: string;
+  runMode?: ReviewRunMode;
   target: ReviewTargetChoice;
   workspaceCwd?: string;
 }): StarMapReviewRequest | undefined {
@@ -133,6 +140,7 @@ function buildReviewRequest(params: {
   if (params.target === "uncommittedChanges") {
     return {
       ...(cwd ? { cwd } : {}),
+      runMode: params.runMode,
       target: { type: "uncommittedChanges" },
     };
   }
@@ -141,6 +149,7 @@ function buildReviewRequest(params: {
     return branch
       ? {
           ...(cwd ? { cwd } : {}),
+          runMode: params.runMode,
           target: { type: "baseBranch", branch },
         }
       : undefined;
@@ -150,6 +159,7 @@ function buildReviewRequest(params: {
     return sha
       ? {
           ...(cwd ? { cwd } : {}),
+          runMode: params.runMode,
           target: { type: "commit", sha, title: null },
         }
       : undefined;
@@ -158,6 +168,7 @@ function buildReviewRequest(params: {
   return instructions
     ? {
         ...(cwd ? { cwd } : {}),
+        runMode: params.runMode,
         target: { type: "custom", instructions },
       }
     : undefined;
@@ -187,6 +198,7 @@ export function StarMapReviewSetup(props: StarMapReviewSetupProps) {
   const [branchEdited, setBranchEdited] = useState(false);
   const [commit, setCommit] = useState("");
   const [customInstructions, setCustomInstructions] = useState("");
+  const [runMode, setRunMode] = useState<ReviewRunMode>();
   const targetRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const dialogRef = useRef<HTMLElement | null>(null);
   const branchListId = useId();
@@ -208,22 +220,41 @@ export function StarMapReviewSetup(props: StarMapReviewSetupProps) {
     }
   }, [branchEdited, branchOptions]);
 
+  const reviewRunModeDecision = resolveReviewRunMode({
+    ownerSummary: props.backend,
+    requestedRunMode: runMode,
+    reviewerBackend: props.thread.source,
+    reviewerSummary: props.backend,
+    thread: props.thread,
+    workspaceCwd,
+  });
   const request = useMemo(
     () => buildReviewRequest({
       branch,
       commit,
       customInstructions,
+      runMode: reviewRunModeDecision.explicitRunModeSupported
+        ? reviewRunModeDecision.runMode : undefined,
       target,
       workspaceCwd,
     }),
-    [branch, commit, customInstructions, target, workspaceCwd],
+    [
+      branch,
+      commit,
+      customInstructions,
+      reviewRunModeDecision.runMode,
+      reviewRunModeDecision.explicitRunModeSupported,
+      target,
+      workspaceCwd,
+    ],
   );
   const workspaceSelectionRequired = workspaceOptions.length > 1;
   const canSubmit = Boolean(
     request
     && (!workspaceSelectionRequired || workspaceCwd)
     && !busy
-    && !submitting,
+    && !submitting
+    && !reviewRunModeDecision.submissionUnavailable
   );
 
   const submit = (event: FormEvent<HTMLFormElement>): void => {
@@ -238,8 +269,13 @@ export function StarMapReviewSetup(props: StarMapReviewSetupProps) {
       if (!dialog || !(targetNode instanceof Node)) return;
       const ownerCard = dialog.closest(".star-map-chat-card");
       if (!ownerCard?.contains(targetNode)) return;
+      const targetElement =
+        targetNode instanceof HTMLElement ? targetNode : undefined;
 
       if (event.key === "Escape" && !submitting) {
+        if (targetElement?.closest(".composer-dropdown--open")) {
+          return;
+        }
         event.preventDefault();
         event.stopPropagation();
         onCancel();
@@ -255,8 +291,6 @@ export function StarMapReviewSetup(props: StarMapReviewSetupProps) {
         return;
       }
 
-      const targetElement =
-        targetNode instanceof HTMLElement ? targetNode : undefined;
       const insideDialog = dialog.contains(targetNode);
       const insideDisabledComposer = Boolean(
         targetElement?.closest(".compact-composer"),
@@ -264,6 +298,7 @@ export function StarMapReviewSetup(props: StarMapReviewSetupProps) {
       if (!insideDialog && !insideDisabledComposer) return;
       if (
         targetElement?.closest("textarea, select")
+        || targetElement?.closest(".composer-dropdown")
         || targetElement?.closest("[data-review-dismiss]")
       ) {
         return;
@@ -277,6 +312,8 @@ export function StarMapReviewSetup(props: StarMapReviewSetupProps) {
             branch,
             commit,
             customInstructions,
+            runMode: reviewRunModeDecision.explicitRunModeSupported
+              ? reviewRunModeDecision.runMode : undefined,
             target: requestedTarget,
             workspaceCwd,
           })
@@ -286,6 +323,7 @@ export function StarMapReviewSetup(props: StarMapReviewSetupProps) {
         || (workspaceSelectionRequired && !workspaceCwd)
         || busy
         || submitting
+        || reviewRunModeDecision.submissionUnavailable
       ) {
         return;
       }
@@ -306,6 +344,9 @@ export function StarMapReviewSetup(props: StarMapReviewSetupProps) {
     onCancel,
     onSubmit,
     request,
+    reviewRunModeDecision.runMode,
+    reviewRunModeDecision.submissionUnavailable,
+    reviewRunModeDecision.explicitRunModeSupported,
     submitting,
     workspaceCwd,
     workspaceSelectionRequired,
@@ -435,6 +476,16 @@ export function StarMapReviewSetup(props: StarMapReviewSetupProps) {
               />
             </label>
           ) : null}
+
+          <div className="composer__review-field composer__review-reviewer">
+            <span>Reviewer</span>
+            <div className="composer__review-reviewer-chips">
+              <ReviewLocationDropdown
+                decision={reviewRunModeDecision}
+                onChange={setRunMode}
+              />
+            </div>
+          </div>
 
           {props.busy ? (
             <p className="star-map-review-setup__message" role="status">

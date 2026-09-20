@@ -2105,7 +2105,16 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
     });
   }
 
+  private async assertReviewModeOwner(backend?: AppServerBackendKind): Promise<void> {
+    const response = await this.listBackends({ includeUnavailable: true });
+    const owners = backend ? response.backends.filter((entry) => entry.kind === backend) : response.backends;
+    if (!owners.length || owners.some((entry) => entry.capabilities.reviewRunMode !== true)) {
+      throw new Error("This Federation owner does not support explicit review modes. Update that PwrAgent instance before choosing a mode.");
+    }
+  }
+
   async startReview(request: StartReviewRequest): Promise<StartReviewResponse> {
+    if (request.runMode !== undefined) await this.assertReviewModeOwner(request.backend);
     return await this.rpc.request<StartReviewResponse>({
       method: FEDERATION_BACKEND_METHODS.startReview,
       params: request,
@@ -2153,6 +2162,7 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
   async createScheduledThreadAction(
     request: CreateScheduledThreadActionRequest,
   ): Promise<ScheduledThreadActionMutationResponse> {
+    if (request.review?.runMode !== undefined) await this.assertReviewModeOwner(request.backend);
     return await this.rpc.request<ScheduledThreadActionMutationResponse>({
       method: FEDERATION_BACKEND_METHODS.createScheduledThreadAction,
       params: request,
@@ -2162,6 +2172,7 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
   async updateScheduledThreadAction(
     request: UpdateScheduledThreadActionRequest,
   ): Promise<ScheduledThreadActionMutationResponse> {
+    if (request.review?.runMode !== undefined) await this.assertReviewModeOwner();
     return await this.rpc.request<ScheduledThreadActionMutationResponse>({
       method: FEDERATION_BACKEND_METHODS.updateScheduledThreadAction,
       params: request,

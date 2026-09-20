@@ -212,3 +212,34 @@ function reviewWorkspaceContains(
     projectPath.startsWith(`${workspacePath}/`)
   );
 }
+
+/** Resolve the primary linked workspace independently of whether it has changes. */
+export function findPrimaryReviewWorkspaceCwd(
+  thread: NavigationThreadSummary,
+): string | undefined {
+  const projectKey = normalizeReviewWorkspacePath(thread.projectKey);
+  const fallback = thread.linkedDirectories[0]?.worktreePath
+    ?? thread.linkedDirectories[0]?.path
+    ?? thread.projectKey;
+  if (!projectKey) return fallback;
+
+  return thread.linkedDirectories
+    .flatMap((directory) => {
+      const workspaceCwd = normalizeReviewWorkspacePath(
+        directory.worktreePath ?? directory.path,
+      );
+      const matchLength = [directory.worktreePath, directory.path]
+        .map(normalizeReviewWorkspacePath)
+        .filter((candidate): candidate is string => Boolean(candidate))
+        .filter((candidate) => (
+          projectKey === candidate
+          || projectKey.startsWith(`${candidate}/`)
+        ))
+        .reduce((longest, candidate) => Math.max(longest, candidate.length), 0);
+      return workspaceCwd && matchLength > 0
+        ? [{ matchLength, workspaceCwd }]
+        : [];
+    })
+    .sort((left, right) => right.matchLength - left.matchLength)[0]
+    ?.workspaceCwd ?? fallback;
+}
