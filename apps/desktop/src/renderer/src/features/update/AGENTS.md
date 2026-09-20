@@ -11,7 +11,7 @@
 - **`app:update-check-result-event`** is emitted from exactly one trigger —
   `checkForAppUpdatesNow("menu")`, i.e. Help → Check for Updates. It is the
   only thing that distinguishes "the operator is waiting for this answer" from
-  "the hour hand looked again". Settings → General → Updates deliberately does
+  "the hour hand looked again". Settings → Updates deliberately does
   not emit it: that surface reports its `manual` result inline beside the
   button, and a card repeating the answer next to it would say the same thing
   twice. Neither does the app-management agent tool, which answers the agent
@@ -120,8 +120,8 @@ from `releaseNotesUrl` in
 
 | Surface | Control |
 |---|---|
-| Settings → General → Updates, all four slot tiles | `Release notes` under each tile |
-| Settings → General → Updates, the status line and `Downloaded version:` | `Release notes` inline, scoped to the version that line names |
+| Settings → Updates, all four slot tiles | `Release notes` under each tile |
+| Settings → Updates, the status line and `Downloaded version:` | `Release notes` inline, scoped to the version that line names |
 | Banner live card (`available` / `downloading`) | `Release notes` beside Cancel |
 | Banner offer card (`downloaded`) | `Release notes` between Restart and Dismiss |
 | Settled-check notice (`no-update` / `canceled`) | `Release notes` as a notice action |

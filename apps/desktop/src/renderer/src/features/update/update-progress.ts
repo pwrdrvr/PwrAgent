@@ -144,7 +144,7 @@ export type UpdateCheckOutcomeCopy = {
 /**
  * Wording for a menu check that has finished and left nothing to act on.
  *
- * Kept parallel to Settings -> General -> Updates, which answers the same
+ * Kept parallel to Settings -> Updates, which answers the same
  * results inline. The in-flight statuses are not here: they are the live
  * card's, and `updateProgressCopy` words those. Neither is `downloaded` —
  * that outcome is actionable, so the sticky Restart card carries it.
