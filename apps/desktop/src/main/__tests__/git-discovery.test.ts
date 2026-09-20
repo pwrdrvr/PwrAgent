@@ -124,6 +124,7 @@ describe("Git discovery", () => {
     vi.doMock("node:os", () => ({
       default: {
         homedir: () => "/Users/test",
+        tmpdir: () => "/tmp",
       },
     }));
     const { resolveGitExecutable } = await import("../app-server/git-executable");
@@ -172,7 +173,7 @@ describe("Git discovery", () => {
     await expect(
       runGitCommand("/repo", ["status", "--short"], { env: hydratedEnv }),
     ).resolves.toEqual({
-      stdout: "ok",
+      stdout: "ok\n",
       stderr: "",
     });
     expect(execFileMock).toHaveBeenCalledWith(

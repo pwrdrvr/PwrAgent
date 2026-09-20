@@ -1,28 +1,24 @@
 import { ipcMain } from "electron";
-import { execFileSync } from "node:child_process";
-import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { RUNTIME_IDENTITY_CHANNEL } from "../../shared/ipc";
 import type { RuntimeIdentity } from "../../shared/runtime-identity";
-import { getGitCommand } from "../git-command";
+import { runGitCommand } from "../app-server/git-executable";
 
-function readGitValue(cwd: string, args: string[]): string | undefined {
+async function readGitValue(cwd: string, args: string[]): Promise<string | undefined> {
   try {
-    const value = execFileSync(getGitCommand(), ["-C", cwd, ...args], {
-      encoding: "utf8",
-      env: buildPwrAgentChildProcessEnv(process.env),
-      stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
-
-    return value.length > 0 ? value : undefined;
+    const { stdout } = await runGitCommand(cwd, args, {
+      timeout: 2_000,
+      maxBuffer: 64 * 1024,
+    });
+    return stdout.trim() || undefined;
   } catch {
     return undefined;
   }
 }
 
-export function resolveRuntimeIdentity(cwd = process.cwd()): RuntimeIdentity {
+export async function resolveRuntimeIdentity(cwd = process.cwd()): Promise<RuntimeIdentity> {
   const branch =
-    readGitValue(cwd, ["branch", "--show-current"]) ??
-    readGitValue(cwd, ["symbolic-ref", "--quiet", "--short", "HEAD"]);
+    await readGitValue(cwd, ["branch", "--show-current"]) ??
+    await readGitValue(cwd, ["symbolic-ref", "--quiet", "--short", "HEAD"]);
 
   if (branch) {
     return {
@@ -31,7 +27,7 @@ export function resolveRuntimeIdentity(cwd = process.cwd()): RuntimeIdentity {
     };
   }
 
-  const commitSha = readGitValue(cwd, ["rev-parse", "HEAD"]);
+  const commitSha = await readGitValue(cwd, ["rev-parse", "HEAD"]);
 
   return {
     commitSha,

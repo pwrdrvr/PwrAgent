@@ -1,8 +1,6 @@
-import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { access } from "node:fs/promises";
 import path from "node:path";
-import { promisify } from "node:util";
 import {
   buildDirectorySummaries,
   buildThreadIdentityKey,
@@ -37,10 +35,9 @@ import {
   type CodexThreadMigrationMetadata,
 } from "../codex-app-server/client";
 import { buildCodexClientArgs } from "./backend-registry";
-import { getGitCommand } from "../git-command";
+import { runGitCommand } from "./git-executable";
 
 const migrationLog = getMainLogger("pwragent:thread-migration");
-const execFileAsync = promisify(execFile);
 
 type SourceMigrationClient = Pick<
   CodexAppServerClient,
@@ -1027,9 +1024,7 @@ async function gitBranchExists(
     return undefined;
   }
   try {
-    await execFileAsync(getGitCommand(), [
-      "-C",
-      repositoryPath,
+    await runGitCommand(repositoryPath, [
       "rev-parse",
       "--verify",
       `${branchName}^{commit}`,

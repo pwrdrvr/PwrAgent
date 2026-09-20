@@ -1,18 +1,13 @@
 import { createHash } from "node:crypto";
-import { execFile } from "node:child_process";
 import { mkdtemp, mkdir, realpath, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { promisify } from "node:util";
 import type {
   AppServerBackendKind,
   WorktreeSnapshotSummary,
 } from "@pwragent/shared";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { runGitCommand } from "./git-executable";
-import { getGitCommand } from "../git-command";
-
-const execFileAsync = promisify(execFile);
 
 type GitResult = {
   stdout: string;
@@ -68,16 +63,7 @@ async function runGit(
   } = {},
 ): Promise<GitResult> {
   const env = buildPwrAgentChildProcessEnv(process.env, options.env);
-  if (process.platform === "win32" && options.ownProcessTree) {
-    return await runGitCommand(cwd, args, {
-      env,
-      ownProcessTree: true,
-    });
-  }
-  return await execFileAsync(getGitCommand(), ["-C", cwd, ...args], {
-    env,
-    maxBuffer: 1024 * 1024 * 10,
-  });
+  return await runGitCommand(cwd, args, { ...options, env });
 }
 
 function trimGitOutput(value: string): string {

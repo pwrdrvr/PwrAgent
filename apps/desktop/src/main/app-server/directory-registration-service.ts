@@ -46,7 +46,7 @@ export type DirectoryRegistrationDeps = {
 };
 
 async function defaultRunGit(cwd: string, args: string[]): Promise<string> {
-  return (await runGitCommand(cwd, args)).stdout;
+  return (await runGitCommand(cwd, args)).stdout.trim();
 }
 
 async function defaultStat(

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const handlers = new Map<string, (...args: unknown[]) => Promise<unknown>>();
-const execFileSyncMock = vi.fn();
+const runGitMock = vi.fn();
 
 vi.mock("electron", () => ({
   ipcMain: {
@@ -14,47 +14,41 @@ vi.mock("electron", () => ({
   },
 }));
 
-vi.mock("node:child_process", () => ({
-  execFileSync: execFileSyncMock,
+vi.mock("../app-server/git-executable", () => ({
+  runGitCommand: runGitMock,
 }));
 
 describe("runtime identity ipc", () => {
   beforeEach(() => {
     handlers.clear();
-    execFileSyncMock.mockReset();
+    runGitMock.mockReset();
   });
 
   it("resolves cwd and the current git branch", async () => {
-    execFileSyncMock.mockReturnValue("codex/show-runtime-identity\n");
+    runGitMock.mockResolvedValue({ stdout: "codex/show-runtime-identity\n" });
     const { resolveRuntimeIdentity } = await import("../ipc/runtime-identity");
 
-    expect(resolveRuntimeIdentity("/repo/PwrAgent")).toEqual({
+    expect(await resolveRuntimeIdentity("/repo/PwrAgent")).toEqual({
       branch: "codex/show-runtime-identity",
       cwd: "/repo/PwrAgent",
     });
-    expect(execFileSyncMock).toHaveBeenCalledWith(
-      "git",
-      ["-C", "/repo/PwrAgent", "branch", "--show-current"],
-      expect.objectContaining({
-        encoding: "utf8",
-        env: expect.not.objectContaining({
-          ELECTRON_RENDERER_URL: expect.anything(),
-        }),
-        stdio: ["ignore", "pipe", "ignore"],
-      }),
+    expect(runGitMock).toHaveBeenCalledWith(
+      "/repo/PwrAgent",
+      ["branch", "--show-current"],
+      { timeout: 2_000, maxBuffer: 64 * 1024 },
     );
   });
 
   it("falls back to the short commit when HEAD is detached", async () => {
-    execFileSyncMock
-      .mockReturnValueOnce("\n")
+    runGitMock
+      .mockResolvedValueOnce({ stdout: "\n" })
       .mockImplementationOnce(() => {
         throw new Error("not symbolic");
       })
-      .mockReturnValueOnce("ab12cd3344556677889900aabbccddeeff001122\n");
+      .mockResolvedValueOnce({ stdout: "ab12cd3344556677889900aabbccddeeff001122\n" });
     const { resolveRuntimeIdentity } = await import("../ipc/runtime-identity");
 
-    expect(resolveRuntimeIdentity("/repo/PwrAgent")).toEqual({
+    expect(await resolveRuntimeIdentity("/repo/PwrAgent")).toEqual({
       commitSha: "ab12cd3344556677889900aabbccddeeff001122",
       cwd: "/repo/PwrAgent",
       detachedHead: true,
@@ -62,7 +56,7 @@ describe("runtime identity ipc", () => {
   });
 
   it("registers and disposes the IPC handler", async () => {
-    execFileSyncMock.mockReturnValue("main\n");
+    runGitMock.mockResolvedValue({ stdout: "main\n" });
     const { registerRuntimeIdentityIpcHandlers, disposeRuntimeIdentityIpcHandlers } =
       await import("../ipc/runtime-identity");
     const { RUNTIME_IDENTITY_CHANNEL } = await import("../../shared/ipc");

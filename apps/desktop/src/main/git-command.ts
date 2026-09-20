@@ -18,8 +18,6 @@
  */
 export type GitCommandResolver = () => string | undefined;
 
-const DEFAULT_GIT_COMMAND = "git";
-
 let resolver: GitCommandResolver | undefined;
 
 export function setGitCommandResolver(next: GitCommandResolver | undefined): void {
@@ -40,7 +38,3 @@ export function getConfiguredGitCommand(): string | undefined {
   }
 }
 
-/** The command to spawn, falling back to `PATH` resolution of `git`. */
-export function getGitCommand(): string {
-  return getConfiguredGitCommand() ?? DEFAULT_GIT_COMMAND;
-}

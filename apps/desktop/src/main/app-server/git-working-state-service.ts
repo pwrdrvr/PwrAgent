@@ -1,5 +1,4 @@
 import path from "node:path";
-import { spawn } from "node:child_process";
 import { readFile, stat } from "node:fs/promises";
 import { IterableMapper } from "@shutterstock/p-map-iterable";
 import type {
@@ -12,9 +11,8 @@ import type {
   WorktreeOtherChangeEntry,
   WorktreeOtherChangeStatus,
 } from "@pwragent/shared";
-import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { GitReadCache, type GitReadRequest } from "../git-info/read-cache";
-import { resolveGitExecutable, runGitCommand } from "./git-executable";
+import { streamGitCommand, runGitCommand } from "./git-executable";
 
 function normalizeAbsolutePath(value: string): string {
   return path.resolve(value).replace(/\\/g, "/");
@@ -116,37 +114,7 @@ async function defaultRunGit(
   env?: NodeJS.ProcessEnv,
   input?: string,
 ): Promise<string> {
-  if (input === undefined) {
-    return (await runGitCommand(cwd, args, { env })).stdout;
-  }
-
-  const childEnv = buildPwrAgentChildProcessEnv(env ?? process.env);
-  const git = await resolveGitExecutable(childEnv);
-  return await new Promise<string>((resolve, reject) => {
-    const child = spawn(git, ["-C", cwd, ...args], { env: childEnv });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk: string) => {
-      stdout += chunk;
-    });
-    child.stderr.on("data", (chunk: string) => {
-      stderr += chunk;
-    });
-    child.on("error", reject);
-    child.on("close", (code) => {
-      if (code === 0) {
-        resolve(stdout.trim());
-      } else {
-        reject(
-          new Error(stderr.trim() || `git exited with code ${code ?? "unknown"}`),
-        );
-      }
-    });
-    child.stdin.on("error", () => undefined);
-    child.stdin.end(input);
-  });
+  return (await runGitCommand(cwd, args, { env, input })).stdout;
 }
 
 function parseNumstat(output: string): {
@@ -509,8 +477,8 @@ function parseStatusPorcelainRecord(
   let worktreeCode = record[1] ?? " ";
   let pathStart = 3;
   if (record[1] === " " && record[2] !== " ") {
-    // runGitCommand trims stdout; an unstaged-only status record starts with
-    // a leading space (` M path`), so after trim the first record can arrive
+    // Legacy injected runners may trim stdout; an unstaged-only record starts
+    // with a leading space (` M path`), so the first record can arrive
     // as `M path`. Recover that shape instead of dropping the path's first
     // character (`apps/...` -> `pps/...`).
     indexCode = " ";
@@ -807,55 +775,17 @@ async function listUntrackedDirectoryFilesLimited(
     return { repoPaths: [], truncated: true };
   }
 
-  const childEnv = buildPwrAgentChildProcessEnv(gitEnv ?? process.env);
-  const git = await resolveGitExecutable(childEnv);
-  return await new Promise((resolve) => {
-    const repoPaths: string[] = [];
-    let pending = "";
-    let bytesRead = 0;
-    let truncated = false;
-    let settled = false;
-
-    const child = spawn(
-      git,
-      [
-        "-C",
-        cwd,
-        "--no-optional-locks",
-        "ls-files",
-        "--others",
-        "--exclude-standard",
-        "-z",
-        "--",
-        repoPath,
-      ],
-      { env: childEnv },
-    );
-
-    const finish = () => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(timeout);
-      resolve({ repoPaths: repoPaths.slice(0, limit), truncated });
-    };
-
-    const stop = () => {
-      truncated = true;
-      child.kill();
-    };
-
-    const timeout = setTimeout(stop, UNTRACKED_DIRECTORY_EXPANSION_TIMEOUT_MS);
-
-    child.stdout.setEncoding("utf8");
-    child.stdout.on("data", (chunk: string) => {
-      if (settled || truncated) {
-        return;
-      }
+  const repoPaths: string[] = [];
+  let pending = "";
+  let bytesRead = 0;
+  const result = await streamGitCommand(cwd, [
+    "--no-optional-locks", "ls-files", "--others", "--exclude-standard", "-z", "--", repoPath,
+  ], {
+    env: gitEnv,
+    timeout: UNTRACKED_DIRECTORY_EXPANSION_TIMEOUT_MS,
+    onStdout: (chunk) => {
       bytesRead += Buffer.byteLength(chunk);
       pending += chunk;
-
       let separatorIndex = pending.indexOf("\0");
       while (separatorIndex >= 0) {
         const record = pending.slice(0, separatorIndex);
@@ -863,21 +793,14 @@ async function listUntrackedDirectoryFilesLimited(
         const normalized = normalizeGitRelativePath(record);
         if (normalized && includeRepoPath(normalized)) {
           repoPaths.push(normalized);
-          if (repoPaths.length > limit) {
-            stop();
-            return;
-          }
+          if (repoPaths.length > limit) return false;
         }
         separatorIndex = pending.indexOf("\0");
       }
-
-      if (bytesRead > UNTRACKED_DIRECTORY_EXPANSION_MAX_BYTES) {
-        stop();
-      }
-    });
-    child.once("error", finish);
-    child.once("close", finish);
-  });
+      return bytesRead <= UNTRACKED_DIRECTORY_EXPANSION_MAX_BYTES;
+    },
+  }).catch(() => ({ stopped: true }));
+  return { repoPaths: repoPaths.slice(0, limit), truncated: result.stopped };
 }
 
 async function expandUntrackedDirectoryEntry(
