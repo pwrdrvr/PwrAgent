@@ -282,6 +282,31 @@ test("settings-general — Settings → General panel", async () => {
   }
 });
 
+// Release controls moved out of General onto their own nav row, which left
+// `settings-general.png` showing a card that is no longer there and nothing
+// documenting where it went. Re-run `screenshot:docs-site` to refresh both.
+test("settings-updates — Settings → Updates panel", async () => {
+  test.setTimeout(120_000);
+
+  const app = await launchDocsSiteApp({
+    fixturePath: path.resolve(specDir, "fixtures/smoke/replay.fixture.json"),
+    windowSize: WINDOW_SIZE,
+    appearance: SCREENSHOT_APPEARANCE,
+  });
+
+  try {
+    await openSettingsSection(app.window, {
+      navLabel: "Updates",
+      regionLabel: "Update settings",
+    });
+
+    await bringToFront(app.electronApp);
+    captureNative("settings-updates.png");
+  } finally {
+    await app.close();
+  }
+});
+
 test("settings-experimental — Settings → Experimental panel", async () => {
   test.setTimeout(120_000);
 

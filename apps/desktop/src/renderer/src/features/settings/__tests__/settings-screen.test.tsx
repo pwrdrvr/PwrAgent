@@ -1027,16 +1027,18 @@ describe("SettingsScreen", () => {
       "page",
     );
 
-    // Updates is its own nav row now — General holds no release controls.
-    expect(screen.queryByRole("heading", { name: "Updates" })).toBeNull();
-    expect(
-      screen.queryByRole("button", { name: "Check for Update" }),
-    ).toBeNull();
+    // General is on screen — asserted before the two negatives below, which
+    // would otherwise also pass against a pane that had not rendered yet.
     expect(
       screen.getByRole("switch", {
         name: "Confirm quit when threads or terminals are active",
       }),
     ).toHaveAttribute("aria-checked", "true");
+    // Updates is its own nav row now — General holds no release controls.
+    expect(screen.queryByRole("heading", { name: "Updates" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Check for Update" }),
+    ).toBeNull();
     fireEvent.click(
       screen.getByRole("switch", {
         name: "Confirm quit when threads or terminals are active",
