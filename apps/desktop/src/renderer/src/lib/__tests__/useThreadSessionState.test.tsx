@@ -12637,6 +12637,20 @@ describe("useThreadSessionState", () => {
         ]);
       }
 
+      // A running review can appear in one snapshot and be absent from the
+      // next (for example after switching away and reloading the thread).
+      // Seeing it once must not retire the live start marker permanently.
+      hydratedEntries = result.current.entries;
+      await act(async () => { await result.current.reload(); });
+      expect(result.current.entries.map((entry) => entry.id)).toEqual([
+        "enteredReviewMode",
+      ]);
+      hydratedEntries = [];
+      await act(async () => { await result.current.reload(); });
+      expect(result.current.entries.map((entry) => entry.id)).toEqual([
+        "enteredReviewMode",
+      ]);
+
       act(() => emitReview("exitedReviewMode"));
       const liveEntries = result.current.entries;
       expect(liveEntries.map((entry) => entry.id)).toEqual([
@@ -12675,6 +12689,11 @@ describe("useThreadSessionState", () => {
       expect(result.current.entries.every((entry) =>
         entry.turn?.status === "completed"
       )).toBe(true);
+
+      // Once terminal replay acknowledges the cards, the fallback is retired.
+      hydratedEntries = [];
+      await act(async () => { await result.current.reload(); });
+      expect(result.current.entries).toEqual([]);
     },
   );
 
