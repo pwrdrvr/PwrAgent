@@ -6191,6 +6191,41 @@ describe("Composer", () => {
     await waitFor(() => expect(startReview).toHaveBeenCalledWith(expect.objectContaining({ runMode, delivery: "inline" })));
   });
 
+  it("locks inline review to thread settings and restores overrides when switching back", async () => {
+    const startReview = vi.fn(async () => ({ backend: "codex" as const, threadId: "thread-1", reviewThreadId: "thread-1", turnId: "review" }));
+    const backend = backendSummary("codex", { models: [
+      { id: "thread-model", label: "Thread model", current: true, supportsReasoning: true, reasoningEfforts: ["low", "high"], defaultReasoningEffort: "low" },
+      { id: "review-model", label: "Review model override", supportsReasoning: true, reasoningEfforts: ["low", "high"], defaultReasoningEffort: "high" },
+    ] });
+    backend.capabilities = { ...backend.capabilities, startReview: true, reviewRunMode: true, reviewRunner: true, reviewCodexInline: true, reviewCodexSubAgent: true };
+    render(<Composer backends={[backend]} desktopApi={{ startReview, onAgentEvent: () => () => undefined }} disabled={false} skills={[]} thread={{
+      id: "thread-1", title: "Review", titleSource: "explicit", source: "codex", model: "thread-model", reasoningEffort: "low", executionMode: "default", linkedDirectories: [], inbox: { inInbox: false },
+    }} />);
+    fireEvent.change(screen.getByRole("textbox", { name: "Reply" }), { target: { value: "/review" } });
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "Reply" }), { key: "Enter" });
+    const group = await screen.findByRole("group", { name: "Review target" });
+    fireEvent.click(within(group).getByRole("button", { name: "Review model" }));
+    fireEvent.click(within(group).getByRole("option", { name: "Review model override" }));
+    const chooseMode = (name: string) => {
+      fireEvent.click(within(group).getByRole("button", { name: "Review run mode" }));
+      fireEvent.click(within(group).getByRole("option", { name }));
+    };
+    chooseMode("Codex Inline");
+    const model = within(group).getByRole("button", { name: "Review model" });
+    const effort = within(group).getByRole("button", { name: "Review reasoning" });
+    expect(model).toBeDisabled();
+    expect(model).toHaveTextContent("Thread model");
+    expect(effort).toBeDisabled();
+    expect(effort).toHaveTextContent("low");
+    chooseMode("Codex Sub Agent");
+    expect(model).not.toBeDisabled();
+    expect(model).toHaveTextContent("Review model override");
+    chooseMode("Codex Inline");
+    fireEvent.click(within(group).getByRole("button", { name: /Current changes/ }));
+    fireEvent.click(within(group).getByRole("button", { name: "Start review" }));
+    await waitFor(() => expect(startReview).toHaveBeenCalledWith(expect.objectContaining({ runMode: "codex-inline", model: "thread-model", reasoningEffort: "low" })));
+  });
+
   it("says why an unavailable review mode is unavailable, and refuses it", async () => {
     const backend = backendSummary("codex");
     backend.capabilities = { ...backend.capabilities, startReview: true, reviewRunMode: true, reviewRunner: true, reviewCodexInline: false, reviewCodexSubAgent: true };
