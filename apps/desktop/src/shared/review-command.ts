@@ -1,4 +1,8 @@
 import type { AppServerReviewOutput, AppServerReviewTarget } from "@pwragent/shared";
+import {
+  normalizeReviewConfidenceScore,
+  REVIEW_OUTPUT_INSTRUCTIONS,
+} from "./review-output";
 
 export type ParsedReviewCommand = {
   target: AppServerReviewTarget;
@@ -167,34 +171,6 @@ function stripWrappingQuotes(value: string): string {
 }
 
 /**
- * Keeps a reviewer-reported confidence only when it can mean something.
- *
- * The score is the reviewer's own confidence that its `overall_correctness`
- * verdict is right. Three values look like numbers and are not judgements:
- *
- * - Exactly `0`. The output schema in the review prompt has to show the field,
- *   and whatever value it shows is the one a weaker model copies through. A
- *   literal zero next to "patch is correct" is a transcription, not a reviewer
- *   with no confidence at all.
- * - Anything above 1. A model answering `95` may mean 95%, or may mean nothing.
- *   Rescaling it guesses at intent; dropping it does not.
- * - Anything below 0, or non-finite.
- *
- * Dropping the value is safe because the verdict stands on its own — readers
- * render the correctness without a number. Substituting zero would not.
- */
-export function normalizeReviewConfidenceScore(
-  value: unknown,
-): number | undefined {
-  return typeof value === "number"
-    && Number.isFinite(value)
-    && value > 0
-    && value <= 1
-    ? value
-    : undefined;
-}
-
-/**
  * Reduce a Git ref to the branch name both sides of a comparison can agree on.
  *
  * The same branch reaches us written three ways: `refs/heads/main` from Git
@@ -289,26 +265,16 @@ export function isPwrAgentInlineReviewPrompt(text: string): boolean {
 }
 
 /**
- * The requested shape is the plain review format the transcript card already
- * parses (`parsePlainReview` in TranscriptReview.tsx), so an inline review's
- * final message renders as findings rather than as one block of prose. A
- * reply that ignores it still reaches the card, as the explanation alone.
+ * The same structured contract a PwrAgent Sub Agent child answers with, so an
+ * inline review's card carries a verdict, confidence, and findings like every
+ * other mode's.
  */
 export function buildInlineReviewPrompt(target: AppServerReviewTarget): string {
   return [
     "<pwragent-inline-review-instructions>",
     "Perform a code review in this thread. Focus on concrete correctness regressions. Do not modify files.",
     reviewTargetInstructions(target),
-    [
-      "End with one message in this shape and nothing after it.",
-      "First, a short overall explanation that ends with your verdict: the patch is correct, or the patch is incorrect.",
-      "Then, only if you have findings, a line reading \"Review comments:\" followed by one entry per finding:",
-      "",
-      "- [P1] Short title — /absolute/path/to/file.ts:12-18",
-      "  What is wrong and why it matters.",
-      "",
-      "Use P0 for the most severe through P3 for the least, and an absolute file path.",
-    ].join("\n"),
+    `Finish with your review as your final message. ${REVIEW_OUTPUT_INSTRUCTIONS}`,
     "</pwragent-inline-review-instructions>",
   ].join("\n\n");
 }

@@ -112,3 +112,86 @@ describe("inline review result presentation", () => {
     expect(result.tailMessages).toEqual([]);
   });
 });
+
+describe("structured inline review reply presentation", () => {
+  const output = {
+    findings: [],
+    overall_correctness: "patch is correct" as const,
+    overall_explanation: "No regressions in the diff.",
+    overall_confidence_score: 0.9,
+  };
+  const replyText = JSON.stringify(output);
+  const turn = { id: "turn-inline", status: "completed" as const };
+  const start: AppServerThreadEntry = {
+    type: "review",
+    id: "inline-review:turn-inline:started",
+    review: "Review changes against main",
+    displayText: "Review changes against main",
+    turn: { ...turn, status: "in_progress" },
+  };
+  const result: AppServerThreadEntry = {
+    type: "review",
+    id: "inline-review:turn-inline:result",
+    review: "No regressions in the diff.\n\nNo findings.",
+    output,
+    turn,
+  };
+  const reply: AppServerThreadMessageEntry = {
+    type: "message", id: "reply", role: "assistant", text: replyText, turn,
+  };
+  const present = (tailEntries: AppServerThreadEntry[], activeTurnId?: string) => {
+    const index = createTranscriptReviewHistoryIndex();
+    return deriveTranscriptReviewPresentation({
+      activeTurnId,
+      historyEvents: iterateTranscriptReviewHistoryEvents(index),
+      historyIndex: index,
+      tailEntries,
+      tailMessages: tailEntries.filter(
+        (entry): entry is AppServerThreadMessageEntry => entry.type === "message",
+      ),
+    });
+  };
+
+  it("drops the JSON reply beside the structured card it produced", () => {
+    const presentation = present([start, reply, result]);
+    expect(presentation.tailEntries.map((entry) => entry.id)).toEqual([
+      start.id,
+      result.id,
+    ]);
+    expect(presentation.tailMessages).toEqual([]);
+  });
+
+  it("drops a retained history copy of the reply too", () => {
+    const index = createTranscriptReviewHistoryIndex();
+    addTranscriptReviewSegmentToIndex(
+      index,
+      summarizeTranscriptReviewSegment([start, reply], [reply]),
+    );
+    const presentation = deriveTranscriptReviewPresentation({
+      historyEvents: iterateTranscriptReviewHistoryEvents(index),
+      historyIndex: index,
+      tailEntries: [result],
+      tailMessages: [],
+    });
+    expect([...presentation.excludedHistoryEntryIds]).toContain("reply");
+    expect([...presentation.excludedHistoryMessageIds]).toContain("reply");
+  });
+
+  it("holds the reply back while its review turn runs, before the card lands", () => {
+    expect(present([start, reply], "turn-inline").tailEntries.map((entry) => entry.id))
+      .toEqual([start.id]);
+  });
+
+  it("keeps the reply when the review turn ended without a card", () => {
+    // A failed or cancelled review publishes no result; the reply is then the
+    // only copy of what the reviewer said.
+    expect(present([start, reply]).tailEntries.map((entry) => entry.id))
+      .toEqual([start.id, reply.id]);
+  });
+
+  it("keeps review-shaped JSON in an ordinary turn", () => {
+    const ordinary = { ...reply, turn: { id: "turn-ordinary", status: "completed" as const } };
+    expect(present([ordinary], "turn-ordinary").tailEntries.map((entry) => entry.id))
+      .toEqual(["reply"]);
+  });
+});

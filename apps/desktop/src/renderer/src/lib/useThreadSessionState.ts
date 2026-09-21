@@ -7523,6 +7523,7 @@ export function useThreadSessionState(params: {
   );
   const reviewPresentation = useMemo(
     () => createTranscriptReviewPresentation({
+      activeTurnId: selectedSession?.activeTurnId,
       history: selectedSession?.loadedHistory,
       index: selectedHistoryIndex,
       tailEntries: reconciledTailEntries,
@@ -7532,9 +7533,29 @@ export function useThreadSessionState(params: {
       mergedTailMessages,
       reconciledTailEntries,
       selectedHistoryIndex,
+      selectedSession?.activeTurnId,
       selectedSession?.loadedHistory,
     ],
   );
+  // The streamed reply joins the transcript after the review presentation
+  // runs, so a review turn's JSON reply would stream in verbatim before its
+  // card replaced it. Hold it back from its first brace; the turn's status
+  // line still shows it working.
+  const selectedPendingAssistantMessage = selectedSession?.pendingAssistantMessage;
+  const pendingAssistantMessage = useMemo(() => {
+    const turnId = selectedPendingAssistantMessage?.turn?.id;
+    if (
+      !selectedPendingAssistantMessage
+      || !turnId
+      || !/^\s*(?:```(?:json)?\s*)?\{/u.test(selectedPendingAssistantMessage.text)
+    ) {
+      return selectedPendingAssistantMessage;
+    }
+    const reviewTurn = reconciledTailEntries.some(
+      (entry) => entry.type === "review" && entry.turn?.id === turnId,
+    );
+    return reviewTurn ? undefined : selectedPendingAssistantMessage;
+  }, [reconciledTailEntries, selectedPendingAssistantMessage]);
 
   const entries = useMemo(
     () =>
@@ -7636,7 +7657,7 @@ export function useThreadSessionState(params: {
     reload,
     messages,
     contextWindow: selectedSession?.contextWindow,
-    pendingAssistantMessage: selectedSession?.pendingAssistantMessage,
+    pendingAssistantMessage,
     pendingMcpInteraction: selectedSession?.pendingMcpInteraction,
     pendingRequest: selectedSession?.pendingRequest,
     pendingUserInput: selectedSession?.pendingUserInput,

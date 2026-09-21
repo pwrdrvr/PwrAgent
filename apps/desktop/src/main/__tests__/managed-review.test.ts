@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 import {
   buildManagedReviewContextInput,
   buildManagedReviewPrompt,
-  formatManagedReviewOutput,
-  parseManagedReviewOutput,
 } from "../app-server/managed-review";
+import {
+  formatReviewOutputText,
+  parseReviewOutputText,
+} from "../../shared/review-output";
 import grokReviewSession from "./fixtures/grok-managed-review-session.json";
 
 describe("managed review", () => {
@@ -43,7 +45,7 @@ describe("managed review", () => {
   });
 
   it("parses the structured review artifact shape", () => {
-    expect(parseManagedReviewOutput(JSON.stringify({
+    expect(parseReviewOutputText(JSON.stringify({
       findings: [{
         title: "[P1] Release the queue",
         body: "The terminal path leaves queued work blocked.",
@@ -83,7 +85,7 @@ describe("managed review", () => {
     });
 
     it("parses the artifact out of the surrounding narration", () => {
-      const parsed = parseManagedReviewOutput(output);
+      const parsed = parseReviewOutputText(output);
 
       expect(parsed).toBeDefined();
       expect(parsed?.overall_correctness).toBe("patch is incorrect");
@@ -100,8 +102,8 @@ describe("managed review", () => {
     });
 
     it("formats the parsed artifact instead of replaying raw model output", () => {
-      const parsed = parseManagedReviewOutput(output);
-      const formatted = formatManagedReviewOutput(parsed!);
+      const parsed = parseReviewOutputText(output);
+      const formatted = formatReviewOutputText(parsed!);
 
       expect(formatted).not.toContain("I'll review this branch against");
       expect(formatted).not.toContain('"findings"');
@@ -116,7 +118,7 @@ describe("managed review", () => {
       correctness: unknown;
       withFinding?: boolean;
     }) {
-      return parseManagedReviewOutput(JSON.stringify({
+      return parseReviewOutputText(JSON.stringify({
         findings: params.withFinding
           ? [{
               title: "Off-by-one",
@@ -195,7 +197,7 @@ describe("managed review confidence", () => {
 
   it("keeps a reported confidence in range", () => {
     expect(
-      parseManagedReviewOutput(JSON.stringify({
+      parseReviewOutputText(JSON.stringify({
         ...base,
         overall_confidence_score: 0.85,
       }))?.overall_confidence_score,
@@ -206,7 +208,7 @@ describe("managed review confidence", () => {
     // The prompt now tells a reviewer that cannot distinguish to leave the
     // field out. Rejecting the whole object for a missing score would throw
     // away real findings the moment a model takes that branch.
-    const parsed = parseManagedReviewOutput(JSON.stringify({
+    const parsed = parseReviewOutputText(JSON.stringify({
       ...base,
       findings: [{
         title: "Unreleased queue",
@@ -229,7 +231,7 @@ describe("managed review confidence", () => {
     // model copies whatever value it shows. A zero beside "patch is correct"
     // is a transcription, not a reviewer with no confidence.
     expect(
-      parseManagedReviewOutput(JSON.stringify({
+      parseReviewOutputText(JSON.stringify({
         ...base,
         overall_confidence_score: 0,
       }))?.overall_confidence_score,
@@ -239,7 +241,7 @@ describe("managed review confidence", () => {
   it("drops a score outside 0-1 instead of guessing at percent", () => {
     for (const score of [95, 1.5, -0.2, Number.NaN]) {
       expect(
-        parseManagedReviewOutput(JSON.stringify({
+        parseReviewOutputText(JSON.stringify({
           ...base,
           overall_confidence_score: score,
         }))?.overall_confidence_score,

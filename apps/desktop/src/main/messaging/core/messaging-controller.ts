@@ -210,6 +210,7 @@ import {
   normalizeReviewOutputRecord,
   parseReviewCommand,
 } from "../../../shared/review-command.js";
+import { parseReviewOutputText } from "../../../shared/review-output.js";
 import type { MessagingInteractionMapper } from "./interaction-mapper.js";
 import {
   buildBoundedResumeIntent,
@@ -1640,13 +1641,22 @@ export class MessagingController {
       && isTerminalTurnLifecycle(lifecycle)
       && lifecycle?.status !== "completed",
     );
+    // A reply that is the structured review itself (a Codex Inline turn
+    // answers in the review JSON contract) is what the artifact was parsed
+    // from. Its prose is already the artifact's review text; taking the reply
+    // instead would post the raw JSON.
+    const pendingReviewAssistantProse =
+      pendingReviewAssistantText
+      && !parseReviewOutputText(pendingReviewAssistantText)
+        ? pendingReviewAssistantText
+        : undefined;
     const completedReviewArtifact = !eventTurnKey
       ? reviewArtifact
       : reviewCompletionReady && pendingReviewArtifact
         ? {
             ...pendingReviewArtifact,
-            ...(pendingReviewAssistantText
-              ? { review: pendingReviewAssistantText }
+            ...(pendingReviewAssistantProse
+              ? { review: pendingReviewAssistantProse }
               : {}),
           }
         : undefined;

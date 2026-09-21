@@ -9696,6 +9696,60 @@ describe("MessagingController", () => {
     });
   });
 
+  it("posts the parsed review, not the reply it was parsed from, for a structured inline review", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    harness.delivered.length = 0;
+    const reviewOutput = {
+      findings: [],
+      overall_correctness: "patch is correct",
+      overall_explanation: "No regressions in the diff.",
+      overall_confidence_score: 0.9,
+    };
+    const emitItem = (item: Record<string, unknown>) =>
+      harness.controller.handleBackendEvent({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: { threadId: "thread-1", turnId: "inline-turn-1", item },
+        },
+      } as AgentEvent);
+
+    // The order a Codex Inline turn produces: the start card, the model's JSON
+    // reply, then the result card main emits just before turn/completed.
+    await emitItem({ id: "inline-review:inline-turn-1:started", type: "enteredReviewMode" });
+    await emitItem({
+      id: "reply-1",
+      type: "agentMessage",
+      text: JSON.stringify(reviewOutput),
+    });
+    await emitItem({
+      id: "inline-review:inline-turn-1:result",
+      type: "exitedReviewMode",
+      review: "No regressions in the diff.\n\nNo findings.",
+      data: { reviewOutput },
+    });
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "inline-turn-1",
+          turn: { id: "inline-turn-1", status: "completed", output: [] },
+        },
+      },
+    } satisfies AgentEvent);
+
+    const completionMessages = harness.delivered.filter(
+      (intent) => intent.kind === "message",
+    );
+    expect(completionMessages).toHaveLength(1);
+    const text = JSON.stringify(completionMessages[0]);
+    expect(text).toContain("No regressions in the diff.");
+    expect(text).not.toContain("overall_correctness");
+  });
+
   it("does not stream a second completion surface for review turns", async () => {
     let now = 1_000;
     const harness = await createHarness({

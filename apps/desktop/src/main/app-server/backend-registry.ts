@@ -64,9 +64,11 @@ import {
 import {
   buildManagedReviewContextInput,
   buildManagedReviewPrompt,
-  formatManagedReviewOutput,
-  parseManagedReviewOutput,
 } from "./managed-review";
+import {
+  formatReviewOutputText,
+  parseReviewOutputText,
+} from "../../shared/review-output";
 import {
   isUsageActivityEntry,
   usageActivityScope,
@@ -18218,10 +18220,13 @@ export class DesktopBackendRegistry {
       });
       return;
     }
-    // Kept as the assistant wrote it. The card parses the plain review
-    // format itself, and an exact copy is what lets the transcript drop the
-    // assistant message the card now shows.
-    const review = record.output?.trim() || "Review completed without output.";
+    // Same contract and parser as a PwrAgent Sub Agent child. The reply stays
+    // in this thread as the model wrote it; the card and messaging get the
+    // parsed artifact, and an unparseable reply is still shown, as prose.
+    const parsed = parseReviewOutputText(record.output);
+    const review = parsed
+      ? formatReviewOutputText(parsed)
+      : record.output?.trim() || "Review completed without output.";
     const entry: AppServerThreadReviewEntry = {
       type: "review",
       id: `inline-review:${terminal.turnId}:result`,
@@ -18229,6 +18234,7 @@ export class DesktopBackendRegistry {
       createdAt: terminal.completedAt,
       reviewer: record.reviewer,
       ...(record.context ? { context: record.context } : {}),
+      ...(parsed ? { output: parsed } : {}),
       turn: {
         id: terminal.turnId,
         status: "completed",
@@ -18261,6 +18267,7 @@ export class DesktopBackendRegistry {
             review,
             createdAt: terminal.completedAt,
             data: {
+              ...(parsed ? { reviewOutput: parsed } : {}),
               reviewer: entry.reviewer,
               ...(entry.context ? { context: entry.context } : {}),
             },
@@ -28616,9 +28623,9 @@ export class DesktopBackendRegistry {
         >,
         completedItemOutput,
       );
-      const parsed = parseManagedReviewOutput(output);
+      const parsed = parseReviewOutputText(output);
       const review = parsed
-        ? formatManagedReviewOutput(parsed)
+        ? formatReviewOutputText(parsed)
         : output?.trim() || "Review completed without output.";
       const entry: AppServerThreadReviewEntry = {
         type: "review",

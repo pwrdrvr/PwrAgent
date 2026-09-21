@@ -25898,14 +25898,24 @@ command = "pnpm dev"
       headCommit: "89abcdef0123456789abcdef0123456789abcdef",
       pullRequest: null,
     };
-    const finalReview = [
-      "One regression. The patch is incorrect.",
-      "",
-      "Review comments:",
-      "",
-      "- [P1] Guard the empty list — /repo/src/list.ts:4-6",
-      "  `items[0]` is read before the length check.",
-    ].join("\n");
+    const reviewOutput = {
+      findings: [
+        {
+          title: "Guard the empty list",
+          body: "`items[0]` is read before the length check.",
+          confidence_score: 0.8,
+          priority: 1,
+          code_location: {
+            absolute_file_path: "/repo/src/list.ts",
+            line_range: { start: 4, end: 6 },
+          },
+        },
+      ],
+      overall_correctness: "patch is incorrect",
+      overall_explanation: "One regression in the empty-list path.",
+      overall_confidence_score: 0.9,
+    };
+    const finalReview = JSON.stringify(reviewOutput);
 
     const createInlineHarness = (options: {
       replay?: AppServerThreadReplay;
@@ -26006,10 +26016,12 @@ command = "pnpm dev"
       await harness.emitAgentMessage("final", finalReview, "final_answer");
       await harness.emitTurnCompleted();
 
+      // The card gets the parsed artifact and readable prose; the JSON reply
+      // stays in the thread as the model wrote it.
       expect(harness.itemData("exitedReviewMode")).toMatchObject({
         id: "inline-review:turn-inline:result",
-        review: finalReview,
-        data: { reviewer, context },
+        review: expect.stringContaining("One regression in the empty-list path."),
+        data: { reviewer, context, reviewOutput },
       });
       // Messaging pairs the artifact with the final assistant text only when
       // the artifact arrives first.
@@ -26031,7 +26043,8 @@ command = "pnpm dev"
         }),
         expect.objectContaining({
           id: "inline-review:turn-inline:result",
-          review: finalReview,
+          review: expect.stringContaining("- [P1] Guard the empty list"),
+          output: reviewOutput,
           reviewer,
           context,
           turn: expect.objectContaining({ id: "turn-inline", status: "completed" }),
@@ -26104,8 +26117,26 @@ command = "pnpm dev"
         harness.itemIndex("exitedReviewMode"),
       );
       expect(harness.itemData("exitedReviewMode")).toMatchObject({
-        review: finalReview,
+        data: { reviewOutput },
       });
+
+      await harness.registry.close();
+    });
+
+    it("keeps a reply that ignored the JSON contract, as the card's prose", async () => {
+      const harness = createInlineHarness();
+      const prose = "Looks fine to me. The patch is correct.";
+
+      await harness.startInlineReview();
+      await harness.emitAgentMessage("final", prose);
+      await harness.emitTurnCompleted();
+
+      const result = harness.itemData("exitedReviewMode") as {
+        data?: Record<string, unknown>;
+        review?: string;
+      };
+      expect(result.review).toBe(prose);
+      expect(result.data).not.toHaveProperty("reviewOutput");
 
       await harness.registry.close();
     });
