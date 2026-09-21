@@ -1,11 +1,14 @@
 import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { bundledGitDirectory, bundledGitEnvironment, bundledGitExecutable, configureBundledGit } from "../bundled-git";
 import { resolveGitExecutable, runGitCommand, streamGitCommand } from "../app-server/git-executable";
 
-afterEach(() => configureBundledGit());
+afterEach(() => {
+  configureBundledGit();
+  vi.unstubAllEnvs();
+});
 
 describe("bundled Git runtime", () => {
   it("pins the executable, helpers and hook PATH despite inherited overrides", async () => {
@@ -18,6 +21,18 @@ describe("bundled Git runtime", () => {
     expect(Object.keys(env).filter((key) => key.toUpperCase() === "PATH")).toEqual(["PATH"]);
     expect(inherited.GIT_EXEC_PATH).toBe("/foreign/helpers");
     expect((await runGitCommand(os.tmpdir(), ["lfs", "version"], { env: inherited })).stdout).toMatch(/^git-lfs\//);
+  });
+
+  it.each(["empty", "inherited"])("ignores ambient helper overrides with an %s supplied environment", async (source) => {
+    vi.stubEnv("GIT_EXEC_PATH", path.join(os.tmpdir(), "foreign-git-helpers"));
+    vi.stubEnv("LOCAL_GIT_DIRECTORY", path.join(os.tmpdir(), "foreign-git"));
+    const supplied = source === "empty" ? {} : process.env;
+    const env = bundledGitEnvironment(supplied);
+    expect(env.GIT_EXEC_PATH).toContain(bundledGitDirectory() + path.sep);
+    expect(env.PATH?.split(path.delimiter)).toContain(env.GIT_EXEC_PATH);
+    expect(await resolveGitExecutable(supplied)).toBe(bundledGitExecutable());
+    const result = await runGitCommand(os.tmpdir(), ["lfs", "version"], { env: supplied });
+    expect(result.stdout).toMatch(/^git-lfs\//);
   });
 
   it("does not fall back on either buffered or streaming calls when the bundle is absent", async () => {

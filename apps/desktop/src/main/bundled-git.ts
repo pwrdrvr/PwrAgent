@@ -51,9 +51,14 @@ export function bundledGitEnvironment(source: NodeJS.ProcessEnv): NodeJS.Process
     }
   }
   const root = bundledGitDirectory();
-  const { env } = dugite.setupEnvironment({ LOCAL_GIT_DIRECTORY: root }, { ...clean, PATH: inheritedPath });
+  // An omitted helper override makes Dugite read process.env.GIT_EXEC_PATH
+  // again. An explicit empty override resolves the bundled platform layout.
+  const helperDirectory = dugite.resolveGitExecPath(root, "");
+  const { env } = dugite.setupEnvironment(
+    { LOCAL_GIT_DIRECTORY: root, GIT_EXEC_PATH: helperDirectory },
+    { ...clean, PATH: inheritedPath },
+  );
   const executableDirectory = path.dirname(bundledGitExecutable());
-  const helperDirectory = env.GIT_EXEC_PATH!;
   // Git puts its exec path first for subcommands; shells and hooks also need
   // the bundled git/git-lfs before any installed versions in PATH.
   env.PATH = [...new Set([executableDirectory, helperDirectory, ...(env.PATH ?? "").split(path.delimiter)])].join(path.delimiter);
