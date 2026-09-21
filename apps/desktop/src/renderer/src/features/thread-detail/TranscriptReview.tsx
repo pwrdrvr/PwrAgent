@@ -8,6 +8,7 @@ import type {
 import { formatPathRelativeToDirectories } from "@pwragent/shared";
 import { useCallback, useMemo, type MouseEvent } from "react";
 import { normalizeReviewDisplayText } from "../../../../shared/review-command";
+import { withoutRedundantPriorityTag } from "../../../../shared/review-output";
 import { formatBackendLabel } from "../../lib/backend-label";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import type { DesktopApi } from "../../lib/desktop-api";
@@ -256,8 +257,12 @@ export function TranscriptReview(props: TranscriptReviewProps) {
     () => (output ? undefined : parsePlainReview(props.entry.review)),
     [output, props.entry.review],
   );
+  // One array feeds the rows and both copy buttons, so the tag is dropped once
+  // for all three.
   const findings = useMemo(
-    () => output?.findings ?? plainReview?.findings ?? [],
+    () => output?.findings.map(withoutRedundantPriorityTag)
+      ?? plainReview?.findings
+      ?? [],
     [output, plainReview],
   );
   const findingCount = output?.findings.length;

@@ -183,6 +183,37 @@ function normalizeOverallCorrectness(
   return findings.length > 0 ? "patch is incorrect" : "patch is correct";
 }
 
+type ReviewFinding = AppServerReviewOutput["findings"][number];
+
+const LEADING_PRIORITY_TAG = /^\s*\[P([0-3])\]\s*/i;
+
+/**
+ * Reviewers that learned Codex's own review format lead a finding's title
+ * with its tag — "[P2] Persist inline review provenance" — although the
+ * contract gives priority a field of its own. Every surface that draws the
+ * priority separately (the card's badge, the copied heading, the text form)
+ * then prints it twice.
+ *
+ * The stored finding keeps the reviewer's words; those surfaces read this
+ * view of it. A tag that contradicts the field stays in the title, so the
+ * disagreement shows rather than being settled either way, and a finding
+ * with no priority takes its tag as the priority.
+ */
+export function withoutRedundantPriorityTag<T extends ReviewFinding>(
+  finding: T,
+): T {
+  const tag = LEADING_PRIORITY_TAG.exec(finding.title);
+  const title = tag ? finding.title.slice(tag[0].length) : "";
+  if (!tag || !title.trim()) {
+    return finding;
+  }
+  const tagged = Number(tag[1]);
+  if (finding.priority === undefined) {
+    return { ...finding, priority: tagged, title };
+  }
+  return finding.priority === tagged ? { ...finding, title } : finding;
+}
+
 export function formatReviewOutputText(
   output: AppServerReviewOutput,
 ): string {
@@ -193,7 +224,7 @@ export function formatReviewOutputText(
     return [...lines, "", "No findings."].join("\n");
   }
   lines.push("");
-  for (const finding of output.findings) {
+  for (const finding of output.findings.map(withoutRedundantPriorityTag)) {
     const priority = finding.priority === undefined
       ? "P?"
       : `P${finding.priority}`;
