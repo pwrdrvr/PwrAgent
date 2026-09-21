@@ -8,6 +8,7 @@ import type {
   ListInstanceProjectsResult,
   MaterializeDirectoryLaunchpadRequest,
   NavigationSnapshot,
+  NavigationLaunchpadDefaults,
   NavigationQueryRequest,
   NavigationQueryPage,
   SearchFederationThreadsResult,
@@ -1000,6 +1001,187 @@ describe("federation agent tools service", () => {
       threadId: "remote-thread-9",
     });
     expect(data.groupingMode).toBe("none");
+  });
+
+  it("uses an explicit backend instead of a remote Grok launchpad backend", async () => {
+    const materializeDirectoryLaunchpad = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "remote-thread-10",
+      executionMode: "default" as const,
+      workMode: "worktree" as const,
+    }));
+    const readPopulation = vi.fn(async () =>
+      buildSnapshot({
+        directories: [{
+          key: "dir:/repo",
+          kind: "directory",
+          label: "PwrSuiteLab",
+          path: "/repo",
+          threadKeys: [],
+          needsAttentionCount: 0,
+          launchpad: {
+            backend: "acp:grok",
+            executionMode: "default",
+            workMode: "worktree",
+            directoryKey: "dir:/repo",
+            directoryKind: "directory",
+            directoryLabel: "PwrSuiteLab",
+            prompt: "",
+            createdAt: 1,
+            updatedAt: 2,
+          },
+        }] as NavigationSnapshot["directories"],
+      }),
+    );
+    const handler = createFederationAgentToolsHandler({
+      collectHostInfo: async () => localHostInfo,
+      runtime: buildRuntime({
+        health: async () =>
+          buildHealth({
+            peers: [{
+              id: "pwr_studio",
+              label: "Studio Mac",
+              role: "client",
+              status: "connected",
+              capabilities: ["thread_navigation"],
+            }],
+          }),
+        remoteBackend: (() => ({
+          readPopulation,
+          materializeDirectoryLaunchpad,
+        })) as never,
+      }),
+    });
+
+    await handler({
+      operation: "create_instance_thread",
+      context,
+      args: {
+        instanceId: "pwr_studio",
+        projectKey: "dir:/repo",
+        backend: "codex",
+        model: "gpt-6-astra",
+        tokenMiserEnabled: false,
+      },
+    });
+
+    expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith(
+      expect.objectContaining({
+        launchpad: expect.objectContaining({
+          backend: "codex",
+          model: "gpt-6-astra",
+          tokenMiserEnabled: false,
+        }),
+      }),
+      expect.anything(),
+    );
+  });
+
+  describe.each(["saved launchpad", "instance defaults"])("backend switch from %s", (source) => {
+    it.each([
+      { backend: "codex", saved: false, explicit: false },
+      { backend: "codex", saved: true, explicit: false },
+      { backend: "codex", saved: true, explicit: true },
+      { backend: "acp:claude", saved: false, explicit: false },
+      { backend: "acp:claude", saved: true, explicit: false },
+      { backend: "acp:claude", saved: true, explicit: true },
+    ] as const)("restores $backend settings (saved=$saved, explicit=$explicit)", async ({ backend, saved, explicit }) => {
+      const destinationSettings = {
+        model: "destination-model",
+        reasoningEffort: "medium",
+        executionMode: "default" as const,
+        ...(backend === "codex"
+          ? { serviceTier: "priority", fastMode: false }
+          : { acpRuntime: { currentModeId: "destination-mode" } }),
+      };
+      const sourceSettings: NavigationLaunchpadDefaults = {
+        backend: "acp:grok",
+        executionMode: "full-access",
+        workMode: "local",
+        model: "grok-4.5",
+        reasoningEffort: "high",
+        serviceTier: "source-tier",
+        fastMode: true,
+        acpRuntime: { currentModeId: "source-only-mode" },
+        providerSettings: saved ? { [backend]: destinationSettings } : {},
+      };
+      const snapshot = buildSnapshot({
+        launchpadDefaults: sourceSettings,
+        directories: [{
+          key: "dir:/repo",
+          kind: "directory",
+          label: "PwrSuiteLab",
+          path: "/repo",
+          threadKeys: [],
+          needsAttentionCount: 0,
+          ...(source === "saved launchpad" ? { launchpad: {
+            ...sourceSettings,
+            directoryKey: "dir:/repo",
+            directoryKind: "directory",
+            directoryLabel: "PwrSuiteLab",
+            prompt: "Unsent operator draft",
+            createdAt: 1,
+            updatedAt: 2,
+          } } : {}),
+        }] as NavigationSnapshot["directories"],
+      });
+      const original = structuredClone(snapshot);
+      const materializeDirectoryLaunchpad = vi.fn(async (request: MaterializeDirectoryLaunchpadRequest) => ({
+        backend: request.launchpad!.backend,
+        threadId: "remote-child",
+        executionMode: request.launchpad!.executionMode,
+        workMode: request.launchpad!.workMode!,
+      }));
+      const handler = createFederationAgentToolsHandler({
+        collectHostInfo: async () => localHostInfo,
+        runtime: buildRuntime({
+          health: async () => buildHealth({ peers: [{
+            id: "pwr_studio",
+            label: "Studio Mac",
+            role: "client",
+            status: "connected",
+            capabilities: ["thread_navigation"],
+          }] }),
+          remoteBackend: (() => ({
+            readPopulation: async () => snapshot,
+            materializeDirectoryLaunchpad,
+          })) as never,
+        }),
+      });
+      const overrides = explicit ? {
+        model: "explicit-model",
+        reasoningEffort: "low",
+        executionMode: "full-access" as const,
+        fastMode: true,
+      } : {};
+
+      const response = await handler({
+        operation: "create_instance_thread",
+        context,
+        args: { instanceId: "pwr_studio", projectKey: "dir:/repo", backend, ...overrides },
+      });
+
+      expect(response).toMatchObject({ ok: true, data: { backend } });
+      const draft = materializeDirectoryLaunchpad.mock.calls[0][0].launchpad!;
+      expect(draft).toMatchObject({ backend, workMode: "local", prompt: "" });
+      const expected = {
+        model: undefined,
+        reasoningEffort: undefined,
+        executionMode: "default",
+        serviceTier: undefined,
+        fastMode: undefined,
+        acpRuntime: undefined,
+        ...(saved ? destinationSettings : {}),
+        ...overrides,
+      };
+      for (const [key, value] of Object.entries(expected)) {
+        expect(draft[key as keyof typeof draft], key).toEqual(value);
+      }
+      if (explicit) {
+        expect(draft.providerSettings?.[backend]).toMatchObject(overrides);
+      }
+      expect(snapshot).toEqual(original);
+    });
   });
 
   it("mounts a delegated sibling on its remote group-root owner", async () => {

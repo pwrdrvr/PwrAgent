@@ -1,4 +1,5 @@
 import type {
+  AppServerBackendKind,
   CreateInstanceThreadToolArgs,
   FederationSearchScope,
   ListFederationInstancesToolArgs,
@@ -98,7 +99,7 @@ function descriptionForOperation(
     case "list_instance_projects":
       return "List projects on one local or remote PwrAgent instance. Pass an instanceId from list_federation_instances. Each result includes projectKey, label, path, and launchpad status. Use projectKey with create_instance_thread.";
     case "create_instance_thread":
-      return "Create a PwrAgent thread in a project on a selected instance. Get instanceId and projectKey from the list tools. The input becomes the first prompt. Set groupingMode=subthread for delegated child work across instances. Use none for independent intake. Settings inherit from the launchpad and then the instance. Set overrides only when the user requests them. Read ~/.pwragent/AGENTS.md for operator startup preferences when it exists. Use handoff_task for local delegation that needs workspace or grouping controls. Use this tool for a selected instance or instance-based intake. Startup can take minutes. Do not retry a slow request. Use search_federation_threads to check for the thread. Return threadLink verbatim. Keep instanceId for later remote calls.";
+      return "Create a PwrAgent thread in a project on a selected instance. Get instanceId and projectKey from the list tools. The input becomes the first prompt. Set groupingMode=subthread for delegated child work across instances. Use none for independent intake. Settings inherit from the launchpad and then the instance. Set backend when the user asks for a provider other than the target launchpad's configured provider. Set other overrides only when the user requests them. Read ~/.pwragent/AGENTS.md for operator startup preferences when it exists. Use handoff_task for local delegation that needs workspace or grouping controls. Use this tool for a selected instance or instance-based intake. Startup can take minutes. Do not retry a slow request. Use search_federation_threads to check for the thread. Return threadLink verbatim. Keep instanceId for later remote calls.";
     case "search_federation_threads":
       return "Search thread metadata on local and connected PwrAgent instances. Use scope=all, local, or remote to select the search area. Pass instanceId to select one instance. Scope and instanceId both apply when you set both. Filters apply before the result limit. Results include owner data, threadLink, and peer failures. Use search_threads for local transcript or advanced searches. Return threadLink verbatim. Keep instanceId for later remote calls.";
   }
@@ -170,6 +171,11 @@ function inputSchemaForOperation(
             type: "string",
             description:
               "Initial prompt for the created thread's first turn. Include the concrete task, not the parent transcript.",
+          },
+          backend: {
+            type: "string",
+            description:
+              "Provider backend override, for example `codex` or `acp:grok`. Omit to inherit the target launchpad backend.",
           },
           model: { type: "string" },
           reasoningEffort: { type: "string" },
@@ -286,7 +292,7 @@ function invalidArgumentsMessageForOperation(
     case "list_instance_projects":
       return "list_instance_projects requires a non-empty instanceId string.";
     case "create_instance_thread":
-      return "create_instance_thread requires non-empty instanceId and projectKey strings, and accepts only known workMode and groupingMode values.";
+      return "create_instance_thread requires non-empty instanceId and projectKey strings, and accepts only known backend, workMode, and groupingMode values.";
     case "search_federation_threads":
       return "search_federation_threads requires a non-empty query string; scope must be all, local, or remote; backend and filters must be valid; limit must be an integer between 1 and 200.";
   }
@@ -366,6 +372,7 @@ function normalizeCreateInstanceThreadArgs(
   }
   const optionalStringFields = [
     "input",
+    "backend",
     "model",
     "reasoningEffort",
     "executionMode",
@@ -377,10 +384,14 @@ function normalizeCreateInstanceThreadArgs(
     }
   }
   const input = readTrimmedString(args.input);
+  const backend = readTrimmedString(args.backend);
   const model = readTrimmedString(args.model);
   const reasoningEffort = readTrimmedString(args.reasoningEffort);
   const executionMode = readTrimmedString(args.executionMode);
   const branchName = readTrimmedString(args.branchName);
+  if (backend && !isAppServerBackendKind(backend)) {
+    return undefined;
+  }
   if (
     Object.hasOwn(args, "tokenMiserEnabled")
     && typeof args.tokenMiserEnabled !== "boolean"
@@ -391,6 +402,7 @@ function normalizeCreateInstanceThreadArgs(
     instanceId,
     projectKey,
     ...(input ? { input } : {}),
+    ...(backend ? { backend: backend as AppServerBackendKind } : {}),
     ...(model ? { model } : {}),
     ...(reasoningEffort ? { reasoningEffort } : {}),
     ...(executionMode
