@@ -9212,6 +9212,31 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("starts an ephemeral review with creation-time tools without resuming a missing rollout", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+    const dynamicTools: DynamicToolSpec[] = [{
+      type: "function", name: "read_token_miser_output", description: "Read review tool output.",
+      inputSchema: { type: "object" },
+    }];
+    MockTransport.threadResumeError = { message: "no rollout found for thread id ephemeral-review" };
+    try {
+      const thread = await client.startThread({ ephemeral: true, dynamicTools });
+      await expect(client.startTurn({
+        threadId: thread.threadId,
+        input: [{ type: "text", text: "Perform a code review." }],
+      })).resolves.toMatchObject({ turnId: "turn-1" });
+      const requests = MockTransport.instances.flatMap((transport) => transport.sentMessages)
+        .map((message) => JSON.parse(message));
+      expect(requests.find((request) => request.method === "thread/start")?.params)
+        .toMatchObject({ ephemeral: true, dynamicTools });
+      expect(requests.some((request) => request.method === "thread/resume")).toBe(false);
+      expect(requests.find((request) => request.method === "turn/start")?.params.threadId).toBe(thread.threadId);
+    } finally {
+      await client.close();
+    }
+  });
+
   it("refreshes dynamic tools before the first turn only when requested", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     MockTransport.threadStartResult = {

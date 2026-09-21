@@ -17686,8 +17686,6 @@ export class DesktopBackendRegistry {
     const tokenMiserDynamicTools = params.tokenMiserEnabled
       ? buildCodexTokenMiserDynamicToolSpecs(this.tokenMiserStore)
       : [];
-    const dynamicToolsResumeSupported =
-      await this.supportsTokenMiserDynamicToolsResume(client);
     const thread = await client.startThread({
       ...(params.cwd ? { cwd: params.cwd } : {}),
       approvalPolicy: modeSettings.approvalPolicy,
@@ -17727,9 +17725,9 @@ export class DesktopBackendRegistry {
         ...(params.codexEnvironmentRuntime
           ? { codexEnvironmentRuntime: params.codexEnvironmentRuntime }
           : {}),
-        ...(dynamicToolsResumeSupported
-          ? { dynamicTools: tokenMiserDynamicTools }
-          : {}),
+        // The complete tool catalog and environment were installed by
+        // thread/start above. Re-sending dynamicTools here asks the client to
+        // resume this ephemeral worker, which has no persisted rollout.
         ...(pwrdrvrTokenMiser !== undefined ? { pwrdrvrTokenMiser } : {}),
       });
       const startedReviewChildKey = buildThreadIdentityKey(

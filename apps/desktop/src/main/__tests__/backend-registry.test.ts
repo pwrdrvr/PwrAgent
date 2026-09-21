@@ -5491,6 +5491,13 @@ describe("DesktopBackendRegistry", () => {
       },
       startThreadResult: { threadId: "managed-review-child" },
     });
+    const startTurn = codexClient.startTurn.bind(codexClient);
+    vi.spyOn(codexClient, "startTurn").mockImplementation(async (params) => {
+      if (params.dynamicTools !== undefined) {
+        throw new Error("json-rpc error (-32600): no rollout found for thread id managed-review-child");
+      }
+      return startTurn(params);
+    });
     const overlayStore = createOverlayStoreMock();
     const registry = new DesktopBackendRegistry({
       codexClient,
@@ -5559,14 +5566,8 @@ describe("DesktopBackendRegistry", () => {
           "read_all_token_miser_output",
         ],
       );
-      expectPwragentDynamicTools(
-        codexClient.lastStartTurnParams?.dynamicTools,
-        [
-          "search_token_miser_output",
-          "read_token_miser_output",
-          "read_all_token_miser_output",
-        ],
-      );
+      expect(codexClient.lastStartThreadParams?.ephemeral).toBe(true);
+      expect(codexClient.lastStartTurnParams?.dynamicTools).toBeUndefined();
       expect(
         await internals.resolveTokenMiserThreadOverride(
           "codex",
