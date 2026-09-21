@@ -532,7 +532,7 @@ describe("buildTranscriptRenderItems", () => {
         id: "work:turn-review:live-warning-thread-1:complete",
         collapsible: true,
         entries: [warning, activity],
-        label: "Worked for 1m 22s",
+        label: "Reviewed for 1m 22s",
       },
       { type: "entry", entry: completedReview },
     ]);
@@ -576,7 +576,7 @@ describe("buildTranscriptRenderItems", () => {
         id: "work:turn-review:tool-1:complete",
         collapsible: true,
         entries: [firstActivity],
-        label: "Worked for 1m 14s",
+        label: "Reviewed for 1m 14s",
       },
       { type: "entry", entry: completedReview },
       {
@@ -587,6 +587,166 @@ describe("buildTranscriptRenderItems", () => {
         label: "More work",
       },
     ]);
+  });
+
+  it("folds a running review's work between its cards into one collapsed group", () => {
+    const turn = {
+      id: "turn-review",
+      status: "in_progress" as const,
+      startedAt: 1_000,
+    };
+    const startedReview = review("review-start", "Review changes against main", turn);
+    const first = commentary("c1", "Reading the merge-base diff.", turn);
+    const activity: AppServerThreadActivityEntry = {
+      type: "activity",
+      id: "tool-1",
+      summary: "Read one file",
+      details: [],
+      turn,
+    };
+    // Still streaming: no `commentary` phase yet.
+    const streaming: AppServerThreadMessageEntry = {
+      type: "message",
+      id: "streaming",
+      role: "assistant",
+      text: "Tracing the retry path.",
+      turn,
+    };
+
+    const items = buildTranscriptRenderItems({
+      entries: [startedReview, first, activity, streaming],
+      activeTurnId: "turn-review",
+      activeMessageId: "streaming",
+      now: 5_000,
+    });
+
+    expect(items).toEqual([
+      { type: "entry", entry: startedReview },
+      {
+        type: "workPhaseGroup",
+        activeStartedAt: 1_000,
+        activeVerb: "Reviewing",
+        id: "work:turn-review:c1:complete",
+        collapsible: true,
+        entries: [first, activity, streaming],
+        label: "Reviewing",
+      },
+    ]);
+  });
+
+  it("keeps a review group's id when the review finishes, so an open group stays open", () => {
+    const running = { id: "turn-review", status: "in_progress" as const, startedAt: 1_000 };
+    const done = completedTurn("turn-review", 90_000);
+    const entriesFor = (turn: AppServerThreadMessageEntry["turn"]) => [
+      review("review-start", "Review changes against main", running),
+      commentary("c1", "Reading the merge-base diff.", turn),
+    ];
+
+    const live = buildTranscriptRenderItems({
+      entries: entriesFor(running),
+      activeTurnId: "turn-review",
+    });
+    const finished = buildTranscriptRenderItems({
+      entries: [
+        ...entriesFor(done),
+        review("review-result", "Code review", done),
+      ],
+    });
+
+    const groupId = (items: ReturnType<typeof buildTranscriptRenderItems>) =>
+      items.find((item) => item.type === "workPhaseGroup")?.id;
+    expect(groupId(live)).toBe("commentary:turn-review:c1:complete");
+    expect(groupId(finished)).toBe(groupId(live));
+  });
+
+  it("counts a review turn's phase-less replies as its folded messages", () => {
+    const turn = completedTurn("turn-review", 20_000);
+    const startedReview = review("review-start", "Review changes against main", turn);
+    const reply: AppServerThreadMessageEntry = {
+      type: "message",
+      id: "reply",
+      role: "assistant",
+      text: "Checking the retry path.",
+      turn,
+    };
+    const result = review("review-result", "Code review", turn);
+
+    expect(buildTranscriptRenderItems({ entries: [startedReview, reply, result] })).toEqual([
+      { type: "entry", entry: startedReview },
+      {
+        type: "workPhaseGroup",
+        id: "commentary:turn-review:reply:complete",
+        collapsible: true,
+        entries: [reply],
+        label: "1 previous message",
+      },
+      { type: "entry", entry: result },
+    ]);
+  });
+
+  it("leaves a review's reply in view when no result card follows it", () => {
+    const turn = completedTurn("turn-review", 20_000);
+    const startedReview = review("review-start", "Review changes against main", turn);
+    const reply = (id: string): AppServerThreadMessageEntry => ({
+      type: "message",
+      id,
+      role: "assistant",
+      text: "The retry path never persists its attempt count.",
+      turn,
+    });
+    const result = review("review-result", "Code review", turn);
+
+    // After the result card: the review's last word, not its working.
+    const afterResult = reply("after-result");
+    expect(buildTranscriptRenderItems({
+      entries: [startedReview, result, afterResult],
+    })).toEqual([
+      { type: "entry", entry: startedReview },
+      { type: "entry", entry: result },
+      { type: "entry", entry: afterResult },
+    ]);
+
+    // A review that ended without a card: the reply is the only copy.
+    const withoutResult = reply("without-result");
+    expect(buildTranscriptRenderItems({
+      entries: [startedReview, withoutResult],
+    })).toEqual([
+      { type: "entry", entry: startedReview },
+      { type: "entry", entry: withoutResult },
+    ]);
+  });
+
+  it("says a finished review reviewed, where an ordinary turn worked", () => {
+    const labelFor = (withReview: boolean) => {
+      const turn = completedTurn("turn-1", 229_000);
+      const activity: AppServerThreadActivityEntry = {
+        type: "activity",
+        id: "tool-1",
+        summary: "Read one file",
+        details: [],
+        turn,
+      };
+      const items = buildTranscriptRenderItems({
+        entries: withReview
+          ? [review("review-start", "Review changes against main", turn), activity]
+          : [activity],
+      });
+      return items.find((item) => item.type === "workPhaseGroup")?.label;
+    };
+
+    expect(labelFor(true)).toBe("Reviewed for 3m 49s");
+    expect(labelFor(false)).toBe("Worked for 3m 49s");
+  });
+
+  it("still streams an ordinary running turn's commentary", () => {
+    const turn = { id: "turn-1", status: "in_progress" as const, startedAt: 1_000 };
+    const first = commentary("c1", "First scan.", turn);
+
+    expect(buildTranscriptRenderItems({
+      entries: [first],
+      activeTurnId: "turn-1",
+      now: 5_000,
+    })).toEqual([{ type: "entry", entry: first }]);
   });
 
   it("keeps duplicate entry ids from colliding when grouping completed work", () => {
