@@ -4760,6 +4760,90 @@ describe("DesktopBackendRegistry", () => {
     }
   });
 
+  it.each([false, true])("uses connection negotiation when disabling Token Miser with an active turn: %s", async (negotiated) => {
+    const codexClient = new MockBackendClient({
+      threads: [],
+      serverCapabilities: {
+        pwrdrvrTokenMiser: {
+          version: 1,
+          identity: "pwrdrvr.pwragent.token-miser",
+          initializeCapabilityField: "pwrdrvrTokenMiser",
+          threadStartField: "pwrdrvrTokenMiser",
+          threadResumeField: "pwrdrvrTokenMiser",
+          descriptorEnvironmentVariable:
+            "PWRAGENT_TOKEN_MISER_BRIDGE_DESCRIPTOR_PATH",
+          descriptorVersion: 1,
+        },
+        codeModeOutputReducer: {
+          intentContextVersion: 1,
+          modelGuidance: {
+            version: 1,
+            toolDescriptionConfigKey:
+              "features.code_mode.output_reducer.tool_description_guidance",
+            continuationConfigKey:
+              "features.code_mode.output_reducer.continuation_guidance",
+            modelVisibleOverheadRequestField:
+              "model_visible_overhead_characters",
+          },
+          postToolUseField: "parent_intent",
+          protocolVersion: 1,
+          reducerRequestField: "parent_intent",
+        },
+      },
+    });
+    Object.assign(codexClient, { isTokenMiserActivationNegotiated: () => negotiated });
+    const readCapabilities = vi.spyOn(codexClient, "readServerCapabilities");
+    let selectionListener: ((change: ManagedCodexSelectionChange) => unknown) | undefined;
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      watchManagedCodexRuntime: (listener) => {
+        selectionListener = listener;
+        return () => undefined;
+      },
+      overlayStore: createOverlayStoreMock({
+        overlays: {
+          "codex:thread-off": {
+            backend: "codex",
+            threadId: "thread-off",
+            executionMode: "default",
+            extraLinkedDirectories: [],
+            tokenMiserEnabled: true,
+          },
+        },
+      }),
+      resolveManagedTokenMiserActivationRequired: () => true,
+    });
+    const internals = registry as unknown as {
+      activeTurnKeys: Set<string>;
+      prepareTokenMiserRuntime: () => Promise<void>;
+      resolveTokenMiserEnabledFn: () => boolean;
+    };
+    internals.resolveTokenMiserEnabledFn = () => false;
+    vi.spyOn(internals, "prepareTokenMiserRuntime").mockResolvedValue(undefined);
+
+    internals.activeTurnKeys.add("codex:other-thread:active-turn");
+    await selectionListener?.({ enabled: false, reason: "availability" });
+    expect(codexClient.closeCallCount).toBe(0);
+    try {
+      await registry.startThread({ backend: "codex", cwd: process.cwd() });
+      expect(
+        codexClient.lastStartThreadParams?.pwrdrvrTokenMiser,
+      ).toBeUndefined();
+
+      await registry.startTurn({
+        backend: "codex",
+        threadId: "thread-off",
+        input: [{ type: "text", text: "Keep this thread opted out." }],
+      });
+      expect(codexClient.lastStartTurnParams?.pwrdrvrTokenMiser)
+        .toBe(negotiated ? null : undefined);
+      expect(codexClient.closeCallCount).toBe(0);
+      expect(readCapabilities.mock.calls.length).toBeLessThanOrEqual(1);
+    } finally {
+      await registry.close();
+    }
+  });
+
   it("preserves explicit disable for incomplete native Token Miser runtimes", async () => {
     const codexClient = new MockBackendClient({
       threads: [],
