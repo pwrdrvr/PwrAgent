@@ -2351,12 +2351,13 @@ describe("ThreadView", () => {
     expect(screen.getByLabelText("Setup output")).toHaveTextContent("install failed");
     act(() => setupProgress({ ...event, phase: "failed", exitCode: 1, error: "nvm failed" }));
     expect(screen.getByRole("heading", { name: "Environment setup failed" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Dismiss setup output" })).toBeVisible();
     act(() => setupProgress({ ...event, phase: "started" }));
     expect(screen.getByLabelText("Setup output")).not.toHaveTextContent("install failed");
     expect(screen.getByLabelText("Setup output")).not.toHaveTextContent("nvm failed");
     act(() => setupProgress({ ...event, phase: "completed", exitCode: 0, output: "installed" }));
-    expect(screen.getByRole("heading", { name: "Environment setup complete" })).toBeVisible();
-    fireEvent.click(screen.getByRole("button", { name: "Dismiss setup output" }));
+    expect(screen.queryByRole("heading", { name: "Environment setup complete" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Dismiss setup output" })).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Setup output")).not.toBeInTheDocument();
   });
 
