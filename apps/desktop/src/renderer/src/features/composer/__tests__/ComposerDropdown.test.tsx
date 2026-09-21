@@ -10,17 +10,20 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function renderAccessMode() {
+function renderAccessMode(showTriggerTooltip = true, autoDisabled = false) {
   return render(
     <div className="composer__setup" style={{ overflow: "hidden" }}>
       <ComposerDropdown
         ariaLabel="Access mode"
         onChange={vi.fn()}
         options={[
-          { value: "default", label: "Default Access" },
-          { value: "auto", label: "Auto" },
+          { value: "default", label: "Default Access", tooltip: "Asks you to approve additional access." },
+          {
+            value: "auto", label: "Auto", disabled: autoDisabled,
+            tooltip: autoDisabled ? "Requires Codex 0.153.0 or later." : "Codex reviews eligible permission requests.",
+          },
         ]}
-        tooltip="Auto keeps the workspace sandbox."
+        tooltip={showTriggerTooltip ? "Auto keeps the workspace sandbox." : undefined}
         value="default"
       />
     </div>,
@@ -28,6 +31,42 @@ function renderAccessMode() {
 }
 
 describe("ComposerDropdown tooltip", () => {
+  it("shows delayed help on disabled menu items without adding help to the trigger", () => {
+    vi.useFakeTimers();
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect")
+      .mockImplementation(function (this: HTMLElement) {
+        const top = this.classList.contains("composer-dropdown__menu") ? 500 : 540;
+        return {
+          left: 420, right: 680, top, bottom: top + 40,
+          width: 260, height: 40, x: 420, y: top, toJSON: () => ({}),
+        };
+      });
+    renderAccessMode(false, true);
+    const button = screen.getByRole("button", { name: "Access mode" });
+    fireEvent.mouseEnter(button);
+    fireEvent.focus(button);
+    act(() => vi.advanceTimersByTime(TOOLTIP_HOVER_DELAY_MS));
+    expect(screen.queryByRole("tooltip")).toBeNull();
+
+    fireEvent.click(button);
+    const auto = screen.getByRole("option", { name: "Auto" });
+    expect(auto).toBeDisabled();
+    fireEvent.mouseEnter(auto.parentElement!);
+    expect(screen.queryByRole("tooltip")).toBeNull();
+    act(() => vi.advanceTimersByTime(TOOLTIP_HOVER_DELAY_MS));
+    expect(screen.getByRole("tooltip")).toHaveTextContent("Requires Codex 0.153.0 or later.");
+    // The popup starts at 500; help sits above the popup, not above a row.
+    expect(screen.getByRole("tooltip")).toHaveStyle({ top: "450px" });
+
+    fireEvent.mouseLeave(auto.parentElement!);
+    const defaultAccess = screen.getByRole("option", { name: /Default Access/ });
+    fireEvent.focus(defaultAccess);
+    expect(screen.getByRole("tooltip")).toHaveTextContent("Asks you to approve additional access.");
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByRole("tooltip")).toBeNull();
+  });
+
+
   it("delays hover, escapes clipping, and stays within the composer bounds", () => {
     vi.useFakeTimers();
     vi.spyOn(HTMLElement.prototype, "getBoundingClientRect")

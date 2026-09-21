@@ -92,6 +92,7 @@ import { agentEventMatchesThread } from "../../lib/federated-thread-events";
 import {
   acpRuntimeModeRequiresFullAccess,
   formatExecutionModeLabel,
+  describeCodexExecutionMode,
   getAcpRuntimeModeControl,
 } from "../../lib/execution-mode";
 import { isSameWorktreeSubthreadLaunchpad } from "../../lib/subthread-launchpads";
@@ -9362,8 +9363,10 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     });
     setSendError(undefined);
   };
-  const availableExecutionModes =
-    backend?.executionModes.filter((mode) => mode.available) ?? [];
+  const executionModeOptions =
+    backend?.executionModes.filter((mode) =>
+      mode.available || (backend.available && mode.mode === "auto"),
+    ) ?? [];
   const workspaceLabel = formatThreadWorkspaceLabel(props.thread);
   const supportsPlanMode =
     (props.launchpad?.backend ?? props.thread?.source) === "codex";
@@ -11780,11 +11783,10 @@ export const Composer = memo(function Composer(props: ComposerProps) {
             </span>
           ) : null}
 
-          {availableExecutionModes.length > 0 &&
+          {executionModeOptions.length > 0 &&
           (props.launchpad || (props.thread && props.onSetExecutionMode)) ? (
             <ComposerDropdown
               ariaLabel="Access mode"
-              tooltip="Auto keeps the workspace sandbox and lets Codex review eligible permission requests. Changing reviewers applies to new requests; pending approvals keep their original reviewer."
               compact
               tone={
                 (props.launchpad?.executionMode ??
@@ -11799,9 +11801,12 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                 props.thread?.executionMode ??
                 "default"
               }
-              options={availableExecutionModes.map((mode) => ({
+              options={executionModeOptions.map((mode) => ({
                 label: formatExecutionModeLabel(mode.mode),
                 value: mode.mode,
+                disabled: !mode.available,
+                tooltip: mode.unavailableReason
+                  ?? (backend?.kind === "codex" ? describeCodexExecutionMode(mode.mode) : undefined),
               }))}
               onChange={(value) => {
                 const executionMode = value as ThreadExecutionMode;

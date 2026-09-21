@@ -1965,6 +1965,41 @@ describe("Composer", () => {
     expect(button).not.toHaveTextContent("VS Code");
   });
 
+  it.each([true, false])("shows Auto with runtime availability %s and help on its menu item", (available) => {
+    render(
+      <Composer
+        backends={[{
+          ...backendSummary("codex"),
+          executionModes: [
+            { mode: "default", label: "Default Access", available: true, isDefault: true },
+            {
+              mode: "auto", label: "Auto", available,
+              ...(!available ? { unavailableReason: "Auto requires Codex 0.153.0 or later." } : {}),
+            },
+          ],
+        }]}
+        disabled={false}
+        onSetExecutionMode={async () => undefined}
+        skills={[]}
+        thread={{
+          id: "thread-1", title: "Access", titleSource: "explicit",
+          source: "codex", executionMode: "default",
+          linkedDirectories: [], inbox: { inInbox: false },
+        }}
+      />,
+    );
+    const access = screen.getByRole("button", { name: "Access mode" });
+    expect(access).not.toHaveAttribute("aria-description");
+    fireEvent.focus(access);
+    expect(screen.queryByRole("tooltip")).toBeNull();
+    fireEvent.click(access);
+    const auto = screen.getByRole("option", { name: "Auto" });
+    expect(auto).toHaveProperty("disabled", !available);
+    expect(auto).toHaveAttribute("aria-description", available
+      ? "Workspace sandbox; Codex reviews eligible permission requests."
+      : "Auto requires Codex 0.153.0 or later.");
+  });
+
   it("flags the access-mode chip as danger when full access is selected", () => {
     render(
       <Composer
