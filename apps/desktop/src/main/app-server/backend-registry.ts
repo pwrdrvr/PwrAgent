@@ -23116,6 +23116,9 @@ export class DesktopBackendRegistry {
     client: BackendClient;
     enabled: boolean;
   }): Promise<CodexPwrdrvrTokenMiserActivation | null | undefined> {
+    // A runtime may advertise the extension without this connection having
+    // negotiated it. The profile gate also controls initialize negotiation.
+    if (!this.resolveTokenMiserEnabledFn()) return undefined;
     const capabilities = await this.readTokenMiserServerCapabilities(
       params.client,
     );

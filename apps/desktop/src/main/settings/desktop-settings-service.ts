@@ -49,6 +49,7 @@ import { execFile } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { accessSync, constants, statSync } from "node:fs";
 import { retainManagedCodexCommand } from "../codex-managed-runtime";
+import { managedCodexTagForCommand } from "../codex-build-channel";
 import path from "node:path";
 import {
   DEFAULT_BACKGROUND_PR_POLLING,
@@ -742,9 +743,23 @@ export class DesktopSettingsService {
     const managedCodexRuntime = this.managedCodexRuntime;
     const managedCodexError = this.managedCodexError;
     const codexDiscoveryCommand = this.resolveActiveCodexCommand(config);
-    const codexDiscovery = this.codexDiscoveryCoordinator.peek?.(
+    let codexDiscovery = this.codexDiscoveryCoordinator.peek?.(
       codexDiscoveryCommand,
     ) ?? codexDiscoveryFromProvider(this.configStore.read("providers").codex);
+    // Startup discovery may find the next launch's executable while this
+    // process retains its current one. "Using" must describe that selection.
+    const sessionCommand = this.sessionCodexCommand;
+    if (sessionCommand) {
+      const candidates = codexDiscovery.candidates
+        .filter((candidate) => candidate.command !== sessionCommand.command)
+        .map((candidate) => ({ ...candidate, selected: false }));
+      codexDiscovery = {
+        ...codexDiscovery,
+        selectedCommand: sessionCommand.command,
+        selectedSource: sessionCommand.source,
+        candidates: [{ ...sessionCommand, executable: true, selected: true }, ...candidates],
+      };
+    }
     const codexProfiles = this.readCodexProfiles();
     // Settle discovery that is ALREADY running before reading its result.
     // Never start it: this must not turn a projection read into a probe,
@@ -2006,6 +2021,12 @@ export class DesktopSettingsService {
     if (patch.experimental?.tokenMiserEnabled !== undefined) {
       await this.managedCodexRuntimeSwitchAttempt;
     }
+    if (disablingTokenMiser && discoveryPermit) {
+      // Disabling also changes the executable. Complete the ordinary selection
+      // as part of this Settings action, without requiring a separate refresh.
+      this.managedCodexRuntime = undefined;
+      await this.refreshCodexDiscovery(discoveryPermit);
+    }
     return update;
   }
 
@@ -2547,7 +2568,16 @@ export class DesktopSettingsService {
       ?? (this.rejectedStartupCachedCommand ? undefined
         : codexDiscoveryFromProvider(this.configStore.read("providers").codex));
     const selected = cached?.candidates.find((candidate) => candidate.selected);
-    if (!selected) {
+    if (
+      !selected
+      || (
+        !this.resolveTokenMiserEnabled()
+        && managedCodexTagForCommand(selected.command) !== undefined
+        && selected.command !== configuredCommand
+      )
+    ) {
+      // A durable discovery result is not authorization to keep the managed
+      // build after Token Miser is disabled. Explicit operator paths still win.
       return undefined;
     }
     return {
