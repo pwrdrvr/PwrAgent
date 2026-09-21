@@ -125,7 +125,7 @@ test("managed review failure leaves one start marker and clears Stop state", asy
 
     const reviewTarget = fixture.app.window.getByRole("group", { name: "Review target" });
     await reviewTarget.getByRole("combobox", { name: "Base branch" }).fill("main");
-    await reviewTarget.getByRole("button", { name: "Review mode", exact: true }).click();
+    await reviewTarget.getByRole("button", { name: "Review run mode", exact: true }).click();
     await reviewTarget.getByRole("option", { name: "PwrAgent Sub Agent", exact: true }).click();
     await reviewTarget.getByRole("button", { name: "Start review" }).click();
 
