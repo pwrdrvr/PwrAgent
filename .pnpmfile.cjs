@@ -11,7 +11,14 @@ const dependencyFields = [
   'peerDependencies',
 ]
 
-const firstPartyPackageNames = new Set(['pwragent-workspace'])
+// Workspace packages whose name the `@pwragent/` prefix below does not catch.
+// `pwragent-workspace` is the repository root; `packages/pwragent` is published
+// unscoped. A name missed here loses devDependency scanning AND the
+// `pnpm.overrides` / `resolutions` scan, since both sit behind `isFirstParty` —
+// two holes from one drifted string, which is why the enumeration test in
+// `scripts/pnpmfile.test.mjs` derives this list from the workspace globs rather
+// than trusting it by eye.
+const firstPartyPackageNames = new Set(['pwragent-workspace', 'pwragent'])
 const firstPartyPackagePrefix = '@pwragent/'
 
 function isFirstParty(pkg) {
@@ -20,18 +27,33 @@ function isFirstParty(pkg) {
   return pkg.name.startsWith(firstPartyPackagePrefix)
 }
 
-const gitSpecPattern = /^(?:git(?:\+|:)|git@|ssh:\/\/git@|github:|gitlab:|bitbucket:|https?:\/\/(?:www\.)?(?:github|gitlab|bitbucket)\.com\/|[^/@\s]+\/[^/\s]+(?:#.*)?$)/
+// The spec shapes pnpm itself treats as a git fetch. The final alternation is
+// the bare `user/repo#ref` GitHub shortcut, which pnpm resolves the same way
+// as `github:user/repo`.
+//
+// That last branch is spelled `[^/@\s:]+` rather than `[^/@\s]+`. Excluding
+// `:` is a fix, not a style change: without it, any protocol spec whose path
+// has exactly one segment is read as a `user/repo` shortcut and blocked.
+// `file:../local` parses as `file:..` + `/` + `local` and throws, as do
+// `link:../local` and `workspace:../pkg`. A spec with two or more path
+// segments (`file:./packages/x`) escaped only because the trailing class
+// cannot match a second `/`.
+const gitSpecPattern = /^(?:git(?:\+|:)|git@|ssh:\/\/git@|github:|gitlab:|bitbucket:|https?:\/\/(?:www\.)?(?:github|gitlab|bitbucket)\.com\/|[^/@\s:]+\/[^/\s]+(?:#.*)?$)/
 
 function isGitSpec(spec) {
   return typeof spec === 'string' && gitSpecPattern.test(spec)
 }
 
-function scanField(pkg, field) {
-  const dependencies = pkg[field]
-  if (!dependencies) return
-  for (const [name, spec] of Object.entries(dependencies)) {
+// `owner` and `label` are separate from `container` so a nested block can be
+// scanned without losing the diagnostic: `pnpm.overrides` lives one level down,
+// where there is no `name` to report and where `field` alone would print the
+// misleading `.overrides`.
+function scanField(container, field, owner = container.name, label = field) {
+  const specs = container[field]
+  if (!specs) return
+  for (const [name, spec] of Object.entries(specs)) {
     if (isGitSpec(spec)) {
-      throw new Error(`Blocked git dependency ${name}@${spec} (in ${pkg.name ?? '<unknown>'}.${field})`)
+      throw new Error(`Blocked git dependency ${name}@${spec} (in ${owner ?? '<unknown>'}.${label})`)
     }
   }
 }
@@ -60,6 +82,21 @@ function readPackage(pkg) {
     // to gate them here and the false positive on legitimate upstream
     // packages (e.g. axe-core's axe-test-fixtures) goes away.
     scanField(pkg, 'devDependencies')
+    // Neither of these is a dependency field, but pnpm resolves their values
+    // exactly like a spec — so a git spec here bypasses every scan above while
+    // still being fetched. It is also the quietest place to hide one: an
+    // override repoints a TRANSITIVE package, so it appears in no dependency
+    // block and a reviewer scanning the diff for a git URL under
+    // `dependencies` will not see it. Without this, the install is still
+    // stopped, but only by the fetcher, whose error names neither the package
+    // nor where it was declared.
+    //
+    // First-party only, like devDependencies above: pnpm honours overrides
+    // declared by the workspace root, so a registry package's own copy is
+    // inert and blocking on it would be a false positive with nothing behind
+    // it. `resolutions` is the yarn-style spelling pnpm also reads.
+    scanField(pkg.pnpm ?? {}, 'overrides', pkg.name, 'pnpm.overrides')
+    scanField(pkg, 'resolutions')
   }
   return pkg
 }
@@ -78,4 +115,11 @@ module.exports = {
       gitHostedTarball: blockGitFetcher,
     },
   },
+}
+
+// Exported for tests only. pnpm reads `hooks` and ignores everything else.
+module.exports.__testing = {
+  isGitSpec,
+  isFirstParty,
+  readPackage,
 }
