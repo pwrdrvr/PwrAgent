@@ -11329,6 +11329,12 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                       ) : null}
                     </>
                   ) : null}
+                  {reviewerOverridesSupported ? (
+                    <span
+                      aria-hidden="true"
+                      className="composer__review-reviewer-rule"
+                    />
+                  ) : null}
                   <ReviewLocationDropdown
                     decision={reviewRunModeDecision}
                     onChange={(runMode) => {

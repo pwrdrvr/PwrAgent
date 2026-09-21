@@ -9,7 +9,16 @@ import type { ReactNode } from "react";
  */
 
 export type ComposerDropdownOption = {
+  /**
+   * Marked unselectable, but still focusable and still announced — the
+   * attribute is `aria-disabled`, not `disabled`. A native disabled button
+   * receives no pointer events and leaves the tab order, so an option that
+   * carried one had no gesture that could ever produce the reason it was
+   * unavailable. Callers put that reason in `description`.
+   */
   disabled?: boolean;
+  /** One line under the label, for a choice whose name does not explain it. */
+  description?: string;
   label: string;
   value: string;
 };
@@ -119,33 +128,68 @@ export function ComposerDropdown(props: {
           {selectedOption?.label ?? props.value}
         </span>
       </button>
+      {/* The listbox carries its own name: the trigger's label does not reach
+          it through `aria-controls`, and an unnamed one is an axe
+          `aria-input-field-name` failure on every dropdown in the app. */}
       {open ? (
-        <div className="composer-dropdown__menu" id={listboxId} role="listbox">
-          {props.options.map((option) => (
-            <button
-              aria-selected={option.value === props.value}
-              className="composer-dropdown__option"
-              disabled={option.disabled}
-              key={option.value}
-              role="option"
-              type="button"
-              onClick={() => {
-                closeMenu();
-                if (option.value !== props.value) {
-                  props.onChange(option.value);
-                }
-              }}
-            >
-              {option.value === props.value ? (
-                <span aria-hidden="true" className="composer-dropdown__check">
-                  ✓
+        <div
+          aria-label={props.ariaLabel}
+          className="composer-dropdown__menu"
+          id={listboxId}
+          role="listbox"
+        >
+          {props.options.map((option, index) => {
+            // Indexed rather than keyed on the value: other callers use branch
+            // names and model ids as values, which are not safe id fragments.
+            const descriptionId = option.description
+              ? `${listboxId}-description-${index}`
+              : undefined;
+            return (
+              <button
+                aria-describedby={descriptionId}
+                aria-disabled={option.disabled ? true : undefined}
+                aria-selected={option.value === props.value}
+                className="composer-dropdown__option"
+                key={option.value}
+                role="option"
+                type="button"
+                onClick={() => {
+                  // Guarded rather than `disabled`: the option stays focusable
+                  // and hoverable so its description is reachable.
+                  if (option.disabled) {
+                    return;
+                  }
+                  closeMenu();
+                  if (option.value !== props.value) {
+                    props.onChange(option.value);
+                  }
+                }}
+              >
+                {option.value === props.value ? (
+                  <span aria-hidden="true" className="composer-dropdown__check">
+                    ✓
+                  </span>
+                ) : (
+                  <span aria-hidden="true" className="composer-dropdown__check" />
+                )}
+                <span className="composer-dropdown__option-body">
+                  <span className="composer-dropdown__option-label">{option.label}</span>
+                  {option.description ? (
+                    // Hidden from name-from-content so the option is still
+                    // named by its label alone; aria-describedby reaches
+                    // through aria-hidden to announce it as the description.
+                    <span
+                      aria-hidden="true"
+                      className="composer-dropdown__option-description"
+                      id={descriptionId}
+                    >
+                      {option.description}
+                    </span>
+                  ) : null}
                 </span>
-              ) : (
-                <span aria-hidden="true" className="composer-dropdown__check" />
-              )}
-              <span className="composer-dropdown__option-label">{option.label}</span>
-            </button>
-          ))}
+              </button>
+            );
+          })}
         </div>
       ) : null}
     </div>
