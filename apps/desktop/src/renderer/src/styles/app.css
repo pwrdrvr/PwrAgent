@@ -18558,6 +18558,9 @@ a.button {
   background: transparent;
   font: inherit;
   font-size: 13px;
+  /* The toggle is a <button>, whose UA default centers a summary long
+     enough to wrap. Wrapped lines start at the text column instead. */
+  text-align: start;
 }
 
 .transcript-work-phase-group__toggle {
