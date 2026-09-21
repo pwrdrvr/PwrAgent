@@ -117,7 +117,7 @@
     "ajv": "8.20.0",
     "axe-core": "^4.11.4",
     "electron": "^41.10.3",
-    "electron-builder": "26.16.0",
+    "electron-builder": "26.16.1",
     "electron-vite": "^5.0.0",
     "tsx": "^4.20.6",
     "vite": "^7.3.2"
