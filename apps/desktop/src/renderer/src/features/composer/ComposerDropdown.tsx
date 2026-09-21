@@ -1,5 +1,6 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import type { ReactNode } from "react";
+import { useViewportTooltip } from "../../lib/useViewportTooltip";
 
 /**
  * Extracted from Composer.tsx so surfaces beyond the composer footer (the
@@ -11,6 +12,7 @@ import type { ReactNode } from "react";
 export type ComposerDropdownOption = {
   disabled?: boolean;
   label: string;
+  tooltip?: string;
   value: string;
 };
 
@@ -64,11 +66,31 @@ export function ComposerDropdown(props: {
   value: string;
 }) {
   const [open, setOpen] = useState(false);
+  const [tooltipOption, setTooltipOption] = useState<string>();
   const listboxId = useId();
   const selectedOption =
     props.options.find((option) => option.value === props.value) ?? props.options[0];
   const ref = useDismissableMenu<HTMLDivElement>(open, () => setOpen(false));
   const Icon = props.icon;
+  const getTooltipHorizontalBounds = useCallback((target: HTMLElement) => {
+    const composerSetup = target.closest<HTMLElement>(".composer__setup");
+    if (!composerSetup) {
+      return undefined;
+    }
+    const { left, right } = composerSetup.getBoundingClientRect();
+    return { left, right };
+  }, []);
+  const { tooltipId, show, showAfterDelay, hide, visible, tooltipNode } =
+    useViewportTooltip({
+      className: "viewport-tooltip",
+      getHorizontalBounds: getTooltipHorizontalBounds,
+    });
+
+  useEffect(() => {
+    if (!open) {
+      hide();
+    }
+  }, [hide, open]);
 
   return (
     <div
@@ -77,17 +99,22 @@ export function ComposerDropdown(props: {
         props.compact ? "composer-dropdown--compact" : "",
         props.kind === "branch" ? "composer-dropdown--branch" : "",
         props.tone === "danger" ? "composer-dropdown--danger" : "",
-        props.tooltip ? "tooltip-target" : "",
         open ? "composer-dropdown--open" : "",
       ]
         .filter(Boolean)
         .join(" ")}
-      data-tooltip={props.tooltip}
       onPointerEnter={props.onPointerEnter}
+      onMouseEnter={(event) => {
+        if (!open && props.tooltip) {
+          showAfterDelay(event.currentTarget, props.tooltip);
+        }
+      }}
+      onMouseLeave={hide}
       ref={ref}
     >
       <button
         aria-description={props.tooltip}
+        aria-describedby={visible && !open ? tooltipId : undefined}
         aria-controls={open ? listboxId : undefined}
         aria-expanded={open}
         aria-haspopup="listbox"
@@ -98,7 +125,16 @@ export function ComposerDropdown(props: {
         id={props.id}
         type="button"
         value={props.value}
-        onClick={() => setOpen((current) => !current)}
+        onBlur={hide}
+        onClick={() => {
+          hide();
+          setOpen((current) => !current);
+        }}
+        onFocus={(event) => {
+          if (!open && props.tooltip) {
+            show(event.currentTarget, props.tooltip);
+          }
+        }}
       >
         {Icon ? (
           <span aria-hidden="true" className="composer-dropdown__icon">
@@ -112,32 +148,55 @@ export function ComposerDropdown(props: {
       {open ? (
         <div className="composer-dropdown__menu" id={listboxId} role="listbox">
           {props.options.map((option) => (
-            <button
-              aria-selected={option.value === props.value}
-              className="composer-dropdown__option"
-              disabled={option.disabled}
+            <div
               key={option.value}
-              role="option"
-              type="button"
-              onClick={() => {
-                setOpen(false);
-                if (option.value !== props.value) {
-                  props.onChange(option.value);
+              role="presentation"
+              onBlur={hide}
+              onFocus={(event) => {
+                if (option.tooltip) {
+                  setTooltipOption(option.value);
+                  show(event.currentTarget.parentElement!, option.tooltip);
                 }
               }}
+              onMouseEnter={(event) => {
+                if (option.tooltip) {
+                  setTooltipOption(option.value);
+                  // Anchor above the whole list so help cannot cover its rows.
+                  showAfterDelay(event.currentTarget.parentElement!, option.tooltip);
+                }
+              }}
+              onMouseLeave={hide}
             >
-              {option.value === props.value ? (
-                <span aria-hidden="true" className="composer-dropdown__check">
-                  ✓
-                </span>
-              ) : (
-                <span aria-hidden="true" className="composer-dropdown__check" />
-              )}
-              <span className="composer-dropdown__option-label">{option.label}</span>
-            </button>
+              <button
+                aria-description={option.tooltip}
+                aria-describedby={visible && tooltipOption === option.value ? tooltipId : undefined}
+                aria-selected={option.value === props.value}
+                className="composer-dropdown__option"
+                disabled={option.disabled}
+                role="option"
+                type="button"
+                onClick={() => {
+                  hide();
+                  setOpen(false);
+                  if (option.value !== props.value) {
+                    props.onChange(option.value);
+                  }
+                }}
+              >
+                {option.value === props.value ? (
+                  <span aria-hidden="true" className="composer-dropdown__check">
+                    ✓
+                  </span>
+                ) : (
+                  <span aria-hidden="true" className="composer-dropdown__check" />
+                )}
+                <span className="composer-dropdown__option-label">{option.label}</span>
+              </button>
+            </div>
           ))}
         </div>
       ) : null}
+      {tooltipNode}
     </div>
   );
 }

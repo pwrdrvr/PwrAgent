@@ -1,8 +1,9 @@
 import { navigationQueryFixture } from "../../test/navigation-query-fixture";
 import { threadSummaryIdentityKey } from "../federated-thread-events";
 import "@testing-library/jest-dom/vitest";
-import { act, renderHook, waitFor } from "@testing-library/react";
+import { act, render, renderHook, screen, waitFor } from "@testing-library/react";
 import { StrictMode } from "react";
+import { DirectoriesList } from "../../features/navigation/DirectoriesList";
 import {
   buildPullRequestStatusKey,
   shortenDerivedThreadTitle,
@@ -8127,6 +8128,27 @@ describe("useThreadNavigation", () => {
       preferredBackend: undefined,
     });
     expect(result.current.selectedItemKey).toBe("launchpad:workspace:new-thread");
+    expect(result.current.selectedDirectory?.counts).toEqual({
+      total: 0,
+      active: 0,
+      activeRemote: 0,
+      pinned: 0,
+      unread: 0,
+      review: 0,
+    });
+
+    render(
+      <DirectoriesList
+        directories={result.current.directories}
+        threads={result.current.threads}
+        selectedItemKey={result.current.selectedItemKey}
+        onOpenLaunchpad={async () => undefined}
+        onOpenThreadContextMenu={() => undefined}
+        onSelectThread={() => undefined}
+      />,
+    );
+    expect(screen.getByText("No threads in this directory yet.")).toBeInTheDocument();
+    expect(screen.queryByText("Loading directory counts…")).not.toBeInTheDocument();
   });
 
   it("reuses the selected directory launchpad context for new threads", async () => {

@@ -30,6 +30,7 @@ export function resolveCodexStreamNotice(
 ): { notice: AppNoticeToastNotice } | { dismissId: string } | undefined {
   const { method, params } = signal.notification;
   if (!isCodexStreamNoticeMethod(method)) return undefined;
+  if (method === "warning" && params.presentation === "activity-only") return undefined;
   const threadId = readText(params.threadId);
   if (!threadId) return undefined;
   const turnId = readText(params.turnId);

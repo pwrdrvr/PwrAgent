@@ -1,3 +1,4 @@
+import { normalizeAutoReviewNotification } from "./auto-review";
 import { ThreadListTextCache } from "./thread-list-text-cache";
 import { CODEX_SIGN_IN_REQUIRED, codexAuthState } from "../codex-auth-state";
 import { mkdir } from "node:fs/promises";
@@ -72,6 +73,9 @@ import type {
   ServerRequest as CodexServerRequest,
 } from "@pwrdrvr/codex-app-server-protocol";
 import type {
+  ApprovalsReviewer,
+  TurnSettingsUpdateParams,
+  TurnSettingsUpdateResponse,
   ConfigValueWriteParams as CodexConfigValueWriteParams,
   Model as CodexModel,
   ModelListParams as CodexModelListParams,
@@ -151,6 +155,12 @@ import {
 import { persistCodexFileInput } from "./codex-file-input-files";
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 20_000;
+// Codex gives client creation, initialization, and tool discovery separate
+// 30-second startup budgets. Full inventory also lists resources with a
+// 300-second request budget. Leave headroom for auth discovery and processing.
+// These are bounded defaults, not a ceiling on configurable/paginated MCP work.
+const DEFAULT_MCP_INVENTORY_TIMEOUT_MS = 120_000;
+const DEFAULT_FULL_MCP_INVENTORY_TIMEOUT_MS = 420_000;
 const ARCHIVED_THREAD_METADATA_REFRESH_INTERVAL_MS = 60_000;
 const DEFAULT_CODEX_COLLABORATION_MODEL = "gpt-5.5";
 export const DEFAULT_CODEX_THREAD_TITLE_MODEL = "gpt-5.6-luna";
@@ -279,6 +289,7 @@ type CodexClientOptions = {
   ) => Promise<ThreadDirectoryEnrichment>;
   connectionObserver?: JsonRpcObserver;
   requestTimeoutMs?: number;
+  mcpInventoryTimeoutMs?: number;
   clientVersion?: string;
   resolvePwrdrvrTokenMiserActivationNonce?: () => string | undefined;
   /**
@@ -466,6 +477,9 @@ const GENERATED_CODEX_NOTIFICATION_METHODS = new Set<string>([
   "item/commandExecution/outputDelta",
   "item/commandExecution/terminalInteraction",
   "item/fileChange/outputDelta",
+  "item/autoApprovalReview/started",
+  "item/autoApprovalReview/completed",
+  "guardianWarning",
   "hook/started",
   "hook/completed",
   "mcpServer/oauthLogin/completed",
@@ -1251,11 +1265,22 @@ function normalizeServerNotification(
   method: string,
   params: unknown,
 ): AppServerNotification {
+  const autoReview = normalizeAutoReviewNotification(method, params);
+  if (autoReview) return autoReview;
   if (method === "thread/settings/updated") {
     return normalizeThreadSettingsUpdatedNotification(params);
   }
 
   const record = asRecord(params) ?? {};
+  if (method === "guardianWarning" && typeof record.message === "string") {
+    return { method: "warning", params: {
+      ...(typeof record.threadId === "string" ? { threadId: record.threadId } : {}),
+      message: record.message,
+      // Guardian emits routine review decisions as warnings. Preserve them in
+      // thread activity without promoting each decision to a global toast.
+      presentation: "activity-only",
+    } };
+  }
   const metadata = extractRequestMetadata(params);
 
   // Codex reports a failed turn as `turn/completed` whose `turn.status` is
@@ -6443,6 +6468,25 @@ function normalizeCodexReasoningEffort(
   return undefined;
 }
 
+function applyApprovalReviewer(
+  payload: Pick<CodexThreadStartParams, "approvalsReviewer">,
+  params: { approvalsReviewer?: ApprovalsReviewer; approvalPolicy?: string; sandbox?: string },
+  compatibility: CodexProtocolCompatibility,
+): void {
+  if (params.approvalsReviewer === "auto_review") {
+    if (!compatibility.supportsAutoReview) {
+      throw new Error("Auto access requires Codex 0.153.0 or later.");
+    }
+    if ((params.approvalPolicy && params.approvalPolicy !== "on-request")
+      || (params.sandbox && params.sandbox !== "workspace-write")) {
+      throw new Error("Auto access requires on-request approvals and the workspace-write sandbox.");
+    }
+  }
+  if (params.approvalsReviewer && compatibility.supportsAutoReview) {
+    payload.approvalsReviewer = params.approvalsReviewer;
+  }
+}
+
 function buildThreadStartPayload(params: {
   cwd?: string;
   runtimeWorkspaceRoots?: string[];
@@ -6450,6 +6494,7 @@ function buildThreadStartPayload(params: {
   baseInstructions?: CodexThreadStartParams["baseInstructions"];
   model?: string;
   approvalPolicy?: string;
+  approvalsReviewer?: ApprovalsReviewer;
   sandbox?: string;
   serviceTier?: string | null;
   fastMode?: boolean;
@@ -6492,6 +6537,7 @@ function buildThreadStartPayload(params: {
   if (approvalPolicy) {
     base.approvalPolicy = approvalPolicy;
   }
+  applyApprovalReviewer(base, params, compatibility);
 
   const sandbox = normalizeCodexSandboxMode(params.sandbox);
   if (sandbox) {
@@ -6641,6 +6687,7 @@ function buildThreadForkPayload(params: {
   cwd?: string;
   model?: string;
   approvalPolicy?: string;
+  approvalsReviewer?: ApprovalsReviewer;
   sandbox?: string;
   serviceTier?: string;
   fastMode?: boolean;
@@ -6676,6 +6723,7 @@ function buildThreadForkPayload(params: {
   if (approvalPolicy) {
     base.approvalPolicy = approvalPolicy;
   }
+  applyApprovalReviewer(base, params, compatibility);
 
   const sandbox = normalizeCodexSandboxMode(params.sandbox);
   if (sandbox) {
@@ -6704,6 +6752,7 @@ function buildThreadResumePayloads(params: {
   cwd?: string;
   model?: string;
   approvalPolicy?: string;
+  approvalsReviewer?: ApprovalsReviewer;
   sandbox?: string;
   serviceTier?: string | null;
   reasoningEffort?: string;
@@ -6736,6 +6785,7 @@ function buildThreadResumePayloads(params: {
   if (approvalPolicy) {
     base.approvalPolicy = approvalPolicy;
   }
+  applyApprovalReviewer(base, params, compatibility);
 
   const sandbox = normalizeCodexSandboxMode(params.sandbox);
   if (sandbox) {
@@ -6935,6 +6985,7 @@ function buildTurnStartPayload(params: {
   serviceTier?: string | null;
   fastMode?: boolean;
   approvalPolicy?: string;
+  approvalsReviewer?: ApprovalsReviewer;
   sandbox?: string;
   outputSchema?: CodexTurnStartParams["outputSchema"];
   collaborationMode?: AppServerCollaborationModeRequest;
@@ -6968,6 +7019,7 @@ function buildTurnStartPayload(params: {
   if (approvalPolicy) {
     base.approvalPolicy = approvalPolicy;
   }
+  applyApprovalReviewer(base, params, compatibility);
   const sandboxPolicy = buildCodexSandboxPolicy(params.sandbox);
   if (sandboxPolicy) {
     base.sandboxPolicy = sandboxPolicy;
@@ -7403,6 +7455,7 @@ export class CodexAppServerClient {
   >();
   private readonly archivedThreadMetadataLastRefreshByFilter = new Map<string, number>();
   private initialized = false;
+  private tokenMiserActivationNegotiated = false;
   private initializationPromise: Promise<void> | null = null;
   private initializeResult: InitializeResult | null = null;
   private readonly notificationListeners = new Set<
@@ -7665,6 +7718,7 @@ export class CodexAppServerClient {
 
   private async closeConnection(): Promise<void> {
     this.initialized = false;
+    this.tokenMiserActivationNegotiated = false;
     this.authActiveTurns.clear();
     this.initializationPromise = null;
     this.initializeResult = null;
@@ -7819,6 +7873,12 @@ export class CodexAppServerClient {
   async getInitializeResult(): Promise<InitializeResult> {
     await this.ensureInitialized();
     return this.initializeResult ?? {};
+  }
+
+  isTokenMiserActivationNegotiated(): boolean {
+    return this.initialized
+      && this.pendingCloses === 0
+      && this.tokenMiserActivationNegotiated;
   }
 
   async readServerCapabilities(): Promise<CodexServerCapabilities> {
@@ -8616,6 +8676,12 @@ export class CodexAppServerClient {
   }): Promise<CodexMcpServerSummary[]> {
     await this.ensureInitialized();
 
+    const timeoutMs = this.options.mcpInventoryTimeoutMs
+      ?? this.options.requestTimeoutMs
+      ?? (params.detail === "full"
+        ? DEFAULT_FULL_MCP_INVENTORY_TIMEOUT_MS
+        : DEFAULT_MCP_INVENTORY_TIMEOUT_MS);
+
     const listPages = async (threadId?: string) => {
       const servers: CodexMcpServerSummary[] = [];
       const contextKey = threadId ? `thread:${threadId}` : "global";
@@ -8631,7 +8697,7 @@ export class CodexAppServerClient {
             limit: 100,
             ...(cursor ? { cursor } : {}),
           }],
-          timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+          timeoutMs,
         });
         const page = readMcpServerStatusPage(result, params.detail);
         servers.push(...page.servers);
@@ -8920,6 +8986,7 @@ export class CodexAppServerClient {
     ephemeral?: boolean;
     model?: string;
     approvalPolicy?: string;
+    approvalsReviewer?: ApprovalsReviewer;
     sandbox?: string;
     serviceTier?: string | null;
     reasoningEffort?: string;
@@ -8971,6 +9038,7 @@ export class CodexAppServerClient {
     cwd?: string;
     model?: string;
     approvalPolicy?: string;
+    approvalsReviewer?: ApprovalsReviewer;
     sandbox?: string;
     serviceTier?: string;
     fastMode?: boolean;
@@ -9016,6 +9084,7 @@ export class CodexAppServerClient {
     input: AppServerTurnInputItem[];
     cwd?: string;
     approvalPolicy?: string;
+    approvalsReviewer?: ApprovalsReviewer;
     sandbox?: string;
     model?: string;
     collaborationMode?: AppServerCollaborationModeRequest;
@@ -9080,6 +9149,7 @@ export class CodexAppServerClient {
             threadId: params.threadId,
             cwd: params.cwd,
             approvalPolicy: params.approvalPolicy,
+            approvalsReviewer: params.approvalsReviewer,
             sandbox: params.sandbox,
             model: params.model,
             serviceTier: params.serviceTier,
@@ -9137,6 +9207,7 @@ export class CodexAppServerClient {
             serviceTier: params.serviceTier,
             fastMode: params.fastMode,
             approvalPolicy: params.approvalPolicy,
+            approvalsReviewer: params.approvalsReviewer,
             sandbox: params.sandbox,
             collaborationMode: params.collaborationMode,
             collaborationFallbackModel:
@@ -9637,16 +9708,53 @@ export class CodexAppServerClient {
     };
   }
 
+  async setTurnApprovalReviewer(params: TurnSettingsUpdateParams): Promise<TurnSettingsUpdateResponse> {
+    await this.ensureInitialized();
+    if (!this.getProtocolCompatibility().supportsAutoReview) {
+      throw new Error("Changing the approval reviewer during a turn requires Codex 0.153.0 or later.");
+    }
+    const result = asRecord(await this.connection.request(
+      "turn/settings/update",
+      params,
+      this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    ));
+    if (result?.status !== "applied" && result?.status !== "targetUnavailable") {
+      throw new Error("Codex returned an invalid approval reviewer update result.");
+    }
+    return { status: result.status };
+  }
+
   async setThreadPermissions(params: {
     threadId: string;
     cwd?: string;
     model?: string;
     approvalPolicy?: string;
+    approvalsReviewer?: ApprovalsReviewer;
     sandbox?: string;
     serviceTier?: string;
     reasoningEffort?: string;
   }): Promise<{ threadId: string }> {
     await this.ensureInitialized();
+
+    // A new thread has no rollout to resume until its first turn. Update the
+    // loaded thread directly, preserving the selected reviewer before that turn.
+    if (this.pendingFirstTurnThreadResults.has(params.threadId)
+      && this.getProtocolCompatibility().supportsAutoReview) {
+      const [permissions] = buildThreadResumePayloads(params, this.getProtocolCompatibility());
+      const payload: CodexThreadSettingsUpdateParams = {
+        threadId: params.threadId,
+        approvalPolicy: permissions.approvalPolicy as CodexThreadSettingsUpdateParams["approvalPolicy"],
+        approvalsReviewer: permissions.approvalsReviewer,
+        sandboxPolicy: buildCodexSandboxPolicy(params.sandbox),
+        ...(params.cwd ? { cwd: params.cwd } : {}),
+        ...(params.model ? { model: params.model } : {}),
+        ...(params.serviceTier ? { serviceTier: params.serviceTier } : {}),
+        ...(params.reasoningEffort ? { effort: normalizeCodexReasoningEffort(params.reasoningEffort) } : {}),
+      };
+      await this.connection.request("thread/settings/update", payload,
+        this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS);
+      return { threadId: params.threadId };
+    }
 
     const result = await requestWithFallbacks({
       client: this.connection,
@@ -10070,6 +10178,7 @@ export class CodexAppServerClient {
         };
         const result = await this.rawConnection.request("initialize", initializeParams);
         this.initializeResult = parseInitializeResponse(result);
+        this.tokenMiserActivationNegotiated = Boolean(activationNonce);
       } catch (error) {
         if (!isAlreadyInitializedError(error)) {
           throw error;

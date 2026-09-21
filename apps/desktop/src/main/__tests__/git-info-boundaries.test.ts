@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
 
 const require = createRequire(import.meta.url);
 const config = require("../../../../../.dependency-cruiser.cjs");
-const executable = path.resolve("node_modules/dependency-cruiser/bin/dependency-cruise.mjs");
+const executable = path.resolve("node_modules/dependency-cruiser/bin/dependency-cruiser.mjs");
 const run = promisify(execFile);
 
 describe("Git dependency boundaries", () => {

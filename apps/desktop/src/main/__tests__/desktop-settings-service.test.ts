@@ -204,6 +204,47 @@ describe("DesktopSettingsService", () => {
     expect(fs.existsSync(configPath)).toBe(false);
   });
 
+  it("serves repeated Token Miser and runtime reads from memory across a config toggle", async () => {
+    const configPath = path.join(createTempRoot(), "config.toml");
+    const configStore = new DesktopConfigStore({ configPath });
+    const discover = vi.fn(async () => ({
+      candidates: [{ command: "/ordinary/codex", source: "path" as const,
+        executable: true, selected: true, version: "0.153.4" }],
+      selectedCommand: "/ordinary/codex",
+    }));
+    const service = new DesktopSettingsService({
+      configPath, configStore, env: {}, secretStore: new MemoryDesktopSecretStore(),
+      codexDiscoveryCoordinator: { discover, invalidate: vi.fn(), resolve: vi.fn() },
+    });
+    await service.refreshCodexDiscovery(issueProviderDiscoveryPermit("settings-user-action"));
+    const reload = vi.spyOn(configStore, "reloadFromDisk");
+    const project = vi.spyOn(service, "readSettingsProjection");
+    const readFile = vi.spyOn(fs, "readFileSync");
+    try {
+      for (const enabled of [false, true]) {
+        // Model an observed config change; its write/reload is outside the hot loop.
+        await configStore.write({ experimental: { tokenMiserEnabled: enabled } }, ["experimental"]);
+        reload.mockClear();
+        readFile.mockClear();
+        discover.mockClear();
+        for (let i = 0; i < 3; i += 1) {
+          expect(service.resolveTokenMiserEnabled()).toBe(enabled);
+          expect(service.resolveTokenMiserDefaultEnabled()).toBe(true);
+          expect((await service.resolveCodexCommand()).command).toBe("/ordinary/codex");
+        }
+        expect(reload).not.toHaveBeenCalled();
+        expect(readFile).not.toHaveBeenCalled();
+        expect(discover).not.toHaveBeenCalled();
+        expect(project).not.toHaveBeenCalled();
+      }
+    } finally {
+      readFile.mockRestore();
+      reload.mockRestore();
+      project.mockRestore();
+      configStore.dispose();
+    }
+  });
+
   it("runs discovery only for a permitted refresh", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");
@@ -1417,11 +1458,53 @@ describe("DesktopSettingsService", () => {
     await startup;
     await expect(service.resolveCodexCommand()).resolves.toMatchObject({ command: previous });
     expect(configStore.read("providers").codex.lastKnownGood?.selectedCommand).toBe(replacement);
+    const snapshot = await service.readSettingsProjection();
+    expect(snapshot.models.codex.discovery.selectedCommand).toBe(previous);
+    expect(snapshot.models.codex.discovery.candidates.filter((candidate) => candidate.selected))
+      .toEqual([expect.objectContaining({ command: previous, version: "0.200.0" })]);
     const nextService = new DesktopSettingsService(options);
     const nextStartup = nextService.refreshStartupDiscovery(issueProviderDiscoveryPermit("startup"));
     await expect(nextService.resolveCodexCommand()).resolves.toMatchObject({ command: replacement });
     await nextStartup;
     configStore.dispose();
+  });
+
+  it.each([false, undefined])("rejects a cached managed Codex when Token Miser is %s", async (enabled) => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    if (enabled !== undefined) {
+      fs.writeFileSync(configPath, "[experimental]\ntoken_miser_enabled = false\n");
+    }
+    const managed = path.join(process.env.PWRAGENT_HOME!, "agents", "codex", "versions", "pwragent-v0.149.0-pwragent.2", "codex");
+    fs.mkdirSync(path.dirname(managed), { recursive: true });
+    fs.writeFileSync(managed, "fixture", { mode: 0o755 });
+    const configStore = new DesktopConfigStore({ configPath });
+    configStore.recordProviderDiscovery("codex", {
+      candidates: [{ command: managed, source: "config", version: "0.149.0-pwragent.2" }],
+      selectedCommand: managed,
+      selectedVersion: "0.149.0-pwragent.2",
+    });
+    const retain = vi.fn(async () => undefined);
+    const service = new DesktopSettingsService({
+      configPath, configStore, env: {}, secretStore: new MemoryDesktopSecretStore(),
+      retainCachedCodexCommand: retain,
+      codexDiscoveryCoordinator: {
+        discover: vi.fn(async () => ({
+          candidates: [{ command: "/ordinary/codex", source: "path" as const,
+            executable: true, selected: true, version: "0.153.4" }],
+          selectedCommand: "/ordinary/codex",
+        })),
+        invalidate: vi.fn(), resolve: vi.fn(),
+      },
+    });
+    try {
+      await service.refreshStartupDiscovery(issueProviderDiscoveryPermit("startup"));
+      await expect(service.resolveCodexCommand()).resolves.toMatchObject({ command: "/ordinary/codex" });
+      expect(retain).not.toHaveBeenCalled();
+    } finally {
+      configStore.dispose();
+      fs.rmSync(managed, { force: true });
+    }
   });
 
   it("clears the session pin before explicit Token Miser enable and disable callbacks", async () => {
@@ -1746,10 +1829,8 @@ describe("DesktopSettingsService", () => {
     });
     ensureManaged.mockClear();
 
-    await service.writeConfigPatchTargeted({
-      experimental: { tokenMiserEnabled: false },
-    });
-    await service.refreshCodexDiscovery(
+    await service.writeConfigPatchTargeted(
+      { experimental: { tokenMiserEnabled: false } },
       issueProviderDiscoveryPermit("settings-user-action"),
     );
     await expect(service.resolveCodexCommand()).resolves.toMatchObject({

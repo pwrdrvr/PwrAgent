@@ -12398,6 +12398,42 @@ describe("useThreadSessionState", () => {
     });
   });
 
+  it("updates a live Auto review in place with the denial rationale", async () => {
+    const listeners = new Set<(event: AgentEvent) => void>();
+    const readThread = vi.fn(async (): Promise<AppServerReadThreadResponse> => ({
+      backend: "codex", fetchedAt: 1000, threadId: "thread-1",
+      replay: { entries: [], messages: [], pagination: { supportsPagination: false, hasPreviousPage: false } },
+    }));
+    const desktopApi: DesktopApi = {
+      readThread,
+      onAgentEvent: (listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
+    };
+    const { result } = renderHook(() => useThreadSessionState({
+      desktopApi, thread: buildThread({ id: "thread-1", updatedAt: 1000 }),
+    }));
+    await waitFor(() => expect(readThread).toHaveBeenCalled());
+    const publish = (completed: boolean) => act(() => {
+      for (const listener of listeners) listener({ backend: "codex", notification: {
+        method: completed ? "item/completed" : "item/started",
+        params: { threadId: "thread-1", turnId: "turn-1", item: {
+          id: "auto-review-1", type: "autoApprovalReview",
+          text: completed ? "Auto review: Denied" : "Auto review: Reviewing",
+          data: { status: completed ? "failed" : "in_progress", detail: completed ? "The destination is outside the authorized scope." : "Reviewing network request" },
+        } },
+      } });
+    });
+    publish(false);
+    await waitFor(() => expect(result.current.entries.some((entry) => entry.type === "activity"
+      && entry.details.some((detail) => detail.label === "Auto review: Reviewing"))).toBe(true));
+    publish(true);
+    await waitFor(() => {
+      const details = result.current.entries.flatMap((entry) => entry.type === "activity" ? entry.details : []);
+      expect(details.filter((detail) => detail.id === "auto-review-1")).toEqual([expect.objectContaining({
+        label: "Auto review: Denied", status: "failed", markdown: "The destination is outside the authorized scope.",
+      })]);
+    });
+  });
+
   it("renders live review items without synthesizing an assistant completion message", async () => {
     const agentEventListeners = new Set<
       Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
@@ -14880,6 +14916,64 @@ describe("useThreadSessionState", () => {
       result.current.setActiveTurnId(undefined);
     });
 
+    expect(result.current.thinkingThreadKeys["codex:thread-1"]).toBeUndefined();
+  });
+
+  it.each([false, true])("does not revive an idle turn from a pending dynamic tool call (live completion: %s)", async (liveCompletion) => {
+    let emit!: Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0];
+    const idleResponse: AppServerReadThreadResponse = {
+      ...readThreadResponse({ entries: [], hasPreviousPage: false }),
+      // An asynchronous host tool can outlive the provider turn that called it.
+      pendingRequest: {
+        method: "item/tool/call",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-1",
+          requestId: "call-1",
+          namespace: "pwragent",
+          tool: "manage_mcp_connections",
+          arguments: { action: "list" },
+        },
+      },
+    };
+    const readThread = vi.fn().mockResolvedValue(idleResponse);
+    if (liveCompletion) {
+      readThread.mockResolvedValueOnce(readThreadResponse({ entries: [], hasPreviousPage: false }));
+    }
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (listener) => { emit = listener; return () => undefined; },
+      readThread,
+    };
+    const { result } = renderHook(() => useThreadSessionState({
+      desktopApi,
+      thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+    }));
+    await waitForThreadHydration(result);
+    if (liveCompletion) {
+      act(() => {
+        emit({ backend: "codex", notification: { method: "turn/started", params: {
+          threadId: "thread-1", turnId: "turn-1",
+          turn: { id: "turn-1", status: "inProgress" },
+        } } });
+        emit({ backend: "codex", notification: { method: "thread/status/changed", params: {
+          threadId: "thread-1", status: { type: "idle" },
+        } } });
+        emit({ backend: "codex", notification: { method: "turn/completed", params: {
+          threadId: "thread-1", turnId: "turn-1",
+          turn: { id: "turn-1", status: "completed", output: [] },
+        } } });
+      });
+      await waitFor(() => expect(readThread.mock.calls.length).toBeGreaterThan(1));
+      await waitForThreadHydration(result);
+    }
+    expect(result.current.activeTurnId).toBeUndefined();
+    expect(result.current.pendingStatusText).toBeUndefined();
+    expect(result.current.threadBusy).toBe(false);
+    expect(result.current.thinkingThreadKeys["codex:thread-1"]).toBeUndefined();
+
+    await act(async () => { await result.current.reload(); });
+    expect(result.current.activeTurnId).toBeUndefined();
     expect(result.current.thinkingThreadKeys["codex:thread-1"]).toBeUndefined();
   });
 

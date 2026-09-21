@@ -2563,6 +2563,7 @@ describe("StarMapChatCard settings menu", () => {
             capabilities: {},
             executionModes: [
               { mode: "default", label: "Default Access", available: true },
+              { mode: "auto", label: "Auto", available: true },
               { mode: "full-access", label: "Full Access", available: true },
             ],
             launchpadOptions: {
@@ -2883,6 +2884,35 @@ describe("StarMapChatCard settings menu", () => {
         threadId: "t-local",
       });
     });
+  });
+
+  it("keeps Full Access selected until the server applies Auto", async () => {
+    const desktopApi = settingsApi();
+    renderCard({
+      desktopApi,
+      thread: localThread({
+        executionMode: "full-access",
+        model: "gpt-5-codex",
+      }),
+    });
+    await openSettingsMenu();
+    await chooseAccessMode("Auto");
+
+    await waitFor(() => {
+      expect(desktopApi.setThreadExecutionMode).toHaveBeenCalledWith(
+        expect.objectContaining({ executionMode: "auto" }),
+      );
+    });
+    await openSettingsMenu();
+    fireEvent.click(await screen.findByRole("menuitem", { name: /Access/ }));
+    expect(
+      (await screen.findByRole("menuitemradio", { name: "Full Access" }))
+        .getAttribute("aria-checked"),
+    ).toBe("true");
+    expect(
+      screen.getByRole("menuitemradio", { name: "Auto" })
+        .getAttribute("aria-checked"),
+    ).toBe("false");
   });
 
   it("hides Access when the backend describes only one available mode", async () => {

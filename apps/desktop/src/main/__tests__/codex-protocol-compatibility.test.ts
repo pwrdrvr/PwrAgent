@@ -7,9 +7,19 @@ import {
 
 describe("Codex App Server protocol compatibility", () => {
   it.each([
+    [undefined, false],
+    ["0.152.0", false],
+    ["0.153.0", true],
+    ["0.153.4-pwragent.1", true],
+  ])("gates automatic review for %s", (version, supported) => {
+    expect(resolveCodexProtocolCompatibility(version).supportsAutoReview).toBe(supported);
+  });
+
+  it.each([
     {
       version: undefined,
       expected: {
+        supportsAutoReview: false,
         dynamicToolFormat: "flat",
         includePersistExtendedHistory: true,
         supportsOnFailureApprovalPolicy: true,
@@ -19,6 +29,7 @@ describe("Codex App Server protocol compatibility", () => {
     {
       version: "codex-cli 0.136.0",
       expected: {
+        supportsAutoReview: false,
         dynamicToolFormat: "flat",
         includePersistExtendedHistory: true,
         supportsOnFailureApprovalPolicy: true,
@@ -28,6 +39,7 @@ describe("Codex App Server protocol compatibility", () => {
     {
       version: "codex-cli 0.137.0",
       expected: {
+        supportsAutoReview: false,
         dynamicToolFormat: "flat",
         includePersistExtendedHistory: false,
         supportsOnFailureApprovalPolicy: true,
@@ -37,6 +49,7 @@ describe("Codex App Server protocol compatibility", () => {
     {
       version: "codex-cli 0.141.0",
       expected: {
+        supportsAutoReview: false,
         dynamicToolFormat: "namespaced",
         includePersistExtendedHistory: false,
         supportsOnFailureApprovalPolicy: true,
@@ -46,6 +59,7 @@ describe("Codex App Server protocol compatibility", () => {
     {
       version: "codex-cli 0.143.0",
       expected: {
+        supportsAutoReview: false,
         dynamicToolFormat: "namespaced",
         includePersistExtendedHistory: false,
         supportsOnFailureApprovalPolicy: false,
@@ -55,6 +69,7 @@ describe("Codex App Server protocol compatibility", () => {
     {
       version: "codex-cli 0.144.0",
       expected: {
+        supportsAutoReview: false,
         dynamicToolFormat: "namespaced",
         includePersistExtendedHistory: false,
         supportsOnFailureApprovalPolicy: false,

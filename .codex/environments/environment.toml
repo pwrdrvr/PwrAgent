@@ -9,12 +9,38 @@ corepack enable
 pnpm install
 '''
 
+[setup.win32]
+script = '''
+$ErrorActionPreference = "Stop"
+$nodeVersion = (Get-Content -LiteralPath .nvmrc -Raw).Trim().TrimStart('v')
+nvm install $nodeVersion
+if ($LASTEXITCODE -ne 0) { throw "nvm install failed" }
+nvm use $nodeVersion
+if ($LASTEXITCODE -ne 0) { throw "nvm use failed" }
+corepack.cmd enable
+if ($LASTEXITCODE -ne 0) { throw "corepack enable failed" }
+pnpm.cmd install
+if ($LASTEXITCODE -ne 0) { throw "pnpm install failed" }
+'''
+
 [cleanup]
 script = "rm -rf node_modules"
+
+[cleanup.win32]
+script = '''
+if (Test-Path -LiteralPath node_modules) {
+  Remove-Item -LiteralPath node_modules -Recurse -Force -ErrorAction Stop
+}
+'''
+
+# Actions are explicitly scoped so each platform sees each name exactly once.
+# macOS and Linux retain the original POSIX commands. Windows actions use a child
+# PowerShell so profile/debug variables do not leak into later terminal commands.
 
 [[actions]]
 name = "Work"
 icon = "run"
+platform = "darwin"
 command = '''
 nvm use --silent
 corepack enable
@@ -22,8 +48,37 @@ PWRAGENT_PROFILE=work pnpm dev
 '''
 
 [[actions]]
+name = "Work"
+icon = "run"
+platform = "linux"
+command = '''
+nvm use --silent
+corepack enable
+PWRAGENT_PROFILE=work pnpm dev
+'''
+
+[[actions]]
+name = "Work"
+icon = "run"
+platform = "win32"
+command = '''
+powershell.exe -NoProfile -Command {
+  $ErrorActionPreference = "Stop"
+  $nodeVersion = (Get-Content -LiteralPath .nvmrc -Raw -ErrorAction Stop).Trim().TrimStart('v')
+  nvm use $nodeVersion
+  if ($LASTEXITCODE -ne 0) { throw "nvm use failed" }
+  corepack.cmd enable
+  if ($LASTEXITCODE -ne 0) { throw "corepack enable failed" }
+  $env:PWRAGENT_PROFILE = "work"
+  pnpm.cmd dev
+  exit $LASTEXITCODE
+}
+'''
+
+[[actions]]
 name = "Dev - Messaging"
 icon = "run"
+platform = "darwin"
 command = '''
 nvm use --silent
 corepack enable
@@ -31,8 +86,37 @@ PWRAGENT_PROFILE=dev pnpm dev
 '''
 
 [[actions]]
+name = "Dev - Messaging"
+icon = "run"
+platform = "linux"
+command = '''
+nvm use --silent
+corepack enable
+PWRAGENT_PROFILE=dev pnpm dev
+'''
+
+[[actions]]
+name = "Dev - Messaging"
+icon = "run"
+platform = "win32"
+command = '''
+powershell.exe -NoProfile -Command {
+  $ErrorActionPreference = "Stop"
+  $nodeVersion = (Get-Content -LiteralPath .nvmrc -Raw -ErrorAction Stop).Trim().TrimStart('v')
+  nvm use $nodeVersion
+  if ($LASTEXITCODE -ne 0) { throw "nvm use failed" }
+  corepack.cmd enable
+  if ($LASTEXITCODE -ne 0) { throw "corepack enable failed" }
+  $env:PWRAGENT_PROFILE = "dev"
+  pnpm.cmd dev
+  exit $LASTEXITCODE
+}
+'''
+
+[[actions]]
 name = "Dev - No Messaging"
 icon = "run"
+platform = "darwin"
 command = '''
 nvm use --silent
 corepack enable
@@ -40,8 +124,38 @@ PWRAGENT_PROFILE=dev pnpm dev:no-messaging
 '''
 
 [[actions]]
+name = "Dev - No Messaging"
+icon = "run"
+platform = "linux"
+command = '''
+nvm use --silent
+corepack enable
+PWRAGENT_PROFILE=dev pnpm dev:no-messaging
+'''
+
+[[actions]]
+name = "Dev - No Messaging"
+icon = "run"
+platform = "win32"
+command = '''
+powershell.exe -NoProfile -Command {
+  $ErrorActionPreference = "Stop"
+  $nodeVersion = (Get-Content -LiteralPath .nvmrc -Raw -ErrorAction Stop).Trim().TrimStart('v')
+  nvm use $nodeVersion
+  if ($LASTEXITCODE -ne 0) { throw "nvm use failed" }
+  corepack.cmd enable
+  if ($LASTEXITCODE -ne 0) { throw "corepack enable failed" }
+  $env:PWRAGENT_PROFILE = "dev"
+  $env:PWRAGENT_DISABLE_MESSAGING = "1"
+  pnpm.cmd --filter "@pwragent/desktop" dev -- --disable-messaging
+  exit $LASTEXITCODE
+}
+'''
+
+[[actions]]
 name = "Default - No Messaging"
 icon = "run"
+platform = "darwin"
 command = '''
 nvm use --silent
 corepack enable
@@ -49,18 +163,82 @@ PWRAGENT_PROFILE=default pnpm dev:no-messaging
 '''
 
 [[actions]]
+name = "Default - No Messaging"
+icon = "run"
+platform = "linux"
+command = '''
+nvm use --silent
+corepack enable
+PWRAGENT_PROFILE=default pnpm dev:no-messaging
+'''
+
+[[actions]]
+name = "Default - No Messaging"
+icon = "run"
+platform = "win32"
+command = '''
+powershell.exe -NoProfile -Command {
+  $ErrorActionPreference = "Stop"
+  $nodeVersion = (Get-Content -LiteralPath .nvmrc -Raw -ErrorAction Stop).Trim().TrimStart('v')
+  nvm use $nodeVersion
+  if ($LASTEXITCODE -ne 0) { throw "nvm use failed" }
+  corepack.cmd enable
+  if ($LASTEXITCODE -ne 0) { throw "corepack enable failed" }
+  $env:PWRAGENT_PROFILE = "default"
+  $env:PWRAGENT_DISABLE_MESSAGING = "1"
+  pnpm.cmd --filter "@pwragent/desktop" dev -- --disable-messaging
+  exit $LASTEXITCODE
+}
+'''
+
+[[actions]]
 name = "Dev - Protocol Capture"
 icon = "run"
+platform = "darwin"
 command = '''
 nvm use --silent
 corepack enable
 PWRAGENT_PROTOCOL_CAPTURE=1 PWRAGENT_PROTOCOL_CAPTURE_ROOT=.local/protocol-captures PWRAGENT_APP_SERVER_PROTOCOL_LOG=1 PWRAGENT_PROFILE=dev pnpm dev:no-messaging
 '''
 
+[[actions]]
+name = "Dev - Protocol Capture"
+icon = "run"
+platform = "linux"
+command = '''
+nvm use --silent
+corepack enable
+PWRAGENT_PROTOCOL_CAPTURE=1 PWRAGENT_PROTOCOL_CAPTURE_ROOT=.local/protocol-captures PWRAGENT_APP_SERVER_PROTOCOL_LOG=1 PWRAGENT_PROFILE=dev pnpm dev:no-messaging
+'''
+
+[[actions]]
+name = "Dev - Protocol Capture"
+icon = "run"
+platform = "win32"
+command = '''
+powershell.exe -NoProfile -Command {
+  $ErrorActionPreference = "Stop"
+  $nodeVersion = (Get-Content -LiteralPath .nvmrc -Raw -ErrorAction Stop).Trim().TrimStart('v')
+  nvm use $nodeVersion
+  if ($LASTEXITCODE -ne 0) { throw "nvm use failed" }
+  corepack.cmd enable
+  if ($LASTEXITCODE -ne 0) { throw "corepack enable failed" }
+  $env:PWRAGENT_PROTOCOL_CAPTURE = "1"
+  $env:PWRAGENT_PROTOCOL_CAPTURE_ROOT = ".local/protocol-captures"
+  $env:PWRAGENT_APP_SERVER_PROTOCOL_LOG = "1"
+  $env:PWRAGENT_PROFILE = "dev"
+  $env:PWRAGENT_DISABLE_MESSAGING = "1"
+  pnpm.cmd --filter "@pwragent/desktop" dev -- --disable-messaging
+  exit $LASTEXITCODE
+}
+'''
+
 # Start standalone React DevTools before launching the app with its bridge enabled.
+
 [[actions]]
 name = "React DevTools - Standalone"
 icon = "run"
+platform = "darwin"
 command = '''
 nvm use --silent
 corepack enable
@@ -68,10 +246,68 @@ npx react-devtools --port 8097
 '''
 
 [[actions]]
+name = "React DevTools - Standalone"
+icon = "run"
+platform = "linux"
+command = '''
+nvm use --silent
+corepack enable
+npx react-devtools --port 8097
+'''
+
+[[actions]]
+name = "React DevTools - Standalone"
+icon = "run"
+platform = "win32"
+command = '''
+powershell.exe -NoProfile -Command {
+  $ErrorActionPreference = "Stop"
+  $nodeVersion = (Get-Content -LiteralPath .nvmrc -Raw -ErrorAction Stop).Trim().TrimStart('v')
+  nvm use $nodeVersion
+  if ($LASTEXITCODE -ne 0) { throw "nvm use failed" }
+  corepack.cmd enable
+  if ($LASTEXITCODE -ne 0) { throw "corepack enable failed" }
+  npx.cmd react-devtools --port 8097
+  exit $LASTEXITCODE
+}
+'''
+
+[[actions]]
 name = "Dev - React DevTools"
 icon = "run"
+platform = "darwin"
 command = '''
 nvm use --silent
 corepack enable
 PWRAGENT_PROFILE=dev PWRAGENT_DEV_REACT_DEVTOOLS=1 PWRAGENT_DEV_REACT_DEVTOOLS_PORT=8097 pnpm dev
+'''
+
+[[actions]]
+name = "Dev - React DevTools"
+icon = "run"
+platform = "linux"
+command = '''
+nvm use --silent
+corepack enable
+PWRAGENT_PROFILE=dev PWRAGENT_DEV_REACT_DEVTOOLS=1 PWRAGENT_DEV_REACT_DEVTOOLS_PORT=8097 pnpm dev
+'''
+
+[[actions]]
+name = "Dev - React DevTools"
+icon = "run"
+platform = "win32"
+command = '''
+powershell.exe -NoProfile -Command {
+  $ErrorActionPreference = "Stop"
+  $nodeVersion = (Get-Content -LiteralPath .nvmrc -Raw -ErrorAction Stop).Trim().TrimStart('v')
+  nvm use $nodeVersion
+  if ($LASTEXITCODE -ne 0) { throw "nvm use failed" }
+  corepack.cmd enable
+  if ($LASTEXITCODE -ne 0) { throw "corepack enable failed" }
+  $env:PWRAGENT_PROFILE = "dev"
+  $env:PWRAGENT_DEV_REACT_DEVTOOLS = "1"
+  $env:PWRAGENT_DEV_REACT_DEVTOOLS_PORT = "8097"
+  pnpm.cmd dev
+  exit $LASTEXITCODE
+}
 '''

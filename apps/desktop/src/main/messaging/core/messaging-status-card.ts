@@ -177,7 +177,7 @@ export function buildBindingStatusIntent(params: {
   const permissionsMode =
     params.threadState.executionMode ??
     preferences?.permissionsMode ??
-    (preferences?.executionMode === "full-access" ? "full-access" : undefined) ??
+    preferences?.executionMode ??
     defaults?.executionMode ??
     "default";
   const queuedExecutionMode =
@@ -1824,7 +1824,7 @@ function unavailable(): string {
  * Mirrors the desktop transcript copy: "Default Access" / "Full Access".
  */
 export function formatExecutionModeLabel(mode: ThreadExecutionMode): string {
-  return mode === "full-access" ? "Full Access" : "Default Access";
+  return mode === "auto" ? "Auto" : mode === "full-access" ? "Full Access" : "Default Access";
 }
 
 /**
@@ -1837,11 +1837,11 @@ export function formatPermissionsActionLabel(
   current: string,
   queued?: ThreadExecutionMode,
 ): string {
-  const currentLabel = current === "full-access" ? "Full Access" : "Default";
+  const currentLabel = current === "auto" ? "Auto" : current === "full-access" ? "Full Access" : "Default";
   if (!queued) {
     return `Permissions: ${currentLabel}`;
   }
-  const queuedLabel = queued === "full-access" ? "Full Access" : "Default";
+  const queuedLabel = queued === "auto" ? "Auto" : queued === "full-access" ? "Full Access" : "Default";
   return `Permissions: ${currentLabel} → ${queuedLabel} (queued)`;
 }
 
@@ -1899,7 +1899,7 @@ function formatPermissionsLineLabel(
   current: string,
   queued?: ThreadExecutionMode,
 ): string {
-  const currentLabel = current === "full-access" ? "Full Access" : "Default Access";
+  const currentLabel = current === "auto" ? "Auto" : current === "full-access" ? "Full Access" : "Default Access";
   if (!queued) {
     return currentLabel;
   }

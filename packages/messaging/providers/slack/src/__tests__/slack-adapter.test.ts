@@ -1756,6 +1756,97 @@ describe("SlackAdapter", () => {
     });
   });
 
+  describe("breakfast reply attachment destinations", () => {
+    const rootTs = "1700000000.000010";
+    const routes = [
+      { name: "channel", kind: "channel", channelId: "C012ABCDEF0" },
+      { name: "DM", kind: "dm", channelId: "D012ABCDEF0" },
+      { name: "thread", kind: "thread", channelId: "C012ABCDEF0", expectedThreadTs: rootTs },
+      { name: "explicit source channel", kind: "thread", channelId: "C012ABCDEF0", sourceRelative: "source_channel" },
+      { name: "explicit source thread", kind: "channel", channelId: "C012ABCDEF0", sourceRelative: "source_thread", expectedThreadTs: rootTs },
+    ] as const;
+
+    for (const route of routes) {
+      for (const payload of ["image", "long image", "file"] as const) {
+        it(`keeps a ${payload} with its ${route.name} reply`, async () => {
+          const posted: Array<{ channel: string; thread_ts?: string }> = [];
+          const uploads: Array<{ channel: string; threadTs?: string }> = [];
+          const adapter = new SlackAdapter({
+            config: baseConfig,
+            callbackHandleStore: fakeStore(),
+            api: {
+              ...fakeApi({ posted }),
+              uploadFile: async (params) => { uploads.push(params); },
+            },
+            socketClient: fakeSocket(),
+          });
+          const expectedThreadTs = "expectedThreadTs" in route
+            ? route.expectedThreadTs
+            : undefined;
+          const result = await adapter.deliver({
+            id: "breakfast-reply",
+            kind: "message",
+            createdAt: 1,
+            role: "assistant",
+            parts: [
+              {
+                type: "text",
+                text: payload === "long image"
+                  ? "Oat cereal with milk and berries. ".repeat(500)
+                  : "Oat cereal with milk and berries.",
+                markdown: "markdown",
+              },
+              payload === "file"
+                ? { type: "file", name: "cereal.txt", data: new Uint8Array([1, 2, 3]), mimeType: "text/plain" }
+                : { type: "image", url: "data:image/png;base64,AQID", alt: "Cereal bowl" },
+            ],
+            delivery: {
+              requireAttachments: true,
+              ...("sourceRelative" in route ? { sourceRelative: route.sourceRelative } : {}),
+            },
+            targetSurface: {
+              channel: "slack",
+              id: rootTs,
+              state: {
+                opaque: {
+                  channelId: route.channelId,
+                  ts: rootTs,
+                  ...(route.kind === "thread" ? { threadTs: rootTs } : {}),
+                },
+              },
+            },
+            audit: {
+              actor: { platformUserId: "U012ABCDEF0" },
+              channel: {
+                channel: "slack",
+                conversation: {
+                  id: route.channelId,
+                  kind: route.kind,
+                  ...(route.kind === "thread" ? { parentId: rootTs } : {}),
+                },
+              },
+              occurredAt: 1,
+            },
+          });
+
+          expect(result.outcome).toBe("presented");
+          if (payload === "long image") {
+            expect(posted.length).toBeGreaterThan(1);
+          } else {
+            expect(posted).toHaveLength(1);
+          }
+          for (const post of posted) {
+            expect(post.channel).toBe(route.channelId);
+            expect(post.thread_ts).toBe(expectedThreadTs);
+          }
+          expect(uploads).toHaveLength(1);
+          expect(uploads[0]?.channel).toBe(route.channelId);
+          expect(uploads[0]?.threadTs).toBe(expectedThreadTs);
+        });
+      }
+    }
+  });
+
   it("uploads data images and renders remote images as Slack blocks", async () => {
     const posted: unknown[] = [];
     const uploads: Array<{

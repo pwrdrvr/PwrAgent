@@ -2319,6 +2319,48 @@ describe("ThreadView", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("streams environment selection output for an existing thread and resets it on retry", () => {
+    let setupProgress: Parameters<NonNullable<DesktopApi["onCodexEnvironmentSetupProgress"]>>[0] = () => undefined;
+    render(
+      <ThreadView
+        addOptimisticUserMessage={() => "optimistic-1"}
+        backends={[]}
+        clearPendingRequest={() => undefined}
+        composerDisabled={false}
+        desktopApi={{ onCodexEnvironmentSetupProgress: (callback) => { setupProgress = callback; return () => undefined; } }}
+        loading={false}
+        loadingMore={false}
+        messageCount={0}
+        selectedThread={buildTimestampTargetThread("existing", "Existing thread")}
+        skills={[]}
+        transcriptEntries={[]}
+        onLoadOlder={async () => undefined}
+        removeOptimisticMessage={() => undefined}
+      />,
+    );
+    const event = {
+      directoryKey: "thread:codex:existing", environmentId: "env", environmentName: "Fixture environment",
+      command: "nvm install $nodeVersion", cwd: "C:\\fixture", at: 1,
+    };
+    act(() => setupProgress({ ...event, directoryKey: "thread:codex:other", phase: "started" }));
+    expect(screen.queryByRole("heading", { name: "Running environment setup" })).not.toBeInTheDocument();
+    act(() => setupProgress({ ...event, phase: "started" }));
+    expect(screen.getByRole("heading", { name: "Running environment setup" })).toBeVisible();
+    expect(screen.getByLabelText("Setup command")).toHaveTextContent("nvm install $nodeVersion");
+    act(() => setupProgress({ ...event, phase: "stderr", chunk: "install failed" }));
+    expect(screen.getByLabelText("Setup output")).toHaveTextContent("install failed");
+    act(() => setupProgress({ ...event, phase: "failed", exitCode: 1, error: "nvm failed" }));
+    expect(screen.getByRole("heading", { name: "Environment setup failed" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Dismiss setup output" })).toBeVisible();
+    act(() => setupProgress({ ...event, phase: "started" }));
+    expect(screen.getByLabelText("Setup output")).not.toHaveTextContent("install failed");
+    expect(screen.getByLabelText("Setup output")).not.toHaveTextContent("nvm failed");
+    act(() => setupProgress({ ...event, phase: "completed", exitCode: 0, output: "installed" }));
+    expect(screen.queryByRole("heading", { name: "Environment setup complete" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Dismiss setup output" })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Setup output")).not.toBeInTheDocument();
+  });
+
   it("shows pending environment setup while a forked worktree is preparing", async () => {
     let setupProgress: Parameters<
       NonNullable<DesktopApi["onCodexEnvironmentSetupProgress"]>

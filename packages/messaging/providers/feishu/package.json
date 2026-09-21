@@ -8,7 +8,7 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@larksuiteoapi/node-sdk": "1.73.3",
+    "@larksuiteoapi/node-sdk": "1.74.0",
     "@pwragent/messaging-interface": "workspace:*"
   },
   "devDependencies": {

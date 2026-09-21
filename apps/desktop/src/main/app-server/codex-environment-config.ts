@@ -9,20 +9,27 @@ type RawAction = {
   name?: string;
   icon?: string;
   command?: string;
+  platform?: string;
 };
+
+type EnvironmentPlatform = "darwin" | "linux" | "win32";
+type ScriptConfig = { script?: string } & Partial<
+  Record<EnvironmentPlatform, { script?: string }>
+>;
 
 type RawEnvironmentConfig = {
   name?: string;
-  setup?: {
-    script?: string;
-  };
-  cleanup?: {
-    script?: string;
-  };
+  setup?: ScriptConfig;
+  cleanup?: ScriptConfig;
   actions: RawAction[];
 };
 
-type ParserContext = "" | "setup" | "cleanup" | "action";
+type ParserContext =
+  | ""
+  | "setup"
+  | "cleanup"
+  | "action"
+  | `${"setup" | "cleanup"}.${EnvironmentPlatform}`;
 
 const KEY_LINE = /^\s*([A-Za-z_][A-Za-z0-9_-]*)\s*=\s*(.*)$/;
 const SECTION_LINE = /^\s*\[\s*([^[\]]+?)\s*\]\s*(?:#.*)?$/;
@@ -30,6 +37,7 @@ const ARRAY_SECTION_LINE = /^\s*\[\[\s*([^[\]]+?)\s*\]\]\s*(?:#.*)?$/;
 
 export async function listCodexEnvironmentOptions(
   directoryPath?: string,
+  platform: NodeJS.Platform = process.platform,
 ): Promise<CodexEnvironmentOption[]> {
   if (!directoryPath?.trim()) {
     return [];
@@ -75,9 +83,10 @@ export async function listCodexEnvironmentOptions(
       id: makeUniqueEnvironmentId(fallbackId, options),
       name: parsed.name?.trim() || fallbackName,
       sourcePath,
-      setupScript: normalizeScript(parsed.setup?.script),
-      cleanupScript: normalizeScript(parsed.cleanup?.script),
-      actions: normalizeActions(parsed.actions),
+      setupScript: resolvePlatformScript(parsed.setup, platform),
+      cleanupScript: resolvePlatformScript(parsed.cleanup, platform),
+      ...(platform === "win32" ? { shell: "powershell" as const } : {}),
+      actions: normalizeActions(parsed.actions, platform),
     });
   }
 
@@ -194,7 +203,9 @@ export function parseCodexEnvironmentToml(
     const section = SECTION_LINE.exec(line);
     if (section) {
       const name = section[1]?.trim();
-      context = name === "setup" || name === "cleanup" ? name : "";
+      context = /^(setup|cleanup)(\.(darwin|linux|win32))?$/.test(name ?? "")
+        ? name as ParserContext
+        : "";
       currentAction = undefined;
       i += 1;
       continue;
@@ -226,22 +237,23 @@ function assignValue(
     return;
   }
 
-  if (context === "setup") {
+  if (context === "setup" || context === "cleanup" || context.includes(".")) {
     if (key === "script") {
-      config.setup = { script: value };
-    }
-    return;
-  }
-
-  if (context === "cleanup") {
-    if (key === "script") {
-      config.cleanup = { script: value };
+      const [section, platform] = context.split(".") as [
+        "setup" | "cleanup", EnvironmentPlatform | undefined,
+      ];
+      const scripts = config[section] ??= {};
+      if (platform) {
+        scripts[platform] = { script: value };
+      } else {
+        scripts.script = value;
+      }
     }
     return;
   }
 
   if (context === "action" && currentAction) {
-    if (key === "name" || key === "icon" || key === "command") {
+    if (key === "name" || key === "icon" || key === "command" || key === "platform") {
       currentAction[key] = value;
     }
     return;
@@ -355,15 +367,32 @@ function normalizeAction(
   };
 }
 
+function resolvePlatformScript(
+  scripts: ScriptConfig | undefined,
+  platform: NodeJS.Platform,
+): string | undefined {
+  const override = platform === "darwin" || platform === "linux" || platform === "win32"
+    ? scripts?.[platform]?.script
+    : undefined;
+  return normalizeScript(override ?? scripts?.script);
+}
+
 function normalizeActions(
   actions: RawAction[],
+  platform: NodeJS.Platform,
 ): CodexEnvironmentOption["actions"] {
   const existingIds = new Set<string>();
   const normalized: CodexEnvironmentOption["actions"] = [];
-  actions.forEach((action, index) => {
+  const platformActions = actions.filter(
+    (action) => !action.platform || action.platform === platform,
+  );
+  platformActions.forEach((action, index) => {
     const next = normalizeAction(action, index, existingIds);
     if (next) {
-      normalized.push(next);
+      normalized.push({
+        ...next,
+        ...(platform === "win32" ? { shell: "powershell" as const } : {}),
+      });
     }
   });
   return normalized;

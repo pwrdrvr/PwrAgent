@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -10,6 +10,68 @@ import {
 } from "../app-server/codex-environment-config";
 
 describe("codex environment config", () => {
+  it.each(["darwin", "linux", "win32"] as const)("selects the checked-in environment for %s", async (platform) => {
+    const [option] = await listCodexEnvironmentOptions(path.resolve(import.meta.dirname, "../../../../.."), platform);
+    expect(option.actions).toHaveLength(7);
+    expect(new Set(option.actions.map((action) => action.id)).size).toBe(7);
+    expect(option.actions[0].id).toBe("work");
+    if (platform === "win32") {
+      expect(option.shell).toBe("powershell");
+      expect(option.setupScript).toContain("nvm install $nodeVersion");
+      expect(option.cleanupScript).toContain("Remove-Item -LiteralPath node_modules");
+      expect(option.actions.every((action) => action.shell === "powershell")).toBe(true);
+      expect(option.actions[0].command).toContain('$env:PWRAGENT_PROFILE = "work"');
+    } else {
+      expect(option.shell).toBeUndefined();
+      expect(option.setupScript).toBe("nvm install\ncorepack enable\npnpm install");
+      expect(option.cleanupScript).toBe("rm -rf node_modules");
+      expect(option.actions[0].command).toContain("PWRAGENT_PROFILE=work pnpm dev");
+    }
+  });
+
+  it("resolves overrides independently of table order, including empty overrides and shared actions", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-platform-env-"));
+    try {
+      await mkdir(path.join(root, ".codex/environments"), { recursive: true });
+      await writeFile(path.join(root, ".codex/environments/environment.toml"), `
+[setup.win32]
+script = ""
+[setup.linux]
+script = "linux setup"
+[setup]
+script = "default setup"
+[cleanup.win32]
+script = "Windows cleanup"
+[cleanup]
+script = "default cleanup"
+[[actions]]
+name = "Shared"
+command = "node --version"
+[[actions]]
+name = "Run"
+platform = "darwin"
+command = "mac run"
+[[actions]]
+name = "Run"
+platform = "win32"
+command = "Windows run"
+`);
+      const [win] = await listCodexEnvironmentOptions(root, "win32");
+      expect(win.setupScript).toBeUndefined();
+      expect(win.cleanupScript).toBe("Windows cleanup");
+      expect(win.actions.map((action) => action.id)).toEqual(["shared", "run"]);
+      const [mac] = await listCodexEnvironmentOptions(root, "darwin");
+      expect(mac.setupScript).toBe("default setup");
+      expect(mac.cleanupScript).toBe("default cleanup");
+      expect(mac.actions.map((action) => action.command)).toEqual(["node --version", "mac run"]);
+      const [linux] = await listCodexEnvironmentOptions(root, "linux");
+      expect(linux.setupScript).toBe("linux setup");
+      expect(linux.actions.map((action) => action.id)).toEqual(["shared"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("parses setup scripts and action commands", () => {
     const parsed = parseCodexEnvironmentToml(`
 version = 1

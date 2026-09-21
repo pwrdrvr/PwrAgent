@@ -18,6 +18,7 @@ export function applyLaunchpadEnvironmentSetupProgress(
   event: CodexEnvironmentSetupProgressEvent,
 ): LaunchpadEnvironmentSetupProgress {
   const base =
+    event.phase !== "started" &&
     current?.directoryKey === event.directoryKey &&
     current.environmentId === event.environmentId
       ? current
