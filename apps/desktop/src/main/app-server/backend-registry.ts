@@ -17870,7 +17870,15 @@ export class DesktopBackendRegistry {
             type: "enteredReviewMode",
             review: record.displayText,
             createdAt: startedAt,
-            data: { reviewer: entry.reviewer },
+            // Spelled out rather than left to withReviewRuntimeMetadata: that
+            // looks the record up under the review CHILD's thread, and this
+            // item is emitted under the parent's, so the lookup misses and
+            // the live card would lose its workspace/branch/commit/PR rows
+            // until a reload read the persisted entry above.
+            data: {
+              reviewer: entry.reviewer,
+              ...(entry.context ? { context: entry.context } : {}),
+            },
           },
         },
       },
@@ -28102,9 +28110,11 @@ export class DesktopBackendRegistry {
               type: "exitedReviewMode",
               review,
               createdAt: completedAt,
+              // Same child-vs-parent key miss as the started item.
               data: {
                 ...(parsed ? { reviewOutput: parsed } : {}),
                 reviewer: entry.reviewer,
+                ...(entry.context ? { context: entry.context } : {}),
               },
             },
           },

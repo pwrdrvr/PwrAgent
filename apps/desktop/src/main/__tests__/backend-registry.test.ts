@@ -27422,6 +27422,108 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("puts review provenance on the live managed review cards, not only the persisted ones", async () => {
+    // The parent's cards are emitted under the parent thread, but the review
+    // record is keyed by the child. withReviewRuntimeMetadata therefore cannot
+    // decorate them, and before this the live start card showed only the
+    // reviewer row until a reload read the persisted entry.
+    const context: AppServerReviewContext = {
+      workspacePath: "/repo/worktree",
+      projectLabel: "PwrAgent",
+      gitBranch: "feat/review-cards",
+      baseBranch: "main",
+      headCommit: "0123456789abcdef0123456789abcdef01234567",
+      pullRequest: {
+        provider: "github.com",
+        org: "example-org",
+        repo: "example-repo",
+        number: 42,
+        url: "https://github.com/example-org/example-repo/pull/42",
+      },
+    };
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start", "turn/start"] },
+      startThreadResult: { threadId: "managed-review-child" },
+    });
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-parent": {
+          backend: "codex",
+          threadId: "thread-parent",
+        } as ThreadOverlayState,
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore,
+      resolveManagedReviewEnabled: () => true,
+    });
+    vi.spyOn(
+      registry as unknown as {
+        resolveReviewContext(): Promise<AppServerReviewContext | undefined>;
+      },
+      "resolveReviewContext",
+    ).mockResolvedValue(context);
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => {
+      events.push(event);
+    });
+
+    const response = await registry.startReview({
+      runMode: "pwragent-sub-agent",
+      backend: "codex",
+      threadId: "thread-parent",
+      target: { type: "baseBranch", branch: "main" },
+      delivery: "inline",
+    });
+    await codexClient.emit({
+      method: "item/completed",
+      params: {
+        threadId: response.reviewThreadId,
+        turnId: response.turnId,
+        item: {
+          id: "review-output",
+          type: "agentMessage",
+          text: JSON.stringify({
+            findings: [],
+            overall_correctness: "patch is correct",
+            overall_explanation: "No blocking findings.",
+            overall_confidence_score: 0.9,
+          }),
+        },
+      },
+    });
+    await codexClient.emit({
+      method: "turn/completed",
+      params: {
+        threadId: response.reviewThreadId,
+        turnId: response.turnId,
+        turn: { id: response.turnId, status: "completed", output: [] },
+      },
+    });
+
+    const liveItemData = (itemType: string): unknown => {
+      const event = events.find((candidate) =>
+        isCompletedItemType(candidate, itemType)
+        && "threadId" in candidate.notification.params
+        && candidate.notification.params.threadId === "thread-parent"
+      );
+      if (event?.notification.method !== "item/completed") {
+        return undefined;
+      }
+      return (event.notification.params.item as { data?: unknown }).data;
+    };
+    expect(liveItemData("enteredReviewMode")).toMatchObject({ context });
+    expect(liveItemData("exitedReviewMode")).toMatchObject({
+      context,
+      reviewOutput: expect.objectContaining({
+        overall_correctness: "patch is correct",
+      }),
+    });
+
+    await registry.close();
+  });
+
   it("enriches default-model managed review cards from durable usage", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/start", "turn/start"] },
