@@ -2840,6 +2840,15 @@ type ReviewSubAgentRecord = {
   turnId: string;
 };
 
+type ReviewTerminal = {
+  backend: AppServerBackendKind;
+  completedAt?: number;
+  errorMessage?: string;
+  method: "turn/completed" | "turn/failed" | "turn/cancelled";
+  threadId: string;
+  turnId: string;
+};
+
 type PendingReviewStartRecord = {
   pendingReviewId: string;
   backend: AppServerBackendKind;
@@ -8306,6 +8315,7 @@ export class DesktopBackendRegistry {
   private readonly activeCodexTurnModes = new Map<string, ThreadExecutionMode>();
   private readonly activeCodexReviewTurnKeys = new Set<string>();
   private readonly activeCodexReviewInterruptTurnIds = new Map<string, string>();
+  private readonly pendingReviewTerminals = new Set<Map<string, ReviewTerminal>>();
   private readonly activeReviewSubAgents = new Map<string, ReviewSubAgentRecord>();
   private readonly reviewSubAgentsByReviewTurn = new Map<
     string,
@@ -15988,6 +15998,13 @@ export class DesktopBackendRegistry {
     backend: AppServerBackendKind;
     threadId: string;
   }): { backend: AppServerBackendKind; threadId: string; turnId: string } | undefined {
+    const review = this.findReviewForParentTurn({
+      backend: params.backend,
+      parentThreadId: params.threadId,
+    });
+    if (review) {
+      return { ...params, turnId: review.turnId };
+    }
     if (params.backend === "codex") {
       for (const key of this.activeCodexTurnModes.keys()) {
         const parsed = parseThreadTurnKeyBody(key);
@@ -17280,6 +17297,20 @@ export class DesktopBackendRegistry {
   }
 
   async startReview(params: StartReviewRequest): Promise<StartReviewResponse> {
+    // Retain terminal evidence only for the lifetime of this start request.
+    const terminals = new Map<string, ReviewTerminal>();
+    this.pendingReviewTerminals.add(terminals);
+    try {
+      return await this.startReviewWithTerminalEvidence(params, terminals);
+    } finally {
+      this.pendingReviewTerminals.delete(terminals);
+    }
+  }
+
+  private async startReviewWithTerminalEvidence(
+    params: StartReviewRequest,
+    terminals: Map<string, ReviewTerminal>,
+  ): Promise<StartReviewResponse> {
     this.assertNotBootstrap("startReview");
     const acpManagedMode =
       isAcpBackendId(params.backend)
@@ -17496,6 +17527,18 @@ export class DesktopBackendRegistry {
         const activeTurnMode = await this.resolveCodexThreadExecutionModeForActiveTurn(
           reviewThreadId,
         );
+        if (!managedMode) {
+          const startedTurn = this.getActiveTurnForThread({
+            backend: "codex",
+            threadId: reviewThreadId,
+          });
+          if (startedTurn && startedTurn.turnId !== result.turnId) {
+            this.activeCodexReviewInterruptTurnIds.set(
+              buildActiveTurnModeKey(reviewThreadId, result.turnId),
+              startedTurn.turnId,
+            );
+          }
+        }
         this.activeTurnKeys.add(
           buildActiveTurnKey(params.backend, reviewThreadId, result.turnId),
         );
@@ -17506,8 +17549,9 @@ export class DesktopBackendRegistry {
         this.activeCodexReviewTurnKeys.add(
           buildActiveTurnModeKey(reviewThreadId, result.turnId),
         );
-      } finally {
+      } catch (error) {
         this.reservedCodexStartThreadIds.delete(params.threadId);
+        throw error;
       }
     } else if (acpReviewReservationKey) {
       this.reservedAcpStartThreadKeys.delete(acpReviewReservationKey);
@@ -17537,7 +17581,17 @@ export class DesktopBackendRegistry {
     );
     this.activeReviewSubAgents.set(reviewSubAgentKey, reviewSubAgentRecord);
     this.reviewSubAgentsByReviewTurn.set(reviewSubAgentKey, reviewSubAgentRecord);
-    await this.persistReviewSubAgent(reviewSubAgentRecord);
+    if (reserveCodexReviewStart) {
+      this.reservedCodexStartThreadIds.delete(params.threadId);
+    }
+    const earlyTerminal = terminals.get(reviewSubAgentKey);
+    if (!managedMode && earlyTerminal) {
+      await this.completeReviewSubAgent(earlyTerminal);
+      this.clearNativeReviewActiveTurns(reviewSubAgentRecord);
+      await this.releaseNativeReviewParent(reviewSubAgentRecord, earlyTerminal);
+    } else {
+      await this.persistReviewSubAgent(reviewSubAgentRecord);
+    }
     backendRegistryLog.info("code review started", {
       mode: reviewSubAgentRecord.mode,
       parentBackend: reviewSubAgentRecord.parentBackend,
@@ -18232,7 +18286,7 @@ export class DesktopBackendRegistry {
       try {
         if (request.operation === "stop") {
           const managedAcpReview = isAcpBackendId(request.backend)
-            ? this.findManagedReviewForParentTurn({
+            ? this.findReviewForParentTurn({
                 backend: request.backend,
                 parentThreadId: request.threadId,
                 turnId: active.turnId,
@@ -18399,49 +18453,51 @@ export class DesktopBackendRegistry {
     threadId: string;
     turnId: string;
   }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
-    const managedReview = this.findManagedReviewForParentTurn({
+    const review = this.findReviewForParentTurn({
       backend: params.backend,
       parentThreadId: params.threadId,
       turnId: params.turnId,
     });
-    if (managedReview) {
-      if (isAcpBackendId(managedReview.backend)) {
+    if (review) {
+      if (isAcpBackendId(review.backend)) {
         const childLockKey = executionModeQueueKey(
-          managedReview.backend,
-          managedReview.reviewThreadId,
+          review.backend,
+          review.reviewThreadId,
         );
         await this.acpSessionPromptLocks.run(
           childLockKey,
           async () => await this.interruptAcpTurn({
-            backend: managedReview.backend,
-            threadId: managedReview.reviewThreadId,
-            turnId: managedReview.turnId,
+            backend: review.backend,
+            threadId: review.reviewThreadId,
+            turnId: review.turnId,
           }),
         );
         backendRegistryLog.info("managed ACP review interrupt requested", {
-          parentThreadId: managedReview.parentThreadId,
-          reviewThreadId: managedReview.reviewThreadId,
-          turnId: managedReview.turnId,
+          parentThreadId: review.parentThreadId,
+          reviewThreadId: review.reviewThreadId,
+          turnId: review.turnId,
         });
         return params;
       }
       const activeMode = this.activeCodexTurnModes.get(
         buildActiveTurnModeKey(
-          managedReview.reviewThreadId,
-          managedReview.turnId,
+          review.reviewThreadId,
+          review.turnId,
         ),
       );
       const client = activeMode
         ? this.getClient("codex", activeMode)
         : this.codexClient;
       await client.interruptTurn({
-        threadId: managedReview.reviewThreadId,
-        turnId: managedReview.turnId,
+        threadId: review.reviewThreadId,
+        turnId: this.activeCodexReviewInterruptTurnIds.get(
+          buildActiveTurnModeKey(review.reviewThreadId, review.turnId),
+        ) ?? review.turnId,
       });
-      backendRegistryLog.info("managed review interrupt requested", {
-        parentThreadId: managedReview.parentThreadId,
-        reviewThreadId: managedReview.reviewThreadId,
-        turnId: managedReview.turnId,
+      backendRegistryLog.info("review interrupt requested", {
+        parentThreadId: review.parentThreadId,
+        reviewThreadId: review.reviewThreadId,
+        turnId: review.turnId,
       });
       return params;
     }
@@ -18963,6 +19019,13 @@ export class DesktopBackendRegistry {
     params: SteerTurnRequest,
     messageOrigin?: AppServerThreadMessageOrigin,
   ): Promise<SteerTurnResponse> {
+    const review = this.findReviewForParentTurn({
+      backend: params.backend,
+      parentThreadId: params.threadId,
+    });
+    if (review?.mode === "native") {
+      throw new Error("Native review steering is unsupported; queue a follow-up instead.");
+    }
     const input = await enrichLocalFileInputs(params.input, {
       privateStorageRoots: this.localFilePrivateStorageRoots,
     });
@@ -19901,6 +19964,9 @@ export class DesktopBackendRegistry {
     threadId: string,
     backend: AppServerBackendKind = "codex",
   ): boolean {
+    if (this.findReviewForParentTurn({ backend, parentThreadId: threadId })) {
+      return true;
+    }
     if (backend === "codex") {
       if (this.reservedCodexStartThreadIds.has(threadId)) {
         return true;
@@ -19932,7 +19998,8 @@ export class DesktopBackendRegistry {
   }
 
   private threadHasActiveCodexReviewTurn(threadId: string): boolean {
-    return Boolean(this.findActiveCodexReviewTurnKey(threadId));
+    return Boolean(this.findActiveCodexReviewTurnKey(threadId))
+      || this.findReviewForParentTurn({ backend: "codex", parentThreadId: threadId })?.mode === "native";
   }
 
   private findActiveCodexReviewTurnKey(threadId: string): string | undefined {
@@ -27937,13 +28004,13 @@ export class DesktopBackendRegistry {
     });
   }
 
-  private async completeReviewSubAgent(params: {
-    backend: AppServerBackendKind;
-    completedAt?: number;
-    method: AppServerNotification["method"];
-    threadId: string;
-    turnId: string;
-  }): Promise<void> {
+  private async completeReviewSubAgent(params: ReviewTerminal): Promise<void> {
+    for (const terminals of this.pendingReviewTerminals) {
+      terminals.set(
+        buildReviewSubAgentKey(params.backend, params.threadId, params.turnId),
+        params,
+      );
+    }
     const activeReview = this.findActiveReviewSubAgentForTerminal(params);
     if (!activeReview) {
       return;
@@ -27986,17 +28053,58 @@ export class DesktopBackendRegistry {
     });
   }
 
-  private findManagedReviewForParentTurn(params: {
+  private clearNativeReviewActiveTurns(record: ReviewSubAgentRecord): void {
+    if (record.mode === "native" && record.backend === "codex") {
+      const reviewKey = buildActiveTurnModeKey(record.reviewThreadId, record.turnId);
+      const interruptTurnId = this.activeCodexReviewInterruptTurnIds.get(reviewKey);
+      for (const turnId of new Set([record.turnId, interruptTurnId])) {
+        if (!turnId) {
+          continue;
+        }
+        const modeKey = buildActiveTurnModeKey(record.reviewThreadId, turnId);
+        this.activeCodexTurnModes.delete(modeKey);
+        this.activeCodexReviewTurnKeys.delete(modeKey);
+        this.activeTurnKeys.delete(buildActiveTurnKey("codex", record.reviewThreadId, turnId));
+      }
+      this.activeCodexReviewInterruptTurnIds.delete(reviewKey);
+    }
+  }
+
+  private async releaseNativeReviewParent(
+    record: ReviewSubAgentRecord,
+    terminal: ReviewTerminal,
+  ): Promise<void> {
+    await this.drainPendingReviewStartsForTerminalTurn({
+      backend: record.parentBackend,
+      threadId: record.parentThreadId,
+      turnId: record.turnId,
+      method: terminal.method,
+    });
+    this.drainPendingThreadWorkspaceMovesForTerminalTurn({
+      backend: record.parentBackend,
+      threadId: record.parentThreadId,
+      turnId: record.turnId,
+    });
+    void this.flushQueuedExecutionModeIfPresent(record.parentThreadId);
+    void this.threadTurnQueue.releaseThread({
+      backend: record.parentBackend,
+      threadId: record.parentThreadId,
+      turnId: record.turnId,
+      status: terminal.method,
+      ...(terminal.errorMessage ? { errorMessage: terminal.errorMessage } : {}),
+    });
+  }
+
+  private findReviewForParentTurn(params: {
     backend: AppServerBackendKind;
     parentThreadId: string;
-    turnId: string;
+    turnId?: string;
   }): ReviewSubAgentRecord | undefined {
     return Array.from(this.activeReviewSubAgents.values()).find(
       (record) =>
-        record.mode === "managed"
-        && record.parentBackend === params.backend
+        record.parentBackend === params.backend
         && record.parentThreadId === params.parentThreadId
-        && record.turnId === params.turnId,
+        && (!params.turnId || record.turnId === params.turnId),
     );
   }
 
@@ -39116,6 +39224,7 @@ export class DesktopBackendRegistry {
         await this.completeReviewSubAgent({
           backend: event.backend,
           completedAt: completedAtFromTerminalNotification(event.notification),
+          errorMessage: errorMessageFromTerminalNotification(event.notification),
           method: event.notification.method,
           threadId: notification.params.threadId,
           turnId,
@@ -39173,6 +39282,9 @@ export class DesktopBackendRegistry {
         const wasKnownActiveTurn =
           !turnId.startsWith("pending:") &&
           this.activeCodexTurnModes.has(activeTurnModeKey);
+        if (managedReview?.mode === "native") {
+          this.clearNativeReviewActiveTurns(managedReview);
+        }
         this.clearCodexReviewInterruptMappingForTurn(
           notification.params.threadId,
           turnId,
@@ -39213,16 +39325,32 @@ export class DesktopBackendRegistry {
           });
         }
       }
+      if (managedReview?.mode === "native"
+        && managedReview.reviewThreadId !== managedReview.parentThreadId) {
+        await this.releaseNativeReviewParent(managedReview, {
+          backend: event.backend,
+          threadId: notification.params.threadId,
+          turnId: managedReview.turnId,
+          method: event.notification.method,
+          errorMessage: errorMessageFromTerminalNotification(event.notification),
+        });
+      }
+      // Inline review waiters use the returned outer turn ID, even when
+      // Codex terminates the observed inner interrupt turn.
+      const lifecycleTurnId = managedReview?.mode === "native"
+        && managedReview.reviewThreadId === managedReview.parentThreadId
+        ? managedReview.turnId
+        : turnId;
       await this.drainPendingReviewStartsForTerminalTurn({
         backend: event.backend,
         threadId: notification.params.threadId,
-        turnId,
+        turnId: lifecycleTurnId,
         method: event.notification.method,
       });
       this.drainPendingThreadWorkspaceMovesForTerminalTurn({
         backend: event.backend,
         threadId: notification.params.threadId,
-        turnId,
+        turnId: lifecycleTurnId,
       });
       if (event.backend === "codex") {
         // Turn-end is the resume boundary — flush any queued mode change
@@ -39255,7 +39383,7 @@ export class DesktopBackendRegistry {
       void this.threadTurnQueue.releaseThread({
         backend: event.backend,
         threadId: notification.params.threadId,
-        turnId,
+        turnId: lifecycleTurnId,
         status: event.notification.method,
         ...(event.notification.method === "turn/failed"
           ? {

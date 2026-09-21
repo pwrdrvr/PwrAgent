@@ -31127,6 +31127,251 @@ command = "pnpm dev"
     }
   });
 
+  it.each(["thread-parent", "thread-review"])(
+    "keeps native review ownership and releases the parent queue once (%s)",
+    async (reviewThreadId) => {
+      const codexClient = new MockBackendClient({
+        initializeResult: { methods: ["turn/start", "turn/interrupt", "turn/steer", "review/start"] },
+        startReviewResult: {
+          threadId: "thread-parent", reviewThreadId, turnId: "review-turn",
+        },
+      });
+      const registry = new DesktopBackendRegistry({
+        codexClient, overlayStore: createOverlayStoreMock(),
+      });
+      await discoverCodexBackendForTest(registry);
+      const start = vi.spyOn(codexClient, "startTurn");
+      const steer = vi.spyOn(codexClient, "steerTurn");
+      await registry.startReview({
+        backend: "codex", threadId: "thread-parent", target: { type: "uncommittedChanges" },
+      });
+      expect(codexClient.lastStartReviewParams?.delivery).toBe("inline");
+      expect(start).not.toHaveBeenCalled();
+      expect(registry.getActiveTurnForThread({
+        backend: "codex", threadId: "thread-parent",
+      })).toEqual({ backend: "codex", threadId: "thread-parent", turnId: "review-turn" });
+      expect(registry.isThreadTurnOccupied({ backend: "codex", threadId: "thread-parent" })).toBe(true);
+      const queued = await registry.submitTurn({
+        backend: "codex", threadId: "thread-parent",
+        input: [{ type: "text", text: "Continue after review" }], origin: "messaging",
+      });
+      expect(queued.status).toBe("queued");
+      {
+        await expect(registry.steerTurn({
+          backend: "codex", threadId: "thread-parent", expectedTurnId: "review-turn",
+          requestId: "steer-review", input: [{ type: "text", text: "Steer" }],
+        })).rejects.toThrow("Native review steering is unsupported");
+        await expect(registry.controlActiveTurn({
+          operation: "steer", backend: "codex", threadId: "thread-parent",
+          requestId: "control-steer-review", expectedTurnId: "review-turn",
+          input: [{ type: "text", text: "Steer" }],
+        })).resolves.toMatchObject({ ok: false, error: { code: "unsupported_capability" } });
+        expect(steer).not.toHaveBeenCalled();
+      }
+      await codexClient.emit({
+        method: "thread/status/changed",
+        params: { threadId: "thread-parent", status: { type: "idle" } },
+      });
+      expect(start).not.toHaveBeenCalled();
+      await expect(registry.controlActiveTurn({
+        operation: "stop", backend: "codex", threadId: "thread-parent",
+        requestId: "stop-review", expectedTurnId: "review-turn",
+      })).resolves.toMatchObject({ ok: true, disposition: "interrupted", turnId: "review-turn" });
+      expect(codexClient.lastInterruptTurnParams).toMatchObject({ threadId: reviewThreadId, turnId: "review-turn" });
+      expect(registry.isThreadTurnOccupied({ backend: "codex", threadId: "thread-parent" })).toBe(true);
+      expect(start).not.toHaveBeenCalled();
+      const terminal = {
+        method: "turn/cancelled" as const,
+        params: { threadId: reviewThreadId, turnId: "review-turn",
+          turn: { id: "review-turn", status: "cancelled" as const } },
+      };
+      await codexClient.emit(terminal);
+      await expect.poll(() => start.mock.calls.length).toBe(1);
+      await codexClient.emit(terminal);
+      expect(start).toHaveBeenCalledTimes(1);
+      expect(codexClient.lastStartTurnParams?.threadId).toBe("thread-parent");
+      await registry.close();
+    },
+  );
+
+  it("holds the parent queue after a distinct native review fails", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start", "review/start"] },
+      startReviewResult: { threadId: "parent", reviewThreadId: "review", turnId: "review-turn" },
+    });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    const start = vi.spyOn(codexClient, "startTurn");
+    await registry.startReview({ backend: "codex", threadId: "parent", target: { type: "uncommittedChanges" } });
+    await registry.submitTurn({
+      backend: "codex", threadId: "parent", input: [{ type: "text", text: "Next" }], origin: "messaging",
+    });
+    await codexClient.emit({
+      method: "turn/failed", params: { threadId: "review", turnId: "review-turn",
+        turn: { id: "review-turn", status: "failed", error: { message: "Review failed upstream" } } },
+    });
+    expect(start).not.toHaveBeenCalled();
+    expect(registry.isThreadTurnOccupied({ backend: "codex", threadId: "parent" })).toBe(false);
+    await expect.poll(() => registry.getQueuedTurnsSnapshot()).toMatchObject({
+      [buildThreadIdentityKey("codex", "parent")]: [expect.objectContaining({
+        manualReleaseRequired: true, holdReason: "Review failed upstream",
+      })],
+    });
+    await registry.close();
+  });
+
+  it.each([true, false])(
+    "preserves native inner/outer review lifecycle (started before response: %s)",
+    async (startedBeforeResponse) => {
+      const codexClient = new MockBackendClient({
+        initializeResult: { methods: ["turn/start", "review/start", "turn/interrupt"] },
+        startReviewResult: { threadId: "thread-parent", reviewThreadId: "thread-parent", turnId: "outer" },
+      });
+      const started = {
+        method: "turn/started" as const,
+        params: { threadId: "thread-parent", turnId: "inner",
+          turn: { id: "inner", status: "in_progress" as const } },
+      };
+      if (startedBeforeResponse) {
+        vi.spyOn(codexClient, "startReview").mockImplementation(async () => {
+          await codexClient.emit(started);
+          return { threadId: "thread-parent", reviewThreadId: "thread-parent", turnId: "outer" };
+        });
+      }
+      const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+      const start = vi.spyOn(codexClient, "startTurn");
+      await registry.startReview({ backend: "codex", threadId: "thread-parent", target: { type: "uncommittedChanges" } });
+      if (!startedBeforeResponse) await codexClient.emit(started);
+      expect(registry.getActiveTurnForThread({ backend: "codex", threadId: "thread-parent" })?.turnId).toBe("outer");
+      await registry.submitTurn({
+        backend: "codex", threadId: "thread-parent", input: [{ type: "text", text: "Next" }], origin: "messaging",
+      });
+      await registry.interruptTurn({ backend: "codex", threadId: "thread-parent", turnId: "outer" });
+      expect(codexClient.lastInterruptTurnParams).toMatchObject({ threadId: "thread-parent", turnId: "inner" });
+      await codexClient.emit({
+        method: "item/completed", params: { threadId: "thread-parent", turnId: "outer",
+          item: { id: "review-result", type: "exitedReviewMode", review: "No findings." } },
+      });
+      expect(start).not.toHaveBeenCalled();
+      expect(registry.isThreadTurnOccupied({ backend: "codex", threadId: "thread-parent" })).toBe(true);
+      await codexClient.emit({
+        method: "turn/completed", params: { threadId: "thread-parent", turnId: "outer",
+          turn: { id: "outer", status: "completed", output: [] } },
+      });
+      await expect.poll(() => start.mock.calls.length).toBe(1);
+      await registry.close();
+    },
+  );
+
+  it.each(["cancelled", "failed", "completed"] as const)(
+    "settles scheduled inline reviews when the inner turn is %s",
+    async (status) => {
+      const codexClient = new MockBackendClient({
+        initializeResult: { methods: ["review/start"] },
+      });
+      const registry = new DesktopBackendRegistry({
+        codexClient,
+        overlayStore: createOverlayStoreMock(),
+      });
+      const events: AgentEvent[] = [];
+      registry.onEvent((event) => { events.push(event); });
+      const start = vi.spyOn(codexClient, "startReview")
+        .mockImplementationOnce(async () => {
+          await codexClient.emit({
+            method: "turn/started",
+            params: {
+              threadId: "thread-parent",
+              turnId: "inner",
+              turn: { id: "inner", status: "in_progress" },
+            },
+          });
+          return { threadId: "thread-parent", reviewThreadId: "thread-parent", turnId: "outer" };
+        })
+        .mockResolvedValue({ threadId: "thread-parent", reviewThreadId: "thread-parent", turnId: "next-review" });
+      const request = {
+        backend: "codex" as const,
+        threadId: "thread-parent",
+        target: { type: "uncommittedChanges" as const },
+      };
+      try {
+        await registry.startReview(request);
+        const scheduled = await registry.submitReview(request);
+        expect(scheduled).toMatchObject({ status: "scheduled", invokingTurnId: "outer" });
+        if (scheduled.status !== "scheduled") throw new Error("Expected a scheduled review");
+        const params = { threadId: "thread-parent", turnId: "inner" };
+        const terminal: AppServerNotification = status === "failed"
+          ? {
+              method: "turn/failed",
+              params: { ...params, turn: { id: "inner", status, error: { message: "Review failed" } } },
+            }
+          : status === "cancelled"
+            ? {
+                method: "turn/cancelled",
+                params: { ...params, turn: { id: "inner", status } },
+              }
+            : {
+                method: "turn/completed",
+                params: { ...params, turn: { id: "inner", status, output: [] } },
+              };
+        await codexClient.emit(terminal);
+        await codexClient.emit(terminal);
+        const updates = events.filter((event) =>
+          event.notification.method === "thread/reviewStart/updated"
+          && event.notification.params.pendingReviewId === scheduled.pendingReviewId
+          && event.notification.params.status !== "scheduled"
+        );
+        expect(updates).toEqual([{
+          backend: "codex",
+          notification: {
+            method: "thread/reviewStart/updated",
+            params: expect.objectContaining({
+              threadId: "thread-parent",
+              pendingReviewId: scheduled.pendingReviewId,
+              status: status === "completed" ? "started" : "cancelled",
+            }),
+          },
+        }]);
+        expect(start).toHaveBeenCalledTimes(status === "completed" ? 2 : 1);
+        expect(registry.cancelPendingReview(scheduled.pendingReviewId, "Must already be settled")).toBe(false);
+      } finally {
+        await registry.close();
+      }
+    },
+  );
+
+  it.each(["thread-parent", "thread-review"])(
+    "does not resurrect a native review completed before its response (%s)",
+    async (reviewThreadId) => {
+      const codexClient = new MockBackendClient({
+        initializeResult: { methods: ["turn/start", "review/start"] },
+      });
+      const overlayStore = createOverlayStoreMock();
+      const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+      vi.spyOn(codexClient, "startReview").mockImplementation(async () => {
+        await codexClient.emit({
+          method: "turn/started",
+          params: { threadId: reviewThreadId, turnId: "inner",
+            turn: { id: "inner", status: "in_progress" } },
+        });
+        await codexClient.emit({
+          method: "turn/completed",
+          params: { threadId: reviewThreadId, turnId: "review-turn",
+            turn: { id: "review-turn", status: "completed", output: [] } },
+        });
+        return { threadId: "thread-parent", reviewThreadId, turnId: "review-turn" };
+      });
+      await registry.startReview({
+        backend: "codex", threadId: "thread-parent", target: { type: "uncommittedChanges" },
+      });
+      expect(registry.isThreadTurnOccupied({ backend: "codex", threadId: "thread-parent" })).toBe(false);
+      expect(registry.isThreadTurnOccupied({ backend: "codex", threadId: reviewThreadId })).toBe(false);
+      expect(registry.getActiveTurnForThread({ backend: "codex", threadId: "thread-parent" })).toBeUndefined();
+      expect((await overlayStore.getThreadOverlayState({
+        backend: "codex", threadId: "thread-parent",
+      }))?.subAgents?.[0]).toMatchObject({ status: "success" });
+      await registry.close();
+    },
+  );
+
   it("interrupts Codex reviews with the backend active turn id", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/interrupt", "review/start"] },
