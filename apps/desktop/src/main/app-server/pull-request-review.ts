@@ -1,6 +1,7 @@
 import type { AppServerReviewTarget, PrSummary } from "@pwragent/shared";
 import { GithubPrFetcher } from "../pr-status/github-pr-fetcher";
 import { parseGitHubRemote } from "../pr-status/git-remote";
+import { EXPLICIT_REVIEW_PULL_REQUEST_URL } from "../../shared/pull-request-review";
 import { runGitCommand } from "./git-executable";
 import type { ReviewGitRunner } from "./review-workspace-guard";
 
@@ -25,8 +26,8 @@ export async function resolvePullRequestReview(params: {
   if (attached.length !== 1) {
     throw new Error("Review not started: select one unambiguous attached pull request.");
   }
-  const identity = /^https:\/\/([^/]+)\/([^/]+)\/([^/]+)\/pull\/([1-9][0-9]*)$/.exec(url);
-  if (!identity || identity[1] !== "github.com") {
+  const identity = EXPLICIT_REVIEW_PULL_REQUEST_URL.exec(url);
+  if (!identity) {
     throw new Error("Explicit pull request review currently requires a GitHub.com attachment with authoritative base and head commits.");
   }
   const [, provider, org, repo, number] = identity;

@@ -7,7 +7,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PrSummary } from "@pwragent/shared";
 import { resolvePullRequestReview } from "../app-server/pull-request-review";
 import { resolveReviewProvenance } from "../app-server/review-provenance";
-import { attachedPullRequestsForWorkspace, nativeReviewTarget } from "../../shared/pull-request-review";
+import {
+  attachedPullRequestsForWorkspace,
+  describeAttachedPullRequestLocalSync,
+  findCheckedOutPullRequest,
+  nativeReviewTarget,
+} from "../../shared/pull-request-review";
 
 const exec = promisify(execFile);
 let cwd: string;
@@ -119,6 +124,73 @@ describe("explicit attached PR review", () => {
     expect(attachedPullRequestsForWorkspace({ cwd, prs: [...prs, unrelated], repository: "github.com/fixture/project" })).toEqual(prs);
     expect(attachedPullRequestsForWorkspace({ cwd, prs: [prs[0], { ...prs[1], linkedDirectoryPaths: [cwd] }, unrelated] })).toHaveLength(2);
     expect(attachedPullRequestsForWorkspace({ cwd, prs })).toEqual([]);
+  });
+
+  it("separates a checkout that is the pull request from one that only resembles it", () => {
+    const pr = { headRefName: "stack-1", headSha: "a".repeat(40) };
+    const clean = { dirtyFiles: 0, unpushedCommits: 0, untrackedFiles: 0 };
+    expect(describeAttachedPullRequestLocalSync({
+      currentBranch: "stack-1", gitWorkingState: clean, pr,
+    })).toEqual({ known: true, matches: true, differences: [] });
+    // origin/ is the same branch; a different branch is not, and says so
+    // without needing the working state to have been probed.
+    expect(describeAttachedPullRequestLocalSync({
+      currentBranch: "origin/stack-1", gitWorkingState: clean, pr,
+    }).matches).toBe(true);
+    expect(describeAttachedPullRequestLocalSync({ currentBranch: "stack-2", pr }))
+      .toEqual({
+        known: true,
+        matches: false,
+        differences: ["this checkout is on stack-2, not the pull request's stack-1"],
+      });
+    // An unprobed working state is unknown, never "matches".
+    expect(describeAttachedPullRequestLocalSync({ currentBranch: "stack-1", pr }))
+      .toEqual({ known: false, matches: false, differences: [] });
+    expect(describeAttachedPullRequestLocalSync({
+      currentBranch: "stack-1", pr,
+      gitWorkingState: { dirtyFiles: 2, unpushedCommits: 1, untrackedFiles: 3 },
+    }).differences).toEqual([
+      "2 uncommitted files",
+      "3 untracked files",
+      "1 unpushed commit",
+    ]);
+    // The directory row only speaks for this checkout while it reports the
+    // same branch; a clean tree sitting on an older commit is still divergent.
+    expect(describeAttachedPullRequestLocalSync({
+      currentBranch: "stack-1", gitWorkingState: clean, pr,
+      directoryGitStatus: {
+        currentBranch: "stack-1",
+        recentCommits: [{ sha: "b".repeat(40), shortSha: "bbbbbbb" }],
+      },
+    }).differences).toEqual([
+      "a different head commit (bbbbbbb here, aaaaaaa on the pull request)",
+    ]);
+    expect(describeAttachedPullRequestLocalSync({
+      currentBranch: "stack-1", gitWorkingState: clean, pr,
+      directoryGitStatus: { behind: 2, currentBranch: "stack-1" },
+    }).differences).toEqual(["2 commits behind the remote branch"]);
+    expect(describeAttachedPullRequestLocalSync({
+      currentBranch: "stack-1", gitWorkingState: clean, pr,
+      directoryGitStatus: { behind: 2, currentBranch: "main" },
+    }).matches).toBe(true);
+  });
+
+  it("offers only an open pull request as the checked-out default", () => {
+    const shared = {
+      currentBranch: "stack-1",
+      gitWorkingState: { dirtyFiles: 0, unpushedCommits: 0, untrackedFiles: 0 },
+    };
+    const open = { ...prs[0], headRefName: "stack-1", lifecycleState: "open" as const };
+    expect(findCheckedOutPullRequest({ ...shared, prs: [open] })).toBe(open);
+    expect(findCheckedOutPullRequest({
+      ...shared,
+      prs: [{ ...open, lifecycleState: "merged" as const }],
+    })).toBeUndefined();
+    expect(findCheckedOutPullRequest({
+      ...shared,
+      gitWorkingState: { dirtyFiles: 1, unpushedCommits: 0, untrackedFiles: 0 },
+      prs: [open],
+    })).toBeUndefined();
   });
 
   it("fetches missing exact objects even after the provider branch advances without moving local refs", async () => {

@@ -27,6 +27,27 @@ single-commit review for the whole PR. As with other custom reviews, adherence t
 file-reading instructions depends on the reviewer. The application does not
 isolate the review in a separate filesystem.
 
+## Choosing between a pull request and the checkout
+
+The composer offers the attached-PR target only when the selected project has
+attached pull requests and the owning workspace executes locally. An
+always-present row that dead-ends on "no attached pull requests" is noise, and
+the keyboard target walk only visits the targets it draws.
+
+The PR target reviews the provider's published head. Base branch and Current
+changes review the checkout in front of the operator. Those describe the same
+commits only when the checkout sits on the PR's head branch with a clean tree,
+nothing unpushed, and the same head commit, so that is the one case where the
+composer defaults to the pull request. A dirty tree, an unpushed commit, a
+different head commit, or a different branch keeps the local default, and
+selecting the PR then names what the review would skip. Local Git state that
+has not been probed counts as unknown, never as a match.
+
+The checkout's head commit is compared directly when the directory row reports
+the same branch; Git refuses the same branch in two worktrees, so that is what
+establishes the row describes this checkout. Otherwise the clean/unpushed
+counters stand in for it.
+
 The initial provider scope is GitHub.com. Other providers keep the generic Base
 branch, Current changes, Commit, and Custom targets. Codex remote execution
 workspaces are explicitly unsupported for attached-PR review. A Federation peer
