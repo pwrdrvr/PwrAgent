@@ -8311,6 +8311,43 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("keeps guardian decisions in thread activity without changing ordinary warnings", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+    await client.getInitializeResult();
+    const notifications: unknown[] = [];
+    client.onNotification((notification) => {
+      notifications.push(notification);
+    });
+    const transport = MockTransport.instances.at(-1)!;
+    const message = "Automatic approval review approved (risk: low, authorization: high): Routine network read.";
+    transport.emitInbound({
+      jsonrpc: "2.0",
+      method: "guardianWarning",
+      params: { threadId: "thread-1", message },
+    });
+    transport.emitInbound({
+      jsonrpc: "2.0",
+      method: "warning",
+      params: { threadId: "thread-1", message: "Model fallback in use." },
+    });
+    await vi.waitFor(() => expect(notifications).toHaveLength(2));
+    expect(notifications).toEqual([
+      {
+        method: "warning",
+        params: { threadId: "thread-1", message, presentation: "activity-only" },
+      },
+      {
+        method: "warning",
+        params: { threadId: "thread-1", message: "Model fallback in use." },
+      },
+    ]);
+    await client.close();
+  });
+
   it("normalizes config warnings with project trust metadata", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
 

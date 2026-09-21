@@ -1269,6 +1269,9 @@ function normalizeServerNotification(
     return { method: "warning", params: {
       ...(typeof record.threadId === "string" ? { threadId: record.threadId } : {}),
       message: record.message,
+      // Guardian emits routine review decisions as warnings. Preserve them in
+      // thread activity without promoting each decision to a global toast.
+      presentation: "activity-only",
     } };
   }
   const metadata = extractRequestMetadata(params);

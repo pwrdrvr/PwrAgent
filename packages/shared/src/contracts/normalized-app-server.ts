@@ -1620,7 +1620,12 @@ export type AppServerNotification =
     }
   | {
       method: "warning";
-      params: { threadId?: string | null; message: string };
+      params: {
+        threadId?: string | null;
+        message: string;
+        /** Keep routine notices in the transcript without a global toast. */
+        presentation?: "activity-only";
+      };
     }
   | {
       method: "turn/started";
@@ -2006,6 +2011,7 @@ export type AppServerNotification =
       params: {
         threadId?: string;
         message: string;
+        presentation?: "activity-only";
       };
     }
   | {
