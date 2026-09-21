@@ -30,7 +30,7 @@ overrides:
   undici@7: 7.29.0
   ws: 8.21.3
 
-pnpmfileChecksum: sha256-ENVI4WvTe5sygYLw830xNJB8CimBQgr6EM0Oi3TR7os=
+pnpmfileChecksum: sha256-3O4jvullrr3x9F2QxkfFDUf5ivYM1e40WyXU3F2naCk=
 
 patchedDependencies:
   '@sigstore/core@4.0.1':

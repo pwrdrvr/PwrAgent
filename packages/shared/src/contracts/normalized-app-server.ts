@@ -33,7 +33,7 @@ export type AppServerBuiltinBackendKind = "codex";
 export type AcpBackendId = `acp:${string}`;
 export type AppServerBackendKind = AppServerBuiltinBackendKind | AcpBackendId;
 export type AppServerBackendScope = AppServerBackendKind | "all";
-export type ThreadExecutionMode = "default" | "full-access";
+export type ThreadExecutionMode = "default" | "auto" | "full-access";
 
 export type ThreadIdentifier = string;
 
@@ -314,6 +314,7 @@ export type WorktreeSnapshotSummary = {
 export type CodexEnvironmentExecutionTarget = "local" | "remote";
 
 export type CodexEnvironmentAction = {
+  shell?: "powershell";
   id: string;
   name: string;
   icon?: string;
@@ -1620,7 +1621,12 @@ export type AppServerNotification =
     }
   | {
       method: "warning";
-      params: { threadId?: string | null; message: string };
+      params: {
+        threadId?: string | null;
+        message: string;
+        /** Keep routine notices in the transcript without a global toast. */
+        presentation?: "activity-only";
+      };
     }
   | {
       method: "turn/started";
@@ -2006,6 +2012,7 @@ export type AppServerNotification =
       params: {
         threadId?: string;
         message: string;
+        presentation?: "activity-only";
       };
     }
   | {

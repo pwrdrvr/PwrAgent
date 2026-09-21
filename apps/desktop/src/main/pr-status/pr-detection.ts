@@ -1,12 +1,9 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import type { LinkedDirectorySummary, PrSummary } from "@pwragent/shared";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { resolveForgeReposForDirectory } from "./git-remote";
 import type { GithubPrFetcher } from "./github-pr-fetcher";
-import { getGitCommand } from "../git-command";
+import { runGitCommand } from "../app-server/git-executable";
 
-const execFileAsync = promisify(execFile);
 const GIT_BRANCH_LOOKUP_TIMEOUT_MS = 2_000;
 const FALLBACK_DEFAULT_BRANCHES = [
   "main",
@@ -140,15 +137,14 @@ async function readTrackedRemoteBranch(params: {
 }): Promise<TrackedRemoteBranch | undefined> {
   let stdout: string;
   try {
-    ({ stdout } = await execFileAsync(
-      getGitCommand(),
+    ({ stdout } = await runGitCommand(
+      params.cwd,
       [
         "for-each-ref",
         "--format=%(refname)%09%(upstream:remotename)%09%(upstream:remoteref)",
         `refs/heads/${params.localBranch}`,
       ],
       {
-        cwd: params.cwd,
         env: buildPwrAgentChildProcessEnv(process.env),
         maxBuffer: 64 * 1024,
         timeout: GIT_BRANCH_LOOKUP_TIMEOUT_MS,
@@ -201,8 +197,7 @@ async function readRemoteDefaultBranches(cwd: string): Promise<{
   defaultsByRemote: Map<string, string>;
   remotes: Set<string>;
 }> {
-  const { stdout } = await execFileAsync(getGitCommand(), ["remote"], {
-    cwd,
+  const { stdout } = await runGitCommand(cwd, ["remote"], {
     env: buildPwrAgentChildProcessEnv(process.env),
     maxBuffer: 64 * 1024,
     timeout: GIT_BRANCH_LOOKUP_TIMEOUT_MS,
@@ -253,8 +248,7 @@ async function readGitLine(
   args: string[],
 ): Promise<string | undefined> {
   try {
-    const { stdout } = await execFileAsync(getGitCommand(), args, {
-      cwd,
+    const { stdout } = await runGitCommand(cwd, args, {
       env: buildPwrAgentChildProcessEnv(process.env),
       maxBuffer: 64 * 1024,
       timeout: GIT_BRANCH_LOOKUP_TIMEOUT_MS,

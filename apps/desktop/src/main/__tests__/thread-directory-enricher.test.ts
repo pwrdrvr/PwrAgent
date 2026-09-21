@@ -1,3 +1,4 @@
+import type { ExecFileOptions } from "node:child_process";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -10,6 +11,20 @@ const expectedDir = (p: string): string => path.resolve(p).replace(/\\/g, "/");
 describe("createThreadDirectoryEnricher", () => {
   beforeEach(() => {
     vi.resetModules();
+    // Exercise directory probing at the shared executor boundary. Executable
+    // discovery is covered separately and must not consume these Git responses.
+    vi.doMock("../app-server/git-executable", async () => {
+      const { execFile } = await import("node:child_process");
+      return {
+        runGitCommand: (cwd: string, args: string[], options: ExecFileOptions) =>
+          new Promise((resolve, reject) => {
+            execFile("git", ["-C", cwd, ...args], options, (error, result) => {
+              if (error) reject(error);
+              else resolve(result);
+            });
+          }),
+      };
+    });
     // This suite isolates Git discovery and fallback behavior. The companion
     // enrichment-cache suite validates real filesystem invalidation.
     vi.doMock("../git-info/private/directory-observation", () => ({

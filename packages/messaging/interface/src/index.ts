@@ -1601,7 +1601,7 @@ export type MessagingInboundEvent =
   | MessagingInboundMediaEvent
   | MessagingInboundLifecycleEvent;
 
-export type MessagingPermissionsMode = "default" | "full-access";
+export type MessagingPermissionsMode = "default" | "auto" | "full-access";
 
 export type MessagingBindingPreferences = {
   acpRuntime?: BackendAcpSessionRuntimeState;

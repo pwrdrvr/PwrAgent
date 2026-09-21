@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   AgentEvent,
+  CodexEnvironmentSetupProgressEvent,
   ApplyThreadModelMigrationRequest,
   CancelQueuedTurnRequest,
   ReleaseQueuedTurnRequest,
@@ -173,6 +174,10 @@ const registry = {
       status: "acknowledged-new-thread" as const,
     }),
   ),
+  setCodexThreadEnvironment: vi.fn(async (
+    request: SetCodexThreadEnvironmentRequest,
+    _onProgress?: (event: CodexEnvironmentSetupProgressEvent) => void,
+  ) => ({ backend: request.backend, threadId: request.threadId })),
   getLatestCodexConfigWarning: vi.fn(() => ({})),
 };
 
@@ -466,6 +471,7 @@ describe("agent ipc", () => {
     registry.cancelThreadPrAutoDispatch.mockClear();
     registry.sendThreadPrAutoDispatchNow.mockClear();
     registry.applyThreadModelMigration.mockClear();
+    registry.setCodexThreadEnvironment.mockClear();
     federationMock.runtime.remoteBackend.mockClear();
     federationMock.runtime.hydrateLiveThreadMessageOrigin.mockReset();
     federationMock.runtime.hydrateLiveThreadMessageOrigin.mockImplementation(
@@ -869,6 +875,45 @@ describe("agent ipc", () => {
     });
 
     disposeAgentIpcHandlers();
+  });
+
+  it("finishes environment selection without sending progress to a closed window", async () => {
+    const { registerAgentIpcHandlers, disposeAgentIpcHandlers } = await import("../ipc/agent-ipc");
+    const { AGENT_SET_CODEX_THREAD_ENVIRONMENT_CHANNEL, CODEX_ENVIRONMENT_SETUP_PROGRESS_CHANNEL } = await import("../../shared/ipc");
+    let destroyed = false;
+    const sender = {
+      isDestroyed: () => destroyed,
+      send: vi.fn(() => {
+        if (destroyed) throw new Error("Object has been destroyed");
+      }),
+    };
+    const progress = {
+      directoryKey: "thread:codex:thread-1",
+      environmentId: "env",
+      environmentName: "Fixture environment",
+      command: "node setup.js",
+      at: 1,
+    };
+    registry.setCodexThreadEnvironment.mockImplementationOnce(async (request, onProgress) => {
+      onProgress?.({ ...progress, phase: "started" });
+      destroyed = true;
+      onProgress?.({ ...progress, phase: "stdout", chunk: "installing" });
+      onProgress?.({ ...progress, phase: "stderr", chunk: "warning" });
+      onProgress?.({ ...progress, phase: "completed", exitCode: 0 });
+      return { backend: request.backend, threadId: request.threadId };
+    });
+    registerAgentIpcHandlers();
+    try {
+      await expect(handlers.get(AGENT_SET_CODEX_THREAD_ENVIRONMENT_CHANNEL)?.({ sender }, {
+        backend: "codex", threadId: "thread-1", environmentId: "env",
+      })).resolves.toEqual({ backend: "codex", threadId: "thread-1" });
+      expect(sender.send).toHaveBeenCalledExactlyOnceWith(
+        CODEX_ENVIRONMENT_SETUP_PROGRESS_CHANNEL,
+        { ...progress, phase: "started" },
+      );
+    } finally {
+      disposeAgentIpcHandlers();
+    }
   });
 
   it("preserves directly renderable queued images from a federation peer", async () => {

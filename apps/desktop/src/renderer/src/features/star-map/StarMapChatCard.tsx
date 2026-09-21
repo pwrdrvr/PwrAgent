@@ -1196,7 +1196,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
     Partial<
       Pick<
         NavigationThreadSummary,
-        "executionMode" | "fastMode" | "model" | "reasoningEffort"
+        "fastMode" | "model" | "reasoningEffort"
       >
     >
   >({});
@@ -1206,8 +1206,8 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
   const threadReasoningEffort =
     optimisticSettings.reasoningEffort ?? selectedConfiguration?.reasoningEffort;
   const threadFastMode = optimisticSettings.fastMode ?? selectedConfiguration?.fastMode;
-  const threadExecutionMode =
-    optimisticSettings.executionMode ?? selectedConfiguration?.executionMode;
+  // Sandbox changes can remain queued after the mutation resolves.
+  const threadExecutionMode = selectedConfiguration?.executionMode;
   const modelOptions = backendSummary?.launchpadOptions?.models ?? [];
   const selectedModelOption =
     modelOptions.find((option) => option.id === threadModel)
@@ -1231,7 +1231,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
     }
   }, [imagesSupported]);
   useEffect(() => {
-    // Via the ref so the effect can key on the four scalar fields alone.
+    // Via the ref so the effect can key on the three scalar fields alone.
     const summary = configurationRef.current;
     setOptimisticSettings((current) => {
       const kept = Object.entries(current).filter(
@@ -1243,7 +1243,6 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
         : Object.fromEntries(kept);
     });
   }, [
-    selectedConfiguration?.executionMode,
     selectedConfiguration?.fastMode,
     selectedConfiguration?.model,
     selectedConfiguration?.reasoningEffort,
@@ -1260,10 +1259,6 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
     (executionMode: ThreadExecutionMode): void => {
       const setExecutionMode = desktopApi?.setThreadExecutionMode;
       if (!setExecutionMode || !composerReadinessRef.current) return;
-      setOptimisticSettings((current) => ({
-        ...current,
-        executionMode,
-      }));
       void setExecutionMode({
         backend: threadSource,
         executionMode,
@@ -1283,8 +1278,6 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
   const { fullAccessRiskDialog, requestExecutionModeSelection } =
     useExecutionModeSelection({
       applyExecutionMode,
-      // The optimistic value, so a second click while the first
-      // escalation round-trips does not re-prompt.
       currentExecutionMode: threadExecutionMode,
       desktopApi,
     });

@@ -189,6 +189,7 @@ class MockTransport implements JsonRpcTransport {
     nextCursor: null,
   };
   static mcpServerStatusError: { code?: number; message: string } | undefined;
+  static deferMcpServerStatus = false;
   static mcpServerStatusThreadError:
     | { code?: number; message: string }
     | undefined;
@@ -209,6 +210,7 @@ class MockTransport implements JsonRpcTransport {
     | undefined = undefined;
 
   readonly sentMessages: string[] = [];
+  mcpServerStatusResponse?: () => void;
   readonly options?: unknown;
   closeCount = 0;
   readonly loadedThreads = new Set<string>();
@@ -758,6 +760,14 @@ class MockTransport implements JsonRpcTransport {
     }
 
     if (payload.method === "mcpServerStatus/list") {
+      if (MockTransport.deferMcpServerStatus) {
+        this.mcpServerStatusResponse = () => this.messageHandler(JSON.stringify({
+          jsonrpc: "2.0",
+          id: payload.id,
+          result: MockTransport.threadMcpServerStatusResult,
+        }));
+        return;
+      }
       const error = payload.params?.threadId
         ? MockTransport.mcpServerStatusThreadError
           ?? MockTransport.mcpServerStatusError
@@ -1176,6 +1186,11 @@ class MockTransport implements JsonRpcTransport {
       return;
     }
 
+    if (payload.method === "turn/settings/update") {
+      this.messageHandler(JSON.stringify({ id: payload.id, result: { status: "applied" } }));
+      return;
+    }
+
     if (payload.method === "thread/settings/update") {
       const result: ThreadSettingsUpdateResponse = {};
       this.messageHandler(
@@ -1333,6 +1348,57 @@ async function waitForLatestTransportRequest(
 }
 
 describe("CodexAppServerClient", () => {
+  it("forwards Auto through create, resume, fork, turn start, and live updates", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.serverVersion = "0.153.4";
+    const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+    const permissions = { approvalPolicy: "on-request", sandbox: "workspace-write", approvalsReviewer: "auto_review" as const };
+    await client.startThread(permissions);
+    await client.forkThread({ threadId: "thread-2", ...permissions });
+    await client.startTurn({ threadId: "thread-2", input: [{ type: "text", text: "Inspect the project" }], ...permissions });
+    await expect(client.setTurnApprovalReviewer({ threadId: "thread-2", turnId: "turn-1", approvalsReviewer: "user" })).resolves.toEqual({ status: "applied" });
+    const requests = MockTransport.instances.flatMap((transport) => transport.sentMessages.map((message) => JSON.parse(message)));
+    for (const method of ["thread/start", "thread/fork", "thread/resume", "turn/start"]) {
+      expect(requests.find((request) => request.method === method)?.params).toMatchObject({ approvalsReviewer: "auto_review", approvalPolicy: "on-request" });
+    }
+    expect(requests.find((request) => request.method === "turn/start")?.params.sandboxPolicy.type).toBe("workspaceWrite");
+    expect(requests.find((request) => request.method === "turn/settings/update")?.params).toEqual({ threadId: "thread-2", turnId: "turn-1", approvalsReviewer: "user" });
+    await client.close();
+  });
+
+  it("selects Auto before a new thread has a rollout", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+    const thread = await client.startThread({ approvalsReviewer: "user", approvalPolicy: "on-request", sandbox: "workspace-write" });
+    MockTransport.threadResumeError = { code: -32000, message: "No rollout yet" };
+    await expect(client.setThreadPermissions({ threadId: thread.threadId, approvalsReviewer: "auto_review", approvalPolicy: "on-request", sandbox: "workspace-write" })).resolves.toEqual(thread);
+    const requests = MockTransport.instances.flatMap((transport) => transport.sentMessages.map((message) => JSON.parse(message)));
+    expect(requests.some((request) => request.method === "thread/resume")).toBe(false);
+    expect(requests.find((request) => request.method === "thread/settings/update")?.params).toMatchObject({
+      approvalsReviewer: "auto_review", approvalPolicy: "on-request", sandboxPolicy: { type: "workspaceWrite" },
+    });
+    await client.close();
+  });
+
+  it("rejects Auto on older servers instead of stripping the reviewer", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.serverVersion = "0.152.0";
+    const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+    await expect(client.startThread({ approvalsReviewer: "auto_review", approvalPolicy: "on-request", sandbox: "workspace-write" })).rejects.toThrow("0.153.0");
+    expect(MockTransport.instances.flatMap((transport) => transport.sentMessages.map((message) => JSON.parse(message))).some((request) => request.method === "thread/start")).toBe(false);
+    await client.close();
+  });
+
+  it.each([
+    { approvalPolicy: "never", sandbox: "workspace-write" },
+    { approvalPolicy: "on-request", sandbox: "danger-full-access" },
+  ])("rejects Auto with incompatible overrides: %j", async (permissions) => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+    await expect(client.startThread({ ...permissions, approvalsReviewer: "auto_review" })).rejects.toThrow("requires on-request");
+    await client.close();
+  });
+
   it("fails active turns and blocks probes until the rejected profile is verified", async () => {
     const { codexAuthState } = await import("../codex-auth-state");
     const { CodexAppServerClient } = await import("../codex-app-server/client");
@@ -1441,6 +1507,7 @@ describe("CodexAppServerClient", () => {
       },
     };
     MockTransport.mcpServerStatusError = undefined;
+    MockTransport.deferMcpServerStatus = false;
     MockTransport.mcpServerStatusThreadError = undefined;
     MockTransport.threadMcpServerStatusResult = {
       data: [],
@@ -1527,6 +1594,30 @@ describe("CodexAppServerClient", () => {
         },
       },
     });
+  });
+
+  it("retains Token Miser negotiation until close without re-reading its setting", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    let enabled = true;
+    const resolveNonce = vi.fn(() => enabled ? "A".repeat(43) : undefined);
+    const client = new CodexAppServerClient({
+      resolvePwrdrvrTokenMiserActivationNonce: resolveNonce,
+    });
+    try {
+      await client.getInitializeResult();
+      enabled = false;
+      for (let i = 0; i < 3; i += 1) {
+        expect(client.isTokenMiserActivationNegotiated()).toBe(true);
+      }
+      expect(resolveNonce).toHaveBeenCalledOnce();
+      await client.close();
+      expect(client.isTokenMiserActivationNegotiated()).toBe(false);
+      await client.getInitializeResult();
+      expect(client.isTokenMiserActivationNegotiated()).toBe(false);
+      expect(resolveNonce).toHaveBeenCalledTimes(2);
+    } finally {
+      await client.close();
+    }
   });
 
   it("reads the code-mode output reducer capability from the server", async () => {
@@ -8233,6 +8324,43 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("keeps guardian decisions in thread activity without changing ordinary warnings", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+    await client.getInitializeResult();
+    const notifications: unknown[] = [];
+    client.onNotification((notification) => {
+      notifications.push(notification);
+    });
+    const transport = MockTransport.instances.at(-1)!;
+    const message = "Automatic approval review approved (risk: low, authorization: high): Routine network read.";
+    transport.emitInbound({
+      jsonrpc: "2.0",
+      method: "guardianWarning",
+      params: { threadId: "thread-1", message },
+    });
+    transport.emitInbound({
+      jsonrpc: "2.0",
+      method: "warning",
+      params: { threadId: "thread-1", message: "Model fallback in use." },
+    });
+    await vi.waitFor(() => expect(notifications).toHaveLength(2));
+    expect(notifications).toEqual([
+      {
+        method: "warning",
+        params: { threadId: "thread-1", message, presentation: "activity-only" },
+      },
+      {
+        method: "warning",
+        params: { threadId: "thread-1", message: "Model fallback in use." },
+      },
+    ]);
+    await client.close();
+  });
+
   it("normalizes config warnings with project trust metadata", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
 
@@ -8585,6 +8713,64 @@ describe("CodexAppServerClient", () => {
     ]);
 
     await client.close();
+  });
+
+  it.each([
+    { detail: "toolsAndAuthOnly" as const, delayMs: 95_000, timeoutMs: 120_000 },
+    { detail: "full" as const, delayMs: 395_000, timeoutMs: 420_000 },
+  ])("waits for Codex $detail inventory and still bounds a hung request", async ({
+    detail, delayMs, timeoutMs,
+  }) => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({ command: "codex" });
+    await client.listMcpServers({ detail });
+    const transport = MockTransport.instances.at(-1)!;
+    MockTransport.deferMcpServerStatus = true;
+    vi.useFakeTimers();
+    try {
+      const inventory = client.listMcpServers({ threadId: "thread-1", detail });
+      const response = expect(inventory).resolves.toEqual([]);
+      await vi.advanceTimersByTimeAsync(delayMs);
+      expect(transport.mcpServerStatusResponse).toBeDefined();
+      transport.mcpServerStatusResponse!();
+      await response;
+
+      const hung = client.listMcpServers({ detail });
+      const failure = expect(hung).rejects.toThrow("json-rpc timeout: mcpServerStatus/list");
+      await vi.advanceTimersByTimeAsync(timeoutMs);
+      await failure;
+    } finally {
+      await client.close();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    { requestTimeoutMs: 150, mcpInventoryTimeoutMs: undefined, expectedMs: 150 },
+    { requestTimeoutMs: 150, mcpInventoryTimeoutMs: 250, expectedMs: 250 },
+  ])("honors MCP inventory timeout overrides: $expectedMs ms", async ({
+    requestTimeoutMs, mcpInventoryTimeoutMs, expectedMs,
+  }) => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({
+      command: "codex", requestTimeoutMs, mcpInventoryTimeoutMs,
+    });
+    await client.listMcpServers({ detail: "toolsAndAuthOnly" });
+    MockTransport.deferMcpServerStatus = true;
+    vi.useFakeTimers();
+    try {
+      let settled = false;
+      const inventory = client.listMcpServers({ detail: "toolsAndAuthOnly" });
+      const failure = expect(inventory).rejects.toThrow("json-rpc timeout: mcpServerStatus/list");
+      void inventory.catch(() => { settled = true; });
+      await vi.advanceTimersByTimeAsync(expectedMs - 1);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await failure;
+    } finally {
+      await client.close();
+      vi.useRealTimers();
+    }
   });
 
   it("normalizes MCP inventory without forwarding tool schemas", async () => {

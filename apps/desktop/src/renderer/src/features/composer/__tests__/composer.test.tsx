@@ -1965,6 +1965,41 @@ describe("Composer", () => {
     expect(button).not.toHaveTextContent("VS Code");
   });
 
+  it.each([true, false])("shows Auto with runtime availability %s and help on its menu item", (available) => {
+    render(
+      <Composer
+        backends={[{
+          ...backendSummary("codex"),
+          executionModes: [
+            { mode: "default", label: "Default Access", available: true, isDefault: true },
+            {
+              mode: "auto", label: "Auto", available,
+              ...(!available ? { unavailableReason: "Auto requires Codex 0.153.0 or later." } : {}),
+            },
+          ],
+        }]}
+        disabled={false}
+        onSetExecutionMode={async () => undefined}
+        skills={[]}
+        thread={{
+          id: "thread-1", title: "Access", titleSource: "explicit",
+          source: "codex", executionMode: "default",
+          linkedDirectories: [], inbox: { inInbox: false },
+        }}
+      />,
+    );
+    const access = screen.getByRole("button", { name: "Access mode" });
+    expect(access).not.toHaveAttribute("aria-description");
+    fireEvent.focus(access);
+    expect(screen.queryByRole("tooltip")).toBeNull();
+    fireEvent.click(access);
+    const auto = screen.getByRole("option", { name: "Auto" });
+    expect(auto).toHaveProperty("disabled", !available);
+    expect(auto).toHaveAttribute("aria-description", available
+      ? "Workspace sandbox; Codex reviews eligible permission requests."
+      : "Auto requires Codex 0.153.0 or later.");
+  });
+
   it("flags the access-mode chip as danger when full access is selected", () => {
     render(
       <Composer
@@ -14894,7 +14929,7 @@ describe("Composer", () => {
     expect(screen.queryByRole("option", { name: "New worktree" })).not.toBeInTheDocument();
   });
 
-  it("keeps unpublished unborn repositories local and refreshes Git status on hover", () => {
+  it("keeps unpublished unborn repositories local and refreshes Git status on hover", async () => {
     const unavailableReason =
       "Worktrees are unavailable because this repository has no published base branch yet. Create the initial commit in the Local checkout and publish the default branch. Worktrees will be enabled once a remote base branch is available.";
     const refreshDirectoryGitStatuses = vi.fn(async () => ({ scheduledCount: 1 }));
@@ -14940,10 +14975,8 @@ describe("Composer", () => {
     expect(workspaceMode).toHaveValue("local");
     expect(workspaceMode).toHaveTextContent("Local");
     expect(workspaceMode).toHaveAttribute("aria-description", unavailableReason);
-    expect(workspaceMode.closest(".composer-dropdown")).toHaveAttribute(
-      "data-tooltip",
-      unavailableReason,
-    );
+    fireEvent.mouseEnter(workspaceMode.closest(".composer-dropdown")!);
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(unavailableReason);
     fireEvent.pointerEnter(workspaceMode.closest(".composer-dropdown")!);
     expect(refreshDirectoryGitStatuses).toHaveBeenCalledExactlyOnceWith({
       directoryKeys: ["directory:/Users/fixture-user/pwrdrvr/UnbornRepo"],

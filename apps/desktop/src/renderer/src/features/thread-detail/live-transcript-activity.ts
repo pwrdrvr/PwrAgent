@@ -728,6 +728,17 @@ export function buildLiveToolDetails(
   item: Record<string, unknown>
 ): AppServerThreadActivityDetail[] {
   const itemType = readString(item, "type")?.replace(/[-_\s]/g, "").toLowerCase();
+  if (itemType === "autoapprovalreview") {
+    const data = item.data as Record<string, unknown> | undefined;
+    return [{
+      id: readString(item, "id") ?? "auto-review",
+      kind: "command",
+      label: readString(item, "text") ?? "Auto review",
+      markdown: data && readString(data, "detail"),
+      status: normalizeItemStatus(data?.status),
+    }];
+  }
+
   if (
     itemType !== "dynamictoolcall" &&
     itemType !== "commandexecution" &&

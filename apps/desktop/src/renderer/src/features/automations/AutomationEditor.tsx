@@ -2579,6 +2579,9 @@ export function AutomationEditor(props: AutomationEditorProps) {
                   options={[
                     { label: "Inherit Agent access", value: "" },
                     ...ACCESS_MODE_OPTIONS,
+                    ...(effectiveBackend?.executionModes.some((mode) => mode.mode === "auto" && mode.available)
+                      ? [{ label: "Auto", value: "auto" }]
+                      : []),
                   ]}
                   value={profileExecutionMode}
                   onChange={(value) =>

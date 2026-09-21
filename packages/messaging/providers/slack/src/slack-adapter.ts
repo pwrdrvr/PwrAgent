@@ -925,7 +925,7 @@ export class SlackAdapter implements SlackProviderAdapter {
     });
     // Long assistant messages: split into several posts at clean boundaries so
     // neither a 12,000-char standard-Markdown block nor a legacy 3,000-char
-    // section block truncates the tail. Images are attached to the final chunk;
+    // section block truncates the tail. Remote images render on the final chunk;
     // file attachments and interactive/update surfaces retain the single-post
     // path because their placement and update semantics are more specialized.
     if (
@@ -992,10 +992,12 @@ export class SlackAdapter implements SlackProviderAdapter {
         };
       }
 
+      // Uploads follow the reply destination. A channel reply timestamp is not
+      // a thread destination; using it here hides attachments under the reply.
       await this.uploadOutboundFiles({
         channelId,
         intent,
-        threadTs: target.threadTs ?? ts,
+        threadTs: target.threadTs,
       });
 
       return {
@@ -1954,10 +1956,10 @@ export class SlackAdapter implements SlackProviderAdapter {
   /**
    * Post a long message as several Slack messages, one per chunk, so
    * the content is never truncated at the 3000-char section-block limit. The
-   * chunks are already boundary-split by the caller. Remote image blocks and
-   * uploaded data images are associated with the final chunk. Returns the first
-   * message as the surface and records every posted timestamp in its opaque
-   * state so a later dismissal retracts the complete delivery.
+   * chunks are already boundary-split by the caller. Remote image blocks render
+   * on the final chunk; uploads use the same destination as the text. Returns
+   * the first message as the surface and records every posted timestamp in its
+   * opaque state so a later dismissal retracts the complete delivery.
    */
   private async deliverChunkedTextMessage(params: {
     intent: Extract<MessagingSurfaceIntent, { kind: "message" }>;
@@ -1971,7 +1973,6 @@ export class SlackAdapter implements SlackProviderAdapter {
     let firstSurface: MessagingSurfaceRef | undefined;
     const messageTimestamps: string[] = [];
     let deliveredAny = false;
-    let lastTs: string | undefined;
     try {
       for (const [index, chunk] of params.chunks.entries()) {
         const isLastChunk = index === params.chunks.length - 1;
@@ -1999,7 +2000,6 @@ export class SlackAdapter implements SlackProviderAdapter {
           );
         }
         const ts = result.ts;
-        lastTs = ts ?? lastTs;
         if (ts) {
           messageTimestamps.push(ts);
         }
@@ -2020,7 +2020,7 @@ export class SlackAdapter implements SlackProviderAdapter {
       await this.uploadOutboundFiles({
         channelId: params.target.channelId,
         intent: params.intent,
-        threadTs: params.target.threadTs ?? lastTs,
+        threadTs: params.target.threadTs,
       });
       if (firstSurface && messageTimestamps.length > 1) {
         const firstState = readSlackSurfaceState(firstSurface);

@@ -19212,7 +19212,7 @@ function readExecutionModeQueuedParams(
   };
   if (
     typeof params.threadId === "string" &&
-    (params.queuedExecutionMode === "default" || params.queuedExecutionMode === "full-access") &&
+    (params.queuedExecutionMode === "default" || params.queuedExecutionMode === "auto" || params.queuedExecutionMode === "full-access") &&
     typeof params.queuedAt === "number"
   ) {
     return {
@@ -22844,7 +22844,7 @@ function readThreadExecutionModeValue(
   value: MessagingJsonValue | undefined,
 ): ThreadExecutionMode | undefined {
   const executionMode = readStringValue(value, "executionMode");
-  return executionMode === "default" || executionMode === "full-access"
+  return executionMode === "default" || executionMode === "auto" || executionMode === "full-access"
     ? executionMode
     : undefined;
 }

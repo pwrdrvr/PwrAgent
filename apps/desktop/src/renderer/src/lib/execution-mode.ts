@@ -6,7 +6,18 @@ import type {
 } from "@pwragent/shared";
 
 export function formatExecutionModeLabel(mode?: ThreadExecutionMode): string {
-  return mode === "full-access" ? "Full Access" : "Default Access";
+  return mode === "auto" ? "Auto" : mode === "full-access" ? "Full Access" : "Default Access";
+}
+
+export function describeCodexExecutionMode(mode: ThreadExecutionMode): string {
+  switch (mode) {
+    case "auto":
+      return "Workspace sandbox; Codex reviews eligible permission requests.";
+    case "full-access":
+      return "Runs without the workspace sandbox or permission prompts.";
+    default:
+      return "Workspace sandbox; asks you to approve additional access.";
+  }
 }
 
 export function acpRuntimeModeRequiresFullAccess(value: string): boolean {

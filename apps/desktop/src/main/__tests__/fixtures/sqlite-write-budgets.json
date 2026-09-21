@@ -13,6 +13,13 @@
     "rowsChanged": 4,
     "statements": 4
   },
+  "auto-access-selection": {
+    "commits": 2,
+    "note": "one operator mode selection and permission audit; no per-review persistence",
+    "observedWalBytes": 32960,
+    "rowsChanged": 2,
+    "statements": 2
+  },
   "automation-run-transcript-burst": {
     "commits": 1,
     "note": "2,500 completed tool items across 50 windows, one shutdown-boundary artifact write",

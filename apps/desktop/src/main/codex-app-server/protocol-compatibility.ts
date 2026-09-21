@@ -7,6 +7,7 @@ const GENERATED_MODEL_LIST_MIN_VERSION = [0, 144, 0] as const;
 const THREAD_SCOPED_MCP_STATUS_MIN_VERSION = [0, 144, 0] as const;
 
 export type CodexProtocolCompatibility = {
+  supportsAutoReview: boolean;
   dynamicToolFormat: "flat" | "namespaced";
   includePersistExtendedHistory: boolean;
   supportsOnFailureApprovalPolicy: boolean;
@@ -55,6 +56,8 @@ export function resolveCodexProtocolCompatibility(
     version !== undefined && compareSemanticVersions(version, minimum) >= 0;
 
   return {
+    // Conservative floor: the tested protocol supports live reviewer updates.
+    supportsAutoReview: isAtLeast([0, 153, 0]),
     dynamicToolFormat: isAtLeast(NAMESPACED_DYNAMIC_TOOLS_MIN_VERSION)
       ? "namespaced"
       : "flat",

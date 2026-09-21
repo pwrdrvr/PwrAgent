@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import type { ReactNode } from "react";
+import { useViewportTooltip } from "../../lib/useViewportTooltip";
 
 /**
  * Extracted from Composer.tsx so surfaces beyond the composer footer (the
@@ -10,16 +11,15 @@ import type { ReactNode } from "react";
 
 export type ComposerDropdownOption = {
   /**
-   * Marked unselectable, but still focusable and still announced — the
-   * attribute is `aria-disabled`, not `disabled`. A native disabled button
-   * receives no pointer events and leaves the tab order, so an option that
-   * carried one had no gesture that could ever produce the reason it was
-   * unavailable. Callers put that reason in `description`.
+   * Options with an inline description remain focusable with `aria-disabled`
+   * so their unavailability reason can be announced. Other options retain
+   * native disabled behavior, with tooltip help on the wrapping element.
    */
   disabled?: boolean;
   /** One line under the label, for a choice whose name does not explain it. */
   description?: string;
   label: string;
+  tooltip?: string;
   value: string;
 };
 
@@ -74,6 +74,7 @@ export function ComposerDropdown(props: {
   value: string;
 }) {
   const [open, setOpen] = useState(false);
+  const [tooltipOption, setTooltipOption] = useState<string>();
   const listboxId = useId();
   const onOpenChange = props.onOpenChange;
   const selectedOption =
@@ -84,6 +85,25 @@ export function ComposerDropdown(props: {
   }, [onOpenChange]);
   const ref = useDismissableMenu<HTMLDivElement>(open, closeMenu);
   const Icon = props.icon;
+  const getTooltipHorizontalBounds = useCallback((target: HTMLElement) => {
+    const composerSetup = target.closest<HTMLElement>(".composer__setup");
+    if (!composerSetup) {
+      return undefined;
+    }
+    const { left, right } = composerSetup.getBoundingClientRect();
+    return { left, right };
+  }, []);
+  const { tooltipId, show, showAfterDelay, hide, visible, tooltipNode } =
+    useViewportTooltip({
+      className: "viewport-tooltip",
+      getHorizontalBounds: getTooltipHorizontalBounds,
+    });
+
+  useEffect(() => {
+    if (!open) {
+      hide();
+    }
+  }, [hide, open]);
 
   return (
     <div
@@ -92,17 +112,22 @@ export function ComposerDropdown(props: {
         props.compact ? "composer-dropdown--compact" : "",
         props.kind === "branch" ? "composer-dropdown--branch" : "",
         props.tone === "danger" ? "composer-dropdown--danger" : "",
-        props.tooltip ? "tooltip-target" : "",
         open ? "composer-dropdown--open" : "",
       ]
         .filter(Boolean)
         .join(" ")}
-      data-tooltip={props.tooltip}
       onPointerEnter={props.onPointerEnter}
+      onMouseEnter={(event) => {
+        if (!open && props.tooltip) {
+          showAfterDelay(event.currentTarget, props.tooltip);
+        }
+      }}
+      onMouseLeave={hide}
       ref={ref}
     >
       <button
         aria-description={props.tooltip}
+        aria-describedby={visible && !open ? tooltipId : undefined}
         aria-controls={open ? listboxId : undefined}
         aria-expanded={open}
         aria-haspopup="listbox"
@@ -113,7 +138,14 @@ export function ComposerDropdown(props: {
         id={props.id}
         type="button"
         value={props.value}
+        onBlur={hide}
+        onFocus={(event) => {
+          if (!open && props.tooltip) {
+            show(event.currentTarget, props.tooltip);
+          }
+        }}
         onClick={() => {
+          hide();
           const nextOpen = !open;
           setOpen(nextOpen);
           onOpenChange?.(nextOpen);
@@ -145,53 +177,79 @@ export function ComposerDropdown(props: {
               ? `${listboxId}-description-${index}`
               : undefined;
             return (
-              <button
-                aria-describedby={descriptionId}
-                aria-disabled={option.disabled ? true : undefined}
-                aria-selected={option.value === props.value}
-                className="composer-dropdown__option"
+              <div
                 key={option.value}
-                role="option"
-                type="button"
-                onClick={() => {
-                  // Guarded rather than `disabled`: the option stays focusable
-                  // and hoverable so its description is reachable.
-                  if (option.disabled) {
-                    return;
-                  }
-                  closeMenu();
-                  if (option.value !== props.value) {
-                    props.onChange(option.value);
+                role="presentation"
+                onBlur={hide}
+                onFocus={(event) => {
+                  if (option.tooltip) {
+                    setTooltipOption(option.value);
+                    show(event.currentTarget.parentElement!, option.tooltip);
                   }
                 }}
+                onMouseEnter={(event) => {
+                  if (option.tooltip) {
+                    setTooltipOption(option.value);
+                    // Anchor above the whole list so help cannot cover its rows.
+                    showAfterDelay(event.currentTarget.parentElement!, option.tooltip);
+                  }
+                }}
+                onMouseLeave={hide}
               >
-                {option.value === props.value ? (
-                  <span aria-hidden="true" className="composer-dropdown__check">
-                    ✓
-                  </span>
-                ) : (
-                  <span aria-hidden="true" className="composer-dropdown__check" />
-                )}
-                <span className="composer-dropdown__option-body">
-                  <span className="composer-dropdown__option-label">{option.label}</span>
-                  {option.description ? (
-                    // Hidden from name-from-content so the option is still
-                    // named by its label alone; aria-describedby reaches
-                    // through aria-hidden to announce it as the description.
-                    <span
-                      aria-hidden="true"
-                      className="composer-dropdown__option-description"
-                      id={descriptionId}
-                    >
-                      {option.description}
+                <button
+                  aria-description={option.tooltip}
+                  aria-describedby={[
+                    descriptionId,
+                    visible && tooltipOption === option.value ? tooltipId : undefined,
+                  ].filter(Boolean).join(" ") || undefined}
+                  aria-disabled={option.disabled ? true : undefined}
+                  disabled={option.disabled && !option.description}
+                  aria-selected={option.value === props.value}
+                  className="composer-dropdown__option"
+                  role="option"
+                  type="button"
+                  onClick={() => {
+                    // Described options stay focusable so their reason is reachable.
+                    // They need this guard in addition to aria-disabled.
+                    if (option.disabled) {
+                      return;
+                    }
+                    hide();
+                    closeMenu();
+                    if (option.value !== props.value) {
+                      props.onChange(option.value);
+                    }
+                  }}
+                >
+                  {option.value === props.value ? (
+                    <span aria-hidden="true" className="composer-dropdown__check">
+                      ✓
                     </span>
-                  ) : null}
-                </span>
-              </button>
+                  ) : (
+                    <span aria-hidden="true" className="composer-dropdown__check" />
+                  )}
+                  <span className="composer-dropdown__option-body">
+                    <span className="composer-dropdown__option-label">{option.label}</span>
+                    {option.description ? (
+                      // Hidden from name-from-content so the option is still
+                      // named by its label alone; aria-describedby reaches
+                      // through aria-hidden to announce it as the description.
+                      <span
+                        aria-hidden="true"
+                        className="composer-dropdown__option-description"
+                        id={descriptionId}
+                      >
+                        {option.description}
+                      </span>
+                    ) : null}
+                  </span>
+                </button>
+              </div>
             );
           })}
         </div>
       ) : null}
+      {tooltipNode}
     </div>
   );
 }

@@ -12399,6 +12399,42 @@ describe("useThreadSessionState", () => {
     });
   });
 
+  it("updates a live Auto review in place with the denial rationale", async () => {
+    const listeners = new Set<(event: AgentEvent) => void>();
+    const readThread = vi.fn(async (): Promise<AppServerReadThreadResponse> => ({
+      backend: "codex", fetchedAt: 1000, threadId: "thread-1",
+      replay: { entries: [], messages: [], pagination: { supportsPagination: false, hasPreviousPage: false } },
+    }));
+    const desktopApi: DesktopApi = {
+      readThread,
+      onAgentEvent: (listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
+    };
+    const { result } = renderHook(() => useThreadSessionState({
+      desktopApi, thread: buildThread({ id: "thread-1", updatedAt: 1000 }),
+    }));
+    await waitFor(() => expect(readThread).toHaveBeenCalled());
+    const publish = (completed: boolean) => act(() => {
+      for (const listener of listeners) listener({ backend: "codex", notification: {
+        method: completed ? "item/completed" : "item/started",
+        params: { threadId: "thread-1", turnId: "turn-1", item: {
+          id: "auto-review-1", type: "autoApprovalReview",
+          text: completed ? "Auto review: Denied" : "Auto review: Reviewing",
+          data: { status: completed ? "failed" : "in_progress", detail: completed ? "The destination is outside the authorized scope." : "Reviewing network request" },
+        } },
+      } });
+    });
+    publish(false);
+    await waitFor(() => expect(result.current.entries.some((entry) => entry.type === "activity"
+      && entry.details.some((detail) => detail.label === "Auto review: Reviewing"))).toBe(true));
+    publish(true);
+    await waitFor(() => {
+      const details = result.current.entries.flatMap((entry) => entry.type === "activity" ? entry.details : []);
+      expect(details.filter((detail) => detail.id === "auto-review-1")).toEqual([expect.objectContaining({
+        label: "Auto review: Denied", status: "failed", markdown: "The destination is outside the authorized scope.",
+      })]);
+    });
+  });
+
   it("renders live review items without synthesizing an assistant completion message", async () => {
     const agentEventListeners = new Set<
       Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]

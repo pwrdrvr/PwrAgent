@@ -603,6 +603,8 @@ export type CodexEnvironmentOption = {
   sourcePath: string;
   setupScript?: string;
   cleanupScript?: string;
+  /** Native Windows environments use PowerShell; absent preserves legacy POSIX execution. */
+  shell?: "powershell";
   actions: CodexEnvironmentAction[];
 };
 

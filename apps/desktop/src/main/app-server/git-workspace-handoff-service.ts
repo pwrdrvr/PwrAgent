@@ -1,7 +1,5 @@
-import { execFile } from "node:child_process";
 import { mkdir, realpath, stat } from "node:fs/promises";
 import path from "node:path";
-import { promisify } from "node:util";
 import type {
   AppServerBackendKind,
   DesktopWorktreeStorageLocation,
@@ -20,9 +18,8 @@ import {
   releaseWorktreePathReservation,
 } from "./git-directory-service";
 import { WorktreeArchiveService } from "./worktree-archive-service";
-import { getGitCommand } from "../git-command";
+import { runGitCommand } from "./git-executable";
 
-const execFileAsync = promisify(execFile);
 const DETACHED_HEAD_LEAVE_LOCAL_BRANCH = "HEAD";
 
 // Directory/worktree identifiers surfaced in the handoff response are returned
@@ -129,7 +126,7 @@ async function runGit(
   args: string[],
   env?: NodeJS.ProcessEnv,
 ): Promise<GitResult> {
-  return await execFileAsync(getGitCommand(), ["-C", cwd, ...args], {
+  return await runGitCommand(cwd, args, {
     env: buildPwrAgentChildProcessEnv(env ?? process.env),
     maxBuffer: 1024 * 1024 * 10,
   });
