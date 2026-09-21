@@ -12,7 +12,7 @@
     "@pwragent/messaging-interface": "workspace:*"
   },
   "devDependencies": {
-    "vitest": "^4.1.4"
+    "vitest": "^5.0.0"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json"
