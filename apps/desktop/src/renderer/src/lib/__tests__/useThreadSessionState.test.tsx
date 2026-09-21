@@ -12668,6 +12668,72 @@ describe("useThreadSessionState", () => {
     expect(result.current.messages.map((message) => message.id)).toEqual(["authored"]);
   });
 
+  it("drops a finished turn's live tool rows once the replay settles that turn", async () => {
+    // A command Codex parses into actions replays as `<item>-<n>` details with
+    // no command text, so the live row (bare item id, command kept) never
+    // matches a replay row by content.
+    const readItem = {
+      type: "commandExecution",
+      id: "exec-read",
+      command: "sed -n 1,80p src/registry.ts",
+      cwd: "/repo",
+      status: "completed",
+      exitCode: 0,
+      aggregatedOutput: "",
+      commandActions: [{ type: "read", command: "sed -n 1,80p src/registry.ts", name: "registry.ts", path: "/repo/src/registry.ts" }],
+    };
+    const settledTurn = { id: "turn-1", status: "completed" as const, durationMs: 90_000 };
+    const settledReplay: AppServerThreadEntry[] = [
+      {
+        type: "activity",
+        id: "activity-exec-read",
+        summary: "Explored 1 file",
+        details: [{ id: "exec-read-1", kind: "read", label: "Read registry.ts", path: "/repo/src/registry.ts", status: "completed" }],
+        turn: settledTurn,
+      },
+      { type: "message", id: "final", role: "assistant", phase: "final", text: "Done.", turn: settledTurn },
+    ];
+    let emit: (event: AgentEvent) => void = () => undefined;
+    let settled = false;
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (listener) => { emit = listener; return () => undefined; },
+      readThread: async () => ({
+        backend: "codex", threadId: "thread-1", fetchedAt: Date.now(),
+        replay: {
+          entries: settled ? settledReplay : [],
+          messages: [],
+          pagination: { supportsPagination: false, hasPreviousPage: false },
+        },
+      }),
+    };
+    const { result } = renderHook(() => useThreadSessionState({
+      desktopApi,
+      thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+    }));
+    await waitForThreadHydration(result);
+    const send = (method: string, params: Record<string, unknown>) => {
+      act(() => emit({
+        backend: "codex",
+        notification: { method, params: { threadId: "thread-1", turnId: "turn-1", ...params } },
+      } as AgentEvent));
+    };
+
+    send("turn/started", { turn: { id: "turn-1", status: "inProgress" } });
+    send("item/started", { item: { ...readItem, status: "inProgress" } });
+    send("item/completed", { item: readItem });
+    const liveToolRows = () =>
+      result.current.entries.filter((entry) => entry.id.startsWith("live-tools-"));
+    expect(liveToolRows()).toHaveLength(1);
+
+    settled = true;
+    send("turn/completed", { turn: { id: "turn-1", status: "completed", output: [] } });
+
+    await waitFor(() => {
+      expect(result.current.entries.map((entry) => entry.id)).toContain("activity-exec-read");
+    });
+    expect(liveToolRows()).toEqual([]);
+  });
+
   it("shows a structured inline review as its card, never as the JSON reply", async () => {
     let emit: (event: AgentEvent) => void = () => undefined;
     const desktopApi: DesktopApi = {
