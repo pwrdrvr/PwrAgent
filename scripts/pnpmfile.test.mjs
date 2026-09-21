@@ -227,7 +227,21 @@ describe("first-party coverage", () => {
       // `pack*ges/*` ends in `/*` but names no real directory, so the walk
       // would find nothing and return [] — the silent no-op this function
       // exists to refuse. Only expand when the prefix is a literal path.
-      if (!prefix.includes("*")) return subdirectories(root, prefix, { recursive });
+      if (!prefix.includes("*")) {
+        // A prefix that does not exist is a config error, not an empty
+        // workspace: `subdirectories` would return [] and this glob's
+        // packages would drop out of the enumeration while every assertion
+        // still passed. An existing but empty directory is legitimate and
+        // still yields [].
+        if (!existsSync(join(root, prefix))) {
+          throw new Error(
+            `pnpm-workspace.yaml globs ${glob}, but ${prefix} does not exist. `
+              + "Enumerating nothing for it would silently shrink the set of "
+              + "packages this test claims to have checked.",
+          );
+        }
+        return subdirectories(root, prefix, { recursive });
+      }
     }
     // Refuse rather than match nothing: a pattern that quietly expands to []
     // turns this whole test into a no-op that still reports success.
@@ -325,7 +339,28 @@ describe("first-party coverage", () => {
       // packages in the set, so the test claims to have checked more than it
       // did.
       const root = seed(["packages/*", glob]);
+      // The leading glob needs a real directory, so the exclusion is what
+      // this asserts on rather than the missing-prefix refusal.
+      write("packages/lib/package.json", JSON.stringify({ name: "only-me" }));
+
       expect(() => workspacePackageNames(root)).toThrow(/does not implement/);
+    });
+
+    it("refuses a glob whose prefix directory is missing", () => {
+      // The renamed-or-typo'd directory case: silently enumerating nothing
+      // would let `covers every workspace package` pass over a shorter list.
+      const root = seed(["packages/*", "aps/*"]);
+      write("packages/lib/package.json", JSON.stringify({ name: "only-me" }));
+
+      expect(() => workspacePackageNames(root)).toThrow(/does not exist/);
+    });
+
+    it("allows a glob whose directory exists but holds no package", () => {
+      const root = seed(["packages/*", "apps/*"]);
+      mkdirSync(join(root, "apps"), { recursive: true });
+      write("packages/lib/package.json", JSON.stringify({ name: "only-me" }));
+
+      expect(workspacePackageNames(root)).toEqual(["fixture-root", "only-me"]);
     });
 
     it("refuses a glob shape it cannot expand rather than matching nothing", () => {
@@ -437,7 +472,7 @@ describe("pnpm.overrides and resolutions", () => {
 
   it("allows every override this repository actually declares", () => {
     // Guards the fix against the live manifest: a false positive here fails
-    // \`pnpm install\` for everyone.
+    // `pnpm install` for everyone.
     const root = require("../package.json");
     expect(() => readPackage(structuredClone(root))).not.toThrow();
     expect(Object.keys(root.pnpm?.overrides ?? {}).length).toBeGreaterThan(0);
