@@ -1329,7 +1329,9 @@ export function registerAgentIpcHandlers(): void {
           .setCodexThreadEnvironment(stripFederationTarget(request));
       }
       return await registry.setCodexThreadEnvironment(request, (progress) => {
-        event.sender?.send?.(CODEX_ENVIRONMENT_SETUP_PROGRESS_CHANNEL, progress);
+        if (!event.sender.isDestroyed()) {
+          event.sender.send(CODEX_ENVIRONMENT_SETUP_PROGRESS_CHANNEL, progress);
+        }
       });
     },
   );
