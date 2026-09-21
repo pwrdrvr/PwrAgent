@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { createMcpSafeFetch } from "../mcp-connections/mcp-safe-fetch";
 import { parseErrorResponse } from "@modelcontextprotocol/sdk/client/auth.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 
 describe("createMcpSafeFetch", () => {
   it("keeps Cloudflare challenge HTML out of SDK OAuth errors", async () => {
@@ -36,12 +38,61 @@ describe("createMcpSafeFetch", () => {
     expect(await result.text()).not.toContain("private page");
   });
 
-  it("rejects a successful HTML landing page without exposing its body", async () => {
+  it.each([200, 202])("rejects an HTTP %s HTML landing page without exposing its body", async (status) => {
     const fetchFn = vi.fn(async () => new Response("<html>private page</html>", {
+      status,
       headers: { "content-type": "text/html" },
     }));
     await expect(createMcpSafeFetch({ fetchFn })("https://mcp.example.com/mcp"))
       .rejects.toThrow("returned an HTML page instead of an MCP or OAuth response");
+  });
+
+  it.each([null, "", "empty-stream"])("delivers SDK notifications with an empty HTML-labelled 202 (%s)", async (body) => {
+    const fetchFn = vi.fn<FetchLike>(async (_input, init) => {
+      // Initialization starts an optional SSE GET after the acknowledged POST.
+      if (init?.method === "GET") return new Response(null, { status: 405 });
+      return new Response(
+        body === "empty-stream"
+          ? new ReadableStream<Uint8Array>({
+              start(controller) {
+                controller.enqueue(new Uint8Array());
+                controller.close();
+              },
+            })
+          : body,
+        { status: 202, headers: { "content-type": "text/html" } },
+      );
+    });
+    const transport = new StreamableHTTPClientTransport(new URL("https://mcp.example.com/mcp"), {
+      fetch: createMcpSafeFetch({ fetchFn }),
+    });
+    await transport.start();
+    try {
+      await expect(transport.send({ jsonrpc: "2.0", method: "notifications/initialized" }))
+        .resolves.toBeUndefined();
+      expect(fetchFn.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1);
+    } finally {
+      await transport.close();
+    }
+  });
+
+  it("terminates an SDK session with an empty HTML-labelled 204", async () => {
+    const fetchFn = vi.fn(async () => new Response(null, {
+      status: 204,
+      headers: { "content-type": "text/html" },
+    }));
+    const transport = new StreamableHTTPClientTransport(new URL("https://mcp.example.com/mcp"), {
+      sessionId: "test-session",
+      fetch: createMcpSafeFetch({ fetchFn }),
+    });
+    await transport.start();
+    try {
+      await expect(transport.terminateSession()).resolves.toBeUndefined();
+      expect(fetchFn).toHaveBeenCalledOnce();
+      expect(transport.sessionId).toBeUndefined();
+    } finally {
+      await transport.close();
+    }
   });
 
   it("preserves JSON OAuth errors without consuming the response", async () => {

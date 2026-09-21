@@ -61,6 +61,28 @@ async function sanitizeHtmlResponse(response: Response, url: URL): Promise<Respo
   if (!challenged && contentType !== "text/html" && contentType !== "application/xhtml+xml") {
     return response;
   }
+  if (response.ok && !challenged) {
+    // Frameworks can label empty acknowledgements as HTML. A network 202
+    // can have a stream even when it contains no bytes; do not trust headers
+    // or buffer a whole HTML page just to distinguish it from an empty body.
+    if (!response.body) return response;
+    const reader = response.body.getReader();
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+          return new Response(null, {
+            status: response.status,
+            statusText: response.statusText,
+            headers: response.headers,
+          });
+        }
+        if (value.byteLength > 0) break;
+      }
+    } finally {
+      reader.releaseLock();
+    }
+  }
   // The SDK includes non-JSON error bodies verbatim in exceptions. Never
   // forward a website or browser challenge into status, logs, or IPC errors.
   await response.body?.cancel().catch(() => undefined);
