@@ -34516,7 +34516,7 @@ export class DesktopBackendRegistry {
       linkedDirectory: sourceLinkedDirectory,
       mode: "same_workspace",
     });
-    const executionMode =
+    const requestedOrInheritedExecutionMode =
       request.args.executionMode ??
       (sourceBackend === "codex"
         ? this.activeCodexTurnModes.get(
@@ -34530,6 +34530,14 @@ export class DesktopBackendRegistry {
           ? this.acpBackend.getSession(sourceBackend, sourceThreadId)
               ?.executionMode ?? "default"
           : "default");
+    // Auto review belongs to Codex. An implicit cross-provider handoff keeps
+    // approvals enabled using ACP's default mode; explicit Auto remains invalid.
+    const executionMode =
+      request.args.executionMode === undefined
+      && isAcpBackendId(backend)
+      && requestedOrInheritedExecutionMode === "auto"
+        ? "default"
+        : requestedOrInheritedExecutionMode;
     const modeSettings = EXECUTION_MODE_SUMMARIES[executionMode];
 
     if (

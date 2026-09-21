@@ -33022,7 +33022,14 @@ command = "pnpm dev"
     await registry.close();
   });
 
-  it("groups an ACP handoff under a Codex parent", async () => {
+  it.each([
+    { parentMode: "default", requestedMode: undefined, expectedMode: "default" },
+    { parentMode: "auto", requestedMode: undefined, expectedMode: "default" },
+    { parentMode: "full-access", requestedMode: undefined, expectedMode: "full-access" },
+    { parentMode: "auto", requestedMode: "default", expectedMode: "default" },
+    { parentMode: "auto", requestedMode: "full-access", expectedMode: "full-access" },
+    { parentMode: "auto", requestedMode: "auto", expectedMode: undefined },
+  ] as const)("resolves ACP handoff access from $parentMode with override $requestedMode", async ({ parentMode, requestedMode, expectedMode }) => {
     const parentDirectory = {
       id: expectedDir("/repo/app"),
       kind: "local" as const,
@@ -33047,12 +33054,12 @@ command = "pnpm dev"
         "codex:codex-parent": {
           backend: "codex",
           threadId: "codex-parent",
-          executionMode: "default",
+          executionMode: parentMode,
           extraLinkedDirectories: [parentDirectory],
         },
       },
     });
-    const { acpBackendId, registry } = createKimiAcpRegistry({
+    const { acpBackendId, acpClient, registry } = createKimiAcpRegistry({
       codexClient,
       overlayStore,
       sessionId: "kimi-child",
@@ -33080,6 +33087,7 @@ command = "pnpm dev"
         tool: "handoff_task",
         arguments: {
           backend: acpBackendId,
+          ...(requestedMode ? { executionMode: requestedMode } : {}),
           task: "Investigate the migration race.",
           title: "Migration race",
           groupingMode: "subthread",
@@ -33087,6 +33095,14 @@ command = "pnpm dev"
         },
       },
     } as AppServerPendingRequestNotification);
+
+    if (expectedMode === undefined) {
+      expect(response).toMatchObject({ success: false });
+      expect(JSON.stringify(response)).toContain("Auto access is supported only by Codex.");
+      expect(acpClient.startSession).not.toHaveBeenCalled();
+      await registry.close();
+      return;
+    }
 
     expect(response).toMatchObject({ success: true });
     const payload = JSON.parse(
@@ -33106,6 +33122,7 @@ command = "pnpm dev"
     ).resolves.toMatchObject({
       parentThreadId: "codex-parent",
       parentThreadBackend: "codex",
+      executionMode: expectedMode,
     });
     await expect(
       overlayStore.getThreadOverlayState({
@@ -33114,6 +33131,7 @@ command = "pnpm dev"
       }),
     ).resolves.toMatchObject({
       subthreadOrder: ["kimi-child"],
+      executionMode: parentMode,
     });
 
     await registry.close();
@@ -33391,7 +33409,7 @@ command = "pnpm dev"
     await registry.close();
   });
 
-  it("persists the source backend on a trusted cross-provider handoff launchpad", async () => {
+  it.each(["default", "auto"] as const)("persists supported settings on a trusted ACP handoff launchpad from %s", async (parentMode) => {
     const root = await mkdtemp(
       path.join(os.tmpdir(), "pwragent-cross-provider-trust-"),
     );
@@ -33424,7 +33442,7 @@ command = "pnpm dev"
         "codex:codex-parent": {
           backend: "codex",
           threadId: "codex-parent",
-          executionMode: "default",
+          executionMode: parentMode,
           extraLinkedDirectories: [parentDirectory],
         },
       },
@@ -33519,6 +33537,7 @@ command = "pnpm dev"
         backend: acpBackendId,
         parentThreadId: "codex-parent",
         parentThreadBackend: "codex",
+        executionMode: "default",
       });
     } finally {
       unsubscribe();
