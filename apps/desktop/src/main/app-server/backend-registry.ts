@@ -769,6 +769,7 @@ type BackendClient = {
   close(): Promise<void>;
   getInitializeResult(): Promise<InitializeResult>;
   readServerCapabilities?(): Promise<CodexServerCapabilities>;
+  isTokenMiserActivationNegotiated?(): boolean;
   readCodexHome?(): Promise<string>;
   readConfiguredMcpServerNames?(params?: {
     cwd?: string;
@@ -23116,13 +23117,20 @@ export class DesktopBackendRegistry {
     client: BackendClient;
     enabled: boolean;
   }): Promise<CodexPwrdrvrTokenMiserActivation | null | undefined> {
-    // A runtime may advertise the extension without this connection having
-    // negotiated it. The profile gate also controls initialize negotiation.
-    if (!this.resolveTokenMiserEnabledFn()) return undefined;
+    // A disabled profile may still have a negotiated connection while another
+    // turn keeps the runtime switch pending. Preserve explicit deactivation on
+    // that connection; a fresh disabled connection must omit the extension.
+    if (
+      !this.resolveTokenMiserEnabledFn()
+      && !params.client.isTokenMiserActivationNegotiated?.()
+    ) return undefined;
     const capabilities = await this.readTokenMiserServerCapabilities(
       params.client,
     );
-    if (!hasTokenMiserActivationTransport(capabilities)) {
+    if (
+      params.client.isTokenMiserActivationNegotiated?.() === false
+      || !hasTokenMiserActivationTransport(capabilities)
+    ) {
       return undefined;
     }
     if (!params.enabled) {

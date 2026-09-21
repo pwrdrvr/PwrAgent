@@ -7403,6 +7403,7 @@ export class CodexAppServerClient {
   >();
   private readonly archivedThreadMetadataLastRefreshByFilter = new Map<string, number>();
   private initialized = false;
+  private tokenMiserActivationNegotiated = false;
   private initializationPromise: Promise<void> | null = null;
   private initializeResult: InitializeResult | null = null;
   private readonly notificationListeners = new Set<
@@ -7665,6 +7666,7 @@ export class CodexAppServerClient {
 
   private async closeConnection(): Promise<void> {
     this.initialized = false;
+    this.tokenMiserActivationNegotiated = false;
     this.authActiveTurns.clear();
     this.initializationPromise = null;
     this.initializeResult = null;
@@ -7819,6 +7821,12 @@ export class CodexAppServerClient {
   async getInitializeResult(): Promise<InitializeResult> {
     await this.ensureInitialized();
     return this.initializeResult ?? {};
+  }
+
+  isTokenMiserActivationNegotiated(): boolean {
+    return this.initialized
+      && this.pendingCloses === 0
+      && this.tokenMiserActivationNegotiated;
   }
 
   async readServerCapabilities(): Promise<CodexServerCapabilities> {
@@ -10070,6 +10078,7 @@ export class CodexAppServerClient {
         };
         const result = await this.rawConnection.request("initialize", initializeParams);
         this.initializeResult = parseInitializeResponse(result);
+        this.tokenMiserActivationNegotiated = Boolean(activationNonce);
       } catch (error) {
         if (!isAlreadyInitializedError(error)) {
           throw error;

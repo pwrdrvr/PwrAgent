@@ -4760,7 +4760,7 @@ describe("DesktopBackendRegistry", () => {
     }
   });
 
-  it("omits native Token Miser activation when the profile feature is disabled", async () => {
+  it.each([false, true])("uses connection negotiation when disabling Token Miser with an active turn: %s", async (negotiated) => {
     const codexClient = new MockBackendClient({
       threads: [],
       serverCapabilities: {
@@ -4791,8 +4791,15 @@ describe("DesktopBackendRegistry", () => {
         },
       },
     });
+    Object.assign(codexClient, { isTokenMiserActivationNegotiated: () => negotiated });
+    const readCapabilities = vi.spyOn(codexClient, "readServerCapabilities");
+    let selectionListener: ((change: ManagedCodexSelectionChange) => unknown) | undefined;
     const registry = new DesktopBackendRegistry({
       codexClient,
+      watchManagedCodexRuntime: (listener) => {
+        selectionListener = listener;
+        return () => undefined;
+      },
       overlayStore: createOverlayStoreMock({
         overlays: {
           "codex:thread-off": {
@@ -4800,19 +4807,23 @@ describe("DesktopBackendRegistry", () => {
             threadId: "thread-off",
             executionMode: "default",
             extraLinkedDirectories: [],
-            tokenMiserEnabled: false,
+            tokenMiserEnabled: true,
           },
         },
       }),
       resolveManagedTokenMiserActivationRequired: () => true,
     });
     const internals = registry as unknown as {
+      activeTurnKeys: Set<string>;
       prepareTokenMiserRuntime: () => Promise<void>;
       resolveTokenMiserEnabledFn: () => boolean;
     };
     internals.resolveTokenMiserEnabledFn = () => false;
     vi.spyOn(internals, "prepareTokenMiserRuntime").mockResolvedValue(undefined);
 
+    internals.activeTurnKeys.add("codex:other-thread:active-turn");
+    await selectionListener?.({ enabled: false, reason: "availability" });
+    expect(codexClient.closeCallCount).toBe(0);
     try {
       await registry.startThread({ backend: "codex", cwd: process.cwd() });
       expect(
@@ -4824,7 +4835,10 @@ describe("DesktopBackendRegistry", () => {
         threadId: "thread-off",
         input: [{ type: "text", text: "Keep this thread opted out." }],
       });
-      expect(codexClient.lastStartTurnParams?.pwrdrvrTokenMiser).toBeUndefined();
+      expect(codexClient.lastStartTurnParams?.pwrdrvrTokenMiser)
+        .toBe(negotiated ? null : undefined);
+      expect(codexClient.closeCallCount).toBe(0);
+      expect(readCapabilities.mock.calls.length).toBeLessThanOrEqual(1);
     } finally {
       await registry.close();
     }

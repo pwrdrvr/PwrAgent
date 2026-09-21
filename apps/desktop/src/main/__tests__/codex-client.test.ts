@@ -1528,6 +1528,30 @@ describe("CodexAppServerClient", () => {
     });
   });
 
+  it("retains Token Miser negotiation until close without re-reading its setting", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    let enabled = true;
+    const resolveNonce = vi.fn(() => enabled ? "A".repeat(43) : undefined);
+    const client = new CodexAppServerClient({
+      resolvePwrdrvrTokenMiserActivationNonce: resolveNonce,
+    });
+    try {
+      await client.getInitializeResult();
+      enabled = false;
+      for (let i = 0; i < 3; i += 1) {
+        expect(client.isTokenMiserActivationNegotiated()).toBe(true);
+      }
+      expect(resolveNonce).toHaveBeenCalledOnce();
+      await client.close();
+      expect(client.isTokenMiserActivationNegotiated()).toBe(false);
+      await client.getInitializeResult();
+      expect(client.isTokenMiserActivationNegotiated()).toBe(false);
+      expect(resolveNonce).toHaveBeenCalledTimes(2);
+    } finally {
+      await client.close();
+    }
+  });
+
   it("reads the code-mode output reducer capability from the server", async () => {
     MockTransport.serverCapabilitiesResult = {
       pwrdrvrTokenMiser: {

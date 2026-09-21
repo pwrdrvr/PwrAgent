@@ -203,6 +203,47 @@ describe("DesktopSettingsService", () => {
     expect(fs.existsSync(configPath)).toBe(false);
   });
 
+  it("serves repeated Token Miser and runtime reads from memory across a config toggle", async () => {
+    const configPath = path.join(createTempRoot(), "config.toml");
+    const configStore = new DesktopConfigStore({ configPath });
+    const discover = vi.fn(async () => ({
+      candidates: [{ command: "/ordinary/codex", source: "path" as const,
+        executable: true, selected: true, version: "0.153.4" }],
+      selectedCommand: "/ordinary/codex",
+    }));
+    const service = new DesktopSettingsService({
+      configPath, configStore, env: {}, secretStore: new MemoryDesktopSecretStore(),
+      codexDiscoveryCoordinator: { discover, invalidate: vi.fn(), resolve: vi.fn() },
+    });
+    await service.refreshCodexDiscovery(issueProviderDiscoveryPermit("settings-user-action"));
+    const reload = vi.spyOn(configStore, "reloadFromDisk");
+    const project = vi.spyOn(service, "readSettingsProjection");
+    const readFile = vi.spyOn(fs, "readFileSync");
+    try {
+      for (const enabled of [false, true]) {
+        // Model an observed config change; its write/reload is outside the hot loop.
+        await configStore.write({ experimental: { tokenMiserEnabled: enabled } }, ["experimental"]);
+        reload.mockClear();
+        readFile.mockClear();
+        discover.mockClear();
+        for (let i = 0; i < 3; i += 1) {
+          expect(service.resolveTokenMiserEnabled()).toBe(enabled);
+          expect(service.resolveTokenMiserDefaultEnabled()).toBe(true);
+          expect((await service.resolveCodexCommand()).command).toBe("/ordinary/codex");
+        }
+        expect(reload).not.toHaveBeenCalled();
+        expect(readFile).not.toHaveBeenCalled();
+        expect(discover).not.toHaveBeenCalled();
+        expect(project).not.toHaveBeenCalled();
+      }
+    } finally {
+      readFile.mockRestore();
+      reload.mockRestore();
+      project.mockRestore();
+      configStore.dispose();
+    }
+  });
+
   it("runs discovery only for a permitted refresh", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");
