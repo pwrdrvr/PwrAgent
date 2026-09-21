@@ -12666,6 +12666,147 @@ describe("useThreadSessionState", () => {
   });
 
   it.each([false, true])(
+    "keeps retained review cards before newer turns after reload and reselection (turn anchor: %s)",
+    async (hasTurnAnchor) => {
+      let agentEventHandler: Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0] | undefined;
+      let hydratedEntries: AppServerThreadEntry[] = [];
+      const desktopApi: DesktopApi = {
+        onAgentEvent: (listener) => {
+          agentEventHandler = listener;
+          return () => undefined;
+        },
+        readThread: async ({ threadId }) => readThreadResponse({
+          threadId,
+          entries: threadId === "thread-1" ? hydratedEntries : [],
+          hasPreviousPage: true,
+          previousCursor: "older",
+        }),
+      };
+      const { result, rerender } = renderHook(({ thread }) => useThreadSessionState({
+        desktopApi,
+        liveTranscriptEventFiltering: true,
+        thread,
+      }), {
+        initialProps: { thread: buildThread({ id: "thread-1", updatedAt: 1_000 }) },
+      });
+      await waitForThreadHydration(result);
+
+      act(() => {
+        for (const [index, type] of ["enteredReviewMode", "exitedReviewMode"].entries()) {
+          agentEventHandler?.({
+            backend: "codex",
+            notification: {
+              method: "item/completed",
+              params: {
+                threadId: "thread-1",
+                turnId: "old-review",
+                item: {
+                  id: type,
+                  type,
+                  createdAt: 1_800_000_002_000 + index * 1_000,
+                  review: index === 0 ? "Review changes against main" : "Old findings.",
+                },
+              },
+            },
+          });
+        }
+        agentEventHandler?.({
+          backend: "codex",
+          notification: {
+            method: "turn/completed",
+            params: {
+              threadId: "thread-1",
+              turnId: "old-review",
+              turn: { id: "old-review", status: "completed", output: [] },
+            },
+          },
+        });
+      });
+      expect(result.current.entries.map((entry) => entry.id)).toEqual([
+        "enteredReviewMode", "exitedReviewMode",
+      ]);
+
+      hydratedEntries = [
+        ...(hasTurnAnchor ? [{
+          ...messageEntry({ id: "old-context", text: "Checking changes", createdAt: 1_800_000_002_500 }),
+          turn: { id: "old-review", status: "completed" as const },
+        }] : []),
+        { ...messageEntry({ id: "fixes", text: "Fixed the findings", createdAt: 1_800_000_004_000 }),
+          turn: { id: "fix-turn", status: "completed" } },
+        reviewEntry({ id: "new-review", review: "New findings", createdAt: 1_800_000_005_000, turnId: "new-review-turn" }),
+        { ...messageEntry({ id: "latest", text: "Latest response", createdAt: 1_800_000_006_000 }),
+          turn: { id: "latest-turn", status: "completed" } },
+      ];
+      const expectedIds = [
+        "enteredReviewMode", ...(hasTurnAnchor ? ["old-context"] : []),
+        "exitedReviewMode", "fixes", "new-review", "latest",
+      ];
+      await act(async () => { await result.current.reload(); });
+      expect(result.current.entries.map((entry) => entry.id)).toEqual(expectedIds);
+
+      rerender({ thread: buildThread({ id: "thread-2", updatedAt: 1_000 }) });
+      await waitForThreadHydration(result, "thread-2");
+      rerender({ thread: buildThread({ id: "thread-1", updatedAt: 2_000 }) });
+      await act(async () => { await result.current.reload(); });
+      expect(result.current.entries.map((entry) => entry.id)).toEqual(expectedIds);
+    },
+  );
+
+  it("merges retained reviews with a newer transcript in linear work", async () => {
+    const measure = async (count: number): Promise<number> => {
+      let entryReads = 0;
+      const entries = Array.from({ length: count }, (_, index) => new Proxy({
+        ...messageEntry({
+          id: `newer-${index}`,
+          text: `Newer response ${index}`,
+          createdAt: 1_800_000_010_000 + index,
+        }),
+        turn: { id: `newer-turn-${index}`, status: "completed" as const },
+      }, {
+        get(target, property, receiver) {
+          if (property === "type" || property === "id" || property === "createdAt") {
+            entryReads += 1;
+          }
+          return Reflect.get(target, property, receiver);
+        },
+      }));
+      const desktopApi: DesktopApi = {
+        onAgentEvent: () => () => undefined,
+        readThread: async () => readThreadResponse({ entries, hasPreviousPage: false }),
+      };
+      const { result, unmount } = renderHook(() => useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      }));
+      await waitForThreadHydration(result);
+      entryReads = 0;
+      act(() => {
+        for (let index = 0; index < count; index += 1) {
+          result.current.upsertLiveTranscriptEntry(reviewEntry({
+            id: `old-review-${index}`,
+            review: `Old findings ${index}`,
+            createdAt: 1_800_000_001_000 + index,
+            turnId: `old-turn-${index}`,
+          }));
+        }
+      });
+      const reads = entryReads;
+      expect(result.current.entries.map((entry) => entry.id)).toEqual([
+        ...Array.from({ length: count }, (_, index) => `old-review-${index}`),
+        ...Array.from({ length: count }, (_, index) => `newer-${index}`),
+      ]);
+      unmount();
+      return reads;
+    };
+    const small = await measure(100);
+    const large = await measure(200);
+    expect(small).toBeGreaterThan(0);
+    // Doubling both streams must not quadruple transcript visits. No timing
+    // threshold: this counts entry accesses, including candidate matching.
+    expect(large).toBeLessThan(small * 2.5);
+  });
+
+  it.each([false, true])(
     "retains live review cards through lagging refreshes (pagination: %s)",
     async (supportsPagination) => {
       let agentEventHandler:
