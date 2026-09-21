@@ -30282,6 +30282,20 @@ button.pricing-token-miser__folded:focus-visible {
   cursor: default;
 }
 
+/* A chip locked with a reason (`disabledReason`) is aria-disabled so it can
+   still take focus and explain itself. It reads as disabled at rest and on
+   hover, but keeps the focus ring: a focusable control with no visible focus
+   is lost the moment a keyboard user lands on it. */
+.composer-dropdown__button[aria-disabled="true"] {
+  color: var(--text-secondary);
+  cursor: default;
+}
+
+.composer-dropdown__button[aria-disabled="true"]:hover:not(:focus-visible) {
+  border-color: var(--border-subtle);
+  background: var(--bg-input);
+}
+
 .composer-dropdown__label {
   min-width: 0;
   overflow: hidden;

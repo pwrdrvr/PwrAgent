@@ -9375,6 +9375,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         submissionUnavailable: false,
       };
   const inlineReviewUsesThreadSettings = reviewRunModeDecision.runMode === "codex-inline";
+  // Every reviewer chip Codex Inline locks says why, focusable included: the
+  // provider and recents chips were greyed out with no explanation at all.
+  const inlineReviewLockReason = inlineReviewUsesThreadSettings
+    ? "Codex Inline uses this thread’s provider, model, and effort."
+    : undefined;
   const reviewerSelection = inlineReviewUsesThreadSettings
     ? resolveReviewerSelection({
         backends: props.backends,
@@ -11239,6 +11244,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                       <ComposerDropdown
                         ariaLabel="Review provider"
                         disabled={inlineReviewUsesThreadSettings}
+                        disabledReason={inlineReviewLockReason}
                         id="composer-review-provider"
                         options={reviewerBackendOptions.map((candidate) => ({
                           label: formatBackendLabel(candidate.kind, props.backends),
@@ -11254,8 +11260,8 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                       {reviewerModelOptions.length > 0 ? (
                         <ComposerDropdown
                           ariaLabel="Review model"
-                          tooltip={inlineReviewUsesThreadSettings ? "Codex Inline uses this thread’s model and effort." : undefined}
                           disabled={inlineReviewUsesThreadSettings}
+                          disabledReason={inlineReviewLockReason}
                           id="composer-review-model"
                           options={reviewerModelOptions.map((option) => ({
                             label: option.label ?? option.id,
@@ -11274,8 +11280,8 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                       {reviewerReasoningOptions.length > 0 ? (
                         <ComposerDropdown
                           ariaLabel="Review reasoning"
-                          tooltip={inlineReviewUsesThreadSettings ? "Codex Inline uses this thread’s model and effort." : undefined}
                           disabled={inlineReviewUsesThreadSettings}
+                          disabledReason={inlineReviewLockReason}
                           id="composer-review-reasoning"
                           options={reviewerReasoningOptions.map((effort) => ({
                             label: effort,
@@ -11304,6 +11310,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                         <ComposerDropdown
                           ariaLabel="Recent reviewer settings"
                           disabled={inlineReviewUsesThreadSettings}
+                          disabledReason={inlineReviewLockReason}
                           id="composer-review-recents"
                           options={[
                             // Sentinel so the trigger reads "Recent" until a

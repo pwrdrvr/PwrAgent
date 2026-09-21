@@ -6211,14 +6211,26 @@ describe("Composer", () => {
       fireEvent.click(within(group).getByRole("option", { name }));
     };
     chooseMode("Codex Inline");
+    const provider = within(group).getByRole("button", { name: "Review provider" });
     const model = within(group).getByRole("button", { name: "Review model" });
     const effort = within(group).getByRole("button", { name: "Review reasoning" });
-    expect(model).toBeDisabled();
+    // Locked, but still focusable so the reason reaches a keyboard user; a
+    // native disabled button would take no focus and fire no tooltip.
+    for (const chip of [provider, model, effort]) {
+      expect(chip).toBeEnabled();
+      expect(chip).toHaveAttribute("aria-disabled", "true");
+      expect(chip).toHaveAttribute(
+        "aria-description",
+        "Codex Inline uses this thread’s provider, model, and effort.",
+      );
+    }
     expect(model).toHaveTextContent("Thread model");
-    expect(effort).toBeDisabled();
     expect(effort).toHaveTextContent("low");
+    fireEvent.click(model);
+    expect(within(group).queryByRole("listbox", { name: "Review model" })).toBeNull();
     chooseMode("Codex Sub Agent");
-    expect(model).not.toBeDisabled();
+    expect(model).not.toHaveAttribute("aria-disabled");
+    expect(model).not.toHaveAttribute("aria-description");
     expect(model).toHaveTextContent("Review model override");
     chooseMode("Codex Inline");
     fireEvent.click(within(group).getByRole("button", { name: /Current changes/ }));

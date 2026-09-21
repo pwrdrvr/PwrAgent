@@ -19,7 +19,7 @@ const REVIEW_LOCATION_OPTIONS: Array<{
   {
     label: "Codex Inline",
     value: "codex-inline",
-    description: "An ordinary turn in this thread, with its context.",
+    description: "An ordinary turn in this thread, with its context and model.",
   },
   {
     label: "Codex Sub Agent",

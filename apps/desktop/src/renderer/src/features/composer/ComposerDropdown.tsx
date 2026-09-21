@@ -62,6 +62,13 @@ export function ComposerDropdown(props: {
   ariaLabel: string;
   compact?: boolean;
   disabled?: boolean;
+  /**
+   * Why a disabled chip is disabled. With a reason the trigger is
+   * `aria-disabled` rather than `disabled`: it stays focusable and hoverable
+   * so the reason can reach the operator, and it opens no menu. A native
+   * disabled button takes no focus, so a keyboard user never hears why.
+   */
+  disabledReason?: string;
   icon?: ComposerDropdownIcon;
   id?: string;
   kind?: "branch";
@@ -85,6 +92,8 @@ export function ComposerDropdown(props: {
   }, [onOpenChange]);
   const ref = useDismissableMenu<HTMLDivElement>(open, closeMenu);
   const Icon = props.icon;
+  const lockedWithReason = Boolean(props.disabled && props.disabledReason);
+  const tooltip = lockedWithReason ? props.disabledReason : props.tooltip;
   const getTooltipHorizontalBounds = useCallback((target: HTMLElement) => {
     const composerSetup = target.closest<HTMLElement>(".composer__setup");
     if (!composerSetup) {
@@ -118,15 +127,16 @@ export function ComposerDropdown(props: {
         .join(" ")}
       onPointerEnter={props.onPointerEnter}
       onMouseEnter={(event) => {
-        if (!open && props.tooltip) {
-          showAfterDelay(event.currentTarget, props.tooltip);
+        if (!open && tooltip) {
+          showAfterDelay(event.currentTarget, tooltip);
         }
       }}
       onMouseLeave={hide}
       ref={ref}
     >
       <button
-        aria-description={props.tooltip}
+        aria-description={tooltip}
+        aria-disabled={lockedWithReason ? true : undefined}
         aria-describedby={visible && !open ? tooltipId : undefined}
         aria-controls={open ? listboxId : undefined}
         aria-expanded={open}
@@ -134,17 +144,23 @@ export function ComposerDropdown(props: {
         aria-label={props.ariaLabel}
         className="composer-dropdown__button"
         data-value={props.value}
-        disabled={props.disabled || props.options.length === 0}
+        disabled={
+          (props.disabled && !lockedWithReason) || props.options.length === 0
+        }
         id={props.id}
         type="button"
         value={props.value}
         onBlur={hide}
         onFocus={(event) => {
-          if (!open && props.tooltip) {
-            show(event.currentTarget, props.tooltip);
+          if (!open && tooltip) {
+            show(event.currentTarget, tooltip);
           }
         }}
         onClick={() => {
+          // Guarded rather than `disabled`, so the reason stays reachable.
+          if (lockedWithReason) {
+            return;
+          }
           hide();
           const nextOpen = !open;
           setOpen(nextOpen);
