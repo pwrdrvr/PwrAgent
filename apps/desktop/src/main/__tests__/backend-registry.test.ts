@@ -51298,12 +51298,17 @@ script = "printf setup"
     });
 
     it.each([
-      { from: "default", to: "auto", reviewer: "auto_review" },
-      { from: "auto", to: "default", reviewer: "user" },
-    ] as const)("queues $from to $to until the managed review finishes", async ({ from, to, reviewer }) => {
+      { from: "default", to: "auto", reviewer: "auto_review", managed: true },
+      { from: "auto", to: "default", reviewer: "user", managed: true },
+      { from: "default", to: "auto", reviewer: "auto_review", managed: false },
+      { from: "auto", to: "default", reviewer: "user", managed: false },
+    ] as const)("queues $from to $to until review finishes (managed=$managed)", async ({ from, to, reviewer, managed }) => {
       const codexClient = new MockBackendClient({
-        initializeResult: { methods: ["thread/start", "turn/start"] },
-        startThreadResult: { threadId: "managed-review-child" },
+        initializeResult: { methods: ["thread/start", "turn/start", "review/start"] },
+        startThreadResult: { threadId: "review-child" },
+        startReviewResult: {
+          threadId: "thread-parent", reviewThreadId: "review-child", turnId: "turn-1",
+        },
       });
       const overlayStore = createOverlayStoreMock({
         overlays: {
@@ -51318,15 +51323,16 @@ script = "printf setup"
       const registry = new DesktopBackendRegistry({
         codexClient,
         overlayStore,
-        resolveManagedReviewEnabled: () => true,
+        resolveManagedReviewEnabled: () => managed,
       });
+      await discoverCodexBackendForTest(registry);
       const review = await registry.startReview({
         backend: "codex",
         threadId: "thread-parent",
         target: { type: "baseBranch", branch: "main" },
         delivery: "inline",
       });
-      expect(review.reviewThreadId).toBe("managed-review-child");
+      expect(review.reviewThreadId).toBe("review-child");
 
       await registry.setThreadExecutionMode({
         backend: "codex", threadId: "thread-parent", executionMode: to,

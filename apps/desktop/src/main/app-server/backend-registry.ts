@@ -19267,9 +19267,9 @@ export class DesktopBackendRegistry {
       return { backend: "codex", threadId: params.threadId, executionMode: currentApplied };
     }
     const active = this.getActiveTurnForThread(params);
-    // A managed review registers its child's turn on the parent to hold the
+    // A review registers its child's turn on the parent to hold the
     // parent's queue. That synthetic pairing is not a live Codex turn target.
-    const managedReview = active && this.findManagedReviewForParentTurn({
+    const review = active && this.findReviewForParentTurn({
       backend: params.backend,
       parentThreadId: params.threadId,
       turnId: active.turnId,
@@ -19280,7 +19280,7 @@ export class DesktopBackendRegistry {
         || (activeStart?.params.approvalPolicy && activeStart.params.approvalPolicy !== "on-request"));
     if (
       active
-      && !managedReview
+      && !review
       && !customBoundary
       && this.findActiveCodexThreadMode(params.threadId) !== "full-access"
       && params.executionMode !== currentApplied
@@ -19301,7 +19301,7 @@ export class DesktopBackendRegistry {
       }
     }
 
-    // Managed reviews, sandbox changes, and starts without a turn id must wait.
+    // Reviews, sandbox changes, and starts without a turn id must wait.
     // Active turn → queue. No codex call, no overlay executionMode flip.
     if (hasActiveTurn && params.executionMode !== currentApplied) {
       const queued = await this.queueThreadExecutionMode(params);
