@@ -1185,6 +1185,11 @@ class MockTransport implements JsonRpcTransport {
       return;
     }
 
+    if (payload.method === "turn/settings/update") {
+      this.messageHandler(JSON.stringify({ id: payload.id, result: { status: "applied" } }));
+      return;
+    }
+
     if (payload.method === "thread/settings/update") {
       const result: ThreadSettingsUpdateResponse = {};
       this.messageHandler(
@@ -1342,6 +1347,57 @@ async function waitForLatestTransportRequest(
 }
 
 describe("CodexAppServerClient", () => {
+  it("forwards Auto through create, resume, fork, turn start, and live updates", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.serverVersion = "0.153.4";
+    const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+    const permissions = { approvalPolicy: "on-request", sandbox: "workspace-write", approvalsReviewer: "auto_review" as const };
+    await client.startThread(permissions);
+    await client.forkThread({ threadId: "thread-2", ...permissions });
+    await client.startTurn({ threadId: "thread-2", input: [{ type: "text", text: "Inspect the project" }], ...permissions });
+    await expect(client.setTurnApprovalReviewer({ threadId: "thread-2", turnId: "turn-1", approvalsReviewer: "user" })).resolves.toEqual({ status: "applied" });
+    const requests = MockTransport.instances.flatMap((transport) => transport.sentMessages.map((message) => JSON.parse(message)));
+    for (const method of ["thread/start", "thread/fork", "thread/resume", "turn/start"]) {
+      expect(requests.find((request) => request.method === method)?.params).toMatchObject({ approvalsReviewer: "auto_review", approvalPolicy: "on-request" });
+    }
+    expect(requests.find((request) => request.method === "turn/start")?.params.sandboxPolicy.type).toBe("workspaceWrite");
+    expect(requests.find((request) => request.method === "turn/settings/update")?.params).toEqual({ threadId: "thread-2", turnId: "turn-1", approvalsReviewer: "user" });
+    await client.close();
+  });
+
+  it("selects Auto before a new thread has a rollout", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+    const thread = await client.startThread({ approvalsReviewer: "user", approvalPolicy: "on-request", sandbox: "workspace-write" });
+    MockTransport.threadResumeError = { code: -32000, message: "No rollout yet" };
+    await expect(client.setThreadPermissions({ threadId: thread.threadId, approvalsReviewer: "auto_review", approvalPolicy: "on-request", sandbox: "workspace-write" })).resolves.toEqual(thread);
+    const requests = MockTransport.instances.flatMap((transport) => transport.sentMessages.map((message) => JSON.parse(message)));
+    expect(requests.some((request) => request.method === "thread/resume")).toBe(false);
+    expect(requests.find((request) => request.method === "thread/settings/update")?.params).toMatchObject({
+      approvalsReviewer: "auto_review", approvalPolicy: "on-request", sandboxPolicy: { type: "workspaceWrite" },
+    });
+    await client.close();
+  });
+
+  it("rejects Auto on older servers instead of stripping the reviewer", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.serverVersion = "0.152.0";
+    const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+    await expect(client.startThread({ approvalsReviewer: "auto_review", approvalPolicy: "on-request", sandbox: "workspace-write" })).rejects.toThrow("0.153.0");
+    expect(MockTransport.instances.flatMap((transport) => transport.sentMessages.map((message) => JSON.parse(message))).some((request) => request.method === "thread/start")).toBe(false);
+    await client.close();
+  });
+
+  it.each([
+    { approvalPolicy: "never", sandbox: "workspace-write" },
+    { approvalPolicy: "on-request", sandbox: "danger-full-access" },
+  ])("rejects Auto with incompatible overrides: %j", async (permissions) => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+    await expect(client.startThread({ ...permissions, approvalsReviewer: "auto_review" })).rejects.toThrow("requires on-request");
+    await client.close();
+  });
+
   it("fails active turns and blocks probes until the rejected profile is verified", async () => {
     const { codexAuthState } = await import("../codex-auth-state");
     const { CodexAppServerClient } = await import("../codex-app-server/client");
@@ -8263,6 +8319,43 @@ describe("CodexAppServerClient", () => {
       }
     ]);
 
+    await client.close();
+  });
+
+  it("keeps guardian decisions in thread activity without changing ordinary warnings", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+    await client.getInitializeResult();
+    const notifications: unknown[] = [];
+    client.onNotification((notification) => {
+      notifications.push(notification);
+    });
+    const transport = MockTransport.instances.at(-1)!;
+    const message = "Automatic approval review approved (risk: low, authorization: high): Routine network read.";
+    transport.emitInbound({
+      jsonrpc: "2.0",
+      method: "guardianWarning",
+      params: { threadId: "thread-1", message },
+    });
+    transport.emitInbound({
+      jsonrpc: "2.0",
+      method: "warning",
+      params: { threadId: "thread-1", message: "Model fallback in use." },
+    });
+    await vi.waitFor(() => expect(notifications).toHaveLength(2));
+    expect(notifications).toEqual([
+      {
+        method: "warning",
+        params: { threadId: "thread-1", message, presentation: "activity-only" },
+      },
+      {
+        method: "warning",
+        params: { threadId: "thread-1", message: "Model fallback in use." },
+      },
+    ]);
     await client.close();
   });
 

@@ -71,6 +71,18 @@ afterEach(() => {
 });
 
 describe("sqlite write metrics", () => {
+  it("persists an operator Auto selection and audit entry without per-review writes", async () => {
+    await store.setThreadExecutionMode({ backend: "codex", threadId: "auto-thread", executionMode: "default" });
+    const { writes } = await measureSqliteWrites(async () => {
+      await store.setThreadExecutionMode({ backend: "codex", threadId: "auto-thread", executionMode: "auto" });
+      await store.appendPermissionTransition({ backend: "codex", threadId: "auto-thread", transition: {
+        id: "auto-change", fromExecutionMode: "default", toExecutionMode: "auto", status: "applied", occurredAt: 1000,
+      } });
+    });
+    expectSqliteWriteBudget({ scenario: "auto-access-selection", note: "one operator mode selection and permission audit; no per-review persistence", writes });
+    expect((await store.getThreadOverlayState({ backend: "codex", threadId: "auto-thread" }))?.executionMode).toBe("auto");
+  });
+
   it("replaces project workspace and clears project runtime in one commit", async () => {
     await store.replaceWorkspaceLinkedDirectory({
       backend: "codex", threadId: "move-project", gitBranch: "old-branch",

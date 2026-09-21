@@ -480,7 +480,7 @@ function inputSchemaForOperation(
           },
           executionMode: {
             type: "string",
-            enum: ["default", "full-access"],
+            enum: ["default", "auto", "full-access"],
             description:
               "Thread execution/permission mode. Active turns may queue this until the next safe boundary.",
           },

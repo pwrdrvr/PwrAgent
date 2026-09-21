@@ -525,6 +525,20 @@ describe("CompactComposer settings menu", () => {
     expect(screen.getByRole("menu")).toBeTruthy();
   });
 
+  it("offers Auto as a separate sandboxed access mode", () => {
+    const menu = settingsMenu({ executionModes: [
+      { label: "Default Access", mode: "default" },
+      { label: "Auto", mode: "auto" },
+      { label: "Full Access", mode: "full-access" },
+    ] });
+    renderComposer({ executionMode: "default", settingsMenu: menu });
+    openMenu();
+    fireEvent.click(screen.getByRole("menuitem", { name: /Access/ }));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Auto" }));
+    expect(menu.onSelectExecutionMode).toHaveBeenCalledWith("auto");
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
   it("switches access mode from the submenu", () => {
     const menu = settingsMenu();
     renderComposer({ executionMode: "default", settingsMenu: menu });
