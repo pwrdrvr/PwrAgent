@@ -481,18 +481,26 @@ function mergeTranscriptEntries(
     }
   );
   let mergedEntryIndexById = new Map<string, number>();
+  const retainedReviewIds = new Set<string>();
+  let reviewIndexesByTurn = new Map<string | undefined, number[]>();
   let greatestCreatedAt: number | undefined;
   let greatestCreatedAtByTurn = new Map<string, number>();
   let greatestSequenceByTurn = new Map<string, number>();
   let terminalTurnIds = new Set<string>();
   const rebuildAppendIndexes = (): void => {
     mergedEntryIndexById = new Map();
+    reviewIndexesByTurn = new Map();
     greatestCreatedAt = undefined;
     greatestCreatedAtByTurn = new Map();
     greatestSequenceByTurn = new Map();
     terminalTurnIds = new Set();
     merged.forEach((entry, index) => {
       mergedEntryIndexById.set(entry.id, index);
+      if (entry.type === "review") {
+        const indexes = reviewIndexesByTurn.get(entry.turn?.id) ?? [];
+        indexes.push(index);
+        reviewIndexesByTurn.set(entry.turn?.id, indexes);
+      }
       const createdAt = typeof entry.createdAt === "number"
         ? entry.createdAt
         : undefined;
@@ -525,6 +533,11 @@ function mergeTranscriptEntries(
   };
   const appendIndexedEntry = (entry: AppServerThreadEntry): void => {
     mergedEntryIndexById.set(entry.id, merged.length);
+    if (entry.type === "review") {
+      const indexes = reviewIndexesByTurn.get(entry.turn?.id) ?? [];
+      indexes.push(merged.length);
+      reviewIndexesByTurn.set(entry.turn?.id, indexes);
+    }
     merged.push(entry);
     if (typeof entry.createdAt === "number") {
       greatestCreatedAt = Math.max(
@@ -598,12 +611,18 @@ function mergeTranscriptEntries(
     }
 
     if (optimisticEntry.type === "review") {
-      const matchingReviewIndex = merged.findIndex(
-        (entry) =>
-          entry.type === "review"
-          && reviewEntriesMatch(entry, optimisticEntry)
-      );
+      const candidateIndexes = optimisticEntry.turn?.id
+        ? [...(reviewIndexesByTurn.get(optimisticEntry.turn.id) ?? []),
+            ...(reviewIndexesByTurn.get(undefined) ?? [])]
+        : [...reviewIndexesByTurn.values()].flat();
+      const matchingReviewIndex = candidateIndexes.find((index) => {
+        const entry = merged[index]!;
+        return entry.type === "review" && reviewEntriesMatch(entry, optimisticEntry);
+      }) ?? -1;
       if (matchingReviewIndex !== -1) {
+        if (retainedReviewIds.delete(merged[matchingReviewIndex]!.id)) {
+          retainedReviewIds.add(optimisticEntry.id);
+        }
         merged[matchingReviewIndex] = preserveReviewMetadata(
           merged[matchingReviewIndex],
           optimisticEntry,
@@ -611,6 +630,12 @@ function mergeTranscriptEntries(
         rebuildAppendIndexes();
         continue;
       }
+      // Keep live review receipt order in a separate stream. The final linear
+      // merge places omitted cards alongside the authoritative history without
+      // repeatedly splicing the transcript and rebuilding all its indexes.
+      retainedReviewIds.add(optimisticEntry.id);
+      appendIndexedEntry(optimisticEntry);
+      continue;
     }
 
     const optimisticTurnId = optimisticEntry.turn?.id;
@@ -772,7 +797,15 @@ function mergeTranscriptEntries(
     appendIndexedEntry(optimisticEntry);
   }
 
-  return merged;
+  if (retainedReviewIds.size === 0) {
+    return merged;
+  }
+  const retainedReviews: AppServerThreadEntry[] = [];
+  const authoritativeEntries: AppServerThreadEntry[] = [];
+  for (const entry of merged) {
+    (retainedReviewIds.has(entry.id) ? retainedReviews : authoritativeEntries).push(entry);
+  }
+  return reconcileRetainedTranscriptTail(authoritativeEntries, retainedReviews, new Map());
 }
 
 function mergeTranscriptMessages(
