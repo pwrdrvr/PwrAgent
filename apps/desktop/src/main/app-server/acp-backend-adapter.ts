@@ -444,7 +444,6 @@ export function buildAcpCapabilities(
     startReview: agentCapabilities?.managedReview === true,
     reviewRunner: agentCapabilities?.managedReview === true,
     reviewRunMode: true,
-    reviewCodexInline: false,
     reviewCodexSubAgent: false,
     interruptTurn: true,
     steerTurn: agentCapabilities?.steerTurn === true,

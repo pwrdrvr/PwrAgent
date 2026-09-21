@@ -440,8 +440,8 @@ function inputSchemaForOperation(
         properties: {
           runMode: {
             type: "string",
-            enum: ["codex-inline", "codex-sub-agent", "pwragent-sub-agent"],
-            description: "Codex Inline runs a parent-context turn. Codex Sub Agent (default) uses the native reviewer. PwrAgent Sub Agent uses an ephemeral managed reviewer. ACP and secondary workspaces require PwrAgent Sub Agent.",
+            enum: ["codex-sub-agent", "pwragent-sub-agent"],
+            description: "Codex Sub Agent (default) uses the native reviewer. PwrAgent Sub Agent uses an ephemeral managed reviewer. ACP and secondary workspaces require PwrAgent Sub Agent.",
           },
           cwd: {
             type: "string",
@@ -877,7 +877,7 @@ function normalizeStartReviewArgs(
   args: Record<string, unknown>,
 ): StartReviewToolArgs | undefined {
   const runMode = args.runMode;
-  if (runMode !== undefined && runMode !== "codex-inline"
+  if (runMode !== undefined
     && runMode !== "codex-sub-agent" && runMode !== "pwragent-sub-agent") {
     return undefined;
   }

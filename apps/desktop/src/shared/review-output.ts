@@ -1,10 +1,8 @@
 import type { AppServerReviewOutput } from "@pwragent/shared";
 
 /**
- * The structured review contract, shared by every review PwrAgent prompts for
- * itself: a PwrAgent Sub Agent child and a Codex Inline turn. Main parses the
- * reply; messaging and the renderer read the same parser to recognise a reply
- * that *is* the artifact, so each can show the card instead of the raw JSON.
+ * The structured review contract a PwrAgent Sub Agent child answers in. Main
+ * parses the child's reply into the review card's output and its text form.
  */
 export const REVIEW_OUTPUT_INSTRUCTIONS = [
   "Return only one JSON object with this exact top-level shape:",
@@ -189,7 +187,7 @@ const LEADING_PRIORITY_TAG = /^\s*\[P([0-3])\]\s*/i;
 
 /**
  * Reviewers that learned Codex's own review format lead a finding's title
- * with its tag — "[P2] Persist inline review provenance" — although the
+ * with its tag — "[P2] Persist review provenance" — although the
  * contract gives priority a field of its own. Every surface that draws the
  * priority separately (the card's badge, the copied heading, the text form)
  * then prints it twice.

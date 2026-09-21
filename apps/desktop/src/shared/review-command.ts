@@ -1,8 +1,5 @@
 import type { AppServerReviewOutput, AppServerReviewTarget } from "@pwragent/shared";
-import {
-  normalizeReviewConfidenceScore,
-  REVIEW_OUTPUT_INSTRUCTIONS,
-} from "./review-output";
+import { normalizeReviewConfidenceScore } from "./review-output";
 
 export type ParsedReviewCommand = {
   target: AppServerReviewTarget;
@@ -262,21 +259,6 @@ export function isPwrAgentInlineReviewPrompt(text: string): boolean {
   const normalized = text.trim();
   return normalized.startsWith("<pwragent-inline-review-instructions>\n")
     && normalized.endsWith("\n</pwragent-inline-review-instructions>");
-}
-
-/**
- * The same structured contract a PwrAgent Sub Agent child answers with, so an
- * inline review's card carries a verdict, confidence, and findings like every
- * other mode's.
- */
-export function buildInlineReviewPrompt(target: AppServerReviewTarget): string {
-  return [
-    "<pwragent-inline-review-instructions>",
-    "Perform a code review in this thread. Focus on concrete correctness regressions. Do not modify files.",
-    reviewTargetInstructions(target),
-    `Finish with your review as your final message. ${REVIEW_OUTPUT_INSTRUCTIONS}`,
-    "</pwragent-inline-review-instructions>",
-  ].join("\n\n");
 }
 
 export function reviewTargetInstructions(target: AppServerReviewTarget): string {

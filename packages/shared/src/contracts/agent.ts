@@ -328,7 +328,7 @@ export type ReleaseQueuedTurnResponse = {
 };
 
 /** Product execution modes; independent of native protocol delivery. */
-export type ReviewRunMode = "codex-inline" | "codex-sub-agent" | "pwragent-sub-agent";
+export type ReviewRunMode = "codex-sub-agent" | "pwragent-sub-agent";
 
 export type StartReviewRequest = {
   /** Omitted legacy requests use native review unless provider/workspace constraints require managed review. */

@@ -691,14 +691,12 @@ export function combineTranscriptMessages(
 }
 
 export function createTranscriptReviewPresentation(params: {
-  activeTurnId?: string;
   history: LoadedTranscriptHistory | undefined;
   index: TranscriptHistoryIndex | undefined;
   tailEntries: AppServerThreadEntry[];
   tailMessages: AppServerThreadMessage[];
 }): TranscriptReviewPresentation {
   return deriveTranscriptReviewPresentation({
-    activeTurnId: params.activeTurnId,
     historyEvents: params.history && params.index
       ? iterateTranscriptReviewHistoryEvents(params.index.review)
       : [],

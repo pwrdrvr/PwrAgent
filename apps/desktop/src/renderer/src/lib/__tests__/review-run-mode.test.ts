@@ -38,7 +38,6 @@ function reviewer(
     capabilities: {
       reviewRunner,
       reviewRunMode,
-      reviewCodexInline: true,
       reviewCodexSubAgent: true,
     } as BackendSummary["capabilities"],
     executionModes: [],
@@ -66,9 +65,9 @@ describe("resolveReviewRunMode", () => {
     const native = resolveReviewRunMode({ ownerSummary: owner, reviewerSummary: owner, thread: thread() });
     expect(native.nativeDisabled).toBe(true);
     expect(native.submissionUnavailable).toBe(true);
-    const inline = resolveReviewRunMode({ ownerSummary: owner, reviewerSummary: owner, thread: thread(), requestedRunMode: "codex-inline" });
-    expect(inline.runMode).toBe("codex-inline");
-    expect(inline.submissionUnavailable).toBe(false);
+    const managed = resolveReviewRunMode({ ownerSummary: owner, reviewerSummary: owner, thread: thread(), requestedRunMode: "pwragent-sub-agent" });
+    expect(managed.runMode).toBe("pwragent-sub-agent");
+    expect(managed.submissionUnavailable).toBe(false);
   });
 
   it("honors an optional subagent choice", () => {
@@ -166,7 +165,7 @@ describe("resolveReviewRunMode", () => {
 
   it("blocks a captured explicit selection if the owner loses mode support", () => {
     const decision = resolveReviewRunMode({ ownerSummary: reviewer("codex", true, false),
-      reviewerSummary: reviewer("codex", true), thread: thread(), requestedRunMode: "codex-inline" });
+      reviewerSummary: reviewer("codex", true), thread: thread(), requestedRunMode: "pwragent-sub-agent" });
     expect(decision.submissionUnavailable).toBe(true);
     expect(decision.explicitRunModeSupported).toBe(false);
   });

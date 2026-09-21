@@ -5,15 +5,14 @@ native Codex protocol's `delivery` field.
 
 | Label | Wire value | Execution |
 | --- | --- | --- |
-| Codex Inline | `codex-inline` | Ordinary `turn/start` on the parent, with its context and a PwrAgent review prompt. |
 | Codex Sub Agent | `codex-sub-agent` | Native `review/start`, with `delivery: inline`; default selection. |
 | PwrAgent Sub Agent | `pwragent-sub-agent` | Existing ephemeral managed reviewer, with results retained on the parent. |
 
-The prompted mode uses the ordinary turn lifecycle. Reviewer settings apply to
-that turn without updating the parent's model settings or deriving its title
-from the internal prompt. The generated prompt uses the explicit
-`pwragent-inline-review-instructions` envelope; transcript projection hides this
-input while retaining unmarked user-authored review instructions.
+Codex's native reviewer already runs on the parent thread, so there is no
+separate prompted inline mode. Transcript projection still hides the
+`pwragent-inline-review-instructions` envelope, which development builds of a
+prompted mode sent as an ordinary turn, while retaining unmarked user-authored
+review instructions.
 
 ## Compatibility and validation
 
@@ -28,9 +27,9 @@ input while retaining unmarked user-authored review instructions.
   delivery; combining any explicit mode with `detached` is rejected. Legacy
   requests without a mode retain their existing delivery semantics.
 - `reviewRunMode` advertises owner support for this contract.
-  `reviewCodexInline`, `reviewCodexSubAgent`, and `reviewRunner` independently
-  advertise the three engines. Supporting ordinary turns does not imply native
-  `review/start` support. Unavailable explicit modes fail without fallback.
+  `reviewCodexSubAgent` and `reviewRunner` independently advertise the two
+  engines. Supporting ordinary turns does not imply native `review/start`
+  support. Unavailable explicit modes fail without fallback.
 - Federation checks the owner before sending an explicit mode, including
   scheduled-action creation or updates. An older owner's disabled selector
   reads Owner default; it sends no new mode field. Explicit transport requests

@@ -1,4 +1,3 @@
-import { buildInlineReviewPrompt } from "../../../../shared/review-command";
 import "@testing-library/jest-dom/vitest";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import type {
@@ -12648,9 +12647,7 @@ describe("useThreadSessionState", () => {
     }
     emitItem("item/completed", "user-turn", { type: "userMessage", id: "authored", content: [{ type: "text", text }] });
     expect(result.current.messages.some((message) => message.id === "authored")).toBe(true);
-    const inlineText = buildInlineReviewPrompt({ type: "custom", instructions: "Check error handling." });
-    emitItem("item/completed", "custom-user-turn", { type: "userMessage", id: "authored-custom", content: [{ type: "text", text: "Check error handling." }] });
-    expect(result.current.messages.some((message) => message.id === "authored-custom")).toBe(true);
+    const inlineText = "<pwragent-inline-review-instructions>\nInspect this diff and report findings.\n</pwragent-inline-review-instructions>";
     for (const method of ["item/started", "item/completed"] as const) {
       emitItem(method, "inline-turn", { type: "userMessage", id: "inline-internal", content: [{ type: "text", text: inlineText }] });
       expect(result.current.entries.some((entry) => entry.id === "inline-internal")).toBe(false);
@@ -12732,73 +12729,6 @@ describe("useThreadSessionState", () => {
       expect(result.current.entries.map((entry) => entry.id)).toContain("activity-exec-read");
     });
     expect(liveToolRows()).toEqual([]);
-  });
-
-  it("shows a structured inline review as its card, never as the JSON reply", async () => {
-    let emit: (event: AgentEvent) => void = () => undefined;
-    const desktopApi: DesktopApi = {
-      onAgentEvent: (listener) => { emit = listener; return () => undefined; },
-      readThread: async () => ({
-        backend: "codex", threadId: "thread-1", fetchedAt: Date.now(),
-        replay: {
-          entries: [],
-          messages: [],
-          pagination: { supportsPagination: false, hasPreviousPage: false },
-        },
-      }),
-    };
-    const { result } = renderHook(() => useThreadSessionState({
-      desktopApi,
-      thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
-    }));
-    await waitForThreadHydration(result);
-    const send = (method: string, turnId: string, params: Record<string, unknown>) => {
-      act(() => emit({
-        backend: "codex",
-        notification: { method, params: { threadId: "thread-1", turnId, ...params } },
-      } as AgentEvent));
-    };
-    const reviewOutput = {
-      findings: [],
-      overall_correctness: "patch is correct",
-      overall_explanation: "No regressions in the diff.",
-      overall_confidence_score: 0.9,
-    };
-    const reply = JSON.stringify(reviewOutput);
-
-    // An ordinary turn that answers in JSON streams as usual.
-    send("turn/started", "ordinary-turn", { turn: { id: "ordinary-turn", status: "inProgress" } });
-    send("item/agentMessage/delta", "ordinary-turn", { itemId: "ordinary", delta: "{\"a\":1}" });
-    expect(result.current.pendingAssistantMessage?.id).toBe("ordinary");
-    send("turn/completed", "ordinary-turn", { turn: { id: "ordinary-turn", status: "completed", output: [] } });
-
-    send("turn/started", "inline-turn", { turn: { id: "inline-turn", status: "inProgress" } });
-    send("item/completed", "inline-turn", { item: {
-      id: "inline-review:inline-turn:started",
-      type: "enteredReviewMode",
-      review: "Review changes against main",
-    } });
-    // Commentary before the review still streams.
-    send("item/agentMessage/delta", "inline-turn", { itemId: "commentary", delta: "Reading the diff." });
-    expect(result.current.pendingAssistantMessage?.id).toBe("commentary");
-    send("item/agentMessage/delta", "inline-turn", { itemId: "reply", delta: reply.slice(0, 12) });
-    expect(result.current.pendingAssistantMessage).toBeUndefined();
-    send("item/completed", "inline-turn", { item: { id: "reply", type: "agentMessage", text: reply } });
-    expect(result.current.entries.some((entry) => entry.id === "reply")).toBe(false);
-    send("item/completed", "inline-turn", { item: {
-      id: "inline-review:inline-turn:result",
-      type: "exitedReviewMode",
-      review: "No regressions in the diff.\n\nNo findings.",
-      data: { reviewOutput },
-    } });
-    send("turn/completed", "inline-turn", { turn: { id: "inline-turn", status: "completed", output: [] } });
-
-    expect(result.current.entries.some((entry) => entry.id === "reply")).toBe(false);
-    expect(result.current.messages.some((message) => message.id === "reply")).toBe(false);
-    expect(result.current.entries).toContainEqual(expect.objectContaining({
-      id: "inline-review:inline-turn:result",
-      output: expect.objectContaining({ overall_correctness: "patch is correct" }),
-    }));
   });
 
   it.each([false, true])(

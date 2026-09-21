@@ -25802,61 +25802,6 @@ command = "pnpm dev"
       }
     }
   });
-  it("does not restore an inline review as active when its terminal event precedes turn/start", async () => {
-    const startTurnDelay = createDeferred<void>();
-    const codexClient = new MockBackendClient({
-      initializeResult: { methods: ["turn/start"] },
-      startTurnDelay: startTurnDelay.promise,
-      startTurnResults: [{ threadId: "thread-parent", turnId: "turn-fast-review" }],
-    });
-    const registry = new DesktopBackendRegistry({
-      codexClient,
-      overlayStore: createOverlayStoreMock(),
-    });
-
-    const review = registry.startReview({
-      backend: "codex",
-      threadId: "thread-parent",
-      target: { type: "baseBranch", branch: "main" },
-      delivery: "inline",
-      runMode: "codex-inline",
-    });
-    await vi.waitFor(() => {
-      expect(codexClient.startTurnCallCount).toBe(1);
-    });
-
-    await codexClient.emit({
-      method: "turn/completed",
-      params: {
-        threadId: "thread-parent",
-        turnId: "turn-fast-review",
-        turn: {
-          id: "turn-fast-review",
-          status: "completed",
-          output: [],
-        },
-      },
-    });
-    startTurnDelay.resolve();
-
-    await expect(review).resolves.toMatchObject({
-      threadId: "thread-parent",
-      reviewThreadId: "thread-parent",
-      turnId: "turn-fast-review",
-    });
-    expect(registry.getInProgressThreadSnapshotForQuit()).toEqual({
-      count: 0,
-      threadIds: [],
-    });
-    await expect(registry.startTurn({
-      backend: "codex",
-      threadId: "thread-parent",
-      input: [{ type: "text", text: "Continue after the fast review" }],
-    })).resolves.toMatchObject({ threadId: "thread-parent" });
-
-    await registry.close();
-  });
-
   it.each([undefined, "codex-sub-agent"] as const)("preserves native review for mode %s despite the legacy experiment", async (runMode) => {
     const codexClient = new MockBackendClient({ initializeResult: { methods: ["review/start", "turn/start", "thread/start"] } });
     const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(), resolveManagedReviewEnabled: () => true });
@@ -25866,314 +25811,8 @@ command = "pnpm dev"
     await registry.close();
   });
 
-  it("runs Codex Inline through an ordinary parent turn without persisting reviewer settings", async () => {
-    const codexClient = new MockBackendClient({
-      initializeResult: { methods: ["turn/start", "thread/start"] },
-      models: [{ id: "gpt-5.5", label: "GPT-5.5", current: true }, { id: "gpt-5.2", label: "GPT-5.2" }],
-    });
-    const overlayStore = createOverlayStoreMock({ overlays: {
-      "codex:parent": { backend: "codex", threadId: "parent", model: "gpt-5.5", extraLinkedDirectories: [] },
-    } });
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
-    const result = await registry.startReview({
-      backend: "codex", threadId: "parent", target: { type: "custom", instructions: "Check error handling." },
-      runMode: "codex-inline", model: "gpt-5.2", reviewBackend: "codex",
-    });
-    expect(result.reviewThreadId).toBe("parent");
-    expect(codexClient.lastStartReviewParams).toBeUndefined();
-    expect(codexClient.lastStartTurnParams).toMatchObject({
-      threadId: "parent", model: "gpt-5.2", suppressThreadTitleDerivation: true,
-      input: [{ type: "text", text: expect.stringContaining("<pwragent-inline-review-instructions>") }],
-    });
-    expect((await overlayStore.getThreadOverlayState({ backend: "codex", threadId: "parent" }))?.model).toBe("gpt-5.5");
-    await registry.close();
-  });
-
-  describe("Codex Inline review cards", () => {
-    const context: AppServerReviewContext = {
-      workspacePath: "/repo",
-      projectLabel: "example-repo",
-      gitBranch: "feat/inline-cards",
-      baseBranch: "main",
-      headCommit: "89abcdef0123456789abcdef0123456789abcdef",
-      pullRequest: null,
-    };
-    const reviewOutput = {
-      findings: [
-        {
-          title: "Guard the empty list",
-          body: "`items[0]` is read before the length check.",
-          confidence_score: 0.8,
-          priority: 1,
-          code_location: {
-            absolute_file_path: "/repo/src/list.ts",
-            line_range: { start: 4, end: 6 },
-          },
-        },
-      ],
-      overall_correctness: "patch is incorrect",
-      overall_explanation: "One regression in the empty-list path.",
-      overall_confidence_score: 0.9,
-    };
-    const finalReview = JSON.stringify(reviewOutput);
-
-    const createInlineHarness = (options: {
-      replay?: AppServerThreadReplay;
-      startTurnDelay?: Promise<unknown>;
-    } = {}) => {
-      const codexClient = new MockBackendClient({
-        initializeResult: { methods: ["turn/start"] },
-        startTurnResults: [{ threadId: "thread-parent", turnId: "turn-inline" }],
-        ...options,
-      });
-      const overlayStore = createOverlayStoreMock({
-        overlays: {
-          "codex:thread-parent": {
-            backend: "codex",
-            threadId: "thread-parent",
-            model: "gpt-5.5",
-            reasoningEffort: "high",
-          } as ThreadOverlayState,
-        },
-      });
-      const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
-      vi.spyOn(
-        registry as unknown as {
-          resolveReviewContext(): Promise<AppServerReviewContext | undefined>;
-        },
-        "resolveReviewContext",
-      ).mockResolvedValue(context);
-      const events: AgentEvent[] = [];
-      registry.onEvent((event) => {
-        events.push(event);
-      });
-      const startInlineReview = () => registry.startReview({
-        backend: "codex",
-        threadId: "thread-parent",
-        target: { type: "baseBranch", branch: "main" },
-        delivery: "inline",
-        runMode: "codex-inline",
-      });
-      const emitAgentMessage = (id: string, text: string, phase?: string) =>
-        codexClient.emit({
-          method: "item/completed",
-          params: {
-            threadId: "thread-parent",
-            turnId: "turn-inline",
-            item: {
-              id,
-              type: "agentMessage",
-              text,
-              ...(phase ? { phase } : {}),
-            },
-          },
-        });
-      const emitTurnCompleted = () => codexClient.emit({
-        method: "turn/completed",
-        params: {
-          threadId: "thread-parent",
-          turnId: "turn-inline",
-          turn: { id: "turn-inline", status: "completed", output: [] },
-        },
-      });
-      const itemIndex = (itemType: string) =>
-        events.findIndex((event) => isCompletedItemType(event, itemType));
-      const itemData = (itemType: string): unknown => {
-        const event = events[itemIndex(itemType)];
-        if (event?.notification.method !== "item/completed") {
-          return undefined;
-        }
-        return event.notification.params.item;
-      };
-      return {
-        codexClient,
-        emitAgentMessage,
-        emitTurnCompleted,
-        events,
-        itemData,
-        itemIndex,
-        overlayStore,
-        registry,
-        startInlineReview,
-      };
-    };
-
-    it("publishes a start card with the reviewer and provenance, and a result card with the review", async () => {
-      const harness = createInlineHarness();
-
-      await harness.startInlineReview();
-
-      const reviewer = { backend: "codex", model: "gpt-5.5", reasoningEffort: "high" };
-      expect(harness.itemData("enteredReviewMode")).toMatchObject({
-        id: "inline-review:turn-inline:started",
-        data: { reviewer, context },
-      });
-      expect(harness.events[harness.itemIndex("enteredReviewMode")]).toMatchObject({
-        notification: { params: { threadId: "thread-parent", turnId: "turn-inline" } },
-      });
-
-      await harness.emitAgentMessage("commentary", "Reading the diff first.", "commentary");
-      await harness.emitAgentMessage("final", finalReview, "final_answer");
-      await harness.emitTurnCompleted();
-
-      // The card gets the parsed artifact and readable prose; the JSON reply
-      // stays in the thread as the model wrote it.
-      expect(harness.itemData("exitedReviewMode")).toMatchObject({
-        id: "inline-review:turn-inline:result",
-        review: expect.stringContaining("One regression in the empty-list path."),
-        data: { reviewer, context, reviewOutput },
-      });
-      // Messaging pairs the artifact with the final assistant text only when
-      // the artifact arrives first.
-      const turnCompletedIndex = harness.events.findIndex((event) =>
-        event.notification.method === "turn/completed"
-      );
-      expect(harness.itemIndex("exitedReviewMode")).toBeLessThan(turnCompletedIndex);
-      const overlay = await harness.overlayStore.getThreadOverlayState({
-        backend: "codex",
-        threadId: "thread-parent",
-      });
-      expect(overlay?.managedReviewEntries).toEqual([
-        expect.objectContaining({
-          id: "inline-review:turn-inline:started",
-          displayText: "Review changes against main",
-          reviewer,
-          context,
-          turn: expect.objectContaining({ id: "turn-inline", status: "in_progress" }),
-        }),
-        expect.objectContaining({
-          id: "inline-review:turn-inline:result",
-          review: expect.stringContaining("- [P1] Guard the empty list"),
-          output: reviewOutput,
-          reviewer,
-          context,
-          turn: expect.objectContaining({ id: "turn-inline", status: "completed" }),
-        }),
-      ]);
-      // An ordinary turn: no sub-agent row, so no monitor usage either.
-      expect(overlay?.subAgents ?? []).toEqual([]);
-
-      await harness.registry.close();
-    });
-
-    it("keeps the start card above the turn it opens after a reload", async () => {
-      const turn = { id: "turn-inline", status: "completed" as const };
-      const harness = createInlineHarness({
-        replay: {
-          entries: [
-            {
-              type: "message",
-              id: "inline-prompt",
-              role: "user",
-              text: "<pwragent-inline-review-instructions>\n\nReview.\n\n</pwragent-inline-review-instructions>",
-              turn,
-            },
-            {
-              type: "message",
-              id: "inline-final",
-              role: "assistant",
-              text: finalReview,
-              turn,
-            },
-          ],
-          messages: [],
-          pagination: { supportsPagination: true, hasPreviousPage: false },
-        },
-      });
-
-      await harness.startInlineReview();
-      await harness.emitAgentMessage("final", finalReview);
-      await harness.emitTurnCompleted();
-      const response = await harness.registry.readThread({
-        backend: "codex",
-        threadId: "thread-parent",
-      });
-
-      expect(response.replay.entries.map((entry) => entry.id)).toEqual([
-        "inline-review:turn-inline:started",
-        "inline-prompt",
-        "inline-final",
-        "inline-review:turn-inline:result",
-      ]);
-
-      await harness.registry.close();
-    });
-
-    it("still publishes both cards, in order, when the turn ends before turn/start returns", async () => {
-      const startTurnDelay = createDeferred<void>();
-      const harness = createInlineHarness({ startTurnDelay: startTurnDelay.promise });
-
-      const review = harness.startInlineReview();
-      await vi.waitFor(() => {
-        expect(harness.codexClient.startTurnCallCount).toBe(1);
-      });
-      await harness.emitAgentMessage("final", finalReview);
-      await harness.emitTurnCompleted();
-      startTurnDelay.resolve();
-      await review;
-
-      expect(harness.itemIndex("enteredReviewMode")).toBeGreaterThan(-1);
-      expect(harness.itemIndex("enteredReviewMode")).toBeLessThan(
-        harness.itemIndex("exitedReviewMode"),
-      );
-      expect(harness.itemData("exitedReviewMode")).toMatchObject({
-        data: { reviewOutput },
-      });
-
-      await harness.registry.close();
-    });
-
-    it("keeps a reply that ignored the JSON contract, as the card's prose", async () => {
-      const harness = createInlineHarness();
-      const prose = "Looks fine to me. The patch is correct.";
-
-      await harness.startInlineReview();
-      await harness.emitAgentMessage("final", prose);
-      await harness.emitTurnCompleted();
-
-      const result = harness.itemData("exitedReviewMode") as {
-        data?: Record<string, unknown>;
-        review?: string;
-      };
-      expect(result.review).toBe(prose);
-      expect(result.data).not.toHaveProperty("reviewOutput");
-
-      await harness.registry.close();
-    });
-
-    it("publishes no result card for a turn that did not complete", async () => {
-      const harness = createInlineHarness();
-
-      await harness.startInlineReview();
-      await harness.codexClient.emit({
-        method: "turn/failed",
-        params: {
-          threadId: "thread-parent",
-          turnId: "turn-inline",
-          turn: {
-            id: "turn-inline",
-            status: "failed",
-            error: { message: "stream disconnected" },
-          },
-        },
-      });
-
-      expect(harness.itemIndex("exitedReviewMode")).toBe(-1);
-      const overlay = await harness.overlayStore.getThreadOverlayState({
-        backend: "codex",
-        threadId: "thread-parent",
-      });
-      expect(overlay?.managedReviewEntries?.map((entry) => entry.id)).toEqual([
-        "inline-review:turn-inline:started",
-      ]);
-
-      await harness.registry.close();
-    });
-  });
-
   it.each([
     { runMode: "codex-sub-agent", methods: ["turn/start"], error: "review/start" },
-    { runMode: "codex-inline", methods: ["review/start"], error: "turn/start" },
     { runMode: "pwragent-sub-agent", methods: ["review/start"], error: "thread/start" },
   ] as const)("rejects unsupported explicit $runMode without substituting engines", async ({ runMode, methods, error }) => {
     const codexClient = new MockBackendClient({ initializeResult: { methods: [...methods] } });
@@ -26184,7 +25823,7 @@ command = "pnpm dev"
     await registry.close();
   });
 
-  it.each(["codex-inline", "codex-sub-agent", "pwragent-sub-agent"] as const)("rejects detached delivery with explicit %s", async (runMode) => {
+  it.each(["codex-sub-agent", "pwragent-sub-agent"] as const)("rejects detached delivery with explicit %s", async (runMode) => {
     const codexClient = new MockBackendClient({});
     const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
     await expect(registry.startReview({ backend: "codex", threadId: "parent", target: { type: "uncommittedChanges" }, runMode, delivery: "detached" })).rejects.toThrow("detached delivery");
@@ -26375,6 +26014,34 @@ command = "pnpm dev"
       await registry.listBackends({ includeUnavailable: true })
     ).backends.find((backend) => backend.kind === "codex");
     expect(codexBackend?.capabilities.reviewRunner).toBe(true);
+
+    await registry.close();
+  });
+
+  it.each([
+    { methods: ["review/start"], native: true, managed: false },
+    { methods: ["thread/start", "turn/start"], native: false, managed: true },
+    { methods: ["turn/start"], native: false, managed: false },
+  ])("advertises review support only with a review engine ($methods)", async ({ methods, native, managed }) => {
+    // An ordinary turn is not a review engine: each mode needs either native
+    // review/start or a thread to run a managed reviewer in.
+    const codexClient = new MockBackendClient({ initializeResult: { methods } });
+    const registry = new DesktopBackendRegistry({
+      codexClient, overlayStore: createOverlayStoreMock(), discoverLocalAcpAgents: async () => [],
+    });
+    // Discovery is what reads the initialize methods; before it runs the
+    // summary assumes the full app-server surface.
+    await registry.refreshProvidersAtStartup(issueProviderDiscoveryPermit("startup"));
+
+    const codexBackend = (
+      await registry.listBackends({ includeUnavailable: true })
+    ).backends.find((backend) => backend.kind === "codex");
+    expect(codexBackend?.methods).toEqual(methods);
+    expect(codexBackend?.capabilities).toMatchObject({
+      startReview: native || managed,
+      reviewCodexSubAgent: native,
+      reviewRunner: managed,
+    });
 
     await registry.close();
   });
@@ -28143,11 +27810,10 @@ command = "pnpm dev"
       resolveManagedReviewEnabled: () => false,
     });
 
-    for (const runMode of ["codex-inline", "codex-sub-agent"] as const) {
-      await expect(registry.startReview({ backend: "codex", threadId: "thread-parent",
-        target: { type: "baseBranch", branch: "origin/main" }, cwd: "/repo/selected", runMode,
-      })).rejects.toThrow("PwrAgent Sub Agent is required for a secondary workspace");
-    }
+    await expect(registry.startReview({ backend: "codex", threadId: "thread-parent",
+      target: { type: "baseBranch", branch: "origin/main" }, cwd: "/repo/selected",
+      runMode: "codex-sub-agent",
+    })).rejects.toThrow("PwrAgent Sub Agent is required for a secondary workspace");
 
     const response = await registry.startReview({
       backend: "codex",

@@ -210,7 +210,6 @@ import {
   normalizeReviewOutputRecord,
   parseReviewCommand,
 } from "../../../shared/review-command.js";
-import { parseReviewOutputText } from "../../../shared/review-output.js";
 import type { MessagingInteractionMapper } from "./interaction-mapper.js";
 import {
   buildBoundedResumeIntent,
@@ -1641,22 +1640,13 @@ export class MessagingController {
       && isTerminalTurnLifecycle(lifecycle)
       && lifecycle?.status !== "completed",
     );
-    // A reply that is the structured review itself (a Codex Inline turn
-    // answers in the review JSON contract) is what the artifact was parsed
-    // from. Its prose is already the artifact's review text; taking the reply
-    // instead would post the raw JSON.
-    const pendingReviewAssistantProse =
-      pendingReviewAssistantText
-      && !parseReviewOutputText(pendingReviewAssistantText)
-        ? pendingReviewAssistantText
-        : undefined;
     const completedReviewArtifact = !eventTurnKey
       ? reviewArtifact
       : reviewCompletionReady && pendingReviewArtifact
         ? {
             ...pendingReviewArtifact,
-            ...(pendingReviewAssistantProse
-              ? { review: pendingReviewAssistantProse }
+            ...(pendingReviewAssistantText
+              ? { review: pendingReviewAssistantText }
               : {}),
           }
         : undefined;
@@ -3074,7 +3064,6 @@ export class MessagingController {
       ? "This owner no longer supports explicit review modes. Update that PwrAgent instance before starting this review."
       : undefined;
     const modeOptions: { label: string; value: ReviewRunMode; supported: boolean }[] = [
-      { label: "Codex Inline", value: "codex-inline", supported: owner?.capabilities?.reviewCodexInline === true && !managedReason },
       { label: "Codex Sub Agent", value: "codex-sub-agent", supported: owner?.capabilities?.reviewCodexSubAgent === true && !managedReason },
       { label: "PwrAgent Sub Agent", value: "pwragent-sub-agent", supported: reviewerEntry?.capabilities?.reviewRunner === true },
     ];
@@ -5858,7 +5847,7 @@ export class MessagingController {
 
     if (phase === "run_mode") {
       const runMode = value?.runMode;
-      if (runMode === "codex-inline" || runMode === "codex-sub-agent" || runMode === "pwragent-sub-agent") {
+      if (runMode === "codex-sub-agent" || runMode === "pwragent-sub-agent") {
         await this.updateReviewPendingIntent(pendingIntent, event, { phase: "summary", runMode });
       }
       return;

@@ -6,21 +6,16 @@ import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import { ComposerDropdown } from "./ComposerDropdown";
 
 /**
- * The names alone do not separate these: two of the three differ only by the
- * vendor word, and none of them says whether the review shares this thread's
- * context or lands in a child. Every other picker in the review panel — all
- * four target cards above this row — explains itself, so this one does too.
+ * The names alone do not separate these: they differ only by the vendor word,
+ * and neither says whether the review is posted into this thread or runs in a
+ * child. Every other picker in the review panel — all four target cards above
+ * this row — explains itself, so this one does too.
  */
 const REVIEW_LOCATION_OPTIONS: Array<{
   description: string;
   label: string;
   value: ReviewRunMode;
 }> = [
-  {
-    label: "Codex Inline",
-    value: "codex-inline",
-    description: "An ordinary turn in this thread, with its context and model.",
-  },
   {
     label: "Codex Sub Agent",
     value: "codex-sub-agent",
@@ -45,9 +40,7 @@ function optionState(
         }
       : { disabled: false };
   }
-  const disabled =
-    value === "codex-inline" ? decision.inlineDisabled : decision.nativeDisabled;
-  return disabled
+  return decision.nativeDisabled
     ? { disabled: true, reason: "Not available on this thread's owner." }
     : { disabled: false };
 }

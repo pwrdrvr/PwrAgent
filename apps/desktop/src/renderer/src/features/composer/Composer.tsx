@@ -5743,8 +5743,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     // closed by then, so reviewConfig is empty and would silently downgrade the
     // review to the thread's provider. Otherwise take the live panel state,
     // captured before it clears below.
-    const submittedReviewer = reviewCommand.reviewer
-      ?? (reviewCommand.runMode === "codex-inline" ? undefined : reviewConfig?.reviewer);
+    const submittedReviewer = reviewCommand.reviewer ?? reviewConfig?.reviewer;
     // A queued reviewer already carries resolved values; only the live panel
     // needs its chips resolved against the picked provider's catalog.
     const submittedModel = reviewCommand.reviewer
@@ -6861,7 +6860,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
           cwd: reviewCommand.cwd,
           // Carry the picked reviewer through the queue so releasing it later
           // does not silently fall back to the thread's own provider.
-          ...(reviewCommand.runMode !== "codex-inline" && reviewConfig?.reviewer
+          ...(reviewConfig?.reviewer
             ? {
                 reviewBackend: reviewConfig.reviewer.backend,
                 model: reviewerSelection.model?.id,
@@ -9346,13 +9345,20 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     reviewerRecentsState.authorityKey === reviewerAuthorityKey
       ? reviewerRecentsState.recents
       : [];
-  const requestedReviewerSelection = resolveReviewerSelection({
+  const reviewerSelection = resolveReviewerSelection({
     backends: props.backends,
     override: reviewConfig?.reviewer,
     threadBackend: props.thread?.source,
     threadModel: selectedModelOption?.id,
     threadReasoningEffort: supportsReasoning ? selectedReasoningEffort : undefined,
   });
+  const reviewerModelOptions =
+    reviewerSelection.summary?.launchpadOptions?.models ?? [];
+  const reviewerReasoningOptions = getReasoningEffortsForModel(
+    reviewerSelection.summary,
+    reviewerSelection.model,
+  );
+  const reviewerOverridden = Boolean(reviewConfig?.reviewer);
   const reviewOwnerSummary = props.backends?.find(
     (candidate) => candidate.kind === props.thread?.source,
   );
@@ -9360,8 +9366,8 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     ? resolveReviewRunMode({
         ownerSummary: reviewOwnerSummary,
         requestedRunMode: reviewConfig?.runModeChosen ? reviewConfig.runMode : undefined,
-        reviewerBackend: requestedReviewerSelection.backend,
-        reviewerSummary: requestedReviewerSelection.summary,
+        reviewerBackend: reviewerSelection.backend,
+        reviewerSummary: reviewerSelection.summary,
         thread: props.thread,
         workspaceCwd: reviewConfig?.workspaceCwd,
       })
@@ -9370,31 +9376,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         explicitRunModeSupported: false,
         runMode: "codex-sub-agent" as const,
         subagentDisabled: true,
-        inlineDisabled: true,
         nativeDisabled: true,
         submissionUnavailable: false,
       };
-  const inlineReviewUsesThreadSettings = reviewRunModeDecision.runMode === "codex-inline";
-  // Every reviewer chip Codex Inline locks says why, focusable included: the
-  // provider and recents chips were greyed out with no explanation at all.
-  const inlineReviewLockReason = inlineReviewUsesThreadSettings
-    ? "Codex Inline uses this thread’s provider, model, and effort."
-    : undefined;
-  const reviewerSelection = inlineReviewUsesThreadSettings
-    ? resolveReviewerSelection({
-        backends: props.backends,
-        threadBackend: props.thread?.source,
-        threadModel: selectedModelOption?.id,
-        threadReasoningEffort: supportsReasoning ? selectedReasoningEffort : undefined,
-      })
-    : requestedReviewerSelection;
-  const reviewerModelOptions =
-    reviewerSelection.summary?.launchpadOptions?.models ?? [];
-  const reviewerReasoningOptions = getReasoningEffortsForModel(
-    reviewerSelection.summary,
-    reviewerSelection.model,
-  );
-  const reviewerOverridden = !inlineReviewUsesThreadSettings && Boolean(reviewConfig?.reviewer);
   const reviewSubmissionUnavailable =
     reviewRunModeDecision.submissionUnavailable;
   // A remembered combination is only offered while it still resolves against
@@ -11243,8 +11227,6 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                     <>
                       <ComposerDropdown
                         ariaLabel="Review provider"
-                        disabled={inlineReviewUsesThreadSettings}
-                        disabledReason={inlineReviewLockReason}
                         id="composer-review-provider"
                         options={reviewerBackendOptions.map((candidate) => ({
                           label: formatBackendLabel(candidate.kind, props.backends),
@@ -11260,8 +11242,6 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                       {reviewerModelOptions.length > 0 ? (
                         <ComposerDropdown
                           ariaLabel="Review model"
-                          disabled={inlineReviewUsesThreadSettings}
-                          disabledReason={inlineReviewLockReason}
                           id="composer-review-model"
                           options={reviewerModelOptions.map((option) => ({
                             label: option.label ?? option.id,
@@ -11280,8 +11260,6 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                       {reviewerReasoningOptions.length > 0 ? (
                         <ComposerDropdown
                           ariaLabel="Review reasoning"
-                          disabled={inlineReviewUsesThreadSettings}
-                          disabledReason={inlineReviewLockReason}
                           id="composer-review-reasoning"
                           options={reviewerReasoningOptions.map((effort) => ({
                             label: effort,
@@ -11309,8 +11287,6 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                       {resolvableReviewerRecents.length > 0 ? (
                         <ComposerDropdown
                           ariaLabel="Recent reviewer settings"
-                          disabled={inlineReviewUsesThreadSettings}
-                          disabledReason={inlineReviewLockReason}
                           id="composer-review-recents"
                           options={[
                             // Sentinel so the trigger reads "Recent" until a

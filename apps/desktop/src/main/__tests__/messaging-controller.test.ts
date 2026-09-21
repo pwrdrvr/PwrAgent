@@ -934,24 +934,23 @@ describe("MessagingController", () => {
   });
 
   it.each([
-    ["codex-inline", "Codex Inline"],
     ["codex-sub-agent", "Codex Sub Agent"],
     ["pwragent-sub-agent", "PwrAgent Sub Agent"],
   ])("captures the %s choice from messaging", async (runMode, label) => {
     const harness = await createHarness({ listBackends: async () => ({
       fetchedAt: 1000, backends: [buildBackendSummary({ capabilities: {
         ...buildBackendSummary().capabilities, reviewRunner: true, reviewRunMode: true,
-        reviewCodexInline: true, reviewCodexSubAgent: true,
+        reviewCodexSubAgent: true,
       } })],
     }) });
     await bindThread(harness);
     await harness.controller.handleInboundEvent(buildCommandEvent("/review"));
     await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "review:summary:mode" }));
-    expect(harness.delivered.at(-1)).toMatchObject({ actions: expect.arrayContaining([
-      expect.objectContaining({ label: "Codex Inline" }),
-      expect.objectContaining({ label: "Codex Sub Agent" }),
-      expect.objectContaining({ label: "PwrAgent Sub Agent" }),
-    ]) });
+    const modeActions = (harness.delivered.at(-1) as { actions?: { label: string }[] }).actions;
+    expect(modeActions?.map((action) => action.label)).toEqual(
+      expect.arrayContaining(["Codex Sub Agent", "PwrAgent Sub Agent"]),
+    );
+    expect(modeActions?.some((action) => /inline/i.test(action.label))).toBe(false);
     await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: `review:mode:${runMode}` }));
     expect(harness.delivered.at(-1)).toMatchObject({ review: { runMode }, body: expect.stringContaining(label) });
     await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "review:summary:start" }));
@@ -963,19 +962,19 @@ describe("MessagingController", () => {
     const harness = await createHarness({ listBackends: async () => ({
       fetchedAt: 1000, backends: [buildBackendSummary({ capabilities: {
         ...buildBackendSummary().capabilities, reviewRunner: true,
-        reviewRunMode: supported, reviewCodexInline: true, reviewCodexSubAgent: true,
+        reviewRunMode: supported, reviewCodexSubAgent: true,
       } })],
     }) });
     await bindThread(harness);
     await harness.controller.handleInboundEvent(buildCommandEvent("/review"));
     await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "review:summary:mode" }));
-    await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "review:mode:codex-inline" }));
+    await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "review:mode:pwragent-sub-agent" }));
     supported = false;
     if (rebuild) {
       await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "review:summary:target" }));
       await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "review:back" }));
       expect(harness.delivered.at(-1)).toMatchObject({
-        review: { runMode: "codex-inline" },
+        review: { runMode: "pwragent-sub-agent" },
         body: expect.stringContaining("Update"),
       });
     }
@@ -9694,60 +9693,6 @@ describe("MessagingController", () => {
         }),
       ],
     });
-  });
-
-  it("posts the parsed review, not the reply it was parsed from, for a structured inline review", async () => {
-    const harness = await createHarness();
-    await bindThread(harness);
-    harness.delivered.length = 0;
-    const reviewOutput = {
-      findings: [],
-      overall_correctness: "patch is correct",
-      overall_explanation: "No regressions in the diff.",
-      overall_confidence_score: 0.9,
-    };
-    const emitItem = (item: Record<string, unknown>) =>
-      harness.controller.handleBackendEvent({
-        backend: "codex",
-        notification: {
-          method: "item/completed",
-          params: { threadId: "thread-1", turnId: "inline-turn-1", item },
-        },
-      } as AgentEvent);
-
-    // The order a Codex Inline turn produces: the start card, the model's JSON
-    // reply, then the result card main emits just before turn/completed.
-    await emitItem({ id: "inline-review:inline-turn-1:started", type: "enteredReviewMode" });
-    await emitItem({
-      id: "reply-1",
-      type: "agentMessage",
-      text: JSON.stringify(reviewOutput),
-    });
-    await emitItem({
-      id: "inline-review:inline-turn-1:result",
-      type: "exitedReviewMode",
-      review: "No regressions in the diff.\n\nNo findings.",
-      data: { reviewOutput },
-    });
-    await harness.controller.handleBackendEvent({
-      backend: "codex",
-      notification: {
-        method: "turn/completed",
-        params: {
-          threadId: "thread-1",
-          turnId: "inline-turn-1",
-          turn: { id: "inline-turn-1", status: "completed", output: [] },
-        },
-      },
-    } satisfies AgentEvent);
-
-    const completionMessages = harness.delivered.filter(
-      (intent) => intent.kind === "message",
-    );
-    expect(completionMessages).toHaveLength(1);
-    const text = JSON.stringify(completionMessages[0]);
-    expect(text).toContain("No regressions in the diff.");
-    expect(text).not.toContain("overall_correctness");
   });
 
   it("does not stream a second completion surface for review turns", async () => {

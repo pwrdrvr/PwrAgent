@@ -9080,7 +9080,6 @@ export class CodexAppServerClient {
   }
 
   async startTurn(params: {
-    suppressThreadTitleDerivation?: boolean;
     threadId: string;
     input: AppServerTurnInputItem[];
     cwd?: string;
@@ -9229,12 +9228,10 @@ export class CodexAppServerClient {
     const turnId = extractTurnIdFromValue(result) ?? `pending:${threadId}`;
     this.pendingFirstTurnThreadResults.delete(params.threadId);
     this.pendingFirstTurnShellEnvironments.delete(params.threadId);
-    if (!params.suppressThreadTitleDerivation) {
-      await this.recordDerivedThreadNameWithCodex({
-        threadId: params.threadId,
-        input: params.input,
-      });
-    }
+    await this.recordDerivedThreadNameWithCodex({
+      threadId: params.threadId,
+      input: params.input,
+    });
 
     return { threadId, turnId };
   }

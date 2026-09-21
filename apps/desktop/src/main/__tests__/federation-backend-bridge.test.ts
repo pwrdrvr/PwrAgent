@@ -30,7 +30,7 @@ describe("federation backend bridge", () => {
   it("gates explicit review modes before sending them to an old Federation owner", async () => {
     const request = vi.fn(async (_args: { method: string }) => ({ backends: [{ kind: "codex", capabilities: {} }] }));
     const client = new FederationRemoteBackendClient({ request } as unknown as FederationRpcEndpoint);
-    const review = { backend: "codex" as const, threadId: "parent", target: { type: "uncommittedChanges" as const }, runMode: "codex-inline" as const };
+    const review = { backend: "codex" as const, threadId: "parent", target: { type: "uncommittedChanges" as const }, runMode: "pwragent-sub-agent" as const };
     await expect(client.startReview(review)).rejects.toThrow("does not support explicit review modes");
     await expect(client.createScheduledThreadAction({ ...review, kind: "review", review, scheduledFor: 100, displayText: "Review" })).rejects.toThrow("does not support explicit review modes");
     await expect(client.updateScheduledThreadAction({ id: "queued-review", review })).rejects.toThrow("does not support explicit review modes");
@@ -61,7 +61,7 @@ describe("federation backend bridge", () => {
     });
     const client = new FederationRemoteBackendClient({ request } as unknown as FederationRpcEndpoint);
     const update = { id: "queued-review", review: {
-      target: { type: "uncommittedChanges" as const }, runMode: "codex-inline" as const,
+      target: { type: "uncommittedChanges" as const }, runMode: "pwragent-sub-agent" as const,
     } };
     if (backend === "codex") {
       await client.updateScheduledThreadAction(update);

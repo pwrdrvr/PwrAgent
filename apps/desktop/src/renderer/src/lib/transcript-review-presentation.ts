@@ -8,7 +8,6 @@ import {
   isCodexReviewPromptText,
   isPwrAgentInlineReviewPrompt,
 } from "../../../shared/review-command";
-import { parseReviewOutputText } from "../../../shared/review-output";
 
 export type TranscriptReviewEvent =
   | AppServerThreadMessageEntry
@@ -60,17 +59,6 @@ function isPlainReviewFindingText(text: string): boolean {
     /\b(?:full\s+)?review comments?:/i.test(text)
     && /(?:^|\n)\s*-\s*\[P[0-3]\]\s+.+(?:\s+—\s+|\s+-\s+).+:\d+/u.test(text)
   );
-}
-
-/**
- * A reply written in the structured review contract — a Codex Inline turn's
- * last message. It is the artifact's source, so once its turn has a result
- * card it is a second, unreadable copy of that card. The substring check keeps
- * the parse off every other assistant message on every streamed delta.
- */
-function isReviewOutputReply(text: string): boolean {
-  return text.includes("overall_correctness")
-    && parseReviewOutputText(text) !== undefined;
 }
 
 function shouldUseAssistantReviewText(params: {
@@ -150,7 +138,7 @@ export function summarizeTranscriptReviewSegment(
     }
 
     appendTextCandidate(assistantEntriesByTextHash, entry.text, entry.id);
-    if (isPlainReviewFindingText(entry.text) || isReviewOutputReply(entry.text)) {
+    if (isPlainReviewFindingText(entry.text)) {
       events.push(entry);
     }
   }
@@ -230,8 +218,7 @@ function reviewEvent(entry: AppServerThreadEntry): TranscriptReviewEvent | undef
   }
   if (
     entry.type === "message"
-    && ((entry.role === "assistant"
-        && (isPlainReviewFindingText(entry.text) || isReviewOutputReply(entry.text)))
+    && ((entry.role === "assistant" && isPlainReviewFindingText(entry.text))
       || (entry.role === "user"
         && (isCodexReviewPromptText(entry.text) || isPwrAgentInlineReviewPrompt(entry.text))))
   ) {
@@ -298,11 +285,6 @@ function isDuplicateReviewMessage(
  * collisions are verified against normalized text before an ID is excluded.
  */
 export function deriveTranscriptReviewPresentation(params: {
-  /**
-   * A review turn still running has no result card yet. Its finished reply
-   * arrives a moment before the card does, and would flash as raw JSON.
-   */
-  activeTurnId?: string;
   historyEvents: Iterable<TranscriptReviewEvent>;
   historyIndex: TranscriptReviewHistoryIndex;
   tailEntries: AppServerThreadEntry[];
@@ -317,7 +299,6 @@ export function deriveTranscriptReviewPresentation(params: {
     entry: AppServerThreadMessageEntry;
     source: ReviewCandidate["source"];
   }[] = [];
-  const reviewOutputReplies: AppServerThreadMessageEntry[] = [];
   const excludedHistoryEntryIds = new Set<string>();
   const excludedHistoryMessageIds = new Set<string>();
   const excludedTailEntryIds = new Set<string>();
@@ -335,10 +316,6 @@ export function deriveTranscriptReviewPresentation(params: {
 
     if (event.role === "user") {
       userPrompts.push({ entry: event, source });
-      return;
-    }
-    if (isReviewOutputReply(event.text)) {
-      reviewOutputReplies.push(event);
       return;
     }
     const candidate = matchingReviewCandidate(candidates, event);
@@ -402,24 +379,6 @@ export function deriveTranscriptReviewPresentation(params: {
     const text = candidate.entry.output?.overall_explanation ?? candidate.entry.review;
     if (text.trim()) {
       reviewTexts.add(normalizeTranscriptText(text));
-    }
-  }
-  // Only beside a structured result for the same turn, or while that review
-  // turn is still running and its card is on the way. An ordinary reply that
-  // happens to be review-shaped JSON stays, because nothing else shows it.
-  const structuredResultTurnIds = new Set(
-    candidates.flatMap(({ entry }) =>
-      entry.output && entry.turn?.id ? [entry.turn.id] : [],
-    ),
-  );
-  for (const reply of reviewOutputReplies) {
-    const turnId = reply.turn?.id;
-    if (
-      turnId
-      && (structuredResultTurnIds.has(turnId)
-        || (turnId === params.activeTurnId && reviewTurnIds.has(turnId)))
-    ) {
-      reviewTexts.add(normalizeTranscriptText(reply.text));
     }
   }
 

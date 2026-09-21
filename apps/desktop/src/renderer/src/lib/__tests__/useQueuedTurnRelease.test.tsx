@@ -2038,7 +2038,7 @@ describe("useQueuedTurnRelease", () => {
       reviewCommand: {
         cwd: "/repo/polled-worktree",
         displayText: "Review changes against main",
-        runMode: "codex-inline",
+        runMode: "pwragent-sub-agent",
         target: { type: "baseBranch", branch: "main" },
       },
     });
@@ -2067,7 +2067,7 @@ describe("useQueuedTurnRelease", () => {
       threadId: "thread-a",
       target: { type: "baseBranch", branch: "main" },
       delivery: "inline",
-      runMode: "codex-inline",
+      runMode: "pwragent-sub-agent",
       cwd: "/repo/polled-worktree",
     });
     expect(

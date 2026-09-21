@@ -13,7 +13,6 @@ export type ReviewRunModeDecision = {
   helpText?: string;
   runMode: ReviewRunMode;
   subagentDisabled: boolean;
-  inlineDisabled: boolean;
   nativeDisabled: boolean;
   submissionUnavailable: boolean;
 };
@@ -68,7 +67,6 @@ export function resolveReviewRunMode(params: {
       `PwrAgent Sub Agent is required because ${reviewerLabel} runs reviews in a managed subagent.`;
   }
 
-  const inlineDisabled = params.ownerSummary?.capabilities.reviewCodexInline !== true;
   const nativeDisabled = params.ownerSummary?.capabilities.reviewCodexSubAgent !== true;
   const runMode: ReviewRunMode = forcedReason
     ? "pwragent-sub-agent"
@@ -77,7 +75,7 @@ export function resolveReviewRunMode(params: {
     ? params.requestedRunMode !== undefined
     : runMode === "pwragent-sub-agent"
       ? !subagentSupported
-      : runMode === "codex-inline" ? inlineDisabled : nativeDisabled;
+      : nativeDisabled;
   const helpText = [
     forcedReason,
     !explicitRunModeSupported
@@ -91,7 +89,6 @@ export function resolveReviewRunMode(params: {
     helpText,
     runMode,
     subagentDisabled: !subagentSupported,
-    inlineDisabled,
     nativeDisabled,
     submissionUnavailable,
   };

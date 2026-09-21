@@ -1,12 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
-  buildInlineReviewPrompt,
   formatReviewCommand,
-  isPwrAgentInlineReviewPrompt,
   normalizeReviewDisplayText,
   parseReviewCommand,
 } from "../review-command";
-import { REVIEW_OUTPUT_INSTRUCTIONS } from "../review-output";
 
 describe("parseReviewCommand", () => {
   it("parses bare review as uncommitted changes", () => {
@@ -73,15 +70,5 @@ describe("normalizeReviewDisplayText", () => {
     expect(normalizeReviewDisplayText("current changes")).toBe(
       "Review current changes"
     );
-  });
-});
-
-describe("buildInlineReviewPrompt", () => {
-  it("asks for the structured review contract inside the recognised envelope", () => {
-    const prompt = buildInlineReviewPrompt({ type: "baseBranch", branch: "main" });
-    // The card's verdict, confidence, and findings all come from this reply.
-    expect(prompt).toContain(REVIEW_OUTPUT_INSTRUCTIONS);
-    // The transcript hides the prompt by its envelope.
-    expect(isPwrAgentInlineReviewPrompt(prompt)).toBe(true);
   });
 });
