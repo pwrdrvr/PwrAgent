@@ -5,6 +5,7 @@ import {
   McpOAuthSessionCoordinator,
   McpReauthorizationRequiredError,
 } from "../mcp-connections/mcp-oauth-session-coordinator";
+import { createMcpSafeFetch } from "../mcp-connections/mcp-safe-fetch";
 import type {
   McpCredentialVault,
   McpOAuthCredential,
@@ -34,6 +35,35 @@ function refreshAuth(
 }
 
 describe("McpOAuthSessionCoordinator", () => {
+  it("reports an HTML registration failure before opening browser consent", async () => {
+    const { vault, writes } = createVault({
+      resourceUrl: "https://mcp.example.com/mcp",
+      discoveryState: { authorizationServerUrl: "https://mcp.example.com" },
+    });
+    const fetchFn = vi.fn(async () => new Response("<!DOCTYPE html><script>challenge-data</script>", {
+      status: 403,
+      headers: { "content-type": "text/html", "cf-mitigated": "challenge" },
+    }));
+    const coordinator = new McpOAuthSessionCoordinator({
+      connectionId: "example",
+      serverUrl: new URL("https://mcp.example.com/mcp"),
+      vault,
+      fetchFn: createMcpSafeFetch({ fetchFn }),
+    });
+    const onRedirect = vi.fn();
+    const waitForCode = vi.fn();
+    await expect(coordinator.authorize({
+      redirectUrl: new URL("http://127.0.0.1:4040/oauth/callback"),
+      onRedirect,
+      waitForCode,
+    })).rejects.toThrow("browser verification");
+    expect(coordinator.detail).toContain("HTTP 403");
+    expect(coordinator.detail).not.toMatch(/<script>|challenge-data|Raw body/);
+    expect(onRedirect).not.toHaveBeenCalled();
+    expect(waitForCode).not.toHaveBeenCalled();
+    expect(writes).toHaveLength(0);
+  });
+
   it.each(["timeout", "late callback", "late token response"])(
     "keeps the newer authorization when an abandoned attempt returns a %s",
     async (outcome) => {
