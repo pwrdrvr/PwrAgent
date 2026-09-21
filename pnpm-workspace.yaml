@@ -55,6 +55,7 @@ ignoredBuiltDependencies:
   - electron-winstaller
   - protobufjs
 onlyBuiltDependencies:
+  - dugite
   - better-sqlite3
   - electron
   - esbuild

@@ -1,3 +1,4 @@
+import { configureBundledGit } from "./bundled-git";
 import { app, BrowserWindow, dialog, Menu, nativeImage, shell } from "electron";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
@@ -224,6 +225,8 @@ import {
   E2E_SHUTDOWN_LAUNCH_ID_ENV,
   type E2eShutdownPhase,
 } from "./e2e-shutdown-diagnostics";
+
+configureBundledGit(app.isPackaged ? process.resourcesPath : undefined);
 
 const APP_NAME = "PwrAgent";
 const APP_COPYRIGHT = "Copyright © 2026 PwrDrvr LLC.";

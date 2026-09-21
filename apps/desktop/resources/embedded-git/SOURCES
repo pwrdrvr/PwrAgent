@@ -1,0 +1,22 @@
+PwrAgent redistributes the unmodified Git and Git LFS executables from
+Dugite 3.2.3 / dugite-native v2.53.0-4. These are separate command-line tools.
+PwrAgent's own code remains MIT licensed.
+
+Git 2.53.0: GPL-2.0-only; see COPYING.
+Source: https://github.com/git/git/tree/v2.53.0
+Windows Git 2.53.0.windows.4 source:
+https://github.com/git-for-windows/git/tree/v2.53.0.windows.4
+Build scripts, patches, and distribution metadata:
+https://github.com/desktop/dugite-native/tree/v2.53.0-4
+
+Git LFS 3.7.1: MIT; see LICENSE.git-lfs.
+https://github.com/git-lfs/git-lfs/tree/v3.7.1
+
+Git Credential Manager 2.9.0 (non-macOS distributions): MIT;
+see LICENSE.git-credential-manager and NOTICE.
+https://github.com/git-ecosystem/git-credential-manager/tree/v2.9.0
+
+The macOS package omits Git Credential Manager's .NET payload because its
+architecture-specific non-Mach-O files cannot be merged into a universal app.
+Git's other credential helpers and the user's credential configuration remain
+available.

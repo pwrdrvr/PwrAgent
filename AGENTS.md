@@ -389,7 +389,12 @@
 - Adding an id to `ALLOWED_LICENSE_IDS` is a legal decision.
 - Make that decision in a commit that says why.
 - Never add an id to make CI green.
-- Strong copyleft and source-available terms are permitted nowhere.
+- PwrDrvr LLC explicitly approved one exception on 2026-09-20: ship Dugite's
+  bundled Git as a separate executable with Git LFS, to remove the system-Git
+  dependency. Git's GPL-2.0-only license and source/build locations are retained
+  in `apps/desktop/resources/embedded-git/` and `THIRD_PARTY_LICENSES`. This does
+  not add GPL to the npm dependency allowlist or change first-party MIT licensing.
+- Apart from that bundled Git exception, strong copyleft and source-available terms are permitted nowhere.
 - Those terms include GPL, AGPL, BSL, SSPL, and Commons Clause.
 - LGPL is also permitted nowhere.
 - PwrAgent ships no LGPL component, and the notice carries no FSF text and no written source offer.

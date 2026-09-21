@@ -3947,191 +3947,45 @@ describe("SettingsScreen", () => {
     expect(within(failingRow as HTMLElement).queryByRole("button")).toBeNull();
   });
 
-  it("shows Git discovery and Xcode license remediation", async () => {
+  it("shows the bundled Git and LFS versions without installed-runtime selection", async () => {
     const snapshot = createSnapshot();
     snapshot.applications.git = {
-      path: { value: "", source: "default" },
+      path: { value: "/app/resources/git/bin/git", source: "default" },
       discovery: {
-        selectedCommand: "/opt/homebrew/bin/git",
-        selectedSource: "homebrew",
-        candidates: [
-          {
-            command: "/opt/homebrew/bin/git",
-            executable: true,
-            selected: true,
-            source: "homebrew",
-            version: "2.39.1",
-          },
-          {
-            command: "/usr/bin/git",
-            executable: false,
-            selected: false,
-            source: "xcode",
-            failureReason:
-              "You have not agreed to the Xcode license agreements. Please run 'sudo xcodebuild -license'",
-          },
-          {
-            command: "/usr/local/bin/git",
-            executable: false,
-            selected: false,
-            source: "homebrew",
-            failureReason: "not_found",
-          },
-        ],
+        selectedCommand: "/app/resources/git/bin/git", selectedSource: "bundled",
+        candidates: [{ command: "/app/resources/git/bin/git", source: "bundled",
+          selected: true, executable: true, version: "2.53.0", lfsVersion: "3.7.1" }],
       },
     };
     const settings = createSettingsState(snapshot);
-    const copyTextMock = vi.fn(async () => undefined);
-
-    render(
-      <SettingsScreen
-        desktopApi={{ copyText: copyTextMock }}
-        initialSection="git"
-        settings={settings}
-        onClose={() => undefined}
-      />,
-    );
-
-    const gitPanel = screen.getByRole("heading", { name: "Git" }).closest("section")!;
-    expect(within(gitPanel).getAllByText("/opt/homebrew/bin/git").length).toBeGreaterThanOrEqual(1);
-    expect(within(gitPanel).getByText(/Apple's Git at/)).toBeInTheDocument();
-    expect(within(gitPanel).queryByText("/usr/local/bin/git")).not.toBeInTheDocument();
-    expect(
-      within(gitPanel).getByText("sudo xcodebuild -license"),
-    ).toBeInTheDocument();
-
-    fireEvent.click(within(gitPanel).getByRole("button", { name: "Copy command" }));
-    await waitFor(() => {
-      expect(copyTextMock).toHaveBeenCalledWith("sudo xcodebuild -license");
-    });
-  });
-
-  it("selects a git candidate and shows what signed each one", async () => {
-    const snapshot = createSnapshot();
-    snapshot.applications.git = {
-      path: { value: "", source: "default" },
-      discovery: {
-        selectedCommand: "/opt/homebrew/bin/git",
-        selectedSource: "homebrew",
-        candidates: [
-          {
-            command: "/opt/homebrew/bin/git",
-            executable: true,
-            selected: true,
-            source: "homebrew",
-            version: "2.54.0",
-          },
-          {
-            command: "/usr/bin/git",
-            executable: true,
-            selected: false,
-            source: "xcode",
-            version: "2.50.1",
-          },
-        ],
-      },
-    };
-    const settings = createSettingsState(snapshot);
-    const inspectCodeSignatures = vi.fn(async () => ({
-      signatures: [
-        { path: "/opt/homebrew/bin/git", trust: "adhoc" as const },
-        {
-          path: "/usr/bin/git",
-          trust: "platform" as const,
-          signer: "macOS Software Signing",
-        },
-      ],
-    }));
     const refreshGitDiscovery = vi.fn(async () => ({ snapshot }));
-
-    render(
-      <SettingsScreen
-        desktopApi={{ inspectCodeSignatures, refreshGitDiscovery }}
-        initialSection="git"
-        settings={settings}
-        onClose={() => undefined}
-      />,
-    );
-
-    const gitPanel = screen
-      .getByRole("heading", { name: "Git" })
-      .closest("section")!;
-
-    // The provenance is the title, because every row here is `git` and the
-    // choice being made is Homebrew's or Apple's.
-    expect(within(gitPanel).getByText("Homebrew")).toBeInTheDocument();
-    expect(within(gitPanel).getByText("Apple")).toBeInTheDocument();
-    expect(within(gitPanel).getByText("2.50.1")).toBeInTheDocument();
-
-    // Signatures arrive after the rows paint.
-    expect(await within(gitPanel).findByText("Ad-hoc")).toBeInTheDocument();
-    expect(within(gitPanel).getByText("System")).toBeInTheDocument();
-
-    // The whole row is the control: before this, git rows had no action at
-    // all and clicking one did nothing.
-    fireEvent.click(
-      within(gitPanel).getByRole("button", {
-        name: "Use Apple git at /usr/bin/git",
-      }),
-    );
-    await waitFor(() => {
-      expect(settings.writeConfig).toHaveBeenCalledWith({
-        applications: {
-          git: {
-            path: "/usr/bin/git",
-          },
-        },
-      });
-    });
-    // Selecting has to re-probe: a plain projection re-read would serve the
-    // memoized startup snapshot back and the pane would look unchanged.
-    expect(refreshGitDiscovery).toHaveBeenCalled();
+    render(<SettingsScreen desktopApi={{ refreshGitDiscovery }} initialSection="git"
+      settings={settings} onClose={() => undefined} />);
+    const panel = screen.getByRole("heading", { name: "Git" }).closest("section")!;
+    expect(within(panel).getByText("2.53.0")).toBeInTheDocument();
+    expect(within(panel).getByText("3.7.1")).toBeInTheDocument();
+    expect(within(panel).getByText("In use")).toBeInTheDocument();
+    expect(within(panel).queryByText("Manual path")).not.toBeInTheDocument();
+    expect(within(panel).queryByRole("button", { name: /Use .*git/ })).not.toBeInTheDocument();
+    fireEvent.click(within(panel).getByRole("button", { name: "Re-check" }));
+    await waitFor(() => expect(refreshGitDiscovery).toHaveBeenCalled());
+    expect(settings.writeConfig).not.toHaveBeenCalled();
   });
 
-  it("does not offer a git selection while PWRAGENT_GIT_PATH is set", () => {
+  it("reports a missing bundled LFS without offering system Git as a fallback", () => {
     const snapshot = createSnapshot();
-    snapshot.applications.git = {
-      path: { value: "/opt/env/git", source: "env" },
-      discovery: {
-        selectedCommand: "/opt/env/git",
-        selectedSource: "env",
-        candidates: [
-          {
-            command: "/opt/env/git",
-            executable: true,
-            selected: true,
-            source: "env",
-            version: "2.54.0",
-          },
-          {
-            command: "/usr/bin/git",
-            executable: true,
-            selected: false,
-            source: "xcode",
-            version: "2.50.1",
-          },
-        ],
-      },
+    snapshot.applications.git.discovery = {
+      selectedSource: "bundled", selectedCommand: "/app/git/bin/git",
+      candidates: [{ command: "/app/git/bin/git", source: "bundled", selected: true,
+        executable: false, failureReason: "Bundled Git LFS is missing" }],
     };
-    const settings = createSettingsState(snapshot);
-
-    render(
-      <SettingsScreen
-        initialSection="git"
-        settings={settings}
-        onClose={() => undefined}
-      />,
-    );
-
-    const gitPanel = screen
-      .getByRole("heading", { name: "Git" })
-      .closest("section")!;
-    expect(
-      within(gitPanel).getByRole("button", {
-        name: "Use Apple git at /usr/bin/git",
-      }),
-    ).toBeDisabled();
-    expect(within(gitPanel).getByText(/PWRAGENT_GIT_PATH is set/)).toBeInTheDocument();
+    render(<SettingsScreen initialSection="git" settings={createSettingsState(snapshot)} onClose={() => undefined} />);
+    const panel = screen.getByRole("heading", { name: "Git" }).closest("section")!;
+    expect(within(panel).getByText("Unavailable")).toBeInTheDocument();
+    expect(within(panel).getByText("Bundled Git LFS is missing")).toBeInTheDocument();
+    const nav = screen.getByRole("navigation", { name: "Settings sections" });
+    expect(within(nav).getByText("unavailable")).toBeInTheDocument();
+    expect(within(panel).queryByRole("button", { name: "Choose…" })).not.toBeInTheDocument();
   });
 
   it("renders the Mattermost section and saves edits via writeConfig", async () => {

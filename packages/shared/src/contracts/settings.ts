@@ -883,6 +883,7 @@ export type DesktopGlabDiscoverySnapshot = {
 };
 
 export type DesktopGitCandidateSource =
+  | "bundled"
   | "env"
   | "config"
   | "path"
@@ -896,6 +897,7 @@ export type DesktopGitDiscoveryCandidate = {
   executable: boolean;
   selected: boolean;
   version?: string;
+  lfsVersion?: string;
   versionFailureReason?: string;
   failureReason?: string;
 };

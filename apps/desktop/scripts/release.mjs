@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { verifyBundledGit } from "./verify-bundled-git.mjs";
 /**
  * PwrAgent desktop release orchestrator.
  *
@@ -892,7 +893,7 @@ if (!signStageOnly) {
   //    into the stage. Remove stale copies before our controlled cp to avoid
   //    macOS cp -R nesting (cp -R src dst/ creates dst/src/ when dst exists).
   step("seed stage with build output + builder inputs");
-  for (const dir of ["out", "build"]) {
+  for (const dir of ["out", "build", "resources"]) {
     const target = join(stageDir, dir);
     if (existsSync(target)) {
       rmSync(target, { recursive: true, force: true });
@@ -1000,6 +1001,9 @@ const dist = join(stageDir, "dist");
 if (win) {
   const builtApp = findWindowsUnpackedDir(dist);
 
+  step("verify packaged Git and LFS");
+  verifyBundledGit(join(builtApp, "resources"));
+
   step("verify packaged ripgrep");
   verifyPackagedRipgrep(join(builtApp, "resources"));
 
@@ -1029,6 +1033,9 @@ if (win) {
 
 if (linux) {
   const builtApp = findLinuxUnpackedDir(dist);
+
+  step("verify packaged Git and LFS");
+  verifyBundledGit(join(builtApp, "resources"));
 
   step("verify packaged ripgrep");
   verifyPackagedRipgrep(join(builtApp, "resources"));
@@ -1076,6 +1083,9 @@ const dockTilePluginExecutable = join(
   "MacOS",
   "PwrAgentDockTilePlugin",
 );
+
+step("verify packaged Git and LFS");
+verifyBundledGit(join(builtApp, "Contents", "Resources"), { macSlices });
 
 step(`verify ${macArch} binary slices`);
 verifyMacSlices(join(builtApp, "Contents", "MacOS", "PwrAgent"));

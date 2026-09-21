@@ -1,3 +1,4 @@
+import { bundledGitEnvironment, bundledGitExecutable, bundledGitLfsExecutable } from "../bundled-git";
 import { getAppStateDb } from "../state/app-state";
 import {
   DESKTOP_UI_LAYOUT_DEFAULTS,
@@ -211,7 +212,7 @@ import {
   type ResolvedCodexCommandCandidate,
 } from "@pwrdrvr/codex-discovery";
 import { discoverDesktopApplications } from "./application-discovery";
-import { GIT_COMMAND_ENV, discoverGitCommands } from "./git-discovery";
+import { discoverGitCommands } from "./git-discovery";
 import { discoverGlabCommands } from "./glab-discovery";
 import { discoverGhCommands } from "./gh-discovery";
 import { getMainLogger } from "../log";
@@ -1487,10 +1488,7 @@ export class DesktopSettingsService {
           discovery: ghDiscovery,
         },
         git: {
-          path: this.resolveString(
-            config.applications?.git?.path,
-            GIT_COMMAND_ENV,
-          ),
+          path: { value: bundledGitExecutable(), source: "default" },
           discovery: gitDiscovery,
         },
       },
@@ -2617,7 +2615,7 @@ export class DesktopSettingsService {
       ?? (shouldResolveManagedGrok
         ? this.options.resolveActiveManagedGrokCommand?.()
         : undefined);
-    return [codexCommand, grokCommand].filter(
+    return [bundledGitExecutable(), bundledGitLfsExecutable(), codexCommand, grokCommand].filter(
       (command): command is string => command !== undefined,
     );
   }
@@ -2778,6 +2776,9 @@ export class DesktopSettingsService {
           hadHomebrewPrefix: Boolean(shellEnv.HOMEBREW_PREFIX),
         });
         mergePwrAgentChildProcessEnv(targetEnv, shellEnv);
+        const bundledEnv = bundledGitEnvironment(targetEnv);
+        for (const key of Object.keys(targetEnv)) delete targetEnv[key];
+        Object.assign(targetEnv, bundledEnv);
         if (this.startupCodexHome) {
           targetEnv.CODEX_HOME = this.startupCodexHome;
         }
@@ -2833,6 +2834,9 @@ export class DesktopSettingsService {
         hadHomebrewPrefix: Boolean(shellEnv.HOMEBREW_PREFIX),
       });
       mergePwrAgentChildProcessEnv(targetEnv, shellEnv);
+      const bundledEnv = bundledGitEnvironment(targetEnv);
+      for (const key of Object.keys(targetEnv)) delete targetEnv[key];
+      Object.assign(targetEnv, bundledEnv);
       if (this.startupCodexHome) {
         targetEnv.CODEX_HOME = this.startupCodexHome;
       }
@@ -2941,6 +2945,7 @@ export class DesktopSettingsService {
   }
 
   private withStartupCodexHome(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+    env = bundledGitEnvironment(env);
     if (!this.startupCodexHome) return env;
     return {
       ...env,
@@ -3003,38 +3008,6 @@ export class DesktopSettingsService {
       || configured
       || undefined
     );
-  }
-
-  /**
-   * The git the main process should spawn, or `undefined` when the
-   * operator has expressed no preference and `PATH` should decide.
-   * Installed as the `git-command` resolver at startup, so every git
-   * spawn honours the Settings pane's selection.
-   *
-   * A configured path the last discovery run found unusable is dropped.
-   * Discovery's own selection already skips a non-executable candidate, so
-   * without this the Settings pane would show one git as "In use" while
-   * every direct `getGitCommand()` spawn ran a different, broken one — the
-   * realistic case being an OS update that re-arms the Xcode license
-   * prompt under an operator who had chosen Apple's git. Env override is
-   * exempt: it is an explicit escape hatch and must not be second-guessed,
-   * and a path we have not probed is trusted rather than ignored.
-   */
-  resolveGitCommandPreference(): string | undefined {
-    const envOverride = readEnvString(this.env, GIT_COMMAND_ENV);
-    if (envOverride) {
-      return envOverride;
-    }
-
-    const configured = this.configStore.read("applications").git?.path?.trim();
-    if (!configured) {
-      return undefined;
-    }
-
-    const probed = this.gitDiscoveryCache?.result?.candidates.find(
-      (candidate) => candidate.command === configured,
-    );
-    return probed && !probed.executable ? undefined : configured;
   }
 
   private readConfig(): ConfigReadResult {

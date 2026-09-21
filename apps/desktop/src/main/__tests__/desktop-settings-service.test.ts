@@ -1,3 +1,4 @@
+import { bundledGitEnvironment, bundledGitExecutable, bundledGitLfsExecutable } from "../bundled-git";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -3165,7 +3166,7 @@ describe("DesktopSettingsService", () => {
 
     await expect(service.resolveTerminalSpawnEnvAsync()).resolves.toMatchObject({
       CODEX_HOME: path.join(codexRoot, "profiles", "work"),
-      PATH: "/opt/homebrew/bin:/usr/bin",
+      PATH: bundledGitEnvironment({ PATH: "/opt/homebrew/bin:/usr/bin" }).PATH,
     });
   });
 
@@ -3231,6 +3232,7 @@ describe("DesktopSettingsService", () => {
     ensureManagedCodexRuntime.mockClear();
 
     expect(service.resolveIntegratedTerminalCommands()).toEqual([
+      bundledGitExecutable(), bundledGitLfsExecutable(),
       "/pwragent/codex/versions/current/codex",
       "/pwragent/grok/versions/current/grok",
     ]);
@@ -3266,6 +3268,7 @@ describe("DesktopSettingsService", () => {
     // the download failed. Threads fall back to the configured command here,
     // so a terminal that pinned nothing would send `codex` somewhere else.
     expect(service.resolveIntegratedTerminalCommands()).toEqual([
+      bundledGitExecutable(), bundledGitLfsExecutable(),
       "/custom/codex/bin/codex",
     ]);
   });
@@ -3297,6 +3300,7 @@ describe("DesktopSettingsService", () => {
     });
 
     expect(service.resolveIntegratedTerminalCommands()).toEqual([
+      bundledGitExecutable(), bundledGitLfsExecutable(),
       "/custom/codex/bin/codex",
       "/custom/grok/bin/grok",
     ]);
@@ -3331,6 +3335,7 @@ describe("DesktopSettingsService", () => {
     });
 
     expect(service.resolveIntegratedTerminalCommands()).toEqual([
+      bundledGitExecutable(), bundledGitLfsExecutable(),
       "/custom/codex/bin/codex",
     ]);
     expect(resolveActiveManagedGrokCommand).not.toHaveBeenCalled();
@@ -3376,7 +3381,7 @@ describe("DesktopSettingsService", () => {
     });
 
     expect(service.resolveCodexSpawnEnv().PATH).toBe(
-      "/Users/alice/.sdkman/candidates/sbt/current/bin:/usr/bin",
+      bundledGitEnvironment({ PATH: "/Users/alice/.sdkman/candidates/sbt/current/bin:/usr/bin" }).PATH,
     );
     expect(service.resolveCodexSpawnEnv().NVM_DIR).toBe("/Users/alice/.nvm");
   });
@@ -3401,11 +3406,11 @@ describe("DesktopSettingsService", () => {
     expect(codexEnv).not.toHaveProperty("ELECTRON_RENDERER_URL");
     expect(terminalEnv).not.toHaveProperty("ELECTRON_RENDERER_URL");
     expect(codexEnv).toMatchObject({
-      PATH: "/opt/homebrew/bin:/usr/bin",
+      PATH: bundledGitEnvironment({ PATH: "/opt/homebrew/bin:/usr/bin" }).PATH,
       NVM_DIR: "/Users/alice/.nvm",
     });
     expect(terminalEnv).toMatchObject({
-      PATH: "/opt/homebrew/bin:/usr/bin",
+      PATH: bundledGitEnvironment({ PATH: "/opt/homebrew/bin:/usr/bin" }).PATH,
       NVM_DIR: "/Users/alice/.nvm",
     });
   });
