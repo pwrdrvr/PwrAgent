@@ -844,6 +844,64 @@ describe("sqlite write metrics", () => {
     }
   });
 
+  it("budgets a Codex Inline review to its two cards", async () => {
+    const registry = new DesktopBackendRegistry({
+      codexClient: createStubBackendClient({ turnStart: true }),
+      overlayStore: store as never,
+    });
+    const emit = (registry as unknown as {
+      emit(event: AgentEvent): Promise<void>;
+    }).emit.bind(registry);
+
+    try {
+      const { writes } = await measureSqliteWrites(async () => {
+        const review = await registry.startReview({
+          backend: "codex",
+          threadId: "thread-inline-review",
+          target: { type: "uncommittedChanges" },
+          runMode: "codex-inline",
+        });
+        await emit({
+          backend: "codex",
+          notification: {
+            method: "item/completed",
+            params: {
+              threadId: review.threadId,
+              turnId: review.turnId,
+              item: { id: "final", type: "agentMessage", text: "No findings." },
+            },
+          },
+        });
+        await emit({
+          backend: "codex",
+          notification: {
+            method: "turn/completed",
+            params: {
+              threadId: review.threadId,
+              turnId: review.turnId,
+              turn: { id: review.turnId, status: "completed", output: [] },
+            },
+          },
+        });
+      });
+
+      // One commit per card, once per review the operator starts: never per
+      // item or per streamed event. The turn adds none of its own, because
+      // an inline review does not persist the reviewer's model settings. At
+      // an implausible 200 inline reviews a day, the measured ~33 KB of WAL
+      // projects to about 6.6 MB/day.
+      expectSqliteWriteBudget({
+        note:
+          "one Codex Inline review turn from start to completion: the start "
+          + "and result cards, one commit each",
+        scenario: "codex-inline-review-cards",
+        writes,
+      });
+    } finally {
+      await registry.close();
+    }
+  });
+
   it("holds streamed command output to one commit per flush window", async () => {
     // The regression guard for PR #1406. Tool accounting used to run one
     // implicit transaction per streamed 8 KiB chunk — 3,693 commits and 58 MB
@@ -2750,16 +2808,30 @@ function createStubBackendClient(options?: {
   nativeSubAgentThreads?: AppServerThreadSummary[];
   replay?: AppServerThreadReplay;
   threads?: AppServerThreadSummary[];
+  turnStart?: boolean;
 }) {
   let startedThreadSequence = 0;
+  let startedTurnSequence = 0;
   return {
     close: async () => {},
     getInitializeResult: async () => ({
       methods: [
         ...(options?.replay ? ["thread/read"] : []),
         ...(options?.threads ? ["thread/list"] : []),
+        ...(options?.turnStart ? ["turn/start"] : []),
       ],
     }),
+    ...(options?.turnStart
+      ? {
+          startTurn: async (params: { threadId: string }) => {
+            startedTurnSequence += 1;
+            return {
+              threadId: params.threadId,
+              turnId: `turn-write-budget-${startedTurnSequence}`,
+            };
+          },
+        }
+      : {}),
     listNativeSubAgentThreads: async () => options?.nativeSubAgentThreads ?? [],
     listThreads: async () => options?.threads ?? [],
     onNotification: () => () => {},

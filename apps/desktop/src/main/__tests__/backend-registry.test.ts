@@ -25786,6 +25786,257 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  describe("Codex Inline review cards", () => {
+    const context: AppServerReviewContext = {
+      workspacePath: "/repo",
+      projectLabel: "example-repo",
+      gitBranch: "feat/inline-cards",
+      baseBranch: "main",
+      headCommit: "89abcdef0123456789abcdef0123456789abcdef",
+      pullRequest: null,
+    };
+    const finalReview = [
+      "One regression. The patch is incorrect.",
+      "",
+      "Review comments:",
+      "",
+      "- [P1] Guard the empty list — /repo/src/list.ts:4-6",
+      "  `items[0]` is read before the length check.",
+    ].join("\n");
+
+    const createInlineHarness = (options: {
+      replay?: AppServerThreadReplay;
+      startTurnDelay?: Promise<unknown>;
+    } = {}) => {
+      const codexClient = new MockBackendClient({
+        initializeResult: { methods: ["turn/start"] },
+        startTurnResults: [{ threadId: "thread-parent", turnId: "turn-inline" }],
+        ...options,
+      });
+      const overlayStore = createOverlayStoreMock({
+        overlays: {
+          "codex:thread-parent": {
+            backend: "codex",
+            threadId: "thread-parent",
+            model: "gpt-5.5",
+            reasoningEffort: "high",
+          } as ThreadOverlayState,
+        },
+      });
+      const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+      vi.spyOn(
+        registry as unknown as {
+          resolveReviewContext(): Promise<AppServerReviewContext | undefined>;
+        },
+        "resolveReviewContext",
+      ).mockResolvedValue(context);
+      const events: AgentEvent[] = [];
+      registry.onEvent((event) => {
+        events.push(event);
+      });
+      const startInlineReview = () => registry.startReview({
+        backend: "codex",
+        threadId: "thread-parent",
+        target: { type: "baseBranch", branch: "main" },
+        delivery: "inline",
+        runMode: "codex-inline",
+      });
+      const emitAgentMessage = (id: string, text: string, phase?: string) =>
+        codexClient.emit({
+          method: "item/completed",
+          params: {
+            threadId: "thread-parent",
+            turnId: "turn-inline",
+            item: {
+              id,
+              type: "agentMessage",
+              text,
+              ...(phase ? { phase } : {}),
+            },
+          },
+        });
+      const emitTurnCompleted = () => codexClient.emit({
+        method: "turn/completed",
+        params: {
+          threadId: "thread-parent",
+          turnId: "turn-inline",
+          turn: { id: "turn-inline", status: "completed", output: [] },
+        },
+      });
+      const itemIndex = (itemType: string) =>
+        events.findIndex((event) => isCompletedItemType(event, itemType));
+      const itemData = (itemType: string): unknown => {
+        const event = events[itemIndex(itemType)];
+        if (event?.notification.method !== "item/completed") {
+          return undefined;
+        }
+        return event.notification.params.item;
+      };
+      return {
+        codexClient,
+        emitAgentMessage,
+        emitTurnCompleted,
+        events,
+        itemData,
+        itemIndex,
+        overlayStore,
+        registry,
+        startInlineReview,
+      };
+    };
+
+    it("publishes a start card with the reviewer and provenance, and a result card with the review", async () => {
+      const harness = createInlineHarness();
+
+      await harness.startInlineReview();
+
+      const reviewer = { backend: "codex", model: "gpt-5.5", reasoningEffort: "high" };
+      expect(harness.itemData("enteredReviewMode")).toMatchObject({
+        id: "inline-review:turn-inline:started",
+        data: { reviewer, context },
+      });
+      expect(harness.events[harness.itemIndex("enteredReviewMode")]).toMatchObject({
+        notification: { params: { threadId: "thread-parent", turnId: "turn-inline" } },
+      });
+
+      await harness.emitAgentMessage("commentary", "Reading the diff first.", "commentary");
+      await harness.emitAgentMessage("final", finalReview, "final_answer");
+      await harness.emitTurnCompleted();
+
+      expect(harness.itemData("exitedReviewMode")).toMatchObject({
+        id: "inline-review:turn-inline:result",
+        review: finalReview,
+        data: { reviewer, context },
+      });
+      // Messaging pairs the artifact with the final assistant text only when
+      // the artifact arrives first.
+      const turnCompletedIndex = harness.events.findIndex((event) =>
+        event.notification.method === "turn/completed"
+      );
+      expect(harness.itemIndex("exitedReviewMode")).toBeLessThan(turnCompletedIndex);
+      const overlay = await harness.overlayStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: "thread-parent",
+      });
+      expect(overlay?.managedReviewEntries).toEqual([
+        expect.objectContaining({
+          id: "inline-review:turn-inline:started",
+          displayText: "Review changes against main",
+          reviewer,
+          context,
+          turn: expect.objectContaining({ id: "turn-inline", status: "in_progress" }),
+        }),
+        expect.objectContaining({
+          id: "inline-review:turn-inline:result",
+          review: finalReview,
+          reviewer,
+          context,
+          turn: expect.objectContaining({ id: "turn-inline", status: "completed" }),
+        }),
+      ]);
+      // An ordinary turn: no sub-agent row, so no monitor usage either.
+      expect(overlay?.subAgents ?? []).toEqual([]);
+
+      await harness.registry.close();
+    });
+
+    it("keeps the start card above the turn it opens after a reload", async () => {
+      const turn = { id: "turn-inline", status: "completed" as const };
+      const harness = createInlineHarness({
+        replay: {
+          entries: [
+            {
+              type: "message",
+              id: "inline-prompt",
+              role: "user",
+              text: "<pwragent-inline-review-instructions>\n\nReview.\n\n</pwragent-inline-review-instructions>",
+              turn,
+            },
+            {
+              type: "message",
+              id: "inline-final",
+              role: "assistant",
+              text: finalReview,
+              turn,
+            },
+          ],
+          messages: [],
+          pagination: { supportsPagination: true, hasPreviousPage: false },
+        },
+      });
+
+      await harness.startInlineReview();
+      await harness.emitAgentMessage("final", finalReview);
+      await harness.emitTurnCompleted();
+      const response = await harness.registry.readThread({
+        backend: "codex",
+        threadId: "thread-parent",
+      });
+
+      expect(response.replay.entries.map((entry) => entry.id)).toEqual([
+        "inline-review:turn-inline:started",
+        "inline-prompt",
+        "inline-final",
+        "inline-review:turn-inline:result",
+      ]);
+
+      await harness.registry.close();
+    });
+
+    it("still publishes both cards, in order, when the turn ends before turn/start returns", async () => {
+      const startTurnDelay = createDeferred<void>();
+      const harness = createInlineHarness({ startTurnDelay: startTurnDelay.promise });
+
+      const review = harness.startInlineReview();
+      await vi.waitFor(() => {
+        expect(harness.codexClient.startTurnCallCount).toBe(1);
+      });
+      await harness.emitAgentMessage("final", finalReview);
+      await harness.emitTurnCompleted();
+      startTurnDelay.resolve();
+      await review;
+
+      expect(harness.itemIndex("enteredReviewMode")).toBeGreaterThan(-1);
+      expect(harness.itemIndex("enteredReviewMode")).toBeLessThan(
+        harness.itemIndex("exitedReviewMode"),
+      );
+      expect(harness.itemData("exitedReviewMode")).toMatchObject({
+        review: finalReview,
+      });
+
+      await harness.registry.close();
+    });
+
+    it("publishes no result card for a turn that did not complete", async () => {
+      const harness = createInlineHarness();
+
+      await harness.startInlineReview();
+      await harness.codexClient.emit({
+        method: "turn/failed",
+        params: {
+          threadId: "thread-parent",
+          turnId: "turn-inline",
+          turn: {
+            id: "turn-inline",
+            status: "failed",
+            error: { message: "stream disconnected" },
+          },
+        },
+      });
+
+      expect(harness.itemIndex("exitedReviewMode")).toBe(-1);
+      const overlay = await harness.overlayStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: "thread-parent",
+      });
+      expect(overlay?.managedReviewEntries?.map((entry) => entry.id)).toEqual([
+        "inline-review:turn-inline:started",
+      ]);
+
+      await harness.registry.close();
+    });
+  });
+
   it.each([
     { runMode: "codex-sub-agent", methods: ["turn/start"], error: "review/start" },
     { runMode: "codex-inline", methods: ["review/start"], error: "turn/start" },

@@ -24,6 +24,8 @@ const OVERLAY_OWNED_ENTRY_ID_PREFIXES = [
   "live-token-usage-",
   // Managed review rows, which live in a hidden child session's overlay.
   "managed-review:",
+  // Codex Inline review cards. The turn is the provider's; the cards are not.
+  "inline-review:",
   // Setup activity rebuilt from the overlay's Codex environment runtime.
   "codex-environment-setup-",
 ] as const;

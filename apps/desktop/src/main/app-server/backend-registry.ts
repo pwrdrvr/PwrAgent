@@ -2845,6 +2845,35 @@ type ReviewSubAgentRecord = {
   turnId: string;
 };
 
+/**
+ * A Codex Inline review: an ordinary turn on the reviewed thread. It needs no
+ * ReviewSubAgentRecord — there is no child to track, and that record would
+ * add a sub-agent row and bill the thread's own turn as monitor usage. What
+ * it does need is the two cards the other modes get, so this carries what
+ * they report.
+ */
+type InlineReviewRecord = {
+  context?: AppServerReviewContext;
+  displayText: string;
+  /** The turn's last assistant message, which is the review. */
+  output?: string;
+  reviewer: NonNullable<AppServerThreadReviewEntry["reviewer"]>;
+  /** The start entry is out; a terminal may publish the result. */
+  started: boolean;
+  /**
+   * A terminal that arrived before `turn/start` returned. The result has to
+   * follow the start entry, so it waits here for it.
+   */
+  terminal?: {
+    completedAt: number;
+    method: "turn/completed" | "turn/failed" | "turn/cancelled";
+    turnId: string;
+  };
+  threadId: string;
+  /** Unset until `turn/start` returns. */
+  turnId?: string;
+};
+
 type PendingReviewStartRecord = {
   pendingReviewId: string;
   backend: AppServerBackendKind;
@@ -6304,6 +6333,42 @@ function insertTranscriptEntry(
   return nextEntries;
 }
 
+function isInlineReviewTurn(
+  record: InlineReviewRecord,
+  turnId: string | undefined,
+): turnId is string {
+  // `pending:` ids belong to startTurnNow's placeholder turn. A rejected
+  // turn/start fails it synthetically, and the invalid-message-id recovery
+  // can then start the real turn after all; that failure must not settle it.
+  return Boolean(
+    turnId
+    && !turnId.startsWith("pending:")
+    && (!record.turnId || record.turnId === turnId),
+  );
+}
+
+/**
+ * An inline review's start card opens a turn the provider replay already
+ * holds, so it goes before that turn's first row. The generic insert puts a
+ * row after its turn's last one, which would move the card below the review
+ * it introduces on every reload.
+ */
+function insertInlineReviewStartEntry(
+  entries: AppServerThreadEntry[],
+  entry: AppServerThreadReviewEntry,
+): AppServerThreadEntry[] {
+  const turnId = entry.turn?.id;
+  const firstSameTurnIndex = turnId
+    ? entries.findIndex((candidate) => candidate.turn?.id === turnId)
+    : -1;
+  if (firstSameTurnIndex === -1) {
+    return insertTranscriptEntry(entries, entry);
+  }
+  const nextEntries = [...entries];
+  nextEntries.splice(firstSameTurnIndex, 0, entry);
+  return nextEntries;
+}
+
 function mergeManagedReviewEntries(params: {
   replay: AppServerThreadReplay;
   entries?: AppServerThreadReviewEntry[];
@@ -6314,10 +6379,12 @@ function mergeManagedReviewEntries(params: {
 
   let entries = params.replay.entries;
   for (const reviewEntry of params.entries) {
-    entries = insertTranscriptEntry(
-      entries.filter((entry) => entry.id !== reviewEntry.id),
-      reviewEntry,
-    );
+    const remaining = entries.filter((entry) => entry.id !== reviewEntry.id);
+    entries =
+      reviewEntry.id.startsWith("inline-review:")
+      && reviewEntry.turn?.status === "in_progress"
+        ? insertInlineReviewStartEntry(remaining, reviewEntry)
+        : insertTranscriptEntry(remaining, reviewEntry);
   }
   return {
     ...params.replay,
@@ -8314,6 +8381,11 @@ export class DesktopBackendRegistry {
   private readonly activeCodexReviewTurnKeys = new Set<string>();
   private readonly activeCodexReviewInterruptTurnIds = new Map<string, string>();
   private readonly activeReviewSubAgents = new Map<string, ReviewSubAgentRecord>();
+  /**
+   * Keyed by thread, not turn: the record exists before `turn/start` returns
+   * a turn id, and a reserved thread runs nothing else in the meantime.
+   */
+  private readonly inlineReviewsByThread = new Map<string, InlineReviewRecord>();
   private readonly reviewSubAgentsByReviewTurn = new Map<
     string,
     ReviewSubAgentRecord
@@ -17459,15 +17531,40 @@ export class DesktopBackendRegistry {
           buildCapabilities((await client.getInitializeResult()).methods ?? [], "codex").reviewCodexInline,
         );
         if (!supported) throw new Error("Codex Inline requires turn/start support.");
-        const turn = await this.startTurnNow({
-          backend: "codex",
+        const inlineReview: InlineReviewRecord = {
+          displayText: reviewTaskLabel(params.target),
+          // The turn runs on the thread's own settings unless the operator
+          // picked others, so the thread's are what the card should name.
+          reviewer: reviewEntryReviewer({
+            backend: "codex",
+            model: modelSettings.model ?? overlay?.model,
+            reasoningEffort:
+              modelSettings.reasoningEffort ?? overlay?.reasoningEffort,
+          }),
+          ...(reviewContext ? { context: reviewContext } : {}),
+          started: false,
           threadId: params.threadId,
-          input: [{ type: "text", text: buildInlineReviewPrompt(params.target) }],
-          ...modelSettings,
-          persistModelSettings: false,
-          preReservedCodexStart: true,
-          suppressThreadTitleDerivation: true,
-        });
+        };
+        // Registered before turn/start: a fast turn can finish before the
+        // request returns, and its output and terminal must find the record.
+        this.inlineReviewsByThread.set(params.threadId, inlineReview);
+        let turn: StartTurnResponse;
+        try {
+          turn = await this.startTurnNow({
+            backend: "codex",
+            threadId: params.threadId,
+            input: [{ type: "text", text: buildInlineReviewPrompt(params.target) }],
+            ...modelSettings,
+            persistModelSettings: false,
+            preReservedCodexStart: true,
+            suppressThreadTitleDerivation: true,
+          });
+        } catch (error) {
+          this.inlineReviewsByThread.delete(params.threadId);
+          throw error;
+        }
+        inlineReview.turnId = turn.turnId;
+        await this.publishInlineReviewStarted(inlineReview);
         return { ...turn, reviewThreadId: turn.threadId };
       }
 
@@ -17875,6 +17972,198 @@ export class DesktopBackendRegistry {
             // item is emitted under the parent's, so the lookup misses and
             // the live card would lose its workspace/branch/commit/PR rows
             // until a reload read the persisted entry above.
+            data: {
+              reviewer: entry.reviewer,
+              ...(entry.context ? { context: entry.context } : {}),
+            },
+          },
+        },
+      },
+    });
+  }
+
+  /**
+   * The turn is already running when this is called, so a failed write is
+   * logged rather than thrown: throwing would report a live review as one
+   * that never started.
+   */
+  private async publishInlineReviewStarted(
+    record: InlineReviewRecord,
+  ): Promise<void> {
+    const turnId = record.turnId;
+    if (!turnId) {
+      return;
+    }
+    try {
+      const startedAt = Date.now();
+      const entry: AppServerThreadReviewEntry = {
+        type: "review",
+        id: `inline-review:${turnId}:started`,
+        review: record.displayText,
+        displayText: record.displayText,
+        createdAt: startedAt,
+        reviewer: record.reviewer,
+        ...(record.context ? { context: record.context } : {}),
+        turn: {
+          id: turnId,
+          status: "in_progress",
+          startedAt,
+        },
+      };
+      await this.overlayStore.upsertManagedReviewEntry({
+        backend: "codex",
+        threadId: record.threadId,
+        entry,
+      });
+      // Codex emits this turn's own turn/started and turn/completed; the
+      // managed path's synthetic lifecycle events would duplicate them.
+      await this.emit({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: record.threadId,
+            turnId,
+            item: {
+              id: entry.id,
+              type: "enteredReviewMode",
+              review: record.displayText,
+              createdAt: startedAt,
+              data: {
+                reviewer: entry.reviewer,
+                ...(entry.context ? { context: entry.context } : {}),
+              },
+            },
+          },
+        },
+      });
+    } catch (error) {
+      backendRegistryLog.warn("failed to publish inline review start", {
+        error: error instanceof Error ? error.message : String(error),
+        threadId: record.threadId,
+        turnId,
+      });
+    }
+    record.started = true;
+    if (record.terminal) {
+      if (this.inlineReviewsByThread.get(record.threadId) === record) {
+        this.inlineReviewsByThread.delete(record.threadId);
+      }
+      await this.publishInlineReviewTerminal(record, record.terminal);
+    }
+  }
+
+  private rememberInlineReviewOutput(event: AgentEvent): void {
+    if (
+      this.inlineReviewsByThread.size === 0
+      || event.backend !== "codex"
+      || event.notification.method !== "item/completed"
+      || readNotificationItemType(event.notification) !== "agentMessage"
+    ) {
+      return;
+    }
+    const params = readRecord(event.notification.params);
+    const threadId = readNonEmptyString(params?.threadId);
+    const turnId = readNonEmptyString(params?.turnId);
+    const record = threadId ? this.inlineReviewsByThread.get(threadId) : undefined;
+    if (!record || !isInlineReviewTurn(record, turnId)) {
+      return;
+    }
+    // The last message wins: commentary between tool calls comes earlier.
+    const output = textFragmentsFromCodexNotification(event.notification)
+      .at(-1)
+      ?.trim();
+    if (output) {
+      record.output = output;
+    }
+  }
+
+  private async settleInlineReview(params: {
+    notification: Extract<
+      AppServerNotification,
+      { method: "turn/completed" | "turn/failed" | "turn/cancelled" }
+    >;
+    threadId: string;
+    turnId: string;
+  }): Promise<void> {
+    const record = this.inlineReviewsByThread.get(params.threadId);
+    if (!record || !isInlineReviewTurn(record, params.turnId)) {
+      return;
+    }
+    record.output ??= finalTextFromTerminalNotification(params.notification);
+    const terminal = {
+      completedAt:
+        completedAtFromTerminalNotification(params.notification) ?? Date.now(),
+      method: params.notification.method,
+      turnId: params.turnId,
+    };
+    if (!record.started) {
+      record.terminal = terminal;
+      return;
+    }
+    this.inlineReviewsByThread.delete(params.threadId);
+    await this.publishInlineReviewTerminal(record, terminal);
+  }
+
+  /**
+   * Runs before the turn's own terminal reaches any listener, so messaging
+   * pairs this artifact with the final assistant text exactly as it does a
+   * native review's.
+   */
+  private async publishInlineReviewTerminal(
+    record: InlineReviewRecord,
+    terminal: NonNullable<InlineReviewRecord["terminal"]>,
+  ): Promise<void> {
+    if (terminal.method !== "turn/completed") {
+      backendRegistryLog.info("inline review artifact discarded", {
+        method: terminal.method,
+        threadId: record.threadId,
+        turnId: terminal.turnId,
+      });
+      return;
+    }
+    // Kept as the assistant wrote it. The card parses the plain review
+    // format itself, and an exact copy is what lets the transcript drop the
+    // assistant message the card now shows.
+    const review = record.output?.trim() || "Review completed without output.";
+    const entry: AppServerThreadReviewEntry = {
+      type: "review",
+      id: `inline-review:${terminal.turnId}:result`,
+      review,
+      createdAt: terminal.completedAt,
+      reviewer: record.reviewer,
+      ...(record.context ? { context: record.context } : {}),
+      turn: {
+        id: terminal.turnId,
+        status: "completed",
+        completedAt: terminal.completedAt,
+      },
+    };
+    try {
+      await this.overlayStore.upsertManagedReviewEntry({
+        backend: "codex",
+        threadId: record.threadId,
+        entry,
+      });
+    } catch (error) {
+      backendRegistryLog.warn("failed to persist inline review result", {
+        error: error instanceof Error ? error.message : String(error),
+        threadId: record.threadId,
+        turnId: terminal.turnId,
+      });
+    }
+    await this.emit({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: record.threadId,
+          turnId: terminal.turnId,
+          item: {
+            id: entry.id,
+            type: "exitedReviewMode",
+            review,
+            createdAt: terminal.completedAt,
             data: {
               reviewer: entry.reviewer,
               ...(entry.context ? { context: entry.context } : {}),
@@ -39008,6 +39297,7 @@ export class DesktopBackendRegistry {
     this.rememberFileChangeApprovalContext(event);
     event = this.withEmbeddedFileChangeApprovalContext(event);
     this.rememberManagedReviewOutput(event);
+    this.rememberInlineReviewOutput(event);
 
     this.recordTaskMonitorActivity(event);
 
@@ -39172,6 +39462,16 @@ export class DesktopBackendRegistry {
             { method: "turn/completed" | "turn/failed" | "turn/cancelled" }
           >,
           record: managedReview,
+        });
+      }
+      if (turnId && event.backend === "codex") {
+        await this.settleInlineReview({
+          notification: event.notification as Extract<
+            AppServerNotification,
+            { method: "turn/completed" | "turn/failed" | "turn/cancelled" }
+          >,
+          threadId: notification.params.threadId,
+          turnId,
         });
       }
       const genericActiveTurnKeyPrefix =

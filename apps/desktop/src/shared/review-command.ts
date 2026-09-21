@@ -288,12 +288,27 @@ export function isPwrAgentInlineReviewPrompt(text: string): boolean {
     && normalized.endsWith("\n</pwragent-inline-review-instructions>");
 }
 
+/**
+ * The requested shape is the plain review format the transcript card already
+ * parses (`parsePlainReview` in TranscriptReview.tsx), so an inline review's
+ * final message renders as findings rather than as one block of prose. A
+ * reply that ignores it still reaches the card, as the explanation alone.
+ */
 export function buildInlineReviewPrompt(target: AppServerReviewTarget): string {
   return [
     "<pwragent-inline-review-instructions>",
     "Perform a code review in this thread. Focus on concrete correctness regressions. Do not modify files.",
     reviewTargetInstructions(target),
-    "Report actionable findings with file paths and line numbers, followed by a concise verdict.",
+    [
+      "End with one message in this shape and nothing after it.",
+      "First, a short overall explanation that ends with your verdict: the patch is correct, or the patch is incorrect.",
+      "Then, only if you have findings, a line reading \"Review comments:\" followed by one entry per finding:",
+      "",
+      "- [P1] Short title — /absolute/path/to/file.ts:12-18",
+      "  What is wrong and why it matters.",
+      "",
+      "Use P0 for the most severe through P3 for the least, and an absolute file path.",
+    ].join("\n"),
     "</pwragent-inline-review-instructions>",
   ].join("\n\n");
 }

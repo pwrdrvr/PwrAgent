@@ -62,3 +62,53 @@ describe("native review prompt presentation", () => {
     expect(result.tailMessages.map((entry) => entry.id)).toEqual(promptInHistory ? [] : ["authored", "sourced", "steer"]);
   });
 });
+
+describe("inline review result presentation", () => {
+  // Main builds an inline review's result card from the turn's last
+  // assistant message verbatim. The card is the one copy the reader sees.
+  it.each([
+    ["a verdict alone", "Nothing blocking here. The patch is correct."],
+    [
+      "findings",
+      "One regression. The patch is incorrect.\n\nReview comments:\n\n- [P1] Guard the empty list — /repo/src/list.ts:4-6\n  `items[0]` is read before the length check.",
+    ],
+  ])("shows the result card and drops the assistant message it repeats (%s)", (_label, reviewText) => {
+    const turn = { id: "turn-inline", status: "completed" as const };
+    const tailEntries: AppServerThreadEntry[] = [
+      {
+        type: "review",
+        id: "inline-review:turn-inline:started",
+        review: "Review changes against main",
+        displayText: "Review changes against main",
+        turn: { ...turn, status: "in_progress" },
+      },
+      {
+        type: "message",
+        id: "prompt",
+        role: "user",
+        text: "<pwragent-inline-review-instructions>\nInspect this diff.\n</pwragent-inline-review-instructions>",
+        turn,
+      },
+      { type: "message", id: "final", role: "assistant", text: reviewText, turn },
+      {
+        type: "review",
+        id: "inline-review:turn-inline:result",
+        review: reviewText,
+        turn,
+      },
+    ];
+    const tailMessages = tailEntries.filter(
+      (entry): entry is AppServerThreadMessageEntry => entry.type === "message",
+    );
+    const index = createTranscriptReviewHistoryIndex();
+    const result = deriveTranscriptReviewPresentation({
+      historyEvents: iterateTranscriptReviewHistoryEvents(index), historyIndex: index,
+      tailEntries, tailMessages,
+    });
+    expect(result.tailEntries.map((entry) => entry.id)).toEqual([
+      "inline-review:turn-inline:started",
+      "inline-review:turn-inline:result",
+    ]);
+    expect(result.tailMessages).toEqual([]);
+  });
+});
