@@ -17368,7 +17368,6 @@ export class DesktopBackendRegistry {
     terminals: Map<string, ReviewTerminal>,
     trustedSnapshot: boolean,
   ): Promise<StartReviewResponse> {
-
     this.assertNotBootstrap("startReview");
     params = await this.prepareReviewRequest(params, trustedSnapshot);
     const acpManagedMode =
@@ -17539,7 +17538,6 @@ export class DesktopBackendRegistry {
           }
         }
       }
-
 
       const startWithClient = async (
         client: BackendClient,

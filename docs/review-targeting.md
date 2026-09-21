@@ -60,9 +60,6 @@ checkout, queued snapshots after provider-head changes, exact-object fetching
 after branch movement, repository scoping, forged incoming snapshots and flags,
 native wire translation, and UI selection across linked projects.
 
-Inline PR review carries its scope on the parent's inline review start and result
-cards through the existing overlay projection and `InlineReviewRecord` lifecycle.
-It creates no sub-agent or separate scope card. The checked-in start-card write
-budget measures one SQLite commit and 16,480 bytes of WAL, or 1.65 MB/day at
-100 starts per day. This measures the start card only; result persistence belongs
-to the existing inline review lifecycle. Pinning adds no separate SQLite write.
+PR scope is retained in the existing native and managed review provenance.
+Codex Inline is no longer a supported execution mode. Queued PR review keeps
+its captured native or managed mode together with the immutable target snapshot.

@@ -118,7 +118,7 @@ describe("ScheduledThreadActionService", () => {
     const request = {
       backend: "codex" as const, threadId: "thread-1", kind: "review" as const,
       scheduledFor: 20_000, displayText: `Review ${url}`,
-      review: { target: { type: "pullRequest" as const, url }, runMode: "codex-inline" as const },
+      review: { target: { type: "pullRequest" as const, url }, runMode: "codex-sub-agent" as const },
     };
     const result = await harness.service.create(request, { id: "pr-queue" });
     expect(store.get(result.action.id)?.review?.target).toEqual(target);
@@ -137,7 +137,7 @@ describe("ScheduledThreadActionService", () => {
     // the branch again after restart or a push.
     const restarted = createHarness();
     await restarted.service.sendNow({ id: result.action.id });
-    expect(restarted.submitReview).toHaveBeenCalledWith(expect.objectContaining({ target, runMode: "codex-inline" }), true);
+    expect(restarted.submitReview).toHaveBeenCalledWith(expect.objectContaining({ target, runMode: "codex-sub-agent" }), true);
     expect(prepare).toHaveBeenCalledTimes(2);
   });
 
