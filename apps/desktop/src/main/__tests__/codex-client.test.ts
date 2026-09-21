@@ -188,6 +188,7 @@ class MockTransport implements JsonRpcTransport {
     nextCursor: null,
   };
   static mcpServerStatusError: { code?: number; message: string } | undefined;
+  static deferMcpServerStatus = false;
   static mcpServerStatusThreadError:
     | { code?: number; message: string }
     | undefined;
@@ -208,6 +209,7 @@ class MockTransport implements JsonRpcTransport {
     | undefined = undefined;
 
   readonly sentMessages: string[] = [];
+  mcpServerStatusResponse?: () => void;
   readonly options?: unknown;
   closeCount = 0;
   readonly loadedThreads = new Set<string>();
@@ -757,6 +759,14 @@ class MockTransport implements JsonRpcTransport {
     }
 
     if (payload.method === "mcpServerStatus/list") {
+      if (MockTransport.deferMcpServerStatus) {
+        this.mcpServerStatusResponse = () => this.messageHandler(JSON.stringify({
+          jsonrpc: "2.0",
+          id: payload.id,
+          result: MockTransport.threadMcpServerStatusResult,
+        }));
+        return;
+      }
       const error = payload.params?.threadId
         ? MockTransport.mcpServerStatusThreadError
           ?? MockTransport.mcpServerStatusError
@@ -1440,6 +1450,7 @@ describe("CodexAppServerClient", () => {
       },
     };
     MockTransport.mcpServerStatusError = undefined;
+    MockTransport.deferMcpServerStatus = false;
     MockTransport.mcpServerStatusThreadError = undefined;
     MockTransport.threadMcpServerStatusResult = {
       data: [],
@@ -8607,6 +8618,64 @@ describe("CodexAppServerClient", () => {
     ]);
 
     await client.close();
+  });
+
+  it.each([
+    { detail: "toolsAndAuthOnly" as const, delayMs: 95_000, timeoutMs: 120_000 },
+    { detail: "full" as const, delayMs: 395_000, timeoutMs: 420_000 },
+  ])("waits for Codex $detail inventory and still bounds a hung request", async ({
+    detail, delayMs, timeoutMs,
+  }) => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({ command: "codex" });
+    await client.listMcpServers({ detail });
+    const transport = MockTransport.instances.at(-1)!;
+    MockTransport.deferMcpServerStatus = true;
+    vi.useFakeTimers();
+    try {
+      const inventory = client.listMcpServers({ threadId: "thread-1", detail });
+      const response = expect(inventory).resolves.toEqual([]);
+      await vi.advanceTimersByTimeAsync(delayMs);
+      expect(transport.mcpServerStatusResponse).toBeDefined();
+      transport.mcpServerStatusResponse!();
+      await response;
+
+      const hung = client.listMcpServers({ detail });
+      const failure = expect(hung).rejects.toThrow("json-rpc timeout: mcpServerStatus/list");
+      await vi.advanceTimersByTimeAsync(timeoutMs);
+      await failure;
+    } finally {
+      await client.close();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    { requestTimeoutMs: 150, mcpInventoryTimeoutMs: undefined, expectedMs: 150 },
+    { requestTimeoutMs: 150, mcpInventoryTimeoutMs: 250, expectedMs: 250 },
+  ])("honors MCP inventory timeout overrides: $expectedMs ms", async ({
+    requestTimeoutMs, mcpInventoryTimeoutMs, expectedMs,
+  }) => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({
+      command: "codex", requestTimeoutMs, mcpInventoryTimeoutMs,
+    });
+    await client.listMcpServers({ detail: "toolsAndAuthOnly" });
+    MockTransport.deferMcpServerStatus = true;
+    vi.useFakeTimers();
+    try {
+      let settled = false;
+      const inventory = client.listMcpServers({ detail: "toolsAndAuthOnly" });
+      const failure = expect(inventory).rejects.toThrow("json-rpc timeout: mcpServerStatus/list");
+      void inventory.catch(() => { settled = true; });
+      await vi.advanceTimersByTimeAsync(expectedMs - 1);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await failure;
+    } finally {
+      await client.close();
+      vi.useRealTimers();
+    }
   });
 
   it("normalizes MCP inventory without forwarding tool schemas", async () => {

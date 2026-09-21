@@ -151,6 +151,12 @@ import {
 import { persistCodexFileInput } from "./codex-file-input-files";
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 20_000;
+// Codex gives client creation, initialization, and tool discovery separate
+// 30-second startup budgets. Full inventory also lists resources with a
+// 300-second request budget. Leave headroom for auth discovery and processing.
+// These are bounded defaults, not a ceiling on configurable/paginated MCP work.
+const DEFAULT_MCP_INVENTORY_TIMEOUT_MS = 120_000;
+const DEFAULT_FULL_MCP_INVENTORY_TIMEOUT_MS = 420_000;
 const ARCHIVED_THREAD_METADATA_REFRESH_INTERVAL_MS = 60_000;
 const DEFAULT_CODEX_COLLABORATION_MODEL = "gpt-5.5";
 export const DEFAULT_CODEX_THREAD_TITLE_MODEL = "gpt-5.6-luna";
@@ -279,6 +285,7 @@ type CodexClientOptions = {
   ) => Promise<ThreadDirectoryEnrichment>;
   connectionObserver?: JsonRpcObserver;
   requestTimeoutMs?: number;
+  mcpInventoryTimeoutMs?: number;
   clientVersion?: string;
   resolvePwrdrvrTokenMiserActivationNonce?: () => string | undefined;
   /**
@@ -8624,6 +8631,12 @@ export class CodexAppServerClient {
   }): Promise<CodexMcpServerSummary[]> {
     await this.ensureInitialized();
 
+    const timeoutMs = this.options.mcpInventoryTimeoutMs
+      ?? this.options.requestTimeoutMs
+      ?? (params.detail === "full"
+        ? DEFAULT_FULL_MCP_INVENTORY_TIMEOUT_MS
+        : DEFAULT_MCP_INVENTORY_TIMEOUT_MS);
+
     const listPages = async (threadId?: string) => {
       const servers: CodexMcpServerSummary[] = [];
       const contextKey = threadId ? `thread:${threadId}` : "global";
@@ -8639,7 +8652,7 @@ export class CodexAppServerClient {
             limit: 100,
             ...(cursor ? { cursor } : {}),
           }],
-          timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+          timeoutMs,
         });
         const page = readMcpServerStatusPage(result, params.detail);
         servers.push(...page.servers);
