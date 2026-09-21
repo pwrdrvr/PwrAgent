@@ -211,7 +211,7 @@
   },
   "inline-pr-review-context": {
     "commits": 1,
-    "note": "One captured PR scope card for an ordinary parent turn; no sub-agent, streamed writes, or completion rewrite",
+    "note": "One inline review start card carrying captured PR scope through the parent lifecycle",
     "observedWalBytes": 16480,
     "rowsChanged": 1,
     "statements": 1

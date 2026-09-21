@@ -60,9 +60,9 @@ checkout, queued snapshots after provider-head changes, exact-object fetching
 after branch movement, repository scoping, forged incoming snapshots and flags,
 native wire translation, and UI selection across linked projects.
 
-Inline PR review records its scope as a parent review card through the existing
-overlay projection. It creates no sub-agent and does not claim a second turn
-lifecycle. The ordinary parent turn owns the findings. The checked-in write
-budget measures one SQLite commit and 16,480 bytes of WAL for the scope card.
-At 100 inline PR reviews per day, `(100 / 86400) × 16480 × 86400` is 1.65 MB/day.
-There are no timer, stream-event, or completion writes for this card.
+Inline PR review carries its scope on the parent's inline review start and result
+cards through the existing overlay projection and `InlineReviewRecord` lifecycle.
+It creates no sub-agent or separate scope card. The checked-in start-card write
+budget measures one SQLite commit and 16,480 bytes of WAL, or 1.65 MB/day at
+100 starts per day. This measures the start card only; result persistence belongs
+to the existing inline review lifecycle. Pinning adds no separate SQLite write.
