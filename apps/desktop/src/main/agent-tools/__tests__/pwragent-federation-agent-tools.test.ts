@@ -47,6 +47,7 @@ describe("pwragent federation agent tools", () => {
             inputSchema: expect.objectContaining({
               required: ["instanceId", "projectKey"],
               properties: expect.objectContaining({
+                backend: expect.objectContaining({ type: "string" }),
                 workMode: expect.objectContaining({
                   enum: ["local", "worktree"],
                 }),
@@ -123,6 +124,15 @@ describe("pwragent federation agent tools", () => {
         instanceId: "pwr_studio",
         projectKey: "dir:/repo",
         workMode: "container",
+      },
+    },
+    {
+      name: "rejects an unknown backend before dispatching create_instance_thread",
+      tool: "create_instance_thread",
+      arguments: {
+        instanceId: "pwr_studio",
+        projectKey: "dir:/repo",
+        backend: "grok",
       },
     },
     {
@@ -229,6 +239,7 @@ describe("pwragent federation agent tools", () => {
           instanceId: " pwr_studio ",
           projectKey: " dir:/Users/op/pwrsnap ",
           input: " Fix the recorder crash ",
+          backend: " codex ",
           workMode: "worktree",
           branchName: " origin/main ",
           groupingMode: "subthread",
@@ -251,6 +262,7 @@ describe("pwragent federation agent tools", () => {
         instanceId: "pwr_studio",
         projectKey: "dir:/Users/op/pwrsnap",
         input: "Fix the recorder crash",
+        backend: "codex",
         workMode: "worktree",
         branchName: "origin/main",
         groupingMode: "subthread",

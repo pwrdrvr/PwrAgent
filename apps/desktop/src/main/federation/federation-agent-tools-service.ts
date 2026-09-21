@@ -432,7 +432,9 @@ async function createInstanceThread(
   if (!config || config.protocol !== 2 || config.unchanged || !config.defaults || config.directoryKey !== args.projectKey) {
     return failure("internal_error", "The owning instance did not provide ready project configuration. Upgrade or reconnect it before creating a thread.");
   }
-  const projectBackend = config.launchpad?.backend ?? config.defaults.backend;
+  const projectBackend = args.backend
+    ?? config.launchpad?.backend
+    ?? config.defaults.backend;
   if (args.tokenMiserEnabled !== undefined && projectBackend !== "codex") {
     return failure(
       "invalid_arguments",
@@ -795,7 +797,7 @@ function buildLaunchpadDraft(params: {
   // The stored prompt/editor document/attachments are the operator's unsent
   // draft — sending them from an agent tool would fire composer text the
   // operator never submitted.
-  const backend = stored?.backend ?? defaults.backend;
+  const backend = args.backend ?? stored?.backend ?? defaults.backend;
   const model = args.model ?? stored?.model ?? defaults.model;
   const reasoningEffort =
     args.reasoningEffort ?? stored?.reasoningEffort ?? defaults.reasoningEffort;

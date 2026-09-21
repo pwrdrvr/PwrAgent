@@ -1002,6 +1002,80 @@ describe("federation agent tools service", () => {
     expect(data.groupingMode).toBe("none");
   });
 
+  it("uses an explicit backend instead of a remote Grok launchpad backend", async () => {
+    const materializeDirectoryLaunchpad = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "remote-thread-10",
+      executionMode: "default" as const,
+      workMode: "worktree" as const,
+    }));
+    const readPopulation = vi.fn(async () =>
+      buildSnapshot({
+        directories: [{
+          key: "dir:/repo",
+          kind: "directory",
+          label: "PwrSuiteLab",
+          path: "/repo",
+          threadKeys: [],
+          needsAttentionCount: 0,
+          launchpad: {
+            backend: "acp:grok",
+            executionMode: "default",
+            workMode: "worktree",
+            directoryKey: "dir:/repo",
+            directoryKind: "directory",
+            directoryLabel: "PwrSuiteLab",
+            prompt: "",
+            createdAt: 1,
+            updatedAt: 2,
+          },
+        }] as NavigationSnapshot["directories"],
+      }),
+    );
+    const handler = createFederationAgentToolsHandler({
+      collectHostInfo: async () => localHostInfo,
+      runtime: buildRuntime({
+        health: async () =>
+          buildHealth({
+            peers: [{
+              id: "pwr_studio",
+              label: "Studio Mac",
+              role: "client",
+              status: "connected",
+              capabilities: ["thread_navigation"],
+            }],
+          }),
+        remoteBackend: (() => ({
+          readPopulation,
+          materializeDirectoryLaunchpad,
+        })) as never,
+      }),
+    });
+
+    await handler({
+      operation: "create_instance_thread",
+      context,
+      args: {
+        instanceId: "pwr_studio",
+        projectKey: "dir:/repo",
+        backend: "codex",
+        model: "gpt-6-astra",
+        tokenMiserEnabled: false,
+      },
+    });
+
+    expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith(
+      expect.objectContaining({
+        launchpad: expect.objectContaining({
+          backend: "codex",
+          model: "gpt-6-astra",
+          tokenMiserEnabled: false,
+        }),
+      }),
+      expect.anything(),
+    );
+  });
+
   it("mounts a delegated sibling on its remote group-root owner", async () => {
     const materializeDirectoryLaunchpad = vi.fn(async () => ({
       backend: "codex" as const,

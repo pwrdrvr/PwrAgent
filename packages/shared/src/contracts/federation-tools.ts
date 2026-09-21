@@ -153,6 +153,8 @@ export type CreateInstanceThreadToolArgs = {
   projectKey: string;
   /** Initial prompt for the created thread's first turn. */
   input?: string;
+  /** Override the target project's configured backend for this new thread. */
+  backend?: AppServerBackendKind;
   model?: string;
   reasoningEffort?: string;
   executionMode?: ThreadExecutionMode;
