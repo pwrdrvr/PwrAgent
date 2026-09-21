@@ -19378,7 +19378,9 @@ command = "pnpm dev:messaging"
     let markSetupStarted!: () => void;
     const setupGate = new Promise<void>((resolve) => { finishSetup = resolve; });
     const setupStarted = new Promise<void>((resolve) => { markSetupStarted = resolve; });
-    const commandRunner = vi.fn(async () => {
+    const progress = vi.fn();
+    const commandRunner = vi.fn(async (params: Parameters<CodexEnvironmentCommandRunner>[0]) => {
+      params.onProgress?.({ phase: "stdout", chunk: "installing dependencies\n", at: Date.now() });
       markSetupStarted();
       await setupGate;
       return {
@@ -19423,8 +19425,10 @@ command = "pnpm dev:messaging"
     try {
       const selection = registry.setCodexThreadEnvironment({
         backend: "codex", threadId: "thread-1", environmentId: "environment",
-      });
+      }, progress);
       await setupStarted;
+      expect(progress).toHaveBeenCalledWith(expect.objectContaining({ directoryKey: "thread:codex:thread-1", phase: "started" }));
+      expect(progress).toHaveBeenCalledWith(expect.objectContaining({ phase: "stdout", chunk: "installing dependencies\n" }));
       const turn = registry.startTurn({
         backend: "codex", threadId: "thread-1", input: [{ type: "text", text: "Use node" }],
       });
@@ -19451,6 +19455,7 @@ command = "pnpm dev:messaging"
         },
       });
 
+      expect(progress).toHaveBeenCalledWith(expect.objectContaining({ phase: "completed", output: "installed" }));
       expect(commandRunner).toHaveBeenCalledWith(expect.objectContaining({
         cwd: root,
         command: "pnpm install",
@@ -19507,12 +19512,15 @@ command = "pnpm dev:messaging"
       commandRunner.mockRejectedValueOnce(new Error("setup failed"));
       await expect(registry.setCodexThreadEnvironment({
         backend: "codex", threadId: "thread-1", environmentId: "environment",
-      })).rejects.toThrow("setup failed");
+      }, progress)).rejects.toThrow("setup failed");
+      expect(progress).toHaveBeenLastCalledWith(expect.objectContaining({
+        directoryKey: "thread:codex:thread-1", phase: "failed", output: "setup failed",
+      }));
       expect((await overlayStore.getThreadOverlayState({ backend: "codex", threadId: "thread-1" }))
         ?.codexEnvironmentRuntime).toMatchObject({ setupStatus: "failed", setupOutput: "setup failed" });
       await registry.setCodexThreadEnvironment({
         backend: "codex", threadId: "thread-1", environmentId: "environment",
-      });
+      }, progress);
       expect(commandRunner).toHaveBeenCalledTimes(3);
     } finally {
       await registry.close();

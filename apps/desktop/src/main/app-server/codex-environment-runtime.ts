@@ -124,6 +124,7 @@ export type CodexEnvironmentSelection = {
 };
 
 export type CodexEnvironmentCommandParams = {
+  shell?: "powershell";
   cwd?: string;
   command: string;
   env?: NodeJS.ProcessEnv;
@@ -499,6 +500,7 @@ export async function applyLocalCodexEnvironmentSelection(params: {
       const result = await (params.commandRunner ?? runShellCommand)({
         cwd,
         command: selection.environment.setupScript,
+        shell: selection.environment.shell,
         env: commandEnv,
         mode: "wait",
         captureShellEnvironment: true,
@@ -592,6 +594,7 @@ export async function applyLocalCodexEnvironmentSelection(params: {
       const result = await (params.commandRunner ?? runShellCommand)({
         cwd,
         command: selection.action.command,
+        shell: selection.action.shell,
         env: actionEnv,
         mode: "detach",
         detachedTerminationKey: runId,
@@ -687,6 +690,7 @@ export async function startLocalCodexEnvironmentAction(params: {
     const result = await (params.commandRunner ?? runShellCommand)({
       cwd: params.runtime.cwd,
       command: action.command,
+      shell: action.shell,
       env: actionEnv,
       mode: "detach",
       detachedTerminationKey: params.runId,
@@ -747,7 +751,9 @@ function runShellCommand(
   if (cwdProblem) {
     return Promise.reject(new CodexEnvironmentCommandError(cwdProblem.message));
   }
-  const shell = resolveCommandShell(commandEnv);
+  const shell = params.shell === "powershell"
+    ? resolvePowerShellCommand(commandEnv)
+    : resolveCommandShell(commandEnv);
   const processId = `pwragent-env-${randomUUID()}`;
   const startedAt = Date.now();
   environmentRuntimeLog.info("codex-environment-command-start", {
@@ -763,15 +769,15 @@ function runShellCommand(
   const useWindowsJob =
     process.platform === "win32"
     && (params.mode === "detach" || Boolean(params.timeoutMs));
-  const shellArgs: [string, string] = [
-    "-lc",
-    wrapShellCommand(
-      shell,
-      params.command,
-      capture?.filePath,
-      processId,
-    ),
-  ];
+  const shellArgs = params.shell === "powershell"
+    ? [
+        "-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand",
+        Buffer.from(
+          wrapPowerShellCommand(params.command, capture?.filePath),
+          "utf16le",
+        ).toString("base64"),
+      ]
+    : ["-lc", wrapShellCommand(shell, params.command, capture?.filePath, processId)];
   const windowsJobLaunch = useWindowsJob
     ? wrapCommandInWindowsJob({
         args: shellArgs,
@@ -1337,7 +1343,7 @@ function readCapturedShellEnvironment(
   }
 
   const parsed: Record<string, string> = {};
-  for (const line of raw.split("\n")) {
+  for (const line of raw.split(/\r?\n/)) {
     const separatorIndex = line.indexOf("=");
     if (separatorIndex <= 0) {
       continue;
@@ -1428,6 +1434,16 @@ function isParentElectronRuntimeEnvKey(key: string): boolean {
     key.startsWith("PRELOAD_VITE_") ||
     key.startsWith("RENDERER_VITE_")
   );
+}
+
+function resolvePowerShellCommand(env: NodeJS.ProcessEnv): string {
+  // Hydrated PATH values need not contain Windows system tools.
+  const systemRoot = Object.entries(env).find(
+    ([key]) => key.toUpperCase() === "SYSTEMROOT",
+  )?.[1];
+  return systemRoot
+    ? path.win32.join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
+    : "powershell.exe";
 }
 
 function resolveCommandShell(env: NodeJS.ProcessEnv): string {
@@ -1570,6 +1586,24 @@ function readCodexEnvironmentSetupTimeoutMs(env: NodeJS.ProcessEnv): number {
   }
 
   return Math.round(parsed);
+}
+
+export function wrapPowerShellCommand(
+  command: string,
+  captureEnvPath?: string,
+): string {
+  return [
+    '$ErrorActionPreference = "Stop"',
+    "$global:LASTEXITCODE = 0",
+    "& {",
+    command,
+    "}",
+    "if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }",
+    ...(captureEnvPath ? [
+      "$pwragentCapturedEnvironment = Get-ChildItem Env: | ForEach-Object { $_.Name + '=' + $_.Value }",
+      `[System.IO.File]::WriteAllLines('${captureEnvPath.replace(/'/g, "''")}', [string[]]$pwragentCapturedEnvironment, (New-Object System.Text.UTF8Encoding($false)))`,
+    ] : []),
+  ].join("\n");
 }
 
 function wrapShellCommand(

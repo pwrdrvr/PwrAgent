@@ -21862,16 +21862,18 @@ export class DesktopBackendRegistry {
 
   async setCodexThreadEnvironment(
     request: SetCodexThreadEnvironmentRequest,
+    onSetupProgress?: (event: CodexEnvironmentSetupProgressEvent) => void,
   ): Promise<SetCodexThreadEnvironmentResponse> {
     return this.withCodexEnvironmentRuntimeLock(
       request.backend,
       request.threadId,
-      () => this.setCodexThreadEnvironmentLocked(request),
+      () => this.setCodexThreadEnvironmentLocked(request, onSetupProgress),
     );
   }
 
   private async setCodexThreadEnvironmentLocked(
     request: SetCodexThreadEnvironmentRequest,
+    onSetupProgress?: (event: CodexEnvironmentSetupProgressEvent) => void,
   ): Promise<SetCodexThreadEnvironmentResponse> {
     if (!request.environmentId) {
       await this.overlayStore.setThreadCodexEnvironmentRuntime?.({
@@ -21939,6 +21941,10 @@ export class DesktopBackendRegistry {
           cwd,
           env: this.codexEnvironmentCommandEnv,
           hydrationStore: this.codexEnvironmentHydrationStore,
+          onSetupProgress: (event) => onSetupProgress?.({
+            ...event,
+            directoryKey: `thread:${request.backend}:${request.threadId}`,
+          }),
           selection: {
             environment,
             executionTarget: existingRuntime?.executionTarget ?? "local",

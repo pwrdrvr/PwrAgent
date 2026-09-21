@@ -12,6 +12,7 @@ import {
   startLocalCodexEnvironmentAction,
   stopCodexEnvironmentDetachedCommand,
   waitForCodexEnvironmentDetachedCommandGone,
+  wrapPowerShellCommand,
 } from "../app-server/codex-environment-runtime";
 import { collectProcessTreeIds } from "../process-tree";
 import { WINDOWS_JOB_OVERALL_READY_TIMEOUT_MS } from "../windows-job-wrapper";
@@ -76,6 +77,58 @@ describe("codex environment runtime", () => {
   afterEach(() => {
     mainLogEntries.length = 0;
   });
+
+  it("routes native environment setup and actions to PowerShell", async () => {
+    const commandRunner = vi.fn(async () => ({ output: "ok", exitCode: 0, durationMs: 1 }));
+    const action = { id: "run", name: "Run", command: "Write-Output action", shell: "powershell" as const };
+    const runtime = await applyLocalCodexEnvironmentSelection({
+      commandRunner,
+      selection: {
+        environment: { id: "env", name: "Env", sourcePath: "environment.toml", shell: "powershell", setupScript: "Write-Output setup", actions: [action] },
+        executionTarget: "local",
+        runSetup: true,
+        action,
+      },
+    });
+    expect(commandRunner).toHaveBeenNthCalledWith(1, expect.objectContaining({ shell: "powershell", mode: "wait" }));
+    expect(commandRunner).toHaveBeenNthCalledWith(2, expect.objectContaining({ shell: "powershell", mode: "detach" }));
+    await startLocalCodexEnvironmentAction({ runtime: runtime!, actionId: "run", runId: "again", commandRunner });
+    expect(commandRunner).toHaveBeenNthCalledWith(3, expect.objectContaining({ shell: "powershell", mode: "detach" }));
+  });
+
+  it("quotes PowerShell capture paths and checks native exit status before capture", () => {
+    const script = wrapPowerShellCommand("Write-Output done", "C:\\user's folder\\env.txt");
+    expect(script).toContain("'C:\\user''s folder\\env.txt'");
+    expect(script).toContain("System.Text.UTF8Encoding($false)");
+    expect(script.indexOf("if ($LASTEXITCODE -ne 0)")).toBeLessThan(script.indexOf("WriteAllLines"));
+    expect(script).not.toContain("set -e");
+  });
+
+  it.skipIf(!isWindows)("runs native PowerShell setup with live output, hydration, and failure reporting", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-powershell-"));
+    const events: string[] = [];
+    const environment = { id: "ps", name: "PowerShell", sourcePath: "environment.toml", shell: "powershell" as const, actions: [] };
+    try {
+      const runtime = await applyLocalCodexEnvironmentSelection({
+        cwd: root,
+        onSetupProgress: (event) => { events.push(event.phase); },
+        selection: {
+          environment: { ...environment, setupScript: '$env:NVM_HOME = "C:\\fixture\\node"; Write-Output "native setup"' },
+          executionTarget: "local", runSetup: true,
+        },
+      });
+      expect(runtime?.setupOutput).toContain("native setup");
+      expect(runtime?.shellEnvironment?.NVM_HOME).toBe("C:\\fixture\\node");
+      expect(events).toContain("stdout");
+      expect(events.at(-1)).toBe("completed");
+      await expect(applyLocalCodexEnvironmentSelection({
+        cwd: root,
+        selection: { environment: { ...environment, setupScript: "cmd.exe /d /c exit 7" }, executionTarget: "local", runSetup: true },
+      })).rejects.toMatchObject({ runtime: { setupStatus: "failed", setupExitCode: 7 } });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 30_000);
 
   it("treats a missing detached command as already gone", async () => {
     await expect(
