@@ -30,6 +30,7 @@ import type {
 } from "@pwragent/shared";
 import {
   FEDERATION_CAPABILITIES,
+  applyNavigationLaunchpadProviderSettingsPatch,
   buildFederatedThreadRef,
   buildThreadMarkdownLink,
   buildThreadUrl,
@@ -797,25 +798,25 @@ function buildLaunchpadDraft(params: {
   // The stored prompt/editor document/attachments are the operator's unsent
   // draft — sending them from an agent tool would fire composer text the
   // operator never submitted.
-  const backend = args.backend ?? stored?.backend ?? defaults.backend;
-  const model = args.model ?? stored?.model ?? defaults.model;
+  const backend = stored?.backend ?? defaults.backend;
+  const model = stored?.model ?? defaults.model;
   const reasoningEffort =
-    args.reasoningEffort ?? stored?.reasoningEffort ?? defaults.reasoningEffort;
+    stored?.reasoningEffort ?? defaults.reasoningEffort;
   const serviceTier = stored?.serviceTier ?? defaults.serviceTier;
-  const fastMode = args.fastMode ?? stored?.fastMode ?? defaults.fastMode;
+  const fastMode = stored?.fastMode ?? defaults.fastMode;
   const acpRuntime = stored?.acpRuntime ?? defaults.acpRuntime;
   const providerSettings = stored?.providerSettings ?? defaults.providerSettings;
   const branchName = args.branchName ?? stored?.branchName;
-  const tokenMiserEnabled = backend === "codex"
+  const tokenMiserEnabled = (args.backend ?? backend) === "codex"
     ? args.tokenMiserEnabled ?? stored?.tokenMiserEnabled
     : undefined;
   const now = Date.now();
-  return {
+  const draft: NavigationLaunchpadDraft = {
     createdAt: stored?.createdAt ?? now,
     updatedAt: now,
     backend,
     executionMode:
-      args.executionMode ?? stored?.executionMode ?? defaults.executionMode,
+      stored?.executionMode ?? defaults.executionMode,
     workMode: args.workMode ?? stored?.workMode ?? defaults.workMode ?? "worktree",
     ...(model !== undefined ? { model } : {}),
     ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
@@ -834,6 +835,16 @@ function buildLaunchpadDraft(params: {
     prompt: "",
     ...(branchName !== undefined ? { branchName } : {}),
   };
+  // Switch providers before applying overrides. The shared projection clears
+  // source-only fields and restores the destination's saved settings, while
+  // keeping explicit overrides in sync with its providerSettings entry.
+  return applyNavigationLaunchpadProviderSettingsPatch(draft, {
+    ...(args.backend !== undefined ? { backend: args.backend } : {}),
+    ...(args.model !== undefined ? { model: args.model } : {}),
+    ...(args.reasoningEffort !== undefined ? { reasoningEffort: args.reasoningEffort } : {}),
+    ...(args.executionMode !== undefined ? { executionMode: args.executionMode } : {}),
+    ...(args.fastMode !== undefined ? { fastMode: args.fastMode } : {}),
+  });
 }
 
 function ok(
