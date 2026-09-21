@@ -30283,12 +30283,19 @@ button.pricing-token-miser__folded:focus-visible {
 }
 
 /* A chip locked with a reason (`disabledReason`) is aria-disabled so it can
-   still take focus and explain itself. It reads as disabled at rest and on
-   hover, but keeps the focus ring: a focusable control with no visible focus
-   is lost the moment a keyboard user lands on it. */
+   still take focus and explain itself. A colour step alone did not read as
+   locked: beside live chips in the light theme the two were near-identical,
+   so it takes the 0.45 the renderer uses for disabled controls. Keyboard
+   focus lifts it back to full strength — a focus ring at 0.45 is as easy to
+   miss as no ring, and the tooltip says why the chip will not open. */
 .composer-dropdown__button[aria-disabled="true"] {
   color: var(--text-secondary);
   cursor: default;
+  opacity: 0.45;
+}
+
+.composer-dropdown__button[aria-disabled="true"]:focus-visible {
+  opacity: 1;
 }
 
 .composer-dropdown__button[aria-disabled="true"]:hover:not(:focus-visible) {
