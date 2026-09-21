@@ -14919,6 +14919,64 @@ describe("useThreadSessionState", () => {
     expect(result.current.thinkingThreadKeys["codex:thread-1"]).toBeUndefined();
   });
 
+  it.each([false, true])("does not revive an idle turn from a pending dynamic tool call (live completion: %s)", async (liveCompletion) => {
+    let emit!: Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0];
+    const idleResponse: AppServerReadThreadResponse = {
+      ...readThreadResponse({ entries: [], hasPreviousPage: false }),
+      // An asynchronous host tool can outlive the provider turn that called it.
+      pendingRequest: {
+        method: "item/tool/call",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-1",
+          requestId: "call-1",
+          namespace: "pwragent",
+          tool: "manage_mcp_connections",
+          arguments: { action: "list" },
+        },
+      },
+    };
+    const readThread = vi.fn().mockResolvedValue(idleResponse);
+    if (liveCompletion) {
+      readThread.mockResolvedValueOnce(readThreadResponse({ entries: [], hasPreviousPage: false }));
+    }
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (listener) => { emit = listener; return () => undefined; },
+      readThread,
+    };
+    const { result } = renderHook(() => useThreadSessionState({
+      desktopApi,
+      thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+    }));
+    await waitForThreadHydration(result);
+    if (liveCompletion) {
+      act(() => {
+        emit({ backend: "codex", notification: { method: "turn/started", params: {
+          threadId: "thread-1", turnId: "turn-1",
+          turn: { id: "turn-1", status: "inProgress" },
+        } } });
+        emit({ backend: "codex", notification: { method: "thread/status/changed", params: {
+          threadId: "thread-1", status: { type: "idle" },
+        } } });
+        emit({ backend: "codex", notification: { method: "turn/completed", params: {
+          threadId: "thread-1", turnId: "turn-1",
+          turn: { id: "turn-1", status: "completed", output: [] },
+        } } });
+      });
+      await waitFor(() => expect(readThread.mock.calls.length).toBeGreaterThan(1));
+      await waitForThreadHydration(result);
+    }
+    expect(result.current.activeTurnId).toBeUndefined();
+    expect(result.current.pendingStatusText).toBeUndefined();
+    expect(result.current.threadBusy).toBe(false);
+    expect(result.current.thinkingThreadKeys["codex:thread-1"]).toBeUndefined();
+
+    await act(async () => { await result.current.reload(); });
+    expect(result.current.activeTurnId).toBeUndefined();
+    expect(result.current.thinkingThreadKeys["codex:thread-1"]).toBeUndefined();
+  });
+
   it("logs and clears stale thinking when a selected thread read proves the thread is idle", async () => {
     const logRendererDiagnostic = vi.fn(async () => undefined);
     const readThread = vi

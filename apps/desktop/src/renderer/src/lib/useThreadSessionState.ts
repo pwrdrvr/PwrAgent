@@ -4918,7 +4918,10 @@ export function useThreadSessionState(params: {
             || hydratedPendingMcpInteraction
             || hydratedApprovalRequest
           );
-          const hydratedPendingTurnId = hydratedPendingRequest
+          // Host tool calls can remain pending after their provider turn ends.
+          // Only a request the renderer can present as an interaction owns a
+          // turn here; otherwise it would undo idle reconciliation below.
+          const hydratedPendingTurnId = hydratedPendingInteraction && hydratedPendingRequest
             ? readNotificationTurnId(hydratedPendingRequest)
             : undefined;
           const hydratedCompletedTurn = didHydrateCompletedTurn(
