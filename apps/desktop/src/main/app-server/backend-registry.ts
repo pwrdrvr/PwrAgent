@@ -490,6 +490,7 @@ import {
   readAgentDynamicToolCall,
   toDynamicToolResponse,
 } from "../agent-tools/agent-tool-router";
+import { buildPwrAgentMcpConnectionToolRouter } from "../agent-tools/pwragent-mcp-connection-agent-tools";
 import { buildTokenMiserToolDefinitions } from "../agent-tools/token-miser-agent-tools";
 import {
   getTokenMiserBridgeDescriptorPath,
@@ -32016,20 +32017,38 @@ export class DesktopBackendRegistry {
       }
     }
 
-    const tokenMiserCall = readAgentDynamicToolCall({
+    const hostToolCall = readAgentDynamicToolCall({
       method: request.method,
       params: request.params,
     });
+    const mcpConnectionRouter = buildPwrAgentMcpConnectionToolRouter(
+      async (connectionRequest) =>
+        await this.handleAgentMcpConnectionRequest(connectionRequest),
+    );
+    if (hostToolCall && mcpConnectionRouter.acceptsDynamicToolCall(hostToolCall)) {
+      if (!this.isLiveDynamicToolCall(backend, hostToolCall)) {
+        return toDynamicToolResponse({
+          ok: false,
+          code: "forbidden",
+          message: "MCP connection tool calls must originate from an active turn on the owning thread.",
+        });
+      }
+      return await mcpConnectionRouter.handleDynamicToolCall({
+        backend,
+        call: hostToolCall,
+      });
+    }
+
     const tokenMiserRouter = new AgentToolRouter(
       buildTokenMiserToolDefinitions(this.tokenMiserStore),
     );
     if (
-      tokenMiserCall
-      && tokenMiserRouter.acceptsDynamicToolCall(tokenMiserCall)
+      hostToolCall
+      && tokenMiserRouter.acceptsDynamicToolCall(hostToolCall)
     ) {
       if (!(await this.isTokenMiserDynamicToolCallEnabled(
         backend,
-        tokenMiserCall,
+        hostToolCall,
       ))) {
         return toDynamicToolResponse({
           ok: false,
@@ -32037,7 +32056,7 @@ export class DesktopBackendRegistry {
           message: "Token Miser retrieval is disabled for this thread.",
         });
       }
-      if (!this.isLiveDynamicToolCall(backend, tokenMiserCall)) {
+      if (!this.isLiveDynamicToolCall(backend, hostToolCall)) {
         return toDynamicToolResponse({
           ok: false,
           code: "forbidden",
@@ -32047,7 +32066,7 @@ export class DesktopBackendRegistry {
       }
       return await tokenMiserRouter.handleDynamicToolCall({
         backend,
-        call: tokenMiserCall,
+        call: hostToolCall,
       });
     }
 
@@ -32342,6 +32361,16 @@ export class DesktopBackendRegistry {
         call: taskMonitorToolCall,
         handler: async (monitorRequest) =>
           await this.handleAgentTaskMonitorRequest(monitorRequest),
+      });
+    }
+
+    // Host tools have no user response to wait for. A missing dispatch route
+    // must fail here rather than leave an unresolvable interactive request.
+    if (request.method === "item/tool/call") {
+      return toDynamicToolResponse({
+        ok: false,
+        code: "unsupported_operation",
+        message: "No PwrAgent handler is registered for this dynamic tool call.",
       });
     }
 

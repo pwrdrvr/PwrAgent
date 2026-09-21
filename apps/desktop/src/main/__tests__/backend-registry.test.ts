@@ -32376,6 +32376,118 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("rejects unhandled host tools while leaving user requests pending past the inventory deadline", async () => {
+    vi.useFakeTimers();
+    onTestFinished(() => { vi.useRealTimers(); });
+    const codexClient = new MockBackendClient({ initializeResult: { methods: [] } });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    onTestFinished(async () => await registry.close());
+    const hostResult = vi.fn();
+    const hostResponse = codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "inventory-thread", turnId: "turn-1",
+        callId: "unknown-call", requestId: "unknown-call",
+        namespace: "pwragent", tool: "unknown_fixture_tool", arguments: {},
+      },
+    } as AppServerPendingRequestNotification).then(hostResult);
+    void hostResponse.catch(() => {});
+    await vi.advanceTimersByTimeAsync(0);
+    expect(hostResult).toHaveBeenCalledWith(expect.objectContaining({ success: false }));
+    expect(registry.getNavigationInputRequestThreadKeys().size).toBe(0);
+    await hostResponse;
+
+    for (const method of ["item/commandExecution/requestApproval", "item/tool/requestUserInput"] as const) {
+      const settled = vi.fn();
+      const response = codexClient.emitRequest({
+        method,
+        params: {
+          threadId: "inventory-thread", turnId: "turn-1", itemId: "item-1",
+          requestId: method, command: "echo fixture", questions: [],
+        },
+      } as AppServerPendingRequestNotification).then(settled);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(settled).not.toHaveBeenCalled();
+      expect(registry.getNavigationInputRequestThreadKeys().size).toBe(1);
+      await registry.submitServerRequest({
+        backend: "codex", threadId: "inventory-thread", turnId: "turn-1",
+        requestId: method,
+        response: method === "item/tool/requestUserInput" ? { answers: {} } : { decision: "accept" },
+      });
+      await response;
+      expect(settled).toHaveBeenCalledTimes(1);
+      expect(registry.getNavigationInputRequestThreadKeys().size).toBe(0);
+    }
+  });
+
+  it.each(["success", "stall", "late rejection", "inactive"])(
+    "dispatches MCP connection inventory without retaining a pending request: %s",
+    async (scenario) => {
+      vi.useFakeTimers();
+      onTestFinished(() => { vi.useRealTimers(); });
+      let resolveInventory!: (value: McpConnectionStatus[]) => void;
+      let rejectInventory!: (error: Error) => void;
+      const listConnections = vi.fn(() => new Promise<McpConnectionStatus[]>((resolve, reject) => {
+        resolveInventory = resolve;
+        rejectInventory = reject;
+      }));
+      const codexClient = new MockBackendClient({
+        initializeResult: { methods: ["thread/read"] },
+      });
+      const registry = new DesktopBackendRegistry({
+        codexClient,
+        overlayStore: createOverlayStoreMock(),
+        mcpConnectionService: {
+          registerBridge: vi.fn(),
+          listConnections,
+          createConnection: vi.fn(),
+          probeConnection: vi.fn(),
+        },
+      });
+      onTestFinished(async () => await registry.close());
+      if (scenario !== "inactive") {
+        await registry.publishLocalEvent({
+          backend: "codex",
+          notification: {
+            method: "turn/started",
+            params: { threadId: "inventory-thread", turnId: "turn-1", turn: { id: "turn-1" } },
+          },
+        });
+      }
+      const settled = vi.fn();
+      const response = codexClient.emitRequest({
+        method: "item/tool/call",
+        params: {
+          threadId: "inventory-thread", turnId: "turn-1",
+          callId: "inventory-call", requestId: "inventory-call",
+          namespace: "pwragent", tool: "manage_mcp_connections",
+          arguments: { action: "list" },
+        },
+      } as AppServerPendingRequestNotification).then(settled);
+      void response.catch(() => {});
+      await vi.advanceTimersByTimeAsync(0);
+      expect(registry.getNavigationInputRequestThreadKeys().size).toBe(0);
+      expect(listConnections).toHaveBeenCalledTimes(scenario === "inactive" ? 0 : 1);
+      if (scenario === "success") resolveInventory([]);
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(settled).toHaveBeenCalledTimes(1);
+      expect(settled.mock.calls[0]?.[0]).toMatchObject({ success: scenario === "success" });
+      if (scenario === "stall" || scenario === "late rejection") {
+        expect(JSON.stringify(settled.mock.calls[0])).toContain("timed out");
+        if (scenario === "stall") resolveInventory([]);
+        else rejectInventory(new Error("late inventory failure"));
+        await vi.advanceTimersByTimeAsync(0);
+        expect(settled).toHaveBeenCalledTimes(1);
+      }
+      await response;
+      expect(registry.getNavigationInputRequestThreadKeys().size).toBe(0);
+      await expect(registry.submitServerRequest({
+        backend: "codex", threadId: "inventory-thread", turnId: "turn-1",
+        requestId: "inventory-call", response: { decision: "accept" },
+      })).rejects.toThrow("No pending server request");
+    },
+  );
+
   it("handles thread inspection dynamic tool calls from active turns", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/list"] },

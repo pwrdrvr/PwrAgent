@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared";
 import { buildPwrAgentMcpConnectionToolRouter } from "../pwragent-mcp-connection-agent-tools.js";
 
@@ -16,6 +16,42 @@ async function call(
 }
 
 describe("manage_mcp_connections", () => {
+  it("bounds list on the MCP transport and releases its deadline after completion", async () => {
+    vi.useFakeTimers();
+    onTestFinished(() => { vi.useRealTimers(); });
+    const router = buildPwrAgentMcpConnectionToolRouter(() => new Promise(() => {}));
+    const settled = vi.fn();
+    void call(router, { action: "list" }).then(settled);
+    await vi.advanceTimersByTimeAsync(19_999);
+    expect(settled).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(settled).toHaveBeenCalledWith(expect.objectContaining({
+      isError: true,
+      structuredContent: {
+        code: "internal_error",
+        message: expect.stringContaining("timed out"),
+      },
+    }));
+    expect(vi.getTimerCount()).toBe(0);
+
+    const quickRouter = buildPwrAgentMcpConnectionToolRouter(async () => ({
+      ok: true, data: { action: "list", gatewayEnabled: true, connections: [] },
+    }));
+    expect((await call(quickRouter, { action: "list" })).isError).toBeFalsy();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("does not impose the list deadline on describe_thread", async () => {
+    vi.useFakeTimers();
+    onTestFinished(() => { vi.useRealTimers(); });
+    const router = buildPwrAgentMcpConnectionToolRouter(() => new Promise(() => {}));
+    const settled = vi.fn();
+    void call(router, { action: "describe_thread" }).then(settled);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(settled).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("advertises exactly one tool, and no way to authorize or remove", () => {
     // An agent proposes and inspects; a person authorizes and enables.
     // `authorize` needs a browser consent an agent cannot give, and

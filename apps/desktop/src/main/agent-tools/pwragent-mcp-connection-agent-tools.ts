@@ -19,6 +19,9 @@ import {
 } from "./agent-tool-definition.js";
 import { AgentToolRouter } from "./agent-tool-router.js";
 
+// Local connection status only, not Codex tool/resource discovery or OAuth consent.
+const MCP_CONNECTION_INVENTORY_TIMEOUT_MS = 20_000;
+
 export const PWRAGENT_MCP_CONNECTION_UNAVAILABLE_MESSAGE =
   "PwrAgent MCP connection tools are not available.";
 
@@ -67,14 +70,39 @@ export function buildPwrAgentMcpConnectionToolDefinitions(
             'Pass action "list", "create" (with displayName and serverUrl), or "describe_thread".',
         });
       }
-      const response = await handler({
+      const request: PwrAgentMcpConnectionRequest = {
         operation,
         context: {
           backend: context.backend,
           ...(context.threadId ? { threadId: context.threadId } : {}),
         },
         args: normalized,
-      });
+      };
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let response: PwrAgentMcpConnectionResponse;
+      try {
+        // The gateway owns shared connection work and has no per-reader abort.
+        // Bound this caller's wait only. Promise.race consumes late rejections
+        // and a late result cannot publish another response or pending request.
+        response = normalized.action === "list"
+          ? await Promise.race([
+              new Promise<PwrAgentMcpConnectionResponse>((resolve) => {
+                timer = setTimeout(() => resolve({
+                  ok: false,
+                  error: {
+                    code: "internal_error",
+                    message:
+                      `manage_mcp_connections list timed out after ${MCP_CONNECTION_INVENTORY_TIMEOUT_MS / 1_000} seconds. Check MCP connections in Settings → Plugins and retry.`,
+                  },
+                }), MCP_CONNECTION_INVENTORY_TIMEOUT_MS);
+                timer.unref?.();
+              }),
+              handler(request),
+            ])
+          : await handler(request);
+      } finally {
+        clearTimeout(timer);
+      }
       if (response.ok) return agentToolSuccess(response.data);
       return agentToolFailure({
         code: response.error.code,
