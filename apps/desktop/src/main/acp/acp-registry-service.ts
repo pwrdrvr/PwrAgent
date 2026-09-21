@@ -17,7 +17,7 @@ import {
 
 export type AcpRegistryFetch = (
   input: string,
-  init?: { headers?: Record<string, string> },
+  init?: { headers?: Record<string, string>; signal?: AbortSignal },
 ) => Promise<{
   ok: boolean;
   status: number;
@@ -62,9 +62,12 @@ export class AcpRegistryService {
     this.registryUrl = options.registryUrl ?? ACP_REGISTRY_URL;
   }
 
-  async fetchRegistry(): Promise<AcpRegistrySnapshot> {
+  async fetchRegistry(
+    options?: { signal?: AbortSignal },
+  ): Promise<AcpRegistrySnapshot> {
     const response = await this.fetcher(this.registryUrl, {
       headers: { accept: "application/json" },
+      ...(options?.signal ? { signal: options.signal } : {}),
     });
     if (!response.ok) {
       throw new Error(

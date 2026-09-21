@@ -29,6 +29,9 @@ import type {
   ListDiscordThreadPermissionChannelsResponse,
   ListAcpAgentSettingsRequest,
   ListAcpAgentSettingsResponse,
+  CancelProviderCatalogRefreshRequest,
+  ReadProviderCatalogRefreshResponse,
+  ProviderCatalogRefreshState,
   ReadDesktopSettingsRequest,
   ReadDesktopSettingsResponse,
   ReadDesktopConfigBootstrapResponse,
@@ -61,6 +64,10 @@ import {
   ONBOARDING_COMPLETE_CODEX_BOOTSTRAP_CHANNEL,
   ACP_AGENTS_LIST_CHANNEL,
   ACP_AGENT_UPDATE_ACKNOWLEDGE_CHANNEL,
+  PROVIDER_CATALOG_REFRESH_CANCEL_CHANNEL,
+  PROVIDER_CATALOG_REFRESH_EVENT_CHANNEL,
+  PROVIDER_CATALOG_REFRESH_READ_CHANNEL,
+  PROVIDER_CATALOG_REFRESH_START_CHANNEL,
   SETTINGS_CHECK_CODEX_AUTH_PROFILE_STATUS_CHANNEL,
   SETTINGS_CLEAR_SECRET_CHANNEL,
   SETTINGS_CREATE_CODEX_AUTH_PROFILE_CHANNEL,
@@ -107,6 +114,12 @@ import {
   issueProviderDiscoveryPermit,
   type ProviderDiscoveryPermit,
 } from "../settings/provider-discovery-permit";
+import {
+  ProviderCatalogRefreshCoordinator,
+  type ProviderCatalogRefreshProgress,
+  type ProviderCatalogRefreshProviderUpdate,
+} from "../settings/provider-catalog-refresh";
+import { subscribersForChannel } from "../window-channels";
 import { CredentialTester } from "../credential-tester/credential-tester";
 import { getDesktopMessagingRuntime } from "../messaging/messaging-runtime";
 import { loadDesktopMessagingConfigFromSettings } from "../messaging/messaging-config";
@@ -132,7 +145,7 @@ import { isBannedAcpRegistryId } from "../acp/acp-agent-allowlist";
 import { discoverLocalAcpAgentRecords } from "../acp/acp-instance-discovery";
 import {
   ensureAcpRuntimeDiscoveryWorkspace,
-  refreshAcpRuntimeCapabilities,
+  probeAcpRuntimeCapabilities,
 } from "../acp/acp-capability-probe";
 import { shouldReprobeAcpCapabilities } from "../acp/acp-capability-freshness";
 import { describeDistributionSource } from "../acp/acp-install-provenance";
@@ -214,6 +227,10 @@ const recentAcpRefreshes = new Set<
 >();
 const ACP_REFRESH_REUSE_TTL_MS = 5_000;
 const USER_INITIATED_ACP_PROBE_TIMEOUT_MS = 10 * 60_000;
+// The registry only decorates entries and a stored snapshot stands in when it
+// is unreachable, so an unresponsive endpoint must not hold up discovery.
+const ACP_REGISTRY_FETCH_TIMEOUT_MS = 15_000;
+const JOINED_ACP_REFRESH_PHASE = "Waiting for a provider refresh already running";
 
 function acpRefreshRegistryIds(
   request: ListAcpAgentSettingsRequest,
@@ -266,9 +283,14 @@ function permitAcpDiscoveryRequest(
   return issueProviderDiscoveryPermit(request.discoveryIntent);
 }
 
+/**
+ * `progress` reports on, and can cancel, only a pass this request starts. A
+ * request that joins another pass waits for that pass's result.
+ */
 async function listAcpAgentSettings(
   request: ListAcpAgentSettingsRequest = {},
   service?: DesktopSettingsService,
+  progress?: ProviderCatalogRefreshProgress,
 ): Promise<ListAcpAgentSettingsResponse> {
   const permit = permitAcpDiscoveryRequest(request);
   if (request.refresh === false) {
@@ -283,6 +305,7 @@ async function listAcpAgentSettings(
     setContainsAll(active.registryIds, registryIds),
   );
   if (superset) {
+    progress?.onPhase(JOINED_ACP_REFRESH_PHASE);
     return await superset.promise;
   }
 
@@ -314,6 +337,7 @@ async function listAcpAgentSettings(
   );
   const run = (async () => {
     if (overlapping.length > 0) {
+      progress?.onPhase(JOINED_ACP_REFRESH_PHASE);
       await Promise.all(overlapping.map((entry) => entry.promise));
     }
     if (registryIds.size > 0 && remainingRegistryIds.length === 0) {
@@ -328,7 +352,12 @@ async function listAcpAgentSettings(
         ? { ...request, registryIds: remainingRegistryIds }
         : request;
     invalidateRecentAcpRefreshes(acpRefreshRegistryIds(nextRequest));
-    return await listAcpAgentSettingsImpl(nextRequest, service, permit);
+    return await listAcpAgentSettingsImpl(
+      nextRequest,
+      service,
+      permit,
+      progress,
+    );
   })();
   const active: InFlightAcpRefresh = {
     probeCapabilities,
@@ -336,15 +365,24 @@ async function listAcpAgentSettings(
     promise: run,
   };
   inFlightAcpRefreshes.add(active);
+  // A cancelled pass skips the probes it has not finished. Nothing may join
+  // it after that, or a new request would get the cancelled pass's answer.
+  const detach = (): void => {
+    inFlightAcpRefreshes.delete(active);
+  };
+  progress?.signal.addEventListener("abort", detach, { once: true });
   try {
     const response = await run;
-    recentAcpRefreshes.add({
-      ...active,
-      completedAt: Date.now(),
-      response,
-    });
+    if (!progress?.signal.aborted) {
+      recentAcpRefreshes.add({
+        ...active,
+        completedAt: Date.now(),
+        response,
+      });
+    }
     return response;
   } finally {
+    progress?.signal.removeEventListener("abort", detach);
     inFlightAcpRefreshes.delete(active);
   }
 }
@@ -353,6 +391,7 @@ async function listAcpAgentSettingsImpl(
   request: ListAcpAgentSettingsRequest = {},
   service?: DesktopSettingsService,
   permit?: ProviderDiscoveryPermit,
+  progress?: ProviderCatalogRefreshProgress,
 ): Promise<ListAcpAgentSettingsResponse> {
   const store = new AcpAgentStore(getAppStateDb());
   const settingsService = getService(service);
@@ -361,21 +400,30 @@ async function listAcpAgentSettingsImpl(
   let error: string | undefined;
 
   if (request.refresh !== false) {
+    progress?.onPhase("Reading the ACP registry");
+    const timeout = AbortSignal.timeout(ACP_REGISTRY_FETCH_TIMEOUT_MS);
     try {
-      snapshot = await registryService.fetchRegistry();
+      snapshot = await registryService.fetchRegistry({
+        signal: progress ? AbortSignal.any([progress.signal, timeout]) : timeout,
+      });
       store.saveRegistrySnapshot(snapshot);
     } catch (fetchError) {
-      error = fetchError instanceof Error ? fetchError.message : String(fetchError);
+      error = timeout.aborted
+        ? `The ACP registry did not respond within ${ACP_REGISTRY_FETCH_TIMEOUT_MS / 1000} seconds.`
+        : fetchError instanceof Error
+          ? fetchError.message
+          : String(fetchError);
     }
   }
 
   snapshot ??= store.readRegistrySnapshot();
   let discoveryEnv: NodeJS.ProcessEnv | undefined;
-  if (request.refresh === true) {
+  if (request.refresh === true && !progress?.signal.aborted) {
     assertProviderDiscoveryPermit(permit, [
       "settings-user-action",
       "setup-user-action",
     ]);
+    progress?.onPhase("Loading your shell environment");
     try {
       // Electron and package managers can prepend transient Node bin
       // directories to the app process PATH. Discover ACP CLIs from the same
@@ -398,6 +446,7 @@ async function listAcpAgentSettingsImpl(
       : {}),
     ...(request.registryIds ? { registryIds: request.registryIds } : {}),
     ...(discoveryEnv ? { env: discoveryEnv } : {}),
+    ...(progress ? { progress } : {}),
   });
   const entries = snapshot
     ? registryService
@@ -602,6 +651,60 @@ function placeholderAcpAgentSettingsEntry(
   };
 }
 
+function modelCountOf(
+  record: AcpInstalledAgentRecord,
+): { modelCount?: number } {
+  const models = record.runtimeCapabilities?.models?.availableModels;
+  return models ? { modelCount: models.length } : {};
+}
+
+async function probeInstalledAcpAgent(
+  store: AcpAgentStore,
+  record: AcpInstalledAgentRecord,
+  options: {
+    cwd: string;
+    probeTimeoutMs?: number;
+    report: (
+      registryId: string,
+      update: ProviderCatalogRefreshProviderUpdate,
+    ) => void;
+    signal?: AbortSignal;
+  },
+): Promise<void> {
+  const registryId = record.registryId;
+  if (options.signal?.aborted) {
+    store.upsertInstalledAgent(record);
+    options.report(registryId, { status: "cancelled" });
+    return;
+  }
+  try {
+    const probe = await probeAcpRuntimeCapabilities(
+      record,
+      options.cwd,
+      options.probeTimeoutMs,
+      {
+        ...(options.signal ? { signal: options.signal } : {}),
+        onStage: (stage) =>
+          options.report(registryId, { status: "running", detail: stage }),
+      },
+    );
+    store.upsertInstalledAgent(probe.record);
+    options.report(
+      registryId,
+      probe.error !== undefined
+        ? { status: "failed", error: probe.error }
+        : { status: "succeeded", ...modelCountOf(probe.record) },
+    );
+  } catch (error) {
+    if (!options.signal?.aborted) {
+      throw error;
+    }
+    // Keep what the last completed probe learned about this runtime.
+    store.upsertInstalledAgent(record);
+    options.report(registryId, { status: "cancelled" });
+  }
+}
+
 async function listInstalledAndLocalAcpAgents(
   store: AcpAgentStore,
   options?: {
@@ -612,11 +715,26 @@ async function listInstalledAndLocalAcpAgents(
     probeCapabilities?: boolean;
     registryIds?: readonly string[];
     env?: NodeJS.ProcessEnv;
+    progress?: ProviderCatalogRefreshProgress;
   },
 ): Promise<AcpInstalledAgentRecord[]> {
   const installed = store.listInstalledAgents();
   let discovered: AcpInstalledAgentRecord[] = [];
-  if (options?.refreshLocal) {
+  const progress = options?.progress;
+  // Only a provider's final answer is recorded, so a discovery failure can
+  // still answer every provider nothing else reached.
+  const answered = new Set<string>();
+  const report = (
+    registryId: string,
+    update: ProviderCatalogRefreshProviderUpdate,
+  ): void => {
+    if (update.status !== "running") {
+      answered.add(registryId);
+    }
+    progress?.onProvider(registryId, update);
+  };
+  let discoveryRegistryIds: string[] = [];
+  if (options?.refreshLocal && !progress?.signal.aborted) {
     assertProviderDiscoveryPermit(options.permit, [
       "settings-user-action",
       "setup-user-action",
@@ -629,11 +747,12 @@ async function listInstalledAndLocalAcpAgents(
         (registryId) =>
           !options.registryIds || options.registryIds.includes(registryId),
       );
-      const discoveryRegistryIds = options.probeCapabilities === false
+      discoveryRegistryIds = options.probeCapabilities === false
         ? requestedRegistryIds
         : requestedRegistryIds.filter((registryId) =>
             acpProviderEnabledFromSnapshot(providers, registryId),
           );
+      progress?.onPhase("Finding installed CLIs");
       for (const registryId of discoveryRegistryIds) {
         const override = acpProviderCommandOverrideFromSnapshot(
           providers,
@@ -674,14 +793,30 @@ async function listInstalledAndLocalAcpAgents(
             : {}),
         };
       });
+      progress?.onPhase(undefined);
       const discoveryCwd = await ensureAcpRuntimeDiscoveryWorkspace();
       const now = Date.now();
+      // `force` is reserved for explicit UI refresh/login actions. Gemini can
+      // wait on a human browser OAuth round trip, so keep background
+      // discovery bounded while giving those actions room.
+      const probeTimeoutMs = options.force === true
+        ? USER_INITIATED_ACP_PROBE_TIMEOUT_MS
+        : undefined;
+      // Probes launch independent agents, so they run together: one agent
+      // that hangs on its request timeout must not hold back the others.
+      const probes: Array<Promise<void>> = [];
       for (const record of discovered) {
         if (record.installStatus !== "installed") {
           // Compatibility diagnostics (for example a legacy Python kimi-cli)
           // are durable records but must never inherit the previous usable
           // runtime/model cache or launch an ACP capability probe.
           store.upsertInstalledAgent(record);
+          report(record.registryId, {
+            status: "skipped",
+            detail: record.incompatibleInstances?.length
+              ? "Only an unsupported version is installed"
+              : "Not installed",
+          });
           continue;
         }
         const current = store.getInstalledAgent(record.backendId);
@@ -726,26 +861,32 @@ async function listInstalledAndLocalAcpAgents(
             ...(options?.force === true ? { force: true } : {}),
           })
         ) {
-          store.upsertInstalledAgent(
-            await refreshAcpRuntimeCapabilities(
-              nextRecord,
-              discoveryCwd,
-              // `force` is reserved for explicit UI refresh/login actions.
-              // Gemini can wait on a human browser OAuth round trip, so keep
-              // background discovery bounded while giving those actions room.
-              options.force === true
-                ? USER_INITIATED_ACP_PROBE_TIMEOUT_MS
-                : undefined,
-            ),
+          probes.push(
+            probeInstalledAcpAgent(store, nextRecord, {
+              cwd: discoveryCwd,
+              report,
+              ...(probeTimeoutMs !== undefined ? { probeTimeoutMs } : {}),
+              ...(progress ? { signal: progress.signal } : {}),
+            }),
           );
         } else {
           store.upsertInstalledAgent(nextRecord);
+          report(record.registryId, {
+            status: "succeeded",
+            detail: "Recently checked",
+            ...modelCountOf(nextRecord),
+          });
         }
       }
+      await Promise.all(probes);
     } catch (error) {
-      settingsIpcLog.debug("local_acp_discovery_failed", {
-        error: error instanceof Error ? error.message : String(error),
-      });
+      const message = error instanceof Error ? error.message : String(error);
+      settingsIpcLog.debug("local_acp_discovery_failed", { error: message });
+      for (const registryId of discoveryRegistryIds) {
+        if (!answered.has(registryId)) {
+          report(registryId, { status: "failed", error: message });
+        }
+      }
     }
   }
   const refreshedInstalled = options?.refreshLocal
@@ -1311,6 +1452,85 @@ function disposeCredentialTester(): void {
   credentialTesterInstance = undefined;
 }
 
+let providerCatalogRefresh: ProviderCatalogRefreshCoordinator | undefined;
+
+/**
+ * The Settings "Refresh all providers" action: Codex model discovery plus a
+ * forced probe of every enabled ACP provider, with progress and Cancel.
+ */
+function createProviderCatalogRefresh(
+  service?: DesktopSettingsService,
+): ProviderCatalogRefreshCoordinator {
+  return new ProviderCatalogRefreshCoordinator({
+    publish: (state) => {
+      for (const webContents of subscribersForChannel(
+        PROVIDER_CATALOG_REFRESH_EVENT_CHANNEL,
+      )) {
+        webContents.send(PROVIDER_CATALOG_REFRESH_EVENT_CHANNEL, state);
+      }
+    },
+    listAcpProviders: () => {
+      const providers = getService(service).readProvidersConfig();
+      return LOCAL_ACP_REGISTRY_IDS.filter(
+        (registryId) =>
+          !isBannedAcpRegistryId(registryId)
+          && acpProviderEnabledFromSnapshot(providers, registryId),
+      ).map((registryId) => ({
+        id: registryId,
+        label:
+          BUILT_IN_ACP_STRATEGIES.find((strategy) => strategy.id === registryId)
+            ?.displayName ?? registryId,
+      }));
+    },
+    refreshCodex: async () => {
+      const response = await getDesktopBackendRegistry().listBackends(
+        { includeUnavailable: true, refreshModels: "codex" },
+        issueProviderDiscoveryPermit("settings-user-action"),
+      );
+      const codex = response.backends.find(
+        (backend) => backend.kind === "codex",
+      );
+      if (!codex?.available) {
+        throw new Error(codex?.unavailableReason || "Codex is unavailable.");
+      }
+      const models = codex.launchpadOptions?.models;
+      return models ? { modelCount: models.length } : {};
+    },
+    refreshAcp: async (progress) => {
+      // A pass this request joins, or a result it reuses, reports nothing
+      // per provider; answer those from the listing it returns.
+      const answered = new Set<string>();
+      const response = await listAcpAgentSettings(
+        {
+          discoveryIntent: "settings-user-action",
+          force: true,
+          refresh: true,
+        },
+        service,
+        {
+          ...progress,
+          onProvider: (registryId, update) => {
+            if (update.status !== "running") {
+              answered.add(registryId);
+            }
+            progress.onProvider(registryId, update);
+          },
+        },
+      );
+      for (const entry of response.entries) {
+        if (!answered.has(entry.registryId)) {
+          progress.onProvider(
+            entry.registryId,
+            entry.installed
+              ? { status: "succeeded", detail: "Updated by another refresh" }
+              : { status: "skipped", detail: "Not installed" },
+          );
+        }
+      }
+    },
+  });
+}
+
 export function registerSettingsIpcHandlers(
   service?: DesktopSettingsService,
   options?: {
@@ -1328,6 +1548,34 @@ export function registerSettingsIpcHandlers(
       request?: ListAcpAgentSettingsRequest,
     ): Promise<ListAcpAgentSettingsResponse> =>
       await listAcpAgentSettings(request, service),
+  );
+
+  providerCatalogRefresh?.dispose();
+  const catalogRefresh = createProviderCatalogRefresh(service);
+  providerCatalogRefresh = catalogRefresh;
+  ipcMain.removeHandler(PROVIDER_CATALOG_REFRESH_START_CHANNEL);
+  ipcMain.handle(
+    PROVIDER_CATALOG_REFRESH_START_CHANNEL,
+    async (): Promise<ProviderCatalogRefreshState> => catalogRefresh.start(),
+  );
+  ipcMain.removeHandler(PROVIDER_CATALOG_REFRESH_CANCEL_CHANNEL);
+  ipcMain.handle(
+    PROVIDER_CATALOG_REFRESH_CANCEL_CHANNEL,
+    async (
+      _event,
+      request: CancelProviderCatalogRefreshRequest,
+    ): Promise<ReadProviderCatalogRefreshResponse> => {
+      const state = catalogRefresh.cancel(request.runId);
+      return state ? { state } : {};
+    },
+  );
+  ipcMain.removeHandler(PROVIDER_CATALOG_REFRESH_READ_CHANNEL);
+  ipcMain.handle(
+    PROVIDER_CATALOG_REFRESH_READ_CHANNEL,
+    async (): Promise<ReadProviderCatalogRefreshResponse> => {
+      const state = catalogRefresh.read();
+      return state ? { state } : {};
+    },
   );
 
   ipcMain.removeHandler(ACP_AGENT_UPDATE_ACKNOWLEDGE_CHANNEL);
@@ -1936,7 +2184,12 @@ export function disposeSettingsIpcHandlers(): void {
   codexLoginManager.dispose();
   pendingCodexProviderRecovery.clear();
   recentAcpRefreshes.clear();
+  providerCatalogRefresh?.dispose();
+  providerCatalogRefresh = undefined;
   ipcMain.removeHandler(ACP_AGENTS_LIST_CHANNEL);
+  ipcMain.removeHandler(PROVIDER_CATALOG_REFRESH_START_CHANNEL);
+  ipcMain.removeHandler(PROVIDER_CATALOG_REFRESH_CANCEL_CHANNEL);
+  ipcMain.removeHandler(PROVIDER_CATALOG_REFRESH_READ_CHANNEL);
   ipcMain.removeHandler(ACP_AGENT_UPDATE_ACKNOWLEDGE_CHANNEL);
   ipcMain.removeHandler(TOKEN_MISER_READ_USAGE_CHANNEL);
   ipcMain.removeHandler(SETTINGS_READ_CHANNEL);

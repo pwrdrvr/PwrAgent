@@ -95,6 +95,14 @@ export const BACKEND_LIST_CHANNEL = "backend:list";
 export const ACP_AGENTS_LIST_CHANNEL = "acp-agents:list";
 export const ACP_AGENT_UPDATE_ACKNOWLEDGE_CHANNEL =
   "acp-agents:acknowledge-update";
+export const PROVIDER_CATALOG_REFRESH_START_CHANNEL =
+  "provider-catalog-refresh:start";
+export const PROVIDER_CATALOG_REFRESH_CANCEL_CHANNEL =
+  "provider-catalog-refresh:cancel";
+export const PROVIDER_CATALOG_REFRESH_READ_CHANNEL =
+  "provider-catalog-refresh:read";
+export const PROVIDER_CATALOG_REFRESH_EVENT_CHANNEL =
+  "provider-catalog-refresh:event";
 export const AGENT_START_THREAD_CHANNEL = "agent:start-thread";
 export const AGENT_FORK_THREAD_CHANNEL = "agent:fork-thread";
 export const AGENT_START_TURN_CHANNEL = "agent:start-turn";

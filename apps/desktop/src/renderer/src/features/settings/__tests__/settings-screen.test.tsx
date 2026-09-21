@@ -23,6 +23,7 @@ import type {
   McpConnectionStatus,
   MessagingPairingEntry,
   MutateMcpConnectionResponse,
+  ProviderCatalogRefreshState,
   SetMcpConnectionEnabledRequest,
   WorktreeSnapshotSummary,
 } from "@pwragent/shared";
@@ -765,19 +766,42 @@ describe("SettingsScreen", () => {
     });
   });
 
-  it("keeps the Models hub refresh explicitly all-provider", async () => {
-    const listBackends = vi.fn(async () => ({
-      fetchedAt: 1000,
-      backends: [],
-    }));
-    const listAcpAgents = vi.fn(async () => ({
-      fetchedAt: 1000,
-      entries: [],
-    }));
+  it("runs the Models hub refresh in main and shows each provider's progress", async () => {
+    const listBackends = vi.fn<NonNullable<DesktopApi["listBackends"]>>(
+      async () => ({ fetchedAt: 1000, backends: [] }),
+    );
+    const listAcpAgents = vi.fn<NonNullable<DesktopApi["listAcpAgents"]>>(
+      async () => ({ fetchedAt: 1000, entries: [] }),
+    );
+    const catalog = createCatalogRefreshApi();
+    const running = catalogRefreshState({
+      revision: 1,
+      status: "running",
+      phase: "Finding installed CLIs",
+      providers: [
+        {
+          id: "codex",
+          label: "Codex",
+          status: "succeeded",
+          modelCount: 5,
+          startedAt: 1_000,
+          finishedAt: 2_000,
+        },
+        {
+          id: "grok",
+          label: "Grok",
+          status: "running",
+          detail: "Opening a session",
+          startedAt: 1_000,
+        },
+        { id: "kimi", label: "Kimi Code CLI", status: "pending" },
+      ],
+    });
+    catalog.startProviderCatalogRefresh.mockResolvedValue(running);
 
     render(
       <SettingsScreen
-        desktopApi={{ listAcpAgents, listBackends }}
+        desktopApi={{ listAcpAgents, listBackends, ...catalog.api }}
         initialSection="models"
         settings={createSettingsState()}
         onClose={() => undefined}
@@ -788,22 +812,165 @@ describe("SettingsScreen", () => {
       name: "Refresh all providers",
     });
     await waitFor(() => expect(listBackends).toHaveBeenCalled());
-    listBackends.mockClear();
-    listAcpAgents.mockClear();
     fireEvent.click(refresh);
 
+    const progress = await screen.findByRole("list", {
+      name: "Provider refresh",
+    });
+    expect(catalog.startProviderCatalogRefresh).toHaveBeenCalledTimes(1);
+    // Discovery belongs to main's run; the renderer only reads caches.
+    expect(
+      listBackends.mock.calls.every(
+        ([request]) => request?.refreshModels === undefined,
+      ),
+    ).toBe(true);
+    expect(
+      listAcpAgents.mock.calls.every(([request]) => request?.refresh !== true),
+    ).toBe(true);
+    expect(within(progress).getByText("Finding installed CLIs")).toBeInTheDocument();
+    expect(within(progress).getByText("5 models")).toBeInTheDocument();
+    expect(within(progress).getByText("Opening a session")).toBeInTheDocument();
+    expect(within(progress).getByText("Waiting")).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Refreshing… 1 of 3 done",
+    );
+    expect(
+      screen.queryByRole("button", { name: "Refresh all providers" }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     await waitFor(() => {
-      expect(listAcpAgents).toHaveBeenCalledWith({
-        discoveryIntent: "settings-user-action",
-        force: true,
-        refresh: true,
-      });
-      expect(listBackends).toHaveBeenCalledWith({
-        discoveryIntent: "settings-user-action",
-        includeUnavailable: true,
-        refreshModels: true,
+      expect(catalog.cancelProviderCatalogRefresh).toHaveBeenCalledWith({
+        runId: 1,
       });
     });
+
+    listBackends.mockClear();
+    act(() => {
+      catalog.emit(
+        catalogRefreshState({
+          ...running,
+          revision: 2,
+          status: "cancelled",
+          finishedAt: 3_000,
+          providers: running.providers.map((provider) =>
+            provider.status === "succeeded"
+              ? provider
+              : { ...provider, status: "cancelled", finishedAt: 3_000 },
+          ),
+        }),
+      );
+    });
+
+    expect(
+      await screen.findByRole("button", { name: "Refresh all providers" }),
+    ).toBeEnabled();
+    // The cancelled rows stay up, so the provider that hung is named.
+    expect(
+      within(screen.getByRole("list", { name: "Provider refresh" }))
+        .getAllByText("Cancelled"),
+    ).toHaveLength(2);
+    await waitFor(() => {
+      expect(listBackends).toHaveBeenCalledWith({ includeUnavailable: true });
+    });
+  });
+
+  it("shows a refresh already running when Settings opens mid-run", async () => {
+    const catalog = createCatalogRefreshApi();
+    const running = catalogRefreshState({
+      revision: 4,
+      status: "running",
+      providers: [
+        {
+          id: "codex",
+          label: "Codex",
+          status: "running",
+          detail: "Reading models and account",
+          startedAt: 1_000,
+        },
+      ],
+    });
+    catalog.readProviderCatalogRefresh.mockResolvedValue({ state: running });
+
+    render(
+      <SettingsScreen
+        desktopApi={{
+          listBackends: async () => ({ fetchedAt: 1000, backends: [] }),
+          ...catalog.api,
+        }}
+        initialSection="models"
+        settings={createSettingsState()}
+        onClose={() => undefined}
+      />,
+    );
+
+    expect(
+      await screen.findByText("Reading models and account"),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+
+    // A snapshot older than the one on screen must not replace it.
+    act(() => {
+      catalog.emit(
+        catalogRefreshState({
+          ...running,
+          revision: 3,
+          providers: [
+            { id: "codex", label: "Codex", status: "pending" },
+          ],
+        }),
+      );
+    });
+    expect(screen.getByText("Reading models and account")).toBeInTheDocument();
+  });
+
+  it("summarizes a refresh that reached every provider", async () => {
+    const catalog = createCatalogRefreshApi();
+    catalog.readProviderCatalogRefresh.mockResolvedValue({
+      state: catalogRefreshState({
+        revision: 9,
+        status: "completed",
+        finishedAt: 13_000,
+        providers: [
+          {
+            id: "codex",
+            label: "Codex",
+            status: "succeeded",
+            modelCount: 5,
+            startedAt: 1_000,
+            finishedAt: 2_000,
+          },
+          {
+            id: "qwen",
+            label: "Qwen Code",
+            status: "skipped",
+            detail: "Not installed",
+            finishedAt: 4_000,
+          },
+        ],
+      }),
+    });
+
+    render(
+      <SettingsScreen
+        desktopApi={{
+          listBackends: async () => ({ fetchedAt: 1000, backends: [] }),
+          ...catalog.api,
+        }}
+        initialSection="models"
+        settings={createSettingsState()}
+        onClose={() => undefined}
+      />,
+    );
+
+    expect(
+      await screen.findByText(
+        "Last refresh updated 1 provider in 0:12. Skipped Qwen Code (not installed).",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("list", { name: "Provider refresh" }),
+    ).not.toBeInTheDocument();
   });
 
   it("refreshes only Codex from the focused Codex screen", async () => {
@@ -8210,5 +8377,45 @@ function settingsQueryPage<T extends {
         launchpadPresent: Boolean(directory.launchpad), launchpadBackend: directory.launchpad?.backend,
       })),
     }),
+  };
+}
+
+function catalogRefreshState(
+  state: Omit<ProviderCatalogRefreshState, "runId" | "startedAt">
+    & Partial<Pick<ProviderCatalogRefreshState, "runId" | "startedAt">>,
+): ProviderCatalogRefreshState {
+  return { runId: 1, startedAt: 1_000, ...state };
+}
+
+function createCatalogRefreshApi() {
+  let listener: ((state: ProviderCatalogRefreshState) => void) | undefined;
+  const startProviderCatalogRefresh = vi.fn<
+    NonNullable<DesktopApi["startProviderCatalogRefresh"]>
+  >();
+  const cancelProviderCatalogRefresh = vi.fn<
+    NonNullable<DesktopApi["cancelProviderCatalogRefresh"]>
+  >(async () => ({}));
+  const readProviderCatalogRefresh = vi.fn<
+    NonNullable<DesktopApi["readProviderCatalogRefresh"]>
+  >(async () => ({}));
+  const onProviderCatalogRefresh: NonNullable<
+    DesktopApi["onProviderCatalogRefresh"]
+  > = (callback) => {
+    listener = callback;
+    return () => {
+      listener = undefined;
+    };
+  };
+  return {
+    api: {
+      cancelProviderCatalogRefresh,
+      onProviderCatalogRefresh,
+      readProviderCatalogRefresh,
+      startProviderCatalogRefresh,
+    } satisfies Partial<DesktopApi>,
+    cancelProviderCatalogRefresh,
+    emit: (state: ProviderCatalogRefreshState) => listener?.(state),
+    readProviderCatalogRefresh,
+    startProviderCatalogRefresh,
   };
 }

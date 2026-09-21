@@ -154,6 +154,9 @@ import type {
   StartCodexMcpServerLoginResponse,
   ListAcpAgentSettingsRequest,
   ListAcpAgentSettingsResponse,
+  CancelProviderCatalogRefreshRequest,
+  ProviderCatalogRefreshState,
+  ReadProviderCatalogRefreshResponse,
   AcknowledgeAcpAgentUpdateRequest,
   AcknowledgeAcpAgentUpdateResponse,
   ListDesktopPwrAgentProfilesResponse,
@@ -967,6 +970,15 @@ export type DesktopApi = {
   listAcpAgents?: (
     request?: ListAcpAgentSettingsRequest
   ) => Promise<ListAcpAgentSettingsResponse>;
+  /** Start the Settings all-provider catalog refresh, or join the one running. */
+  startProviderCatalogRefresh?: () => Promise<ProviderCatalogRefreshState>;
+  cancelProviderCatalogRefresh?: (
+    request: CancelProviderCatalogRefreshRequest,
+  ) => Promise<ReadProviderCatalogRefreshResponse>;
+  readProviderCatalogRefresh?: () => Promise<ReadProviderCatalogRefreshResponse>;
+  onProviderCatalogRefresh?: (
+    callback: (state: ProviderCatalogRefreshState) => void,
+  ) => () => void;
   acknowledgeAcpAgentUpdate?: (
     request: AcknowledgeAcpAgentUpdateRequest,
   ) => Promise<AcknowledgeAcpAgentUpdateResponse>;
