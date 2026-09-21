@@ -18819,6 +18819,16 @@ command = "pnpm grok"
       },
       threads: [],
     });
+    // Title generation runs in the background. Observe its actual rename
+    // boundary rather than assuming a fixed number of event-loop turns is enough.
+    let resolveRenamed!: () => void;
+    const renamed = new Promise<void>((resolve) => { resolveRenamed = resolve; });
+    const renameThread = codexClient.renameThread.bind(codexClient);
+    vi.spyOn(codexClient, "renameThread").mockImplementation(async (params) => {
+      const result = await renameThread(params);
+      resolveRenamed();
+      return result;
+    });
     const registry = new DesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
@@ -18843,7 +18853,7 @@ command = "pnpm grok"
       },
     });
 
-    await waitForCondition(() => codexClient.lastRenameThreadParams !== undefined);
+    await renamed;
     expect(titleService.generateTitle).toHaveBeenCalledWith({
       backend: "codex",
       threadId: "thread-1",
