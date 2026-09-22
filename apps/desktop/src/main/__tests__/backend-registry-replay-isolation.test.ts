@@ -83,11 +83,13 @@ vi.mock("../codex-app-server/client", () => ({
 
 const settingsState = vi.hoisted(() => ({
   codexEnv: undefined as NodeJS.ProcessEnv | undefined,
+  configOverrides: [] as string[],
 }));
 
 vi.mock("../settings/desktop-settings-singleton", () => ({
   getDesktopSettingsService: () => ({
     resolveCodexCommandPreference: () => undefined,
+    resolveCodexConfigOverrides: () => settingsState.configOverrides,
     resolveCodexSpawnEnv: () => settingsState.codexEnv,
     resolveCodexSpawnEnvAsync: async () => settingsState.codexEnv ?? process.env,
     resolveWorktreeStorage: () => "in-repo",
@@ -139,6 +141,7 @@ beforeEach(() => {
   constructorState.codexResolveArgs = [];
   constructorState.codexResolveEnvs = [];
   settingsState.codexEnv = undefined;
+  settingsState.configOverrides = [];
 });
 
 afterEach(() => {
@@ -205,6 +208,33 @@ describe("DesktopBackendRegistry replay isolation", () => {
     expect(constructorState.codexArgs).toEqual([undefined]);
 
     await registry.close();
+  });
+
+  it("resolves profile overlays at each connection without changing the Codex home", async () => {
+    const codexHome = path.join(os.tmpdir(), "pwragent-overlay-home");
+    settingsState.codexEnv = { CODEX_HOME: codexHome };
+    settingsState.configOverrides = ['model_provider="local"', 'model="fixture-one"'];
+    const registry = new DesktopBackendRegistry({ overlayStore: createOverlayStoreMock() });
+    try {
+      const resolveArgs = constructorState.codexResolveArgs[0]!;
+      const first = await resolveArgs(settingsState.codexEnv);
+      expect(first.slice(0, 4)).toEqual([
+        "-c", 'model_provider="local"', "-c", 'model="fixture-one"',
+      ]);
+      expect(first).toContain('approval_policy="on-request"');
+      expect(first).toContain('sandbox_mode="workspace-write"');
+      settingsState.configOverrides = ['model="fixture-two"'];
+      const second = await resolveArgs(settingsState.codexEnv);
+      expect(second).toContain('model="fixture-two"');
+      expect(second).not.toContain('model="fixture-one"');
+      expect(constructorState.codexEnvs[0]?.CODEX_HOME).toBe(codexHome);
+      settingsState.configOverrides = [];
+      expect(await resolveArgs({})).toEqual([
+        "-c", 'approval_policy="on-request"', "-c", 'sandbox_mode="workspace-write"',
+      ]);
+    } finally {
+      await registry.close();
+    }
   });
 
   it("passes the selected Codex home to the live client", async () => {

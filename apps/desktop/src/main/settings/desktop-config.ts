@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { validateCodexConfigOverrides } from "./codex-config-overrides";
 import os from "node:os";
 import path from "node:path";
 import type {
@@ -269,6 +270,7 @@ export type DesktopSettingsConfig = {
       path?: string;
       profile?: string;
       allowFast?: boolean;
+      configOverrides?: string[];
     };
   };
   acpAgents?: {
@@ -1479,6 +1481,12 @@ export function desktopSettingsPatchToEdits(
   if (patch.models?.codex?.profile !== undefined) {
     set(["models", "codex", "profile"], patch.models.codex.profile);
   }
+  if (patch.models?.codex?.configOverrides !== undefined) {
+    set(
+      ["models", "codex", "config_overrides"],
+      validateCodexConfigOverrides(patch.models.codex.configOverrides),
+    );
+  }
   if (patch.models?.codex?.allowFast !== undefined) {
     set(["models", "codex", "allow_fast"], patch.models.codex.allowFast);
   }
@@ -1666,7 +1674,9 @@ export function parseDesktopSettingsToml(
   contents: string,
   filePath: string,
 ): DesktopSettingsConfig {
-  return normalizeDesktopConfig(parseTomlTables(contents, filePath));
+  return normalizeDesktopConfig(parseTomlTables(contents, filePath, {
+    requiredValuePaths: ["models.codex.config_overrides"],
+  }));
 }
 
 function normalizeDesktopConfig(
@@ -2030,6 +2040,9 @@ function normalizeDesktopConfig(
         path: readString(codex?.path),
         profile: readString(codex?.profile),
         allowFast: readBoolean(codex?.allow_fast),
+        configOverrides: codex?.config_overrides === undefined
+          ? undefined
+          : validateCodexConfigOverrides(codex.config_overrides),
       },
     },
     acpAgents: {

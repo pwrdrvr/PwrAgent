@@ -175,6 +175,9 @@ export function normalizeConfigDomains(params: {
         ? true
         : config.acpAgents?.[provider]?.enabled !== false;
       const dependencyFingerprint = providerDependencyFingerprint({
+        configOverrides: provider === "codex"
+          ? config.models?.codex?.configOverrides
+          : undefined,
         commandOverride,
         enabled,
         managedBuilds:
@@ -284,6 +287,7 @@ export function providerLastKnownGoodMatchesConfig(
 }
 
 export function providerDependencyFingerprint(params: {
+  configOverrides?: readonly string[];
   commandOverride?: string;
   enabled: boolean;
   managedBuilds?: boolean;
@@ -293,6 +297,7 @@ export function providerDependencyFingerprint(params: {
   return createHash("sha256")
     .update(JSON.stringify({
       arch: process.arch,
+      ...(params.configOverrides?.length ? { configOverrides: params.configOverrides } : {}),
       commandOverride: params.commandOverride ?? "",
       enabled: params.enabled,
       managedBuilds: params.managedBuilds ?? null,

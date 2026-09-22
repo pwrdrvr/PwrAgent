@@ -8031,6 +8031,58 @@ describe("DesktopBackendRegistry", () => {
     }
   });
 
+  it("invalidates only Codex and waits for idle when a profile overlay changes", async () => {
+    const tempRoot = await mkdtemp(
+      path.join(os.tmpdir(), "pwragent-backend-registry-"),
+    );
+    const configPath = path.join(tempRoot, "config.toml");
+    await writeFile(
+      configPath,
+      `[models.codex]\nconfig_overrides = ['model="fixture-one"']\n`,
+    );
+    const configStore = new DesktopConfigStore({ configPath });
+    const codexClient = new MockBackendClient({});
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+      acpAgentStore: createAcpAgentStoreMock([]),
+      configStore,
+      discoverLocalAcpAgents: async () => [],
+    });
+    const invalidate = vi.spyOn(registry, "invalidateProviderRuntimeSelections");
+    const internals = registry as unknown as {
+      activeTurnKeys: Set<string>;
+      maybeRestartCodexForManagedRuntimeChange(): Promise<boolean>;
+    };
+    internals.activeTurnKeys.add("codex:thread-1:turn-1");
+
+    try {
+      await writeFile(
+        configPath,
+        `[models.codex]\nconfig_overrides = ['model="fixture-two"']\n`,
+      );
+      configStore.reloadFromDisk("watch");
+
+      await vi.waitFor(() => {
+        expect(invalidate).toHaveBeenCalledExactlyOnceWith({
+          acp: false,
+          acpRegistryIds: [],
+          codex: true,
+        });
+      });
+      await registry.synchronizeProviderRuntimeSelections();
+      expect(invalidate).toHaveBeenCalledTimes(1);
+      expect(codexClient.closeCallCount).toBe(0);
+      internals.activeTurnKeys.delete("codex:thread-1:turn-1");
+      await expect(internals.maybeRestartCodexForManagedRuntimeChange()).resolves.toBe(true);
+      expect(codexClient.closeCallCount).toBe(1);
+    } finally {
+      await registry.close();
+      configStore.dispose();
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
   it("omits disabled persisted ACP agents from backend pickers", async () => {
     const tempRoot = await mkdtemp(
       path.join(os.tmpdir(), "pwragent-backend-registry-"),
