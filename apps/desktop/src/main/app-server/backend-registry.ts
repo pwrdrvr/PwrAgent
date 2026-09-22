@@ -96,12 +96,17 @@ import {
   normalizeRenamedTitleSource,
   resolveTokenUsagePriceUnavailableReason,
   shortenDerivedThreadTitle,
+  threadSeenWatermark,
   type AgentEvent,
   type ArchiveWorktreeRequest,
   type ArchiveWorktreeResponse,
   type ArchiveThreadRequest,
   type ArchiveThreadCleanupResult,
   type ArchiveThreadResponse,
+  type MarkThreadSeenRequest,
+  type MarkThreadSeenResponse,
+  type SetThreadPinRequest,
+  type SetThreadPinResponse,
   type AppServerListSkillsResponse,
   type AppServerNotification,
   type AppServerPendingRequestNotification,
@@ -7766,6 +7771,15 @@ function threadOrchestrationFailure(
   };
 }
 
+/** See `DesktopBackendRegistry.setAgentThreadActions`. */
+export type AgentThreadActions = {
+  archiveThread: (request: ArchiveThreadRequest) => Promise<ArchiveThreadResponse>;
+  setThreadPin: (request: SetThreadPinRequest) => Promise<SetThreadPinResponse>;
+  markThreadSeen: (
+    request: MarkThreadSeenRequest,
+  ) => Promise<MarkThreadSeenResponse>;
+};
+
 function threadInspectionFailure(
   code: PwrAgentThreadInspectionErrorCode,
   message: string,
@@ -8648,9 +8662,7 @@ export class DesktopBackendRegistry {
   private automationInspectionHandler?: AutomationInspectionHandler;
   private appManagementHandler?: PwrAgentAppManagementHandler;
   private starMapHandler?: PwrAgentStarMapHandler;
-  private agentThreadArchiver?: (
-    request: ArchiveThreadRequest,
-  ) => Promise<ArchiveThreadResponse>;
+  private agentThreadActions?: AgentThreadActions;
   private messagingAgentToolService?: MessagingAgentToolService;
   private readonly messagingHandler: PwrAgentMessagingHandler =
     async (request) => {
@@ -9918,18 +9930,15 @@ export class DesktopBackendRegistry {
   }
 
   /**
-   * How an Agent tool archives a local thread. The app's own archive path
-   * also ungroups remote children through the federation runtime, which
-   * this registry cannot reach; installing that path here makes an archive
-   * from `mutate_thread` the same as one from a thread's context menu.
+   * How an Agent tool archives, pins, or marks a local thread read: the
+   * app's own paths, installed so `mutate_thread` does exactly what a
+   * thread's context menu does. The archive path also ungroups remote
+   * children through the federation runtime, which this registry cannot
+   * reach, and the pin and seen paths publish the events every window
+   * redraws from.
    */
-  setAgentThreadArchiver(
-    archiver:
-      | ((request: ArchiveThreadRequest) => Promise<ArchiveThreadResponse>)
-      | null
-      | undefined,
-  ): void {
-    this.agentThreadArchiver = archiver ?? undefined;
+  setAgentThreadActions(actions: AgentThreadActions | null | undefined): void {
+    this.agentThreadActions = actions ?? undefined;
   }
 
   setPwrAgentStarMapHandler(
@@ -37961,13 +37970,19 @@ export class DesktopBackendRegistry {
       projectPath = args.projectPath.trim();
     }
 
-    const archive = Object.hasOwn(args, "archive");
-    if (archive && args.archive !== true) {
-      return threadInspectionFailure(
-        "invalid_arguments",
-        "archive only accepts true. An archived thread is restored from Settings → Archived Threads.",
-      );
+    for (const field of ["archive", "pinned", "unread"] as const) {
+      if (Object.hasOwn(args, field) && typeof args[field] !== "boolean") {
+        return threadInspectionFailure(
+          "invalid_arguments",
+          field === "archive"
+            ? "archive must be true to archive the thread or false to restore it."
+            : `${field} must be a boolean when provided.`,
+        );
+      }
     }
+    const archive = args.archive;
+    const pinned = args.pinned;
+    const unread = args.unread;
 
     const changes: ThreadMutationAppliedChange[] = [];
     if (title !== undefined) {
@@ -37998,11 +38013,25 @@ export class DesktopBackendRegistry {
         to: projectPath,
       });
     }
-    if (archive) {
+    if (archive !== undefined) {
       changes.push({
         field: "archive",
         status: dryRun ? "would_apply" : "applied",
-        to: true,
+        to: archive,
+      });
+    }
+    if (pinned !== undefined) {
+      changes.push({
+        field: "pinned",
+        status: dryRun ? "would_apply" : "applied",
+        to: pinned,
+      });
+    }
+    if (unread !== undefined) {
+      changes.push({
+        field: "unread",
+        status: dryRun ? "would_apply" : "applied",
+        to: unread,
       });
     }
 
@@ -38012,21 +38041,21 @@ export class DesktopBackendRegistry {
         error: {
           code: "invalid_arguments",
           message:
-            "At least one mutation field is required: title, model, serviceTier, reasoningEffort, fastMode, executionMode, projectPath, or archive.",
+            "At least one mutation field is required: title, model, serviceTier, reasoningEffort, fastMode, executionMode, projectPath, archive, pinned, or unread.",
         },
       };
     }
-    if (archive && changes.length > 1) {
+    if (archive !== undefined && changes.length > 1) {
       return threadInspectionFailure(
         "invalid_arguments",
-        "archive cannot be combined with other changes: an archived thread has no settings left to change.",
+        "archive cannot be combined with other changes. Archive or restore the thread in a call of its own.",
       );
     }
     // The turn making this call runs in the invoking thread. Archiving it or
     // relinking its workspace would pull that thread out from under the turn
     // that still has to report the result.
     if (
-      (archive || projectPath !== undefined)
+      (archive === true || projectPath !== undefined)
       && context
       && !instanceId
       && args.backend === context.backend
@@ -38070,7 +38099,9 @@ export class DesktopBackendRegistry {
           ...(modelSettings.value ? { modelSettings: modelSettings.value } : {}),
           ...(executionMode !== undefined ? { executionMode } : {}),
           ...(projectPath !== undefined ? { projectPath } : {}),
-          ...(archive ? { archive: true } : {}),
+          ...(archive !== undefined ? { archive } : {}),
+          ...(pinned !== undefined ? { pinned } : {}),
+          ...(unread !== undefined ? { unread } : {}),
           dryRun,
         });
       } catch (error) {
@@ -38089,22 +38120,62 @@ export class DesktopBackendRegistry {
       );
     }
 
-    // Archiving a thread mid-turn orphans the turn: the provider keeps
-    // running work nothing will show. Refused on a dry run too, so a preview
-    // tells the Agent what the real call would say.
-    if (mutateLocally && archive && this.threadHasActiveTurn(threadId, args.backend)) {
-      return threadInspectionFailure(
-        "forbidden",
-        `Thread ${args.backend}:${threadId} has a turn running. Stop it with stop_thread before archiving it.`,
-      );
+    // Everything below is checked before anything changes, and on a dry run
+    // too, so a preview tells the Agent what the real call would say.
+    const threadLabel = `Thread ${args.backend}:${threadId}`;
+    if (mutateLocally) {
+      // Known only when the backend listed the thread; an overlay-only hit
+      // leaves the question to the archive call itself.
+      const archivedAt = localSummary?.archivedAt;
+      if (archive === true && archivedAt !== undefined) {
+        return threadInspectionFailure(
+          "invalid_arguments",
+          `${threadLabel} is already archived.`,
+        );
+      }
+      if (archive === false && localSummary && archivedAt === undefined) {
+        return threadInspectionFailure(
+          "invalid_arguments",
+          `${threadLabel} is not archived.`,
+        );
+      }
+      // Archiving a thread mid-turn orphans the turn: the provider keeps
+      // running work nothing will show.
+      if (archive === true && this.threadHasActiveTurn(threadId, args.backend)) {
+        return threadInspectionFailure(
+          "forbidden",
+          `${threadLabel} has a turn running. Stop it with stop_thread before archiving it.`,
+        );
+      }
+      // Unread is a seen watermark behind the thread's last update, and a
+      // thread with no update time has nothing to put it behind.
+      if (unread === true && localSummary?.updatedAt === undefined) {
+        return threadInspectionFailure(
+          "invalid_arguments",
+          `${threadLabel} has no update time to mark unread against.`,
+        );
+      }
+      if (
+        (pinned !== undefined || unread !== undefined)
+        && !this.agentThreadActions
+      ) {
+        return threadInspectionFailure(
+          "internal_error",
+          "Pinning and read state are not available in this process.",
+        );
+      }
     }
 
-    if (mutateLocally && archive && !dryRun) {
-      const archiveThread = this.agentThreadArchiver
-        ?? (async (request: ArchiveThreadRequest) =>
-          await this.archiveThread(request));
+    if (mutateLocally && archive !== undefined && !dryRun) {
       try {
-        await archiveThread({ backend: args.backend, threadId });
+        if (archive) {
+          const archiveThread = this.agentThreadActions?.archiveThread
+            ?? (async (request: ArchiveThreadRequest) =>
+              await this.archiveThread(request));
+          await archiveThread({ backend: args.backend, threadId });
+        } else {
+          await this.restoreThread({ backend: args.backend, threadId });
+        }
       } catch (error) {
         return federatedThreadInspectionFailure(error);
       }
@@ -38151,6 +38222,22 @@ export class DesktopBackendRegistry {
         backend: args.backend,
         threadId,
         executionMode,
+      });
+    }
+
+    if (mutateLocally && pinned !== undefined && !dryRun) {
+      await this.agentThreadActions?.setThreadPin({
+        backend: args.backend,
+        threadId,
+        pinned,
+      });
+    }
+
+    if (mutateLocally && unread !== undefined && !dryRun) {
+      await this.agentThreadActions?.markThreadSeen({
+        backend: args.backend,
+        threadId,
+        ...threadSeenWatermark(localSummary?.updatedAt, unread),
       });
     }
 

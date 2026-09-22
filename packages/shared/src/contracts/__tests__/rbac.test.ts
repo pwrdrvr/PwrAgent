@@ -407,6 +407,20 @@ describe("action → permission lookup tables", () => {
     expect(permissionsForThreadMutation({ archive: true })).toEqual([
       "thread.control.archive",
     ]);
+    // A restore brings back what an archive removed, so it asks the same.
+    expect(permissionsForThreadMutation({ archive: false })).toEqual([
+      "thread.control.archive",
+    ]);
+    expect(
+      permissionsForThreadMutation({ pinned: true, unread: false }),
+    ).toEqual(["thread.control.organize"]);
+  });
+
+  it("lets a Power User pin and mark read, as they can rename", () => {
+    const powerUser = BUILT_IN_ROLES.find(
+      (role) => role.id === RBAC_BUILT_IN_ROLE_IDS.powerUser,
+    );
+    expect(powerUser?.permissions).toContain("thread.control.organize");
   });
 
   it("keeps archiving opt-in for every built-in role but Admin", () => {

@@ -93,8 +93,15 @@ describe("federated thread mutation service", () => {
     expect(backend.renameThread).not.toHaveBeenCalled();
   });
 
-  describe("archive and project moves", () => {
-    function peerOwning(threadStatus: "active" | "idle") {
+  describe("archive, restore, pins, read state and project moves", () => {
+    function peerOwning(
+      threadStatus: "active" | "idle",
+      options: {
+        archivedAt?: number;
+        updatedAt?: number;
+        capabilities?: string[];
+      } = {},
+    ) {
       const backend = {
         resolveThread: vi.fn(async () => ({
           thread: {
@@ -103,6 +110,12 @@ describe("federated thread mutation service", () => {
             title: "Remote thread",
             linkedDirectories: [],
             threadStatus,
+            ...(options.archivedAt !== undefined
+              ? { archivedAt: options.archivedAt }
+              : {}),
+            ...(options.updatedAt !== undefined
+              ? { updatedAt: options.updatedAt }
+              : {}),
           },
         })),
         renameThread: vi.fn(async (request) => request),
@@ -112,19 +125,32 @@ describe("federated thread mutation service", () => {
           archivedAt: 1,
           cleanup: [],
         })),
+        restoreThread: vi.fn(async () => ({
+          backend: "codex",
+          threadId: "remote-thread",
+          restoredAt: 2,
+        })),
+        setThreadPin: vi.fn(async (request) => request),
+        markThreadSeen: vi.fn(async (request) => request),
         handoffThreadWorkspace: vi.fn(async () => ({})),
       };
+      const target = { scope: "remote" as const, instanceId: "pwr_owner" };
       const runtime = {
         connectedPeerTargets: () => [{
-          target: { scope: "remote" as const, instanceId: "pwr_owner" },
+          target,
           label: "Owner Mac",
-          capabilities: ["thread_navigation", "turn_control"],
+          capabilities: options.capabilities ?? ["thread_navigation", "turn_control"],
         }],
         remoteBackend: () => backend,
-      } as unknown as DesktopFederationRuntime;
+        assertRemoteNavigationQueryProtocol: vi.fn(),
+      };
       return {
         backend,
-        handler: createFederatedThreadMutationHandler({ runtime: () => runtime }),
+        runtime,
+        target,
+        handler: createFederatedThreadMutationHandler({
+          runtime: () => runtime as unknown as DesktopFederationRuntime,
+        }),
       };
     }
 
@@ -153,6 +179,100 @@ describe("federated thread mutation service", () => {
         archive: true,
         dryRun: true,
       })).rejects.toMatchObject({ code: "forbidden" });
+      expect(backend.archiveThread).not.toHaveBeenCalled();
+    });
+
+    it("restores an archived thread on its owner, and only an archived one", async () => {
+      const archived = peerOwning("idle", { archivedAt: 1_000 });
+      const live = peerOwning("idle");
+
+      await archived.handler({
+        backend: "codex",
+        threadId: "remote-thread",
+        archive: false,
+        dryRun: false,
+      });
+      await expect(live.handler({
+        backend: "codex",
+        threadId: "remote-thread",
+        archive: false,
+        dryRun: false,
+      })).rejects.toMatchObject({ code: "invalid_arguments" });
+      await expect(archived.handler({
+        backend: "codex",
+        threadId: "remote-thread",
+        archive: true,
+        dryRun: false,
+      })).rejects.toMatchObject({ code: "invalid_arguments" });
+
+      expect(archived.backend.restoreThread).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "remote-thread",
+      });
+      expect(live.backend.restoreThread).not.toHaveBeenCalled();
+      expect(archived.backend.archiveThread).not.toHaveBeenCalled();
+    });
+
+    it("sends the operator to Settings when the peer is too old to restore", async () => {
+      const { backend, handler } = peerOwning("idle", { archivedAt: 1_000 });
+      backend.restoreThread.mockRejectedValueOnce(
+        Object.assign(new Error("Unknown method backend.restoreThread"), {
+          code: "method_not_found",
+        }),
+      );
+
+      await expect(handler({
+        backend: "codex",
+        threadId: "remote-thread",
+        archive: false,
+        dryRun: false,
+      })).rejects.toMatchObject({
+        code: "invalid_arguments",
+        message: expect.stringContaining("Settings → Archived Threads"),
+      });
+    });
+
+    it("pins and marks read on a peer that grants navigation alone", async () => {
+      // Pin and read state are the owner's browse-level calls: asking for
+      // turn control too would refuse a peer that allows exactly these.
+      const { backend, handler, runtime, target } = peerOwning("idle", {
+        updatedAt: 5_000,
+        capabilities: ["thread_navigation"],
+      });
+
+      await handler({
+        backend: "codex",
+        threadId: "remote-thread",
+        pinned: true,
+        unread: true,
+        dryRun: false,
+      });
+
+      expect(runtime.assertRemoteNavigationQueryProtocol)
+        .toHaveBeenCalledWith(target);
+      expect(backend.setThreadPin).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "remote-thread",
+        pinned: true,
+      });
+      expect(backend.markThreadSeen).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "remote-thread",
+        seenUpdatedAt: 4_999,
+      });
+    });
+
+    it("still needs turn control for an archive", async () => {
+      const { backend, handler } = peerOwning("idle", {
+        capabilities: ["thread_navigation"],
+      });
+
+      await expect(handler({
+        backend: "codex",
+        threadId: "remote-thread",
+        archive: true,
+        dryRun: false,
+      })).rejects.toThrow("does not grant turn_control");
       expect(backend.archiveThread).not.toHaveBeenCalled();
     });
 

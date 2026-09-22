@@ -61,6 +61,8 @@ import type {
   DesktopProviderThreadModelMigration,
   HandoffThreadWorkspaceResponse,
   LinkedDirectorySummary,
+  MarkThreadSeenRequest,
+  SetThreadPinRequest,
   NavigationLaunchpadDefaults,
   NavigationSnapshot,
   NavigationLaunchpadDraft,
@@ -43768,10 +43770,34 @@ script = "printf setup"
     await registry.close();
   });
 
-  describe("mutate_thread archive and project moves", () => {
-    async function setup(options: { targetActive?: boolean } = {}) {
+  describe("mutate_thread archive, restore, pins, read state and project moves", () => {
+    function listedThread(
+      id: string,
+      overrides: Partial<AppServerThreadSummary> = {},
+    ): AppServerThreadSummary {
+      return {
+        id,
+        title: `Thread ${id}`,
+        titleSource: "explicit",
+        source: "codex",
+        linkedDirectories: [],
+        ...overrides,
+      };
+    }
+
+    async function setup(
+      options: {
+        targetActive?: boolean;
+        threads?: AppServerThreadSummary[];
+        archivedThreads?: AppServerThreadSummary[];
+      } = {},
+    ) {
       const codexClient = new MockBackendClient({
         initializeResult: { methods: ["thread/list"] },
+        ...(options.threads ? { threads: options.threads } : {}),
+        ...(options.archivedThreads
+          ? { archivedThreads: options.archivedThreads }
+          : {}),
       });
       const registry = new DesktopBackendRegistry({
         codexClient,
@@ -43793,10 +43819,32 @@ script = "printf setup"
         archivedAt: 1,
         cleanup: [],
       }));
-      registry.setAgentThreadArchiver(archiver);
+      const setThreadPin = vi.fn(async (request: SetThreadPinRequest) => ({
+        backend: request.backend ?? "codex",
+        threadId: request.threadId,
+        ...(request.pinned ? { pinnedRank: "a0" } : {}),
+      }));
+      const markThreadSeen = vi.fn(async (request: MarkThreadSeenRequest) => ({
+        backend: request.backend ?? "codex",
+        threadId: request.threadId,
+        seenAt: 1,
+        seenUpdatedAt: request.seenUpdatedAt,
+      }));
+      registry.setAgentThreadActions({
+        archiveThread: archiver,
+        setThreadPin,
+        markThreadSeen,
+      });
       const handoff = vi
         .spyOn(registry, "handoffThreadWorkspace")
         .mockResolvedValue({} as HandoffThreadWorkspaceResponse);
+      const restore = vi
+        .spyOn(registry, "restoreThread")
+        .mockImplementation(async (request) => ({
+          backend: request.backend,
+          threadId: request.threadId,
+          restoredAt: 1,
+        }));
       const running = [
         "agent-thread",
         ...(options.targetActive ? ["target-thread"] : []),
@@ -43835,7 +43883,16 @@ script = "printf setup"
           payload: JSON.parse(response.contentItems[0]!.text),
         };
       };
-      return { archiver, call, codexClient, handoff, registry };
+      return {
+        archiver,
+        call,
+        codexClient,
+        handoff,
+        markThreadSeen,
+        registry,
+        restore,
+        setThreadPin,
+      };
     }
 
     it("archives a local thread through the app's own archive path", async () => {
@@ -43897,16 +43954,121 @@ script = "printf setup"
       await registry.close();
     });
 
-    it("archives alone, and only with true", async () => {
-      const { archiver, call, registry } = await setup();
+    it("archives and restores alone, and only with a boolean", async () => {
+      const { archiver, call, registry, restore } = await setup();
 
       const combined = await call({ archive: true, title: "Last words" });
-      const falsy = await call({ archive: false });
+      const restoreAndPin = await call({ archive: false, pinned: true });
+      const loose = await call({ archive: "yes" });
 
       expect(combined.payload.code).toBe("invalid_arguments");
-      expect(falsy.payload.code).toBe("invalid_arguments");
-      expect(falsy.payload.message).toMatch(/Archived Threads/);
+      expect(restoreAndPin.payload.code).toBe("invalid_arguments");
+      expect(loose.payload.code).toBe("invalid_arguments");
       expect(archiver).not.toHaveBeenCalled();
+      expect(restore).not.toHaveBeenCalled();
+      await registry.close();
+    });
+
+    it("restores an archived thread, and says so for one that is not", async () => {
+      const { archiver, call, registry, restore } = await setup({
+        threads: [listedThread("target-thread")],
+        archivedThreads: [listedThread("gone-thread", { archivedAt: 1_000 })],
+      });
+
+      const restored = await call({ threadId: "gone-thread", archive: false });
+      const notArchived = await call({ archive: false });
+      const twice = await call({ threadId: "gone-thread", archive: true });
+
+      expect(restored.success).toBe(true);
+      expect(restored.payload.mutation.changes).toEqual([
+        { field: "archive", status: "applied", to: false },
+      ]);
+      expect(restore).toHaveBeenCalledTimes(1);
+      expect(restore).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "gone-thread",
+      });
+      expect(notArchived.payload).toEqual({
+        code: "invalid_arguments",
+        message: "Thread codex:target-thread is not archived.",
+      });
+      expect(twice.payload).toEqual({
+        code: "invalid_arguments",
+        message: "Thread codex:gone-thread is already archived.",
+      });
+      expect(archiver).not.toHaveBeenCalled();
+      await registry.close();
+    });
+
+    it("pins and marks a thread read through the app's own paths", async () => {
+      const { call, markThreadSeen, registry, setThreadPin } = await setup({
+        threads: [listedThread("target-thread", { updatedAt: 5_000 })],
+      });
+
+      const result = await call({ pinned: true, unread: false });
+
+      expect(result.payload.mutation.changes).toEqual([
+        { field: "pinned", status: "applied", to: true },
+        { field: "unread", status: "applied", to: false },
+      ]);
+      expect(setThreadPin).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "target-thread",
+        pinned: true,
+      });
+      // At the thread's last update: without a watermark the store keeps
+      // the old one, and the thread stays unread.
+      expect(markThreadSeen).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "target-thread",
+        seenUpdatedAt: 5_000,
+      });
+      await registry.close();
+    });
+
+    it("marks a thread unread one tick behind its last update", async () => {
+      const { call, markThreadSeen, registry, setThreadPin } = await setup({
+        threads: [listedThread("target-thread", { updatedAt: 5_000 })],
+      });
+
+      await call({ unread: true, pinned: false });
+
+      expect(markThreadSeen).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "target-thread",
+        seenUpdatedAt: 4_999,
+      });
+      expect(setThreadPin).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "target-thread",
+        pinned: false,
+      });
+      await registry.close();
+    });
+
+    it("cannot mark unread a thread with no update time", async () => {
+      const { call, markThreadSeen, registry } = await setup();
+
+      const result = await call({ unread: true });
+
+      expect(result.payload.code).toBe("invalid_arguments");
+      expect(markThreadSeen).not.toHaveBeenCalled();
+      await registry.close();
+    });
+
+    it("previews pins and read state without changing them", async () => {
+      const { call, markThreadSeen, registry, setThreadPin } = await setup({
+        threads: [listedThread("target-thread", { updatedAt: 5_000 })],
+      });
+
+      const result = await call({ pinned: true, unread: true, dryRun: true });
+
+      expect(result.payload.mutation.changes).toEqual([
+        { field: "pinned", status: "would_apply", to: true },
+        { field: "unread", status: "would_apply", to: true },
+      ]);
+      expect(setThreadPin).not.toHaveBeenCalled();
+      expect(markThreadSeen).not.toHaveBeenCalled();
       await registry.close();
     });
 
@@ -43975,7 +44137,7 @@ script = "printf setup"
       await registry.close();
     });
 
-    it("hands an archive or a move to the peer that owns the thread", async () => {
+    it("hands an archive, a restore, a move or a pin to the peer that owns the thread", async () => {
       const codexClient = new MockBackendClient({
         initializeResult: { methods: ["thread/list"] },
         listThreadsError: new Error("local codex backend unavailable"),
@@ -44018,6 +44180,8 @@ script = "printf setup"
 
       await call({ archive: true });
       await call({ projectPath: "/Users/studio/repos/app" });
+      await call({ archive: false });
+      await call({ pinned: true, unread: false });
 
       expect(mutationHandler).toHaveBeenNthCalledWith(1, {
         backend: "codex",
@@ -44029,6 +44193,19 @@ script = "printf setup"
         backend: "codex",
         threadId: "remote-thread",
         projectPath: "/Users/studio/repos/app",
+        dryRun: false,
+      });
+      expect(mutationHandler).toHaveBeenNthCalledWith(3, {
+        backend: "codex",
+        threadId: "remote-thread",
+        archive: false,
+        dryRun: false,
+      });
+      expect(mutationHandler).toHaveBeenNthCalledWith(4, {
+        backend: "codex",
+        threadId: "remote-thread",
+        pinned: true,
+        unread: false,
         dryRun: false,
       });
       await registry.close();
