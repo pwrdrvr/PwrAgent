@@ -1,3 +1,4 @@
+import { setGitCommandResolver } from "../git-command";
 import { codexAuthState } from "../codex-auth-state";
 import { app, safeStorage } from "electron";
 import { DesktopSettingsService } from "./desktop-settings-service";
@@ -79,6 +80,8 @@ export function getDesktopSettingsService(): DesktopSettingsService {
         }
       },
     });
+    const service = desktopSettingsService;
+    setGitCommandResolver(() => service.resolveGitCommandPreference());
     unsubscribeAuth = codexAuthState.subscribe(() => {
       for (const webContents of subscribersForChannel(SETTINGS_RUNTIME_CHANGED_EVENT_CHANNEL)) {
         webContents.send(SETTINGS_RUNTIME_CHANGED_EVENT_CHANNEL);
@@ -109,5 +112,6 @@ export function resetDesktopSettingsServiceForTests(): void {
   unsubscribeAuth?.();
   unsubscribeAuth = undefined;
   desktopSettingsService = undefined;
+  setGitCommandResolver(undefined);
   disposeDesktopConfigStore();
 }

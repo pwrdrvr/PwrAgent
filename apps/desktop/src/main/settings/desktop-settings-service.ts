@@ -1,4 +1,5 @@
-import { bundledGitEnvironment, bundledGitExecutable, bundledGitLfsExecutable } from "../bundled-git";
+import { bundledGitExecutable, bundledGitLfsExecutable } from "../bundled-git";
+import { gitRuntimeEnvironment } from "../git-runtime";
 import { getAppStateDb } from "../state/app-state";
 import {
   DESKTOP_UI_LAYOUT_DEFAULTS,
@@ -213,7 +214,7 @@ import {
   type ResolvedCodexCommandCandidate,
 } from "@pwrdrvr/codex-discovery";
 import { discoverDesktopApplications } from "./application-discovery";
-import { discoverGitCommands } from "./git-discovery";
+import { GIT_COMMAND_ENV, discoverGitCommands } from "./git-discovery";
 import { discoverGlabCommands } from "./glab-discovery";
 import { discoverGhCommands } from "./gh-discovery";
 import { getMainLogger } from "../log";
@@ -1503,7 +1504,7 @@ export class DesktopSettingsService {
           discovery: ghDiscovery,
         },
         git: {
-          path: { value: bundledGitExecutable(), source: "default" },
+          path: this.resolveString(config.applications?.git?.path, GIT_COMMAND_ENV),
           discovery: gitDiscovery,
         },
       },
@@ -2645,7 +2646,8 @@ export class DesktopSettingsService {
       ?? (shouldResolveManagedGrok
         ? this.options.resolveActiveManagedGrokCommand?.()
         : undefined);
-    return [bundledGitExecutable(), bundledGitLfsExecutable(), codexCommand, grokCommand].filter(
+    const gitCommand = this.resolveGitCommandPreference();
+    return [gitCommand ?? bundledGitExecutable(), ...(gitCommand ? [] : [bundledGitLfsExecutable()]), codexCommand, grokCommand].filter(
       (command): command is string => command !== undefined,
     );
   }
@@ -2770,7 +2772,7 @@ export class DesktopSettingsService {
     }
 
     if (this.codexSpawnEnvHydrationPromise) {
-      return await this.codexSpawnEnvHydrationPromise;
+      return this.applyGitRuntime(await this.codexSpawnEnvHydrationPromise);
     }
 
     const targetEnv = this.ensureBaseCodexSpawnEnv();
@@ -2806,7 +2808,7 @@ export class DesktopSettingsService {
           hadHomebrewPrefix: Boolean(shellEnv.HOMEBREW_PREFIX),
         });
         mergePwrAgentChildProcessEnv(targetEnv, shellEnv);
-        const bundledEnv = bundledGitEnvironment(targetEnv);
+        const bundledEnv = gitRuntimeEnvironment(targetEnv, this.resolveGitCommandPreference());
         for (const key of Object.keys(targetEnv)) delete targetEnv[key];
         Object.assign(targetEnv, bundledEnv);
         if (this.startupCodexHome) {
@@ -2839,7 +2841,7 @@ export class DesktopSettingsService {
     }
 
     if (this.terminalSpawnEnvHydrationPromise) {
-      return await this.terminalSpawnEnvHydrationPromise;
+      return this.applyGitRuntime(await this.terminalSpawnEnvHydrationPromise);
     }
 
     const targetEnv = this.ensureBaseTerminalSpawnEnv();
@@ -2864,7 +2866,7 @@ export class DesktopSettingsService {
         hadHomebrewPrefix: Boolean(shellEnv.HOMEBREW_PREFIX),
       });
       mergePwrAgentChildProcessEnv(targetEnv, shellEnv);
-      const bundledEnv = bundledGitEnvironment(targetEnv);
+      const bundledEnv = gitRuntimeEnvironment(targetEnv, this.resolveGitCommandPreference());
       for (const key of Object.keys(targetEnv)) delete targetEnv[key];
       Object.assign(targetEnv, bundledEnv);
       if (this.startupCodexHome) {
@@ -2873,14 +2875,14 @@ export class DesktopSettingsService {
       return targetEnv;
     });
 
-    return await this.terminalSpawnEnvHydrationPromise;
+    return this.applyGitRuntime(await this.terminalSpawnEnvHydrationPromise);
   }
 
   private ensureBaseCodexSpawnEnv(): NodeJS.ProcessEnv {
     this.codexSpawnEnv ??= this.withStartupCodexHome(
       buildPwrAgentChildProcessEnv(this.env),
     );
-    return this.codexSpawnEnv;
+    return this.applyGitRuntime(this.codexSpawnEnv);
   }
 
   /**
@@ -2971,11 +2973,18 @@ export class DesktopSettingsService {
     this.terminalSpawnEnv ??= this.withStartupCodexHome(
       buildPwrAgentChildProcessEnv(this.env),
     );
-    return this.terminalSpawnEnv;
+    return this.applyGitRuntime(this.terminalSpawnEnv);
+  }
+
+  private applyGitRuntime(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+    const next = gitRuntimeEnvironment(env, this.resolveGitCommandPreference());
+    for (const key of Object.keys(env)) delete env[key];
+    Object.assign(env, next);
+    return env;
   }
 
   private withStartupCodexHome(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-    env = bundledGitEnvironment(env);
+    env = gitRuntimeEnvironment(env, this.resolveGitCommandPreference());
     if (!this.startupCodexHome) return env;
     return {
       ...env,
@@ -3038,6 +3047,11 @@ export class DesktopSettingsService {
       || configured
       || undefined
     );
+  }
+
+  resolveGitCommandPreference(): string | undefined {
+    return readEnvString(this.env, GIT_COMMAND_ENV)
+      ?? (this.configStore.read("applications").git?.path?.trim() || undefined);
   }
 
   private readConfig(): ConfigReadResult {

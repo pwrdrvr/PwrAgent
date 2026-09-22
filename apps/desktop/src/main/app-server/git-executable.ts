@@ -2,7 +2,7 @@ import { execFile as execFileCallback, spawn } from "node:child_process";
 import os from "node:os";
 import { promisify } from "node:util";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
-import { bundledGitEnvironment, validateBundledGit } from "../bundled-git";
+import { gitRuntimeEnvironment, resolveRuntimeGitExecutable } from "../git-runtime";
 import { startWindowsJobReadyPoll, wrapCommandInWindowsJob } from "../windows-job-wrapper";
 import { terminateOwnedProcessTree } from "../process-tree";
 
@@ -10,14 +10,14 @@ const execFile = promisify(execFileCallback);
 
 function gitEnvironment(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return {
-    ...bundledGitEnvironment(buildPwrAgentChildProcessEnv(env)),
+    ...gitRuntimeEnvironment(buildPwrAgentChildProcessEnv(env)),
     GIT_TERMINAL_PROMPT: "0",
     GCM_INTERACTIVE: "Never",
   };
 }
 
-export async function resolveGitExecutable(_env?: NodeJS.ProcessEnv): Promise<string> {
-  return await validateBundledGit();
+export async function resolveGitExecutable(env: NodeJS.ProcessEnv = process.env): Promise<string> {
+  return await resolveRuntimeGitExecutable(env);
 }
 
 export async function runGitCommand(
@@ -37,7 +37,7 @@ export async function runGitCommand(
 }> {
   const env = gitEnvironment(options.env ?? process.env);
   options.signal?.throwIfAborted();
-  const git = await resolveGitExecutable(env);
+  const git = await resolveGitExecutable(options.env ?? process.env);
   const gitArgs = ["-C", cwd, ...args];
   const windowsJobLaunch =
     process.platform === "win32" && options.ownProcessTree
@@ -90,7 +90,7 @@ export async function streamGitCommand(
   },
 ): Promise<{ stopped: boolean }> {
   const env = gitEnvironment(options.env ?? process.env);
-  const command = await resolveGitExecutable(env);
+  const command = await resolveGitExecutable(options.env ?? process.env);
   const gitArgs = ["-C", cwd, ...args];
   const job = process.platform === "win32"
     ? wrapCommandInWindowsJob({ command, args: gitArgs, env, cwd: os.tmpdir() })

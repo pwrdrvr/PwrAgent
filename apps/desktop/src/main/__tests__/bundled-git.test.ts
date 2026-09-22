@@ -12,7 +12,7 @@ afterEach(() => {
 
 describe("bundled Git runtime", () => {
   it("pins the executable, helpers and hook PATH despite inherited overrides", async () => {
-    const inherited = { ...process.env, LOCAL_GIT_DIRECTORY: "/foreign/git", GIT_EXEC_PATH: "/foreign/helpers", GIT_TEMPLATE_DIR: "/foreign/templates", PWRAGENT_GIT_PATH: "/foreign/bin/git", Path: "/foreign/bin" };
+    const inherited = { ...process.env, LOCAL_GIT_DIRECTORY: "/foreign/git", GIT_EXEC_PATH: "/foreign/helpers", GIT_TEMPLATE_DIR: "/foreign/templates", Path: "/foreign/bin" };
     const env = bundledGitEnvironment(inherited);
     expect(await resolveGitExecutable(inherited)).toBe(bundledGitExecutable());
     expect(env.LOCAL_GIT_DIRECTORY).toBe(bundledGitDirectory());

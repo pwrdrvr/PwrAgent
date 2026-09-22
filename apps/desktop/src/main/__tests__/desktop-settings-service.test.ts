@@ -108,6 +108,26 @@ describe("DesktopSettingsService", () => {
     expect(service.readCodexProfiles().profiles[0]?.authenticationRequired).toBeUndefined();
   });
 
+  it("restores stored Git overrides and updates cached child environments when cleared", async () => {
+    const service = new DesktopSettingsService({
+      configPath: path.join(createTempRoot(), "config.toml"),
+      env: { PATH: path.dirname(process.execPath) },
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+    const initial = service.resolveCodexSpawnEnv();
+    expect(initial.GIT_EXEC_PATH).toBeDefined();
+    await service.writeConfigPatchTargeted({ applications: { git: { path: process.execPath } } });
+    expect(service.resolveGitCommandPreference()).toBe(process.execPath);
+    const custom = service.resolveCodexSpawnEnv();
+    expect(custom).toBe(initial);
+    expect(custom.GIT_EXEC_PATH).toBeUndefined();
+    expect(custom.PATH?.split(path.delimiter)[0]).toBe(path.dirname(process.execPath));
+    expect(service.resolveIntegratedTerminalCommands()).toContain(process.execPath);
+    await service.writeConfigPatchTargeted({ applications: { git: { path: "" } } });
+    expect(service.resolveGitCommandPreference()).toBeUndefined();
+    expect(service.resolveCodexSpawnEnv().GIT_EXEC_PATH).toBeDefined();
+  });
+
   it("reads secret storage availability without loading the full Settings projection or secrets", () => {
     const secretStore = new MemoryDesktopSecretStore();
     const service = new DesktopSettingsService({

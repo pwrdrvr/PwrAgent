@@ -3,13 +3,15 @@ import { FORGE_SETTINGS } from "./forge-settings";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   DesktopCodeSignature,
+  DesktopGitDiscoveryCandidate,
   DesktopGhDiscoveryCandidate,
   DesktopSettingsSnapshot,
   GhStatus,
 } from "@pwragent/shared";
 import { isValidatedDiscoveryCandidate } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
-import { GitHubIcon, GitLabIcon } from "../../icons";
+import { copyText } from "../../lib/copy-text";
+import { GitHubIcon, GitLabIcon, GitIcon } from "../../icons";
 import { SettingsCopyValue } from "./SettingsCopyValue";
 import {
   SettingsField,
@@ -48,6 +50,8 @@ const FORGE_CLI_ICONS = { gh: GitHubIcon, glab: GitLabIcon } satisfies Record<Fo
  * panes cannot drift: a selection made on one is already made on the
  * other. That is the whole reason this is a module and not a copy.
  */
+const XCODE_LICENSE_REMEDIATION_COMMAND = "sudo xcodebuild -license";
+
 export function GitToolSection(props: {
   desktopApi?: DesktopApi;
   saving: boolean;
@@ -55,40 +59,232 @@ export function GitToolSection(props: {
   onRefresh: () => Promise<void>;
   onSaveGitPath: (path: string) => Promise<void>;
 }) {
+  const desktopApi = props.desktopApi;
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string>();
-  const candidate = props.snapshot.applications.git.discovery.candidates.find((item) => item.selected);
-  const refresh = async () => {
+  const [error, setError] = useState<string | undefined>(undefined);
+  const discovery = props.snapshot.applications.git.discovery;
+  const gitPath = props.snapshot.applications.git.path;
+  const envForced = gitPath.source === "env";
+  const selected = discovery.candidates.find((candidate) => candidate.selected);
+  const hasWorkingGit = discovery.candidates.some((candidate) => candidate.executable);
+  const configuredCommand = gitPath.value.trim();
+  const visibleCandidates = discovery.candidates.filter(
+    (candidate) =>
+      candidate.executable
+      || candidate.source === "bundled"
+      || candidate.selected
+      || isXcodeLicenseCandidate(candidate)
+      // The operator's own choice always stays on screen. Filtering it out
+      // with the rest of the broken candidates is how a selection that has
+      // stopped working becomes invisible: the pane would show some other
+      // git as "In use" with nothing saying a different one is configured,
+      // and no row to clear.
+      || candidate.command === configuredCommand
+      || !hasWorkingGit,
+  );
+  const xcodeLicenseCandidate = discovery.candidates.find((candidate) =>
+    isXcodeLicenseCandidate(candidate)
+  );
+  const pill = describeGitStatusPill(discovery, xcodeLicenseCandidate);
+  // Mirrors the gh field: the pill says how the choice was *made*, not which
+  // location won. Where it came from is already the row's title.
+  const sourceLabel = gitPath.source === "default" ? "bundled" : gitPath.source;
+  const signatures = useCodeSignatures(
+    desktopApi,
+    visibleCandidates.map((candidate) => candidate.command),
+  );
+
+  const refresh = async (): Promise<void> => {
     setLoading(true);
     setError(undefined);
     try {
-      await props.desktopApi?.refreshGitDiscovery?.();
+      // The projection refresh alone would re-render the memoized startup
+      // probe, so "Re-check" has to ask for a real re-probe.
+      if (desktopApi?.refreshGitDiscovery) {
+        await desktopApi.refreshGitDiscovery();
+      }
       await props.onRefresh();
     } catch (caught) {
+      // Every caller reaches this through `void`, so an uncaught rejection
+      // here is invisible: the spinner clears, the rows do not change, and
+      // the operator is told nothing. Mirrors the gh section's `load`.
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
       setLoading(false);
     }
   };
+
+  const saveGitPath = async (path: string): Promise<void> => {
+    setError(undefined);
+    try {
+      await props.onSaveGitPath(path);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+      return;
+    }
+    await refresh();
+  };
+
   return (
-    <SettingsSection eyebrow="Git" sectionId="git" title="Git"
-      description="PwrAgent uses the Git and Git LFS included with the application for repository and worktree operations.">
-      <SettingsField label="Bundled runtime" source="bundled"
-        sub="Installed Git versions and legacy custom paths do not change this runtime."
-        error={error ?? candidate?.failureReason}
-        control={
-          <div className="settings-gh-status">
-            <span className={`settings-pill settings-pill--${candidate?.executable ? "ok" : "err"}`}>
-              {candidate?.executable ? "In use" : "Unavailable"}
-            </span>
-            {candidate?.version ? <span>Git <code>{candidate.version}</code></span> : null}
-            {candidate?.lfsVersion ? <span>Git LFS <code>{candidate.lfsVersion}</code></span> : null}
-            {candidate?.command ? <span className="settings-pathrow__path"><code>{candidate.command}</code></span> : null}
-            <button className="button button--secondary" type="button" disabled={loading || props.saving}
-              onClick={() => void refresh()}>{loading ? "Checking…" : "Re-check"}</button>
-          </div>
-        }
-      />
+    <SettingsSection
+      eyebrow="Git"
+      sectionId="git"
+      title="Git"
+      description={
+        <>
+          PwrAgent uses bundled Git and Git LFS by default. Choose an installed
+          Git to override the runtime used for repositories and worktrees.
+        </>
+      }
+    >
+      <div className="settings-fields">
+        <SettingsField
+          label="Command status"
+          sub="Checks the git command PwrAgent will use for repository and worktree operations."
+          source={sourceLabel}
+          control={
+            <div className="settings-gh-status">
+              <span className={`settings-pill settings-pill--${pill.tone}`}>
+                {pill.label}
+              </span>
+              {selected?.command ? (
+                <span className="settings-pathrow__path">
+                  Path: <code>{selected.command}</code>
+                </span>
+              ) : null}
+              {selected?.version ? (
+                <span className="settings-pathrow__path">
+                  Version: <code>{selected.version}</code>
+                </span>
+              ) : null}
+              {selected?.lfsVersion ? <span>Git LFS <code>{selected.lfsVersion}</code></span> : null}
+              {selected?.failureReason ? <span className="settings-error">{selected.failureReason}</span> : null}
+              {xcodeLicenseCandidate ? (
+                <div className="settings-gh-status">
+                  <span className="settings-pathrow__path settings-error">
+                    Apple&apos;s Git at <code>{xcodeLicenseCandidate.command}</code>{" "}
+                    is blocked by the Xcode license check.
+                  </span>
+                  <span className="settings-pathrow__path">
+                    Run this in Terminal, then follow the prompts:
+                  </span>
+                  <span className="settings-pathrow__path">
+                    <code>{XCODE_LICENSE_REMEDIATION_COMMAND}</code>
+                  </span>
+                  <div className="settings-inline-actions">
+                    <button
+                      className="button button--secondary"
+                      type="button"
+                      onClick={() =>
+                        void copyText(
+                          XCODE_LICENSE_REMEDIATION_COMMAND,
+                          props.desktopApi,
+                        )
+                      }
+                    >
+                      Copy command
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+              <div className="settings-inline-actions">
+                <button
+                  className="button button--secondary"
+                  disabled={loading || props.saving}
+                  type="button"
+                  onClick={() => void refresh()}
+                >
+                  {loading ? "Checking…" : "Re-check"}
+                </button>
+              </div>
+            </div>
+          }
+        />
+        <SettingsField
+          label="Available paths"
+          sub={
+            hasWorkingGit
+              ? "Detected on this machine. Pick the one PwrAgent should run."
+              : "No working git executable was found. These are the paths PwrAgent checked."
+          }
+          source={envForced ? "env override active" : undefined}
+          error={error}
+          control={
+            <div
+              className="settings-paths"
+              aria-label="Git discovery"
+              role="group"
+            >
+              {visibleCandidates.length === 0 ? (
+                <p className="settings-empty">No git candidates found.</p>
+              ) : (
+                visibleCandidates.map((candidate) => (
+                  <GitCandidateRow
+                    key={`${candidate.source}:${candidate.command}`}
+                    candidate={candidate}
+                    disabled={props.saving || loading || envForced}
+                    signature={signatures.get(candidate.command)}
+                    onSelect={(command) => void saveGitPath(candidate.source === "bundled" ? "" : command)}
+                  />
+                ))
+              )}
+              {envForced ? (
+                <p className="settings-empty">
+                  PWRAGENT_GIT_PATH is set, so it wins over anything chosen
+                  here. Unset it to choose a git in Settings.
+                </p>
+              ) : null}
+            </div>
+          }
+        />
+        {gitPath.value.trim() && !envForced ? (
+          <SettingsField
+            label="Discovery mode"
+            sub="Clear the override and use bundled Git and Git LFS."
+            source="config"
+            control={
+              <SettingsPathRow
+                title="Bundled Git"
+                chips={[{ label: "default", tone: "muted" }]}
+                selected={false}
+                disabled={props.saving || loading}
+                useLabel="Use bundled"
+                onUse={() => void saveGitPath("")}
+              />
+            }
+          />
+        ) : null}
+        <SettingsField
+          label="Manual path"
+          sub="Pick a git executable outside the discovered locations."
+          control={
+            <div className="settings-inline-actions">
+              <button
+                className="button button--secondary"
+                disabled={
+                  props.saving || envForced || !desktopApi?.pickGitCommand
+                }
+                type="button"
+                onClick={() => {
+                  void (async () => {
+                    if (!desktopApi?.pickGitCommand) return;
+                    setError(undefined);
+                    const result = await desktopApi.pickGitCommand();
+                    if (result.canceled) return;
+                    if (result.error || !result.path) {
+                      setError(result.error ?? "No git path was selected.");
+                      return;
+                    }
+                    await saveGitPath(result.path);
+                  })();
+                }}
+              >
+                Choose…
+              </button>
+            </div>
+          }
+        />
+      </div>
     </SettingsSection>
   );
 }
@@ -390,11 +586,11 @@ export function GhToolSection(props: {
             source={envForced ? "env override active" : "config"}
             control={
               <SettingsPathRow
-                title="Auto discovery"
+                title="Bundled Git"
                 chips={[{ label: "default", tone: "muted" }]}
                 selected={false}
                 disabled={props.saving || envForced}
-                useLabel="Auto"
+                useLabel="Use bundled"
                 onUse={() => void saveGhPath("")}
               />
             }
@@ -460,6 +656,59 @@ export function GhToolSection(props: {
         />
       </div>
     </SettingsSection>
+  );
+}
+
+/**
+ * One git candidate.
+ *
+ * The title is the **provenance**, not the path. Every row in this list is
+ * `git`, so what the operator is actually choosing between is Homebrew and
+ * Apple — which the old layout put in a 10-px chip while the 13-px title
+ * carried the path that every row nearly duplicates.
+ */
+function GitCandidateRow(props: {
+  candidate: DesktopGitDiscoveryCandidate;
+  disabled?: boolean;
+  signature?: DesktopCodeSignature;
+  onSelect: (command: string) => void;
+}) {
+  const candidate = props.candidate;
+  const failureLabel = describeCommandDiscoveryFailure(candidate.failureReason);
+  const source = describeGitCandidateSource(candidate.source);
+  const chips: SettingsPathRowChip[] = [];
+  const signatureChip = codeSignatureChip(props.signature);
+  if (signatureChip) {
+    chips.push(signatureChip);
+  }
+  if (!candidate.executable) {
+    chips.push({
+      key: "state",
+      label: failureLabel ?? "Unavailable",
+      tone: isXcodeLicenseCandidate(candidate) ? "warn" : "err",
+    });
+  }
+
+  const detail = commandDiscoveryFailureDetail(
+    candidate.failureReason ?? candidate.versionFailureReason,
+  );
+
+  return (
+    <SettingsPathRow
+      icon={<GitIcon size={18} />}
+      title={source}
+      meta={[candidate.version && `Git ${candidate.version}`, candidate.lfsVersion && `LFS ${candidate.lfsVersion}`].filter(Boolean).join(" · ")}
+      path={detail ?? candidate.command}
+      pathIsDetail={Boolean(detail)}
+      chips={chips}
+      selected={candidate.selected}
+      selectedLabel="In use"
+      selectLabel={`Use ${source} git at ${candidate.command}`}
+      disabled={props.disabled || !candidate.executable}
+      onSelect={
+        candidate.executable ? () => props.onSelect(candidate.command) : undefined
+      }
+    />
   );
 }
 
@@ -545,12 +794,43 @@ function needsTerminalQuoting(value: string): boolean {
   return !/^[A-Za-z0-9_@%+=:,./-]+$/.test(value);
 }
 
+function describeGitStatusPill(
+  discovery: DesktopSettingsSnapshot["applications"]["git"]["discovery"],
+  xcodeLicenseCandidate?: DesktopGitDiscoveryCandidate,
+): {
+  tone: "ok" | "warn" | "bad" | "neutral";
+  label: string;
+} {
+  if (discovery.candidates.some((candidate) => candidate.selected && candidate.executable)) {
+    return xcodeLicenseCandidate
+      ? { tone: "warn", label: "Available" }
+      : { tone: "ok", label: "Available" };
+  }
+  if (xcodeLicenseCandidate) {
+    return { tone: "bad", label: "Xcode license required" };
+  }
+  return { tone: "bad", label: "Not available" };
+}
+
 function describeGhCandidateSource(
   source: DesktopGhDiscoveryCandidate["source"],
 ): string {
   if (source === "homebrew") return "Homebrew";
   if (source === "macports") return "MacPorts";
   if (source === "windows") return "Windows install";
+  if (source === "user") return "User bin";
+  if (source === "config") return "Custom path";
+  if (source === "env") return "env";
+  if (source === "path") return "PATH";
+  return source;
+}
+
+function describeGitCandidateSource(
+  source: DesktopGitDiscoveryCandidate["source"],
+): string {
+  if (source === "bundled") return "Bundled";
+  if (source === "xcode") return "Apple";
+  if (source === "homebrew") return "Homebrew";
   if (source === "user") return "User bin";
   if (source === "config") return "Custom path";
   if (source === "env") return "env";
@@ -568,6 +848,13 @@ function describeCommandDiscoveryFailure(reason?: string): string | undefined {
 
 function commandDiscoveryFailureDetail(reason?: string): string | undefined {
   return sharedCommandDiscoveryFailureDetail(reason, describeXcodeLicenseFailure);
+}
+
+export function isXcodeLicenseCandidate(
+  candidate: DesktopGitDiscoveryCandidate,
+): boolean {
+  return candidate.command === "/usr/bin/git"
+    && isXcodeLicenseFailure(candidate.failureReason ?? candidate.versionFailureReason);
 }
 
 function isXcodeLicenseFailure(reason?: string): boolean {

@@ -7,26 +7,35 @@ import { discoverGitCommands, parseGitVersionOutput, validateGitCommand } from "
 
 afterEach(() => configureBundledGit());
 
-describe("bundled Git discovery", () => {
-  it("reports bundled Git and LFS despite legacy path overrides", async () => {
-    const result = await discoverGitCommands({
-      configuredCommand: "/missing/custom/git",
-      env: { ...process.env, PWRAGENT_GIT_PATH: "/missing/env/git", LOCAL_GIT_DIRECTORY: "/missing/distribution", GIT_EXEC_PATH: "/missing/helpers" },
-    });
+describe("Git discovery", () => {
+  it("selects bundled Git and LFS by default while retaining installed candidates", async () => {
+    const result = await discoverGitCommands({ env: { ...process.env, PWRAGENT_GIT_PATH: undefined } });
     expect(result.selectedCommand).toBe(bundledGitExecutable());
-    expect(result.candidates).toEqual([expect.objectContaining({
+    expect(result.candidates).toContainEqual(expect.objectContaining({
       source: "bundled", selected: true, executable: true,
       version: expect.stringMatching(/^\d+\./), lfsVersion: expect.stringMatching(/^\d+\./),
-    })]);
+    }));
   });
 
-  it("reports a missing packaged runtime instead of discovering installed Git", async () => {
+  it("keeps a broken env override selected ahead of config and the working bundle", async () => {
+    const result = await discoverGitCommands({ configuredCommand: "/missing/config/git", env: { ...process.env, PWRAGENT_GIT_PATH: "/missing/env/git" } });
+    expect(result.selectedCommand).toBe("/missing/env/git");
+    expect(result.candidates.find((candidate) => candidate.selected)).toMatchObject({ source: "env", executable: false });
+    expect(result.candidates.find((candidate) => candidate.source === "bundled")).toMatchObject({ selected: false, executable: true });
+  });
+
+  it("keeps a broken configured override selected without fallback", async () => {
+    const result = await discoverGitCommands({ configuredCommand: "/missing/config/git", env: { ...process.env, PWRAGENT_GIT_PATH: undefined } });
+    expect(result.selectedCommand).toBe("/missing/config/git");
+    expect(result.candidates.find((candidate) => candidate.selected)?.executable).toBe(false);
+  });
+
+  it("reports a missing packaged runtime without selecting an installed Git", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-missing-git-"));
     try {
       configureBundledGit(root);
-      const result = await discoverGitCommands();
-      expect(result.candidates).toHaveLength(1);
-      expect(result.candidates[0]).toMatchObject({ source: "bundled", executable: false });
+      const result = await discoverGitCommands({ env: { ...process.env, PWRAGENT_GIT_PATH: undefined } });
+      expect(result.candidates.find((candidate) => candidate.selected)).toMatchObject({ source: "bundled", executable: false });
       expect(result.selectedCommand).toContain(root);
     } finally {
       configureBundledGit();
@@ -34,8 +43,11 @@ describe("bundled Git discovery", () => {
     }
   });
 
-  it("rejects an installed runtime requested by an older settings client", async () => {
-    await expect(validateGitCommand({ command: "/usr/bin/git" })).rejects.toThrow("bundled Git");
+  it("validates Git and LFS for a manually selected executable", async () => {
+    expect(await validateGitCommand({ command: bundledGitExecutable() })).toMatchObject({
+      executable: true, version: expect.any(String), lfsVersion: expect.any(String),
+    });
+    expect(await validateGitCommand({ command: "/missing/manual/git" })).toMatchObject({ executable: false });
   });
 
   it("parses both upstream and Windows Git versions", () => {
