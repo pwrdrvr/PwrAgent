@@ -2145,91 +2145,9 @@ describe("useThreadNavigation", () => {
       expect(readPopulation).toHaveBeenCalledTimes(2);
     });
 
-    unmount();
-  });
-
-  it("coalesces bounded focus refreshes to one per minute after completion", async () => {
-    let focusListener: (() => void) | undefined;
-    let delayedFocusHandler: (() => void) | undefined;
-    const originalSetTimeout = globalThis.setTimeout;
-    const setTimeoutSpy = vi
-      .spyOn(globalThis, "setTimeout")
-      .mockImplementation((handler, timeout, ...args) => {
-        if (typeof timeout === "number" && timeout > 10_000) {
-          delayedFocusHandler =
-            typeof handler === "function" ? () => handler(...args) : undefined;
-          return 42 as unknown as ReturnType<typeof setTimeout>;
-        }
-        return originalSetTimeout(handler, timeout, ...args);
-      });
-    vi.spyOn(globalThis, "clearTimeout").mockImplementation(() => undefined);
-    const dateNowSpy = vi.spyOn(Date, "now");
-    dateNowSpy.mockReturnValue(1_000_000);
-
-    const readPopulation = vi.fn(async () => ({
-      backend: "all" as const,
-      fetchedAt: Date.now(),
-      unchanged: false,
-      inboxThreadKeys: ["codex:thread-1"],
-      threads: [
-        {
-          id: "thread-1",
-          title: "First thread",
-          titleSource: "explicit" as const,
-          summary: "First thread summary",
-          source: "codex" as const,
-          linkedDirectories: [],
-          inbox: {
-            inInbox: true,
-            reason: "new-thread" as const,
-          },
-          updatedAt: 1_000,
-        },
-      ],
-      directories: [],
-      launchpadDefaults: {
-        backend: "codex" as const,
-        executionMode: "default" as const,
-      },
-    }));
-    const desktopApi: DesktopApi = {
-      readPopulation,
-      onWindowFocus: (callback) => {
-        focusListener = callback;
-        return () => {
-          focusListener = undefined;
-        };
-      },
-    };
-
-    const { result, unmount } = renderHook(() =>
-      useThreadNavigation(desktopApi, { lightweightNavigationRefresh: true }),
-    );
-
-    await waitFor(() => {
-      expect(result.current.selectedThread?.id).toBe("thread-1");
-    });
-
+    // A second focus after completion must not wait for a throttle interval.
     act(() => {
       focusListener?.();
-    });
-
-    await waitFor(() => {
-      expect(readPopulation).toHaveBeenCalledTimes(2);
-    });
-
-    dateNowSpy.mockReturnValue(1_030_000);
-    act(() => {
-      focusListener?.();
-      focusListener?.();
-    });
-
-    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 30_000);
-    expect(readPopulation).toHaveBeenCalledTimes(2);
-
-    dateNowSpy.mockReturnValue(1_060_000);
-    act(() => {
-      delayedFocusHandler?.();
     });
 
     await waitFor(() => {

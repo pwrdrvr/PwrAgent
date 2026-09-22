@@ -1417,7 +1417,6 @@ export type GetNavigationSnapshotRequest = {
   federationTarget?: FederationTarget;
   filter?: string;
   forceRefresh?: boolean;
-  refreshMode?: "active-recent" | "full";
   /**
    * Await per-thread Git working state instead of serving the cache. Only a
    * caller that reads `thread.gitWorkingState` to make a decision — the
@@ -1462,7 +1461,6 @@ export function buildNavigationSnapshotTransportScopeKey(
     backend: request.backend ?? "all",
     federationTarget: request.federationTarget ?? { scope: "local" },
     filter: request.filter ?? "",
-    refreshMode: request.refreshMode ?? "full",
   });
 }
 

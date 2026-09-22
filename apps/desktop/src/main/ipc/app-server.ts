@@ -780,7 +780,6 @@ function getNavigationSnapshotRequestKey(
     federationTarget: request.federationTarget ?? { scope: "local" },
     filter: request.filter ?? "",
     forceRefresh: request.forceRefresh === true,
-    refreshMode: request.refreshMode ?? "full",
   });
 }
 
@@ -789,7 +788,7 @@ function getRemoteNavigationSnapshotCacheKey(
     federationTarget: { scope: "remote"; instanceId: string };
   },
 ): string {
-  // forceRefresh / refreshMode are renderer scheduling hints. The remote RPC
+  // forceRefresh is a renderer scheduling hint. The remote RPC
   // reads the same owner snapshot either way, so every variant shares one
   // last-known fallback during a disconnect.
   return JSON.stringify({
@@ -797,45 +796,6 @@ function getRemoteNavigationSnapshotCacheKey(
     federationTarget: request.federationTarget,
     filter: request.filter ?? "",
   });
-}
-
-function buildThreadSnapshotCacheKey(
-  backend: AppServerBackendScope,
-  filter?: string,
-): string {
-  return JSON.stringify({
-    backend,
-    filter: filter?.trim() ?? "",
-  });
-}
-
-function mergeRecentThreadsIntoCachedSnapshot(
-  cachedThreads: AppServerThreadSummary[] | undefined,
-  recentThreads: AppServerThreadSummary[],
-): AppServerThreadSummary[] {
-  if (!cachedThreads || cachedThreads.length === 0) {
-    return recentThreads;
-  }
-  const recentByKey = new Map(
-    recentThreads.map((thread) => [
-      buildThreadIdentityKey(thread.source, thread.id),
-      thread,
-    ]),
-  );
-  const merged = cachedThreads.map((thread) => {
-    const threadKey = buildThreadIdentityKey(thread.source, thread.id);
-    return recentByKey.get(threadKey) ?? thread;
-  });
-  const cachedKeys = new Set(
-    cachedThreads.map((thread) => buildThreadIdentityKey(thread.source, thread.id)),
-  );
-  for (const thread of recentThreads) {
-    const threadKey = buildThreadIdentityKey(thread.source, thread.id);
-    if (!cachedKeys.has(threadKey)) {
-      merged.push(thread);
-    }
-  }
-  return merged.sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0));
 }
 
 function getThreadPullRequestsRequestKey(
@@ -1410,10 +1370,6 @@ class DesktopAppServerService {
   private readonly previousDirectoriesByBackend = new Map<
     AppServerBackendScope,
     NavigationSnapshot["directories"]
-  >();
-  private readonly lastFullNavigationThreadsByKey = new Map<
-    string,
-    AppServerThreadSummary[]
   >();
   // Seeded with the empty-list hash so a pinless boot never flips
   // `unchanged` on the first snapshot.
@@ -2275,34 +2231,12 @@ class DesktopAppServerService {
       }
     }
     const backend: AppServerBackendScope = request.backend ?? "all";
-    const refreshMode = request.refreshMode ?? "full";
-    const activeRecentRefresh = refreshMode === "active-recent";
-    const cacheKey = buildThreadSnapshotCacheKey(backend, request.filter);
-    const hasCachedFullThreads = this.lastFullNavigationThreadsByKey.has(cacheKey);
-    const cachedFullThreads = this.lastFullNavigationThreadsByKey.get(cacheKey);
-    const fetchedThreads = await getDesktopBackendRegistry().listThreads({
+    const threads = await getDesktopBackendRegistry().listThreads({
       backend: backend === "all" ? undefined : backend,
-      callerReason: activeRecentRefresh
-        ? "navigation-snapshot:active-recent"
-        : "navigation-snapshot",
+      callerReason: "navigation-snapshot",
       filter: request.filter,
       forceRefresh: request.forceRefresh,
-      limit: activeRecentRefresh ? 50 : undefined,
-      maxPages: activeRecentRefresh ? 1 : undefined,
-      skipArchivedMetadataRefresh: activeRecentRefresh,
     });
-    const threads = activeRecentRefresh
-      ? mergeRecentThreadsIntoCachedSnapshot(
-          cachedFullThreads,
-          fetchedThreads,
-        )
-      : fetchedThreads;
-    const partialSnapshot =
-      activeRecentRefresh
-      && !hasCachedFullThreads;
-    if (!activeRecentRefresh) {
-      this.lastFullNavigationThreadsByKey.set(cacheKey, threads);
-    }
     const messagingBindingsByThreadKey = await buildMessagingBindingsByThreadKey(threads);
     const automationsByThreadKey = buildAutomationSummariesByThreadKey();
     const queuedExecutionModesByThreadKey = getDesktopBackendRegistry()
@@ -2314,7 +2248,6 @@ class DesktopAppServerService {
       automationsByThreadKey,
       fetchedAt: Date.now(),
       messagingBindingsByThreadKey,
-      ...(partialSnapshot ? { partial: true } : {}),
       queuedExecutionModesByThreadKey,
       queuedTurnsByThreadKey,
       threads,
@@ -2325,7 +2258,7 @@ class DesktopAppServerService {
     this.seedPrStatusRegistryFromThreads(snapshot.threads);
     const canonicalSnapshot = this.applyCanonicalPrStatuses(snapshot.threads);
     const replaceThreadPrAttachments =
-      backend === "all" && !request.filter?.trim() && !activeRecentRefresh;
+      backend === "all" && !request.filter?.trim();
     await this.rememberThreadPrAttachments(canonicalSnapshot.threads, {
       replace: replaceThreadPrAttachments,
     });
@@ -2434,7 +2367,6 @@ class DesktopAppServerService {
     if (
       backend === "all"
       && !request.filter?.trim()
-      && !activeRecentRefresh
     ) {
       // Creation-time visibility and append-rank decisions must see the same
       // merged local + viewer-owned remote pin list the renderer sees.
@@ -7676,7 +7608,6 @@ class DesktopAppServerService {
     this.pendingDirectoryGitStatusRefreshes.clear();
     this.pendingDirectoryGitStatusKeys.clear();
     this.previousDirectoriesByBackend.clear();
-    this.lastFullNavigationThreadsByKey.clear();
     this.directoryGitStatusByKey.clear();
     this.directoryGitStatusCacheLoaded = false;
     this.automaticDirectoryGitStatusRefreshesStarted = 0;

@@ -5944,7 +5944,6 @@ type ThreadListCallerReason =
   | "ipc-list-threads"
   | "messaging-navigation-snapshot"
   | "navigation-snapshot"
-  | "navigation-snapshot:active-recent"
   | "startup-prewarm"
   | "title-generation"
   | "workspace-handoff"
@@ -11033,8 +11032,7 @@ export class DesktopBackendRegistry {
       || Boolean(params.filter?.trim())
       || params.forceRefresh === true
       || (params.callerReason !== "startup-prewarm"
-        && params.callerReason !== "navigation-snapshot"
-        && params.callerReason !== "navigation-snapshot:active-recent")
+        && params.callerReason !== "navigation-snapshot")
     ) {
       return undefined;
     }

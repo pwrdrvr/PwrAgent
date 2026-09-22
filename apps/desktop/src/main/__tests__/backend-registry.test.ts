@@ -15509,7 +15509,7 @@ script = "echo setup"
     await registry.close();
   });
 
-  it("does not run archive cleanup from partial active-recent Codex lists", async () => {
+  it("does not run archive cleanup from partial Codex lists", async () => {
     const codexClient = new MockBackendClient({
       archivedThreads: [
         {
@@ -15552,7 +15552,7 @@ script = "echo setup"
 
     await registry.listThreads({
       backend: "codex",
-      callerReason: "navigation-snapshot:active-recent",
+      callerReason: "startup-prewarm",
       forceRefresh: true,
       limit: 50,
       maxPages: 1,

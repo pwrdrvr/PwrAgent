@@ -1048,11 +1048,6 @@ function SettingsSectionBody(props: {
             experimental: { liveTranscriptEventFiltering: enabled },
           });
         }}
-        onLightweightNavigationRefreshChange={async (enabled: boolean) => {
-          await props.settings.writeConfig({
-            experimental: { lightweightNavigationRefresh: enabled },
-          });
-        }}
         onMarkdownMathRenderingChange={async (enabled: boolean) => {
           await props.settings.writeConfig({
             experimental: { markdownMathRendering: enabled },

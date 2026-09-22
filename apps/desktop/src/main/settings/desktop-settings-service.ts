@@ -1012,10 +1012,6 @@ export class DesktopSettingsService {
           config.experimental?.liveTranscriptEventFiltering,
           false,
         ),
-        lightweightNavigationRefresh: this.resolveConfigBoolean(
-          config.experimental?.lightweightNavigationRefresh,
-          false,
-        ),
         markdownMathRendering: this.resolveConfigBoolean(
           config.experimental?.markdownMathRendering,
           false,

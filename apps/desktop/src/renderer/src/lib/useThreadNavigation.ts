@@ -119,7 +119,6 @@ const ROOT_NEW_THREAD_WORKSPACE_LABEL = "Workspaces";
 const FEDERATED_LAUNCHPAD_SELECTION_PREFIX = "federated-launchpad:";
 const NAVIGATION_BACKGROUND_REFRESH_INTERVAL_MS = 5 * 60_000;
 const NAVIGATION_BACKGROUND_REFRESH_IDLE_AFTER_MS = 30 * 60_000;
-const NAVIGATION_FOCUS_REFRESH_MIN_INTERVAL_MS = 60_000;
 const NAVIGATION_ACTIVITY_EVENTS = [
   "input",
   "keydown",
@@ -168,7 +167,6 @@ type NavigationRefreshOptions = {
   invalidatedOnly?: boolean;
   owners?: FederationTarget[];
   forceRefresh?: boolean;
-  refreshMode?: "active-recent" | "full";
 };
 
 function mergeNavigationRefreshOwners(left: FederationTarget[] | undefined, right: FederationTarget[] | undefined): FederationTarget[] | undefined {
@@ -2634,7 +2632,6 @@ type UseThreadNavigationOptions = {
   enabled?: boolean;
   composerDraftStore?: ComposerDraftStore;
   attentionPromoteOnTurnEnd?: boolean;
-  lightweightNavigationRefresh?: boolean;
   progressiveInitialRefresh?: boolean;
   threadViewVisible?: boolean;
   /**
@@ -2917,7 +2914,6 @@ export function useThreadNavigation(
   const enabled = options.enabled ?? true;
   const rendererFederationTarget = useMemo(readRendererFederationTarget, []);
   const isRendererFederationWindow = Boolean(rendererFederationTarget);
-  const lightweightNavigationRefresh = options.lightweightNavigationRefresh ?? false;
   const threadViewVisible = options.threadViewVisible ?? true;
   const [browseMode, setBrowseMode] = useState<BrowseMode>(readBridgedBrowseMode);
   const [selectedItemKey, setSelectedItemKey] = useState<string>();
@@ -3054,7 +3050,6 @@ export function useThreadNavigation(
         forcePreferredSelection?: boolean;
         preferredOptimisticThread?: NavigationThreadSummary;
         preferredSelectionKey?: string;
-        refreshMode?: "active-recent" | "full";
         owners?: FederationTarget[];
         invalidatedOnly?: boolean;
       }
@@ -3065,12 +3060,6 @@ export function useThreadNavigation(
   const scheduledRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(
     undefined
   );
-  const scheduledFocusRefreshTimerRef = useRef<
-    ReturnType<typeof setTimeout> | undefined
-  >(undefined);
-  const focusRefreshInFlightRef = useRef(false);
-  const focusRefreshQueuedRef = useRef(false);
-  const lastFocusRefreshCompletedAtRef = useRef(0);
   const remotePeerDisconnectedRef = useRef(false);
   const lastNavigationActivityAtRef = useRef(Date.now());
   const backgroundRefreshIdleRef = useRef(false);
@@ -3299,7 +3288,6 @@ export function useThreadNavigation(
         forcePreferredSelection,
         preferredOptimisticThread,
         preferredSelectionKey,
-        refreshMode: options?.refreshMode,
         owners: options?.owners,
         invalidatedOnly: options?.invalidatedOnly === true,
       };
@@ -3324,7 +3312,6 @@ export function useThreadNavigation(
             nextRequest.forcePreferredSelection,
             {
               forceRefresh: nextRequest.forceRefresh,
-              refreshMode: nextRequest.refreshMode,
               owners: nextRequest.owners,
               invalidatedOnly: nextRequest.invalidatedOnly,
             }
@@ -3370,11 +3357,6 @@ export function useThreadNavigation(
         forcePreferredSelection,
         preferredOptimisticThread,
         preferredSelectionKey,
-        refreshMode:
-          options?.refreshMode === "full" ||
-          queuedRefreshRef.current?.refreshMode === "full"
-            ? "full"
-            : options?.refreshMode ?? queuedRefreshRef.current?.refreshMode,
       };
 
       if (scheduledRefreshTimerRef.current !== undefined) {
@@ -3395,7 +3377,6 @@ export function useThreadNavigation(
           nextRequest.forcePreferredSelection,
           {
             forceRefresh: nextRequest.forceRefresh,
-            refreshMode: nextRequest.refreshMode,
             owners: nextRequest.owners,
             invalidatedOnly: nextRequest.invalidatedOnly,
           }
@@ -3404,49 +3385,6 @@ export function useThreadNavigation(
     },
     [refresh]
   );
-
-  const scheduleFocusRefresh = useCallback((): void => {
-    if (focusRefreshInFlightRef.current) {
-      focusRefreshQueuedRef.current = true;
-      return;
-    }
-
-    if (scheduledFocusRefreshTimerRef.current !== undefined) {
-      focusRefreshQueuedRef.current = true;
-      return;
-    }
-
-    const elapsedSinceLastCompletion =
-      Date.now() - lastFocusRefreshCompletedAtRef.current;
-    const delayMs = Math.max(
-      0,
-      NAVIGATION_FOCUS_REFRESH_MIN_INTERVAL_MS - elapsedSinceLastCompletion,
-    );
-
-    const runRefresh = () => {
-      scheduledFocusRefreshTimerRef.current = undefined;
-      focusRefreshQueuedRef.current = false;
-      focusRefreshInFlightRef.current = true;
-      void refresh(undefined, undefined, false, {
-        forceRefresh: true,
-        refreshMode: "full",
-      }).finally(() => {
-        focusRefreshInFlightRef.current = false;
-        lastFocusRefreshCompletedAtRef.current = Date.now();
-        if (focusRefreshQueuedRef.current) {
-          scheduleFocusRefresh();
-        }
-      });
-    };
-
-    if (delayMs === 0) {
-      runRefresh();
-      return;
-    }
-
-    focusRefreshQueuedRef.current = true;
-    scheduledFocusRefreshTimerRef.current = setTimeout(runRefresh, delayMs);
-  }, [refresh]);
 
   const markNavigationActivity = useCallback(
     (options: { refreshOnIdleResume?: boolean } = {}): void => {
@@ -3468,13 +3406,11 @@ export function useThreadNavigation(
 
       scheduleRefresh(undefined, undefined, false, {
         forceRefresh: true,
-        refreshMode: lightweightNavigationRefresh ? "active-recent" : undefined,
       });
     },
     [
       desktopApi?.getNavigationQueryPage,
       enabled,
-      lightweightNavigationRefresh,
       scheduleRefresh,
     ]
   );
@@ -3483,9 +3419,6 @@ export function useThreadNavigation(
     return () => {
       if (scheduledRefreshTimerRef.current !== undefined) {
         clearTimeout(scheduledRefreshTimerRef.current);
-      }
-      if (scheduledFocusRefreshTimerRef.current !== undefined) {
-        clearTimeout(scheduledFocusRefreshTimerRef.current);
       }
     };
   }, []);
@@ -3552,7 +3485,6 @@ export function useThreadNavigation(
 
       scheduleRefresh(undefined, undefined, false, {
         forceRefresh: true,
-        refreshMode: lightweightNavigationRefresh ? "active-recent" : undefined,
       });
     }, NAVIGATION_BACKGROUND_REFRESH_INTERVAL_MS);
 
@@ -3562,7 +3494,6 @@ export function useThreadNavigation(
   }, [
     desktopApi?.getNavigationQueryPage,
     enabled,
-    lightweightNavigationRefresh,
     scheduleRefresh,
     viewVisible,
   ]);
@@ -3574,18 +3505,12 @@ export function useThreadNavigation(
 
     return desktopApi.onWindowFocus(() => {
       markNavigationActivity({ refreshOnIdleResume: false });
-      if (lightweightNavigationRefresh) {
-        scheduleFocusRefresh();
-        return;
-      }
       scheduleRefresh();
     });
   }, [
     desktopApi,
     enabled,
-    lightweightNavigationRefresh,
     markNavigationActivity,
-    scheduleFocusRefresh,
     scheduleRefresh,
   ]);
 
@@ -3690,7 +3615,6 @@ export function useThreadNavigation(
         if (params.status === "connected") {
           scheduleEventRefresh(undefined, undefined, false, {
             forceRefresh: true,
-            refreshMode: "full",
           });
           return;
         }
