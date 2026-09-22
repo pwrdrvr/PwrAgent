@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { chmod, copyFile, mkdir, mkdtemp, readFile, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { access, chmod, copyFile, mkdir, mkdtemp, readFile, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -77,6 +77,49 @@ describe("bundled Git runtime", () => {
       await rm(path.join(root, "asset.bin"));
       await git(["checkout", "--", "asset.bin"]);
       expect(await readFile(path.join(root, "asset.bin"))).toEqual(payload);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("enables LFS for an operator with no LFS setup, and yields to one who opted out", async () => {
+    const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-lfs-defaults-")));
+    const repo = path.join(root, "repo");
+    // No system LFS, no global filter, no `git lfs install` in the repository.
+    const env = {
+      ...process.env,
+      PATH: process.platform === "win32" ? path.join(process.env.SystemRoot ?? "C:\\Windows", "System32") : "/usr/bin:/bin",
+      GIT_CONFIG_GLOBAL: path.join(root, "global-config"),
+      GIT_AUTHOR_NAME: "Fixture", GIT_AUTHOR_EMAIL: "fixture@example.invalid",
+      GIT_COMMITTER_NAME: "Fixture", GIT_COMMITTER_EMAIL: "fixture@example.invalid",
+    };
+    const git = async (cwd: string, args: string[]) => (await runGitCommand(cwd, args, { env })).stdout.trim();
+    try {
+      await writeFile(env.GIT_CONFIG_GLOBAL, "");
+      await mkdir(repo);
+      await git(repo, ["init", "-b", "main"]);
+      // Dugite sets this on every platform, so it proves the bundle's own
+      // system config is still read beneath PwrAgent's defaults.
+      expect(await git(repo, ["config", "--get", "credential.https://dev.azure.com.usehttppath"])).toBe("true");
+      await writeFile(path.join(repo, ".gitattributes"), "*.bin filter=lfs diff=lfs merge=lfs -text\n");
+      const payload = Buffer.from("bundled LFS defaults\0payload\n");
+      await writeFile(path.join(repo, "asset.bin"), payload);
+      await git(repo, ["add", ".gitattributes", "asset.bin"]);
+      await git(repo, ["-c", "commit.gpgsign=false", "commit", "-m", "LFS fixture"]);
+      const pointer = await git(repo, ["show", "HEAD:asset.bin"]);
+      expect(pointer).toMatch(/^version https:\/\/git-lfs.github.com\/spec\/v1\n/);
+      // git-lfs installs its hooks the first time the filter runs, so a push
+      // uploads the objects a commit stored.
+      await expect(access(path.join(repo, ".git", "hooks", "pre-push"))).resolves.toBeUndefined();
+      await rm(path.join(repo, "asset.bin"));
+      await git(repo, ["checkout", "--", "asset.bin"]);
+      expect(await readFile(path.join(repo, "asset.bin"))).toEqual(payload);
+
+      // Global config outranks the bundle's system defaults.
+      await git(root, ["lfs", "install", "--skip-smudge"]);
+      await rm(path.join(repo, "asset.bin"));
+      await git(repo, ["checkout", "--", "asset.bin"]);
+      expect((await readFile(path.join(repo, "asset.bin"), "utf8")).trim()).toBe(pointer);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -195,7 +238,7 @@ describe.skipIf(process.platform === "win32")("bundled Git keychain credentials"
     }
   });
 
-  it("leaves Dugite's config alone off macOS", async () => {
+  it("adds no keychain helper off macOS", async () => {
     const install = await fakeKeychainInstall();
     try {
       vi.stubEnv("PWRAGENT_HOME", path.join(install.root, "home"));
@@ -203,7 +246,9 @@ describe.skipIf(process.platform === "win32")("bundled Git keychain credentials"
         { ...process.env, PATH: [install.bin, "/usr/bin"].join(path.delimiter) },
         { platform: "linux" },
       );
-      expect(env.GIT_CONFIG_SYSTEM).toBe(path.join(bundledGitDirectory(), "etc", "gitconfig"));
+      const config = await readFile(env.GIT_CONFIG_SYSTEM!, "utf8");
+      expect(config).toContain("[filter \"lfs\"]");
+      expect(config).not.toContain("[credential]");
       expect(env.PATH).not.toContain(path.dirname(install.helper));
     } finally {
       await rm(install.root, { recursive: true, force: true });

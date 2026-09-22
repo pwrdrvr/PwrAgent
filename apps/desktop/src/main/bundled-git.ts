@@ -32,8 +32,10 @@ export function bundledGitExecutable(): string {
 }
 
 export function bundledGitLfsExecutable(): string {
-  const env = bundledGitEnvironment({});
-  return path.join(env.GIT_EXEC_PATH!, process.platform === "win32" ? "git-lfs.exe" : "git-lfs");
+  // The explicit empty override resolves the bundled platform layout, as in
+  // bundledGitEnvironment, without writing that environment's system config.
+  const helperDirectory = dugite.resolveGitExecPath(bundledGitDirectory(), "");
+  return path.join(helperDirectory, process.platform === "win32" ? "git-lfs.exe" : "git-lfs");
 }
 
 export async function validateBundledGit(): Promise<string> {
@@ -79,9 +81,12 @@ export function bundledGitEnvironment(
   const keychainHelper = (options.platform ?? process.platform) === "darwin"
     ? installedKeychainHelper({ PATH: inheritedPath, DEVELOPER_DIR: clean.DEVELOPER_DIR })
     : undefined;
+  // Dugite points POSIX Git at its own etc/gitconfig. On Windows, MinGit reads
+  // the one inside the bundle that Dugite's build configured.
+  const bundleConfig = env.GIT_CONFIG_SYSTEM ?? mingitSystemConfig(root, helperDirectory);
+  const systemConfig = bundleConfig ? bundledSystemConfig(bundleConfig, keychainHelper) : undefined;
+  if (systemConfig) env.GIT_CONFIG_SYSTEM = systemConfig;
   if (keychainHelper) {
-    const systemConfig = keychainSystemConfig(env.GIT_CONFIG_SYSTEM, keychainHelper);
-    if (systemConfig) env.GIT_CONFIG_SYSTEM = systemConfig;
     // Last, so it only answers names nothing earlier provides: a user-level
     // `credential.helper = osxkeychain` runs `git-credential-osxkeychain`,
     // which Git looks for in its own exec path and then on PATH.
@@ -89,6 +94,15 @@ export function bundledGitEnvironment(
   }
   env.PATH = [...new Set(pathEntries)].join(path.delimiter);
   return env;
+}
+
+/** Dugite's build writes to etc/gitconfig when MinGit has one there, and to
+ * the architecture folder's etc/gitconfig otherwise. */
+function mingitSystemConfig(root: string, helperDirectory: string): string | undefined {
+  return [
+    path.join(root, "etc", "gitconfig"),
+    path.join(path.dirname(path.dirname(helperDirectory)), "etc", "gitconfig"),
+  ].find((candidate) => existsSync(candidate));
 }
 
 const APPLE_GIT_SHIM = "/usr/bin/git";
@@ -167,26 +181,47 @@ export function bundledGitConfigDirectory(): string {
 }
 
 /**
- * A system config that keeps Dugite's own settings and adds the installed
- * keychain helper. System scope, like Homebrew's and Apple's, so a user who
- * resets `credential.helper` in their global config still opts out.
+ * The bundle's system config with the defaults an installed Git and Git LFS
+ * would have set at system scope:
+ *
+ * - The LFS filter, exactly as `git lfs install --system` writes it. Dugite
+ *   bundles git-lfs but configures no filter, so without this an LFS
+ *   repository checks out pointer files unless the operator happened to run
+ *   `git lfs install` against their global config. The filter also has
+ *   git-lfs install its pre-push hook on first use, so pushes upload objects.
+ * - On macOS, the installed keychain credential helper.
+ *
+ * System scope, like the installed Git's, so global and repository config
+ * still override every default: `lfs install --skip-smudge` keeps pointers,
+ * and resetting `credential.helper` opts out. The bundle's config is
+ * included after the defaults so its own settings win too.
  *
  * Named by content: instances running different app copies write different
  * files instead of rewriting one another's. Returns undefined when the file
- * cannot be written, leaving Dugite's config in place.
+ * cannot be written, leaving the bundle's config in place.
  */
-function keychainSystemConfig(
-  dugiteConfig: string | undefined,
-  helper: string,
+function bundledSystemConfig(
+  bundleConfig: string,
+  keychainHelper: string | undefined,
 ): string | undefined {
   const content = [
-    "# Written by PwrAgent: the bundled Git's system config, plus the keychain",
-    "# credential helper from the Git installed on this Mac.",
-    ...(dugiteConfig ? ["[include]", `\tpath = ${quoteConfigValue(dugiteConfig)}`] : []),
-    "[credential]",
-    // A shell snippet rather than a bare path, so a path with a space
-    // (Xcode-beta.app, a renamed volume) still runs as one word.
-    `\thelper = ${quoteConfigValue(`!'${helper.replaceAll("'", "'\\''")}'`)}`,
+    "# Written by PwrAgent: defaults for its bundled Git, then the bundle's own",
+    "# system config.",
+    "[filter \"lfs\"]",
+    "\tclean = git-lfs clean -- %f",
+    "\tsmudge = git-lfs smudge -- %f",
+    "\tprocess = git-lfs filter-process",
+    "\trequired = true",
+    ...(keychainHelper
+      ? [
+        "[credential]",
+        // A shell snippet rather than a bare path, so a path with a space
+        // (Xcode-beta.app, a renamed volume) still runs as one word.
+        `\thelper = ${quoteConfigValue(`!'${keychainHelper.replaceAll("'", "'\\''")}'`)}`,
+      ]
+      : []),
+    "[include]",
+    `\tpath = ${quoteConfigValue(bundleConfig)}`,
     "",
   ].join("\n");
   const hash = createHash("sha256").update(content).digest("hex").slice(0, 16);

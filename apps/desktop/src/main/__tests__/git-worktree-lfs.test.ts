@@ -10,11 +10,13 @@ describe("worktree creation with bundled Git LFS", () => {
     const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-worktree-lfs-")));
     const repo = path.join(root, "repo");
     const remote = path.join(root, "origin.git");
+    // The operator has no LFS setup: an empty global config, and no
+    // `git lfs install` in the repository. The bundle's defaults are all
+    // that enable the filter.
     const env = {
       ...process.env,
       PATH: process.platform === "win32" ? path.join(process.env.SystemRoot ?? "C:\\Windows", "System32") : "/usr/bin:/bin",
       GIT_CONFIG_GLOBAL: path.join(root, "empty-config"),
-      GIT_CONFIG_NOSYSTEM: "1",
       GIT_LFS_SKIP_SMUDGE: "0",
       GIT_AUTHOR_NAME: "Fixture", GIT_AUTHOR_EMAIL: "fixture@example.invalid",
       GIT_COMMITTER_NAME: "Fixture", GIT_COMMITTER_EMAIL: "fixture@example.invalid",
@@ -24,7 +26,6 @@ describe("worktree creation with bundled Git LFS", () => {
       await mkdir(repo);
       await writeFile(env.GIT_CONFIG_GLOBAL, "");
       await git(repo, ["init", "-b", "main"]);
-      await git(repo, ["lfs", "install", "--local"]);
       await writeFile(path.join(repo, ".gitattributes"), "*.bin filter=lfs diff=lfs merge=lfs -text\n");
       const payload = Buffer.from("LFS worktree fixture\0binary content\r\n");
       await writeFile(path.join(repo, "asset.bin"), payload);
