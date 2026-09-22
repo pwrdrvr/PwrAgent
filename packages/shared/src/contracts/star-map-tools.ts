@@ -21,6 +21,7 @@ import type { StarMapWorkspaceLayout } from "./star-map";
  */
 export const PWRAGENT_STAR_MAP_OPERATION_NAMES = [
   "read_star_map_view",
+  "fly_star_map_to",
 ] as const;
 
 export type PwrAgentStarMapOperationName =
@@ -29,6 +30,7 @@ export type PwrAgentStarMapOperationName =
 export const PWRAGENT_STAR_MAP_ERROR_CODES = [
   "invalid_arguments",
   "star_map_not_open",
+  "not_found",
   "unsupported_operation",
   "internal_error",
 ] as const;
@@ -200,8 +202,59 @@ export type ReadStarMapViewToolArgs = {
   includeHidden?: boolean;
 };
 
+/**
+ * Where to fly the camera: a thread's card, a cloud, or - with `instanceId`
+ * alone - that instance's own body.
+ */
+export type FlyStarMapToToolArgs = {
+  /** A card. Pair with `backend`, and with `instanceId` for a peer's thread. */
+  threadId?: ThreadIdentifier;
+  backend?: AppServerBackendKind;
+  /** A cloud, by the `key` read_star_map_view reports. */
+  cloudKey?: string;
+  /**
+   * The instance that owns the thread or cloud. The same project draws one
+   * cloud per instance in the lanes and orbit lenses, so a cloud key alone
+   * can name more than one.
+   */
+  instanceId?: FederationInstanceId | string;
+};
+
+/** A flight destination once the arguments have said which kind it is. */
+export type StarMapFlightTarget =
+  | {
+      kind: "thread";
+      backend: AppServerBackendKind;
+      threadId: ThreadIdentifier;
+      instanceId?: FederationInstanceId | string;
+    }
+  | {
+      kind: "cloud";
+      cloudKey: string;
+      instanceId?: FederationInstanceId | string;
+    }
+  | {
+      kind: "instance";
+      instanceId: FederationInstanceId | string;
+    };
+
+export const STAR_MAP_FLIGHT_TARGET_KINDS = [
+  "thread",
+  "cloud",
+  "instance",
+] as const satisfies readonly StarMapFlightTarget["kind"][];
+
+export type FlyStarMapToToolData = {
+  target: StarMapFlightTarget["kind"];
+  /** What the camera flew to, as the map labels it. */
+  label?: string;
+  /** The card was not drawn, so the flight brought it onto the map first. */
+  summoned?: boolean;
+};
+
 export type PwrAgentStarMapToolArgsByOperation = {
   read_star_map_view: ReadStarMapViewToolArgs;
+  fly_star_map_to: FlyStarMapToToolArgs;
 };
 
 export type PwrAgentStarMapToolArgs<
@@ -218,6 +271,7 @@ export type ReadStarMapViewToolData = {
 
 export type PwrAgentStarMapDataByOperation = {
   read_star_map_view: ReadStarMapViewToolData;
+  fly_star_map_to: FlyStarMapToToolData;
 };
 
 export type PwrAgentStarMapContext = {
@@ -248,6 +302,62 @@ export type PwrAgentStarMapResponse<
         message: string;
       };
     };
+
+/**
+ * Main -> renderer: an Agent asked the map to do something. The map answers
+ * every command exactly once, on the result channel, under the same
+ * `requestId`.
+ */
+export type StarMapCommand = {
+  requestId: string;
+  kind: "fly_to";
+  target: StarMapFlightTarget;
+};
+
+export type StarMapCommandResult = {
+  requestId: string;
+  response: PwrAgentStarMapResponse<"fly_star_map_to">;
+};
+
+/**
+ * Gate on the renderer's answer. It becomes an Agent tool result verbatim,
+ * so a malformed one must not reach the model as if the map had said it.
+ */
+export function isStarMapCommandResult(
+  value: unknown,
+): value is StarMapCommandResult {
+  if (typeof value !== "object" || value === null) return false;
+  const candidate = value as Partial<StarMapCommandResult>;
+  const response = candidate.response as
+    | Partial<PwrAgentStarMapResponse<"fly_star_map_to">>
+    | undefined;
+  if (typeof candidate.requestId !== "string" || !response) return false;
+  if (response.ok === true) {
+    const data = (response as { data?: Partial<FlyStarMapToToolData> }).data;
+    return (
+      typeof data === "object"
+      && data !== null
+      && STAR_MAP_FLIGHT_TARGET_KINDS.includes(
+        data.target as StarMapFlightTarget["kind"],
+      )
+      && (data.label === undefined || typeof data.label === "string")
+      && (data.summoned === undefined || typeof data.summoned === "boolean")
+    );
+  }
+  if (response.ok === false) {
+    const error = (response as { error?: { code?: unknown; message?: unknown } })
+      .error;
+    return (
+      typeof error === "object"
+      && error !== null
+      && PWRAGENT_STAR_MAP_ERROR_CODES.includes(
+        error.code as PwrAgentStarMapErrorCode,
+      )
+      && typeof error.message === "string"
+    );
+  }
+  return false;
+}
 
 function isStringArray(value: unknown): value is string[] {
   return (

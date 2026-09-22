@@ -71,6 +71,14 @@ export const STAR_MAP_PUBLISH_VIEW_CHANNEL = "star-map:publish-view";
  * manager thread the map's Manager card talks to.
  */
 export const STAR_MAP_OPEN_MANAGER_CHANNEL = "star-map:open-manager";
+/**
+ * Main → renderer event: something an Agent tool asked the map to do, such
+ * as flying the camera. The map answers once, on
+ * `STAR_MAP_COMMAND_RESULT_CHANNEL`, under the command's `requestId`.
+ */
+export const STAR_MAP_COMMAND_CHANNEL = "star-map:command";
+/** Renderer → main invoke: the map's one answer to a command. */
+export const STAR_MAP_COMMAND_RESULT_CHANNEL = "star-map:command-result";
 export const APP_SERVER_INSPECT_TOKEN_MISER_OUTPUT_CHANNEL = "app-server:inspect-token-miser-output";
 export const APP_SERVER_READ_THREAD_CHANNEL = "app-server:read-thread";
 export const APP_SERVER_ANALYZE_THREAD_TOOL_HISTORY_CHANNEL =

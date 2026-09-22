@@ -1,12 +1,18 @@
 import type {
+  FlyStarMapToToolArgs,
   PwrAgentStarMapRequest,
   PwrAgentStarMapResponse,
   ReadStarMapViewToolArgs,
+  StarMapFlightTarget,
   StarMapViewSnapshot,
   StarMapViewThread,
 } from "@pwragent/shared";
-import { DEFAULT_STAR_MAP_VIEW_MAX_THREADS } from "@pwragent/shared";
+import {
+  DEFAULT_STAR_MAP_VIEW_MAX_THREADS,
+  isAppServerBackendKind,
+} from "@pwragent/shared";
 import type { PwrAgentStarMapHandler } from "../agent-tools/pwragent-star-map-agent-tools";
+import { sendStarMapCommand } from "./star-map-command-bus";
 import { readStarMapView } from "./star-map-view-registry";
 
 const NOT_OPEN_MESSAGE =
@@ -15,6 +21,7 @@ const NOT_OPEN_MESSAGE =
 export type StarMapAgentToolsDeps = {
   readView?: () => StarMapViewSnapshot | undefined;
   now?: () => number;
+  sendCommand?: typeof sendStarMapCommand;
 };
 
 /**
@@ -29,10 +36,64 @@ export function createStarMapAgentToolsHandler(
 ): PwrAgentStarMapHandler {
   const readView = deps.readView ?? readStarMapView;
   const now = deps.now ?? (() => Date.now());
+  const sendCommand = deps.sendCommand ?? sendStarMapCommand;
   return async (
     request: PwrAgentStarMapRequest,
-  ): Promise<PwrAgentStarMapResponse> =>
-    readViewResponse(readView(), request.args, now());
+  ): Promise<PwrAgentStarMapResponse> => {
+    if (request.operation === "fly_star_map_to") {
+      return await flyResponse(request.args, sendCommand);
+    }
+    return readViewResponse(readView(), request.args, now());
+  };
+}
+
+async function flyResponse(
+  args: FlyStarMapToToolArgs,
+  sendCommand: typeof sendStarMapCommand,
+): Promise<PwrAgentStarMapResponse<"fly_star_map_to">> {
+  const target = flightTargetFor(args);
+  if (typeof target === "string") {
+    return { ok: false, error: { code: "invalid_arguments", message: target } };
+  }
+  const response = await sendCommand({ kind: "fly_to", target });
+  return response ?? {
+    ok: false,
+    error: { code: "star_map_not_open", message: NOT_OPEN_MESSAGE },
+  };
+}
+
+/** The one destination the arguments name, or why they name none. */
+function flightTargetFor(
+  args: FlyStarMapToToolArgs,
+): StarMapFlightTarget | string {
+  if (args.threadId !== undefined && args.cloudKey !== undefined) {
+    return "fly_star_map_to takes a threadId or a cloudKey, not both.";
+  }
+  if (args.threadId !== undefined) {
+    if (!args.backend || !isAppServerBackendKind(args.backend)) {
+      return "fly_star_map_to needs the thread's backend beside threadId.";
+    }
+    return {
+      kind: "thread",
+      backend: args.backend,
+      threadId: args.threadId,
+      ...(args.instanceId ? { instanceId: args.instanceId } : {}),
+    };
+  }
+  if (args.backend !== undefined) {
+    return "fly_star_map_to backend only goes with threadId.";
+  }
+  if (args.cloudKey !== undefined) {
+    return {
+      kind: "cloud",
+      cloudKey: args.cloudKey,
+      ...(args.instanceId ? { instanceId: args.instanceId } : {}),
+    };
+  }
+  if (args.instanceId !== undefined) {
+    return { kind: "instance", instanceId: args.instanceId };
+  }
+  return "fly_star_map_to needs a threadId, a cloudKey, or an instanceId.";
 }
 
 function readViewResponse(

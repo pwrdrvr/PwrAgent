@@ -6,6 +6,7 @@ import type {
   ReadStarMapWorkspaceResponse,
   SetStarMapCardPositionRequest,
   StarMapArrangementEntry,
+  StarMapCommandResult,
   StarMapIntakeRequest,
   StarMapIntakeResponse,
   StarMapViewSnapshot,
@@ -18,10 +19,12 @@ import {
 import {
   isRemoteFederationTarget,
   isStarMapArrangementEntry,
+  isStarMapCommandResult,
   isStarMapViewSnapshot,
   isStarMapWorkspaceSnapshot,
 } from "@pwragent/shared";
 import {
+  STAR_MAP_COMMAND_RESULT_CHANNEL,
   STAR_MAP_FOCUS_MAIN_WINDOW_CHANNEL,
   STAR_MAP_INTAKE_CHANNEL,
   STAR_MAP_OPEN_THREAD_IN_MAIN_CHANNEL,
@@ -51,6 +54,7 @@ import {
   showStarMapWindow,
 } from "../star-map-window";
 import { publishStarMapView } from "../star-map/star-map-view-registry";
+import { resolveStarMapCommand } from "../star-map/star-map-command-bus";
 import { openStarMapManagerThread } from "../star-map/star-map-manager-thread";
 
 /**
@@ -137,6 +141,7 @@ export function registerStarMapIpcHandlers(): void {
   ipcMain.removeHandler(STAR_MAP_FOCUS_MAIN_WINDOW_CHANNEL);
   ipcMain.removeHandler(STAR_MAP_PUBLISH_VIEW_CHANNEL);
   ipcMain.removeHandler(STAR_MAP_OPEN_MANAGER_CHANNEL);
+  ipcMain.removeHandler(STAR_MAP_COMMAND_RESULT_CHANNEL);
   ipcMain.handle(STAR_MAP_OPEN_WINDOW_CHANNEL, async (event): Promise<void> => {
     showStarMapWindow({
       sourceWindow: BrowserWindow.fromWebContents(event.sender),
@@ -218,6 +223,21 @@ export function registerStarMapIpcHandlers(): void {
     },
   );
   ipcMain.handle(
+    STAR_MAP_COMMAND_RESULT_CHANNEL,
+    async (event, result: StarMapCommandResult): Promise<void> => {
+      // The same boundary as a publish: this answer reaches a model as what
+      // the map did, so only a map window may give it - and the bus only
+      // accepts it from the one window the command went to.
+      if (!isStarMapWindowWebContents(event.sender)) {
+        return;
+      }
+      if (!isStarMapCommandResult(result)) {
+        return;
+      }
+      resolveStarMapCommand({ senderId: event.sender.id, result });
+    },
+  );
+  ipcMain.handle(
     STAR_MAP_READ_ARRANGEMENT_CHANNEL,
     async (): Promise<ReadStarMapArrangementResponse> => ({
       entries: await getDesktopOverlayStore().readStarMapArrangement(),
@@ -285,6 +305,7 @@ export function registerStarMapIpcHandlers(): void {
 }
 
 export function disposeStarMapIpcHandlers(): void {
+  ipcMain.removeHandler(STAR_MAP_COMMAND_RESULT_CHANNEL);
   ipcMain.removeHandler(STAR_MAP_OPEN_MANAGER_CHANNEL);
   ipcMain.removeHandler(STAR_MAP_PUBLISH_VIEW_CHANNEL);
   ipcMain.removeHandler(STAR_MAP_READ_ARRANGEMENT_CHANNEL);

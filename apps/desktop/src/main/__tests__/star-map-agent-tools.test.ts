@@ -4,12 +4,15 @@
 // The assertions worth keeping are the honesty ones. A truncated thread
 // list has to say it truncated, and a cloud's counts must not shrink just
 // because the list did.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type {
   PwrAgentStarMapResponse,
   StarMapViewSnapshot,
 } from "@pwragent/shared";
-import { createStarMapAgentToolsHandler } from "../star-map/star-map-agent-tools-service";
+import {
+  createStarMapAgentToolsHandler,
+  type StarMapAgentToolsDeps,
+} from "../star-map/star-map-agent-tools-service";
 import { buildPwrAgentStarMapToolDefinitions } from "../agent-tools/pwragent-star-map-agent-tools";
 import type {
   AgentToolCallContext,
@@ -481,5 +484,98 @@ describe("star map tool definitions", () => {
     expect(result?.ok).toBe(false);
     if (!result || result.ok) return;
     expect(result.code).toBe("internal_error");
+  });
+});
+
+describe("fly_star_map_to", () => {
+  const flown = {
+    ok: true as const,
+    data: { target: "thread" as const, label: "Release notes" },
+  };
+
+  type SendCommand = NonNullable<StarMapAgentToolsDeps["sendCommand"]>;
+
+  function flyWith(sendCommand = vi.fn<SendCommand>(async () => flown)) {
+    const handler = createStarMapAgentToolsHandler({ sendCommand });
+    const fly = async (args: Record<string, unknown>) =>
+      await handler({
+        operation: "fly_star_map_to",
+        context: {},
+        args,
+      });
+    return { fly, sendCommand };
+  }
+
+  it("sends a card flight to the map and reports the map's answer", async () => {
+    const { fly, sendCommand } = flyWith();
+
+    await expect(
+      fly({ threadId: "t-1", backend: "codex", instanceId: "pwr_studio" }),
+    ).resolves.toEqual(flown);
+    expect(sendCommand).toHaveBeenCalledWith({
+      kind: "fly_to",
+      target: {
+        kind: "thread",
+        backend: "codex",
+        threadId: "t-1",
+        instanceId: "pwr_studio",
+      },
+    });
+  });
+
+  it("names a cloud by its key, and an instance's body by its id alone", async () => {
+    const { fly, sendCommand } = flyWith();
+
+    await fly({ cloudKey: "pwragent", instanceId: "pwr_studio" });
+    await fly({ instanceId: "pwr_studio" });
+
+    expect(sendCommand.mock.calls.map(([command]) => command.target)).toEqual([
+      { kind: "cloud", cloudKey: "pwragent", instanceId: "pwr_studio" },
+      { kind: "instance", instanceId: "pwr_studio" },
+    ]);
+  });
+
+  it("refuses arguments that name no single destination", async () => {
+    const { fly, sendCommand } = flyWith();
+
+    const answers = await Promise.all([
+      fly({}),
+      fly({ threadId: "t-1" }),
+      fly({ threadId: "t-1", backend: "not-a-backend" }),
+      fly({ threadId: "t-1", backend: "codex", cloudKey: "pwragent" }),
+      fly({ backend: "codex" }),
+    ]);
+
+    for (const answer of answers) {
+      expect(answer).toMatchObject({
+        ok: false,
+        error: { code: "invalid_arguments" },
+      });
+    }
+    expect(sendCommand).not.toHaveBeenCalled();
+  });
+
+  it("says the map is closed when there is no map to fly", async () => {
+    const { fly } = flyWith(vi.fn<SendCommand>(async () => undefined));
+
+    await expect(fly({ instanceId: "pwr_studio" })).resolves.toMatchObject({
+      ok: false,
+      error: { code: "star_map_not_open" },
+    });
+  });
+
+  it("rejects a non-string destination at the tool boundary", async () => {
+    const sendCommand = vi.fn<SendCommand>(async () => flown);
+    const definition = buildPwrAgentStarMapToolDefinitions(
+      createStarMapAgentToolsHandler({ sendCommand }),
+    ).find((entry) => entry.name === "fly_star_map_to");
+
+    const result = await definition?.dispatch(
+      { threadId: 42, backend: "codex" },
+      { backend: "codex", threadId: "thread-1", transport: "mcp" },
+    );
+
+    expect(result).toMatchObject({ ok: false, code: "invalid_arguments" });
+    expect(sendCommand).not.toHaveBeenCalled();
   });
 });

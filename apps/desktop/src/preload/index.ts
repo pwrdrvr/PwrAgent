@@ -419,6 +419,8 @@ import type {
   SetStarMapCardPositionRequest,
   OpenStarMapManagerRequest,
   OpenStarMapManagerResponse,
+  StarMapCommand,
+  StarMapCommandResult,
   StarMapIntakeResponse,
   StarMapViewSnapshot,
   WriteStarMapWorkspaceRequest,
@@ -669,6 +671,8 @@ import {
   FEDERATION_REVOKE_PEER_CHANNEL,
   FEDERATION_SET_CELESTIAL_ICON_CHANNEL,
   FEDERATION_SET_EVENT_SUBSCRIPTIONS_CHANNEL,
+  STAR_MAP_COMMAND_CHANNEL,
+  STAR_MAP_COMMAND_RESULT_CHANNEL,
   STAR_MAP_FOCUS_MAIN_WINDOW_CHANNEL,
   STAR_MAP_INTAKE_CHANNEL,
   STAR_MAP_OPEN_THREAD_IN_MAIN_CHANNEL,
@@ -1342,6 +1346,20 @@ const desktopApi = Object.freeze({
     request: OpenStarMapManagerRequest,
   ): Promise<OpenStarMapManagerResponse> =>
     await ipcRenderer.invoke(STAR_MAP_OPEN_MANAGER_CHANNEL, request),
+  onStarMapCommand: (
+    callback: (command: StarMapCommand) => void,
+  ): (() => void) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      payload: StarMapCommand,
+    ) => callback(payload);
+    ipcRenderer.on(STAR_MAP_COMMAND_CHANNEL, listener);
+    return () => {
+      ipcRenderer.off(STAR_MAP_COMMAND_CHANNEL, listener);
+    };
+  },
+  resolveStarMapCommand: async (result: StarMapCommandResult): Promise<void> =>
+    await ipcRenderer.invoke(STAR_MAP_COMMAND_RESULT_CHANNEL, result),
   openStarMapWindow: async (): Promise<void> => {
     await ipcRenderer.invoke(STAR_MAP_OPEN_WINDOW_CHANNEL);
   },

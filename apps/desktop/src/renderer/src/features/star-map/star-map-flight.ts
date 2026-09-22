@@ -60,6 +60,28 @@ export function starMapFlightScale(current: number): number {
 }
 
 /**
+ * The scale that frames `rect` whole with `margin` of sky around it, but
+ * never closer than a card flight lands: a small cloud is shown at card
+ * zoom, a large one pulled back until all of it fits.
+ */
+export function starMapFramingScale(params: {
+  rect: StarMapFlightRect;
+  viewport: StarMapViewBox;
+  current: number;
+  margin?: number;
+}): number {
+  const margin = params.margin ?? 80;
+  const fit = Math.min(
+    (params.viewport.width - margin * 2) / Math.max(1, params.rect.width),
+    (params.viewport.height - margin * 2) / Math.max(1, params.rect.height),
+  );
+  return Math.min(
+    MAX_ZOOM,
+    Math.max(MIN_ZOOM, Math.min(starMapFlightScale(params.current), fit)),
+  );
+}
+
+/**
  * The view that puts `rect` in the middle of the window at `scale`.
  *
  * Clamped through the same `clampStarMapView` as every other
