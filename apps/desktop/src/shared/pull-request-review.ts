@@ -26,9 +26,10 @@ export function attachedPullRequestsForWorkspace(params: {
   const scoped = params.prs.filter((pr) => pr.linkedDirectoryPaths?.some(
     (path) => normalizePath(path) === normalizePath(params.cwd!),
   ));
-  const repositories = new Set(params.repository
-    ? [params.repository.toLowerCase()]
-    : scoped.map(repository).filter(Boolean));
+  const repositories = new Set([
+    ...(params.repository ? [params.repository.toLowerCase()] : []),
+    ...scoped.map(repository).filter(Boolean),
+  ]);
   return params.prs.filter((pr) => repositories.has(repository(pr)));
 }
 
@@ -176,7 +177,11 @@ export function describeAttachedPullRequestLocalSync(params: {
     );
   }
 
-  return { known: true, matches: differences.length === 0, differences };
+  if (differences.length > 0) {
+    return { known: true, matches: false, differences };
+  }
+  if (!localHead?.sha || !pr.headSha) return UNKNOWN_PULL_REQUEST_SYNC;
+  return { known: true, matches: localHead.sha === pr.headSha, differences };
 }
 
 /**

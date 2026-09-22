@@ -5891,6 +5891,10 @@ describe("Composer", () => {
       desktopApi={{ onAgentEvent: () => () => undefined }}
       disabled={false} skills={[]}
       thread={reviewTargetThread({})}
+      directory={{ key: "project", kind: "directory", label: "Project", path: "/repo/project",
+        gitStatus: { currentBranch: "feat/stack-1", branches: ["main", "feat/stack-1"], syncState: "in-sync",
+          recentCommits: [{ sha: "a".repeat(40), shortSha: "aaaaaaa", subject: "Published head" }] },
+      }}
     />);
     openReviewComposer();
     const group = screen.getByRole("group", { name: "Review target" });
@@ -5899,6 +5903,40 @@ describe("Composer", () => {
     expect(screen.getByLabelText("Attached pull request"))
       .toHaveValue("https://github.com/fixture/project/pull/7");
     expect(screen.getByText(/would cover the same commits/)).toBeInTheDocument();
+  });
+
+  it("keeps local review when directory status belongs to another checkout", () => {
+    render(<Composer
+      desktopApi={{ onAgentEvent: () => () => undefined }}
+      disabled={false} skills={[]} thread={reviewTargetThread({})}
+      directory={{ key: "project", kind: "directory", label: "Project", path: "/repo/project",
+        gitStatus: { currentBranch: "main", behind: 0, branches: ["main"], syncState: "in-sync" },
+      }}
+    />);
+    openReviewComposer();
+    const group = screen.getByRole("group", { name: "Review target" });
+    expect(within(group).getByRole("button", { name: /Base branch/ })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.queryByText(/would cover the same commits/)).not.toBeInTheDocument();
+  });
+
+  it("offers and submits a scoped upstream PR when origin is a fork", () => {
+    const startReview = vi.fn();
+    render(<Composer
+      desktopApi={{ onAgentEvent: () => () => undefined, startReview }}
+      disabled={false} skills={[]} thread={reviewTargetThread({})}
+      directory={{ key: "project", kind: "directory", label: "Project", path: "/repo/project",
+        gitStatus: { originRepository: "github.com/contributor/project", currentBranch: "feat/stack-1",
+          branches: ["main", "feat/stack-1"], syncState: "in-sync" },
+      }}
+    />);
+    openReviewComposer();
+    const group = screen.getByRole("group", { name: "Review target" });
+    fireEvent.click(within(group).getByRole("button", { name: /Attached PR/ }));
+    expect(screen.getByLabelText("Attached pull request")).toHaveValue("https://github.com/fixture/project/pull/7");
+    fireEvent.click(within(group).getByRole("button", { name: "Start review" }));
+    expect(startReview).toHaveBeenCalledWith(expect.objectContaining({
+      target: { type: "pullRequest", url: "https://github.com/fixture/project/pull/7" },
+    }));
   });
 
   it("keeps the local default and names what the PR omits when they differ", () => {

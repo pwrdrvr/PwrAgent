@@ -126,16 +126,36 @@ describe("explicit attached PR review", () => {
     expect(attachedPullRequestsForWorkspace({ cwd, prs })).toEqual([]);
   });
 
+  it("includes scoped upstream attachments alongside a fork origin", () => {
+    const upstream = { ...prs[0], linkedDirectoryPaths: [cwd] };
+    const unrelated = { ...prs[0], url: "https://github.com/other/project/pull/3", linkedDirectoryPaths: ["/other"] };
+    expect(attachedPullRequestsForWorkspace({
+      cwd, repository: "github.com/contributor/project", prs: [upstream, prs[1], unrelated],
+    })).toEqual([upstream, prs[1]]);
+  });
+
+  it.each([undefined, { currentBranch: "stack-1" }, { currentBranch: "main", behind: 0 }])(
+    "does not infer head equality from clean counters with status %j", (directoryGitStatus) => {
+      const pr = { ...prs[0], headRefName: "stack-1", lifecycleState: "open" as const };
+      const params = { currentBranch: "stack-1", directoryGitStatus,
+        gitWorkingState: { dirtyFiles: 0, untrackedFiles: 0, unpushedCommits: 0 } };
+      expect(describeAttachedPullRequestLocalSync({ ...params, pr })).toEqual({ known: false, matches: false, differences: [] });
+      expect(findCheckedOutPullRequest({ ...params, prs: [pr] })).toBeUndefined();
+    },
+  );
+
   it("separates a checkout that is the pull request from one that only resembles it", () => {
     const pr = { headRefName: "stack-1", headSha: "a".repeat(40) };
     const clean = { dirtyFiles: 0, unpushedCommits: 0, untrackedFiles: 0 };
     expect(describeAttachedPullRequestLocalSync({
       currentBranch: "stack-1", gitWorkingState: clean, pr,
+      directoryGitStatus: { currentBranch: "stack-1", recentCommits: [{ sha: pr.headSha, shortSha: "aaaaaaa" }] },
     })).toEqual({ known: true, matches: true, differences: [] });
     // origin/ is the same branch; a different branch is not, and says so
     // without needing the working state to have been probed.
     expect(describeAttachedPullRequestLocalSync({
       currentBranch: "origin/stack-1", gitWorkingState: clean, pr,
+      directoryGitStatus: { currentBranch: "stack-1", recentCommits: [{ sha: pr.headSha, shortSha: "aaaaaaa" }] },
     }).matches).toBe(true);
     expect(describeAttachedPullRequestLocalSync({ currentBranch: "stack-2", pr }))
       .toEqual({
@@ -172,7 +192,15 @@ describe("explicit attached PR review", () => {
     expect(describeAttachedPullRequestLocalSync({
       currentBranch: "stack-1", gitWorkingState: clean, pr,
       directoryGitStatus: { behind: 2, currentBranch: "main" },
-    }).matches).toBe(true);
+    })).toEqual({ known: false, matches: false, differences: [] });
+  });
+
+  it("requires a published head even when the checkout head is available", () => {
+    expect(describeAttachedPullRequestLocalSync({
+      currentBranch: "stack-1", pr: { headRefName: "stack-1" },
+      gitWorkingState: { dirtyFiles: 0, untrackedFiles: 0, unpushedCommits: 0 },
+      directoryGitStatus: { currentBranch: "stack-1", recentCommits: [{ sha: "a".repeat(40), shortSha: "aaaaaaa" }] },
+    })).toEqual({ known: false, matches: false, differences: [] });
   });
 
   it("offers only an open pull request as the checked-out default", () => {
@@ -181,7 +209,11 @@ describe("explicit attached PR review", () => {
       gitWorkingState: { dirtyFiles: 0, unpushedCommits: 0, untrackedFiles: 0 },
     };
     const open = { ...prs[0], headRefName: "stack-1", lifecycleState: "open" as const };
-    expect(findCheckedOutPullRequest({ ...shared, prs: [open] })).toBe(open);
+    const directoryGitStatus = {
+      currentBranch: "stack-1", recentCommits: [{ sha: open.headSha!, shortSha: open.headSha!.slice(0, 7) }],
+    };
+    expect(findCheckedOutPullRequest({ ...shared, prs: [open] })).toBeUndefined();
+    expect(findCheckedOutPullRequest({ ...shared, directoryGitStatus, prs: [open] })).toBe(open);
     expect(findCheckedOutPullRequest({
       ...shared,
       prs: [{ ...open, lifecycleState: "merged" as const }],
