@@ -2,14 +2,15 @@
 
 The Star Map's **Manager** button opens a long-lived thread the operator talks
 to *about the map*: "rename that thread to have an AB test prefix like the
-others in its cloud", "steer the two selected cards", "what is Studio actually
-working on".
+others in its cloud", "steer the two selected cards", "move these into
+PwrSnap", "archive the finished ones", "fly me to the release runbook thread",
+"what is Studio actually working on".
 
 Nothing about the manager is a privileged execution path. It is an ordinary
 thread with the ordinary PwrAgent tool catalog — `mutate_thread`, the
-orchestration tools, the federation tools — plus one new tool that lets *any*
-thread see what is on the map. The feature is really that tool; the manager is
-the affordance that makes it worth having.
+orchestration tools, the federation tools — plus two tools that let *any*
+thread see what is on the map and move its camera. The feature is really those
+tools; the manager is the affordance that makes them worth having.
 
 ## Why a view snapshot exists at all
 
@@ -41,14 +42,16 @@ builds the snapshot *inside* the throttle — the builder walks every cloud and
 thread, and the hook sits on the drag path. Callers pass a memoized input, not
 a finished snapshot.
 
-## The tool
+## The tools
 
 | Tool | Serves | Messaging RBAC |
 |---|---|---|
 | `read_star_map_view` | Instances, clouds and their full membership, drawn vs folded cards, selection, open chat cards, camera, filters, and where each drawn card sits. Each thread carries `backend` / `threadId` / `instanceId`. | `tools.thread_inspection` |
+| `fly_star_map_to` | Moves the camera to a thread's card, a cloud, or an instance's body, and answers with what it flew to. | `tools.thread_inspection` |
 
-It is gated for messaging-originated turns at the same permission as any other
-read of thread metadata.
+Both are gated for messaging-originated turns at the same permission as any
+other read of thread metadata. A flight changes what the operator is looking
+at and nothing else.
 
 The honesty property worth preserving is pinned by tests: **truncation is
 reported.** `maxThreads` shortens the thread list but never the clouds' own
@@ -75,6 +78,41 @@ and never looks uncertain, which is the worst way for this to fail.
 carries geometry even when the operator has panned it out of view, so "the card
 on the left" has to exclude it.
 
+### Flying the camera
+
+`fly_star_map_to` is the one path where main asks the renderer to *do*
+something, so it has its own channel rather than riding on the publish.
+`star-map-command-bus.ts` sends the command to the renderer behind the view
+the Agent last read — a command sent anywhere else would act on a map the
+Agent never saw — and holds the tool call open for the answer.
+
+Every command resolves exactly once: with the map's answer, with "the map
+closed" if its renderer dies, or with a timeout. A thrown handler in the
+renderer is answered too (`useStarMapCommands`), because an unanswered command
+costs the turn the full timeout. The answer is trusted only from a Star Map
+window, only from the one the command went to, and only if it validates
+(`isStarMapCommandResult`) — it reaches the model as what the map did.
+
+What the destinations mean:
+
+- **A card.** The same `flyToThread` ⌘K uses, so a card the lens is not
+  drawing is summoned first. A thread the map has not loaded at all — the
+  local feed holds one filtered page — is asked for by identity from its
+  owning feed, flown to when it lands, and kept on the map like a ⌘K pick.
+  The renderer gives up after ten seconds, before main's fifteen, so the
+  Agent hears why rather than a timeout.
+- **A cloud.** Resolved against a snapshot built on the spot from the same
+  input the publisher uses, so the `cloudKey` the Agent read is the key that
+  matches. The camera frames the union of the cloud's placed cards, at card
+  zoom for a small cloud and pulled back until a large one fits. The same
+  project draws one cloud per instance in the lanes and orbit lenses, so an
+  ambiguous key is refused with the instances named.
+- **An instance.** Its body, which the projects lens does not draw.
+
+An Agent flight never moves keyboard focus. The edge arrows' flight does,
+for a reason that does not apply here — and the operator is usually typing
+into the manager's card while it runs.
+
 ### Why there is no screenshot tool
 
 An earlier revision had a `capture_star_map` beside this one. It was cut before
@@ -96,6 +134,35 @@ path.
 What genuinely still needs pixels is appearance rather than position — does a
 label collide with a chip, do two clouds overlap, does this look wrong — which
 is design and debugging work with better tools already available to it.
+
+## Moving and archiving threads
+
+These are `mutate_thread` fields, not new tools: `projectPath` and
+`archive`. That tool already resolves a thread locally or on the owning peer,
+supports `dryRun`, and is gated for messaging per field. A field whose
+permission is missing fails to compile, so the new fields could not ship
+ungated.
+
+- **`projectPath`** is the status card's *Move to Project*: a `to-project`
+  workspace handoff that relinks the thread to another checkout without
+  copying files. It is gated on `thread.control.handoff`, as that button is.
+  The path comes from `list_instance_projects` on the thread's own instance,
+  because it is checked on that instance's disk. It runs **before** any other
+  field in the same call, so a refused destination leaves the title and
+  settings as they were rather than half the request applied.
+- **`archive`** takes only `true` and never shares a call with another
+  field. It has its own permission, `thread.control.archive`, Admin only by
+  default: it removes worktrees, which no messaging action did before.
+  A thread with a turn running is refused, on a dry run too, so a preview
+  says what the real call would. A local archive goes through the app's own
+  archive path (`setAgentThreadArchiver`), which also ungroups the thread's
+  children on other instances. The registry cannot reach that step itself.
+  Undo is **Settings → Archived Threads** on the owning instance. No tool
+  restores a thread.
+
+Neither will act on the thread running the call: archiving it or relinking
+its workspace would pull it out from under the turn that has to report the
+result.
 
 ## How the manager gets its instructions
 
