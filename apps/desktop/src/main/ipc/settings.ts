@@ -2,6 +2,7 @@ import { codexAuthState } from "../codex-auth-state";
 import { CodexAppServerClient } from "../codex-app-server/client";
 import { validateGlabCommand } from "../settings/glab-discovery";
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
+import { IterableMapper } from "@shutterstock/p-map-iterable";
 import type {
   AcpAgentPreference,
   AcpAgentSettingsEntry,
@@ -231,6 +232,9 @@ const USER_INITIATED_ACP_PROBE_TIMEOUT_MS = 10 * 60_000;
 // is unreachable, so an unresponsive endpoint must not hold up discovery.
 const ACP_REGISTRY_FETCH_TIMEOUT_MS = 15_000;
 const JOINED_ACP_REFRESH_PHASE = "Waiting for a provider refresh already running";
+// Each capability probe launches a whole agent CLI, so a refresh starts a few
+// at a time rather than every installed runtime at once.
+const ACP_PROBE_CONCURRENCY = 4;
 
 function acpRefreshRegistryIds(
   request: ListAcpAgentSettingsRequest,
@@ -658,8 +662,14 @@ function modelCountOf(
   return models ? { modelCount: models.length } : {};
 }
 
+type AcpProbeOutcome = {
+  record: AcpInstalledAgentRecord;
+  update: ProviderCatalogRefreshProviderUpdate;
+};
+
+// Never throws: IterableMapper stops handing out results at the first mapper
+// error, which would leave the probes already running unobserved.
 async function probeInstalledAcpAgent(
-  store: AcpAgentStore,
   record: AcpInstalledAgentRecord,
   options: {
     cwd: string;
@@ -670,12 +680,15 @@ async function probeInstalledAcpAgent(
     ) => void;
     signal?: AbortSignal;
   },
-): Promise<void> {
+): Promise<AcpProbeOutcome> {
   const registryId = record.registryId;
+  // Keep what the last completed probe learned about this runtime.
+  const cancelled: AcpProbeOutcome = {
+    record,
+    update: { status: "cancelled" },
+  };
   if (options.signal?.aborted) {
-    store.upsertInstalledAgent(record);
-    options.report(registryId, { status: "cancelled" });
-    return;
+    return cancelled;
   }
   try {
     const probe = await probeAcpRuntimeCapabilities(
@@ -688,20 +701,18 @@ async function probeInstalledAcpAgent(
           options.report(registryId, { status: "running", detail: stage }),
       },
     );
-    store.upsertInstalledAgent(probe.record);
-    options.report(
-      registryId,
-      probe.error !== undefined
+    return {
+      record: probe.record,
+      update: probe.error !== undefined
         ? { status: "failed", error: probe.error }
         : { status: "succeeded", ...modelCountOf(probe.record) },
-    );
+    };
   } catch (error) {
-    if (!options.signal?.aborted) {
-      throw error;
+    if (options.signal?.aborted) {
+      return cancelled;
     }
-    // Keep what the last completed probe learned about this runtime.
-    store.upsertInstalledAgent(record);
-    options.report(registryId, { status: "cancelled" });
+    const message = error instanceof Error ? error.message : String(error);
+    return { record, update: { status: "failed", error: message } };
   }
 }
 
@@ -802,9 +813,7 @@ async function listInstalledAndLocalAcpAgents(
       const probeTimeoutMs = options.force === true
         ? USER_INITIATED_ACP_PROBE_TIMEOUT_MS
         : undefined;
-      // Probes launch independent agents, so they run together: one agent
-      // that hangs on its request timeout must not hold back the others.
-      const probes: Array<Promise<void>> = [];
+      const toProbe: AcpInstalledAgentRecord[] = [];
       for (const record of discovered) {
         if (record.installStatus !== "installed") {
           // Compatibility diagnostics (for example a legacy Python kimi-cli)
@@ -861,14 +870,7 @@ async function listInstalledAndLocalAcpAgents(
             ...(options?.force === true ? { force: true } : {}),
           })
         ) {
-          probes.push(
-            probeInstalledAcpAgent(store, nextRecord, {
-              cwd: discoveryCwd,
-              report,
-              ...(probeTimeoutMs !== undefined ? { probeTimeoutMs } : {}),
-              ...(progress ? { signal: progress.signal } : {}),
-            }),
-          );
+          toProbe.push(nextRecord);
         } else {
           store.upsertInstalledAgent(nextRecord);
           report(record.registryId, {
@@ -878,14 +880,35 @@ async function listInstalledAndLocalAcpAgents(
           });
         }
       }
-      // Settle every probe before answering: returning on the first failure
-      // would drop this pass from the coalescing set while sibling agents are
-      // still being probed, inviting a second copy of each.
-      const failure = (await Promise.allSettled(probes)).find(
-        (result): result is PromiseRejectedResult => result.status === "rejected",
+      // Probes launch independent agents, so several run at once: one agent
+      // that hangs on its request timeout must not hold back the others.
+      // Each result is stored and reported the moment its probe finishes.
+      const probes = new IterableMapper(
+        toProbe,
+        (record) =>
+          probeInstalledAcpAgent(record, {
+            cwd: discoveryCwd,
+            report,
+            ...(probeTimeoutMs !== undefined ? { probeTimeoutMs } : {}),
+            ...(progress ? { signal: progress.signal } : {}),
+          }),
+        { concurrency: ACP_PROBE_CONCURRENCY, maxUnread: ACP_PROBE_CONCURRENCY },
       );
-      if (failure) {
-        throw failure.reason;
+      // Drain every probe before answering, even past a failed write: leaving
+      // early would drop this pass from the coalescing set while sibling
+      // agents are still being probed, inviting a second copy of each.
+      let storeFailure: unknown;
+      for await (const outcome of probes) {
+        try {
+          store.upsertInstalledAgent(outcome.record);
+        } catch (error) {
+          storeFailure ??= error;
+          continue;
+        }
+        report(outcome.record.registryId, outcome.update);
+      }
+      if (storeFailure !== undefined) {
+        throw storeFailure;
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
