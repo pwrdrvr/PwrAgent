@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   buildThreadIdentityKey,
+  type NavigationIdentity,
   type NavigationThreadSummary,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
@@ -34,6 +35,12 @@ export function useStarMapManager(params: {
   /** Local navigation threads, unfiltered by the map's own filters. */
   threads: readonly NavigationThreadSummary[];
   openThread: (thread: NavigationThreadSummary) => void;
+  /**
+   * Ask the map to load one thread by identity, or stop asking. The map's
+   * own feed is one filtered page, so a manager thread that has aged out of
+   * it, or that a filter excludes, never arrives unless it is asked for.
+   */
+  onDemandThread?: (identity: NavigationIdentity | undefined) => void;
   onRefreshLocalThreads?: () => void;
   /**
    * Where a failure is shown. The map already owns one error banner, and
@@ -56,6 +63,8 @@ export function useStarMapManager(params: {
   resolveRef.current = params.desktopApi?.openStarMapManager;
   const refreshRef = useRef(params.onRefreshLocalThreads);
   refreshRef.current = params.onRefreshLocalThreads;
+  const demandRef = useRef(params.onDemandThread);
+  demandRef.current = params.onDemandThread;
   const errorRef = useRef(params.onError);
   errorRef.current = params.onError;
   // `open`'s continuation can land after the surface is gone: resolving the
@@ -82,6 +91,7 @@ export function useStarMapManager(params: {
   const fail = useCallback((message: string) => {
     setBusy(false);
     setPendingThreadKey(undefined);
+    demandRef.current?.(undefined);
     errorRef.current(message);
   }, []);
 
@@ -109,9 +119,13 @@ export function useStarMapManager(params: {
           setBusy(false);
           return;
         }
-        // Freshly created: the card needs the thread's navigation summary,
-        // which only arrives with the next snapshot.
+        // Not loaded here: freshly created, paged out, or filtered away. The
+        // card needs the thread's navigation summary, so ask for that row.
         setPendingThreadKey(threadKey);
+        demandRef.current?.({
+          backend: response.backend as NavigationIdentity["backend"],
+          threadId: response.threadId,
+        });
         // Awaited only for its failure: the arrival effect is what ends the
         // wait, but an unhandled rejection here would leave the button
         // disabled for the full timeout with nothing said.
@@ -138,6 +152,8 @@ export function useStarMapManager(params: {
     setPendingThreadKey(undefined);
     setBusy(false);
     openThreadRef.current(arrived);
+    // The open card keeps its own thread loaded from here on.
+    demandRef.current?.(undefined);
   }, [clearTimer, params.threads, pendingThreadKey]);
 
   return { busy, open };

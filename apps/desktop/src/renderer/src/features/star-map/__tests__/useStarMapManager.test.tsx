@@ -90,7 +90,47 @@ describe("useStarMapManager", () => {
     expect(onError).not.toHaveBeenCalled();
   });
 
+  it("asks for a manager thread the map has not loaded, until it opens", async () => {
+    // The map's feed is one filtered page: an existing manager that newer
+    // threads have pushed off it only arrives when asked for by identity.
+    const openThread = vi.fn();
+    const onDemandThread = vi.fn();
+    const onError = vi.fn();
+    const { rerender, result } = renderHook(
+      (props: { threads: NavigationThreadSummary[] }) =>
+        useStarMapManager({
+          desktopApi: api(async () => ({
+            status: "ready",
+            backend: "codex",
+            threadId: "manager-old",
+            created: false,
+          })),
+          threads: props.threads,
+          openThread,
+          onDemandThread,
+          onError,
+        }),
+      { initialProps: { threads: [thread("newer")] } },
+    );
+    act(() => result.current.open());
+    await waitFor(() =>
+      expect(onDemandThread).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "manager-old",
+      }),
+    );
+    expect(openThread).not.toHaveBeenCalled();
+
+    rerender({ threads: [thread("newer"), thread("manager-old")] });
+    await waitFor(() => expect(openThread).toHaveBeenCalledTimes(1));
+    expect(openThread.mock.calls[0][0].id).toBe("manager-old");
+    // The open card keeps its own row loaded, so the ask is withdrawn.
+    expect(onDemandThread).toHaveBeenLastCalledWith(undefined);
+    expect(onError).not.toHaveBeenCalled();
+  });
+
   it("stops waiting, and says so, when the thread never arrives", async () => {
+    const onDemandThread = vi.fn();
     const onError = vi.fn();
     const { result } = renderHook(() =>
       useStarMapManager({
@@ -102,6 +142,7 @@ describe("useStarMapManager", () => {
         })),
         threads: [],
         openThread: vi.fn(),
+        onDemandThread,
         onError,
       }),
     );
@@ -112,6 +153,7 @@ describe("useStarMapManager", () => {
     });
     expect(result.current.busy).toBe(false);
     expect(onError).toHaveBeenCalledWith(expect.stringMatching(/try again/i));
+    expect(onDemandThread).toHaveBeenLastCalledWith(undefined);
   });
 
   it("surfaces a main-process failure instead of spinning", async () => {

@@ -2588,3 +2588,71 @@ describe("StarMapScreen", () => {
     expect(screen.queryByRole("status")).toBeNull();
   });
 });
+
+describe("StarMapScreen manager", () => {
+  it("opens a manager thread that is not on the map's loaded page", async () => {
+    // The map loads its own threads a filtered page at a time. A manager
+    // with ten newer threads ahead of it is not on that page, so the button
+    // has to ask for its row by identity; waiting for a page to bring it
+    // ends in "did not load" on every click.
+    const newer = Array.from(
+      { length: 10 },
+      (_, index) => unreadThread(`newer-${index}`),
+    );
+    const manager = unreadThread("manager");
+    const getNavigationQueryPage = vi.fn(
+      async (request: NavigationQueryRequest) => {
+        if (request.query.kind === "star-map") {
+          return queryPage(request, newer);
+        }
+        if (request.query.kind === "exact") {
+          const asked = new Set(
+            request.query.identities.map((ref) => ref.threadId),
+          );
+          return queryPage(
+            request,
+            [...newer, manager].filter((thread) => asked.has(thread.id)),
+          );
+        }
+        return queryPage(request, []);
+      },
+    );
+    const desktopApi = {
+      ...buildDesktopApi(),
+      getNavigationQueryPage,
+      openStarMapManager: vi.fn(async () => ({
+        status: "ready" as const,
+        backend: "codex",
+        threadId: "manager",
+        created: false,
+      })),
+      readThread: vi.fn(async () => ({
+        backend: "codex" as const,
+        threadId: "manager",
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: { supportsPagination: false, hasPreviousPage: false },
+        },
+      })),
+    } as unknown as DesktopApi;
+
+    render(
+      <StarMapScreen
+        desktopApi={desktopApi}
+        sessionKeys={{}}
+        onOpenLocalThread={() => undefined}
+        onFocusLocalInstance={() => undefined}
+      />,
+    );
+    await screen.findByRole("button", { name: "Open thread: Thread newer-0" });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Ask the Star Map manager" }),
+    );
+
+    expect(
+      await screen.findByRole("region", { name: "Chat: Thread manager" }),
+    ).toBeTruthy();
+    expect(screen.queryByText(/did not load/i)).toBeNull();
+  });
+});

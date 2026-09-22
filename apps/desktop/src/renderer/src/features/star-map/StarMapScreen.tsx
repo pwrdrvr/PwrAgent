@@ -1159,9 +1159,19 @@ export function StarMapScreen(props: StarMapScreenProps) {
     }
     return result;
   }, [chatCards.cards, health?.instanceId]);
-  const demandedLocalIdentities = useMemo(() => chatCards.cards
-    .filter((card) => card.ownerInstanceId === localInstanceId)
-    .map((card) => ({ backend: card.thread.source, threadId: card.thread.id })), [chatCards.cards, localInstanceId]);
+  /**
+   * The manager thread while its card is being opened. The local feed holds
+   * one filtered page, so a manager that has aged out of it, or that the
+   * operator's filters exclude, only arrives if it is asked for by identity -
+   * the same way an open chat card keeps its own thread loaded.
+   */
+  const [managerDemand, setManagerDemand] = useState<NavigationIdentity>();
+  const demandedLocalIdentities = useMemo(() => {
+    const identities: NavigationIdentity[] = chatCards.cards
+      .filter((card) => card.ownerInstanceId === localInstanceId)
+      .map((card) => ({ backend: card.thread.source, threadId: card.thread.id }));
+    return managerDemand ? [...identities, managerDemand] : identities;
+  }, [chatCards.cards, localInstanceId, managerDemand]);
   const localRowsAreOwnerMatched = props.localThreads === undefined;
   const localFeed = useLocalStarMapThreads({
     desktopApi: props.desktopApi,
@@ -2943,6 +2953,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
     // never find the thread it just created.
     threads: localThreads,
     openThread,
+    onDemandThread: setManagerDemand,
     onRefreshLocalThreads: props.onRefreshLocalThreads,
     // Reported through the map's one error banner rather than a second one:
     // `.star-map__card-error` is absolutely positioned at a fixed spot, so
