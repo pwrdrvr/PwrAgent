@@ -367,18 +367,40 @@ describe("star map window IPC", () => {
       { sender: { id: STAR_MAP_SENDER_ID + 1 } },
       {
         requestId,
+        kind: "fly_to",
         response: { ok: true, data: { target: "instance", label: "Forged" } },
       },
     );
-    // A malformed answer from the map itself is not reported either.
+    // A malformed answer from the map itself is not reported either: not a
+    // destination, not a command, not labelled at all.
     await answer(
       { sender },
-      { requestId, response: { ok: true, data: { target: "somewhere" } } },
+      {
+        requestId,
+        kind: "fly_to",
+        response: { ok: true, data: { target: "somewhere" } },
+      },
     );
     await answer(
       { sender },
       {
         requestId,
+        kind: "teleport",
+        response: { ok: true, data: { target: "instance", label: "Nowhere" } },
+      },
+    );
+    await answer(
+      { sender },
+      {
+        requestId,
+        response: { ok: true, data: { target: "instance", label: "Unlabelled" } },
+      },
+    );
+    await answer(
+      { sender },
+      {
+        requestId,
+        kind: "fly_to",
         response: { ok: true, data: { target: "instance", label: "Studio" } },
       },
     );

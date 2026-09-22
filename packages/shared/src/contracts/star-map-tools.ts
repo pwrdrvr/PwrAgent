@@ -22,6 +22,8 @@ import type { StarMapWorkspaceLayout } from "./star-map";
 export const PWRAGENT_STAR_MAP_OPERATION_NAMES = [
   "read_star_map_view",
   "fly_star_map_to",
+  "highlight_star_map_threads",
+  "set_star_map_view",
 ] as const;
 
 export type PwrAgentStarMapOperationName =
@@ -138,6 +140,8 @@ export type StarMapViewThread = {
   visible: boolean;
   /** Gathered by the operator's marquee or shift-click. */
   selected: boolean;
+  /** Ringed by an Agent's `highlight_star_map_threads`, not by the operator. */
+  highlighted?: boolean;
   /** A floating chat card on the map is open on this thread. */
   chatCardOpen: boolean;
   /** Map-space card rect; absent while the card is folded away. */
@@ -182,6 +186,8 @@ export type StarMapViewSnapshot = {
   threads: StarMapViewThread[];
   selectedThreadKeys: string[];
   openChatCardThreadKeys: string[];
+  /** What an Agent last highlighted, drawn or not. */
+  highlightedThreadKeys?: string[];
   /** Threads surviving the current filters, across every instance. */
   matchedThreadCount: number;
 };
@@ -218,7 +224,19 @@ export type FlyStarMapToToolArgs = {
    * can name more than one.
    */
   instanceId?: FederationInstanceId | string;
+  /** With a thread only: open it once there. See `StarMapThreadOpenMode`. */
+  open?: StarMapThreadOpenMode;
 };
+
+/**
+ * How to open a thread an Agent flew to. `card` opens its chat card on the
+ * map, beside the thread's own card. `full` opens the whole thread: in the
+ * main window for this instance's thread, in its owner's viewer for a
+ * peer's. A full open leaves the map, so it skips the flight.
+ */
+export const STAR_MAP_THREAD_OPEN_MODES = ["card", "full"] as const;
+
+export type StarMapThreadOpenMode = (typeof STAR_MAP_THREAD_OPEN_MODES)[number];
 
 /** A flight destination once the arguments have said which kind it is. */
 export type StarMapFlightTarget =
@@ -250,11 +268,80 @@ export type FlyStarMapToToolData = {
   label?: string;
   /** The card was not drawn, so the flight brought it onto the map first. */
   summoned?: boolean;
+  /** How the thread was opened, when the call asked for it. */
+  opened?: StarMapThreadOpenMode;
+};
+
+/** A thread card, named the way every thread tool names a thread. */
+export type StarMapThreadRef = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  /** The owning instance, for a peer's thread. */
+  instanceId?: FederationInstanceId | string;
+};
+
+export const MAX_STAR_MAP_HIGHLIGHT_THREADS = 50;
+
+/**
+ * Ring a set of cards so the operator can see what an Agent means before it
+ * acts on them. Replaces the previous highlight; `clear` drops it.
+ */
+export type HighlightStarMapThreadsToolArgs = {
+  threads?: StarMapThreadRef[];
+  clear?: boolean;
+};
+
+export type HighlightStarMapThreadsToolData = {
+  /** Thread keys now ringed, in the order the call named them. */
+  highlightedThreadKeys: string[];
+  /** Named threads the map could not load, and so could not ring. */
+  missingThreadKeys?: string[];
+};
+
+/** The map's filter chips, by the key `read_star_map_view` reports. */
+export const STAR_MAP_VIEW_FILTER_KEYS = [
+  "attention",
+  "approval",
+  "pr",
+  "unpushed",
+  "pinned",
+  "agent",
+] as const;
+
+export type StarMapViewFilterKey = (typeof STAR_MAP_VIEW_FILTER_KEYS)[number];
+
+/** A chip's state as an Agent sets it; `neutral` turns the chip off. */
+export const STAR_MAP_VIEW_FILTER_SETTINGS = [
+  "include",
+  "exclude",
+  "neutral",
+] as const;
+
+export type StarMapViewFilterSetting =
+  (typeof STAR_MAP_VIEW_FILTER_SETTINGS)[number];
+
+/** Change the lens and the chips, as the View menu and the chip strip do. */
+export type SetStarMapViewToolArgs = {
+  layout?: StarMapViewLayout;
+  /** Chips to set. Chips not named keep their state. */
+  filters?: Partial<Record<StarMapViewFilterKey, StarMapViewFilterSetting>>;
+  /** Turn every chip off before applying `filters`. */
+  clearFilters?: boolean;
+  hideOfflineInstances?: boolean;
+};
+
+/** The view after the change, in the same terms `read_star_map_view` uses. */
+export type SetStarMapViewToolData = {
+  layout: StarMapViewLayout;
+  filters: StarMapViewFilter[];
+  hideOfflineInstances: boolean;
 };
 
 export type PwrAgentStarMapToolArgsByOperation = {
   read_star_map_view: ReadStarMapViewToolArgs;
   fly_star_map_to: FlyStarMapToToolArgs;
+  highlight_star_map_threads: HighlightStarMapThreadsToolArgs;
+  set_star_map_view: SetStarMapViewToolArgs;
 };
 
 export type PwrAgentStarMapToolArgs<
@@ -272,6 +359,8 @@ export type ReadStarMapViewToolData = {
 export type PwrAgentStarMapDataByOperation = {
   read_star_map_view: ReadStarMapViewToolData;
   fly_star_map_to: FlyStarMapToToolData;
+  highlight_star_map_threads: HighlightStarMapThreadsToolData;
+  set_star_map_view: SetStarMapViewToolData;
 };
 
 export type PwrAgentStarMapContext = {
@@ -306,18 +395,64 @@ export type PwrAgentStarMapResponse<
 /**
  * Main -> renderer: an Agent asked the map to do something. The map answers
  * every command exactly once, on the result channel, under the same
- * `requestId`.
+ * `requestId` and `kind`.
  */
-export type StarMapCommand = {
-  requestId: string;
-  kind: "fly_to";
-  target: StarMapFlightTarget;
+export type StarMapCommand =
+  | {
+      requestId: string;
+      kind: "fly_to";
+      target: StarMapFlightTarget;
+      open?: StarMapThreadOpenMode;
+    }
+  | {
+      requestId: string;
+      /** An empty list clears the highlight. */
+      kind: "highlight";
+      threads: StarMapThreadRef[];
+    }
+  | {
+      requestId: string;
+      kind: "set_view";
+      changes: SetStarMapViewToolArgs;
+    };
+
+export type StarMapCommandKind = StarMapCommand["kind"];
+
+/**
+ * A command as a tool builds it, before the bus gives it a request id.
+ * Distributes over the kinds, so the default is each command's own shape
+ * rather than the few fields every command shares.
+ */
+export type StarMapCommandInput<
+  TKind extends StarMapCommandKind = StarMapCommandKind,
+> = TKind extends StarMapCommandKind
+  ? Omit<Extract<StarMapCommand, { kind: TKind }>, "requestId">
+  : never;
+
+export const STAR_MAP_COMMAND_KINDS = [
+  "fly_to",
+  "highlight",
+  "set_view",
+] as const satisfies readonly StarMapCommandKind[];
+
+/** The tool each command answers for, which fixes its answer's shape. */
+export type StarMapCommandOperation = {
+  fly_to: "fly_star_map_to";
+  highlight: "highlight_star_map_threads";
+  set_view: "set_star_map_view";
 };
 
+export type StarMapCommandResponse<
+  TKind extends StarMapCommandKind = StarMapCommandKind,
+> = PwrAgentStarMapResponse<StarMapCommandOperation[TKind]>;
+
 export type StarMapCommandResult = {
-  requestId: string;
-  response: PwrAgentStarMapResponse<"fly_star_map_to">;
-};
+  [TKind in StarMapCommandKind]: {
+    requestId: string;
+    kind: TKind;
+    response: StarMapCommandResponse<TKind>;
+  };
+}[StarMapCommandKind];
 
 /**
  * Gate on the renderer's answer. It becomes an Agent tool result verbatim,
@@ -329,20 +464,27 @@ export function isStarMapCommandResult(
   if (typeof value !== "object" || value === null) return false;
   const candidate = value as Partial<StarMapCommandResult>;
   const response = candidate.response as
-    | Partial<PwrAgentStarMapResponse<"fly_star_map_to">>
+    | Partial<StarMapCommandResponse>
     | undefined;
-  if (typeof candidate.requestId !== "string" || !response) return false;
+  if (
+    typeof candidate.requestId !== "string"
+    || !STAR_MAP_COMMAND_KINDS.includes(candidate.kind as StarMapCommandKind)
+    || typeof response !== "object"
+    || response === null
+  ) {
+    return false;
+  }
   if (response.ok === true) {
-    const data = (response as { data?: Partial<FlyStarMapToToolData> }).data;
-    return (
-      typeof data === "object"
-      && data !== null
-      && STAR_MAP_FLIGHT_TARGET_KINDS.includes(
-        data.target as StarMapFlightTarget["kind"],
-      )
-      && (data.label === undefined || typeof data.label === "string")
-      && (data.summoned === undefined || typeof data.summoned === "boolean")
-    );
+    const data = (response as { data?: unknown }).data;
+    if (typeof data !== "object" || data === null) return false;
+    switch (candidate.kind as StarMapCommandKind) {
+      case "fly_to":
+        return isFlightData(data as Partial<FlyStarMapToToolData>);
+      case "highlight":
+        return isHighlightData(data as Partial<HighlightStarMapThreadsToolData>);
+      case "set_view":
+        return isSetViewData(data as Partial<SetStarMapViewToolData>);
+    }
   }
   if (response.ok === false) {
     const error = (response as { error?: { code?: unknown; message?: unknown } })
@@ -357,6 +499,46 @@ export function isStarMapCommandResult(
     );
   }
   return false;
+}
+
+function isFlightData(data: Partial<FlyStarMapToToolData>): boolean {
+  return (
+    STAR_MAP_FLIGHT_TARGET_KINDS.includes(
+      data.target as StarMapFlightTarget["kind"],
+    )
+    && (data.label === undefined || typeof data.label === "string")
+    && (data.summoned === undefined || typeof data.summoned === "boolean")
+    && (
+      data.opened === undefined
+      || STAR_MAP_THREAD_OPEN_MODES.includes(data.opened)
+    )
+  );
+}
+
+function isHighlightData(data: Partial<HighlightStarMapThreadsToolData>): boolean {
+  return (
+    isStringArray(data.highlightedThreadKeys)
+    && (data.missingThreadKeys === undefined || isStringArray(data.missingThreadKeys))
+  );
+}
+
+function isSetViewData(data: Partial<SetStarMapViewToolData>): boolean {
+  return (
+    STAR_MAP_VIEW_LAYOUTS.includes(data.layout as StarMapViewLayout)
+    && typeof data.hideOfflineInstances === "boolean"
+    && Array.isArray(data.filters)
+    && data.filters.every(
+      (filter: unknown) =>
+        typeof filter === "object"
+        && filter !== null
+        && typeof (filter as StarMapViewFilter).key === "string"
+        && typeof (filter as StarMapViewFilter).label === "string"
+        && (
+          (filter as StarMapViewFilter).state === "include"
+          || (filter as StarMapViewFilter).state === "exclude"
+        ),
+    )
+  );
 }
 
 function isStringArray(value: unknown): value is string[] {

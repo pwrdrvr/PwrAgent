@@ -26,7 +26,10 @@ import {
   type NavigationIdentity,
   type NavigationThreadSummary,
   type PwrAgentStarMapErrorCode,
+  type SetStarMapViewToolArgs,
   type StarMapFlightTarget,
+  type StarMapThreadOpenMode,
+  type StarMapThreadRef,
   type StarMapViewRect,
   type StarMapViewSurface,
   type StarMapWorkspaceAnchor,
@@ -81,6 +84,7 @@ import {
   countAttentionSignals,
   countFilterMatches,
   cycleFilterState,
+  describeActiveFilters,
   readStoredFilterSelection,
   selectFilteredThreads,
   STAR_MAP_FILTERS,
@@ -143,6 +147,8 @@ import { useStarMapManager } from "./useStarMapManager";
 import {
   useStarMapCommands,
   type StarMapFlightResponse,
+  type StarMapHighlightResponse,
+  type StarMapSetViewResponse,
 } from "./useStarMapCommands";
 import {
   readStoredPreferences,
@@ -350,10 +356,11 @@ const STAR_MAP_INTAKE_REVEAL_TIMEOUT_MS = 30_000;
  */
 const STAR_MAP_AGENT_FLIGHT_LOAD_TIMEOUT_MS = 10_000;
 
-function agentFlightFailure(
+/** A failed answer, which is a valid answer to any command. */
+function agentCommandFailure(
   code: PwrAgentStarMapErrorCode,
   message: string,
-): StarMapFlightResponse {
+): { ok: false; error: { code: PwrAgentStarMapErrorCode; message: string } } {
   return { ok: false, error: { code, message } };
 }
 
@@ -1196,11 +1203,31 @@ export function StarMapScreen(props: StarMapScreenProps) {
    * own thread loaded, until it lands or the flight gives up.
    */
   const [flightDemand, setFlightDemand] = useState<NavigationIdentity>();
-  const flightDemandOwner = flightDemand?.ownerInstanceId;
-  const flightDemandIsLocal =
-    !flightDemandOwner
-    || flightDemandOwner === health?.instanceId
-    || flightDemandOwner === STAR_MAP_LOCAL_INSTANCE_PLACEHOLDER;
+  /** The same, for the threads an Agent's highlight is waiting on. */
+  const [highlightDemand, setHighlightDemand] = useState<
+    readonly NavigationIdentity[]
+  >([]);
+  /** Every thread an Agent command is waiting on, split by owning feed. */
+  const agentDemand = useMemo(() => {
+    const local: NavigationIdentity[] = [];
+    const remote: NavigationIdentity[] = [];
+    for (const identity of [
+      ...(flightDemand ? [flightDemand] : []),
+      ...highlightDemand,
+    ]) {
+      const owner = identity.ownerInstanceId;
+      if (
+        !owner
+        || owner === health?.instanceId
+        || owner === STAR_MAP_LOCAL_INSTANCE_PLACEHOLDER
+      ) {
+        local.push({ backend: identity.backend, threadId: identity.threadId });
+      } else {
+        remote.push(identity);
+      }
+    }
+    return { local, remote };
+  }, [flightDemand, health?.instanceId, highlightDemand]);
   const demandedIdentitiesByInstance = useMemo(() => {
     const result = new Map<string, NavigationIdentity[]>();
     for (const card of chatCards.cards) {
@@ -1213,19 +1240,14 @@ export function StarMapScreen(props: StarMapScreenProps) {
       });
       result.set(card.ownerInstanceId, identities);
     }
-    if (flightDemand && flightDemandOwner && !flightDemandIsLocal) {
-      const identities = result.get(flightDemandOwner) ?? [];
-      identities.push(flightDemand);
-      result.set(flightDemandOwner, identities);
+    for (const identity of agentDemand.remote) {
+      const owner = identity.ownerInstanceId!;
+      const identities = result.get(owner) ?? [];
+      identities.push(identity);
+      result.set(owner, identities);
     }
     return result;
-  }, [
-    chatCards.cards,
-    flightDemand,
-    flightDemandIsLocal,
-    flightDemandOwner,
-    health?.instanceId,
-  ]);
+  }, [agentDemand, chatCards.cards, health?.instanceId]);
   /**
    * The manager thread while its card is being opened. The local feed holds
    * one filtered page, so a manager that has aged out of it, or that the
@@ -1238,17 +1260,11 @@ export function StarMapScreen(props: StarMapScreenProps) {
       .filter((card) => card.ownerInstanceId === localInstanceId)
       .map((card) => ({ backend: card.thread.source, threadId: card.thread.id }));
     if (managerDemand) identities.push(managerDemand);
-    if (flightDemand && flightDemandIsLocal) {
-      identities.push({
-        backend: flightDemand.backend,
-        threadId: flightDemand.threadId,
-      });
-    }
+    identities.push(...agentDemand.local);
     return identities;
   }, [
+    agentDemand,
     chatCards.cards,
-    flightDemand,
-    flightDemandIsLocal,
     localInstanceId,
     managerDemand,
   ]);
@@ -3705,32 +3721,40 @@ export function StarMapScreen(props: StarMapScreenProps) {
     chatCards.beginAnchorRebase();
   }, [chatCards, federationLayoutReady, preferences.layout]);
 
+  /**
+   * The one place a summon cannot reach on its own: a cloud in the orbit
+   * lens caps its cards per PROJECT, and seating a summoned thread first in
+   * the instance's feed only puts it first in its bucket — a child in a long
+   * parent group can still land past the cap. Unfold each cloud folding one
+   * of these threads exactly as its "+N more" chip would, and let the next
+   * layout answer with a rect.
+   *
+   * Only folded clouds are touched, so a second pass cannot fold one back.
+   */
+  const unfoldOrbitCloudsHolding = useCallback(
+    (threadKeys: ReadonlySet<string>): void => {
+      if (!orbitMode || !clusterClouds) return;
+      for (const [instanceId, cloud] of clusterClouds) {
+        for (const cluster of cloud.clusters) {
+          if (
+            cluster.visibleCount < cluster.threads.length
+            && cluster.threads.some((thread) =>
+              threadKeys.has(buildThreadIdentityKey(thread.source, thread.id)),
+            )
+          ) {
+            toggleClusterExpanded(instanceId, cluster.key);
+          }
+        }
+      }
+    },
+    [clusterClouds, orbitMode, toggleClusterExpanded],
+  );
+
   useEffect(() => {
     if (!pendingFlight) return;
     const rect = rectForThreadKey(flightRects, pendingFlight);
     if (!rect) {
-      // The one place a summon cannot reach on its own: a cloud in the
-      // orbit lens caps its cards per PROJECT, and seating the summoned
-      // thread first in the instance's feed only puts it first in its
-      // bucket — a child in a long parent group can still land past the
-      // cap. Unfold that cloud exactly as its "+N more" chip would, and
-      // let the next layout answer with a rect.
-      if (!orbitMode || !clusterClouds) return;
-      for (const [instanceId, cloud] of clusterClouds) {
-        const cluster = cloud.clusters.find(
-          (entry) =>
-            entry.visibleCount < entry.threads.length
-            && entry.threads.some(
-              (thread) =>
-                buildThreadIdentityKey(thread.source, thread.id)
-                === pendingFlight,
-            ),
-        );
-        if (cluster) {
-          toggleClusterExpanded(instanceId, cluster.key);
-          return;
-        }
-      }
+      unfoldOrbitCloudsHolding(new Set([pendingFlight]));
       return;
     }
     setPendingFlight(undefined);
@@ -3755,15 +3779,13 @@ export function StarMapScreen(props: StarMapScreenProps) {
     // radial lenses, and an effect keyed on its identity would re-run on
     // every streamed update. Same shape as the wheel listener above.
   }, [
-    clusterClouds,
     flight,
     flightRects,
-    orbitMode,
     panZoomCanvas.width,
     panZoomCanvas.height,
     pendingFlight,
-    toggleClusterExpanded,
     topAnchoredView,
+    unfoldOrbitCloudsHolding,
     viewportSize.width,
     viewportSize.height,
   ]);
@@ -3775,6 +3797,19 @@ export function StarMapScreen(props: StarMapScreenProps) {
    * identical cards.
    */
   const [locatedThreadKey, setLocatedThreadKey] = useState<string>();
+
+  /**
+   * Cards an Agent ringed with `highlight_star_map_threads`, by thread key:
+   * "these are the ones I mean", held while it asks the operator. Cleared by
+   * the Agent, by its next highlight, or by a click on empty sky - the same
+   * gesture that drops the operator's own selection.
+   *
+   * Thread keys, not card keys, like `locatedThreadKey`: the ring should
+   * survive a lens change, which moves every card to a new card key.
+   */
+  const [highlightedThreadKeys, setHighlightedThreadKeys] = useState<
+    ReadonlySet<string>
+  >(() => new Set());
 
   /**
    * Pick a result: put the card on the map if it is not there, then fly to
@@ -4062,6 +4097,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
       overview,
       selection,
       openChatCardThreadKeys,
+      highlightedThreadKeys,
       cardRects: flightRects,
       sessionKeys: props.sessionKeys,
     }),
@@ -4073,6 +4109,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
       filterSelection,
       flightRects,
       hiddenInstanceCount,
+      highlightedThreadKeys,
       localInstanceId,
       matchedThreadCount,
       openChatCardThreadKeys,
@@ -4101,14 +4138,31 @@ export function StarMapScreen(props: StarMapScreenProps) {
    */
   const pendingAgentFlightRef = useRef<{
     target: Extract<StarMapFlightTarget, { kind: "thread" }>;
+    open?: StarMapThreadOpenMode;
     settle: (response: StarMapFlightResponse) => void;
   }>(undefined);
 
-  /** The loaded summary for an Agent's thread target, from its owner's feed. */
+  /**
+   * The View menu's change, and an Agent's through `set_star_map_view`: one
+   * path, so the two cannot disagree about what a lens change resets.
+   */
+  const applyPreferences = useCallback(
+    (next: StarMapViewPreferences) => {
+      // A lens change re-places every card. Every lens paints selected state
+      // now, so a selection WOULD carry over intact — and that is the
+      // problem: the cards are somewhere else entirely, and the operator is
+      // left holding a selection they did not sweep on the map now in front
+      // of them, which the kebab would then act on.
+      if (next.layout !== preferences.layout) setSelection(new Set());
+      setPreferences(next);
+      writeStoredPreferences(next);
+    },
+    [preferences.layout],
+  );
+
+  /** The loaded summary for a thread an Agent named, from its owner's feed. */
   const findAgentFlightThread = useCallback(
-    (
-      target: Extract<StarMapFlightTarget, { kind: "thread" }>,
-    ): NavigationThreadSummary | undefined => {
+    (target: StarMapThreadRef): NavigationThreadSummary | undefined => {
       const threadKey = buildThreadIdentityKey(target.backend, target.threadId);
       if (target.instanceId) {
         return findStarMapIntakeRevealTarget({
@@ -4133,6 +4187,49 @@ export function StarMapScreen(props: StarMapScreenProps) {
   );
 
   /**
+   * Land on a thread an Agent named, now that its summary is loaded, and
+   * open it if asked. `demanded` marks a row the map only holds because the
+   * command asked for it: kept on the map like a ⌘K summon, or it would
+   * vanish the moment the ask is withdrawn.
+   */
+  const arriveForAgent = useCallback(
+    (
+      thread: NavigationThreadSummary,
+      open: StarMapThreadOpenMode | undefined,
+      demanded: boolean,
+    ): StarMapFlightResponse => {
+      const label = thread.title;
+      // A full open leaves the map, so there is nothing to fly to first.
+      if (open === "full") {
+        openThreadFully(thread);
+        return { ok: true, data: { target: "thread", label, opened: "full" } };
+      }
+      const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+      const summoned = demanded || !rectForThreadKey(flightRects, threadKey);
+      if (demanded) {
+        setSummonedThreads((current) => {
+          if (current.get(threadKey) === thread) return current;
+          const next = new Map(current);
+          next.set(threadKey, thread);
+          return next;
+        });
+      }
+      flyToThread(thread);
+      if (open === "card") openThread(thread);
+      return {
+        ok: true,
+        data: {
+          target: "thread",
+          label,
+          summoned,
+          ...(open ? { opened: open } : {}),
+        },
+      };
+    },
+    [flightRects, flyToThread, openThread, openThreadFully],
+  );
+
+  /**
    * Fly where an Agent asked, and say what the camera went to.
    *
    * Never moves keyboard focus, unlike the edge arrows' flight: the operator
@@ -4140,7 +4237,10 @@ export function StarMapScreen(props: StarMapScreenProps) {
    * focus would pull the caret out from under them mid-sentence.
    */
   const flyForAgent = useCallback(
-    async (target: StarMapFlightTarget): Promise<StarMapFlightResponse> => {
+    async (
+      target: StarMapFlightTarget,
+      open?: StarMapThreadOpenMode,
+    ): Promise<StarMapFlightResponse> => {
       const flyToRect = (rect: StarMapFlightRect, scale: number): void => {
         // A ⌘K pick still waiting for its card would otherwise land later
         // and fly the map away again.
@@ -4168,7 +4268,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
           (candidate) => candidate.key === `instance:${target.instanceId}`,
         );
         if (!body) {
-          return agentFlightFailure(
+          return agentCommandFailure(
             "not_found",
             projectsMode
               ? "The projects lens draws no instance bodies. Fly to one of that instance's threads or clouds instead."
@@ -4193,7 +4293,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
             ),
         );
         if (clouds.length > 1) {
-          return agentFlightFailure(
+          return agentCommandFailure(
             "invalid_arguments",
             `Cloud ${target.cloudKey} is drawn on ${clouds
               .map((cloud) => cloud.instanceLabel ?? cloud.instanceId)
@@ -4237,7 +4337,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
           flyToRect(pointAt(sun.x, sun.y), viewRef.current.scale);
           return { ok: true, data: { target: "cloud", label: sun.label } };
         }
-        return agentFlightFailure(
+        return agentCommandFailure(
           "not_found",
           cloud
             ? `Cloud ${cloud.label} has no cards on the map to fly to.`
@@ -4248,15 +4348,10 @@ export function StarMapScreen(props: StarMapScreenProps) {
       const threadKey = buildThreadIdentityKey(target.backend, target.threadId);
       const loaded = findAgentFlightThread(target);
       if (loaded) {
-        const summoned = !rectForThreadKey(flightRects, threadKey);
-        flyToThread(loaded);
-        return {
-          ok: true,
-          data: { target: "thread", label: loaded.title, summoned },
-        };
+        return arriveForAgent(loaded, open, false);
       }
       pendingAgentFlightRef.current?.settle(
-        agentFlightFailure("internal_error", "A newer flight replaced this one."),
+        agentCommandFailure("internal_error", "A newer flight replaced this one."),
       );
       return await new Promise<StarMapFlightResponse>((resolve) => {
         const settle = (response: StarMapFlightResponse): void => {
@@ -4268,7 +4363,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
         };
         const timer = window.setTimeout(() => {
           settle(
-            agentFlightFailure(
+            agentCommandFailure(
               "not_found",
               target.instanceId
                 ? `Thread ${threadKey} could not be loaded onto the map. It may be archived, or its instance offline.`
@@ -4276,7 +4371,11 @@ export function StarMapScreen(props: StarMapScreenProps) {
             ),
           );
         }, STAR_MAP_AGENT_FLIGHT_LOAD_TIMEOUT_MS);
-        pendingAgentFlightRef.current = { target, settle };
+        pendingAgentFlightRef.current = {
+          target,
+          ...(open ? { open } : {}),
+          settle,
+        };
         setFlightDemand({
           backend: target.backend,
           threadId: target.threadId,
@@ -4285,11 +4384,10 @@ export function StarMapScreen(props: StarMapScreenProps) {
       });
     },
     [
+      arriveForAgent,
       edgeArrowTargets,
       findAgentFlightThread,
       flight,
-      flightRects,
-      flyToThread,
       panZoomCanvas.height,
       panZoomCanvas.width,
       projectsMode,
@@ -4305,28 +4403,258 @@ export function StarMapScreen(props: StarMapScreenProps) {
     if (!pending || !flightDemand) return;
     const thread = findAgentFlightThread(pending.target);
     if (!thread) return;
-    // Kept on the map like a ⌘K summon. The feed carries this row only while
-    // the flight asks for it, so a card that happened to draw from the feed
-    // would vanish the moment the flight settled and the ask was withdrawn.
-    const threadKey = buildThreadIdentityKey(thread.source, thread.id);
-    setSummonedThreads((current) => {
-      if (current.get(threadKey) === thread) return current;
-      const next = new Map(current);
-      next.set(threadKey, thread);
-      return next;
-    });
-    flyToThread(thread);
-    pending.settle({
-      ok: true,
-      data: { target: "thread", label: thread.title, summoned: true },
-    });
-  }, [findAgentFlightThread, flightDemand, flyToThread]);
+    pending.settle(arriveForAgent(thread, pending.open, true));
+  }, [arriveForAgent, findAgentFlightThread, flightDemand]);
+
+  /**
+   * A highlight waiting for threads the map had not loaded. Unlike a flight
+   * it settles with whatever arrived when time runs out: ringing four of
+   * five cards and naming the fifth is a better answer than ringing none.
+   * `expired` is set by the timer and read by the arrival effect, so the
+   * answer is always built from the render that has the rows.
+   */
+  const pendingHighlightRef = useRef<{
+    threads: StarMapThreadRef[];
+    demandedKeys: ReadonlySet<string>;
+    expired: boolean;
+    settle: (response: StarMapHighlightResponse) => void;
+  }>(undefined);
+  const [highlightWaitExpiry, setHighlightWaitExpiry] = useState(0);
+
+  /**
+   * The ringed cards the camera has yet to frame, by thread key. A summoned
+   * card has no rect until the next layout, so the framing waits for every
+   * one of them - or, once `expired`, frames the ones that made it.
+   */
+  const [pendingHighlightFrame, setPendingHighlightFrame] = useState<{
+    threadKeys: readonly string[];
+    expired: boolean;
+  }>();
+
+  /** Ring what the Agent named and can be found, and say what was not. */
+  const applyHighlight = useCallback(
+    (
+      threads: readonly StarMapThreadRef[],
+      demandedKeys: ReadonlySet<string>,
+    ): StarMapHighlightResponse => {
+      const found = new Map<string, NavigationThreadSummary>();
+      const missing: string[] = [];
+      for (const ref of threads) {
+        const threadKey = buildThreadIdentityKey(ref.backend, ref.threadId);
+        const thread = findAgentFlightThread(ref);
+        if (thread) found.set(threadKey, thread);
+        else missing.push(threadKey);
+      }
+      if (found.size === 0) {
+        return agentCommandFailure(
+          "not_found",
+          `None of those threads could be loaded onto the map: ${missing.join(", ")}. A peer's thread needs its instanceId.`,
+        );
+      }
+      // Onto the map, and kept there: a card folded away or filtered out
+      // cannot be ringed, and a row the highlight loaded leaves the feed
+      // with the ask.
+      setSummonedThreads((current) => {
+        let next: Map<string, NavigationThreadSummary> | undefined;
+        for (const [threadKey, thread] of found) {
+          const needed =
+            demandedKeys.has(threadKey)
+            || !rectForThreadKey(flightRects, threadKey);
+          if (!needed || current.get(threadKey) === thread) continue;
+          next ??= new Map(current);
+          next.set(threadKey, thread);
+        }
+        return next ?? current;
+      });
+      const highlighted = [...found.keys()];
+      setHighlightedThreadKeys(new Set(highlighted));
+      setPendingHighlightFrame({ threadKeys: highlighted, expired: false });
+      return {
+        ok: true,
+        data: {
+          highlightedThreadKeys: highlighted,
+          ...(missing.length > 0 ? { missingThreadKeys: missing } : {}),
+        },
+      };
+    },
+    [findAgentFlightThread, flightRects],
+  );
+
+  const highlightForAgent = useCallback(
+    async (threads: StarMapThreadRef[]): Promise<StarMapHighlightResponse> => {
+      pendingHighlightRef.current?.settle(
+        agentCommandFailure(
+          "internal_error",
+          "A newer highlight replaced this one.",
+        ),
+      );
+      if (threads.length === 0) {
+        setHighlightedThreadKeys(new Set());
+        setPendingHighlightFrame(undefined);
+        return { ok: true, data: { highlightedThreadKeys: [] } };
+      }
+      const unloaded = threads.filter((ref) => !findAgentFlightThread(ref));
+      if (unloaded.length === 0) return applyHighlight(threads, new Set());
+      return await new Promise<StarMapHighlightResponse>((resolve) => {
+        const settle = (response: StarMapHighlightResponse): void => {
+          if (pendingHighlightRef.current?.settle !== settle) return;
+          pendingHighlightRef.current = undefined;
+          window.clearTimeout(timer);
+          setHighlightDemand([]);
+          resolve(response);
+        };
+        const timer = window.setTimeout(() => {
+          const pending = pendingHighlightRef.current;
+          if (pending?.settle !== settle) return;
+          pending.expired = true;
+          setHighlightWaitExpiry((count) => count + 1);
+        }, STAR_MAP_AGENT_FLIGHT_LOAD_TIMEOUT_MS);
+        pendingHighlightRef.current = {
+          threads,
+          demandedKeys: new Set(
+            unloaded.map((ref) =>
+              buildThreadIdentityKey(ref.backend, ref.threadId),
+            ),
+          ),
+          expired: false,
+          settle,
+        };
+        setHighlightDemand(
+          unloaded.map((ref) => ({
+            backend: ref.backend,
+            threadId: ref.threadId,
+            ...(ref.instanceId ? { ownerInstanceId: ref.instanceId } : {}),
+          })),
+        );
+      });
+    },
+    [applyHighlight, findAgentFlightThread],
+  );
+
+  // Every thread a highlight asked for has landed, or its time is up.
+  useEffect(() => {
+    const pending = pendingHighlightRef.current;
+    if (!pending) return;
+    if (
+      !pending.expired
+      && pending.threads.some((ref) => !findAgentFlightThread(ref))
+    ) {
+      return;
+    }
+    pending.settle(applyHighlight(pending.threads, pending.demandedKeys));
+  }, [applyHighlight, findAgentFlightThread, highlightDemand, highlightWaitExpiry]);
+
+  // A summoned card that never draws must not hold the framing forever.
+  useEffect(() => {
+    if (!pendingHighlightFrame || pendingHighlightFrame.expired) return;
+    const timer = window.setTimeout(() => {
+      setPendingHighlightFrame((current) =>
+        current === pendingHighlightFrame
+          ? { ...current, expired: true }
+          : current,
+      );
+    }, STAR_MAP_SUMMON_TIMEOUT_MS);
+    return () => window.clearTimeout(timer);
+  }, [pendingHighlightFrame]);
+
+  // Frame every ringed card once they are drawn. Never takes focus, for the
+  // same reason `flyForAgent` does not.
+  useEffect(() => {
+    if (!pendingHighlightFrame) return;
+    const rects = pendingHighlightFrame.threadKeys.map((threadKey) =>
+      rectForThreadKey(flightRects, threadKey),
+    );
+    if (!pendingHighlightFrame.expired && rects.some((rect) => !rect)) {
+      unfoldOrbitCloudsHolding(
+        new Set(
+          pendingHighlightFrame.threadKeys.filter((_, index) => !rects[index]),
+        ),
+      );
+      return;
+    }
+    setPendingHighlightFrame(undefined);
+    const bounds = boundsOfRects(rects);
+    if (!bounds) return;
+    // A ⌘K pick still waiting for its card would otherwise land later and
+    // fly the map away again.
+    setPendingFlight(undefined);
+    operatorMovedViewRef.current = true;
+    flight.flyTo(
+      starMapViewFocusedOn({
+        rect: bounds,
+        canvas: { width: panZoomCanvas.width, height: panZoomCanvas.height },
+        viewport: { width: viewportSize.width, height: viewportSize.height },
+        scale: starMapFramingScale({
+          rect: bounds,
+          viewport: viewportSize,
+          current: viewRef.current.scale,
+        }),
+        topAnchored: topAnchoredView,
+      }),
+    );
+  }, [
+    flight,
+    flightRects,
+    panZoomCanvas.height,
+    panZoomCanvas.width,
+    pendingHighlightFrame,
+    topAnchoredView,
+    unfoldOrbitCloudsHolding,
+    viewportSize,
+  ]);
+
+  /** The View menu and the chip strip, driven by `set_star_map_view`. */
+  const setViewForAgent = useCallback(
+    (changes: SetStarMapViewToolArgs): StarMapSetViewResponse => {
+      const nextPreferences: StarMapViewPreferences = {
+        ...preferences,
+        ...(changes.layout ? { layout: changes.layout } : {}),
+        ...(changes.hideOfflineInstances !== undefined
+          ? { hideOfflineInstances: changes.hideOfflineInstances }
+          : {}),
+      };
+      if (
+        nextPreferences.layout !== preferences.layout
+        || nextPreferences.hideOfflineInstances
+          !== preferences.hideOfflineInstances
+      ) {
+        applyPreferences(nextPreferences);
+      }
+      const nextFilters: StarMapFilterSelection = changes.clearFilters
+        ? {}
+        : { ...filterSelection };
+      for (const [key, state] of Object.entries(changes.filters ?? {})) {
+        const chip = key as StarMapFilterKey;
+        if (state === "neutral") delete nextFilters[chip];
+        else nextFilters[chip] = state;
+      }
+      if (changes.clearFilters || changes.filters) {
+        setFilterSelection(nextFilters);
+        writeStoredFilterSelection(nextFilters);
+      }
+      return {
+        ok: true,
+        data: {
+          layout: nextPreferences.layout,
+          filters: describeActiveFilters(nextFilters),
+          hideOfflineInstances: nextPreferences.hideOfflineInstances,
+        },
+      };
+    },
+    [applyPreferences, filterSelection, preferences],
+  );
 
   useEffect(() => () => {
     pendingAgentFlightRef.current?.settle(
-      agentFlightFailure(
+      agentCommandFailure(
         "star_map_not_open",
         "The Star Map closed before the thread loaded.",
+      ),
+    );
+    pendingHighlightRef.current?.settle(
+      agentCommandFailure(
+        "star_map_not_open",
+        "The Star Map closed before those threads loaded.",
       ),
     );
   }, []);
@@ -4334,6 +4662,8 @@ export function StarMapScreen(props: StarMapScreenProps) {
   useStarMapCommands({
     desktopApi: props.desktopApi,
     onFlyTo: flyForAgent,
+    onHighlight: highlightForAgent,
+    onSetView: setViewForAgent,
   });
 
   /**
@@ -4358,7 +4688,11 @@ export function StarMapScreen(props: StarMapScreenProps) {
           pointerEvent.clientX - startX,
           pointerEvent.clientY - startY,
         );
-        if (travelled <= CANVAS_CLICK_SLOP_PX) setSelection(new Set());
+        if (travelled <= CANVAS_CLICK_SLOP_PX) {
+          setSelection(new Set());
+          // The Agent's ring goes with it: "never mind, not those".
+          setHighlightedThreadKeys(new Set());
+        }
       };
       window.addEventListener("pointerup", stop);
       window.addEventListener("pointercancel", stop);
@@ -5286,6 +5620,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
               riseDelayMs={riseDelays[index]}
               entering={enteringThreadKeys.has(threadKey)}
               located={locatedThreadKey === threadKey}
+              highlighted={highlightedThreadKeys.has(threadKey)}
               instanceIcon={celestialIcons.iconFor(
                 position.instanceId === localInstanceId
                   ? undefined
@@ -5868,6 +6203,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
                         }
                         entering={enteringThreadKeys.has(threadKey)}
                         located={locatedThreadKey === threadKey}
+                        highlighted={highlightedThreadKeys.has(threadKey)}
                         instanceIcon={celestialIcons.iconFor(
                           owner === localInstanceId ? undefined : owner,
                         )}
@@ -6280,17 +6616,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
           </button>
           <StarMapViewOptions
             preferences={preferences}
-            onChange={(next) => {
-              // A lens change re-places every card. Every lens paints
-              // selected state now, so a selection WOULD carry over intact
-              // — and that is the problem: the cards are somewhere else
-              // entirely, and the operator is left holding a selection
-              // they did not sweep on the map now in front of them, which
-              // the kebab would then act on.
-              if (next.layout !== preferences.layout) setSelection(new Set());
-              setPreferences(next);
-              writeStoredPreferences(next);
-            }}
+            onChange={applyPreferences}
             onResetView={resetView}
           />
         </div>

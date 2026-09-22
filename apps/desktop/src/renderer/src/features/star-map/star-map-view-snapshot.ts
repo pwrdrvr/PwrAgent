@@ -13,8 +13,7 @@ import {
   type StarMapSessionKeys,
 } from "./attention";
 import {
-  STAR_MAP_FILTERS,
-  filterState,
+  describeActiveFilters,
   isPinnedThread,
   type StarMapFilterSelection,
 } from "./star-map-filters";
@@ -104,6 +103,8 @@ export type StarMapViewSnapshotInput = {
   selection: ReadonlySet<string>;
   /** Thread keys with a floating chat card open over the map. */
   openChatCardThreadKeys: ReadonlySet<string>;
+  /** Thread keys an Agent ringed with `highlight_star_map_threads`. */
+  highlightedThreadKeys?: ReadonlySet<string>;
   /**
    * Map-space geometry by card key, for the cards being drawn. Its key set
    * is also what "drawn" means here: a card the layout is not placing has no
@@ -297,6 +298,9 @@ export function buildStarMapViewSnapshot(
         cloudKey: cloudKeyByCard.get(cardKey),
         visible,
         selected: input.selection.has(cardKey),
+        ...(input.highlightedThreadKeys?.has(threadKey)
+          ? { highlighted: true }
+          : {}),
         chatCardOpen: input.openChatCardThreadKeys.has(threadKey),
         rect: rect
           ? {
@@ -336,12 +340,7 @@ export function buildStarMapViewSnapshot(
     layout: input.layout satisfies StarMapViewLayout,
     camera: input.camera,
     viewport: input.viewport,
-    filters: STAR_MAP_FILTERS.flatMap((definition) => {
-      const state = filterState(input.filterSelection, definition.key);
-      return state === "neutral"
-        ? []
-        : [{ key: definition.key, label: definition.label, state }];
-    }),
+    filters: describeActiveFilters(input.filterSelection),
     hideOfflineInstances: input.hideOfflineInstances,
     hiddenInstanceCount: input.hiddenInstanceCount,
     instances,
@@ -351,6 +350,9 @@ export function buildStarMapViewSnapshot(
       .filter((thread) => thread.selected)
       .map((thread) => thread.threadKey),
     openChatCardThreadKeys: [...input.openChatCardThreadKeys],
+    ...(input.highlightedThreadKeys?.size
+      ? { highlightedThreadKeys: [...input.highlightedThreadKeys] }
+      : {}),
     matchedThreadCount: input.matchedThreadCount,
   };
 }

@@ -529,7 +529,11 @@ describe("fly_star_map_to", () => {
     await fly({ cloudKey: "pwragent", instanceId: "pwr_studio" });
     await fly({ instanceId: "pwr_studio" });
 
-    expect(sendCommand.mock.calls.map(([command]) => command.target)).toEqual([
+    expect(
+      sendCommand.mock.calls.map(
+        ([command]) => (command as { target?: unknown }).target,
+      ),
+    ).toEqual([
       { kind: "cloud", cloudKey: "pwragent", instanceId: "pwr_studio" },
       { kind: "instance", instanceId: "pwr_studio" },
     ]);
@@ -555,6 +559,24 @@ describe("fly_star_map_to", () => {
     expect(sendCommand).not.toHaveBeenCalled();
   });
 
+  it("opens the thread it flew to only when the destination is a thread", async () => {
+    const { fly, sendCommand } = flyWith();
+
+    await fly({ threadId: "t-1", backend: "codex", open: "card" });
+    const cloud = await fly({ cloudKey: "pwragent", open: "card" });
+
+    expect(sendCommand).toHaveBeenCalledTimes(1);
+    expect(sendCommand).toHaveBeenCalledWith({
+      kind: "fly_to",
+      target: { kind: "thread", backend: "codex", threadId: "t-1" },
+      open: "card",
+    });
+    expect(cloud).toMatchObject({
+      ok: false,
+      error: { code: "invalid_arguments" },
+    });
+  });
+
   it("says the map is closed when there is no map to fly", async () => {
     const { fly } = flyWith(vi.fn<SendCommand>(async () => undefined));
 
@@ -576,6 +598,114 @@ describe("fly_star_map_to", () => {
     );
 
     expect(result).toMatchObject({ ok: false, code: "invalid_arguments" });
+    expect(sendCommand).not.toHaveBeenCalled();
+  });
+});
+
+describe("highlight_star_map_threads and set_star_map_view", () => {
+  type SendCommand = NonNullable<StarMapAgentToolsDeps["sendCommand"]>;
+
+  function toolsWith(
+    sendCommand = vi.fn<SendCommand>(async () => ({
+      ok: true as const,
+      data: { highlightedThreadKeys: [] },
+    })),
+  ) {
+    const definitions = buildPwrAgentStarMapToolDefinitions(
+      createStarMapAgentToolsHandler({ sendCommand }),
+    );
+    const call = async (name: string, args: Record<string, unknown>) =>
+      await definitions
+        .find((entry) => entry.name === name)!
+        .dispatch(args, { backend: "codex", threadId: "manager", transport: "mcp" });
+    return { call, sendCommand };
+  }
+
+  it("rings the threads it names, and clears them on request", async () => {
+    const { call, sendCommand } = toolsWith();
+
+    await call("highlight_star_map_threads", {
+      threads: [
+        { threadId: " t-1 ", backend: "codex" },
+        { threadId: "t-2", backend: "codex", instanceId: "pwr_studio" },
+      ],
+    });
+    await call("highlight_star_map_threads", { clear: true });
+
+    expect(sendCommand.mock.calls.map(([command]) => command)).toEqual([
+      {
+        kind: "highlight",
+        threads: [
+          { backend: "codex", threadId: "t-1" },
+          { backend: "codex", threadId: "t-2", instanceId: "pwr_studio" },
+        ],
+      },
+      { kind: "highlight", threads: [] },
+    ]);
+  });
+
+  it("refuses a highlight that names nothing, or names threads badly", async () => {
+    const { call, sendCommand } = toolsWith();
+
+    const results = await Promise.all([
+      call("highlight_star_map_threads", {}),
+      call("highlight_star_map_threads", { clear: false }),
+      call("highlight_star_map_threads", {
+        threads: [{ threadId: "t-1", backend: "codex" }],
+        clear: true,
+      }),
+      call("highlight_star_map_threads", { threads: [] }),
+      call("highlight_star_map_threads", {
+        threads: [{ threadId: "t-1", backend: "not-a-backend" }],
+      }),
+      call("highlight_star_map_threads", {
+        threads: Array.from({ length: 51 }, (_, index) => ({
+          threadId: `t-${index}`,
+          backend: "codex",
+        })),
+      }),
+    ]);
+
+    for (const result of results) {
+      expect(result).toMatchObject({ ok: false, code: "invalid_arguments" });
+    }
+    expect(sendCommand).not.toHaveBeenCalled();
+  });
+
+  it("changes the lens and chips it names, and no others", async () => {
+    const { call, sendCommand } = toolsWith();
+
+    await call("set_star_map_view", {
+      layout: "projects",
+      filters: { attention: "include", agent: "neutral" },
+      hideOfflineInstances: true,
+    });
+
+    expect(sendCommand).toHaveBeenCalledWith({
+      kind: "set_view",
+      changes: {
+        layout: "projects",
+        filters: { attention: "include", agent: "neutral" },
+        hideOfflineInstances: true,
+      },
+    });
+  });
+
+  it("names the real chips when asked for one that is not", async () => {
+    const { call, sendCommand } = toolsWith();
+
+    const unknownChip = await call("set_star_map_view", {
+      filters: { starred: "include" },
+    });
+    const badLayout = await call("set_star_map_view", { layout: "grid" });
+    const nothing = await call("set_star_map_view", { clearFilters: false });
+
+    expect(unknownChip).toMatchObject({ ok: false, code: "invalid_arguments" });
+    expect(JSON.stringify(unknownChip)).toContain(
+      "attention, approval, pr, unpushed, pinned, agent",
+    );
+    expect(badLayout).toMatchObject({ ok: false, code: "invalid_arguments" });
+    expect(nothing).toMatchObject({ ok: false, code: "invalid_arguments" });
     expect(sendCommand).not.toHaveBeenCalled();
   });
 });

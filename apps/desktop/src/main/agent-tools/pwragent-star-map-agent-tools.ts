@@ -1,15 +1,28 @@
 import type {
   FlyStarMapToToolArgs,
+  HighlightStarMapThreadsToolArgs,
   PwrAgentStarMapOperationName,
   PwrAgentStarMapRequest,
   PwrAgentStarMapResponse,
   ReadStarMapViewToolArgs,
+  SetStarMapViewToolArgs,
+  StarMapThreadOpenMode,
+  StarMapThreadRef,
+  StarMapViewFilterKey,
+  StarMapViewFilterSetting,
+  StarMapViewLayout,
 } from "@pwragent/shared";
 import {
   DEFAULT_STAR_MAP_VIEW_MAX_THREADS,
+  isAppServerBackendKind,
+  MAX_STAR_MAP_HIGHLIGHT_THREADS,
   MAX_STAR_MAP_VIEW_MAX_THREADS,
   PWRAGENT_STAR_MAP_OPERATION_NAMES,
   PWRAGENT_TOOL_NAMESPACE,
+  STAR_MAP_THREAD_OPEN_MODES,
+  STAR_MAP_VIEW_FILTER_KEYS,
+  STAR_MAP_VIEW_FILTER_SETTINGS,
+  STAR_MAP_VIEW_LAYOUTS,
 } from "@pwragent/shared";
 import type {
   AgentToolDefinition,
@@ -104,6 +117,32 @@ function descriptionForOperation(
         "For a cloud, pass cloudKey from read_star_map_view.",
         "Add instanceId when that project has a cloud on more than one instance.",
         "Pass instanceId alone for an instance's body, which the projects lens does not draw.",
+        "Pass open as card to open a thread's chat card on the map once there.",
+        "Pass open as full to open the whole thread instead, which leaves the map.",
+        "Fails when no Star Map surface is open.",
+      ].join(" ");
+    case "highlight_star_map_threads":
+      return [
+        "Ring thread cards on the operator's Star Map so they can see which ones you mean.",
+        "Use it before acting on several threads, while you ask the operator to confirm.",
+        "Each thread takes threadId and backend, plus instanceId for a peer's thread.",
+        "A thread the map has not loaded is loaded and brought onto it first.",
+        "The camera frames every ringed card.",
+        "Each call replaces the last highlight.",
+        "Pass clear as true to remove it once the operator has answered.",
+        "Fails when no Star Map surface is open.",
+      ].join(" ");
+    case "set_star_map_view":
+      return [
+        "Change the operator's Star Map lens and filter chips.",
+        "Use it when the operator asks to see the map a different way.",
+        "layout picks the lens: lanes, orbit, or projects.",
+        "filters sets chips by key to include, exclude, or neutral.",
+        "Chips not named keep their state.",
+        "Within attention, approval, pr and unpushed, included chips match any of them.",
+        "Chips in different groups must all match.",
+        "clearFilters turns every chip off before filters apply.",
+        "hideOfflineInstances drops disconnected instances from the map.",
         "Fails when no Star Map surface is open.",
       ].join(" ");
   }
@@ -158,22 +197,102 @@ function inputSchemaForOperation(
             description:
               "The instance that owns the thread or cloud. Alone, fly to its body.",
           },
+          open: {
+            type: "string",
+            enum: [...STAR_MAP_THREAD_OPEN_MODES],
+            description:
+              "With threadId only. card opens its chat card on the map. full opens the whole thread.",
+          },
+        },
+      };
+    case "highlight_star_map_threads":
+      return {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          threads: {
+            type: "array",
+            minItems: 1,
+            maxItems: MAX_STAR_MAP_HIGHLIGHT_THREADS,
+            description: "The cards to ring. Replaces the last highlight.",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              required: ["threadId", "backend"],
+              properties: {
+                threadId: { type: "string" },
+                backend: { type: "string" },
+                instanceId: {
+                  type: "string",
+                  description: "The owning instance, for a peer's thread.",
+                },
+              },
+            },
+          },
+          clear: {
+            type: "boolean",
+            description: "true removes the highlight. Pass it without threads.",
+          },
+        },
+      };
+    case "set_star_map_view":
+      return {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          layout: {
+            type: "string",
+            enum: [...STAR_MAP_VIEW_LAYOUTS],
+            description: "The lens to show.",
+          },
+          filters: {
+            type: "object",
+            additionalProperties: false,
+            description: "Chip states by key. neutral turns a chip off.",
+            properties: Object.fromEntries(
+              STAR_MAP_VIEW_FILTER_KEYS.map((key) => [
+                key,
+                { type: "string", enum: [...STAR_MAP_VIEW_FILTER_SETTINGS] },
+              ]),
+            ),
+          },
+          clearFilters: {
+            type: "boolean",
+            description: "true turns every chip off before filters apply.",
+          },
+          hideOfflineInstances: {
+            type: "boolean",
+            description: "true drops disconnected instances from the map.",
+          },
         },
       };
   }
 }
 
 type ParsedArgs =
-  | { args: ReadStarMapViewToolArgs | FlyStarMapToToolArgs }
+  | {
+      args:
+        | ReadStarMapViewToolArgs
+        | FlyStarMapToToolArgs
+        | HighlightStarMapThreadsToolArgs
+        | SetStarMapViewToolArgs;
+    }
   | { error: string };
 
 function parseArgs(
   operation: PwrAgentStarMapOperationName,
   args: Record<string, unknown>,
 ): ParsedArgs {
-  return operation === "fly_star_map_to"
-    ? parseFlyArgs(args)
-    : parseReadArgs(args);
+  switch (operation) {
+    case "read_star_map_view":
+      return parseReadArgs(args);
+    case "fly_star_map_to":
+      return parseFlyArgs(args);
+    case "highlight_star_map_threads":
+      return parseHighlightArgs(args);
+    case "set_star_map_view":
+      return parseSetViewArgs(args);
+  }
 }
 
 /**
@@ -189,6 +308,113 @@ function parseFlyArgs(args: Record<string, unknown>): ParsedArgs {
       return { error: `fly_star_map_to ${field} must be a non-empty string.` };
     }
     (parsed as Record<string, string>)[field] = value.trim();
+  }
+  if (args.open !== undefined) {
+    if (!STAR_MAP_THREAD_OPEN_MODES.includes(args.open as StarMapThreadOpenMode)) {
+      return { error: "fly_star_map_to open must be card or full." };
+    }
+    parsed.open = args.open as StarMapThreadOpenMode;
+  }
+  return { args: parsed };
+}
+
+function parseHighlightArgs(args: Record<string, unknown>): ParsedArgs {
+  if (args.clear !== undefined && typeof args.clear !== "boolean") {
+    return { error: "highlight_star_map_threads clear must be a boolean." };
+  }
+  if (args.threads === undefined) {
+    return { args: args.clear === undefined ? {} : { clear: args.clear } };
+  }
+  if (
+    !Array.isArray(args.threads)
+    || args.threads.length === 0
+    || args.threads.length > MAX_STAR_MAP_HIGHLIGHT_THREADS
+  ) {
+    return {
+      error: `highlight_star_map_threads threads must list 1 to ${MAX_STAR_MAP_HIGHLIGHT_THREADS} threads.`,
+    };
+  }
+  const threads: StarMapThreadRef[] = [];
+  for (const [index, entry] of args.threads.entries()) {
+    const thread = entry as Record<string, unknown> | null;
+    const threadId = typeof thread?.threadId === "string"
+      ? thread.threadId.trim()
+      : "";
+    const backend = thread?.backend;
+    const instanceId = thread?.instanceId;
+    if (
+      !threadId
+      || typeof backend !== "string"
+      || !isAppServerBackendKind(backend)
+    ) {
+      return {
+        error: `highlight_star_map_threads threads[${index}] needs a threadId and a known backend.`,
+      };
+    }
+    if (
+      instanceId !== undefined
+      && (typeof instanceId !== "string" || !instanceId.trim())
+    ) {
+      return {
+        error: `highlight_star_map_threads threads[${index}].instanceId must be a non-empty string.`,
+      };
+    }
+    threads.push({
+      backend,
+      threadId,
+      ...(typeof instanceId === "string" ? { instanceId: instanceId.trim() } : {}),
+    });
+  }
+  return {
+    args: {
+      threads,
+      ...(args.clear === undefined ? {} : { clear: args.clear }),
+    },
+  };
+}
+
+function parseSetViewArgs(args: Record<string, unknown>): ParsedArgs {
+  const parsed: SetStarMapViewToolArgs = {};
+  if (args.layout !== undefined) {
+    if (!STAR_MAP_VIEW_LAYOUTS.includes(args.layout as StarMapViewLayout)) {
+      return {
+        error: `set_star_map_view layout must be one of ${STAR_MAP_VIEW_LAYOUTS.join(", ")}.`,
+      };
+    }
+    parsed.layout = args.layout as StarMapViewLayout;
+  }
+  if (args.filters !== undefined) {
+    if (
+      typeof args.filters !== "object"
+      || args.filters === null
+      || Array.isArray(args.filters)
+    ) {
+      return { error: "set_star_map_view filters must be an object of chip states." };
+    }
+    const filters: SetStarMapViewToolArgs["filters"] = {};
+    for (const [key, state] of Object.entries(args.filters)) {
+      if (!STAR_MAP_VIEW_FILTER_KEYS.includes(key as StarMapViewFilterKey)) {
+        return {
+          error: `set_star_map_view has no ${key} chip. The chips are ${STAR_MAP_VIEW_FILTER_KEYS.join(", ")}.`,
+        };
+      }
+      if (
+        !STAR_MAP_VIEW_FILTER_SETTINGS.includes(state as StarMapViewFilterSetting)
+      ) {
+        return {
+          error: `set_star_map_view filters.${key} must be include, exclude, or neutral.`,
+        };
+      }
+      filters[key as StarMapViewFilterKey] = state as StarMapViewFilterSetting;
+    }
+    parsed.filters = filters;
+  }
+  for (const field of ["clearFilters", "hideOfflineInstances"] as const) {
+    if (args[field] === undefined) continue;
+    if (typeof args[field] !== "boolean") {
+      return { error: `set_star_map_view ${field} must be a boolean.` };
+    }
+    parsed[field] = args[field];
   }
   return { args: parsed };
 }

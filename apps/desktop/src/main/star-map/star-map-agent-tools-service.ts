@@ -1,8 +1,13 @@
 import type {
   FlyStarMapToToolArgs,
+  HighlightStarMapThreadsToolArgs,
   PwrAgentStarMapRequest,
   PwrAgentStarMapResponse,
   ReadStarMapViewToolArgs,
+  SetStarMapViewToolArgs,
+  StarMapCommandInput,
+  StarMapCommandKind,
+  StarMapCommandResponse,
   StarMapFlightTarget,
   StarMapViewSnapshot,
   StarMapViewThread,
@@ -40,10 +45,39 @@ export function createStarMapAgentToolsHandler(
   return async (
     request: PwrAgentStarMapRequest,
   ): Promise<PwrAgentStarMapResponse> => {
-    if (request.operation === "fly_star_map_to") {
-      return await flyResponse(request.args, sendCommand);
+    switch (request.operation) {
+      case "read_star_map_view":
+        return readViewResponse(readView(), request.args, now());
+      case "fly_star_map_to":
+        return await flyResponse(request.args, sendCommand);
+      case "highlight_star_map_threads":
+        return await highlightResponse(request.args, sendCommand);
+      case "set_star_map_view":
+        return await setViewResponse(request.args, sendCommand);
     }
-    return readViewResponse(readView(), request.args, now());
+  };
+}
+
+function invalidArguments(message: string): {
+  ok: false;
+  error: { code: "invalid_arguments"; message: string };
+} {
+  return { ok: false, error: { code: "invalid_arguments", message } };
+}
+
+/** Send a command and return the map's answer, or why no map answered. */
+async function commandMap<TKind extends StarMapCommandKind>(
+  sendCommand: typeof sendStarMapCommand,
+  command: StarMapCommandInput<TKind>,
+): Promise<StarMapCommandResponse<TKind>> {
+  // The bus delivers only an answer whose kind matches the command it sent,
+  // so the answer is this command's shape.
+  const response = (await sendCommand(command)) as
+    | StarMapCommandResponse<TKind>
+    | undefined;
+  return response ?? {
+    ok: false,
+    error: { code: "star_map_not_open", message: NOT_OPEN_MESSAGE },
   };
 }
 
@@ -52,14 +86,55 @@ async function flyResponse(
   sendCommand: typeof sendStarMapCommand,
 ): Promise<PwrAgentStarMapResponse<"fly_star_map_to">> {
   const target = flightTargetFor(args);
-  if (typeof target === "string") {
-    return { ok: false, error: { code: "invalid_arguments", message: target } };
+  if (typeof target === "string") return invalidArguments(target);
+  if (args.open && target.kind !== "thread") {
+    return invalidArguments("fly_star_map_to open only goes with threadId.");
   }
-  const response = await sendCommand({ kind: "fly_to", target });
-  return response ?? {
-    ok: false,
-    error: { code: "star_map_not_open", message: NOT_OPEN_MESSAGE },
-  };
+  return await commandMap<"fly_to">(sendCommand, {
+    kind: "fly_to",
+    target,
+    ...(args.open ? { open: args.open } : {}),
+  });
+}
+
+async function highlightResponse(
+  args: HighlightStarMapThreadsToolArgs,
+  sendCommand: typeof sendStarMapCommand,
+): Promise<PwrAgentStarMapResponse<"highlight_star_map_threads">> {
+  if (args.threads && args.clear) {
+    return invalidArguments(
+      "highlight_star_map_threads takes threads or clear, not both. A new list already replaces the last one.",
+    );
+  }
+  if (!args.threads && args.clear !== true) {
+    return invalidArguments(
+      "highlight_star_map_threads needs threads to ring, or clear as true.",
+    );
+  }
+  return await commandMap<"highlight">(sendCommand, {
+    kind: "highlight",
+    threads: args.threads ?? [],
+  });
+}
+
+async function setViewResponse(
+  args: SetStarMapViewToolArgs,
+  sendCommand: typeof sendStarMapCommand,
+): Promise<PwrAgentStarMapResponse<"set_star_map_view">> {
+  if (
+    args.layout === undefined
+    && args.filters === undefined
+    && args.clearFilters !== true
+    && args.hideOfflineInstances === undefined
+  ) {
+    return invalidArguments(
+      "set_star_map_view needs a layout, filters, clearFilters, or hideOfflineInstances.",
+    );
+  }
+  return await commandMap<"set_view">(sendCommand, {
+    kind: "set_view",
+    changes: args,
+  });
 }
 
 /** The one destination the arguments name, or why they name none. */

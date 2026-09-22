@@ -15550,6 +15550,15 @@ a.button {
   }
 }
 
+/* An Agent pointing at this card while it asks the operator about it: the
+   located ring, held instead of pulsed, because it lasts as long as the
+   question does. A ring rather than the selection's fill and rail, so the
+   Agent's "these ones" never reads as something the operator gathered. */
+.star-map-card-shell--highlighted .star-map-card {
+  border-color: var(--accent-border);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
 @media (prefers-reduced-motion: no-preference) {
   @keyframes star-map-card-enter {
     0% {
