@@ -98,6 +98,10 @@ export function GitToolSection(props: {
     selected && !selected.executable && !xcodeLicenseCandidate
       ? describeSelectedGitFailure(selected)
       : undefined;
+  // Only the bundle carries its own Git LFS, so only it can set Git LFS up in
+  // a repository whose owner has no git-lfs of their own.
+  const lfsMissingOutsidePwrAgent =
+    selected?.source === "bundled" && discovery.installedLfs === false;
   const pill = describeGitStatusPill(describeGitCommandState(discovery));
   // Mirrors the gh field: the tag says how the choice was *made*, not which
   // location won. Where it came from is already the row's title.
@@ -185,6 +189,13 @@ export function GitToolSection(props: {
               {selectedFailure ? (
                 <span className="settings-pathrow__path settings-gh-status__reason settings-error">
                   {selectedFailure}
+                </span>
+              ) : null}
+              {lfsMissingOutsidePwrAgent ? (
+                <span className="settings-pathrow__path settings-gh-status__reason settings-warning">
+                  Git LFS is not installed outside PwrAgent. In a repository
+                  where PwrAgent sets Git LFS up, <code>git push</code> from
+                  your own terminal fails until you install Git LFS.
                 </span>
               ) : null}
               {xcodeLicenseCandidate ? (

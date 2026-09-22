@@ -1,6 +1,7 @@
 import { execFile as execFileCallback, spawn } from "node:child_process";
 import os from "node:os";
 import { promisify } from "node:util";
+import { noteBundledGitCommand } from "../bundled-git-lfs-advisory";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { gitRuntimeEnvironment, resolveRuntimeGitExecutable } from "../git-runtime";
 import { startWindowsJobReadyPoll, wrapCommandInWindowsJob } from "../windows-job-wrapper";
@@ -75,6 +76,8 @@ export async function runGitCommand(
     };
   } finally {
     windowsJobLaunch?.cleanup();
+    // After the command: a checkout installs the Git LFS hooks it warns about.
+    noteBundledGitCommand(cwd, args, options.env ?? process.env);
   }
 }
 
@@ -156,5 +159,6 @@ export async function streamGitCommand(
     });
   } finally {
     job?.cleanup();
+    noteBundledGitCommand(cwd, args, options.env ?? process.env);
   }
 }

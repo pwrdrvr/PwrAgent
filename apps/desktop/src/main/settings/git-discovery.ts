@@ -1,7 +1,7 @@
 import os from "node:os";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { bundledGitEnvironment, bundledGitExecutable, validateBundledGit } from "../bundled-git";
+import { bundledGitEnvironment, bundledGitExecutable, installedGitLfs, validateBundledGit } from "../bundled-git";
 import { customGitEnvironment, GIT_COMMAND_ENV } from "../git-runtime";
 export { GIT_COMMAND_ENV } from "../git-runtime";
 import path from "node:path";
@@ -149,7 +149,14 @@ export async function discoverGitCommands(params?: {
   const selected = candidates.find((candidate) => candidate.command === requested)
     ?? candidates.find((candidate) => candidate.source === (env[GIT_COMMAND_ENV]?.trim() ? "env" : configuredCommand ? "config" : "bundled"));
   if (selected) selected.selected = true;
-  return { selectedCommand: selected?.command, selectedSource: selected?.source, candidates };
+  return {
+    selectedCommand: selected?.command,
+    selectedSource: selected?.source,
+    candidates,
+    // Settings warns when the bundle set Git LFS up for a repository that
+    // the operator's own Git then cannot push.
+    installedLfs: Boolean(installedGitLfs(env)),
+  };
 }
 
 /**

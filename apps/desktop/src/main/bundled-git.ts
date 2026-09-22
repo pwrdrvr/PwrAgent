@@ -105,6 +105,48 @@ function mingitSystemConfig(root: string, helperDirectory: string): string | und
   ].find((candidate) => existsSync(candidate));
 }
 
+/** Whether `value` is `directory` itself or something beneath it. */
+export function isInsideDirectory(directory: string, value: string): boolean {
+  const relative = path.relative(directory, value);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+/** PATH under whichever casing the host uses. Windows environments vary. */
+export function searchPathOf(env: NodeJS.ProcessEnv): string {
+  const key = Object.keys(env).find((name) => name.toUpperCase() === "PATH");
+  return (key ? env[key] : undefined) ?? "";
+}
+
+const installedLfsBySearch = new Map<string, string | undefined>();
+
+/**
+ * The operator's own git-lfs, found by following their PATH exactly as the
+ * `command -v git-lfs` test at the top of every Git LFS hook does.
+ *
+ * PwrAgent's own bundle is skipped: it joins PATH only inside the processes
+ * PwrAgent launches, so finding git-lfs there says nothing about whether the
+ * operator's own shell can push a repository the bundle set Git LFS up in.
+ */
+export function installedGitLfs(env: NodeJS.ProcessEnv): string | undefined {
+  const searchPath = searchPathOf(env);
+  const cached = installedLfsBySearch.get(searchPath);
+  if (cached ? existsSync(cached) : installedLfsBySearch.has(searchPath)) return cached;
+  const bundle = path.resolve(bundledGitDirectory());
+  const executable = process.platform === "win32" ? "git-lfs.exe" : "git-lfs";
+  let found: string | undefined;
+  for (const entry of searchPath.split(path.delimiter)) {
+    if (!path.isAbsolute(entry) || isInsideDirectory(bundle, entry)) continue;
+    const candidate = path.join(entry, executable);
+    if (existsSync(candidate)) {
+      found = candidate;
+      break;
+    }
+  }
+  if (installedLfsBySearch.size > 32) installedLfsBySearch.clear();
+  installedLfsBySearch.set(searchPath, found);
+  return found;
+}
+
 const APPLE_GIT_SHIM = "/usr/bin/git";
 const KEYCHAIN_HELPER = "git-credential-osxkeychain";
 const keychainHelperBySearch = new Map<string, string | undefined>();

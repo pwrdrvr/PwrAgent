@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { RemoteNavigationPageBaselines } from "../federation/remote-navigation-page-baselines";
-import { GithubPrAuthenticationNotice } from "../pr-status/github-pr-authentication-notice";
+import { setBundledGitLfsAdvisory } from "../bundled-git-lfs-advisory";
+import { OneTimeProfileNotice } from "../notices/one-time-profile-notice";
 import { expectedNavigationReadFailure, type NavigationReadFailure } from "../../shared/navigation-ipc-result";
 import { NavigationAttentionViewLeases } from "../app-server/navigation-attention-view-leases";
 import type { NavigationAttentionViewReleaseRequest } from "@pwragent/shared";
@@ -242,6 +243,8 @@ import {
   APP_SERVER_GET_PR_AUTO_DISPATCH_BUDGET_STATUS_CHANNEL,
   APP_SERVER_RESUME_PR_AUTO_DISPATCH_BUDGET_CHANNEL,
   PR_AUTO_DISPATCH_BUDGET_CHANGED_EVENT_CHANNEL,
+  BUNDLED_GIT_LFS_ADVISORY_ACK_CHANNEL,
+  BUNDLED_GIT_LFS_ADVISORY_EVENT_CHANNEL,
   GITHUB_PR_AUTHENTICATION_FAILURE_ACK_CHANNEL,
   GITHUB_PR_AUTHENTICATION_FAILURE_EVENT_CHANNEL,
   GITHUB_PR_SAML_ENFORCEMENT_EVENT_CHANNEL,
@@ -1353,9 +1356,13 @@ class DesktopAppServerService {
   private prLookupRegistryLoadPromise: Promise<void> | undefined;
   private prGraphqlClient: GithubGraphqlPrClient | undefined;
   private readonly githubSamlBlockedRepositories = new Set<string>();
-  private readonly githubPrAuthenticationNotice = new GithubPrAuthenticationNotice(
-    undefined,
+  private readonly githubPrAuthenticationNotice = new OneTimeProfileNotice(
+    OneTimeProfileNotice.markerFor("github-pr-authentication-failure"),
     (error) => appServerLog.warn("Could not persist GitHub PR authentication notice", { error }),
+  );
+  private readonly bundledGitLfsNotice = new OneTimeProfileNotice(
+    OneTimeProfileNotice.markerFor("bundled-git-lfs"),
+    (error) => appServerLog.warn("Could not persist bundled Git LFS advisory", { error }),
   );
   private prPollingScheduler: PrPollingScheduler | undefined;
   private backgroundPrPollingEnabled = false;
@@ -5353,6 +5360,23 @@ class DesktopAppServerService {
     this.githubPrAuthenticationNotice.acknowledge();
   }
 
+  /** PwrAgent set Git LFS up where the operator's own Git cannot push. */
+  publishBundledGitLfsAdvisory(repositoryPath: string): void {
+    const event = { occurredAt: Date.now(), repositoryPath };
+    this.bundledGitLfsNotice.publish(
+      subscribersForChannel(BUNDLED_GIT_LFS_ADVISORY_EVENT_CHANNEL)
+        .filter((webContents) => !webContents.isDestroyed())
+        .map((webContents) => () => webContents.send(
+          BUNDLED_GIT_LFS_ADVISORY_EVENT_CHANNEL,
+          event,
+        )),
+    );
+  }
+
+  acknowledgeBundledGitLfsAdvisory(): void {
+    this.bundledGitLfsNotice.acknowledge();
+  }
+
   private getPrGraphqlClient(): GithubGraphqlPrClient {
     if (!this.prGraphqlClient) {
       this.prGraphqlClient = new GithubGraphqlPrClient({
@@ -7964,6 +7988,15 @@ function invalidateNavigationEvent(event: AgentEvent): void {
 }
 
 export function registerAppServerIpcHandlers(): void {
+  setBundledGitLfsAdvisory((repositoryPath) => {
+    appServerService.publishBundledGitLfsAdvisory(repositoryPath);
+  });
+  ipcMain.removeHandler(BUNDLED_GIT_LFS_ADVISORY_ACK_CHANNEL);
+  ipcMain.handle(BUNDLED_GIT_LFS_ADVISORY_ACK_CHANNEL, (event) => {
+    if (subscribersForChannel(BUNDLED_GIT_LFS_ADVISORY_EVENT_CHANNEL).includes(event.sender)) {
+      appServerService.acknowledgeBundledGitLfsAdvisory();
+    }
+  });
   ipcMain.removeHandler(GITHUB_PR_AUTHENTICATION_FAILURE_ACK_CHANNEL);
   ipcMain.handle(GITHUB_PR_AUTHENTICATION_FAILURE_ACK_CHANNEL, (event) => {
     if (subscribersForChannel(GITHUB_PR_AUTHENTICATION_FAILURE_EVENT_CHANNEL).includes(event.sender)) {
@@ -9006,6 +9039,8 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   }
   navigationQueryConsumersBySender.clear();
   ipcMain.removeHandler(GITHUB_PR_AUTHENTICATION_FAILURE_ACK_CHANNEL);
+  setBundledGitLfsAdvisory(undefined);
+  ipcMain.removeHandler(BUNDLED_GIT_LFS_ADVISORY_ACK_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_LIST_SKILLS_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_LIST_THREADS_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_READ_THREAD_CHANNEL);

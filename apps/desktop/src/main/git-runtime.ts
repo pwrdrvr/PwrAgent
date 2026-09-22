@@ -6,6 +6,7 @@ import {
   bundledGitConfigDirectory,
   bundledGitDirectory,
   bundledGitEnvironment,
+  isInsideDirectory,
   validateBundledGit,
 } from "./bundled-git";
 import { getConfiguredGitCommand } from "./git-command";
@@ -20,11 +21,7 @@ export function gitCommandPreference(env: NodeJS.ProcessEnv): string | undefined
 export function customGitEnvironment(source: NodeJS.ProcessEnv, command: string): NodeJS.ProcessEnv {
   const env = { ...source };
   const root = path.resolve(bundledGitDirectory());
-  const within = (directory: string, value: string) => {
-    const relative = path.relative(directory, value);
-    return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
-  };
-  const inBundle = (value: string) => within(root, value);
+  const inBundle = (value: string) => isInsideDirectory(root, value);
   // The system config PwrAgent generates for the bundle includes Dugite's;
   // an installed Git reads its own.
   const generatedConfigs = path.resolve(bundledGitConfigDirectory());
@@ -36,7 +33,7 @@ export function customGitEnvironment(source: NodeJS.ProcessEnv, command: string)
       delete env[key];
     } else if (["LOCAL_GIT_DIRECTORY", "GIT_EXEC_PATH", "GIT_TEMPLATE_DIR"].includes(upper)
       || (["GIT_CONFIG_SYSTEM", "PREFIX", "GIT_SSL_CAINFO"].includes(upper) && env[key] && inBundle(env[key]!))
-      || (upper === "GIT_CONFIG_SYSTEM" && env[key] && within(generatedConfigs, env[key]!))) {
+      || (upper === "GIT_CONFIG_SYSTEM" && env[key] && isInsideDirectory(generatedConfigs, env[key]!))) {
       delete env[key];
     }
   }

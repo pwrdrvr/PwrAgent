@@ -75,6 +75,10 @@ export const GITHUB_PR_AUTHENTICATION_FAILURE_EVENT_CHANNEL =
   "app-server:github-pr-authentication-failure";
 export const GITHUB_PR_AUTHENTICATION_FAILURE_ACK_CHANNEL =
   "app-server:github-pr-authentication-failure-ack";
+export const BUNDLED_GIT_LFS_ADVISORY_EVENT_CHANNEL =
+  "app-server:bundled-git-lfs-advisory";
+export const BUNDLED_GIT_LFS_ADVISORY_ACK_CHANNEL =
+  "app-server:bundled-git-lfs-advisory-ack";
 export const APP_SERVER_ARCHIVE_THREAD_CHANNEL = "app-server:archive-thread";
 export const APP_SERVER_RESOLVE_MISSING_CODEX_THREADS_CHANNEL =
   "app-server:resolve-missing-codex-threads";

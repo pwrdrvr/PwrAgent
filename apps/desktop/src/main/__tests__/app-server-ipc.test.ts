@@ -1448,6 +1448,33 @@ describe("app server ipc", () => {
     expect(searchForJump).not.toHaveBeenCalled();
   });
 
+  it("sends the bundled Git LFS advisory to subscribed renderers", async () => {
+    const { BUNDLED_GIT_LFS_ADVISORY_EVENT_CHANNEL } = await import("../../shared/ipc");
+    const { noteBundledGitCommand, setBundledGitLfsAdvisory } = await import(
+      "../bundled-git-lfs-advisory"
+    );
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-lfs-advisory-ipc-"));
+    const repository = path.join(root, "repo");
+    try {
+      await mkdir(path.join(repository, ".git", "hooks"), { recursive: true });
+      await writeFile(path.join(repository, ".git", "hooks", "pre-push"), 'git lfs pre-push "$@"\n');
+      // An empty PATH: no git-lfs for the operator's own shell to find.
+      await mkdir(path.join(root, "bin"));
+      prAutoDispatchBudgetStatusSend.mockClear();
+      // Registering the handlers is what installs the publisher.
+      registerAppServerIpcHandlers();
+      noteBundledGitCommand(repository, ["checkout", "main"], { PATH: path.join(root, "bin") });
+      expect(prAutoDispatchBudgetStatusSend).toHaveBeenCalledExactlyOnceWith(
+        BUNDLED_GIT_LFS_ADVISORY_EVENT_CHANNEL,
+        { occurredAt: expect.any(Number), repositoryPath: repository },
+      );
+    } finally {
+      setBundledGitLfsAdvisory(undefined);
+      prAutoDispatchBudgetStatusSend.mockClear();
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+
   it("routes notice acknowledgement only from a subscribed renderer", async () => {
     const { GITHUB_PR_AUTHENTICATION_FAILURE_ACK_CHANNEL } = await import("../../shared/ipc");
     const { subscribersForChannel } = await import("../window-channels");

@@ -2,17 +2,25 @@ import fs from "node:fs";
 import path from "node:path";
 import { resolveActiveProfilePath } from "../profile";
 
-/** One advisory per local profile, including across application restarts. */
-export class GithubPrAuthenticationNotice {
+/**
+ * One advisory per local profile, including across application restarts.
+ *
+ * Each caller owns a marker file naming its own advisory; the mechanics of
+ * delivering once, only to a real consumer, are the same for all of them.
+ */
+export class OneTimeProfileNotice {
   private notified = false;
   private pending = false;
 
   constructor(
-    private readonly markerPath = resolveActiveProfilePath(
-      path.join("state", "notices", "github-pr-authentication-failure"),
-    ),
+    private readonly markerPath: string,
     private readonly onPersistenceError: (error: unknown) => void = () => {},
   ) {}
+
+  /** The marker for `name`, under the active profile's notice directory. */
+  static markerFor(name: string): string {
+    return resolveActiveProfilePath(path.join("state", "notices", name));
+  }
 
   publish(deliveries: Array<() => void>): void {
     // A background lookup before any window subscribes must not consume it.
@@ -34,7 +42,7 @@ export class GithubPrAuthenticationNotice {
       fs.closeSync(fs.openSync(this.markerPath, "wx", 0o600));
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "EEXIST") return;
-      // A read-only profile must not break PR polling or repeat every poll.
+      // A read-only profile must not break the caller or repeat forever.
       this.onPersistenceError(error);
     }
   }

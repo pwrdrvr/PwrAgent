@@ -915,6 +915,12 @@ export type DesktopGitDiscoverySnapshot = {
   selectedSource?: DesktopGitCandidateSource;
   candidates: DesktopGitDiscoveryCandidate[];
   error?: string;
+  /**
+   * Whether the operator's own `PATH` carries a git-lfs, which is the test
+   * Git LFS hooks themselves run. False means Git outside PwrAgent cannot
+   * push a repository the bundled runtime set Git LFS up in.
+   */
+  installedLfs?: boolean;
 };
 
 export type DesktopApplicationKind = "editor" | "terminal";

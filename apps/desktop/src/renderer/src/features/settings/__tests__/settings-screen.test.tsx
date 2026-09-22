@@ -3948,6 +3948,49 @@ describe("SettingsScreen", () => {
     expect(within(failingRow as HTMLElement).queryByRole("button")).toBeNull();
   });
 
+  it.each([false, true])("warns when the machine has no Git LFS of its own (installedLfs %s)", async (installedLfs) => {
+    const snapshot = createSnapshot();
+    snapshot.applications.git = {
+      path: { value: "", source: "default" },
+      discovery: {
+        selectedCommand: "/app/resources/git/bin/git",
+        selectedSource: "bundled",
+        installedLfs,
+        candidates: [
+          {
+            command: "/app/resources/git/bin/git",
+            executable: true,
+            selected: true,
+            source: "bundled",
+            version: "2.53.0",
+            lfsVersion: "3.7.1",
+          },
+        ],
+      },
+    };
+
+    render(
+      <SettingsScreen
+        desktopApi={{}}
+        initialSection="git"
+        settings={createSettingsState(snapshot)}
+        onClose={() => undefined}
+      />,
+    );
+
+    const panel = screen.getByRole("heading", { name: "Git" }).closest("section")!;
+    const warning = within(panel).queryByText(/Git LFS is not installed outside PwrAgent/);
+    if (installedLfs) {
+      expect(warning).toBeNull();
+      return;
+    }
+    // An advisory about the operator's own terminal, not a failure of ours.
+    expect(warning).toHaveClass("settings-warning");
+    expect(warning).not.toHaveClass("settings-error");
+    expect(within(warning!).getByText("git push")).toBeInTheDocument();
+    expect(within(panel).getByText("Available")).toBeInTheDocument();
+  });
+
   it("shows bundled Git and LFS versions in the status and the row", async () => {
     const snapshot = createSnapshot();
     snapshot.applications.git = {

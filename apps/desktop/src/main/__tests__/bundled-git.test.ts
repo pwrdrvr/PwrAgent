@@ -7,7 +7,9 @@ import {
   bundledGitDirectory,
   bundledGitEnvironment,
   bundledGitExecutable,
+  bundledGitLfsExecutable,
   configureBundledGit,
+  installedGitLfs,
   installedKeychainHelper,
 } from "../bundled-git";
 import { resolveGitExecutable, runGitCommand, streamGitCommand } from "../app-server/git-executable";
@@ -122,6 +124,22 @@ describe("bundled Git runtime", () => {
       expect((await readFile(path.join(repo, "asset.bin"), "utf8")).trim()).toBe(pointer);
     } finally {
       await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("looks past its own bundle for the operator's git-lfs", async () => {
+    const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-installed-lfs-")));
+    const executable = path.join(root, process.platform === "win32" ? "git-lfs.exe" : "git-lfs");
+    try {
+      // The bundle's own git-lfs joins PATH inside PwrAgent's children only,
+      // so finding it there would say nothing about the operator's shell.
+      const bundled = path.dirname(bundledGitLfsExecutable());
+      expect(installedGitLfs({ PATH: bundled })).toBeUndefined();
+      expect(installedGitLfs({ PATH: root })).toBeUndefined();
+      await writeFile(executable, "");
+      expect(installedGitLfs({ PATH: [bundled, root].join(path.delimiter) })).toBe(executable);
+    } finally {
+      await rm(root, { force: true, recursive: true });
     }
   });
 
