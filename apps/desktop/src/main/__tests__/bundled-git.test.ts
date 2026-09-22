@@ -11,12 +11,56 @@ import {
   configureBundledGit,
   installedGitLfs,
   installedKeychainHelper,
+  operatorSearchPath,
 } from "../bundled-git";
 import { resolveGitExecutable, runGitCommand, streamGitCommand } from "../app-server/git-executable";
 
 afterEach(() => {
   configureBundledGit();
   vi.unstubAllEnvs();
+});
+
+/** What launchd hands an app the operator opened from Finder or the Dock. */
+const LAUNCHD_SEARCH_PATH = ["/usr/bin", "/bin", "/usr/sbin", "/sbin"].join(path.delimiter);
+
+describe("operator search path", () => {
+  const installDirectories = ["/opt/homebrew/bin", ".local/bin"];
+  const home = path.join(path.sep, "Users", "dana");
+  const repair = (searchPath: string, platform: NodeJS.Platform = "darwin") =>
+    operatorSearchPath(searchPath, { home, installDirectories, platform });
+
+  it("searches what the operator installed, and launchd's directories last", () => {
+    expect(repair(LAUNCHD_SEARCH_PATH)).toBe([
+      "/opt/homebrew/bin",
+      path.join(home, ".local", "bin"),
+      "/usr/bin",
+      "/bin",
+      "/usr/sbin",
+      "/sbin",
+    ].join(path.delimiter));
+  });
+
+  it("leaves every other PATH exactly as it stands", () => {
+    // A shell has already searched what the operator installed, in their own
+    // order. A fixture directory is the same case: neither is rewritten.
+    for (const searchPath of [
+      ["/opt/homebrew/bin", "/usr/bin", "/bin"].join(path.delimiter),
+      ["/usr/bin", path.join(os.tmpdir(), "fixture", "bin")].join(path.delimiter),
+    ]) {
+      expect(repair(searchPath)).toBe(searchPath);
+    }
+    // A Windows PATH comes from the registry, which already holds what an
+    // installer put there.
+    expect(repair(LAUNCHD_SEARCH_PATH, "win32")).toBe(LAUNCHD_SEARCH_PATH);
+  });
+
+  it("names each directory once", () => {
+    expect(operatorSearchPath(["/usr/bin", "/usr/bin"].join(path.delimiter), {
+      home,
+      installDirectories: ["/usr/bin", ".local/bin"],
+      platform: "darwin",
+    })).toBe(["/usr/bin", path.join(home, ".local", "bin")].join(path.delimiter));
+  });
 });
 
 describe("bundled Git runtime", () => {
@@ -143,6 +187,20 @@ describe("bundled Git runtime", () => {
     }
   });
 
+  it.skipIf(process.platform === "win32")("finds the operator's git-lfs when PwrAgent was opened from Finder", async () => {
+    // Apple ships no git-lfs, so launchd's PATH alone reports one installed
+    // nowhere, and the warning about a repository the bundle set Git LFS up
+    // in would reach every operator who has one.
+    const home = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-launchd-home-")));
+    try {
+      await mkdir(path.join(home, "bin"));
+      await writeFile(path.join(home, "bin", "git-lfs"), "");
+      expect(installedGitLfs({ PATH: LAUNCHD_SEARCH_PATH, HOME: home })).toBeDefined();
+    } finally {
+      await rm(home, { force: true, recursive: true });
+    }
+  });
+
   it("rejects a bundle missing LFS even when the Git executable is present", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-missing-lfs-"));
     const originalGit = bundledGitExecutable();
@@ -210,6 +268,26 @@ describe.skipIf(process.platform === "win32")("bundled Git keychain credentials"
       await symlink(path.join(upgraded, "bin", "git"), path.join(install.bin, "git"));
       expect(installedKeychainHelper({ PATH: searchPath }))
         .toBe(path.join(upgraded, "libexec", "git-core", "git-credential-osxkeychain"));
+    } finally {
+      await rm(install.root, { recursive: true, force: true });
+    }
+  });
+
+  it("searches past launchd's PATH for the helper that stored the keychain items", async () => {
+    const install = await fakeKeychainInstall();
+    try {
+      vi.stubEnv("PWRAGENT_HOME", path.join(install.root, "home"));
+      // An app opened from Finder inherits launchd's PATH and nothing else.
+      // Whatever it finds there is not the Git the operator runs, so it is not
+      // the helper whose keychain items open without an access prompt.
+      const launchdOnly = installedKeychainHelper({ PATH: LAUNCHD_SEARCH_PATH });
+      const env = bundledGitEnvironment(
+        { ...process.env, HOME: install.root, PATH: LAUNCHD_SEARCH_PATH },
+        { platform: "darwin" },
+      );
+      const helper = (await readFile(env.GIT_CONFIG_SYSTEM!, "utf8")).match(/helper = "!'([^']+)'"/)?.[1];
+      expect(helper).toBeDefined();
+      expect(helper).not.toBe(launchdOnly);
     } finally {
       await rm(install.root, { recursive: true, force: true });
     }

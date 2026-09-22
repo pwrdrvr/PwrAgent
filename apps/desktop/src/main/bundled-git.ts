@@ -1,3 +1,4 @@
+import os from "node:os";
 import path from "node:path";
 import dugite from "dugite";
 import { createHash } from "node:crypto";
@@ -79,7 +80,10 @@ export function bundledGitEnvironment(
   // the bundled git/git-lfs before any installed versions in PATH.
   const pathEntries = [executableDirectory, helperDirectory, ...(env.PATH ?? "").split(path.delimiter)];
   const keychainHelper = (options.platform ?? process.platform) === "darwin"
-    ? installedKeychainHelper({ PATH: inheritedPath, DEVELOPER_DIR: clean.DEVELOPER_DIR })
+    ? installedKeychainHelper({
+      PATH: operatorSearchPath(inheritedPath, { home: clean.HOME }),
+      DEVELOPER_DIR: clean.DEVELOPER_DIR,
+    })
     : undefined;
   // Dugite points POSIX Git at its own etc/gitconfig. On Windows, MinGit reads
   // the one inside the bundle that Dugite's build configured.
@@ -117,6 +121,62 @@ export function searchPathOf(env: NodeJS.ProcessEnv): string {
   return (key ? env[key] : undefined) ?? "";
 }
 
+/** Everything launchd hands an app opened from Finder or the Dock. */
+const LAUNCHD_PATH = ["/usr/bin", "/bin", "/usr/sbin", "/sbin"];
+
+/** Where an operator installs Git and git-lfs when PATH does not say. */
+const INSTALL_DIRECTORIES = ["/opt/homebrew/bin", "/usr/local/bin", ".local/bin", "bin"];
+
+/**
+ * The PATH to search for the operator's own Git tooling, which is not the
+ * PATH this process runs with.
+ *
+ * An app opened from Finder or the Dock inherits launchd's PATH and nothing
+ * else: /usr/bin:/bin:/usr/sbin:/sbin, with no Homebrew and no ~/.local/bin.
+ * A terminal that ran `brew shellenv` has the reverse order. Two macOS
+ * behaviors ask what the operator's own shell would find, and under launchd's
+ * PATH alone both answer wrongly in the packaged build only:
+ *
+ * - The keychain helper the bundle borrows. A keychain item stays readable
+ *   without an access prompt only for the helper binary that stored it, which
+ *   is the one the operator's terminal Git runs. We would find Apple's
+ *   instead, or — with no developer tools — none at all, putting every
+ *   keychain-backed HTTPS remote back on "terminal prompts disabled".
+ * - `installedGitLfs`, which asks whether the operator's own shell can push a
+ *   repository the bundle set Git LFS up in. Apple ships no git-lfs, so the
+ *   answer is always no and the warning fires for everyone who has one.
+ *
+ * So a PATH that holds nothing but launchd's directories is repaired: the
+ * well-known install directories are searched, and launchd's are searched
+ * last. A PATH carrying anything else came from a shell and is used as it
+ * stands, which is also what keeps this out of tests that pass a fixture
+ * directory.
+ *
+ * Preferring a Homebrew install the operator does not actually run is the
+ * error left, and it is the smaller one. It costs an access prompt, where the
+ * reverse costs the feature.
+ */
+export function operatorSearchPath(
+  searchPath: string,
+  options: {
+    home?: string;
+    installDirectories?: readonly string[];
+    platform?: NodeJS.Platform;
+  } = {},
+): string {
+  const entries = searchPath.split(path.delimiter).filter((entry) => entry.length > 0);
+  // A Windows PATH comes from the registry, which already holds what an
+  // installer put there.
+  if ((options.platform ?? process.platform) === "win32") return searchPath;
+  // Anything launchd does not supply came from a shell, which has already
+  // searched what the operator installed, in their own order.
+  if (entries.some((entry) => !LAUNCHD_PATH.includes(entry))) return searchPath;
+  const home = options.home?.trim() || os.homedir();
+  const installed = (options.installDirectories ?? INSTALL_DIRECTORIES)
+    .map((entry) => (path.isAbsolute(entry) ? entry : path.join(home, entry)));
+  return [...new Set([...installed, ...entries])].join(path.delimiter);
+}
+
 const installedLfsBySearch = new Map<string, string | undefined>();
 
 /**
@@ -128,7 +188,7 @@ const installedLfsBySearch = new Map<string, string | undefined>();
  * operator's own shell can push a repository the bundle set Git LFS up in.
  */
 export function installedGitLfs(env: NodeJS.ProcessEnv): string | undefined {
-  const searchPath = searchPathOf(env);
+  const searchPath = operatorSearchPath(searchPathOf(env), { home: env.HOME });
   const cached = installedLfsBySearch.get(searchPath);
   if (cached ? existsSync(cached) : installedLfsBySearch.has(searchPath)) return cached;
   const bundle = path.resolve(bundledGitDirectory());
