@@ -311,22 +311,6 @@ describe("desktopSettingsPatchToEdits — experimental", () => {
     ]);
   });
 
-  it("writes the lightweight navigation refresh flag", () => {
-    const edits = desktopSettingsPatchToEdits({
-      experimental: {
-        lightweightNavigationRefresh: true,
-      },
-    });
-
-    expect(edits).toEqual([
-      {
-        op: "set",
-        path: ["experimental", "lightweight_navigation_refresh"],
-        value: true,
-      },
-    ]);
-  });
-
   it("writes the Markdown math rendering flag", () => {
     const edits = desktopSettingsPatchToEdits({
       experimental: {

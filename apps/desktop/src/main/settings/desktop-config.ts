@@ -125,7 +125,6 @@ export type DesktopSettingsConfig = {
     chatReplyComposer?: StoredChatReplyComposer;
     fullAccessRiskWarningDismissed?: boolean;
     liveTranscriptEventFiltering?: boolean;
-    lightweightNavigationRefresh?: boolean;
     markdownMathRendering?: boolean;
     threadPricingSummary?: boolean;
     threadPricingDisplayUsd?: boolean;
@@ -706,12 +705,6 @@ export function desktopSettingsPatchToEdits(
     set(
       ["experimental", "live_transcript_event_filtering"],
       patch.experimental.liveTranscriptEventFiltering,
-    );
-  }
-  if (patch.experimental?.lightweightNavigationRefresh !== undefined) {
-    set(
-      ["experimental", "lightweight_navigation_refresh"],
-      patch.experimental.lightweightNavigationRefresh,
     );
   }
   if (patch.experimental?.markdownMathRendering !== undefined) {
@@ -1801,9 +1794,6 @@ function normalizeDesktopConfig(
       ),
       liveTranscriptEventFiltering: readBoolean(
         experimental?.live_transcript_event_filtering,
-      ),
-      lightweightNavigationRefresh: readBoolean(
-        experimental?.lightweight_navigation_refresh,
       ),
       markdownMathRendering: readBoolean(
         experimental?.markdown_math_rendering,

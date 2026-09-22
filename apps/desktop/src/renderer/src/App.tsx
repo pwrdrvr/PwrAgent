@@ -1455,8 +1455,6 @@ function DesktopAppShell(props: {
     enabled: normalAppEnabled,
     composerDraftStore,
     attentionPromoteOnTurnEnd: settings.snapshot?.general.attentionPromoteOnTurnEnd?.value ?? true,
-    lightweightNavigationRefresh:
-      settings.snapshot?.experimental.lightweightNavigationRefresh?.value ?? false,
     onThreadActionError: handleThreadActionError,
     progressiveInitialRefresh: true,
     threadViewVisible: mainView === "thread",

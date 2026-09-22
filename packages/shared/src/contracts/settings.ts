@@ -1063,13 +1063,6 @@ export type DesktopSettingsSnapshot = {
      */
     liveTranscriptEventFiltering: DesktopSettingsValue<boolean>;
     /**
-     * Gates the lightweight navigation refresh experiment. When disabled,
-     * background navigation refreshes keep using broad forced snapshots.
-     * When enabled, foreground polling uses the one-page active-recent
-     * snapshot and focus refreshes are coalesced.
-     */
-    lightweightNavigationRefresh: DesktopSettingsValue<boolean>;
-    /**
      * Renders LaTeX delimiters in thread Markdown with KaTeX. Disabled by
      * default so the renderer does not load the math runtime until an operator
      * explicitly opts into the experiment.
@@ -1376,7 +1369,6 @@ export type DesktopSettingsConfigPatch = {
   experimental?: {
     fullAccessRiskWarningDismissed?: boolean;
     liveTranscriptEventFiltering?: boolean;
-    lightweightNavigationRefresh?: boolean;
     markdownMathRendering?: boolean;
     threadPricingSummary?: boolean;
     threadPricingDisplayUsd?: boolean;

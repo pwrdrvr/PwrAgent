@@ -4111,37 +4111,6 @@ describe("DesktopSettingsService", () => {
     );
   });
 
-  it("defaults lightweight navigation refresh to false and persists it", async () => {
-    const root = createTempRoot();
-    const configPath = path.join(root, "config.toml");
-    const service = new DesktopSettingsService({
-      configPath,
-      env: {},
-      secretStore: new MemoryDesktopSecretStore(),
-    });
-
-    const initial = await service.readSettingsProjection();
-    expect(initial.experimental.lightweightNavigationRefresh).toEqual({
-      value: false,
-      source: "default",
-    });
-
-    await service.writeConfigPatchTargeted({
-      experimental: {
-        lightweightNavigationRefresh: true,
-      },
-    });
-
-    const updated = await service.readSettingsProjection();
-    expect(updated.experimental.lightweightNavigationRefresh).toEqual({
-      value: true,
-      source: "config",
-    });
-    expect(fs.readFileSync(configPath, "utf8")).toContain(
-      "lightweight_navigation_refresh = true",
-    );
-  });
-
   it("defaults Markdown math rendering to false and persists it", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");

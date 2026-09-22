@@ -180,10 +180,6 @@ function createSnapshot(
         value: false,
         source: "default",
       },
-      lightweightNavigationRefresh: {
-        value: false,
-        source: "default",
-      },
       markdownMathRendering: {
         value: false,
         source: "default",
@@ -1588,17 +1584,6 @@ describe("SettingsScreen", () => {
 
     fireEvent.click(
       screen.getByRole("switch", {
-        name: "Enable lightweight navigation refresh",
-      }),
-    );
-    await waitFor(() => {
-      expect(settings.writeConfig).toHaveBeenCalledWith({
-        experimental: { lightweightNavigationRefresh: true },
-      });
-    });
-
-    fireEvent.click(
-      screen.getByRole("switch", {
         name: "Enable Codex skill questions",
       }),
     );
@@ -2307,7 +2292,6 @@ describe("SettingsScreen", () => {
     >;
     delete experimental.liveTranscriptEventFiltering;
     delete experimental.codexDefaultModeRequestUserInput;
-    delete experimental.lightweightNavigationRefresh;
     delete experimental.markdownMathRendering;
     const settings = createSettingsState(snapshot);
 
@@ -2325,16 +2309,12 @@ describe("SettingsScreen", () => {
     const questionsSwitch = screen.getByRole("switch", {
       name: "Enable Codex skill questions",
     });
-    const refreshSwitch = screen.getByRole("switch", {
-      name: "Enable lightweight navigation refresh",
-    });
     const mathSwitch = screen.getByRole("switch", {
       name: "Enable Markdown math rendering",
     });
 
     expect(filteringSwitch).toHaveAttribute("aria-checked", "false");
     expect(questionsSwitch).toHaveAttribute("aria-checked", "false");
-    expect(refreshSwitch).toHaveAttribute("aria-checked", "false");
     expect(mathSwitch).toHaveAttribute("aria-checked", "false");
 
     fireEvent.click(filteringSwitch);
@@ -2348,13 +2328,6 @@ describe("SettingsScreen", () => {
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         experimental: { codexDefaultModeRequestUserInput: true },
-      });
-    });
-
-    fireEvent.click(refreshSwitch);
-    await waitFor(() => {
-      expect(settings.writeConfig).toHaveBeenCalledWith({
-        experimental: { lightweightNavigationRefresh: true },
       });
     });
 

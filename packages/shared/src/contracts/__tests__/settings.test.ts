@@ -113,10 +113,6 @@ describe("desktop settings contracts", () => {
           value: false,
           source: "default",
         },
-        lightweightNavigationRefresh: {
-          value: false,
-          source: "default",
-        },
         threadPricingSummary: {
           value: true,
           source: "default",

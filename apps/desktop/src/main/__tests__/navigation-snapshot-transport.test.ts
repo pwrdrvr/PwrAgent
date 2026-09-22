@@ -233,39 +233,6 @@ describe("NavigationSnapshotTransport", () => {
     }).kind).toBe("unchanged");
   });
 
-  it("retains independent revisions for full and active-recent scopes", () => {
-    const transport = new NavigationSnapshotTransport();
-    const snapshot = buildSnapshot([buildThread(1)]);
-    const full = transport.encode({
-      request: {},
-      snapshot,
-    });
-    const activeRecent = transport.encode({
-      request: { refreshMode: "active-recent" },
-      snapshot,
-    });
-    if (full.kind !== "full" || activeRecent.kind !== "full") {
-      throw new Error("Expected independent full baselines");
-    }
-
-    expect(transport.encode({
-      baseRevision: full.revision,
-      request: { refreshMode: "full" },
-      snapshot,
-    })).toEqual({
-      kind: "unchanged",
-      revision: full.revision,
-    });
-    expect(transport.encode({
-      baseRevision: activeRecent.revision,
-      request: { refreshMode: "active-recent" },
-      snapshot,
-    })).toEqual({
-      kind: "unchanged",
-      revision: activeRecent.revision,
-    });
-  });
-
   it("filters one canonical history for sparse and full consumers", () => {
     const transport = new NavigationSnapshotTransport();
     const threads = Array.from({ length: 1_200 }, (_, index) =>
@@ -307,7 +274,7 @@ describe("NavigationSnapshotTransport", () => {
     ]);
 
     const full = transport.encode({
-      request: { refreshMode: "active-recent" },
+      request: {},
       scopeKey: "federation-navigation",
       selection: { kind: "all" },
       snapshot: buildSnapshot(updatedThreads, 3),

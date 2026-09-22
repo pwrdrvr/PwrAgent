@@ -2324,7 +2324,6 @@ describe("app server ipc", () => {
     const stale = await handler?.({}, {
       federationTarget,
       forceRefresh: true,
-      refreshMode: "full",
     }) as typeof fresh;
     expect(stale).toMatchObject({
       federationTarget,
@@ -2394,7 +2393,7 @@ describe("app server ipc", () => {
       },
     );
     await expect(
-      handler?.({}, { federationTarget, forceRefresh: true, refreshMode: "full" }),
+      handler?.({}, { federationTarget, forceRefresh: true }),
     ).resolves.toBe(snapshot);
   });
 
@@ -2756,9 +2755,6 @@ describe("app server ipc", () => {
       callerReason: "navigation-snapshot",
       filter: undefined,
       forceRefresh: undefined,
-      limit: undefined,
-      maxPages: undefined,
-      skipArchivedMetadataRefresh: false,
     });
     expect(reconcileNavigationSnapshot).toHaveBeenCalledWith({
       backend: "all",
@@ -4015,134 +4011,6 @@ describe("app server ipc", () => {
         primaryGitRepository: "github.com/pwrdrvr/pwragent",
       }],
     });
-  });
-
-  it("uses one active recent page for lightweight navigation refreshes", async () => {
-
-    getStartupProviderRefreshStatus.mockReturnValueOnce({ state: "checking" });
-    registerAppServerIpcHandlers();
-
-    const response = await readLegacyOwnerMaterialization?.(
-      {},
-      {
-        forceRefresh: true,
-        refreshMode: "active-recent",
-      } satisfies GetNavigationSnapshotRequest,
-    );
-
-    expect(listThreads).toHaveBeenCalledWith({
-      backend: undefined,
-      callerReason: "navigation-snapshot:active-recent",
-      filter: undefined,
-      forceRefresh: true,
-      limit: 50,
-      maxPages: 1,
-      skipArchivedMetadataRefresh: true,
-    });
-    expect(reconcileNavigationSnapshot).toHaveBeenCalledWith(
-      expect.objectContaining({
-        partial: true,
-      }),
-    );
-    expect(response).toEqual(expect.objectContaining({
-      providerRefresh: { state: "checking" },
-    }));
-    expect(rememberCompleteNavigationSnapshot).not.toHaveBeenCalled();
-  });
-
-  it("merges lightweight navigation refreshes into the last full thread list", async () => {
-
-    const staleThread = {
-      id: "thread-stale",
-      title: "Stale thread",
-      titleSource: "explicit" as const,
-      source: "codex" as const,
-      linkedDirectories: [],
-      updatedAt: 1_000,
-    };
-    const recentThread = {
-      id: "thread-recent",
-      title: "Recent thread",
-      titleSource: "explicit" as const,
-      source: "codex" as const,
-      linkedDirectories: [],
-      updatedAt: 2_000,
-    };
-    const updatedRecentThread = {
-      ...recentThread,
-      title: "Updated recent thread",
-      updatedAt: 3_000,
-    };
-    listThreads
-      .mockResolvedValueOnce([recentThread, staleThread])
-      .mockResolvedValueOnce([updatedRecentThread]);
-
-    registerAppServerIpcHandlers();
-
-    await readLegacyOwnerMaterialization?.(
-      {},
-      {} satisfies GetNavigationSnapshotRequest,
-    );
-    await readLegacyOwnerMaterialization?.(
-      {},
-      {
-        forceRefresh: true,
-        refreshMode: "active-recent",
-      } satisfies GetNavigationSnapshotRequest,
-    );
-
-    expect(reconcileNavigationSnapshot).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        threads: [
-          expect.objectContaining({
-            id: "thread-recent",
-            title: "Updated recent thread",
-          }),
-          expect.objectContaining({ id: "thread-stale" }),
-        ],
-      }),
-    );
-    expect(reconcileNavigationSnapshot).toHaveBeenLastCalledWith(
-      expect.not.objectContaining({ partial: true }),
-    );
-  });
-
-  it("treats an empty full thread list as a complete lightweight baseline", async () => {
-
-    const discoveredThread = {
-      id: "thread-discovered",
-      title: "Discovered thread",
-      titleSource: "explicit" as const,
-      source: "codex" as const,
-      linkedDirectories: [],
-      updatedAt: 2_000,
-    };
-    listThreads
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([discoveredThread]);
-
-    registerAppServerIpcHandlers();
-
-    await readLegacyOwnerMaterialization?.(
-      {},
-      {} satisfies GetNavigationSnapshotRequest,
-    );
-    await readLegacyOwnerMaterialization?.(
-      {},
-      {
-        forceRefresh: true,
-        refreshMode: "active-recent",
-      } satisfies GetNavigationSnapshotRequest,
-    );
-
-    expect(reconcileNavigationSnapshot).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        threads: [expect.objectContaining({ id: "thread-discovered" })],
-      }),
-    );
-    expect(reconcileNavigationSnapshot).toHaveBeenLastCalledWith(
-      expect.not.objectContaining({ partial: true }),
-    );
   });
 
   it("returns backend scope all when listing threads without a backend filter", async () => {

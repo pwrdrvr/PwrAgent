@@ -1719,10 +1719,6 @@ describe("App", () => {
           value: false,
           source: "default",
         },
-        lightweightNavigationRefresh: {
-          value: false,
-          source: "default",
-        },
         tokenMiserEnabled: {
           value: false,
           source: "default",
