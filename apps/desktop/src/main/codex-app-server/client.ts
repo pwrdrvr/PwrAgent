@@ -6660,20 +6660,6 @@ function mergeCodexDefaultModeRequestUserInputConfig(
   } as CodexThreadStartParams["config"];
 }
 
-function mergeCodexFastModeConfig(
-  config: CodexThreadStartParams["config"] | undefined,
-  fastMode: boolean | undefined,
-): CodexThreadStartParams["config"] | undefined {
-  if (typeof fastMode !== "boolean") {
-    return config;
-  }
-  const baseConfig = isPlainRecord(config) ? config : {};
-  return {
-    ...baseConfig,
-    fast_mode: fastMode,
-  } as CodexThreadStartParams["config"];
-}
-
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
@@ -6731,13 +6717,13 @@ function buildThreadForkPayload(params: {
     base.sandbox = sandbox;
   }
 
-  const serviceTier = normalizeCodexServiceTier(params.serviceTier);
-  if (serviceTier) {
+  const serviceTier = normalizeCodexServiceTier(resolveCodexServiceTier(params));
+  if (serviceTier !== undefined) {
     base.serviceTier = serviceTier;
   }
 
   const config = mergeCodexShellEnvironmentPolicyConfig(
-    mergeCodexFastModeConfig(params.config, params.fastMode),
+    params.config,
     params.codexEnvironmentRuntime,
     params.bundledToolsDirectory,
   );
@@ -6800,7 +6786,7 @@ function buildThreadResumePayloads(params: {
 
   const config = mergeCodexShellEnvironmentPolicyConfig(
     mergeCodexDefaultModeRequestUserInputConfig(
-      mergeCodexFastModeConfig(params.config, params.fastMode),
+      params.config,
       params.defaultModeRequestUserInput,
     ),
     params.codexEnvironmentRuntime,
