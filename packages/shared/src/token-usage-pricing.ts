@@ -308,6 +308,10 @@ const XAI_GROK45_PRICING_EFFECTIVE_FROM = Date.UTC(2026, 6, 8);
 // https://docs.x.ai/developers/pricing
 const XAI_GROK46_PRICING_CATALOG_VERSION = "2026-08-12";
 const XAI_GROK46_PRICING_EFFECTIVE_FROM = Date.UTC(2026, 7, 12);
+// https://docs.x.ai/developers/models/grok-4.7
+// https://x.ai/news/grok-4-7 (Fast costs twice the standard token rates).
+const XAI_GROK47_PRICING_CATALOG_VERSION = "2026-09-21";
+const XAI_GROK47_PRICING_EFFECTIVE_FROM = Date.UTC(2026, 8, 21);
 // ModelStudio Standard, Singapore / International list pricing:
 // https://www.alibabacloud.com/help/en/model-studio/model-pricing
 // Implicit-cache hits cost 20% of the normal input-token rate:
@@ -632,6 +636,35 @@ const OPENAI_PRICING_CATALOG: readonly PricingCatalogEntry[] = [
 const XAI_PRICING_CATALOG: readonly PricingCatalogEntry[] = [
   // Grok ACP authenticates the signed-in Grok account rather than an API key.
   // Estimate account usage at the standard rate across all context sizes.
+  {
+    cachedInputUsdPerMillion: 0.5,
+    catalogId: XAI_PRICING_CATALOG_ID,
+    catalogVersion: XAI_GROK47_PRICING_CATALOG_VERSION,
+    displayModel: "Grok 4.7",
+    displayTier: "Standard",
+    effectiveFrom: XAI_GROK47_PRICING_EFFECTIVE_FROM,
+    inputUsdPerMillion: 2,
+    model: "grok-4.7",
+    outputTokensIncludeReasoning: true,
+    outputUsdPerMillion: 6,
+    provider: "xai",
+    serviceTier: "standard",
+  },
+  {
+    // Grok ACP advertises Fast as a separate model, not a service tier.
+    cachedInputUsdPerMillion: 1,
+    catalogId: XAI_PRICING_CATALOG_ID,
+    catalogVersion: XAI_GROK47_PRICING_CATALOG_VERSION,
+    displayModel: "Grok 4.7 Fast",
+    displayTier: "Standard",
+    effectiveFrom: XAI_GROK47_PRICING_EFFECTIVE_FROM,
+    inputUsdPerMillion: 4,
+    model: "grok-4.7-build-fast",
+    outputTokensIncludeReasoning: true,
+    outputUsdPerMillion: 12,
+    provider: "xai",
+    serviceTier: "standard",
+  },
   {
     aliases: ["grok-4.6-build", "grok-4.6-latest"],
     cachedInputUsdPerMillion: 0.5,
