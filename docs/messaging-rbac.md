@@ -48,11 +48,12 @@ code side).
 | `thread.control.stop` | control | Interrupt the running turn. |
 | `thread.control.compact` | control | Compact the thread's context. |
 | `thread.control.handoff` | control | Move a thread between local/worktree/branches (all `handoff:*` actions), or to another project (`mutate_thread` `projectPath`). |
-| `thread.control.archive` | control (danger: med) | Let the agent archive a thread (`mutate_thread` `archive`), removing the worktrees PwrAgent created for it. Admin only by default. |
+| `thread.control.archive` | control (danger: med) | Let the agent archive a thread (`mutate_thread` `archive: true`), removing the worktrees PwrAgent created for it, or restore an archived one (`archive: false`). Admin only by default. |
+| `thread.control.organize` | control | Let the agent pin or unpin a thread (`mutate_thread` `pinned`) and mark it read or unread (`unread`). |
 | `thread.control.schedule` | control | Queue a message to the bound thread for later (`/schedule`) and list or cancel the queue (`/scheduled`). |
 | `approval.respond.default` | interactive | Approve or deny non-escalation approval requests. |
 | `approval.respond.escalation` | interactive (danger: med) | Approve or deny network / exec / filesystem escalation requests. |
-| `tools.thread_inspection` | tools (danger: med) | Let the agent search and read OTHER threads on the actor's behalf (`search_threads`, `read_thread`, thread status, PR inspection, `read_star_map_view`), and fly the desktop Star Map to one (`fly_star_map_to`). |
+| `tools.thread_inspection` | tools (danger: med) | Let the agent search and read OTHER threads on the actor's behalf (`search_threads`, `read_thread`, thread status, PR inspection, `read_star_map_view`), and point the desktop Star Map at them (`fly_star_map_to`, `highlight_star_map_threads`, `set_star_map_view`). |
 | `tools.thread_orchestration` | tools (danger: med) | Let the agent inject messages into other threads, hand off tasks, attach directories, and attach PRs. |
 | `tools.instance_management` | tools (danger: med) | Let the agent manage PwrAgent itself and inspect automations (`manage_pwragent`). |
 | `thread.execution.full_access` | danger (danger: high) | Select or resume into full-access execution — near-complete control of the host. |
@@ -68,7 +69,11 @@ Notes on the danger tiers:
   gate for `executionMode: "full-access"`. `archive` has no status-card
   button to match, so it has a permission of its own rather than riding on
   `thread.control.handoff`: it removes worktrees, which holding handoff has
-  never implied.
+  never implied. A restore (`archive: false`) asks the same permission,
+  since it brings those worktrees back. `pinned` and `unread` have no
+  status-card buttons either; they share `thread.control.organize`, which
+  Power User holds, because they change how the operator's list is sorted
+  and nothing about the thread's work.
 - `thread.execution.full_access` is escalation-equivalent. It **double-gates**:
   the RBAC permission is required *in addition to* the existing global
   full-access toggle, never as a bypass of it.
@@ -82,7 +87,7 @@ reserved: `admin`, `power_user`, `power_user_tools`, `chat_user`,
 | Role | Permission set | Intent |
 |---|---|---|
 | **Admin** | The whole catalog, computed — it can never silently miss a newly added capability. Includes `federation.remote_control`, so Admin is the only built-in that reaches other instances. | The operator's own accounts. |
-| **Power User** | Everything a thread operator needs EXCEPT `approval.respond.escalation`, the `tools.*` agent surface, and full access. Enumerated explicitly so new permissions are opt-in. | A trusted colleague driving their own threads. |
+| **Power User** | Everything a thread operator needs EXCEPT `approval.respond.escalation`, `thread.control.archive`, the `tools.*` agent surface, and full access. Enumerated explicitly so new permissions are opt-in. | A trusted colleague driving their own threads. |
 | **Power User + Tools** | Power User plus the three `tools.*` permissions. | A Power User also trusted to let the agent reach beyond the bound thread — but still only on *this* machine. |
 | **Chat User** | `message.reply`, `elicitation.answer`, `thread.status.view`. | Converse and observe; no control surface. |
 | **Limited Chat User** | `message.reply`, `elicitation.answer`. | Reply and answer questions only. |
