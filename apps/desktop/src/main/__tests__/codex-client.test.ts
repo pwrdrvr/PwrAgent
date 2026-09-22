@@ -2826,6 +2826,61 @@ describe("CodexAppServerClient", () => {
     ]);
   });
 
+  it("keeps custom models with provider labels and explicit capability limits", async () => {
+    const id = "/models/bonsai.gguf";
+    MockTransport.modelListResult = createModelListResponse([
+      createCodexModel({
+        id,
+        displayName: "PrismML Bonsai 2 27B",
+        isDefault: true,
+        defaultReasoningEffort: "none",
+        supportedReasoningEfforts: [],
+        inputModalities: ["text"],
+      }),
+      createCodexModel({ id: "hidden-local-model", hidden: true }),
+    ]);
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({ command: "codex" });
+
+    await expect(client.listModels()).resolves.toEqual([{
+      id,
+      label: "PrismML Bonsai 2 27B",
+      current: true,
+      defaultReasoningEffort: "none",
+      reasoningEfforts: [],
+      supportsReasoning: false,
+      supportsFast: false,
+      supportsImage: false,
+    }]);
+    await client.close();
+  });
+
+  it("preserves empty capabilities and custom labels from legacy model lists", async () => {
+    MockTransport.serverVersion = "0.143.0";
+    MockTransport.modelListResult = { data: [
+      {
+        id: "local-model",
+        display_name: "Local model",
+        supported_reasoning_efforts: [],
+        service_tiers: [],
+        input_modalities: ["text"],
+      },
+      { id: "hidden-model", hidden: true },
+    ] };
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({ command: "codex" });
+
+    await expect(client.listModels()).resolves.toEqual([expect.objectContaining({
+      id: "local-model",
+      label: "Local model",
+      reasoningEfforts: [],
+      supportsReasoning: false,
+      supportsFast: false,
+      supportsImage: false,
+    })]);
+    await client.close();
+  });
+
   it("keeps available Spark models image-disabled and honors an explicit image-support protocol flag", async () => {
     MockTransport.serverVersion = "0.143.0";
     MockTransport.modelListResult = {

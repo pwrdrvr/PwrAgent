@@ -6580,6 +6580,35 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  it("skips OpenAI quotas and title helpers for a no-auth local Codex provider", async () => {
+    const codexClient = new MockBackendClient({
+      account: { requiresOpenaiAuth: false },
+      initializeResult: { methods: ["thread/start", "turn/start", "thread/name/set"] },
+      models: [{ id: "local-model", label: "Local model", current: true }],
+      threads: [],
+    });
+    const titleService = {
+      generateTitle: vi.fn(async () => ({ status: "generated" as const, title: "Local title" })),
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+      threadTitleGenerationService: titleService,
+    });
+    await registry.refreshProvidersAtStartup(issueProviderDiscoveryPermit("startup"));
+    await registry.listBackends({ refreshRateLimits: true });
+    expect(codexClient.readRateLimitsCallCount).toBe(0);
+    await registry.startThread({ backend: "codex", cwd: "/repo-a" });
+    await registry.startTurn({
+      backend: "codex",
+      threadId: "thread-1",
+      input: [{ type: "text", text: "Test the local provider" }],
+    });
+    await flushAsync();
+    expect(titleService.generateTitle).not.toHaveBeenCalled();
+    await registry.close();
+  });
+
   it("refreshes idle Codex quotas without rediscovery and coalesces repeated reads", async () => {
     const codexClient = new MockBackendClient({
       rateLimits: [{ name: "Weekly limit", remaining: 91 }],
@@ -18052,6 +18081,51 @@ script = "echo setup"
     expect(launchpad.launchpad.fastMode).not.toBe(true);
     expect(launchpad.launchpad.serviceTier).toBeUndefined();
 
+    await registry.close();
+  });
+
+  it("starts a local Codex model without inherited reasoning or Fast settings", async () => {
+    const model = "/models/bonsai.gguf";
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+      models: [{
+        id: model,
+        label: "PrismML Bonsai 2 27B",
+        current: true,
+        reasoningEfforts: [],
+        supportsReasoning: false,
+        supportsFast: false,
+        supportsImage: false,
+      }],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock({ overlays: {
+        "codex:local-thread": {
+          backend: "codex",
+          threadId: "local-thread",
+          executionMode: "default",
+          model,
+          reasoningEffort: "high",
+          fastMode: true,
+          serviceTier: "priority",
+          extraLinkedDirectories: [],
+        },
+      } }),
+    });
+
+    await registry.listBackends();
+    await registry.startTurn({
+      backend: "codex",
+      threadId: "local-thread",
+      input: [{ type: "text", text: "Use the local model" }],
+    });
+    expect(codexClient.lastStartTurnParams).toMatchObject({
+      model,
+      reasoningEffort: undefined,
+      serviceTier: undefined,
+      fastMode: false,
+    });
     await registry.close();
   });
 

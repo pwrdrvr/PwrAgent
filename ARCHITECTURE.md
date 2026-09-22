@@ -359,6 +359,30 @@ Codex App Server protocol bindings are consumed from
 workspace. Workspace packages remain marked `private: true` for publishing control,
 but the source in this repository is MIT-licensed.
 
+### Local models through Codex
+
+The Codex adapter accepts every non-hidden model advertised by `model/list`.
+Known OpenAI models retain their picker order; other models retain their provider
+labels and capability metadata. A custom provider can supply a Codex
+`model_catalog_json` with its exact model IDs, context limits, modalities, reasoning
+levels, and service tiers. Endpoint discovery is Codex-owned; PwrAgent does not
+read a model server's catalog or infer capabilities from its filename. Unknown
+models remain unpriced. No-auth providers without an OpenAI account skip account
+quota polling and the automatic OpenAI title helper, retaining prompt-derived titles.
+
+`scripts/codex-local-responses-bridge.mjs` is an optional Codex executable wrapper
+for local Responses servers whose chat templates require one leading system message
+and whose tool parser accepts only flat functions. It consolidates instructions,
+flattens namespace tool names, and restores namespaces in streamed responses and
+tool history. It rejects unsupported tool types instead of silently dropping them.
+Its HTTP listener uses an ephemeral loopback port and lives with the wrapped Codex
+process; the upstream must also use loopback. The wrapper accepts `--codex PATH`,
+`--upstream http://127.0.0.1:PORT/v1`, `--provider NAME`, then `--` and Codex's
+arguments. It passes the bridge URL as a process-local `-c` override and does not
+edit Codex configuration, copy authentication, or log request bodies. The profile's
+catalog must disable unsupported built-in tools such as freeform patching and
+hosted web search. Shell-based file edits remain available.
+
 ## Background PR status and Star Map
 
 - The main process polls tracked pull requests with focused, warm, and cold

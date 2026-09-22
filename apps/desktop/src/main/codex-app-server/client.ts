@@ -5572,7 +5572,7 @@ function pickReasoningEfforts(record: Record<string, unknown>): string[] | undef
         .filter((effort): effort is string => Boolean(effort)),
     ),
   ];
-  return efforts.length > 0 ? efforts : undefined;
+  return efforts;
 }
 
 function extractModelOptions(value: unknown): BackendModelOption[] {
@@ -5592,11 +5592,15 @@ function extractModelOptions(value: unknown): BackendModelOption[] {
     if (!id || pickBoolean(modelRecord, ["hidden"]) === true) {
       return [];
     }
+    const inputModalities = modelRecord.inputModalities ?? modelRecord.input_modalities;
 
     return [
       {
         id,
-        label: formatCodexModelLabel(id),
+        label: formatCodexModelLabel(
+          id,
+          pickString(modelRecord, ["displayName", "display_name", "label"]),
+        ),
         current: pickBoolean(modelRecord, [
           "current",
           "default",
@@ -5611,23 +5615,25 @@ function extractModelOptions(value: unknown): BackendModelOption[] {
         supportsReasoning: pickBoolean(modelRecord, [
           "supportsReasoning",
           "supports_reasoning",
-        ]),
+        ]) ?? (pickReasoningEfforts(modelRecord)?.length === 0 ? false : undefined),
         supportsFast: pickModelSupportsFast(modelRecord),
         supportsSteering: pickBoolean(modelRecord, [
           "supportsSteering",
           "supports_steering",
         ]),
-        // Prefer an explicit protocol flag when the model list carries one;
-        // otherwise fall back to the known Spark exclusion (Spark models do
-        // not accept image input). Leaving this `undefined` for all other
-        // models means "assume supported" in the composer.
+        // Prefer explicit capabilities, including a text-only modality list.
+        // Older servers without either retain the known Spark exclusion.
         supportsImage:
           pickBoolean(modelRecord, [
             "supportsImage",
             "supports_image",
             "supportsVision",
             "supports_vision",
-          ]) ?? (isSparkModelId(id) ? false : undefined),
+          ]) ?? (
+            Array.isArray(inputModalities)
+              ? inputModalities.includes("image")
+              : isSparkModelId(id) ? false : undefined
+          ),
       },
     ];
   });
@@ -5786,7 +5792,7 @@ function extractGeneratedModelOptions(
     return [
       {
         id: model.id,
-        label: formatCodexModelLabel(model.id),
+        label: formatCodexModelLabel(model.id, model.displayName),
         current: model.isDefault,
         defaultReasoningEffort: model.defaultReasoningEffort,
         reasoningEfforts: model.supportedReasoningEfforts.map(
@@ -5832,10 +5838,10 @@ function isSparkModelId(id: string): boolean {
   return id.toLowerCase().includes("spark");
 }
 
-function formatCodexModelLabel(id: string): string {
+function formatCodexModelLabel(id: string, displayName?: string): string {
   const match = /^gpt-([^-]+)(?:-(.+))?$/i.exec(id.trim());
   if (!match) {
-    return id;
+    return displayName?.trim() || id;
   }
 
   const version = match[1];

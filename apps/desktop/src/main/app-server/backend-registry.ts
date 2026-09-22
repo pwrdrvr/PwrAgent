@@ -5872,6 +5872,10 @@ async function readClientRateLimits(client: BackendClient): Promise<BackendRateL
   return await client.readRateLimits();
 }
 
+function isUnauthenticatedCodexProvider(account: BackendAccountSummary | undefined): boolean {
+  return account?.requiresOpenaiAuth === false && !account.type;
+}
+
 function rateLimitSummaryKey(limit: BackendRateLimitSummary): string {
   return [
     limit.limitId ?? "",
@@ -26023,6 +26027,7 @@ export class DesktopBackendRegistry {
     notificationVersion: number;
   }): Promise<boolean> {
     if (this.codexClient.isAuthenticationRequired?.()) return false;
+    if (isUnauthenticatedCodexProvider(this.codexBackendSummary?.account)) return false;
     let refetchedRateLimits: BackendRateLimitSummary[];
     try {
       refetchedRateLimits = await readClientRateLimits(this.codexClient);
@@ -26130,6 +26135,7 @@ export class DesktopBackendRegistry {
     const backendGeneration = this.codexBackendGeneration;
     const rateLimitsNotificationVersion = this.codexRateLimitsNotificationVersion;
     const { lastKnownGood } = this.readCodexProvider();
+    const accountRead = readClientAccount(this.codexClient);
     const [
       initializeResult,
       defaultModelsResult,
@@ -26142,8 +26148,10 @@ export class DesktopBackendRegistry {
         return result;
       }),
       this.readCodexDefaultModelsOnce("backend-summary"),
-      readClientAccount(this.codexClient),
-      readClientRateLimits(this.codexClient),
+      accountRead,
+      accountRead.catch(() => undefined).then((account) =>
+        isUnauthenticatedCodexProvider(account) ? [] : readClientRateLimits(this.codexClient)
+      ),
       this.resolveCodexRuntimeCommandFn?.(),
     ]);
     if (backendGeneration !== this.codexBackendGeneration) {
@@ -30428,6 +30436,14 @@ export class DesktopBackendRegistry {
   }): void {
     const key = buildTitleGenerationKey(params.backend, params.threadId);
     if (!this.threadTitleGenerationService) {
+      return;
+    }
+    // The automatic Codex title helper requests an OpenAI model and reasoning
+    // settings. Keep the prompt-derived title for no-auth local providers.
+    if (
+      params.backend === "codex"
+      && isUnauthenticatedCodexProvider(this.codexBackendSummary?.account)
+    ) {
       return;
     }
     if (
