@@ -61,6 +61,7 @@ export type MessagingPermissionId =
   | "thread.control.stop"
   | "thread.control.compact"
   | "thread.control.handoff"
+  | "thread.control.archive"
   | "thread.control.schedule"
   // Mid-turn interactive surfaces.
   | "approval.respond.default"
@@ -228,6 +229,14 @@ export const MESSAGING_PERMISSION_CATALOG: readonly MessagingPermissionDescripto
     label: "Hand off a thread",
     description: "Move a thread between local/worktree/branches.",
     group: "control",
+  },
+  {
+    id: "thread.control.archive",
+    label: "Archive a thread",
+    description:
+      "Archive a thread and remove the worktrees PwrAgent created for it.",
+    group: "control",
+    danger: "med",
   },
   {
     id: "thread.control.schedule",
@@ -806,6 +815,10 @@ const THREAD_MUTATION_FIELD_PERMISSIONS: Record<
     value === "full-access"
       ? ["thread.settings.execution_mode", "thread.execution.full_access"]
       : ["thread.settings.execution_mode"],
+  // Relinking a thread to another checkout is the status card's Move to
+  // Project, which that card gates on handoff.
+  projectPath: () => ["thread.control.handoff"],
+  archive: () => ["thread.control.archive"],
 };
 
 /**

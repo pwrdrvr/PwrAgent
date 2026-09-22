@@ -60,6 +60,9 @@ export type PwrAgentFederatedThreadMutationRequest = {
   title?: string;
   modelSettings?: Omit<SetThreadModelSettingsRequest, "backend" | "threadId">;
   executionMode?: ThreadExecutionMode;
+  /** A checkout or worktree root on the owning peer. */
+  projectPath?: string;
+  archive?: true;
   dryRun: boolean;
 };
 
@@ -74,7 +77,7 @@ export type PwrAgentFederatedThreadMutationHandler = (
 
 export class PwrAgentFederatedThreadInspectionError extends Error {
   constructor(
-    readonly code: "peer_unavailable",
+    readonly code: "peer_unavailable" | "forbidden",
     message: string,
   ) {
     super(message);
@@ -141,7 +144,7 @@ function descriptionForOperation(
     case "watch_thread_pull_request":
       return "Create a durable, one-time watch for an attached pull request at the current head. The watch wakes the thread after CI success, early failure, or a merge conflict. Only a primary-workspace PR is eligible. The oldest duplicate watch receives the result. A terminal snapshot returns currentOutcome without a new watch. Omit backend and threadId for the current thread. Omit url only when one eligible PR exists. After creation, end the turn. Do not poll CI or create a monitor. Auto-fix PR handles failure wake-ups without a duplicate turn.";
     case "mutate_thread":
-      return "Change guarded settings on a PwrAgent thread. Pass instanceId for a known remote thread. Otherwise, PwrAgent resolves the owner. This tool does not rename a messaging topic or thread.";
+      return "Change guarded settings on a PwrAgent thread, move it to another project, or archive it. Pass instanceId for a known remote thread. Otherwise, PwrAgent resolves the owner. This tool does not rename a messaging topic or thread. For projectPath, use a path from list_instance_projects on the thread's own instance. No tool can undo an archive: confirm it with the user first.";
   }
 }
 
@@ -483,6 +486,16 @@ function inputSchemaForOperation(
             enum: ["default", "auto", "full-access"],
             description:
               "Thread execution/permission mode. Active turns may queue this until the next safe boundary.",
+          },
+          projectPath: {
+            type: "string",
+            description:
+              "Move the thread to this project: an absolute checkout or worktree root on the thread's own instance. The thread is relinked, and no files are copied. Refused while it has a turn running.",
+          },
+          archive: {
+            type: "boolean",
+            description:
+              "true archives the thread, removing the worktrees PwrAgent created for it. Cannot be combined with other changes. Refused while it has a turn running.",
           },
           dryRun: {
             type: "boolean",

@@ -190,6 +190,18 @@ export type MutateThreadToolArgs = {
   fastMode?: boolean;
   executionMode?: ThreadExecutionMode;
   /**
+   * Moves the thread to another project: the absolute path of a Git checkout
+   * or worktree root on the instance that owns the thread. The thread is
+   * relinked to it; no files are copied.
+   */
+  projectPath?: string;
+  /**
+   * Archives the thread, removing the worktrees PwrAgent created for it.
+   * Only `true` is accepted, and never beside another change: an archived
+   * thread has no settings left to change.
+   */
+  archive?: boolean;
+  /**
    * Validate and report the requested mutations without applying them.
    */
   dryRun?: boolean;
@@ -308,7 +320,9 @@ export type WatchThreadPullRequestResult = {
 export type ThreadMutationField =
   | "title"
   | "model_settings"
-  | "execution_mode";
+  | "execution_mode"
+  | "project"
+  | "archive";
 
 export type ThreadMutationChangeStatus =
   | "would_apply"

@@ -398,6 +398,22 @@ describe("action → permission lookup tables", () => {
     ).toEqual(
       new Set(["thread.settings.execution_mode", "thread.execution.full_access"]),
     );
+    // A project move is the status card's Move to Project.
+    expect(permissionsForThreadMutation({ projectPath: "/repos/app" })).toEqual([
+      "thread.control.handoff",
+    ]);
+    // Archive has its own permission: it removes worktrees, which no other
+    // messaging action does, so holding handoff must not imply it.
+    expect(permissionsForThreadMutation({ archive: true })).toEqual([
+      "thread.control.archive",
+    ]);
+  });
+
+  it("keeps archiving opt-in for every built-in role but Admin", () => {
+    const holders = BUILT_IN_ROLES
+      .filter((role) => role.permissions.includes("thread.control.archive"))
+      .map((role) => role.id);
+    expect(holders).toEqual([RBAC_BUILT_IN_ROLE_IDS.admin]);
   });
 
   it("resolves prefixed action ids for render-time filtering", () => {

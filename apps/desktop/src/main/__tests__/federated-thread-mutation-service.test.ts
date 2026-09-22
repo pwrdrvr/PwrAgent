@@ -92,4 +92,93 @@ describe("federated thread mutation service", () => {
 
     expect(backend.renameThread).not.toHaveBeenCalled();
   });
+
+  describe("archive and project moves", () => {
+    function peerOwning(threadStatus: "active" | "idle") {
+      const backend = {
+        resolveThread: vi.fn(async () => ({
+          thread: {
+            source: "codex" as const,
+            id: "remote-thread",
+            title: "Remote thread",
+            linkedDirectories: [],
+            threadStatus,
+          },
+        })),
+        renameThread: vi.fn(async (request) => request),
+        archiveThread: vi.fn(async () => ({
+          backend: "codex",
+          threadId: "remote-thread",
+          archivedAt: 1,
+          cleanup: [],
+        })),
+        handoffThreadWorkspace: vi.fn(async () => ({})),
+      };
+      const runtime = {
+        connectedPeerTargets: () => [{
+          target: { scope: "remote" as const, instanceId: "pwr_owner" },
+          label: "Owner Mac",
+          capabilities: ["thread_navigation", "turn_control"],
+        }],
+        remoteBackend: () => backend,
+      } as unknown as DesktopFederationRuntime;
+      return {
+        backend,
+        handler: createFederatedThreadMutationHandler({ runtime: () => runtime }),
+      };
+    }
+
+    it("archives on the peer that owns the thread", async () => {
+      const { backend, handler } = peerOwning("idle");
+
+      await handler({
+        backend: "codex",
+        threadId: "remote-thread",
+        archive: true,
+        dryRun: false,
+      });
+
+      expect(backend.archiveThread).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "remote-thread",
+      });
+    });
+
+    it("refuses a peer's thread with a turn running, as it does locally", async () => {
+      const { backend, handler } = peerOwning("active");
+
+      await expect(handler({
+        backend: "codex",
+        threadId: "remote-thread",
+        archive: true,
+        dryRun: true,
+      })).rejects.toMatchObject({ code: "forbidden" });
+      expect(backend.archiveThread).not.toHaveBeenCalled();
+    });
+
+    it("moves on the peer before anything else changes", async () => {
+      // The destination path only means something on the peer's own disk,
+      // so the peer is the one that checks it - and a refusal there must not
+      // leave the rename below already applied.
+      const { backend, handler } = peerOwning("idle");
+      backend.handoffThreadWorkspace.mockRejectedValueOnce(
+        new Error("Move to Project requires an existing directory."),
+      );
+
+      await expect(handler({
+        backend: "codex",
+        threadId: "remote-thread",
+        projectPath: "/Users/studio/repos/app",
+        title: "Moved",
+        dryRun: false,
+      })).rejects.toThrow("requires an existing directory");
+      expect(backend.handoffThreadWorkspace).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "remote-thread",
+        direction: "to-project",
+        targetPath: "/Users/studio/repos/app",
+      });
+      expect(backend.renameThread).not.toHaveBeenCalled();
+    });
+  });
 });

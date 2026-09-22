@@ -59,7 +59,7 @@ import {
   disposeAutomationIpcHandlers,
   registerAutomationIpcHandlers,
 } from "./ipc/automation-ipc";
-import { disposeAppServerIpcHandlers, registerAppServerIpcHandlers, startAppServerOwnerNavigation } from "./ipc/app-server";
+import { appServerService, disposeAppServerIpcHandlers, registerAppServerIpcHandlers, startAppServerOwnerNavigation } from "./ipc/app-server";
 import {
   disposeImageNormalizationIpcHandlers,
   registerImageNormalizationIpcHandlers,
@@ -1394,6 +1394,11 @@ export function bootstrapApp(): void {
       createFederatedThreadControlHandler({
         targetStore: getDesktopOverlayStore(),
       }),
+    );
+    // The app's own archive path, so an Agent's archive also ungroups the
+    // thread's children on other instances.
+    getDesktopBackendRegistry().setAgentThreadArchiver(
+      async (request) => await appServerService.archiveThread(request),
     );
     // Windows and Linux: serve the painted title-bar menu bar from the live
     // application menu (idempotent; the renderer mounts the bar only where the
