@@ -1,3 +1,4 @@
+import { sqliteBackendChangeVersion } from "./sqlite-backend-change-version";
 import { sqliteThreadChangeVersion } from "./sqlite-thread-change-version";
 import { buildAppendPinRank, insertSubthreadIdAfter, sortSubthreadSummaries } from "@pwragent/shared";
 import path from "node:path";
@@ -672,8 +673,10 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
   };
   private remotePinNavigationCache?: { version: string; expires: number; rows: NavigationThreadSummary[] };
   private backendReadCache?: {
-    payload: string;
-    state: { knownThreadKeys: string[]; lastSnapshotHash?: string };
+    scope: string;
+    dataVersion: number;
+    backendChanges: number;
+    state: { knownThreadKeys: string[]; lastSnapshotHash?: string } | undefined;
   };
 
   private navigationUnreadBaseline?: NavigationUnreadBaseline;
@@ -7357,28 +7360,35 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
   private getBackend(
     scope: string,
   ): { knownThreadKeys: string[]; lastSnapshotHash?: string } | undefined {
-    const row = this.stateDb.raw
-      .prepare("SELECT payload FROM backends WHERE scope = ?")
-      .get(scope) as { payload: string } | undefined;
-    if (!row) return undefined;
-    // Still read the authoritative row on every call. Equality avoids parsing
-    // and normalizing thousands of identities again, without hiding a write
-    // from another process or retaining an unbounded cache of scopes.
-    if (this.backendReadCache?.payload === row.payload) {
-      return this.backendReadCache.state;
+    const db = this.stateDb.raw;
+    // Transaction snapshots and rolled-back values must never certify a cache.
+    if (db.inTransaction) this.backendReadCache = undefined;
+    const backendChanges = sqliteBackendChangeVersion(db);
+    const dataVersion = db.pragma("data_version", { simple: true }) as number;
+    const cache = this.backendReadCache;
+    if (cache && cache.scope === scope && cache.dataVersion === dataVersion
+      && cache.backendChanges === backendChanges) {
+      return cache.state && { ...cache.state, knownThreadKeys: [...cache.state.knownThreadKeys] };
     }
-    const state = JSON.parse(row.payload) as {
+    const row = db.prepare("SELECT payload FROM backends WHERE scope = ?")
+      .get(scope) as { payload: string } | undefined;
+    const state = row ? JSON.parse(row.payload) as {
       knownThreadKeys: string[];
       lastSnapshotHash?: string;
-    };
-    const normalized = {
-      ...state,
+    } : undefined;
+    const normalized = state && {
+      lastSnapshotHash: state.lastSnapshotHash,
       knownThreadKeys: state.knownThreadKeys.map((threadKey) =>
         normalizeThreadIdentityKey(threadKey) ?? threadKey
       ),
     };
-    this.backendReadCache = { payload: row.payload, state: normalized };
-    return normalized;
+    // Retain only one scope, including absent rows. Sample versions before the
+    // SELECT so an external commit racing the read forces a later refresh.
+    if (!db.inTransaction) {
+      this.backendReadCache = { scope, dataVersion, backendChanges, state: normalized };
+    }
+    // The cache owns its array; callers can freely mutate their returned value.
+    return normalized && { ...normalized, knownThreadKeys: [...normalized.knownThreadKeys] };
   }
 
   private putBackend(
