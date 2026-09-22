@@ -1229,7 +1229,13 @@ describe("StarMapChatCard slash commands", () => {
         reviewThreadId: "review-1",
         turnId: "turn-review-1",
       }));
-      const desktopApi = reviewCapableApi(backend, { startReview });
+      const desktopApi = reviewCapableApi(backend, { startReview,
+        listBackends: async () => ({ fetchedAt: 1, backends: [{
+          kind: backend, label: backend, available: true, methods: [], executionModes: [],
+          capabilities: { ...reviewCapabilities(true), reviewRunMode: true, reviewRunner: true,
+            reviewCodexSubAgent: backend === "codex" },
+        }] }),
+      });
       const onUserRepliedToThread = vi.fn();
       renderCard({
         desktopApi,
@@ -1251,6 +1257,14 @@ describe("StarMapChatCard slash commands", () => {
       fireEvent.click(
         within(dialog).getByRole("button", { name: /Current changes/ }),
       );
+      const mode = within(dialog).getByRole("button", { name: "Review run mode" });
+      if (backend === "codex") {
+        fireEvent.click(mode);
+        fireEvent.click(within(dialog).getByRole("option", { name: "PwrAgent Sub Agent" }));
+      } else {
+        expect(mode.hasAttribute("disabled")).toBe(true);
+        expect(mode.textContent).toContain("PwrAgent Sub Agent");
+      }
       fireEvent.click(
         within(dialog).getByRole("button", { name: "Start review" }),
       );
@@ -1261,6 +1275,7 @@ describe("StarMapChatCard slash commands", () => {
           threadId: "t-local",
           target: { type: "uncommittedChanges" },
           delivery: "inline",
+          runMode: "pwragent-sub-agent",
         });
       });
       await waitFor(() => {

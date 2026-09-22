@@ -443,6 +443,8 @@ export function buildAcpCapabilities(
     startTurn: true,
     startReview: agentCapabilities?.managedReview === true,
     reviewRunner: agentCapabilities?.managedReview === true,
+    reviewRunMode: true,
+    reviewCodexSubAgent: false,
     interruptTurn: true,
     steerTurn: agentCapabilities?.steerTurn === true,
     transcriptPagination: false,

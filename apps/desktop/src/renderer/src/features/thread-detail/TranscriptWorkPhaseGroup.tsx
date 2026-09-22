@@ -18,6 +18,7 @@ import { formatElapsedMs } from "./transcript-render-items";
 
 type TranscriptWorkPhaseGroupProps = {
   activeStartedAt?: number;
+  activeVerb?: string;
   applications?: DesktopApplicationsSnapshot;
   collapsible: boolean;
   directoryPaths?: string[];
@@ -61,6 +62,7 @@ export const TranscriptWorkPhaseGroup = memo(function TranscriptWorkPhaseGroup(
           <span>
             <TranscriptWorkPhaseGroupLabel
               activeStartedAt={props.activeStartedAt}
+              activeVerb={props.activeVerb}
               label={props.label}
             />
           </span>
@@ -69,6 +71,7 @@ export const TranscriptWorkPhaseGroup = memo(function TranscriptWorkPhaseGroup(
         <div className="transcript-work-phase-group__label">
           <TranscriptWorkPhaseGroupLabel
             activeStartedAt={props.activeStartedAt}
+            activeVerb={props.activeVerb}
             label={props.label}
           />
         </div>
@@ -109,6 +112,7 @@ function workPhaseGroupToggleLabel(label: string): string {
 
 function TranscriptWorkPhaseGroupLabel(props: {
   activeStartedAt?: number;
+  activeVerb?: string;
   label: string;
 }) {
   const [now, setNow] = useState(() => Date.now());
@@ -131,7 +135,7 @@ function TranscriptWorkPhaseGroupLabel(props: {
     return props.label;
   }
 
-  return `Working for ${formatElapsedMs(now - props.activeStartedAt)}`;
+  return `${props.activeVerb ?? "Working"} for ${formatElapsedMs(now - props.activeStartedAt)}`;
 }
 
 function renderEntry(params: {

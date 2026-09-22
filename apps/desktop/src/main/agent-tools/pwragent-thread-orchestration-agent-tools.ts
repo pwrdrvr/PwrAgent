@@ -438,6 +438,11 @@ function inputSchemaForOperation(
         additionalProperties: false,
         required: ["target"],
         properties: {
+          runMode: {
+            type: "string",
+            enum: ["codex-sub-agent", "pwragent-sub-agent"],
+            description: "Codex Sub Agent (default) uses the native reviewer. PwrAgent Sub Agent uses an ephemeral managed reviewer. ACP and secondary workspaces require PwrAgent Sub Agent.",
+          },
           cwd: {
             type: "string",
             description:
@@ -871,6 +876,11 @@ function normalizeThreadTurnControlArgs(
 function normalizeStartReviewArgs(
   args: Record<string, unknown>,
 ): StartReviewToolArgs | undefined {
+  const runMode = args.runMode;
+  if (runMode !== undefined
+    && runMode !== "codex-sub-agent" && runMode !== "pwragent-sub-agent") {
+    return undefined;
+  }
   const targetRecord =
     args.target && typeof args.target === "object" && !Array.isArray(args.target)
       ? args.target as Record<string, unknown>
@@ -912,6 +922,7 @@ function normalizeStartReviewArgs(
   }
   return {
     target,
+    ...(runMode ? { runMode } : {}),
     ...(cwd ? { cwd } : {}),
   };
 }

@@ -5581,11 +5581,18 @@ describe("DesktopBackendRegistry", () => {
       },
       startThreadResult: { threadId: "managed-review-child" },
     });
+    const startTurn = codexClient.startTurn.bind(codexClient);
+    vi.spyOn(codexClient, "startTurn").mockImplementation(async (params) => {
+      if (params.dynamicTools !== undefined) {
+        throw new Error("json-rpc error (-32600): no rollout found for thread id managed-review-child");
+      }
+      return startTurn(params);
+    });
     const overlayStore = createOverlayStoreMock();
     const registry = new DesktopBackendRegistry({
       codexClient,
       overlayStore,
-      resolveManagedReviewEnabled: () => true,
+      resolveManagedReviewEnabled: () => true, // Legacy config no longer selects the engine.
     });
     const tokenMiserStateDir = path.join(
       "/tmp",
@@ -5622,6 +5629,7 @@ describe("DesktopBackendRegistry", () => {
 
     try {
       await registry.startReview({
+      runMode: "pwragent-sub-agent",
         backend: "codex",
         threadId: "thread-1",
         target: { type: "custom", instructions: "Review the current change." },
@@ -5648,14 +5656,8 @@ describe("DesktopBackendRegistry", () => {
           "read_all_token_miser_output",
         ],
       );
-      expectPwragentDynamicTools(
-        codexClient.lastStartTurnParams?.dynamicTools,
-        [
-          "search_token_miser_output",
-          "read_token_miser_output",
-          "read_all_token_miser_output",
-        ],
-      );
+      expect(codexClient.lastStartThreadParams?.ephemeral).toBe(true);
+      expect(codexClient.lastStartTurnParams?.dynamicTools).toBeUndefined();
       expect(
         await internals.resolveTokenMiserThreadOverride(
           "codex",
@@ -5727,7 +5729,7 @@ describe("DesktopBackendRegistry", () => {
     const registry = new DesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
-      resolveManagedReviewEnabled: () => true,
+      resolveManagedReviewEnabled: () => true, // Legacy config no longer selects the engine.
     });
     const tokenMiserStateDir = path.join(
       "/tmp",
@@ -5750,6 +5752,7 @@ describe("DesktopBackendRegistry", () => {
 
     try {
       await registry.startReview({
+      runMode: "pwragent-sub-agent",
         backend: "codex",
         threadId: "thread-1",
         target: { type: "custom", instructions: "Review the current change." },
@@ -25809,6 +25812,34 @@ command = "pnpm dev"
       }
     }
   });
+  it.each([undefined, "codex-sub-agent"] as const)("preserves native review for mode %s despite the legacy experiment", async (runMode) => {
+    const codexClient = new MockBackendClient({ initializeResult: { methods: ["review/start", "turn/start", "thread/start"] } });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(), resolveManagedReviewEnabled: () => true });
+    await registry.startReview({ backend: "codex", threadId: "parent", target: { type: "uncommittedChanges" }, runMode });
+    expect(codexClient.lastStartReviewParams).toMatchObject({ threadId: "parent", delivery: "inline" });
+    expect(codexClient.lastStartTurnParams).toBeUndefined();
+    await registry.close();
+  });
+
+  it.each([
+    { runMode: "codex-sub-agent", methods: ["turn/start"], error: "review/start" },
+    { runMode: "pwragent-sub-agent", methods: ["review/start"], error: "thread/start" },
+  ] as const)("rejects unsupported explicit $runMode without substituting engines", async ({ runMode, methods, error }) => {
+    const codexClient = new MockBackendClient({ initializeResult: { methods: [...methods] } });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    await expect(registry.startReview({ backend: "codex", threadId: "parent", target: { type: "uncommittedChanges" }, runMode })).rejects.toThrow(error);
+    expect(codexClient.lastStartReviewParams).toBeUndefined();
+    expect(codexClient.lastStartTurnParams).toBeUndefined();
+    await registry.close();
+  });
+
+  it.each(["codex-sub-agent", "pwragent-sub-agent"] as const)("rejects detached delivery with explicit %s", async (runMode) => {
+    const codexClient = new MockBackendClient({});
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    await expect(registry.startReview({ backend: "codex", threadId: "parent", target: { type: "uncommittedChanges" }, runMode, delivery: "detached" })).rejects.toThrow("detached delivery");
+    await registry.close();
+  });
+
   it("passes persisted Codex environment hydration when starting reviews", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["review/start"] },
@@ -25993,6 +26024,34 @@ command = "pnpm dev"
       await registry.listBackends({ includeUnavailable: true })
     ).backends.find((backend) => backend.kind === "codex");
     expect(codexBackend?.capabilities.reviewRunner).toBe(true);
+
+    await registry.close();
+  });
+
+  it.each([
+    { methods: ["review/start"], native: true, managed: false },
+    { methods: ["thread/start", "turn/start"], native: false, managed: true },
+    { methods: ["turn/start"], native: false, managed: false },
+  ])("advertises review support only with a review engine ($methods)", async ({ methods, native, managed }) => {
+    // An ordinary turn is not a review engine: each mode needs either native
+    // review/start or a thread to run a managed reviewer in.
+    const codexClient = new MockBackendClient({ initializeResult: { methods } });
+    const registry = new DesktopBackendRegistry({
+      codexClient, overlayStore: createOverlayStoreMock(), discoverLocalAcpAgents: async () => [],
+    });
+    // Discovery is what reads the initialize methods; before it runs the
+    // summary assumes the full app-server surface.
+    await registry.refreshProvidersAtStartup(issueProviderDiscoveryPermit("startup"));
+
+    const codexBackend = (
+      await registry.listBackends({ includeUnavailable: true })
+    ).backends.find((backend) => backend.kind === "codex");
+    expect(codexBackend?.methods).toEqual(methods);
+    expect(codexBackend?.capabilities).toMatchObject({
+      startReview: native || managed,
+      reviewCodexSubAgent: native,
+      reviewRunner: managed,
+    });
 
     await registry.close();
   });
@@ -26343,9 +26402,10 @@ command = "pnpm dev"
     const registry = new DesktopBackendRegistry({
       codexClient,
       overlayStore,
-      resolveManagedReviewEnabled: () => true,
+      resolveManagedReviewEnabled: () => true, // Legacy config no longer selects the engine.
     });
     await registry.startReview({
+      runMode: "pwragent-sub-agent",
       backend: "codex",
       threadId: "thread-parent",
       target: { type: "baseBranch", branch: "main" },
@@ -26410,9 +26470,10 @@ command = "pnpm dev"
     const registry = new DesktopBackendRegistry({
       codexClient,
       overlayStore: overlayStore as never,
-      resolveManagedReviewEnabled: () => true,
+      resolveManagedReviewEnabled: () => true, // Legacy config no longer selects the engine.
     });
     await registry.startReview({
+      runMode: "pwragent-sub-agent",
       backend: "codex",
       threadId: "thread-parent",
       target: { type: "baseBranch", branch: "main" },
@@ -27124,9 +27185,10 @@ command = "pnpm dev"
     const registry = new DesktopBackendRegistry({
       codexClient,
       overlayStore,
-      resolveManagedReviewEnabled: () => true,
+      resolveManagedReviewEnabled: () => true, // Legacy config no longer selects the engine.
     });
     await registry.startReview({
+      runMode: "pwragent-sub-agent",
       backend: "codex",
       threadId: "thread-parent",
       target: { type: "baseBranch", branch: "main" },
@@ -27169,7 +27231,7 @@ command = "pnpm dev"
     await registry.close();
   });
 
-  it("runs the managed review experiment as one child turn and attributes usage to it", async () => {
+  it("runs explicit PwrAgent Sub Agent as one child turn and attributes usage to it", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/start", "turn/start"] },
       models: [
@@ -27213,7 +27275,7 @@ command = "pnpm dev"
     const registry = new DesktopBackendRegistry({
       codexClient,
       overlayStore,
-      resolveManagedReviewEnabled: () => true,
+      resolveManagedReviewEnabled: () => true, // Legacy config no longer selects the engine.
     });
     const events: AgentEvent[] = [];
     registry.onEvent((event) => {
@@ -27226,6 +27288,7 @@ command = "pnpm dev"
     expect(codexBackend?.capabilities.startReview).toBe(true);
 
     const response = await registry.startReview({
+      runMode: "pwragent-sub-agent",
       backend: "codex",
       threadId: "thread-parent",
       target: { type: "baseBranch", branch: "main" },
@@ -27421,7 +27484,25 @@ command = "pnpm dev"
     await registry.close();
   });
 
-  it("enriches default-model managed review cards from durable usage", async () => {
+  it("puts review provenance on the live managed review cards, not only the persisted ones", async () => {
+    // The parent's cards are emitted under the parent thread, but the review
+    // record is keyed by the child. withReviewRuntimeMetadata therefore cannot
+    // decorate them, and before this the live start card showed only the
+    // reviewer row until a reload read the persisted entry.
+    const context: AppServerReviewContext = {
+      workspacePath: "/repo/worktree",
+      projectLabel: "PwrAgent",
+      gitBranch: "feat/review-cards",
+      baseBranch: "main",
+      headCommit: "0123456789abcdef0123456789abcdef01234567",
+      pullRequest: {
+        provider: "github.com",
+        org: "example-org",
+        repo: "example-repo",
+        number: 42,
+        url: "https://github.com/example-org/example-repo/pull/42",
+      },
+    };
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/start", "turn/start"] },
       startThreadResult: { threadId: "managed-review-child" },
@@ -27439,8 +27520,93 @@ command = "pnpm dev"
       overlayStore,
       resolveManagedReviewEnabled: () => true,
     });
+    vi.spyOn(
+      registry as unknown as {
+        resolveReviewContext(): Promise<AppServerReviewContext | undefined>;
+      },
+      "resolveReviewContext",
+    ).mockResolvedValue(context);
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => {
+      events.push(event);
+    });
 
     const response = await registry.startReview({
+      runMode: "pwragent-sub-agent",
+      backend: "codex",
+      threadId: "thread-parent",
+      target: { type: "baseBranch", branch: "main" },
+      delivery: "inline",
+    });
+    await codexClient.emit({
+      method: "item/completed",
+      params: {
+        threadId: response.reviewThreadId,
+        turnId: response.turnId,
+        item: {
+          id: "review-output",
+          type: "agentMessage",
+          text: JSON.stringify({
+            findings: [],
+            overall_correctness: "patch is correct",
+            overall_explanation: "No blocking findings.",
+            overall_confidence_score: 0.9,
+          }),
+        },
+      },
+    });
+    await codexClient.emit({
+      method: "turn/completed",
+      params: {
+        threadId: response.reviewThreadId,
+        turnId: response.turnId,
+        turn: { id: response.turnId, status: "completed", output: [] },
+      },
+    });
+
+    const liveItemData = (itemType: string): unknown => {
+      const event = events.find((candidate) =>
+        isCompletedItemType(candidate, itemType)
+        && "threadId" in candidate.notification.params
+        && candidate.notification.params.threadId === "thread-parent"
+      );
+      if (event?.notification.method !== "item/completed") {
+        return undefined;
+      }
+      return (event.notification.params.item as { data?: unknown }).data;
+    };
+    expect(liveItemData("enteredReviewMode")).toMatchObject({ context });
+    expect(liveItemData("exitedReviewMode")).toMatchObject({
+      context,
+      reviewOutput: expect.objectContaining({
+        overall_correctness: "patch is correct",
+      }),
+    });
+
+    await registry.close();
+  });
+
+  it("enriches default-model managed review cards from durable usage", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start", "turn/start"] },
+      startThreadResult: { threadId: "managed-review-child" },
+    });
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-parent": {
+          backend: "codex",
+          threadId: "thread-parent",
+        } as ThreadOverlayState,
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore,
+      resolveManagedReviewEnabled: () => true, // Legacy config no longer selects the engine.
+    });
+
+    const response = await registry.startReview({
+      runMode: "pwragent-sub-agent",
       backend: "codex",
       threadId: "thread-parent",
       target: { type: "baseBranch", branch: "main" },
@@ -27515,14 +27681,14 @@ command = "pnpm dev"
 
   it("terminal-gates failed managed reviews and holds the parent queue for retry", async () => {
     const codexClient = new MockBackendClient({
-      initializeResult: { methods: ["turn/start", "review/start"] },
+      initializeResult: { methods: ["thread/start", "turn/start", "review/start"] },
       startThreadResult: { threadId: "managed-review-child" },
     });
     const overlayStore = createOverlayStoreMock();
     const registry = new DesktopBackendRegistry({
       codexClient,
       overlayStore,
-      resolveManagedReviewEnabled: () => true,
+      resolveManagedReviewEnabled: () => true, // Legacy config no longer selects the engine.
     });
     const events: AgentEvent[] = [];
     registry.onEvent((event) => {
@@ -27530,6 +27696,7 @@ command = "pnpm dev"
     });
 
     await registry.startReview({
+      runMode: "pwragent-sub-agent",
       backend: "codex",
       threadId: "thread-parent",
       target: { type: "uncommittedChanges" },
@@ -27652,6 +27819,11 @@ command = "pnpm dev"
       }),
       resolveManagedReviewEnabled: () => false,
     });
+
+    await expect(registry.startReview({ backend: "codex", threadId: "thread-parent",
+      target: { type: "baseBranch", branch: "origin/main" }, cwd: "/repo/selected",
+      runMode: "codex-sub-agent",
+    })).rejects.toThrow("PwrAgent Sub Agent is required for a secondary workspace");
 
     const response = await registry.startReview({
       backend: "codex",
@@ -37815,7 +37987,7 @@ script = "printf setup"
   it("schedules a dynamic-tool review until the invoking turn completes", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: {
-        methods: ["turn/start", "review/start", "thread/resume"],
+        methods: ["thread/start", "turn/start", "review/start", "thread/resume"],
       },
     });
     const registry = new DesktopBackendRegistry({

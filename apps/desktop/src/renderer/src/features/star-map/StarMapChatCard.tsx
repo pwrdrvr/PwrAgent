@@ -1769,6 +1769,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
 
         {reviewSetupOpen ? (
           <StarMapReviewSetup
+            backend={backendSummary}
             busy={session.threadBusy}
             directories={navigationSources.directories}
             error={reviewError}

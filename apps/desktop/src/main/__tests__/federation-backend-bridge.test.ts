@@ -27,6 +27,53 @@ import { FEDERATION_MAX_FRAME_BYTES } from "../federation/federation-transport";
 import { pageNormalizedReplay } from "../app-server/thread-replay-pagination";
 
 describe("federation backend bridge", () => {
+  it("gates explicit review modes before sending them to an old Federation owner", async () => {
+    const request = vi.fn(async (_args: { method: string }) => ({ backends: [{ kind: "codex", capabilities: {} }] }));
+    const client = new FederationRemoteBackendClient({ request } as unknown as FederationRpcEndpoint);
+    const review = { backend: "codex" as const, threadId: "parent", target: { type: "uncommittedChanges" as const }, runMode: "pwragent-sub-agent" as const };
+    await expect(client.startReview(review)).rejects.toThrow("does not support explicit review modes");
+    await expect(client.createScheduledThreadAction({ ...review, kind: "review", review, scheduledFor: 100, displayText: "Review" })).rejects.toThrow("does not support explicit review modes");
+    await expect(client.updateScheduledThreadAction({ id: "queued-review", review })).rejects.toThrow("does not support explicit review modes");
+    expect(request.mock.calls.every(([args]) => (args as { method: string }).method === FEDERATION_BACKEND_METHODS.listBackends)).toBe(true);
+  });
+
+  it("forwards the exact explicit review mode to a capable Federation owner", async () => {
+    const request = vi.fn(async ({ method }: { method: string }) => method === FEDERATION_BACKEND_METHODS.listBackends
+      ? { backends: [{ kind: "codex", capabilities: { reviewRunMode: true } }] }
+      : { backend: "codex", threadId: "parent", turnId: "review", reviewThreadId: "parent" });
+    const client = new FederationRemoteBackendClient({ request } as unknown as FederationRpcEndpoint);
+    const review = { backend: "codex" as const, threadId: "parent", target: { type: "uncommittedChanges" as const }, runMode: "codex-sub-agent" as const };
+    await client.startReview(review);
+    expect(request).toHaveBeenLastCalledWith({ method: FEDERATION_BACKEND_METHODS.startReview, params: review });
+  });
+
+  it.each(["codex", "acp:legacy", undefined])("checks the scheduled review target backend %s rather than unrelated backend capabilities", async (backend) => {
+    const request = vi.fn(async ({ method, params }: { method: string; params?: { cursor?: string } }) => {
+      if (method === FEDERATION_BACKEND_METHODS.listBackends) return { backends: [
+        { kind: "codex", capabilities: { reviewRunMode: true } },
+        { kind: "acp:legacy", capabilities: {} },
+      ] };
+      if (method === FEDERATION_BACKEND_METHODS.listScheduledThreadActions) return {
+        actions: params?.cursor ? (backend ? [{ id: "queued-review", backend }] : []) : [],
+        nextCursor: params?.cursor ? undefined : "page-2",
+      };
+      return {};
+    });
+    const client = new FederationRemoteBackendClient({ request } as unknown as FederationRpcEndpoint);
+    const update = { id: "queued-review", review: {
+      target: { type: "uncommittedChanges" as const }, runMode: "pwragent-sub-agent" as const,
+    } };
+    if (backend === "codex") {
+      await client.updateScheduledThreadAction(update);
+      expect(request).toHaveBeenLastCalledWith({ method: FEDERATION_BACKEND_METHODS.updateScheduledThreadAction, params: update });
+    } else {
+      await expect(client.updateScheduledThreadAction(update)).rejects.toThrow(
+        backend ? "does not support explicit review modes" : "Scheduled review action was not found",
+      );
+      expect(request.mock.calls.some(([args]) => args.method === FEDERATION_BACKEND_METHODS.updateScheduledThreadAction)).toBe(false);
+    }
+  });
+
   it("coalesces concurrent identical transcript reads and releases settled results", async () => {
     let finish!: (response: AppServerReadThreadResponse) => void;
     const request = vi.fn(() => new Promise<AppServerReadThreadResponse>((resolve) => { finish = resolve; }));

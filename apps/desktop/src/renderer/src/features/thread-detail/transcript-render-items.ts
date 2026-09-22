@@ -16,6 +16,8 @@ export type TranscriptRenderItem =
   | {
       type: "workPhaseGroup";
       activeStartedAt?: number;
+      /** Verb for the live elapsed label, e.g. "Reviewing for 1m 20s". */
+      activeVerb?: string;
       id: string;
       collapsible: boolean;
       entries: AppServerThreadEntry[];
@@ -41,20 +43,39 @@ export function buildTranscriptRenderItems(params: {
     return params.entries.map((entry) => ({ type: "entry", entry }));
   }
 
+  const reviewTurnIds = collectReviewTurnIds(params.entries);
+
   if (activeTurnId) {
+    // A running review folds its work between the cards as it goes, so the
+    // transcript reads start card, one collapsed group, result card — rather
+    // than streaming every commentary line the review writes along the way.
+    const activeReview = reviewTurnIds.has(activeTurnId)
+      ? {
+          startedAt: activeTurnStartedAt(
+            params.entries,
+            activeTurnId,
+            params.activeTurnStartedAt,
+          ),
+          turnId: activeTurnId,
+        }
+      : undefined;
     const groups = buildCompletedGroups(
       params.entries,
-      activeTurnId,
+      activeReview ? undefined : activeTurnId,
       params.alwaysVisibleEntryIds,
       params.directoryPaths,
+      reviewTurnIds,
+      activeReview,
     );
-    const activeGroups = buildActiveWorkGroups(
-      params.entries,
-      activeTurnId,
-      params.now,
-      params.activeTurnStartedAt,
-      params.alwaysVisibleEntryIds,
-    );
+    const activeGroups = activeReview
+      ? []
+      : buildActiveWorkGroups(
+          params.entries,
+          activeTurnId,
+          params.now,
+          params.activeTurnStartedAt,
+          params.alwaysVisibleEntryIds,
+        );
     groups.push(...activeGroups);
     if (groups.length > 0) {
       return renderWithGroups(params.entries, groups);
@@ -68,6 +89,7 @@ export function buildTranscriptRenderItems(params: {
     undefined,
     params.alwaysVisibleEntryIds,
     params.directoryPaths,
+    reviewTurnIds,
   );
   if (completedGroups.length > 0) {
     return renderWithGroups(params.entries, completedGroups);
@@ -86,25 +108,45 @@ export function buildTranscriptRenderItems(params: {
 
 type RenderGroup = {
   activeStartedAt?: number;
+  activeVerb?: string;
   collapsible: boolean;
   entries: AppServerThreadEntry[];
   id: string;
   label: string;
 };
 
+function collectReviewTurnIds(entries: AppServerThreadEntry[]): Set<string> {
+  const turnIds = new Set<string>();
+  for (const entry of entries) {
+    if (entry.type === "review" && entry.turn?.id) {
+      turnIds.add(entry.turn.id);
+    }
+  }
+  return turnIds;
+}
+
+function activeTurnStartedAt(
+  entries: AppServerThreadEntry[],
+  activeTurnId: string,
+  fallbackStartedAt?: number,
+): number | undefined {
+  const turn = entries.find((entry) => entry.turn?.id === activeTurnId)?.turn;
+  const startedAtCandidates = [fallbackStartedAt, turn?.startedAt].filter(
+    (value): value is number => typeof value === "number"
+  );
+  return startedAtCandidates.length > 0
+    ? Math.min(...startedAtCandidates)
+    : undefined;
+}
+
 function buildActiveWorkGroups(
   entries: AppServerThreadEntry[],
   activeTurnId: string,
   now = Date.now(),
-  activeTurnStartedAt?: number,
+  fallbackStartedAt?: number,
   alwaysVisibleEntryIds?: ReadonlySet<string>,
 ): RenderGroup[] {
-  const turn = entries.find((entry) => entry.turn?.id === activeTurnId)?.turn;
-  const startedAtCandidates = [activeTurnStartedAt, turn?.startedAt].filter(
-    (value): value is number => typeof value === "number"
-  );
-  const startedAt =
-    startedAtCandidates.length > 0 ? Math.min(...startedAtCandidates) : undefined;
+  const startedAt = activeTurnStartedAt(entries, activeTurnId, fallbackStartedAt);
   const elapsedMs =
     typeof startedAt === "number" ? Math.max(now - startedAt, 0) : undefined;
   if (
@@ -147,10 +189,21 @@ function buildCompletedGroups(
   excludeTurnId?: string,
   alwaysVisibleEntryIds?: ReadonlySet<string>,
   directoryPaths?: string[],
+  reviewTurnIds?: ReadonlySet<string>,
+  activeReview?: { startedAt?: number; turnId: string },
 ): RenderGroup[] {
   const groups: RenderGroup[] = [];
   const groupIds = new Set<string>();
   const completedWorkTurnIds = new Set<string>();
+  // A review's replies fold only between its cards. One after the result card,
+  // or in a review that ended without one, is what the reviewer said last and
+  // stays in view.
+  const lastReviewIndexByTurn = new Map<string, number>();
+  entries.forEach((entry, index) => {
+    if (entry.type === "review" && entry.turn?.id) {
+      lastReviewIndexByTurn.set(entry.turn.id, index);
+    }
+  });
   let currentEntries: AppServerThreadEntry[] = [];
   let currentTurnId: string | undefined;
 
@@ -162,7 +215,9 @@ function buildCompletedGroups(
     }
 
     const turn = readCompletedTurn(currentEntries);
-    if (!turn) {
+    const liveReview =
+      !turn && activeReview?.turnId === currentTurnId ? activeReview : undefined;
+    if (!turn && !liveReview) {
       currentEntries = [];
       currentTurnId = undefined;
       return;
@@ -175,14 +230,30 @@ function buildCompletedGroups(
     const id = groupIds.has(baseId) ? `${baseId}:${groups.length}` : baseId;
     groupIds.add(id);
     groups.push({
+      // Same id the finished turn will produce, so a group opened mid-review
+      // stays open when the review completes.
+      ...(liveReview
+        ? {
+            activeStartedAt: liveReview.startedAt,
+            activeVerb: "Reviewing",
+          }
+        : {}),
       collapsible: true,
       entries: currentEntries,
       id,
-      label: hasWork
-        ? repeatedWorkTurn
-          ? "More work"
-          : workGroupLabel(turn, currentEntries, directoryPaths)
-        : previousMessagesLabel(currentEntries.filter(isAssistantCommentaryMessage).length),
+      // No completed metadata means this is the live review (checked above).
+      label: !turn
+        ? "Reviewing"
+        : hasWork
+          ? repeatedWorkTurn
+            ? "More work"
+            : workGroupLabel(
+                turn,
+                currentEntries,
+                directoryPaths,
+                reviewTurnIds?.has(currentTurnId) ? "Reviewed" : "Worked",
+              )
+          : previousMessagesLabel(currentEntries.filter(isAssistantMessage).length),
     });
     if (hasWork) {
       completedWorkTurnIds.add(currentTurnId);
@@ -191,13 +262,18 @@ function buildCompletedGroups(
     currentTurnId = undefined;
   };
 
-  for (const entry of entries) {
+  for (const [index, entry] of entries.entries()) {
     const turnId = entry.turn?.id;
+    const isReplyBetweenReviewCards =
+      Boolean(turnId)
+      && isAssistantMessage(entry)
+      && (turnId === activeReview?.turnId
+        || index < (lastReviewIndexByTurn.get(turnId ?? "") ?? -1));
     const canJoinGroup =
       !alwaysVisibleEntryIds?.has(entry.id)
       && Boolean(turnId)
       && turnId !== excludeTurnId
-      && isWorkPhaseEntry(entry);
+      && (isWorkPhaseEntry(entry) || isReplyBetweenReviewCards);
 
     if (!canJoinGroup) {
       flushCurrent();
@@ -321,6 +397,18 @@ function renderWithGroups(
   return items;
 }
 
+/**
+ * In a review turn every assistant message is working output: the review's
+ * answer is its result card. A streamed reply carries no `commentary` phase
+ * until it completes, so matching on the phase alone would show each line of
+ * a running review before folding it away.
+ */
+function isAssistantMessage(
+  entry: AppServerThreadEntry,
+): entry is AppServerThreadMessageEntry {
+  return entry.type === "message" && entry.role === "assistant";
+}
+
 function isAssistantCommentaryMessage(
   entry: AppServerThreadEntry | undefined
 ): entry is AppServerThreadMessageEntry {
@@ -409,13 +497,14 @@ function workGroupLabel(
   turn: AppServerThreadTurnMetadata,
   entries: AppServerThreadEntry[],
   directoryPaths: string[] | undefined,
+  verb: "Reviewed" | "Worked",
 ): string {
   const base = typeof turn.durationMs === "number" && turn.durationMs > 60_000
-    ? `Worked for ${formatElapsedMs(turn.durationMs)}`
+    ? `${verb} for ${formatElapsedMs(turn.durationMs)}`
     : typeof turn.startedAt === "number"
       && typeof turn.completedAt === "number"
       && turn.completedAt > turn.startedAt + 60_000
-      ? `Worked for ${formatElapsedMs(turn.completedAt - turn.startedAt)}`
+      ? `${verb} for ${formatElapsedMs(turn.completedAt - turn.startedAt)}`
       : "Previous work";
   const toolEntries = entries.filter(
     (entry): entry is AppServerThreadActivityEntry =>

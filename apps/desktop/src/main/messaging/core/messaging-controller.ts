@@ -1,3 +1,4 @@
+import type { ReviewRunMode } from "@pwragent/shared";
 import { MessagingBrowseQueryPool } from "./messaging-browse-query-pool";
 import type { NavigationQuery } from "@pwragent/shared";
 import { readMessagingLaunchpadContext, isMessagingLaunchpadContext, type MessagingLaunchpadDirectory, type MessagingLaunchpadContext, type MessagingNewThreadNavigation } from "./messaging-launchpad-context";
@@ -11,6 +12,7 @@ import {
   buildFederatedThreadRef,
   buildThreadIdentityKey,
   findPreferredReviewWorkspaceCwd,
+  findPrimaryReviewWorkspaceCwd,
   federatedThreadIdentityKey,
   isAcpBackendId,
   isAppServerBackendKind,
@@ -2969,6 +2971,7 @@ export class MessagingController {
     binding: MessagingBindingRecord;
     navigation: MessagingNavigationContext;
     phase: MessagingReviewIntent["review"]["phase"];
+    runMode?: ReviewRunMode;
     cwd?: string;
     repositoryPath?: string;
     workspacePageIndex?: number;
@@ -3015,7 +3018,7 @@ export class MessagingController {
     // No advertised review runners means this instance predates reviewer
     // overrides; the Reviewer button stays off rather than offering a choice
     // that cannot land.
-    const reviewerOverridesSupported = reviewerBackends.length > 0;
+    const reviewerOverridesSupported = reviewerBackends.some((entry) => entry.capabilities?.reviewRunner !== false);
     const reviewerBackendKind = params.reviewer?.backend ?? params.binding.backend;
     const reviewerEntry = reviewerBackends.find(
       (entry) => entry.backend === reviewerBackendKind,
@@ -3043,6 +3046,28 @@ export class MessagingController {
     ]
       .filter((part): part is string => Boolean(part))
       .join(" · ");
+
+    const owner = reviewerBackends.find((entry) => entry.backend === params.binding.backend);
+    const modeSupported = owner?.capabilities?.reviewRunMode === true;
+    const primaryCwd = thread ? findPrimaryReviewWorkspaceCwd(thread) : undefined;
+    const managedReason = reviewerBackendKind !== params.binding.backend
+      ? "PwrAgent Sub Agent is required for a different review provider."
+      : params.binding.backend.startsWith("acp:")
+        ? "PwrAgent Sub Agent is required for ACP reviews."
+        : params.cwd && primaryCwd && !reviewWorkspaceMatches(params.cwd, primaryCwd)
+          ? "PwrAgent Sub Agent is required for a secondary workspace."
+          : undefined;
+    const runMode = !modeSupported
+      ? params.runMode
+      : managedReason ? "pwragent-sub-agent" : params.runMode ?? "codex-sub-agent";
+    const modeUnavailable = !modeSupported && runMode !== undefined
+      ? "This owner no longer supports explicit review modes. Update that PwrAgent instance before starting this review."
+      : undefined;
+    const modeOptions: { label: string; value: ReviewRunMode; supported: boolean }[] = [
+      { label: "Codex Sub Agent", value: "codex-sub-agent", supported: owner?.capabilities?.reviewCodexSubAgent === true && !managedReason },
+      { label: "PwrAgent Sub Agent", value: "pwragent-sub-agent", supported: reviewerEntry?.capabilities?.reviewRunner === true },
+    ];
+    const modeLabel = modeOptions.find((option) => option.value === runMode)?.label ?? "Owner default";
 
     let title = "Review";
     let body: string;
@@ -3088,6 +3113,9 @@ export class MessagingController {
           `Reviewer: ${reviewerSummaryLabel}${params.reviewer ? "" : " (thread default)"}`,
         );
       }
+      if (runMode) summaryLines.push(`Mode: ${modeLabel}`);
+      if (modeUnavailable) summaryLines.push(modeUnavailable);
+      if (modeSupported && managedReason) summaryLines.push(managedReason);
       body = summaryLines.join("\n");
       actions = [
         ...(linkedWorkspaces.length > 1
@@ -3134,6 +3162,9 @@ export class MessagingController {
               priority: 13,
             }]
           : []),
+        ...(modeSupported ? [{
+          id: "review:summary:mode", label: "Review Mode", fallbackText: "review mode", priority: 3,
+        }] : []),
         {
           id: "review:summary:start",
           label: "Start Review",
@@ -3141,6 +3172,20 @@ export class MessagingController {
           fallbackText: "start review",
           priority: 0,
         },
+        cancelAction,
+      ];
+    } else if (params.phase === "run_mode") {
+      title = "Review mode";
+      body = modeUnavailable ?? managedReason ?? "Choose how to run this review.";
+      actions = [
+        ...modeOptions.filter((option) => modeSupported && option.supported).map((option) => ({
+          id: `review:mode:${option.value}`,
+          label: option.label,
+          fallbackText: option.label,
+          value: { runMode: option.value },
+          priority: 0,
+        })),
+        backAction,
         cancelAction,
       ];
     } else if (params.phase === "workspace") {
@@ -3275,13 +3320,13 @@ export class MessagingController {
         "It applies to this review only — the thread keeps its own settings.",
       ].join("\n");
       actions = [
-        ...reviewerBackends.map((entry, index) => ({
+        ...reviewerBackends.flatMap((entry, index) => entry.capabilities?.reviewRunner === false ? [] : [{
           id: `review:reviewer:provider:${index}`,
           label: entry.label,
           fallbackText: entry.backend,
           priority: 10 + index,
           value: { backend: entry.backend },
-        })),
+        }]),
         // Priority sits with Back/Cancel, not with the options: truncation
         // drops the highest priority number first, and the escape hatch is
         // the last thing that should go when a profile caps actions.
@@ -3368,6 +3413,7 @@ export class MessagingController {
         backend: params.binding.backend,
         threadId: params.binding.threadId,
         phase: params.phase,
+        ...(runMode ? { runMode } : {}),
         ...(params.reviewer ? { reviewer: params.reviewer } : {}),
         ...(reviewerBackends.length > 0 ? { reviewerBackends } : {}),
         ...(params.cwd ? { cwd: params.cwd } : {}),
@@ -5766,6 +5812,8 @@ export class MessagingController {
         await this.updateReviewPendingIntent(pendingIntent, event, {
           phase: "custom",
         });
+      } else if (action.id === "review:summary:mode") {
+        await this.updateReviewPendingIntent(pendingIntent, event, { phase: "run_mode" });
       } else if (action.id === "review:summary:reviewer") {
         await this.updateReviewPendingIntent(pendingIntent, event, {
           phase: "reviewer_provider",
@@ -5793,6 +5841,14 @@ export class MessagingController {
           event,
           target,
         );
+      }
+      return;
+    }
+
+    if (phase === "run_mode") {
+      const runMode = value?.runMode;
+      if (runMode === "codex-sub-agent" || runMode === "pwragent-sub-agent") {
+        await this.updateReviewPendingIntent(pendingIntent, event, { phase: "summary", runMode });
       }
       return;
     }
@@ -5956,6 +6012,7 @@ export class MessagingController {
     event: MessagingInboundCallbackEvent | MessagingInboundTextEvent,
     review: {
       phase: MessagingReviewIntent["review"]["phase"];
+    runMode?: ReviewRunMode;
       cwd?: string;
       repositoryPath?: string;
       workspacePageIndex?: number;
@@ -6020,6 +6077,7 @@ export class MessagingController {
       binding,
       navigation,
       phase: review.phase,
+      runMode: review.runMode ?? pendingIntent.intent.review.runMode,
       cwd,
       repositoryPath,
       workspacePageIndex: review.workspacePageIndex,
@@ -6029,9 +6087,7 @@ export class MessagingController {
         : {
             reviewer: review.reviewer ?? pendingIntent.intent.review.reviewer,
           }),
-      reviewerBackends:
-        pendingIntent.intent.review.reviewerBackends
-        ?? await this.listReviewerBackends(),
+      reviewerBackends: await this.listReviewerBackends(),
       id: pendingIntent.intent.id,
       createdAt: pendingIntent.intent.createdAt,
       targetSurface,
@@ -6095,6 +6151,7 @@ export class MessagingController {
       event,
       target,
       cwd: pendingIntent.intent.review.cwd,
+      runMode: pendingIntent.intent.review.runMode,
       reviewerLabel: reviewerBackends?.find(
         (candidate) => candidate.backend === reviewerBackend,
       )?.label,
@@ -6117,6 +6174,7 @@ export class MessagingController {
     event: MessagingInboundEvent;
     target: AppServerReviewTarget;
     cwd?: string;
+    runMode?: ReviewRunMode;
     /** Reviewer override typed on the command; absent means inherit. */
     reviewBackend?: AppServerBackendKind;
     /** Human-facing reviewer label resolved by the picker, when known. */
@@ -6135,6 +6193,12 @@ export class MessagingController {
     }
 
     try {
+      if (params.runMode !== undefined) {
+        const owner = await this.getBackendSummary(params.binding.backend);
+        if (owner?.capabilities.reviewRunMode !== true) {
+          throw new Error("This owner no longer supports explicit review modes. Update that PwrAgent instance before starting this review.");
+        }
+      }
       const navigation = await this.readBoundThreadConfiguration(params.binding);
       const settings = turnSettingsForBinding(params.binding, navigation);
       const reviewer = {
@@ -6161,6 +6225,7 @@ export class MessagingController {
         threadId: params.binding.threadId,
         target: params.target,
         delivery: "inline",
+        ...(params.runMode ? { runMode: params.runMode } : {}),
         ...(params.cwd ? { cwd: params.cwd } : {}),
         // An explicit reviewer replaces the binding's inherited settings
         // wholesale — its model belongs to a different catalog.
@@ -14520,10 +14585,11 @@ export class MessagingController {
         includeUnavailable: false,
       });
       return (response?.backends ?? [])
-        .filter((candidate) => candidate.capabilities.reviewRunner === true)
+        .filter((candidate) => candidate.capabilities.reviewRunner === true || candidate.capabilities.reviewRunMode === true)
         .map((candidate) => ({
           backend: candidate.kind,
           label: candidate.label,
+          capabilities: candidate.capabilities,
           models: (candidate.launchpadOptions?.models ?? []).map((model) => ({
             id: model.id,
             label: model.label ?? model.id,

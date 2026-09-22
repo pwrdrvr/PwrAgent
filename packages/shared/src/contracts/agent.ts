@@ -327,7 +327,12 @@ export type ReleaseQueuedTurnResponse = {
   errorMessage?: string;
 };
 
+/** Product execution modes; independent of native protocol delivery. */
+export type ReviewRunMode = "codex-sub-agent" | "pwragent-sub-agent";
+
 export type StartReviewRequest = {
+  /** Omitted legacy requests use native review unless provider/workspace constraints require managed review. */
+  runMode?: ReviewRunMode;
   backend: AppServerBackendKind;
   federationTarget?: FederationTarget;
   threadId: ThreadIdentifier;

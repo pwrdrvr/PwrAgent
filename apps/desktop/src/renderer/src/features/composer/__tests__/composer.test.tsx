@@ -6167,6 +6167,74 @@ describe("Composer", () => {
     expect(screen.queryByText("Queued next")).not.toBeInTheDocument();
   });
 
+  it.each([
+    ["codex-sub-agent", "Codex Sub Agent"],
+    ["pwragent-sub-agent", "PwrAgent Sub Agent"],
+  ])("submits the explicit %s from a compact Reviewer chip", async (runMode, label) => {
+    const startReview = vi.fn(async () => ({ backend: "codex" as const, threadId: "thread-1", reviewThreadId: "thread-1", turnId: "review" }));
+    const backend = backendSummary("codex");
+    backend.capabilities = { ...backend.capabilities, startReview: true, reviewRunMode: true, reviewRunner: true, reviewCodexSubAgent: true };
+    render(<Composer backends={[backend]} desktopApi={{ startReview, onAgentEvent: () => () => undefined }} disabled={false} skills={[]} thread={{
+      id: "thread-1", title: "Review", titleSource: "explicit", source: "codex", executionMode: "default", linkedDirectories: [], inbox: { inInbox: false },
+    }} />);
+    fireEvent.change(screen.getByRole("textbox", { name: "Reply" }), { target: { value: "/review" } });
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "Reply" }), { key: "Enter" });
+    const group = await screen.findByRole("group", { name: "Review target" });
+    const chip = within(group).getByRole("button", { name: "Review run mode" });
+    expect(chip.closest(".composer__review-reviewer")).not.toBeNull();
+    expect(chip).toHaveTextContent("Codex Sub Agent");
+    fireEvent.click(chip);
+    fireEvent.click(within(group).getByRole("option", { name: label }));
+    fireEvent.click(within(group).getByRole("button", { name: /Current changes/ }));
+    fireEvent.click(within(group).getByRole("button", { name: "Start review" }));
+    await waitFor(() => expect(startReview).toHaveBeenCalledWith(expect.objectContaining({ runMode, delivery: "inline" })));
+  });
+
+  it("says why an unavailable review mode is unavailable, and refuses it", async () => {
+    const backend = backendSummary("codex");
+    backend.capabilities = { ...backend.capabilities, startReview: true, reviewRunMode: true, reviewRunner: true, reviewCodexSubAgent: false };
+    render(<Composer backends={[backend]} desktopApi={{ onAgentEvent: () => () => undefined }} disabled={false} skills={[]} thread={{
+      id: "thread-1", title: "Review", titleSource: "explicit", source: "codex", executionMode: "default", linkedDirectories: [], inbox: { inInbox: false },
+    }} />);
+    fireEvent.change(screen.getByRole("textbox", { name: "Reply" }), { target: { value: "/review" } });
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "Reply" }), { key: "Enter" });
+    const group = await screen.findByRole("group", { name: "Review target" });
+    const chip = within(group).getByRole("button", { name: "Review run mode" });
+    fireEvent.click(chip);
+    fireEvent.click(within(group).getByRole("option", { name: "PwrAgent Sub Agent" }));
+    expect(chip).toHaveTextContent("PwrAgent Sub Agent");
+    fireEvent.click(chip);
+    // Queried by the label alone: the description must not join the option's
+    // accessible name, or every caller's name-based lookup shifts under it.
+    const native = within(group).getByRole("option", { name: "Codex Sub Agent" });
+    // aria-disabled, never `disabled`. A natively disabled button takes no
+    // pointer events and leaves the tab order, which would put the reason
+    // below it out of reach of both pointer and keyboard.
+    expect(native).toHaveAttribute("aria-disabled", "true");
+    expect(native).not.toBeDisabled();
+    expect(
+      within(group).getByText("Not available on this thread's owner."),
+    ).toBeInTheDocument();
+    fireEvent.click(native);
+    expect(chip).toHaveTextContent("PwrAgent Sub Agent");
+  });
+
+  it("names the mode an owner without the capability will run anyway", async () => {
+    const backend = backendSummary("codex");
+    backend.capabilities = { ...backend.capabilities, startReview: true, reviewRunner: true };
+    render(<Composer backends={[backend]} desktopApi={{ onAgentEvent: () => () => undefined }} disabled={false} skills={[]} thread={{
+      id: "thread-1", title: "Review", titleSource: "explicit", source: "codex", executionMode: "default", linkedDirectories: [], inbox: { inInbox: false },
+    }} />);
+    fireEvent.change(screen.getByRole("textbox", { name: "Reply" }), { target: { value: "/review" } });
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "Reply" }), { key: "Enter" });
+    const group = await screen.findByRole("group", { name: "Review target" });
+    const chip = within(group).getByRole("button", { name: "Review run mode" });
+    // The decision still resolves to a mode; the one state the operator cannot
+    // change must not also be the one that says the least.
+    expect(chip).toHaveTextContent("Owner default · Codex Sub Agent");
+    expect(chip).toBeDisabled();
+  });
+
   it("runs a review on a picked reviewer without touching the thread's settings", async () => {
     const startReview = vi.fn(async () => ({
       backend: "codex" as const,
@@ -6200,6 +6268,8 @@ describe("Composer", () => {
           ...summary.capabilities,
           startReview: true,
           reviewRunner: true,
+          reviewRunMode: true,
+          reviewCodexSubAgent: kind === "codex",
         },
       };
     };
@@ -6269,6 +6339,7 @@ describe("Composer", () => {
       expect.objectContaining({
         backend: "codex",
         reviewBackend: "acp:grok",
+        runMode: "pwragent-sub-agent",
         model: "grok-4",
         reasoningEffort: "high",
       })

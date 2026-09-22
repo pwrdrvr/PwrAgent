@@ -1,4 +1,5 @@
 import type { AppServerReviewOutput, AppServerReviewTarget } from "@pwragent/shared";
+import { normalizeReviewConfidenceScore } from "./review-output";
 
 export type ParsedReviewCommand = {
   target: AppServerReviewTarget;
@@ -167,34 +168,6 @@ function stripWrappingQuotes(value: string): string {
 }
 
 /**
- * Keeps a reviewer-reported confidence only when it can mean something.
- *
- * The score is the reviewer's own confidence that its `overall_correctness`
- * verdict is right. Three values look like numbers and are not judgements:
- *
- * - Exactly `0`. The output schema in the review prompt has to show the field,
- *   and whatever value it shows is the one a weaker model copies through. A
- *   literal zero next to "patch is correct" is a transcription, not a reviewer
- *   with no confidence at all.
- * - Anything above 1. A model answering `95` may mean 95%, or may mean nothing.
- *   Rescaling it guesses at intent; dropping it does not.
- * - Anything below 0, or non-finite.
- *
- * Dropping the value is safe because the verdict stands on its own — readers
- * render the correctness without a number. Substituting zero would not.
- */
-export function normalizeReviewConfidenceScore(
-  value: unknown,
-): number | undefined {
-  return typeof value === "number"
-    && Number.isFinite(value)
-    && value > 0
-    && value <= 1
-    ? value
-    : undefined;
-}
-
-/**
  * Reduce a Git ref to the branch name both sides of a comparison can agree on.
  *
  * The same branch reaches us written three ways: `refs/heads/main` from Git
@@ -286,4 +259,17 @@ export function isPwrAgentInlineReviewPrompt(text: string): boolean {
   const normalized = text.trim();
   return normalized.startsWith("<pwragent-inline-review-instructions>\n")
     && normalized.endsWith("\n</pwragent-inline-review-instructions>");
+}
+
+export function reviewTargetInstructions(target: AppServerReviewTarget): string {
+  switch (target.type) {
+    case "baseBranch":
+      return `Review the current checkout against base branch '${target.branch}'. Find the merge base and inspect the resulting diff.`;
+    case "commit":
+      return `Review commit ${target.sha}${target.title ? ` (${target.title})` : ""}.`;
+    case "custom":
+      return target.instructions.trim() || "Review the current code changes.";
+    case "uncommittedChanges":
+      return "Review all staged, unstaged, and untracked changes in the current checkout.";
+  }
 }

@@ -82,6 +82,57 @@ describe("TranscriptReview", () => {
     expect(screen.getByText("Lines 845-848")).toBeInTheDocument();
   });
 
+  it("draws a priority once when the reviewer also typed it into the title", async () => {
+    const location = {
+      absolute_file_path: "/repo/src/registry.ts",
+      line_range: { start: 4, end: 6 },
+    };
+    const copyRichText = vi.fn(
+      async (_payload: { html: string; text: string }) => undefined,
+    );
+    render(
+      <TranscriptReview
+        desktopApi={{ copyRichText, copyText: vi.fn(async () => undefined) }}
+        entry={{
+          type: "review",
+          id: "review-tagged",
+          review: "",
+          displayText: "Review changes against origin/main",
+          output: {
+            findings: [
+              { title: "[P2] Persist provenance before returning", body: "Tagged twice.", confidence_score: 0.9, priority: 2, code_location: location },
+              { title: "[P1] Tag and field disagree", body: "Kept as written.", confidence_score: 0.9, priority: 3, code_location: location },
+              { title: "[P0] No priority field", body: "Tag becomes the badge.", confidence_score: 0.9, code_location: location },
+            ],
+            overall_correctness: "patch is incorrect",
+            overall_explanation: "Three findings.",
+          },
+        }}
+      />,
+    );
+
+    const titles = Array.from(
+      document.querySelectorAll(".transcript-review__finding-head"),
+      (head) => head.textContent,
+    );
+    expect(titles).toEqual([
+      "P2Persist provenance before returning",
+      "P3[P1] Tag and field disagree",
+      "P0No priority field",
+    ]);
+    expect(screen.getByRole("button", {
+      name: "Copy finding: Persist provenance before returning",
+    })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy review with what was reviewed" }));
+    await waitFor(() => {
+      expect(copyRichText).toHaveBeenCalledTimes(1);
+    });
+    const text = copyRichText.mock.calls[0]?.[0].text ?? "";
+    expect(text).toContain("### 1. [P2] Persist provenance before returning");
+    expect(text).not.toContain("[P2] [P2]");
+  });
+
   it("hides raw entered-review protocol text when it matches the display label", () => {
     render(
       <TranscriptReview

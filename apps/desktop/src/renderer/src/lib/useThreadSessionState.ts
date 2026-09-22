@@ -1456,11 +1456,60 @@ function pruneOptimisticEntries(
         return false;
       }
 
+      if (isLiveToolRowSettledByReplay(response.replay.entries, entry)) {
+        return false;
+      }
+
       return !hasMatchingReplayActivity(response.replay.entries, entry);
     }
 
     return !response.replay.entries.some((candidate) => candidate.id === entry.id);
   });
+}
+
+// Keyed by the immutable replay array, like `replayActivityMatches` below:
+// pruning runs on every streamed output chunk, and the replay only changes
+// when a refresh replaces it.
+const replaySettledToolTurnIds = new WeakMap<AppServerThreadEntry[], Set<string>>();
+
+/**
+ * A live tool row is the renderer's running copy of a turn's commands. Once
+ * the replay holds that turn settled, with tool rows of its own, the replay is
+ * the record of them and the live copy only repeats it.
+ *
+ * Matching each live row against a replay row cannot establish that. A
+ * command Codex parses into actions (a read, a search, a listing) replays as
+ * `<item>-<n>` details that carry no command text, while the live row keeps
+ * the bare item id and the command, so the live row matches nothing. The turn
+ * that had just finished then listed those commands twice ("6 tool updates"
+ * for 3) until the next turn started and the older-turn rule above dropped
+ * them.
+ */
+function isLiveToolRowSettledByReplay(
+  entries: AppServerThreadEntry[],
+  entry: AppServerThreadActivityEntry,
+): boolean {
+  const turnId = entry.turn?.id;
+  if (!turnId || !entry.id.startsWith("live-tools-")) {
+    return false;
+  }
+  let settled = replaySettledToolTurnIds.get(entries);
+  if (!settled) {
+    settled = new Set();
+    for (const candidate of entries) {
+      if (
+        candidate.type === "activity"
+        && candidate.turn?.id
+        && !candidate.id.startsWith("live-")
+        && !isTokenUsageActivityEntry(candidate)
+        && isCompletedTurnMetadata(candidate.turn)
+      ) {
+        settled.add(candidate.turn.id);
+      }
+    }
+    replaySettledToolTurnIds.set(entries, settled);
+  }
+  return settled.has(turnId);
 }
 
 function latestTranscriptCreatedAt(entries: AppServerThreadEntry[]): number | undefined {

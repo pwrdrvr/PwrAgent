@@ -7,7 +7,10 @@ import type {
   ThreadExecutionMode,
   ThreadIdentifier,
 } from "./normalized-app-server";
-import type { AppServerCollaborationModeRequest } from "./agent";
+import type {
+  AppServerCollaborationModeRequest,
+  ReviewRunMode,
+} from "./agent";
 import type { FederationTarget } from "./federation";
 import type {
   NavigationLaunchpadFileAttachment,
@@ -44,6 +47,7 @@ export type ScheduledThreadReviewPayload = {
   target: AppServerReviewTarget;
   draftText?: string;
   delivery?: AppServerReviewDelivery;
+  runMode?: ReviewRunMode;
   cwd?: string;
   /**
    * Reviewer override captured when the review was queued, so releasing it

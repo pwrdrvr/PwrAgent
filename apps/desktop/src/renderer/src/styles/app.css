@@ -30350,14 +30350,19 @@ button.pricing-token-miser__folded:focus-visible {
   text-align: left;
 }
 
-.composer-dropdown__option:hover:not(:disabled),
-.composer-dropdown__option:focus-visible:not(:disabled) {
+.composer-dropdown__option:hover:not([aria-disabled="true"]),
+.composer-dropdown__option:focus-visible:not([aria-disabled="true"]) {
   background: var(--accent-soft);
   color: var(--accent-bright);
 }
 
-.composer-dropdown__option:disabled {
+/* Unselectable, but deliberately still focusable and hoverable: the option's
+   own description carries the reason it is unavailable, and a native
+   `disabled` would put that reason out of reach of pointer and keyboard
+   alike. */
+.composer-dropdown__option[aria-disabled="true"] {
   color: var(--text-muted);
+  cursor: default;
   opacity: 1;
 }
 
@@ -30369,8 +30374,26 @@ button.pricing-token-miser__folded:focus-visible {
   text-align: center;
 }
 
+.composer-dropdown__option-body {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
 .composer-dropdown__option-label {
   min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* A choice whose name does not explain it gets one line that does. Stays
+   muted through hover and selection: it is the supporting clause, not the
+   name being picked. */
+.composer-dropdown__option-description {
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  line-height: 1.35;
   overflow-wrap: anywhere;
 }
 
@@ -32435,9 +32458,28 @@ button.pricing-token-miser__folded:focus-visible {
   resize: vertical;
 }
 
-/* Reviewer override row. Sits below the target detail, above the actions,
-   separated so it reads as "who runs this" rather than another facet of
-   "what to review". */
+/* Who reviews — provider, model, reasoning — and where the review runs are
+   two different questions sharing one row of identical pills. The rule is
+   what says so; without it the row reads "Codex … Codex Sub Agent" as one
+   list. Drawn only where reviewer chips precede the mode chip. */
+.composer__review-reviewer-rule {
+  width: 1px;
+  height: 16px;
+  flex: 0 0 auto;
+  margin: 0 2px;
+  background: var(--border-subtle);
+}
+
+.composer__review-location-chip {
+  max-width: 100%;
+}
+
+.composer__review-location-chip .composer-dropdown {
+  max-width: 100%;
+}
+
+/* Reviewer row. Sits below the target detail, above the actions, and carries
+   both who runs the review and the compact location choice. */
 .composer__review-reviewer {
   padding-top: 10px;
   border-top: 1px solid var(--border-subtle);

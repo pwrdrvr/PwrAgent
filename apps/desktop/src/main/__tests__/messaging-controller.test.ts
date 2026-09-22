@@ -933,6 +933,56 @@ describe("MessagingController", () => {
     });
   });
 
+  it.each([
+    ["codex-sub-agent", "Codex Sub Agent"],
+    ["pwragent-sub-agent", "PwrAgent Sub Agent"],
+  ])("captures the %s choice from messaging", async (runMode, label) => {
+    const harness = await createHarness({ listBackends: async () => ({
+      fetchedAt: 1000, backends: [buildBackendSummary({ capabilities: {
+        ...buildBackendSummary().capabilities, reviewRunner: true, reviewRunMode: true,
+        reviewCodexSubAgent: true,
+      } })],
+    }) });
+    await bindThread(harness);
+    await harness.controller.handleInboundEvent(buildCommandEvent("/review"));
+    await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "review:summary:mode" }));
+    const modeActions = (harness.delivered.at(-1) as { actions?: { label: string }[] }).actions;
+    expect(modeActions?.map((action) => action.label)).toEqual(
+      expect.arrayContaining(["Codex Sub Agent", "PwrAgent Sub Agent"]),
+    );
+    expect(modeActions?.some((action) => /inline/i.test(action.label))).toBe(false);
+    await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: `review:mode:${runMode}` }));
+    expect(harness.delivered.at(-1)).toMatchObject({ review: { runMode }, body: expect.stringContaining(label) });
+    await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "review:summary:start" }));
+    expect(harness.submitReview).toHaveBeenCalledWith(expect.objectContaining({ runMode }));
+  });
+
+  it.each([false, true])("retains an explicit messaging mode after owner downgrade and blocks Start (rebuild: %s)", async (rebuild) => {
+    let supported = true;
+    const harness = await createHarness({ listBackends: async () => ({
+      fetchedAt: 1000, backends: [buildBackendSummary({ capabilities: {
+        ...buildBackendSummary().capabilities, reviewRunner: true,
+        reviewRunMode: supported, reviewCodexSubAgent: true,
+      } })],
+    }) });
+    await bindThread(harness);
+    await harness.controller.handleInboundEvent(buildCommandEvent("/review"));
+    await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "review:summary:mode" }));
+    await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "review:mode:pwragent-sub-agent" }));
+    supported = false;
+    if (rebuild) {
+      await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "review:summary:target" }));
+      await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "review:back" }));
+      expect(harness.delivered.at(-1)).toMatchObject({
+        review: { runMode: "pwragent-sub-agent" },
+        body: expect.stringContaining("Update"),
+      });
+    }
+    await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "review:summary:start" }));
+    expect(harness.submitReview).not.toHaveBeenCalled();
+    expect(harness.delivered.at(-1)).toMatchObject({ kind: "error", body: expect.stringContaining("Update") });
+  });
+
   it("picks a reviewer through the configurator buttons", async () => {
     const harness = await createHarness({
       listBackends: async (): Promise<ListBackendsResponse> => ({

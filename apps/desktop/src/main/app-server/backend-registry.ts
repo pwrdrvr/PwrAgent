@@ -63,9 +63,11 @@ import {
 import {
   buildManagedReviewContextInput,
   buildManagedReviewPrompt,
-  formatManagedReviewOutput,
-  parseManagedReviewOutput,
 } from "./managed-review";
+import {
+  formatReviewOutputText,
+  parseReviewOutputText,
+} from "../../shared/review-output";
 import {
   isUsageActivityEntry,
   usageActivityScope,
@@ -2152,6 +2154,15 @@ function sanitizeAcpRuntimeForExecutionMode(params: {
 function buildCapabilities(methods: string[], backend: AppServerBackendKind): BackendCapabilities {
   const supported = new Set(methods);
   const assumeCodexAppServerSurface = backend === "codex" && methods.length === 0;
+  const reviewCodexSubAgent = supported.has("review/start") || assumeCodexAppServerSurface;
+  // A managed review child is an ephemeral thread plus one turn, so Codex
+  // can review for another provider's thread even on builds whose native
+  // review/start is absent.
+  const reviewRunner =
+    (supported.has("thread/start")
+      || supported.has("thread/new")
+      || assumeCodexAppServerSurface)
+    && (supported.has("turn/start") || assumeCodexAppServerSurface);
 
   return {
     listThreads:
@@ -2176,15 +2187,10 @@ function buildCapabilities(methods: string[], backend: AppServerBackendKind): Ba
     renameThread: supported.has("thread/name/set") || assumeCodexAppServerSurface,
     readThread: supported.has("thread/read") || assumeCodexAppServerSurface,
     startTurn: supported.has("turn/start") || assumeCodexAppServerSurface,
-    startReview: supported.has("review/start") || assumeCodexAppServerSurface,
-    // A managed review child is an ephemeral thread plus one turn, so Codex
-    // can review for another provider's thread even on builds whose native
-    // review/start is absent.
-    reviewRunner:
-      (supported.has("thread/start")
-        || supported.has("thread/new")
-        || assumeCodexAppServerSurface)
-      && (supported.has("turn/start") || assumeCodexAppServerSurface),
+    startReview: reviewCodexSubAgent || reviewRunner,
+    reviewRunMode: true,
+    reviewCodexSubAgent,
+    reviewRunner,
     interruptTurn: supported.has("turn/interrupt"),
     steerTurn: backend === "codex" || supported.has("turn/steer"),
     transcriptPagination: false,
@@ -8788,7 +8794,6 @@ export class DesktopBackendRegistry {
    */
   private readonly isCodexBootstrapDeferredFn: () => boolean;
   private readonly resolveCodexDefaultModeRequestUserInputFn: () => boolean;
-  private readonly resolveManagedReviewEnabledFn: () => boolean;
   private readonly resolveDefaultPrAutoDispatchEnabledFn: () => boolean;
   private readonly resolveProviderModelDefaultsFn: () => Record<
     string,
@@ -8908,6 +8913,7 @@ export class DesktopBackendRegistry {
     isCodexBootstrapDeferred?: () => boolean;
     isBootstrapMode?: () => boolean;
     resolveCodexDefaultModeRequestUserInput?: () => boolean;
+    /** Legacy injection accepted for older callers; runMode owns routing. */
     resolveManagedReviewEnabled?: () => boolean;
     resolveDefaultPrAutoDispatchEnabled?: () => boolean;
     resolveProviderModelDefaults?: () => Record<
@@ -9019,23 +9025,6 @@ export class DesktopBackendRegistry {
         } catch (error) {
           backendRegistryLog.warn(
             "failed to resolve Codex default-mode request_user_input setting",
-            {
-              error: error instanceof Error ? error.message : String(error),
-            },
-          );
-          return false;
-        }
-      });
-    this.resolveManagedReviewEnabledFn =
-      options?.resolveManagedReviewEnabled ??
-      (() => {
-        try {
-          return (
-            settingsService ?? getDesktopSettingsService()
-          ).resolveManagedReviewEnabled();
-        } catch (error) {
-          backendRegistryLog.warn(
-            "failed to resolve managed review experiment setting",
             {
               error: error instanceof Error ? error.message : String(error),
             },
@@ -17370,10 +17359,19 @@ export class DesktopBackendRegistry {
     if (reviewBackendDiffers) {
       this.assertReviewBackendSupported(reviewBackend);
     }
-    const managedReviewExperiment =
-      params.backend === "codex" && this.resolveManagedReviewEnabledFn();
-    let managedMode =
-      acpManagedMode || managedReviewExperiment || reviewBackendDiffers;
+    if (params.runMode !== undefined && ![
+      "codex-sub-agent", "pwragent-sub-agent",
+    ].includes(params.runMode)) {
+      throw new Error("Unknown review run mode.");
+    }
+    if (params.runMode && params.delivery === "detached") {
+      throw new Error("Explicit review modes do not support detached delivery.");
+    }
+    const requiresManaged = acpManagedMode || reviewBackendDiffers;
+    if (requiresManaged && params.runMode && params.runMode !== "pwragent-sub-agent") {
+      throw new Error("PwrAgent Sub Agent is required for ACP or cross-provider reviews.");
+    }
+    let managedMode = requiresManaged || params.runMode === "pwragent-sub-agent";
     const reserveCodexReviewStart = params.backend === "codex";
     const acpReviewReservationKey = isAcpBackendId(params.backend)
       ? buildTurnStartReservationKey(params.backend, params.threadId)
@@ -17437,6 +17435,9 @@ export class DesktopBackendRegistry {
         // linked project other than the parent thread's workspace, start the
         // review as a managed child so both thread/start and turn/start are
         // explicitly rooted in the selected project.
+        if (usesSelectedSecondaryWorkspace && params.runMode && params.runMode !== "pwragent-sub-agent") {
+          throw new Error("PwrAgent Sub Agent is required for a secondary workspace.");
+        }
         managedMode ||= usesSelectedSecondaryWorkspace;
         if (
           usesSelectedSecondaryWorkspace
@@ -17497,10 +17498,22 @@ export class DesktopBackendRegistry {
           )
         : {};
 
+      if (managedMode) {
+        this.assertReviewBackendSupported(reviewBackend);
+        if (reviewBackend === "codex") {
+          const client = this.getClient("codex");
+          if (!buildCapabilities((await client.getInitializeResult()).methods ?? [], "codex").reviewRunner) {
+            throw new Error("PwrAgent Sub Agent requires thread/start and turn/start support.");
+          }
+        }
+      }
+
       const startWithClient = async (
         client: BackendClient,
       ): Promise<{ threadId: string; reviewThreadId: string; turnId: string }> => {
-        if (!client.startReview) {
+        if (!client.startReview || !buildCapabilities(
+          (await client.getInitializeResult()).methods ?? [], "codex",
+        ).reviewCodexSubAgent) {
           throw new Error("Selected backend does not support review/start");
         }
         const tokenMiserConfig =
@@ -17733,8 +17746,6 @@ export class DesktopBackendRegistry {
     const tokenMiserDynamicTools = params.tokenMiserEnabled
       ? buildCodexTokenMiserDynamicToolSpecs(this.tokenMiserStore)
       : [];
-    const dynamicToolsResumeSupported =
-      await this.supportsTokenMiserDynamicToolsResume(client);
     const thread = await client.startThread({
       ...(params.cwd ? { cwd: params.cwd } : {}),
       approvalPolicy: modeSettings.approvalPolicy,
@@ -17776,9 +17787,9 @@ export class DesktopBackendRegistry {
         ...(params.codexEnvironmentRuntime
           ? { codexEnvironmentRuntime: params.codexEnvironmentRuntime }
           : {}),
-        ...(dynamicToolsResumeSupported
-          ? { dynamicTools: tokenMiserDynamicTools }
-          : {}),
+        // The complete tool catalog and environment were installed by
+        // thread/start above. Re-sending dynamicTools here asks the client to
+        // resume this ephemeral worker, which has no persisted rollout.
         ...(pwrdrvrTokenMiser !== undefined ? { pwrdrvrTokenMiser } : {}),
       });
       const startedReviewChildKey = buildThreadIdentityKey(
@@ -17921,7 +17932,15 @@ export class DesktopBackendRegistry {
             type: "enteredReviewMode",
             review: record.displayText,
             createdAt: startedAt,
-            data: { reviewer: entry.reviewer },
+            // Spelled out rather than left to withReviewRuntimeMetadata: that
+            // looks the record up under the review CHILD's thread, and this
+            // item is emitted under the parent's, so the lookup misses and
+            // the live card would lose its workspace/branch/commit/PR rows
+            // until a reload read the persisted entry above.
+            data: {
+              reviewer: entry.reviewer,
+              ...(entry.context ? { context: entry.context } : {}),
+            },
           },
         },
       },
@@ -25772,13 +25791,6 @@ export class DesktopBackendRegistry {
     const available = Boolean(lastKnownGood?.selectedCommand);
     const methods: string[] = [];
     const capabilities = buildCapabilities(methods, "codex");
-    if (
-      this.resolveManagedReviewEnabledFn()
-      && capabilities.createThread
-      && capabilities.startTurn
-    ) {
-      capabilities.startReview = true;
-    }
     // Only claim discovery is outstanding when it actually is. A discovery
     // that ran and selected nothing records no `validation.error`, so this
     // default used to describe a completed discovery as incomplete — and the
@@ -26063,13 +26075,6 @@ export class DesktopBackendRegistry {
       );
     }
     const capabilities = buildCapabilities(methods, "codex");
-    if (
-      this.resolveManagedReviewEnabledFn()
-      && capabilities.createThread
-      && capabilities.startTurn
-    ) {
-      capabilities.startReview = true;
-    }
 
     const discoveredRateLimits =
       rateLimitsResult.status === "fulfilled"
@@ -28288,9 +28293,9 @@ export class DesktopBackendRegistry {
         >,
         completedItemOutput,
       );
-      const parsed = parseManagedReviewOutput(output);
+      const parsed = parseReviewOutputText(output);
       const review = parsed
-        ? formatManagedReviewOutput(parsed)
+        ? formatReviewOutputText(parsed)
         : output?.trim() || "Review completed without output.";
       const entry: AppServerThreadReviewEntry = {
         type: "review",
@@ -28324,9 +28329,11 @@ export class DesktopBackendRegistry {
               type: "exitedReviewMode",
               review,
               createdAt: completedAt,
+              // Same child-vs-parent key miss as the started item.
               data: {
                 ...(parsed ? { reviewOutput: parsed } : {}),
                 reviewer: entry.reviewer,
+                ...(entry.context ? { context: entry.context } : {}),
               },
             },
           },
@@ -32760,6 +32767,7 @@ export class DesktopBackendRegistry {
           backend: request.context.backend,
           threadId: request.context.threadId,
           target: request.args.target,
+          runMode: request.args.runMode,
           delivery: "inline",
           ...(request.args.cwd ? { cwd: request.args.cwd } : {}),
         },

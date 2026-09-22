@@ -675,9 +675,10 @@ describe("ScheduledThreadActionService", () => {
       origin: "desktop",
       scheduledFor: 10_000,
       displayText: "/review",
-      review: { target: { type: "uncommittedChanges" } },
+      review: { target: { type: "uncommittedChanges" }, runMode: "pwragent-sub-agent" },
     });
 
+    expect(harness.submitReview).toHaveBeenCalledWith(expect.objectContaining({ runMode: "pwragent-sub-agent" }));
     expect(store.get(response.action.id)).toMatchObject({
       status: "queued",
       queueEntryId: "review-1",

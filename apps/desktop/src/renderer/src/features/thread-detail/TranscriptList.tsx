@@ -1510,6 +1510,7 @@ export function TranscriptList(props: TranscriptListProps) {
               item.type === "workPhaseGroup" ? (
                 <TranscriptWorkPhaseGroup
                   activeStartedAt={item.activeStartedAt}
+                  activeVerb={item.activeVerb}
                   applications={props.applications}
                   collapsible={item.collapsible}
                   directoryPaths={stableDirectoryPaths}

@@ -33,6 +33,15 @@ afterEach(() => {
 });
 
 describe("scheduled thread action projections", () => {
+  it("retains the captured review mode through scheduled projection", () => {
+    const { result } = renderHook(() => useComposerDraftStore());
+    const scope = buildThreadComposerScopeKey("codex", "thread-1");
+    syncScheduledActionProjections(result.current, [scheduledAction({ kind: "review", turn: undefined,
+      review: { target: { type: "uncommittedChanges" }, runMode: "pwragent-sub-agent" },
+    })]);
+    expect(result.current.getQueuedTurns(scope)[0]?.reviewCommand?.runMode).toBe("pwragent-sub-agent");
+  });
+
   it("hydrates durable scheduled actions without replacing local queue state", () => {
     const { result } = renderHook(() => useComposerDraftStore());
     const store = result.current;
