@@ -74,6 +74,25 @@ describe("federation backend bridge", () => {
     }
   });
 
+  it("uses explicit PR routes on the owner and fails closed on older owners", async () => {
+    const request = vi.fn(async () => { throw new Error("method_not_found"); });
+    const client = new FederationRemoteBackendClient({ request } as unknown as FederationRpcEndpoint);
+    const target = { type: "pullRequest" as const, url: "https://github.com/fixture/project/pull/1" };
+    await expect(client.startReview({ backend: "codex", threadId: "thread", target })).rejects.toThrow("method_not_found");
+    expect(request).toHaveBeenLastCalledWith({
+      method: FEDERATION_BACKEND_METHODS.startPullRequestReview,
+      params: { backend: "codex", threadId: "thread", target },
+    });
+    await expect(client.createScheduledThreadAction({
+      backend: "codex", threadId: "thread", kind: "review", scheduledFor: 1,
+      displayText: "Review PR", review: { target },
+    })).rejects.toThrow("method_not_found");
+    expect(request).toHaveBeenLastCalledWith(expect.objectContaining({ method: FEDERATION_BACKEND_METHODS.createScheduledPullRequestReview }));
+    expect(request).toHaveBeenCalledTimes(2);
+    await expect(client.startReview({ backend: "codex", threadId: "thread", target: { type: "baseBranch", branch: "main" } })).rejects.toThrow();
+    expect(request).toHaveBeenLastCalledWith(expect.objectContaining({ method: FEDERATION_BACKEND_METHODS.startReview }));
+  });
+
   it("coalesces concurrent identical transcript reads and releases settled results", async () => {
     let finish!: (response: AppServerReadThreadResponse) => void;
     const request = vi.fn(() => new Promise<AppServerReadThreadResponse>((resolve) => { finish = resolve; }));

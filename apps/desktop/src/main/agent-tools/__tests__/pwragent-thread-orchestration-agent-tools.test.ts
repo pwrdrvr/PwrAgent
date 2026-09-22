@@ -166,6 +166,7 @@ describe("pwragent thread orchestration agent tools", () => {
                       enum: [
                         "uncommittedChanges",
                         "baseBranch",
+                        "pullRequest",
                         "commit",
                         "custom",
                       ],
@@ -329,6 +330,24 @@ describe("pwragent thread orchestration agent tools", () => {
       }),
     ).resolves.toMatchObject({ success: false });
     expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("accepts attached PR identity while dropping forged MCP snapshot and trust flags", async () => {
+    const handler = vi.fn(async () => ({ ok: false as const, error: { code: "internal_error" as const, message: "fixture" } }));
+    const router = buildPwrAgentThreadOrchestrationToolRouter(handler);
+    await router.handleDynamicToolCall({
+      backend: "codex",
+      call: {
+        threadId: "thread-1", turnId: "turn-1", callId: "pr-call", namespace: "pwragent", tool: "start_review",
+        arguments: {
+          trustedSnapshot: true,
+          target: { type: "pullRequest", url: "https://github.com/fixture/project/pull/1", snapshot: { headCommit: "forged" } },
+        },
+      },
+    });
+    expect(handler).toHaveBeenCalledWith(expect.objectContaining({
+      args: { target: { type: "pullRequest", url: "https://github.com/fixture/project/pull/1" } },
+    }));
   });
 
   it("validates and dispatches structured start_review args", async () => {

@@ -1,4 +1,10 @@
 import { ReviewLocationDropdown } from "./ReviewLocationDropdown";
+import {
+  EXPLICIT_REVIEW_PULL_REQUEST_URL,
+  attachedPullRequestsForWorkspace,
+  describeAttachedPullRequestLocalSync,
+  findCheckedOutPullRequest,
+} from "../../../../shared/pull-request-review";
 import { hydrateComposerDraft } from "./composer-draft-hydration";
 import type { NavigationDirectoryView as NavigationDirectorySummary } from "../../lib/navigation-loaded-rows";
 import {
@@ -53,6 +59,7 @@ import type {
   NavigationLaunchpadFileAttachment,
   NavigationLaunchpadImageAttachment,
   NavigationThreadSummary,
+  PrSummary,
   RenderComposerPdfPreviewResponse,
   ReviewRunMode,
   ThreadWorkspaceHandoffStrategy,
@@ -602,6 +609,7 @@ const CONTEXT_MOON_PHASES = [
 ] as const;
 
 type ReviewConfigState = {
+  pullRequestUrl?: string;
   branch: string;
   branchSource?: "auto" | "user";
   commit: string;
@@ -803,6 +811,11 @@ const REVIEW_TARGET_OPTIONS: Array<{
     description: "Review staged, unstaged, and untracked files",
   },
   {
+    target: "pullRequest",
+    label: "Attached PR",
+    description: "Review a pull request at its published head",
+  },
+  {
     target: "commit",
     label: "Commit",
     description: "Review one commit by SHA",
@@ -953,6 +966,58 @@ function getLaunchpadDirectoryKeyFromScope(scopeKey: string): string | undefined
     : undefined;
 }
 
+/**
+ * Attached pull requests the selected workspace can review, plus the one the
+ * workspace already has checked out clean. Both the default target and the
+ * composer's explanation of how local differs read from this single answer.
+ */
+function reviewPullRequestsFor(params: {
+  cwd?: string;
+  directory?: NavigationDirectorySummary;
+  thread?: NavigationThreadSummary;
+}): {
+  candidates: PrSummary[];
+  checkedOut?: PrSummary;
+  unavailableReason?: string;
+} {
+  // A target the owner would refuse is not a choice worth drawing, so the
+  // candidate list carries only the URL shape it accepts.
+  const attached = attachedPullRequestsForWorkspace({
+    cwd: params.cwd,
+    prs: params.thread?.prs ?? [],
+    repository: params.directory?.gitStatus?.originRepository,
+  }).filter((pr) => EXPLICIT_REVIEW_PULL_REQUEST_URL.test(pr.url));
+  if (params.thread?.codexEnvironmentRuntime?.executionTarget === "remote") {
+    // Resolving a pull request target fetches its commits into a checkout,
+    // which a remote execution workspace does not have. Say so rather than
+    // dropping the row silently when the thread does have pull requests.
+    return {
+      candidates: [],
+      unavailableReason: attached.length
+        ? "Attached pull requests can only be reviewed in a local execution workspace."
+        : undefined,
+    };
+  }
+  return {
+    candidates: attached,
+    checkedOut: findCheckedOutPullRequest({
+      currentBranch:
+        params.thread?.observedGitBranch ?? params.thread?.gitBranch,
+      directoryGitStatus: params.directory?.gitStatus,
+      gitWorkingState: params.thread?.gitWorkingState,
+      prs: attached,
+    }),
+  };
+}
+
+/** "a, b and c" — a difference list reads as prose, not as a bullet run. */
+function formatReviewDivergence(differences: string[]): string {
+  if (differences.length <= 1) {
+    return differences[0] ?? "";
+  }
+  return `${differences.slice(0, -1).join(", ")} and ${differences.at(-1)}`;
+}
+
 function createReviewConfig(params: {
   directory?: NavigationDirectorySummary;
   thread?: NavigationThreadSummary;
@@ -977,7 +1042,26 @@ function createReviewConfig(params: {
   };
   const target = params.reviewCommand?.target;
   if (!target) {
-    return config;
+    // The PR target and a local review only describe the same commits while
+    // the checkout sits on the PR's head with nothing local on top. When they
+    // do, offering the PR is the more precise of two identical reviews; the
+    // moment they diverge the local checkout is what the operator is looking
+    // at, so it keeps the default and the PR stays an explicit choice.
+    const checkedOutPullRequest = reviewPullRequestsFor({
+      cwd: config.workspaceCwd,
+      directory: params.directory,
+      thread: params.thread,
+    }).checkedOut;
+    return checkedOutPullRequest
+      ? {
+          ...config,
+          pullRequestUrl: checkedOutPullRequest.url,
+          target: "pullRequest",
+        }
+      : config;
+  }
+  if (target.type === "pullRequest") {
+    return { ...config, target: "pullRequest", pullRequestUrl: target.url };
   }
   if (target.type === "uncommittedChanges") {
     return { ...config, target: "uncommittedChanges" };
@@ -1112,6 +1196,15 @@ function buildConfiguredReviewCommand(
     return undefined;
   }
   const cwd = config.workspaceCwd?.trim() || undefined;
+
+  if (config.target === "pullRequest") {
+    return config.pullRequestUrl ? {
+      ...(cwd ? { cwd } : {}),
+      runMode: config.runMode,
+      target: { type: "pullRequest", url: config.pullRequestUrl },
+      displayText: `Review ${config.pullRequestUrl}`,
+    } : undefined;
+  }
 
   if (config.target === "uncommittedChanges") {
     return {
@@ -2734,6 +2827,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const reviewOptionRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const reviewCommitInputRef = useRef<HTMLInputElement | null>(null);
   const reviewCustomTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const reviewPullRequestSelectRef = useRef<HTMLSelectElement | null>(null);
   const skillListboxId = useId();
   const slashListboxId = useId();
   const directoryRefListboxId = useId();
@@ -4742,6 +4836,42 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     [props.thread],
   );
   const reviewWorkspaceSelectionRequired = reviewWorkspaceOptions.length > 1;
+  const reviewPullRequestState = useMemo(
+    () =>
+      reviewPullRequestsFor({
+        cwd: reviewConfig?.workspaceCwd ?? reviewWorkspaceOptions[0]?.cwd,
+        directory: reviewDirectory,
+        thread: props.thread,
+      }),
+    [
+      reviewConfig?.workspaceCwd,
+      reviewDirectory,
+      reviewWorkspaceOptions,
+      props.thread,
+    ],
+  );
+  const reviewPullRequests = reviewPullRequestState.candidates;
+  const selectedReviewPullRequest = reviewPullRequests.find(
+    (pr) => pr.url === reviewConfig?.pullRequestUrl,
+  );
+  // What a local review would cover that this PR does not, so the two targets
+  // never read as interchangeable when they are not.
+  const selectedReviewPullRequestSync = selectedReviewPullRequest
+    ? describeAttachedPullRequestLocalSync({
+        currentBranch:
+          props.thread?.observedGitBranch ?? props.thread?.gitBranch,
+        directoryGitStatus: reviewDirectory?.gitStatus,
+        gitWorkingState: props.thread?.gitWorkingState,
+        pr: selectedReviewPullRequest,
+      })
+    : undefined;
+  // Only the targets this workspace can actually run. An always-present row
+  // that dead-ends on "no attached pull requests" is noise, and arrow-key
+  // navigation has to walk the same list the operator can see.
+  const reviewTargetOptions = REVIEW_TARGET_OPTIONS.filter(
+    (option) =>
+      option.target !== "pullRequest" || reviewPullRequests.length > 0,
+  );
   const parsedReviewCommand = supportsReview ? parseReviewCommand(draft) : undefined;
   const isBareReviewCommand = draft.trim() === "/review";
   const isCompactCommand = supportsCompactCommand && draft.trim() === "/compact";
@@ -6050,6 +6180,10 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const submitReviewConfig = async (
     config: ReviewConfigState | undefined,
   ): Promise<void> => {
+    if (config?.target === "pullRequest" && !reviewPullRequests.some((pr) => pr.url === config.pullRequestUrl)) {
+      setSendError("Choose an attached pull request for this project.");
+      return;
+    }
     const configuredReviewCommand = buildConfiguredReviewCommand(config);
     if (!configuredReviewCommand) {
       return;
@@ -6095,33 +6229,40 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         reviewCommitInputRef.current?.focus();
       } else if (target === "custom") {
         reviewCustomTextareaRef.current?.focus();
+      } else if (target === "pullRequest") {
+        reviewPullRequestSelectRef.current?.focus();
       }
     });
   };
 
   const getReviewConfigWithTarget = (
     target: ReviewTargetChoice,
-  ): ReviewConfigState => ({
-    ...(reviewConfig ??
-      createReviewConfig({
+    base?: ReviewConfigState,
+  ): ReviewConfigState => {
+    const current =
+      base
+      ?? reviewConfig
+      ?? createReviewConfig({
         directory: props.directory,
         thread: props.thread,
-      })),
-    target,
-  });
+      });
+    // Reaching the PR target with nothing picked lands on the obvious
+    // candidate rather than a disabled Start button.
+    const pullRequestUrl =
+      target === "pullRequest" && !current.pullRequestUrl
+        ? reviewPullRequestState.checkedOut?.url
+          ?? (reviewPullRequests.length === 1
+            ? reviewPullRequests[0]?.url
+            : undefined)
+        : current.pullRequestUrl;
+    return { ...current, pullRequestUrl, target };
+  };
 
   const selectReviewTarget = (
     target: ReviewTargetChoice,
     options?: { focusDetail?: boolean },
   ): void => {
-    setReviewConfig((current) => ({
-      ...(current ??
-        createReviewConfig({
-          directory: props.directory,
-          thread: props.thread,
-        })),
-      target,
-    }));
+    setReviewConfig((current) => getReviewConfigWithTarget(target, current));
     setSendError(undefined);
     if (options?.focusDetail) {
       focusReviewDetail(target);
@@ -6136,7 +6277,8 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     setSendError(undefined);
     if (
       (target === "commit" && !nextConfig.commit.trim()) ||
-      (target === "custom" && !nextConfig.customInstructions.trim())
+      (target === "custom" && !nextConfig.customInstructions.trim()) ||
+      (target === "pullRequest" && !nextConfig.pullRequestUrl)
     ) {
       focusReviewDetail(target);
       return;
@@ -6167,7 +6309,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     if (event.key === "Enter") {
       event.preventDefault();
       event.stopPropagation();
-      submitFocusedReviewTarget(REVIEW_TARGET_OPTIONS[index]!.target);
+      submitFocusedReviewTarget(reviewTargetOptions[index]!.target);
       return;
     }
     if (event.key !== "ArrowRight" && event.key !== "ArrowLeft") {
@@ -6177,9 +6319,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     event.stopPropagation();
     const direction = event.key === "ArrowRight" ? 1 : -1;
     const nextIndex =
-      (index + direction + REVIEW_TARGET_OPTIONS.length) %
-      REVIEW_TARGET_OPTIONS.length;
-    selectReviewTarget(REVIEW_TARGET_OPTIONS[nextIndex]!.target);
+      (index + direction + reviewTargetOptions.length) %
+      reviewTargetOptions.length;
+    selectReviewTarget(reviewTargetOptions[nextIndex]!.target);
     focusReviewOption(nextIndex);
   };
 
@@ -11110,6 +11252,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                       branch,
                       branchSource: "auto",
                       workspaceCwd,
+                      pullRequestUrl: undefined,
                     }));
                     setSendError(undefined);
                   }}
@@ -11125,14 +11268,21 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                 </select>
               </label>
             ) : null}
-            <div className="composer__review-options">
-              {REVIEW_TARGET_OPTIONS.map((option, index) => (
+            <div
+              className={`composer__review-options${
+                reviewTargetOptions.length > 4
+                  ? " composer__review-options--with-pull-request"
+                  : ""
+              }`}
+            >
+              {reviewTargetOptions.map((option, index) => (
                 <button
                   key={option.target}
                   ref={(element) => {
                     reviewOptionRefs.current[index] = element;
                   }}
                   type="button"
+                  data-review-target={option.target}
                   aria-pressed={reviewConfig?.target === option.target}
                   className={`composer__review-option${reviewConfig?.target === option.target ? " is-active" : ""}`}
                   tabIndex={reviewConfig?.target === option.target ? 0 : -1}
@@ -11149,6 +11299,56 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                 </button>
               ))}
             </div>
+
+            {reviewPullRequestState.unavailableReason ? (
+              <p className="composer__review-note">
+                {reviewPullRequestState.unavailableReason}
+              </p>
+            ) : null}
+
+            {reviewConfig?.target === "pullRequest" ? (
+              <label className="composer__review-field">
+                <span>Pull request</span>
+                <select
+                  aria-label="Attached pull request"
+                  className="composer__review-input"
+                  ref={reviewPullRequestSelectRef}
+                  value={selectedReviewPullRequest?.url ?? ""}
+                  onChange={(event) => setReviewConfig((current) => current
+                    ? { ...current, pullRequestUrl: event.target.value }
+                    : current)}
+                >
+                  <option value="" disabled>Choose pull request</option>
+                  {reviewPullRequests.map((pr) => (
+                    <option key={pr.url} value={pr.url}>
+                      {`#${pr.number} ${pr.title ?? "Untitled pull request"}`}
+                      {pr.headRefName ? ` — ${pr.headRefName}` : ""}
+                    </option>
+                  ))}
+                </select>
+                {selectedReviewPullRequest ? (
+                  <small>
+                    {`${selectedReviewPullRequest.headRefName ?? "Unknown branch"} → ${selectedReviewPullRequest.baseRefName ?? "unknown base"}`}
+                    {selectedReviewPullRequest.headSha
+                      ? ` at ${selectedReviewPullRequest.headSha.slice(0, 7)}`
+                      : ""}
+                    {". Refreshed and pinned to the published head when you start the review."}
+                  </small>
+                ) : (
+                  <small>Choose which attached pull request to review.</small>
+                )}
+                {selectedReviewPullRequestSync?.differences.length ? (
+                  <small className="composer__review-divergence">
+                    {`Reviewing the pull request skips this checkout's ${formatReviewDivergence(selectedReviewPullRequestSync.differences)}. Base branch reviews what is here.`}
+                  </small>
+                ) : selectedReviewPullRequestSync?.matches ? (
+                  <small>
+                    This checkout is clean and sits on this pull request&apos;s
+                    head, so a local review would cover the same commits.
+                  </small>
+                ) : null}
+              </label>
+            ) : null}
 
             {reviewConfig?.target === "baseBranch" ? (
               <div className="composer__review-field">

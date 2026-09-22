@@ -151,7 +151,22 @@ export type AppServerTurnInputItem =
   | AppServerLocalFileInputItem
   | AppServerFileInputItem;
 
+export type AppServerReviewPullRequestSnapshot = {
+  pullRequest: AppServerReviewPullRequest;
+  baseCommit: string;
+  headCommit: string;
+  mergeBaseCommit: string;
+  capturedAt: number;
+};
+
 export type AppServerReviewTarget =
+  | {
+      type: "pullRequest";
+      /** Attached PR URL, resolved on the owning instance at submission. */
+      url: string;
+      /** Owner-captured provenance. Incoming snapshots are never trusted. */
+      snapshot?: AppServerReviewPullRequestSnapshot;
+    }
   | {
       type: "uncommittedChanges";
     }
@@ -254,6 +269,7 @@ export type AppServerReviewContext = {
    * would invent a range the reviewer never looked at.
    */
   baseCommit?: string;
+  pullRequestSnapshot?: AppServerReviewPullRequestSnapshot;
   /**
    * The pull request open on `gitBranch` in this workspace at start.
    *

@@ -5783,6 +5783,220 @@ describe("Composer", () => {
     expect(screen.queryByRole("button", { name: "Send now" })).not.toBeInTheDocument();
   });
 
+  it("selects the attached stacked PR and clears it when the project changes", async () => {
+    const startReview = vi.fn(async (request: StartReviewRequest) => ({
+      backend: request.backend, threadId: request.threadId,
+      reviewThreadId: request.threadId, turnId: "review-pr-1",
+    }));
+    const prs = [1, 2].map((number) => ({
+      provider: "github.com", org: "fixture", repo: "project", number,
+      title: `Stack ${number}`, url: `https://github.com/fixture/project/pull/${number}`,
+      state: "passing" as const, headRefName: `stack-${number}`,
+      baseRefName: number === 1 ? "main" : "stack-1", headSha: String(number).repeat(40),
+      ...(number === 2 ? { linkedDirectoryPaths: ["/repo/project"] } : {}),
+    }));
+    render(<Composer
+      desktopApi={{ onAgentEvent: () => () => undefined, startReview }}
+      disabled={false} skills={[]}
+      thread={{
+        id: "thread-1", title: "Stacked review", titleSource: "explicit",
+        source: "codex", executionMode: "default", inbox: { inInbox: false },
+        linkedDirectories: [
+          { id: "one", kind: "local", label: "Project", path: "/repo/project" },
+          { id: "two", kind: "local", label: "Other", path: "/repo/other" },
+        ],
+        prs: [...prs, { ...prs[0], number: 3, repo: "other", url: "https://github.com/fixture/other/pull/3", linkedDirectoryPaths: ["/repo/other"] }],
+      }}
+    />);
+    fireEvent.change(screen.getByLabelText("Reply"), { target: { value: "/review" } });
+    fireEvent.keyDown(screen.getByLabelText("Reply"), { key: "Enter" });
+    fireEvent.change(screen.getByLabelText("Review project"), { target: { value: "/repo/project" } });
+    fireEvent.click(screen.getByRole("button", { name: /Attached PR/ }));
+    const picker = screen.getByLabelText("Attached pull request");
+    expect(within(picker).getByRole("option", { name: /#1/ })).toBeInTheDocument();
+    expect(within(picker).getByRole("option", { name: /#2/ })).toBeInTheDocument();
+    expect(within(picker).queryByRole("option", { name: /#3/ })).not.toBeInTheDocument();
+    fireEvent.change(picker, { target: { value: prs[0].url } });
+    expect(screen.getByText(/stack-1 . main/)).toHaveTextContent("at 1111111");
+    fireEvent.change(screen.getByLabelText("Review project"), { target: { value: "/repo/other" } });
+    expect(screen.getByLabelText("Attached pull request")).toHaveValue("");
+    fireEvent.change(screen.getByLabelText("Review project"), { target: { value: "/repo/project" } });
+    fireEvent.change(screen.getByLabelText("Attached pull request"), { target: { value: prs[0].url } });
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Start review" })); });
+    expect(startReview).toHaveBeenCalledWith(expect.objectContaining({
+      cwd: "/repo/project", target: { type: "pullRequest", url: prs[0].url },
+    }));
+  });
+
+  const reviewTargetThread = (params: {
+    dirtyFiles?: number;
+    unpushedCommits?: number;
+    untrackedFiles?: number;
+    withPullRequest?: boolean;
+  }): NavigationThreadSummary => ({
+    id: "thread-1",
+    title: "Attached PR review",
+    titleSource: "explicit",
+    source: "codex",
+    executionMode: "default",
+    inbox: { inInbox: false },
+    observedGitBranch: "feat/stack-1",
+    linkedDirectories: [
+      { id: "one", kind: "local", label: "Project", path: "/repo/project" },
+    ],
+    gitWorkingState: {
+      dirtyAdditions: 0,
+      dirtyDeletions: 0,
+      dirtyFiles: params.dirtyFiles ?? 0,
+      unpushedCommits: params.unpushedCommits ?? 0,
+      untrackedFiles: params.untrackedFiles ?? 0,
+    },
+    prs: params.withPullRequest === false ? [] : [{
+      provider: "github.com",
+      org: "fixture",
+      repo: "project",
+      number: 7,
+      title: "Stack one",
+      url: "https://github.com/fixture/project/pull/7",
+      state: "passing" as const,
+      lifecycleState: "open" as const,
+      headRefName: "feat/stack-1",
+      baseRefName: "main",
+      headSha: "a".repeat(40),
+      linkedDirectoryPaths: ["/repo/project"],
+    }],
+  });
+
+  const openReviewComposer = (): void => {
+    fireEvent.change(screen.getByLabelText("Reply"), { target: { value: "/review" } });
+    fireEvent.keyDown(screen.getByLabelText("Reply"), { key: "Enter" });
+  };
+
+  it("omits the attached PR target when the project has none", () => {
+    render(<Composer
+      desktopApi={{ onAgentEvent: () => () => undefined }}
+      disabled={false} skills={[]}
+      thread={reviewTargetThread({ withPullRequest: false })}
+    />);
+    openReviewComposer();
+    const group = screen.getByRole("group", { name: "Review target" });
+    expect(within(group).queryByRole("button", { name: /Attached PR/ }))
+      .not.toBeInTheDocument();
+    expect(within(group).getByRole("button", { name: /Base branch/ }))
+      .toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("defaults to the attached PR when the checkout is clean on its head", () => {
+    render(<Composer
+      desktopApi={{ onAgentEvent: () => () => undefined }}
+      disabled={false} skills={[]}
+      thread={reviewTargetThread({})}
+      directory={{ key: "project", kind: "directory", label: "Project", path: "/repo/project",
+        gitStatus: { currentBranch: "feat/stack-1", branches: ["main", "feat/stack-1"], syncState: "in-sync",
+          recentCommits: [{ sha: "a".repeat(40), shortSha: "aaaaaaa", subject: "Published head" }] },
+      }}
+    />);
+    openReviewComposer();
+    const group = screen.getByRole("group", { name: "Review target" });
+    expect(within(group).getByRole("button", { name: /Attached PR/ }))
+      .toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByLabelText("Attached pull request"))
+      .toHaveValue("https://github.com/fixture/project/pull/7");
+    expect(screen.getByText(/would cover the same commits/)).toBeInTheDocument();
+  });
+
+  it("keeps local review when directory status belongs to another checkout", () => {
+    render(<Composer
+      desktopApi={{ onAgentEvent: () => () => undefined }}
+      disabled={false} skills={[]} thread={reviewTargetThread({})}
+      directory={{ key: "project", kind: "directory", label: "Project", path: "/repo/project",
+        gitStatus: { currentBranch: "main", behind: 0, branches: ["main"], syncState: "in-sync" },
+      }}
+    />);
+    openReviewComposer();
+    const group = screen.getByRole("group", { name: "Review target" });
+    expect(within(group).getByRole("button", { name: /Base branch/ })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.queryByText(/would cover the same commits/)).not.toBeInTheDocument();
+  });
+
+  it("offers and submits a scoped upstream PR when origin is a fork", () => {
+    const startReview = vi.fn();
+    render(<Composer
+      desktopApi={{ onAgentEvent: () => () => undefined, startReview }}
+      disabled={false} skills={[]} thread={reviewTargetThread({})}
+      directory={{ key: "project", kind: "directory", label: "Project", path: "/repo/project",
+        gitStatus: { originRepository: "github.com/contributor/project", currentBranch: "feat/stack-1",
+          branches: ["main", "feat/stack-1"], syncState: "in-sync" },
+      }}
+    />);
+    openReviewComposer();
+    const group = screen.getByRole("group", { name: "Review target" });
+    fireEvent.click(within(group).getByRole("button", { name: /Attached PR/ }));
+    expect(screen.getByLabelText("Attached pull request")).toHaveValue("https://github.com/fixture/project/pull/7");
+    fireEvent.click(within(group).getByRole("button", { name: "Start review" }));
+    expect(startReview).toHaveBeenCalledWith(expect.objectContaining({
+      target: { type: "pullRequest", url: "https://github.com/fixture/project/pull/7" },
+    }));
+  });
+
+  it("keeps the local default and names what the PR omits when they differ", () => {
+    render(<Composer
+      desktopApi={{ onAgentEvent: () => () => undefined }}
+      disabled={false} skills={[]}
+      thread={reviewTargetThread({ dirtyFiles: 2, unpushedCommits: 1 })}
+    />);
+    openReviewComposer();
+    const group = screen.getByRole("group", { name: "Review target" });
+    expect(within(group).getByRole("button", { name: /Base branch/ }))
+      .toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(within(group).getByRole("button", { name: /Attached PR/ }));
+    expect(screen.getByLabelText("Attached pull request"))
+      .toHaveValue("https://github.com/fixture/project/pull/7");
+    expect(
+      screen.getByText(/skips this checkout's 2 uncommitted files and 1 unpushed commit/),
+    ).toBeInTheDocument();
+  });
+
+  it("walks only the targets it offers and waits for a PR before submitting", () => {
+    const withoutPrs = render(<Composer
+      desktopApi={{ onAgentEvent: () => () => undefined }}
+      disabled={false} skills={[]}
+      thread={reviewTargetThread({ withPullRequest: false })}
+    />);
+    openReviewComposer();
+    let group = screen.getByRole("group", { name: "Review target" });
+    fireEvent.keyDown(
+      within(group).getByRole("button", { name: /Current changes/ }),
+      { key: "ArrowRight" },
+    );
+    expect(within(group).getByRole("button", { name: /Commit/ }))
+      .toHaveAttribute("aria-pressed", "true");
+    withoutPrs.unmount();
+
+    const startReview = vi.fn();
+    render(<Composer
+      desktopApi={{ onAgentEvent: () => () => undefined, startReview }}
+      disabled={false} skills={[]}
+      thread={reviewTargetThread({ dirtyFiles: 1 })}
+    />);
+    openReviewComposer();
+    group = screen.getByRole("group", { name: "Review target" });
+    fireEvent.keyDown(
+      within(group).getByRole("button", { name: /Current changes/ }),
+      { key: "ArrowRight" },
+    );
+    const attached = within(group).getByRole("button", { name: /Attached PR/ });
+    expect(attached).toHaveAttribute("aria-pressed", "true");
+    // The sole candidate is preselected, so Enter starts rather than erroring.
+    fireEvent.keyDown(attached, { key: "Enter" });
+    expect(startReview).toHaveBeenCalledWith(expect.objectContaining({
+      target: {
+        type: "pullRequest",
+        url: "https://github.com/fixture/project/pull/7",
+      },
+    }));
+  });
+
   it("preserves schedule selection through bare review configuration", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-10T12:00:00Z"));

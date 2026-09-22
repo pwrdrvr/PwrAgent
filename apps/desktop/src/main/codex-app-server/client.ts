@@ -1,4 +1,5 @@
 import { normalizeAutoReviewNotification } from "./auto-review";
+import { nativeReviewTarget } from "../../shared/pull-request-review";
 import { ThreadListTextCache } from "./thread-list-text-cache";
 import { CODEX_SIGN_IN_REQUIRED, codexAuthState } from "../codex-auth-state";
 import { mkdir } from "node:fs/promises";
@@ -7048,7 +7049,7 @@ function buildReviewStartPayload(params: {
 }): CodexReviewStartParams {
   return {
     threadId: params.threadId,
-    target: params.target,
+    target: nativeReviewTarget(params.target),
     delivery: params.delivery ?? "inline",
   };
 }

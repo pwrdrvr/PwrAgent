@@ -23723,8 +23723,11 @@ command = "pnpm dev"
     const pdfPath = path.join(root, "roadster.pdf");
     await writeFile(pdfPath, "%PDF-1.7\n", "utf8");
     const startTurnDelay = createDeferred<void>();
+    const startTurnEntered = createDeferred<void>();
+    const titleRequested = createDeferred<void>();
     const titleService = {
       generateTitle: vi.fn(async () => {
+        titleRequested.resolve();
         return {
           status: "generated" as const,
           title: "Roadster roof equipment",
@@ -23735,6 +23738,12 @@ command = "pnpm dev"
       initializeResult: { methods: ["turn/start", "thread/name/set"] },
       startTurnDelay: startTurnDelay.promise,
       threads: [],
+    });
+    const originalStartTurn = codexClient.startTurn.bind(codexClient);
+    vi.spyOn(codexClient, "startTurn").mockImplementation((params) => {
+      const result = originalStartTurn(params);
+      startTurnEntered.resolve();
+      return result;
     });
     const pdfMcp = createPdfMcpServerMock();
     const registry = new DesktopBackendRegistry({
@@ -23756,8 +23765,9 @@ command = "pnpm dev"
       threadTitleGenerationService: titleService,
     });
 
+    let startTurnPromise: ReturnType<typeof registry.startTurn> | undefined;
     try {
-      const startTurnPromise = registry.startTurn({
+      startTurnPromise = registry.startTurn({
         backend: "codex",
         threadId: "thread-title-pdf",
         input: [
@@ -23768,7 +23778,9 @@ command = "pnpm dev"
           { type: "localFile", name: "roadster.pdf", path: pdfPath },
         ],
       });
-      await waitForCondition(() => codexClient.startTurnCallCount === 1);
+      // PDF preparation performs real I/O. Observe backend entry rather than
+      // assuming it completes within a fixed number of event-loop flushes.
+      await Promise.race([startTurnEntered.promise, startTurnPromise]);
       expect(codexClient.startTurnCallCount).toBe(1);
       await (
         registry as unknown as { emit(event: AgentEvent): Promise<void> }
@@ -23782,7 +23794,7 @@ command = "pnpm dev"
           },
         },
       });
-      await waitForCondition(() => titleService.generateTitle.mock.calls.length === 1);
+      await titleRequested.promise;
 
       expect(titleService.generateTitle).toHaveBeenCalledWith(expect.objectContaining({
         backend: "codex",
@@ -23800,6 +23812,8 @@ command = "pnpm dev"
         turnId: "turn-1",
       });
     } finally {
+      startTurnDelay.resolve();
+      await startTurnPromise?.catch(() => undefined);
       await registry.close();
       await rm(root, { recursive: true, force: true });
     }

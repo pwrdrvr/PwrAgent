@@ -1,3 +1,4 @@
+import { resolvePullRequestReview } from "./pull-request-review";
 import { navigationWorkingStatePath as resolveThreadWorkingStatePath } from "@pwragent/shared";
 import {
   buildPullRequestReferenceUrl,
@@ -2534,6 +2535,8 @@ function reviewSubAgentId(turnId: string): string {
 
 function reviewTaskLabel(target: StartReviewRequest["target"]): string {
   switch (target.type) {
+    case "pullRequest":
+      return `Review ${target.url}${target.snapshot ? ` at ${target.snapshot.headCommit.slice(0, 10)}` : ""}`;
     case "baseBranch":
       return `Review changes against ${target.branch}`;
     case "commit":
@@ -17335,12 +17338,35 @@ export class DesktopBackendRegistry {
     }
   }
 
-  async startReview(params: StartReviewRequest): Promise<StartReviewResponse> {
+  /** Owner-side submission boundary. Caller snapshots are never authoritative. */
+  async prepareReviewRequest(
+    params: StartReviewRequest,
+    trustedSnapshot = false,
+  ): Promise<StartReviewRequest> {
+    if (params.target.type !== "pullRequest") return params;
+    const overlay = await this.overlayStore.getThreadOverlayState({
+      backend: params.backend, threadId: params.threadId,
+    });
+    const cwd = params.cwd?.trim() || await this.resolveThreadEnvironmentCwd(
+      params.backend, params.threadId, overlay,
+    );
+    if (!cwd) throw new Error("Select a repository workspace for the pull request review.");
+    const target = await resolvePullRequestReview({
+      target: params.target,
+      cwd,
+      prs: overlay?.prs ?? [],
+      executionTarget: overlay?.codexEnvironmentRuntime?.executionTarget,
+      trustedSnapshot,
+    });
+    return { ...params, cwd, target };
+  }
+
+  async startReview(params: StartReviewRequest, trustedSnapshot = false): Promise<StartReviewResponse> {
     // Retain terminal evidence only for the lifetime of this start request.
     const terminals = new Map<string, ReviewTerminal>();
     this.pendingReviewTerminals.add(terminals);
     try {
-      return await this.startReviewWithTerminalEvidence(params, terminals);
+      return await this.startReviewWithTerminalEvidence(params, terminals, trustedSnapshot);
     } finally {
       this.pendingReviewTerminals.delete(terminals);
     }
@@ -17349,8 +17375,10 @@ export class DesktopBackendRegistry {
   private async startReviewWithTerminalEvidence(
     params: StartReviewRequest,
     terminals: Map<string, ReviewTerminal>,
+    trustedSnapshot: boolean,
   ): Promise<StartReviewResponse> {
     this.assertNotBootstrap("startReview");
+    params = await this.prepareReviewRequest(params, trustedSnapshot);
     const acpManagedMode =
       isAcpBackendId(params.backend)
       && this.acpBackend.supportsManagedReview(params.backend);
@@ -17446,6 +17474,9 @@ export class DesktopBackendRegistry {
         // explicitly rooted in the selected project.
         if (usesSelectedSecondaryWorkspace && params.runMode && params.runMode !== "pwragent-sub-agent") {
           throw new Error("PwrAgent Sub Agent is required for a secondary workspace.");
+        }
+        if (usesSelectedSecondaryWorkspace && !managedMode && params.target.type === "pullRequest") {
+          throw new Error("Native pull request review must run in the thread's own workspace. Select a PwrAgent-managed reviewer for another linked project.");
         }
         managedMode ||= usesSelectedSecondaryWorkspace;
         if (
@@ -17958,7 +17989,7 @@ export class DesktopBackendRegistry {
 
   async submitReview(params: StartReviewRequest & {
     idempotencyKey?: string;
-  }): Promise<
+  }, trustedSnapshot = false): Promise<
     | {
         status: "started";
         response: StartReviewResponse;
@@ -17969,7 +18000,8 @@ export class DesktopBackendRegistry {
         invokingTurnId: string;
       }
   > {
-    const { idempotencyKey, ...request } = params;
+    const { idempotencyKey, ...incoming } = params;
+    const request = await this.prepareReviewRequest(incoming, trustedSnapshot);
     const activeTurn = this.getActiveTurnForThread({
       backend: request.backend,
       threadId: request.threadId,
@@ -17997,7 +18029,7 @@ export class DesktopBackendRegistry {
     if (!invokingTurnId) {
       return {
         status: "started",
-        response: await this.startReview(request),
+        response: await this.startReview(request, true),
       };
     }
     const pending = this.scheduleReviewStart({
@@ -18143,7 +18175,7 @@ export class DesktopBackendRegistry {
       };
       this.pendingReviewStarts.set(candidate.pendingReviewId, starting);
       try {
-        const response = await this.startReview(starting.request);
+        const response = await this.startReview(starting.request, true);
         this.pendingReviewStarts.set(candidate.pendingReviewId, {
           ...starting,
           status: "started",
@@ -32776,14 +32808,14 @@ export class DesktopBackendRegistry {
       const pending = this.scheduleReviewStart({
         invokingTurnId,
         idempotencyKey: request.context.callId,
-        request: {
+        request: await this.prepareReviewRequest({
           backend: request.context.backend,
           threadId: request.context.threadId,
           target: request.args.target,
           runMode: request.args.runMode,
           delivery: "inline",
           ...(request.args.cwd ? { cwd: request.args.cwd } : {}),
-        },
+        }),
       });
       return {
         ok: true,

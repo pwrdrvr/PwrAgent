@@ -1,3 +1,4 @@
+import { nativeReviewTarget } from "./pull-request-review";
 import type { AppServerReviewOutput, AppServerReviewTarget } from "@pwragent/shared";
 import { normalizeReviewConfidenceScore } from "./review-output";
 
@@ -20,6 +21,9 @@ export function shortReviewSha(sha: string): string {
 }
 
 export function formatReviewCommand(target: AppServerReviewTarget): string {
+  if (target.type === "pullRequest") {
+    return `/review --pr ${target.url}`;
+  }
   if (target.type === "uncommittedChanges") {
     return "/review";
   }
@@ -124,6 +128,11 @@ export function parseReviewCommand(input: string): ParsedReviewCommand | undefin
       target: { type: "uncommittedChanges" },
       displayText: "Review current changes",
     };
+  }
+
+  if (argument.startsWith("--pr ")) {
+    const url = argument.slice(5).trim();
+    return url ? { target: { type: "pullRequest", url }, displayText: `Review ${url}` } : undefined;
   }
 
   const customPrefix = "--custom";
@@ -263,6 +272,8 @@ export function isPwrAgentInlineReviewPrompt(text: string): boolean {
 
 export function reviewTargetInstructions(target: AppServerReviewTarget): string {
   switch (target.type) {
+    case "pullRequest":
+      return reviewTargetInstructions(nativeReviewTarget(target));
     case "baseBranch":
       return `Review the current checkout against base branch '${target.branch}'. Find the merge base and inspect the resulting diff.`;
     case "commit":

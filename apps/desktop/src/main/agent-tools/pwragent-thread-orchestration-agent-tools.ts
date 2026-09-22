@@ -458,10 +458,12 @@ function inputSchemaForOperation(
                 enum: [
                   "uncommittedChanges",
                   "baseBranch",
+                  "pullRequest",
                   "commit",
                   "custom",
                 ],
               },
+              url: { type: "string", description: "Attached pull request URL. Base and head commits are pinned at submission." },
               branch: { type: "string" },
               sha: { type: "string" },
               title: {
@@ -892,6 +894,9 @@ function normalizeStartReviewArgs(
   let target: StartReviewToolArgs["target"] | undefined;
   if (targetRecord.type === "uncommittedChanges") {
     target = { type: "uncommittedChanges" };
+  } else if (targetRecord.type === "pullRequest") {
+    const url = readTrimmedString(targetRecord.url);
+    if (url) target = { type: "pullRequest", url };
   } else if (targetRecord.type === "baseBranch") {
     const branch = readTrimmedString(targetRecord.branch);
     if (branch) {

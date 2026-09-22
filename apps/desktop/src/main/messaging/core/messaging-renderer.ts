@@ -354,6 +354,8 @@ export function messagingReviewStartTarget(
   target: AppServerReviewTarget,
 ): MessagingReviewStartTarget {
   switch (target.type) {
+    case "pullRequest":
+      return { type: "pullRequest", url: target.url, headCommit: target.snapshot?.headCommit };
     case "uncommittedChanges":
       return { type: "uncommittedChanges" };
     case "baseBranch":
@@ -367,6 +369,8 @@ export function messagingReviewStartTarget(
 
 function formatReviewStartTarget(target: MessagingReviewStartTarget): string {
   switch (target.type) {
+    case "pullRequest":
+      return `Review ${target.url}${target.headCommit ? ` at ${target.headCommit.slice(0, 10)}` : ""}`;
     case "uncommittedChanges":
       return "Current changes review";
     case "baseBranch":

@@ -32403,6 +32403,24 @@ button.pricing-token-miser__folded:focus-visible {
   gap: 8px;
 }
 
+/* With an attached pull request there are five targets. A four-up row would
+   leave a hole, so split them 3 + 2 over a six-column track: the three
+   "what changed" targets above, the two hand-written ones below. The narrow
+   breakpoint below re-splits them; keep the two in step. */
+.composer__review-options--with-pull-request {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
+.composer__review-options--with-pull-request
+  > .composer__review-option:nth-child(-n + 3) {
+  grid-column: span 2;
+}
+
+.composer__review-options--with-pull-request
+  > .composer__review-option:nth-child(n + 4) {
+  grid-column: span 3;
+}
+
 .composer__review-option {
   display: flex;
   min-width: 0;
@@ -32446,6 +32464,23 @@ button.pricing-token-miser__folded:focus-visible {
   color: var(--text-secondary);
   font-size: 12px;
   font-weight: 700;
+}
+
+/* The field label is the bold part. Help text under a control is prose and
+   inherits neither the weight nor the label's size. */
+.composer__review-field small,
+.composer__review-note {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.4;
+}
+
+/* What a local review would cover that the picked target will not. Carried by
+   wording, not by color alone — it is a distinction, not an error. */
+.composer__review-field small.composer__review-divergence {
+  color: var(--text-primary);
 }
 
 .review-commit-picker {
@@ -33341,6 +33376,21 @@ button.pricing-token-miser__folded:focus-visible {
 
   .composer__review-options {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  /* Two columns leave the fifth target alone on its row, so give it the row. */
+  .composer__review-options--with-pull-request {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .composer__review-options--with-pull-request
+    > .composer__review-option:nth-child(-n + 4) {
+    grid-column: auto;
+  }
+
+  .composer__review-options--with-pull-request
+    > .composer__review-option:nth-child(n + 5) {
+    grid-column: 1 / -1;
   }
 
   .workspace-handoff-dialog__branch-path,

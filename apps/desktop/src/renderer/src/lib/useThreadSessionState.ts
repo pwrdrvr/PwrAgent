@@ -3907,12 +3907,32 @@ function normalizeReviewContext(
   const gitBranch = readTrimmedString(record.gitBranch);
   const baseBranch = readTrimmedString(record.baseBranch);
   const pullRequest = normalizeReviewPullRequest(record.pullRequest);
+  const headCommit = readTrimmedString(record.headCommit);
+  const baseCommit = readTrimmedString(record.baseCommit);
+  const snapshot = record.pullRequestSnapshot as Record<string, unknown> | undefined;
+  const snapshotPr = snapshot && normalizeReviewPullRequest(snapshot.pullRequest);
+  const pullRequestSnapshot = snapshot && snapshotPr
+    && typeof snapshot.baseCommit === "string"
+    && typeof snapshot.headCommit === "string"
+    && typeof snapshot.mergeBaseCommit === "string"
+    && typeof snapshot.capturedAt === "number"
+    ? {
+        pullRequest: snapshotPr,
+        baseCommit: snapshot.baseCommit,
+        headCommit: snapshot.headCommit,
+        mergeBaseCommit: snapshot.mergeBaseCommit,
+        capturedAt: snapshot.capturedAt,
+      }
+    : undefined;
   return {
     workspacePath,
     ...(projectLabel ? { projectLabel } : {}),
     ...(repositoryPath ? { repositoryPath } : {}),
     ...(gitBranch ? { gitBranch } : {}),
     ...(baseBranch ? { baseBranch } : {}),
+    ...(headCommit ? { headCommit } : {}),
+    ...(baseCommit ? { baseCommit } : {}),
+    ...(pullRequestSnapshot ? { pullRequestSnapshot } : {}),
     ...(record.pullRequest === null || pullRequest
       ? { pullRequest: pullRequest ?? null }
       : {}),

@@ -164,6 +164,9 @@ function formatBranchLabel(
 function formatCommitTooltip(context: AppServerReviewContext): string {
   const headCommit = context.headCommit?.trim() ?? "";
   const baseCommit = context.baseCommit?.trim();
+  if (context.pullRequestSnapshot) {
+    return `Reviewed tip ${headCommit}\nPR base tip ${context.pullRequestSnapshot.baseCommit}\nMerge base ${context.pullRequestSnapshot.mergeBaseCommit}`;
+  }
   return baseCommit
     ? `Reviewed tip ${headCommit}\nDiff base ${baseCommit}`
     : `Reviewed tip ${headCommit}`;
