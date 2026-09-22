@@ -4603,9 +4603,21 @@ export function StarMapScreen(props: StarMapScreenProps) {
     viewportSize,
   ]);
 
+  /**
+   * The view the next `set_star_map_view` builds on. Written by each command
+   * as well as after every render: an Agent can send two in one tick, and
+   * the second must compose with the first rather than rebuild from the
+   * render the first has already changed.
+   */
+  const agentViewBaseRef = useRef({ preferences, filterSelection });
+  useEffect(() => {
+    agentViewBaseRef.current = { preferences, filterSelection };
+  }, [filterSelection, preferences]);
+
   /** The View menu and the chip strip, driven by `set_star_map_view`. */
   const setViewForAgent = useCallback(
     (changes: SetStarMapViewToolArgs): StarMapSetViewResponse => {
+      const { preferences, filterSelection } = agentViewBaseRef.current;
       const nextPreferences: StarMapViewPreferences = {
         ...preferences,
         ...(changes.layout ? { layout: changes.layout } : {}),
@@ -4632,6 +4644,10 @@ export function StarMapScreen(props: StarMapScreenProps) {
         setFilterSelection(nextFilters);
         writeStoredFilterSelection(nextFilters);
       }
+      agentViewBaseRef.current = {
+        preferences: nextPreferences,
+        filterSelection: nextFilters,
+      };
       return {
         ok: true,
         data: {
@@ -4641,7 +4657,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
         },
       };
     },
-    [applyPreferences, filterSelection, preferences],
+    [applyPreferences],
   );
 
   useEffect(() => () => {

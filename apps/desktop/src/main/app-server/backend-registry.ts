@@ -37715,11 +37715,14 @@ export class DesktopBackendRegistry {
   private async readThreadInspectionSummaryForMutation(params: {
     backend: AppServerBackendKind;
     threadId: string;
+    /** Bypass the list cache, for a change computed from `updatedAt`. */
+    fresh?: boolean;
   }): Promise<ThreadInspectionSummary | undefined> {
     const activeThreads = await this.listThreads({
       backend: params.backend,
       archived: false,
       callerReason: "agent-thread-inspection",
+      ...(params.fresh ? { forceRefresh: true } : {}),
     });
     let candidateThreads = activeThreads.filter(
       (thread) => thread.id === params.threadId,
@@ -38074,6 +38077,9 @@ export class DesktopBackendRegistry {
         localSummary = await this.readThreadInspectionSummaryForMutation({
           backend: args.backend,
           threadId,
+          // The seen watermark is the thread's last update: one read from a
+          // cached list lands behind a newer update and leaves it unread.
+          fresh: unread !== undefined,
         });
       } catch (error) {
         localError = error;

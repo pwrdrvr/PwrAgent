@@ -44046,6 +44046,26 @@ script = "printf setup"
       await registry.close();
     });
 
+    it("marks read at the thread's latest update, not a cached one", async () => {
+      const { call, codexClient, markThreadSeen, registry } = await setup({
+        threads: [listedThread("target-thread", { updatedAt: 5_000 })],
+      });
+      // An earlier call leaves the thread list cached at 5_000.
+      await call({ pinned: true });
+      codexClient.setThreads([
+        listedThread("target-thread", { updatedAt: 6_000 }),
+      ]);
+
+      await call({ unread: false });
+
+      expect(markThreadSeen).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "target-thread",
+        seenUpdatedAt: 6_000,
+      });
+      await registry.close();
+    });
+
     it("cannot mark unread a thread with no update time", async () => {
       const { call, markThreadSeen, registry } = await setup();
 

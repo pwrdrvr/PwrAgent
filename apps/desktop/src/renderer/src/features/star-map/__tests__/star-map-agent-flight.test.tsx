@@ -136,10 +136,23 @@ function commandBridge() {
     });
     return requestId;
   };
+  /** Several commands in one tick, as parallel tool calls can arrive. */
+  const dispatchTogether = (
+    commands: Parameters<typeof dispatch>[0][],
+  ): string[] => {
+    const requestIds = commands.map(() => `request-${++sequence}`);
+    act(() => {
+      commands.forEach((command, index) => {
+        listener?.({ requestId: requestIds[index]!, ...command } as StarMapCommand);
+      });
+    });
+    return requestIds;
+  };
   return {
     api,
     published,
     dispatch,
+    dispatchTogether,
     send(target: StarMapFlightTarget): string {
       return dispatch({ kind: "fly_to", target });
     },
@@ -625,6 +638,38 @@ describe("Star Map Agent flights", () => {
       },
       { timeout: 3_000 },
     );
+  });
+
+  it("composes two view changes that arrive in the same tick", async () => {
+    const bridge = commandBridge();
+    renderMap(bridge.api, [thread("t1", "Windows job wrapper")]);
+    await screen.findByRole("button", {
+      name: "Open thread: Windows job wrapper",
+    });
+    await waitFor(() => {
+      expect(bridge.api.onStarMapCommand).toHaveBeenCalled();
+    });
+
+    const [first, second] = bridge.dispatchTogether([
+      { kind: "set_view", changes: { filters: { attention: "include" } } },
+      { kind: "set_view", changes: { filters: { pinned: "include" } } },
+    ]);
+
+    await bridge.answerTo(first!);
+    expect(await bridge.answerTo(second!)).toMatchObject({
+      ok: true,
+      data: {
+        filters: [
+          { key: "attention", state: "include" },
+          { key: "pinned", state: "include" },
+        ],
+      },
+    });
+    expect(
+      JSON.parse(
+        window.localStorage.getItem("pwragent.starMap.filterSelection") ?? "{}",
+      ),
+    ).toEqual({ attention: "include", pinned: "include" });
   });
 
   it("flies to an instance's body without taking the operator's focus", async () => {
