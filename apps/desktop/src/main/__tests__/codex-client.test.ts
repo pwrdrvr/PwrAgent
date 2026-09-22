@@ -1479,7 +1479,11 @@ describe("CodexAppServerClient", () => {
     MockTransport.threadArchiveResult = {};
     MockTransport.threadNameSetResult = {};
     MockTransport.threadNameSetTransientErrorsByName.clear();
-    MockTransport.modelListResult = createModelListResponse([]);
+    MockTransport.modelListResult = createModelListResponse([createCodexModel({
+      id: "gpt-5.6-luna",
+      defaultReasoningEffort: "low",
+      supportedReasoningEfforts: [{ reasoningEffort: "low", description: "Low" }],
+    })]);
     MockTransport.configValueWriteResult = {
       status: "ok",
       version: "1",
@@ -10658,6 +10662,57 @@ describe("CodexAppServerClient", () => {
       },
     });
 
+    await client.close();
+  });
+
+  it.each([
+    { id: "/models/bonsai.gguf", efforts: [], expectedEffort: undefined },
+    { id: "custom-reasoning", efforts: ["medium", "high"], expectedEffort: "medium" },
+  ])("names threads with the available $id model when Luna is absent", async ({ id, efforts, expectedEffort }) => {
+    MockTransport.modelListResult = createModelListResponse([
+      createCodexModel({ id: "other-model" }),
+      createCodexModel({
+        id,
+        isDefault: true,
+        defaultReasoningEffort: "medium",
+        supportedReasoningEfforts: efforts.map((reasoningEffort) => ({ reasoningEffort: reasoningEffort as "medium" | "high", description: "Supported" })),
+      }),
+    ]);
+    MockTransport.threadStartResult = { thread: { id: "local-title-helper" }, instructionSources: [] };
+    MockTransport.threadMcpServerStatusResult = { data: [], nextCursor: null };
+    MockTransport.turnStartResult = {
+      thread: { id: "local-title-helper" },
+      turn: { id: "local-title-turn", output: [{ type: "text", text: '{"title":"Test local addition"}' }] },
+    };
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({ command: "codex" });
+    await expect(client.generateTitle({
+      prompt: "Write an add function and tests",
+      promptVersion: "thread-title-v3",
+      schema: { type: "object", properties: { title: { type: "string" } }, required: ["title"] },
+      schemaName: "thread_title",
+      timeoutMs: 5_000,
+    })).resolves.toMatchObject({
+      status: "ok", model: id, reasoningEffort: expectedEffort,
+      object: { title: "Test local addition" },
+    });
+    const requests = MockTransport.instances.at(-1)!.sentMessages.map((message) => JSON.parse(message));
+    expect(requests.find((request) => request.method === "thread/start").params.model).toBe(id);
+    const turn = requests.find((request) => request.method === "turn/start").params;
+    expect(turn.model).toBe(id);
+    expect(turn.effort).toBe(expectedEffort);
+    expect(turn.serviceTier).toBeNull();
+    await client.close();
+  });
+
+  it("does not invent a title model when the provider advertises none", async () => {
+    MockTransport.modelListResult = createModelListResponse([]);
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({ command: "codex" });
+    await expect(client.generateTitle({
+      prompt: "Name this thread", promptVersion: "thread-title-v3", schema: {}, schemaName: "thread_title", timeoutMs: 5_000,
+    })).resolves.toEqual({ status: "unavailable", reason: "codex_title_no_available_model" });
+    expect(MockTransport.instances.at(-1)!.sentMessages.some((message) => JSON.parse(message).method === "thread/start")).toBe(false);
     await client.close();
   });
 

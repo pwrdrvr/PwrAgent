@@ -404,7 +404,7 @@ import {
 } from "./acp-backend-adapter";
 import {
   CodexAppServerClient,
-  DEFAULT_CODEX_THREAD_TITLE_MODEL,
+  resolveCodexThreadTitleSettings,
   extractRateLimitSummaries,
   formatRateLimitWindowName,
   type CodexPwrdrvrTokenMiserActivation,
@@ -30438,14 +30438,6 @@ export class DesktopBackendRegistry {
     if (!this.threadTitleGenerationService) {
       return;
     }
-    // The automatic Codex title helper requests an OpenAI model and reasoning
-    // settings. Keep the prompt-derived title for no-auth local providers.
-    if (
-      params.backend === "codex"
-      && isUnauthenticatedCodexProvider(this.codexBackendSummary?.account)
-    ) {
-      return;
-    }
     if (
       this.threadTitleGenerationService.canGenerateTitle &&
       !this.threadTitleGenerationService.canGenerateTitle(params.backend)
@@ -32036,10 +32028,9 @@ export class DesktopBackendRegistry {
     threadId: string;
   }): { model?: string; reasoningEffort?: string } {
     if (params.backend === "codex") {
-      return {
-        model: this.codexClient.getDefaultHelperModel?.() ?? DEFAULT_CODEX_THREAD_TITLE_MODEL,
-        reasoningEffort: "low",
-      };
+      return resolveCodexThreadTitleSettings(
+        this.codexBackendSummary?.launchpadOptions?.models ?? [],
+      ) ?? {};
     }
     if (!isAcpBackendId(params.backend)) {
       return {};

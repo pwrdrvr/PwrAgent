@@ -368,7 +368,8 @@ labels and capability metadata. A custom provider can supply a Codex
 levels, and service tiers. Endpoint discovery is Codex-owned; PwrAgent does not
 read a model server's catalog or infer capabilities from its filename. Unknown
 models remain unpriced. No-auth providers without an OpenAI account skip account
-quota polling and the automatic OpenAI title helper, retaining prompt-derived titles.
+quota polling. Title generation prefers Luna when advertised, otherwise the catalog
+default or first available model, using only its supported reasoning settings.
 
 `scripts/codex-local-responses-bridge.mjs` is an optional Codex executable wrapper
 for local Responses servers whose chat templates require one leading system message

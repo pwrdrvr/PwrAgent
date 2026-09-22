@@ -165,6 +165,27 @@ const DEFAULT_FULL_MCP_INVENTORY_TIMEOUT_MS = 420_000;
 const ARCHIVED_THREAD_METADATA_REFRESH_INTERVAL_MS = 60_000;
 const DEFAULT_CODEX_COLLABORATION_MODEL = "gpt-5.5";
 export const DEFAULT_CODEX_THREAD_TITLE_MODEL = "gpt-5.6-luna";
+
+export function resolveCodexThreadTitleSettings(models: BackendModelOption[]): {
+  model: string;
+  reasoningEffort?: string;
+} | undefined {
+  const model = models.find((entry) => entry.id === "gpt-6-luna")
+    ?? models.find((entry) => entry.id === DEFAULT_CODEX_THREAD_TITLE_MODEL)
+    ?? models.find((entry) => entry.current)
+    ?? models[0];
+  if (!model) return undefined;
+  const efforts = model.reasoningEfforts;
+  const reasoningEffort = model.supportsReasoning === false || efforts?.length === 0
+    ? undefined
+    : efforts === undefined || efforts.includes("low")
+      ? "low"
+      : efforts.includes(model.defaultReasoningEffort ?? "")
+        ? model.defaultReasoningEffort
+        : efforts[0];
+  return { model: model.id, reasoningEffort };
+}
+
 const DEFAULT_CODEX_THREAD_TITLE_TIMEOUT_MS = 20_000;
 const CODEX_THREAD_TITLE_CONFIG_READ_REASON = "thread-title-mcp-inventory";
 /** Wire method Codex uses to invoke a dynamic tool the client advertised. */
@@ -9235,7 +9256,13 @@ export class CodexAppServerClient {
   }
 
   async generateTitle(params: ThreadTitleAdapterParams): Promise<ThreadTitleAdapterResult> {
+    const settings = resolveCodexThreadTitleSettings(await this.listModels());
+    if (!settings) {
+      return { status: "unavailable", reason: "codex_title_no_available_model" };
+    }
     return await this.runHelperStructuredTurn({
+      model: settings.model,
+      reasoningEffort: settings.reasoningEffort ?? null,
       prompt: params.prompt,
       schema: params.schema,
       isMatch: TITLE_RECORD_PREDICATE,
@@ -9361,7 +9388,7 @@ export class CodexAppServerClient {
 
   private async runHelperStructuredTurn(params: {
     model?: string;
-    reasoningEffort?: string;
+    reasoningEffort?: string | null;
     prompt: string;
     /** Omitted by a tool turn, whose product is its tool calls. */
     schema?: Record<string, unknown>;
@@ -9398,7 +9425,9 @@ export class CodexAppServerClient {
     const helperWorkspaceDir = await ensureCodexThreadTitleWorkspace();
     const helperModel = params.model?.trim() || this.getDefaultHelperModel();
     const helperReasoningEffort =
-      normalizeCodexReasoningEffort(params.reasoningEffort) ?? "low";
+      params.reasoningEffort === null
+        ? undefined
+        : normalizeCodexReasoningEffort(params.reasoningEffort) ?? "low";
     const helperSystem = params.system?.trim() || "";
     const isToolTurn = Boolean(params.onToolCall);
     // A tool turn has no output schema, so nothing it emits should be

@@ -6580,19 +6580,21 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
-  it("skips OpenAI quotas and title helpers for a no-auth local Codex provider", async () => {
+  it("skips OpenAI quotas but names threads for a no-auth local Codex provider", async () => {
     const codexClient = new MockBackendClient({
       account: { requiresOpenaiAuth: false },
       initializeResult: { methods: ["thread/start", "turn/start", "thread/name/set"] },
-      models: [{ id: "local-model", label: "Local model", current: true }],
+      models: [{ id: "local-model", label: "Local model", current: true, supportsReasoning: false, reasoningEfforts: [] }],
       threads: [],
     });
     const titleService = {
       generateTitle: vi.fn(async () => ({ status: "generated" as const, title: "Local title" })),
     };
+    const overlayStore = createOverlayStoreMock();
+    const upsertSubAgentSpy = vi.spyOn(overlayStore, "upsertThreadSubAgent");
     const registry = new DesktopBackendRegistry({
       codexClient,
-      overlayStore: createOverlayStoreMock(),
+      overlayStore,
       threadTitleGenerationService: titleService,
     });
     await registry.refreshProvidersAtStartup(issueProviderDiscoveryPermit("startup"));
@@ -6605,7 +6607,10 @@ describe("DesktopBackendRegistry", () => {
       input: [{ type: "text", text: "Test the local provider" }],
     });
     await flushAsync();
-    expect(titleService.generateTitle).not.toHaveBeenCalled();
+    expect(titleService.generateTitle).toHaveBeenCalled();
+    const running = upsertSubAgentSpy.mock.calls.find(([call]) => call.subAgent.status === "running");
+    expect(running?.[0].subAgent.preferredModel).toBe("local-model");
+    expect(running?.[0].subAgent.preferredReasoningEffort).toBeUndefined();
     await registry.close();
   });
 
@@ -23841,6 +23846,7 @@ command = "pnpm dev"
     const upsertSubAgentSpy = vi.spyOn(overlayStore, "upsertThreadSubAgent");
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start", "thread/name/set"] },
+      models: [{ id: "gpt-5.6-luna", label: "Luna", reasoningEfforts: ["low"] }],
       startTurnDelay: startTurnDelay.promise,
       threads: [
         {
@@ -23857,6 +23863,7 @@ command = "pnpm dev"
       overlayStore,
       threadTitleGenerationService: titleService,
     });
+    await registry.refreshProvidersAtStartup(issueProviderDiscoveryPermit("startup"));
 
     const startTurnPromise = registry.startTurn({
       backend: "codex",
@@ -24085,6 +24092,7 @@ command = "pnpm dev"
     const upsertUsageLineSpy = vi.spyOn(overlayStore, "upsertThreadUsageLine");
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start", "thread/name/set"] },
+      models: [{ id: "gpt-5.6-luna", label: "Luna", reasoningEfforts: ["low"] }],
       threads: [
         {
           id: "thread-title-helper-parent",
@@ -24100,6 +24108,7 @@ command = "pnpm dev"
       overlayStore,
       threadTitleGenerationService: titleService,
     });
+    await registry.refreshProvidersAtStartup(issueProviderDiscoveryPermit("startup"));
 
     await registry.startTurn({
       backend: "codex",
@@ -24429,6 +24438,7 @@ command = "pnpm dev"
     const upsertSubAgentSpy = vi.spyOn(overlayStore, "upsertThreadSubAgent");
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start", "thread/name/set"] },
+      models: [{ id: "gpt-5.6-luna", label: "Luna", reasoningEfforts: ["low"] }],
       threads: [
         {
           id: "thread-title-helper-throws",
@@ -24444,6 +24454,7 @@ command = "pnpm dev"
       overlayStore,
       threadTitleGenerationService: titleService,
     });
+    await registry.refreshProvidersAtStartup(issueProviderDiscoveryPermit("startup"));
 
     await registry.startTurn({
       backend: "codex",
