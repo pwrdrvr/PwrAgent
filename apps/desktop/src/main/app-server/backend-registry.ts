@@ -481,6 +481,13 @@ import {
   readPwrAgentFederationDynamicToolCall,
 } from "../agent-tools/pwragent-federation-codex-tools";
 import type { PwrAgentFederationHandler } from "../agent-tools/pwragent-federation-agent-tools";
+import {
+  buildPwrAgentStarMapDynamicToolErrorResponse,
+  handlePwrAgentStarMapDynamicToolCall,
+  isPwrAgentStarMapDynamicToolCall,
+  readPwrAgentStarMapDynamicToolCall,
+} from "../agent-tools/pwragent-star-map-codex-tools";
+import type { PwrAgentStarMapHandler } from "../agent-tools/pwragent-star-map-agent-tools";
 import type { MessagingAgentToolService } from "../messaging/messaging-agent-tool-service";
 import { resolveAutomationInspectionMcpCommand } from "../automations/automation-inspection-cli";
 import { resolveAgentToolCatalogs } from "../agent-tools/agent-tool-catalog-registry";
@@ -8640,6 +8647,7 @@ export class DesktopBackendRegistry {
   private readonly threadTurnQueue: ThreadTurnQueue;
   private automationInspectionHandler?: AutomationInspectionHandler;
   private appManagementHandler?: PwrAgentAppManagementHandler;
+  private starMapHandler?: PwrAgentStarMapHandler;
   private messagingAgentToolService?: MessagingAgentToolService;
   private readonly messagingHandler: PwrAgentMessagingHandler =
     async (request) => {
@@ -8911,6 +8919,7 @@ export class DesktopBackendRegistry {
     messagingArchiveCleaner?: MessagingArchiveCleaner | null;
     automationInspectionMcpCommand?: string;
     appManagementHandler?: PwrAgentAppManagementHandler | null;
+    starMapHandler?: PwrAgentStarMapHandler | null;
     createScratchProjectDirectory?: () => Promise<string>;
     createScheduledThreadAction?: (
       request: CreateScheduledThreadActionRequest,
@@ -9428,6 +9437,7 @@ export class DesktopBackendRegistry {
                 threadInspectionHandler: this.threadInspectionHandler,
                 threadOrchestrationHandler: this.threadOrchestrationHandler,
                 tokenMiserStore: this.tokenMiserStore,
+                starMapHandler: this.starMapHandler,
               }, { taskMonitorRole: "all" }),
             authorizeToolCall: (params) =>
               this.authorizeAgentToolMcpCall(params),
@@ -9533,6 +9543,7 @@ export class DesktopBackendRegistry {
     this.messagingStore = options?.messagingStore;
     this.messagingArchiveCleaner = options?.messagingArchiveCleaner;
     this.appManagementHandler = options?.appManagementHandler ?? undefined;
+    this.starMapHandler = options?.starMapHandler ?? undefined;
     this.gitWorkspaceHandoffService =
       options?.gitWorkspaceHandoffService ??
       new GitWorkspaceHandoffService({
@@ -9901,6 +9912,12 @@ export class DesktopBackendRegistry {
       | undefined,
   ): void {
     this.starMapIntakeFederationHandlerFactory = factory ?? undefined;
+  }
+
+  setPwrAgentStarMapHandler(
+    handler: PwrAgentStarMapHandler | null | undefined,
+  ): void {
+    this.starMapHandler = handler ?? undefined;
   }
 
   setFederatedThreadMessageHandler(
@@ -15125,6 +15142,7 @@ export class DesktopBackendRegistry {
       // advertised three retrieval tools into every turn of an operator who
       // never enabled the feature.
       ...(tokenMiserEnabled ? { tokenMiserStore: this.tokenMiserStore } : {}),
+      starMapHandler: this.starMapHandler,
     });
     const pdfMcpRegistration =
       backend === "codex" && this.resolvePdfAnalysisEnabledFn()
@@ -32309,6 +32327,52 @@ export class DesktopBackendRegistry {
       });
     }
 
+    const starMapToolCall = readPwrAgentStarMapDynamicToolCall({
+      method: request.method,
+      params: request.params,
+    });
+    if (starMapToolCall && isPwrAgentStarMapDynamicToolCall(starMapToolCall)) {
+      if (!this.isLiveDynamicToolCall(backend, starMapToolCall)) {
+        backendRegistryLog.warn("rejecting star map dynamic tool call", {
+          backend,
+          callId: starMapToolCall.callId,
+          namespace: starMapToolCall.namespace,
+          threadId: starMapToolCall.threadId,
+          tool: starMapToolCall.tool,
+          turnId: starMapToolCall.turnId,
+        });
+        return buildPwrAgentStarMapDynamicToolErrorResponse({
+          code: "forbidden",
+          message:
+            "Star map tool calls must originate from an active turn on the same thread.",
+        });
+      }
+      const starMapDenied = this.dynamicToolPermissionDenied(
+        backend,
+        "star_map",
+        starMapToolCall,
+      );
+      if (starMapDenied) {
+        return buildPwrAgentStarMapDynamicToolErrorResponse({
+          code: "forbidden",
+          message: `The messaging user who started this turn lacks permission for this tool (${starMapDenied}).`,
+        });
+      }
+      backendRegistryLog.info("handling star map dynamic tool call", {
+        backend,
+        callId: starMapToolCall.callId,
+        namespace: starMapToolCall.namespace,
+        threadId: starMapToolCall.threadId,
+        tool: starMapToolCall.tool,
+        turnId: starMapToolCall.turnId,
+      });
+      return await handlePwrAgentStarMapDynamicToolCall({
+        backend,
+        call: starMapToolCall,
+        handler: this.starMapHandler,
+      });
+    }
+
     const federationToolCall = readPwrAgentFederationDynamicToolCall({
       method: request.method,
       params: request.params,
@@ -40725,6 +40789,7 @@ function messagingDynamicToolCategoryForCatalog(
     case "thread_inspection":
     case "thread_orchestration":
     case "messaging_context":
+    case "star_map":
       return catalogId;
     default:
       return undefined;
