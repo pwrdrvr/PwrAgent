@@ -3279,7 +3279,7 @@ describe("DesktopSettingsService", () => {
       secretStore: new MemoryDesktopSecretStore(),
       resolveCodexShellEnv: () => ({
         CODEX_HOME: path.join(root, "login-shell-default"),
-        PATH: "/opt/homebrew/bin:/usr/bin",
+        PATH: ["/opt/homebrew/bin", "/usr/bin"].join(path.delimiter),
       }),
     });
 
@@ -3490,11 +3490,11 @@ describe("DesktopSettingsService", () => {
 
   it("adds login shell PATH entries to the Codex app-server spawn env", () => {
     const service = new DesktopSettingsService({
-      env: { PATH: "/usr/bin:/bin" } as NodeJS.ProcessEnv,
+      env: { PATH: ["/usr/bin", "/bin"].join(path.delimiter) } as NodeJS.ProcessEnv,
       secretStore: new MemoryDesktopSecretStore(),
       resolveCodexShellEnv: () => ({
         NVM_DIR: "/Users/alice/.nvm",
-        PATH: "/Users/alice/.sdkman/candidates/sbt/current/bin:/usr/bin",
+        PATH: ["/Users/alice/.sdkman/candidates/sbt/current/bin", "/usr/bin"].join(path.delimiter),
       }),
     });
 
@@ -3509,12 +3509,12 @@ describe("DesktopSettingsService", () => {
     const service = new DesktopSettingsService({
       env: {
         ELECTRON_RENDERER_URL: "http://localhost:5173",
-        PATH: "/usr/bin:/bin",
+        PATH: ["/usr/bin", "/bin"].join(path.delimiter),
       } as NodeJS.ProcessEnv,
       secretStore: new MemoryDesktopSecretStore(),
       resolveCodexShellEnv: () => ({
         ELECTRON_RENDERER_URL: "http://localhost:5175",
-        PATH: "/opt/homebrew/bin:/usr/bin",
+        PATH: ["/opt/homebrew/bin", "/usr/bin"].join(path.delimiter),
         NVM_DIR: "/Users/alice/.nvm",
       }),
     });
