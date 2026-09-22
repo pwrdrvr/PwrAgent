@@ -921,8 +921,9 @@ export function TranscriptList(props: TranscriptListProps) {
         : undefined,
     [props.directoryPaths, props.pendingRequest, transcriptEntries],
   );
-  // `directoryPaths` is rebuilt by the caller on every render, so depending on
-  // the array itself would rebuild every group label on every streamed item.
+  // `directoryPaths` is rebuilt by the caller on every render, so passing the
+  // array itself would hand every transcript row a new prop on every streamed
+  // item.
   // NUL is the one byte a path cannot contain, so the key round-trips a
   // directory name that holds a newline.
   const directoryPathsKey = (props.directoryPaths ?? []).join("\u0000");
@@ -939,7 +940,6 @@ export function TranscriptList(props: TranscriptListProps) {
         activeMessageId:
           props.transientMessage?.id ?? props.pendingAssistantMessage?.id,
         alwaysVisibleEntryIds: alwaysVisibleTransientMessageIds,
-        directoryPaths: stableDirectoryPaths,
         now: renderNow,
       }),
     [
@@ -949,7 +949,6 @@ export function TranscriptList(props: TranscriptListProps) {
       props.transientMessage?.id,
       alwaysVisibleTransientMessageIds,
       renderNow,
-      stableDirectoryPaths,
       transcriptEntries,
     ]
   );

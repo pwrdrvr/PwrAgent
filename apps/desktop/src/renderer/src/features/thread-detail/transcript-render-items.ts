@@ -5,8 +5,6 @@ import type {
   AppServerThreadPlanEntry,
   AppServerThreadTurnMetadata,
 } from "@pwragent/shared";
-import { coalesceToolActivityBurst } from "@pwragent/shared";
-import { formatActivityText } from "./activity-path-display";
 
 export type TranscriptRenderItem =
   | {
@@ -32,7 +30,6 @@ export function buildTranscriptRenderItems(params: {
   activeTurnStartedAt?: number;
   activeMessageId?: string;
   alwaysVisibleEntryIds?: ReadonlySet<string>;
-  directoryPaths?: string[];
   now?: number;
 }): TranscriptRenderItem[] {
   const activeTurnId =
@@ -63,7 +60,6 @@ export function buildTranscriptRenderItems(params: {
       params.entries,
       activeReview ? undefined : activeTurnId,
       params.alwaysVisibleEntryIds,
-      params.directoryPaths,
       reviewTurnIds,
       activeReview,
     );
@@ -88,7 +84,6 @@ export function buildTranscriptRenderItems(params: {
     params.entries,
     undefined,
     params.alwaysVisibleEntryIds,
-    params.directoryPaths,
     reviewTurnIds,
   );
   if (completedGroups.length > 0) {
@@ -188,7 +183,6 @@ function buildCompletedGroups(
   entries: AppServerThreadEntry[],
   excludeTurnId?: string,
   alwaysVisibleEntryIds?: ReadonlySet<string>,
-  directoryPaths?: string[],
   reviewTurnIds?: ReadonlySet<string>,
   activeReview?: { startedAt?: number; turnId: string },
 ): RenderGroup[] {
@@ -250,7 +244,6 @@ function buildCompletedGroups(
             : workGroupLabel(
                 turn,
                 currentEntries,
-                directoryPaths,
                 reviewTurnIds?.has(currentTurnId) ? "Reviewed" : "Worked",
               )
           : previousMessagesLabel(currentEntries.filter(isAssistantMessage).length),
@@ -493,10 +486,13 @@ function readCompletedTurn(
     );
 }
 
+// The heading is a count, never a digest of the work it hides. Tool labels
+// carry whole command lines and file paths, so quoting even three of them
+// wrapped the collapsed row across several lines of the detail it exists to
+// fold away. Expanding the group shows every tool row.
 function workGroupLabel(
   turn: AppServerThreadTurnMetadata,
   entries: AppServerThreadEntry[],
-  directoryPaths: string[] | undefined,
   verb: "Reviewed" | "Worked",
 ): string {
   const base = typeof turn.durationMs === "number" && turn.durationMs > 60_000
@@ -510,7 +506,7 @@ function workGroupLabel(
     (entry): entry is AppServerThreadActivityEntry =>
       entry.type === "activity"
       // Keep the startup notice available when expanded without counting it
-      // as tool work or copying its configuration instructions into the heading.
+      // as tool work.
       && !(entry.tone === "warning"
         && entry.status !== "failed"
         && entry.summary.startsWith("Warning: Under-development features enabled:")),
@@ -519,32 +515,7 @@ function workGroupLabel(
     return base;
   }
 
-  const groups = coalesceToolActivityBurst(
-    toolEntries.map((entry) => ({
-      entry,
-      // Backends that forward an agent's own tool title can put an absolute
-      // path here. The rows inside the group already display these relative to
-      // the thread's directories, so the group label has to match them.
-      label: formatActivityText(entry.summary, entry.details, directoryPaths),
-      status: entry.status,
-    })),
-  );
-  const visibleGroups = groups.slice(0, 3);
-  const omittedToolCount = groups
-    .slice(3)
-    .reduce((total, group) => total + group.count, 0);
-  const summary = visibleGroups
-    .map((group) =>
-      group.count === 1 ? group.label : `${group.count} × ${group.label}`
-    )
-    .join(", ");
-  return `${base} · ${toolEntries.length} tool update${
-    toolEntries.length === 1 ? "" : "s"
-  }: ${summary}${
-    omittedToolCount > 0
-      ? `, ${omittedToolCount} other tool update${omittedToolCount === 1 ? "" : "s"}`
-      : ""
-  }`;
+  return `${base} · ${toolEntries.length} tool updates`;
 }
 
 function previousMessagesLabel(count: number): string {
