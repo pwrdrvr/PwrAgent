@@ -666,6 +666,54 @@ describe("token usage pricing", () => {
     ).toBeUndefined();
   });
 
+  it.each([
+    { model: "grok-4.7", displayModel: "Grok 4.7", multiplier: 1 },
+    { model: "grok-4.7-build-fast", displayModel: "Grok 4.7 Fast", multiplier: 2 },
+  ])("prices $model ACP usage at its account rate", ({ model, displayModel, multiplier }) => {
+    // The reported stalled research turn: aggregate input exceeds 200K.
+    // Reasoning is already included in output and must not be charged twice.
+    const cost = estimateTokenUsageCost({
+      at: Date.UTC(2026, 8, 22),
+      cachedInputTokens: 460_416,
+      inputTokenScope: "aggregate",
+      model,
+      outputTokens: 9_513,
+      reasoningOutputTokens: 7_702,
+      uncachedInputTokens: 318_097,
+    });
+
+    expect(cost).toMatchObject({
+      cachedInputCostMicros: 230_208 * multiplier,
+      cachedInputUsdPerMillion: 0.5 * multiplier,
+      catalogVersion: "2026-09-21",
+      displayName: `${displayModel} Standard`,
+      inputUsdPerMillion: 2 * multiplier,
+      model,
+      outputCostMicros: 57_078 * multiplier,
+      outputTokensIncludeReasoning: true,
+      outputUsdPerMillion: 6 * multiplier,
+      rateId: `xai:2026-09-21:${model}:standard`,
+      totalCostMicros: 923_480 * multiplier,
+      uncachedInputCostMicros: 636_194 * multiplier,
+    });
+    expect(listTokenUsagePricingRates()).toContainEqual(
+      expect.objectContaining({
+        model,
+        displayName: `${displayModel} Standard`,
+        inputUsdPerMillion: 2 * multiplier,
+        cachedInputUsdPerMillion: 0.5 * multiplier,
+        outputUsdPerMillion: 6 * multiplier,
+      }),
+    );
+    expect(estimateTokenUsageCost({
+      at: Date.UTC(2026, 8, 20, 23, 59, 59),
+      cachedInputTokens: 0,
+      model,
+      outputTokens: 100,
+      uncachedInputTokens: 100,
+    })).toBeUndefined();
+  });
+
   it("prices Qwen ACP ModelStudio usage with the International list rate", () => {
     const cost = estimateTokenUsageCost({
       at: Date.UTC(2026, 6, 28),
