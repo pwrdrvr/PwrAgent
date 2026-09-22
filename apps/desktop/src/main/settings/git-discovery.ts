@@ -5,10 +5,11 @@ import { bundledGitEnvironment, bundledGitExecutable, validateBundledGit } from 
 import { customGitEnvironment, GIT_COMMAND_ENV } from "../git-runtime";
 export { GIT_COMMAND_ENV } from "../git-runtime";
 import path from "node:path";
-import type {
-  DesktopGitCandidateSource,
-  DesktopGitDiscoveryCandidate,
-  DesktopGitDiscoverySnapshot,
+import {
+  GIT_LFS_UNAVAILABLE_REASON,
+  type DesktopGitCandidateSource,
+  type DesktopGitDiscoveryCandidate,
+  type DesktopGitDiscoverySnapshot,
 } from "@pwragent/shared";
 import { buildCommandDiscoveryCandidate } from "./command-discovery";
 
@@ -77,7 +78,7 @@ async function buildGitCandidate(
       if (!lfsVersion) throw new Error("Git LFS did not report a version.");
       return { ...candidate, lfsVersion };
     } catch {
-      return { ...candidate, executable: false, failureReason: "Git LFS is unavailable for this Git installation." };
+      return { ...candidate, executable: false, failureReason: GIT_LFS_UNAVAILABLE_REASON };
     }
   }
 
@@ -122,12 +123,24 @@ export async function discoverGitCommands(params?: {
     buildGitCandidate(input, { env, platform: params?.platform });
 
   const inputs = gitCandidateInputs(env);
-  const candidates = dedupeGitCandidates(await Promise.all([
-    build(inputs[0]),
+  const [configured, ...discovered] = await Promise.all([
     build({ command: configuredCommand, source: "config" }),
+    build(inputs[0]),
     build({ command: bundledGitExecutable(), source: "bundled" }),
     ...inputs.slice(1).map(build),
-  ]));
+  ]);
+  // A configured path that is already one of the well-known locations
+  // stays under the source that names it, so the row keeps reading
+  // "Homebrew" rather than the far less useful "Custom path". The extra
+  // candidate exists only for a path discovery would never have found.
+  const configuredIsNew =
+    configured
+    && !discovered.some((candidate) => candidate?.command === configured.command);
+  const candidates = dedupeGitCandidates([
+    ...discovered.slice(0, 1),
+    ...(configuredIsNew ? [configured] : []),
+    ...discovered.slice(1),
+  ]);
   const requested = env[GIT_COMMAND_ENV]?.trim() || configuredCommand || bundledGitExecutable();
   // An explicit but broken selection remains selected; never silently switch.
   const selected = candidates.find((candidate) => candidate.command === requested)

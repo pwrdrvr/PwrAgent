@@ -891,6 +891,14 @@ export type DesktopGitCandidateSource =
   | "xcode"
   | "user";
 
+/**
+ * `failureReason` for a git that runs but has no working Git LFS. The main
+ * process writes it and the renderer matches it exactly, so Settings can
+ * label the row instead of reporting a generic launch failure.
+ */
+export const GIT_LFS_UNAVAILABLE_REASON =
+  "Git LFS is unavailable for this Git installation.";
+
 export type DesktopGitDiscoveryCandidate = {
   command: string;
   source: DesktopGitCandidateSource;

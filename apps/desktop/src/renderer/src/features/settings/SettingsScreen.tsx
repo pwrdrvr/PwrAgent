@@ -15,6 +15,7 @@ import type {
 } from "@pwragent/shared";
 import type { AppearanceController } from "../../lib/useAppearance";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { describeGitCommandState } from "./CommandToolsSettings";
 import type { PwrAgentProfilesState } from "../../lib/usePwrAgentProfiles";
 import type { DesktopSettingsState } from "./useDesktopSettings";
 import { AboutSettings } from "./AboutSettings";
@@ -212,9 +213,11 @@ function describeGitNavChild(
     const discovery = snapshot?.applications.git.discovery;
     const base = { key: "git", label: "Git", sub: "git" };
     if (!discovery) return base;
-    const available = discovery.candidates.some((candidate) => candidate.selected && candidate.executable);
-    return available
-      ? { ...base, dot: "ok" }
+    // Same state the Git card's own pill reports; see describeGitCommandState.
+    const state = describeGitCommandState(discovery);
+    if (state === "available") return { ...base, dot: "ok" };
+    return state === "xcode-license"
+      ? { ...base, dot: "bad", chip: "license" }
       : { ...base, dot: "bad", chip: "unavailable" };
   }
 

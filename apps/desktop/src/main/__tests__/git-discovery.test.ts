@@ -27,7 +27,23 @@ describe("Git discovery", () => {
   it("keeps a broken configured override selected without fallback", async () => {
     const result = await discoverGitCommands({ configuredCommand: "/missing/config/git", env: { ...process.env, PWRAGENT_GIT_PATH: undefined } });
     expect(result.selectedCommand).toBe("/missing/config/git");
-    expect(result.candidates.find((candidate) => candidate.selected)?.executable).toBe(false);
+    expect(result.candidates.find((candidate) => candidate.selected)).toMatchObject({
+      source: "config",
+      executable: false,
+    });
+  });
+
+  it("keeps a configured well-known path under the source that found it", async () => {
+    // Settings titles each row by its source, so a configured Homebrew git
+    // reading "Custom path" would hide where it came from.
+    const result = await discoverGitCommands({
+      configuredCommand: bundledGitExecutable(),
+      env: { ...process.env, PWRAGENT_GIT_PATH: undefined },
+    });
+    expect(result.selectedSource).toBe("bundled");
+    expect(result.candidates.filter((candidate) => candidate.command === bundledGitExecutable()))
+      .toEqual([expect.objectContaining({ source: "bundled", selected: true })]);
+    expect(result.candidates.some((candidate) => candidate.source === "config")).toBe(false);
   });
 
   it("reports a missing packaged runtime without selecting an installed Git", async () => {

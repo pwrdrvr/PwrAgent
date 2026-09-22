@@ -26,6 +26,7 @@ import type {
   SetMcpConnectionEnabledRequest,
   WorktreeSnapshotSummary,
 } from "@pwragent/shared";
+import { GIT_LFS_UNAVAILABLE_REASON } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { SettingsScreen } from "../SettingsScreen";
 import type { ConfirmSettingsLeave } from "../UnsavedSettingsChanges";
@@ -3947,76 +3948,212 @@ describe("SettingsScreen", () => {
     expect(within(failingRow as HTMLElement).queryByRole("button")).toBeNull();
   });
 
-  it("shows bundled Git and LFS versions with the existing override picker", async () => {
+  it("shows bundled Git and LFS versions in the status and the row", async () => {
     const snapshot = createSnapshot();
     snapshot.applications.git = {
       path: { value: "", source: "default" },
       discovery: {
-        selectedCommand: "/app/resources/git/bin/git", selectedSource: "bundled",
-        candidates: [{ command: "/app/resources/git/bin/git", source: "bundled",
-          selected: true, executable: true, version: "2.53.0", lfsVersion: "3.7.1" }],
+        selectedCommand: "/app/resources/git/bin/git",
+        selectedSource: "bundled",
+        candidates: [
+          {
+            command: "/app/resources/git/bin/git",
+            executable: true,
+            selected: true,
+            source: "bundled",
+            version: "2.53.0",
+            lfsVersion: "3.7.1",
+          },
+        ],
       },
     };
     const settings = createSettingsState(snapshot);
     const refreshGitDiscovery = vi.fn(async () => ({ snapshot }));
-    render(<SettingsScreen desktopApi={{ refreshGitDiscovery }} initialSection="git"
-      settings={settings} onClose={() => undefined} />);
+
+    render(
+      <SettingsScreen
+        desktopApi={{ refreshGitDiscovery }}
+        initialSection="git"
+        settings={settings}
+        onClose={() => undefined}
+      />,
+    );
+
     const panel = screen.getByRole("heading", { name: "Git" }).closest("section")!;
-    expect(within(panel).getByText("2.53.0")).toBeInTheDocument();
-    expect(within(panel).getByText("3.7.1")).toBeInTheDocument();
+    expect(within(panel).getByText("Available")).toBeInTheDocument();
+    expect(within(panel).getByText("bundled")).toBeInTheDocument();
+    // The LFS line is the same mono fact line as Path and Version, not a
+    // bare span in the body font.
+    const lfsLine = within(panel).getByText("Git LFS:");
+    expect(lfsLine).toHaveClass("settings-pathrow__path");
+    expect(within(lfsLine).getByText("3.7.1")).toBeInTheDocument();
+    expect(within(panel).getByText("2.53.0 · LFS 3.7.1")).toBeInTheDocument();
     expect(within(panel).getByText("In use")).toBeInTheDocument();
-    expect(within(panel).getByText("Manual path")).toBeInTheDocument();
-    expect(within(panel).queryByRole("button", { name: /Use .*git/ })).not.toBeInTheDocument();
+    // The bundled row is the default, so there is no second control that
+    // also means "use the bundle".
+    expect(within(panel).queryByText("Discovery mode")).not.toBeInTheDocument();
+    expect(within(panel).getByRole("button", { name: "Choose…" })).toBeInTheDocument();
+
     fireEvent.click(within(panel).getByRole("button", { name: "Re-check" }));
     await waitFor(() => expect(refreshGitDiscovery).toHaveBeenCalled());
     expect(settings.writeConfig).not.toHaveBeenCalled();
   });
 
-  it("reports missing bundled LFS while retaining the manual override picker", () => {
+  it("labels a bundle without Git LFS instead of reporting a launch failure", () => {
     const snapshot = createSnapshot();
     snapshot.applications.git.discovery = {
-      selectedSource: "bundled", selectedCommand: "/app/git/bin/git",
-      candidates: [{ command: "/app/git/bin/git", source: "bundled", selected: true,
-        executable: false, failureReason: "Bundled Git LFS is missing" }],
+      selectedCommand: "/app/git/bin/git",
+      selectedSource: "bundled",
+      candidates: [
+        {
+          command: "/app/git/bin/git",
+          executable: false,
+          selected: true,
+          source: "bundled",
+          version: "2.53.0",
+          failureReason: GIT_LFS_UNAVAILABLE_REASON,
+        },
+      ],
     };
-    render(<SettingsScreen initialSection="git" settings={createSettingsState(snapshot)} onClose={() => undefined} />);
+
+    render(
+      <SettingsScreen
+        initialSection="git"
+        settings={createSettingsState(snapshot)}
+        onClose={() => undefined}
+      />,
+    );
+
     const panel = screen.getByRole("heading", { name: "Git" }).closest("section")!;
     expect(within(panel).getByText("Not available")).toBeInTheDocument();
-    expect(within(panel).getAllByText("Bundled Git LFS is missing").length).toBeGreaterThan(0);
+    expect(within(panel).getByText(GIT_LFS_UNAVAILABLE_REASON)).toHaveClass(
+      "settings-gh-status__reason",
+    );
+    const chip = within(panel).getByText("LFS missing");
+    expect(chip).toHaveAttribute("title", "Install Git LFS for this git to select it.");
+    expect(within(panel).queryByText("Launch failed")).not.toBeInTheDocument();
     const nav = screen.getByRole("navigation", { name: "Settings sections" });
     expect(within(nav).getByText("unavailable")).toBeInTheDocument();
     expect(within(panel).getByRole("button", { name: "Choose…" })).toBeInTheDocument();
   });
 
-  it("shows Git discovery and Xcode license remediation", async () => {
+  it("keeps an installed git without Git LFS visible beside a working bundle", () => {
+    const snapshot = createSnapshot();
+    snapshot.applications.git.discovery = {
+      selectedCommand: "/app/git/bin/git",
+      selectedSource: "bundled",
+      candidates: [
+        {
+          command: "/app/git/bin/git",
+          executable: true,
+          selected: true,
+          source: "bundled",
+          version: "2.53.0",
+          lfsVersion: "3.7.1",
+        },
+        {
+          command: "/opt/homebrew/bin/git",
+          executable: false,
+          selected: false,
+          source: "homebrew",
+          version: "2.50.1",
+          failureReason: GIT_LFS_UNAVAILABLE_REASON,
+        },
+        {
+          command: "/usr/local/bin/git",
+          executable: false,
+          selected: false,
+          source: "homebrew",
+          failureReason: "not_found",
+        },
+      ],
+    };
+
+    render(
+      <SettingsScreen
+        initialSection="git"
+        settings={createSettingsState(snapshot)}
+        onClose={() => undefined}
+      />,
+    );
+
+    const panel = screen.getByRole("heading", { name: "Git" }).closest("section")!;
+    // Without this row, the operator's own git would simply be absent.
+    const row = within(panel).getByText("/opt/homebrew/bin/git").closest(".settings-pathrow")!;
+    expect(within(row as HTMLElement).getByText("LFS missing")).toBeInTheDocument();
+    expect(within(row as HTMLElement).getByText("2.50.1")).toBeInTheDocument();
+    expect(within(row as HTMLElement).queryByRole("button")).toBeNull();
+    // A location that does not exist is still hidden.
+    expect(within(panel).queryByText("/usr/local/bin/git")).not.toBeInTheDocument();
+    expect(within(panel).getByText(/An installed git needs Git LFS/)).toBeInTheDocument();
+  });
+
+  it("prints a broken selection's reason as words, not a status token", () => {
     const snapshot = createSnapshot();
     snapshot.applications.git = {
-      path: { value: "", source: "default" },
+      path: { value: "/Users/example/old/git", source: "config" },
       discovery: {
-        selectedCommand: "/opt/homebrew/bin/git",
-        selectedSource: "homebrew",
+        selectedCommand: "/Users/example/old/git",
+        selectedSource: "config",
         candidates: [
           {
-            command: "/opt/homebrew/bin/git",
-            executable: true,
+            command: "/Users/example/old/git",
+            executable: false,
             selected: true,
-            source: "homebrew",
-            version: "2.39.1",
+            source: "config",
+            failureReason: "not_found",
+          },
+          {
+            command: "/app/git/bin/git",
+            executable: true,
+            selected: false,
+            source: "bundled",
+            version: "2.53.0",
+            lfsVersion: "3.7.1",
+          },
+        ],
+      },
+    };
+
+    render(
+      <SettingsScreen
+        initialSection="git"
+        settings={createSettingsState(snapshot)}
+        onClose={() => undefined}
+      />,
+    );
+
+    const panel = screen.getByRole("heading", { name: "Git" }).closest("section")!;
+    expect(within(panel).queryByText("not_found")).not.toBeInTheDocument();
+    const statusLine = Array.from(
+      panel.querySelectorAll(".settings-gh-status__reason"),
+    ).map((element) => element.textContent);
+    expect(statusLine).toEqual(["Missing"]);
+  });
+
+  it("shows Xcode license remediation when the selected git is blocked", async () => {
+    const snapshot = createSnapshot();
+    snapshot.applications.git = {
+      path: { value: "/usr/bin/git", source: "config" },
+      discovery: {
+        selectedCommand: "/usr/bin/git",
+        selectedSource: "xcode",
+        candidates: [
+          {
+            command: "/app/git/bin/git",
+            executable: true,
+            selected: false,
+            source: "bundled",
+            version: "2.53.0",
+            lfsVersion: "3.7.1",
           },
           {
             command: "/usr/bin/git",
             executable: false,
-            selected: false,
+            selected: true,
             source: "xcode",
             failureReason:
               "You have not agreed to the Xcode license agreements. Please run 'sudo xcodebuild -license'",
-          },
-          {
-            command: "/usr/local/bin/git",
-            executable: false,
-            selected: false,
-            source: "homebrew",
-            failureReason: "not_found",
           },
         ],
       },
@@ -4034,17 +4171,72 @@ describe("SettingsScreen", () => {
     );
 
     const gitPanel = screen.getByRole("heading", { name: "Git" }).closest("section")!;
-    expect(within(gitPanel).getAllByText("/opt/homebrew/bin/git").length).toBeGreaterThanOrEqual(1);
+    expect(within(gitPanel).getByText("Xcode license required")).toBeInTheDocument();
     expect(within(gitPanel).getByText(/Apple's Git at/)).toBeInTheDocument();
-    expect(within(gitPanel).queryByText("/usr/local/bin/git")).not.toBeInTheDocument();
     expect(
       within(gitPanel).getByText("sudo xcodebuild -license"),
     ).toBeInTheDocument();
+    // The card and the nav read the same state.
+    const nav = screen.getByRole("navigation", { name: "Settings sections" });
+    expect(within(nav).getByText("license")).toBeInTheDocument();
 
     fireEvent.click(within(gitPanel).getByRole("button", { name: "Copy command" }));
     await waitFor(() => {
       expect(copyTextMock).toHaveBeenCalledWith("sudo xcodebuild -license");
     });
+  });
+
+  it("does not raise an unselected Apple git's Xcode license over a working bundle", () => {
+    const snapshot = createSnapshot();
+    snapshot.applications.git = {
+      path: { value: "", source: "default" },
+      discovery: {
+        selectedCommand: "/app/git/bin/git",
+        selectedSource: "bundled",
+        candidates: [
+          {
+            command: "/app/git/bin/git",
+            executable: true,
+            selected: true,
+            source: "bundled",
+            version: "2.53.0",
+            lfsVersion: "3.7.1",
+          },
+          {
+            command: "/usr/bin/git",
+            executable: false,
+            selected: false,
+            source: "xcode",
+            failureReason:
+              "You have not agreed to the Xcode license agreements. Please run 'sudo xcodebuild -license'",
+          },
+        ],
+      },
+    };
+
+    render(
+      <SettingsScreen
+        initialSection="git"
+        settings={createSettingsState(snapshot)}
+        onClose={() => undefined}
+      />,
+    );
+
+    const gitPanel = screen.getByRole("heading", { name: "Git" }).closest("section")!;
+    // PwrAgent runs the bundle, so the license is not its problem: an amber
+    // pill here once sat over a green nav dot.
+    expect(within(gitPanel).getByText("Available")).toHaveClass("settings-pill--ok");
+    expect(within(gitPanel).queryByText(/Apple's Git at/)).not.toBeInTheDocument();
+    expect(
+      within(gitPanel).queryByRole("button", { name: "Copy command" }),
+    ).not.toBeInTheDocument();
+    // The row still says why it cannot be chosen, and how to fix it.
+    expect(within(gitPanel).getByText("Xcode license")).toHaveAttribute(
+      "title",
+      "Run sudo xcodebuild -license in Terminal to accept the Xcode license.",
+    );
+    const nav = screen.getByRole("navigation", { name: "Settings sections" });
+    expect(within(nav).queryByText("license")).not.toBeInTheDocument();
   });
 
   it("selects a git candidate and shows what signed each one", async () => {
@@ -4102,7 +4294,7 @@ describe("SettingsScreen", () => {
     // choice being made is Homebrew's or Apple's.
     expect(within(gitPanel).getByText("Homebrew")).toBeInTheDocument();
     expect(within(gitPanel).getByText("Apple")).toBeInTheDocument();
-    expect(within(gitPanel).getByText("Git 2.50.1")).toBeInTheDocument();
+    expect(within(gitPanel).getByText("2.50.1")).toBeInTheDocument();
 
     // Signatures arrive after the rows paint.
     expect(await within(gitPanel).findByText("Ad-hoc")).toBeInTheDocument();
@@ -4180,17 +4372,78 @@ describe("SettingsScreen", () => {
     snapshot.applications.git = {
       path: { value: "/custom/git", source: "config" },
       discovery: {
-        selectedCommand: "/custom/git", selectedSource: "config",
+        selectedCommand: "/custom/git",
+        selectedSource: "config",
         candidates: [
-          { command: "/custom/git", source: "config", selected: true, executable: true, version: "2.54.0", lfsVersion: "3.7.1" },
-          { command: "/bundle/git", source: "bundled", selected: false, executable: true, version: "2.53.0", lfsVersion: "3.7.1" },
+          {
+            command: "/custom/git",
+            executable: true,
+            selected: true,
+            source: "config",
+            version: "2.54.0",
+            lfsVersion: "3.7.1",
+          },
+          {
+            command: "/bundle/git",
+            executable: true,
+            selected: false,
+            source: "bundled",
+            version: "2.53.0",
+            lfsVersion: "3.7.1",
+          },
         ],
       },
     };
     const settings = createSettingsState(snapshot);
-    render(<SettingsScreen initialSection="git" settings={settings} onClose={() => undefined} />);
-    fireEvent.click(screen.getByRole("button", { name: "Use Bundled git at /bundle/git" }));
-    await waitFor(() => expect(settings.writeConfig).toHaveBeenCalledWith({ applications: { git: { path: "" } } }));
+
+    render(
+      <SettingsScreen
+        initialSection="git"
+        settings={settings}
+        onClose={() => undefined}
+      />,
+    );
+
+    const gitPanel = screen.getByRole("heading", { name: "Git" }).closest("section")!;
+    // The bundled row is the only reset; a separate "Use bundled" field
+    // would be a second control for the same write.
+    expect(within(gitPanel).queryByText("Discovery mode")).not.toBeInTheDocument();
+    fireEvent.click(
+      within(gitPanel).getByRole("button", { name: "Use Bundled git at /bundle/git" }),
+    );
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        applications: { git: { path: "" } },
+      });
+    });
+  });
+
+  it("offers auto discovery, not a bundle, to reset a gh path override", async () => {
+    const snapshot = createSnapshot();
+    snapshot.applications.gh.path = {
+      value: "/opt/homebrew/bin/gh",
+      source: "config",
+    };
+    const settings = createSettingsState(snapshot);
+
+    render(
+      <SettingsScreen
+        initialSection="git"
+        settings={settings}
+        onClose={() => undefined}
+      />,
+    );
+
+    const ghPanel = screen.getByRole("heading", { name: "GitHub CLI (gh)" })
+      .closest("section")!;
+    expect(within(ghPanel).getByText("Auto discovery")).toBeInTheDocument();
+    expect(within(ghPanel).queryByText(/Bundled/)).not.toBeInTheDocument();
+    fireEvent.click(within(ghPanel).getByRole("button", { name: "Auto" }));
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        applications: { gh: { path: "" } },
+      });
+    });
   });
 
   it("renders the Mattermost section and saves edits via writeConfig", async () => {
