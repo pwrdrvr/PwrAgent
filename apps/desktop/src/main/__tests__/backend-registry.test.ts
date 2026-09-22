@@ -6581,6 +6581,7 @@ describe("DesktopBackendRegistry", () => {
   });
 
   it("skips OpenAI quotas but names threads for a no-auth local Codex provider", async () => {
+    const titleHelperCompleted = createDeferred<string>();
     const codexClient = new MockBackendClient({
       account: { requiresOpenaiAuth: false },
       initializeResult: { methods: ["thread/start", "turn/start", "thread/name/set"] },
@@ -6591,7 +6592,14 @@ describe("DesktopBackendRegistry", () => {
       generateTitle: vi.fn(async () => ({ status: "generated" as const, title: "Local title" })),
     };
     const overlayStore = createOverlayStoreMock();
-    const upsertSubAgentSpy = vi.spyOn(overlayStore, "upsertThreadSubAgent");
+    const upsertThreadSubAgent = overlayStore.upsertThreadSubAgent.bind(overlayStore);
+    const upsertSubAgentSpy = vi.spyOn(overlayStore, "upsertThreadSubAgent").mockImplementation(async (params) => {
+      const result = await upsertThreadSubAgent(params);
+      if (["success", "failed", "cancelled"].includes(params.subAgent.status)) {
+        titleHelperCompleted.resolve(params.subAgent.status);
+      }
+      return result;
+    });
     const registry = new DesktopBackendRegistry({
       codexClient,
       overlayStore,
@@ -6606,8 +6614,18 @@ describe("DesktopBackendRegistry", () => {
       threadId: "thread-1",
       input: [{ type: "text", text: "Test the local provider" }],
     });
-    await flushAsync();
-    expect(titleService.generateTitle).toHaveBeenCalled();
+    // Title generation owns background thread lookups; a timer tick does not
+    // establish their completion, particularly with Windows filesystem I/O.
+    expect(await titleHelperCompleted.promise).toBe("success");
+    expect(titleService.generateTitle).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      userPrompt: "Test the local provider",
+    });
+    expect(codexClient.lastRenameThreadParams).toEqual({
+      threadId: "thread-1",
+      name: "Local title",
+    });
     const running = upsertSubAgentSpy.mock.calls.find(([call]) => call.subAgent.status === "running");
     expect(running?.[0].subAgent.preferredModel).toBe("local-model");
     expect(running?.[0].subAgent.preferredReasoningEffort).toBeUndefined();
