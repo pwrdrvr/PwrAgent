@@ -2268,6 +2268,7 @@ describe("settings ipc", () => {
       installStatus: "installed" as const,
       authStatus: "not-required" as const,
       verificationStatus: "not-applicable" as const,
+      allowlistRuleId: `local-${registryId}-cli`,
       installedAt: 1234,
       updatedAt: 1234,
       launchDescriptor: {
