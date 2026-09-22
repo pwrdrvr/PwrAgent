@@ -206,7 +206,8 @@ function bundledSystemConfig(
 ): string | undefined {
   const content = [
     "# Written by PwrAgent: defaults for its bundled Git, then the bundle's own",
-    "# system config.",
+    "# system config. PwrAgent rewrites this file, so edit your global config",
+    "# (git config --global) instead; it overrides everything here.",
     "[filter \"lfs\"]",
     "\tclean = git-lfs clean -- %f",
     "\tsmudge = git-lfs smudge -- %f",

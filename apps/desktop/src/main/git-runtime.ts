@@ -57,11 +57,16 @@ export async function resolveRuntimeGitExecutable(source: NodeJS.ProcessEnv): Pr
   if (path.isAbsolute(preference) || preference.includes(path.sep)) return path.resolve(preference);
   const env = customGitEnvironment(source, preference);
   if (process.platform === "win32") {
-    const { stdout } = await promisify(execFile)(path.join(env.SystemRoot ?? "C:\\Windows", "System32", "where.exe"), [preference], {
-      env, encoding: "utf8", timeout: 2000, windowsHide: true,
-    });
-    const resolved = stdout.split(/\r?\n/).find((entry) => path.isAbsolute(entry.trim()));
-    if (resolved) return resolved.trim();
+    try {
+      const { stdout } = await promisify(execFile)(path.join(env.SystemRoot ?? "C:\\Windows", "System32", "where.exe"), [preference], {
+        env, encoding: "utf8", timeout: 2000, windowsHide: true,
+      });
+      const resolved = stdout.split(/\r?\n/).find((entry) => path.isAbsolute(entry.trim()));
+      if (resolved) return resolved.trim();
+    } catch {
+      // where.exe exits non-zero for a command it cannot find. Report the
+      // selection below rather than the search tool.
+    }
   } else {
     for (const entry of (env.PATH ?? "").split(path.delimiter)) {
       const candidate = path.resolve(entry, preference);

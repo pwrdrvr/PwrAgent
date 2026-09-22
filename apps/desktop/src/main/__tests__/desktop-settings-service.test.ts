@@ -1,4 +1,4 @@
-import { bundledGitEnvironment, bundledGitExecutable, bundledGitLfsExecutable } from "../bundled-git";
+import { bundledGitDirectory, bundledGitExecutable, bundledGitLfsExecutable } from "../bundled-git";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -42,6 +42,24 @@ function createTempRoot(): string {
 
 function existsOrEmpty(filePath: string): boolean {
   return !fs.existsSync(filePath) || fs.readFileSync(filePath, "utf8") === "";
+}
+
+/**
+ * The bundle's directories first, then exactly what the child inherited.
+ * Deriving the expectation from bundledGitEnvironment instead would agree
+ * with a version of it that dropped the inherited PATH altogether.
+ */
+function expectBundledGitPath(actual: string | undefined, inherited: string[]): void {
+  const entries = (actual ?? "").split(path.delimiter);
+  expect(entries.slice(0, 2)).toEqual([
+    path.dirname(bundledGitExecutable()),
+    path.dirname(bundledGitLfsExecutable()),
+  ]);
+  // The bundle's own entries and the installed keychain helper's git-core
+  // are the only additions PwrAgent makes.
+  expect(entries.filter((entry) =>
+    !entry.startsWith(bundledGitDirectory())
+    && !entry.endsWith(path.join("libexec", "git-core")))).toEqual(inherited);
 }
 
 describe("DesktopSettingsService", () => {
@@ -3265,10 +3283,9 @@ describe("DesktopSettingsService", () => {
       }),
     });
 
-    await expect(service.resolveTerminalSpawnEnvAsync()).resolves.toMatchObject({
-      CODEX_HOME: path.join(codexRoot, "profiles", "work"),
-      PATH: bundledGitEnvironment({ PATH: "/opt/homebrew/bin:/usr/bin" }).PATH,
-    });
+    const terminalEnv = await service.resolveTerminalSpawnEnvAsync();
+    expect(terminalEnv.CODEX_HOME).toBe(path.join(codexRoot, "profiles", "work"));
+    expectBundledGitPath(terminalEnv.PATH, ["/opt/homebrew/bin", "/usr/bin"]);
   });
 
   it("uses only already-active managed runtimes for integrated terminals", async () => {
@@ -3481,9 +3498,10 @@ describe("DesktopSettingsService", () => {
       }),
     });
 
-    expect(service.resolveCodexSpawnEnv().PATH).toBe(
-      bundledGitEnvironment({ PATH: "/Users/alice/.sdkman/candidates/sbt/current/bin:/usr/bin" }).PATH,
-    );
+    expectBundledGitPath(service.resolveCodexSpawnEnv().PATH, [
+      "/Users/alice/.sdkman/candidates/sbt/current/bin",
+      "/usr/bin",
+    ]);
     expect(service.resolveCodexSpawnEnv().NVM_DIR).toBe("/Users/alice/.nvm");
   });
 
@@ -3506,14 +3524,10 @@ describe("DesktopSettingsService", () => {
 
     expect(codexEnv).not.toHaveProperty("ELECTRON_RENDERER_URL");
     expect(terminalEnv).not.toHaveProperty("ELECTRON_RENDERER_URL");
-    expect(codexEnv).toMatchObject({
-      PATH: bundledGitEnvironment({ PATH: "/opt/homebrew/bin:/usr/bin" }).PATH,
-      NVM_DIR: "/Users/alice/.nvm",
-    });
-    expect(terminalEnv).toMatchObject({
-      PATH: bundledGitEnvironment({ PATH: "/opt/homebrew/bin:/usr/bin" }).PATH,
-      NVM_DIR: "/Users/alice/.nvm",
-    });
+    expect(codexEnv.NVM_DIR).toBe("/Users/alice/.nvm");
+    expect(terminalEnv.NVM_DIR).toBe("/Users/alice/.nvm");
+    expectBundledGitPath(codexEnv.PATH, ["/opt/homebrew/bin", "/usr/bin"]);
+    expectBundledGitPath(terminalEnv.PATH, ["/opt/homebrew/bin", "/usr/bin"]);
   });
 
   it("applies env overrides above TOML", async () => {

@@ -46,6 +46,19 @@ describe("Git discovery", () => {
     expect(result.candidates.some((candidate) => candidate.source === "config")).toBe(false);
   });
 
+  it("selects the row a configured bare command resolves to", async () => {
+    // Discovery resolves `git` against PATH, so the selection has to match
+    // the resolved row; otherwise Settings reports no Git while spawns use it.
+    const result = await discoverGitCommands({
+      configuredCommand: "git",
+      env: { ...process.env, PWRAGENT_GIT_PATH: undefined },
+    });
+    expect(result.candidates.filter((candidate) => candidate.selected)).toHaveLength(1);
+    expect(result.selectedCommand).toBe(
+      result.candidates.find((candidate) => candidate.selected)?.command,
+    );
+  });
+
   it("reports a missing packaged runtime without selecting an installed Git", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-missing-git-"));
     try {

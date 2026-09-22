@@ -141,7 +141,10 @@ export async function discoverGitCommands(params?: {
     ...(configuredIsNew ? [configured] : []),
     ...discovered.slice(1),
   ]);
-  const requested = env[GIT_COMMAND_ENV]?.trim() || configuredCommand || bundledGitExecutable();
+  // The candidates' own commands, because discovery resolves a bare `git`
+  // against PATH: comparing the raw setting would match no row and leave the
+  // pane reporting no Git at all while every spawn ran that one.
+  const requested = discovered[0]?.command || configured?.command || bundledGitExecutable();
   // An explicit but broken selection remains selected; never silently switch.
   const selected = candidates.find((candidate) => candidate.command === requested)
     ?? candidates.find((candidate) => candidate.source === (env[GIT_COMMAND_ENV]?.trim() ? "env" : configuredCommand ? "config" : "bundled"));
