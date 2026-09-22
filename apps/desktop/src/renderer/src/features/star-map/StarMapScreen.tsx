@@ -21,6 +21,7 @@ import {
   starMapWorkspaceCardKey,
   STAR_MAP_LOAD_CARD_KEY,
   STAR_MAP_LOAD_CARD_POSITION_KEY,
+  threadSeenWatermark,
   type FederationPeerSummary,
   type NavigationIdentity,
   type NavigationThreadSummary,
@@ -3318,6 +3319,10 @@ export function StarMapScreen(props: StarMapScreenProps) {
                     target.thread.federation?.ref.target
                     ?? readRendererFederationTarget(),
                   threadId: target.thread.id,
+                  // At the thread's own last update, as the thread list
+                  // writes it. Without it the store keeps the old
+                  // watermark, and the next snapshot brings the cookie back.
+                  ...threadSeenWatermark(target.thread.updatedAt, false),
                 }),
               targets: unseenTargets,
             });
@@ -3356,7 +3361,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
                   // One tick behind the thread's own timestamp: the same
                   // watermark the thread list writes, so both surfaces
                   // mean the same thing by "unread".
-                  seenUpdatedAt: Math.max(0, (target.thread.updatedAt ?? 0) - 1),
+                  ...threadSeenWatermark(target.thread.updatedAt ?? 0, true),
                 }),
               targets: seenTargets,
             });
