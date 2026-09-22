@@ -62,19 +62,21 @@ function truncateForLog(value: string | undefined): string | undefined {
  * stderr buffer (e.g. nvm's "v24.14.1 is already installed" trailing a
  * pnpm install that exited 1 with ERR_PNPM_IGNORED_BUILDS on stdout).
  *
- * The fix: include the tail of the arrival-ordered stdout+stderr buffer, the way
- * a user running the script in a terminal would have seen it. The full
- * output is still preserved on `CodexEnvironmentCommandError.output` for
+ * Include the tail of the arrival-ordered stdout+stderr buffer, omitting
+ * JavaScript stack frames when other output is available. Otherwise a long
+ * stack can displace the diagnostic that explains why the command failed.
+ * The full output is still preserved on `CodexEnvironmentCommandError.output` for
  * the dialog's collapsible details — this is just the headline.
  */
 export function buildExitErrorSuffix(output: string): string {
   const combined = output.trimEnd();
   if (!combined) return "";
   const lines = combined.split("\n");
-  const tail =
-    lines.length <= EXIT_ERROR_SUFFIX_LINES
-      ? combined
-      : lines.slice(-EXIT_ERROR_SUFFIX_LINES).join("\n");
+  const diagnosticLines = lines.filter((line) => !/^[\t ]+at\s/.test(line));
+  const summaryLines = diagnosticLines.some((line) => line.trim())
+    ? diagnosticLines
+    : lines;
+  const tail = summaryLines.slice(-EXIT_ERROR_SUFFIX_LINES).join("\n");
   return `: ${tail}`;
 }
 

@@ -1370,6 +1370,28 @@ describe("buildExitErrorSuffix", () => {
     );
   });
 
+  it("keeps the pnpm rejection visible ahead of a long JavaScript stack", () => {
+    const diagnostic = "pnpm: Blocked git dependency prebuildify-cross@github:prebuild/prebuildify-cross#v4.0.0";
+    const output = [
+      "ERROR - (starship::print): Under a 'dumb' terminal",
+      "Now using node v22.14.0",
+      diagnostic,
+      "    at readPackage (/fixture/global_pnpmfile.cjs:23:15)",
+      ...Array.from({ length: 12 }, (_, index) => `    at async resolveDependency (/fixture/pnpm.cjs:${index + 1}:15)`),
+      "Progress: resolved 109, reused 109, downloaded 0, added 0",
+    ].join("\n");
+
+    const suffix = buildExitErrorSuffix(output);
+    expect(suffix).toContain(diagnostic);
+    expect(suffix).not.toContain("    at ");
+    expect(suffix).toContain("Progress: resolved 109");
+  });
+
+  it("retains stack output when there is no diagnostic text", () => {
+    const output = "    at readPackage (/fixture/pnpm.cjs:23:15)\n    at async resolveDependency (/fixture/pnpm.cjs:42:10)";
+    expect(buildExitErrorSuffix(output)).toBe(`: ${output}`);
+  });
+
   it("preserves nvm-on-stderr alongside pnpm-on-stdout (motivating regression)", () => {
     // Reproduces the failure mode that motivated the helper: pnpm writes
     // its real exit-1 diagnostic to stdout, while stderr only contains
