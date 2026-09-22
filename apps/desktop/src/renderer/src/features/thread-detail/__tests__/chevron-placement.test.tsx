@@ -51,6 +51,24 @@ describe("transcript disclosure chevron placement", () => {
     expect((toggle as HTMLElement).textContent).toContain("3 previous messages");
   });
 
+  it("keeps a live review toggle's accessible name off its ticking clock", () => {
+    render(
+      <TranscriptWorkPhaseGroup
+        activeStartedAt={Date.now() - 63_000}
+        activeVerb="Reviewing"
+        collapsible
+        expanded={false}
+        label="Reviewing"
+        entries={[]}
+        skills={[]}
+        onToggle={vi.fn()}
+      />
+    );
+
+    const toggle = screen.getByRole("button", { name: "Reviewing" });
+    expect(toggle).toHaveTextContent(/^Reviewing for 1m 0\ds$/);
+  });
+
   it("does not repeat a single tool label before its command output", () => {
     render(
       <TranscriptActivity

@@ -55,6 +55,9 @@ export const TranscriptWorkPhaseGroup = memo(function TranscriptWorkPhaseGroup(
           className="transcript-work-phase-group__toggle"
           aria-controls={hiddenRegionId}
           aria-expanded={props.expanded}
+          // A live review's visible text ticks every second; the name stays
+          // the group label so it does not change under a screen reader.
+          aria-label={props.label}
           onClick={props.onToggle}
         >
           <span className="transcript-work-phase-group__chevron" aria-hidden="true" />
