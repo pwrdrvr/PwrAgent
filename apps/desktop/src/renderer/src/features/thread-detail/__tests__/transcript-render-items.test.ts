@@ -75,7 +75,7 @@ describe("buildTranscriptRenderItems", () => {
     ]);
   });
 
-  it("labels a dense collapsed work phase with compact tool groups", () => {
+  it("labels a dense collapsed work phase with its tool count only", () => {
     const turn = completedTurn("turn-1", 70_000);
     const activities: AppServerThreadActivityEntry[] = [
       "Read config.toml",
@@ -93,8 +93,7 @@ describe("buildTranscriptRenderItems", () => {
       expect.objectContaining({
         type: "workPhaseGroup",
         entries: activities,
-        label:
-          "Worked for 1m 10s · 3 tool updates: 2 × Read config.toml, Searched messaging",
+        label: "Worked for 1m 10s · 3 tool updates",
       }),
     ]);
   });
@@ -126,12 +125,12 @@ describe("buildTranscriptRenderItems", () => {
         entries,
         label: toolCount === 1
           ? "Worked for 1m 22s"
-          : "Worked for 1m 22s · 2 tool updates: 2 × Read config.toml",
+          : "Worked for 1m 22s · 2 tool updates",
       }),
     ]);
   });
 
-  it("keeps other warnings and failed activities in the work heading", () => {
+  it("counts other warnings and failed activities in the work heading", () => {
     const turn = completedTurn("turn-1", 82_000);
     const entries: AppServerThreadActivityEntry[] = [
       { type: "activity", id: "live-warning-thread-1", summary: "Warning: connection interrupted", details: [], turn },
@@ -141,90 +140,37 @@ describe("buildTranscriptRenderItems", () => {
     expect(buildTranscriptRenderItems({ entries })).toEqual([
       expect.objectContaining({
         entries,
-        label: "Worked for 1m 22s · 2 tool updates: Warning: connection interrupted, Command failed",
+        label: "Worked for 1m 22s · 2 tool updates",
       }),
     ]);
   });
 
-  it("relativizes absolute paths in a collapsed work phase label", () => {
+  it("keeps tool labels out of the heading however long they are", () => {
     const turn = completedTurn("turn-1", 70_000);
-    const root = "/Users/dev/.pwragent/worktrees/ab12/PwrAgnt";
+    const path = "/Users/dev/.pwragent/worktrees/ab12/PwrAgnt/apps/desktop/src/main/messaging/messaging-config.ts";
+    const command = "cat > notes.md <<'EOF'\nfirst line\nsecond line\nEOF";
     const activities: AppServerThreadActivityEntry[] = [
-      `${root}/apps/desktop/src/renderer/src/features/settings/MessagingSettings.tsx`,
-      `${root}/packages/messaging/providers/slack/src/validate-credentials.ts`,
-    ].map((path, index) => ({
-      type: "activity",
-      id: `tool-${index}`,
-      summary: `Read \`${path}\``,
-      details: [
-        { id: `detail-${index}`, kind: "read", label: `Read \`${path}\``, path },
-      ],
-      turn,
-    }));
-
-    expect(
-      buildTranscriptRenderItems({
-        entries: activities,
-        directoryPaths: [root],
-      }),
-    ).toEqual([
-      expect.objectContaining({
-        type: "workPhaseGroup",
-        entries: activities,
-        label:
-          "Worked for 1m 10s · 2 tool updates: "
-          + "Read `apps/desktop/src/renderer/src/features/settings/MessagingSettings.tsx`, "
-          + "Read `packages/messaging/providers/slack/src/validate-credentials.ts`",
-      }),
-    ]);
-  });
-
-  it("coalesces repeated reads of one file after relativizing", () => {
-    const turn = completedTurn("turn-1", 70_000);
-    const root = "/Users/dev/.pwragent/worktrees/ab12/PwrAgnt";
-    const path = `${root}/apps/desktop/src/main/messaging/messaging-config.ts`;
-    const activities: AppServerThreadActivityEntry[] = [0, 1].map((index) => ({
-      type: "activity",
-      id: `tool-${index}`,
-      summary: `Read \`${path}\``,
-      details: [
-        { id: `detail-${index}`, kind: "read", label: `Read \`${path}\``, path },
-      ],
-      turn,
-    }));
-
-    expect(
-      buildTranscriptRenderItems({
-        entries: activities,
-        directoryPaths: [root],
-      }),
-    ).toEqual([
-      expect.objectContaining({
-        type: "workPhaseGroup",
-        label:
-          "Worked for 1m 10s · 2 tool updates: "
-          + "2 × Read `apps/desktop/src/main/messaging/messaging-config.ts`",
-      }),
-    ]);
-  });
-
-  it("leaves a work phase label alone when no directories are linked", () => {
-    const turn = completedTurn("turn-1", 70_000);
-    const path = "/Users/dev/PwrAgnt/apps/desktop/src/main/messaging/messaging-config.ts";
-    const activities: AppServerThreadActivityEntry[] = [0, 1].map((index) => ({
-      type: "activity",
-      id: `tool-${index}`,
-      summary: `Read \`${path}\``,
-      details: [
-        { id: `detail-${index}`, kind: "read", label: `Read \`${path}\``, path },
-      ],
-      turn,
-    }));
+      {
+        type: "activity",
+        id: "tool-0",
+        summary: `Read \`${path}\``,
+        details: [{ id: "detail-0", kind: "read", label: `Read \`${path}\``, path }],
+        turn,
+      },
+      {
+        type: "activity",
+        id: "tool-1",
+        summary: `Ran ${command}`,
+        details: [{ id: "detail-1", kind: "command", label: command }],
+        turn,
+      },
+    ];
 
     expect(buildTranscriptRenderItems({ entries: activities })).toEqual([
       expect.objectContaining({
         type: "workPhaseGroup",
-        label: `Worked for 1m 10s · 2 tool updates: 2 × Read \`${path}\``,
+        entries: activities,
+        label: "Worked for 1m 10s · 2 tool updates",
       }),
     ]);
   });

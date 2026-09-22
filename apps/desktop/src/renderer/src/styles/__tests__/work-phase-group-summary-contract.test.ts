@@ -8,10 +8,11 @@ import { describe, expect, it } from "vitest";
  *
  * The collapsible summary renders inside a `<button>`, and the UA stylesheet
  * gives buttons `text-align: center`; `display: inline-flex` does not reset
- * it. A summary long enough to wrap ("Worked for 3m 49s · 3 tool updates:
- * Ran git diff main...HEAD, Read …") therefore centered every line inside the
- * text column. Measured in headless Chromium against this stylesheet at a
- * 600px column: line one started 22px right of the column and line two 184px.
+ * it. A summary long enough to wrap therefore centered every line inside the
+ * text column. Measured in headless Chromium against this stylesheet with a
+ * 113-character summary at a 600px column: line one started 22px right of the
+ * column and line two 184px. The heading is now only a duration and a tool
+ * count, so it wraps only in a narrow column, but it still must not center.
  * The non-collapsible `<div>` label inherits `start` and never showed it; the
  * declaration sits on the rule the two share so they stay one shape.
  *
