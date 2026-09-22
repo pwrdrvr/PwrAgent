@@ -493,6 +493,55 @@ export type ListAcpAgentSettingsResponse = {
   error?: string;
 };
 
+export type ProviderCatalogRefreshStepStatus =
+  | "pending"
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "cancelled"
+  | "skipped";
+
+/** One provider's part of an all-provider model catalog refresh. */
+export type ProviderCatalogRefreshProviderState = {
+  /** `codex`, or an ACP registry id such as `grok`. */
+  id: string;
+  label: string;
+  status: ProviderCatalogRefreshStepStatus;
+  /** What the provider is doing now, or why it was skipped. */
+  detail?: string;
+  startedAt?: number;
+  finishedAt?: number;
+  modelCount?: number;
+  error?: string;
+};
+
+/**
+ * The Settings "Refresh all providers" run. Main owns it, so a window that
+ * opens Settings mid-run reads the same progress the initiating window sees.
+ */
+export type ProviderCatalogRefreshState = {
+  runId: number;
+  /**
+   * Increases with every published change, across runs, so a reader holding
+   * a newer snapshot can drop an older one that arrives late.
+   */
+  revision: number;
+  status: "running" | "completed" | "cancelled";
+  startedAt: number;
+  finishedAt?: number;
+  /** Shared step the ACP providers wait on, while it runs. */
+  phase?: string;
+  providers: ProviderCatalogRefreshProviderState[];
+};
+
+export type ReadProviderCatalogRefreshResponse = {
+  state?: ProviderCatalogRefreshState;
+};
+
+export type CancelProviderCatalogRefreshRequest = {
+  runId: number;
+};
+
 export type AcknowledgeAcpAgentUpdateRequest = {
   action: "dismiss" | "snooze";
   backendId: AppServerBackendKind;

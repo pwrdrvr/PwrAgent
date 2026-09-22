@@ -3,7 +3,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AcpAgentSettingsEntry } from "@pwragent/shared";
+import type {
+  AcpAgentSettingsEntry,
+  ProviderCatalogRefreshState,
+  ReadProviderCatalogRefreshResponse,
+} from "@pwragent/shared";
 import { DesktopSettingsService } from "../settings/desktop-settings-service";
 import { MemoryDesktopSecretStore } from "../settings/desktop-secret-store";
 import { TokenMiserStore } from "../token-miser/token-miser-store";
@@ -2247,6 +2251,166 @@ describe("settings ipc", () => {
       disposeAppState();
     }
   });
+
+  it("probes providers together and cancels the one that hangs", async () => {
+    const tempRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "pwragent-settings-ipc-"),
+    );
+    tempRoots.push(tempRoot);
+    vi.stubEnv("PWRAGENT_HOME", tempRoot);
+    const localRecord = (registryId: "grok" | "kimi", name: string) => ({
+      backendId: `acp:${registryId}` as const,
+      registryId,
+      name,
+      version: "1.0.0",
+      distributionKind: "local" as const,
+      distributionSource: `${registryId} acp`,
+      installStatus: "installed" as const,
+      authStatus: "not-required" as const,
+      verificationStatus: "not-applicable" as const,
+      allowlistRuleId: `local-${registryId}-cli`,
+      installedAt: 1234,
+      updatedAt: 1234,
+      launchDescriptor: {
+        backendId: `acp:${registryId}` as const,
+        registryId,
+        distributionKind: "local" as const,
+        command: registryId,
+        args: ["acp"],
+        env: {},
+      },
+    });
+    const grok = localRecord("grok", "Grok");
+    const kimi = localRecord("kimi", "Kimi Code CLI");
+    // Grok first: a sequential pass would never reach Kimi.
+    localAcpDiscoveryMock.discoverLocalAcpAgentRecords.mockResolvedValue([
+      grok,
+      kimi,
+    ]);
+    // Codex connects, then stalls on its model and account reads.
+    listBackendsMock.mockImplementationOnce(async (...args: unknown[]) => {
+      (args[2] as { onCodexConnected?: () => void } | undefined)
+        ?.onCodexConnected?.();
+      return await new Promise<never>(() => undefined);
+    });
+    const previousGrokCapabilities = {
+      schemaVersion: 1 as const,
+      status: "discovered" as const,
+      discoveredAt: 500,
+      models: { availableModels: [{ id: "grok-4" }] },
+    };
+    let grokSignal: AbortSignal | undefined;
+    acpRuntimeDiscoveryMock.discoverAcpRuntimeCapabilities.mockImplementation(
+      (async (
+        agent: { registryId: string },
+        options: { signal?: AbortSignal; onStage?: (stage: string) => void },
+      ) => {
+        if (agent.registryId === "kimi") {
+          return {
+            runtimeCapabilities: {
+              schemaVersion: 1,
+              status: "discovered",
+              discoveredAt: Date.now(),
+              models: { availableModels: [{ id: "k3" }, { id: "k2.7" }] },
+            },
+          };
+        }
+        grokSignal = options.signal;
+        options.onStage?.("Opening a session");
+        return await new Promise((_resolve, reject) => {
+          options.signal?.addEventListener("abort", () => {
+            reject(options.signal?.reason);
+          });
+        });
+      }) as never,
+    );
+    const { initializeAppState, disposeAppState, getAppStateDb } = await import(
+      "../state/app-state"
+    );
+    const { AcpAgentStore } = await import("../acp/acp-agent-store");
+    const { registerSettingsIpcHandlers } = await import("../ipc/settings");
+    const {
+      PROVIDER_CATALOG_REFRESH_CANCEL_CHANNEL,
+      PROVIDER_CATALOG_REFRESH_READ_CHANNEL,
+      PROVIDER_CATALOG_REFRESH_START_CHANNEL,
+    } = await import("../../shared/ipc");
+    const service = new DesktopSettingsService({
+      configPath: path.join(tempRoot, "config.toml"),
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+      now: () => 20,
+    });
+    const providerState = (
+      state: ProviderCatalogRefreshState | undefined,
+      id: string,
+    ) => state?.providers.find((provider) => provider.id === id);
+
+    initializeAppState();
+    const upsert = vi.spyOn(AcpAgentStore.prototype, "upsertInstalledAgent");
+    try {
+      new AcpAgentStore(getAppStateDb()).upsertInstalledAgent({
+        ...grok,
+        runtimeCapabilities: previousGrokCapabilities,
+        lastDiscoveredAt: 500,
+      });
+      registerSettingsIpcHandlers(service);
+      const readState = async () =>
+        ((await handlers.get(PROVIDER_CATALOG_REFRESH_READ_CHANNEL)?.({})) as
+          ReadProviderCatalogRefreshResponse).state;
+
+      const started = (await handlers
+        .get(PROVIDER_CATALOG_REFRESH_START_CHANNEL)
+        ?.({})) as ProviderCatalogRefreshState;
+      expect(started.providers.map((provider) => provider.id)).toEqual([
+        "codex",
+        "gemini",
+        "grok",
+        "kimi",
+        "qwen",
+      ]);
+
+      await vi.waitFor(async () => {
+        const state = await readState();
+        expect(providerState(state, "kimi")).toMatchObject({
+          status: "succeeded",
+          modelCount: 2,
+        });
+        expect(providerState(state, "grok")).toMatchObject({
+          status: "running",
+          detail: "Opening a session",
+        });
+        expect(providerState(state, "codex")).toMatchObject({
+          status: "running",
+          detail: "Reading models and account",
+        });
+        expect(state?.status).toBe("running");
+      });
+
+      const cancelled = (await handlers
+        .get(PROVIDER_CATALOG_REFRESH_CANCEL_CHANNEL)
+        ?.({}, { runId: started.runId })) as ReadProviderCatalogRefreshResponse;
+      expect(cancelled.state?.status).toBe("cancelled");
+      expect(providerState(cancelled.state, "grok")?.status).toBe("cancelled");
+      expect(providerState(cancelled.state, "codex")?.status).toBe("cancelled");
+      expect(grokSignal?.aborted).toBe(true);
+
+      // The cancelled probe writes Grok back as it was: no discovery error,
+      // and the capabilities the last completed probe found.
+      const grokWrites = () =>
+        upsert.mock.calls
+          .map(([record]) => record)
+          .filter((record) => record.registryId === "grok");
+      await vi.waitFor(() => expect(grokWrites()).toHaveLength(2));
+      expect(grokWrites()[1]).toMatchObject({
+        runtimeCapabilities: previousGrokCapabilities,
+        lastDiscoveredAt: 500,
+      });
+      expect(grokWrites()[1]?.lastDiscoveryError).toBeUndefined();
+    } finally {
+      upsert.mockRestore();
+      disposeAppState();
+    }
+  }, 20_000);
 
   it("persists a version-keyed Grok update acknowledgement", async () => {
     const tempRoot = fs.mkdtempSync(

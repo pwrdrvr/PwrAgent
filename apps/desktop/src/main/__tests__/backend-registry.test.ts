@@ -14036,6 +14036,66 @@ script = "echo setup"
     await registry.close();
   });
 
+  it("reports Codex connected once initialize answers during a model refresh", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: {
+        serverInfo: { name: "Codex App Server", version: "1.0.0" },
+        methods: ["thread/start", "turn/start"],
+      },
+      models: [],
+    });
+    const initialize = createDeferred<void>();
+    const answerInitialize = codexClient.getInitializeResult.bind(codexClient);
+    codexClient.getInitializeResult = async () => {
+      await initialize.promise;
+      return await answerInitialize();
+    };
+    const onCodexConnected = vi.fn();
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+      createScratchProjectDirectory: async () => "/tmp/pwragent-scratch",
+    });
+
+    const listing = registry.listBackends(
+      { includeUnavailable: true, refreshModels: "codex" },
+      issueProviderDiscoveryPermit("settings-user-action"),
+      { onCodexConnected },
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(onCodexConnected).not.toHaveBeenCalled();
+
+    initialize.resolve();
+    const response = await listing;
+
+    expect(onCodexConnected).toHaveBeenCalledOnce();
+    expect(response.backends[0]?.available).toBe(true);
+    await registry.close();
+  });
+
+  it("never reports Codex connected when initialize fails", async () => {
+    const codexClient = new MockBackendClient({
+      initializeError: new Error("codex unavailable"),
+      models: [],
+    });
+    const onCodexConnected = vi.fn();
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+      createScratchProjectDirectory: async () => "/tmp/pwragent-scratch",
+    });
+
+    const response = await registry.listBackends(
+      { includeUnavailable: true, refreshModels: "codex" },
+      issueProviderDiscoveryPermit("settings-user-action"),
+      { onCodexConnected },
+    );
+
+    expect(response.backends[0]?.available).toBe(false);
+    expect(onCodexConnected).not.toHaveBeenCalled();
+    await registry.close();
+  });
+
   it("keeps fallback backend summary and thread-start defaults aligned", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: {

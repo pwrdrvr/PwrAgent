@@ -5796,6 +5796,14 @@ function buildLaunchpadOptions(
   };
 }
 
+type CodexDiscoveryObserver = {
+  /**
+   * Codex answered `initialize`. Its model, account, and rate-limit reads all
+   * wait on that handshake, so what remains after it is those reads.
+   */
+  onCodexConnected?: () => void;
+};
+
 async function readClientAccount(
   client: BackendClient
 ): Promise<BackendAccountSummary | undefined> {
@@ -10415,6 +10423,7 @@ export class DesktopBackendRegistry {
   async listBackends(
     request: ListBackendsRequest = {},
     discoveryPermit?: ProviderDiscoveryPermit,
+    observer?: CodexDiscoveryObserver,
   ): Promise<ListBackendsResponse> {
     if (request.refreshModels !== undefined) {
       assertProviderDiscoveryPermit(discoveryPermit, [
@@ -10432,7 +10441,7 @@ export class DesktopBackendRegistry {
     }
     const codexSummary =
       request.refreshModels === true || request.refreshModels === "codex"
-        ? await this.discoverCodexBackend(discoveryPermit!)
+        ? await this.discoverCodexBackend(discoveryPermit!, observer)
         : this.readCodexBackendSummary();
     const summaries = [codexSummary];
     const acpSummaries = await this.acpBackend.describeInstalledBackends();
@@ -26006,6 +26015,7 @@ export class DesktopBackendRegistry {
 
   private async discoverCodexBackend(
     permit: ProviderDiscoveryPermit,
+    observer?: CodexDiscoveryObserver,
   ): Promise<BackendSummary> {
     assertProviderDiscoveryPermit(permit);
     const previousSummary = this.readCodexBackendSummary();
@@ -26019,7 +26029,10 @@ export class DesktopBackendRegistry {
       rateLimitsResult,
       runtimeCommandResult,
     ] = await Promise.allSettled([
-      this.codexClient.getInitializeResult(),
+      this.codexClient.getInitializeResult().then((result) => {
+        observer?.onCodexConnected?.();
+        return result;
+      }),
       this.readCodexDefaultModelsOnce("backend-summary"),
       readClientAccount(this.codexClient),
       readClientRateLimits(this.codexClient),

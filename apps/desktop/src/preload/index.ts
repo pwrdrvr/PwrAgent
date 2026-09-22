@@ -166,6 +166,9 @@ import type {
   HandoffThreadWorkspaceResponse,
   ListAcpAgentSettingsRequest,
   ListAcpAgentSettingsResponse,
+  CancelProviderCatalogRefreshRequest,
+  ProviderCatalogRefreshState,
+  ReadProviderCatalogRefreshResponse,
   AcknowledgeAcpAgentUpdateRequest,
   AcknowledgeAcpAgentUpdateResponse,
   NavigationBrowseMode,
@@ -559,6 +562,10 @@ import {
   AGENT_UPDATE_THREAD_EXPECTED_BRANCH_CHANNEL,
   ACP_AGENTS_LIST_CHANNEL,
   ACP_AGENT_UPDATE_ACKNOWLEDGE_CHANNEL,
+  PROVIDER_CATALOG_REFRESH_CANCEL_CHANNEL,
+  PROVIDER_CATALOG_REFRESH_EVENT_CHANNEL,
+  PROVIDER_CATALOG_REFRESH_READ_CHANNEL,
+  PROVIDER_CATALOG_REFRESH_START_CHANNEL,
   AUTOMATIONS_CREATE_CHANNEL,
   AUTOMATIONS_DELETE_CHANNEL,
   AUTOMATIONS_DRAFT_PROMPT_CHANNEL,
@@ -1373,6 +1380,27 @@ const desktopApi = Object.freeze({
     request?: ListAcpAgentSettingsRequest,
   ): Promise<ListAcpAgentSettingsResponse> =>
     await ipcRenderer.invoke(ACP_AGENTS_LIST_CHANNEL, request),
+  startProviderCatalogRefresh: async (): Promise<ProviderCatalogRefreshState> =>
+    await ipcRenderer.invoke(PROVIDER_CATALOG_REFRESH_START_CHANNEL),
+  cancelProviderCatalogRefresh: async (
+    request: CancelProviderCatalogRefreshRequest,
+  ): Promise<ReadProviderCatalogRefreshResponse> =>
+    await ipcRenderer.invoke(PROVIDER_CATALOG_REFRESH_CANCEL_CHANNEL, request),
+  readProviderCatalogRefresh:
+    async (): Promise<ReadProviderCatalogRefreshResponse> =>
+      await ipcRenderer.invoke(PROVIDER_CATALOG_REFRESH_READ_CHANNEL),
+  onProviderCatalogRefresh: (
+    callback: (state: ProviderCatalogRefreshState) => void,
+  ): (() => void) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      state: ProviderCatalogRefreshState,
+    ) => callback(state);
+    ipcRenderer.on(PROVIDER_CATALOG_REFRESH_EVENT_CHANNEL, listener);
+    return () => {
+      ipcRenderer.off(PROVIDER_CATALOG_REFRESH_EVENT_CHANNEL, listener);
+    };
+  },
   acknowledgeAcpAgentUpdate: async (
     request: AcknowledgeAcpAgentUpdateRequest,
   ): Promise<AcknowledgeAcpAgentUpdateResponse> =>

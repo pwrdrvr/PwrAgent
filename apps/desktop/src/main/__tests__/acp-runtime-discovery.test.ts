@@ -119,6 +119,61 @@ describe("discoverAcpRuntimeCapabilities", () => {
     expect(close).toHaveBeenCalledOnce();
   });
 
+  it("terminates a hung agent on abort and reports the step it hung on", async () => {
+    let failPending: ((error: Error) => void) | undefined;
+    const request = vi.fn(async (method: string): Promise<unknown> => {
+      if (method === "initialize") {
+        return { protocolVersion: 1 };
+      }
+      // session/new never answers, as with an agent waiting on a login.
+      return await new Promise((_resolve, reject) => {
+        failPending = reject;
+      });
+    });
+    const close = vi.fn(async () => {
+      failPending?.(new Error("json-rpc transport closed"));
+    });
+    const transport: AcpJsonRpcTransport = {
+      request,
+      close,
+      onNotification: () => () => undefined,
+    };
+    const controller = new AbortController();
+    const stages: string[] = [];
+
+    const discovery = discoverAcpRuntimeCapabilities(buildKimiAgent(), {
+      cwd: "/repo",
+      onStage: (stage) => stages.push(stage),
+      signal: controller.signal,
+      transportFactory: () => transport,
+    });
+    await vi.waitFor(() => {
+      expect(request.mock.calls.map(([method]) => method)).toContain(
+        "session/new",
+      );
+    });
+    controller.abort();
+
+    await expect(discovery).rejects.toMatchObject({ name: "AbortError" });
+    expect(close).toHaveBeenCalled();
+    expect(stages).toEqual(["Starting the CLI", "Opening a session"]);
+  });
+
+  it("does not launch an agent for a discovery aborted before it starts", async () => {
+    const transportFactory = vi.fn();
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      discoverAcpRuntimeCapabilities(buildKimiAgent(), {
+        cwd: "/repo",
+        signal: controller.signal,
+        transportFactory,
+      }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(transportFactory).not.toHaveBeenCalled();
+  });
+
   it("keeps an advertised context window when rebuilding models from config options", async () => {
     // Grok Build advertises both a model list (carrying each window) and
     // model + thought_level config options, which the probe rebuilds from.

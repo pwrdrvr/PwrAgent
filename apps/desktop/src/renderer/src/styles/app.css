@@ -11515,6 +11515,93 @@ a.button {
 }
 
 /* ------------------------------------------------------------------
+   PROVIDER REFRESH PROGRESS (Settings -> AI Providers -> Model catalog)
+
+   One row per provider while "Refresh all providers" runs: what the
+   provider is doing and how long it has been at it, so a provider stuck
+   on one step is visible by name. Every column holds its width while the
+   run moves: the mark is one 12px box whether it holds the spinner or a
+   dot, and the time is tabular so ticking seconds do not nudge the row.
+   ------------------------------------------------------------------ */
+.provider-refresh {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 6px 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  list-style: none;
+}
+
+.provider-refresh__phase {
+  padding: 2px 12px 6px;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+/* Text sits on an 18px line and the mark box is exactly that tall, so the
+   ring or dot centers on the first line even when an error wraps. */
+.provider-refresh__row {
+  display: grid;
+  grid-template-columns: 12px minmax(88px, max-content) minmax(0, 1fr) auto;
+  align-items: start;
+  column-gap: 10px;
+  padding: 4px 12px;
+  font-size: 12.5px;
+  line-height: 18px;
+}
+
+.provider-refresh__mark {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 18px;
+}
+
+.provider-refresh__name {
+  color: var(--text-primary);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* A failure reason can be a stderr tail. Two lines name it; the row's
+   title carries the rest. */
+.provider-refresh__detail {
+  display: -webkit-box;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.provider-refresh__row[data-status="failed"] .provider-refresh__detail {
+  color: var(--text-primary);
+}
+
+.provider-refresh__row[data-status="pending"] .provider-refresh__detail,
+.provider-refresh__row[data-status="cancelled"] .provider-refresh__detail,
+.provider-refresh__row[data-status="skipped"] .provider-refresh__detail {
+  color: var(--text-muted);
+}
+
+.provider-refresh__time {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* Waiting: a ring in the dot's footprint, so it reads as a slot not yet
+   filled rather than as a state. */
+.status-dot.provider-refresh__dot--pending {
+  box-sizing: border-box;
+  border: 1.5px solid var(--text-muted);
+  background: transparent;
+}
+
+/* ------------------------------------------------------------------
    ACP MANAGED BUILD STATUS (Settings -> AI Providers -> Grok)
 
    The PwrAgent-build row reports a release channel, not a boolean:
@@ -33380,6 +33467,9 @@ button.pricing-token-miser__folded:focus-visible {
    `aria-busy` companion and it belongs in the selector below. */
 @media (prefers-reduced-motion: reduce) {
   .settings-pending .pending-spinner,
+  /* A provider row's ring sits beside the step it is on ("Opening a
+     session"), which states the running state without motion. */
+  .provider-refresh .pending-spinner,
   /* The composer's pre-send ring qualifies under the same rule: it sits
      beside the word "Preparing…" and the form carries `aria-busy`, so the
      state survives the ring going still. */

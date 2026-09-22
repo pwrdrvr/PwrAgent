@@ -27,11 +27,20 @@ export async function discoverAcpRuntimeCapabilities(
     now?: () => number;
     requestTimeoutMs?: number;
     transportFactory?: (agent: AcpInstalledAgentRecord) => AcpJsonRpcTransport;
+    /**
+     * Aborting disposes the client, which terminates the agent's process tree
+     * and fails the pending request, so a hung agent stops on demand rather
+     * than holding its request timeout.
+     */
+    signal?: AbortSignal;
+    /** Names the step in progress, for a surface that shows a hung agent. */
+    onStage?: (stage: string) => void;
   },
 ): Promise<AcpRuntimeDiscoveryResult> {
   if (!agent.launchDescriptor) {
     throw new Error(`ACP backend ${agent.backendId} has no launch descriptor`);
   }
+  options.signal?.throwIfAborted();
 
   let runtimeCapabilities: BackendAcpRuntimeCapabilities | undefined;
   let runtimeState: BackendAcpSessionRuntimeState | undefined;
@@ -54,8 +63,14 @@ export async function discoverAcpRuntimeCapabilities(
     },
   });
 
+  const abort = (): void => {
+    void client.dispose().catch(() => undefined);
+  };
+  options.signal?.addEventListener("abort", abort, { once: true });
   try {
+    options.onStage?.("Starting the CLI");
     await client.initialize();
+    options.onStage?.("Opening a session");
     const session = await client.startSession({
       cwd: options.cwd,
       executionMode: "default",
@@ -63,17 +78,26 @@ export async function discoverAcpRuntimeCapabilities(
     });
     runtimeCapabilities = await discoverModelReasoningCapabilities({
       client,
+      onStage: options.onStage,
       readRuntimeCapabilities: () => runtimeCapabilities,
       sessionId: session.sessionId,
     });
+    options.signal?.throwIfAborted();
     return { runtimeCapabilities, runtimeState };
+  } catch (error) {
+    // The disposed transport rejects with "closed"; report the cancellation
+    // instead, so a caller does not record it as a discovery failure.
+    options.signal?.throwIfAborted();
+    throw error;
   } finally {
+    options.signal?.removeEventListener("abort", abort);
     await client.dispose();
   }
 }
 
 type DiscoverySession = {
   client: AcpAgentClient;
+  onStage?: (stage: string) => void;
   readRuntimeCapabilities: () => BackendAcpRuntimeCapabilities | undefined;
   sessionId: string;
 };
@@ -101,7 +125,10 @@ async function discoverModelReasoningCapabilities(
     return contextWindow !== undefined ? { contextWindow } : {};
   };
   try {
-    for (const model of modelOption.values) {
+    for (const [index, model] of modelOption.values.entries()) {
+      params.onStage?.(
+        `Reading model ${index + 1} of ${modelOption.values.length}`,
+      );
       let thoughtLevels: ModelThoughtLevels;
       if (model.value !== selectedModel) {
         try {

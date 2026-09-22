@@ -35,6 +35,11 @@ import {
   CodexAuthProfileLoginButton,
 } from "./CodexAuthProfileSelect";
 import { AcpAgentsSettings } from "./AcpAgentsSettings";
+import {
+  ProviderCatalogRefreshControl,
+  useProviderCatalogRefresh,
+  type ProviderCatalogRefreshController,
+} from "./ProviderCatalogRefresh";
 import { acpStatusLabel } from "./acp-agent-copy";
 import {
   acpAgentEnabledInSnapshot,
@@ -133,6 +138,8 @@ export function ModelsSettings(props: {
   );
   const [catalogError, setCatalogError] = useState<string | undefined>();
   const [refreshingCatalog, setRefreshingCatalog] = useState(false);
+  const catalogRefresh = useProviderCatalogRefresh(props.desktopApi);
+  const catalogBusy = refreshingCatalog || catalogRefresh.running;
   const codex = props.snapshot.models.codex;
   const envForced = codex.path.source === "env";
   // Automatic sources, plus any fixed candidate that failed. An operator who
@@ -174,9 +181,10 @@ export function ModelsSettings(props: {
     }
   }, [props.cachedBackends]);
 
+  // The all-provider refresh runs in main (`useProviderCatalogRefresh`); this
+  // reads the catalog cache, or refreshes Codex alone from its own screen.
   const refreshCatalog = async (
-    force = false,
-    refreshModels: true | "codex" | false = false,
+    refreshModels: "codex" | false = false,
   ): Promise<void> => {
     if (!props.desktopApi?.listBackends) {
       setCatalogError("Provider model discovery is unavailable in this build.");
@@ -184,33 +192,17 @@ export function ModelsSettings(props: {
     }
     setRefreshingCatalog(true);
     try {
-      let acpRegistryRefreshed = false;
-      if (force && props.desktopApi.listAcpAgents) {
-        await props.desktopApi.listAcpAgents({
-          discoveryIntent: "settings-user-action",
-          refresh: true,
-          force: true,
-        });
-        acpRegistryRefreshed = true;
-      }
-      const requestedModelRefresh = force ? true : refreshModels;
       const response = await props.desktopApi.listBackends({
-        ...((force || refreshModels)
-          ? { discoveryIntent: "settings-user-action" as const }
-          : {}),
         includeUnavailable: true,
-        ...(requestedModelRefresh
-          ? { refreshModels: requestedModelRefresh }
+        ...(refreshModels
+          ? {
+              discoveryIntent: "settings-user-action" as const,
+              refreshModels,
+            }
           : {}),
       });
       setBackends(response.backends);
       setCatalogError(undefined);
-      if (acpRegistryRefreshed) {
-        // Announce the registry refresh so every catalog consumer (the
-        // hub index, the nav sub-items, other panes) re-reads — the
-        // catalog has no push channel of its own.
-        window.dispatchEvent(new Event(BACKEND_SUMMARIES_REFRESH_EVENT));
-      }
     } catch (error) {
       setCatalogError(error instanceof Error ? error.message : String(error));
     } finally {
@@ -227,7 +219,7 @@ export function ModelsSettings(props: {
 
   useEffect(() => {
     const refresh = (): void => {
-      void refreshCatalog(false);
+      void refreshCatalog();
     };
     window.addEventListener(BACKEND_SUMMARIES_REFRESH_EVENT, refresh);
     return () => {
@@ -366,11 +358,11 @@ export function ModelsSettings(props: {
                 >
                   <button
                     className="button button--secondary"
-                    disabled={refreshingCatalog || props.saving}
+                    disabled={catalogBusy || props.saving}
                     type="button"
-                    onClick={() => void refreshCatalog(false, "codex")}
+                    onClick={() => void refreshCatalog("codex")}
                   >
-                    {refreshingCatalog ? "Refreshing…" : "Refresh Codex"}
+                    {catalogBusy ? "Refreshing…" : "Refresh Codex"}
                   </button>
                 </div>
               </>
@@ -475,7 +467,7 @@ export function ModelsSettings(props: {
           onEditDefaults={editDefaults}
         />
         <AcpAgentsSettings
-          catalogRefreshing={refreshingCatalog}
+          catalogRefreshing={catalogBusy}
           desktopApi={props.desktopApi}
           only={props.focus}
           saving={props.saving}
@@ -506,9 +498,9 @@ export function ModelsSettings(props: {
         migrations={props.snapshot.models.providerThreadMigrations ?? {}}
         codexFastAllowed={props.snapshot.models.codex.allowFast?.value ?? true}
         error={catalogError}
-        refreshing={refreshingCatalog}
+        catalogRefresh={catalogRefresh}
+        catalogReading={refreshingCatalog}
         saving={props.saving}
-        onRefresh={() => refreshCatalog(true, true)}
         onSave={props.onSaveProviderDefaults}
         onSaveMigrations={props.onSaveProviderThreadMigrations}
         onSaveCodexFastAllowed={props.onSaveCodexFastAllowed}
@@ -637,9 +629,10 @@ function ProviderModelDefaultsSettings(props: {
   migrations: Record<string, DesktopProviderThreadModelMigration>;
   codexFastAllowed: boolean;
   error?: string;
-  refreshing: boolean;
+  catalogRefresh: ProviderCatalogRefreshController;
+  /** A cache read or Codex-only refresh is out. */
+  catalogReading: boolean;
   saving: boolean;
-  onRefresh: () => Promise<void>;
   onSave: (
     defaults: Record<string, DesktopProviderModelDefaults>,
   ) => Promise<void>;
@@ -1026,14 +1019,10 @@ function ProviderModelDefaultsSettings(props: {
             label="Discovered models"
             sub={props.error ?? "No provider has reported a model catalog yet."}
             control={
-              <button
-                className="button button--secondary"
-                disabled={props.refreshing || props.saving}
-                type="button"
-                onClick={() => void props.onRefresh()}
-              >
-                {props.refreshing ? "Refreshing…" : "Refresh all providers"}
-              </button>
+              <ProviderCatalogRefreshControl
+                controller={props.catalogRefresh}
+                disabled={props.catalogReading || props.saving}
+              />
             }
           />
         ) : (
@@ -1045,14 +1034,10 @@ function ProviderModelDefaultsSettings(props: {
                 : "Refresh every provider after installing or upgrading a CLI."
             }
             control={
-              <button
-                className="button button--secondary"
-                disabled={props.refreshing || props.saving}
-                type="button"
-                onClick={() => void props.onRefresh()}
-              >
-                {props.refreshing ? "Refreshing…" : "Refresh all providers"}
-              </button>
+              <ProviderCatalogRefreshControl
+                controller={props.catalogRefresh}
+                disabled={props.catalogReading || props.saving}
+              />
             }
           />
         )}
