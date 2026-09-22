@@ -9196,7 +9196,6 @@ describe("CodexAppServerClient", () => {
       sandbox: "workspace-write",
       serviceTier: "priority",
       config: {
-        fast_mode: true,
         "shell_environment_policy.set.PATH":
           "/Users/fixture-user/.nvm/versions/node/v24.14.1/bin:/usr/bin",
         "shell_environment_policy.set.NVM_DIR": "/Users/fixture-user/.nvm",
@@ -9568,10 +9567,8 @@ describe("CodexAppServerClient", () => {
 
     expect(threadStart).toMatchObject({ config });
     expect(threadResume).toMatchObject({
-      config: {
-        ...config,
-        fast_mode: true,
-      },
+      serviceTier: "priority",
+      config,
     });
     expect(threadFork).toMatchObject({ config });
     expect(observedMessages.join("\n")).not.toContain("pwragent-pdf-secret");
@@ -12227,7 +12224,6 @@ describe("CodexAppServerClient", () => {
           model: "gpt-5.5",
           serviceTier: "priority",
           config: {
-            fast_mode: true,
             "shell_environment_policy.set.PATH":
               "/Users/fixture-user/.nvm/versions/node/v24.14.1/bin:/usr/bin",
           },
@@ -12290,6 +12286,50 @@ describe("CodexAppServerClient", () => {
         }),
       }),
     );
+
+    await client.close();
+  });
+
+  it.each([
+    { fastMode: true, serviceTier: undefined, expectedTier: "priority" },
+    { fastMode: false, serviceTier: "priority", expectedTier: null },
+    { fastMode: false, serviceTier: "flex", expectedTier: "flex" },
+    { fastMode: undefined, serviceTier: undefined, expectedTier: undefined },
+  ])("uses only serviceTier for start, resume, and fork with $fastMode / $serviceTier", async ({
+    fastMode,
+    serviceTier,
+    expectedTier,
+  }) => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+    const config = { model_reasoning_effort: "high" };
+    const settings = { fastMode, serviceTier, config };
+
+    await client.startThread(settings);
+    await client.startTurn({
+      ...settings,
+      threadId: "thread-2",
+      input: [{ type: "text", text: "Continue." }],
+    });
+    await client.forkThread({ ...settings, threadId: "thread-2" });
+
+    const requests = MockTransport.instances.at(-1)!.sentMessages.map(
+      (message) => JSON.parse(message) as {
+        method?: string;
+        params?: Record<string, unknown>;
+      },
+    );
+    for (const method of ["thread/start", "thread/resume", "thread/fork"]) {
+      const request = requests.find((entry) => entry.method === method);
+      expect(request, method).toBeDefined();
+      expect(request!.params?.config, method).toEqual(config);
+      expect(request!.params?.serviceTier, method).toBe(expectedTier);
+    }
+    expect(requests.find((entry) => entry.method === "turn/start")?.params?.serviceTier)
+      .toBe(expectedTier);
 
     await client.close();
   });
@@ -12725,7 +12765,6 @@ describe("CodexAppServerClient", () => {
           serviceTier: "priority",
           cwd: "/Users/example/project",
           "config": {
-            fast_mode: true,
             features: {
               code_mode: {
                 output_reducer: {
