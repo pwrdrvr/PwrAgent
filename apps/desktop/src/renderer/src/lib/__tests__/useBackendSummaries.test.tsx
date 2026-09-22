@@ -1,6 +1,6 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import type { AgentEvent } from "@pwragent/shared";
+import type { AgentEvent, ProviderCatalogRefreshState } from "@pwragent/shared";
 import type { DesktopApi } from "../desktop-api";
 import {
   BACKEND_SUMMARIES_REFRESH_EVENT,
@@ -163,6 +163,42 @@ describe("useBackendSummaries", () => {
     });
     expect(listAcpAgents).not.toHaveBeenCalled();
     expect(listBackends).toHaveBeenCalledTimes(2);
+  });
+
+  it("re-reads summaries when a Settings provider refresh settles", async () => {
+    let listener: ((state: ProviderCatalogRefreshState) => void) | undefined;
+    const listBackends = vi
+      .fn<NonNullable<DesktopApi["listBackends"]>>()
+      .mockResolvedValue({ fetchedAt: 1, backends: [] });
+    const desktopApi: DesktopApi = {
+      listBackends,
+      onProviderCatalogRefresh: (callback) => {
+        listener = callback;
+        return () => undefined;
+      },
+    };
+    const run = (
+      status: ProviderCatalogRefreshState["status"],
+      revision: number,
+    ): ProviderCatalogRefreshState => ({
+      runId: 1,
+      revision,
+      status,
+      startedAt: 1,
+      providers: [],
+    });
+
+    renderHook(() => useBackendSummaries(desktopApi));
+    await waitFor(() => expect(listBackends).toHaveBeenCalledTimes(1));
+
+    // Progress alone reads nothing; the run can take minutes.
+    act(() => listener?.(run("running", 2)));
+    expect(listBackends).toHaveBeenCalledTimes(1);
+
+    // Settings may be closed by now, so this hook re-reads on its own.
+    act(() => listener?.(run("completed", 3)));
+    await waitFor(() => expect(listBackends).toHaveBeenCalledTimes(2));
+    expect(listBackends).toHaveBeenLastCalledWith({ includeUnavailable: true });
   });
 
   it("refreshes backend details when ACP provider status updates", async () => {

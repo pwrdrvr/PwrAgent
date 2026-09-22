@@ -156,6 +156,24 @@ export function useBackendSummaries(
     };
   }, [enabled, refresh]);
 
+  // Settings' "Refresh all providers" runs in main and can outlive the pane
+  // that started it, so the window-local refresh event is not enough: re-read
+  // when main reports the run settled. The run refreshes local providers only.
+  useEffect(() => {
+    if (
+      !enabled
+      || federationTarget?.scope === "remote"
+      || !desktopApi?.onProviderCatalogRefresh
+    ) {
+      return;
+    }
+    return desktopApi.onProviderCatalogRefresh((state) => {
+      if (state.status !== "running") {
+        void refresh();
+      }
+    });
+  }, [desktopApi, enabled, federationTarget, refresh]);
+
   useEffect(() => {
     if (!enabled || !desktopApi?.onAgentEvent) {
       return;

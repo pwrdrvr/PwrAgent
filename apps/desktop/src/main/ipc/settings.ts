@@ -878,10 +878,19 @@ async function listInstalledAndLocalAcpAgents(
           });
         }
       }
-      await Promise.all(probes);
+      // Settle every probe before answering: returning on the first failure
+      // would drop this pass from the coalescing set while sibling agents are
+      // still being probed, inviting a second copy of each.
+      const failure = (await Promise.allSettled(probes)).find(
+        (result): result is PromiseRejectedResult => result.status === "rejected",
+      );
+      if (failure) {
+        throw failure.reason;
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       settingsIpcLog.debug("local_acp_discovery_failed", { error: message });
+      progress?.onPhase(undefined);
       for (const registryId of discoveryRegistryIds) {
         if (!answered.has(registryId)) {
           report(registryId, { status: "failed", error: message });
