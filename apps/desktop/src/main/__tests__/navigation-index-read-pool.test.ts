@@ -99,3 +99,64 @@ it("never retains invalidated in-flight work and caps completed backing", async 
   await pool.read("huge", async () => huge);
   expect(pool.retainedUsage().bytes).toBeLessThan(8 * 1024 * 1024);
 });
+
+
+it.each([512, 2_048])("stops sizing a rejected %i-row snapshot at the retention budget", async (count) => {
+  const pool = new NavigationIndexReadPool(1_000);
+  const row = { id: "fixture", source: "codex" as const, title: "x".repeat(32 * 1024),
+    titleSource: "explicit" as const, linkedDirectories: [], inbox: { inInbox: false } };
+  const snapshot: NavigationQueryIndex = { threads: Array(count).fill(row), directories: [] };
+  const stringify = vi.spyOn(JSON, "stringify");
+  let signal!: AbortSignal;
+  try {
+    expect(await pool.read("fixture", async (sourceSignal) => { signal = sourceSignal; return snapshot; })).toBe(snapshot);
+    const serializedBytes = stringify.mock.results.reduce((sum, result) =>
+      sum + (typeof result.value === "string" ? Buffer.byteLength(result.value) : 0), 0);
+    expect(pool.retainedUsage()).toEqual({ entries: 0, bytes: 0 });
+    expect(signal.aborted).toBe(true);
+    expect(serializedBytes).toBeLessThan(9 * 1024 * 1024);
+  } finally {
+    stringify.mockRestore();
+  }
+});
+
+it.each([0, 1, 127, 128, 129, 300])("charges the exact UTF-8 JSON size across %i-row batch boundaries", async (count) => {
+  const pool = new NavigationIndexReadPool(1_000);
+  const snapshot: NavigationQueryIndex = {
+    localInstanceId: "fixture",
+    coverage: { state: "complete" },
+    threads: Array.from({ length: count }, (_, i) => ({
+      id: String(i), source: "codex", title: "待機 😀 \\\"\n\ud800", titleSource: "explicit",
+      linkedDirectories: [], inbox: { inInbox: false }, updatedAt: undefined,
+    })),
+    directories: Array.from({ length: count }, (_, i) => ({
+      key: String(i), kind: "directory", label: "project", threadKeys: [String(i)], needsAttentionCount: 0,
+    })),
+    inputRequestThreadKeys: new Set(Array.from({ length: count }, (_, i) => `codex:待機:${i}`)),
+  };
+  const expected = Buffer.byteLength(JSON.stringify({ ...snapshot, inputRequestThreadKeys: [...snapshot.inputRequestThreadKeys!] }));
+  await pool.read("fixture", async () => snapshot);
+  expect(pool.retainedUsage()).toEqual({ entries: 1, bytes: expected });
+  pool.invalidate("fixture");
+  expect(pool.retainedUsage()).toEqual({ entries: 0, bytes: 0 });
+});
+
+it("keeps the exact 8 MiB boundary and evicts aggregate backing before admitting another snapshot", async () => {
+  const budget = 8 * 1024 * 1024;
+  const pool = new NavigationIndexReadPool(1_000);
+  const snapshot: NavigationQueryIndex = { threads: [], directories: [], inputRequestThreadKeys: new Set([""]) };
+  const emptyBytes = Buffer.byteLength(JSON.stringify({ ...snapshot, inputRequestThreadKeys: [""] }));
+  snapshot.inputRequestThreadKeys = new Set(["x".repeat(budget - emptyBytes)]);
+  let sourceSignal!: AbortSignal;
+  await pool.read("full", async (signal) => { sourceSignal = signal; return snapshot; });
+  expect(pool.retainedUsage()).toEqual({ entries: 1, bytes: budget });
+  const tooLarge = { ...snapshot, inputRequestThreadKeys: new Set(["x".repeat(budget - emptyBytes + 1)]) };
+  await pool.read("oversized", async () => tooLarge);
+  expect(pool.retainedUsage()).toEqual({ entries: 1, bytes: budget });
+  expect(sourceSignal.aborted).toBe(false);
+  await pool.read("small", async () => index);
+  expect(sourceSignal.aborted).toBe(true);
+  expect(pool.retainedUsage()).toEqual({ entries: 1,
+    bytes: Buffer.byteLength(JSON.stringify({ ...index, inputRequestThreadKeys: [] })) });
+  pool.invalidate("small");
+});
