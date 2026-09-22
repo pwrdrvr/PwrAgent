@@ -1,12 +1,20 @@
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { setGitCommandResolver } from "../git-command";
-import { bundledGitDirectory, bundledGitEnvironment, bundledGitExecutable } from "../bundled-git";
+import {
+  bundledGitConfigDirectory,
+  bundledGitDirectory,
+  bundledGitEnvironment,
+  bundledGitExecutable,
+} from "../bundled-git";
 import { customGitEnvironment, gitRuntimeEnvironment } from "../git-runtime";
 import { resolveGitExecutable, runGitCommand, streamGitCommand } from "../app-server/git-executable";
 
-afterEach(() => setGitCommandResolver(undefined));
+afterEach(() => {
+  setGitCommandResolver(undefined);
+  vi.unstubAllEnvs();
+});
 
 describe("explicit Git runtime selection", () => {
   it("uses the configured executable and lets the environment override it", async () => {
@@ -37,5 +45,16 @@ describe("explicit Git runtime selection", () => {
     setGitCommandResolver(undefined);
     expect(gitRuntimeEnvironment(custom).GIT_EXEC_PATH).toContain(bundledGitDirectory());
     expect(await resolveGitExecutable(custom)).toBe(bundledGitExecutable());
+  });
+
+  it("drops the bundle's generated system config for a selected Git", () => {
+    vi.stubEnv("PWRAGENT_HOME", path.join(os.tmpdir(), "pwragent-generated-config-home"));
+    const generated = path.join(bundledGitConfigDirectory(), "gitconfig-0123456789abcdef");
+    const custom = customGitEnvironment({ GIT_CONFIG_SYSTEM: generated }, process.execPath);
+    expect(custom.GIT_CONFIG_SYSTEM).toBeUndefined();
+    // An operator's own system config is theirs to keep.
+    const own = path.join(os.tmpdir(), "operator-gitconfig");
+    expect(customGitEnvironment({ GIT_CONFIG_SYSTEM: own }, process.execPath).GIT_CONFIG_SYSTEM)
+      .toBe(own);
   });
 });

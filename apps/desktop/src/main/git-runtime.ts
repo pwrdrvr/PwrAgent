@@ -2,7 +2,12 @@ import path from "node:path";
 import { access, constants } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { bundledGitDirectory, bundledGitEnvironment, validateBundledGit } from "./bundled-git";
+import {
+  bundledGitConfigDirectory,
+  bundledGitDirectory,
+  bundledGitEnvironment,
+  validateBundledGit,
+} from "./bundled-git";
 import { getConfiguredGitCommand } from "./git-command";
 
 export const GIT_COMMAND_ENV = "PWRAGENT_GIT_PATH";
@@ -15,10 +20,14 @@ export function gitCommandPreference(env: NodeJS.ProcessEnv): string | undefined
 export function customGitEnvironment(source: NodeJS.ProcessEnv, command: string): NodeJS.ProcessEnv {
   const env = { ...source };
   const root = path.resolve(bundledGitDirectory());
-  const inBundle = (value: string) => {
-    const relative = path.relative(root, value);
+  const within = (directory: string, value: string) => {
+    const relative = path.relative(directory, value);
     return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
   };
+  const inBundle = (value: string) => within(root, value);
+  // The system config PwrAgent generates for the bundle includes Dugite's;
+  // an installed Git reads its own.
+  const generatedConfigs = path.resolve(bundledGitConfigDirectory());
   let inheritedPath = "";
   for (const key of Object.keys(env)) {
     const upper = key.toUpperCase();
@@ -26,7 +35,8 @@ export function customGitEnvironment(source: NodeJS.ProcessEnv, command: string)
       inheritedPath = env[key] ?? "";
       delete env[key];
     } else if (["LOCAL_GIT_DIRECTORY", "GIT_EXEC_PATH", "GIT_TEMPLATE_DIR"].includes(upper)
-      || (["GIT_CONFIG_SYSTEM", "PREFIX", "GIT_SSL_CAINFO"].includes(upper) && env[key] && inBundle(env[key]!))) {
+      || (["GIT_CONFIG_SYSTEM", "PREFIX", "GIT_SSL_CAINFO"].includes(upper) && env[key] && inBundle(env[key]!))
+      || (upper === "GIT_CONFIG_SYSTEM" && env[key] && within(generatedConfigs, env[key]!))) {
       delete env[key];
     }
   }
