@@ -1,5 +1,27 @@
 import type { NavigationQueryIndex } from "./navigation-query-projection";
 
+const RETAINED_BYTE_BUDGET = 8 * 1024 * 1024;
+
+/** Measure only enough of a snapshot to admit it. Native JSON serialization
+ * runs on bounded row batches, avoiding one full temporary snapshot string.
+ * The shell includes empty-array brackets; batches add contents and commas.
+ * Every retained snapshot is charged exactly its original JSON UTF-8 size.
+ */
+function retainedIndexBytes(index: NavigationQueryIndex): number {
+  const inputRequestThreadKeys = [...(index.inputRequestThreadKeys ?? [])];
+  let bytes = Buffer.byteLength(JSON.stringify({
+    ...index, threads: [], directories: [], inputRequestThreadKeys: [],
+  }));
+  if (bytes > RETAINED_BYTE_BUDGET) return bytes;
+  for (const rows of [index.threads, index.directories, inputRequestThreadKeys]) {
+    for (let offset = 0; offset < rows.length; offset += 128) {
+      bytes += Buffer.byteLength(JSON.stringify(rows.slice(offset, offset + 128))) - 2 + (offset ? 1 : 0);
+      if (bytes > RETAINED_BYTE_BUDGET) return bytes;
+    }
+  }
+  return bytes;
+}
+
 type Pending = { controller: AbortController; readers: number; promise: Promise<NavigationQueryIndex> };
 
 /** Shared physical reads with optional short, version-keyed, byte-bounded reuse. */
@@ -23,10 +45,10 @@ export class NavigationIndexReadPool {
 
   private retain(key: string, index: NavigationQueryIndex, owner: Pending): void {
     if (!this.retentionMs || this.joinable.get(key) !== owner || owner.controller.signal.aborted) return;
-    const bytes = Buffer.byteLength(JSON.stringify({ ...index, inputRequestThreadKeys: [...(index.inputRequestThreadKeys ?? [])] }));
-    if (bytes > 8 * 1024 * 1024) return;
+    const bytes = retainedIndexBytes(index);
+    if (bytes > RETAINED_BYTE_BUDGET) return;
     this.evict(key);
-    while (this.retained.size >= 8 || this.retainedBytes + bytes > 8 * 1024 * 1024) this.evict(this.retained.keys().next().value!);
+    while (this.retained.size >= 8 || this.retainedBytes + bytes > RETAINED_BYTE_BUDGET) this.evict(this.retained.keys().next().value!);
     const timer = setTimeout(() => this.evict(key), this.retentionMs);
     timer.unref?.();
     this.retained.set(key, { index, bytes, expires: Date.now() + this.retentionMs, timer, owner });
