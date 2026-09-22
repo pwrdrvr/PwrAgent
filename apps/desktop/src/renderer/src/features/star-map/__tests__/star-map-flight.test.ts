@@ -4,13 +4,16 @@ import {
   interpolateStarMapView,
   starMapFlightIsNoop,
   starMapFlightScale,
+  starMapFramingScale,
   starMapViewFocusedOn,
   STAR_MAP_FLIGHT_SCALE,
 } from "../star-map-flight";
 import {
+  isOverviewZoom,
   MAX_ZOOM,
   MIN_ZOOM,
   MIN_VISIBLE_FRACTION,
+  STAR_MAP_OVERVIEW_ZOOM,
 } from "../star-map-view-geometry";
 
 const VIEWPORT = { width: 1280, height: 800 };
@@ -140,5 +143,36 @@ describe("starMapFlightIsNoop", () => {
     const view = { x: -100, y: -50, scale: 1 };
     expect(starMapFlightIsNoop(view, { ...view, x: -140 })).toBe(false);
     expect(starMapFlightIsNoop(view, { ...view, scale: 1.4 })).toBe(false);
+  });
+});
+
+describe("starMapFramingScale", () => {
+  it("frames a small set at card zoom and pulls back for a wider one", () => {
+    const small = { x: 0, y: 0, width: 300, height: 200 };
+    const wide = { x: 0, y: 0, width: 2_000, height: 600 };
+
+    expect(
+      starMapFramingScale({ rect: small, viewport: VIEWPORT, current: 1 }),
+    ).toBe(STAR_MAP_FLIGHT_SCALE);
+    const scale = starMapFramingScale({
+      rect: wide,
+      viewport: VIEWPORT,
+      current: 1,
+    });
+    expect(scale).toBeLessThan(STAR_MAP_FLIGHT_SCALE);
+    expect(wide.width * scale).toBeLessThanOrEqual(VIEWPORT.width);
+  });
+
+  it("never pulls back past the zoom where cards are drawn", () => {
+    // Rings and cards across a whole fleet: fitted, the camera would land
+    // in the overview, which draws labels and no cards at all.
+    const scale = starMapFramingScale({
+      rect: { x: 0, y: 0, width: 20_000, height: 12_000 },
+      viewport: VIEWPORT,
+      current: 1,
+    });
+
+    expect(scale).toBe(STAR_MAP_OVERVIEW_ZOOM);
+    expect(isOverviewZoom(scale)).toBe(false);
   });
 });
