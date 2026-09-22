@@ -1,7 +1,110 @@
 import { describe, expect, it, vi } from "vitest";
 import { createMcpSafeFetch } from "../mcp-connections/mcp-safe-fetch";
+import { parseErrorResponse } from "@modelcontextprotocol/sdk/client/auth.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 
 describe("createMcpSafeFetch", () => {
+  it("keeps Cloudflare challenge HTML out of SDK OAuth errors", async () => {
+    const response = new Response("<!DOCTYPE html><script>private-challenge</script>", {
+      status: 403,
+      headers: { "content-type": "text/html", "cf-mitigated": "challenge" },
+    });
+    const cancel = vi.spyOn(response.body!, "cancel");
+    const fetchFn = vi.fn(async () => response);
+    const result = await createMcpSafeFetch({ fetchFn })("https://claude.ai/register?secret=value");
+    const error = await parseErrorResponse(result);
+    expect(error.message).toContain("browser verification");
+    expect(error.message).toContain("HTTP 403");
+    expect(error.message).not.toMatch(/private-challenge|<script>|secret=value/);
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  it.each([401, 404, 502])("preserves HTTP %s semantics while replacing HTML", async (status) => {
+    const fetchFn = vi.fn(async () => new Response("<html>private page</html>", {
+      status,
+      headers: {
+        "content-type": "Text/HTML; charset=utf-8",
+        "www-authenticate": "Bearer resource_metadata=\"https://mcp.example.com/metadata\"",
+        "content-length": "999",
+        "content-encoding": "gzip",
+      },
+    }));
+    const result = await createMcpSafeFetch({ fetchFn })("https://mcp.example.com/mcp");
+    expect(result.status).toBe(status);
+    expect(result.headers.get("www-authenticate")).toContain("resource_metadata");
+    expect(result.headers.has("content-length")).toBe(false);
+    expect(result.headers.has("content-encoding")).toBe(false);
+    expect(await result.text()).not.toContain("private page");
+  });
+
+  it.each([200, 202])("rejects an HTTP %s HTML landing page without exposing its body", async (status) => {
+    const fetchFn = vi.fn(async () => new Response("<html>private page</html>", {
+      status,
+      headers: { "content-type": "text/html" },
+    }));
+    await expect(createMcpSafeFetch({ fetchFn })("https://mcp.example.com/mcp"))
+      .rejects.toThrow("returned an HTML page instead of an MCP or OAuth response");
+  });
+
+  it.each([null, "", "empty-stream"])("delivers SDK notifications with an empty HTML-labelled 202 (%s)", async (body) => {
+    const fetchFn = vi.fn<FetchLike>(async (_input, init) => {
+      // Initialization starts an optional SSE GET after the acknowledged POST.
+      if (init?.method === "GET") return new Response(null, { status: 405 });
+      return new Response(
+        body === "empty-stream"
+          ? new ReadableStream<Uint8Array>({
+              start(controller) {
+                controller.enqueue(new Uint8Array());
+                controller.close();
+              },
+            })
+          : body,
+        { status: 202, headers: { "content-type": "text/html" } },
+      );
+    });
+    const transport = new StreamableHTTPClientTransport(new URL("https://mcp.example.com/mcp"), {
+      fetch: createMcpSafeFetch({ fetchFn }),
+    });
+    await transport.start();
+    try {
+      await expect(transport.send({ jsonrpc: "2.0", method: "notifications/initialized" }))
+        .resolves.toBeUndefined();
+      expect(fetchFn.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1);
+    } finally {
+      await transport.close();
+    }
+  });
+
+  it("terminates an SDK session with an empty HTML-labelled 204", async () => {
+    const fetchFn = vi.fn(async () => new Response(null, {
+      status: 204,
+      headers: { "content-type": "text/html" },
+    }));
+    const transport = new StreamableHTTPClientTransport(new URL("https://mcp.example.com/mcp"), {
+      sessionId: "test-session",
+      fetch: createMcpSafeFetch({ fetchFn }),
+    });
+    await transport.start();
+    try {
+      await expect(transport.terminateSession()).resolves.toBeUndefined();
+      expect(fetchFn).toHaveBeenCalledOnce();
+      expect(transport.sessionId).toBeUndefined();
+    } finally {
+      await transport.close();
+    }
+  });
+
+  it("preserves JSON OAuth errors without consuming the response", async () => {
+    const response = new Response(JSON.stringify({ error: "invalid_client" }), {
+      status: 401,
+      headers: { "content-type": "application/json" },
+    });
+    const fetchFn = vi.fn(async () => response);
+    expect(await createMcpSafeFetch({ fetchFn })("https://mcp.example.com/token")).toBe(response);
+    expect(response.bodyUsed).toBe(false);
+  });
+
   it.each([
     "https://mcp.example.com/mcp",
     "https://search.internal.example/mcp",
