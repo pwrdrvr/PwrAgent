@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { ProviderCatalogRefreshState } from "@pwragent/shared";
 import {
   ProviderCatalogRefreshCoordinator,
+  type ProviderCatalogRefreshCodexProgress,
   type ProviderCatalogRefreshProgress,
 } from "../settings/provider-catalog-refresh";
 
@@ -20,7 +21,7 @@ function createCoordinator() {
   const codex = deferred<{ modelCount?: number }>();
   const acp = deferred<void>();
   let progress: ProviderCatalogRefreshProgress | undefined;
-  let codexSignal: AbortSignal | undefined;
+  let codexProgress: ProviderCatalogRefreshCodexProgress | undefined;
   let clock = 1_000;
   const refreshAcp = vi.fn(async (next: ProviderCatalogRefreshProgress) => {
     progress = next;
@@ -33,8 +34,8 @@ function createCoordinator() {
       { id: "grok", label: "Grok" },
       { id: "kimi", label: "Kimi Code CLI" },
     ],
-    refreshCodex: async (signal) => {
-      codexSignal = signal;
+    refreshCodex: async (next) => {
+      codexProgress = next;
       return await codex.promise;
     },
     refreshAcp,
@@ -45,7 +46,12 @@ function createCoordinator() {
       clock += ms;
     },
     codex,
-    codexSignal: () => codexSignal,
+    codexProgress: () => {
+      if (!codexProgress) {
+        throw new Error("refreshCodex has not started");
+      }
+      return codexProgress;
+    },
     coordinator,
     progress: () => {
       if (!progress) {
@@ -70,7 +76,11 @@ describe("ProviderCatalogRefreshCoordinator", () => {
 
     expect(state).toMatchObject({ runId: 1, status: "running" });
     expect(state.providers).toEqual([
-      expect.objectContaining({ id: "codex", status: "running" }),
+      expect.objectContaining({
+        id: "codex",
+        status: "running",
+        detail: "Starting Codex",
+      }),
       { id: "grok", label: "Grok", status: "pending" },
       { id: "kimi", label: "Kimi Code CLI", status: "pending" },
     ]);
@@ -100,8 +110,30 @@ describe("ProviderCatalogRefreshCoordinator", () => {
     expect(coordinator.read()?.status).toBe("running");
   });
 
+  it("moves Codex to its model reads once it connects", async () => {
+    const { codex, codexProgress, coordinator } = createCoordinator();
+    coordinator.start();
+    await vi.waitFor(() => codexProgress());
+
+    codexProgress().onConnected();
+
+    expect(provider(coordinator.read(), "codex")).toMatchObject({
+      status: "running",
+      detail: "Reading models and account",
+      startedAt: 1_000,
+    });
+    codex.resolve({ modelCount: 5 });
+    await vi.waitFor(() => {
+      expect(provider(coordinator.read(), "codex")).toMatchObject({
+        status: "succeeded",
+        modelCount: 5,
+      });
+    });
+    expect(provider(coordinator.read(), "codex")?.detail).toBeUndefined();
+  });
+
   it("settles immediately on cancel and drops what the dying run reports", async () => {
-    const { advance, codex, codexSignal, coordinator, progress } =
+    const { advance, codex, codexProgress, coordinator, progress } =
       createCoordinator();
     const { runId } = coordinator.start();
     await vi.waitFor(() => progress());
@@ -116,7 +148,7 @@ describe("ProviderCatalogRefreshCoordinator", () => {
 
     expect(cancelled).toMatchObject({ status: "cancelled", finishedAt: 91_000 });
     expect(progress().signal.aborted).toBe(true);
-    expect(codexSignal()?.aborted).toBe(true);
+    expect(codexProgress().signal.aborted).toBe(true);
     expect(provider(cancelled, "kimi")).toMatchObject({
       status: "succeeded",
       modelCount: 4,
@@ -129,6 +161,7 @@ describe("ProviderCatalogRefreshCoordinator", () => {
     expect(provider(cancelled, "codex")?.status).toBe("cancelled");
 
     progress().onProvider("grok", { status: "failed", error: "closed" });
+    codexProgress().onConnected();
     codex.resolve({ modelCount: 5 });
     await Promise.resolve();
     expect(coordinator.read()).toBe(cancelled);

@@ -22,16 +22,28 @@ export type ProviderCatalogRefreshProgress = {
   onProvider: (id: string, update: ProviderCatalogRefreshProviderUpdate) => void;
 };
 
+export type ProviderCatalogRefreshCodexProgress = {
+  signal: AbortSignal;
+  /** Codex is up; only its model and account reads remain. */
+  onConnected: () => void;
+};
+
 export type ProviderCatalogRefreshCoordinatorOptions = {
   now?: () => number;
   publish: (state: ProviderCatalogRefreshState) => void;
   /** Enabled ACP providers, listed before discovery reports on any of them. */
   listAcpProviders: () => Array<{ id: string; label: string }>;
-  refreshCodex: (signal: AbortSignal) => Promise<{ modelCount?: number }>;
+  refreshCodex: (
+    progress: ProviderCatalogRefreshCodexProgress,
+  ) => Promise<{ modelCount?: number }>;
   refreshAcp: (progress: ProviderCatalogRefreshProgress) => Promise<void>;
 };
 
 export const CODEX_PROVIDER_CATALOG_ID = "codex";
+// Codex reports two stages so a hang reads as "Codex will not start" or "its
+// model list is slow" rather than one line for both.
+const CODEX_STARTING_STAGE = "Starting Codex";
+const CODEX_READING_STAGE = "Reading models and account";
 
 const TERMINAL_STATUSES: ReadonlySet<ProviderCatalogRefreshStepStatus> = new Set([
   "succeeded",
@@ -88,7 +100,7 @@ export class ProviderCatalogRefreshCoordinator {
           id: CODEX_PROVIDER_CATALOG_ID,
           label: "Codex",
           status: "running",
-          detail: "Reading models and account",
+          detail: CODEX_STARTING_STAGE,
           startedAt,
         },
         ...this.options.listAcpProviders().map(
@@ -128,7 +140,17 @@ export class ProviderCatalogRefreshCoordinator {
 
   private async runCodex(runId: number, signal: AbortSignal): Promise<void> {
     try {
-      const result = await untilAborted(this.options.refreshCodex(signal), signal);
+      const result = await untilAborted(
+        this.options.refreshCodex({
+          signal,
+          onConnected: () =>
+            this.updateProvider(runId, CODEX_PROVIDER_CATALOG_ID, {
+              status: "running",
+              detail: CODEX_READING_STAGE,
+            }),
+        }),
+        signal,
+      );
       this.updateProvider(runId, CODEX_PROVIDER_CATALOG_ID, {
         status: "succeeded",
         ...(result.modelCount !== undefined

@@ -2287,6 +2287,12 @@ describe("settings ipc", () => {
       grok,
       kimi,
     ]);
+    // Codex connects, then stalls on its model and account reads.
+    listBackendsMock.mockImplementationOnce(async (...args: unknown[]) => {
+      (args[2] as { onCodexConnected?: () => void } | undefined)
+        ?.onCodexConnected?.();
+      return await new Promise<never>(() => undefined);
+    });
     const previousGrokCapabilities = {
       schemaVersion: 1 as const,
       status: "discovered" as const,
@@ -2373,6 +2379,10 @@ describe("settings ipc", () => {
           status: "running",
           detail: "Opening a session",
         });
+        expect(providerState(state, "codex")).toMatchObject({
+          status: "running",
+          detail: "Reading models and account",
+        });
         expect(state?.status).toBe("running");
       });
 
@@ -2381,6 +2391,7 @@ describe("settings ipc", () => {
         ?.({}, { runId: started.runId })) as ReadProviderCatalogRefreshResponse;
       expect(cancelled.state?.status).toBe("cancelled");
       expect(providerState(cancelled.state, "grok")?.status).toBe("cancelled");
+      expect(providerState(cancelled.state, "codex")?.status).toBe("cancelled");
       expect(grokSignal?.aborted).toBe(true);
 
       // The cancelled probe writes Grok back as it was: no discovery error,

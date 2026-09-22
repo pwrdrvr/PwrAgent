@@ -1514,10 +1514,11 @@ function createProviderCatalogRefresh(
             ?.displayName ?? registryId,
       }));
     },
-    refreshCodex: async () => {
+    refreshCodex: async (progress) => {
       const response = await getDesktopBackendRegistry().listBackends(
         { includeUnavailable: true, refreshModels: "codex" },
         issueProviderDiscoveryPermit("settings-user-action"),
+        { onCodexConnected: progress.onConnected },
       );
       const codex = response.backends.find(
         (backend) => backend.kind === "codex",
