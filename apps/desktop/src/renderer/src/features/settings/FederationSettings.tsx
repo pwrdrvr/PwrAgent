@@ -704,7 +704,7 @@ export function FederationSettings(props: FederationSettingsProps) {
             label="Listen host"
             sub={
               listensForPeers
-                ? "Local address for gateway mode."
+                ? "Bind to one local IP address, such as 192.168.1.10, or 0.0.0.0 for all IPv4 interfaces. 127.0.0.1 accepts local connections only."
                 : "Only used when Mode is gateway or dual."
             }
             control={

@@ -4118,3 +4118,26 @@ describe("DesktopFederationRuntime", () => {
     ).toBe(true);
   });
 });
+
+
+describe("Cloudflare listener reachability", () => {
+  it.each(["127.0.0.1", "0.0.0.0"])("accepts the loopback origin through %s", (host) => {
+    const securityProbes = {};
+    const runtime = Object.assign(Object.create(DesktopFederationRuntime.prototype), {
+      server: { securityProbes }, listenUrl: `ws://${host}:47830`, stopping: false,
+    }) as DesktopFederationRuntime;
+    expect(runtime.loopbackListenPort()).toBe(47830);
+    expect(runtime.cloudflareSecurityProbes(47830)).toBe(securityProbes);
+    expect(() => runtime.cloudflareSecurityProbes(47831)).toThrow();
+  });
+
+  it("does not claim a LAN-only or stopped listener is reachable on loopback", () => {
+    const runtime = Object.assign(Object.create(DesktopFederationRuntime.prototype), {
+      server: {}, listenUrl: "ws://192.168.1.2:47830", stopping: false,
+    }) as DesktopFederationRuntime;
+    expect(runtime.loopbackListenPort()).toBeUndefined();
+    expect(() => runtime.cloudflareSecurityProbes(47830)).toThrow();
+    Object.assign(runtime, { listenUrl: "ws://0.0.0.0:47830", stopping: true });
+    expect(runtime.loopbackListenPort()).toBeUndefined();
+  });
+});

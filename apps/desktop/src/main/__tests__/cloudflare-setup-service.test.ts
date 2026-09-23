@@ -481,6 +481,7 @@ describe("Cloudflare sign-in (oauth) admission", () => {
     const h = harness("oauth");
     await h.connect();
     await h.provision();
+    h.verifyListener.mockImplementation(() => { throw new Error("listener unavailable"); });
     await h.service.setEmails(["second@example.com", "SECOND@example.com", "third@example.com"]);
     const update = h.calls.filter((call) => call.method === "PUT" && call.path.endsWith(`/policies/${h.state()?.identityPolicyId}`)).at(-1);
     expect(update?.body.include).toEqual([{ email: { email: "second@example.com" } }, { email: { email: "third@example.com" } }]);
