@@ -18638,12 +18638,15 @@ describe("Composer", () => {
       });
     });
     draftStore.listRecoveryCandidates = vi.fn(async () => recoveryCandidates);
-    const deletedDraft =
+    const inputMarkdown =
       "Somebody once told me\n\n\n\n" +
       "The world is gonna roll me\n\n\n\n" +
       "I ain't the sharpest tool in the shed\n\n\n\n" +
       "```\n// This is a tool\n```\n\n\n\n" +
       "- This is\n- Not exactly a tool";
+    // Recovery stores the parsed editor draft, including its normalized
+    // Markdown spacing, rather than the unparsed programmatic input.
+    const deletedDraft = inputMarkdown.replace(/\n{3,}/g, "\n\n");
 
     render(
       <Composer
@@ -18658,7 +18661,7 @@ describe("Composer", () => {
     );
 
     const input = screen.getByLabelText("Reply");
-    fireEvent.change(input, { target: { value: deletedDraft } });
+    fireEvent.change(input, { target: { value: inputMarkdown } });
     await waitFor(() => {
       expect(input).toHaveValue(deletedDraft);
     });

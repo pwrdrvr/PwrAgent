@@ -196,6 +196,89 @@ const pastedCatalogSql = [
 ].join("\n");
 
 describe("ComposerTiptapInput", () => {
+  it("reports the parsed draft once for programmatic input", () => {
+    const { onChange } = renderTiptapInput();
+    const textbox = screen.getByRole("textbox", { name: "Reply" });
+    onChange.mockClear();
+    fireEvent.change(textbox, {
+      target: { value: "First paragraph\n\n\n\nSecond paragraph" },
+    });
+    expect(textbox).toHaveValue("First paragraph\n\nSecond paragraph");
+    expect(onChange).toHaveBeenCalledExactlyOnceWith("First paragraph\n\nSecond paragraph", []);
+  });
+
+  it("normalizes the initial Markdown draft without editability updates", () => {
+    const { onChange } = renderTiptapInput({ value: "First paragraph\n\n\n\nSecond paragraph" });
+    expect(screen.getByRole("textbox", { name: "Reply" })).toHaveValue("First paragraph\n\nSecond paragraph");
+    expect(onChange).toHaveBeenCalledExactlyOnceWith("First paragraph\n\nSecond paragraph", []);
+  });
+
+  it("does not report draft edits when synchronizing editability or autocomplete attributes", () => {
+    const onChange = vi.fn();
+    const props = {
+      id: "reply",
+      label: "Reply",
+      value: "/help",
+      skillTokens: [],
+      placeholder: "Reply",
+      onChange,
+    };
+    const { rerender } = render(<ComposerTiptapInput {...props} />);
+    expect(onChange).not.toHaveBeenCalled();
+
+    rerender(<ComposerTiptapInput {...props} ariaExpanded ariaControls="commands" ariaActiveDescendant="help" />);
+    const textbox = screen.getByRole("textbox", { name: "Reply" });
+    expect(textbox).toHaveAttribute("aria-controls", "commands");
+    expect(textbox).toHaveAttribute("aria-activedescendant", "help");
+    rerender(<ComposerTiptapInput {...props} disabled />);
+    expect(textbox).toHaveAttribute("contenteditable", "false");
+    expect(textbox).not.toHaveAttribute("aria-controls");
+    expect(textbox).not.toHaveAttribute("aria-activedescendant");
+    rerender(<ComposerTiptapInput {...props} />);
+    expect(textbox).toHaveAttribute("contenteditable", "true");
+    expect(textbox).toHaveTextContent("/help");
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("restores a draft that opens autocomplete without replaying the old editor value", () => {
+    const onChange = vi.fn();
+    function Wrapper() {
+      const [value, setValue] = useState("");
+      const [skillTokens, setSkillTokens] = useState<ComposerSkillToken[]>([]);
+      const showAutocomplete = value.startsWith("/");
+      return (
+        <>
+          <button onClick={() => setValue("/help")}>Restore draft</button>
+          <ComposerTiptapInput
+            id="reply"
+            label="Reply"
+            markdownConversion
+            value={value}
+            skillTokens={skillTokens}
+            placeholder="Reply"
+            ariaExpanded={showAutocomplete}
+            ariaControls={showAutocomplete ? "commands" : undefined}
+            ariaActiveDescendant={showAutocomplete ? "help" : undefined}
+            onChange={(nextValue, nextSkillTokens = []) => {
+              onChange(nextValue);
+              setValue(nextValue);
+              setSkillTokens(nextSkillTokens);
+            }}
+          />
+        </>
+      );
+    }
+
+    render(<Wrapper />);
+    onChange.mockClear();
+    fireEvent.click(screen.getByRole("button", { name: "Restore draft" }));
+    const textbox = screen.getByRole("textbox", { name: "Reply" });
+    expect(textbox).toHaveTextContent("/help");
+    expect(textbox).toHaveAttribute("aria-controls", "commands");
+    expect(textbox).toHaveAttribute("aria-activedescendant", "help");
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
   it("keeps read-only text selectable without running edit, paste, drop, or submit handlers", () => {
     const onChange = vi.fn();
     const onKeyDown = vi.fn();
