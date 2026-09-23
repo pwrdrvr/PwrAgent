@@ -1,0 +1,51 @@
+diff --git a/lib/coreBundle.js b/lib/coreBundle.js
+index 8ed8bb5de1b12c7c050191123b22a119298826bb..7e05995baa038ab3a1af175a72820f250d227e33 100644
+--- a/lib/coreBundle.js
++++ b/lib/coreBundle.js
+@@ -9323,13 +9323,16 @@ async function launchProcess(options) {
+     stdio
+   };
+   const spawnedProcess = childProcess.spawn(options.command, options.args || [], spawnOptions);
++  const diagnostics = globalThis[Symbol.for("pwragent.playwrightShutdownDiagnostics")]?.launched(spawnedProcess, gracefullyClose);
+   const cleanup = async () => {
++    diagnostics?.stage("temporary-directories");
+     options.log(`[pid=${spawnedProcess.pid || "N/A"}] starting temporary directories cleanup`);
+     const errors = await removeFolders(options.tempDirectories);
+     for (let i = 0; i < options.tempDirectories.length; ++i) {
+       if (errors[i])
+         options.log(`[pid=${spawnedProcess.pid || "N/A"}] exception while removing ${options.tempDirectories[i]}: ${errors[i]}`);
+     }
++    diagnostics?.stage("cleaned");
+     options.log(`[pid=${spawnedProcess.pid || "N/A"}] finished temporary directories cleanup`);
+   };
+   spawnedProcess.on("error", () => {
+@@ -9378,16 +9381,21 @@ async function launchProcess(options) {
+   killSet.add(killProcessAndCleanup);
+   let gracefullyClosing = false;
+   async function gracefullyClose() {
++    diagnostics?.stage("graceful-close");
+     if (gracefullyClosing) {
+       options.log(`[pid=${spawnedProcess.pid}] <forcefully close>`);
+       killProcess();
++      diagnostics?.stage("wait-for-process-close-and-cleanup");
+       await waitForCleanup;
+       return;
+     }
+     gracefullyClosing = true;
+     options.log(`[pid=${spawnedProcess.pid}] <gracefully close start>`);
++    diagnostics?.stage("attempt-to-gracefully-close");
+     await options.attemptToGracefullyClose().catch(() => killProcess());
++    diagnostics?.stage("wait-for-process-close-and-cleanup");
+     await waitForCleanup;
++    diagnostics?.stage("graceful-close-completed");
+     options.log(`[pid=${spawnedProcess.pid}] <gracefully close end>`);
+   }
+   function killProcess() {
+@@ -9425,6 +9433,7 @@ async function launchProcess(options) {
+         options.log(`[pid=${spawnedProcess.pid || "N/A"}] exception while removing ${dir}: ${e}`);
+       }
+     }
++    diagnostics?.stage("cleaned");
+     options.log(`[pid=${spawnedProcess.pid || "N/A"}] finished temporary directories cleanup`);
+   }
+   function killAndWait() {

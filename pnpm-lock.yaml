@@ -42,6 +42,12 @@ patchedDependencies:
   khroma@2.1.0:
     hash: 2d947e3babbdfcfad137cbccca33429445e6e185c1c94a32039fe95af34623c7
     path: patches/khroma@2.1.0.patch
+  playwright-core@1.63.0:
+    hash: 8554b4c8ba32f72c901e65b8d75d007a24c94f013f9df9983f0dda077f94c82d
+    path: patches/playwright-core@1.63.0.patch
+  playwright@1.63.0:
+    hash: ccabdd5daece7ce9554aa2d1f3b012c121461ddaa14f7ca7dfe4d48289866487
+    path: patches/playwright@1.63.0.patch
 
 importers:
 
@@ -227,7 +233,7 @@ importers:
         version: 1.4.0(zod@4.4.3)
       '@axe-core/playwright':
         specifier: ^4.11.3
-        version: 4.13.0(playwright-core@1.63.0)
+        version: 4.13.0(playwright-core@1.63.0(patch_hash=8554b4c8ba32f72c901e65b8d75d007a24c94f013f9df9983f0dda077f94c82d))
       '@electron/asar':
         specifier: ^4.2.0
         version: 4.3.0
@@ -5169,10 +5175,10 @@ snapshots:
       is-potential-custom-element-name: 1.0.1
       lru-cache: 11.5.2
 
-  '@axe-core/playwright@4.13.0(playwright-core@1.63.0)':
+  '@axe-core/playwright@4.13.0(playwright-core@1.63.0(patch_hash=8554b4c8ba32f72c901e65b8d75d007a24c94f013f9df9983f0dda077f94c82d))':
     dependencies:
       axe-core: 4.13.0
-      playwright-core: 1.63.0
+      playwright-core: 1.63.0(patch_hash=8554b4c8ba32f72c901e65b8d75d007a24c94f013f9df9983f0dda077f94c82d)
 
   '@babel/code-frame@7.29.7':
     dependencies:
@@ -5979,7 +5985,7 @@ snapshots:
 
   '@playwright/test@1.63.0':
     dependencies:
-      playwright: 1.63.0
+      playwright: 1.63.0(patch_hash=ccabdd5daece7ce9554aa2d1f3b012c121461ddaa14f7ca7dfe4d48289866487)
 
   '@protobufjs/aspromise@1.1.2': {}
 
@@ -9360,11 +9366,11 @@ snapshots:
       pvutils: 1.2.0
       tslib: 2.8.1
 
-  playwright-core@1.63.0: {}
+  playwright-core@1.63.0(patch_hash=8554b4c8ba32f72c901e65b8d75d007a24c94f013f9df9983f0dda077f94c82d): {}
 
-  playwright@1.63.0:
+  playwright@1.63.0(patch_hash=ccabdd5daece7ce9554aa2d1f3b012c121461ddaa14f7ca7dfe4d48289866487):
     dependencies:
-      playwright-core: 1.63.0
+      playwright-core: 1.63.0(patch_hash=8554b4c8ba32f72c901e65b8d75d007a24c94f013f9df9983f0dda077f94c82d)
 
   plist@3.1.0:
     dependencies:
