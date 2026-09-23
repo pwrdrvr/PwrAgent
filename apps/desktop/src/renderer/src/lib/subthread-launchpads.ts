@@ -1,7 +1,13 @@
 import type { NavigationThreadSummary } from "@pwragent/shared";
 import { SUBTHREAD_LAUNCHPAD_KEY_PREFIX } from "@pwragent/shared";
 
-export type ThreadWorkspaceMode = "local" | "same-worktree" | "new-worktree";
+export type ThreadWorkspaceMode = "local" | "same-worktree" | "new-worktree" | "new-workspace";
+
+export function getThreadPrimaryDirectory(thread: NavigationThreadSummary) {
+  return thread.linkedDirectories.find((directory) =>
+    (directory.worktreePath ?? directory.path) === thread.projectKey,
+  ) ?? thread.linkedDirectories[0];
+}
 
 export function buildSubthreadLaunchpadKey(
   parent: Pick<NavigationThreadSummary, "id" | "source">,
@@ -19,7 +25,7 @@ export function getSubthreadLaunchpadMode(
   }
 
   const mode = parts[3];
-  if (mode === "local" || mode === "same-worktree" || mode === "new-worktree") {
+  if (mode === "local" || mode === "same-worktree" || mode === "new-worktree" || mode === "new-workspace") {
     return mode;
   }
   return undefined;

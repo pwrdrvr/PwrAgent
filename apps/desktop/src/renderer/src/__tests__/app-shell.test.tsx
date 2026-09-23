@@ -5994,7 +5994,7 @@ describe("App", () => {
       await screen.findByRole("button", { name: "Second project thread" }),
     );
     fireEvent.click(
-      await screen.findByRole("menuitem", { name: "Sub-thread in Local" }),
+      await screen.findByRole("menuitem", { name: "Sub-thread in This Directory" }),
     );
     await screen.findByRole("heading", { level: 2, name: "New thread" });
     expect(

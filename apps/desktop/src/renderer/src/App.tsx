@@ -2902,6 +2902,7 @@ function DesktopAppShell(props: {
           onAddProjectDirectory={readRendererFederationTarget()
             ? undefined
             : addProjectDirectory}
+          readThreadWorktreeAvailability={navigation.readThreadWorktreeAvailability}
           onCreateSubthread={async (thread, mode) => {
             setMainView("thread");
             await navigation.createSubthread(thread, mode);

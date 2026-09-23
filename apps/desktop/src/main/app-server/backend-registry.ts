@@ -15563,7 +15563,9 @@ export class DesktopBackendRegistry {
       );
     }
     request.onPreparedWorkspaceRollback?.(preparedWorkspace.rollback);
-    const cwd = preparedWorkspace.cwd;
+    const cwd = directoryKind === "workspace" && !preparedWorkspace.cwd
+      ? await this.createScratchProjectDirectory()
+      : preparedWorkspace.cwd;
     const linkedDirectories =
       preparedWorkspace.workMode === "worktree"
         ? buildWorktreeLinkedDirectory({
@@ -15608,9 +15610,11 @@ export class DesktopBackendRegistry {
     let codexEnvironmentStartupFailure: CodexEnvironmentStartupFailure | undefined;
     try {
       try {
-        const sourceRuntime = Object.hasOwn(request, "codexEnvironmentRuntime")
-          ? request.codexEnvironmentRuntime
-          : sourceOverlay?.codexEnvironmentRuntime;
+        const sourceRuntime = directoryKind === "workspace"
+          ? undefined
+          : Object.hasOwn(request, "codexEnvironmentRuntime")
+            ? request.codexEnvironmentRuntime
+            : sourceOverlay?.codexEnvironmentRuntime;
         forkedCodexEnvironmentRuntime = await this.buildForkedCodexEnvironmentRuntime({
           cwd,
           onSetupProgress: request.onCodexEnvironmentSetupProgress

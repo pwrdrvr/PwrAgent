@@ -1801,7 +1801,7 @@ describe("Sidebar", () => {
     );
 
     fireEvent.contextMenu(screen.getByRole("button", { name: /^Cross-project cleanup/ }));
-    expect(screen.queryByRole("menuitem", { name: "Sub-thread in Local" })).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: "Sub-thread in This Directory" })).toBeNull();
     fireEvent.click(screen.getByRole("menuitem", { name: "Sub-thread in Same Worktree" }));
 
     expect(onCreateSubthread).toHaveBeenCalledWith(sharedThread, "same-worktree");
@@ -2050,7 +2050,7 @@ describe("Sidebar", () => {
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "Local checkout cleanup" }));
     expect(screen.queryByRole("menuitem", { name: "Sub-thread in Same Worktree" })).toBeNull();
-    fireEvent.click(screen.getByRole("menuitem", { name: "Sub-thread in Local" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Sub-thread in This Directory" }));
 
     expect(onCreateSubthread).toHaveBeenCalledWith(localThread, "local");
 
@@ -2059,6 +2059,79 @@ describe("Sidebar", () => {
 
     expect(onCreateSubthread).toHaveBeenCalledWith(localThread, "new-worktree");
   });
+
+  it.each([false, true])("waits for owner Git capability before enabling creation (%s)", async (available) => {
+    let resolveAvailability!: (available: boolean) => void;
+    const readThreadWorktreeAvailability = vi.fn(() => new Promise<boolean>((resolve) => { resolveAvailability = resolve; }));
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="inbox"
+        directories={directories}
+        inboxThreads={[localThread]}
+        loading={false}
+        threads={[localThread]}
+        readThreadWorktreeAvailability={readThreadWorktreeAvailability}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onCreateSubthread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />,
+    );
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Local checkout cleanup" }));
+    expect(screen.queryByRole("menuitem", { name: /New Worktree/ })).toBeNull();
+    expect(screen.getByRole("menuitem", { name: "Sub-thread in New Workspace" })).toBeDisabled();
+    await act(async () => { resolveAvailability(available); });
+    expect(screen.getByRole("menuitem", {
+      name: available ? "Sub-thread in New Worktree" : "Sub-thread in New Workspace",
+    })).toBeEnabled();
+    expect(readThreadWorktreeAvailability).toHaveBeenCalledWith(localThread);
+  });
+
+  it.each([undefined, { currentBranch: "main", worktreeCreationAvailable: false }])(
+    "offers workspace actions without worktrees when Git creation is unavailable (%j)",
+    (gitStatus) => {
+      const workspaceThread = {
+        ...localThread,
+        gitBranch: undefined,
+        projectKey: "/scratch/research",
+        linkedDirectories: [{ id: "scratch", label: "Research", path: "/scratch/research", kind: "local" as const }],
+      };
+      const onCreateSubthread = vi.fn(async () => undefined);
+      const onForkThread = vi.fn(async () => undefined);
+      render(
+        <Sidebar
+          backends={[{ ...backends[0]!, capabilities: { ...backends[0]!.capabilities, forkThread: true } }]}
+          browseMode="inbox"
+          directories={[{ ...directories[0]!, kind: "workspace", path: "/scratch/research", gitStatus }]}
+          inboxThreads={[workspaceThread]}
+          loading={false}
+          threads={[workspaceThread]}
+          onBrowseModeChange={() => undefined}
+          onCreateThread={async () => undefined}
+          onCreateSubthread={onCreateSubthread}
+          onForkThread={onForkThread}
+          onOpenLaunchpad={async () => undefined}
+          onSelectThread={() => undefined}
+        />,
+      );
+      const openMenu = () => fireEvent.contextMenu(screen.getByRole("button", { name: "Local checkout cleanup" }));
+      openMenu();
+      expect(screen.queryAllByRole("menuitem", { name: /Worktree/ })).toHaveLength(0);
+      fireEvent.click(screen.getByRole("menuitem", { name: "Sub-thread in This Directory" }));
+      expect(onCreateSubthread).toHaveBeenCalledWith(workspaceThread, "local");
+      openMenu();
+      fireEvent.click(screen.getByRole("menuitem", { name: "Sub-thread in New Workspace" }));
+      expect(onCreateSubthread).toHaveBeenCalledWith(workspaceThread, "new-workspace");
+      openMenu();
+      fireEvent.click(screen.getByRole("menuitem", { name: "Fork in This Directory" }));
+      expect(onForkThread).toHaveBeenCalledWith(workspaceThread, "local");
+      openMenu();
+      fireEvent.click(screen.getByRole("menuitem", { name: "Fork in New Workspace" }));
+      expect(onForkThread).toHaveBeenCalledWith(workspaceThread, "new-workspace");
+    },
+  );
 
   it("forks a Codex thread from the thread context menu", () => {
     const onForkThread = vi.fn(async () => undefined);
@@ -2124,7 +2197,7 @@ describe("Sidebar", () => {
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "Local checkout cleanup" }));
     expect(screen.queryByRole("menuitem", { name: "Fork into Same Worktree" })).toBeNull();
-    fireEvent.click(screen.getByRole("menuitem", { name: "Fork in Local" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Fork in This Directory" }));
 
     expect(onForkThread).toHaveBeenCalledWith(localThread, "local");
 
@@ -2157,7 +2230,7 @@ describe("Sidebar", () => {
 
     expect(screen.queryByRole("menuitem", { name: "Fork into Same Worktree" })).toBeNull();
     expect(screen.queryByRole("menuitem", { name: "Fork into New Worktree" })).toBeNull();
-    expect(screen.queryByRole("menuitem", { name: "Fork in Local" })).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: "Fork in This Directory" })).toBeNull();
   });
 
   it("exposes sub-thread and fork actions on a child card", () => {

@@ -20945,6 +20945,43 @@ script = "printf setup-output"
     await registry.close();
   });
 
+  it("forks into a fresh scratch workspace with an explicit cwd and parent", async () => {
+    const overlayStore = createOverlayStoreMock();
+    await overlayStore.setThreadCodexEnvironmentRuntime?.({
+      backend: "codex",
+      threadId: "thread-parent",
+      codexEnvironmentRuntime: {
+        environmentId: "source", environmentName: "Source", executionTarget: "local",
+        cwd: "/source", shellEnvironment: { SOURCE_ROOT: "/source" },
+      },
+    });
+    const codexClient = new MockBackendClient({ initializeResult: { methods: ["thread/fork"] } });
+    const createScratchProjectDirectory = vi.fn(async () => "/tmp/fresh-fork-workspace");
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore,
+      createScratchProjectDirectory,
+    });
+    const response = await registry.forkThread({
+      backend: "codex",
+      sourceThreadId: "thread-parent",
+      parentThreadId: "thread-parent",
+      directoryKind: "workspace",
+      directoryLabel: "New Workspace",
+      workMode: "local",
+    });
+    expect(createScratchProjectDirectory).toHaveBeenCalledOnce();
+    expect(codexClient.lastForkThreadParams).toMatchObject({
+      threadId: "thread-parent",
+      cwd: "/tmp/fresh-fork-workspace",
+    });
+    expect(codexClient.lastForkThreadParams?.codexEnvironmentRuntime).toBeUndefined();
+    expect(response.linkedDirectory).toMatchObject({ kind: "local", path: expectedDir("/tmp/fresh-fork-workspace") });
+    expect(await overlayStore.getThreadOverlayState({ backend: "codex", threadId: "thread-fork" }))
+      .toMatchObject({ parentThreadId: "thread-parent" });
+    await registry.close();
+  });
+
   it("forks a Codex thread into the same worktree and records the visual parent", async () => {
     const overlayStore = createOverlayStoreMock();
     const codexClient = new MockBackendClient({
