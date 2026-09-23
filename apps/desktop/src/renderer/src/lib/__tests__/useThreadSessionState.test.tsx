@@ -2995,6 +2995,84 @@ describe("useThreadSessionState", () => {
     expect(result.current.activeTurnStartedAt).toBe(5_000);
   });
 
+  it.each([
+    { transition: "active", interaction: false, expectedTurn: "turn-1" },
+    { transition: "active", interaction: true, expectedTurn: "turn-1" },
+    { transition: "idle", interaction: true, expectedTurn: undefined },
+    { transition: "completed then active", interaction: true, expectedTurn: undefined },
+    { transition: "new turn then active", interaction: true, expectedTurn: "turn-2" },
+  ])("hydrates compatible mid-turn state after $transition (interaction: $interaction)", async ({
+    transition, interaction, expectedTurn,
+  }) => {
+    let emit: (event: AgentEvent) => void = () => undefined;
+    let resolveRead!: (response: AppServerReadThreadResponse) => void;
+    const readThread = vi.fn(() => new Promise<AppServerReadThreadResponse>((resolve) => {
+      resolveRead = resolve;
+    }));
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (listener) => { emit = listener; return () => undefined; },
+      readThread,
+    };
+    const response: AppServerReadThreadResponse = {
+      ...readThreadResponse({
+        entries: [{
+          ...messageEntry({ id: "commentary-1", createdAt: 5_000, text: "Working." }),
+          phase: "commentary",
+          turn: { id: "turn-1", status: "in_progress", startedAt: 5_000 },
+        }],
+        hasPreviousPage: false,
+        threadStatus: "active",
+      }),
+      ...(interaction ? {
+        pendingRequest: {
+          method: "item/tool/requestUserInput" as const,
+          params: {
+            threadId: "thread-1", turnId: "turn-1", itemId: "input-1", requestId: "request-1",
+            questions: [{
+              id: "scope", header: "Scope", question: "Which scope?", isOther: false, isSecret: false,
+              options: [{ label: "Current", description: "Use the current scope." }],
+            }],
+          },
+        },
+      } : {}),
+    };
+    const { result } = renderHook(() => useThreadSessionState({
+      desktopApi,
+      thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+    }));
+    await waitFor(() => expect(readThread).toHaveBeenCalledTimes(1));
+
+    act(() => {
+      if (transition === "completed then active") {
+        emit({ backend: "codex", notification: { method: "turn/completed", params: {
+          threadId: "thread-1", turnId: "turn-1",
+          turn: { id: "turn-1", status: "completed", output: [{ type: "text", text: "Done." }] },
+        } } });
+      } else if (transition === "new turn then active") {
+        emit({ backend: "codex", notification: { method: "turn/started", params: {
+          threadId: "thread-1", turn: { id: "turn-2", status: "inProgress" },
+        } } });
+      }
+      emit({ backend: "codex", notification: { method: "thread/status/changed", params: {
+        threadId: "thread-1", status: { type: transition === "idle" ? "idle" : "active" },
+      } } });
+    });
+    await act(async () => { resolveRead(response); });
+    await waitForThreadHydration(result);
+
+    expect(result.current.activeTurnId).toBe(expectedTurn);
+    expect(result.current.threadBusy).toBe(transition !== "idle");
+    if (transition === "active" && interaction) {
+      expect(result.current.pendingUserInput?.requestId).toBe("request-1");
+      expect(result.current.pendingStatusText).toBe("Waiting for input");
+    } else {
+      expect(result.current.pendingUserInput).toBeUndefined();
+    }
+    if (transition === "active" && !interaction) {
+      expect(result.current.activeTurnStartedAt).toBe(5_000);
+    }
+  });
+
   it("does not adopt a stale in-progress turn from an idle hydration snapshot", async () => {
     const staleTurn = {
       id: "turn-stale",

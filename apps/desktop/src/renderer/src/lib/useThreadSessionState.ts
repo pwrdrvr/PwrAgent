@@ -4676,7 +4676,10 @@ export function useThreadSessionState(params: {
     threadKey,
   ]);
   const selectedThreadKeyRef = useRef<string | undefined>(undefined);
-  const liveLifecycleVersionsRef = useRef(new Map<string, number>());
+  const liveLifecycleVersionsRef = useRef(new Map<string, {
+    revision: number;
+    turnRevision: number;
+  }>());
   const consumedOptimisticActiveTurnKeysRef = useRef<Set<string>>(new Set());
   const launchpadMessageCandidateRef = useRef<{
     candidate: LaunchpadMessageCandidate;
@@ -4891,7 +4894,7 @@ export function useThreadSessionState(params: {
       }
 
       const requestVersion = (requestVersionsRef.current[targetThreadKey] ?? 0) + 1;
-      const readLifecycleVersion = liveLifecycleVersionsRef.current.get(targetThreadKey) ?? 0;
+      const readLifecycleVersion = liveLifecycleVersionsRef.current.get(targetThreadKey);
       requestVersionsRef.current[targetThreadKey] = requestVersion;
       inFlightHydrationsRef.current.set(targetThreadKey, requestVersion);
 
@@ -4966,8 +4969,16 @@ export function useThreadSessionState(params: {
           // A read can capture active state before turn/completed and arrive
           // after it. Keep its transcript, but let the newer live lifecycle
           // own activity and pending interactions (also for a racing start).
-          const lifecycleChangedDuringRead = readLifecycleVersion
-            !== (liveLifecycleVersionsRef.current.get(targetThreadKey) ?? 0);
+          // A compatible active status alone has no turn ID or interaction,
+          // so the snapshot must still be allowed to supply those fields.
+          const currentLifecycleVersion = liveLifecycleVersionsRef.current.get(targetThreadKey);
+          const compatibleActiveStatus =
+            (readLifecycleVersion?.turnRevision ?? 0) === (currentLifecycleVersion?.turnRevision ?? 0)
+            && readResponseThreadStatus(response) === "active"
+            && current.backendReportedActive === true;
+          const lifecycleChangedDuringRead =
+            readLifecycleVersion?.revision !== currentLifecycleVersion?.revision
+            && !compatibleActiveStatus;
           const retainedLiveEntryStore =
             retainedLiveEntriesRef.current[targetThreadKey];
           const retainedLiveEntries = retainedLiveEntryStore
@@ -5734,8 +5745,12 @@ export function useThreadSessionState(params: {
         || event.notification.method === "turn/completed"
         || event.notification.method === "turn/failed"
         || event.notification.method === "turn/cancelled") {
-        liveLifecycleVersionsRef.current.set(targetThreadKey,
-          (liveLifecycleVersionsRef.current.get(targetThreadKey) ?? 0) + 1);
+        const previous = liveLifecycleVersionsRef.current.get(targetThreadKey);
+        liveLifecycleVersionsRef.current.set(targetThreadKey, {
+          revision: (previous?.revision ?? 0) + 1,
+          turnRevision: (previous?.turnRevision ?? 0)
+            + (event.notification.method === "thread/status/changed" ? 0 : 1),
+        });
       }
 
       updateSession(targetThreadKey, (session) => {
