@@ -2441,7 +2441,6 @@ export const ComposerTiptapInput = forwardRef<
 >(function ComposerTiptapInput(props, ref) {
   const propsRef = useRef(props);
   const editorRef = useRef<TiptapEditor | null>(null);
-  const wasReadOnlyRef = useRef(false);
   const [threadContextMenu, setThreadContextMenu] =
     useState<ComposerThreadContextMenuState>();
   const selectionIndexRef = useRef(props.value.length);
@@ -2885,10 +2884,27 @@ export const ComposerTiptapInput = forwardRef<
       return;
     }
 
-    // Entering or leaving read-only mode is not a draft edit. Emitting an
-    // update would clear the parent's send error when a failed check unlocks.
-    editor.setEditable(!props.disabled && !props.readOnly, !props.readOnly && !wasReadOnlyRef.current);
-    wasReadOnlyRef.current = Boolean(props.readOnly);
+    // Parsing the initial Markdown/document can normalize the draft. Publish
+    // that once when the editor is created, before controlled-value syncing,
+    // rather than relying on editability updates to report it as a user edit.
+    const initial = readTiptapContent(editor, readMode);
+    if (getContentSignature(initial) !== getContentSignature(propsRef.current)) {
+      propsRef.current.onChange(initial.value, initial.skillTokens, {
+        editorDocument: editor.getJSON(),
+      });
+    }
+  }, [editor, readMode]);
+
+  useLayoutEffect(() => {
+    if (!editor) {
+      return;
+    }
+
+    // Editability and autocomplete ARIA changes are not draft edits. An update
+    // here can replay stale content before the controlled-value effect runs,
+    // toggling autocomplete and feeding a nested React update loop. It would
+    // also clear the parent's send error when a failed check unlocks.
+    editor.setEditable(!props.disabled && !props.readOnly, false);
     editor.view.dom.setAttribute("id", props.id);
     editor.view.dom.setAttribute("aria-label", props.label);
     if (props.readOnly) {
@@ -2950,10 +2966,13 @@ export const ComposerTiptapInput = forwardRef<
           buildTiptapContent(value, [], {
             markdownConversion: propsRef.current.markdownConversion,
           }),
-          { emitUpdate: true },
+          { emitUpdate: false },
         );
+        // Report the parsed draft once. Reporting the raw value after Tiptap's
+        // update would overwrite normalized whitespace and misalign chip indexes.
+        const next = readTiptapContent(editor, readMode);
         flushSync(() => {
-          propsRef.current.onChange(value, [], {
+          propsRef.current.onChange(next.value, next.skillTokens, {
             editorDocument: editor.getJSON(),
           });
         });
