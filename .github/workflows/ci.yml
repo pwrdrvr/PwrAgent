@@ -736,30 +736,24 @@ jobs:
       fail-fast: false
       matrix:
         lane: [1, 2, 3, 4]
-    # Bound runner spend even when the test process or its teardown hangs.
+    # One budget for setup, build, tests, and reporting. Do not add shorter
+    # step or suite deadlines that interrupt a progressing lane before this cap.
     timeout-minutes: 10
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
-        timeout-minutes: 1
         # No `lfs: true` here, unlike the Linux and macOS lanes. The only LFS
         # objects in the tree are the two darwin visual baselines, and
         # `visual-regression.spec.ts` skips off darwin/arm64.
 
       - name: Install Node.js and dependencies
         uses: pwrdrvr/configure-nodejs@v1
-        timeout-minutes: 2
         with:
           node-version: 24.18.0
           working-directory: .
           cache-electron: "true"
 
       - name: Run desktop replay-backed Electron tests
-        # Six minutes includes the native rebuild and desktop build. Playwright's
-        # four-minute suite deadline fails a hung suite and reports the timeout
-        # before the step deadline. The job cap remains the backstop
-        # if either build or teardown hangs; do not extend it for failing specs.
-        timeout-minutes: 6
         # windows-latest provides an interactive desktop session, so unlike the
         # Linux lane this needs neither xvfb nor a window manager.
         #
@@ -771,12 +765,10 @@ jobs:
         run: >-
           pnpm --filter @pwragent/desktop test:e2e
           --shard=${{ matrix.lane }}/4
-          --global-timeout=240000
 
       - name: Upload desktop Playwright artifacts
         uses: actions/upload-artifact@v7
         if: ${{ !cancelled() }}
-        timeout-minutes: 1
         with:
           name: desktop-e2e-windows-lane-${{ matrix.lane }}-artifacts
           path: |
