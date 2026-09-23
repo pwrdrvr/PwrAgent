@@ -10,7 +10,12 @@
 // one. So this spec runs on every platform, including the Linux lane, where a
 // packaged build answers `skipped` and offers no in-app download at all.
 
-import { expect, test, type ElectronApplication } from "@playwright/test";
+import {
+  expect,
+  test,
+  type ElectronApplication,
+  type Locator,
+} from "@playwright/test";
 import { launchElectronApp } from "./fixtures/electron-app";
 
 const FAKE_VERSION = "420.0.0";
@@ -38,6 +43,30 @@ async function checkForUpdates(app: ElectronApplication): Promise<void> {
   });
 }
 
+type Box = { x: number; y: number; width: number; height: number };
+
+async function box(locator: Locator): Promise<Box> {
+  const measured = await locator.boundingBox();
+  if (measured === null) {
+    throw new Error(`Expected a laid-out box for ${locator}`);
+  }
+  return measured;
+}
+
+function overlaps(a: Box, b: Box): boolean {
+  return a.x < b.x + b.width
+    && b.x < a.x + a.width
+    && a.y < b.y + b.height
+    && b.y < a.y + a.height;
+}
+
+function contains(outer: Box, point: { x: number; y: number }): boolean {
+  return point.x >= outer.x
+    && point.x <= outer.x + outer.width
+    && point.y >= outer.y
+    && point.y <= outer.y + outer.height;
+}
+
 test("a menu check reports itself live and ends on an actionable offer", async () => {
   const app = await launchElectronApp({
     env: FAKE_UPDATE_ENV,
@@ -54,6 +83,7 @@ test("a menu check reports itself live and ends on an actionable offer", async (
     const card = window.locator(".app-update-banner--progress");
     await expect(card).toContainText("Checking for updates");
     await expect(card.locator("[role='progressbar']")).toBeVisible();
+    const checkingWidth = (await box(card)).width;
     // The card reports work in flight, so it is its own surface and NOT a
     // notice in the stack, which would drain a 9-second countdown toward a
     // dismissal while the check it reports is still running.
@@ -71,16 +101,61 @@ test("a menu check reports itself live and ends on an actionable offer", async (
       /\d+/,
     );
 
+    // The actions sit in a row under the bar. v1.1.0-beta.3 put them in a
+    // column beside it, and at the 420px stack width Cancel landed on top of
+    // both the bar and the message.
+    const cancel = await box(card.getByRole("button", { name: "Cancel" }));
+    const track = await box(card.locator("[role='progressbar']"));
+    const message = await box(card.locator(".app-update-banner__message"));
+    expect(track.width, "the bar has width to cover").toBeGreaterThan(0);
+    expect(cancel.y, "Cancel starts below the bar").toBeGreaterThanOrEqual(
+      track.y + track.height,
+    );
+    expect(overlaps(cancel, message), "Cancel clears the message").toBe(false);
+    const downloadingWidth = (await box(card)).width;
+
     // And it ends on the one thing there is to do about it.
-    await expect(
-      window.locator(".app-update-banner:not(.app-update-banner--progress)"),
-    ).toContainText(`Restart to update to v${FAKE_VERSION}.`, {
-      timeout: 30_000,
-    });
+    const offer = window.locator(
+      ".app-update-banner:not(.app-update-banner--progress)",
+    );
+    await expect(offer).toContainText(
+      `Restart to update to v${FAKE_VERSION}.`,
+      { timeout: 30_000 },
+    );
     await expect(
       window.getByRole("button", { name: "Restart" }),
     ).toBeVisible();
     await expect(window.locator(".app-update-banner--progress")).toHaveCount(0);
+    // Measured at rest: the offer rises 8px into place as it enters.
+    await offer.evaluate((element) =>
+      Promise.all(
+        element.getAnimations().map((animation) => animation.finished),
+      ).then(() => undefined)
+    );
+
+    // One check, one card width: the checking, downloading and offer cards
+    // were 266px, 420px and 303px when each sized to its own content.
+    const offerWidth = (await box(offer)).width;
+    expect(Math.round(checkingWidth)).toBe(Math.round(downloadingWidth));
+    expect(Math.round(offerWidth)).toBe(Math.round(downloadingWidth));
+
+    // The stack is bottom-anchored, so the offer's action row covers the
+    // live card's. A click aimed at Cancel as the download finishes must
+    // land on Dismiss, which leaves the update uninstalled, never on Restart.
+    const dismiss = await box(
+      offer.getByRole("button", { name: "Dismiss update notification" }),
+    );
+    const restart = await box(offer.getByRole("button", { name: "Restart" }));
+    const aim = {
+      x: cancel.x + cancel.width / 2,
+      y: cancel.y + cancel.height / 2,
+    };
+    expect(contains(dismiss, aim), "Cancel's centre lands on Dismiss").toBe(
+      true,
+    );
+    expect(overlaps(restart, cancel), "Restart clears Cancel's slot").toBe(
+      false,
+    );
   } finally {
     await app.close();
   }

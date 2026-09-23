@@ -324,6 +324,40 @@ describe("AppUpdateBanner", () => {
     expect(notices).toHaveLength(0);
   });
 
+  it("puts Dismiss in the slot Cancel held when the offer replaces the live card", async () => {
+    // The stack is bottom-anchored, so the live card's action row and the
+    // offer's cover the same pixels, and a click aimed at Cancel as the
+    // download finishes lands on whatever took its place. That has to be
+    // Dismiss, never Restart. This pins the order; app.css's trailing
+    // button group places it, and update-check.spec.ts measures the result.
+    const { desktopApi, emit, emitResult } = renderBanner({ status: "idle" });
+    const actionLabels = () =>
+      Array.from(
+        document.querySelectorAll(".app-update-banner__actions button"),
+        (button) => button.getAttribute("aria-label") ?? button.textContent,
+      );
+
+    await waitFor(() => {
+      expect(desktopApi.onAppUpdateCheckResult).toHaveBeenCalledTimes(1);
+    });
+    act(() => {
+      emitResult({ status: "checking" });
+    });
+    act(() => {
+      emit({ status: "downloading", version: "1.0.0", percent: 99 });
+    });
+    expect(actionLabels()).toEqual(["Release notes", "Cancel"]);
+
+    act(() => {
+      emit({ status: "downloaded", version: "1.0.0" });
+    });
+    expect(actionLabels()).toEqual([
+      "Release notes",
+      "Restart",
+      "Dismiss update notification",
+    ]);
+  });
+
   it("hands a failed check to the notice stack and takes the card down", async () => {
     const { desktopApi, notices, emitResult } = renderBanner({ status: "idle" });
 

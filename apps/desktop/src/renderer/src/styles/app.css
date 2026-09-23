@@ -7584,7 +7584,11 @@ a.button {
   background: color-mix(in srgb, var(--bg-panel-elevated) 94%, var(--status-error) 6%);
 }
 
+/* Full stack width in every phase, the same as the notices it hands off to.
+   A `max-content` card changed size at each step of one check: 266px while
+   checking, 420px while downloading, 303px once the update was ready. */
 .app-update-banner {
+  width: 100%;
   border: 1px solid var(--accent-border);
   background: color-mix(in srgb, var(--bg-panel-elevated) 94%, var(--accent) 6%);
 }
@@ -7880,11 +7884,29 @@ a.button {
   animation-play-state: paused;
 }
 
+/* One row under the content in every phase that has actions: the link
+   leads, the buttons trail, and the way out (Cancel, then Dismiss) is the
+   last button. AppUpdateBanner.tsx says why that last slot matters. The
+   buttons carry `margin-left: auto` themselves so they stay trailing when
+   the version is not semver-shaped and the link renders nothing. */
+.app-update-banner__actions {
+  align-items: center;
+}
+
+.app-update-banner__buttons {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+}
+
+/* 13px, the card's own body size. Unsized, a `.button` here inherits the
+   16px document default, which made Cancel the largest text on the card. */
 .app-update-banner__restart,
 .app-update-banner__dismiss,
 .app-update-banner__cancel {
   min-height: 30px;
   padding: 0 10px;
+  font-size: 13px;
 }
 
 /* "Release notes" — text among real buttons, on purpose. The card already
@@ -7897,6 +7919,9 @@ a.button {
   gap: 4px;
   min-height: 30px;
   padding: 0 4px;
+  /* It leads the actions row, so pull the text back onto the content's left
+     edge; the padding stays for the focus outline. */
+  margin-left: -4px;
   appearance: none;
   cursor: pointer;
   border: 0;
@@ -7924,27 +7949,14 @@ a.button {
    duration - the track below is the only bar on it, and it means the thing
    the operator is actually waiting on.
 
-   The min-width is the point of the rule: `.app-update-banner` is
-   `width: max-content`, so without it the card would breathe in and out as
-   the percent text changed width, and the bar would be as narrow as the
-   shortest line on the card. */
-.app-update-banner--progress {
-  align-items: center;
-}
+   It is one column, like the offer card, with the actions in a row under the
+   track. Cancel and Release notes used to sit in a second column beside the
+   content, whose `min-width: 236px` then overflowed its track once that
+   column grew: at the 420px stack width, the bar and the message ran
+   underneath Cancel. The full-width card is also what keeps the bar from
+   breathing as the percent text changes.
 
-/* Only the phases that offer Cancel get a second track. Declaring it
-   unconditionally would spend the card's 12px gap on an empty column during
-   the release read, so the checking card would sit wider than the downloading
-   one for no reason. */
-.app-update-banner--progress:has(.app-update-banner__actions) {
-  grid-template-columns: minmax(0, 1fr) auto;
-}
-
-.app-update-banner--progress .app-update-banner__content {
-  min-width: 236px;
-}
-
-/* Same measurements as `.context-usage-card__meter` and
+   The track has the same measurements as `.context-usage-card__meter` and
    `.incident-explorer__meter`, so the app keeps one bar language. */
 .app-update-banner__track {
   display: block;
