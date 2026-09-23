@@ -134,7 +134,7 @@ describe("FocusedDiffService", () => {
     expect(client.generateObject).toHaveBeenCalledWith(
       expect.objectContaining({
         backend: "codex",
-        model: "gpt-5.6-luna",
+        model: undefined,
         system: expect.stringContaining(
           "Show hunks when they alter logic, data flow, behavior",
         ),

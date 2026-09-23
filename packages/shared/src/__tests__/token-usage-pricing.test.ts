@@ -338,6 +338,49 @@ describe("token usage pricing", () => {
     }
   });
 
+  it.each([
+    ["gpt-6-sol", false, 272_000, 2, 0.2, 2.5, 10],
+    ["gpt-6-sol", false, 272_001, 4, 0.4, 5, 15],
+    ["gpt-6-sol", true, 272_000, 4, 0.4, 5, 20],
+    ["gpt-6-sol", true, 272_001, 8, 0.8, 10, 30],
+    ["gpt-6-luna", false, 272_000, 0.1, 0.01, 0.125, 0.5],
+    ["gpt-6-luna", false, 272_001, 0.2, 0.02, 0.25, 0.75],
+    ["gpt-6-luna", true, 272_000, 0.2, 0.02, 0.25, 1],
+    ["gpt-6-luna", true, 272_001, 0.4, 0.04, 0.5, 1.5],
+  ] as const)("prices %s fast=%s with %s input tokens", (
+    model, fastMode, inputTokens, inputRate, cachedRate, writeRate, outputRate,
+  ) => {
+    const params = {
+      at: Date.UTC(2026, 8, 22),
+      model,
+      fastMode,
+      inputTokenScope: "request" as const,
+      uncachedInputTokens: 200_000,
+      cacheWriteInputTokens: 20_000,
+      cachedInputTokens: inputTokens - 200_000,
+      outputTokens: 10_000,
+    };
+    const cost = estimateOpenAiTokenUsageCost(params);
+    expect(cost).toMatchObject({
+      catalogVersion: "2026-09-22",
+      inputUsdPerMillion: inputRate,
+      cachedInputUsdPerMillion: cachedRate,
+      cacheWriteInputUsdPerMillion: writeRate,
+      outputUsdPerMillion: outputRate,
+      uncachedInputCostMicros: 180_000 * inputRate,
+      cacheWriteInputCostMicros: 20_000 * writeRate,
+      outputCostMicros: 10_000 * outputRate,
+    });
+    expect(listOpenAiTokenUsagePricingRates().find((rate) => rate.rateId === cost?.rateId))
+      .toMatchObject({ model, cacheWriteInputUsdPerMillion: writeRate });
+    expect(estimateOpenAiTokenUsageCost({ ...params, at: Date.UTC(2026, 8, 21) }))
+      .toBeUndefined();
+    if (inputTokens > 272_000) {
+      expect(estimateOpenAiTokenUsageCost({ ...params, inputTokenScope: "aggregate" }))
+        .toBeUndefined();
+    }
+  });
+
   it("prices GPT-6 Astra at the short-context boundary", () => {
     const cost = estimateOpenAiTokenUsageCost({
       at: Date.UTC(2026, 8, 4),

@@ -6,7 +6,7 @@ import type { AppServerBackendKind, ThreadIdentifier } from "./normalized-app-se
  */
 export const TASK_MONITOR_TOOL_NAMESPACE = "pwragent_task_monitors";
 
-export const DEFAULT_TASK_MONITOR_MODEL = "gpt-5.6-luna";
+export const DEFAULT_TASK_MONITOR_MODEL = "gpt-6-luna";
 export const DEFAULT_TASK_MONITOR_REASONING_EFFORT = "medium";
 export const DEFAULT_TASK_MONITOR_POLL_INTERVAL_SECONDS = 30;
 export const DEFAULT_TASK_MONITOR_STARTUP_TIMEOUT_SECONDS = 45;

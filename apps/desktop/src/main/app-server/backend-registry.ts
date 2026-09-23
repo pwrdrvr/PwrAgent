@@ -829,6 +829,7 @@ type BackendClient = {
     cwd: string;
   }): Promise<{ threadId: string }>;
   generateTitle?: ThreadTitleGenerator["generateTitle"];
+  getDefaultHelperModel?(): string;
   generateStructuredObject?(params: {
     model?: string;
     reasoningEffort?: string;
@@ -1957,6 +1958,24 @@ const OPENAI_FALLBACK_MODELS: BackendModelOption[] = [
     label: "GPT-6-Astra",
     defaultReasoningEffort: DEFAULT_REASONING_EFFORT,
     reasoningEfforts: OPENAI_GPT56_REASONING_EFFORTS,
+    supportsReasoning: true,
+    supportsFast: true,
+    supportsSteering: true,
+  },
+  {
+    id: "gpt-6-sol",
+    label: "GPT-6-Sol",
+    defaultReasoningEffort: DEFAULT_REASONING_EFFORT,
+    reasoningEfforts: ["none", ...OPENAI_GPT56_REASONING_EFFORTS],
+    supportsReasoning: true,
+    supportsFast: true,
+    supportsSteering: true,
+  },
+  {
+    id: "gpt-6-luna",
+    label: "GPT-6-Luna",
+    defaultReasoningEffort: DEFAULT_REASONING_EFFORT,
+    reasoningEfforts: ["none", ...OPENAI_GPT56_REASONING_EFFORTS],
     supportsReasoning: true,
     supportsFast: true,
     supportsSteering: true,
@@ -31992,7 +32011,7 @@ export class DesktopBackendRegistry {
   }): { model?: string; reasoningEffort?: string } {
     if (params.backend === "codex") {
       return {
-        model: DEFAULT_CODEX_THREAD_TITLE_MODEL,
+        model: this.codexClient.getDefaultHelperModel?.() ?? DEFAULT_CODEX_THREAD_TITLE_MODEL,
         reasoningEffort: "low",
       };
     }
@@ -36031,6 +36050,7 @@ export class DesktopBackendRegistry {
     const selectedModel =
       models.find((model) => model.id === requestedModel) ??
       models.find((model) => model.id === DEFAULT_TASK_MONITOR_MODEL) ??
+      models.find((model) => model.id === "gpt-5.6-luna") ??
       models.find((model) => model.id.toLowerCase().includes("mini")) ??
       models.find((model) => model.current) ??
       models.find((model) => model.supportsReasoning) ??
