@@ -213,6 +213,12 @@ export function PluginsSettings(props: {
    */
   const authorizationsRef = useRef(new Map<string, number>());
   const authorizationAttemptRef = useRef(0);
+  /**
+   * Cancel requests still on their way to the main process, by connection. A
+   * retry waits for its row's, or the cancel could land after the retry has
+   * registered and call off the new attempt instead of the old one.
+   */
+  const cancellationsRef = useRef(new Map<string, Promise<void>>());
   const [authorizing, setAuthorizing] = useState<ReadonlySet<string>>(
     () => new Set<string>(),
   );
@@ -731,6 +737,8 @@ export function PluginsSettings(props: {
         name: server.name,
       });
       setRemoveCandidate(undefined);
+      // Keyed by name, so a server added back under it would inherit it.
+      setCodexSignInError(server.name);
       if (await loadServers()) {
         setNotice({
           kind: "success",
@@ -772,13 +780,20 @@ export function PluginsSettings(props: {
   const cancelAuthorization = async (connection: McpConnectionStatus) => {
     if (!authorizationsRef.current.delete(connection.id)) return;
     publishAuthorizing();
-    try {
-      await props.desktopApi?.cancelMcpConnectionAuthorization?.({
-        connectionId: connection.id,
-      });
-    } catch {
-      // Releasing the row is the whole point, and it already happened. A
-      // listener that outlives this call times out on its own.
+    const cancellation = (async () => {
+      try {
+        await props.desktopApi?.cancelMcpConnectionAuthorization?.({
+          connectionId: connection.id,
+        });
+      } catch {
+        // Releasing the row is the whole point, and it already happened. A
+        // listener that outlives this call times out on its own.
+      }
+    })();
+    cancellationsRef.current.set(connection.id, cancellation);
+    await cancellation;
+    if (cancellationsRef.current.get(connection.id) === cancellation) {
+      cancellationsRef.current.delete(connection.id);
     }
     await loadConnections();
   };
@@ -810,6 +825,8 @@ export function PluginsSettings(props: {
     publishAuthorizing();
     setAuthorizationError(connection.id);
     try {
+      await cancellationsRef.current.get(connection.id);
+      if (!isCurrent()) return;
       const connectLocal = connection.kind === "pwrgit"
         ? props.desktopApi?.connectPwrGit
         : connection.kind === "pwrsnap" ? props.desktopApi?.connectPwrSnap : undefined;
