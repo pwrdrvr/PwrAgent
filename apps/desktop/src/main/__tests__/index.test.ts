@@ -157,6 +157,8 @@ const setFederatedThreadMessageHandlerMock = vi.fn();
 const setFederatedThreadInspectionHandlerMock = vi.fn();
 const setFederatedThreadMutationHandlerMock = vi.fn();
 const setFederatedThreadControlHandlerMock = vi.fn();
+const setAgentThreadArchiverMock = vi.fn();
+const appServerArchiveThreadMock = vi.fn();
 const synchronizeProviderRuntimeSelectionsMock = vi.fn(async () => undefined);
 const listThreadsMock = vi.fn<(request?: unknown) => Promise<unknown[]>>();
 const refreshProvidersAtStartupMock = vi.fn<() => Promise<void>>(
@@ -329,6 +331,7 @@ vi.mock("../quit-manager", () => ({
 }));
 
 vi.mock("../ipc/app-server", () => ({
+  appServerService: { archiveThread: appServerArchiveThreadMock },
   registerAppServerIpcHandlers: registerAppServerIpcHandlersMock,
   startAppServerOwnerNavigation: startAppServerOwnerNavigationMock,
   disposeAppServerIpcHandlers: disposeAppServerIpcHandlersMock,
@@ -581,6 +584,7 @@ vi.mock("../app-server/backend-registry", () => ({
       setFederatedThreadInspectionHandlerMock,
     setFederatedThreadMutationHandler: setFederatedThreadMutationHandlerMock,
     setFederatedThreadControlHandler: setFederatedThreadControlHandlerMock,
+    setAgentThreadArchiver: setAgentThreadArchiverMock,
     setMessagingArchiveCleaner: setMessagingArchiveCleanerMock,
   })),
 }));
@@ -795,6 +799,8 @@ describe("bootstrapApp", () => {
     setFederatedThreadInspectionHandlerMock.mockReset();
     setFederatedThreadMutationHandlerMock.mockReset();
     setFederatedThreadControlHandlerMock.mockReset();
+    setAgentThreadArchiverMock.mockReset();
+    appServerArchiveThreadMock.mockReset();
     synchronizeProviderRuntimeSelectionsMock.mockReset();
     synchronizeProviderRuntimeSelectionsMock.mockResolvedValue(undefined);
     listThreadsMock.mockReset();
@@ -1115,6 +1121,31 @@ describe("bootstrapApp", () => {
     expect(createMainWindowMock).toHaveBeenCalledWith({
       onShown: expect.any(Function),
       startupCpuProfiler: startupProfilerInstance,
+    });
+  });
+
+  it("archives an Agent's thread through the app's own archive path", async () => {
+    // The registry's archive alone leaves the thread's children on other
+    // instances grouped under it; only the app's path ungroups them. Drop
+    // this wiring and an archive from mutate_thread quietly skips that step.
+    startupProfilerInstance.start.mockResolvedValue();
+    appServerArchiveThreadMock.mockResolvedValue({
+      backend: "codex",
+      threadId: "t-1",
+      archivedAt: 1,
+      cleanup: [],
+    });
+
+    await import("../index");
+    await flushMicrotasks();
+
+    const archiver = setAgentThreadArchiverMock.mock.calls[0]?.[0] as
+      | ((request: { backend: string; threadId: string }) => Promise<unknown>)
+      | undefined;
+    await archiver?.({ backend: "codex", threadId: "t-1" });
+    expect(appServerArchiveThreadMock).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "t-1",
     });
   });
 

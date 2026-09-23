@@ -201,6 +201,8 @@ import type {
   SetStarMapCardPositionRequest,
   OpenStarMapManagerRequest,
   OpenStarMapManagerResponse,
+  StarMapCommand,
+  StarMapCommandResult,
   StarMapIntakeResponse,
   StarMapViewSnapshot,
   WriteStarMapWorkspaceRequest,
@@ -770,6 +772,14 @@ export type DesktopApi = {
   openStarMapManager?: (
     request: OpenStarMapManagerRequest,
   ) => Promise<OpenStarMapManagerResponse>;
+  /**
+   * Commands an Agent tool sends the map, such as flying the camera. Each
+   * one is answered exactly once through `resolveStarMapCommand`.
+   */
+  onStarMapCommand?: (
+    callback: (command: StarMapCommand) => void,
+  ) => () => void;
+  resolveStarMapCommand?: (result: StarMapCommandResult) => Promise<void>;
   /** Spawns or focuses the dedicated Federation Star Map window. */
   openStarMapWindow?: () => Promise<void>;
   /** From the Star Map window: focus the main window and open a thread there. */

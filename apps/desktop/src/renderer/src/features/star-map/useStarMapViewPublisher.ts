@@ -1,4 +1,5 @@
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
+import type { StarMapViewSnapshot } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import {
   buildStarMapViewSnapshot,
@@ -25,7 +26,7 @@ export function useStarMapViewPublisher(params: {
   desktopApi?: DesktopApi;
   input: StarMapViewSnapshotInput;
   intervalMs?: number;
-}): void {
+}): { readView: () => StarMapViewSnapshot } {
   // Assigned from an effect, never during render. A render React starts and
   // abandons (concurrent rendering interrupts non-discrete work) must not be
   // what a pending publish picks up: the snapshot would describe rects and
@@ -71,4 +72,14 @@ export function useStarMapViewPublisher(params: {
       }
     };
   }, []);
+
+  // The view now rather than at the next publish, for a command that names
+  // something the Agent read - a cloud to fly to. Built off the same
+  // effect-assigned input, so it never describes a render that was not
+  // painted.
+  const readView = useCallback(
+    () => buildStarMapViewSnapshot(inputRef.current),
+    [],
+  );
+  return { readView };
 }

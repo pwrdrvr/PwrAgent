@@ -6,7 +6,9 @@
 // thread would land nowhere.
 import type { WebContents } from "electron";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { StarMapCommand } from "@pwragent/shared";
 import {
+  STAR_MAP_COMMAND_RESULT_CHANNEL,
   STAR_MAP_FOCUS_MAIN_WINDOW_CHANNEL,
   STAR_MAP_INTAKE_CHANNEL,
   STAR_MAP_OPEN_THREAD_IN_MAIN_CHANNEL,
@@ -22,6 +24,10 @@ import {
   resetStarMapViewRegistry,
 } from "../star-map/star-map-view-registry";
 import { registerStarMapIpcHandlers } from "../ipc/star-map";
+import {
+  resetStarMapCommandBus,
+  sendStarMapCommand,
+} from "../star-map/star-map-command-bus";
 import { isFederationWindowWebContents } from "../window";
 import { subscribersForChannel } from "../window-channels";
 import { requestShowThread } from "../window-show-thread";
@@ -336,6 +342,51 @@ describe("star map window IPC", () => {
     );
 
     expect(readStarMapView()?.layout).toBe("orbit");
+  });
+
+  it("takes a command's answer only from the map, and only well formed", async () => {
+    resetStarMapCommandBus();
+    const send = vi.fn();
+    const sender = {
+      id: STAR_MAP_SENDER_ID,
+      isDestroyed: () => false,
+      once: () => undefined,
+      removeListener: () => undefined,
+      send,
+    } as unknown as WebContents;
+    const pending = sendStarMapCommand(
+      { kind: "fly_to", target: { kind: "instance", instanceId: "pwr_studio" } },
+      { webContents: () => sender, timeoutMs: 5_000 },
+    );
+    const { requestId } = send.mock.calls[0]![1] as StarMapCommand;
+    const answer = handlerFor(STAR_MAP_COMMAND_RESULT_CHANNEL);
+
+    // The preload is shared, so Settings or Activity can reach this channel
+    // too; an answer from one of them would report a flight nobody made.
+    await answer(
+      { sender: { id: STAR_MAP_SENDER_ID + 1 } },
+      {
+        requestId,
+        response: { ok: true, data: { target: "instance", label: "Forged" } },
+      },
+    );
+    // A malformed answer from the map itself is not reported either.
+    await answer(
+      { sender },
+      { requestId, response: { ok: true, data: { target: "somewhere" } } },
+    );
+    await answer(
+      { sender },
+      {
+        requestId,
+        response: { ok: true, data: { target: "instance", label: "Studio" } },
+      },
+    );
+
+    await expect(pending).resolves.toEqual({
+      ok: true,
+      data: { target: "instance", label: "Studio" },
+    });
   });
 
   it("ignores a published view from a window that is not the map", async () => {

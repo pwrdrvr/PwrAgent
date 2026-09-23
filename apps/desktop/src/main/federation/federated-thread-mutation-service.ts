@@ -45,6 +45,30 @@ export function createFederatedThreadMutationHandler(
         `Federation instance ${match.peer.label} owns thread ${request.threadId} but does not grant turn_control.`,
       );
     }
+    // Same refusal the local path makes, read off the peer's own listing:
+    // archiving mid-turn leaves the provider running work nothing shows.
+    if (request.archive && match.thread.threadStatus === "active") {
+      throw new PwrAgentFederatedThreadInspectionError(
+        "forbidden",
+        `Thread ${request.backend}:${request.threadId} on ${match.peer.label} has a turn running. Stop it with stop_thread before archiving it.`,
+      );
+    }
+    if (request.archive && !request.dryRun) {
+      await match.backend.archiveThread({
+        backend: request.backend,
+        threadId: request.threadId,
+      });
+    }
+    // First, as locally: the peer checks the destination on its own disk,
+    // and a refused move should not leave the other changes half applied.
+    if (request.projectPath !== undefined && !request.dryRun) {
+      await match.backend.handoffThreadWorkspace({
+        backend: request.backend,
+        threadId: request.threadId,
+        direction: "to-project",
+        targetPath: request.projectPath,
+      });
+    }
     if (!request.dryRun) {
       if (request.title !== undefined) {
         await match.backend.renameThread({

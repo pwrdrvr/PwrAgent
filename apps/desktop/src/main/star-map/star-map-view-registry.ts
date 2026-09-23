@@ -62,6 +62,14 @@ export function readStarMapView(): StarMapViewSnapshot | undefined {
   return currentEntry()?.snapshot;
 }
 
+/**
+ * The renderer behind that same view: a command sent anywhere else would
+ * act on a map the Agent never read.
+ */
+export function currentStarMapWebContents(): WebContents | undefined {
+  return currentEntry()?.webContents;
+}
+
 function currentEntry(): Entry | undefined {
   prune();
   let latest: Entry | undefined;

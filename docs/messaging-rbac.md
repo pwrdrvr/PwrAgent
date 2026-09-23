@@ -47,11 +47,12 @@ code side).
 | `thread.settings.skills` | settings | Open the skills browser and change enabled skills (all `skills:*` sub-actions). |
 | `thread.control.stop` | control | Interrupt the running turn. |
 | `thread.control.compact` | control | Compact the thread's context. |
-| `thread.control.handoff` | control | Move a thread between local/worktree/branches (all `handoff:*` actions). |
+| `thread.control.handoff` | control | Move a thread between local/worktree/branches (all `handoff:*` actions), or to another project (`mutate_thread` `projectPath`). |
+| `thread.control.archive` | control (danger: med) | Let the agent archive a thread (`mutate_thread` `archive`), removing the worktrees PwrAgent created for it. Admin only by default. |
 | `thread.control.schedule` | control | Queue a message to the bound thread for later (`/schedule`) and list or cancel the queue (`/scheduled`). |
 | `approval.respond.default` | interactive | Approve or deny non-escalation approval requests. |
 | `approval.respond.escalation` | interactive (danger: med) | Approve or deny network / exec / filesystem escalation requests. |
-| `tools.thread_inspection` | tools (danger: med) | Let the agent search and read OTHER threads on the actor's behalf (`search_threads`, `read_thread`, thread status, PR inspection, `read_star_map_view`). |
+| `tools.thread_inspection` | tools (danger: med) | Let the agent search and read OTHER threads on the actor's behalf (`search_threads`, `read_thread`, thread status, PR inspection, `read_star_map_view`), and fly the desktop Star Map to one (`fly_star_map_to`). |
 | `tools.thread_orchestration` | tools (danger: med) | Let the agent inject messages into other threads, hand off tasks, attach directories, and attach PRs. |
 | `tools.instance_management` | tools (danger: med) | Let the agent manage PwrAgent itself and inspect automations (`manage_pwragent`). |
 | `thread.execution.full_access` | danger (danger: high) | Select or resume into full-access execution — near-complete control of the host. |
@@ -64,7 +65,10 @@ Notes on the danger tiers:
   own thread, because it can cross-thread-disclose or escalate. `mutate_thread`
   is the exception: it is gated **per field** at parity with the status-card
   buttons (`permissionsForThreadMutation`), including the full-access danger
-  gate for `executionMode: "full-access"`.
+  gate for `executionMode: "full-access"`. `archive` has no status-card
+  button to match, so it has a permission of its own rather than riding on
+  `thread.control.handoff`: it removes worktrees, which holding handoff has
+  never implied.
 - `thread.execution.full_access` is escalation-equivalent. It **double-gates**:
   the RBAC permission is required *in addition to* the existing global
   full-access toggle, never as a bypass of it.

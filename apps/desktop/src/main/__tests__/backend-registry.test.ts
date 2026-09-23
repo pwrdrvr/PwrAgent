@@ -57,7 +57,9 @@ import type {
   BackendRateLimitSummary,
   CodexThreadEnvironmentRuntime,
   CreateScheduledThreadActionRequest,
+  ArchiveThreadRequest,
   DesktopProviderThreadModelMigration,
+  HandoffThreadWorkspaceResponse,
   LinkedDirectorySummary,
   NavigationLaunchpadDefaults,
   NavigationSnapshot,
@@ -43785,6 +43787,273 @@ script = "printf setup"
     expect(codexClient.lastRenameThreadParams).toBeUndefined();
 
     await registry.close();
+  });
+
+  describe("mutate_thread archive and project moves", () => {
+    async function setup(options: { targetActive?: boolean } = {}) {
+      const codexClient = new MockBackendClient({
+        initializeResult: { methods: ["thread/list"] },
+      });
+      const registry = new DesktopBackendRegistry({
+        codexClient,
+        overlayStore: createOverlayStoreMock({
+          overlays: {
+            "codex:agent-thread": createAgentOverlay(),
+            "codex:target-thread": {
+              backend: "codex",
+              threadId: "target-thread",
+              executionMode: "default",
+              extraLinkedDirectories: [],
+            },
+          },
+        }),
+      });
+      const archiver = vi.fn(async (request: ArchiveThreadRequest) => ({
+        backend: request.backend,
+        threadId: request.threadId,
+        archivedAt: 1,
+        cleanup: [],
+      }));
+      registry.setAgentThreadArchiver(archiver);
+      const handoff = vi
+        .spyOn(registry, "handoffThreadWorkspace")
+        .mockResolvedValue({} as HandoffThreadWorkspaceResponse);
+      const running = [
+        "agent-thread",
+        ...(options.targetActive ? ["target-thread"] : []),
+      ];
+      for (const threadId of running) {
+        await registry.publishLocalEvent({
+          backend: "codex",
+          notification: {
+            method: "turn/started",
+            params: {
+              threadId,
+              turnId: `turn-${threadId}`,
+              turn: { id: `turn-${threadId}` },
+            },
+          },
+        });
+      }
+      const call = async (args: Record<string, unknown>) => {
+        const response = (await codexClient.emitRequest({
+          method: "item/tool/call",
+          params: {
+            threadId: "agent-thread",
+            turnId: "turn-agent-thread",
+            callId: "call-1",
+            requestId: "call-1",
+            namespace: "pwragent",
+            tool: "mutate_thread",
+            arguments: { backend: "codex", threadId: "target-thread", ...args },
+          },
+        } as AppServerPendingRequestNotification)) as {
+          success: boolean;
+          contentItems: Array<{ text: string }>;
+        };
+        return {
+          success: response.success,
+          payload: JSON.parse(response.contentItems[0]!.text),
+        };
+      };
+      return { archiver, call, codexClient, handoff, registry };
+    }
+
+    it("archives a local thread through the app's own archive path", async () => {
+      const { archiver, call, registry } = await setup();
+
+      const result = await call({ archive: true });
+
+      expect(result.success).toBe(true);
+      expect(result.payload.mutation.changes).toEqual([
+        { field: "archive", status: "applied", to: true },
+      ]);
+      // The installed path, not the registry's own: only the app's archive
+      // also ungroups the thread's children on other instances.
+      expect(archiver).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "target-thread",
+      });
+      await registry.close();
+    });
+
+    it("reports a failed archive as a tool error", async () => {
+      const { archiver, call, registry } = await setup();
+      archiver.mockRejectedValueOnce(
+        new Error("thread target-thread not found"),
+      );
+
+      const result = await call({ archive: true });
+
+      expect(result.success).toBe(false);
+      expect(result.payload).toEqual({
+        code: "not_found",
+        message: "thread target-thread not found",
+      });
+      await registry.close();
+    });
+
+    it("previews an archive without making it", async () => {
+      const { archiver, call, registry } = await setup();
+
+      const result = await call({ archive: true, dryRun: true });
+
+      expect(result.payload.mutation.changes).toEqual([
+        { field: "archive", status: "would_apply", to: true },
+      ]);
+      expect(archiver).not.toHaveBeenCalled();
+      await registry.close();
+    });
+
+    it("refuses to archive a thread with a turn running, even on a dry run", async () => {
+      // A preview that said yes would be a lie the real call then takes back.
+      const { archiver, call, registry } = await setup({ targetActive: true });
+
+      const result = await call({ archive: true, dryRun: true });
+
+      expect(result.success).toBe(false);
+      expect(result.payload.code).toBe("forbidden");
+      expect(result.payload.message).toMatch(/stop_thread/);
+      expect(archiver).not.toHaveBeenCalled();
+      await registry.close();
+    });
+
+    it("archives alone, and only with true", async () => {
+      const { archiver, call, registry } = await setup();
+
+      const combined = await call({ archive: true, title: "Last words" });
+      const falsy = await call({ archive: false });
+
+      expect(combined.payload.code).toBe("invalid_arguments");
+      expect(falsy.payload.code).toBe("invalid_arguments");
+      expect(falsy.payload.message).toMatch(/Archived Threads/);
+      expect(archiver).not.toHaveBeenCalled();
+      await registry.close();
+    });
+
+    it("will not archive or move the thread running the call", async () => {
+      const { archiver, call, handoff, registry } = await setup();
+
+      const archived = await call({ threadId: "agent-thread", archive: true });
+      const moved = await call({
+        threadId: "agent-thread",
+        projectPath: "/repos/elsewhere",
+      });
+
+      expect(archived.payload.code).toBe("forbidden");
+      expect(moved.payload.code).toBe("forbidden");
+      expect(archiver).not.toHaveBeenCalled();
+      expect(handoff).not.toHaveBeenCalled();
+      await registry.close();
+    });
+
+    it("moves a local thread to another project", async () => {
+      const { call, codexClient, handoff, registry } = await setup();
+
+      const result = await call({
+        projectPath: " /repos/elsewhere ",
+        title: "Moved",
+      });
+
+      expect(result.success).toBe(true);
+      expect(handoff).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "target-thread",
+        direction: "to-project",
+        targetPath: "/repos/elsewhere",
+      });
+      expect(result.payload.mutation.changes).toContainEqual({
+        field: "project",
+        status: "applied",
+        to: "/repos/elsewhere",
+      });
+      expect(codexClient.lastRenameThreadParams).toEqual({
+        threadId: "target-thread",
+        name: "Moved",
+      });
+      await registry.close();
+    });
+
+    it("changes nothing else when the move is refused", async () => {
+      // The destination is only checked on disk, so the move goes first: a
+      // bad path must not leave the thread renamed and still unmoved.
+      const { call, codexClient, handoff, registry } = await setup();
+      handoff.mockRejectedValueOnce(
+        new Error("Select a Git project checkout or worktree as the destination."),
+      );
+
+      const result = await call({
+        projectPath: "/tmp/not-a-repo",
+        title: "Moved",
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.payload).toEqual({
+        code: "invalid_arguments",
+        message: "Select a Git project checkout or worktree as the destination.",
+      });
+      expect(codexClient.lastRenameThreadParams).toBeUndefined();
+      await registry.close();
+    });
+
+    it("hands an archive or a move to the peer that owns the thread", async () => {
+      const codexClient = new MockBackendClient({
+        initializeResult: { methods: ["thread/list"] },
+        listThreadsError: new Error("local codex backend unavailable"),
+      });
+      const registry = new DesktopBackendRegistry({
+        codexClient,
+        overlayStore: createOverlayStoreMock({
+          overlays: { "codex:agent-thread": createAgentOverlay() },
+        }),
+      });
+      const mutationHandler = vi.fn(async () => ({
+        instanceId: "pwr_remote",
+        instanceLabel: "Remote Mac",
+      }));
+      registry.setFederatedThreadMutationHandler(mutationHandler);
+      await registry.publishLocalEvent({
+        backend: "codex",
+        notification: {
+          method: "turn/started",
+          params: {
+            threadId: "agent-thread",
+            turnId: "turn-1",
+            turn: { id: "turn-1" },
+          },
+        },
+      });
+      const call = async (args: Record<string, unknown>) =>
+        await codexClient.emitRequest({
+          method: "item/tool/call",
+          params: {
+            threadId: "agent-thread",
+            turnId: "turn-1",
+            callId: "call-1",
+            requestId: "call-1",
+            namespace: "pwragent",
+            tool: "mutate_thread",
+            arguments: { backend: "codex", threadId: "remote-thread", ...args },
+          },
+        } as AppServerPendingRequestNotification);
+
+      await call({ archive: true });
+      await call({ projectPath: "/Users/studio/repos/app" });
+
+      expect(mutationHandler).toHaveBeenNthCalledWith(1, {
+        backend: "codex",
+        threadId: "remote-thread",
+        archive: true,
+        dryRun: false,
+      });
+      expect(mutationHandler).toHaveBeenNthCalledWith(2, {
+        backend: "codex",
+        threadId: "remote-thread",
+        projectPath: "/Users/studio/repos/app",
+        dryRun: false,
+      });
+      await registry.close();
+    });
   });
 
   it("mutates PwrAgent thread settings from active turns", async () => {

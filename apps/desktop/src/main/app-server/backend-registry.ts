@@ -8648,6 +8648,9 @@ export class DesktopBackendRegistry {
   private automationInspectionHandler?: AutomationInspectionHandler;
   private appManagementHandler?: PwrAgentAppManagementHandler;
   private starMapHandler?: PwrAgentStarMapHandler;
+  private agentThreadArchiver?: (
+    request: ArchiveThreadRequest,
+  ) => Promise<ArchiveThreadResponse>;
   private messagingAgentToolService?: MessagingAgentToolService;
   private readonly messagingHandler: PwrAgentMessagingHandler =
     async (request) => {
@@ -9912,6 +9915,21 @@ export class DesktopBackendRegistry {
       | undefined,
   ): void {
     this.starMapIntakeFederationHandlerFactory = factory ?? undefined;
+  }
+
+  /**
+   * How an Agent tool archives a local thread. The app's own archive path
+   * also ungroups remote children through the federation runtime, which
+   * this registry cannot reach; installing that path here makes an archive
+   * from `mutate_thread` the same as one from a thread's context menu.
+   */
+  setAgentThreadArchiver(
+    archiver:
+      | ((request: ArchiveThreadRequest) => Promise<ArchiveThreadResponse>)
+      | null
+      | undefined,
+  ): void {
+    this.agentThreadArchiver = archiver ?? undefined;
   }
 
   setPwrAgentStarMapHandler(
@@ -37302,7 +37320,10 @@ export class DesktopBackendRegistry {
     }
 
     if (request.operation === "mutate_thread") {
-      return await this.handleMutateThreadInspectionRequest(request.args);
+      return await this.handleMutateThreadInspectionRequest(
+        request.args,
+        request.context,
+      );
     }
 
     return {
@@ -37852,6 +37873,7 @@ export class DesktopBackendRegistry {
 
   private async handleMutateThreadInspectionRequest(
     args: MutateThreadToolArgs,
+    context?: PwrAgentThreadInspectionRequest["context"],
   ): Promise<PwrAgentThreadInspectionResponse> {
     if (!isAppServerBackendKind(args.backend)) {
       return {
@@ -37928,6 +37950,25 @@ export class DesktopBackendRegistry {
       executionMode = args.executionMode;
     }
 
+    let projectPath: string | undefined;
+    if (Object.hasOwn(args, "projectPath")) {
+      if (typeof args.projectPath !== "string" || !args.projectPath.trim()) {
+        return threadInspectionFailure(
+          "invalid_arguments",
+          "projectPath must be a non-empty string when provided.",
+        );
+      }
+      projectPath = args.projectPath.trim();
+    }
+
+    const archive = Object.hasOwn(args, "archive");
+    if (archive && args.archive !== true) {
+      return threadInspectionFailure(
+        "invalid_arguments",
+        "archive only accepts true. An archived thread is restored from Settings → Archived Threads.",
+      );
+    }
+
     const changes: ThreadMutationAppliedChange[] = [];
     if (title !== undefined) {
       changes.push({
@@ -37950,6 +37991,20 @@ export class DesktopBackendRegistry {
         to: executionMode,
       });
     }
+    if (projectPath !== undefined) {
+      changes.push({
+        field: "project",
+        status: dryRun ? "would_apply" : "applied",
+        to: projectPath,
+      });
+    }
+    if (archive) {
+      changes.push({
+        field: "archive",
+        status: dryRun ? "would_apply" : "applied",
+        to: true,
+      });
+    }
 
     if (changes.length === 0) {
       return {
@@ -37957,9 +38012,30 @@ export class DesktopBackendRegistry {
         error: {
           code: "invalid_arguments",
           message:
-            "At least one mutation field is required: title, model, serviceTier, reasoningEffort, fastMode, or executionMode.",
+            "At least one mutation field is required: title, model, serviceTier, reasoningEffort, fastMode, executionMode, projectPath, or archive.",
         },
       };
+    }
+    if (archive && changes.length > 1) {
+      return threadInspectionFailure(
+        "invalid_arguments",
+        "archive cannot be combined with other changes: an archived thread has no settings left to change.",
+      );
+    }
+    // The turn making this call runs in the invoking thread. Archiving it or
+    // relinking its workspace would pull that thread out from under the turn
+    // that still has to report the result.
+    if (
+      (archive || projectPath !== undefined)
+      && context
+      && !instanceId
+      && args.backend === context.backend
+      && threadId === context.threadId
+    ) {
+      return threadInspectionFailure(
+        "forbidden",
+        "mutate_thread cannot archive or move the thread running this turn.",
+      );
     }
 
     let localError: unknown;
@@ -37993,6 +38069,8 @@ export class DesktopBackendRegistry {
           ...(title !== undefined ? { title } : {}),
           ...(modelSettings.value ? { modelSettings: modelSettings.value } : {}),
           ...(executionMode !== undefined ? { executionMode } : {}),
+          ...(projectPath !== undefined ? { projectPath } : {}),
+          ...(archive ? { archive: true } : {}),
           dryRun,
         });
       } catch (error) {
@@ -38009,6 +38087,47 @@ export class DesktopBackendRegistry {
           includeRemote ? " locally or on a connected Federation peer" : " locally"
         }.`,
       );
+    }
+
+    // Archiving a thread mid-turn orphans the turn: the provider keeps
+    // running work nothing will show. Refused on a dry run too, so a preview
+    // tells the Agent what the real call would say.
+    if (mutateLocally && archive && this.threadHasActiveTurn(threadId, args.backend)) {
+      return threadInspectionFailure(
+        "forbidden",
+        `Thread ${args.backend}:${threadId} has a turn running. Stop it with stop_thread before archiving it.`,
+      );
+    }
+
+    if (mutateLocally && archive && !dryRun) {
+      const archiveThread = this.agentThreadArchiver
+        ?? (async (request: ArchiveThreadRequest) =>
+          await this.archiveThread(request));
+      try {
+        await archiveThread({ backend: args.backend, threadId });
+      } catch (error) {
+        return federatedThreadInspectionFailure(error);
+      }
+    }
+
+    // First, and before anything else changes: the destination is checked on
+    // disk, and a move that fails should leave the title and settings as
+    // they were rather than half the request applied.
+    if (mutateLocally && projectPath !== undefined && !dryRun) {
+      try {
+        await this.handoffThreadWorkspace({
+          backend: args.backend,
+          threadId,
+          direction: "to-project",
+          targetPath: projectPath,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return threadInspectionFailure(
+          message === ACTIVE_TURN_HANDOFF_ERROR ? "forbidden" : "invalid_arguments",
+          message,
+        );
+      }
     }
 
     if (mutateLocally && title !== undefined && !dryRun) {

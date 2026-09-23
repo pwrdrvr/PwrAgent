@@ -1,4 +1,5 @@
 import type {
+  FlyStarMapToToolArgs,
   PwrAgentStarMapOperationName,
   PwrAgentStarMapRequest,
   PwrAgentStarMapResponse,
@@ -59,7 +60,7 @@ export function buildPwrAgentStarMapToolDefinitions(
           message: PWRAGENT_STAR_MAP_UNAVAILABLE_MESSAGE,
         });
       }
-      const parsed = parseArgs(args);
+      const parsed = parseArgs(operation, args);
       if ("error" in parsed) {
         return agentToolFailure({
           code: "invalid_arguments",
@@ -94,6 +95,17 @@ function descriptionForOperation(
         "Each thread carries the backend, threadId and instanceId tools need.",
         "Fails when no Star Map surface is open.",
       ].join(" ");
+    case "fly_star_map_to":
+      return [
+        "Fly the operator's Star Map camera to a card, a cloud, or an instance's body.",
+        "Use it when the operator asks where something is or to be shown it.",
+        "For a card, pass threadId and backend, plus instanceId for a peer's thread.",
+        "A card the map is not drawing is brought onto it first.",
+        "For a cloud, pass cloudKey from read_star_map_view.",
+        "Add instanceId when that project has a cloud on more than one instance.",
+        "Pass instanceId alone for an instance's body, which the projects lens does not draw.",
+        "Fails when no Star Map surface is open.",
+      ].join(" ");
   }
 }
 
@@ -124,12 +136,64 @@ function inputSchemaForOperation(
           },
         },
       };
+    case "fly_star_map_to":
+      return {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          threadId: {
+            type: "string",
+            description: "Fly to this thread's card.",
+          },
+          backend: {
+            type: "string",
+            description: "The thread's backend. Required with threadId.",
+          },
+          cloudKey: {
+            type: "string",
+            description: "Fly to this cloud, by its read_star_map_view key.",
+          },
+          instanceId: {
+            type: "string",
+            description:
+              "The instance that owns the thread or cloud. Alone, fly to its body.",
+          },
+        },
+      };
   }
 }
 
-type ParsedArgs = { args: ReadStarMapViewToolArgs } | { error: string };
+type ParsedArgs =
+  | { args: ReadStarMapViewToolArgs | FlyStarMapToToolArgs }
+  | { error: string };
 
-function parseArgs(args: Record<string, unknown>): ParsedArgs {
+function parseArgs(
+  operation: PwrAgentStarMapOperationName,
+  args: Record<string, unknown>,
+): ParsedArgs {
+  return operation === "fly_star_map_to"
+    ? parseFlyArgs(args)
+    : parseReadArgs(args);
+}
+
+/**
+ * Types only: which combination names a destination is the service's call,
+ * because it is the same rule whether the call came from Codex or MCP.
+ */
+function parseFlyArgs(args: Record<string, unknown>): ParsedArgs {
+  const parsed: FlyStarMapToToolArgs = {};
+  for (const field of ["threadId", "backend", "cloudKey", "instanceId"] as const) {
+    const value = args[field];
+    if (value === undefined) continue;
+    if (typeof value !== "string" || !value.trim()) {
+      return { error: `fly_star_map_to ${field} must be a non-empty string.` };
+    }
+    (parsed as Record<string, string>)[field] = value.trim();
+  }
+  return { args: parsed };
+}
+
+function parseReadArgs(args: Record<string, unknown>): ParsedArgs {
   const maxThreads = optionalPositiveInteger(
     args.maxThreads,
     MAX_STAR_MAP_VIEW_MAX_THREADS,

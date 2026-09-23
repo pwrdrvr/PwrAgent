@@ -17,6 +17,7 @@ import {
   clampStarMapView,
   MAX_ZOOM,
   MIN_ZOOM,
+  STAR_MAP_OVERVIEW_ZOOM,
   type StarMapView,
   type StarMapViewBox,
 } from "./star-map-view-geometry";
@@ -57,6 +58,37 @@ export const STAR_MAP_FLIGHT_SCALE = 1;
 export function starMapFlightScale(current: number): number {
   if (!Number.isFinite(current) || current <= 0) return STAR_MAP_FLIGHT_SCALE;
   return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, Math.max(current, STAR_MAP_FLIGHT_SCALE)));
+}
+
+/**
+ * The scale that frames `rect` whole with `margin` of sky around it, but
+ * never closer than a card flight lands: a small cloud is shown at card
+ * zoom, a large one pulled back until all of it fits.
+ *
+ * Never pulled back past the overview zoom, though. Below it the map draws
+ * no cards, so framing a spread-out set there would show the operator
+ * cloud labels and none of the cards - or rings - the flight was for. A
+ * set wider than the window at that zoom is centred instead of fitted.
+ */
+export function starMapFramingScale(params: {
+  rect: StarMapFlightRect;
+  viewport: StarMapViewBox;
+  current: number;
+  margin?: number;
+}): number {
+  const margin = params.margin ?? 80;
+  const fit = Math.min(
+    (params.viewport.width - margin * 2) / Math.max(1, params.rect.width),
+    (params.viewport.height - margin * 2) / Math.max(1, params.rect.height),
+  );
+  return Math.min(
+    MAX_ZOOM,
+    Math.max(
+      MIN_ZOOM,
+      STAR_MAP_OVERVIEW_ZOOM,
+      Math.min(starMapFlightScale(params.current), fit),
+    ),
+  );
 }
 
 /**
