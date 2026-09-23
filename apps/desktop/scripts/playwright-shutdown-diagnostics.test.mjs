@@ -53,10 +53,14 @@ async function probe(mode) {
       `}
     });
   `);
+  // The fixture's Playwright config owns the five-second cleanup deadline.
+  // Do not give execFile a second deadline that starts before its worker has
+  // loaded the config: full-suite process pressure can otherwise kill the
+  // probe before the worker-side recorder has had a chance to become ready.
   const result = await run(process.execPath, [cli, "test", "-c", path.join(root, "playwright.config.mjs")], {
     cwd: desktop,
     env: { ...process.env, PWRAGENT_E2E_WORKER_DIAGNOSTICS: "1", SHUTDOWN_PROBE_SECRET: "must-not-appear-in-artifacts" },
-    timeout: 15_000, maxBuffer: 1024 * 1024,
+    maxBuffer: 1024 * 1024,
   }).then((value) => ({ ...value, code: 0 }), (error) => ({ code: error.code, stdout: error.stdout, stderr: error.stderr }));
   if (existsSync(descendantPidFile)) {
     try { process.kill(Number(readFileSync(descendantPidFile, "utf8")), "SIGKILL"); } catch (error) {
@@ -121,6 +125,7 @@ describe("real Playwright worker shutdown diagnostics", () => {
     expect(result.code, result.stdout + result.stderr).toBe(0);
     expect(result.snapshots).toHaveLength(0);
     const timeline = result.artifacts.find(({ file }) => file.endsWith("timeline.jsonl")).text;
+    expect(timeline).toContain('"kind":"worker-start"');
     expect(timeline).toContain('"kind":"worker-end","failed":false');
   }, 20_000);
 });

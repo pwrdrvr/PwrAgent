@@ -29,7 +29,8 @@ Start with `snapshot-1.json`, then use `timeline.jsonl` to reconstruct events:
 - `resources` contains creation stacks and test ownership for tracked live
   async resources. `report.libuv` and `report.nativeStack` come from Node's
   diagnostic report. A live handle is supporting evidence, not proof of a leak.
-- `timeline.jsonl` distinguishes process exit, stdio close, temporary-directory
+- `timeline.jsonl` starts with `worker-start` once the worker has loaded this
+  recorder, then distinguishes process exit, stdio close, temporary-directory
   cleanup, and entry into each worker cleanup phase. It includes healthy
   launches so an earlier test's leftover process can be identified.
 
