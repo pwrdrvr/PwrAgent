@@ -62,6 +62,11 @@ export function installShutdownDiagnostics({ outputDir, currentTest, captureAfte
     destroy(id) { resources.delete(id); },
   });
   hook.enable();
+  // This is the worker-side readiness boundary. The config module also runs in
+  // Playwright's controller, where TEST_WORKER_INDEX is absent and this
+  // recorder intentionally returns above. A timeline here proves that the
+  // worker loaded the recorder before its test body or cleanup starts.
+  safe(() => event({ kind: "worker-start", workerIndex: process.env.TEST_WORKER_INDEX }))();
 
   const captureTree = () => {
     if (treeStarted) return;
