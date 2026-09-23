@@ -1,5 +1,6 @@
 import { resolvePullRequestReview } from "./pull-request-review";
 import { navigationWorkingStatePath as resolveThreadWorkingStatePath } from "@pwragent/shared";
+import { validateCodexConfigOverrides } from "../settings/codex-config-overrides";
 import {
   buildPullRequestReferenceUrl,
   parsePullRequestReferenceUrl,
@@ -2280,8 +2281,14 @@ function mergeCommandSummaries(
   return merged;
 }
 
-export function buildCodexClientArgs(env?: NodeJS.ProcessEnv): string[] {
+export function buildCodexClientArgs(
+  env?: NodeJS.ProcessEnv,
+  configOverrides: readonly string[] = [],
+): string[] {
   const args = [
+    ...validateCodexConfigOverrides(configOverrides).flatMap((override) => [
+      "-c", override,
+    ]),
     "-c",
     'approval_policy="on-request"',
     "-c",
@@ -9276,7 +9283,10 @@ export class DesktopBackendRegistry {
         connectionObserver: codexObserver,
         env: codexSpawnEnv,
         resolveArgs: settingsService
-          ? async (env) => buildCodexClientArgs(env)
+          ? async (env) => buildCodexClientArgs(
+              env,
+              settingsService.resolveCodexConfigOverrides?.() ?? [],
+            )
           : undefined,
         resolveCommand: settingsService
           ? async () => await settingsService.resolveCodexCommand()

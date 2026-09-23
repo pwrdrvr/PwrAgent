@@ -63,6 +63,39 @@ function expectBundledGitPath(actual: string | undefined, inherited: string[]): 
 }
 
 describe("DesktopSettingsService", () => {
+  it("refuses default Codex launch arguments after an invalid cold-start profile", () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    fs.writeFileSync(configPath, '[models.codex]\nconfig_overrides=[42]');
+    const service = new DesktopSettingsService({
+      configPath, env: {}, secretStore: new MemoryDesktopSecretStore(),
+    });
+    expect(() => service.resolveCodexConfigOverrides()).toThrow("invalid profile configuration");
+  });
+
+  it("persists and projects Codex overlays independently of the authentication home", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    const codexHome = path.join(root, "codex");
+    const service = new DesktopSettingsService({
+      configPath, env: { CODEX_HOME: codexHome },
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+    expect(service.resolveCodexConfigOverrides()).toEqual([]);
+    const overrides = ['model_provider="local"', 'model_providers.local.base_url="http://127.0.0.1:1234/v1"'];
+    await service.writeConfigPatchTargeted({ models: { codex: { configOverrides: overrides } } });
+    expect(service.resolveCodexConfigOverrides()).toEqual(overrides);
+    expect((await service.readSettingsProjection()).models.codex.configOverrides)
+      .toEqual({ value: overrides, source: "config" });
+    const detached = service.resolveCodexConfigOverrides();
+    detached.push('model="mutated"');
+    expect(service.resolveCodexConfigOverrides()).toEqual(overrides);
+    expect(service.resolveCodexSpawnEnv().CODEX_HOME).toBe(codexHome);
+    expect(fs.existsSync(path.join(codexHome, "config.toml"))).toBe(false);
+    await service.writeConfigPatchTargeted({ models: { codex: { configOverrides: [] } } });
+    expect(service.resolveCodexConfigOverrides()).toEqual([]);
+  });
+
   it("does not scan Token Miser accounting for an ordinary settings projection", async () => {
     const service = new DesktopSettingsService({
       configPath: path.join(createTempRoot(), "config.toml"),

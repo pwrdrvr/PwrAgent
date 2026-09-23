@@ -112,12 +112,17 @@ const FLOAT_LITERAL = /^-?(?:\d+\.\d+(?:[eE][-+]?\d+)?|\d+[eE][-+]?\d+)$/;
  * lenient on value kinds — values our value parser doesn't recognize log a
  * warning and the key is dropped from the table. The schema-aware
  * normalization layer treats missing keys as defaults, so an exotic value
- * in an unknown section can't kill a config read.
+ * in an unknown section can't kill a config read. Callers can require selected
+ * value paths to parse, so malformed known settings never become defaults.
  *
  * Duplicate section headers: first occurrence wins. Subsequent occurrences
  * log a warning and their keys are ignored.
  */
-export function parseTomlTables(source: string, filePath: string): TomlTables {
+export function parseTomlTables(
+  source: string,
+  filePath: string,
+  options: { requiredValuePaths?: readonly string[] } = {},
+): TomlTables {
   const lines = source.split(/\r?\n/);
   const tables: TomlTables = {};
   const seenSections = new Set<string>();
@@ -187,6 +192,10 @@ export function parseTomlTables(source: string, filePath: string): TomlTables {
     const valueText = sliceValueText(lines, i, valueStartCol, endLine);
     const parsed = tryParseValue(valueText);
     if (!parsed) {
+      const valuePath = currentTable ? `${currentTable}.${key}` : key;
+      if (options.requiredValuePaths?.includes(valuePath)) {
+        throw new Error(`Unsupported TOML value for ${valuePath} on line ${i + 1} in ${filePath}.`);
+      }
       console.warn(
         `Skipping unsupported TOML value for key '${key}' on line ${i + 1} in ${filePath}.`,
       );
@@ -701,7 +710,7 @@ function tryParseValue(rawText: string): ParsedValue | undefined {
     const value = Number(text);
     return Number.isFinite(value) ? { kind: "float", value } : undefined;
   }
-  if (text.startsWith('"')) {
+  if (text.startsWith('"') || text.startsWith("'")) {
     const result = scanQuotedString(text, 0);
     if (result && result.endIndex === text.length - 1) {
       return { kind: "string", value: result.value };
@@ -735,7 +744,7 @@ function parseArrayLiteral(text: string): ParsedValue | undefined {
     return { kind: "inline-table-array", value: tables };
   }
 
-  if (trimmed.every((e) => e.startsWith('"'))) {
+  if (trimmed.every((e) => e.startsWith('"') || e.startsWith("'"))) {
     const strings: string[] = [];
     for (const entry of trimmed) {
       const parsed = scanQuotedString(entry, 0);
@@ -868,6 +877,12 @@ function scanQuotedString(
   text: string,
   startIndex: number,
 ): { value: string; endIndex: number } | undefined {
+  if (text[startIndex] === "'") {
+    const endIndex = text.indexOf("'", startIndex + 1);
+    if (endIndex < 0) return undefined;
+    const value = text.slice(startIndex + 1, endIndex);
+    return /[\r\n]/.test(value) ? undefined : { value, endIndex };
+  }
   if (text[startIndex] !== '"') return undefined;
   let value = "";
   let i = startIndex + 1;

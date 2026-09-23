@@ -43,6 +43,27 @@ conversation storage remain owned by the installed CLI. PwrAgent persists the
 session metadata and desktop overlay state needed to locate and present those
 threads without duplicating full provider transcripts in sqlite.
 
+Codex configuration overlays are process-local arguments on the profile's
+single App Server connection. `models.codex.config_overrides` in PwrAgent TOML
+maps to `models.codex.configOverrides` in settings patches/projections; the
+settings resolver supplies its ordered `key=value` strings to
+`buildCodexClientArgs` as individual `-c` arguments. Codex owns value parsing and
+config precedence. PwrAgent validates the envelope and reserves its approval,
+sandbox-mode, PATH and CODEX_HOME launch keys (including parent-table writes).
+No overlay is written to the selected Codex home. Existing per-thread protocol
+settings still override process defaults; overlays do not migrate saved thread
+model selections or add model capability metadata.
+
+Overlay changes enter the existing provider fingerprint/invalidation path and
+reconnect Codex at an idle boundary, then resolve the current overlay again.
+Invalid edits retain the config store's last-known-good snapshot; a cold start
+with invalid config and no such snapshot cannot launch Codex using defaults.
+The setting is additive, so there is no legacy field to migrate or dual-write.
+Clearing it with an empty array restores ordinary launch arguments. Overrides
+are plaintext configuration, including in process arguments; provider secrets
+belong in environment variables referenced by Codex's `env_key` or
+`env_http_headers`. No new periodic or per-turn persistence is introduced.
+
 ## Git information reads
 
 Navigation Git information goes through main-process stores. Directory enrichment

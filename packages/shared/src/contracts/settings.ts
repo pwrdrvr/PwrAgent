@@ -1260,6 +1260,7 @@ export type DesktopSettingsSnapshot = {
       path: DesktopSettingsValue<string>;
       profile: DesktopSettingsValue<string>;
       allowFast?: DesktopSettingsValue<boolean>;
+      configOverrides?: DesktopSettingsValue<string[]>;
       discovery: DesktopCodexDiscoverySnapshot;
       profiles: DesktopCodexAuthProfileDiscoverySnapshot;
     };
@@ -1532,6 +1533,8 @@ export type DesktopSettingsConfigPatch = {
       path?: string;
       profile?: string;
       allowFast?: boolean;
+      /** Ordered process-local Codex key=value overrides; never written to CODEX_HOME. */
+      configOverrides?: string[];
     };
   };
   acpAgents?: {
