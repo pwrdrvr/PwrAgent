@@ -1134,6 +1134,11 @@ describe("federation backend bridge", () => {
         archivedAt: 2_000,
         cleanup: [],
       })),
+      restoreThread: vi.fn(async () => ({
+        backend: "codex",
+        threadId: "thread-1",
+        restoredAt: 2_500,
+      })),
       createScheduledThreadAction: vi.fn(async (request) => ({
         action: {
           ...request,
@@ -1255,6 +1260,19 @@ describe("federation backend bridge", () => {
     await router.routeEnvelope({
       sourcePeerId: "client_one",
       envelope: {
+        id: "request-2-restore",
+        kind: "request",
+        method: FEDERATION_BACKEND_METHODS.restoreThread,
+        params: { backend: "codex", threadId: "thread-1" },
+        protocolVersion: 1,
+        sourceInstanceId: "client_one",
+        targetInstanceId: "gateway_one",
+        createdAt: 1_150,
+      },
+    });
+    await router.routeEnvelope({
+      sourcePeerId: "client_one",
+      envelope: {
         id: "request-3",
         kind: "request",
         method: FEDERATION_BACKEND_METHODS.cancelQueuedTurn,
@@ -1268,6 +1286,10 @@ describe("federation backend bridge", () => {
 
     expect(backend.listThreads).not.toHaveBeenCalled();
     expect(backend.archiveThread).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    expect(backend.restoreThread).toHaveBeenCalledWith({
       backend: "codex",
       threadId: "thread-1",
     });
@@ -1328,6 +1350,15 @@ describe("federation backend bridge", () => {
         result: {
           backend: "codex",
           threadId: "thread-1",
+        },
+      },
+      {
+        kind: "response",
+        requestId: "request-2-restore",
+        result: {
+          backend: "codex",
+          threadId: "thread-1",
+          restoredAt: 2_500,
         },
       },
       {
@@ -3431,6 +3462,7 @@ describe("federation backend bridge", () => {
       cancelThreadPrAutoDispatch: vi.fn(),
       sendThreadPrAutoDispatchNow: vi.fn(),
       archiveThread: vi.fn(),
+      restoreThread: vi.fn(),
       startThread: vi.fn(),
       forkThread: vi.fn(),
       startTurn: vi.fn(),
@@ -3833,6 +3865,7 @@ describe("federation backend bridge", () => {
         cancelThreadPrAutoDispatch: vi.fn(),
         sendThreadPrAutoDispatchNow: vi.fn(),
         archiveThread: vi.fn(),
+        restoreThread: vi.fn(),
         startThread: vi.fn(),
         forkThread: vi.fn(),
         startTurn: vi.fn(),

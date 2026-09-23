@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
 import type { WebContents } from "electron";
 import type {
-  PwrAgentStarMapResponse,
-  StarMapCommand,
+  StarMapCommandInput,
+  StarMapCommandKind,
+  StarMapCommandResponse,
   StarMapCommandResult,
 } from "@pwragent/shared";
 import { STAR_MAP_COMMAND_CHANNEL } from "../../shared/ipc";
@@ -15,11 +16,10 @@ import { currentStarMapWebContents } from "./star-map-view-registry";
  */
 export const STAR_MAP_COMMAND_TIMEOUT_MS = 15_000;
 
-type FlightResponse = PwrAgentStarMapResponse<"fly_star_map_to">;
-
 type Pending = {
   webContentsId: number;
-  settle: (response: FlightResponse) => void;
+  kind: StarMapCommandKind;
+  settle: (response: StarMapCommandResponse) => void;
 };
 
 const pending = new Map<string, Pending>();
@@ -38,15 +38,15 @@ export type StarMapCommandDeps = {
  * tool response, so a turn is never left waiting on a window.
  */
 export async function sendStarMapCommand(
-  command: Omit<StarMapCommand, "requestId">,
+  command: StarMapCommandInput,
   deps: StarMapCommandDeps = {},
-): Promise<FlightResponse | undefined> {
+): Promise<StarMapCommandResponse | undefined> {
   const webContents = (deps.webContents ?? currentStarMapWebContents)();
   if (!webContents || webContents.isDestroyed()) return undefined;
   const requestId = (deps.newRequestId ?? randomUUID)();
   const timeoutMs = deps.timeoutMs ?? STAR_MAP_COMMAND_TIMEOUT_MS;
-  return await new Promise<FlightResponse>((resolve) => {
-    const settle = (response: FlightResponse): void => {
+  return await new Promise<StarMapCommandResponse>((resolve) => {
+    const settle = (response: StarMapCommandResponse): void => {
       if (pending.get(requestId)?.settle !== settle) return;
       pending.delete(requestId);
       clearTimeout(timer);
@@ -71,7 +71,11 @@ export async function sendStarMapCommand(
         },
       });
     }, timeoutMs);
-    pending.set(requestId, { webContentsId: webContents.id, settle });
+    pending.set(requestId, {
+      webContentsId: webContents.id,
+      kind: command.kind,
+      settle,
+    });
     webContents.once("destroyed", onDestroyed);
     webContents.send(STAR_MAP_COMMAND_CHANNEL, { ...command, requestId });
   });
@@ -79,7 +83,8 @@ export async function sendStarMapCommand(
 
 /**
  * Deliver a map's answer. Only the renderer the command went to may answer
- * it: any other window answering would be reporting on a map it is not.
+ * it: any other window answering would be reporting on a map it is not. An
+ * answer shaped for a different command is not an answer to this one.
  */
 export function resolveStarMapCommand(params: {
   senderId: number;
@@ -87,6 +92,7 @@ export function resolveStarMapCommand(params: {
 }): boolean {
   const entry = pending.get(params.result.requestId);
   if (!entry || entry.webContentsId !== params.senderId) return false;
+  if (entry.kind !== params.result.kind) return false;
   entry.settle(params.result.response);
   return true;
 }

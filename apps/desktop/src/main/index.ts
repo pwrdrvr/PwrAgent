@@ -1398,11 +1398,17 @@ export function bootstrapApp(): void {
         targetStore: getDesktopOverlayStore(),
       }),
     );
-    // The app's own archive path, so an Agent's archive also ungroups the
-    // thread's children on other instances.
-    getDesktopBackendRegistry().setAgentThreadArchiver(
-      async (request) => await appServerService.archiveThread(request),
-    );
+    // The app's own paths, so an Agent's archive also ungroups the thread's
+    // children on other instances, and its pins and read marks reach every
+    // window the way a click does.
+    getDesktopBackendRegistry().setAgentThreadActions({
+      archiveThread: async (request) =>
+        await appServerService.archiveThread(request),
+      setThreadPin: async (request) =>
+        await appServerService.setThreadPin(request),
+      markThreadSeen: async (request) =>
+        await appServerService.markThreadSeen(request),
+    });
     // Windows and Linux: serve the painted title-bar menu bar from the live
     // application menu (idempotent; the renderer mounts the bar only where the
     // native title bar — and with it the native menu bar — is hidden).

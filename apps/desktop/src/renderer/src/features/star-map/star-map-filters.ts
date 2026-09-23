@@ -2,6 +2,8 @@ import {
   buildThreadIdentityKey,
   comparePinnedThreads,
   type NavigationThreadSummary,
+  type StarMapViewFilter,
+  type StarMapViewFilterKey,
 } from "@pwragent/shared";
 import { isThreadRemoteWork } from "../navigation/ThreadRowStatus";
 import {
@@ -50,6 +52,17 @@ export type StarMapFilterKey =
   | "pinned"
   | "agent";
 
+/**
+ * Agent tools set chips by the shared `STAR_MAP_VIEW_FILTER_KEYS`. A chip
+ * added on either side and not the other fails to compile here, instead of
+ * becoming a chip an Agent reads and cannot set.
+ */
+const _filterKeysMatchAgentTools: [StarMapFilterKey] extends [StarMapViewFilterKey]
+  ? [StarMapViewFilterKey] extends [StarMapFilterKey]
+    ? true
+    : false
+  : false = true;
+
 export type StarMapFilterDefinition = {
   facet: StarMapFilterFacet;
   key: StarMapFilterKey;
@@ -83,6 +96,18 @@ export function filterState(
   key: StarMapFilterKey,
 ): StarMapFilterState {
   return selection[key] ?? "neutral";
+}
+
+/** The chips the operator set, in strip order, as the Agent tools report them. */
+export function describeActiveFilters(
+  selection: StarMapFilterSelection,
+): StarMapViewFilter[] {
+  return STAR_MAP_FILTERS.flatMap((definition) => {
+    const state = filterState(selection, definition.key);
+    return state === "neutral"
+      ? []
+      : [{ key: definition.key, label: definition.label, state }];
+  });
 }
 
 /** A thread is pinned when the navigation snapshot gave it a pin rank. */

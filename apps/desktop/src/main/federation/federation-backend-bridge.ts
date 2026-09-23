@@ -27,6 +27,8 @@ import type {
   AppServerTurnInputItem,
   ArchiveThreadRequest,
   ArchiveThreadResponse,
+  RestoreThreadRequest,
+  RestoreThreadResponse,
   ReadQueuedTurnRequest,
   ReadQueuedTurnResponse,
   CancelQueuedTurnRequest,
@@ -424,6 +426,7 @@ export const FEDERATION_BACKEND_METHODS = {
   cancelThreadPrAutoDispatch: "backend.cancelThreadPrAutoDispatch",
   sendThreadPrAutoDispatchNow: "backend.sendThreadPrAutoDispatchNow",
   archiveThread: "backend.archiveThread",
+  restoreThread: "backend.restoreThread",
   startThread: "backend.startThread",
   forkThread: "backend.forkThread",
   startTurn: "backend.startTurn",
@@ -543,6 +546,7 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.cancelThreadPrAutoDispatch]: "turn_control",
   [FEDERATION_BACKEND_METHODS.sendThreadPrAutoDispatchNow]: "turn_control",
   [FEDERATION_BACKEND_METHODS.archiveThread]: "turn_control",
+  [FEDERATION_BACKEND_METHODS.restoreThread]: "turn_control",
   [FEDERATION_BACKEND_METHODS.startThread]: "turn_control",
   [FEDERATION_BACKEND_METHODS.forkThread]: "turn_control",
   [FEDERATION_BACKEND_METHODS.startTurn]: "turn_control",
@@ -734,6 +738,7 @@ export type FederationBackendOperations = {
     request: SendThreadPrAutoDispatchNowRequest,
   ): Promise<SendThreadPrAutoDispatchNowResponse>;
   archiveThread(request: ArchiveThreadRequest): Promise<ArchiveThreadResponse>;
+  restoreThread(request: RestoreThreadRequest): Promise<RestoreThreadResponse>;
   startThread(request: StartThreadRequest): Promise<StartThreadResponse>;
   forkThread(
     request: ForkThreadRequest,
@@ -1224,6 +1229,13 @@ export function registerFederationBackendHandlers(params: {
     async (envelope) =>
       await params.backend.archiveThread(
         envelope.params as ArchiveThreadRequest,
+      ),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.restoreThread,
+    async (envelope) =>
+      await params.backend.restoreThread(
+        envelope.params as RestoreThreadRequest,
       ),
   );
   params.router.registerHandler(
@@ -1994,6 +2006,15 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
   ): Promise<ArchiveThreadResponse> {
     return await this.rpc.request<ArchiveThreadResponse>({
       method: FEDERATION_BACKEND_METHODS.archiveThread,
+      params: request,
+    });
+  }
+
+  async restoreThread(
+    request: RestoreThreadRequest,
+  ): Promise<RestoreThreadResponse> {
+    return await this.rpc.request<RestoreThreadResponse>({
+      method: FEDERATION_BACKEND_METHODS.restoreThread,
       params: request,
     });
   }

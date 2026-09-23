@@ -1,6 +1,7 @@
 import "./foreground-fixture";
 import {
   act,
+  fireEvent,
   render,
   renderHook,
   screen,
@@ -12,9 +13,12 @@ import {
   type NavigationQueryPage,
   type NavigationQueryRequest,
   type NavigationThreadSummary,
+  type SetStarMapViewToolArgs,
   type StarMapCommand,
   type StarMapCommandResult,
   type StarMapFlightTarget,
+  type StarMapThreadOpenMode,
+  type StarMapThreadRef,
   type StarMapViewSnapshot,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
@@ -120,15 +124,37 @@ function commandBridge() {
       published.push(snapshot);
     }),
   };
+  const dispatch = (
+    command:
+      | { kind: "fly_to"; target: StarMapFlightTarget; open?: StarMapThreadOpenMode }
+      | { kind: "highlight"; threads: StarMapThreadRef[] }
+      | { kind: "set_view"; changes: SetStarMapViewToolArgs },
+  ): string => {
+    const requestId = `request-${++sequence}`;
+    act(() => {
+      listener?.({ requestId, ...command } as StarMapCommand);
+    });
+    return requestId;
+  };
+  /** Several commands in one tick, as parallel tool calls can arrive. */
+  const dispatchTogether = (
+    commands: Parameters<typeof dispatch>[0][],
+  ): string[] => {
+    const requestIds = commands.map(() => `request-${++sequence}`);
+    act(() => {
+      commands.forEach((command, index) => {
+        listener?.({ requestId: requestIds[index]!, ...command } as StarMapCommand);
+      });
+    });
+    return requestIds;
+  };
   return {
     api,
     published,
+    dispatch,
+    dispatchTogether,
     send(target: StarMapFlightTarget): string {
-      const requestId = `request-${++sequence}`;
-      act(() => {
-        listener?.({ requestId, kind: "fly_to", target });
-      });
-      return requestId;
+      return dispatch({ kind: "fly_to", target });
     },
     async answerTo(requestId: string) {
       await waitFor(() => {
@@ -137,9 +163,19 @@ function commandBridge() {
       });
       return answers.find((answer) => answer.requestId === requestId)!.response;
     },
-    async fly(target: StarMapFlightTarget) {
+    async fly(target: StarMapFlightTarget, open?: StarMapThreadOpenMode) {
       await waitFor(() => expect(listener).toBeDefined());
-      return await this.answerTo(this.send(target));
+      return await this.answerTo(
+        dispatch({ kind: "fly_to", target, ...(open ? { open } : {}) }),
+      );
+    },
+    async highlight(threads: StarMapThreadRef[]) {
+      await waitFor(() => expect(listener).toBeDefined());
+      return await this.answerTo(dispatch({ kind: "highlight", threads }));
+    },
+    async setView(changes: SetStarMapViewToolArgs) {
+      await waitFor(() => expect(listener).toBeDefined());
+      return await this.answerTo(dispatch({ kind: "set_view", changes }));
     },
   };
 }
@@ -147,6 +183,7 @@ function commandBridge() {
 function renderMap(
   api: Partial<DesktopApi>,
   localThreads?: NavigationThreadSummary[],
+  options: { onOpenLocalThread?: (thread: NavigationThreadSummary) => void } = {},
 ) {
   return render(
     <StarMapScreen
@@ -154,7 +191,7 @@ function renderMap(
       {...(localThreads ? { localThreads } : {})}
       sessionKeys={{}}
       localInstanceLabel="Mac-Mini-M4"
-      onOpenLocalThread={() => undefined}
+      onOpenLocalThread={options.onOpenLocalThread ?? (() => undefined)}
       onFocusLocalInstance={() => undefined}
     />,
   );
@@ -338,6 +375,303 @@ describe("Star Map Agent flights", () => {
     ).resolves.toMatchObject({ ok: false, error: { code: "not_found" } });
   });
 
+  it("opens the chat card of the thread it flies to", async () => {
+    const bridge = commandBridge();
+    const { container } = renderMap(bridge.api, [
+      thread("t1", "Windows job wrapper"),
+      thread("t2", "Release notarization"),
+    ]);
+    await screen.findByRole("button", {
+      name: "Open thread: Release notarization",
+    });
+
+    const answer = await bridge.fly(
+      { kind: "thread", backend: "codex", threadId: "t2" },
+      "card",
+    );
+
+    expect(answer).toEqual({
+      ok: true,
+      data: {
+        target: "thread",
+        label: "Release notarization",
+        summoned: false,
+        opened: "card",
+      },
+    });
+    await waitFor(() => {
+      expect(
+        container.querySelector('[aria-label="Chat: Release notarization"]'),
+      ).not.toBeNull();
+    });
+  });
+
+  it("opens a thread in full view without flying the map", async () => {
+    const bridge = commandBridge();
+    const opened: string[] = [];
+    const { container } = renderMap(
+      bridge.api,
+      [thread("t1", "Windows job wrapper"), thread("t2", "Release notarization")],
+      { onOpenLocalThread: (entry) => opened.push(entry.id) },
+    );
+    await screen.findByRole("button", {
+      name: "Open thread: Release notarization",
+    });
+    const canvas = container.querySelector<HTMLElement>(".star-map__canvas");
+    const before = canvas?.style.transform;
+
+    const answer = await bridge.fly(
+      { kind: "thread", backend: "codex", threadId: "t2" },
+      "full",
+    );
+
+    expect(answer).toEqual({
+      ok: true,
+      data: { target: "thread", label: "Release notarization", opened: "full" },
+    });
+    expect(opened).toEqual(["t2"]);
+    expect(canvas?.style.transform).toBe(before);
+  });
+
+  it("rings the threads an Agent names, frames them, and reports them", async () => {
+    const bridge = commandBridge();
+    const { container } = renderMap(bridge.api, [
+      thread("t1", "Windows job wrapper"),
+      thread("t2", "Release notarization"),
+      thread("t3", "Docs sweep"),
+    ]);
+    await screen.findByRole("button", { name: "Open thread: Docs sweep" });
+    const canvas = container.querySelector<HTMLElement>(".star-map__canvas");
+    const before = canvas?.style.transform;
+
+    const answer = await bridge.highlight([
+      { backend: "codex", threadId: "t1" },
+      { backend: "codex", threadId: "t3" },
+    ]);
+
+    expect(answer).toEqual({
+      ok: true,
+      data: { highlightedThreadKeys: ["codex:t1", "codex:t3"] },
+    });
+    await waitFor(() => {
+      expect(
+        [...container.querySelectorAll(".star-map-card-shell--highlighted")]
+          .map((card) => card.getAttribute("data-thread-key"))
+          .sort(),
+      ).toEqual(["codex:t1", "codex:t3"]);
+    });
+    await waitFor(() => {
+      expect(canvas?.style.transform).not.toBe(before);
+    });
+    // Read back the way the Agent reads the map, so it knows what it ringed.
+    await waitFor(
+      () => {
+        expect(bridge.published.at(-1)?.highlightedThreadKeys).toEqual([
+          "codex:t1",
+          "codex:t3",
+        ]);
+      },
+      { timeout: 3_000 },
+    );
+  });
+
+  it("loads a thread a highlight names, and names the one it cannot", async () => {
+    // "Archive the stale ones" is about old threads, which are exactly the
+    // ones past the map's first page.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const bridge = commandBridge();
+    const loaded = thread("t1", "Windows job wrapper");
+    const older = thread("t9", "Release runbook");
+    const getNavigationQueryPage = vi.fn(
+      async (request: NavigationQueryRequest) => {
+        if (request.query.kind === "star-map") {
+          return queryPage(request, [loaded]);
+        }
+        if (request.query.kind === "exact") {
+          const asked = new Set(
+            request.query.identities.map((ref) => ref.threadId),
+          );
+          return queryPage(
+            request,
+            [loaded, older].filter((entry) => asked.has(entry.id)),
+          );
+        }
+        return queryPage(request, []);
+      },
+    );
+    const { container } = renderMap({ ...bridge.api, getNavigationQueryPage });
+    await screen.findByRole("button", {
+      name: "Open thread: Windows job wrapper",
+    });
+    await waitFor(() => {
+      expect(bridge.api.onStarMapCommand).toHaveBeenCalled();
+    });
+
+    const requestId = bridge.dispatch({
+      kind: "highlight",
+      threads: [
+        { backend: "codex", threadId: "t9" },
+        { backend: "codex", threadId: "gone" },
+      ],
+    });
+    await screen.findByRole("button", { name: "Open thread: Release runbook" });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(11_000);
+    });
+
+    expect(await bridge.answerTo(requestId)).toEqual({
+      ok: true,
+      data: {
+        highlightedThreadKeys: ["codex:t9"],
+        missingThreadKeys: ["codex:gone"],
+      },
+    });
+    // Still on the map once the highlight stops asking for it.
+    expect(
+      container.querySelector('[data-thread-key="codex:t9"]'),
+    ).not.toBeNull();
+  });
+
+  it("drops the ring when asked, and on a click on empty sky", async () => {
+    const bridge = commandBridge();
+    const { container } = renderMap(bridge.api, [
+      thread("t1", "Windows job wrapper"),
+      thread("t2", "Release notarization"),
+    ]);
+    await screen.findByRole("button", {
+      name: "Open thread: Release notarization",
+    });
+    const ringed = () =>
+      container.querySelectorAll(".star-map-card-shell--highlighted").length;
+
+    await bridge.highlight([{ backend: "codex", threadId: "t1" }]);
+    await waitFor(() => expect(ringed()).toBe(1));
+    await expect(bridge.highlight([])).resolves.toEqual({
+      ok: true,
+      data: { highlightedThreadKeys: [] },
+    });
+    await waitFor(() => expect(ringed()).toBe(0));
+
+    await bridge.highlight([{ backend: "codex", threadId: "t2" }]);
+    await waitFor(() => expect(ringed()).toBe(1));
+    const viewport = container.querySelector<HTMLElement>(".star-map__viewport")!;
+    fireEvent.pointerDown(viewport, { button: 0, clientX: 300, clientY: 300 });
+    fireEvent.pointerUp(window, { clientX: 300, clientY: 300 });
+    await waitFor(() => expect(ringed()).toBe(0));
+  });
+
+  it("refuses a highlight when none of the threads can be found", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const bridge = commandBridge();
+    renderMap(bridge.api, [thread("t1", "Windows job wrapper")]);
+    await screen.findByRole("button", {
+      name: "Open thread: Windows job wrapper",
+    });
+    await waitFor(() => {
+      expect(bridge.api.onStarMapCommand).toHaveBeenCalled();
+    });
+
+    const requestId = bridge.dispatch({
+      kind: "highlight",
+      threads: [{ backend: "codex", threadId: "gone" }],
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(11_000);
+    });
+
+    expect(await bridge.answerTo(requestId)).toMatchObject({
+      ok: false,
+      error: { code: "not_found" },
+    });
+  });
+
+  it("sets the lens and chips the way the View menu and the strip do", async () => {
+    const bridge = commandBridge();
+    renderMap(bridge.api, [thread("t1", "Windows job wrapper")]);
+    await screen.findByRole("button", {
+      name: "Open thread: Windows job wrapper",
+    });
+
+    const answer = await bridge.setView({
+      layout: "lanes",
+      filters: { attention: "include", agent: "exclude" },
+    });
+    const cleared = await bridge.setView({
+      clearFilters: true,
+      filters: { pinned: "include" },
+    });
+
+    expect(answer).toEqual({
+      ok: true,
+      data: {
+        layout: "lanes",
+        hideOfflineInstances: false,
+        filters: [
+          { key: "attention", label: "Attention", state: "include" },
+          { key: "agent", label: "Agents", state: "exclude" },
+        ],
+      },
+    });
+    expect(cleared).toMatchObject({
+      ok: true,
+      data: {
+        filters: [{ key: "pinned", label: "Pinned", state: "include" }],
+      },
+    });
+    // Stored like the operator's own choice, so the map reopens the same.
+    expect(
+      JSON.parse(
+        window.localStorage.getItem("pwragent.starMap.filterSelection") ?? "{}",
+      ),
+    ).toEqual({ pinned: "include" });
+    expect(
+      JSON.parse(
+        window.localStorage.getItem("pwragent.starMap.viewPreferences") ?? "{}",
+      ).layout,
+    ).toBe("lanes");
+    await waitFor(
+      () => {
+        expect(bridge.published.at(-1)).toMatchObject({
+          layout: "lanes",
+          filters: [{ key: "pinned", state: "include" }],
+        });
+      },
+      { timeout: 3_000 },
+    );
+  });
+
+  it("composes two view changes that arrive in the same tick", async () => {
+    const bridge = commandBridge();
+    renderMap(bridge.api, [thread("t1", "Windows job wrapper")]);
+    await screen.findByRole("button", {
+      name: "Open thread: Windows job wrapper",
+    });
+    await waitFor(() => {
+      expect(bridge.api.onStarMapCommand).toHaveBeenCalled();
+    });
+
+    const [first, second] = bridge.dispatchTogether([
+      { kind: "set_view", changes: { filters: { attention: "include" } } },
+      { kind: "set_view", changes: { filters: { pinned: "include" } } },
+    ]);
+
+    await bridge.answerTo(first!);
+    expect(await bridge.answerTo(second!)).toMatchObject({
+      ok: true,
+      data: {
+        filters: [
+          { key: "attention", state: "include" },
+          { key: "pinned", state: "include" },
+        ],
+      },
+    });
+    expect(
+      JSON.parse(
+        window.localStorage.getItem("pwragent.starMap.filterSelection") ?? "{}",
+      ),
+    ).toEqual({ attention: "include", pinned: "include" });
+  });
+
   it("flies to an instance's body without taking the operator's focus", async () => {
     // The operator is usually typing to the manager when this runs; the
     // edge arrows' own flight refocuses the map, which here would pull the
@@ -387,6 +721,13 @@ describe("useStarMapCommands", () => {
         onFlyTo: async () => {
           throw new Error("layout exploded");
         },
+        onHighlight: async () => ({
+          ok: true,
+          data: { highlightedThreadKeys: [] },
+        }),
+        onSetView: () => {
+          throw new Error("not this one");
+        },
       }),
     );
 
@@ -399,6 +740,7 @@ describe("useStarMapCommands", () => {
     await waitFor(() => {
       expect(resolveStarMapCommand).toHaveBeenCalledWith({
         requestId: "request-1",
+        kind: "fly_to",
         response: {
           ok: false,
           error: { code: "internal_error", message: "layout exploded" },

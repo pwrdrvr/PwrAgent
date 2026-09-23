@@ -62,6 +62,7 @@ export type MessagingPermissionId =
   | "thread.control.compact"
   | "thread.control.handoff"
   | "thread.control.archive"
+  | "thread.control.organize"
   | "thread.control.schedule"
   // Mid-turn interactive surfaces.
   | "approval.respond.default"
@@ -234,9 +235,15 @@ export const MESSAGING_PERMISSION_CATALOG: readonly MessagingPermissionDescripto
     id: "thread.control.archive",
     label: "Archive a thread",
     description:
-      "Archive a thread and remove the worktrees PwrAgent created for it.",
+      "Archive a thread and remove the worktrees PwrAgent created for it, or restore an archived one.",
     group: "control",
     danger: "med",
+  },
+  {
+    id: "thread.control.organize",
+    label: "Pin and mark read",
+    description: "Pin or unpin a thread, and mark it read or unread.",
+    group: "control",
   },
   {
     id: "thread.control.schedule",
@@ -383,6 +390,7 @@ const POWER_USER_PERMISSIONS: MessagingPermissionId[] = [
   "thread.control.stop",
   "thread.control.compact",
   "thread.control.handoff",
+  "thread.control.organize",
   "thread.control.schedule",
   "approval.respond.default",
 ];
@@ -818,7 +826,10 @@ const THREAD_MUTATION_FIELD_PERMISSIONS: Record<
   // Relinking a thread to another checkout is the status card's Move to
   // Project, which that card gates on handoff.
   projectPath: () => ["thread.control.handoff"],
+  // Both directions: a restore brings back worktrees an archive removed.
   archive: () => ["thread.control.archive"],
+  pinned: () => ["thread.control.organize"],
+  unread: () => ["thread.control.organize"],
 };
 
 /**

@@ -98,10 +98,13 @@ summary.
   [../../docs/star-map-manager.md](../../docs/star-map-manager.md) before
   changing the snapshot shape, the manager thread's identity, or how its
   instructions are delivered.
-- Agent commands to the map (`fly_star_map_to`) arrive through
+- Agent commands to the map (`fly_star_map_to`,
+  `highlight_star_map_threads`, `set_star_map_view`) arrive through
   `useStarMapCommands` and must be answered exactly once, even when the
   handler throws: main holds the Agent's tool call open until the map
-  replies. An Agent flight must not move keyboard focus.
+  replies. Each answer carries its command's kind, and main drops one that
+  does not match. No Agent command may move keyboard focus. An Agent's
+  highlight is its own ring, never written into the operator's selection.
 
 ### Full Access Escalation
 

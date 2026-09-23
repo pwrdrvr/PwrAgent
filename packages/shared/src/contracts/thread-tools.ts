@@ -196,11 +196,20 @@ export type MutateThreadToolArgs = {
    */
   projectPath?: string;
   /**
-   * Archives the thread, removing the worktrees PwrAgent created for it.
-   * Only `true` is accepted, and never beside another change: an archived
-   * thread has no settings left to change.
+   * `true` archives the thread, removing the worktrees PwrAgent created for
+   * it. `false` restores an archived one, the way Settings → Archived
+   * Threads does. Never beside another change: an archived thread has no
+   * settings left to change, and a restore is worth confirming on its own.
    */
   archive?: boolean;
+  /** Pins or unpins the thread on the instance that owns it. */
+  pinned?: boolean;
+  /**
+   * `false` marks the thread read. `true` marks it unread again, which moves
+   * its seen watermark behind its last update, so a thread with no update
+   * time cannot be marked unread.
+   */
+  unread?: boolean;
   /**
    * Validate and report the requested mutations without applying them.
    */
@@ -322,7 +331,9 @@ export type ThreadMutationField =
   | "model_settings"
   | "execution_mode"
   | "project"
-  | "archive";
+  | "archive"
+  | "pinned"
+  | "unread";
 
 export type ThreadMutationChangeStatus =
   | "would_apply"

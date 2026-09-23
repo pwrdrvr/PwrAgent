@@ -68,7 +68,7 @@ describe("star map command bus", () => {
     expect(
       resolveStarMapCommand({
         senderId: 7,
-        result: { requestId: "request-1", response: landed },
+        result: { requestId: "request-1", kind: "fly_to", response: landed },
       }),
     ).toBe(true);
     await expect(pending).resolves.toEqual(landed);
@@ -76,7 +76,7 @@ describe("star map command bus", () => {
     expect(
       resolveStarMapCommand({
         senderId: 7,
-        result: { requestId: "request-1", response: landed },
+        result: { requestId: "request-1", kind: "fly_to", response: landed },
       }),
     ).toBe(false);
   });
@@ -94,7 +94,7 @@ describe("star map command bus", () => {
     expect(
       resolveStarMapCommand({
         senderId: 8,
-        result: { requestId: "request-1", response: landed },
+        result: { requestId: "request-1", kind: "fly_to", response: landed },
       }),
     ).toBe(false);
     await vi.advanceTimersByTimeAsync(1_000);
@@ -103,6 +103,36 @@ describe("star map command bus", () => {
       ok: false,
       error: { code: "internal_error" },
     });
+  });
+
+  it("takes only an answer to the kind of command it sent", async () => {
+    // A highlight's answer is shaped for a highlight: delivered to a flight,
+    // the Agent would be told it flew somewhere with no destination.
+    vi.useFakeTimers();
+    const map = fakeMap(7);
+    const pending = sendStarMapCommand(flight, {
+      webContents: () => map,
+      newRequestId: () => "request-1",
+      timeoutMs: 1_000,
+    });
+
+    expect(
+      resolveStarMapCommand({
+        senderId: 7,
+        result: {
+          requestId: "request-1",
+          kind: "highlight",
+          response: { ok: true, data: { highlightedThreadKeys: [] } },
+        },
+      }),
+    ).toBe(false);
+    expect(
+      resolveStarMapCommand({
+        senderId: 7,
+        result: { requestId: "request-1", kind: "fly_to", response: landed },
+      }),
+    ).toBe(true);
+    await expect(pending).resolves.toEqual(landed);
   });
 
   it("says the map closed when it closes mid-command", async () => {

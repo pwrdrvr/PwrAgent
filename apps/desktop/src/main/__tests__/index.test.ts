@@ -157,8 +157,10 @@ const setFederatedThreadMessageHandlerMock = vi.fn();
 const setFederatedThreadInspectionHandlerMock = vi.fn();
 const setFederatedThreadMutationHandlerMock = vi.fn();
 const setFederatedThreadControlHandlerMock = vi.fn();
-const setAgentThreadArchiverMock = vi.fn();
+const setAgentThreadActionsMock = vi.fn();
 const appServerArchiveThreadMock = vi.fn();
+const appServerSetThreadPinMock = vi.fn();
+const appServerMarkThreadSeenMock = vi.fn();
 const synchronizeProviderRuntimeSelectionsMock = vi.fn(async () => undefined);
 const listThreadsMock = vi.fn<(request?: unknown) => Promise<unknown[]>>();
 const refreshProvidersAtStartupMock = vi.fn<() => Promise<void>>(
@@ -331,7 +333,11 @@ vi.mock("../quit-manager", () => ({
 }));
 
 vi.mock("../ipc/app-server", () => ({
-  appServerService: { archiveThread: appServerArchiveThreadMock },
+  appServerService: {
+    archiveThread: appServerArchiveThreadMock,
+    setThreadPin: appServerSetThreadPinMock,
+    markThreadSeen: appServerMarkThreadSeenMock,
+  },
   registerAppServerIpcHandlers: registerAppServerIpcHandlersMock,
   startAppServerOwnerNavigation: startAppServerOwnerNavigationMock,
   disposeAppServerIpcHandlers: disposeAppServerIpcHandlersMock,
@@ -584,7 +590,7 @@ vi.mock("../app-server/backend-registry", () => ({
       setFederatedThreadInspectionHandlerMock,
     setFederatedThreadMutationHandler: setFederatedThreadMutationHandlerMock,
     setFederatedThreadControlHandler: setFederatedThreadControlHandlerMock,
-    setAgentThreadArchiver: setAgentThreadArchiverMock,
+    setAgentThreadActions: setAgentThreadActionsMock,
     setMessagingArchiveCleaner: setMessagingArchiveCleanerMock,
   })),
 }));
@@ -799,8 +805,10 @@ describe("bootstrapApp", () => {
     setFederatedThreadInspectionHandlerMock.mockReset();
     setFederatedThreadMutationHandlerMock.mockReset();
     setFederatedThreadControlHandlerMock.mockReset();
-    setAgentThreadArchiverMock.mockReset();
+    setAgentThreadActionsMock.mockReset();
     appServerArchiveThreadMock.mockReset();
+    appServerSetThreadPinMock.mockReset();
+    appServerMarkThreadSeenMock.mockReset();
     synchronizeProviderRuntimeSelectionsMock.mockReset();
     synchronizeProviderRuntimeSelectionsMock.mockResolvedValue(undefined);
     listThreadsMock.mockReset();
@@ -1124,28 +1132,46 @@ describe("bootstrapApp", () => {
     });
   });
 
-  it("archives an Agent's thread through the app's own archive path", async () => {
+  it("gives an Agent's thread changes the app's own archive, pin and seen paths", async () => {
     // The registry's archive alone leaves the thread's children on other
-    // instances grouped under it; only the app's path ungroups them. Drop
-    // this wiring and an archive from mutate_thread quietly skips that step.
+    // instances grouped under it, and its own pin and seen writes publish
+    // nothing the windows redraw from. Drop this wiring and mutate_thread
+    // quietly skips those steps.
     startupProfilerInstance.start.mockResolvedValue();
-    appServerArchiveThreadMock.mockResolvedValue({
-      backend: "codex",
-      threadId: "t-1",
-      archivedAt: 1,
-      cleanup: [],
-    });
 
     await import("../index");
     await flushMicrotasks();
 
-    const archiver = setAgentThreadArchiverMock.mock.calls[0]?.[0] as
-      | ((request: { backend: string; threadId: string }) => Promise<unknown>)
+    const actions = setAgentThreadActionsMock.mock.calls[0]?.[0] as
+      | Record<
+          "archiveThread" | "setThreadPin" | "markThreadSeen",
+          (request: Record<string, unknown>) => Promise<unknown>
+        >
       | undefined;
-    await archiver?.({ backend: "codex", threadId: "t-1" });
+    await actions?.archiveThread({ backend: "codex", threadId: "t-1" });
+    await actions?.setThreadPin({
+      backend: "codex",
+      threadId: "t-1",
+      pinned: true,
+    });
+    await actions?.markThreadSeen({
+      backend: "codex",
+      threadId: "t-1",
+      seenUpdatedAt: 5,
+    });
     expect(appServerArchiveThreadMock).toHaveBeenCalledWith({
       backend: "codex",
       threadId: "t-1",
+    });
+    expect(appServerSetThreadPinMock).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "t-1",
+      pinned: true,
+    });
+    expect(appServerMarkThreadSeenMock).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "t-1",
+      seenUpdatedAt: 5,
     });
   });
 

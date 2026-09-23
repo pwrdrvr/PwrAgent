@@ -26,6 +26,22 @@ function isSuppressed(
   return (thread.updatedAt ?? 0) <= overlay.dismissedAt;
 }
 
+/**
+ * The seen watermark that makes a thread read or unread. `deriveInboxState`
+ * calls a thread unread while its last update is newer than the watermark,
+ * so read puts the watermark AT that update and unread one tick behind it.
+ *
+ * Omitting the watermark is not "read": the store keeps the previous one,
+ * and a thread marked unread stays unread through every later snapshot.
+ */
+export function threadSeenWatermark(
+  updatedAt: number | undefined,
+  unread: boolean,
+): { seenUpdatedAt?: number } {
+  if (updatedAt === undefined) return {};
+  return { seenUpdatedAt: unread ? Math.max(0, updatedAt - 1) : updatedAt };
+}
+
 export function deriveInboxState(params: {
   firstSnapshot: boolean;
   isNewThread: boolean;

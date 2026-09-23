@@ -2177,6 +2177,49 @@ describe("StarMapScreen", () => {
     });
   });
 
+  it("marks an unread thread seen at its own last update", async () => {
+    // The store keeps the previous watermark when none is sent, and unread
+    // is "updated after the watermark": without it the cookie cleared here
+    // and came back with the next snapshot.
+    const markThreadSeen = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "t1",
+      seenAt: 5,
+    }));
+    render(
+      <StarMapScreen
+        desktopApi={
+          { ...buildDesktopApi(), markThreadSeen } as unknown as DesktopApi
+        }
+        localThreads={[unreadThread("t1")]}
+        sessionKeys={{}}
+        localInstanceLabel="Mac-Mini-M4"
+        onOpenLocalThread={() => undefined}
+        onFocusLocalInstance={() => undefined}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: "Actions for Thread t1" }),
+      ).toBeTruthy();
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Actions for Thread t1" }),
+    );
+    fireEvent.click(screen.getByRole("menuitem", { name: "Mark as seen" }));
+
+    await waitFor(() => {
+      expect(markThreadSeen).toHaveBeenCalledWith(
+        expect.objectContaining({
+          backend: "codex",
+          threadId: "t1",
+          seenUpdatedAt: 100,
+        }),
+      );
+    });
+  });
+
   it("groups threads under project suns and swaps the project chip for the instance", async () => {
     window.localStorage.setItem(
       "pwragent.starMap.viewPreferences",

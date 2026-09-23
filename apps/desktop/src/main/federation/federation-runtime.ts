@@ -6040,6 +6040,9 @@ function localBackendOperations(): FederationBackendOperations {
       });
       return response;
     },
+    async restoreThread(request) {
+      return await getDesktopBackendRegistry().restoreThread(request);
+    },
     async startThread(request: StartThreadRequest): Promise<StartThreadResponse> {
       return await getDesktopBackendRegistry().startThread(request);
     },
