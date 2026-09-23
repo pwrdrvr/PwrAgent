@@ -1,4 +1,5 @@
 import { resolvePullRequestReview } from "./pull-request-review";
+import { priceLocalModelUsage } from "@pwragent/shared";
 import { navigationWorkingStatePath as resolveThreadWorkingStatePath } from "@pwragent/shared";
 import { validateCodexConfigOverrides } from "../settings/codex-config-overrides";
 import {
@@ -404,7 +405,7 @@ import {
 } from "./acp-backend-adapter";
 import {
   CodexAppServerClient,
-  DEFAULT_CODEX_THREAD_TITLE_MODEL,
+  resolveCodexThreadTitleSettings,
   extractRateLimitSummaries,
   formatRateLimitWindowName,
   type CodexPwrdrvrTokenMiserActivation,
@@ -5872,6 +5873,10 @@ async function readClientRateLimits(client: BackendClient): Promise<BackendRateL
   return await client.readRateLimits();
 }
 
+function isUnauthenticatedCodexProvider(account: BackendAccountSummary | undefined): boolean {
+  return account?.requiresOpenaiAuth === false && !account.type;
+}
+
 function rateLimitSummaryKey(limit: BackendRateLimitSummary): string {
   return [
     limit.limitId ?? "",
@@ -8863,6 +8868,7 @@ export class DesktopBackendRegistry {
     DesktopProviderThreadModelMigration
   >;
   private readonly resolveCodexFastAllowedFn: () => boolean;
+  private readonly resolveCodexLocalModelIdsFn: () => string[];
   private readonly resolvePdfAnalysisEnabledFn: () => boolean;
   private readonly resolveTokenMiserEnabledFn: () => boolean;
   private readonly resolveTokenMiserDefaultEnabledFn: () => boolean;
@@ -8985,6 +8991,7 @@ export class DesktopBackendRegistry {
       DesktopProviderThreadModelMigration
     >;
     resolveCodexFastAllowed?: () => boolean;
+    resolveCodexLocalModelIds?: () => string[];
     resolvePdfAnalysisEnabled?: () => boolean;
     configStore?: Pick<DesktopConfigStore, "read" | "subscribe">;
     resolveSpendAlertPolicy?: () => DesktopSpendAlertPolicy;
@@ -9116,6 +9123,8 @@ export class DesktopBackendRegistry {
     this.resolveProviderThreadModelMigrationsFn =
       options?.resolveProviderThreadModelMigrations ??
       (() => settingsService?.resolveProviderThreadModelMigrations() ?? {});
+    this.resolveCodexLocalModelIdsFn = options?.resolveCodexLocalModelIds
+      ?? (() => settingsService?.resolveCodexLocalModelIds?.() ?? []);
     this.resolveCodexFastAllowedFn =
       options?.resolveCodexFastAllowed ??
       (() => settingsService?.resolveCodexFastAllowed() ?? true);
@@ -14581,12 +14590,29 @@ export class DesktopBackendRegistry {
     if (params.backend !== "codex") {
       return withCompactions;
     }
-    return mergeThreadPricingLines(
+    const merged = mergeThreadPricingLines(
       withCompactions,
       [
         ...(this.liveTokenMiserUsageLines.get(params.threadId)?.values() ?? []),
       ],
     );
+    const localIds = new Set(this.resolveCodexLocalModelIdsFn());
+    const models = this.codexBackendSummary?.launchpadOptions?.models ?? [];
+    const labels = new Map(models.map((model) => [model.id, model.label]));
+    let changedPricing = false;
+    const lines = merged.lines.map((line) => {
+      const isCodexModel = line.backend === "codex"
+        && (line.scope !== "monitor" || line.provider === "openai" || line.provider === "local");
+      const label = isCodexModel && line.model ? labels.get(line.model) : undefined;
+      const decorated = label ? { ...line, modelLabel: label } : line;
+      // A helper can belong to another backend while sharing this ledger.
+      if (isCodexModel && line.model && localIds.has(line.model)) {
+        changedPricing = true;
+        return priceLocalModelUsage(decorated);
+      }
+      return decorated;
+    });
+    return changedPricing ? mergeThreadPricingLines(merged, lines) : { ...merged, lines };
   }
 
   private async emitThreadPricingUpdated(params: {
@@ -26023,6 +26049,7 @@ export class DesktopBackendRegistry {
     notificationVersion: number;
   }): Promise<boolean> {
     if (this.codexClient.isAuthenticationRequired?.()) return false;
+    if (isUnauthenticatedCodexProvider(this.codexBackendSummary?.account)) return false;
     let refetchedRateLimits: BackendRateLimitSummary[];
     try {
       refetchedRateLimits = await readClientRateLimits(this.codexClient);
@@ -26130,6 +26157,7 @@ export class DesktopBackendRegistry {
     const backendGeneration = this.codexBackendGeneration;
     const rateLimitsNotificationVersion = this.codexRateLimitsNotificationVersion;
     const { lastKnownGood } = this.readCodexProvider();
+    const accountRead = readClientAccount(this.codexClient);
     const [
       initializeResult,
       defaultModelsResult,
@@ -26142,8 +26170,10 @@ export class DesktopBackendRegistry {
         return result;
       }),
       this.readCodexDefaultModelsOnce("backend-summary"),
-      readClientAccount(this.codexClient),
-      readClientRateLimits(this.codexClient),
+      accountRead,
+      accountRead.catch(() => undefined).then((account) =>
+        isUnauthenticatedCodexProvider(account) ? [] : readClientRateLimits(this.codexClient)
+      ),
       this.resolveCodexRuntimeCommandFn?.(),
     ]);
     if (backendGeneration !== this.codexBackendGeneration) {
@@ -32020,10 +32050,9 @@ export class DesktopBackendRegistry {
     threadId: string;
   }): { model?: string; reasoningEffort?: string } {
     if (params.backend === "codex") {
-      return {
-        model: this.codexClient.getDefaultHelperModel?.() ?? DEFAULT_CODEX_THREAD_TITLE_MODEL,
-        reasoningEffort: "low",
-      };
+      return resolveCodexThreadTitleSettings(
+        this.codexBackendSummary?.launchpadOptions?.models ?? [],
+      ) ?? {};
     }
     if (!isAcpBackendId(params.backend)) {
       return {};

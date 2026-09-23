@@ -6580,6 +6580,100 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  it("projects declared local costs and catalog labels without rewriting history or pricing unknown remote models", async () => {
+    const id = "/models/bonsai.gguf";
+    const local: ThreadUsageLineRecord = {
+      backend: "codex", threadId: "thread-1", usageLineId: "local-turn", model: id,
+      provider: "openai", currency: "USD", createdAt: 1000,
+      scope: "turn", source: "live", status: "finalized",
+      priceStatus: "unpriced", priceUnavailableReason: "missing-rate",
+      inputTokens: 100, uncachedInputTokens: 80, cachedInputTokens: 20,
+      outputTokens: 10, reasoningOutputTokens: 0, totalTokens: 110,
+      uncachedInputCostMicros: 0, cachedInputCostMicros: 0, outputCostMicros: 0, totalCostMicros: 0,
+    };
+    const original = [local, { ...local, usageLineId: "remote-turn", model: "unknown-remote" },
+      { ...local, usageLineId: "helper", scope: "monitor" as const, source: "monitor" as const,
+        sourceItemId: "system:title-helper:test", parentThreadId: "thread-1", threadId: "helper-thread" },
+      { ...local, usageLineId: "other-provider", scope: "monitor" as const, provider: "qwen" }];
+    const overlayStore = {
+      ...createOverlayStoreMock(),
+      readThreadPricing: vi.fn(async () => ({ lines: original, summaries: [] })),
+    };
+    const writes = vi.spyOn(overlayStore, "upsertThreadUsageLine");
+    let localIds = [id];
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ models: [{ id, label: "PrismML Bonsai 2 27B" }] }),
+      overlayStore, resolveCodexLocalModelIds: () => localIds,
+    });
+    onTestFinished(() => registry.close());
+    await registry.refreshProvidersAtStartup(issueProviderDiscoveryPermit("startup"));
+    const result = await registry.readThread({ backend: "codex", threadId: "thread-1", display: { resource: "pricing" } });
+    const rows = result.display?.pricingPage?.rows ?? [];
+    const byId = (id: string) => rows.find((row) => row.line.usageLineId === id)?.line;
+    expect(byId("local-turn")).toMatchObject({ model: id, modelLabel: "PrismML Bonsai 2 27B", priceStatus: "priced", provider: "local", totalCostMicros: 0, totalTokens: 110 });
+    expect(byId("helper")).toMatchObject({ priceStatus: "priced", provider: "local", totalCostMicros: 0 });
+    expect(byId("remote-turn")).toMatchObject({ priceStatus: "unpriced", priceUnavailableReason: "missing-rate" });
+    expect(byId("other-provider")).toMatchObject({ priceStatus: "unpriced", provider: "qwen" });
+    expect(result.display?.pricing?.summary).toMatchObject({ pricedUsageLineCount: 2, unpricedUsageLineCount: 2 });
+    expect(original[0].priceStatus).toBe("unpriced");
+    expect(writes).not.toHaveBeenCalled();
+    localIds = [];
+    const cleared = await registry.readThread({ backend: "codex", threadId: "thread-1", display: { resource: "pricing" } });
+    expect(cleared.display?.pricingPage?.rows.every((row) => row.line.priceStatus === "unpriced")).toBe(true);
+  });
+
+  it("skips OpenAI quotas but names threads for a no-auth local Codex provider", async () => {
+    const titleHelperCompleted = createDeferred<string>();
+    const codexClient = new MockBackendClient({
+      account: { requiresOpenaiAuth: false },
+      initializeResult: { methods: ["thread/start", "turn/start", "thread/name/set"] },
+      models: [{ id: "local-model", label: "Local model", current: true, supportsReasoning: false, reasoningEfforts: [] }],
+      threads: [],
+    });
+    const titleService = {
+      generateTitle: vi.fn(async () => ({ status: "generated" as const, title: "Local title" })),
+    };
+    const overlayStore = createOverlayStoreMock();
+    const upsertThreadSubAgent = overlayStore.upsertThreadSubAgent.bind(overlayStore);
+    const upsertSubAgentSpy = vi.spyOn(overlayStore, "upsertThreadSubAgent").mockImplementation(async (params) => {
+      const result = await upsertThreadSubAgent(params);
+      if (["success", "failed", "cancelled"].includes(params.subAgent.status)) {
+        titleHelperCompleted.resolve(params.subAgent.status);
+      }
+      return result;
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore,
+      threadTitleGenerationService: titleService,
+    });
+    await registry.refreshProvidersAtStartup(issueProviderDiscoveryPermit("startup"));
+    await registry.listBackends({ refreshRateLimits: true });
+    expect(codexClient.readRateLimitsCallCount).toBe(0);
+    await registry.startThread({ backend: "codex", cwd: "/repo-a" });
+    await registry.startTurn({
+      backend: "codex",
+      threadId: "thread-1",
+      input: [{ type: "text", text: "Test the local provider" }],
+    });
+    // Title generation owns background thread lookups; a timer tick does not
+    // establish their completion, particularly with Windows filesystem I/O.
+    expect(await titleHelperCompleted.promise).toBe("success");
+    expect(titleService.generateTitle).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      userPrompt: "Test the local provider",
+    });
+    expect(codexClient.lastRenameThreadParams).toEqual({
+      threadId: "thread-1",
+      name: "Local title",
+    });
+    const running = upsertSubAgentSpy.mock.calls.find(([call]) => call.subAgent.status === "running");
+    expect(running?.[0].subAgent.preferredModel).toBe("local-model");
+    expect(running?.[0].subAgent.preferredReasoningEffort).toBeUndefined();
+    await registry.close();
+  });
+
   it("refreshes idle Codex quotas without rediscovery and coalesces repeated reads", async () => {
     const codexClient = new MockBackendClient({
       rateLimits: [{ name: "Weekly limit", remaining: 91 }],
@@ -18055,6 +18149,51 @@ script = "echo setup"
     await registry.close();
   });
 
+  it("starts a local Codex model without inherited reasoning or Fast settings", async () => {
+    const model = "/models/bonsai.gguf";
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+      models: [{
+        id: model,
+        label: "PrismML Bonsai 2 27B",
+        current: true,
+        reasoningEfforts: [],
+        supportsReasoning: false,
+        supportsFast: false,
+        supportsImage: false,
+      }],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock({ overlays: {
+        "codex:local-thread": {
+          backend: "codex",
+          threadId: "local-thread",
+          executionMode: "default",
+          model,
+          reasoningEffort: "high",
+          fastMode: true,
+          serviceTier: "priority",
+          extraLinkedDirectories: [],
+        },
+      } }),
+    });
+
+    await registry.listBackends();
+    await registry.startTurn({
+      backend: "codex",
+      threadId: "local-thread",
+      input: [{ type: "text", text: "Use the local model" }],
+    });
+    expect(codexClient.lastStartTurnParams).toMatchObject({
+      model,
+      reasoningEffort: undefined,
+      serviceTier: undefined,
+      fastMode: false,
+    });
+    await registry.close();
+  });
+
   it("clears stale Codex Fast serviceTier from launchpad defaults when Fast mode changes", async () => {
     const overlayStore = createOverlayStoreMock({
       launchpadDefaults: {
@@ -23767,6 +23906,7 @@ command = "pnpm dev"
     const upsertSubAgentSpy = vi.spyOn(overlayStore, "upsertThreadSubAgent");
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start", "thread/name/set"] },
+      models: [{ id: "gpt-5.6-luna", label: "Luna", reasoningEfforts: ["low"] }],
       startTurnDelay: startTurnDelay.promise,
       threads: [
         {
@@ -23783,6 +23923,7 @@ command = "pnpm dev"
       overlayStore,
       threadTitleGenerationService: titleService,
     });
+    await registry.refreshProvidersAtStartup(issueProviderDiscoveryPermit("startup"));
 
     const startTurnPromise = registry.startTurn({
       backend: "codex",
@@ -24011,6 +24152,7 @@ command = "pnpm dev"
     const upsertUsageLineSpy = vi.spyOn(overlayStore, "upsertThreadUsageLine");
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start", "thread/name/set"] },
+      models: [{ id: "gpt-5.6-luna", label: "Luna", reasoningEfforts: ["low"] }],
       threads: [
         {
           id: "thread-title-helper-parent",
@@ -24026,6 +24168,7 @@ command = "pnpm dev"
       overlayStore,
       threadTitleGenerationService: titleService,
     });
+    await registry.refreshProvidersAtStartup(issueProviderDiscoveryPermit("startup"));
 
     await registry.startTurn({
       backend: "codex",
@@ -24355,6 +24498,7 @@ command = "pnpm dev"
     const upsertSubAgentSpy = vi.spyOn(overlayStore, "upsertThreadSubAgent");
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start", "thread/name/set"] },
+      models: [{ id: "gpt-5.6-luna", label: "Luna", reasoningEfforts: ["low"] }],
       threads: [
         {
           id: "thread-title-helper-throws",
@@ -24370,6 +24514,7 @@ command = "pnpm dev"
       overlayStore,
       threadTitleGenerationService: titleService,
     });
+    await registry.refreshProvidersAtStartup(issueProviderDiscoveryPermit("startup"));
 
     await registry.startTurn({
       backend: "codex",

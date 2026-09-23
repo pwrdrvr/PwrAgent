@@ -165,6 +165,27 @@ const DEFAULT_FULL_MCP_INVENTORY_TIMEOUT_MS = 420_000;
 const ARCHIVED_THREAD_METADATA_REFRESH_INTERVAL_MS = 60_000;
 const DEFAULT_CODEX_COLLABORATION_MODEL = "gpt-5.5";
 export const DEFAULT_CODEX_THREAD_TITLE_MODEL = "gpt-5.6-luna";
+
+export function resolveCodexThreadTitleSettings(models: BackendModelOption[]): {
+  model: string;
+  reasoningEffort?: string;
+} | undefined {
+  const model = models.find((entry) => entry.id === "gpt-6-luna")
+    ?? models.find((entry) => entry.id === DEFAULT_CODEX_THREAD_TITLE_MODEL)
+    ?? models.find((entry) => entry.current)
+    ?? models[0];
+  if (!model) return undefined;
+  const efforts = model.reasoningEfforts;
+  const reasoningEffort = model.supportsReasoning === false || efforts?.length === 0
+    ? undefined
+    : efforts === undefined || efforts.includes("low")
+      ? "low"
+      : efforts.includes(model.defaultReasoningEffort ?? "")
+        ? model.defaultReasoningEffort
+        : efforts[0];
+  return { model: model.id, reasoningEffort };
+}
+
 const DEFAULT_CODEX_THREAD_TITLE_TIMEOUT_MS = 20_000;
 const CODEX_THREAD_TITLE_CONFIG_READ_REASON = "thread-title-mcp-inventory";
 /** Wire method Codex uses to invoke a dynamic tool the client advertised. */
@@ -5572,7 +5593,7 @@ function pickReasoningEfforts(record: Record<string, unknown>): string[] | undef
         .filter((effort): effort is string => Boolean(effort)),
     ),
   ];
-  return efforts.length > 0 ? efforts : undefined;
+  return efforts;
 }
 
 function extractModelOptions(value: unknown): BackendModelOption[] {
@@ -5592,11 +5613,15 @@ function extractModelOptions(value: unknown): BackendModelOption[] {
     if (!id || pickBoolean(modelRecord, ["hidden"]) === true) {
       return [];
     }
+    const inputModalities = modelRecord.inputModalities ?? modelRecord.input_modalities;
 
     return [
       {
         id,
-        label: formatCodexModelLabel(id),
+        label: formatCodexModelLabel(
+          id,
+          pickString(modelRecord, ["displayName", "display_name", "label"]),
+        ),
         current: pickBoolean(modelRecord, [
           "current",
           "default",
@@ -5611,23 +5636,25 @@ function extractModelOptions(value: unknown): BackendModelOption[] {
         supportsReasoning: pickBoolean(modelRecord, [
           "supportsReasoning",
           "supports_reasoning",
-        ]),
+        ]) ?? (pickReasoningEfforts(modelRecord)?.length === 0 ? false : undefined),
         supportsFast: pickModelSupportsFast(modelRecord),
         supportsSteering: pickBoolean(modelRecord, [
           "supportsSteering",
           "supports_steering",
         ]),
-        // Prefer an explicit protocol flag when the model list carries one;
-        // otherwise fall back to the known Spark exclusion (Spark models do
-        // not accept image input). Leaving this `undefined` for all other
-        // models means "assume supported" in the composer.
+        // Prefer explicit capabilities, including a text-only modality list.
+        // Older servers without either retain the known Spark exclusion.
         supportsImage:
           pickBoolean(modelRecord, [
             "supportsImage",
             "supports_image",
             "supportsVision",
             "supports_vision",
-          ]) ?? (isSparkModelId(id) ? false : undefined),
+          ]) ?? (
+            Array.isArray(inputModalities)
+              ? inputModalities.includes("image")
+              : isSparkModelId(id) ? false : undefined
+          ),
       },
     ];
   });
@@ -5786,7 +5813,7 @@ function extractGeneratedModelOptions(
     return [
       {
         id: model.id,
-        label: formatCodexModelLabel(model.id),
+        label: formatCodexModelLabel(model.id, model.displayName),
         current: model.isDefault,
         defaultReasoningEffort: model.defaultReasoningEffort,
         reasoningEfforts: model.supportedReasoningEfforts.map(
@@ -5832,10 +5859,10 @@ function isSparkModelId(id: string): boolean {
   return id.toLowerCase().includes("spark");
 }
 
-function formatCodexModelLabel(id: string): string {
+function formatCodexModelLabel(id: string, displayName?: string): string {
   const match = /^gpt-([^-]+)(?:-(.+))?$/i.exec(id.trim());
   if (!match) {
-    return id;
+    return displayName?.trim() || id;
   }
 
   const version = match[1];
@@ -9229,11 +9256,18 @@ export class CodexAppServerClient {
   }
 
   async generateTitle(params: ThreadTitleAdapterParams): Promise<ThreadTitleAdapterResult> {
+    const settings = resolveCodexThreadTitleSettings(await this.listModels());
+    if (!settings) {
+      return { status: "unavailable", reason: "codex_title_no_available_model" };
+    }
     return await this.runHelperStructuredTurn({
+      model: settings.model,
+      reasoningEffort: settings.reasoningEffort ?? null,
       prompt: params.prompt,
       schema: params.schema,
       isMatch: TITLE_RECORD_PREDICATE,
       timeoutMs: params.timeoutMs,
+      turnTimeoutMs: params.turnTimeoutMs,
     });
   }
 
@@ -9355,7 +9389,7 @@ export class CodexAppServerClient {
 
   private async runHelperStructuredTurn(params: {
     model?: string;
-    reasoningEffort?: string;
+    reasoningEffort?: string | null;
     prompt: string;
     /** Omitted by a tool turn, whose product is its tool calls. */
     schema?: Record<string, unknown>;
@@ -9392,7 +9426,9 @@ export class CodexAppServerClient {
     const helperWorkspaceDir = await ensureCodexThreadTitleWorkspace();
     const helperModel = params.model?.trim() || this.getDefaultHelperModel();
     const helperReasoningEffort =
-      normalizeCodexReasoningEffort(params.reasoningEffort) ?? "low";
+      params.reasoningEffort === null
+        ? undefined
+        : normalizeCodexReasoningEffort(params.reasoningEffort) ?? "low";
     const helperSystem = params.system?.trim() || "";
     const isToolTurn = Boolean(params.onToolCall);
     // A tool turn has no output schema, so nothing it emits should be

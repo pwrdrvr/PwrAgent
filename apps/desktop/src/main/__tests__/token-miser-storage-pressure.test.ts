@@ -81,3 +81,21 @@ it("allows concurrent processes to import and clean up the same legacy directory
   expect(await second.listMetadata()).toHaveLength(40);
   await expect(fs.stat(root)).rejects.toMatchObject({ code: "ENOENT" });
 });
+
+it.each([true, false])("accepts Windows cleanup EPERM only when the directory is gone (removed=%s)", async (removed) => {
+  const { store, root } = await fixture();
+  const rmdir = fs.rmdir.bind(fs);
+  vi.spyOn(fs, "rmdir").mockImplementation(async (directory, options) => {
+    if (directory !== root) return await rmdir(directory, options);
+    if (removed) await rmdir(directory, options);
+    throw Object.assign(new Error("fixture concurrent Windows removal"), { code: "EPERM" });
+  });
+  if (removed) {
+    await store.prune({ maxAgeMs: 0, maxBytes: 0 });
+    expect(await store.listMetadata()).toHaveLength(40);
+    await expect(fs.stat(root)).rejects.toMatchObject({ code: "ENOENT" });
+  } else {
+    await expect(store.prune({ maxAgeMs: 0, maxBytes: 0 })).rejects.toMatchObject({ code: "EPERM" });
+    expect((await fs.stat(root)).isDirectory()).toBe(true);
+  }
+});

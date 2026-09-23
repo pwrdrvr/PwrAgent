@@ -359,6 +359,57 @@ Codex App Server protocol bindings are consumed from
 workspace. Workspace packages remain marked `private: true` for publishing control,
 but the source in this repository is MIT-licensed.
 
+### Local models through Codex
+
+The Codex adapter accepts every non-hidden model advertised by `model/list`.
+Known OpenAI models retain their picker order; other models retain their provider
+labels and capability metadata. A custom provider can supply a Codex
+`model_catalog_json` with its exact model IDs, context limits, modalities, reasoning
+levels, and service tiers. PwrAgent reads capabilities through Codex's protocol;
+the optional local launcher can discover server modalities as described below.
+PwrAgent does not infer capabilities from model filenames. Unknown
+models remain unpriced unless explicitly declared local. No-auth providers without an OpenAI account skip account
+quota polling. Title generation prefers Luna when advertised, otherwise the catalog
+default or first available model, using only its supported reasoning settings.
+
+`models.codex.local_model_ids` (typed settings `localModelIds`) declares exact
+model IDs with zero local API cost for this PwrAgent profile. It applies to
+Codex turn and helper usage, including existing history, as a reversible read
+projection. The raw ledger and token counts stay intact; clearing the declaration
+restores ordinary catalog pricing. No periodic or per-event database writes are
+added. Authentication state, loopback URLs, filenames, and unknown rate entries
+do not imply free inference. Electricity and hardware costs are outside API
+pricing. Pricing cards and model spend groups use the discovered catalog label;
+absolute path IDs fall back to the filename if the catalog is unavailable. The
+exact model ID remains the accounting key and is available on the card tooltip.
+
+`scripts/codex-local-responses-bridge.mjs` is an optional Codex executable wrapper
+for local Responses servers whose chat templates require one leading system message
+and whose tool parser accepts only flat functions. It consolidates instructions,
+flattens namespace tool names, and restores namespaces in streamed responses and
+tool history. It rejects unsupported tool types instead of silently dropping them.
+Its HTTP listener uses an ephemeral loopback port and lives with the wrapped Codex
+process; the upstream must also use loopback. The wrapper accepts `--codex PATH`,
+`--upstream http://127.0.0.1:PORT/v1`, `--provider NAME`, then `--` and Codex's
+arguments. It passes the bridge URL as a process-local `-c` override and does not
+edit Codex configuration, copy authentication, or log request bodies. The profile's
+catalog must disable unsupported built-in tools such as freeform patching and
+hosted web search. Shell-based file edits remain available.
+
+With `--model-catalog TEMPLATE`, the launcher refreshes the single-model
+template's input modalities from llama.cpp's `/v1/models` and `/props` before
+starting Codex. The configured model ID must match both endpoints, and an
+explicit `modalities.vision` boolean controls whether `image` is advertised.
+Labels, instructions, reasoning levels, and tool settings remain in the template.
+Generic `multimodal` metadata alone is not enough to distinguish images from audio.
+The launcher writes a private temporary catalog, passes its path through
+`-c model_catalog_json=...`, and removes it when Codex exits. Neither the template
+nor shared Codex config is rewritten. Metadata requests stay on loopback, reject
+redirects, and have five-second timeouts and 1 MiB response limits. Unavailable,
+unknown, or mismatched metadata fails startup explicitly instead of advertising
+stale capabilities. Version probes skip discovery. Restart the provider connection
+after changing the loaded model's vision projector so Codex reloads the catalog.
+
 ## Background PR status and Star Map
 
 - The main process polls tracked pull requests with focused, warm, and cold

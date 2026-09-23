@@ -69,6 +69,8 @@ export type ThreadUsageLineRecord = {
   fastMode?: boolean;
   inputTokens: number;
   model?: string;
+  /** Read-time catalog label; model remains the exact protocol identity. */
+  modelLabel?: string;
   // Observed context-replay tallies for a live turn: one replay per model
   // request within the turn (each carries a fresh `last` breakdown from the
   // protocol). A replay is "hot" when its input was predominantly cache-served,

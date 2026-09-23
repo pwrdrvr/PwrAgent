@@ -38,6 +38,7 @@ export type PricingModelSpend = {
    * recorded, or a helper whose sub-agent summary never carried one.
    */
   model?: string;
+  modelLabel?: string;
   provider: string;
   /** Distinct sub-agents the operator dispatched that billed to this model. */
   subAgentCount: number;
@@ -115,6 +116,7 @@ export function buildPricingSpendByModel(params: {
         hasEstimatedRows: false,
         key: modelKey,
         ...(model === undefined ? {} : { model }),
+        modelLabel: line.modelLabel,
         provider: line.provider,
         subAgentIds: new Set<string>(),
         summary: emptyPricingSummary(line),
@@ -152,6 +154,7 @@ export function buildPricingSpendByModel(params: {
             hasEstimatedRows: bucket.hasEstimatedRows,
             key: bucket.key,
             ...(bucket.model === undefined ? {} : { model: bucket.model }),
+            ...(bucket.modelLabel ? { modelLabel: bucket.modelLabel } : {}),
             provider: bucket.provider,
             subAgentCount: bucket.subAgentIds.size,
             summary: bucket.summary,
@@ -270,6 +273,7 @@ type MutableModelSpend = {
   hasEstimatedRows: boolean;
   key: string;
   model?: string;
+  modelLabel?: string;
   provider: string;
   subAgentIds: Set<string>;
   summary: ThreadPricingSummary;

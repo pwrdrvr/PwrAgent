@@ -3,6 +3,7 @@ import { buildThreadTitlePrompt } from "./thread-title-prompt";
 
 export const THREAD_TITLE_PROMPT_VERSION = "thread-title-v3";
 const THREAD_TITLE_TIMEOUT_MS = 20_000;
+const THREAD_TITLE_TURN_TIMEOUT_MS = 180_000;
 const REQUESTED_MAX_TITLE_CHARACTERS = 50;
 const REQUESTED_MAX_TITLE_WORDS = 6;
 const TITLE_LIMIT_TOLERANCE = 0.3;
@@ -35,6 +36,8 @@ export type ThreadTitleAdapterParams = {
   schemaName: string;
   threadId?: string;
   timeoutMs: number;
+  /** Inference budget, separate from helper setup and cleanup round-trips. */
+  turnTimeoutMs?: number;
 };
 
 export type ThreadTitleAdapterResult =
@@ -86,17 +89,20 @@ export type ThreadTitleGenerationServiceOptions = {
   generators?: Partial<Record<AppServerBackendKind, ThreadTitleGenerator>>;
   generatorResolver?: (backend: AppServerBackendKind) => ThreadTitleGenerator | undefined;
   timeoutMs?: number;
+  turnTimeoutMs?: number;
 };
 
 export class ThreadTitleGenerationService {
   private readonly generators: Partial<Record<AppServerBackendKind, ThreadTitleGenerator>>;
   private readonly generatorResolver?: (backend: AppServerBackendKind) => ThreadTitleGenerator | undefined;
   private readonly timeoutMs: number;
+  private readonly turnTimeoutMs: number;
 
   constructor(options: ThreadTitleGenerationServiceOptions = {}) {
     this.generators = options.generators ?? {};
     this.generatorResolver = options.generatorResolver;
     this.timeoutMs = options.timeoutMs ?? THREAD_TITLE_TIMEOUT_MS;
+    this.turnTimeoutMs = options.turnTimeoutMs ?? options.timeoutMs ?? THREAD_TITLE_TURN_TIMEOUT_MS;
   }
 
   canGenerateTitle(backend: AppServerBackendKind): boolean {
@@ -135,6 +141,7 @@ export class ThreadTitleGenerationService {
       schemaName: "thread_title",
       threadId: params.threadId,
       timeoutMs: this.timeoutMs,
+      turnTimeoutMs: this.turnTimeoutMs,
     });
     if (result.status !== "ok") {
       return result;

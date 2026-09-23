@@ -66,6 +66,15 @@ describe("Codex configuration overlays", () => {
     expect(parseDesktopSettingsToml(fs.readFileSync(file, "utf8"), file).models?.codex?.configOverrides).toEqual([]);
   });
 
+  it("validates explicit local-model pricing IDs without silently dropping malformed values", () => {
+    expect(parseDesktopSettingsToml("[models.codex]\nlocal_model_ids=['/models/bonsai.gguf']", "fixture.toml").models?.codex?.localModelIds)
+      .toEqual(["/models/bonsai.gguf"]);
+    for (const value of ['[42]', '"free"', '["unterminated]', '[""]']) {
+      expect(() => parseDesktopSettingsToml(`[models.codex]\nlocal_model_ids=${value}`, "fixture.toml"))
+        .toThrow();
+    }
+  });
+
   it("rejects malformed stored overlays and preserves absent legacy settings", () => {
     expect(parseDesktopSettingsToml('[models.codex]\nprofile="work"', "fixture.toml").models?.codex)
       .toEqual({ profile: "work" });

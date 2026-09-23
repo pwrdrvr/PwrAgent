@@ -1479,7 +1479,11 @@ describe("CodexAppServerClient", () => {
     MockTransport.threadArchiveResult = {};
     MockTransport.threadNameSetResult = {};
     MockTransport.threadNameSetTransientErrorsByName.clear();
-    MockTransport.modelListResult = createModelListResponse([]);
+    MockTransport.modelListResult = createModelListResponse([createCodexModel({
+      id: "gpt-5.6-luna",
+      defaultReasoningEffort: "low",
+      supportedReasoningEfforts: [{ reasoningEffort: "low", description: "Low" }],
+    })]);
     MockTransport.configValueWriteResult = {
       status: "ok",
       version: "1",
@@ -2824,6 +2828,61 @@ describe("CodexAppServerClient", () => {
         supportsReasoning: true,
       },
     ]);
+  });
+
+  it("keeps custom models with provider labels and explicit capability limits", async () => {
+    const id = "/models/bonsai.gguf";
+    MockTransport.modelListResult = createModelListResponse([
+      createCodexModel({
+        id,
+        displayName: "PrismML Bonsai 2 27B",
+        isDefault: true,
+        defaultReasoningEffort: "none",
+        supportedReasoningEfforts: [],
+        inputModalities: ["text"],
+      }),
+      createCodexModel({ id: "hidden-local-model", hidden: true }),
+    ]);
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({ command: "codex" });
+
+    await expect(client.listModels()).resolves.toEqual([{
+      id,
+      label: "PrismML Bonsai 2 27B",
+      current: true,
+      defaultReasoningEffort: "none",
+      reasoningEfforts: [],
+      supportsReasoning: false,
+      supportsFast: false,
+      supportsImage: false,
+    }]);
+    await client.close();
+  });
+
+  it("preserves empty capabilities and custom labels from legacy model lists", async () => {
+    MockTransport.serverVersion = "0.143.0";
+    MockTransport.modelListResult = { data: [
+      {
+        id: "local-model",
+        display_name: "Local model",
+        supported_reasoning_efforts: [],
+        service_tiers: [],
+        input_modalities: ["text"],
+      },
+      { id: "hidden-model", hidden: true },
+    ] };
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({ command: "codex" });
+
+    await expect(client.listModels()).resolves.toEqual([expect.objectContaining({
+      id: "local-model",
+      label: "Local model",
+      reasoningEfforts: [],
+      supportsReasoning: false,
+      supportsFast: false,
+      supportsImage: false,
+    })]);
+    await client.close();
   });
 
   it("keeps available Spark models image-disabled and honors an explicit image-support protocol flag", async () => {
@@ -10606,6 +10665,57 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it.each([
+    { id: "/models/bonsai.gguf", efforts: [], expectedEffort: undefined },
+    { id: "custom-reasoning", efforts: ["medium", "high"], expectedEffort: "medium" },
+  ])("names threads with the available $id model when Luna is absent", async ({ id, efforts, expectedEffort }) => {
+    MockTransport.modelListResult = createModelListResponse([
+      createCodexModel({ id: "other-model" }),
+      createCodexModel({
+        id,
+        isDefault: true,
+        defaultReasoningEffort: "medium",
+        supportedReasoningEfforts: efforts.map((reasoningEffort) => ({ reasoningEffort: reasoningEffort as "medium" | "high", description: "Supported" })),
+      }),
+    ]);
+    MockTransport.threadStartResult = { thread: { id: "local-title-helper" }, instructionSources: [] };
+    MockTransport.threadMcpServerStatusResult = { data: [], nextCursor: null };
+    MockTransport.turnStartResult = {
+      thread: { id: "local-title-helper" },
+      turn: { id: "local-title-turn", output: [{ type: "text", text: '{"title":"Test local addition"}' }] },
+    };
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({ command: "codex" });
+    await expect(client.generateTitle({
+      prompt: "Write an add function and tests",
+      promptVersion: "thread-title-v3",
+      schema: { type: "object", properties: { title: { type: "string" } }, required: ["title"] },
+      schemaName: "thread_title",
+      timeoutMs: 5_000,
+    })).resolves.toMatchObject({
+      status: "ok", model: id, reasoningEffort: expectedEffort,
+      object: { title: "Test local addition" },
+    });
+    const requests = MockTransport.instances.at(-1)!.sentMessages.map((message) => JSON.parse(message));
+    expect(requests.find((request) => request.method === "thread/start").params.model).toBe(id);
+    const turn = requests.find((request) => request.method === "turn/start").params;
+    expect(turn.model).toBe(id);
+    expect(turn.effort).toBe(expectedEffort);
+    expect(turn.serviceTier).toBeNull();
+    await client.close();
+  });
+
+  it("does not invent a title model when the provider advertises none", async () => {
+    MockTransport.modelListResult = createModelListResponse([]);
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({ command: "codex" });
+    await expect(client.generateTitle({
+      prompt: "Name this thread", promptVersion: "thread-title-v3", schema: {}, schemaName: "thread_title", timeoutMs: 5_000,
+    })).resolves.toEqual({ status: "unavailable", reason: "codex_title_no_available_model" });
+    expect(MockTransport.instances.at(-1)!.sentMessages.some((message) => JSON.parse(message).method === "thread/start")).toBe(false);
+    await client.close();
+  });
+
   it("generates thread titles through an ephemeral Codex helper turn", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     const observedMessages: string[] = [];
@@ -11039,7 +11149,7 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
-  it("lets turnTimeoutMs bound turn/start, which can carry the answer", async () => {
+  it.each(["structured", "title"])("lets turnTimeoutMs bound %s turn/start, which can carry the answer", async (kind) => {
     // `turn/start` returns the finished structured record on some servers
     // (the immediate-record branch exists for exactly that), so bounding it
     // at `timeoutMs` would make a raised `turnTimeoutMs` a silent no-op.
@@ -11055,17 +11165,20 @@ describe("CodexAppServerClient", () => {
       directoryResolver: async () => [],
     });
     let settled = false;
-    const probePromise = client.generateStructuredObject({
+    const params = {
       prompt: "Return the requested status object.",
       schema: {
         type: "object",
         required: ["status"],
         properties: { status: { type: "string" } },
       },
-      isMatch: (record) => record.status === "complete",
       timeoutMs: 60,
       turnTimeoutMs: 5_000,
-    }).then((result) => {
+    };
+    const probePromise = (kind === "title"
+      ? client.generateTitle({ ...params, promptVersion: "thread-title-v3", schemaName: "thread_title" })
+      : client.generateStructuredObject({ ...params, isMatch: (record) => record.status === "complete" })
+    ).then((result) => {
       settled = true;
       return result;
     });

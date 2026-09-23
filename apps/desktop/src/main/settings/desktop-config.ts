@@ -1,3 +1,4 @@
+import { validateLocalModelIds } from "@pwragent/shared";
 import fs from "node:fs";
 import { validateCodexConfigOverrides } from "./codex-config-overrides";
 import os from "node:os";
@@ -271,6 +272,7 @@ export type DesktopSettingsConfig = {
       profile?: string;
       allowFast?: boolean;
       configOverrides?: string[];
+      localModelIds?: string[];
     };
   };
   acpAgents?: {
@@ -1487,6 +1489,9 @@ export function desktopSettingsPatchToEdits(
       validateCodexConfigOverrides(patch.models.codex.configOverrides),
     );
   }
+  if (patch.models?.codex?.localModelIds !== undefined) {
+    set(["models", "codex", "local_model_ids"], validateLocalModelIds(patch.models.codex.localModelIds));
+  }
   if (patch.models?.codex?.allowFast !== undefined) {
     set(["models", "codex", "allow_fast"], patch.models.codex.allowFast);
   }
@@ -1675,7 +1680,7 @@ export function parseDesktopSettingsToml(
   filePath: string,
 ): DesktopSettingsConfig {
   return normalizeDesktopConfig(parseTomlTables(contents, filePath, {
-    requiredValuePaths: ["models.codex.config_overrides"],
+    requiredValuePaths: ["models.codex.config_overrides", "models.codex.local_model_ids"],
   }));
 }
 
@@ -2040,6 +2045,7 @@ function normalizeDesktopConfig(
         path: readString(codex?.path),
         profile: readString(codex?.profile),
         allowFast: readBoolean(codex?.allow_fast),
+        localModelIds: codex?.local_model_ids === undefined ? undefined : validateLocalModelIds(codex.local_model_ids),
         configOverrides: codex?.config_overrides === undefined
           ? undefined
           : validateCodexConfigOverrides(codex.config_overrides),

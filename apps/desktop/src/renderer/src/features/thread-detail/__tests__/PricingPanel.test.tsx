@@ -46,6 +46,46 @@ function buildMonitorLine(
   };
 }
 
+it("shows a local model label and zero price without changing its accounting identity", () => {
+  const id = "/models/private/bonsai.gguf";
+  const original = buildMonitorLine({
+    scope: "turn", model: id, modelLabel: "PrismML Bonsai 2 27B",
+    priceStatus: "unpriced", priceUnavailableReason: "missing-rate",
+  });
+  const local = spend.priceLocalModelUsage(original);
+  const { getAllByText, queryByText, container } = render(<PricingPanel pricing={{ lines: [local], summaries: [] }} />);
+  expect(getAllByText("PrismML Bonsai 2 27B").length).toBeGreaterThan(0);
+  expect(queryByText(id)).toBeNull();
+  expect(container.textContent).not.toContain("Unpriced");
+  expect(container.textContent).not.toContain("could not be priced");
+  expect(container.textContent).toContain("$0.000");
+  expect(container.textContent).toContain("Local");
+  expect(local.model).toBe(id);
+  expect(local.totalTokens).toBe(original.totalTokens);
+  expect(original.priceStatus).toBe("unpriced");
+});
+
+it("keeps remote model IDs and shortens only absolute filesystem paths", () => {
+  expect(spend.formatPricingModelLabel("vendor/model-name")).toBe("vendor/model-name");
+  expect(spend.formatPricingModelLabel("/models/bonsai.gguf")).toBe("bonsai.gguf");
+  expect(spend.formatPricingModelLabel(String.raw`C:\models\bonsai.gguf`)).toBe("bonsai.gguf");
+  expect(spend.formatPricingModelLabel("/models/bonsai.gguf", "Bonsai")).toBe("Bonsai");
+});
+
+it("retains zero local pricing for projected historical gaps", () => {
+  const line = spend.priceLocalModelUsage(buildMonitorLine({
+    scope: "turn", model: "/models/bonsai.gguf", modelLabel: "Bonsai",
+    inputTokens: 100, uncachedInputTokens: 100, outputTokens: 10,
+    cumulativeInputTokens: 1000, cumulativeUncachedInputTokens: 1000,
+    cumulativeCachedInputTokens: 0, cumulativeOutputTokens: 100,
+    cumulativeReasoningOutputTokens: 0,
+  }));
+  const display = spend.buildThreadPricingDisplay({ pricing: { lines: [line], summaries: [] } });
+  expect(display.rows.some((row) => row.line.estimatedUsageGap)).toBe(true);
+  expect(display.rows.every((row) => row.line.priceStatus === "priced" && row.line.totalCostMicros === 0)).toBe(true);
+  expect(display.summary?.unpricedUsageLineCount).toBe(0);
+});
+
 it("ticks only live timestamps and keeps completed cards and pricing calculations static", () => {
   vi.useFakeTimers();
   const startedAt = 1_800_000_000_000;

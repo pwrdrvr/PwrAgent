@@ -1,6 +1,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
+import type { ListBackendsRequest, ListBackendsResponse } from "@pwragent/shared";
 import { applyDesktopSettingsPatch } from "../src/main/settings/desktop-config";
 import { launchElectronApp } from "./fixtures/electron-app";
 
@@ -29,6 +30,21 @@ test("hydrates provider-scoped pricing totals in the context rail", async () => 
   });
 
   try {
+    // Thread history can paint before startup model discovery finishes. Load
+    // the replay catalog before requesting pricing that uses its display labels.
+    const models = await app.window.evaluate(async () => {
+      const api = (window as typeof window & {
+        pwragent: { listBackends: (request: ListBackendsRequest) => Promise<ListBackendsResponse> };
+      }).pwragent;
+      const result = await api.listBackends({
+        refreshModels: "codex",
+        discoveryIntent: "settings-user-action",
+      });
+      return result.backends.find((backend) => backend.kind === "codex")?.launchpadOptions?.models;
+    });
+    expect(models).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "gpt-5.5", label: "GPT-5.5" }),
+    ]));
     await app.window
       .getByRole("button", { name: /Pricing ledger thread/i })
       .first()
@@ -70,7 +86,7 @@ test("hydrates provider-scoped pricing totals in the context rail", async () => 
     await expect(spendGroupHead).toContainText("OpenAI");
     await expect(spendGroupHead).toContainText("$0.017 · 2 rows");
     await expect(contextRail.locator(".pricing-spend-row__label")).toHaveText([
-      "gpt-5.5",
+      "GPT-5.5",
       "Unknown model",
       "grok-4.5",
     ]);
@@ -103,7 +119,8 @@ test("hydrates provider-scoped pricing totals in the context rail", async () => 
     // The usage cards still name every model, so each of these now resolves
     // against a spend row too and has to be scoped to the card list.
     const usageRows = contextRail.locator(".pricing-usage-row");
-    await expect(usageRows.getByText("gpt-5.5 · high")).toBeVisible();
+    await expect(usageRows.getByText("GPT-5.5 · high")).toBeVisible();
+    await expect(usageRows.getByText("GPT-5.5 · high")).toHaveAttribute("title", "gpt-5.5");
     await expect(
       contextRail.getByText("$0.017 list price this turn"),
     ).toBeVisible();

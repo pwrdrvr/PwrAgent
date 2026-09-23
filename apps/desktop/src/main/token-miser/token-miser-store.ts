@@ -1087,8 +1087,22 @@ export class TokenMiserStore {
     }).immediate();
     await mapTokenMiserFiles(files, (file) => withTokenMiserFileOperation(() => fs.rm(file, { force: true })));
     for (const directory of [...directories.sort((a, b) => b.length - a.length), threadsRoot, this.rootDir]) {
-      await withTokenMiserFileOperation(() => fs.rmdir(directory)).catch((error: NodeJS.ErrnoException) => {
-        if (error.code !== "ENOENT" && error.code !== "ENOTEMPTY") throw error;
+      await withTokenMiserFileOperation(() => fs.rmdir(directory)).catch(async (error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT" || error.code === "ENOTEMPTY") return;
+        // Windows can report EPERM when another importer has removed the same
+        // directory. Accept only the confirmed postcondition, not permission
+        // failures against a directory that still exists.
+        if (error.code === "EPERM") {
+          const missing = await withTokenMiserFileOperation(() => fs.stat(directory)).then(
+            () => false,
+            (statError: NodeJS.ErrnoException) => {
+              if (statError.code === "ENOENT") return true;
+              throw statError;
+            },
+          );
+          if (missing) return;
+        }
+        throw error;
       });
     }
     this.db.prepare("INSERT OR IGNORE INTO meta (key, value) VALUES (?, 'complete')").run(migrationKey);
