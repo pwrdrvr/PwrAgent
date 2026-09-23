@@ -529,3 +529,67 @@ describe("Cloudflare operation feedback", () => {
     expect(screen.getByRole("button", { name: "Update allowlist" })).toBeDisabled();
   });
 });
+
+
+describe("Cloudflare partial-operation recovery", () => {
+  const published: CloudflareSetupStatus = {
+    ...connected, gate: "service-token", hostname: "federation.example.com", phase: "Published",
+  };
+  const issued: CloudflareSetupStatus = {
+    ...published, clients: [{ id: "issued-token", label: "Travel laptop", expiresAt: "2027-01-01T00:00:00Z", revoked: false }],
+  };
+
+  it.each(["export-client", "remove"] as const)("refreshes persisted state after %s fails without holding controls", async (action) => {
+    let refresh!: (status: CloudflareSetupStatus) => void;
+    let failed = false;
+    const call = vi.fn(async (request: CloudflareSetupRequest) => {
+      if (request.action === action) {
+        failed = true;
+        throw new Error("Operation partially completed");
+      }
+      if (failed) return new Promise<CloudflareSetupStatus>((resolve) => { refresh = resolve; });
+      return published;
+    });
+    render(<CloudflareSetup api={{ configureFederationCloudflare: call } as DesktopApi}
+      listenPort="47830" onWriteConfig={async () => true} onSettingsChanged={async () => {}} />);
+    await screen.findByLabelText("Cloudflare client name");
+    fireEvent.change(screen.getByLabelText("Cloudflare client name"), { target: { value: "Travel laptop" } });
+    fireEvent.change(screen.getByLabelText("Cloudflare client transfer password"), { target: { value: "long-enough-password" } });
+    const button = action === "remove" ? "Remove endpoint" : "Issue & save client setup";
+    fireEvent.click(screen.getByRole("button", { name: button }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Operation partially completed");
+    expect(screen.getByRole("button", { name: button })).toBeEnabled();
+    await act(async () => refresh(action === "remove" ? connected : issued));
+    expect(screen.getByRole("alert")).toHaveTextContent("Operation partially completed");
+    if (action === "remove") {
+      expect(screen.queryByRole("button", { name: "Remove endpoint" })).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Create protected endpoint" })).toBeInTheDocument();
+    } else {
+      expect(screen.getByText("Travel laptop")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Revoke service token" })).toBeEnabled();
+    }
+  });
+
+  it("discards a delayed recovery read after a newer action succeeds", async () => {
+    let refresh!: (status: CloudflareSetupStatus) => void;
+    let failed = false;
+    const call = vi.fn(async (request: CloudflareSetupRequest) => {
+      if (request.action === "remove") {
+        if (failed) return connected;
+        failed = true;
+        throw new Error("Removal partially completed");
+      }
+      if (failed) return new Promise<CloudflareSetupStatus>((resolve) => { refresh = resolve; });
+      return published;
+    });
+    render(<CloudflareSetup api={{ configureFederationCloudflare: call } as DesktopApi}
+      listenPort="47830" onWriteConfig={async () => true} onSettingsChanged={async () => {}} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Remove endpoint" }));
+    await screen.findByRole("alert");
+    fireEvent.click(screen.getByRole("button", { name: "Remove endpoint" }));
+    await screen.findByRole("button", { name: "Create protected endpoint" });
+    await act(async () => refresh(published));
+    expect(screen.queryByRole("button", { name: "Remove endpoint" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+});

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import type {
   CloudflareClientConnection,
   CloudflareFederationGate,
@@ -123,6 +123,7 @@ export function CloudflareSetup(props: Props) {
   // A provisioned endpoint reports its own gate and the choice is fixed.
   const [gate, setGate] = useState<CloudflareFederationGate>("service-token");
   const [savedDraft, setSavedDraft] = useState("");
+  const operationGeneration = useRef(0);
 
   useEffect(() => {
     let active = true;
@@ -148,7 +149,7 @@ export function CloudflareSetup(props: Props) {
       // to set up as a gateway; open on the half it actually uses.
       if ((value.signIn || value.clientConnection) && !value.hostname) setTab("client");
     }).catch((err: unknown) => { if (active) setError({ message: errorText(err, "Could not read Cloudflare setup.") }); });
-    return () => { active = false; };
+    return () => { active = false; operationGeneration.current += 1; };
   }, [api]);
 
   // A provisioned endpoint's gate is a fact, not a preference: the Access policy
@@ -210,6 +211,7 @@ export function CloudflareSetup(props: Props) {
 
   const run = async (request: CloudflareSetupRequest, progress: string, stage = ACTION_STAGE[request.action]) => {
     if (!api?.configureFederationCloudflare || busy || listenerBusy) return;
+    const generation = ++operationGeneration.current;
     setBusy({ action: request.action, progress, stage });
     setError(undefined);
     setMessageStage(stage);
@@ -243,6 +245,18 @@ export function CloudflareSetup(props: Props) {
       setError({ message, action: request.action, stage });
       if (request.action === "provision") {
         try { next = await api.configureFederationCloudflare({ action: "status" }); adopt(next); } catch { /* Preserve the original error. */ }
+      } else {
+        // Issuing a credential or removing an endpoint can persist changes
+        // before a later step fails. Reconcile without holding the controls,
+        // and never let this read overwrite a newer operation or user edit.
+        void api.configureFederationCloudflare({ action: "status" }).then((refreshed) => {
+          if (operationGeneration.current !== generation) return;
+          setStatus(refreshed);
+          if (allowlistPristine) {
+            setAllowlistText((current) => current === allowlistText ? (refreshed.emails ?? []).join("\n") : current);
+          }
+          if (request.action === "remove" && !refreshed.hostname) setHostname("");
+        }).catch(() => { /* Keep the operation's error if reconciliation fails. */ });
       }
       if (restore && next && !next.hostname) {
         const restored = await onWriteConfig(restore).catch(() => false);
@@ -406,6 +420,7 @@ export function CloudflareSetup(props: Props) {
           <p>The gateway also accepts direct connections on {props.listenHost}. If you use only Cloudflare Access, you can listen on 127.0.0.1. Keep the current address for local network clients.</p>
           <button type="button" className="button button--secondary" disabled={disabled}
             onClick={() => {
+              operationGeneration.current += 1;
               setListenerBusy(true);
               setListenerMessage(undefined);
               setError(undefined);
