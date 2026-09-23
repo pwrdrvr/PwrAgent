@@ -29611,27 +29611,31 @@ button.pricing-token-miser__folded:focus-visible {
      composer where hidden content is obviously recoverable (the thumbnails
      are their own affordance).
 
-     240px is two rows measured through the border box, which is what
+     242px is two rows measured through the border box, which is what
      `max-height` bounds: a row is the 88px thumbnail + the 6px
      `.composer__attachment` gap + an 18px chip line (the size chip always
-     renders), so 112 + 8 + 112 of content, plus the 8px top padding below.
+     renders), so 112 + 8 + 112 of content, plus the 10px top padding below.
      Derived at 232px first, which silently clipped the second row by
      exactly that padding.
 
-     The `vh` half is the one that usually binds — it wins below a 1000px
+     The `vh` half is the one that usually binds — it wins below a 1008px
      window, so at the app's own 640px minimum the strip is 154px and shows
      one row and part of the next. That is the point: the cap has to shrink
      with the pane it must fit inside, and the fixed half is only there to
      stop the strip eating a tall display. */
-  max-height: min(240px, 24vh);
+  max-height: min(242px, 24vh);
   overflow-y: auto;
   /* Each thumbnail's remove cookie is pinned at `top: -6px; right: -6px`,
-     outside its own box, so a scroller would clip it. Pad the two edges it
-     overhangs; the negative top margin puts the strip back where it was,
-     and the right pad sits inside the row's own wrapping slack so the left
-     edge stays aligned with the rest of the composer column. */
-  padding: 8px 8px 0 0;
-  margin-top: -8px;
+     outside its own box, so a scroller would clip it. Its focus ring
+     (`outline: 2px` at `outline-offset: 2px`, in the shared focus rule)
+     reaches 4px further, so the cookie overhangs by 10px, not 6px. The
+     first cut padded 8px, which kept the cookie and sliced the top of the
+     ring flat. Pad the two edges it overhangs; the negative top margin puts
+     the strip back where it was, and the right pad sits inside the row's
+     own wrapping slack so the left edge stays aligned with the rest of the
+     composer column. */
+  padding: 10px 10px 0 0;
+  margin-top: -10px;
 }
 
 .composer__attachment {

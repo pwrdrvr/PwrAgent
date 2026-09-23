@@ -1,6 +1,21 @@
 import { describe, expect, it } from "vitest";
 
-import { cssRuleBody as ruleBody, firstCssRuleBody } from "./css-rule-body";
+import {
+  appCss,
+  cssRuleBody as ruleBody,
+  firstCssRuleBody,
+} from "./css-rule-body";
+
+/** A `<prop>: <n>px;` declaration's value, anchored so `top` never reads `margin-top`. */
+function pxDeclaration(body: string, property: string): number {
+  const match = body.match(
+    new RegExp(`(?:^|\\n)\\s*${property}:\\s*(-?\\d+(?:\\.\\d+)?)px\\b`),
+  );
+  if (!match) {
+    throw new Error(`Expected a px ${property} declaration in ${body}`);
+  }
+  return Number(match[1]);
+}
 
 /**
  * Locks the declarations that keep the launchpad's send controls on screen.
@@ -97,11 +112,40 @@ describe("launchpad connection card bounds", () => {
     // last column's off. The padding buys the two edges it overhangs and the
     // negative margin puts the strip back where it was, which is why the
     // pair only ever makes sense together.
+    //
+    // The overhang is the cookie's offset plus its focus ring, and the ring
+    // lives in the shared focus rule, not beside the offset. This test used
+    // to pin `8px`, which covered the offset alone: the ring's top was sliced
+    // flat while every assertion here passed. So it is derived, and a wider
+    // ring or a bigger offset fails here instead of on screen. Matched out of
+    // the raw stylesheet because the focus rule is a twenty-selector group.
+    const remove = firstCssRuleBody(".composer__attachment-remove");
+    const focus = appCss.match(
+      /\n[^{}]*\.composer__attachment-remove:focus-visible\s*[,{][^{}]*\{(?<body>[^}]*)\}/,
+    )?.groups?.body;
+    expect(focus).toBeDefined();
+    const ring = pxDeclaration(focus!, "outline") + pxDeclaration(focus!, "outline-offset");
+    expect(ring).toBeGreaterThan(0);
+
     const body = ruleBody(".composer__attachments");
-    expect(body).toMatch(/padding:\s*8px\s+8px\s+0\s+0;/);
-    expect(body).toMatch(/margin-top:\s*-8px;/);
-    expect(firstCssRuleBody(".composer__attachment-remove")).toMatch(
-      /top:\s*-6px;/,
+    const padding = body.match(/\n\s*padding:\s*(\d+)px\s+(\d+)px\s+0\s+0;/);
+    expect(padding).not.toBeNull();
+    const [padTop, padRight] = [Number(padding![1]), Number(padding![2])];
+    expect(padTop).toBeGreaterThanOrEqual(-pxDeclaration(remove, "top") + ring);
+    expect(padRight).toBeGreaterThanOrEqual(-pxDeclaration(remove, "right") + ring);
+    expect(pxDeclaration(body, "margin-top")).toBe(-padTop);
+
+    // The fixed half of the cap is two rows through the border box, so it
+    // moves with the top padding. It was derived at 232px once and clipped
+    // the second row by exactly the padding it forgot.
+    const row =
+      pxDeclaration(firstCssRuleBody(".composer__attachment-thumb"), "height")
+      + pxDeclaration(firstCssRuleBody(".composer__attachment"), "gap")
+      + pxDeclaration(firstCssRuleBody(".composer__attachment-chip"), "height");
+    const cap = body.match(/max-height:\s*min\((\d+)px,/);
+    expect(cap).not.toBeNull();
+    expect(Number(cap![1])).toBe(
+      2 * row + pxDeclaration(body, "gap") + padTop,
     );
   });
 });
