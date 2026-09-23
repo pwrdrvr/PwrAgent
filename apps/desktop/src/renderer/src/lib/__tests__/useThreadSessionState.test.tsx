@@ -10640,6 +10640,90 @@ describe("useThreadSessionState", () => {
     expect(result.current.activeTurnId).toBeUndefined();
   });
 
+  it.each(["navigation", "in-flight read"])("does not revive a completed turn from stale %s activity", async (source) => {
+    let agentEventHandler: Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0] | undefined;
+    const activeResponse = readThreadResponse({
+      entries: [{
+        ...messageEntry({ id: "commentary-1", createdAt: 1_000, text: "Working." }),
+        phase: "commentary",
+        turn: { id: "turn-1", status: "in_progress" },
+      }],
+      hasPreviousPage: false,
+      threadStatus: "active",
+    });
+    let resolveRead: ((response: AppServerReadThreadResponse) => void) | undefined;
+    const readThread = vi.fn().mockResolvedValueOnce(activeResponse)
+      .mockImplementation(() => new Promise<AppServerReadThreadResponse>((resolve) => {
+        resolveRead = resolve;
+      }));
+    const desktopApi: DesktopApi = {
+      readThread,
+      onAgentEvent: (listener) => {
+        agentEventHandler = listener;
+        return () => undefined;
+      },
+    };
+    const { result, rerender } = renderHook(
+      ({ updatedAt }) => useThreadSessionState({
+        desktopApi,
+        thread: { ...buildThread({ id: "thread-1", updatedAt }), threadStatus: "active" },
+      }),
+      { initialProps: { updatedAt: 1_000 } },
+    );
+    await waitForThreadHydration(result);
+    expect(result.current.activeTurnId).toBe("turn-1");
+
+    let pendingRead: Promise<void> | undefined;
+    if (source === "in-flight read") {
+      act(() => { pendingRead = result.current.reload(); });
+    }
+    await act(async () => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            turn: {
+              id: "turn-1", status: "completed",
+              output: [{ type: "text", text: "Done." }],
+            },
+          },
+        },
+      });
+    });
+    expect(result.current.threadBusy).toBe(false);
+
+    if (source === "navigation") {
+      // An unrelated metadata refresh advances updatedAt but still carries
+      // the pre-completion activity projection.
+      rerender({ updatedAt: 2_000 });
+    } else {
+      await act(async () => {
+        resolveRead?.(activeResponse);
+        await pendingRead;
+      });
+    }
+    expect(result.current.activeTurnId).toBeUndefined();
+    expect(result.current.pendingStatusText).toBeUndefined();
+    expect(result.current.threadBusy).toBe(false);
+    expect(result.current.thinkingThreadKeys["codex:thread-1"]).toBeUndefined();
+
+    // A real new turn must still activate immediately.
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/started",
+          params: { threadId: "thread-1", turn: { id: "turn-2", status: "inProgress" } },
+        },
+      });
+    });
+    expect(result.current.activeTurnId).toBe("turn-2");
+    expect(result.current.threadBusy).toBe(true);
+  });
+
   it("rechecks a selected thinking thread when idle has no terminal event", async () => {
     let agentEventHandler:
       | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
