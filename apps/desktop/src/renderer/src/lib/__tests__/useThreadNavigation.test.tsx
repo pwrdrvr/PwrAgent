@@ -8387,6 +8387,79 @@ describe("useThreadNavigation", () => {
     });
   });
 
+  it.each([
+    [undefined, false],
+    [{ currentBranch: "main", worktreeCreationAvailable: false }, false],
+    [{ currentBranch: "main", worktreeCreationAvailable: true }, true],
+  ] as const)("reads worktree availability from the primary directory on the owner (%j)", async (gitStatus, expected) => {
+    const parent: NavigationThreadSummary = {
+      id: "availability", title: "Research", titleSource: "explicit", source: "codex",
+      projectKey: "/scratch/research", gitBranch: "stale-branch",
+      linkedDirectories: [
+        { id: "primary", label: "Research", path: "/scratch/research", kind: "local" },
+        { id: "secondary", label: "Repo", path: "/repo", worktreePath: "/repo/worktree", kind: "worktree" },
+      ], inbox: { inInbox: true },
+      federation: { instanceLabel: "Owner", ref: { backend: "codex", threadId: "availability",
+        target: { scope: "remote", instanceId: "owner" } } },
+    };
+    const getNavigationSelectedDetail = vi.fn<NonNullable<DesktopApi["getNavigationSelectedDetail"]>>(async (request) => ({
+      protocol: 2, ref: request.ref, readiness: "ready", identity: "present", revision: "owner", thread: parent,
+      workspaceDirectories: [
+        { key: "primary", label: "Research", path: "/scratch/research", gitStatus },
+        { key: "secondary", label: "Repo", path: "/repo", gitStatus: { currentBranch: "main", worktreeCreationAvailable: true } },
+      ],
+    }));
+    const api: DesktopApi = { getNavigationSelectedDetail, onAgentEvent: () => () => undefined };
+    const { result } = renderHook(() => useThreadNavigation(api));
+    await expect(result.current.readThreadWorktreeAvailability(parent)).resolves.toBe(expected);
+    expect(getNavigationSelectedDetail).toHaveBeenCalledWith(expect.objectContaining({
+      federationTarget: { scope: "remote", instanceId: "owner" }, includeWorkspaceConfiguration: true,
+    }));
+  });
+
+  it.each(["local", "new-workspace"] as const)("uses the requested %s directory for workspace children and forks", async (mode) => {
+    const parent: NavigationThreadSummary = {
+      id: "workspace-parent", title: "Research", titleSource: "explicit", source: "codex", executionMode: "default",
+      projectKey: "/scratch/research", gitBranch: "stale", observedGitBranch: "stale", linkedDirectories: [
+        { id: "scratch", label: "Research", path: "/scratch/research", kind: "local" },
+      ], inbox: { inInbox: true },
+    };
+    const defaults = { backend: "codex" as const, executionMode: "default" as const };
+    const ensureDirectoryLaunchpad = vi.fn<NonNullable<DesktopApi["ensureDirectoryLaunchpad"]>>(async (request) => ({
+      launchpad: { ...request, ...defaults, prompt: "", workMode: "local", createdAt: 1, updatedAt: 1 },
+      defaults,
+    }));
+    const forkThread = vi.fn<NonNullable<DesktopApi["forkThread"]>>(async () => ({
+      backend: "codex", sourceThreadId: parent.id, threadId: "fork", executionMode: "default", workMode: "local",
+      linkedDirectory: { id: "fresh", label: "Fresh", path: "/scratch/fresh", kind: "local" },
+    }));
+    const api: DesktopApi = {
+      ...actionDetailApi(parent), ensureDirectoryLaunchpad, forkThread,
+      readPopulation: async () => ({ backend: "all", fetchedAt: 1, unchanged: false,
+        inboxThreadKeys: ["codex:workspace-parent"], threads: [parent], directories: [], launchpadDefaults: defaults }),
+      onAgentEvent: () => () => undefined,
+    };
+    const { result } = renderHook(() => useThreadNavigation(api));
+    await waitFor(() => expect(result.current.threads).toHaveLength(1));
+    await act(async () => { await result.current.createSubthread(parent, mode); });
+    const directoryKind = mode === "new-workspace" ? "workspace" : "directory";
+    const directoryPath = mode === "new-workspace" ? undefined : "/scratch/research";
+    expect(ensureDirectoryLaunchpad).toHaveBeenCalledWith(expect.objectContaining({
+      directoryKey: `subthread:codex:workspace-parent:${mode}`,
+      directoryKind, directoryPath, parentThreadId: parent.id,
+    }));
+    expect(result.current.selectedLaunchpad).toMatchObject({ directoryKind, workMode: "local", parentThreadId: parent.id });
+    expect(result.current.selectedLaunchpad?.directoryPath).toBe(directoryPath);
+    await act(async () => { await result.current.forkThread(parent, mode); });
+    expect(forkThread).toHaveBeenCalledWith(expect.objectContaining({
+      directoryKind, directoryPath, sourceThreadId: parent.id, parentThreadId: parent.id, workMode: "local",
+    }));
+    if (mode === "new-workspace") {
+      expect(result.current.selectedThread?.gitBranch).toBeUndefined();
+      expect(result.current.selectedThread?.observedGitBranch).toBeUndefined();
+    }
+  });
+
   it("forks a parent thread through the desktop bridge and selects the optimistic fork", async () => {
     const parentThread = {
       id: "thread-parent",

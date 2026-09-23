@@ -81,6 +81,7 @@ import {
 import {
   buildSubthreadLaunchpadKey,
   getParentThreadIdFromSubthreadLaunchpadKey,
+  getThreadPrimaryDirectory,
   type ThreadWorkspaceMode,
 } from "./subthread-launchpads";
 
@@ -231,8 +232,16 @@ function selectThreadWorkspace(
   workMode: NavigationLaunchpadDraft["workMode"];
   branchName?: string;
 } {
-  const worktree = thread.linkedDirectories.find((directory) => directory.kind === "worktree");
-  const local = thread.linkedDirectories.find((directory) => directory.kind === "local");
+  if (mode === "new-workspace") {
+    return {
+      directoryKind: "workspace",
+      directoryLabel: "New Workspace",
+      workMode: "local",
+    };
+  }
+  const primary = getThreadPrimaryDirectory(thread);
+  const worktree = primary?.kind === "worktree" ? primary : undefined;
+  const local = primary?.kind === "local" ? primary : undefined;
   const preferred = worktree ?? local;
   const namedBranch =
     thread.observedGitBranch && thread.observedGitBranch !== "HEAD"
@@ -2662,6 +2671,7 @@ export function useThreadNavigation(
     executionMode?: ThreadExecutionMode,
     options?: { forceWorkspace?: boolean }
   ) => Promise<void>;
+  readThreadWorktreeAvailability: (thread: NavigationThreadSummary) => Promise<boolean>;
   createSubthread: (
     parent: NavigationThreadSummary,
     mode?: ThreadWorkspaceMode,
@@ -5302,6 +5312,22 @@ export function useThreadNavigation(
     [desktopApi, refresh],
   );
 
+  const readThreadWorktreeAvailability = useCallback(async (thread: NavigationThreadSummary): Promise<boolean> => {
+    const detail = await readNavigationActionDetail({
+      api: desktopApi,
+      thread,
+      target: readRendererFederationTarget(),
+      signal: actionAbortControllerRef.current.signal,
+      includeWorkspaceConfiguration: true,
+    });
+    const primary = getThreadPrimaryDirectory(detail.thread);
+    const status = detail.workspaceDirectories?.find(
+      (candidate) => candidate.key === primary?.id,
+    )?.gitStatus;
+    return status?.worktreeCreationAvailable !== false
+      && Boolean(status?.worktreeCreationAvailable || status?.currentBranch || status?.branches?.length);
+  }, [desktopApi]);
+
   const createSubthread = useCallback(
     async (
       parent: NavigationThreadSummary,
@@ -5556,10 +5582,14 @@ export function useThreadNavigation(
           fastMode: parent.fastMode,
           gitBranch:
             response.gitBranch ??
-            (response.workMode === "worktree" ? "HEAD" : parent.gitBranch),
+            (response.workMode === "worktree"
+              ? "HEAD"
+              : mode === "new-workspace" ? undefined : parent.gitBranch),
           observedGitBranch:
             response.observedGitBranch ??
-            (response.workMode === "worktree" ? "HEAD" : parent.observedGitBranch),
+            (response.workMode === "worktree"
+              ? "HEAD"
+              : mode === "new-workspace" ? undefined : parent.observedGitBranch),
           codexEnvironmentRuntime: response.codexEnvironmentRuntime,
           linkedDirectories,
           parentThreadId: parent.id,
@@ -8028,6 +8058,7 @@ export function useThreadNavigation(
     composerSourceThreadKey,
     createThread,
     createSubthread,
+    readThreadWorktreeAvailability,
     discardLaunchpad,
     forkThread,
     creatingThread,

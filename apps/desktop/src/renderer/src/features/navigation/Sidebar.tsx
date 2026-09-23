@@ -1,3 +1,4 @@
+import { getThreadPrimaryDirectory } from "../../lib/subthread-launchpads";
 import { readNavigationPresentationOrder } from "./navigation-presentation-order";
 import type { useBoundedNavigationWindow } from "../../lib/useBoundedNavigationWindow";
 import { navigationThreadSelectionKey } from "../../lib/navigation-query-state";
@@ -223,6 +224,7 @@ type SidebarProps = {
   addingProjectDirectory?: boolean;
   /** Directory the default New Thread action resolves to (flyout label). */
   newThreadDirectoryLabel?: string;
+  readThreadWorktreeAvailability?: (thread: NavigationThreadSummary) => Promise<boolean>;
   onCreateSubthread?: (
     thread: NavigationThreadSummary,
     mode: ThreadWorkspaceMode,
@@ -1548,16 +1550,64 @@ export function Sidebar(props: SidebarProps) {
       ).length
     : 0;
   const contextMenuHasChildThreads = contextMenuChildThreadCount > 0;
-  const contextMenuLocalPath = contextMenu?.thread.linkedDirectories.find(
-    (directory) => directory.kind === "local"
-  )?.path;
-  const contextMenuWorktreePath = contextMenu?.thread.linkedDirectories.find(
-    (directory) => directory.kind === "worktree"
-  );
+  const contextMenuPrimaryDirectory = contextMenu
+    ? getThreadPrimaryDirectory(contextMenu.thread)
+    : undefined;
+  const contextMenuLocalPath = contextMenuPrimaryDirectory?.kind === "local"
+    ? contextMenuPrimaryDirectory.path
+    : undefined;
+  const contextMenuWorktreePath = contextMenuPrimaryDirectory?.kind === "worktree"
+    ? contextMenuPrimaryDirectory
+    : undefined;
   const contextMenuWorktreeCopyPath =
     contextMenuWorktreePath?.worktreePath ?? contextMenuWorktreePath?.path;
   const contextMenuHasLocalWorkspace = Boolean(contextMenuLocalPath);
   const contextMenuHasWorktreeWorkspace = Boolean(contextMenuWorktreePath);
+  // A local directory is not necessarily a Git checkout. Never borrow a
+  // local directory's Git status for a thread owned by another instance.
+  const contextMenuGitStatus = !contextMenu?.thread.federation
+    ? props.directories.find((directory) =>
+        Boolean(directory.path) && (
+          directory.path === (contextMenuWorktreeCopyPath ?? contextMenuLocalPath)
+          || directory.path === contextMenuWorktreePath?.path
+        ),
+      )?.gitStatus
+    : undefined;
+  const contextMenuCanCreateWorktree = contextMenuGitStatus?.worktreeCreationAvailable !== false
+    && Boolean(
+      contextMenuGitStatus?.worktreeCreationAvailable
+      || contextMenuGitStatus?.currentBranch
+      || contextMenuHasWorktreeWorkspace
+      || contextMenu?.thread.observedGitBranch
+      || contextMenu?.thread.gitBranch,
+    );
+  const contextMenuThreadKey = contextMenu ? threadSummaryIdentityKey(contextMenu.thread) : undefined;
+  const [worktreeAvailability, setWorktreeAvailability] = useState<{ key: string; available: boolean }>();
+  const readThreadWorktreeAvailability = props.readThreadWorktreeAvailability;
+  const contextMenuThread = contextMenu?.thread;
+  useEffect(() => {
+    if (!contextMenuThread || !contextMenuThreadKey || !readThreadWorktreeAvailability) {
+      return;
+    }
+    let cancelled = false;
+    setWorktreeAvailability(undefined);
+    void readThreadWorktreeAvailability(contextMenuThread).then(
+      (available) => {
+        if (!cancelled) setWorktreeAvailability({ key: contextMenuThreadKey, available });
+      },
+      () => {
+        if (!cancelled) setWorktreeAvailability({ key: contextMenuThreadKey, available: false });
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [contextMenuThread, contextMenuThreadKey, readThreadWorktreeAvailability]);
+  const checkingWorktreeAvailability = Boolean(readThreadWorktreeAvailability
+    && worktreeAvailability?.key !== contextMenuThreadKey);
+  const canCreateContextMenuWorktree = readThreadWorktreeAvailability
+    ? worktreeAvailability?.key === contextMenuThreadKey && worktreeAvailability?.available === true
+    : contextMenuCanCreateWorktree;
   const contextMenuHasWorkspace =
     contextMenuHasLocalWorkspace || contextMenuHasWorktreeWorkspace;
   const contextMenuBranchName = contextMenu?.thread.gitBranch;
@@ -2265,118 +2315,62 @@ export function Sidebar(props: SidebarProps) {
               {contextMenuHasCreationActions ? (
                 <div className="thread-context-menu__section">
                   {contextMenuCanCreateSubthread ? (
-                    contextMenuHasWorktreeWorkspace ? (
-                      <>
-                        <button
-                          role="menuitem"
-                          type="button"
-                          onClick={() =>
-                            createSubthreadFromContextMenu(
-                              contextMenu.thread,
-                              "same-worktree",
-                            )
-                          }
-                        >
-                          Sub-thread in Same Worktree
-                        </button>
-                        <button
-                          role="menuitem"
-                          type="button"
-                          onClick={() =>
-                            createSubthreadFromContextMenu(
-                              contextMenu.thread,
-                              "new-worktree",
-                            )
-                          }
-                        >
-                          Sub-thread in New Worktree
-                        </button>
-                      </>
-                    ) : (
-                      <>
-                        <button
-                          role="menuitem"
-                          type="button"
-                          onClick={() =>
-                            createSubthreadFromContextMenu(
-                              contextMenu.thread,
-                              "local",
-                            )
-                          }
-                        >
-                          Sub-thread in Local
-                        </button>
-                        <button
-                          role="menuitem"
-                          type="button"
-                          onClick={() =>
-                            createSubthreadFromContextMenu(
-                              contextMenu.thread,
-                              "new-worktree",
-                            )
-                          }
-                        >
-                          Sub-thread in New Worktree
-                        </button>
-                      </>
-                    )
+                    <>
+                      <button
+                        role="menuitem"
+                        type="button"
+                        onClick={() => createSubthreadFromContextMenu(
+                          contextMenu.thread,
+                          contextMenuHasWorktreeWorkspace ? "same-worktree" : "local",
+                        )}
+                      >
+                        {contextMenuHasWorktreeWorkspace
+                          ? "Sub-thread in Same Worktree"
+                          : "Sub-thread in This Directory"}
+                      </button>
+                      <button
+                        role="menuitem"
+                        type="button"
+                        disabled={checkingWorktreeAvailability}
+                        onClick={() => createSubthreadFromContextMenu(
+                          contextMenu.thread,
+                          canCreateContextMenuWorktree ? "new-worktree" : "new-workspace",
+                        )}
+                      >
+                        {canCreateContextMenuWorktree
+                          ? "Sub-thread in New Worktree"
+                          : "Sub-thread in New Workspace"}
+                      </button>
+                    </>
                   ) : null}
                   {contextMenuCanFork ? (
-                    contextMenuHasWorktreeWorkspace ? (
-                      <>
-                        <button
-                          role="menuitem"
-                          type="button"
-                          onClick={() =>
-                            forkThreadFromContextMenu(
-                              contextMenu.thread,
-                              "same-worktree",
-                            )
-                          }
-                        >
-                          Fork into Same Worktree
-                        </button>
-                        <button
-                          role="menuitem"
-                          type="button"
-                          onClick={() =>
-                            forkThreadFromContextMenu(
-                              contextMenu.thread,
-                              "new-worktree",
-                            )
-                          }
-                        >
-                          Fork into New Worktree
-                        </button>
-                      </>
-                    ) : (
-                      <>
-                        <button
-                          role="menuitem"
-                          type="button"
-                          onClick={() =>
-                            forkThreadFromContextMenu(
-                              contextMenu.thread,
-                              "local",
-                            )
-                          }
-                        >
-                          Fork in Local
-                        </button>
-                        <button
-                          role="menuitem"
-                          type="button"
-                          onClick={() =>
-                            forkThreadFromContextMenu(
-                              contextMenu.thread,
-                              "new-worktree",
-                            )
-                          }
-                        >
-                          Fork into New Worktree
-                        </button>
-                      </>
-                    )
+                    <>
+                      <button
+                        role="menuitem"
+                        type="button"
+                        onClick={() => forkThreadFromContextMenu(
+                          contextMenu.thread,
+                          contextMenuHasWorktreeWorkspace ? "same-worktree" : "local",
+                        )}
+                      >
+                        {contextMenuHasWorktreeWorkspace
+                          ? "Fork into Same Worktree"
+                          : "Fork in This Directory"}
+                      </button>
+                      <button
+                        role="menuitem"
+                        type="button"
+                        disabled={checkingWorktreeAvailability}
+                        onClick={() => forkThreadFromContextMenu(
+                          contextMenu.thread,
+                          canCreateContextMenuWorktree ? "new-worktree" : "new-workspace",
+                        )}
+                      >
+                        {canCreateContextMenuWorktree
+                          ? "Fork into New Worktree"
+                          : "Fork in New Workspace"}
+                      </button>
+                    </>
                   ) : null}
                 </div>
               ) : null}
