@@ -4136,7 +4136,8 @@ describe("Cloudflare listener reachability", () => {
       server: {}, listenUrl: "ws://192.168.1.2:47830", stopping: false,
     }) as DesktopFederationRuntime;
     expect(runtime.loopbackListenPort()).toBeUndefined();
-    expect(() => runtime.cloudflareSecurityProbes(47830)).toThrow();
+    expect(() => runtime.cloudflareSecurityProbes(47830))
+      .toThrow("The gateway listens on 192.168.1.2:47830, which the Cloudflare tunnel cannot reach.");
     Object.assign(runtime, { listenUrl: "ws://0.0.0.0:47830", stopping: true });
     expect(runtime.loopbackListenPort()).toBeUndefined();
   });

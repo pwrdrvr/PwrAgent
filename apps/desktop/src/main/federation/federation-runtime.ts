@@ -1281,10 +1281,16 @@ export class DesktopFederationRuntime {
     if (!Number.isInteger(listenPort) || listenPort < 1 || listenPort > 65535
       || this.stopping || !this.server || this.loopbackListenPort() !== listenPort) {
       // Say why when the runtime knows: "enable the gateway" reads as a missing
-      // setting when the listener is enabled and failed to bind.
+      // setting when the listener is enabled and failed to bind, or is running
+      // on an address the tunnel cannot reach.
+      const bound = !this.stopping && this.server && this.loopbackListenPort() === undefined
+        ? /^ws:\/\/([^/]+)$/.exec(this.listenUrl ?? "")?.[1]
+        : undefined;
       throw new Error(this.gatewayListenerError
-        ? `The gateway is not listening on 127.0.0.1:${listenPort}: ${this.gatewayListenerError}`
-        : "Enable the gateway on the selected loopback port before Cloudflare setup or validation.");
+        ? `The gateway is not listening on port ${listenPort}: ${this.gatewayListenerError}`
+        : bound
+          ? `The gateway listens on ${bound}, which the Cloudflare tunnel cannot reach. Listen on 127.0.0.1 or 0.0.0.0.`
+          : "Enable the gateway on the selected port, listening on 127.0.0.1 or 0.0.0.0, before Cloudflare setup or validation.");
     }
     return this.server.securityProbes;
   }

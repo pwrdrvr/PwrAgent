@@ -346,6 +346,15 @@ describe("Cloudflare setup flow", () => {
     await waitFor(() => expect(call).toHaveBeenCalledWith({ action: "remove" }));
   });
 
+  it("does not offer to move a tunnel onto a listener it cannot reach", async () => {
+    const published: CloudflareSetupStatus = { ...connected, hostname: "federation.example.com", listenPort: 47830,
+      tunnelId: "tunnel", phase: "Published", gate: "service-token" };
+    render(<CloudflareSetup api={{ configureFederationCloudflare: vi.fn(async () => published) } as DesktopApi}
+      listenHost="192.168.1.10" listenPort="47831" onWriteConfig={async () => true} onSettingsChanged={async () => {}} />);
+    await screen.findByText("Cloudflare cannot reach a listener on 192.168.1.10.");
+    expect(screen.getByRole("button", { name: "Move tunnel to port 47831" })).toBeDisabled();
+  });
+
   it("does not warn about the tunnel port while it matches the listener", async () => {
     const published: CloudflareSetupStatus = { ...connected, hostname: "federation.example.com", listenPort: 47830,
       tunnelId: "tunnel", phase: "Published", gate: "service-token" };

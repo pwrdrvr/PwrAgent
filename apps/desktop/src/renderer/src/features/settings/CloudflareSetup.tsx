@@ -594,7 +594,7 @@ export function CloudflareSetup(props: Props) {
                 <p>Cloudflare sends this endpoint&rsquo;s traffic to 127.0.0.1:{status?.listenPort}, but the gateway listener is set to {livePort}. Move the tunnel, or set the listener back to {status?.listenPort}.</p>
                 <div className="settings-button-row">
                   {action(`Move tunnel to port ${livePort}`, { action: "provision", hostname: status?.hostname ?? "", listenPort: livePort, gate: effectiveGate },
-                    "Moving the tunnel and re-checking the policy…", true, !connected)}
+                    "Moving the tunnel and re-checking the policy…", true, !connected || !listenerReachable)}
                 </div>
                 {!connected ? <p className="cloudflare-setup__hint">Connect the Cloudflare account in step 2 to move the tunnel.</p> : null}
               </div> : null}
