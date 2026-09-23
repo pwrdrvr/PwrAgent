@@ -258,6 +258,7 @@ function selectThreadWorkspace(
     mode === "same-worktree"
       ? worktree?.worktreePath ?? worktree?.path ?? local?.path ?? thread.projectKey
       : local?.path ?? thread.projectKey;
+  const currentBranch = thread.observedGitBranch ?? thread.gitBranch;
   return {
     directoryKind: sameWorkspacePath ? "directory" : "workspace",
     directoryLabel:
@@ -265,12 +266,11 @@ function selectThreadWorkspace(
         ? local?.label ?? thread.title
         : preferred?.label ?? thread.title,
     directoryPath: sameWorkspacePath,
-    gitStatusSourcePath:
-      mode === "local"
-        ? local?.path ?? sameWorkspacePath
-        : worktree?.path ?? local?.path ?? sameWorkspacePath,
+    // Existing-workspace status must come from the checkout the child uses.
+    // The repository root can have a different branch from this worktree.
+    gitStatusSourcePath: sameWorkspacePath,
     workMode: "local",
-    ...(mode === "same-worktree" && namedBranch ? { branchName: namedBranch } : {}),
+    ...(mode === "same-worktree" && currentBranch ? { branchName: currentBranch } : {}),
   };
 }
 

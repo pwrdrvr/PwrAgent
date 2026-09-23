@@ -20587,29 +20587,37 @@ script = "printf setup-output"
     }
   });
 
-  it("updates Codex git metadata when materializing a git-backed launchpad", async () => {
+  it.each(["feature/metadata", "HEAD"])("initializes same-worktree thread metadata from Git branch %s", async (branch) => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-launchpad-metadata-"));
     const repo = path.join(root, "app");
+    const worktree = path.join(root, "worktree", "app");
     await mkdir(repo, { recursive: true });
-    await git(repo, ["init", "-b", "feature/metadata"]);
+    await git(repo, ["init", "-b", "main"]);
     await git(repo, ["commit", "--allow-empty", "-m", "init"]);
+    // Both checkouts point at the same commit; only their symbolic HEAD differs.
+    await git(repo, branch === "HEAD"
+      ? ["worktree", "add", "--detach", worktree, "main"]
+      : ["worktree", "add", "-b", branch, worktree, "main"]);
+    const overlayStore = createOverlayStoreMock();
 
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/start", "thread/metadata/update"] },
     });
     const registry = new DesktopBackendRegistry({
       codexClient,
-      overlayStore: createOverlayStoreMock(),
+      overlayStore,
     });
 
     try {
       await registry.materializeDirectoryLaunchpad({
-        directoryKey: `directory:${repo}`,
+        directoryKey: "subthread:codex:thread-parent:same-worktree",
         launchpad: {
-          directoryKey: `directory:${repo}`,
+          directoryKey: "subthread:codex:thread-parent:same-worktree",
           directoryKind: "directory",
           directoryLabel: "app",
-          directoryPath: repo,
+          directoryPath: worktree,
+          parentThreadId: "thread-parent",
+          parentThreadBackend: "codex",
           backend: "codex",
           executionMode: "default",
           prompt: "",
@@ -20624,9 +20632,22 @@ script = "printf setup-output"
       expect(codexClient.lastUpdateThreadMetadataParams).toEqual({
         threadId: "thread-1",
         gitInfo: {
-          branch: "feature/metadata",
+          branch,
         },
       });
+      expect(await registry.checkThreadBranchDrift({
+        backend: "codex",
+        threadId: "thread-1",
+        expectedBranch: branch,
+      })).toMatchObject({
+        expectedBranch: branch,
+        observedBranch: branch,
+        drifted: false,
+      });
+      expect(await overlayStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: "thread-1",
+      })).toMatchObject({ observedGitBranch: branch });
     } finally {
       await registry.close();
       await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });

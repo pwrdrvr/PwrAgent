@@ -9918,7 +9918,7 @@ describe("useThreadNavigation", () => {
     });
   });
 
-  it("opens same-worktree sub-thread launchpads on the parent worktree branch", async () => {
+  it.each(["feature/parent", "HEAD"])("creates same-worktree subthreads with the worktree branch %s before hydration", async (currentBranch) => {
     const parentThread = {
       id: "thread-parent",
       title: "Worktree parent",
@@ -9935,7 +9935,7 @@ describe("useThreadNavigation", () => {
         },
       ],
       gitBranch: "feature/parent",
-      observedGitBranch: "feature/parent",
+      observedGitBranch: currentBranch,
       inbox: {
         inInbox: true,
         reason: "new-thread" as const,
@@ -9943,7 +9943,14 @@ describe("useThreadNavigation", () => {
       createdAt: 1_000,
       updatedAt: 2_000,
     };
-    const ensureDirectoryLaunchpad = vi.fn(async () => ({
+    const ensureDirectoryLaunchpad = vi.fn<NonNullable<DesktopApi["ensureDirectoryLaunchpad"]>>(async (request) => ({
+      // Model the owner reading status from the requested checkout. The main
+      // repository and the parent's worktree deliberately have different HEADs.
+      gitStatus: {
+        currentBranch: request.gitStatusSourcePath === "/repo/app/.worktrees/parent/app"
+          ? currentBranch
+          : "main",
+      },
       launchpad: {
         directoryKey: "subthread:codex:thread-parent:same-worktree",
         directoryKind: "directory" as const,
@@ -9971,7 +9978,7 @@ describe("useThreadNavigation", () => {
         backend: "codex" as const,
         executionMode: "default" as const,
         prompt: "",
-        branchName: "feature/parent",
+        branchName: currentBranch,
         parentThreadId: "thread-parent",
         parentThreadTitle: "Worktree parent",
         createdAt: 1,
@@ -10000,6 +10007,12 @@ describe("useThreadNavigation", () => {
       readPopulation,
       onAgentEvent: () => () => undefined,
       updateDirectoryLaunchpad,
+      materializeDirectoryLaunchpad: vi.fn(async () => ({
+        backend: "codex" as const,
+        threadId: "thread-child",
+        executionMode: "default" as const,
+        workMode: "local" as const,
+      })),
     };
 
     const { result } = renderHook(() => useThreadNavigation(desktopApi));
@@ -10012,14 +10025,37 @@ describe("useThreadNavigation", () => {
       await result.current.createSubthread(parentThread, "same-worktree");
     });
 
+    expect(result.current.selectedLaunchpad?.workMode).toBe("local");
+    const onMaterialized = vi.fn();
+    await act(async () => {
+      await result.current.materializeDirectoryLaunchpad(
+        "subthread:codex:thread-parent:same-worktree",
+        undefined, undefined, undefined, undefined, undefined, undefined,
+        onMaterialized,
+      );
+    });
+
+    expect(result.current.selectedThread).toMatchObject({
+      id: "thread-child",
+      gitBranch: currentBranch,
+      parentThreadId: "thread-parent",
+      linkedDirectories: [expect.objectContaining({
+        path: "/repo/app/.worktrees/parent/app",
+      })],
+    });
+    expect(onMaterialized).toHaveBeenCalledWith(expect.objectContaining({
+      id: "thread-child",
+      gitBranch: currentBranch,
+    }));
+
     expect(ensureDirectoryLaunchpad).toHaveBeenCalledWith({
       federationTarget: undefined,
       directoryKey: "subthread:codex:thread-parent:same-worktree",
       directoryKind: "directory",
       directoryLabel: "app",
       directoryPath: "/repo/app/.worktrees/parent/app",
-      gitStatusSourcePath: "/repo/app",
-      currentBranch: "feature/parent",
+      gitStatusSourcePath: "/repo/app/.worktrees/parent/app",
+      currentBranch,
       parentThreadId: "thread-parent",
       parentThreadBackend: "codex",
       parentThreadTitle: "Worktree parent",
@@ -10030,18 +10066,10 @@ describe("useThreadNavigation", () => {
       patch: expect.objectContaining({
         workMode: "local",
         directoryPath: "/repo/app/.worktrees/parent/app",
-        branchName: "feature/parent",
+        branchName: currentBranch,
         parentThreadId: "thread-parent",
         parentThreadBackend: "codex",
       }),
-    });
-    expect(result.current.selectedLaunchpad).toMatchObject({
-      directoryKey: "subthread:codex:thread-parent:same-worktree",
-      workMode: "local",
-      branchName: "feature/parent",
-      parentThreadId: "thread-parent",
-      parentThreadBackend: "codex",
-      parentThreadTitle: "Worktree parent",
     });
   });
 
