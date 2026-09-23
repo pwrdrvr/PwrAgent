@@ -12749,8 +12749,17 @@ a.button {
   overflow-wrap: anywhere;
 }
 
-.settings-mcp-row[data-health="needsSignIn"] .settings-mcp-row__error {
+/* A server that needs credentials has its failed start explained by that,
+   and signing in is the remedy either way, so the line is muted. A sign-in
+   that failed is the failure itself, whatever the health dot says. */
+.settings-mcp-row[data-health="needsSignIn"]
+  .settings-mcp-row__error:not(.settings-mcp-row__error--sign-in) {
   color: var(--text-muted);
+}
+
+/* A Codex row has no detail block, so its state line carries the indent. */
+.settings-mcp-row > .settings-mcp-row__state {
+  margin-left: 26px;
 }
 
 .settings-mcp-row__chips,

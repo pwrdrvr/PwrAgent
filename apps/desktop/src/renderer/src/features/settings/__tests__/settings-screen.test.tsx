@@ -7643,11 +7643,17 @@ describe("SettingsScreen", () => {
     fireEvent.click(
       screen.getByRole("menuitem", { name: "Sign in to datadog again" }),
     );
+    // The wait is datadog's alone: atlassian stays usable throughout.
+    expect(
+      await within(datadogRow!).findByRole("button", {
+        name: "Cancel sign-in to datadog",
+      }),
+    ).toBeInTheDocument();
     expect(
       within(atlassianRow!).getByRole("button", {
         name: "More actions for atlassian",
       }),
-    ).toBeDisabled();
+    ).toBeEnabled();
     await waitFor(() => {
       expect(startCodexMcpServerLogin).toHaveBeenCalledWith({
         codexHome,
@@ -7669,11 +7675,14 @@ describe("SettingsScreen", () => {
         },
       });
     });
+    expect(within(datadogRow!).getByRole("status")).toHaveTextContent(
+      "Starting…",
+    );
     expect(
       within(atlassianRow!).getByRole("button", {
         name: "More actions for atlassian",
       }),
-    ).toBeDisabled();
+    ).toBeEnabled();
     await act(async () => {
       agentEventListener?.({
         backend: "codex",
@@ -7683,9 +7692,13 @@ describe("SettingsScreen", () => {
         },
       });
     });
-    expect(await screen.findByText(
-      "datadog signed in and its row was refreshed.",
-    )).toBeInTheDocument();
+    // The row is the confirmation; the card says nothing.
+    expect(
+      await within(datadogRow!).findByRole("button", {
+        name: "More actions for datadog",
+      }),
+    ).toBeEnabled();
+    expect(within(datadogRow!).queryByRole("status")).not.toBeInTheDocument();
     expect(reloadCodexMcpServers).toHaveBeenCalledWith({ codexHome });
 
     fireEvent.click(
@@ -7711,12 +7724,16 @@ describe("SettingsScreen", () => {
     fireEvent.click(
       screen.getByRole("menuitem", { name: "Sign in to atlassian again" }),
     );
-    expect(await screen.findByRole("button", { name: "Cancel sign-in" }))
-      .toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Cancel sign-in" }));
-    expect(await screen.findByText(
-      "Stopped waiting for sign-in. You can try again.",
-    )).toBeInTheDocument();
+    fireEvent.click(
+      await within(atlassianRow!).findByRole("button", {
+        name: "Cancel sign-in to atlassian",
+      }),
+    );
+    expect(
+      await within(atlassianRow!).findByRole("button", {
+        name: "More actions for atlassian",
+      }),
+    ).toBeEnabled();
     expect(
       within(datadogRow!).getByRole("button", { name: "More actions for datadog" }),
     ).toBeEnabled();
@@ -7806,14 +7823,18 @@ describe("SettingsScreen", () => {
       expect(authorizeMcpConnection).toHaveBeenCalledWith({
         connectionId: "datadog",
       });
-      expect(screen.getByText("Datadog is connected through PwrAgent."))
-        .toBeInTheDocument();
     });
     const row = screen.getByText("Datadog")
       .closest<HTMLElement>(".settings-mcp-row");
     expect(row).not.toBeNull();
-    // The credential chip reads as the Codex list's does for the same state.
-    expect(within(row!).getByText("Signed in")).toBeInTheDocument();
+    // The row is the confirmation: its credential chip reads as the Codex
+    // list's does for the same state, and its wait has ended.
+    expect(await within(row!).findByText("Signed in")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(within(row!).queryByRole("status")).not.toBeInTheDocument();
+    });
+    // "Adding Datadog..." was the form's to say, and the form is done.
+    expect(screen.queryByText("Adding Datadog...")).not.toBeInTheDocument();
   });
 
   it("refuses to save a URL the gateway cannot hold, and says where it belongs", async () => {
