@@ -4696,6 +4696,10 @@ export function useThreadSessionState(params: {
     threadKey,
   ]);
   const selectedThreadKeyRef = useRef<string | undefined>(undefined);
+  const liveLifecycleVersionsRef = useRef(new Map<string, {
+    revision: number;
+    turnRevision: number;
+  }>());
   const consumedOptimisticActiveTurnKeysRef = useRef<Set<string>>(new Set());
   const launchpadMessageCandidateRef = useRef<{
     candidate: LaunchpadMessageCandidate;
@@ -4748,6 +4752,9 @@ export function useThreadSessionState(params: {
 
   useEffect(() => {
     const retainedThreadKeys = new Set(Object.keys(sessions));
+    for (const key of liveLifecycleVersionsRef.current.keys()) {
+      if (!retainedThreadKeys.has(key)) liveLifecycleVersionsRef.current.delete(key);
+    }
     for (const key of conditionalReadsRef.current.keys()) {
       if (!retainedThreadKeys.has(key)) conditionalReadsRef.current.delete(key);
     }
@@ -4907,6 +4914,7 @@ export function useThreadSessionState(params: {
       }
 
       const requestVersion = (requestVersionsRef.current[targetThreadKey] ?? 0) + 1;
+      const readLifecycleVersion = liveLifecycleVersionsRef.current.get(targetThreadKey);
       requestVersionsRef.current[targetThreadKey] = requestVersion;
       inFlightHydrationsRef.current.set(targetThreadKey, requestVersion);
 
@@ -4978,6 +4986,19 @@ export function useThreadSessionState(params: {
         }
 
         updateSession(targetThreadKey, (current) => {
+          // A read can capture active state before turn/completed and arrive
+          // after it. Keep its transcript, but let the newer live lifecycle
+          // own activity and pending interactions (also for a racing start).
+          // A compatible active status alone has no turn ID or interaction,
+          // so the snapshot must still be allowed to supply those fields.
+          const currentLifecycleVersion = liveLifecycleVersionsRef.current.get(targetThreadKey);
+          const compatibleActiveStatus =
+            (readLifecycleVersion?.turnRevision ?? 0) === (currentLifecycleVersion?.turnRevision ?? 0)
+            && readResponseThreadStatus(response) === "active"
+            && current.backendReportedActive === true;
+          const lifecycleChangedDuringRead =
+            readLifecycleVersion?.revision !== currentLifecycleVersion?.revision
+            && !compatibleActiveStatus;
           const retainedLiveEntryStore =
             retainedLiveEntriesRef.current[targetThreadKey];
           const retainedLiveEntries = retainedLiveEntryStore
@@ -5002,7 +5023,9 @@ export function useThreadSessionState(params: {
             current.response,
             Boolean(current.loadedHistory),
           );
-          const hydratedPendingRequest = response.pendingRequest;
+          const hydratedPendingRequest = lifecycleChangedDuringRead
+            ? undefined
+            : response.pendingRequest;
           const hydratedPendingUserInput =
             hydratedPendingRequest && isRequestUserInputNotification(hydratedPendingRequest)
               ? createQuestionnaireState(hydratedPendingRequest)
@@ -5036,7 +5059,9 @@ export function useThreadSessionState(params: {
             ? current.completionHydrationRetries + 1
             : 0;
           const thinkingReasons = describeThinkingState(current);
-          const responseThreadStatus = readResponseThreadStatus(response);
+          const responseThreadStatus = lifecycleChangedDuringRead
+            ? undefined
+            : readResponseThreadStatus(response);
           const backendReportedActive =
             responseThreadStatus === "active"
               ? true
@@ -5201,7 +5226,9 @@ export function useThreadSessionState(params: {
               : current.pendingUserInput,
             response: responseWithRetainedTail,
             staleThinkingRecheckAt:
-              federationTarget?.scope !== "remote" && (ownUpdateStillSettling || reviewUpdateStillSettling)
+              lifecycleChangedDuringRead
+              ? current.staleThinkingRecheckAt
+              : federationTarget?.scope !== "remote" && (ownUpdateStillSettling || reviewUpdateStillSettling)
               ? ownUpdateSettlesAt
               : undefined,
             transientMessage: shouldClearStaleThinking
@@ -5298,6 +5325,12 @@ export function useThreadSessionState(params: {
         threadStatusSummarySeedRef.current[threadKey] = summarySeed;
         const backendReportedActive = thread.threadStatus === "active";
         updateSession(threadKey, (current) => {
+          // Navigation is a bootstrap/recovery projection, not a new turn.
+          // Metadata can advance updatedAt while its active flag still lags
+          // a terminal event already received by this session.
+          if (backendReportedActive && liveLifecycleVersionsRef.current.has(threadKey)) {
+            return current;
+          }
           const shouldRecheckStaleThinking =
             !backendReportedActive && hasThinkingState(current);
           if (
@@ -5725,6 +5758,19 @@ export function useThreadSessionState(params: {
           }
           lastLiveActivitySignatureRef.current[targetThreadKey] = liveActivitySignature;
         }
+      }
+
+      if (event.notification.method === "thread/status/changed"
+        || event.notification.method === "turn/started"
+        || event.notification.method === "turn/completed"
+        || event.notification.method === "turn/failed"
+        || event.notification.method === "turn/cancelled") {
+        const previous = liveLifecycleVersionsRef.current.get(targetThreadKey);
+        liveLifecycleVersionsRef.current.set(targetThreadKey, {
+          revision: (previous?.revision ?? 0) + 1,
+          turnRevision: (previous?.turnRevision ?? 0)
+            + (event.notification.method === "thread/status/changed" ? 0 : 1),
+        });
       }
 
       updateSession(targetThreadKey, (session) => {
