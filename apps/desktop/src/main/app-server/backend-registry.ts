@@ -824,6 +824,7 @@ type BackendClient = {
     cwd: string;
   }): Promise<{ threadId: string }>;
   generateTitle?: ThreadTitleGenerator["generateTitle"];
+  getDefaultHelperModel?(): string;
   generateStructuredObject?(params: {
     model?: string;
     reasoningEffort?: string;
@@ -31979,7 +31980,7 @@ export class DesktopBackendRegistry {
   }): { model?: string; reasoningEffort?: string } {
     if (params.backend === "codex") {
       return {
-        model: DEFAULT_CODEX_THREAD_TITLE_MODEL,
+        model: this.codexClient.getDefaultHelperModel?.() ?? DEFAULT_CODEX_THREAD_TITLE_MODEL,
         reasoningEffort: "low",
       };
     }
@@ -36018,6 +36019,7 @@ export class DesktopBackendRegistry {
     const selectedModel =
       models.find((model) => model.id === requestedModel) ??
       models.find((model) => model.id === DEFAULT_TASK_MONITOR_MODEL) ??
+      models.find((model) => model.id === "gpt-5.6-luna") ??
       models.find((model) => model.id.toLowerCase().includes("mini")) ??
       models.find((model) => model.current) ??
       models.find((model) => model.supportsReasoning) ??

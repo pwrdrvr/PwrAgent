@@ -11352,6 +11352,40 @@ describe("CodexAppServerClient", () => {
     });
   });
 
+  it.each([
+    { hidden: false, override: undefined, expected: "gpt-6-luna" },
+    { hidden: true, override: undefined, expected: "gpt-5.6-luna" },
+    { hidden: false, override: "gpt-5.6-luna", expected: "gpt-5.6-luna" },
+  ])("selects the available helper model without overriding explicit models: $expected", async ({
+    hidden, override, expected,
+  }) => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({ command: "codex" });
+    MockTransport.modelListResult = createModelListResponse([
+      createCodexModel({ id: "gpt-6-luna", hidden }),
+      createCodexModel({ id: "gpt-5.6-luna" }),
+    ]);
+    await client.listModels();
+    MockTransport.threadStartResult = { thread: { id: "helper" }, instructionSources: [] };
+    MockTransport.turnStartResult = {
+      turn: { id: "helper-turn", output: [{ type: "text", text: '{"summary":"done"}' }] },
+    };
+    const result = await client.generateStructuredObject({
+      model: override,
+      prompt: "Summarize",
+      schema: { type: "object", properties: { summary: { type: "string" } } },
+      isMatch: (record) => typeof record.summary === "string",
+    });
+    expect(result).toMatchObject({ status: "ok", model: expected });
+    const requests = MockTransport.instances.at(-1)!.sentMessages.map(
+      (message) => JSON.parse(message) as { method?: string; params?: { model?: string } },
+    );
+    expect(requests.find((request) => request.method === "thread/start")?.params?.model)
+      .toBe(expected);
+    expect(requests.filter((request) => request.method === "model/list")).toHaveLength(1);
+    await client.close();
+  });
+
   it("uses a fresh helper thread for every title and unsubscribes each one", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     const client = new CodexAppServerClient({
@@ -11388,6 +11422,10 @@ describe("CodexAppServerClient", () => {
       "turn-title-helper-1",
       "First title",
     );
+    MockTransport.modelListResult = createModelListResponse([
+      createCodexModel({ id: "gpt-6-luna" }),
+    ]);
+    await client.listModels();
     const second = await generate(
       "thread-title-helper-2",
       "turn-title-helper-2",
@@ -11432,7 +11470,12 @@ describe("CodexAppServerClient", () => {
       "thread/rollback",
     );
 
+    expect(requests.filter((request) => request.method === "thread/start")
+      .map((request) => request.params?.model)).toEqual(["gpt-5.6-luna", "gpt-6-luna"]);
+    expect(second).toMatchObject({ model: "gpt-6-luna" });
+    expect(client.getDefaultHelperModel()).toBe("gpt-6-luna");
     await client.close();
+    expect(client.getDefaultHelperModel()).toBe("gpt-5.6-luna");
   });
 
   it("skips process-wide MCP attestation before Codex 0.144", async () => {

@@ -44815,10 +44815,18 @@ script = "printf setup"
     await registry.close();
   });
 
-  it("falls back to a supported monitor model when the parent requests an unavailable one", async () => {
+  it.each([
+    { available: [], requested: "gpt-5", expected: "gpt-5.4-mini" },
+    { available: ["gpt-5.6-luna"], requested: undefined, expected: "gpt-5.6-luna" },
+    { available: ["gpt-5.6-luna", "gpt-6-luna"], requested: undefined, expected: "gpt-6-luna" },
+    { available: ["gpt-5.6-luna", "gpt-6-luna"], requested: "gpt-5.6-luna", expected: "gpt-5.6-luna" },
+  ])("selects an available monitor model: $expected (requested $requested)", async ({
+    available, requested, expected,
+  }) => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
       models: [
+        ...available.map((id) => ({ id, label: id, supportsReasoning: true })),
         { id: "gpt-5.5", label: "GPT-5.5", supportsReasoning: true },
         { id: "gpt-5.4-mini", label: "GPT-5.4-Mini", supportsReasoning: true },
       ],
@@ -44851,7 +44859,7 @@ script = "printf setup"
         tool: "create_monitor_delegation",
         arguments: {
           task: "Watch PR checks until they finish.",
-          preferredModel: "gpt-5",
+          preferredModel: requested,
           preferredReasoningEffort: "low",
         },
       },
@@ -44861,14 +44869,14 @@ script = "printf setup"
     ) as Record<string, unknown>;
 
     expect(response).toMatchObject({ success: true });
-    expect(payload.preferredModel).toBe("gpt-5.4-mini");
+    expect(payload.preferredModel).toBe(expected);
     expect(payload.preferredReasoningEffort).toBe("low");
     expect(codexClient.lastStartThreadParams).toMatchObject({
-      model: "gpt-5.4-mini",
+      model: expected,
       reasoningEffort: "low",
     });
     expect(codexClient.lastStartTurnParams).toMatchObject({
-      model: "gpt-5.4-mini",
+      model: expected,
       reasoningEffort: "low",
     });
 

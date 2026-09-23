@@ -76,9 +76,11 @@ describe("TokenMiserService", () => {
       hookEventName: "PostToolUse",
       response_id: expect.any(String),
     });
+    expect(generateSummary).not.toHaveBeenCalledWith(expect.objectContaining({
+      model: expect.anything(),
+    }));
     expect(generateSummary).toHaveBeenCalledWith(
       expect.objectContaining({
-        model: "gpt-5.6-luna",
         reasoningEffort: "medium",
         system: expect.stringContaining(
           "Do not recommend actions, searches, reads, refinements, or next steps.",
@@ -695,8 +697,10 @@ describe("TokenMiserService code-mode reduction", () => {
       }],
       response_id: expect.any(String),
     });
+    expect(generateSummary).not.toHaveBeenCalledWith(expect.objectContaining({
+      model: expect.anything(),
+    }));
     expect(generateSummary).toHaveBeenCalledWith(expect.objectContaining({
-      model: "gpt-5.6-luna",
       reasoningEffort: "medium",
       prompt: expect.stringMatching(
         /Call ID: call-1[\s\S]*Cell ID: cell-1[\s\S]*rg --files/,

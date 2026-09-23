@@ -7438,6 +7438,7 @@ export class CodexAppServerClient {
   private tokenMiserActivationNegotiated = false;
   private initializationPromise: Promise<void> | null = null;
   private initializeResult: InitializeResult | null = null;
+  private availableHelperModels: BackendModelOption[] = [];
   private readonly notificationListeners = new Set<
     (notification: AppServerNotification) => void | Promise<void>
   >();
@@ -7702,6 +7703,7 @@ export class CodexAppServerClient {
     this.authActiveTurns.clear();
     this.initializationPromise = null;
     this.initializeResult = null;
+    this.availableHelperModels = [];
     this.rejectHelperTurnWaiters(new Error("codex app server client closed"));
     this.pendingThreadListings.clear();
     this.threadListTextCache.clear();
@@ -8783,6 +8785,14 @@ export class CodexAppServerClient {
     }
   }
 
+  // Reuse explicit provider discovery; helper calls must not fetch a model list
+  // for every title, diff, or tool-output summary. Refresh updates this choice.
+  getDefaultHelperModel(): string {
+    return this.availableHelperModels.some((model) => model.id === "gpt-6-luna")
+      ? "gpt-6-luna"
+      : DEFAULT_CODEX_THREAD_TITLE_MODEL;
+  }
+
   async listModels(
     diagnostics?: JsonRpcObserverDiagnostics,
   ): Promise<BackendModelOption[]> {
@@ -8801,6 +8811,7 @@ export class CodexAppServerClient {
     if (usesGeneratedCodexModelListResponse(this.initializeResult?.userAgent)) {
       const parsedResult = parseConsumedCodexModelListResponse(result);
       const models = extractGeneratedModelOptions(parsedResult);
+      this.availableHelperModels = models;
       codexClientLog.info("model/list", {
         durationMs: Math.round(performance.now() - startedAt),
         normalizedModelIds: models.map((model) => model.id),
@@ -8812,6 +8823,7 @@ export class CodexAppServerClient {
     }
 
     const models = extractModelOptions(result);
+    this.availableHelperModels = models;
     codexClientLog.info("model/list", {
       durationMs: Math.round(performance.now() - startedAt),
       normalizedModelIds: models.map((model) => model.id),
@@ -9378,7 +9390,7 @@ export class CodexAppServerClient {
     const timeoutMs = params.timeoutMs ?? DEFAULT_CODEX_THREAD_TITLE_TIMEOUT_MS;
     const turnTimeoutMs = params.turnTimeoutMs ?? timeoutMs;
     const helperWorkspaceDir = await ensureCodexThreadTitleWorkspace();
-    const helperModel = params.model?.trim() || DEFAULT_CODEX_THREAD_TITLE_MODEL;
+    const helperModel = params.model?.trim() || this.getDefaultHelperModel();
     const helperReasoningEffort =
       normalizeCodexReasoningEffort(params.reasoningEffort) ?? "low";
     const helperSystem = params.system?.trim() || "";

@@ -152,7 +152,6 @@ export type TokenMiserServiceOptions = {
    */
   isEnabledForThread?: (threadId: string) => Promise<boolean | undefined>;
   generateSummary: (params: {
-    model: string;
     reasoningEffort: "medium";
     system: string;
     prompt: string;
@@ -592,7 +591,6 @@ export class TokenMiserService {
   > {
     const members = [...group.members.values()];
     const generated = await this.options.generateSummary({
-      model: "gpt-5.6-luna",
       reasoningEffort: "medium",
       system: TOKEN_MISER_SYSTEM_PROMPT,
       prompt: buildGroupedCodeModeSummaryPrompt(payload, members),
@@ -766,7 +764,6 @@ export class TokenMiserService {
       return undefined;
     }
     const generated = await this.options.generateSummary({
-      model: "gpt-5.6-luna",
       reasoningEffort: "medium",
       system: TOKEN_MISER_SYSTEM_PROMPT,
       prompt: params.prompt,

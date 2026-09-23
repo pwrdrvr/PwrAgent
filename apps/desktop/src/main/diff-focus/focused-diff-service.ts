@@ -18,7 +18,6 @@ import {
 } from "../app-server/ephemeral-object-call";
 
 const FOCUSED_DIFF_PROMPT_VERSION = "focused-diff-v1";
-const FOCUSED_DIFF_CODEX_MODEL = "gpt-5.6-luna";
 const FOCUSED_DIFF_TIMEOUT_MS = 5_000;
 const MIN_HIDE_CONFIDENCE = 0.8;
 const FOCUSED_DIFF_TEST_RESPONSE_ENV = "PWRAGENT_FOCUSED_DIFF_TEST_RESPONSE";
@@ -178,7 +177,6 @@ export class FocusedDiffService {
     // an unavailable Codex backend returns the full-diff fallback below.
     const result = await this.objectCaller.generateObject({
       backend: "codex",
-      model: FOCUSED_DIFF_CODEX_MODEL,
       timeoutMs: this.timeoutMs,
       schema: FOCUSED_DIFF_RESPONSE_SCHEMA,
       schemaName: "focused_diff_hunk_decisions",
