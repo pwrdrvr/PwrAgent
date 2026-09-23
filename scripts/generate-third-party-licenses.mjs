@@ -426,6 +426,12 @@ function main() {
     "Codex App Server Rust dependency disclosures are maintained by the Codex distribution; PwrAgent invokes a local Codex App Server and does not vendor those Rust crates into this npm notice.",
   );
   lines.push("");
+  lines.push("Bundled Git runtime (approved separate-executable license exception)");
+  lines.push("------------------------------------------------------------------");
+  const gitNotices = join(repoRoot, "apps/desktop/resources/embedded-git");
+  for (const file of ["SOURCES", "COPYING", "LICENSE.git-lfs", "LICENSE.git-credential-manager", "NOTICE"]) {
+    lines.push(readFileSync(join(gitNotices, file), "utf8").trim(), "");
+  }
   lines.push("Dependency Summary");
   lines.push("------------------");
   lines.push("");

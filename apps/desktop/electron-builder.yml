@@ -5,6 +5,7 @@ copyright: "Copyright © 2026 PwrDrvr LLC."
 # Dock tile plug-ins are nested code. Sign the staged bundle before
 # electron-builder seals the parent PwrAgent.app for notarization.
 afterPack: "scripts/afterpack-sign-dock-tile-plugin.mjs"
+beforePack: "scripts/beforepack-bundled-git.mjs"
 
 # Pinned so `pnpm deploy --prod` works — electron lives in devDependencies
 # and is therefore not present in the deploy stage's node_modules.
@@ -25,6 +26,7 @@ compression: normal
 # pnpm's symlinked virtual store interacts poorly with electron-builder's
 # default node_modules walk.
 files:
+  - "!**/node_modules/dugite/git/**"
   - "out/**/*"
   - "package.json"
   # Compiled JS only — drop sources, declarations, and sourcemaps.
@@ -72,6 +74,10 @@ files:
   - "!**/node_modules/@pwragent/*/src/**"
 
 extraResources:
+  - from: node_modules/dugite/git
+    to: git
+  - from: resources/embedded-git
+    to: git
   - from: LICENSE
     to: LICENSE
   - from: THIRD_PARTY_LICENSES

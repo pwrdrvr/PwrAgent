@@ -1,3 +1,5 @@
+import { bundledGitExecutable, bundledGitLfsExecutable } from "../bundled-git";
+import { gitRuntimeEnvironment } from "../git-runtime";
 import { getAppStateDb } from "../state/app-state";
 import {
   DESKTOP_UI_LAYOUT_DEFAULTS,
@@ -1498,10 +1500,7 @@ export class DesktopSettingsService {
           discovery: ghDiscovery,
         },
         git: {
-          path: this.resolveString(
-            config.applications?.git?.path,
-            GIT_COMMAND_ENV,
-          ),
+          path: this.resolveString(config.applications?.git?.path, GIT_COMMAND_ENV),
           discovery: gitDiscovery,
         },
       },
@@ -2643,7 +2642,8 @@ export class DesktopSettingsService {
       ?? (shouldResolveManagedGrok
         ? this.options.resolveActiveManagedGrokCommand?.()
         : undefined);
-    return [codexCommand, grokCommand].filter(
+    const gitCommand = this.resolveGitCommandPreference();
+    return [gitCommand ?? bundledGitExecutable(), ...(gitCommand ? [] : [bundledGitLfsExecutable()]), codexCommand, grokCommand].filter(
       (command): command is string => command !== undefined,
     );
   }
@@ -2768,7 +2768,7 @@ export class DesktopSettingsService {
     }
 
     if (this.codexSpawnEnvHydrationPromise) {
-      return await this.codexSpawnEnvHydrationPromise;
+      return this.applyGitRuntime(await this.codexSpawnEnvHydrationPromise);
     }
 
     const targetEnv = this.ensureBaseCodexSpawnEnv();
@@ -2804,6 +2804,9 @@ export class DesktopSettingsService {
           hadHomebrewPrefix: Boolean(shellEnv.HOMEBREW_PREFIX),
         });
         mergePwrAgentChildProcessEnv(targetEnv, shellEnv);
+        const bundledEnv = gitRuntimeEnvironment(targetEnv, this.resolveGitCommandPreference());
+        for (const key of Object.keys(targetEnv)) delete targetEnv[key];
+        Object.assign(targetEnv, bundledEnv);
         if (this.startupCodexHome) {
           targetEnv.CODEX_HOME = this.startupCodexHome;
         }
@@ -2834,7 +2837,7 @@ export class DesktopSettingsService {
     }
 
     if (this.terminalSpawnEnvHydrationPromise) {
-      return await this.terminalSpawnEnvHydrationPromise;
+      return this.applyGitRuntime(await this.terminalSpawnEnvHydrationPromise);
     }
 
     const targetEnv = this.ensureBaseTerminalSpawnEnv();
@@ -2859,20 +2862,23 @@ export class DesktopSettingsService {
         hadHomebrewPrefix: Boolean(shellEnv.HOMEBREW_PREFIX),
       });
       mergePwrAgentChildProcessEnv(targetEnv, shellEnv);
+      const bundledEnv = gitRuntimeEnvironment(targetEnv, this.resolveGitCommandPreference());
+      for (const key of Object.keys(targetEnv)) delete targetEnv[key];
+      Object.assign(targetEnv, bundledEnv);
       if (this.startupCodexHome) {
         targetEnv.CODEX_HOME = this.startupCodexHome;
       }
       return targetEnv;
     });
 
-    return await this.terminalSpawnEnvHydrationPromise;
+    return this.applyGitRuntime(await this.terminalSpawnEnvHydrationPromise);
   }
 
   private ensureBaseCodexSpawnEnv(): NodeJS.ProcessEnv {
     this.codexSpawnEnv ??= this.withStartupCodexHome(
       buildPwrAgentChildProcessEnv(this.env),
     );
-    return this.codexSpawnEnv;
+    return this.applyGitRuntime(this.codexSpawnEnv);
   }
 
   /**
@@ -2963,10 +2969,18 @@ export class DesktopSettingsService {
     this.terminalSpawnEnv ??= this.withStartupCodexHome(
       buildPwrAgentChildProcessEnv(this.env),
     );
-    return this.terminalSpawnEnv;
+    return this.applyGitRuntime(this.terminalSpawnEnv);
+  }
+
+  private applyGitRuntime(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+    const next = gitRuntimeEnvironment(env, this.resolveGitCommandPreference());
+    for (const key of Object.keys(env)) delete env[key];
+    Object.assign(env, next);
+    return env;
   }
 
   private withStartupCodexHome(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+    env = gitRuntimeEnvironment(env, this.resolveGitCommandPreference());
     if (!this.startupCodexHome) return env;
     return {
       ...env,
@@ -3031,36 +3045,9 @@ export class DesktopSettingsService {
     );
   }
 
-  /**
-   * The git the main process should spawn, or `undefined` when the
-   * operator has expressed no preference and `PATH` should decide.
-   * Installed as the `git-command` resolver at startup, so every git
-   * spawn honours the Settings pane's selection.
-   *
-   * A configured path the last discovery run found unusable is dropped.
-   * Discovery's own selection already skips a non-executable candidate, so
-   * without this the Settings pane would show one git as "In use" while
-   * every direct `getGitCommand()` spawn ran a different, broken one — the
-   * realistic case being an OS update that re-arms the Xcode license
-   * prompt under an operator who had chosen Apple's git. Env override is
-   * exempt: it is an explicit escape hatch and must not be second-guessed,
-   * and a path we have not probed is trusted rather than ignored.
-   */
   resolveGitCommandPreference(): string | undefined {
-    const envOverride = readEnvString(this.env, GIT_COMMAND_ENV);
-    if (envOverride) {
-      return envOverride;
-    }
-
-    const configured = this.configStore.read("applications").git?.path?.trim();
-    if (!configured) {
-      return undefined;
-    }
-
-    const probed = this.gitDiscoveryCache?.result?.candidates.find(
-      (candidate) => candidate.command === configured,
-    );
-    return probed && !probed.executable ? undefined : configured;
+    return readEnvString(this.env, GIT_COMMAND_ENV)
+      ?? (this.configStore.read("applications").git?.path?.trim() || undefined);
   }
 
   private readConfig(): ConfigReadResult {

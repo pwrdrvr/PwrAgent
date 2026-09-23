@@ -1,3 +1,4 @@
+import { bundledGitDirectory, bundledGitExecutable, bundledGitLfsExecutable } from "../bundled-git";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -41,6 +42,24 @@ function createTempRoot(): string {
 
 function existsOrEmpty(filePath: string): boolean {
   return !fs.existsSync(filePath) || fs.readFileSync(filePath, "utf8") === "";
+}
+
+/**
+ * The bundle's directories first, then exactly what the child inherited.
+ * Deriving the expectation from bundledGitEnvironment instead would agree
+ * with a version of it that dropped the inherited PATH altogether.
+ */
+function expectBundledGitPath(actual: string | undefined, inherited: string[]): void {
+  const entries = (actual ?? "").split(path.delimiter);
+  expect(entries.slice(0, 2)).toEqual([
+    path.dirname(bundledGitExecutable()),
+    path.dirname(bundledGitLfsExecutable()),
+  ]);
+  // The bundle's own entries and the installed keychain helper's git-core
+  // are the only additions PwrAgent makes.
+  expect(entries.filter((entry) =>
+    !entry.startsWith(bundledGitDirectory())
+    && !entry.endsWith(path.join("libexec", "git-core")))).toEqual(inherited);
 }
 
 describe("DesktopSettingsService", () => {
@@ -105,6 +124,26 @@ describe("DesktopSettingsService", () => {
       codexAuthState.verified(profile.codexHome);
     }
     expect(service.readCodexProfiles().profiles[0]?.authenticationRequired).toBeUndefined();
+  });
+
+  it("restores stored Git overrides and updates cached child environments when cleared", async () => {
+    const service = new DesktopSettingsService({
+      configPath: path.join(createTempRoot(), "config.toml"),
+      env: { PATH: path.dirname(process.execPath) },
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+    const initial = service.resolveCodexSpawnEnv();
+    expect(initial.GIT_EXEC_PATH).toBeDefined();
+    await service.writeConfigPatchTargeted({ applications: { git: { path: process.execPath } } });
+    expect(service.resolveGitCommandPreference()).toBe(process.execPath);
+    const custom = service.resolveCodexSpawnEnv();
+    expect(custom).toBe(initial);
+    expect(custom.GIT_EXEC_PATH).toBeUndefined();
+    expect(custom.PATH?.split(path.delimiter)[0]).toBe(path.dirname(process.execPath));
+    expect(service.resolveIntegratedTerminalCommands()).toContain(process.execPath);
+    await service.writeConfigPatchTargeted({ applications: { git: { path: "" } } });
+    expect(service.resolveGitCommandPreference()).toBeUndefined();
+    expect(service.resolveCodexSpawnEnv().GIT_EXEC_PATH).toBeDefined();
   });
 
   it("reads secret storage availability without loading the full Settings projection or secrets", () => {
@@ -3240,14 +3279,13 @@ describe("DesktopSettingsService", () => {
       secretStore: new MemoryDesktopSecretStore(),
       resolveCodexShellEnv: () => ({
         CODEX_HOME: path.join(root, "login-shell-default"),
-        PATH: "/opt/homebrew/bin:/usr/bin",
+        PATH: ["/opt/homebrew/bin", "/usr/bin"].join(path.delimiter),
       }),
     });
 
-    await expect(service.resolveTerminalSpawnEnvAsync()).resolves.toMatchObject({
-      CODEX_HOME: path.join(codexRoot, "profiles", "work"),
-      PATH: "/opt/homebrew/bin:/usr/bin",
-    });
+    const terminalEnv = await service.resolveTerminalSpawnEnvAsync();
+    expect(terminalEnv.CODEX_HOME).toBe(path.join(codexRoot, "profiles", "work"));
+    expectBundledGitPath(terminalEnv.PATH, ["/opt/homebrew/bin", "/usr/bin"]);
   });
 
   it("uses only already-active managed runtimes for integrated terminals", async () => {
@@ -3312,6 +3350,7 @@ describe("DesktopSettingsService", () => {
     ensureManagedCodexRuntime.mockClear();
 
     expect(service.resolveIntegratedTerminalCommands()).toEqual([
+      bundledGitExecutable(), bundledGitLfsExecutable(),
       "/pwragent/codex/versions/current/codex",
       "/pwragent/grok/versions/current/grok",
     ]);
@@ -3347,6 +3386,7 @@ describe("DesktopSettingsService", () => {
     // the download failed. Threads fall back to the configured command here,
     // so a terminal that pinned nothing would send `codex` somewhere else.
     expect(service.resolveIntegratedTerminalCommands()).toEqual([
+      bundledGitExecutable(), bundledGitLfsExecutable(),
       "/custom/codex/bin/codex",
     ]);
   });
@@ -3378,6 +3418,7 @@ describe("DesktopSettingsService", () => {
     });
 
     expect(service.resolveIntegratedTerminalCommands()).toEqual([
+      bundledGitExecutable(), bundledGitLfsExecutable(),
       "/custom/codex/bin/codex",
       "/custom/grok/bin/grok",
     ]);
@@ -3412,6 +3453,7 @@ describe("DesktopSettingsService", () => {
     });
 
     expect(service.resolveIntegratedTerminalCommands()).toEqual([
+      bundledGitExecutable(), bundledGitLfsExecutable(),
       "/custom/codex/bin/codex",
     ]);
     expect(resolveActiveManagedGrokCommand).not.toHaveBeenCalled();
@@ -3448,17 +3490,18 @@ describe("DesktopSettingsService", () => {
 
   it("adds login shell PATH entries to the Codex app-server spawn env", () => {
     const service = new DesktopSettingsService({
-      env: { PATH: "/usr/bin:/bin" } as NodeJS.ProcessEnv,
+      env: { PATH: ["/usr/bin", "/bin"].join(path.delimiter) } as NodeJS.ProcessEnv,
       secretStore: new MemoryDesktopSecretStore(),
       resolveCodexShellEnv: () => ({
         NVM_DIR: "/Users/alice/.nvm",
-        PATH: "/Users/alice/.sdkman/candidates/sbt/current/bin:/usr/bin",
+        PATH: ["/Users/alice/.sdkman/candidates/sbt/current/bin", "/usr/bin"].join(path.delimiter),
       }),
     });
 
-    expect(service.resolveCodexSpawnEnv().PATH).toBe(
-      "/Users/alice/.sdkman/candidates/sbt/current/bin:/usr/bin",
-    );
+    expectBundledGitPath(service.resolveCodexSpawnEnv().PATH, [
+      "/Users/alice/.sdkman/candidates/sbt/current/bin",
+      "/usr/bin",
+    ]);
     expect(service.resolveCodexSpawnEnv().NVM_DIR).toBe("/Users/alice/.nvm");
   });
 
@@ -3466,12 +3509,12 @@ describe("DesktopSettingsService", () => {
     const service = new DesktopSettingsService({
       env: {
         ELECTRON_RENDERER_URL: "http://localhost:5173",
-        PATH: "/usr/bin:/bin",
+        PATH: ["/usr/bin", "/bin"].join(path.delimiter),
       } as NodeJS.ProcessEnv,
       secretStore: new MemoryDesktopSecretStore(),
       resolveCodexShellEnv: () => ({
         ELECTRON_RENDERER_URL: "http://localhost:5175",
-        PATH: "/opt/homebrew/bin:/usr/bin",
+        PATH: ["/opt/homebrew/bin", "/usr/bin"].join(path.delimiter),
         NVM_DIR: "/Users/alice/.nvm",
       }),
     });
@@ -3481,14 +3524,10 @@ describe("DesktopSettingsService", () => {
 
     expect(codexEnv).not.toHaveProperty("ELECTRON_RENDERER_URL");
     expect(terminalEnv).not.toHaveProperty("ELECTRON_RENDERER_URL");
-    expect(codexEnv).toMatchObject({
-      PATH: "/opt/homebrew/bin:/usr/bin",
-      NVM_DIR: "/Users/alice/.nvm",
-    });
-    expect(terminalEnv).toMatchObject({
-      PATH: "/opt/homebrew/bin:/usr/bin",
-      NVM_DIR: "/Users/alice/.nvm",
-    });
+    expect(codexEnv.NVM_DIR).toBe("/Users/alice/.nvm");
+    expect(terminalEnv.NVM_DIR).toBe("/Users/alice/.nvm");
+    expectBundledGitPath(codexEnv.PATH, ["/opt/homebrew/bin", "/usr/bin"]);
+    expectBundledGitPath(terminalEnv.PATH, ["/opt/homebrew/bin", "/usr/bin"]);
   });
 
   it("applies env overrides above TOML", async () => {

@@ -1,488 +1,86 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { bundledGitExecutable, configureBundledGit } from "../bundled-git";
+import { discoverGitCommands, parseGitVersionOutput, validateGitCommand } from "../settings/git-discovery";
 
-const accessMock = vi.fn();
-const execFileMock = vi.fn();
+afterEach(() => configureBundledGit());
 
-vi.mock("node:fs/promises", () => ({
-  access: accessMock,
-}));
-
-vi.mock("node:child_process", () => ({
-  execFile: (
-    command: string,
-    args: string[],
-    options: Record<string, unknown>,
-    callback: (
-      error: Error | null,
-      result?: { stdout: string; stderr?: string },
-    ) => void,
-  ) => {
-    execFileMock(command, args, options, callback);
-  },
-}));
-
-beforeEach(() => {
-  vi.resetModules();
-  accessMock.mockReset();
-  execFileMock.mockReset();
-});
-
-// Many cases mock Unix git locations (/usr/bin, /opt/homebrew); those are gated off Windows. Windows git discovery coverage is tracked separately.
 describe("Git discovery", () => {
-  it.skipIf(process.platform === "win32")("selects a working Homebrew git when Apple git is blocked by Xcode license", async () => {
-    const missingError = new Error("missing") as NodeJS.ErrnoException;
-    missingError.code = "ENOENT";
-    const xcodeError = new Error(
-      "You have not agreed to the Xcode license agreements. Please run 'sudo xcodebuild -license'",
-    );
-    accessMock.mockImplementation(async (candidate: string) => {
-      if (candidate === "/usr/bin/git" || candidate === "/opt/homebrew/bin/git") {
-        return undefined;
-      }
-      throw missingError;
-    });
-    execFileMock.mockImplementation(
-      (
-        command: string,
-        _args: string[],
-        _options: Record<string, unknown>,
-        callback: (
-          error: Error | null,
-          result?: { stdout: string; stderr?: string },
-        ) => void,
-      ) => {
-        if (command === "/usr/bin/git") {
-          callback(xcodeError);
-          return;
-        }
-        if (command === "/opt/homebrew/bin/git") {
-          callback(null, { stdout: "git version 2.39.1\n" });
-          return;
-        }
-        callback(missingError);
-      },
-    );
-    const { discoverGitCommands, isXcodeLicenseFailure } = await import(
-      "../settings/git-discovery"
-    );
-
-    const snapshot = await discoverGitCommands({ env: { PATH: "/usr/bin" } });
-
-    expect(snapshot.selectedCommand).toBe("/opt/homebrew/bin/git");
-    expect(snapshot.selectedSource).toBe("homebrew");
-    expect(snapshot.candidates).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          command: "/usr/bin/git",
-          executable: false,
-          selected: false,
-          source: "path",
-          failureReason: expect.stringContaining("Xcode license"),
-        }),
-        expect.objectContaining({
-          command: "/opt/homebrew/bin/git",
-          executable: true,
-          selected: true,
-          source: "homebrew",
-          version: "2.39.1",
-        }),
-      ]),
-    );
-    expect(isXcodeLicenseFailure(snapshot.candidates[0]?.failureReason)).toBe(true);
-  });
-
-  it("parses git --version output", async () => {
-    const { parseGitVersionOutput } = await import("../settings/git-discovery");
-
-    expect(parseGitVersionOutput("git version 2.39.1\n")).toBe("2.39.1");
-    expect(parseGitVersionOutput("git version 2.45.0.windows.1\n")).toBe(
-      "2.45.0.windows.1",
-    );
-  });
-
-  it.skipIf(process.platform === "win32")("uses user git paths in the app-server executor", async () => {
-    const homeGit = "/Users/test/bin/git";
-    const missingError = new Error("missing") as NodeJS.ErrnoException;
-    missingError.code = "ENOENT";
-    execFileMock.mockImplementation(
-      (
-        command: string,
-        _args: string[],
-        _options: Record<string, unknown>,
-        callback: (
-          error: Error | null,
-          result?: { stdout: string; stderr?: string },
-        ) => void,
-      ) => {
-        if (command === homeGit) {
-          callback(null, { stdout: "git version 2.48.0\n" });
-          return;
-        }
-        callback(missingError);
-      },
-    );
-    vi.doMock("node:os", () => ({
-      default: {
-        homedir: () => "/Users/test",
-        tmpdir: () => "/tmp",
-      },
+  it("selects bundled Git and LFS by default while retaining installed candidates", async () => {
+    const result = await discoverGitCommands({ env: { ...process.env, PWRAGENT_GIT_PATH: undefined } });
+    expect(result.selectedCommand).toBe(bundledGitExecutable());
+    expect(result.candidates).toContainEqual(expect.objectContaining({
+      source: "bundled", selected: true, executable: true,
+      version: expect.stringMatching(/^\d+\./), lfsVersion: expect.stringMatching(/^\d+\./),
     }));
-    const { resolveGitExecutable } = await import("../app-server/git-executable");
-
-    await expect(resolveGitExecutable()).resolves.toBe(homeGit);
   });
 
-  it.skipIf(process.platform === "win32")("uses the supplied hydrated PATH when resolving app-server git", async () => {
-    const missingError = new Error("missing") as NodeJS.ErrnoException;
-    missingError.code = "ENOENT";
-    const hydratedEnv = {
-      PATH: "/nix/profile/bin:/usr/bin",
-      ELECTRON_RENDERER_URL: "http://localhost:5175",
-    } as NodeJS.ProcessEnv;
-    accessMock.mockImplementation(async (candidate: string) => {
-      if (candidate === "/nix/profile/bin/git") {
-        return undefined;
-      }
-      throw missingError;
-    });
-    execFileMock.mockImplementation(
-      (
-        command: string,
-        args: string[],
-        options: { env?: NodeJS.ProcessEnv },
-        callback: (
-          error: Error | null,
-          result?: { stdout: string; stderr?: string },
-        ) => void,
-      ) => {
-        if (
-          (command === "git" || command === "/nix/profile/bin/git")
-          && options.env?.PATH === hydratedEnv.PATH
-          && options.env?.ELECTRON_RENDERER_URL === undefined
-        ) {
-          callback(null, {
-            stdout: args[0] === "--version" ? "git version 2.49.0\n" : "ok\n",
-          });
-          return;
-        }
-        callback(missingError);
-      },
-    );
-    const { runGitCommand } = await import("../app-server/git-executable");
-
-    await expect(
-      runGitCommand("/repo", ["status", "--short"], { env: hydratedEnv }),
-    ).resolves.toEqual({
-      stdout: "ok\n",
-      stderr: "",
-    });
-    expect(execFileMock).toHaveBeenCalledWith(
-      "git",
-      ["--version"],
-      expect.objectContaining({
-        env: expect.objectContaining({ PATH: hydratedEnv.PATH }),
-      }),
-      expect.any(Function),
-    );
-    expect(execFileMock).toHaveBeenCalledWith(
-      "/nix/profile/bin/git",
-      ["-C", "/repo", "status", "--short"],
-      expect.objectContaining({
-        env: expect.objectContaining({ PATH: hydratedEnv.PATH }),
-      }),
-      expect.any(Function),
-    );
-    for (const [, , options] of execFileMock.mock.calls) {
-      expect((options as { env?: NodeJS.ProcessEnv }).env).not.toHaveProperty(
-        "ELECTRON_RENDERER_URL",
-      );
-    }
+  it("keeps a broken env override selected ahead of config and the working bundle", async () => {
+    const result = await discoverGitCommands({ configuredCommand: "/missing/config/git", env: { ...process.env, PWRAGENT_GIT_PATH: "/missing/env/git" } });
+    expect(result.selectedCommand).toBe("/missing/env/git");
+    expect(result.candidates.find((candidate) => candidate.selected)).toMatchObject({ source: "env", executable: false });
+    expect(result.candidates.find((candidate) => candidate.source === "bundled")).toMatchObject({ selected: false, executable: true });
   });
 
-  it.skipIf(process.platform === "win32")("does not reuse app-server git resolution across different PATH values", async () => {
-    const missingError = new Error("missing") as NodeJS.ErrnoException;
-    missingError.code = "ENOENT";
-    const finderEnv = { PATH: "/usr/bin:/bin" } as NodeJS.ProcessEnv;
-    const hydratedEnv = {
-      PATH: "/custom/bin:/usr/bin:/bin",
-      ELECTRON_RENDERER_URL: "http://localhost:5175",
-    } as NodeJS.ProcessEnv;
-    accessMock.mockImplementation(async (candidate: string) => {
-      if (candidate === "/custom/bin/git") {
-        return undefined;
-      }
-      throw missingError;
+  it("keeps a broken configured override selected without fallback", async () => {
+    const result = await discoverGitCommands({ configuredCommand: "/missing/config/git", env: { ...process.env, PWRAGENT_GIT_PATH: undefined } });
+    expect(result.selectedCommand).toBe("/missing/config/git");
+    expect(result.candidates.find((candidate) => candidate.selected)).toMatchObject({
+      source: "config",
+      executable: false,
     });
-    execFileMock.mockImplementation(
-      (
-        command: string,
-        args: string[],
-        options: { env?: NodeJS.ProcessEnv },
-        callback: (
-          error: Error | null,
-          result?: { stdout: string; stderr?: string },
-        ) => void,
-      ) => {
-        if (
-          (command === "git" || command === "/custom/bin/git")
-          && args[0] === "--version"
-          && options.env?.PATH === hydratedEnv.PATH
-          && options.env?.ELECTRON_RENDERER_URL === undefined
-        ) {
-          callback(null, { stdout: "git version 2.49.0\n" });
-          return;
-        }
-        callback(missingError);
-      },
-    );
-    const { resolveGitExecutable } = await import("../app-server/git-executable");
+  });
 
-    await expect(resolveGitExecutable(finderEnv)).rejects.toThrow(
-      "Git executable unavailable",
-    );
+  it("keeps a configured well-known path under the source that found it", async () => {
+    // Settings titles each row by its source, so a configured Homebrew git
+    // reading "Custom path" would hide where it came from.
+    const result = await discoverGitCommands({
+      configuredCommand: bundledGitExecutable(),
+      env: { ...process.env, PWRAGENT_GIT_PATH: undefined },
+    });
+    expect(result.selectedSource).toBe("bundled");
+    expect(result.candidates.filter((candidate) => candidate.command === bundledGitExecutable()))
+      .toEqual([expect.objectContaining({ source: "bundled", selected: true })]);
+    expect(result.candidates.some((candidate) => candidate.source === "config")).toBe(false);
+  });
 
-    await expect(resolveGitExecutable(hydratedEnv)).resolves.toBe(
-      "/custom/bin/git",
+  it("selects the row a configured bare command resolves to", async () => {
+    // Discovery resolves `git` against PATH, so the selection has to match
+    // the resolved row; otherwise Settings reports no Git while spawns use it.
+    const result = await discoverGitCommands({
+      configuredCommand: "git",
+      env: { ...process.env, PWRAGENT_GIT_PATH: undefined },
+    });
+    expect(result.candidates.filter((candidate) => candidate.selected)).toHaveLength(1);
+    expect(result.selectedCommand).toBe(
+      result.candidates.find((candidate) => candidate.selected)?.command,
     );
   });
 
-  it.skipIf(process.platform === "win32")("skips an executable PATH directory named git", async () => {
-    const directoryError = new Error("permission denied") as NodeJS.ErrnoException;
-    directoryError.code = "EACCES";
-    const missingError = new Error("missing") as NodeJS.ErrnoException;
-    missingError.code = "ENOENT";
-    const env = { PATH: "/bad/bin:/good/bin" } as NodeJS.ProcessEnv;
-    execFileMock.mockImplementation(
-      (
-        command: string,
-        args: string[],
-        _options: { env?: NodeJS.ProcessEnv },
-        callback: (
-          error: Error | null,
-          result?: { stdout: string; stderr?: string },
-        ) => void,
-      ) => {
-        if (command === "git" && args[0] === "--version") {
-          // PATH lookup skips the directory and reaches the real Git.
-          callback(null, { stdout: "git version 2.49.0\n" });
-          return;
-        }
-        if (command === "/bad/bin/git") {
-          callback(directoryError);
-          return;
-        }
-        if (command === "/good/bin/git") {
-          callback(null, { stdout: "git version 2.49.0\n" });
-          return;
-        }
-        callback(missingError);
-      },
-    );
-    const { resolveGitExecutable } = await import("../app-server/git-executable");
-
-    await expect(resolveGitExecutable(env)).resolves.toBe("/good/bin/git");
-    expect(execFileMock).toHaveBeenCalledWith(
-      "/bad/bin/git",
-      ["--version"],
-      expect.any(Object),
-      expect.any(Function),
-    );
-    expect(execFileMock).toHaveBeenCalledWith(
-      "/good/bin/git",
-      ["--version"],
-      expect.any(Object),
-      expect.any(Function),
-    );
-  });
-
-  it.skipIf(process.platform === "win32")("retries app-server git resolution after an initial failure", async () => {
-    const missingError = new Error("missing") as NodeJS.ErrnoException;
-    missingError.code = "ENOENT";
-    let failAll = true;
-    execFileMock.mockImplementation(
-      (
-        command: string,
-        _args: string[],
-        _options: Record<string, unknown>,
-        callback: (
-          error: Error | null,
-          result?: { stdout: string; stderr?: string },
-        ) => void,
-      ) => {
-        if (!failAll && command === "/opt/homebrew/bin/git") {
-          callback(null, { stdout: "git version 2.39.1\n" });
-          return;
-        }
-        callback(missingError);
-      },
-    );
-    const { resolveGitExecutable } = await import("../app-server/git-executable");
-
-    await expect(resolveGitExecutable()).rejects.toThrow("Git executable unavailable");
-
-    failAll = false;
-
-    await expect(resolveGitExecutable()).resolves.toBe("/opt/homebrew/bin/git");
-  });
-
-  it.skipIf(process.platform === "win32")("selects the configured git and keeps the discovered source label", async () => {
-    const missingError = new Error("missing") as NodeJS.ErrnoException;
-    missingError.code = "ENOENT";
-    accessMock.mockImplementation(async (candidate: string) => {
-      if (candidate === "/usr/bin/git" || candidate === "/opt/homebrew/bin/git") {
-        return undefined;
-      }
-      throw missingError;
-    });
-    execFileMock.mockImplementation(
-      (
-        command: string,
-        _args: string[],
-        _options: Record<string, unknown>,
-        callback: (
-          error: Error | null,
-          result?: { stdout: string; stderr?: string },
-        ) => void,
-      ) => {
-        if (command === "/usr/bin/git") {
-          callback(null, { stdout: "git version 2.50.1\n" });
-          return;
-        }
-        if (command === "/opt/homebrew/bin/git") {
-          callback(null, { stdout: "git version 2.54.0\n" });
-          return;
-        }
-        callback(missingError);
-      },
-    );
-    const { discoverGitCommands } = await import("../settings/git-discovery");
-
-    // Without a preference, first-executable wins and Homebrew is ahead of
-    // Apple in the candidate order — the exact behaviour that made Apple's
-    // git unselectable.
-    const env = { PATH: "/nowhere" };
-    const unset = await discoverGitCommands({ env });
-    expect(unset.selectedCommand).toBe("/opt/homebrew/bin/git");
-
-    const configured = await discoverGitCommands({
-      configuredCommand: "/usr/bin/git",
-      env,
-    });
-
-    expect(configured.selectedCommand).toBe("/usr/bin/git");
-    // The row still reads "Apple", not "config": a configured path that is
-    // also a well-known location keeps the source that names it, and no
-    // duplicate row is added for it.
-    expect(configured.selectedSource).toBe("xcode");
-    expect(
-      configured.candidates.filter(
-        (candidate) => candidate.command === "/usr/bin/git",
-      ),
-    ).toHaveLength(1);
-  });
-
-  it.skipIf(process.platform === "win32")("adds a config candidate for a path discovery would never find", async () => {
-    const missingError = new Error("missing") as NodeJS.ErrnoException;
-    missingError.code = "ENOENT";
-    accessMock.mockImplementation(async (candidate: string) => {
-      if (candidate === "/opt/custom/git" || candidate === "/opt/homebrew/bin/git") {
-        return undefined;
-      }
-      throw missingError;
-    });
-    execFileMock.mockImplementation(
-      (
-        command: string,
-        _args: string[],
-        _options: Record<string, unknown>,
-        callback: (
-          error: Error | null,
-          result?: { stdout: string; stderr?: string },
-        ) => void,
-      ) => {
-        if (command === "/opt/custom/git" || command === "/opt/homebrew/bin/git") {
-          callback(null, { stdout: "git version 2.51.0\n" });
-          return;
-        }
-        callback(missingError);
-      },
-    );
-    const { discoverGitCommands } = await import("../settings/git-discovery");
-
-    const snapshot = await discoverGitCommands({
-      configuredCommand: "/opt/custom/git",
-      env: { PATH: "/usr/bin" },
-    });
-
-    expect(snapshot.selectedCommand).toBe("/opt/custom/git");
-    expect(snapshot.selectedSource).toBe("config");
-  });
-
-  it.skipIf(process.platform === "win32")("keeps the env override ahead of the configured path", async () => {
-    const missingError = new Error("missing") as NodeJS.ErrnoException;
-    missingError.code = "ENOENT";
-    accessMock.mockImplementation(async () => undefined);
-    execFileMock.mockImplementation(
-      (
-        command: string,
-        _args: string[],
-        _options: Record<string, unknown>,
-        callback: (
-          error: Error | null,
-          result?: { stdout: string; stderr?: string },
-        ) => void,
-      ) => {
-        if (command === "/opt/env/git" || command === "/opt/custom/git") {
-          callback(null, { stdout: "git version 2.51.0\n" });
-          return;
-        }
-        callback(missingError);
-      },
-    );
-    const { discoverGitCommands } = await import("../settings/git-discovery");
-
-    const snapshot = await discoverGitCommands({
-      configuredCommand: "/opt/custom/git",
-      env: { PATH: "/usr/bin", PWRAGENT_GIT_PATH: "/opt/env/git" },
-    });
-
-    expect(snapshot.selectedCommand).toBe("/opt/env/git");
-    expect(snapshot.selectedSource).toBe("env");
-  });
-
-  it.skipIf(process.platform === "win32")("resolves the app-server git executable through the configured path", async () => {
-    const missingError = new Error("missing") as NodeJS.ErrnoException;
-    missingError.code = "ENOENT";
-    execFileMock.mockImplementation(
-      (
-        command: string,
-        _args: string[],
-        _options: Record<string, unknown>,
-        callback: (
-          error: Error | null,
-          result?: { stdout: string; stderr?: string },
-        ) => void,
-      ) => {
-        if (command === "/opt/custom/git" || command === "/opt/homebrew/bin/git") {
-          callback(null, { stdout: "git version 2.51.0\n" });
-          return;
-        }
-        callback(missingError);
-      },
-    );
-    const { setGitCommandResolver } = await import("../git-command");
-    const { resolveGitExecutable } = await import("../app-server/git-executable");
-
-    // Without a preference the first working well-known candidate wins.
-    await expect(resolveGitExecutable()).resolves.toBe("/opt/homebrew/bin/git");
-
-    // With one, the same resolver every git spawn shares picks it up — the
-    // step that turns the Settings picker from a label into a selection.
-    setGitCommandResolver(() => "/opt/custom/git");
+  it("reports a missing packaged runtime without selecting an installed Git", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-missing-git-"));
     try {
-      await expect(resolveGitExecutable()).resolves.toBe("/opt/custom/git");
+      configureBundledGit(root);
+      const result = await discoverGitCommands({ env: { ...process.env, PWRAGENT_GIT_PATH: undefined } });
+      expect(result.candidates.find((candidate) => candidate.selected)).toMatchObject({ source: "bundled", executable: false });
+      expect(result.selectedCommand).toContain(root);
     } finally {
-      setGitCommandResolver(undefined);
+      configureBundledGit();
+      await rm(root, { force: true, recursive: true });
     }
+  });
+
+  it("validates Git and LFS for a manually selected executable", async () => {
+    expect(await validateGitCommand({ command: bundledGitExecutable() })).toMatchObject({
+      executable: true, version: expect.any(String), lfsVersion: expect.any(String),
+    });
+    expect(await validateGitCommand({ command: "/missing/manual/git" })).toMatchObject({ executable: false });
+  });
+
+  it("parses both upstream and Windows Git versions", () => {
+    expect(parseGitVersionOutput("git version 2.53.0\n")).toBe("2.53.0");
+    expect(parseGitVersionOutput("git version 2.53.0.windows.4\n")).toBe("2.53.0.windows.4");
   });
 });

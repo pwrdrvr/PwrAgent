@@ -8,7 +8,10 @@ import type {
   DesktopSettingsSnapshot,
   GhStatus,
 } from "@pwragent/shared";
-import { isValidatedDiscoveryCandidate } from "@pwragent/shared";
+import {
+  GIT_LFS_UNAVAILABLE_REASON,
+  isValidatedDiscoveryCandidate,
+} from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { copyText } from "../../lib/copy-text";
 import { GitHubIcon, GitLabIcon, GitIcon } from "../../icons";
@@ -71,7 +74,14 @@ export function GitToolSection(props: {
   const visibleCandidates = discovery.candidates.filter(
     (candidate) =>
       candidate.executable
+      // The bundled row is the default and the only way back to it.
+      || candidate.source === "bundled"
+      || candidate.selected
+      // Installed but blocked on something the operator can fix. The bundle
+      // always works, so without these a Homebrew git lacking git-lfs would
+      // vanish from the list with nothing saying why.
       || isXcodeLicenseCandidate(candidate)
+      || isGitLfsUnavailableCandidate(candidate)
       // The operator's own choice always stays on screen. Filtering it out
       // with the rest of the broken candidates is how a selection that has
       // stopped working becomes invisible: the pane would show some other
@@ -80,13 +90,22 @@ export function GitToolSection(props: {
       || candidate.command === configuredCommand
       || !hasWorkingGit,
   );
-  const xcodeLicenseCandidate = discovery.candidates.find((candidate) =>
-    isXcodeLicenseCandidate(candidate)
-  );
-  const pill = describeGitStatusPill(discovery, xcodeLicenseCandidate);
-  // Mirrors the gh field: the pill says how the choice was *made*, not which
+  // Only the git PwrAgent runs can make the license its problem. An
+  // unselected Apple git says so on its own row.
+  const xcodeLicenseCandidate =
+    selected && isXcodeLicenseCandidate(selected) ? selected : undefined;
+  const selectedFailure =
+    selected && !selected.executable && !xcodeLicenseCandidate
+      ? describeSelectedGitFailure(selected)
+      : undefined;
+  // Only the bundle carries its own Git LFS, so only it can set Git LFS up in
+  // a repository whose owner has no git-lfs of their own.
+  const lfsMissingOutsidePwrAgent =
+    selected?.source === "bundled" && discovery.installedLfs === false;
+  const pill = describeGitStatusPill(describeGitCommandState(discovery));
+  // Mirrors the gh field: the tag says how the choice was *made*, not which
   // location won. Where it came from is already the row's title.
-  const sourceLabel = gitPath.source === "default" ? "auto" : gitPath.source;
+  const sourceLabel = gitPath.source === "default" ? "bundled" : gitPath.source;
   const signatures = useCodeSignatures(
     desktopApi,
     visibleCandidates.map((candidate) => candidate.command),
@@ -123,6 +142,12 @@ export function GitToolSection(props: {
     await refresh();
   };
 
+  const selectCandidate = (candidate: DesktopGitDiscoveryCandidate): void => {
+    // Choosing the bundle clears the override rather than pinning the
+    // bundle's path, which moves whenever the app does.
+    void saveGitPath(candidate.source === "bundled" ? "" : candidate.command);
+  };
+
   return (
     <SettingsSection
       eyebrow="Git"
@@ -130,8 +155,9 @@ export function GitToolSection(props: {
       title="Git"
       description={
         <>
-          PwrAgent uses <code>git</code> to inspect repositories and create
-          worktrees for new threads.
+          PwrAgent uses its bundled <code>git</code> and Git LFS to inspect
+          repositories and create worktrees for new threads. Pick an installed
+          git below to use it instead.
         </>
       }
     >
@@ -153,6 +179,23 @@ export function GitToolSection(props: {
               {selected?.version ? (
                 <span className="settings-pathrow__path">
                   Version: <code>{selected.version}</code>
+                </span>
+              ) : null}
+              {selected?.lfsVersion ? (
+                <span className="settings-pathrow__path">
+                  Git LFS: <code>{selected.lfsVersion}</code>
+                </span>
+              ) : null}
+              {selectedFailure ? (
+                <span className="settings-pathrow__path settings-gh-status__reason settings-error">
+                  {selectedFailure}
+                </span>
+              ) : null}
+              {lfsMissingOutsidePwrAgent ? (
+                <span className="settings-pathrow__path settings-gh-status__reason settings-warning">
+                  Git LFS is not installed outside PwrAgent. In a repository
+                  where PwrAgent sets Git LFS up, <code>git push</code> from
+                  your own terminal fails until you install Git LFS.
                 </span>
               ) : null}
               {xcodeLicenseCandidate ? (
@@ -200,7 +243,7 @@ export function GitToolSection(props: {
           label="Available paths"
           sub={
             hasWorkingGit
-              ? "Detected on this machine. Pick the one PwrAgent should run."
+              ? "Bundled with PwrAgent or found on this machine. An installed git needs Git LFS to be selectable."
               : "No working git executable was found. These are the paths PwrAgent checked."
           }
           source={envForced ? "env override active" : undefined}
@@ -220,7 +263,7 @@ export function GitToolSection(props: {
                     candidate={candidate}
                     disabled={props.saving || loading || envForced}
                     signature={signatures.get(candidate.command)}
-                    onSelect={(command) => void saveGitPath(command)}
+                    onSelect={() => selectCandidate(candidate)}
                   />
                 ))
               )}
@@ -233,23 +276,6 @@ export function GitToolSection(props: {
             </div>
           }
         />
-        {gitPath.value.trim() && !envForced ? (
-          <SettingsField
-            label="Discovery mode"
-            sub="Clear the override and use the first discovered git candidate."
-            source="config"
-            control={
-              <SettingsPathRow
-                title="Auto discovery"
-                chips={[{ label: "default", tone: "muted" }]}
-                selected={false}
-                disabled={props.saving || loading}
-                useLabel="Auto"
-                onUse={() => void saveGitPath("")}
-              />
-            }
-          />
-        ) : null}
         <SettingsField
           label="Manual path"
           sub="Pick a git executable outside the discovered locations."
@@ -667,11 +693,12 @@ function GitCandidateRow(props: {
   candidate: DesktopGitDiscoveryCandidate;
   disabled?: boolean;
   signature?: DesktopCodeSignature;
-  onSelect: (command: string) => void;
+  onSelect: () => void;
 }) {
   const candidate = props.candidate;
   const failureLabel = describeCommandDiscoveryFailure(candidate.failureReason);
   const source = describeGitCandidateSource(candidate.source);
+  const xcodeLicense = isXcodeLicenseCandidate(candidate);
   const chips: SettingsPathRowChip[] = [];
   const signatureChip = codeSignatureChip(props.signature);
   if (signatureChip) {
@@ -681,7 +708,12 @@ function GitCandidateRow(props: {
     chips.push({
       key: "state",
       label: failureLabel ?? "Unavailable",
-      tone: isXcodeLicenseCandidate(candidate) ? "warn" : "err",
+      tone: xcodeLicense ? "warn" : "err",
+      title: xcodeLicense
+        ? `Run ${XCODE_LICENSE_REMEDIATION_COMMAND} in Terminal to accept the Xcode license.`
+        : isGitLfsUnavailableCandidate(candidate)
+          ? "Install Git LFS for this git to select it."
+          : undefined,
     });
   }
 
@@ -693,7 +725,11 @@ function GitCandidateRow(props: {
     <SettingsPathRow
       icon={<GitIcon size={18} />}
       title={source}
-      meta={candidate.version}
+      meta={
+        candidate.version && candidate.lfsVersion
+          ? `${candidate.version} · LFS ${candidate.lfsVersion}`
+          : candidate.version
+      }
       path={detail ?? candidate.command}
       pathIsDetail={Boolean(detail)}
       chips={chips}
@@ -701,9 +737,7 @@ function GitCandidateRow(props: {
       selectedLabel="In use"
       selectLabel={`Use ${source} git at ${candidate.command}`}
       disabled={props.disabled || !candidate.executable}
-      onSelect={
-        candidate.executable ? () => props.onSelect(candidate.command) : undefined
-      }
+      onSelect={candidate.executable ? props.onSelect : undefined}
     />
   );
 }
@@ -790,22 +824,45 @@ function needsTerminalQuoting(value: string): boolean {
   return !/^[A-Za-z0-9_@%+=:,./-]+$/.test(value);
 }
 
-function describeGitStatusPill(
+/**
+ * The state of the git PwrAgent will run. The Git card's pill and the
+ * settings nav row both read this, so they cannot disagree: when each
+ * derived its own, a license-blocked Apple git nobody had selected turned
+ * the pill amber over a green nav dot.
+ */
+export type GitCommandState = "available" | "xcode-license" | "unavailable";
+
+export function describeGitCommandState(
   discovery: DesktopSettingsSnapshot["applications"]["git"]["discovery"],
-  xcodeLicenseCandidate?: DesktopGitDiscoveryCandidate,
-): {
+): GitCommandState {
+  const selected = discovery.candidates.find((candidate) => candidate.selected);
+  if (selected?.executable) return "available";
+  if (selected && isXcodeLicenseCandidate(selected)) return "xcode-license";
+  return "unavailable";
+}
+
+function describeGitStatusPill(state: GitCommandState): {
   tone: "ok" | "warn" | "bad" | "neutral";
   label: string;
 } {
-  if (discovery.selectedCommand) {
-    return xcodeLicenseCandidate
-      ? { tone: "warn", label: "Available" }
-      : { tone: "ok", label: "Available" };
-  }
-  if (xcodeLicenseCandidate) {
+  if (state === "available") return { tone: "ok", label: "Available" };
+  if (state === "xcode-license") {
     return { tone: "bad", label: "Xcode license required" };
   }
   return { tone: "bad", label: "Not available" };
+}
+
+/**
+ * Status-line prose for a selected git that cannot run: the raw reason when
+ * it is a sentence, the chip's label when it is only a classified token.
+ * Printing the token raw put `not_found` under the pill.
+ */
+function describeSelectedGitFailure(
+  candidate: DesktopGitDiscoveryCandidate,
+): string | undefined {
+  const reason = candidate.failureReason ?? candidate.versionFailureReason;
+  return sharedCommandDiscoveryFailureDetail(reason)
+    ?? describeCommandDiscoveryFailure(reason);
 }
 
 function describeGhCandidateSource(
@@ -824,6 +881,7 @@ function describeGhCandidateSource(
 function describeGitCandidateSource(
   source: DesktopGitDiscoveryCandidate["source"],
 ): string {
+  if (source === "bundled") return "Bundled";
   if (source === "xcode") return "Apple";
   if (source === "homebrew") return "Homebrew";
   if (source === "user") return "User bin";
@@ -833,19 +891,27 @@ function describeGitCandidateSource(
   return source;
 }
 
-function describeXcodeLicenseFailure(reason: string): string | undefined {
-  return isXcodeLicenseFailure(reason) ? "Xcode license" : undefined;
+function describeGitFailure(reason: string): string | undefined {
+  if (isXcodeLicenseFailure(reason)) return "Xcode license";
+  if (reason === GIT_LFS_UNAVAILABLE_REASON) return "LFS missing";
+  return undefined;
 }
 
 function describeCommandDiscoveryFailure(reason?: string): string | undefined {
-  return describeSharedCommandDiscoveryFailure(reason, describeXcodeLicenseFailure);
+  return describeSharedCommandDiscoveryFailure(reason, describeGitFailure);
 }
 
 function commandDiscoveryFailureDetail(reason?: string): string | undefined {
-  return sharedCommandDiscoveryFailureDetail(reason, describeXcodeLicenseFailure);
+  return sharedCommandDiscoveryFailureDetail(reason, describeGitFailure);
 }
 
-export function isXcodeLicenseCandidate(
+function isGitLfsUnavailableCandidate(
+  candidate: DesktopGitDiscoveryCandidate,
+): boolean {
+  return candidate.failureReason === GIT_LFS_UNAVAILABLE_REASON;
+}
+
+function isXcodeLicenseCandidate(
   candidate: DesktopGitDiscoveryCandidate,
 ): boolean {
   return candidate.command === "/usr/bin/git"

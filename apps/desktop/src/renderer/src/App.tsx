@@ -152,6 +152,7 @@ import {
 } from "./features/notifications/GrokCliUpdateNotice";
 import { buildGithubPrSamlEnforcementNotice } from "./features/notifications/github-pr-saml-notice";
 import { buildManagedGrokSignatureRejectedNotice } from "./features/notifications/managed-grok-signature-notice";
+import { buildBundledGitLfsNotice } from "./features/notifications/bundled-git-lfs-notice";
 import { buildGithubPrAuthenticationNotice } from "./features/notifications/github-pr-authentication-notice";
 import {
   buildToolAccountingNotice,
@@ -171,6 +172,7 @@ import {
   buildHotCpuProfileHandoffMessage,
   formatHotCpuProfileTriggerSummary,
 } from "../../shared/hot-cpu-profile";
+import type { BundledGitLfsAdvisoryEvent } from "../../shared/bundled-git-lfs";
 import {
   githubPrAccessTargetKey,
   type GithubPrAuthenticationFailureEvent,
@@ -541,6 +543,8 @@ function DesktopAppShell(props: {
     useState<GithubPrSamlEnforcementEvent[]>([]);
   const [githubPrAuthenticationFailure, setGithubPrAuthenticationFailure] =
     useState<GithubPrAuthenticationFailureEvent>();
+  const [bundledGitLfsAdvisory, setBundledGitLfsAdvisory] =
+    useState<BundledGitLfsAdvisoryEvent>();
   // Latest navigation identity, mirrored into refs so the backend-error toast
   // subscription can resolve a thread's title and configured project label
   // without re-subscribing on every navigation change. Kept fresh by an
@@ -689,6 +693,8 @@ function DesktopAppShell(props: {
       prefix: "github-pr-authentication-failure",
     });
     setGithubPrAuthenticationFailure(undefined);
+    dispatchAppNotice({ type: "dismiss-prefix", prefix: "bundled-git-lfs-advisory" });
+    setBundledGitLfsAdvisory(undefined);
     openSettingsSection("git");
   }, [dismissGithubPrSamlNotice, openSettingsSection]);
   const githubPrSamlNotice = useMemo(() => {
@@ -733,6 +739,24 @@ function DesktopAppShell(props: {
     }
   }, [githubPrAuthenticationNotice, showAppNotice]);
 
+  const dismissBundledGitLfsNotice = useCallback(() => {
+    dispatchAppNotice({ type: "dismiss-prefix", prefix: "bundled-git-lfs-advisory" });
+    setBundledGitLfsAdvisory(undefined);
+  }, []);
+  const bundledGitLfsNotice = useMemo(() => {
+    return bundledGitLfsAdvisory
+      ? buildBundledGitLfsNotice({
+          event: bundledGitLfsAdvisory,
+          onDismiss: dismissBundledGitLfsNotice,
+          onOpenGitSettings: openGitSettings,
+        })
+      : undefined;
+  }, [bundledGitLfsAdvisory, dismissBundledGitLfsNotice, openGitSettings]);
+
+  useEffect(() => {
+    if (bundledGitLfsNotice) showAppNotice(bundledGitLfsNotice);
+  }, [bundledGitLfsNotice, showAppNotice]);
+
   const syncMessagingErrorNotice = useCallback((
     platform: MessagingChannelKind,
     notice: AppNoticeToastNotice | undefined,
@@ -776,6 +800,14 @@ function DesktopAppShell(props: {
   useEffect(() => {
     return desktopApi?.onGithubPrAuthenticationFailure?.((event) => {
       setGithubPrAuthenticationFailure(event);
+    });
+  }, [desktopApi]);
+
+  // Raised where it happens rather than in Settings: the operator's own shell
+  // is where the push fails, and nothing takes them past Settings first.
+  useEffect(() => {
+    return desktopApi?.onBundledGitLfsAdvisory?.((event) => {
+      setBundledGitLfsAdvisory(event);
     });
   }, [desktopApi]);
 

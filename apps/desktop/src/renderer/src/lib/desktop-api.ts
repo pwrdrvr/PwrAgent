@@ -19,6 +19,7 @@ import type {
 } from "../../../shared/codex-protocol-capture";
 import type { HotCpuProfileCapturedEvent } from "../../../shared/hot-cpu-profile";
 import type { ManagedGrokSignatureRejectedEvent } from "../../../shared/managed-grok-signature";
+import type { BundledGitLfsAdvisoryEvent } from "../../../shared/bundled-git-lfs";
 import type {
   GithubPrAuthenticationFailureEvent,
   GithubPrSamlEnforcementEvent,
@@ -1382,6 +1383,9 @@ export type DesktopApi = {
   ) => () => void;
   onGithubPrAuthenticationFailure?: (
     callback: (event: GithubPrAuthenticationFailureEvent) => void,
+  ) => () => void;
+  onBundledGitLfsAdvisory?: (
+    callback: (event: BundledGitLfsAdvisoryEvent) => void,
   ) => () => void;
   onManagedGrokSignatureRejected?: (
     callback: (event: ManagedGrokSignatureRejectedEvent) => void,

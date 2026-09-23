@@ -1,3 +1,4 @@
+import { setGitCommandResolver } from "../git-command";
 import { codexAuthState } from "../codex-auth-state";
 import { app, safeStorage } from "electron";
 import { DesktopSettingsService } from "./desktop-settings-service";
@@ -18,7 +19,6 @@ import {
   getDesktopConfigStore,
 } from "./config-store/desktop-config-store-singleton";
 import { resolveDesktopConfigPath } from "./desktop-config";
-import { setGitCommandResolver } from "../git-command";
 
 let unsubscribeAuth: (() => void) | undefined;
 let desktopSettingsService: DesktopSettingsService | undefined;
@@ -80,17 +80,13 @@ export function getDesktopSettingsService(): DesktopSettingsService {
         }
       },
     });
-    // Every main-process git spawn resolves through this. Installed here
-    // rather than in `index.ts` so the wiring cannot be missed by a code
-    // path that reaches settings without going through app startup — and
-    // so it is torn down with the service in tests.
+    const service = desktopSettingsService;
+    setGitCommandResolver(() => service.resolveGitCommandPreference());
     unsubscribeAuth = codexAuthState.subscribe(() => {
       for (const webContents of subscribersForChannel(SETTINGS_RUNTIME_CHANGED_EVENT_CHANNEL)) {
         webContents.send(SETTINGS_RUNTIME_CHANGED_EVENT_CHANNEL);
       }
     });
-    const service = desktopSettingsService;
-    setGitCommandResolver(() => service.resolveGitCommandPreference());
     configStore.subscribe(["general"], ({ values }) => {
       broadcastAppearanceChange(values.general.appearance);
     });

@@ -1,3 +1,4 @@
+import { subscribeBundledGitLfsAdvisory } from "./bundled-git-lfs-advisory";
 import { subscribeGithubPrAuthenticationFailure } from "./github-pr-authentication-notice";
 import { unwrapNavigationRead } from "../shared/navigation-ipc-result";
 import type { NavigationAttentionViewReleaseRequest } from "@pwragent/shared";
@@ -484,6 +485,7 @@ import type {
 } from "../shared/image-normalization";
 import type { HotCpuProfileCapturedEvent } from "../shared/hot-cpu-profile";
 import type { ManagedGrokSignatureRejectedEvent } from "../shared/managed-grok-signature";
+import type { BundledGitLfsAdvisoryEvent } from "../shared/bundled-git-lfs";
 import type {
   GithubPrAuthenticationFailureEvent,
   GithubPrSamlEnforcementEvent,
@@ -2563,6 +2565,11 @@ const desktopApi = Object.freeze({
     callback: (event: GithubPrAuthenticationFailureEvent) => void,
   ): (() => void) => {
     return subscribeGithubPrAuthenticationFailure(ipcRenderer, callback);
+  },
+  onBundledGitLfsAdvisory: (
+    callback: (event: BundledGitLfsAdvisoryEvent) => void,
+  ): (() => void) => {
+    return subscribeBundledGitLfsAdvisory(ipcRenderer, callback);
   },
   onAppearanceChanged: (
     callback: (appearance: {

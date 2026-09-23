@@ -1,13 +1,18 @@
 import os from "node:os";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { bundledGitEnvironment, bundledGitExecutable, installedGitLfs, validateBundledGit } from "../bundled-git";
+import { customGitEnvironment, GIT_COMMAND_ENV } from "../git-runtime";
+export { GIT_COMMAND_ENV } from "../git-runtime";
 import path from "node:path";
-import type {
-  DesktopGitCandidateSource,
-  DesktopGitDiscoveryCandidate,
-  DesktopGitDiscoverySnapshot,
+import {
+  GIT_LFS_UNAVAILABLE_REASON,
+  type DesktopGitCandidateSource,
+  type DesktopGitDiscoveryCandidate,
+  type DesktopGitDiscoverySnapshot,
 } from "@pwragent/shared";
 import { buildCommandDiscoveryCandidate } from "./command-discovery";
 
-export const GIT_COMMAND_ENV = "PWRAGENT_GIT_PATH";
 const XCODE_LICENSE_COMMAND = "sudo xcodebuild -license";
 
 export function parseGitVersionOutput(output: string): string | undefined {
@@ -49,10 +54,11 @@ async function buildGitCandidate(
     platform?: NodeJS.Platform;
   },
 ): Promise<DesktopGitDiscoveryCandidate | undefined> {
+  const probeEnv = input.source === "bundled" ? bundledGitEnvironment(options.env) : customGitEnvironment(options.env, input.command ?? "git");
   const candidate = await buildCommandDiscoveryCandidate<DesktopGitCandidateSource>(
     input,
     {
-      env: options.env,
+      env: probeEnv,
       platform: options.platform,
       parseVersion: parseGitVersionOutput,
     },
@@ -62,7 +68,18 @@ async function buildGitCandidate(
   }
 
   if (candidate.version) {
-    return candidate;
+    try {
+      if (input.source === "bundled") await validateBundledGit();
+      const { stdout } = await promisify(execFile)(candidate.command, ["lfs", "version"], {
+        env: probeEnv, cwd: os.tmpdir(), timeout: 5000, maxBuffer: 64 * 1024,
+        encoding: "utf8", windowsHide: true,
+      });
+      const lfsVersion = stdout.match(/git-lfs\/([^\s]+)/)?.[1];
+      if (!lfsVersion) throw new Error("Git LFS did not report a version.");
+      return { ...candidate, lfsVersion };
+    } catch {
+      return { ...candidate, executable: false, failureReason: GIT_LFS_UNAVAILABLE_REASON };
+    }
   }
 
   const failureReason =
@@ -105,42 +122,40 @@ export async function discoverGitCommands(params?: {
   }): Promise<DesktopGitDiscoveryCandidate | undefined> =>
     buildGitCandidate(input, { env, platform: params?.platform });
 
-  const discovered = await Promise.all(gitCandidateInputs(env).map(build));
+  const inputs = gitCandidateInputs(env);
+  const [configured, ...discovered] = await Promise.all([
+    build({ command: configuredCommand, source: "config" }),
+    build(inputs[0]),
+    build({ command: bundledGitExecutable(), source: "bundled" }),
+    ...inputs.slice(1).map(build),
+  ]);
   // A configured path that is already one of the well-known locations
   // stays under the source that names it, so the row keeps reading
-  // "Apple Git" rather than the far less useful "config". The extra
+  // "Homebrew" rather than the far less useful "Custom path". The extra
   // candidate exists only for a path discovery would never have found.
-  const configured = configuredCommand
-    ? await build({ command: configuredCommand, source: "config" })
-    : undefined;
   const configuredIsNew =
     configured
     && !discovered.some((candidate) => candidate?.command === configured.command);
-
   const candidates = dedupeGitCandidates([
     ...discovered.slice(0, 1),
     ...(configuredIsNew ? [configured] : []),
     ...discovered.slice(1),
   ]);
-
-  const selected =
-    candidates.find((candidate) => candidate.source === "env" && candidate.executable)
-    ?? (configured
-      ? candidates.find(
-          (candidate) =>
-            candidate.command === configured.command && candidate.executable,
-        )
-      : undefined)
-    ?? candidates.find((candidate) => candidate.executable);
-
-  if (selected) {
-    selected.selected = true;
-  }
-
+  // The candidates' own commands, because discovery resolves a bare `git`
+  // against PATH: comparing the raw setting would match no row and leave the
+  // pane reporting no Git at all while every spawn ran that one.
+  const requested = discovered[0]?.command || configured?.command || bundledGitExecutable();
+  // An explicit but broken selection remains selected; never silently switch.
+  const selected = candidates.find((candidate) => candidate.command === requested)
+    ?? candidates.find((candidate) => candidate.source === (env[GIT_COMMAND_ENV]?.trim() ? "env" : configuredCommand ? "config" : "bundled"));
+  if (selected) selected.selected = true;
   return {
     selectedCommand: selected?.command,
     selectedSource: selected?.source,
     candidates,
+    // Settings warns when the bundle set Git LFS up for a repository that
+    // the operator's own Git then cannot push.
+    installedLfs: Boolean(installedGitLfs(env)),
   };
 }
 

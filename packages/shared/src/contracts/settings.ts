@@ -883,6 +883,7 @@ export type DesktopGlabDiscoverySnapshot = {
 };
 
 export type DesktopGitCandidateSource =
+  | "bundled"
   | "env"
   | "config"
   | "path"
@@ -890,12 +891,21 @@ export type DesktopGitCandidateSource =
   | "xcode"
   | "user";
 
+/**
+ * `failureReason` for a git that runs but has no working Git LFS. The main
+ * process writes it and the renderer matches it exactly, so Settings can
+ * label the row instead of reporting a generic launch failure.
+ */
+export const GIT_LFS_UNAVAILABLE_REASON =
+  "Git LFS is unavailable for this Git installation.";
+
 export type DesktopGitDiscoveryCandidate = {
   command: string;
   source: DesktopGitCandidateSource;
   executable: boolean;
   selected: boolean;
   version?: string;
+  lfsVersion?: string;
   versionFailureReason?: string;
   failureReason?: string;
 };
@@ -905,6 +915,12 @@ export type DesktopGitDiscoverySnapshot = {
   selectedSource?: DesktopGitCandidateSource;
   candidates: DesktopGitDiscoveryCandidate[];
   error?: string;
+  /**
+   * Whether the operator's own `PATH` carries a git-lfs, which is the test
+   * Git LFS hooks themselves run. False means Git outside PwrAgent cannot
+   * push a repository the bundled runtime set Git LFS up in.
+   */
+  installedLfs?: boolean;
 };
 
 export type DesktopApplicationKind = "editor" | "terminal";

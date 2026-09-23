@@ -17284,6 +17284,11 @@ a.button {
   color: var(--danger-text);
 }
 
+/* An advisory, not a failure: the same accent the warn pill carries. */
+.settings-warning {
+  color: var(--accent-bright);
+}
+
 .thread-view__launchpad-composer {
   display: flex;
   flex: 0 0 auto;

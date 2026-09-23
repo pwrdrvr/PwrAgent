@@ -1,3 +1,4 @@
+import { bundledGitEnvironment } from "../bundled-git";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
@@ -1829,7 +1830,7 @@ describe("settings ipc", () => {
             qwen: { overridePath: "/opt/pwragent/bin/qwen" },
           },
           env: expect.objectContaining({
-            PATH: "/opt/homebrew/bin:/usr/bin",
+            PATH: bundledGitEnvironment({ PATH: "/opt/homebrew/bin:/usr/bin" }).PATH,
           }),
         }),
       );

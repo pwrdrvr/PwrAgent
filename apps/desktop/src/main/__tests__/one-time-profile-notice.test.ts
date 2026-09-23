@@ -2,9 +2,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { GithubPrAuthenticationNotice } from "../pr-status/github-pr-authentication-notice";
+import { OneTimeProfileNotice } from "../notices/one-time-profile-notice";
 
-describe("GithubPrAuthenticationNotice", () => {
+describe("OneTimeProfileNotice", () => {
   let root: string;
   let marker: string;
 
@@ -20,13 +20,13 @@ describe("GithubPrAuthenticationNotice", () => {
   it("delivers once to subscribed windows and stays suppressed across restarts", () => {
     const firstWindow = vi.fn();
     const secondWindow = vi.fn();
-    const notice = new GithubPrAuthenticationNotice(marker);
+    const notice = new OneTimeProfileNotice(marker);
     notice.publish([firstWindow, secondWindow]);
     notice.acknowledge();
     for (let poll = 0; poll < 20; poll += 1) {
       notice.publish([firstWindow, secondWindow]);
     }
-    new GithubPrAuthenticationNotice(marker).publish([firstWindow]);
+    new OneTimeProfileNotice(marker).publish([firstWindow]);
 
     expect(firstWindow).toHaveBeenCalledTimes(1);
     expect(secondWindow).toHaveBeenCalledTimes(1);
@@ -35,7 +35,7 @@ describe("GithubPrAuthenticationNotice", () => {
 
   it("does not consume the notice before a live window subscribes", () => {
     const deliver = vi.fn();
-    const notice = new GithubPrAuthenticationNotice(marker);
+    const notice = new OneTimeProfileNotice(marker);
     notice.publish([]);
     expect(fs.existsSync(marker)).toBe(false);
     notice.publish([deliver]);
@@ -43,25 +43,25 @@ describe("GithubPrAuthenticationNotice", () => {
   });
 
   it("deduplicates existing instances sharing a profile but keeps profiles independent", () => {
-    const first = new GithubPrAuthenticationNotice(marker);
-    const second = new GithubPrAuthenticationNotice(marker);
+    const first = new OneTimeProfileNotice(marker);
+    const second = new OneTimeProfileNotice(marker);
     const deliver = vi.fn();
     first.publish([deliver]);
     first.acknowledge();
     second.publish([deliver]);
     expect(deliver).toHaveBeenCalledTimes(1);
-    new GithubPrAuthenticationNotice(path.join(root, "other", "notice")).publish([deliver]);
+    new OneTimeProfileNotice(path.join(root, "other", "notice")).publish([deliver]);
     expect(deliver).toHaveBeenCalledTimes(2);
   });
 
   it("retries events lost before the renderer listener mounts, including after restart", () => {
     const loadingWindowSend = vi.fn();
-    const notice = new GithubPrAuthenticationNotice(marker);
+    const notice = new OneTimeProfileNotice(marker);
     notice.publish([loadingWindowSend]);
     expect(loadingWindowSend).toHaveBeenCalledTimes(1);
     expect(fs.existsSync(marker)).toBe(false);
 
-    const restarted = new GithubPrAuthenticationNotice(marker);
+    const restarted = new OneTimeProfileNotice(marker);
     const receive = vi.fn(() => restarted.acknowledge());
     restarted.publish([receive]);
     restarted.publish([receive]);
@@ -70,7 +70,7 @@ describe("GithubPrAuthenticationNotice", () => {
   });
 
   it("retries an unacknowledged delivery on the next poll without restarting", () => {
-    const notice = new GithubPrAuthenticationNotice(marker);
+    const notice = new OneTimeProfileNotice(marker);
     notice.publish([vi.fn()]);
     const receive = vi.fn(() => notice.acknowledge());
     notice.publish([receive]);
@@ -79,7 +79,7 @@ describe("GithubPrAuthenticationNotice", () => {
   });
 
   it("does not consume an acknowledgement before publishing", () => {
-    new GithubPrAuthenticationNotice(marker).acknowledge();
+    new OneTimeProfileNotice(marker).acknowledge();
     expect(fs.existsSync(marker)).toBe(false);
   });
 
@@ -87,7 +87,7 @@ describe("GithubPrAuthenticationNotice", () => {
     fs.writeFileSync(path.join(root, "default"), "blocks directory creation");
     const onError = vi.fn();
     const deliver = vi.fn();
-    const notice = new GithubPrAuthenticationNotice(marker, onError);
+    const notice = new OneTimeProfileNotice(marker, onError);
     notice.publish([deliver]);
     notice.acknowledge();
     notice.publish([deliver]);
