@@ -550,6 +550,172 @@ describe("PluginsSettings", () => {
       ).toBeEnabled();
     });
   });
+
+  /**
+   * A Codex sign-in held the pane's one latch, like the managed card's did:
+   * every row went dim for as long as the browser took, and its Cancel was a
+   * banner at the top of the card.
+   */
+  it("waits on the Codex row that is signing in and leaves the others live", async () => {
+    type Emit = (event: {
+      notification: { method: string; params: Record<string, unknown> };
+    }) => void;
+    let emit: Emit | undefined;
+    const openSpy = vi.spyOn(window, "open").mockImplementation(() => null);
+    const startLogin = vi.fn(async (request: { name: string }) => ({
+      codexHome: CODEX_HOME,
+      name: request.name,
+      authorizationUrl: `https://example.test/${request.name}-login`,
+    }));
+    const desktopApi = {
+      ...createDesktopApi([
+        server({ name: "atlassian", authStatus: "notLoggedIn" }),
+        server({ name: "datadog", authStatus: "notLoggedIn" }),
+      ]),
+      startCodexMcpServerLogin: startLogin,
+      // Without it the managed card raises an alert of its own.
+      listMcpConnections: vi.fn().mockResolvedValue({ connections: [] }),
+      onAgentEvent: vi.fn((listener: Emit) => {
+        emit = listener;
+        return () => {};
+      }),
+    } as unknown as DesktopApi;
+    render(<PluginsSettings desktopApi={desktopApi} snapshot={createSnapshot()} />);
+
+    const datadog = within(
+      (await screen.findByText("datadog")).closest("article")!,
+    );
+    const atlassian = within(screen.getByText("atlassian").closest("article")!);
+    // Focused first, the way a keyboard press leaves it: the button it lands
+    // on is about to be replaced by the wait.
+    const signIn = datadog.getByRole("button", { name: "Sign in" });
+    signIn.focus();
+    fireEvent.click(signIn);
+
+    const cancel = await datadog.findByRole("button", {
+      name: "Cancel sign-in to datadog",
+    });
+    expect(datadog.getByRole("status")).toHaveTextContent("Waiting for sign-in…");
+    expect(
+      datadog.getByText("Finish signing in to datadog in your browser."),
+    ).toBeInTheDocument();
+    expect(cancel).toHaveFocus();
+    await waitFor(() => {
+      expect(openSpy).toHaveBeenCalledWith(
+        "https://example.test/datadog-login",
+        "_blank",
+        "noopener,noreferrer",
+      );
+    });
+    // Nothing else is held, and nothing is said anywhere but the row.
+    expect(atlassian.getByRole("button", { name: "Sign in" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Reload config" })).toBeEnabled();
+    expect(screen.queryByText(/sign-in to complete/)).not.toBeInTheDocument();
+
+    fireEvent.click(atlassian.getByRole("button", { name: "Sign in" }));
+    expect(
+      await atlassian.findByRole("button", { name: "Cancel sign-in to atlassian" }),
+    ).toBeInTheDocument();
+    expect(startLogin).toHaveBeenCalledTimes(2);
+
+    // A failure is written under the row it belongs to.
+    act(() => {
+      emit?.({
+        notification: {
+          method: "mcpServer/oauthLogin/completed",
+          params: { name: "atlassian", success: false, error: "access_denied" },
+        },
+      });
+    });
+    expect(await atlassian.findByRole("alert")).toHaveTextContent(
+      "Sign-in failed: access_denied",
+    );
+    expect(screen.getAllByRole("alert")).toHaveLength(1);
+    expect(datadog.getByRole("button", { name: "Cancel sign-in to datadog" }))
+      .toBeInTheDocument();
+
+    fireEvent.click(datadog.getByRole("button", { name: "Cancel sign-in to datadog" }));
+    expect(await datadog.findByRole("button", { name: "Sign in" })).toBeEnabled();
+    expect(datadog.queryByRole("status")).not.toBeInTheDocument();
+    openSpy.mockRestore();
+  });
+
+  /**
+   * Codex has no request to call a login off, and reports each one by server
+   * name alone. A login the operator walked away from keeps running until
+   * Codex times it out, and that timeout used to land on the retry: it ended
+   * a live sign-in and blamed it for a failure it never had.
+   */
+  it("does not blame a retry for the Codex sign-in the operator called off", async () => {
+    type Emit = (event: {
+      notification: { method: string; params: Record<string, unknown> };
+    }) => void;
+    let emit: Emit | undefined;
+    const openSpy = vi.spyOn(window, "open").mockImplementation(() => null);
+    const reload = vi.fn().mockResolvedValue({ codexHome: CODEX_HOME, queued: true });
+    const desktopApi = {
+      ...createDesktopApi([server({ name: "datadog", authStatus: "notLoggedIn" })]),
+      reloadCodexMcpServers: reload,
+      startCodexMcpServerLogin: vi.fn(async () => ({
+        codexHome: CODEX_HOME,
+        name: "datadog",
+        authorizationUrl: "https://example.test/datadog-login",
+      })),
+      onAgentEvent: vi.fn((listener: Emit) => {
+        emit = listener;
+        return () => {};
+      }),
+    } as unknown as DesktopApi;
+    render(<PluginsSettings desktopApi={desktopApi} snapshot={createSnapshot()} />);
+
+    const row = within((await screen.findByText("datadog")).closest("article")!);
+    fireEvent.click(row.getByRole("button", { name: "Sign in" }));
+    fireEvent.click(
+      await row.findByRole("button", { name: "Cancel sign-in to datadog" }),
+    );
+    fireEvent.click(await row.findByRole("button", { name: "Sign in" }));
+    await row.findByRole("button", { name: "Cancel sign-in to datadog" });
+    await waitFor(() => {
+      expect(desktopApi.startCodexMcpServerLogin).toHaveBeenCalledTimes(2);
+    });
+
+    // The called-off login times out first; the retry keeps waiting.
+    act(() => {
+      emit?.({
+        notification: {
+          method: "mcpServer/oauthLogin/completed",
+          params: { name: "datadog", success: false, error: "timed out" },
+        },
+      });
+    });
+    expect(row.queryByRole("alert")).not.toBeInTheDocument();
+    expect(row.getByRole("button", { name: "Cancel sign-in to datadog" }))
+      .toBeInTheDocument();
+
+    // And the retry's own success still finishes it.
+    act(() => {
+      emit?.({
+        notification: {
+          method: "mcpServer/oauthLogin/completed",
+          params: { name: "datadog", success: true },
+        },
+      });
+    });
+    expect(await row.findByRole("status")).toHaveTextContent("Starting…");
+    act(() => {
+      emit?.({
+        notification: {
+          method: "mcpServer/startupStatus/updated",
+          params: { name: "datadog", status: "ready" },
+        },
+      });
+    });
+    expect(await row.findByRole("button", { name: "Sign in" })).toBeEnabled();
+    expect(row.queryByRole("status")).not.toBeInTheDocument();
+    expect(row.queryByRole("alert")).not.toBeInTheDocument();
+    expect(reload).toHaveBeenCalledWith({ codexHome: CODEX_HOME });
+    openSpy.mockRestore();
+  });
   /**
    * An OAuth round trip leaves for the browser, and the pane cannot see what
    * happens there. The wait used to hold the card's one latch: every button on

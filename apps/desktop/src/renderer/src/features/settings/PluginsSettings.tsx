@@ -54,9 +54,15 @@ type ActionNotice = {
 };
 
 type PendingAction = {
-  kind: "login" | "reload" | "remove";
+  kind: "reload" | "remove";
   name: string;
 };
+
+/**
+ * Where a Codex server's sign-in is: waiting on the browser, or signed in and
+ * waiting for Codex to restart the server with the new credentials.
+ */
+type CodexSignInPhase = "browser" | "starting";
 
 type ConnectionPendingAction = {
   kind:
@@ -91,10 +97,25 @@ function editDraftRepointsServer(draft: ConnectionEditDraft): boolean {
   return draft.serverUrl.trim() !== draft.originalServerUrl.trim();
 }
 
-type StartupResult = {
-  status: "ready" | "failed" | "cancelled";
-  error?: string;
-};
+/** Take one from `key`'s count, dropping the key at zero. Returns the count before. */
+function releaseCount(counts: Map<string, number>, key: string): number {
+  const count = counts.get(key) ?? 0;
+  if (count > 1) counts.set(key, count - 1);
+  else counts.delete(key);
+  return count;
+}
+
+/** `current` with `key` set to `message`, or without `key` when there is none. */
+function withKeyedMessage(
+  current: Readonly<Record<string, string>>,
+  key: string,
+  message?: string,
+): Readonly<Record<string, string>> {
+  if (message !== undefined) return { ...current, [key]: message };
+  if (!(key in current)) return current;
+  const { [key]: _cleared, ...rest } = current;
+  return rest;
+}
 
 /**
  * The pane's two sections, by the ids the Settings nav deep-links to. Shared
@@ -204,12 +225,9 @@ export function PluginsSettings(props: {
   >({});
   const setAuthorizationError = useCallback(
     (connectionId: string, error?: string) => {
-      setAuthorizationErrors((current) => {
-        if (error !== undefined) return { ...current, [connectionId]: error };
-        if (!(connectionId in current)) return current;
-        const { [connectionId]: _cleared, ...rest } = current;
-        return rest;
-      });
+      setAuthorizationErrors((current) =>
+        withKeyedMessage(current, connectionId, error),
+      );
     },
     [],
   );
@@ -232,12 +250,51 @@ export function PluginsSettings(props: {
   );
   const [pendingAction, setPendingActionState] = useState<PendingAction>();
   const pendingActionRef = useRef<PendingAction | undefined>(undefined);
-  const startupWaiterRef = useRef<{
-    name: string;
-    resolve: (result: StartupResult | undefined) => void;
+  /**
+   * The Codex sign-ins in flight, by server name.
+   *
+   * These used to share `pendingAction` with Reload config and Remove, so one
+   * sign-in disabled every row in the card for as long as the browser took,
+   * with its Cancel in a banner at the top. Codex runs each
+   * `mcpServer/oauth/login` on its own and reports it by name, so they can
+   * wait side by side, each on its own row.
+   */
+  const codexSignInsRef = useRef(new Map<string, {
+    attempt: number;
+    phase: CodexSignInPhase;
+    timer?: number;
+  }>());
+  const codexSignInAttemptRef = useRef(0);
+  const [codexSignIns, setCodexSignIns] = useState<
+    Readonly<Record<string, CodexSignInPhase>>
+  >({});
+  const publishCodexSignIns = useCallback(() => {
+    setCodexSignIns(Object.fromEntries(
+      [...codexSignInsRef.current].map(([name, entry]) => [name, entry.phase]),
+    ));
+  }, []);
+  /**
+   * Codex logins started for each server that have not reported back yet,
+   * counting any the operator has since called off.
+   *
+   * `mcpServer/oauthLogin/completed` names the server and nothing else. There
+   * is no cancel request either, so a called-off login keeps running until
+   * Codex times it out -- and its failure is indistinguishable from the retry
+   * the row is waiting on. Only the count can tell them apart.
+   */
+  const codexLoginsOutstandingRef = useRef(new Map<string, number>());
+  /** Why each Codex server's last sign-in failed, shown on its own row. */
+  const [codexSignInErrors, setCodexSignInErrors] = useState<
+    Readonly<Record<string, string>>
+  >({});
+  const setCodexSignInError = useCallback((name: string, error?: string) => {
+    setCodexSignInErrors((current) => withKeyedMessage(current, name, error));
+  }, []);
+  /** Per server, a `finishLogin` waiting for Codex to report it started. */
+  const startupWaitersRef = useRef(new Map<string, {
+    resolve: () => void;
     timer: number;
-  } | undefined>(undefined);
-  const oauthWaitTimerRef = useRef<number | undefined>(undefined);
+  }>());
   const [removeCandidate, setRemoveCandidate] =
     useState<CodexMcpServerSummary>();
   const [notice, setNotice] = useState<ActionNotice>();
@@ -283,52 +340,42 @@ export function PluginsSettings(props: {
     setPendingActionState(action);
   }, []);
 
-  const clearOAuthWaitTimer = useCallback(() => {
-    if (oauthWaitTimerRef.current === undefined) return;
-    window.clearTimeout(oauthWaitTimerRef.current);
-    oauthWaitTimerRef.current = undefined;
-  }, []);
+  const endCodexSignIn = useCallback((name: string) => {
+    const entry = codexSignInsRef.current.get(name);
+    if (!entry) return;
+    window.clearTimeout(entry.timer);
+    codexSignInsRef.current.delete(name);
+    publishCodexSignIns();
+  }, [publishCodexSignIns]);
 
-  const cancelLoginWait = useCallback((message?: string) => {
-    clearOAuthWaitTimer();
-    if (pendingActionRef.current?.kind !== "login") return;
-    setPendingAction(undefined);
-    setNotice({
-      kind: "info",
-      text: message ?? "Stopped waiting for sign-in. You can try again.",
-    });
-  }, [clearOAuthWaitTimer, setPendingAction]);
+  /**
+   * Stop waiting on a Codex sign-in that is still in the browser. Codex has no
+   * request to call the login off, so this only releases the row; the login's
+   * eventual report is counted out in `codexLoginsOutstandingRef`.
+   */
+  const cancelCodexSignIn = useCallback((name: string) => {
+    if (codexSignInsRef.current.get(name)?.phase !== "browser") return;
+    endCodexSignIn(name);
+  }, [endCodexSignIn]);
 
-  const scheduleLoginTimeout = useCallback((name: string) => {
-    clearOAuthWaitTimer();
-    oauthWaitTimerRef.current = window.setTimeout(() => {
-      if (
-        pendingActionRef.current?.kind === "login"
-        && pendingActionRef.current.name === name
-      ) {
-        cancelLoginWait(`${name} sign-in timed out. You can try again.`);
-      }
-    }, OAUTH_LOGIN_WAIT_MS);
-  }, [cancelLoginWait, clearOAuthWaitTimer]);
-
-  const cancelStartupWait = useCallback(() => {
-    const waiter = startupWaiterRef.current;
+  const cancelStartupWait = useCallback((name: string) => {
+    const waiter = startupWaitersRef.current.get(name);
     if (!waiter) return;
     window.clearTimeout(waiter.timer);
-    startupWaiterRef.current = undefined;
-    waiter.resolve(undefined);
+    startupWaitersRef.current.delete(name);
+    waiter.resolve();
   }, []);
 
   const waitForGlobalStartup = useCallback((name: string) => {
-    cancelStartupWait();
-    return new Promise<StartupResult | undefined>((resolve) => {
+    cancelStartupWait(name);
+    return new Promise<void>((resolve) => {
       const timer = window.setTimeout(() => {
-        if (startupWaiterRef.current?.name === name) {
-          startupWaiterRef.current = undefined;
+        if (startupWaitersRef.current.get(name)?.timer === timer) {
+          startupWaitersRef.current.delete(name);
         }
-        resolve(undefined);
+        resolve();
       }, LOGIN_STARTUP_WAIT_MS);
-      startupWaiterRef.current = { name, resolve, timer };
+      startupWaitersRef.current.set(name, { resolve, timer });
     });
   }, [cancelStartupWait]);
 
@@ -341,7 +388,9 @@ export function PluginsSettings(props: {
       setLoading(false);
       return false;
     }
-    setLoading(true);
+    // `loading` starts true and is never raised again, for the reason
+    // `loadConnections` gives: a refresh after one row's sign-in must not
+    // remount a row that is still waiting on its own.
     try {
       const response = await props.desktopApi.listCodexMcpServers({
         detail: "toolsAndAuthOnly",
@@ -436,75 +485,69 @@ export function PluginsSettings(props: {
     void loadConnections();
   }, [loadConnections, loadServers]);
 
-  useEffect(() => () => {
-    clearOAuthWaitTimer();
-    const waiter = startupWaiterRef.current;
-    if (!waiter) return;
-    window.clearTimeout(waiter.timer);
-    startupWaiterRef.current = undefined;
-  }, [clearOAuthWaitTimer]);
+  useEffect(() => {
+    const signIns = codexSignInsRef.current;
+    const waiters = startupWaitersRef.current;
+    return () => {
+      for (const entry of signIns.values()) window.clearTimeout(entry.timer);
+      for (const waiter of waiters.values()) window.clearTimeout(waiter.timer);
+      waiters.clear();
+    };
+  }, []);
 
-  const finishLogin = useCallback(async (name: string) => {
-    clearOAuthWaitTimer();
+  /**
+   * A Codex server signed in: reload Codex's MCP configuration so the server
+   * restarts with the new credentials, then refresh the list. The row shows
+   * this as its `starting` phase.
+   *
+   * How the start went is the row's own health line -- the refreshed list
+   * carries the startup status and its error -- so only a reload that could
+   * not happen is written here. A success needs no words: the row turns to
+   * `Signed in` and lists its tools.
+   */
+  const finishLogin = useCallback(async (name: string, attempt: number) => {
+    const entry = codexSignInsRef.current.get(name);
+    if (entry?.attempt !== attempt) return;
+    window.clearTimeout(entry.timer);
+    codexSignInsRef.current.set(name, { attempt, phase: "starting" });
+    publishCodexSignIns();
+    const isCurrent = () =>
+      codexSignInsRef.current.get(name)?.attempt === attempt;
+    const fail = (message: string) => {
+      if (!isCurrent()) return;
+      endCodexSignIn(name);
+      setCodexSignInError(name, message);
+    };
     const codexHome = activeCodexHome;
     if (!props.desktopApi?.reloadCodexMcpServers) {
-      setNotice({
-        kind: "error",
-        text: "MCP config reload is unavailable in this build.",
-      });
-      setPendingAction(undefined);
+      fail("Signed in, but this build cannot reload MCP configuration.");
       return;
     }
     if (!codexHome) {
-      setNotice({ kind: "error", text: "Active Codex profile is unavailable." });
-      setPendingAction(undefined);
+      fail("Signed in, but the active Codex profile is unavailable.");
       return;
     }
-    setPendingAction({ kind: "reload", name });
-    setNotice({
-      kind: "working",
-      text: `${name} sign-in completed. Reloading its MCP connection...`,
-    });
     const startup = waitForGlobalStartup(name);
     try {
       await props.desktopApi.reloadCodexMcpServers({ codexHome });
-      const startupResult = await startup;
-      const refreshed = await loadServers();
-      if (!refreshed) return;
-      if (startupResult?.status === "failed") {
-        setNotice({
-          kind: "error",
-          text: startupResult.error
-            ? `${name} signed in, but startup failed: ${startupResult.error}`
-            : `${name} signed in, but its MCP connection failed to start.`,
-        });
-      } else if (startupResult?.status === "cancelled") {
-        setNotice({
-          kind: "error",
-          text: `${name} signed in, but its MCP connection startup was cancelled.`,
-        });
-      } else {
-        setNotice({
-          kind: "success",
-          text: `${name} signed in and its row was refreshed.`,
-        });
-      }
+      await startup;
+      await loadServers();
+      if (isCurrent()) endCodexSignIn(name);
     } catch (error) {
-      cancelStartupWait();
-      setNotice({
-        kind: "error",
-        text: error instanceof Error ? error.message : String(error),
-      });
-    } finally {
-      setPendingAction(undefined);
+      cancelStartupWait(name);
+      fail(
+        "Signed in, but reloading MCP configuration failed: "
+        + (error instanceof Error ? error.message : String(error)),
+      );
     }
   }, [
-    cancelStartupWait,
-    clearOAuthWaitTimer,
     activeCodexHome,
+    cancelStartupWait,
+    endCodexSignIn,
     loadServers,
     props.desktopApi,
-    setPendingAction,
+    publishCodexSignIns,
+    setCodexSignInError,
     waitForGlobalStartup,
   ]);
 
@@ -542,27 +585,18 @@ export function PluginsSettings(props: {
           return changed ? next : current;
         });
       }
-      const waiter = startupWaiterRef.current;
       // `starting` is the normal precursor to a terminal status and must leave
       // the waiter armed. Disarming on it would clear the fallback timer
       // without resolving, and `finishLogin` would await a promise that can
-      // never settle — wedging the pane with its pending action forever.
-      if (
-        !waiter
-        || !name
-        || !status
-        || status === "starting"
-        || name !== waiter.name
-        || !isGlobalStatus
-      ) {
+      // never settle — wedging the row in its wait forever.
+      if (!name || !status || status === "starting" || !isGlobalStatus) {
         return;
       }
+      const waiter = startupWaitersRef.current.get(name);
+      if (!waiter) return;
       window.clearTimeout(waiter.timer);
-      startupWaiterRef.current = undefined;
-      waiter.resolve({
-        status,
-        ...(typeof params.error === "string" ? { error: params.error } : {}),
-      });
+      startupWaitersRef.current.delete(name);
+      waiter.resolve();
       return;
     }
     if (event.notification.method !== "mcpServer/oauthLogin/completed") {
@@ -574,27 +608,35 @@ export function PluginsSettings(props: {
       : typeof params.serverName === "string"
         ? params.serverName
         : undefined;
-    const pending = pendingActionRef.current;
-    if (!name || pending?.kind !== "login" || name !== pending.name) {
-      return;
-    }
+    if (!name) return;
+    // Every report closes one login Codex was running for this server,
+    // whether or not a row is still waiting on it.
+    const outstanding = releaseCount(codexLoginsOutstandingRef.current, name);
+    const entry = codexSignInsRef.current.get(name);
+    if (entry?.phase !== "browser") return;
+    // Codex saved the credentials, whichever login it was.
     if (params.success === true) {
-      void finishLogin(name);
+      void finishLogin(name, entry.attempt);
       return;
     }
-    clearOAuthWaitTimer();
-    setPendingAction(undefined);
-    setNotice({
-      kind: "error",
-      text: typeof params.error === "string"
-        ? params.error
-        : `${name} sign-in did not complete.`,
-    });
+    // A login the operator called off started before the one the row waits
+    // on, and Codex gives each the same timeout, so while an older one is
+    // outstanding a failure is taken to be its. Getting that wrong keeps the
+    // row waiting a little longer; the other way round ended a live sign-in
+    // and blamed it for a failure it never had.
+    if (outstanding > 1) return;
+    endCodexSignIn(name);
+    setCodexSignInError(
+      name,
+      typeof params.error === "string"
+        ? `Sign-in failed: ${params.error}`
+        : "Sign-in did not complete.",
+    );
   }), [
-    clearOAuthWaitTimer,
+    endCodexSignIn,
     finishLogin,
     props.desktopApi,
-    setPendingAction,
+    setCodexSignInError,
   ]);
 
   const reloadConfig = async () => {
@@ -627,40 +669,48 @@ export function PluginsSettings(props: {
   };
 
   const signIn = async (server: CodexMcpServerSummary) => {
+    const name = server.name;
+    const codexHome = activeCodexHome;
     if (
       !props.desktopApi?.startCodexMcpServerLogin
+      || codexSignInsRef.current.has(name)
       || pendingActionRef.current
       || profileChanged
-      || !activeCodexHome
+      || !codexHome
     ) return;
-    setPendingAction({ kind: "login", name: server.name });
-    setNotice({
-      kind: "working",
-      text: `Waiting for ${server.name} sign-in to complete...`,
-    });
-    scheduleLoginTimeout(server.name);
+    codexSignInAttemptRef.current += 1;
+    const attempt = codexSignInAttemptRef.current;
+    const isCurrent = () =>
+      codexSignInsRef.current.get(name)?.attempt === attempt;
+    const timer = window.setTimeout(() => {
+      if (!isCurrent()) return;
+      endCodexSignIn(name);
+      setCodexSignInError(name, "Sign-in timed out. You can try again.");
+    }, OAUTH_LOGIN_WAIT_MS);
+    codexSignInsRef.current.set(name, { attempt, phase: "browser", timer });
+    publishCodexSignIns();
+    setCodexSignInError(name);
+    // Counted before the request, so a called-off login that reports while
+    // this one is still being started is not mistaken for this one.
+    const outstanding = codexLoginsOutstandingRef.current;
+    outstanding.set(name, (outstanding.get(name) ?? 0) + 1);
     try {
       const result = await props.desktopApi.startCodexMcpServerLogin({
-        codexHome: activeCodexHome,
-        name: server.name,
+        codexHome,
+        name,
       });
-      const pendingAfterStart = pendingActionRef.current as
-        | PendingAction
-        | undefined;
-      if (
-        pendingAfterStart?.kind !== "login"
-        || pendingAfterStart.name !== server.name
-      ) {
-        return;
-      }
+      // Called off before the link arrived: there is nothing to open.
+      if (!isCurrent()) return;
       window.open(result.authorizationUrl, "_blank", "noopener,noreferrer");
     } catch (error) {
-      clearOAuthWaitTimer();
-      setPendingAction(undefined);
-      setNotice({
-        kind: "error",
-        text: error instanceof Error ? error.message : String(error),
-      });
+      // No login started, so none will report.
+      releaseCount(outstanding, name);
+      if (!isCurrent()) return;
+      endCodexSignIn(name);
+      setCodexSignInError(
+        name,
+        `Sign-in failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
   };
 
@@ -1300,15 +1350,6 @@ export function PluginsSettings(props: {
             role={notice.kind === "error" ? "alert" : "status"}
           >
             <span>{notice.text}</span>
-            {pendingAction?.kind === "login" ? (
-              <button
-                className="button button--ghost settings-plugin-notice__action"
-                type="button"
-                onClick={() => cancelLoginWait()}
-              >
-                Cancel sign-in
-              </button>
-            ) : null}
           </div>
         ) : null}
         {loading ? (
@@ -1357,10 +1398,12 @@ export function PluginsSettings(props: {
                 {visibleServers.map((server) => (
                   <McpServerRow
                     key={server.name}
-                    busy={pendingAction?.name === server.name}
                     disabled={actionsDisabled}
                     expanded={expandedServers.has(server.name)}
                     server={server}
+                    signIn={codexSignIns[server.name]}
+                    signInError={codexSignInErrors[server.name]}
+                    onCancelSignIn={() => cancelCodexSignIn(server.name)}
                     onSignIn={() => void signIn(server)}
                     onRemove={() => setRemoveCandidate(server)}
                     onToggle={() => toggleServer(server.name)}
@@ -1808,18 +1851,11 @@ function ManagedMcpConnectionRow(props: {
             * list was a screen away from the row it stopped.
             */}
           {props.authorizing ? (
-            <>
-              <SettingsPendingIndicator pending label="Waiting for sign-in…" />
-              <button
-                aria-label={`Cancel sign-in to ${connection.displayName}`}
-                className="button button--secondary"
-                title={`Stop waiting for ${connection.displayName}. The sign-in page already open in your browser stops working; start again for a fresh one.`}
-                type="button"
-                onClick={props.onCancelAuthorization}
-              >
-                Cancel sign-in
-              </button>
-            </>
+            <SignInWait
+              name={connection.displayName}
+              title={`Stop waiting for ${connection.displayName}. The sign-in page already open in your browser stops working; start again for a fresh one.`}
+              onCancel={props.onCancelAuthorization}
+            />
           ) : (
             <>
               {app ? (
@@ -1927,7 +1963,10 @@ function ManagedMcpConnectionRow(props: {
             : setup.detail}
         </p>
         {props.authorizationError ? (
-          <p className="settings-mcp-row__error" role="alert">
+          <p
+            className="settings-mcp-row__error settings-mcp-row__error--sign-in"
+            role="alert"
+          >
             Sign-in failed: {props.authorizationError}
           </p>
         ) : null}
@@ -2184,11 +2223,50 @@ function LocalConnectionActions(props: {
   );
 }
 
+/**
+ * A sign-in waiting on the browser, standing where the control that started it
+ * was, with its way out beside it.
+ */
+function SignInWait(props: {
+  name: string;
+  /** What calling it off does, for the button's tooltip. */
+  title: string;
+  onCancel: () => void;
+}) {
+  const cancelRef = useRef<HTMLButtonElement | null>(null);
+  // The control the operator used to start the sign-in was replaced by this,
+  // and focus went with it to the document. Keyboard focus lands on the way
+  // out instead of back at the top of the window.
+  useEffect(() => {
+    const active = document.activeElement;
+    if (!active || active === document.body) cancelRef.current?.focus();
+  }, []);
+  return (
+    <>
+      <SettingsPendingIndicator pending label="Waiting for sign-in…" />
+      <button
+        ref={cancelRef}
+        aria-label={`Cancel sign-in to ${props.name}`}
+        className="button button--secondary"
+        title={props.title}
+        type="button"
+        onClick={props.onCancel}
+      >
+        Cancel sign-in
+      </button>
+    </>
+  );
+}
+
 function McpServerRow(props: {
-  busy: boolean;
   disabled: boolean;
   expanded: boolean;
   server: CodexMcpServerSummary;
+  /** Where this server's sign-in is, while one is in flight. */
+  signIn?: CodexSignInPhase;
+  /** Why this server's last sign-in failed, until it is tried again. */
+  signInError?: string;
+  onCancelSignIn: () => void;
   onRemove: () => void;
   onSignIn: () => void;
   onToggle: () => void;
@@ -2235,31 +2313,58 @@ function McpServerRow(props: {
           </span>
         </div>
         <div className="settings-mcp-row__actions">
-          {health === "needsSignIn" ? (
-            <button
-              className="button button--secondary"
-              disabled={props.disabled}
-              type="button"
-              onClick={props.onSignIn}
-            >
-              {props.busy ? "Waiting..." : "Sign in"}
-            </button>
-          ) : null}
-          <button
-            aria-expanded={Boolean(menuPosition)}
-            aria-haspopup="menu"
-            aria-label={`More actions for ${server.name}`}
-            className="button button--ghost settings-mcp-row__more"
-            disabled={props.disabled}
-            title={`More actions for ${server.name}`}
-            type="button"
-            onClick={openMenu}
-          >
-            <span aria-hidden="true">···</span>
-          </button>
+          {props.signIn === "browser" ? (
+            <SignInWait
+              name={server.name}
+              title={`Stop waiting for ${server.name}. Sign in again for a fresh link.`}
+              onCancel={props.onCancelSignIn}
+            />
+          ) : props.signIn === "starting" ? (
+            <SettingsPendingIndicator pending label="Starting…" />
+          ) : (
+            <>
+              {health === "needsSignIn" ? (
+                <button
+                  className="button button--secondary"
+                  disabled={props.disabled}
+                  type="button"
+                  onClick={props.onSignIn}
+                >
+                  Sign in
+                </button>
+              ) : null}
+              <button
+                aria-expanded={Boolean(menuPosition)}
+                aria-haspopup="menu"
+                aria-label={`More actions for ${server.name}`}
+                className="button button--ghost settings-mcp-row__more"
+                disabled={props.disabled}
+                title={`More actions for ${server.name}`}
+                type="button"
+                onClick={openMenu}
+              >
+                <span aria-hidden="true">···</span>
+              </button>
+            </>
+          )}
         </div>
       </div>
-      {server.startupError ? (
+      {props.signIn === "browser" ? (
+        <p className="settings-mcp-row__state">
+          Finish signing in to {server.name} in your browser.
+        </p>
+      ) : props.signIn === "starting" ? (
+        <p className="settings-mcp-row__state">
+          Signed in. Starting {server.name} with the new credentials.
+        </p>
+      ) : props.signInError ? (
+        <p
+          className="settings-mcp-row__error settings-mcp-row__error--sign-in"
+          role="alert"
+        >
+          {props.signInError}
+        </p>
+      ) : server.startupError ? (
         <p className="settings-mcp-row__error">{server.startupError}</p>
       ) : health === "needsSignIn" ? (
         <p className="settings-mcp-row__error">
