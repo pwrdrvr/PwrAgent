@@ -1,6 +1,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
+import type { ListBackendsRequest, ListBackendsResponse } from "@pwragent/shared";
 import { applyDesktopSettingsPatch } from "../src/main/settings/desktop-config";
 import { launchElectronApp } from "./fixtures/electron-app";
 
@@ -29,6 +30,21 @@ test("hydrates provider-scoped pricing totals in the context rail", async () => 
   });
 
   try {
+    // Thread history can paint before startup model discovery finishes. Load
+    // the replay catalog before requesting pricing that uses its display labels.
+    const models = await app.window.evaluate(async () => {
+      const api = (window as typeof window & {
+        pwragent: { listBackends: (request: ListBackendsRequest) => Promise<ListBackendsResponse> };
+      }).pwragent;
+      const result = await api.listBackends({
+        refreshModels: "codex",
+        discoveryIntent: "settings-user-action",
+      });
+      return result.backends.find((backend) => backend.kind === "codex")?.launchpadOptions?.models;
+    });
+    expect(models).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "gpt-5.5", label: "GPT-5.5" }),
+    ]));
     await app.window
       .getByRole("button", { name: /Pricing ledger thread/i })
       .first()
