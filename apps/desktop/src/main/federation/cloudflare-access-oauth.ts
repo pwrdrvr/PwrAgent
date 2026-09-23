@@ -246,6 +246,8 @@ export class CloudflareAccessOAuth {
           redirect_uri: listener.redirectUri,
           code_verifier: verifier,
           resource,
+        }).catch((error: unknown) => {
+          throw new Error(`The browser returned, but PwrAgent could not finish exchanging the sign-in code. ${error instanceof Error ? error.message : "Retry sign-in."}`, { cause: error });
         });
         if (!tokens.refreshToken) {
           // Without a refresh token every connection after fifteen minutes would
@@ -389,6 +391,8 @@ export class CloudflareAccessOAuth {
       });
       // Only a host that answered can be said to lack sign-in.
       if (failures.some(isUnresolvedHost)) throw new Error(unresolvedHostMessage(host));
+      const networkFailure = failures.find((error) => error instanceof Error && error.cause);
+      if (networkFailure) throw networkFailure;
       throw new Error("This Cloudflare endpoint does not offer sign-in. Managed OAuth may be off on its Access application.");
     }
     const metadata = {
@@ -469,15 +473,21 @@ export class CloudflareAccessOAuth {
 
   private async send(url: string, init: RequestInit): Promise<{ ok: boolean; status: number; body: unknown }> {
     let response: Response;
+    let text: string;
     try {
       // No redirects: a bearer or refresh token must only go where discovery,
       // after its host check, said to send it.
       response = await this.fetcher(url, { ...init, redirect: "error", signal: AbortSignal.timeout(20_000) });
+      text = (await response.text()).slice(0, RESPONSE_LIMIT);
     } catch (error) {
       // Kept as the cause so a failed lookup can still be told apart.
-      throw new Error("Cloudflare Access could not be reached. Check your connection and try again.", { cause: error });
+      const target = new URL(url);
+      const cause = error instanceof Error ? error.cause as { code?: unknown } | undefined : undefined;
+      const reason = typeof cause?.code === "string" && /^[A-Z_]+$/.test(cause.code)
+        ? cause.code : error instanceof Error && error.name === "TimeoutError" ? "request timed out" : "network request failed";
+      this.deps.log?.("Cloudflare endpoint request failed", { host: target.hostname, path: target.pathname, reason });
+      throw new Error(`Could not reach the Cloudflare-protected sign-in endpoint ${target.hostname} (${reason}). Check your connection and retry sign-in in PwrAgent.`, { cause: error });
     }
-    const text = (await response.text()).slice(0, RESPONSE_LIMIT);
     let body: unknown;
     try { body = text ? JSON.parse(text) : undefined; } catch { body = undefined; }
     return { ok: response.ok, status: response.status, body };
@@ -582,7 +592,7 @@ async function listenForCallback(previousRedirect: string | undefined) {
     const error = url.searchParams.get("error");
     response.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
     if (code) {
-      response.end(page("PwrAgent is signed in", "You can close this tab and return to PwrAgent."));
+      response.end(page("Sign-in response received", "Return to PwrAgent to check the result. PwrAgent still needs to finish signing in and connect to your gateway."));
       settle?.({ code, returnedState });
     } else {
       const detail = (url.searchParams.get("error_description") ?? error ?? "No authorization code was returned.").slice(0, 200);

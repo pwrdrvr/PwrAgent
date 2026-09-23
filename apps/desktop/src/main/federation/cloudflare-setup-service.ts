@@ -717,7 +717,6 @@ export class CloudflareSetupService {
     const state = await this.state();
     if (cloudflareSetupGate(state) !== "oauth") throw new Error("Only a sign-in endpoint has an email allowlist.");
     const allowed = cloudflareEmails(emails);
-    this.deps.verifyListener(state.listenPort);
     if (!state.applicationId || !state.identityPolicyId) throw new Error("Complete endpoint creation first.");
     await this.apiClient().request(
       `/accounts/${state.accountId}/access/apps/${state.applicationId}/policies/${state.identityPolicyId}`, "PUT",

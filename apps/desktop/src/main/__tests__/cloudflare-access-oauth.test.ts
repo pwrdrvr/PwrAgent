@@ -148,7 +148,7 @@ describe("Cloudflare Access sign-in", () => {
     expect(exchange.get("redirect_uri")).toBe(registration.redirect_uris[0]);
 
     expect(h.stored()).toMatchObject({ endpoint: ENDPOINT, clientId: "client-1", refreshToken: "refresh-2", accessToken: "oauth:access-2" });
-    expect(h.pages[0]).toContain("PwrAgent is signed in");
+    expect(h.pages[0]).toContain("Sign-in response received");
     expect((await h.oauth.status(ENDPOINT))?.state).toBe("signed-in");
   });
 
@@ -379,4 +379,24 @@ describe("PKCE", () => {
       expect(verifier.length).toBeGreaterThanOrEqual(43);
     }
   });
+});
+
+
+it("distinguishes a failed token exchange from the browser callback and permits retry", async () => {
+  const access = fakeAccess();
+  const log = vi.fn();
+  let offline = true;
+  const h = harness({ log, access: { ...access, fetch: async (input, init) => {
+    if (String(input).endsWith("/token") && offline) {
+      throw Object.assign(new TypeError("fetch failed"), { cause: { code: "UND_ERR_CONNECT_TIMEOUT" } });
+    }
+    return access.fetch(input, init);
+  } } });
+  await expect(h.oauth.signIn(ENDPOINT)).rejects.toThrow("The browser returned, but PwrAgent could not finish exchanging the sign-in code.");
+  expect(h.pages[0]).not.toContain("PwrAgent is signed in");
+  expect(log).toHaveBeenCalledWith("Cloudflare endpoint request failed", {
+    host: "team.cloudflareaccess.com", path: "/cdn-cgi/access/oauth/token", reason: "UND_ERR_CONNECT_TIMEOUT",
+  });
+  offline = false;
+  await expect(h.oauth.signIn(ENDPOINT)).resolves.toBeUndefined();
 });

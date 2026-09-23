@@ -704,7 +704,7 @@ export function FederationSettings(props: FederationSettingsProps) {
             label="Listen host"
             sub={
               listensForPeers
-                ? "Local address for gateway mode."
+                ? "127.0.0.1 accepts this computer only, which Tailscale setup requires. 0.0.0.0 also accepts peers on your network and works with Cloudflare Access. A single address, such as 192.168.1.10, works with neither."
                 : "Only used when Mode is gateway or dual."
             }
             control={

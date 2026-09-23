@@ -1279,12 +1279,18 @@ export class DesktopFederationRuntime {
 
   cloudflareSecurityProbes(listenPort: number) {
     if (!Number.isInteger(listenPort) || listenPort < 1 || listenPort > 65535
-      || this.stopping || !this.server || this.listenUrl !== `ws://127.0.0.1:${listenPort}`) {
+      || this.stopping || !this.server || this.loopbackListenPort() !== listenPort) {
       // Say why when the runtime knows: "enable the gateway" reads as a missing
-      // setting when the listener is enabled and failed to bind.
+      // setting when the listener is enabled and failed to bind, or is running
+      // on an address the tunnel cannot reach.
+      const bound = !this.stopping && this.server && this.loopbackListenPort() === undefined
+        ? /^ws:\/\/([^/]+)$/.exec(this.listenUrl ?? "")?.[1]
+        : undefined;
       throw new Error(this.gatewayListenerError
-        ? `The gateway is not listening on 127.0.0.1:${listenPort}: ${this.gatewayListenerError}`
-        : "Enable the gateway on the selected loopback port before Cloudflare setup or validation.");
+        ? `The gateway is not listening on port ${listenPort}: ${this.gatewayListenerError}`
+        : bound
+          ? `The gateway listens on ${bound}, which the Cloudflare tunnel cannot reach. Listen on 127.0.0.1 or 0.0.0.0.`
+          : "Enable the gateway on the selected port, listening on 127.0.0.1 or 0.0.0.0, before Cloudflare setup or validation.");
     }
     return this.server.securityProbes;
   }
@@ -1319,10 +1325,10 @@ export class DesktopFederationRuntime {
     };
   }
 
-  /** The port of a gateway listening on 127.0.0.1 right now, or undefined. */
+  /** The gateway port reachable on IPv4 loopback, including an all-interface bind. */
   loopbackListenPort(): number | undefined {
     if (this.stopping || !this.server) return undefined;
-    const match = /^ws:\/\/127\.0\.0\.1:(\d+)$/.exec(this.listenUrl ?? "");
+    const match = /^ws:\/\/(?:127\.0\.0\.1|0\.0\.0\.0):(\d+)$/.exec(this.listenUrl ?? "");
     return match ? Number(match[1]) : undefined;
   }
 
@@ -2920,7 +2926,7 @@ export class DesktopFederationRuntime {
         try {
           const cloudflare = await loadCloudflareSetup();
           if (cloudflare?.dnsId && cloudflare.tunnelToken
-            && started.url === `ws://127.0.0.1:${cloudflare.listenPort}`
+            && this.loopbackListenPort() === cloudflare.listenPort
             && !startupAborted()) {
             await cloudflareConnector.start(cloudflare.tunnelToken);
           }

@@ -1223,7 +1223,7 @@ describe("FederationSettings", () => {
       target: { value: "8766" },
     });
     const statement = await screen.findByText(
-      /Creating the endpoint uses this profile.s saved listener port/,
+      /Creating the endpoint uses this profile.s saved listener/,
     );
     expect(statement).toHaveTextContent("127.0.0.1:8765");
 

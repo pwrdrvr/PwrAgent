@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import type {
   CloudflareClientConnection,
   CloudflareFederationGate,
@@ -11,7 +11,7 @@ import type {
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { AutomationFlow, AutomationStage } from "../automations/AutomationFunnel";
-import { SettingsField, SettingsSection, type SettingsChipTone } from "./SettingsLayout";
+import { SettingsField, SettingsPendingIndicator, SettingsSection, type SettingsChipTone } from "./SettingsLayout";
 
 type Props = {
   api?: DesktopApi;
@@ -94,6 +94,15 @@ function parseEmails(text: string): string[] {
   return text.split(/[\s,;]+/).map((entry) => entry.trim()).filter(Boolean);
 }
 
+/**
+ * The control a run belongs to. Two controls can send the same action at once
+ * — a Revoke in each client row, a Save draft in steps 2 and 4 — and matching
+ * on the action alone put the pending state on every one of them.
+ */
+function busyKey(request: CloudflareSetupRequest, stage: Stage | undefined): string {
+  return [stage, request.action, request.action === "revoke-client" ? request.id : ""].join(":");
+}
+
 function draftKey(accountId: string, zoneId: string, hostname: string, gate: CloudflareFederationGate, emails: string): string {
   return JSON.stringify([accountId.trim(), zoneId.trim(), hostname.trim(), gate, emails.trim()]);
 }
@@ -110,10 +119,13 @@ export function CloudflareSetup(props: Props) {
   const [label, setLabel] = useState("");
   const [password, setPassword] = useState("");
   const [inviteHours, setInviteHours] = useState(1);
-  const [busy, setBusy] = useState<{ action: CloudflareSetupRequest["action"]; progress: string; stage?: Stage }>();
+  const [busy, setBusy] = useState<{ action: CloudflareSetupRequest["action"]; key: string; progress: string; stage?: Stage }>();
   const [error, setError] = useState<{ message: string; action?: CloudflareSetupRequest["action"]; stage?: Stage }>();
   // Which stage the current status message answers.
   const [messageStage, setMessageStage] = useState<Stage>();
+  // The address a listener write is saving, so only its button shows pending.
+  const [listenerBusy, setListenerBusy] = useState<string>();
+  const [listenerMessage, setListenerMessage] = useState<string>();
   // The answer to a sign-in help button, for as long as that sign-in waits.
   const [signInNote, setSignInNote] = useState<string>();
   const [tab, setTab] = useState<"gateway" | "client">("gateway");
@@ -121,6 +133,7 @@ export function CloudflareSetup(props: Props) {
   // A provisioned endpoint reports its own gate and the choice is fixed.
   const [gate, setGate] = useState<CloudflareFederationGate>("service-token");
   const [savedDraft, setSavedDraft] = useState("");
+  const operationGeneration = useRef(0);
 
   useEffect(() => {
     let active = true;
@@ -146,7 +159,7 @@ export function CloudflareSetup(props: Props) {
       // to set up as a gateway; open on the half it actually uses.
       if ((value.signIn || value.clientConnection) && !value.hostname) setTab("client");
     }).catch((err: unknown) => { if (active) setError({ message: errorText(err, "Could not read Cloudflare setup.") }); });
-    return () => { active = false; };
+    return () => { active = false; operationGeneration.current += 1; };
   }, [api]);
 
   // A provisioned endpoint's gate is a fact, not a preference: the Access policy
@@ -156,7 +169,7 @@ export function CloudflareSetup(props: Props) {
   const mtls = effectiveGate === "mtls";
   const oauth = effectiveGate === "oauth";
   const emails = parseEmails(emailsText);
-  const disabled = Boolean(busy) || !api?.configureFederationCloudflare;
+  const disabled = Boolean(listenerBusy) || Boolean(busy) || !api?.configureFederationCloudflare;
   const created = Boolean(status?.hostname);
   const published = status?.phase === "Published";
   // Once the account is connected, offer a free conventional name as a real
@@ -171,6 +184,12 @@ export function CloudflareSetup(props: Props) {
   // have moved since, typically off a port another process already held.
   const livePort = Number(listenPort);
   const portMoved = Boolean(status?.listenPort && Number.isInteger(livePort) && livePort > 0 && status.listenPort !== livePort);
+  // The tunnel reaches the gateway over IPv4 loopback, which a listener on
+  // 127.0.0.1 or on every interface accepts. The main process applies the same
+  // rule (`loopbackListenPort`) before it creates, validates, or starts the
+  // connector, so Create on any other address could only fail there.
+  const listenHost = props.listenHost || "127.0.0.1";
+  const listenerReachable = listenHost === "127.0.0.1" || listenHost === "0.0.0.0";
   const connected = Boolean(status?.connected);
   const installed = Boolean(status?.connectorInstalled);
   const connectorVersion = status?.connectorVersion ? ` ${status.connectorVersion}` : "";
@@ -207,22 +226,24 @@ export function CloudflareSetup(props: Props) {
   };
 
   const run = async (request: CloudflareSetupRequest, progress: string, stage = ACTION_STAGE[request.action]) => {
-    if (!api?.configureFederationCloudflare || busy) return;
-    setBusy({ action: request.action, progress, stage });
+    if (!api?.configureFederationCloudflare || busy || listenerBusy) return;
+    const generation = ++operationGeneration.current;
+    setBusy({ action: request.action, key: busyKey(request, stage), progress, stage });
     setError(undefined);
+    setListenerMessage(undefined);
     setMessageStage(stage);
     // What Create changed in the federation listener, to put back if it fails
     // before recording anything — otherwise a refused port leaves the profile a
-    // loopback gateway that cannot bind.
+    // gateway that cannot bind.
     let restore: DesktopSettingsConfigPatch | undefined;
     try {
       if (request.action === "provision") {
         const port = Number(listenPort);
         if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("Enter a valid federation listener port above.");
         const mode: DesktopFederationMode = props.mode === "client" || props.mode === "dual" ? "dual" : "gateway";
-        const saved = await onWriteConfig({ federation: { mode, listenHost: "127.0.0.1", listenPort: port } });
+        const saved = await onWriteConfig({ federation: { mode, listenHost, listenPort: port } });
         if (!saved) throw new Error("The gateway listener could not be enabled.");
-        if (!created && props.mode && props.listenHost !== undefined && (props.mode !== mode || props.listenHost !== "127.0.0.1")) {
+        if (!created && props.mode && props.listenHost !== undefined && props.mode !== mode) {
           restore = { federation: { mode: props.mode, listenHost: props.listenHost } };
         }
       }
@@ -238,7 +259,22 @@ export function CloudflareSetup(props: Props) {
     } catch (err) {
       let message = errorText(err, "Cloudflare setup failed.");
       let next: CloudflareSetupStatus | undefined;
-      try { next = await api.configureFederationCloudflare({ action: "status" }); adopt(next); } catch { /* Preserve the original error. */ }
+      setError({ message, action: request.action, stage });
+      if (request.action === "provision") {
+        try { next = await api.configureFederationCloudflare({ action: "status" }); adopt(next); } catch { /* Preserve the original error. */ }
+      } else {
+        // Issuing a credential or removing an endpoint can persist changes
+        // before a later step fails. Reconcile without holding the controls,
+        // and never let this read overwrite a newer operation or user edit.
+        void api.configureFederationCloudflare({ action: "status" }).then((refreshed) => {
+          if (operationGeneration.current !== generation) return;
+          setStatus(refreshed);
+          if (allowlistPristine) {
+            setAllowlistText((current) => current === allowlistText ? (refreshed.emails ?? []).join("\n") : current);
+          }
+          if (request.action === "remove" && !refreshed.hostname) setHostname("");
+        }).catch(() => { /* Keep the operation's error if reconciliation fails. */ });
+      }
       if (restore && next && !next.hostname) {
         const restored = await onWriteConfig(restore).catch(() => false);
         if (restored) {
@@ -265,6 +301,7 @@ export function CloudflareSetup(props: Props) {
     if (!installed) missing.push("cloudflared");
     if (!hostname.trim()) missing.push("public hostname");
     if (oauth && emails.length === 0) missing.push("who can sign in");
+    if (!listenerReachable) missing.push("listener address");
   }
   const present = (items: Array<string | false>) => items.filter((entry): entry is string => Boolean(entry));
   const connectMissing = present([!accountId.trim() && "Account ID", !zoneId.trim() && "Zone ID", !token.trim() && "API token"]);
@@ -273,6 +310,7 @@ export function CloudflareSetup(props: Props) {
     !installed && "cloudflared",
     !hostname.trim() && "a public hostname",
     oauth && emails.length === 0 && "at least one email",
+    !listenerReachable && "a listener on 127.0.0.1 or 0.0.0.0",
   ]);
   const shareMissing = present([
     !connected && "a connected Cloudflare account (step 2)",
@@ -310,17 +348,25 @@ export function CloudflareSetup(props: Props) {
     <input className="settings-input" aria-label={name} value={value} onChange={(event) => change(event.target.value)} placeholder={placeholder}
       type={options.secret ? "password" : "text"} autoComplete="off" spellCheck={false} disabled={disabled || options.locked} />
   );
-  const action = (name: string, request: CloudflareSetupRequest, progressText: string, primary = false, blocked = false, stage?: Stage) => (
-    <button type="button" className={`button button--${primary ? "primary" : "secondary"}`} disabled={disabled || blocked}
-      onClick={() => void run(request, progressText, stage)}>{name}</button>
-  );
+  // The clicked button keeps its name and the Settings pending ring names the
+  // work beside it. Swapping the label for the progress sentence resized the
+  // button, moved its neighbors, and drew that sentence at the disabled 45%.
+  const action = (name: string, request: CloudflareSetupRequest, progressText: string, primary = false, blocked = false, stage?: Stage) => {
+    const pending = busy?.key === busyKey(request, stage ?? ACTION_STAGE[request.action]);
+    return <>
+      <button type="button" className={`button button--${primary ? "primary" : "secondary"}`} disabled={disabled || blocked}
+        onClick={() => void run(request, progressText, stage)} aria-busy={pending || undefined}>{name}</button>
+      <SettingsPendingIndicator pending={pending} label={progressText} />
+    </>;
+  };
   // A new failure scrolls itself into view; the key remounts it per message,
   // and a stable ref runs once per mount rather than on every render.
   const reveal = useCallback((node: HTMLElement | null) => {
     node?.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
   }, []);
+  // A run's progress shows beside its button (see `action`); this slot holds
+  // what the run left behind.
   const outcome = (stage: Stage) => <>
-    {busy?.stage === stage ? <p role="status" aria-live="polite">{busy.progress}</p> : null}
     {!busy && status?.message && messageStage === stage ? <p role="status">{status.message}</p> : null}
     {error?.stage === stage
       ? <p className="cloudflare-setup__error" role="alert" key={error.message} ref={reveal}>{error.message}</p>
@@ -345,17 +391,15 @@ export function CloudflareSetup(props: Props) {
   const modeChange = props.mode === "gateway" || props.mode === "dual" ? ""
     : props.mode === "client" ? " Federation mode changes from client to dual, so this instance keeps its own gateway connection too."
       : " Federation turns on in gateway mode.";
-  const hostChange = props.listenHost && props.listenHost !== "127.0.0.1"
-    ? ` The listener moves from ${props.listenHost} to 127.0.0.1, so it is reachable only through the tunnel.`
-    : "";
   const signingIn = busy?.action === "sign-in";
   const connection = status?.clientConnection;
   // Waiting on the browser. A login method that refuses the person strands the
   // browser on a blank page, so the way back is offered up front rather than
   // after the wait times out. Both buttons work outside the busy latch, and
-  // answer here: the stage's own outcome line shows the wait's progress.
+  // answer here. Sign-in hides its own button while it waits, so this note is
+  // also what says the wait is running, to a screen reader as well.
   const signInHelp = (lead: string) => <div className="cloudflare-setup__notice" role="note">
-    <p>{lead} If Cloudflare says &ldquo;That account does not have access&rdquo; or leaves a blank page, open the sign-in page again and use an email the gateway allows; one-time PIN works with any address.</p>
+    <p role="status">{lead} If Cloudflare says &ldquo;That account does not have access&rdquo; or leaves a blank page, open the sign-in page again and use an email the gateway allows; one-time PIN works with any address.</p>
     <div className="settings-button-row">
       <button type="button" className="button button--secondary"
         onClick={() => void api?.configureFederationCloudflare?.({ action: "reopen-sign-in" })
@@ -367,13 +411,50 @@ export function CloudflareSetup(props: Props) {
     {signInNote ? <p role="status">{signInNote}</p> : null}
   </div>;
 
+  const listen = (host: string) => {
+    operationGeneration.current += 1;
+    setListenerBusy(host);
+    setListenerMessage(undefined);
+    setError(undefined);
+    void onWriteConfig({ federation: { listenHost: host } }).then(async (saved) => {
+      if (!saved) throw new Error("The listener address could not be saved.");
+      await onSettingsChanged();
+      setListenerMessage(`Listener address saved as ${host}.`);
+    }).catch((err: unknown) => setError({ message: errorText(err, "The listener address could not be saved."), stage: "endpoint" }))
+      .finally(() => setListenerBusy(undefined));
+  };
+  const listenButton = (host: string, name: string) => <>
+    <button type="button" className="button button--secondary" disabled={disabled} onClick={() => listen(host)}
+      aria-busy={listenerBusy === host || undefined}>{name}</button>
+    <SettingsPendingIndicator pending={listenerBusy === host} label="Saving listener address…" />
+  </>;
+  // Step 4 names the listener Create keeps, so the listener's caveats sit
+  // there too: on 0.0.0.0 Cloudflare is not the only way in, and on one
+  // interface's address the tunnel cannot get in at all.
+  const listenerNotice = <>
+    {listenHost === "127.0.0.1" ? null : <div className="cloudflare-setup__notice" role="note">
+      {listenerReachable ? <>
+        <strong>Peers on your network can also connect directly.</strong>
+        <p>The federation listener is on 0.0.0.0, so Cloudflare Access is not the only way in. Keep it for local network clients, or listen on 127.0.0.1 so every peer comes through Cloudflare.</p>
+      </> : <>
+        <strong>Cloudflare cannot reach a listener on {listenHost}.</strong>
+        <p>The tunnel connects to this gateway on 127.0.0.1. Listen on 0.0.0.0 to keep local network clients as well, or on 127.0.0.1 for Cloudflare only.</p>
+      </>}
+      <div className="settings-button-row">
+        {listenerReachable ? null : listenButton("0.0.0.0", "Listen on 0.0.0.0")}
+        {listenButton("127.0.0.1", "Listen on 127.0.0.1 only")}
+      </div>
+    </div>}
+    {listenerMessage ? <p role="status">{listenerMessage}</p> : null}
+  </>;
+
   const importSteps = <div className="automation-funnel cloudflare-setup__funnel">
     <AutomationStage verb="Get" title="Setup file from the gateway">
       <p>On the gateway, open Settings → Federation → Cloudflare Access and save a client setup file. Bring the <code>.pwrcf</code> file to this computer, and get its password from the person who made it.</p>
     </AutomationStage>
     <AutomationFlow caption="The file names the endpoint and carries a one-time enrollment invite" />
     <AutomationStage verb="Open" title="Connect with the file">
-      <p>PwrAgent decrypts the file, installs the credential it carries — or opens your browser to sign in, if the endpoint uses sign-in — and enrolls this profile with the gateway.</p>
+      <p>PwrAgent connects to the Cloudflare-protected endpoint configured by your gateway operator. It decrypts the file, installs the credential it carries — or opens your browser to sign in, if the endpoint uses sign-in — and enrolls this profile with the gateway.</p>
       <SettingsField label="Transfer password" control={field("Cloudflare client import password", password, setPassword, "Password from the gateway", { secret: true })} />
       <div className="settings-button-row">
         {action("Open client setup file", { action: "import-client", password }, "Decrypting client setup and connecting…", true, !password)}
@@ -513,10 +594,11 @@ export function CloudflareSetup(props: Props) {
                 <p>Cloudflare sends this endpoint&rsquo;s traffic to 127.0.0.1:{status?.listenPort}, but the gateway listener is set to {livePort}. Move the tunnel, or set the listener back to {status?.listenPort}.</p>
                 <div className="settings-button-row">
                   {action(`Move tunnel to port ${livePort}`, { action: "provision", hostname: status?.hostname ?? "", listenPort: livePort, gate: effectiveGate },
-                    "Moving the tunnel and re-checking the policy…", true, !connected)}
+                    "Moving the tunnel and re-checking the policy…", true, !connected || !listenerReachable)}
                 </div>
                 {!connected ? <p className="cloudflare-setup__hint">Connect the Cloudflare account in step 2 to move the tunnel.</p> : null}
               </div> : null}
+              {listenerNotice}
               {oauth ? <>
                 <SettingsField label="Who can sign in" sub="One email per line. A removed person&rsquo;s PwrAgent disconnects at its next access refresh, within 15 minutes; revoke their peer in Federation to end the session now."
                   control={<textarea className="settings-input settings-input--multiline" aria-label="People who can sign in" value={allowlistText} rows={3}
@@ -546,7 +628,8 @@ export function CloudflareSetup(props: Props) {
               {oauth ? <SettingsField label="Who can sign in" sub="One email per line. Each must match the email the person’s login method reports."
                 control={<textarea className="settings-input settings-input--multiline" aria-label="People who can sign in" value={emailsText} rows={3}
                   placeholder="you@example.com" onChange={(event) => setEmailsText(event.target.value)} spellCheck={false} disabled={disabled || created} />} /> : null}
-              <p>Creating the endpoint uses this profile&rsquo;s saved listener port, so the gateway listens on 127.0.0.1:{port}; to use another port, change it in Configuration and save it first.{modeChange}{hostChange} PwrAgent then creates {oauth ? "the gateway’s validation token, an Access application with sign-in and an email allowlist," : mtls ? "a private certificate authority, an Access application with a certificate-only policy," : "the gateway’s validation token, an Access application with a token-only policy,"} and a tunnel — and publishes {hostname.trim() || "the hostname"} only after reading the policy back.</p>
+              <p>Creating the endpoint uses this profile&rsquo;s saved listener, {listenHost}:{port}; to use another port, change it in Configuration and save it first.{modeChange} PwrAgent then creates {oauth ? "the gateway’s validation token, an Access application with sign-in and an email allowlist," : mtls ? "a private certificate authority, an Access application with a certificate-only policy," : "the gateway’s validation token, an Access application with a token-only policy,"} and a tunnel — and publishes {hostname.trim() || "the hostname"} only after reading the policy back.</p>
+              {listenerNotice}
               <div className="settings-button-row">
                 {action(created ? portMoved ? `Resume and move tunnel to ${livePort}` : "Resume endpoint creation" : "Create protected endpoint",
                   { action: "provision", hostname, listenPort: Number(listenPort), gate: effectiveGate, emails: oauth ? emails : undefined },
@@ -636,7 +719,7 @@ export function CloudflareSetup(props: Props) {
               {signingIn ? signInHelp("Finish signing in in your browser.") : <div className="settings-button-row">
                 {status.signIn.state === "signed-in"
                   ? action("Sign out", { action: "sign-out" }, "Signing out…")
-                  : action("Sign in", { action: "sign-in" }, "Finish signing in in your browser…", true)}
+                  : action(error?.action === "sign-in" ? "Retry sign-in" : "Sign in", { action: "sign-in" }, "Finish signing in in your browser…", true)}
               </div>}
               {outcome("sign-in")}
             </AutomationStage>
