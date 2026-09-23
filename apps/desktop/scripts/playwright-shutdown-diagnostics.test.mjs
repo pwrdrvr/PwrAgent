@@ -1,10 +1,10 @@
 import { execFile } from "node:child_process";
-import { existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, watch, writeFileSync } from "node:fs";
+import { once } from "node:events";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { promisify } from "node:util";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 
 const require = createRequire(import.meta.url);
 const desktop = fileURLToPath(new URL("..", import.meta.url));
@@ -13,11 +13,70 @@ const cli = path.join(path.dirname(fromPlaywright.resolve("playwright/package.js
 const core = fromPlaywright.resolve("playwright-core/lib/coreBundle");
 const diagnostics = new URL("./playwright-shutdown-diagnostics.mjs", import.meta.url).href;
 const roots = [];
-const run = promisify(execFile);
+const activeProbes = new Set();
+const POST_READY_CLI_TIMEOUT_MS = 10_000;
 
-afterAll(() => {
+afterEach(async () => {
+  await Promise.all([...activeProbes].map(stopProbe));
+});
+
+afterAll(async () => {
+  await Promise.all([...activeProbes].map(stopProbe));
   for (const root of roots) rmSync(root, { recursive: true, force: true });
 });
+
+function workerStarted(output) {
+  const directory = path.join(output, "worker-shutdown");
+  if (!existsSync(directory)) return false;
+  return readdirSync(directory, { recursive: true })
+    .filter((file) => path.basename(file) === "timeline.jsonl")
+    .some((file) => readFileSync(path.join(directory, file), "utf8").includes('"kind":"worker-start"'));
+}
+
+function waitForWorkerStart(root, output) {
+  let watcher;
+  const close = () => watcher?.close();
+  const promise = new Promise((resolve, reject) => {
+    const check = () => {
+      try {
+        if (!workerStarted(output)) return;
+        close();
+        resolve();
+      } catch (error) {
+        close();
+        reject(error);
+      }
+    };
+    watcher = watch(root, { recursive: true }, check);
+    check();
+  });
+  return { close, promise };
+}
+
+function startProbe(args, options) {
+  const controller = new AbortController();
+  let child;
+  const result = new Promise((resolve) => {
+    child = execFile(process.execPath, args, { ...options, signal: controller.signal }, (error, stdout, stderr) => {
+      resolve(error ? { code: error.code, stderr, stdout } : { code: 0, stderr, stdout });
+    });
+  });
+  const probe = { child, controller, result };
+  activeProbes.add(probe);
+  void result.finally(() => activeProbes.delete(probe));
+  return probe;
+}
+
+async function stopProbe(probe) {
+  const exited = () => probe.child.exitCode !== null || probe.child.signalCode !== null;
+  if (exited()) return;
+  probe.controller.abort();
+  await Promise.race([
+    once(probe.child, "close").catch(() => undefined),
+    new Promise((resolve) => setTimeout(resolve, 500)),
+  ]);
+  if (!exited()) probe.child.kill("SIGKILL");
+}
 
 async function probe(mode) {
   mkdirSync(path.join(desktop, ".local"), { recursive: true });
@@ -53,18 +112,41 @@ async function probe(mode) {
       `}
     });
   `);
-  // The fixture's Playwright config owns the five-second cleanup deadline.
-  // Do not give execFile a second deadline that starts before its worker has
-  // loaded the config: full-suite process pressure can otherwise kill the
-  // probe before the worker-side recorder has had a chance to become ready.
-  const result = await run(process.execPath, [cli, "test", "-c", path.join(root, "playwright.config.mjs")], {
+  const started = startProbe([cli, "test", "-c", path.join(root, "playwright.config.mjs")], {
     cwd: desktop,
     env: { ...process.env, PWRAGENT_E2E_WORKER_DIAGNOSTICS: "1", SHUTDOWN_PROBE_SECRET: "must-not-appear-in-artifacts" },
     maxBuffer: 1024 * 1024,
-  }).then((value) => ({ ...value, code: 0 }), (error) => ({ code: error.code, stdout: error.stdout, stderr: error.stderr }));
-  if (existsSync(descendantPidFile)) {
-    try { process.kill(Number(readFileSync(descendantPidFile, "utf8")), "SIGKILL"); } catch (error) {
-      if (error.code !== "ESRCH") throw error;
+  });
+  const readiness = waitForWorkerStart(root, output);
+  let completionTimer;
+  let timedOut = false;
+  let result;
+  try {
+    // Startup is governed by the test's own deadline and afterEach owns the
+    // child if it fails. Once the worker has emitted its readiness event, the
+    // probe gets a separate bounded completion window around Playwright's
+    // five-second cleanup timeout.
+    await Promise.race([
+      readiness.promise,
+      started.result.then((completed) => {
+        if (workerStarted(output)) return completed;
+        throw new Error(`Playwright exited before the worker shutdown recorder became ready.\n${completed.stdout}${completed.stderr}`);
+      }),
+    ]);
+    completionTimer = setTimeout(() => {
+      timedOut = true;
+      started.controller.abort();
+    }, POST_READY_CLI_TIMEOUT_MS);
+    result = await started.result;
+    if (timedOut) throw new Error("Playwright did not exit after the worker shutdown recorder became ready.");
+  } finally {
+    clearTimeout(completionTimer);
+    readiness.close();
+    await stopProbe(started);
+    if (existsSync(descendantPidFile)) {
+      try { process.kill(Number(readFileSync(descendantPidFile, "utf8")), "SIGKILL"); } catch (error) {
+        if (error.code !== "ESRCH") throw error;
+      }
     }
   }
   const diagnosticsRoot = path.join(output, "worker-shutdown");
@@ -72,10 +154,21 @@ async function probe(mode) {
   const files = readdirSync(diagnosticsRoot, { recursive: true }).filter((file) => /\.(json|jsonl)$/.test(file));
   const artifacts = files.map((file) => ({ file, text: readFileSync(path.join(diagnosticsRoot, file), "utf8") }));
   expect(artifacts.map(({ text }) => text).join("\n")).not.toContain("must-not-appear-in-artifacts");
+  expect(artifacts.find(({ file }) => file.endsWith("timeline.jsonl"))?.text).toContain('"kind":"worker-start"');
   return { ...result, artifacts, snapshots: artifacts.filter(({ file }) => file.includes("snapshot-")).map(({ text }) => JSON.parse(text)) };
 }
 
 describe("real Playwright worker shutdown diagnostics", () => {
+  it("terminates a probe that stalls before worker readiness", async () => {
+    const started = startProbe(["-e", "setInterval(() => {}, 1_000)"], {
+      cwd: desktop,
+      maxBuffer: 1024 * 1024,
+    });
+    await stopProbe(started);
+    await started.result;
+    expect(started.child.exitCode !== null || started.child.signalCode !== null).toBe(true);
+  });
+
   it("names the process, originating test and unresolved close before Playwright times out", async () => {
     const result = await probe("process");
     expect(result.code, result.stdout + result.stderr).toBe(1);
@@ -125,7 +218,6 @@ describe("real Playwright worker shutdown diagnostics", () => {
     expect(result.code, result.stdout + result.stderr).toBe(0);
     expect(result.snapshots).toHaveLength(0);
     const timeline = result.artifacts.find(({ file }) => file.endsWith("timeline.jsonl")).text;
-    expect(timeline).toContain('"kind":"worker-start"');
     expect(timeline).toContain('"kind":"worker-end","failed":false');
   }, 20_000);
 });
