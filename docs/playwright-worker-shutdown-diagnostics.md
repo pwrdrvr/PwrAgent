@@ -47,11 +47,14 @@ pnpm test apps/desktop/scripts/playwright-shutdown-diagnostics.test.mjs
 ```
 
 This starts the actual installed Playwright runner in disposable directories.
-It verifies three failures with passing test bodies: a stuck graceful-close
-callback, a stuck worker fixture, and an exited parent with inherited pipes
-held by its descendant. It also verifies healthy cleanup exits zero without a
-snapshot and that a planted environment secret is absent from artifacts. No
-Electron window, display server, or browser download is needed.
+It verifies two failures with passing test bodies on every platform: a stuck
+graceful-close callback and a stuck worker fixture. On POSIX it also verifies
+an exited parent with inherited pipes held by its descendant. That reproduction
+is skipped on Windows: its inherited-stdio fixture exits cleanly there instead
+of holding the worker open. This does not disable Windows diagnostic capture;
+the two other failure probes run there. It also verifies healthy cleanup exits
+zero without a snapshot and that a planted environment secret is absent from
+artifacts. No Electron window, display server, or browser download is needed.
 
 Two small versioned pnpm patches emit observations from Playwright's worker
 and process launcher. They leave the original promises, cleanup, error handling

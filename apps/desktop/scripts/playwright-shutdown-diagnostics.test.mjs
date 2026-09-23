@@ -99,7 +99,11 @@ describe("real Playwright worker shutdown diagnostics", () => {
     expect(result.snapshots.find(({ reason }) => reason === "slow-worker-cleanup").phase).toBe("worker-fixtures");
   }, 20_000);
 
-  it("captures an exited parent whose descendant still holds the stdio pipes", async () => {
+  // This fixture relies on POSIX inherited-fd lifetime: the grandchild keeps
+  // the worker's pipe open after its parent exits. Windows CI closes it and
+  // exits zero, so this is not a Windows hang reproduction. The process and
+  // fixture timeout probes above exercise actual failure capture on Windows.
+  it.skipIf(process.platform === "win32")("captures an exited POSIX parent whose descendant still holds the stdio pipes", async () => {
     const result = await probe("pipe");
     expect(result.code, result.stdout + result.stderr).toBe(1);
     expect(result.stdout).toContain("1 passed");
