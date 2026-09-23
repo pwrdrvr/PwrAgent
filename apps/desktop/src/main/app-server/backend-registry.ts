@@ -8095,6 +8095,7 @@ type BackendRegistryOverlayStoreLike = OverlayStoreLike & Partial<
   Pick<
     SqliteOverlayStore,
     | "readThreadGitWorkingStateCache"
+    | "completeThreadUsageTurn"
     | "listRemoteThreadPins"
     | "listThreadCompactions"
     | "recordThreadCompaction"
@@ -39770,6 +39771,22 @@ export class DesktopBackendRegistry {
         };
       };
       const turnId = turnIdFromTerminalNotification(notification);
+      // The final token snapshot can precede this notification, with no later
+      // usage event to carry the end time into the pricing row.
+      if (turnId && this.overlayStore.completeThreadUsageTurn) {
+        const completed = await this.overlayStore.completeThreadUsageTurn({
+          backend: event.backend,
+          threadId: notification.params.threadId,
+          turnId,
+          completedAt: completedAtFromTerminalNotification(event.notification) ?? Date.now(),
+        });
+        if (completed) {
+          await this.emitThreadPricingUpdated({
+            backend: event.backend,
+            threadId: notification.params.threadId,
+          });
+        }
+      }
       if (event.backend === "codex") {
         await this.flushPendingTokenMiserLedger({
           threadId: notification.params.threadId,

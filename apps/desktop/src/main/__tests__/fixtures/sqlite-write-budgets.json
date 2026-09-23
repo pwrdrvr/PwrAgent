@@ -48,6 +48,13 @@
     "rowsChanged": 1,
     "statements": 1
   },
+  "completed-turn-usage-duration": {
+    "commits": 1,
+    "note": "One completion after the live usage row was flushed: one commit per completed turn; zero additional commits for repeated terminal events",
+    "observedWalBytes": 4120,
+    "rowsChanged": 1,
+    "statements": 1
+  },
   "composer-draft-typing": {
     "commits": 70,
     "note": "70 direct store saves (a stress case for prefix collapse, NOT the app's typing cadence — the renderer coalesces to one save per 5s): exactly one journal row survives, and commits track save calls because each save is its own transaction",

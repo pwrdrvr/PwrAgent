@@ -658,6 +658,23 @@ function createOverlayStoreMock(params?: {
         },
       };
     },
+    completeThreadUsageTurn: async ({
+      backend,
+      threadId,
+      turnId,
+      completedAt,
+    }: {
+      backend: AppServerBackendKind;
+      threadId: string;
+      turnId: string;
+      completedAt: number;
+    }) => {
+      for (const [id, line] of usageLines) {
+        if (line.backend === backend && line.threadId === threadId && line.turnId === turnId) {
+          usageLines.set(id, { ...line, completedAt });
+        }
+      }
+    },
     readThreadPricing: async ({
       backend,
       threadId,
@@ -29398,6 +29415,43 @@ command = "pnpm dev"
     });
     expect(pricing.lines[0]?.pricingRateId).toBeUndefined();
 
+    await registry.close();
+  });
+
+  it("records the end time when a turn completes without later usage", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/read"] },
+    });
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+
+    await codexClient.emit({
+      method: "thread/tokenUsage/updated",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        tokenUsage: {
+          last: { inputTokens: 1_000, cachedInputTokens: 100, outputTokens: 20, totalTokens: 1_020 },
+          total: { inputTokens: 1_000, cachedInputTokens: 100, outputTokens: 20, totalTokens: 1_020 },
+        },
+      },
+    });
+    await codexClient.emit({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        turn: { id: "turn-1", status: "completed", completedAt: 1_800_000_004_000, output: [] },
+      },
+    });
+
+    const pricing = await overlayStore.readThreadPricing({ backend: "codex", threadId: "thread-1" });
+    expect(pricing.lines).toHaveLength(1);
+    expect(pricing.lines[0]).toMatchObject({
+      completedAt: 1_800_000_004_000,
+      status: "pending",
+      turnId: "turn-1",
+    });
     await registry.close();
   });
 
