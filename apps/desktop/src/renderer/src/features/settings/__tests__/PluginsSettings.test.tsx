@@ -1,5 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -550,12 +551,13 @@ describe("PluginsSettings", () => {
     });
   });
   /**
-   * An OAuth round trip leaves for the browser, and the card cannot see what
-   * happens there. Without a way out, `connectionPending` disabled every
-   * button on every row -- including the Reauthorize that would have issued a
-   * fresh sign-in link -- until the main process gave up five minutes later.
+   * An OAuth round trip leaves for the browser, and the pane cannot see what
+   * happens there. The wait used to hold the card's one latch: every button on
+   * every row went dim, the add form with them, and the only way out was a
+   * Stop waiting at the top of the card -- a screen away from the row it
+   * stopped on a long list. The wait now belongs to its row.
    */
-  it("hands back the card when an authorization never returns", async () => {
+  it("waits on the row that is signing in, with its way out beside it", async () => {
     const api = createDesktopApi([]);
     const cancel = vi.fn().mockResolvedValue({ connectionId: "rovo" });
     const rovo: McpConnectionStatus = {
@@ -564,50 +566,175 @@ describe("PluginsSettings", () => {
       kind: "remote", authMode: "oauth", enabled: true, configured: false,
       state: "disconnected", createdAt: 0, updatedAt: 0,
     };
-    // Held open so the test can settle it *after* Stop waiting, which is what
-    // an abandoned browser round trip does.
-    let settleAuthorize:
-      | ((value: AuthorizeMcpConnectionResponse) => void)
-      | undefined;
-    api.authorizeMcpConnection = vi.fn(
-      () => new Promise<AuthorizeMcpConnectionResponse>((resolve) => {
-        settleAuthorize = resolve;
-      }),
+    const datadog: McpConnectionStatus = {
+      id: "datadog", displayName: "Datadog",
+      serverUrl: "https://mcp.datadoghq.com/v1/mcp",
+      kind: "remote", authMode: "oauth", enabled: true, configured: true,
+      state: "ready", createdAt: 0, updatedAt: 0,
+    };
+    // Each attempt is held open so the test can settle it *after* its row
+    // has moved on, which is what an abandoned browser round trip does.
+    const attempts: Array<{
+      connectionId: string;
+      reject: (cause: Error) => void;
+    }> = [];
+    const authorize = vi.fn(
+      (request: { connectionId: string }) =>
+        new Promise<AuthorizeMcpConnectionResponse>((_resolve, reject) => {
+          attempts.push({ connectionId: request.connectionId, reject });
+        }),
     );
+    api.authorizeMcpConnection = authorize;
     api.cancelMcpConnectionAuthorization = cancel;
+    api.listMcpConnections = vi.fn().mockResolvedValue({
+      connections: [rovo, datadog],
+    });
+    render(<PluginsSettings desktopApi={api} snapshot={createSnapshot()} />);
+
+    const rovoRow = within(
+      (await screen.findByText(rovo.serverUrl)).closest("article")!,
+    );
+    const datadogRow = within(
+      screen.getByText(datadog.serverUrl).closest("article")!,
+    );
+    fireEvent.click(rovoRow.getByRole("button", { name: "Authorize" }));
+
+    // The wait and its Cancel stand where Authorize was.
+    expect(await rovoRow.findByRole("status")).toHaveTextContent(
+      "Waiting for sign-in…",
+    );
+    expect(
+      rovoRow.getByRole("button", { name: "Cancel sign-in to Atlassian Rovo" }),
+    ).toBeEnabled();
+    expect(
+      rovoRow.getByText("Finish signing in to Atlassian Rovo in your browser."),
+    ).toBeInTheDocument();
+    expect(rovoRow.queryByRole("button", { name: "Authorize" }))
+      .not.toBeInTheDocument();
+    expect(rovoRow.queryByRole("button", { name: "Edit" }))
+      .not.toBeInTheDocument();
+    expect(rovoRow.queryByRole("button", { name: "Remove" }))
+      .not.toBeInTheDocument();
+    // Nothing is said about it anywhere but its row.
+    expect(screen.queryByText(/authorization to complete/))
+      .not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Stop waiting" }))
+      .not.toBeInTheDocument();
+
+    // Every other row, and the add form, stay usable.
+    for (const name of ["Reauthorize", "Disconnect", "Edit", "Remove"]) {
+      expect(datadogRow.getByRole("button", { name })).toBeEnabled();
+    }
+    expect(screen.getByLabelText("Remote MCP URL")).toBeEnabled();
+
+    // So a second sign-in can run beside the first.
+    fireEvent.click(datadogRow.getByRole("button", { name: "Reauthorize" }));
+    expect(
+      await datadogRow.findByRole("button", { name: "Cancel sign-in to Datadog" }),
+    ).toBeEnabled();
+    expect(authorize).toHaveBeenCalledTimes(2);
+
+    fireEvent.click(
+      rovoRow.getByRole("button", { name: "Cancel sign-in to Atlassian Rovo" }),
+    );
+    await waitFor(() => {
+      expect(rovoRow.getByRole("button", { name: "Authorize" })).toBeEnabled();
+    });
+    expect(cancel).toHaveBeenCalledWith({ connectionId: "rovo" });
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(rovoRow.getByRole("button", { name: "Edit" })).toBeEnabled();
+    expect(rovoRow.queryByRole("status")).not.toBeInTheDocument();
+    // Cancelling one sign-in is not cancelling the other.
+    expect(
+      datadogRow.getByRole("button", { name: "Cancel sign-in to Datadog" }),
+    ).toBeInTheDocument();
+
+    // A fresh attempt, then the main process ends the abandoned one the way
+    // it does: by rejecting it. Landing on a stale attempt, that is neither a
+    // failure to report nor the end of the wait that replaced it.
+    fireEvent.click(rovoRow.getByRole("button", { name: "Authorize" }));
+    expect(
+      await rovoRow.findByRole("button", { name: "Cancel sign-in to Atlassian Rovo" }),
+    ).toBeInTheDocument();
+    const abandoned = attempts.find((entry) => entry.connectionId === "rovo")!;
+    await act(async () => {
+      abandoned.reject(new Error("Atlassian Rovo authorization was cancelled."));
+    });
+    expect(rovoRow.queryByRole("alert")).not.toBeInTheDocument();
+    expect(
+      rovoRow.getByRole("button", { name: "Cancel sign-in to Atlassian Rovo" }),
+    ).toBeInTheDocument();
+    expect(authorize).toHaveBeenCalledTimes(3);
+  });
+
+  /**
+   * A failure used to land in the card's notice, a screen away from the row
+   * on a long list -- and it pushed every row down as it appeared.
+   */
+  it("writes a failed sign-in under the row that tried it", async () => {
+    const api = createDesktopApi([]);
+    const rovo: McpConnectionStatus = {
+      id: "rovo", displayName: "Atlassian Rovo",
+      serverUrl: "https://mcp.atlassian.com/v2/mcp",
+      kind: "remote", authMode: "oauth", enabled: true, configured: false,
+      state: "disconnected", createdAt: 0, updatedAt: 0,
+    };
+    api.authorizeMcpConnection = vi.fn()
+      .mockRejectedValueOnce(new Error("The server refused the redirect URL."))
+      .mockReturnValueOnce(new Promise(() => {}));
     api.listMcpConnections = vi.fn().mockResolvedValue({ connections: [rovo] });
     render(<PluginsSettings desktopApi={api} snapshot={createSnapshot()} />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Authorize" }));
-    await screen.findByText(
-      "Waiting for Atlassian Rovo authorization to complete...",
+    const article = (await screen.findByText(rovo.serverUrl)).closest("article")!;
+    const row = within(article);
+    fireEvent.click(row.getByRole("button", { name: "Authorize" }));
+
+    expect(await row.findByRole("alert")).toHaveTextContent(
+      "Sign-in failed: The server refused the redirect URL.",
     );
-    const row = within(
-      screen.getByText("https://mcp.atlassian.com/v2/mcp").closest("article")!,
-    );
-    expect(row.getByRole("button", { name: "Edit" })).toBeDisabled();
-    expect(row.getByRole("button", { name: "Remove" })).toBeDisabled();
-
-    fireEvent.click(screen.getByRole("button", { name: "Stop waiting" }));
-
-    await waitFor(() => {
-      expect(row.getByRole("button", { name: "Authorize" })).toBeEnabled();
-    });
-    expect(row.getByRole("button", { name: "Edit" })).toBeEnabled();
-    expect(row.getByRole("button", { name: "Remove" })).toBeEnabled();
-    expect(cancel).toHaveBeenCalledWith({ connectionId: "rovo" });
-
-    // The abandoned attempt still settles in the main process. Landing on a
-    // stale epoch it says nothing -- a success notice for an authorization the
-    // operator gave up on would be a claim the card cannot support, and
-    // re-entering `finally` would disable the row it was just released from.
-    settleAuthorize?.({ connection: { ...rovo, configured: true, state: "ready" } });
-    await waitFor(() => {
-      expect(
-        screen.getByText(/Stopped waiting for authorization/),
-      ).toBeInTheDocument();
-    });
+    // The row's alert is the only one.
+    expect(screen.getAllByRole("alert")).toHaveLength(1);
     expect(row.getByRole("button", { name: "Authorize" })).toBeEnabled();
+
+    // Trying again retires the old failure rather than stacking under it.
+    fireEvent.click(row.getByRole("button", { name: "Authorize" }));
+    expect(
+      await row.findByRole("button", { name: "Cancel sign-in to Atlassian Rovo" }),
+    ).toBeInTheDocument();
+    expect(row.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  /**
+   * Connect on a local app ends in the same browser sign-in as Reauthorize,
+   * but it ran on a latch of its own: a disabled "Connecting..." that nothing
+   * could call off.
+   */
+  it("lets a local app's Connect be called off like any other sign-in", async () => {
+    const api = createDesktopApi([]);
+    const cancel = vi.fn().mockResolvedValue({ connectionId: "pwrgit" });
+    api.readPwrGitConnectionStatus = vi.fn().mockResolvedValue({
+      connectionId: "pwrgit", displayName: "PwrGit",
+      availability: "running", configured: false,
+    });
+    api.connectPwrGit = vi.fn(() => new Promise<never>(() => {}));
+    api.cancelMcpConnectionAuthorization = cancel;
+    api.listMcpConnections = vi.fn().mockResolvedValue({ connections: [{
+      id: "pwrgit", displayName: "PwrGit", serverUrl: "http://127.0.0.1:51731/mcp",
+      kind: "pwrgit", authMode: "oauth", enabled: true, configured: false,
+      state: "disconnected", createdAt: 0, updatedAt: 0,
+    }] });
+    render(<PluginsSettings desktopApi={api} snapshot={createSnapshot()} />);
+
+    const row = within(
+      (await screen.findByText("http://127.0.0.1:51731/mcp")).closest("article")!,
+    );
+    fireEvent.click(await row.findByRole("button", { name: "Connect" }));
+    fireEvent.click(
+      await row.findByRole("button", { name: "Cancel sign-in to PwrGit" }),
+    );
+
+    expect(await row.findByRole("button", { name: "Connect" })).toBeEnabled();
+    expect(cancel).toHaveBeenCalledWith({ connectionId: "pwrgit" });
   });
   /**
    * The endpoint is the one thing in the row an operator hands to something

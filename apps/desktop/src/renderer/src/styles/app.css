@@ -12749,7 +12749,10 @@ a.button {
   overflow-wrap: anywhere;
 }
 
-.settings-mcp-row[data-health="needsSignIn"] .settings-mcp-row__error {
+/* The Codex row's "Sign in to load this server's tools." is a remedy, not a
+   failure. A managed row's failures sit inside its detail block, and one that
+   says a sign-in failed is a failure whatever the health dot says. */
+.settings-mcp-row[data-health="needsSignIn"] > .settings-mcp-row__error {
   color: var(--text-muted);
 }
 

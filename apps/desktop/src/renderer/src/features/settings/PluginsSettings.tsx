@@ -31,6 +31,7 @@ import type { DesktopApi } from "../../lib/desktop-api";
 import {
   SettingsField,
   SettingsPanelHead,
+  SettingsPendingIndicator,
   SettingsSection,
   SettingsSectionStack,
 } from "./SettingsLayout";
@@ -59,7 +60,6 @@ type PendingAction = {
 
 type ConnectionPendingAction = {
   kind:
-    | "authorize"
     | "availability"
     | "create"
     | "disconnect"
@@ -161,9 +161,8 @@ export function PluginsSettings(props: {
   const [connectionPending, setConnectionPendingState] =
     useState<ConnectionPendingAction>();
   /**
-   * `connectionPending` read from a closure the OAuth wait was started in is
-   * always the value it held when that wait began, so the Stop waiting button
-   * needs the live one to know what it is stopping.
+   * The live `connectionPending`, for a handler that has to refuse a second
+   * click in the same tick: React has not flushed the first one's state yet.
    */
   const connectionPendingRef = useRef<ConnectionPendingAction | undefined>(
     undefined,
@@ -176,12 +175,44 @@ export function PluginsSettings(props: {
     [],
   );
   /**
-   * Which authorization attempt the card is currently listening to. Stop
-   * waiting and a fresh Authorize each bump it, so a browser round trip the
-   * operator has walked away from cannot come back later and overwrite the
-   * notice -- or, worse, re-disable the card it was just released from.
+   * The sign-ins in flight, by connection, each holding the attempt that
+   * started it.
+   *
+   * Kept apart from `connectionPending` on purpose. Everything that sets that
+   * one is a main-process round trip that settles in well under a second; a
+   * sign-in waits on a browser for as long as the operator takes. It used to
+   * hold the same latch, so one sign-in disabled every button on every row
+   * and the add form, and the only way out was a banner at the top of the
+   * card. Nothing required that: each attempt binds its own callback port and
+   * the gateway tracks attempts per connection.
+   *
+   * Cancel sign-in removes the attempt, so a browser round trip the operator
+   * has walked away from lands on a stale attempt when it settles and cannot
+   * report on the row -- or put it back into the wait it was released from.
    */
-  const authorizationEpochRef = useRef(0);
+  const authorizationsRef = useRef(new Map<string, number>());
+  const authorizationAttemptRef = useRef(0);
+  const [authorizing, setAuthorizing] = useState<ReadonlySet<string>>(
+    () => new Set<string>(),
+  );
+  const publishAuthorizing = useCallback(() => {
+    setAuthorizing(new Set(authorizationsRef.current.keys()));
+  }, []);
+  /** Why each connection's last sign-in failed, shown on its own row. */
+  const [authorizationErrors, setAuthorizationErrors] = useState<
+    Readonly<Record<string, string>>
+  >({});
+  const setAuthorizationError = useCallback(
+    (connectionId: string, error?: string) => {
+      setAuthorizationErrors((current) => {
+        if (error !== undefined) return { ...current, [connectionId]: error };
+        if (!(connectionId in current)) return current;
+        const { [connectionId]: _cleared, ...rest } = current;
+        return rest;
+      });
+    },
+    [],
+  );
   // Counts completed sign-ins per connection. A reauthorization can switch
   // accounts without changing anything else the row can see, so the row
   // re-reads its tools when this moves.
@@ -381,7 +412,10 @@ export function PluginsSettings(props: {
       setConnectionsLoading(false);
       return false;
     }
-    setConnectionsLoading(true);
+    // `connectionsLoading` starts true and is never raised again. Raising it
+    // on a refresh swapped the whole list for "Loading connections..." after
+    // every action, which remounted each row -- closing its drawer and, now
+    // that sign-ins run side by side, restarting another row's wait.
     try {
       const response = await props.desktopApi.listMcpConnections();
       setConnections(response.connections);
@@ -672,66 +706,59 @@ export function PluginsSettings(props: {
   };
 
   /**
-   * Give up on an authorization that left for the browser and never came back.
+   * Give up on a sign-in that left for the browser and never came back.
    *
    * There is nothing here to abort: the round trip belongs to the browser and
    * to the callback listener in the main process, which gives up on its own
-   * after five minutes. What the operator is actually stuck behind is
-   * `connectionPending`, which disables every button on every row in this card
-   * -- including the Edit and Remove of the connection being authorized, and
-   * the Reauthorize that would issue a fresh URL. So this releases the wait
-   * and bumps the epoch, and the abandoned attempt lands on a stale epoch and
-   * says nothing.
+   * after five minutes. What the operator is stuck behind is the row's wait,
+   * which stands in for its Authorize, Edit, and Remove -- including the
+   * Authorize that would issue a fresh link. So this drops the attempt, and
+   * the abandoned one lands on a stale attempt and says nothing.
    *
    * The main process is told as well, so the abandoned listener stops holding
    * its port and a retry starts from a clean callback rather than racing the
    * one the operator walked away from.
    */
-  const stopWaitingForAuthorization = async (message?: string) => {
-    const pending = connectionPendingRef.current;
-    if (pending?.kind !== "authorize") return;
-    authorizationEpochRef.current += 1;
-    setConnectionPending(undefined);
-    setConnectionNotice({
-      kind: "info",
-      text: message
-        ?? "Stopped waiting for authorization. Authorize again to start over"
-          + " with a fresh sign-in link.",
-    });
-    if (!pending.connectionId) return;
+  const cancelAuthorization = async (connection: McpConnectionStatus) => {
+    if (!authorizationsRef.current.delete(connection.id)) return;
+    publishAuthorizing();
     try {
       await props.desktopApi?.cancelMcpConnectionAuthorization?.({
-        connectionId: pending.connectionId,
+        connectionId: connection.id,
       });
     } catch {
-      // Releasing the card is the whole point, and it already happened. A
+      // Releasing the row is the whole point, and it already happened. A
       // listener that outlives this call times out on its own.
     }
     await loadConnections();
   };
 
+  /**
+   * Sign a connection in, on its own row.
+   *
+   * The wait and its outcome both belong to the row that asked: the row shows
+   * the wait with its Cancel beside it, and a failure is written under the
+   * row. A success needs no words -- the row turns to `Signed in` and lists
+   * its tools -- and announcing it in the card's notice would push every row
+   * down at the moment the operator is reading one of them.
+   */
   const authorizeConnection = async (
     connection: McpConnectionStatus,
     continueCreate = false,
   ) => {
-    // The ref, not the state: two clicks in one tick both read a
-    // `connectionPending` that React has not flushed yet, and both start a
-    // browser round trip.
-    if (connectionPendingRef.current && !continueCreate) return;
-    // Any attempt still in flight from before this one is abandoned: the
-    // operator asked for a new sign-in link, so the old callback must not be
-    // the one that answers.
-    authorizationEpochRef.current += 1;
-    const epoch = authorizationEpochRef.current;
-    const isCurrent = () => authorizationEpochRef.current === epoch;
-    setConnectionPending({
-      kind: "authorize",
-      connectionId: connection.id,
-    });
-    setConnectionNotice({
-      kind: "working",
-      text: `Waiting for ${connection.displayName} authorization to complete...`,
-    });
+    // The refs, not the state: two clicks in one tick both read state that
+    // React has not flushed yet, and both start a browser round trip.
+    if (
+      authorizationsRef.current.has(connection.id)
+      || (connectionPendingRef.current && !continueCreate)
+    ) return;
+    authorizationAttemptRef.current += 1;
+    const attempt = authorizationAttemptRef.current;
+    const isCurrent = () =>
+      authorizationsRef.current.get(connection.id) === attempt;
+    authorizationsRef.current.set(connection.id, attempt);
+    publishAuthorizing();
+    setAuthorizationError(connection.id);
     try {
       const connectLocal = connection.kind === "pwrgit"
         ? props.desktopApi?.connectPwrGit
@@ -758,18 +785,17 @@ export function PluginsSettings(props: {
         ...current,
         [connection.id]: (current[connection.id] ?? 0) + 1,
       }));
-      setConnectionNotice({
-        kind: "success",
-        text: `${connection.displayName} is connected through PwrAgent.`,
-      });
     } catch (error) {
       if (!isCurrent()) return;
-      setConnectionNotice({
-        kind: "error",
-        text: error instanceof Error ? error.message : String(error),
-      });
+      setAuthorizationError(
+        connection.id,
+        error instanceof Error ? error.message : String(error),
+      );
     } finally {
-      if (isCurrent()) setConnectionPending(undefined);
+      if (isCurrent()) {
+        authorizationsRef.current.delete(connection.id);
+        publishAuthorizing();
+      }
     }
   };
 
@@ -826,6 +852,8 @@ export function PluginsSettings(props: {
       setProbe(undefined);
       await loadConnections();
       setConnectionPending(undefined);
+      // The new row carries the sign-in from here, so "Adding..." is done.
+      setConnectionNotice(undefined);
       await authorizeConnection(response.connection, true);
     } catch (error) {
       setConnectionNotice({
@@ -849,6 +877,10 @@ export function PluginsSettings(props: {
         serverUrl: draft.serverUrl,
       });
       setConnectionEdit(undefined);
+      // A failed sign-in describes the server it was attempted against.
+      if (editDraftRepointsServer(draft)) {
+        setAuthorizationError(draft.connectionId);
+      }
       await loadConnections();
       setConnectionNotice({
         kind: "success",
@@ -1059,25 +1091,6 @@ export function PluginsSettings(props: {
               role={connectionNotice.kind === "error" ? "alert" : "status"}
             >
               <span>{connectionNotice.text}</span>
-              {/*
-                * An OAuth round trip leaves the browser, and PwrAgent cannot
-                * see what happens there. Without this the whole card stayed
-                * disabled behind `connectionPending` until the main process
-                * gave up five minutes later, so an authorization the operator
-                * had already abandoned -- a wrong account, a consent screen
-                * that wanted a fresh URL -- had no way to be retried. The
-                * Codex card below has carried the same affordance for its own
-                * sign-ins since it was written.
-                */}
-              {connectionPending?.kind === "authorize" ? (
-                <button
-                  className="button button--ghost settings-plugin-notice__action"
-                  type="button"
-                  onClick={() => void stopWaitingForAuthorization()}
-                >
-                  Stop waiting
-                </button>
-              ) : null}
             </div>
           ) : null}
           {/*
@@ -1097,6 +1110,8 @@ export function PluginsSettings(props: {
               {connections.map((connection) => (
                 <ManagedMcpConnectionRow
                   key={connection.id}
+                  authorizationError={authorizationErrors[connection.id]}
+                  authorizing={authorizing.has(connection.id)}
                   busy={connectionPending?.connectionId === connection.id}
                   connection={connection}
                   desktopApi={props.desktopApi}
@@ -1104,6 +1119,7 @@ export function PluginsSettings(props: {
                   gatewayEnabled={gatewayEnabled}
                   signIns={signIns[connection.id] ?? 0}
                   onAuthorize={() => void authorizeConnection(connection)}
+                  onCancelAuthorization={() => void cancelAuthorization(connection)}
                   onAvailabilityChange={
                     props.desktopApi?.setMcpConnectionEnabled
                       ? (enabled) =>
@@ -1687,6 +1703,10 @@ function useManagedConnectionTools(params: {
  * connection has: the setup remedy, its actions, and the two switches.
  */
 function ManagedMcpConnectionRow(props: {
+  /** Why this connection's last sign-in failed, until it is tried again. */
+  authorizationError?: string;
+  /** A sign-in for this connection is waiting on the browser. */
+  authorizing: boolean;
   busy: boolean;
   connection: McpConnectionStatus;
   desktopApi?: DesktopApi;
@@ -1695,6 +1715,7 @@ function ManagedMcpConnectionRow(props: {
   /** Completed sign-ins for this connection in this pane. */
   signIns: number;
   onAuthorize: () => void;
+  onCancelAuthorization: () => void;
   onAvailabilityChange?: (enabled: boolean) => void;
   onSelectForNewThreadsChange?: (selectForNewThreads: boolean) => void;
   onChanged: () => void;
@@ -1739,6 +1760,9 @@ function ManagedMcpConnectionRow(props: {
   const seedable =
     mcpConnectionIdsForNewThread([{ ...connection, selectForNewThreads: true }])
       .length > 0;
+  // A sign-in in flight holds this row only. Its switches wait for it, since
+  // it replaces the credentials they describe; every other row stays live.
+  const disabled = props.disabled || props.authorizing;
   return (
     <article
       className="settings-mcp-row settings-mcp-row--managed"
@@ -1777,82 +1801,105 @@ function ManagedMcpConnectionRow(props: {
           ) : null}
         </div>
         <div className="settings-mcp-row__actions">
-          {app ? (
-            <LocalConnectionActions
-              app={app}
-              busy={props.busy}
-              configured={connection.configured}
-              desktopApi={props.desktopApi}
-              disabled={props.disabled}
-              status={localStatus}
-              onAuthorize={props.onAuthorize}
-              onChanged={() => {
-                void refreshLocal();
-                props.onChanged();
-              }}
-              onNotice={props.onNotice}
-            />
-          ) : (
-            <button
-              className="button button--secondary"
-              disabled={props.disabled}
-              title={
-                connection.configured
-                  ? `Sign in to ${connection.displayName} again and replace the credentials PwrAgent holds. Use this when it stops working or you want a different account.`
-                  : `Sign in to ${connection.displayName} in your browser. PwrAgent stores the credentials encrypted in this profile.`
-              }
-              type="button"
-              onClick={props.onAuthorize}
-            >
-              {props.busy
-                ? "Working..."
-                : connection.configured ? "Reauthorize" : "Authorize"}
-            </button>
-          )}
           {/*
-            * Disconnect and Remove differ only in whether the row survives, and
-            * nothing on screen said so -- two destructive-looking buttons side
-            * by side with no way to tell which one you wanted.
+            * The wait stands where the Authorize the operator clicked was,
+            * with its way out beside it. It used to be a disabled "Working..."
+            * here and a Stop waiting at the top of the card, which on a long
+            * list was a screen away from the row it stopped.
             */}
-          {connection.configured ? (
-            <button
-              className="button button--ghost"
-              disabled={props.disabled}
-              title={`Discard the credentials PwrAgent holds for ${connection.displayName} and close its open sessions. The connection stays in this list, so you can authorize it again without retyping its URL.`}
-              type="button"
-              onClick={props.onDisconnect}
-            >
-              Disconnect
-            </button>
-          ) : null}
-          {connection.kind === "remote" ? (
+          {props.authorizing ? (
             <>
-              {/*
-                * A connection's URL is not a write-once field. `create`
-                * persists before authorization is attempted, so without Edit a
-                * single mistyped character left a dead row whose only exit was
-                * Remove and retype.
-                */}
+              <SettingsPendingIndicator pending label="Waiting for sign-in…" />
               <button
-                className="button button--ghost"
-                disabled={props.disabled}
-                title={`Rename ${connection.displayName} or point it at a different URL. A changed URL discards the stored credentials, because they were issued by the old server.`}
+                aria-label={`Cancel sign-in to ${connection.displayName}`}
+                className="button button--secondary"
+                title={`Stop waiting for ${connection.displayName}. The sign-in page already open in your browser stops working; start again for a fresh one.`}
                 type="button"
-                onClick={props.onEdit}
+                onClick={props.onCancelAuthorization}
               >
-                Edit
-              </button>
-              <button
-                className="button button--ghost settings-mcp-row__remove"
-                disabled={props.disabled}
-                title={`Delete ${connection.displayName} from PwrAgent entirely -- the row, its URL, and its credentials. Threads that selected it lose access to it.`}
-                type="button"
-                onClick={props.onRemove}
-              >
-                Remove
+                Cancel sign-in
               </button>
             </>
-          ) : null}
+          ) : (
+            <>
+              {app ? (
+                <LocalConnectionActions
+                  app={app}
+                  busy={props.busy}
+                  configured={connection.configured}
+                  desktopApi={props.desktopApi}
+                  disabled={props.disabled}
+                  status={localStatus}
+                  onAuthorize={props.onAuthorize}
+                  onChanged={() => {
+                    void refreshLocal();
+                    props.onChanged();
+                  }}
+                  onNotice={props.onNotice}
+                />
+              ) : (
+                <button
+                  className="button button--secondary"
+                  disabled={props.disabled}
+                  title={
+                    connection.configured
+                      ? `Sign in to ${connection.displayName} again and replace the credentials PwrAgent holds. Use this when it stops working or you want a different account.`
+                      : `Sign in to ${connection.displayName} in your browser. PwrAgent stores the credentials encrypted in this profile.`
+                  }
+                  type="button"
+                  onClick={props.onAuthorize}
+                >
+                  {props.busy
+                    ? "Working..."
+                    : connection.configured ? "Reauthorize" : "Authorize"}
+                </button>
+              )}
+              {/*
+                * Disconnect and Remove differ only in whether the row survives, and
+                * nothing on screen said so -- two destructive-looking buttons side
+                * by side with no way to tell which one you wanted.
+                */}
+              {connection.configured ? (
+                <button
+                  className="button button--ghost"
+                  disabled={props.disabled}
+                  title={`Discard the credentials PwrAgent holds for ${connection.displayName} and close its open sessions. The connection stays in this list, so you can authorize it again without retyping its URL.`}
+                  type="button"
+                  onClick={props.onDisconnect}
+                >
+                  Disconnect
+                </button>
+              ) : null}
+              {connection.kind === "remote" ? (
+                <>
+                  {/*
+                    * A connection's URL is not a write-once field. `create`
+                    * persists before authorization is attempted, so without Edit a
+                    * single mistyped character left a dead row whose only exit was
+                    * Remove and retype.
+                    */}
+                  <button
+                    className="button button--ghost"
+                    disabled={props.disabled}
+                    title={`Rename ${connection.displayName} or point it at a different URL. A changed URL discards the stored credentials, because they were issued by the old server.`}
+                    type="button"
+                    onClick={props.onEdit}
+                  >
+                    Edit
+                  </button>
+                  <button
+                    className="button button--ghost settings-mcp-row__remove"
+                    disabled={props.disabled}
+                    title={`Delete ${connection.displayName} from PwrAgent entirely -- the row, its URL, and its credentials. Threads that selected it lose access to it.`}
+                    type="button"
+                    onClick={props.onRemove}
+                  >
+                    Remove
+                  </button>
+                </>
+              ) : null}
+            </>
+          )}
         </div>
       </div>
       <div className="settings-mcp-row__detail">
@@ -1869,7 +1916,21 @@ function ManagedMcpConnectionRow(props: {
           label={`${connection.displayName} MCP URL`}
           value={connection.serverUrl}
         />
-        <p className="settings-mcp-row__state">{setup.detail}</p>
+        {/*
+          * While it waits, the remedy line would still be telling the operator
+          * to authorize -- the thing they just did. It says where the sign-in
+          * actually is instead.
+          */}
+        <p className="settings-mcp-row__state">
+          {props.authorizing
+            ? `Finish signing in to ${connection.displayName} in your browser.`
+            : setup.detail}
+        </p>
+        {props.authorizationError ? (
+          <p className="settings-mcp-row__error" role="alert">
+            Sign-in failed: {props.authorizationError}
+          </p>
+        ) : null}
         {listable && inventory?.status === "failed" ? (
           <p className="settings-mcp-row__error">{inventory.error}</p>
         ) : null}
@@ -1933,7 +1994,7 @@ function ManagedMcpConnectionRow(props: {
               // The gateway switch above already states the reason every
               // connection is off, and the row's own state line repeats it, so
               // this reads as a consequence rather than a dead control.
-              disabled={props.disabled || !props.gatewayEnabled}
+              disabled={disabled || !props.gatewayEnabled}
               label={`Offer ${connection.displayName} to threads`}
               onChange={props.onAvailabilityChange}
             />
@@ -1955,7 +2016,7 @@ function ManagedMcpConnectionRow(props: {
                 // here would be a promise the next thread breaks.
                 checked={selectedForNewThreads}
                 disabled={
-                  props.disabled
+                  disabled
                   || !props.gatewayEnabled
                   || !connection.enabled
                 }
@@ -2007,7 +2068,6 @@ function LocalConnectionActions(props: {
   const download = props.app === "PwrGit"
     ? desktopApi?.openPwrGitDownload
     : desktopApi?.openPwrSnapDownload;
-  const connect = props.app === "PwrGit" ? desktopApi?.connectPwrGit : desktopApi?.connectPwrSnap;
 
   // Every action here is invoked as `void run(...)`, so a rejection would
   // escape as an unhandled rejection and the button would simply revert —
@@ -2095,28 +2155,19 @@ function LocalConnectionActions(props: {
     );
   }
 
+  // Connecting ends in the same browser sign-in as Reauthorize, so it goes
+  // through the row's authorization too. On a latch of its own it waited
+  // behind a disabled "Connecting..." with no way to call it off, and a
+  // missing Local Agent Access landed in the card notice, not on this row.
   if (!props.configured) {
     return (
       <button
         className="button button--secondary"
-        disabled={busy}
+        disabled={props.disabled || busy}
         type="button"
-        onClick={() => void run(async () => {
-          const response = await connect?.();
-          // A `needs_local_agent_access` result is not a failure and not a
-          // success: the app is running but has not been told to accept
-          // PwrAgent. Reporting it as connected would send the operator
-          // looking for a bug instead of a setting.
-          if (response?.outcome === "needs_local_agent_access") {
-            return {
-              kind: "info",
-              text: `Turn on Local Agent Access in ${props.app}, then try Connect again.`,
-            };
-          }
-          return undefined;
-        })}
+        onClick={props.onAuthorize}
       >
-        {busy ? "Connecting..." : "Connect"}
+        {busy ? "Working..." : "Connect"}
       </button>
     );
   }

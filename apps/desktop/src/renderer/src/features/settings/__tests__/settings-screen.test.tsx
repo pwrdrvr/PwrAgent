@@ -7806,14 +7806,18 @@ describe("SettingsScreen", () => {
       expect(authorizeMcpConnection).toHaveBeenCalledWith({
         connectionId: "datadog",
       });
-      expect(screen.getByText("Datadog is connected through PwrAgent."))
-        .toBeInTheDocument();
     });
     const row = screen.getByText("Datadog")
       .closest<HTMLElement>(".settings-mcp-row");
     expect(row).not.toBeNull();
-    // The credential chip reads as the Codex list's does for the same state.
-    expect(within(row!).getByText("Signed in")).toBeInTheDocument();
+    // The row is the confirmation: its credential chip reads as the Codex
+    // list's does for the same state, and its wait has ended.
+    expect(await within(row!).findByText("Signed in")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(within(row!).queryByRole("status")).not.toBeInTheDocument();
+    });
+    // "Adding Datadog..." was the form's to say, and the form is done.
+    expect(screen.queryByText("Adding Datadog...")).not.toBeInTheDocument();
   });
 
   it("refuses to save a URL the gateway cannot hold, and says where it belongs", async () => {
