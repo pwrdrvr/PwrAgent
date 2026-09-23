@@ -1435,6 +1435,10 @@ export class DesktopSettingsService {
         codex: {
           path: this.resolveString(config.models?.codex?.path, CODEX_COMMAND_ENV),
           profile: this.resolveConfigString(config.models?.codex?.profile),
+          localModelIds: {
+            value: config.models?.codex?.localModelIds ?? [],
+            source: config.models?.codex?.localModelIds === undefined ? "default" : "config",
+          },
           configOverrides: {
             value: config.models?.codex?.configOverrides ?? [],
             source: config.models?.codex?.configOverrides === undefined ? "default" : "config",
@@ -2746,6 +2750,10 @@ export class DesktopSettingsService {
       throw new Error("Cannot launch Codex with invalid profile configuration and no last-known-good settings.");
     }
     return [...(this.readModelsConfig().codex?.configOverrides ?? [])];
+  }
+
+  resolveCodexLocalModelIds(): string[] {
+    return [...(this.readModelsConfig().codex?.localModelIds ?? [])];
   }
 
   resolveCodexFastAllowed(): boolean {

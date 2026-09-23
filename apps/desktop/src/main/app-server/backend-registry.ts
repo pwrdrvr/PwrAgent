@@ -1,4 +1,5 @@
 import { resolvePullRequestReview } from "./pull-request-review";
+import { priceLocalModelUsage } from "@pwragent/shared";
 import { navigationWorkingStatePath as resolveThreadWorkingStatePath } from "@pwragent/shared";
 import { validateCodexConfigOverrides } from "../settings/codex-config-overrides";
 import {
@@ -8867,6 +8868,7 @@ export class DesktopBackendRegistry {
     DesktopProviderThreadModelMigration
   >;
   private readonly resolveCodexFastAllowedFn: () => boolean;
+  private readonly resolveCodexLocalModelIdsFn: () => string[];
   private readonly resolvePdfAnalysisEnabledFn: () => boolean;
   private readonly resolveTokenMiserEnabledFn: () => boolean;
   private readonly resolveTokenMiserDefaultEnabledFn: () => boolean;
@@ -8989,6 +8991,7 @@ export class DesktopBackendRegistry {
       DesktopProviderThreadModelMigration
     >;
     resolveCodexFastAllowed?: () => boolean;
+    resolveCodexLocalModelIds?: () => string[];
     resolvePdfAnalysisEnabled?: () => boolean;
     configStore?: Pick<DesktopConfigStore, "read" | "subscribe">;
     resolveSpendAlertPolicy?: () => DesktopSpendAlertPolicy;
@@ -9120,6 +9123,8 @@ export class DesktopBackendRegistry {
     this.resolveProviderThreadModelMigrationsFn =
       options?.resolveProviderThreadModelMigrations ??
       (() => settingsService?.resolveProviderThreadModelMigrations() ?? {});
+    this.resolveCodexLocalModelIdsFn = options?.resolveCodexLocalModelIds
+      ?? (() => settingsService?.resolveCodexLocalModelIds?.() ?? []);
     this.resolveCodexFastAllowedFn =
       options?.resolveCodexFastAllowed ??
       (() => settingsService?.resolveCodexFastAllowed() ?? true);
@@ -14585,12 +14590,29 @@ export class DesktopBackendRegistry {
     if (params.backend !== "codex") {
       return withCompactions;
     }
-    return mergeThreadPricingLines(
+    const merged = mergeThreadPricingLines(
       withCompactions,
       [
         ...(this.liveTokenMiserUsageLines.get(params.threadId)?.values() ?? []),
       ],
     );
+    const localIds = new Set(this.resolveCodexLocalModelIdsFn());
+    const models = this.codexBackendSummary?.launchpadOptions?.models ?? [];
+    const labels = new Map(models.map((model) => [model.id, model.label]));
+    let changedPricing = false;
+    const lines = merged.lines.map((line) => {
+      const isCodexModel = line.backend === "codex"
+        && (line.scope !== "monitor" || line.provider === "openai" || line.provider === "local");
+      const label = isCodexModel && line.model ? labels.get(line.model) : undefined;
+      const decorated = label ? { ...line, modelLabel: label } : line;
+      // A helper can belong to another backend while sharing this ledger.
+      if (isCodexModel && line.model && localIds.has(line.model)) {
+        changedPricing = true;
+        return priceLocalModelUsage(decorated);
+      }
+      return decorated;
+    });
+    return changedPricing ? mergeThreadPricingLines(merged, lines) : { ...merged, lines };
   }
 
   private async emitThreadPricingUpdated(params: {

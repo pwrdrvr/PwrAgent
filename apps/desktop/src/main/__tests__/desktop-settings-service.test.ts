@@ -96,6 +96,21 @@ describe("DesktopSettingsService", () => {
     expect(service.resolveCodexConfigOverrides()).toEqual([]);
   });
 
+  it("persists explicit local model pricing declarations and can clear them", async () => {
+    const service = new DesktopSettingsService({
+      configPath: path.join(createTempRoot(), "config.toml"), env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+    expect(service.resolveCodexLocalModelIds()).toEqual([]);
+    const localModelIds = ["/models/bonsai.gguf"];
+    await service.writeConfigPatchTargeted({ models: { codex: { localModelIds } } });
+    expect(service.resolveCodexLocalModelIds()).toEqual(localModelIds);
+    expect((await service.readSettingsProjection()).models.codex.localModelIds)
+      .toEqual({ value: localModelIds, source: "config" });
+    await service.writeConfigPatchTargeted({ models: { codex: { localModelIds: [] } } });
+    expect(service.resolveCodexLocalModelIds()).toEqual([]);
+  });
+
   it("does not scan Token Miser accounting for an ordinary settings projection", async () => {
     const service = new DesktopSettingsService({
       configPath: path.join(createTempRoot(), "config.toml"),

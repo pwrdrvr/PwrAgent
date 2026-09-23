@@ -368,9 +368,20 @@ labels and capability metadata. A custom provider can supply a Codex
 levels, and service tiers. PwrAgent reads capabilities through Codex's protocol;
 the optional local launcher can discover server modalities as described below.
 PwrAgent does not infer capabilities from model filenames. Unknown
-models remain unpriced. No-auth providers without an OpenAI account skip account
+models remain unpriced unless explicitly declared local. No-auth providers without an OpenAI account skip account
 quota polling. Title generation prefers Luna when advertised, otherwise the catalog
 default or first available model, using only its supported reasoning settings.
+
+`models.codex.local_model_ids` (typed settings `localModelIds`) declares exact
+model IDs with zero local API cost for this PwrAgent profile. It applies to
+Codex turn and helper usage, including existing history, as a reversible read
+projection. The raw ledger and token counts stay intact; clearing the declaration
+restores ordinary catalog pricing. No periodic or per-event database writes are
+added. Authentication state, loopback URLs, filenames, and unknown rate entries
+do not imply free inference. Electricity and hardware costs are outside API
+pricing. Pricing cards and model spend groups use the discovered catalog label;
+absolute path IDs fall back to the filename if the catalog is unavailable. The
+exact model ID remains the accounting key and is available on the card tooltip.
 
 `scripts/codex-local-responses-bridge.mjs` is an optional Codex executable wrapper
 for local Responses servers whose chat templates require one leading system message

@@ -1,3 +1,4 @@
+import { LOCAL_MODEL_PRICING_CATALOG, priceLocalModelUsage } from "./local-model-pricing";
 import {
   estimateTokenUsageCost,
   resolveTokenUsagePriceUnavailableReason,
@@ -243,7 +244,7 @@ function buildEstimatedHistoricalGapLine(params: {
           uncachedInputTokens: params.gapTokens.uncachedInputTokens,
         });
 
-  return {
+  const line: EstimatedThreadUsageGapLine = {
     backend: params.anchorLine.backend,
     cachedInputCostMicros: cost?.cachedInputCostMicros ?? 0,
     cachedInputTokens: params.gapTokens.cachedInputTokens,
@@ -252,6 +253,7 @@ function buildEstimatedHistoricalGapLine(params: {
     estimatedUsageGap: true,
     inputTokens,
     model: params.anchorLine.model,
+    ...(params.anchorLine.modelLabel ? { modelLabel: params.anchorLine.modelLabel } : {}),
     outputCostMicros: cost?.outputCostMicros ?? 0,
     outputTokens: params.gapTokens.outputTokens,
     parentThreadId: params.anchorLine.parentThreadId,
@@ -278,4 +280,6 @@ function buildEstimatedHistoricalGapLine(params: {
     usageLineId: `estimated-gap:${params.anchorLine.usageLineId}`,
     usageTurnId: `estimated-gap:${params.anchorLine.usageTurnId ?? params.anchorLine.usageLineId}`,
   };
+  return params.anchorLine.pricingCatalogId === LOCAL_MODEL_PRICING_CATALOG
+    ? priceLocalModelUsage(line) : line;
 }

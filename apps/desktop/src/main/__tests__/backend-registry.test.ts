@@ -6580,6 +6580,48 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  it("projects declared local costs and catalog labels without rewriting history or pricing unknown remote models", async () => {
+    const id = "/models/bonsai.gguf";
+    const local: ThreadUsageLineRecord = {
+      backend: "codex", threadId: "thread-1", usageLineId: "local-turn", model: id,
+      provider: "openai", currency: "USD", createdAt: 1000,
+      scope: "turn", source: "live", status: "finalized",
+      priceStatus: "unpriced", priceUnavailableReason: "missing-rate",
+      inputTokens: 100, uncachedInputTokens: 80, cachedInputTokens: 20,
+      outputTokens: 10, reasoningOutputTokens: 0, totalTokens: 110,
+      uncachedInputCostMicros: 0, cachedInputCostMicros: 0, outputCostMicros: 0, totalCostMicros: 0,
+    };
+    const original = [local, { ...local, usageLineId: "remote-turn", model: "unknown-remote" },
+      { ...local, usageLineId: "helper", scope: "monitor" as const, source: "monitor" as const,
+        sourceItemId: "system:title-helper:test", parentThreadId: "thread-1", threadId: "helper-thread" },
+      { ...local, usageLineId: "other-provider", scope: "monitor" as const, provider: "qwen" }];
+    const overlayStore = {
+      ...createOverlayStoreMock(),
+      readThreadPricing: vi.fn(async () => ({ lines: original, summaries: [] })),
+    };
+    const writes = vi.spyOn(overlayStore, "upsertThreadUsageLine");
+    let localIds = [id];
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ models: [{ id, label: "PrismML Bonsai 2 27B" }] }),
+      overlayStore, resolveCodexLocalModelIds: () => localIds,
+    });
+    onTestFinished(() => registry.close());
+    await registry.refreshProvidersAtStartup(issueProviderDiscoveryPermit("startup"));
+    const result = await registry.readThread({ backend: "codex", threadId: "thread-1", display: { resource: "pricing" } });
+    const rows = result.display?.pricingPage?.rows ?? [];
+    const byId = (id: string) => rows.find((row) => row.line.usageLineId === id)?.line;
+    expect(byId("local-turn")).toMatchObject({ model: id, modelLabel: "PrismML Bonsai 2 27B", priceStatus: "priced", provider: "local", totalCostMicros: 0, totalTokens: 110 });
+    expect(byId("helper")).toMatchObject({ priceStatus: "priced", provider: "local", totalCostMicros: 0 });
+    expect(byId("remote-turn")).toMatchObject({ priceStatus: "unpriced", priceUnavailableReason: "missing-rate" });
+    expect(byId("other-provider")).toMatchObject({ priceStatus: "unpriced", provider: "qwen" });
+    expect(result.display?.pricing?.summary).toMatchObject({ pricedUsageLineCount: 2, unpricedUsageLineCount: 2 });
+    expect(original[0].priceStatus).toBe("unpriced");
+    expect(writes).not.toHaveBeenCalled();
+    localIds = [];
+    const cleared = await registry.readThread({ backend: "codex", threadId: "thread-1", display: { resource: "pricing" } });
+    expect(cleared.display?.pricingPage?.rows.every((row) => row.line.priceStatus === "unpriced")).toBe(true);
+  });
+
   it("skips OpenAI quotas but names threads for a no-auth local Codex provider", async () => {
     const titleHelperCompleted = createDeferred<string>();
     const codexClient = new MockBackendClient({

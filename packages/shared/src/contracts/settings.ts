@@ -1261,6 +1261,7 @@ export type DesktopSettingsSnapshot = {
       profile: DesktopSettingsValue<string>;
       allowFast?: DesktopSettingsValue<boolean>;
       configOverrides?: DesktopSettingsValue<string[]>;
+      localModelIds?: DesktopSettingsValue<string[]>;
       discovery: DesktopCodexDiscoverySnapshot;
       profiles: DesktopCodexAuthProfileDiscoverySnapshot;
     };
@@ -1535,6 +1536,8 @@ export type DesktopSettingsConfigPatch = {
       allowFast?: boolean;
       /** Ordered process-local Codex key=value overrides; never written to CODEX_HOME. */
       configOverrides?: string[];
+      /** Exact model IDs explicitly declared to have zero local API cost. */
+      localModelIds?: string[];
     };
   };
   acpAgents?: {

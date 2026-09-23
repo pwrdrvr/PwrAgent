@@ -1,3 +1,4 @@
+import { formatPricingModelLabel, LOCAL_MODEL_PRICING_CATALOG } from "@pwragent/shared";
 import { buildThreadPricingDisplay, type ThreadPricingDisplay } from "@pwragent/shared";
 import {
   type PricingUsageLine,
@@ -393,8 +394,8 @@ const PricingUsageRow = memo(function PricingUsageRowCard(props: {
             <span className="rail-card__provider-chip">
               {runtimeLabel}
             </span>
-            <span className="rail-card__model">
-              {runtimeModel ?? "Unknown model"}
+            <span className="rail-card__model" title={runtimeModel}>
+              {formatPricingModelLabel(runtimeModel, line.modelLabel)}
               {reasoningEffort ? ` · ${reasoningEffort}` : ""}
               {formatServiceTierLabel(line)}
             </span>
@@ -543,7 +544,7 @@ function PricingModelSpendRow(props: {
       >
         <span aria-hidden="true" className="pricing-spend-row__chevron">›</span>
         <span className="pricing-spend-row__label">
-          {props.spend.model ?? "Unknown model"}
+          {formatPricingModelLabel(props.spend.model, props.spend.modelLabel)}
         </span>
         <span className="pricing-spend-row__meta">{meta}</span>
         {cost ? (
@@ -1203,6 +1204,7 @@ function formatUsageLineRuntimeLabel(
   line: PricingUsageLine,
   subAgent?: PricingSubAgent,
 ): string {
+  if (line.pricingCatalogId === LOCAL_MODEL_PRICING_CATALOG) return "Local";
   if (subAgent?.backend) {
     return formatBackendLabel(subAgent.backend);
   }
@@ -1216,6 +1218,8 @@ function formatUsageLineRuntimeLabel(
 
 function formatPricingProviderLabel(provider: string): string {
   switch (provider.toLocaleLowerCase()) {
+    case "local":
+      return "Local";
     case "openai":
       return "OpenAI";
     case "qwen":
@@ -1228,6 +1232,7 @@ function formatPricingProviderLabel(provider: string): string {
 }
 
 function formatUsageLineCostSuffix(line: PricingUsageLine): string {
+  if (line.pricingCatalogId === LOCAL_MODEL_PRICING_CATALOG) return "local inference";
   if (isEstimatedUsageGap(line)) {
     return "estimated list price";
   }
