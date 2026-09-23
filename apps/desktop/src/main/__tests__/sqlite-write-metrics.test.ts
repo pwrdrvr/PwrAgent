@@ -1282,6 +1282,9 @@ describe("sqlite write metrics", () => {
           threadId: `thread-${turnIndex}`,
           turnId: `turn-${turnIndex}`,
         });
+        if (turnIndex === 0) {
+          expect(pricing.lines[0]?.completedAt).toEqual(expect.any(Number));
+        }
       }
     } finally {
       await registry.close();

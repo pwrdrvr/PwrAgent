@@ -1873,7 +1873,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
               WHEN excluded.started_at IS NULL THEN thread_usage_turns.started_at
               ELSE MIN(thread_usage_turns.started_at, excluded.started_at)
             END,
-            completed_at = excluded.completed_at,
+            completed_at = COALESCE(excluded.completed_at, thread_usage_turns.completed_at),
             observed_at = MIN(thread_usage_turns.observed_at, excluded.observed_at),
             -- Observation-derived tallies are absent on transcript-hydration
             -- lines (the Codex transcript can't reproduce them). COALESCE keeps a
@@ -2156,6 +2156,40 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     });
 
     return { lines, summaries: upsert() };
+  }
+
+  // Record timing separately from finalizing accounting: Codex may send a
+  // legitimate token update after the terminal turn notification.
+  async completeThreadUsageTurn(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    turnId: string;
+    completedAt: number;
+  }): Promise<boolean> {
+    const turn = this.stateDb.raw.prepare(
+      `SELECT turn.completed_at FROM thread_usage_turns AS turn
+        WHERE turn.backend = ? AND turn.thread_id = ? AND turn.turn_id = ?
+          AND EXISTS (
+            SELECT 1 FROM thread_usage_lines AS line
+             WHERE line.usage_turn_id = turn.usage_turn_id
+               AND line.source = 'live'
+               AND line.scope = 'turn'
+               AND line.parent_thread_id IS NULL
+               AND line.status != 'superseded'
+          )`,
+    ).get(params.backend, params.threadId, params.turnId) as {
+      completed_at: number | null;
+    } | undefined;
+    if (!turn || turn.completed_at !== null) {
+      return false;
+    }
+    const result = this.stateDb.raw.prepare(
+      `UPDATE thread_usage_turns
+          SET completed_at = ?, updated_at = ?
+        WHERE backend = ? AND thread_id = ? AND turn_id = ?
+          AND completed_at IS NULL`,
+    ).run(params.completedAt, Date.now(), params.backend, params.threadId, params.turnId);
+    return result.changes > 0;
   }
 
   async readThreadPricing(params: {

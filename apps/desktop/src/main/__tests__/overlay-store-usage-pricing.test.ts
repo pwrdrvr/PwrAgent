@@ -1,7 +1,9 @@
 import type { ThreadUsageLineRecord } from "@pwragent/shared";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
+import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
+import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import {
   createTempStateDb,
   openInMemoryStateDb,
@@ -37,12 +39,66 @@ beforeEach(() => {
 
 afterEach(() => {
   stateDb.close();
+  vi.unstubAllEnvs();
   if (tempDir !== undefined) {
     removeTempStateDbDir(tempDir);
   }
 });
 
 describe("SqliteOverlayStore thread usage pricing ledger", () => {
+  it("uses one commit to record a completed turn after its usage row was flushed", async () => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    useFileStateDb();
+    await store.upsertThreadUsageLine({
+      line: buildUsageLine({ source: "live", status: "pending", startedAt: PRICING_CATALOG_TIME }),
+    });
+
+    const { result, writes } = await measureSqliteWrites(() => store.completeThreadUsageTurn({
+      backend: "codex", threadId: "thread-1", turnId: "turn-1",
+      completedAt: PRICING_CATALOG_TIME + 4_000,
+    }));
+    expect(result).toBe(true);
+    expectSqliteWriteBudget({
+      scenario: "completed-turn-usage-duration",
+      writes,
+      note: "One completion after the live usage row was flushed: one commit per completed turn; zero additional commits for repeated terminal events",
+    });
+    expect(writes.commits).toBe(1);
+    const repeated = await measureSqliteWrites(() => store.completeThreadUsageTurn({
+      backend: "codex", threadId: "thread-1", turnId: "turn-1",
+      completedAt: PRICING_CATALOG_TIME + 4_000,
+    }));
+    expect(repeated.writes.commits).toBe(0);
+  });
+
+  it("retains a terminal turn time without blocking a later usage update", async () => {
+    const startedAt = PRICING_CATALOG_TIME;
+    const completedAt = startedAt + 4_000;
+    const line = buildUsageLine({
+      source: "live", status: "pending", startedAt,
+      completedAt: undefined, turnUsageAttributed: true,
+    });
+    await store.upsertThreadUsageLine({ line });
+
+    expect(await store.completeThreadUsageTurn({
+      backend: "codex", threadId: "thread-1", turnId: "turn-1", completedAt,
+    })).toBe(true);
+    expect((await store.readThreadPricing({ backend: "codex", threadId: "thread-1" })).lines[0])
+      .toMatchObject({ startedAt, completedAt, status: "pending" });
+
+    await store.upsertThreadUsageLine({
+      line: buildUsageLine({
+        ...line, inputTokens: 1_100, uncachedInputTokens: 900,
+        totalTokens: 1_400,
+      }),
+    });
+    expect((await store.readThreadPricing({ backend: "codex", threadId: "thread-1" })).lines[0])
+      .toMatchObject({ completedAt, inputTokens: 1_100 });
+    expect(await store.completeThreadUsageTurn({
+      backend: "codex", threadId: "thread-1", turnId: "turn-1", completedAt,
+    })).toBe(false);
+  });
+
   it.each(["live", "hydration", "backfill"] as const)(
     "preserves finalized turn accounting across restart and %s replacement",
     async (source) => {
