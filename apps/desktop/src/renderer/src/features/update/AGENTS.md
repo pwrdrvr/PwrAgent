@@ -54,6 +54,25 @@ with no countdown. Only when the check settles does the outcome go to the
 stack, through `showNotice`, where the countdown is correct. Don't move the
 in-flight card into a notice.
 
+## One card layout for checking, downloading, and ready
+
+The live card and the offer card are one layout. Every phase is the full
+stack width. The rows run eyebrow and message, then the track, then the
+meter, then the action row. Nothing sits beside the track. In
+v1.1.0-beta.3 the live card put Cancel and Release notes in a column beside
+the content, whose 236px `min-width` then overflowed under Cancel. The card
+was also 266px, 420px and 303px wide across one check.
+
+In the action row, `Release notes` leads, the buttons trail, and **the
+dismissing button is last**: Cancel on the live card, Dismiss on the offer,
+with Restart before it. That last slot is a safety rule, not a style
+choice. The stack is bottom-anchored, so both cards' rows cover the same
+pixels. A download can finish between the operator aiming at Cancel and
+clicking. Whatever replaces Cancel under the pointer must be Dismiss.
+Putting Restart there installs the update the click was meant to stop.
+`update-check.spec.ts` measures this, and the review is
+`Update Banner Phases UX Review` in the PwrAgent Claude Design project.
+
 ## Cancel is offered from `available`, so main must be ready by then
 
 `updateProgressCopy` turns Cancel on as soon as the status reaches
@@ -122,8 +141,8 @@ from `releaseNotesUrl` in
 |---|---|
 | Settings → Updates, all four slot tiles | `Release notes` under each tile |
 | Settings → Updates, the status line and `Downloaded version:` | `Release notes` inline, scoped to the version that line names |
-| Banner live card (`available` / `downloading`) | `Release notes` beside Cancel |
-| Banner offer card (`downloaded`) | `Release notes` between Restart and Dismiss |
+| Banner live card (`available` / `downloading`) | `Release notes` leading the action row, Cancel trailing |
+| Banner offer card (`downloaded`) | `Release notes` leading the action row, Restart then Dismiss trailing |
 | Settled-check notice (`no-update` / `canceled`) | `Release notes` as a notice action |
 | Settings → About, Build → Version | `Release notes` beside the version |
 | Settings → About, Changelog | `Open release notes` beside `Open changelog` |

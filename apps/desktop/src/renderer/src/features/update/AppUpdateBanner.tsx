@@ -317,10 +317,26 @@ export function AppUpdateBanner(props: {
           </div>
           {/* `updateProgressCopy` gives every cancelable phase a version and
               the one phase without a version (`checking`) no Cancel, so the
-              row is present exactly when Cancel is. */}
+              row is present exactly when Cancel is.
+
+              The row sits UNDER the track, never beside it, and is laid out
+              the same way as the offer card's below: the link leads, the
+              buttons trail, and the way out is the last button. That last
+              slot is load-bearing. The stack is bottom-anchored, so this row
+              and the offer card's occupy the same pixels, and a download can
+              finish between the operator aiming at Cancel and clicking it.
+              Whatever replaces Cancel under the pointer has to be Dismiss,
+              not Restart. */}
           {progress.cancelable ? (
             <div className="app-update-banner__actions">
-              {progress.cancelable ? (
+              {/* The card names a version it is spending the operator's
+                  bandwidth on. Reading what is in it is the one question
+                  Cancel exists to answer. */}
+              <ReleaseNotesLink
+                className="app-update-banner__notes"
+                url={progress.notesUrl}
+              />
+              <div className="app-update-banner__buttons">
                 <button
                   className="button button--ghost app-update-banner__cancel"
                   type="button"
@@ -329,14 +345,7 @@ export function AppUpdateBanner(props: {
                 >
                   {canceling ? "Canceling..." : "Cancel"}
                 </button>
-              ) : null}
-              {/* The card names a version it is spending the operator's
-                  bandwidth on. Reading what is in it is the one question
-                  Cancel exists to answer. */}
-              <ReleaseNotesLink
-                className="app-update-banner__notes"
-                url={progress.notesUrl}
-              />
+              </div>
             </div>
           ) : null}
         </aside>
@@ -357,38 +366,43 @@ export function AppUpdateBanner(props: {
             ) : null}
           </div>
           <div className="app-update-banner__actions">
-            <button
-              className="button button--primary app-update-banner__restart"
-              type="button"
-              disabled={restarting}
-              onClick={() => {
-                void handleRestart();
-              }}
-            >
-              {restarting ? "Restarting..." : "Restart"}
-            </button>
-            {/* Between the action and the way out of it, and rendered as
-                quiet text rather than a third pill: the card already asks
-                the operator to choose between Restart and Dismiss, and a
-                third control that looked equally like the point would make
-                that a three-way decision. */}
+            {/* Rendered as quiet text rather than a third pill: the card
+                already asks the operator to choose between Restart and
+                Dismiss, and a third control that looked equally like the
+                point would make that a three-way decision. It leads the row
+                here for the same reason it leads the live card's: the link
+                stays put while the phases change around it. */}
             <ReleaseNotesLink
               className="app-update-banner__notes"
               url={releaseNotesUrl(version)}
             />
-            <button
-              className="button button--ghost app-update-banner__dismiss"
-              type="button"
-              disabled={restarting}
-              aria-label={
-                switchingBack
-                  ? "Dismiss channel switch notification"
-                  : "Dismiss update notification"
-              }
-              onClick={() => setDismissedVersion(version)}
-            >
-              Dismiss
-            </button>
+            <div className="app-update-banner__buttons">
+              <button
+                className="button button--primary app-update-banner__restart"
+                type="button"
+                disabled={restarting}
+                onClick={() => {
+                  void handleRestart();
+                }}
+              >
+                {restarting ? "Restarting..." : "Restart"}
+              </button>
+              {/* Last, in the slot Cancel held on the live card. See the
+                  comment on that row. */}
+              <button
+                className="button button--ghost app-update-banner__dismiss"
+                type="button"
+                disabled={restarting}
+                aria-label={
+                  switchingBack
+                    ? "Dismiss channel switch notification"
+                    : "Dismiss update notification"
+                }
+                onClick={() => setDismissedVersion(version)}
+              >
+                Dismiss
+              </button>
+            </div>
           </div>
         </aside>
       ) : null}
