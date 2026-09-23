@@ -2664,7 +2664,7 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
-  it("filters Codex models to the supported picker set and orders them", async () => {
+  it("orders familiar Codex models without hiding server-advertised models", async () => {
     MockTransport.serverVersion = "0.143.0";
     MockTransport.modelListResult = {
       data: [
@@ -2805,6 +2805,24 @@ describe("CodexAppServerClient", () => {
         current: undefined,
         supportsReasoning: true,
       },
+      {
+        id: "gpt-5.3-codex",
+        label: "GPT-5.3-Codex",
+        current: undefined,
+        supportsReasoning: true,
+      },
+      {
+        id: "gpt-5.5-pro",
+        label: "GPT-5.5-Pro",
+        current: undefined,
+        supportsReasoning: true,
+      },
+      {
+        id: "gpt-5.1-codex-max",
+        label: "GPT-5.1-Codex-Max",
+        current: undefined,
+        supportsReasoning: true,
+      },
     ]);
   });
 
@@ -2832,6 +2850,39 @@ describe("CodexAppServerClient", () => {
     // Explicit protocol flag is honored.
     expect(byId.get("gpt-5.4")?.supportsImage).toBe(false);
   });
+
+  it.each(["0.143.0", "0.144.0"])(
+    "refreshes newly released and unknown visible models on Codex %s",
+    async (version) => {
+      MockTransport.serverVersion = version;
+      MockTransport.modelListResult = createModelListResponse([
+        createCodexModel({ id: "gpt-6-astra" }),
+      ]);
+      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const client = new CodexAppServerClient({ command: "codex" });
+      expect((await client.listModels()).map((model) => model.id)).toEqual(["gpt-6-astra"]);
+
+      MockTransport.modelListResult = createModelListResponse([
+        createCodexModel({ id: "future-model", isDefault: true }),
+        createCodexModel({ id: "gpt-6-luna", additionalSpeedTiers: ["fast"] }),
+        createCodexModel({ id: "hidden-model", hidden: true }),
+        createCodexModel({ id: "gpt-6-sol", additionalSpeedTiers: ["fast"] }),
+        createCodexModel({ id: "gpt-6-astra" }),
+      ]);
+      const refreshed = await client.listModels();
+      expect(refreshed.map((model) => model.id)).toEqual([
+        "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "future-model",
+      ]);
+      expect(refreshed.find((model) => model.id === "gpt-6-sol")).toMatchObject({
+        label: "GPT-6-Sol", supportsFast: true,
+      });
+      expect(refreshed.find((model) => model.id === "gpt-6-luna")).toMatchObject({
+        label: "GPT-6-Luna", supportsFast: true,
+      });
+      expect(refreshed.find((model) => model.id === "future-model")?.current).toBe(true);
+      await client.close();
+    },
+  );
 
   it("derives Fast support from Codex model service tiers", async () => {
     MockTransport.modelListResult = createModelListResponse([

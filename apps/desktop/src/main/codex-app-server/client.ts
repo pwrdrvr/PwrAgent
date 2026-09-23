@@ -246,8 +246,12 @@ const LEGACY_CODEX_THREAD_TITLE_CONFIG: NonNullable<CodexThreadStartParams["conf
 };
 const CODEX_DEFAULT_MODE_REQUEST_USER_INPUT_CONFIG_KEY =
   "features.default_mode_request_user_input";
-const SUPPORTED_CODEX_MODEL_ORDER = [
+// Rank familiar models, but let the server decide which models are available.
+// An allowlist here would silently hide every newly released model on refresh.
+const PREFERRED_CODEX_MODEL_ORDER = [
   "gpt-6-astra",
+  "gpt-6-sol",
+  "gpt-6-luna",
   "gpt-5.6-sol",
   "gpt-5.6-terra",
   "gpt-5.6-luna",
@@ -257,7 +261,6 @@ const SUPPORTED_CODEX_MODEL_ORDER = [
   "gpt-5.3-codex-spark",
   "gpt-5.2",
 ] as const;
-const SUPPORTED_CODEX_MODELS = new Set<string>(SUPPORTED_CODEX_MODEL_ORDER);
 const MAX_INLINE_FILE_DIFF_CHARS = 512 * 1024;
 const MAX_MCP_RESOURCE_IMAGE_BASE64_CHARS = Math.ceil((16 * 1024 * 1024) / 3) * 4;
 const THREAD_METADATA_READ_RETRY_DELAYS_MS = [50, 150, 300] as const;
@@ -5586,7 +5589,7 @@ function extractModelOptions(value: unknown): BackendModelOption[] {
       return [];
     }
     const id = pickString(modelRecord, ["id", "name", "model"]);
-    if (!id || shouldHideCodexModel(id, modelRecord)) {
+    if (!id || pickBoolean(modelRecord, ["hidden"]) === true) {
       return [];
     }
 
@@ -5770,7 +5773,7 @@ function extractGeneratedModelOptions(
   response: ConsumedCodexModelListResponse,
 ): BackendModelOption[] {
   const models = response.data.flatMap((model): BackendModelOption[] => {
-    if (!SUPPORTED_CODEX_MODELS.has(model.id.toLowerCase()) || model.hidden) {
+    if (model.hidden) {
       return [];
     }
 
@@ -5829,16 +5832,6 @@ function isSparkModelId(id: string): boolean {
   return id.toLowerCase().includes("spark");
 }
 
-function shouldHideCodexModel(
-  id: string,
-  modelRecord: Record<string, unknown>,
-): boolean {
-  return (
-    pickBoolean(modelRecord, ["hidden"]) === true ||
-    !SUPPORTED_CODEX_MODELS.has(id.toLowerCase())
-  );
-}
-
 function formatCodexModelLabel(id: string): string {
   const match = /^gpt-([^-]+)(?:-(.+))?$/i.exec(id.trim());
   if (!match) {
@@ -5857,7 +5850,7 @@ function formatCodexModelLabel(id: string): string {
 
 function sortCodexModels(models: BackendModelOption[]): BackendModelOption[] {
   const order = new Map<string, number>(
-    SUPPORTED_CODEX_MODEL_ORDER.map((id, index) => [id, index]),
+    PREFERRED_CODEX_MODEL_ORDER.map((id, index) => [id, index]),
   );
 
   return [...models].sort((left, right) => {
