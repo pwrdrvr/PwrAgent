@@ -14,7 +14,6 @@ const core = fromPlaywright.resolve("playwright-core/lib/coreBundle");
 const diagnostics = new URL("./playwright-shutdown-diagnostics.mjs", import.meta.url).href;
 const roots = [];
 const activeProbes = new Set();
-const POST_READY_CLI_TIMEOUT_MS = 10_000;
 
 afterEach(async () => {
   await Promise.all([...activeProbes].map(stopProbe));
@@ -118,14 +117,11 @@ async function probe(mode) {
     maxBuffer: 1024 * 1024,
   });
   const readiness = waitForWorkerStart(root, output);
-  let completionTimer;
-  let timedOut = false;
   let result;
   try {
     // Startup is governed by the test's own deadline and afterEach owns the
-    // child if it fails. Once the worker has emitted its readiness event, the
-    // probe gets a separate bounded completion window around Playwright's
-    // five-second cleanup timeout.
+    // child if it fails. Worker config evaluation precedes the test and
+    // cleanup lifecycle, so worker-start is not a cleanup deadline.
     await Promise.race([
       readiness.promise,
       started.result.then((completed) => {
@@ -133,14 +129,8 @@ async function probe(mode) {
         throw new Error(`Playwright exited before the worker shutdown recorder became ready.\n${completed.stdout}${completed.stderr}`);
       }),
     ]);
-    completionTimer = setTimeout(() => {
-      timedOut = true;
-      started.controller.abort();
-    }, POST_READY_CLI_TIMEOUT_MS);
     result = await started.result;
-    if (timedOut) throw new Error("Playwright did not exit after the worker shutdown recorder became ready.");
   } finally {
-    clearTimeout(completionTimer);
     readiness.close();
     await stopProbe(started);
     if (existsSync(descendantPidFile)) {
@@ -159,6 +149,30 @@ async function probe(mode) {
 }
 
 describe("real Playwright worker shutdown diagnostics", () => {
+  it("does not report worker readiness from a controller with an inherited worker index", async () => {
+    mkdirSync(path.join(desktop, ".local"), { recursive: true });
+    const root = mkdtempSync(path.join(desktop, ".local/shutdown-probe-"));
+    roots.push(root);
+    const output = path.join(root, "results");
+    writeFileSync(path.join(root, "playwright.config.mjs"), `
+      import { installShutdownDiagnostics } from ${JSON.stringify(diagnostics)};
+      installShutdownDiagnostics({ outputDir: ${JSON.stringify(output)}, currentTest: () => undefined });
+      export default { testDir: '.', testMatch: '*.spec.cjs', outputDir: ${JSON.stringify(output)}, reporter: 'list' };
+    `);
+    writeFileSync(path.join(root, "probe.spec.cjs"), `
+      const { test } = require(${JSON.stringify(require.resolve("@playwright/test"))});
+      test('listed but not run', async () => {});
+    `);
+    const started = startProbe([cli, "test", "--list", "-c", path.join(root, "playwright.config.mjs")], {
+      cwd: desktop,
+      env: { ...process.env, TEST_WORKER_INDEX: "7", PWRAGENT_E2E_WORKER_DIAGNOSTICS: "1" },
+      maxBuffer: 1024 * 1024,
+    });
+    const result = await started.result;
+    expect(result.code, result.stdout + result.stderr).toBe(0);
+    expect(existsSync(path.join(output, "worker-shutdown"))).toBe(false);
+  });
+
   it("terminates a probe that stalls before worker readiness", async () => {
     const started = startProbe(["-e", "setInterval(() => {}, 1_000)"], {
       cwd: desktop,
