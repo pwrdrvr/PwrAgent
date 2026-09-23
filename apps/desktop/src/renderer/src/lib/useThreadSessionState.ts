@@ -4361,6 +4361,25 @@ function assistantMessageEntryFromCompletedItem(params: {
     id,
     role: "assistant",
     text,
+    ...(record.delivery === "async" ? { delivery: "async" as const } : {}),
+    ...(record.delivery === "async" && Array.isArray(record.questions)
+      ? {
+          questions: record.questions.flatMap((value) => {
+            if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+            const question = value as Record<string, unknown>;
+            if (typeof question.title !== "string" || !question.title.trim()) return [];
+            return [{
+              title: question.title,
+              options: question.options === null
+                ? null
+                : Array.isArray(question.options)
+                  && question.options.every((option) => typeof option === "string")
+                  ? question.options as string[]
+                  : null,
+            }];
+          }),
+        }
+      : {}),
     createdAt: Date.now(),
     ...(params.turn ? { turn: params.turn } : {}),
     ...(phase ? { phase } : {}),

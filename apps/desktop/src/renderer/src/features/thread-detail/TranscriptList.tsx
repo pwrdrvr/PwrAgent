@@ -132,6 +132,7 @@ type TranscriptListProps = {
   subAgents?: ThreadSubAgentSummary[];
   onExpandedActivityIdsChange?: (activityIds: string[]) => void;
   onOpenImage?: (image: AppServerThreadImagePart) => void;
+  onChooseAsyncQuestionAnswer?: (question: string, answer: string) => void;
   onExpandedWorkPhaseGroupIdsChange?: (groupIds: string[]) => void;
   onViewportChange?: (viewport?: TranscriptViewport) => void;
   onRespondToPendingRequest?: (action: PendingRequestAction) => Promise<void>;
@@ -1572,6 +1573,7 @@ export function TranscriptList(props: TranscriptListProps) {
                   subAgents={props.subAgents}
                   threadLinkSource={props.threadLinkSource}
                   onOpenImage={props.onOpenImage}
+                  onChooseAsyncQuestionAnswer={props.onChooseAsyncQuestionAnswer}
                 />
               );
             return (

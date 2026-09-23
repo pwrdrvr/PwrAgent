@@ -1216,6 +1216,13 @@ export function ThreadView(props: ThreadViewProps) {
   const pendingPlanEntryRef = useRef<AppServerThreadPlanEntry | undefined>(undefined);
   const [pendingRequestBusy, setPendingRequestBusy] = useState(false);
   const [pendingRequestError, setPendingRequestError] = useState<string>();
+  const asyncQuestionReplyId = useRef(0);
+  const [asyncQuestionReply, setAsyncQuestionReply] = useState<{
+    id: number;
+    threadId: string;
+    backend: NavigationThreadSummary["source"];
+    text: string;
+  }>();
   const [expandedImage, setExpandedImage] = useState<AppServerThreadImagePart>();
   const [contextRailResizing, setContextRailResizing] = useState(false);
   const [transcriptReglueRequestKey, setTranscriptReglueRequestKey] = useState(0);
@@ -3840,6 +3847,16 @@ export function ThreadView(props: ThreadViewProps) {
               onLoadOlder={loadOlderTranscript}
               onLinkedMessageHandled={props.onLinkedMessageHandled}
               onOpenImage={setExpandedImage}
+              onChooseAsyncQuestionAnswer={(question, answer) => {
+                if (!selectedThread) return;
+                asyncQuestionReplyId.current += 1;
+                setAsyncQuestionReply({
+                  id: asyncQuestionReplyId.current,
+                  threadId: selectedThread.id,
+                  backend: selectedThread.source,
+                  text: `Answer to “${question}”: ${answer}`,
+                });
+              }}
               onExpandedActivityIdsChange={
                 props.onExpandedTranscriptActivityIdsChange
               }
@@ -3925,6 +3942,7 @@ export function ThreadView(props: ThreadViewProps) {
             mcpConnectionCount={threadMcpConnectionCount}
             composerImplementation={props.composerImplementation}
             draftStore={props.composerDraftStore}
+            replySuggestion={asyncQuestionReply}
             directory={props.selectedDirectory}
             directories={props.directories}
             disabled={props.composerDisabled}

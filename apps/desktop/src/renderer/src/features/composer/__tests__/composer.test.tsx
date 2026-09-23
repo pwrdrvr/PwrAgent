@@ -6404,6 +6404,42 @@ describe("Composer", () => {
     await waitFor(() => expect(startReview).toHaveBeenCalledWith(expect.objectContaining({ runMode, delivery: "inline" })));
   });
 
+  it("adds async question choices to the reply draft for review before sending", async () => {
+    const thread: NavigationThreadSummary = {
+      id: "thread-async-question",
+      title: "Dependency update",
+      titleSource: "explicit",
+      source: "codex",
+      executionMode: "default",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    const props = {
+      backends: [backendSummary("codex")],
+      skills: [],
+      thread,
+    };
+    const view = render(<Composer {...props} replySuggestion={{
+      id: 1,
+      threadId: thread.id,
+      backend: "codex",
+      text: "Answer to install policy: Allow one command",
+    }} />);
+    expect(await screen.findByRole("textbox", { name: "Reply" })).toHaveValue(
+      "Answer to install policy: Allow one command",
+    );
+
+    view.rerender(<Composer {...props} replySuggestion={{
+      id: 2,
+      threadId: thread.id,
+      backend: "codex",
+      text: "Answer to global hook: Keep active",
+    }} />);
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "Reply" })).toHaveValue(
+      "Answer to install policy: Allow one command\n\nAnswer to global hook: Keep active",
+    ));
+  });
+
   it("says why an unavailable review mode is unavailable, and refuses it", async () => {
     const backend = backendSummary("codex");
     backend.capabilities = { ...backend.capabilities, startReview: true, reviewRunMode: true, reviewRunner: true, reviewCodexSubAgent: false };

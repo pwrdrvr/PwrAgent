@@ -2612,6 +2612,7 @@ function extractConversationMessages(value: unknown): AppServerThreadReplay["mes
           `message-${output.length + 1}`,
         role,
         text: content.text,
+        ...(role === "assistant" ? asyncQuestionMetadata(record) : {}),
         ...(content.parts ? { parts: content.parts } : {}),
         createdAt
       });
@@ -2640,6 +2641,34 @@ function extractConversationMessages(value: unknown): AppServerThreadReplay["mes
 
   visit(value);
   return output;
+}
+
+function asyncQuestionMetadata(record: Record<string, unknown>): Pick<
+  AppServerThreadMessageEntry,
+  "delivery" | "questions"
+> {
+  if (record.delivery !== "async") {
+    return {};
+  }
+  const questions = Array.isArray(record.questions)
+    ? record.questions.flatMap((value) => {
+        const question = asRecord(value);
+        if (!question || typeof question.title !== "string" || !question.title.trim()) {
+          return [];
+        }
+        const options = question.options === null
+          ? null
+          : Array.isArray(question.options)
+            && question.options.every((option) => typeof option === "string")
+            ? question.options as string[]
+            : null;
+        return [{ title: question.title, options }];
+      })
+    : [];
+  return {
+    delivery: "async",
+    ...(questions.length > 0 ? { questions } : {}),
+  };
 }
 
 function normalizeActivityStatus(
@@ -5182,6 +5211,7 @@ function extractThreadEntries(
             `message-${entries.length + 1}`,
           role,
           text: content.text,
+          ...(role === "assistant" ? asyncQuestionMetadata(item) : {}),
           ...(content.parts ? { parts: content.parts } : {}),
           createdAt: messageCreatedAt,
           ...(turnMetadata ? { turn: turnMetadata } : {}),

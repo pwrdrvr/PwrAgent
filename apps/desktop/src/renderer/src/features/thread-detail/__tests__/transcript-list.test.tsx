@@ -2134,6 +2134,37 @@ Implementation notes remain in a readable bubble.`;
     );
   });
 
+  it("presents Codex async questions as reply choices", () => {
+    const onChooseAsyncQuestionAnswer = vi.fn();
+    render(
+      <TranscriptList
+        entries={[{
+          type: "message",
+          id: "call-question",
+          role: "assistant",
+          text: "Which install policy should I use?",
+          delivery: "async",
+          questions: [{
+            title: "Which install policy should I use?",
+            options: ["Allow one command", "Keep policy"],
+          }],
+        }]}
+        loading={false}
+        loadingMore={false}
+        threadId="thread-1"
+        onChooseAsyncQuestionAnswer={onChooseAsyncQuestionAnswer}
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    expect(screen.getByRole("group", { name: "Questions from Codex" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Allow one command" }));
+    expect(onChooseAsyncQuestionAnswer).toHaveBeenCalledWith(
+      "Which install policy should I use?",
+      "Allow one command",
+    );
+  });
+
   it("replaces a transient assistant message in transcript order", () => {
     const entries = [
       {

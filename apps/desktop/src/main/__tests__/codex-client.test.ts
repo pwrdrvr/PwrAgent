@@ -4384,6 +4384,53 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("preserves Codex async question choices in thread replay", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.readThreadResultByThreadId.set("thread-async-question", {
+      thread: {
+        turns: [{
+          id: "turn-async-question",
+          items: [{
+            type: "agentMessage",
+            id: "call-question",
+            text: "Which install policy should I use?",
+            phase: "final_answer",
+            delivery: "async",
+            questions: [{
+              title: "Which install policy should I use?",
+              options: ["Allow one command", "Keep policy"],
+            }],
+          }],
+        }],
+      },
+    });
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    const replay = await client.readThread({ threadId: "thread-async-question" });
+    const expectedQuestion = [{
+      title: "Which install policy should I use?",
+      options: ["Allow one command", "Keep policy"],
+    }];
+    expect(replay.entries).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "call-question",
+        delivery: "async",
+        questions: expectedQuestion,
+      }),
+    ]));
+    expect(replay.messages).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "call-question",
+        delivery: "async",
+        questions: expectedQuestion,
+      }),
+    ]));
+    await client.close();
+  });
+
   it("inherits envelope timestamps for nested thread/read messages", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     MockTransport.readThreadResultByThreadId.set("thread-envelope-messages", {
