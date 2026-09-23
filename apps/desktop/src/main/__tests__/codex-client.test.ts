@@ -11149,7 +11149,7 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
-  it("lets turnTimeoutMs bound turn/start, which can carry the answer", async () => {
+  it.each(["structured", "title"])("lets turnTimeoutMs bound %s turn/start, which can carry the answer", async (kind) => {
     // `turn/start` returns the finished structured record on some servers
     // (the immediate-record branch exists for exactly that), so bounding it
     // at `timeoutMs` would make a raised `turnTimeoutMs` a silent no-op.
@@ -11165,17 +11165,20 @@ describe("CodexAppServerClient", () => {
       directoryResolver: async () => [],
     });
     let settled = false;
-    const probePromise = client.generateStructuredObject({
+    const params = {
       prompt: "Return the requested status object.",
       schema: {
         type: "object",
         required: ["status"],
         properties: { status: { type: "string" } },
       },
-      isMatch: (record) => record.status === "complete",
       timeoutMs: 60,
       turnTimeoutMs: 5_000,
-    }).then((result) => {
+    };
+    const probePromise = (kind === "title"
+      ? client.generateTitle({ ...params, promptVersion: "thread-title-v3", schemaName: "thread_title" })
+      : client.generateStructuredObject({ ...params, isMatch: (record) => record.status === "complete" })
+    ).then((result) => {
       settled = true;
       return result;
     });

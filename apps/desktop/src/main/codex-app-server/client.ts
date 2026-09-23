@@ -9267,6 +9267,7 @@ export class CodexAppServerClient {
       schema: params.schema,
       isMatch: TITLE_RECORD_PREDICATE,
       timeoutMs: params.timeoutMs,
+      turnTimeoutMs: params.turnTimeoutMs,
     });
   }
 

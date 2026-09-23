@@ -39,7 +39,7 @@ describe("ThreadTitleGenerationService", () => {
     expect(schema.properties?.title).not.toHaveProperty("maxLength");
   });
 
-  it("allows 20 seconds for title generators by default", async () => {
+  it("allows three minutes for naming while retaining 20-second protocol timeouts", async () => {
     const generateTitle = vi.fn(async () => ({
       status: "ok",
       object: { title: "Thread naming" },
@@ -56,6 +56,7 @@ describe("ThreadTitleGenerationService", () => {
     expect(generateTitle).toHaveBeenCalledWith(
       expect.objectContaining({
         timeoutMs: 20_000,
+        turnTimeoutMs: 180_000,
       })
     );
   });
