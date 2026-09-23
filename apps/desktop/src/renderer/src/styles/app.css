@@ -9485,6 +9485,27 @@ a.button {
   line-height: 1.6;
 }
 
+/* A run's pending ring comes after every button in its row, so neither the
+   button that was clicked nor its neighbors move while it runs. A long
+   progress line wraps below the buttons rather than pushing them. */
+.cloudflare-setup .settings-button-row > .settings-pending {
+  order: 1;
+  white-space: normal;
+}
+
+/* The account and client rows pin their one button to the right edge; the
+   ring takes the space to its left instead. */
+.cloudflare-setup__account > :first-child,
+.cloudflare-setup__client > :first-child {
+  order: -2;
+}
+
+.cloudflare-setup__account > .settings-pending,
+.cloudflare-setup__client > .settings-pending {
+  order: -1;
+  margin-left: auto;
+}
+
 /* Reference links. Rendered as buttons because opening one is an IPC call, not
    a navigation, but they must read as links beside the real actions. */
 .cloudflare-setup__link {
