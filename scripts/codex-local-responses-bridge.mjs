@@ -6,6 +6,61 @@ import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { pathToFileURL } from "node:url";
 import { once } from "node:events";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+
+function loopbackUpstream(upstream) {
+  const target = new URL(upstream);
+  if (target.protocol !== "http:" || !["127.0.0.1", "[::1]", "localhost"].includes(target.hostname)
+    || target.username || target.password || target.search || target.hash) {
+    throw new Error("Upstream must be an unauthenticated loopback HTTP URL");
+  }
+  return target;
+}
+
+async function readMetadata(url) {
+  const response = await fetch(url, { signal: AbortSignal.timeout(5_000), redirect: "error" });
+  if (!response.ok) throw new Error(`Local model metadata ${url.pathname}: HTTP ${response.status}`);
+  let text = "";
+  let size = 0;
+  const decoder = new TextDecoder();
+  for await (const chunk of response.body) {
+    size += chunk.length;
+    if (size > 1024 * 1024) throw new Error("Local model metadata exceeds 1 MiB");
+    text += decoder.decode(chunk, { stream: true });
+  }
+  return JSON.parse(text + decoder.decode());
+}
+
+export async function discoverModelCatalog(upstream, template) {
+  const target = loopbackUpstream(upstream);
+  const base = target.href.replace(/\/$/, "");
+  if (!target.pathname.replace(/\/$/, "").endsWith("/v1")) {
+    throw new Error("Local model discovery requires a /v1 upstream");
+  }
+  if (!Array.isArray(template?.models) || template.models.length !== 1
+    || typeof template.models[0]?.slug !== "string" || !template.models[0].slug) {
+    throw new Error("Local model discovery requires a single-model catalog template");
+  }
+  const [models, props] = await Promise.all([
+    readMetadata(new URL(`${base}/models`)),
+    readMetadata(new URL(`${base.slice(0, -3)}/props`)),
+  ]);
+  const model = template.models[0];
+  const advertised = Array.isArray(models?.data)
+    && models.data.some((entry) => entry?.id === model.slug);
+  if (!advertised || ![props?.model_alias, props?.model_path].includes(model.slug)) {
+    throw new Error("Local model metadata does not match the catalog model");
+  }
+  if (typeof props?.modalities?.vision !== "boolean") {
+    throw new Error("Local model metadata does not declare a vision capability");
+  }
+  return {
+    ...template,
+    models: [{ ...model, input_modalities: props.modalities.vision ? ["text", "image"] : ["text"] }],
+  };
+}
 
 function flatName(namespace, name) {
   if (!namespace) return name;
@@ -81,11 +136,7 @@ export function translateResponse(value, names) {
 }
 
 export async function startBridge(upstream) {
-  const target = new URL(upstream);
-  if (target.protocol !== "http:" || !["127.0.0.1", "[::1]", "localhost"].includes(target.hostname)
-    || target.username || target.password || target.search || target.hash) {
-    throw new Error("Upstream must be an unauthenticated loopback HTTP URL");
-  }
+  const target = loopbackUpstream(upstream);
   const server = createServer(async (req, res) => {
     const abort = new AbortController();
     res.on("close", () => abort.abort());
@@ -153,23 +204,35 @@ async function main(args) {
   const options = args.slice(0, separator);
   const value = (flag) => options[options.indexOf(flag) + 1];
   if (separator < 0 || !["--codex", "--upstream", "--provider"].every((flag) => options.includes(flag))) {
-    throw new Error("Usage: codex-local-responses-bridge.mjs --codex PATH --upstream http://127.0.0.1:PORT/v1 --provider NAME -- [Codex arguments]");
+    throw new Error("Usage: codex-local-responses-bridge.mjs --codex PATH --upstream http://127.0.0.1:PORT/v1 --provider NAME [--model-catalog TEMPLATE] -- [Codex arguments]");
   }
   const provider = value("--provider");
   if (!/^[a-zA-Z0-9_-]+$/.test(provider)) throw new Error("Invalid provider name");
   const codexArgs = args.slice(separator + 1);
   const versionOnly = codexArgs.includes("--version") || codexArgs.includes("-V");
-  const server = versionOnly ? undefined : await startBridge(value("--upstream"));
-  const child = spawn(value("--codex"), [
-    ...codexArgs,
-    ...(server ? ["-c", `model_providers.${provider}.base_url="http://127.0.0.1:${server.address().port}/v1"`] : []),
-  ], { stdio: "inherit" });
-  const forward = (signal) => child.kill(signal);
+  let server;
+  let catalogDirectory;
+  let child;
+  const forward = (signal) => child?.kill(signal);
   const onInt = () => forward("SIGINT");
   const onTerm = () => forward("SIGTERM");
-  process.on("SIGINT", onInt);
-  process.on("SIGTERM", onTerm);
   try {
+    const overrides = [];
+    if (!versionOnly) {
+      if (options.includes("--model-catalog")) {
+        const template = JSON.parse(await readFile(value("--model-catalog"), "utf8"));
+        const catalog = await discoverModelCatalog(value("--upstream"), template);
+        catalogDirectory = await mkdtemp(path.join(tmpdir(), "pwragent-local-models-"));
+        const catalogPath = path.join(catalogDirectory, "models.json");
+        await writeFile(catalogPath, JSON.stringify(catalog), { mode: 0o600 });
+        overrides.push("-c", `model_catalog_json=${JSON.stringify(catalogPath)}`);
+      }
+      server = await startBridge(value("--upstream"));
+      overrides.push("-c", `model_providers.${provider}.base_url="http://127.0.0.1:${server.address().port}/v1"`);
+    }
+    child = spawn(value("--codex"), [...codexArgs, ...overrides], { stdio: "inherit" });
+    process.on("SIGINT", onInt);
+    process.on("SIGTERM", onTerm);
     const [code, signal] = await once(child, "exit");
     process.exitCode = code ?? (signal === "SIGINT" ? 130 : 143);
   } finally {
@@ -177,6 +240,7 @@ async function main(args) {
     process.off("SIGTERM", onTerm);
     server?.closeAllConnections();
     server?.close();
+    if (catalogDirectory) await rm(catalogDirectory, { recursive: true, force: true });
   }
 }
 

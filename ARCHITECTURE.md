@@ -365,8 +365,9 @@ The Codex adapter accepts every non-hidden model advertised by `model/list`.
 Known OpenAI models retain their picker order; other models retain their provider
 labels and capability metadata. A custom provider can supply a Codex
 `model_catalog_json` with its exact model IDs, context limits, modalities, reasoning
-levels, and service tiers. Endpoint discovery is Codex-owned; PwrAgent does not
-read a model server's catalog or infer capabilities from its filename. Unknown
+levels, and service tiers. PwrAgent reads capabilities through Codex's protocol;
+the optional local launcher can discover server modalities as described below.
+PwrAgent does not infer capabilities from model filenames. Unknown
 models remain unpriced. No-auth providers without an OpenAI account skip account
 quota polling. Title generation prefers Luna when advertised, otherwise the catalog
 default or first available model, using only its supported reasoning settings.
@@ -383,6 +384,20 @@ arguments. It passes the bridge URL as a process-local `-c` override and does no
 edit Codex configuration, copy authentication, or log request bodies. The profile's
 catalog must disable unsupported built-in tools such as freeform patching and
 hosted web search. Shell-based file edits remain available.
+
+With `--model-catalog TEMPLATE`, the launcher refreshes the single-model
+template's input modalities from llama.cpp's `/v1/models` and `/props` before
+starting Codex. The configured model ID must match both endpoints, and an
+explicit `modalities.vision` boolean controls whether `image` is advertised.
+Labels, instructions, reasoning levels, and tool settings remain in the template.
+Generic `multimodal` metadata alone is not enough to distinguish images from audio.
+The launcher writes a private temporary catalog, passes its path through
+`-c model_catalog_json=...`, and removes it when Codex exits. Neither the template
+nor shared Codex config is rewritten. Metadata requests stay on loopback, reject
+redirects, and have five-second timeouts and 1 MiB response limits. Unavailable,
+unknown, or mismatched metadata fails startup explicitly instead of advertising
+stale capabilities. Version probes skip discovery. Restart the provider connection
+after changing the loaded model's vision projector so Codex reloads the catalog.
 
 ## Background PR status and Star Map
 
