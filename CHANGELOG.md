@@ -1,5 +1,20 @@
 # Changelog
 
+## v1.1.0-beta.4 - 2026-09-23
+
+- Local Codex Models - Added support for local Codex-compatible models, optional loopback Responses bridges, model discovery, and profile-scoped Codex configuration overlays.
+- Bundled Git and LFS - PwrAgent now defaults to its bundled Git and Git LFS runtime, removing the dependency on a compatible system installation while preserving explicit overrides.
+- Star Map Manager - Let an agent inspect the open Star Map and help highlight, restore, open, pin, move, archive, and fly between threads.
+- Reviews - Choose the review execution mode per request and pin an attached pull request so stacked-review work targets the intended published diff.
+- Updates and Providers - Moved update controls into their own Settings page; provider refresh now shows per-provider progress, runs concurrently, and can be cancelled.
+- Windows Environments - Added native PowerShell environment setup and live setup progress for Windows threads.
+- Federation - Improved Cloudflare Access setup feedback, retry behavior, listener checks, backend overrides, and retained unsaved Settings edits.
+- Messaging - Kept Slack attachments on the intended reply destination and included reviewer context when review work starts from messaging.
+- Thread and Composer Reliability - Added workspace-aware subthread and fork actions, prevented stale snapshots from reviving completed turns, and fixed composer autocomplete update loops.
+- Models and Controls - Added Codex Auto access mode, showed newer Codex models with GPT-6 Sol/Luna pricing, and added Grok 4.7 and Fast pricing.
+- MCP and Navigation - Made MCP diagnostics concise, bounded connection inventory work, retained review cards through refreshes, and reduced unnecessary navigation and backend reads.
+- Minor - Improved provider credit formatting, empty-workspace presentation, image attachment focus behavior, and setup diagnostics.
+
 ## v1.1.0-beta.3 - 2026-09-20
 
 This beta includes the unshipped beta.2 changes and the following work.
