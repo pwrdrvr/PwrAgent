@@ -6,7 +6,10 @@ import {
   firstCssRuleBody,
 } from "./css-rule-body";
 
-/** A `<prop>: <n>px;` declaration's value, anchored so `top` never reads `margin-top`. */
+/**
+ * A `<prop>: <n>px` declaration's value, anchored to the start of a line so
+ * `top` never reads `margin-top`.
+ */
 function pxDeclaration(body: string, property: string): number {
   const match = body.match(
     new RegExp(`(?:^|\\n)\\s*${property}:\\s*(-?\\d+(?:\\.\\d+)?)px\\b`),
@@ -118,13 +121,15 @@ describe("launchpad connection card bounds", () => {
     // to pin `8px`, which covered the offset alone: the ring's top was sliced
     // flat while every assertion here passed. So it is derived, and a wider
     // ring or a bigger offset fails here instead of on screen. Matched out of
-    // the raw stylesheet because the focus rule is a twenty-selector group.
+    // the raw stylesheet because the focus rule is a shared selector group.
     const remove = firstCssRuleBody(".composer__attachment-remove");
     const focus = appCss.match(
       /\n[^{}]*\.composer__attachment-remove:focus-visible\s*[,{][^{}]*\{(?<body>[^}]*)\}/,
     )?.groups?.body;
     expect(focus).toBeDefined();
-    const ring = pxDeclaration(focus!, "outline") + pxDeclaration(focus!, "outline-offset");
+    const ring =
+      pxDeclaration(focus!, "outline")
+      + pxDeclaration(focus!, "outline-offset");
     expect(ring).toBeGreaterThan(0);
 
     const body = ruleBody(".composer__attachments");
@@ -137,11 +142,16 @@ describe("launchpad connection card bounds", () => {
 
     // The fixed half of the cap is two rows through the border box, so it
     // moves with the top padding. It was derived at 232px once and clipped
-    // the second row by exactly the padding it forgot.
+    // the second row by exactly the padding it forgot, then at 240px with a
+    // one-line chip block. The size and dimension chips wrap onto two lines
+    // in the thumbnail's column for any real image, so a row carries both.
+    const chipLines =
+      2 * pxDeclaration(firstCssRuleBody(".composer__attachment-chip"), "height")
+      + pxDeclaration(firstCssRuleBody(".composer__attachment-chips"), "gap");
     const row =
       pxDeclaration(firstCssRuleBody(".composer__attachment-thumb"), "height")
       + pxDeclaration(firstCssRuleBody(".composer__attachment"), "gap")
-      + pxDeclaration(firstCssRuleBody(".composer__attachment-chip"), "height");
+      + chipLines;
     const cap = body.match(/max-height:\s*min\((\d+)px,/);
     expect(cap).not.toBeNull();
     expect(Number(cap![1])).toBe(
