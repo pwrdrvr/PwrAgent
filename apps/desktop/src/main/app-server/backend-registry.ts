@@ -39760,6 +39760,27 @@ export class DesktopBackendRegistry {
       // coalesced turns in one transaction before terminal state reaches any
       // listener, even when several turns were active concurrently.
       await precedingLiveThreadUsageBarrier;
+      // Most turns still have a buffered usage line. Include the end time in
+      // its pending batch so completion does not require a second commit.
+      const completedTurnId = turnIdFromTerminalNotification(event.notification);
+      if (completedTurnId) {
+        const usageKey = [
+          event.backend,
+          event.notification.params.threadId,
+          completedTurnId,
+          "live-token-usage",
+        ].join(":");
+        const pending = this.pendingLiveThreadUsageLines.get(usageKey);
+        if (pending) {
+          this.pendingLiveThreadUsageLines.set(usageKey, {
+            ...pending,
+            line: {
+              ...pending.line,
+              completedAt: completedAtFromTerminalNotification(event.notification) ?? Date.now(),
+            },
+          });
+        }
+      }
       await this.flushLiveThreadUsageLines();
       const notification = event.notification as {
         params: {
@@ -39770,7 +39791,7 @@ export class DesktopBackendRegistry {
           };
         };
       };
-      const turnId = turnIdFromTerminalNotification(notification);
+      const turnId = completedTurnId;
       // The final token snapshot can precede this notification, with no later
       // usage event to carry the end time into the pricing row.
       if (turnId && this.overlayStore.completeThreadUsageTurn) {

@@ -2167,8 +2167,16 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     completedAt: number;
   }): Promise<boolean> {
     const turn = this.stateDb.raw.prepare(
-      `SELECT completed_at FROM thread_usage_turns
-        WHERE backend = ? AND thread_id = ? AND turn_id = ?`,
+      `SELECT turn.completed_at FROM thread_usage_turns AS turn
+        WHERE turn.backend = ? AND turn.thread_id = ? AND turn.turn_id = ?
+          AND EXISTS (
+            SELECT 1 FROM thread_usage_lines AS line
+             WHERE line.usage_turn_id = turn.usage_turn_id
+               AND line.source = 'live'
+               AND line.scope = 'turn'
+               AND line.parent_thread_id IS NULL
+               AND line.status != 'superseded'
+          )`,
     ).get(params.backend, params.threadId, params.turnId) as {
       completed_at: number | null;
     } | undefined;
