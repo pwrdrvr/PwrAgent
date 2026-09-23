@@ -1,5 +1,6 @@
 import path from "node:path";
-import { defineConfig, type ReporterDescription } from "@playwright/test";
+import { defineConfig, test, type ReporterDescription } from "@playwright/test";
+import { installShutdownDiagnostics } from "./scripts/playwright-shutdown-diagnostics.mjs";
 import {
   E2E_SHUTDOWN_DIAGNOSTICS_FILE_ENV,
 } from "./src/main/e2e-shutdown-diagnostics";
@@ -7,6 +8,11 @@ import {
   E2E_SHUTDOWN_CIRCUIT_BREAKER_ENV,
   E2E_SHUTDOWN_CIRCUIT_STATE_FILE_ENV,
 } from "./e2e/fixtures/electron-shutdown-policy";
+
+installShutdownDiagnostics({
+  outputDir: path.join(import.meta.dirname, "test-results"),
+  currentTest: () => test.info(),
+});
 
 // Every E2E run reports how much the app made sqlite write. This is the only
 // harness that drives the real write path — the main-process unit suites mock

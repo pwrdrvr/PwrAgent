@@ -1,0 +1,38 @@
+diff --git a/lib/worker/workerProcessEntry.js b/lib/worker/workerProcessEntry.js
+index 7d3bbde2d899645ad68684d9202d650243618ea7..f7473b84a8267c48d2b4750d19c40b6a508c2748 100644
+--- a/lib/worker/workerProcessEntry.js
++++ b/lib/worker/workerProcessEntry.js
+@@ -1406,25 +1406,33 @@ var WorkerMain = class extends import_common3.ProcessRunner {
+     return this._runFinished;
+   }
+   async gracefullyClose() {
++    const diagnostics = globalThis[Symbol.for("pwragent.playwrightShutdownDiagnostics")];
++    diagnostics?.workerPhase("stop");
+     try {
+       await this._stop();
+       if (!this._config) {
++        diagnostics?.workerEnd();
+         return;
+       }
+       const fakeTestInfo = new TestInfoImpl(this._config, this._project, this._params, void 0, 0, emtpyTestInfoCallbacks);
+       const runnable = { type: "teardown" };
++      diagnostics?.workerPhase("load");
+       await fakeTestInfo._runWithTimeout(runnable, () => this._loadIfNeeded()).catch(() => {
+       });
++      diagnostics?.workerPhase("test-fixtures");
+       await this._fixtureRunner.teardownScope("test", fakeTestInfo, runnable).catch(() => {
+       });
++      diagnostics?.workerPhase("worker-fixtures");
+       await this._fixtureRunner.teardownScope("worker", fakeTestInfo, runnable).catch(() => {
+       });
++      diagnostics?.workerPhase("registered-processes");
+       await fakeTestInfo._runWithTimeout(runnable, () => gracefullyCloseAll()).catch(() => {
+       });
+       this._fatalErrors.push(...fakeTestInfo.errors);
+     } catch (e) {
+       this._fatalErrors.push(testInfoError(e));
+     }
++    diagnostics?.workerEnd(this._fatalErrors.length > 0);
+     if (this._fatalErrors.length) {
+       this._appendProcessTeardownDiagnostics(this._fatalErrors[this._fatalErrors.length - 1]);
+       const payload = { fatalErrors: this._fatalErrors.map(import_common3.ipc.toTestInfoErrorPayload) };
