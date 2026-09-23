@@ -70,7 +70,7 @@ test("hydrates provider-scoped pricing totals in the context rail", async () => 
     await expect(spendGroupHead).toContainText("OpenAI");
     await expect(spendGroupHead).toContainText("$0.017 · 2 rows");
     await expect(contextRail.locator(".pricing-spend-row__label")).toHaveText([
-      "gpt-5.5",
+      "GPT-5.5",
       "Unknown model",
       "grok-4.5",
     ]);
@@ -103,7 +103,8 @@ test("hydrates provider-scoped pricing totals in the context rail", async () => 
     // The usage cards still name every model, so each of these now resolves
     // against a spend row too and has to be scoped to the card list.
     const usageRows = contextRail.locator(".pricing-usage-row");
-    await expect(usageRows.getByText("gpt-5.5 · high")).toBeVisible();
+    await expect(usageRows.getByText("GPT-5.5 · high")).toBeVisible();
+    await expect(usageRows.getByText("GPT-5.5 · high")).toHaveAttribute("title", "gpt-5.5");
     await expect(
       contextRail.getByText("$0.017 list price this turn"),
     ).toBeVisible();

@@ -313,6 +313,7 @@ it.each([false, true])("joins live gate metadata before pricing pagination (defe
       readThreadToolAccounting: async () => undefined,
     },
     assertNotBootstrap: () => {},
+    resolveCodexLocalModelIdsFn: () => [],
     getActiveTurnForThread: () => ({ turnId: parent.turnId }),
     liveTokenMiserUsageLines: new Map([["fixture", new Map(gates.map((gate) => [gate.usageLineId, gate]))]]),
     liveTokenMiserSubAgents: new Map([["fixture", new Map(agents.map((agent) => [agent.monitorId, agent]))]]),
