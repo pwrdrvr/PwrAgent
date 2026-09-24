@@ -798,9 +798,18 @@ export function projectNavigationQuery(params: {
     return { coverage: params.index.coverage ?? { state: "complete" }, counts: countsForThreads(selectedThreads),
       collectionSize: directories.length, directories, entries: [], queryKey: navigationQueryKey(params.request) };
   }
+  // Attention can include a child while excluding its idle/read parent. Base
+  // placement on the complete filtered membership, before pagination: such a
+  // child needs its own row, but a qualifying parent on a later page must keep
+  // its group. Preserve the actual relationship in row metadata for actions.
+  const attentionMemberKeys = query.kind === "lens" && query.lens === "attention"
+    && (!params.index.coverage || params.index.coverage.state === "complete")
+    ? new Set(selectedThreads.map(threadKey)) : undefined;
   const entries = selectedThreads.map((thread, index): NavigationQueryEntry => {
     const parent = parentIdentity(thread, parentCandidates);
-    const placementParent = query.kind === "directory" || (query.kind === "exact" && query.includeAncestry)
+    const placementParent = attentionMemberKeys && parent && !attentionMemberKeys.has(identityKey(parent))
+      ? undefined
+      : query.kind === "directory" || (query.kind === "exact" && query.includeAncestry)
       ? availableParentIdentity(thread, parentCandidates, params.index.coverage) : parent;
     return {
       row: projectNavigationRow({
