@@ -31,6 +31,10 @@ Start with `snapshot-1.json`, then use `timeline.jsonl` to reconstruct events:
   pipe can produce this state. It does not, by itself, prove which process owns
   the pipe. Correlate with `process-tree.json`, which records the worker,
   tracked children and discoverable descendants (Windows CIM; POSIX `ps`).
+  If the query failed, that file has `error` instead. `killed: true` with
+  `signal` set means the query reached its bound. A `code` means the command
+  exited on its own; read `stderr` for the reason. Node gives both failures
+  the same `error` message, so use these fields, not the message.
 - `resources` contains creation stacks and test ownership for tracked live
   async resources. `report.libuv` and `report.nativeStack` come from Node's
   diagnostic report. A live handle is supporting evidence, not proof of a leak.
@@ -75,7 +79,13 @@ tests: a green ordinary E2E run does not validate failure capture.
 The watchdog runs on the worker's event loop. A native deadlock that blocks that
 loop cannot trigger it; investigating that needs an external process dump. A
 process-tree query is bounded to three seconds and reports query failures in
-its artifact; abrupt worker termination may interrupt it. POSIX can reparent
+its artifact; abrupt worker termination may interrupt it. Each result records
+`elapsedMs`. On hosted Windows runners the query took 0.6-1.1 seconds from a
+loaded worker. Most of that was PowerShell startup and the `CimCmdlets`
+import; the WMI query took 50-75 ms. A narrower WQL projection saved about
+40 ms, so a cheaper query does not remove the risk of reaching the bound.
+The real-worker test therefore accepts a correctly classified kill at the
+bound and fails on any other query failure. POSIX can reparent
 orphans before the query, making ancestry incomplete. Async-resource tracking
 starts when the worker loads the config and keeps at most 512 live records;
 `droppedResources` reports overflow. Records use weak references so diagnostics

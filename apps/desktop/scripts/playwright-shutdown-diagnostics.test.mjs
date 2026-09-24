@@ -201,8 +201,17 @@ describe("real Playwright worker shutdown diagnostics", () => {
     const tree = JSON.parse(result.artifacts.find(({ file }) => file.endsWith("process-tree.json")).text);
     // The probe root is deleted after the run, so this message is the only
     // copy of the failure classification a CI log keeps.
-    expect(tree.error, JSON.stringify(tree)).toBeUndefined();
-    expect(tree.processes.some(({ pid }) => pid === pending.pid)).toBe(true);
+    const record = JSON.stringify(tree);
+    if (tree.killed) {
+      // The query is bounded, not guaranteed. Windows runners measured
+      // 0.6-1.1s against the 3s bound, yet a loaded runner can still reach
+      // it. A kill at the bound must say so; any other failure is a defect.
+      expect(tree, record).toMatchObject({ signal: "SIGTERM", code: null });
+      expect(tree.elapsedMs, record).toBeGreaterThanOrEqual(tree.timeoutMs);
+    } else {
+      expect(tree.error, record).toBeUndefined();
+      expect(tree.processes.some(({ pid }) => pid === pending.pid)).toBe(true);
+    }
   }, 20_000);
 
   it("distinguishes a worker fixture hang from process cleanup", async () => {
