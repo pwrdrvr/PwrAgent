@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.1.0-beta.5 - 2026-09-23
+
+- Update Banner - Kept Cancel and release-note actions clear of download progress, stabilized the banner width across update states, and prevented a late download completion from turning an intended Cancel click into Restart.
+- Pricing - Completed turns now show their duration even when final usage arrived early. Aggregate GPT-6 usage estimates use short-context rates when a request-level context band is unavailable, while measured request costs retain their exact pricing.
+- MCP Sign-In - Kept browser sign-in progress, Cancel, and errors on each connection row so other connections remain usable while authorization is pending.
+
 ## v1.1.0-beta.4 - 2026-09-23
 
 - Local Codex Models - Added support for local Codex-compatible models, optional loopback Responses bridges, model discovery, and profile-scoped Codex configuration overlays.
