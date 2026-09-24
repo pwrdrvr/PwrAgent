@@ -199,7 +199,9 @@ describe("real Playwright worker shutdown diagnostics", () => {
     expect(snapshot.resources.some(({ type }) => type === "PROCESSWRAP")).toBe(true);
     expect(snapshot.report.libuv.length).toBeGreaterThan(0);
     const tree = JSON.parse(result.artifacts.find(({ file }) => file.endsWith("process-tree.json")).text);
-    expect(tree.error).toBeUndefined();
+    // The probe root is deleted after the run, so this message is the only
+    // copy of the failure classification a CI log keeps.
+    expect(tree.error, JSON.stringify(tree)).toBeUndefined();
     expect(tree.processes.some(({ pid }) => pid === pending.pid)).toBe(true);
   }, 20_000);
 

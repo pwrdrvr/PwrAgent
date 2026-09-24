@@ -79,9 +79,17 @@ export function installShutdownDiagnostics({ outputDir, currentTest, captureAfte
     const args = windows
       ? ["-NoProfile", "-NonInteractive", "-Command", "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name | ConvertTo-Json -Compress"]
       : ["-axo", "pid=,ppid=,comm="];
-    const child = execFile(command, args, { timeout: 3_000, maxBuffer: 2 * 1024 * 1024, windowsHide: true }, safe((error, stdout) => {
+    const timeoutMs = 3_000;
+    const started = Date.now();
+    const child = execFile(command, args, { timeout: timeoutMs, maxBuffer: 2 * 1024 * 1024, windowsHide: true }, safe((error, stdout, stderr) => {
+      const elapsedMs = Date.now() - started;
       if (error) {
-        write("process-tree.json", { error: error.message });
+        // Node words a timeout kill and a silent non-zero exit identically
+        // ("Command failed: <command>"), so the message alone cannot say which.
+        write("process-tree.json", {
+          error: error.message, killed: error.killed, signal: error.signal, code: error.code,
+          stderr: String(stderr).slice(0, 2048), stdoutBytes: stdout.length, elapsedMs, timeoutMs,
+        });
         return;
       }
       const rows = windows
@@ -98,7 +106,7 @@ export function installShutdownDiagnostics({ outputDir, currentTest, captureAfte
           if (owned.has(row.ppid) && !owned.has(row.pid)) { owned.add(row.pid); changed = true; }
         }
       }
-      write("process-tree.json", { workerPid: process.pid, processes: rows.filter((row) => owned.has(row.pid)) });
+      write("process-tree.json", { workerPid: process.pid, elapsedMs, timeoutMs, processes: rows.filter((row) => owned.has(row.pid)) });
     }));
     child.unref();
     child.stdout?.unref?.();
