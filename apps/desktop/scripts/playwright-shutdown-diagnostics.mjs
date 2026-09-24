@@ -8,6 +8,7 @@ const key = Symbol.for("pwragent.playwrightShutdownDiagnostics");
 const require = createRequire(import.meta.url);
 const fromPlaywright = createRequire(require.resolve("@playwright/test"));
 const { utils } = fromPlaywright("playwright-core/lib/coreBundle");
+const playwrightGlobals = fromPlaywright(path.join(path.dirname(fromPlaywright.resolve("playwright/package.json")), "lib/globals.js"));
 const trackedTypes = new Set([
   "PROCESSWRAP", "PIPEWRAP", "TCPWRAP", "TCPSERVERWRAP", "Timeout",
   "FSREQCALLBACK", "FSREQPROMISE", "GETADDRINFOREQWRAP", "UDPWRAP",
@@ -17,7 +18,7 @@ const trackedTypes = new Set([
 // anything. The two versioned pnpm patches only emit observations; they do
 // not replace promises, adjust deadlines, swallow errors, or kill processes.
 export function installShutdownDiagnostics({ outputDir, currentTest, captureAfterMs = 5_000 }) {
-  if (process.env.TEST_WORKER_INDEX === undefined
+  if (!playwrightGlobals.isWorkerProcess()
     || process.env.PWRAGENT_E2E_WORKER_DIAGNOSTICS === "0"
     || globalThis[key]) return;
 
@@ -63,8 +64,8 @@ export function installShutdownDiagnostics({ outputDir, currentTest, captureAfte
   });
   hook.enable();
   // This is the worker-side readiness boundary. The config module also runs in
-  // Playwright's controller, where TEST_WORKER_INDEX is absent and this
-  // recorder intentionally returns above. A timeline here proves that the
+  // Playwright's controller, which may inherit TEST_WORKER_INDEX but returns
+  // above because Playwright has not marked it as a worker. A timeline proves the
   // worker loaded the recorder before its test body or cleanup starts.
   safe(() => event({ kind: "worker-start", workerIndex: process.env.TEST_WORKER_INDEX }))();
 

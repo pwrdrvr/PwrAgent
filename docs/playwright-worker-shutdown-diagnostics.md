@@ -4,6 +4,11 @@ Desktop E2E installs this recorder in each Playwright worker. A worker cleanup
 timeout still fails the run. This change captures evidence; it does not fix or
 suppress cleanup failures, increase timeouts, or retry tests.
 
+The config also runs in Playwright's controller and loader processes. An
+inherited `TEST_WORKER_INDEX` does not identify a worker; the recorder starts
+only after Playwright marks the process as a worker. Thus `worker-start` is a
+worker-readiness marker, not merely evidence that the config was evaluated.
+
 The normal path records a small JSONL lifecycle timeline. When one worker
 cleanup phase takes five seconds, it captures a snapshot before Playwright's
 30-second default timeout. It also captures on worker cleanup failure (at most
@@ -56,6 +61,8 @@ of holding the worker open. This does not disable Windows diagnostic capture;
 the two other failure probes run there. It also verifies healthy cleanup exits
 zero without a snapshot and that a planted environment secret is absent from
 artifacts. No Electron window, display server, or browser download is needed.
+The suite also runs Playwright's `--list` mode with an inherited worker index
+to verify that a controller cannot emit a false readiness marker.
 
 Two small versioned pnpm patches emit observations from Playwright's worker
 and process launcher. They leave the original promises, cleanup, error handling
