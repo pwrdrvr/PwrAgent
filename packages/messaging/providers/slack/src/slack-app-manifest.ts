@@ -15,6 +15,16 @@ export const SLACK_APP_MANIFEST_VERSION = 2;
 
 export const DEFAULT_SLACK_SLASH_COMMAND_PREFIX = "pwragent_";
 
+export const DEFAULT_SLACK_APP_NAME = "PwrAgent";
+
+/**
+ * Slack's limit for `display_information.name`. The same string goes into
+ * `bot_user.display_name` (limit 80), so the app name's limit is the one that
+ * binds. Slack's reference also lists `a-z 0-9 - _ .` as the display name's
+ * characters, but it accepts capitals and spaces, as "PwrAgent" always has.
+ */
+export const SLACK_APP_NAME_MAX_LENGTH = 35;
+
 export const SLACK_APP_MANIFEST_BOT_SCOPES = [
   "app_mentions:read",
   "assistant:write",
@@ -99,19 +109,43 @@ export type SlackAppManifest = {
 
 export type BuildOfficialSlackAppManifestOptions = {
   slashCommandPrefix?: string;
+  /**
+   * Written to both the app name and the bot's display name, which is what
+   * Slack shows after @. A teammate's PwrAgent in the same workspace is
+   * otherwise indistinguishable from yours.
+   */
+  appName?: string;
 };
+
+/** The trimmed name, or why Slack would refuse it. */
+export function normalizeSlackAppName(
+  appName: string,
+): { ok: true; appName: string } | { ok: false; error: string } {
+  const trimmed = appName.trim();
+  if (!trimmed) {
+    return { ok: false, error: "Enter a name for the Slack app." };
+  }
+  if (trimmed.length > SLACK_APP_NAME_MAX_LENGTH) {
+    return {
+      ok: false,
+      error: `Slack app names are at most ${SLACK_APP_NAME_MAX_LENGTH} characters.`,
+    };
+  }
+  return { ok: true, appName: trimmed };
+}
 
 export function buildOfficialSlackAppManifest(
   options: BuildOfficialSlackAppManifestOptions = {},
 ): SlackAppManifest {
   const prefix = options.slashCommandPrefix ?? DEFAULT_SLACK_SLASH_COMMAND_PREFIX;
+  const name = options.appName ?? DEFAULT_SLACK_APP_NAME;
   return {
     _metadata: {
       major_version: 1,
       minor_version: 1,
     },
     display_information: {
-      name: "PwrAgent",
+      name,
       description: "Your coding agent, running on your computer.",
       background_color: "#000000",
     },
@@ -125,7 +159,7 @@ export function buildOfficialSlackAppManifest(
         messages_tab_read_only_enabled: false,
       },
       bot_user: {
-        display_name: "PwrAgent",
+        display_name: name,
         always_online: true,
       },
       slash_commands: MESSAGING_COMMAND_CATALOG.map((command) => ({

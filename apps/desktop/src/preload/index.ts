@@ -447,6 +447,7 @@ import type {
   ListDiscordThreadPermissionChannelsResponse,
   OpenDiscordThreadPermissionRequest,
   OpenDiscordThreadPermissionResponse,
+  OpenSlackAppSettingsResponse,
   SlackCreateAppRequest,
   SlackCreateAppResponse,
   DesktopBootInfo,
@@ -835,7 +836,9 @@ import {
   SETTINGS_INSPECT_DISCORD_THREAD_PERMISSIONS_CHANNEL,
   SETTINGS_LIST_DISCORD_THREAD_PERMISSION_CHANNELS_CHANNEL,
   SETTINGS_OPEN_DISCORD_THREAD_PERMISSION_CHANNEL,
+  SETTINGS_OPEN_SLACK_APP_SETTINGS_CHANNEL,
   SETTINGS_OPEN_SLACK_CREATE_APP_CHANNEL,
+  SETTINGS_START_APP_ICON_DRAG_CHANNEL,
   SETTINGS_INSPECT_CODE_SIGNATURES_CHANNEL,
   SETTINGS_PICK_GH_COMMAND_CHANNEL,
   SETTINGS_PICK_GLAB_COMMAND_CHANNEL,
@@ -1516,6 +1519,11 @@ const desktopApi = Object.freeze({
     request?: SlackCreateAppRequest,
   ): Promise<SlackCreateAppResponse> =>
     await ipcRenderer.invoke(SETTINGS_OPEN_SLACK_CREATE_APP_CHANNEL, request),
+  openSlackAppSettings: async (): Promise<OpenSlackAppSettingsResponse> =>
+    await ipcRenderer.invoke(SETTINGS_OPEN_SLACK_APP_SETTINGS_CHANNEL),
+  startAppIconDrag: (): void => {
+    ipcRenderer.send(SETTINGS_START_APP_ICON_DRAG_CHANNEL);
+  },
   listDiscordThreadPermissionChannels: async (
     request: ListDiscordThreadPermissionChannelsRequest,
   ): Promise<ListDiscordThreadPermissionChannelsResponse> =>

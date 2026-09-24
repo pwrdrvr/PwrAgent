@@ -337,7 +337,7 @@ function contactForPairing(
     const id = entry.observedChat.bucketId;
     if (!id || (isSlack && !validateSlackTeamId(id).ok)) {
       throw new Error(
-        "Slack team approval requires a valid workspace ID (starts with T).",
+        "Slack workspace approval requires a valid workspace ID (starts with T).",
       );
     }
     // The workspace name is resolved best-effort at approval time (blank if the

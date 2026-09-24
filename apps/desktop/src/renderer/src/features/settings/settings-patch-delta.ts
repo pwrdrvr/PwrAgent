@@ -182,6 +182,14 @@ export function buildSlackPatchDelta(
   if (snapshot.streamingResponses.value !== candidate.streamingResponses.value) {
     patch.streamingResponses = candidate.streamingResponses.value;
   }
+  // A suggested name equal to the draft is still a choice to record, which
+  // the source says and the value cannot.
+  if (
+    snapshot.appName.value !== candidate.appName.value
+    || snapshot.appName.source !== candidate.appName.source
+  ) {
+    patch.appName = candidate.appName.value;
+  }
   if (snapshot.workspaceUrl.value !== candidate.workspaceUrl.value) {
     patch.workspaceUrl = candidate.workspaceUrl.value;
   }

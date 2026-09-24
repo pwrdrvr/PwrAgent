@@ -4270,8 +4270,16 @@ export function ProviderSetupStep(props: {
       </header>
       {props.provider === "slack" ? (
         <SlackConnectCard
+          appName={snapshot?.messaging.slack.appName}
           desktopApi={props.desktopApi}
+          saving={props.settings.saving}
           variant="onboarding"
+          onSaveAppName={async (appName) => {
+            const saved = await props.settings.writeConfig({
+              messaging: { slack: { appName } },
+            });
+            if (!saved) throw new Error("Could not save the agent name.");
+          }}
         />
       ) : null}
       {leftoverEventsInbound ? (

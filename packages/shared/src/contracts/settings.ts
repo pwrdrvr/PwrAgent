@@ -1207,6 +1207,13 @@ export type DesktopSettingsSnapshot = {
       botToken: DesktopSettingsSecretState;
       appToken: DesktopSettingsSecretState;
       signingSecret: DesktopSettingsSecretState;
+      /**
+       * The name Slack shows after @ and in the app list, written into both
+       * name fields of the app manifest. The default is only a suggestion
+       * (`PwrAgent - <OS user>`): a `"default"` source means the operator has
+       * not chosen one, and Settings will not build a manifest until they do.
+       */
+      appName: DesktopSettingsValue<string>;
       workspaceUrl: DesktopSettingsValue<string>;
       inboundMode: DesktopSettingsValue<"socket" | "events">;
       teamAuthorizationMode: DesktopSettingsValue<DesktopMessagingAuthorizationMode>;
@@ -1487,6 +1494,7 @@ export type DesktopSettingsConfigPatch = {
       liveWorkingCards?: boolean;
       responseMode?: DesktopMessagingResponseMode;
       streamingResponses?: boolean;
+      appName?: string;
       workspaceUrl?: string;
       inboundMode?: "socket" | "events";
       teamAuthorizationMode?: DesktopMessagingAuthorizationMode;
@@ -2289,6 +2297,17 @@ export type SlackCreateAppRequest = {
   open?: boolean;
   /** Create a new app from the manifest, or open Slack Apps to update one. */
   mode?: "create" | "update";
+  /**
+   * The operator's chosen app name, for both manifest name fields. Without
+   * one the manifest keeps the plain `PwrAgent` it always had.
+   */
+  appName?: string;
+};
+
+export type OpenSlackAppSettingsResponse = {
+  url: string;
+  /** False when no app-level token names the app, so Slack's app list opened. */
+  appSpecific: boolean;
 };
 
 export type SlackCreateAppResponse = {

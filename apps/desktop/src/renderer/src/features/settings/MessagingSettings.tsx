@@ -80,6 +80,7 @@ import {
   type SettingsChipTone,
 } from "./SettingsLayout";
 import { AutomationStage } from "../automations/AutomationFunnel";
+import { SlackAppIconStep } from "../messaging/SlackAppIconStep";
 import { SlackConnectCard } from "../messaging/SlackConnectCard";
 import {
   SlackAppTokenSteps,
@@ -1337,8 +1338,18 @@ export function MessagingSettings(props: {
               progress={slackConnectProgress("create")}
             >
               <SlackConnectCard
+                appName={slack.appName}
                 desktopApi={props.desktopApi}
+                saving={props.saving}
                 variant="settings"
+                onSaveAppName={(appName) =>
+                  props.onSaveSlack({
+                    ...slack,
+                    // "config" even for the unedited suggestion: taking it
+                    // is the choice the source records.
+                    appName: { ...slack.appName, value: appName, source: "config" },
+                  })
+                }
               />
             </AutomationStage>
             <AutomationStage
@@ -1388,6 +1399,14 @@ export function MessagingSettings(props: {
                 onClearSecret={props.onClearSecret}
                 onReplaceSecret={props.onReplaceSecret}
               />
+            </AutomationStage>
+            <AutomationStage
+              verb="Add"
+              title="PwrAgent icon"
+              // Nothing reports whether Slack has an icon, and nothing needs one.
+              progress={{ state: "waiting", label: "Optional" }}
+            >
+              <SlackAppIconStep desktopApi={props.desktopApi} />
             </AutomationStage>
             <AutomationStage
               verb="Test"
@@ -1442,7 +1461,7 @@ export function MessagingSettings(props: {
           <SegmentedField
             disabled={props.saving}
             label="DM access"
-            sub="Who may DM the bot. Team and channel rules do not apply to DMs."
+            sub="Who may DM the bot. Workspace and channel rules do not apply to DMs."
             options={DM_ACCESS_MODE_OPTIONS}
             source={sourceBadge(slack.dmAccessMode)}
             value={slack.dmAccessMode.value}
@@ -1472,9 +1491,9 @@ export function MessagingSettings(props: {
           />
           <SegmentedField
             disabled={props.saving}
-            label="Team access default"
-            sub="Whether channel messages must come from an Authorized Team. Matters mainly for Slack Connect."
-            options={TEAM_AUTHORIZATION_MODE_OPTIONS}
+            label="Workspace access default"
+            sub="Whether channel messages must come from an Authorized Workspace. Matters mainly for Slack Connect."
+            options={WORKSPACE_AUTHORIZATION_MODE_OPTIONS}
             source={sourceBadge(slack.teamAuthorizationMode)}
             value={slack.teamAuthorizationMode.value}
             onChange={(teamAuthorizationMode) => {
@@ -1500,9 +1519,9 @@ export function MessagingSettings(props: {
                 "slack",
                 "workspace",
               )}
-              label="Authorized Team IDs"
-              sub="Approves every channel and group DM the bot is in, in a listed team."
-              help="Slack team IDs start with T, e.g. T012ABCDEF0. These are not channel IDs, and the Workspace URL is only display text."
+              label="Authorized Workspaces"
+              sub="Approves every channel and group DM the bot is in, in a listed workspace."
+              help="Slack workspace IDs start with T, e.g. T012ABCDEF0. Slack’s API calls them team IDs. They are not channel IDs, and the Workspace URL is only display text."
               source={optionalListSourceBadge(slack.authorizedWorkspaces)}
               validateEntry={validateSlackWorkspaceIdEntry}
               value={slack.authorizedWorkspaces.value}
@@ -2544,12 +2563,15 @@ const PDF_PROFILE_OPTIONS: Array<{
   { label: "Maximum", value: "actual" },
 ];
 
-const TEAM_AUTHORIZATION_MODE_OPTIONS: Array<{
+// Slack's API calls a workspace a "team" (team_id, T…), and the config keeps
+// that name. Slack's own UI says workspace, so labels do too: an approved
+// "team" showing the company's name read as a different thing entirely.
+const WORKSPACE_AUTHORIZATION_MODE_OPTIONS: Array<{
   label: string;
   value: DesktopMessagingAuthorizationMode;
 }> = [
-  { label: "Require listed teams", value: "approved_only" },
-  { label: "Any team", value: "allow_all" },
+  { label: "Require listed workspaces", value: "approved_only" },
+  { label: "Any workspace", value: "allow_all" },
 ];
 
 const CHANNEL_AUTHORIZATION_MODE_OPTIONS: Array<{
@@ -3332,7 +3354,7 @@ function pairingEntryDetails(entry: MessagingPairingEntry): string[] {
         details.push(`Thread: ${chat.title}`);
       }
     }
-    if (chat.bucketId) details.push(`Team ID ${chat.bucketId}`);
+    if (chat.bucketId) details.push(`Workspace ID ${chat.bucketId}`);
     return details;
   }
   if (chat?.id) {
@@ -3351,7 +3373,7 @@ function pairingEntryDetails(entry: MessagingPairingEntry): string[] {
       entry.platform === "telegram"
         ? "Supergroup ID"
         : entry.platform === "slack"
-          ? "Team ID"
+          ? "Workspace ID"
           : "Bucket ID";
     details.push(`${bucketLabel} ${chat.bucketId}`);
   }
@@ -4159,7 +4181,7 @@ function validateSlackUserIdEntry(value: string): string | undefined {
 
 function validateSlackWorkspaceIdEntry(value: string): string | undefined {
   return validationMessage(validateSlackTeamId(value), "Slack workspace ID", {
-    format: "Use a Slack workspace/team ID starting with T, e.g. T012ABCDEF0.",
+    format: "Use a Slack workspace ID starting with T, e.g. T012ABCDEF0.",
     length: "Slack workspace IDs must be 64 characters or fewer.",
   });
 }

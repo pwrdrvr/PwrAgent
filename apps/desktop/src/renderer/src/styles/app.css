@@ -9835,7 +9835,7 @@ a.button {
 }
 
 /* A field that is a sub-setting of the field above it (e.g. Authorized
-   Team IDs under "Team access default"). Indented with a guide rail. */
+   Workspaces under "Workspace access default"). Indented with a guide rail. */
 .settings-subfield {
   margin-left: 18px;
   border-left: 2px solid var(--border-subtle);
@@ -10025,7 +10025,8 @@ a.button {
 }
 
 .slack-connect__checklist code,
-.slack-connect__step code {
+.slack-connect__step code,
+.slack-connect__admin code {
   color: var(--text-primary);
   font-family: var(--font-mono);
   font-size: 11.5px;
@@ -10033,6 +10034,30 @@ a.button {
 
 .slack-connect__status {
   color: var(--text-secondary);
+}
+
+/* The agent name sits above Create because the manifest carries it. */
+.slack-connect__name {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.slack-connect__name-label {
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.slack-connect__name-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.slack-connect__name-row > input {
+  flex: 1;
+  min-width: 0;
 }
 
 .slack-connect__error {
@@ -10127,6 +10152,34 @@ a.button {
 
 .slack-setup .settings-button-row {
   padding: 0;
+}
+
+.slack-icon-step {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.slack-icon-step__row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+/* The shipped icon at Slack's own app-icon scale: big enough to aim a drag,
+   and square-cornered art rounded the way Slack will show it. */
+.slack-icon-step__icon {
+  width: 56px;
+  height: 56px;
+  border-radius: 8px;
+}
+
+.slack-icon-step__icon.is-draggable {
+  cursor: grab;
+}
+
+.slack-icon-step__icon.is-draggable:active {
+  cursor: grabbing;
 }
 
 .messaging-default-agent {

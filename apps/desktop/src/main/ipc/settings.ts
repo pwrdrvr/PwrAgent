@@ -49,6 +49,7 @@ import type {
   SettingsCredentialTestResult,
   OpenDiscordThreadPermissionRequest,
   OpenDiscordThreadPermissionResponse,
+  OpenSlackAppSettingsResponse,
   SlackCreateAppRequest,
   SlackCreateAppResponse,
   StartDesktopCodexAuthProfileLoginRequest,
@@ -76,6 +77,7 @@ import {
   SETTINGS_INSPECT_DISCORD_THREAD_PERMISSIONS_CHANNEL,
   SETTINGS_LIST_DISCORD_THREAD_PERMISSION_CHANNELS_CHANNEL,
   SETTINGS_OPEN_DISCORD_THREAD_PERMISSION_CHANNEL,
+  SETTINGS_OPEN_SLACK_APP_SETTINGS_CHANNEL,
   SETTINGS_OPEN_SLACK_CREATE_APP_CHANNEL,
   SETTINGS_INSPECT_CODE_SIGNATURES_CHANNEL,
   SETTINGS_PICK_GH_COMMAND_CHANNEL,
@@ -2052,7 +2054,15 @@ export function registerSettingsIpcHandlers(
       request: SlackCreateAppRequest = {},
     ): Promise<SlackCreateAppResponse> => {
       const slackProvider = await import("@pwragent/messaging-provider-slack");
-      const prepared = slackProvider.buildSlackCreateAppUrl();
+      let appName: string | undefined;
+      if (request.appName !== undefined) {
+        const normalized = slackProvider.normalizeSlackAppName(request.appName);
+        if (!normalized.ok) throw new Error(normalized.error);
+        appName = normalized.appName;
+      }
+      const prepared = slackProvider.buildSlackCreateAppUrl({
+        manifest: slackProvider.buildOfficialSlackAppManifest({ appName }),
+      });
       const url = request.mode === "update"
         ? SLACK_APP_MANAGEMENT_URL
         : prepared.url;
@@ -2071,6 +2081,23 @@ export function registerSettingsIpcHandlers(
         manifestJson: prepared.manifestJson,
         opened,
       };
+    },
+  );
+
+  ipcMain.removeHandler(SETTINGS_OPEN_SLACK_APP_SETTINGS_CHANNEL);
+  ipcMain.handle(
+    SETTINGS_OPEN_SLACK_APP_SETTINGS_CHANNEL,
+    async (): Promise<OpenSlackAppSettingsResponse> => {
+      const slackProvider = await import("@pwragent/messaging-provider-slack");
+      // The token stays in main; only the app ID it carries reaches the URL.
+      const target = slackProvider.buildSlackAppSettingsUrl(
+        getService(service).resolveSlackAppTokenSync(),
+      );
+      if (!isSafeExternalOpenUrl(target.url)) {
+        throw new Error("Refused to open an unsafe Slack app URL.");
+      }
+      await shell.openExternal(target.url);
+      return target;
     },
   );
 
@@ -2244,6 +2271,7 @@ export function disposeSettingsIpcHandlers(): void {
   ipcMain.removeHandler(SETTINGS_TEST_CREDENTIALS_CHANNEL);
   ipcMain.removeHandler(SETTINGS_LAST_CREDENTIAL_TEST_CHANNEL);
   ipcMain.removeHandler(SETTINGS_OPEN_SLACK_CREATE_APP_CHANNEL);
+  ipcMain.removeHandler(SETTINGS_OPEN_SLACK_APP_SETTINGS_CHANNEL);
   ipcMain.removeHandler(SETTINGS_LIST_DISCORD_THREAD_PERMISSION_CHANNELS_CHANNEL);
   ipcMain.removeHandler(SETTINGS_INSPECT_DISCORD_THREAD_PERMISSIONS_CHANNEL);
   ipcMain.removeHandler(SETTINGS_OPEN_DISCORD_THREAD_PERMISSION_CHANNEL);

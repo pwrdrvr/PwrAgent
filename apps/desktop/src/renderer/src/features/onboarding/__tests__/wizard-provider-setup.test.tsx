@@ -621,6 +621,7 @@ describe("Slack onboarding setup", () => {
             botToken: unsetSecret,
             appToken: unsetSecret,
             signingSecret: unsetSecret,
+            appName: { value: "PwrAgent - fixture-user", source: "config" },
           },
           feishu: {
             appId: unsetSecret,
@@ -663,6 +664,29 @@ describe("Slack onboarding setup", () => {
     expect(screen.queryByRole("radio", { name: "Events API" })).not.toBeInTheDocument();
     expect(screen.queryByText(/Events API \(requires/i)).not.toBeInTheDocument();
     expect(screen.getByText(/Socket Mode is the only inbound path/i)).toBeInTheDocument();
+  });
+
+  it("saves the chosen agent name before offering Create Slack app", async () => {
+    const settings = slackSettings();
+    const slack = settings.snapshot!.messaging.slack;
+    slack.appName = { value: "PwrAgent - fixture-user", source: "default" };
+    render(
+      <ProviderSetupStep
+        provider="slack"
+        settings={settings}
+        desktopApi={{ openSlackCreateApp: vi.fn() } as unknown as DesktopApi}
+        bufferedSecrets={{}}
+        onBufferSecret={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Create Slack app" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Use this name" }));
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        messaging: { slack: { appName: "PwrAgent - fixture-user" } },
+      });
+    });
   });
 
   it("coerces leftover Events API configs and shows a notice", () => {

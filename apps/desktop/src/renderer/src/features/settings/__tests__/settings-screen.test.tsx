@@ -336,6 +336,7 @@ function createSnapshot(
         botToken: { configured: false, source: "unset", writable: true },
         appToken: { configured: false, source: "unset", writable: true },
         signingSecret: { configured: false, source: "unset", writable: true },
+        appName: { value: "PwrAgent - fixture-user", source: "default" },
         workspaceUrl: { value: "", source: "default" },
         inboundMode: { value: "socket", source: "default" },
         teamAuthorizationMode: { value: "approved_only", source: "default" },
@@ -5291,7 +5292,7 @@ describe("SettingsScreen", () => {
 
     // A workspace was observed, so a team approval is offered too.
     fireEvent.click(within(requestCard as HTMLElement).getByRole("button", {
-      name: "Approve team",
+      name: "Approve workspace",
     }));
 
     await waitFor(() => {
@@ -5564,8 +5565,8 @@ describe("SettingsScreen", () => {
     ).toBeInTheDocument();
 
     const slackControls = openSection("Access & responses");
-    expect(slackControls.getByText("Authorized Team IDs")).toBeInTheDocument();
-    expect(slackControls.getByText("Team access default")).toBeInTheDocument();
+    expect(slackControls.getByText("Authorized Workspaces")).toBeInTheDocument();
+    expect(slackControls.getByText("Workspace access default")).toBeInTheDocument();
     expect(slackControls.getByText("Channel access default")).toBeInTheDocument();
     expect(slackControls.getByText("Channel response default")).toBeInTheDocument();
     expect(slackControls.getByText("Authorized Channels")).toBeInTheDocument();
@@ -5677,6 +5678,8 @@ describe("SettingsScreen", () => {
       ["Bot User OAuth Token", "Saved"],
       ["App-Level Token", "Next"],
       ["Signing Secret", "Waiting"],
+      // Nothing reports whether Slack has an icon, so it never becomes Next.
+      ["PwrAgent icon", "Optional"],
       ["Connection", "Waiting"],
     ]);
     expect(stages[2]).toHaveAttribute("aria-current", "step");
@@ -5790,7 +5793,12 @@ describe("SettingsScreen", () => {
   });
 
   it("offers Connect Slack as the primary create-from-manifest path", async () => {
-    const settings = createSettingsState();
+    const snapshot = createSnapshot();
+    snapshot.messaging.slack.appName = {
+      value: "PwrAgent - fixture-user",
+      source: "config",
+    };
+    const settings = createSettingsState(snapshot);
     const openSlackCreateApp = vi.fn(async () => ({
       url: "https://api.slack.com/apps?new_app=1&manifest_json=%7B%7D",
       oversized: false,
@@ -5814,7 +5822,84 @@ describe("SettingsScreen", () => {
     expect(screen.getAllByText(/customer-owned Slack app/i).length).toBeGreaterThan(0);
     fireEvent.click(screen.getByRole("button", { name: "Create Slack app" }));
     await waitFor(() => {
-      expect(openSlackCreateApp).toHaveBeenCalledWith({ open: true });
+      expect(openSlackCreateApp).toHaveBeenCalledWith({
+        open: true,
+        appName: "PwrAgent - fixture-user",
+      });
+    });
+  });
+
+  /**
+   * Slack creates the app, and its @ name, from the manifest, and a pasted
+   * manifest renames an existing app. Nothing that carries one is offered
+   * until the operator has chosen the name; the suggestion alone is not a
+   * choice.
+   */
+  it("makes the operator choose the agent name before building a manifest", async () => {
+    const settings = createSettingsState();
+    const openSlackCreateApp = vi.fn();
+
+    render(
+      <SettingsScreen
+        settings={settings}
+        desktopApi={{ openSlackCreateApp }}
+        initialSection="messaging"
+        initialSubsection="slack"
+        onClose={() => undefined}
+      />,
+    );
+
+    const name = screen.getByRole("textbox", { name: "Agent name" });
+    expect(name).toHaveValue("PwrAgent - fixture-user");
+    expect(screen.getByRole("button", { name: "Create Slack app" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Copy link for an admin" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Copy manifest" })).toBeDisabled();
+    // Opening Slack's app list carries no manifest.
+    expect(screen.getByRole("button", { name: "Open Slack Apps" })).toBeEnabled();
+
+    // Passing through the box is not choosing its suggestion.
+    fireEvent.focus(name);
+    fireEvent.blur(name);
+    expect(settings.writeConfig).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Use this name" }));
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        messaging: { slack: { appName: "PwrAgent - fixture-user" } },
+      });
+    });
+    expect(openSlackCreateApp).not.toHaveBeenCalled();
+  });
+
+  it("saves an edited agent name on blur, and refuses one Slack would", async () => {
+    const settings = createSettingsState();
+
+    render(
+      <SettingsScreen
+        settings={settings}
+        initialSection="messaging"
+        initialSubsection="slack"
+        onClose={() => undefined}
+      />,
+    );
+
+    const name = screen.getByRole("textbox", { name: "Agent name" });
+    fireEvent.change(name, {
+      target: { value: "PwrAgent - a name far too long for Slack" },
+    });
+    fireEvent.blur(name);
+    expect(
+      await screen.findByText("Slack app names are at most 35 characters."),
+    ).toHaveAttribute("role", "alert");
+    expect(name).toHaveAttribute("aria-invalid", "true");
+    expect(settings.writeConfig).not.toHaveBeenCalled();
+
+    fireEvent.change(name, { target: { value: "  Fixture Agent " } });
+    fireEvent.blur(name);
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        messaging: { slack: { appName: "Fixture Agent" } },
+      });
     });
   });
 

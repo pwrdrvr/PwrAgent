@@ -322,6 +322,7 @@ describe("desktop settings contracts", () => {
             source: "unset",
             writable: true,
           },
+          appName: { value: "PwrAgent", source: "default" },
           workspaceUrl: { value: "", source: "default" },
           inboundMode: { value: "socket", source: "default" },
           teamAuthorizationMode: { value: "approved_only", source: "default" },

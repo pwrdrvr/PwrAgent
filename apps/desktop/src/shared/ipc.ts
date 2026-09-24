@@ -430,6 +430,20 @@ export const SETTINGS_RESOLVE_MESSAGING_CONTACT_CHANNEL =
 export const SETTINGS_OPEN_SLACK_CREATE_APP_CHANNEL =
   "settings:open-slack-create-app";
 /**
+ * Opens the connected Slack app's Basic Information page, found from the app
+ * ID inside the stored app-level token, or Slack's app list without one.
+ * Response: `OpenSlackAppSettingsResponse`.
+ */
+export const SETTINGS_OPEN_SLACK_APP_SETTINGS_CHANNEL =
+  "settings:open-slack-app-settings";
+/**
+ * Fire-and-forget (`send`, not `invoke`): starts a native drag of PwrAgent's
+ * app icon file from the sender window, so it can be dropped into another
+ * app's upload field. Must arrive during the renderer's `dragstart`.
+ */
+export const SETTINGS_START_APP_ICON_DRAG_CHANNEL =
+  "settings:start-app-icon-drag";
+/**
  * List Discord text channels available for the selected authorized server.
  * The main process owns the bot token; the renderer receives display labels
  * and validated channel IDs only.
