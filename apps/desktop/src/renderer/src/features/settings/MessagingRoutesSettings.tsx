@@ -101,6 +101,8 @@ type MessagingRoutesContextValue = {
   loadRoutes: () => Promise<void>;
   openAssignment: (assignment: DesktopMessagingDefaultAgentRoute) => void;
   openNewAssignment: (initialForm: NewDefaultForm) => void;
+  /** The editor request, the first time it is asked for; null after. */
+  takeEditorRequest: () => RouteEditorRequest | null;
 };
 
 const MessagingRoutesContext = createContext<MessagingRoutesContextValue | null>(
@@ -110,6 +112,12 @@ const MessagingRoutesContext = createContext<MessagingRoutesContextValue | null>
 export function MessagingRoutesProvider(props: {
   children: ReactNode;
   desktopApi?: DesktopApi;
+  /**
+   * Brings the Routes section into view. The editor renders only there, and
+   * the approved-surface rows that ask for it sit on focused platform pages,
+   * where the Routes section is not mounted.
+   */
+  onEditorRequest?: () => void;
 }) {
   const [routes, setRoutes] = useState<ListMessagingRoutesResponse>(EMPTY_ROUTES);
   const [loading, setLoading] = useState(true);
@@ -118,6 +126,19 @@ export function MessagingRoutesProvider(props: {
     null,
   );
   const requestIdRef = useRef(0);
+  // The Routes section unmounts whenever a platform page shows, and mounts
+  // again with the last request still in state. Each request opens the
+  // editor once, or every return to the hub would reopen an editor the
+  // operator already saved or cancelled.
+  const takenRequestIdRef = useRef(0);
+  const takeEditorRequest = useCallback(() => {
+    if (!editorRequest || editorRequest.id <= takenRequestIdRef.current) {
+      return null;
+    }
+    takenRequestIdRef.current = editorRequest.id;
+    return editorRequest;
+  }, [editorRequest]);
+  const onEditorRequest = props.onEditorRequest;
 
   const loadRoutes = useCallback(async () => {
     if (!props.desktopApi?.listMessagingRoutes) {
@@ -153,13 +174,24 @@ export function MessagingRoutesProvider(props: {
       openAssignment: (assignment) => {
         requestIdRef.current += 1;
         setEditorRequest({ id: requestIdRef.current, assignment });
+        onEditorRequest?.();
       },
       openNewAssignment: (initialForm) => {
         requestIdRef.current += 1;
         setEditorRequest({ id: requestIdRef.current, initialForm });
+        onEditorRequest?.();
       },
+      takeEditorRequest,
     }),
-    [editorRequest, error, loadRoutes, loading, routes],
+    [
+      editorRequest,
+      error,
+      loadRoutes,
+      loading,
+      onEditorRequest,
+      routes,
+      takeEditorRequest,
+    ],
   );
 
   return (
@@ -191,7 +223,7 @@ export function MessagingRoutesSettings(props: {
   }) => void;
 }) {
   const routeState = useMessagingRoutes();
-  const { routes, loading, loadRoutes } = routeState;
+  const { routes, loading, loadRoutes, takeEditorRequest } = routeState;
   const agentRouteToolUpdateMode =
     props.agentRouteToolUpdateMode ?? "show_none";
   const configuredPlatforms = props.configuredPlatforms ?? ROUTE_PLATFORMS;
@@ -208,7 +240,7 @@ export function MessagingRoutesSettings(props: {
   const routesRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    const request = routeState.editorRequest;
+    const request = takeEditorRequest();
     if (!request) return;
     if ("assignment" in request) {
       setShowAdd(false);
@@ -219,7 +251,7 @@ export function MessagingRoutesSettings(props: {
       setShowAdd(true);
     }
     routesRef.current?.scrollIntoView?.({ behavior: "smooth", block: "center" });
-  }, [routeState.editorRequest]);
+  }, [takeEditorRequest]);
 
   const clearDefault = async (assignmentId: string) => {
     if (!props.desktopApi?.clearMessagingDefaultAgent) return;

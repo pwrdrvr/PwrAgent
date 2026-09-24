@@ -629,6 +629,79 @@ function createArchivedSnapshot(
   };
 }
 
+/** A focused platform page with one approved surface, "team-alerts", and one
+ *  Agent it can route to. Resolves to the surface's Assign button once that
+ *  can be clicked. */
+async function renderPlatformPageWithApprovedSurface(
+  platform: "slack" | "feishu",
+): Promise<HTMLElement> {
+  const baseSnapshot = createSnapshot();
+  const { feishu, slack } = baseSnapshot.messaging;
+  const snapshot = createSnapshot({
+    messaging: {
+      ...baseSnapshot.messaging,
+      slack: platform === "slack"
+        ? {
+            ...slack,
+            authorizedChannels: {
+              value: [{ id: "C012ABCDEF0", displayName: "team-alerts" }],
+              source: "config",
+            },
+          }
+        : slack,
+      feishu: platform === "feishu"
+        ? {
+            ...feishu,
+            authorizedChats: {
+              value: [{ id: "oc_fixture0001", displayName: "team-alerts" }],
+              source: "config",
+            },
+          }
+        : feishu,
+    },
+  });
+  const routes: ListMessagingRoutesResponse = {
+    eligibleAgents: [
+      {
+        backend: "codex",
+        threadId: "agent-1",
+        label: "Jeeves",
+        backendLabel: "OpenAI",
+        backendAvailable: true,
+        available: true,
+      },
+    ],
+    defaultAgents: [],
+    bindings: [],
+    observedSurfaces: [],
+  };
+
+  render(
+    <SettingsScreen
+      desktopApi={{
+        listMessagingRoutes: vi.fn(async () => routes),
+        onMessagingBindingsChanged: () => () => undefined,
+      }}
+      initialSection="messaging"
+      initialSubsection={platform}
+      settings={createSettingsState(snapshot)}
+      onClose={() => undefined}
+    />,
+  );
+
+  const assign = await screen.findByRole("button", {
+    name: "Assign default Agent for team-alerts",
+  });
+  await waitFor(() => expect(assign).toBeEnabled());
+  return assign;
+}
+
+function messagingRoutesHeader(): Element | null {
+  return document.querySelector(
+    '[aria-controls="settings-section-messaging-routes-body"]',
+  );
+}
+
 describe("SettingsScreen", () => {
   it("renders cached provider models and keeps mount-only catalog reads passive", async () => {
     const cachedBackends: BackendSummary[] = [
@@ -4765,6 +4838,66 @@ describe("SettingsScreen", () => {
       .not.toBeInTheDocument();
   });
 
+  it("opens the default Agent editor from an approved surface on a focused platform page", async () => {
+    fireEvent.click(await renderPlatformPageWithApprovedSurface("slack"));
+
+    // The editor lives in the hub's Routes section, prefilled with the
+    // surface whose row was clicked.
+    expect(await screen.findByText("Add default Agent")).toBeInTheDocument();
+    expect(screen.getByLabelText("Default scope")).toHaveValue("conversation");
+    expect(screen.getByLabelText("Messaging platform")).toHaveValue("slack");
+    expect(
+      screen.getByRole("button", { name: /^Surface: / }),
+    ).toHaveAccessibleName("Surface: team-alerts");
+    expect(
+      within(
+        screen.getByRole("navigation", { name: "Settings sections" }),
+      ).getByRole("button", { name: "Routes" }),
+    ).toHaveAttribute("aria-current", "page");
+  });
+
+  it("opens the default Agent editor once per approved-surface request", async () => {
+    fireEvent.click(await renderPlatformPageWithApprovedSurface("slack"));
+    expect(await screen.findByText("Add default Agent")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByText("Add default Agent")).not.toBeInTheDocument();
+
+    // The Routes section unmounts on a platform page and mounts again on
+    // the way back, which must not replay the request it already opened.
+    const nav = screen.getByRole("navigation", { name: "Settings sections" });
+    fireEvent.click(within(nav).getByRole("button", { name: "Slack" }));
+    fireEvent.click(within(nav).getByRole("button", { name: "Routes" }));
+    expect(messagingRoutesHeader()).not.toBeNull();
+    expect(screen.queryByText("Add default Agent")).not.toBeInTheDocument();
+  });
+
+  it("expands a collapsed Routes section for each approved-surface request", async () => {
+    // Feishu, because its page is the one whose sub names none of its
+    // sections ("feishu" against "Feishu / Lark"), so visiting it cannot
+    // replace the first request's "routes" as the last one honored.
+    fireEvent.click(await renderPlatformPageWithApprovedSurface("feishu"));
+    expect(await screen.findByText("Add default Agent")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    fireEvent.click(messagingRoutesHeader() as HTMLElement);
+    expect(messagingRoutesHeader()).toHaveAttribute("aria-expanded", "false");
+
+    // A collapsed section keeps its body mounted but inert, so an editor
+    // opened in it would be there and unreachable.
+    fireEvent.click(
+      within(
+        screen.getByRole("navigation", { name: "Settings sections" }),
+      ).getByRole("button", { name: "Feishu / Lark" }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Assign default Agent for team-alerts",
+      }),
+    );
+    expect(messagingRoutesHeader()).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("Add default Agent")).toBeInTheDocument();
+    expect(document.activeElement).toBe(messagingRoutesHeader());
+  });
+
   it("validates messaging authorized IDs inline and refuses invalid saves", async () => {
     const settings = createSettingsState();
     render(
@@ -7448,10 +7581,10 @@ describe("SettingsScreen", () => {
 
   it("lands on the Routes section again after visiting a platform", () => {
     // Two focus mechanisms overlap here: the nav's `focusSectionId` request
-    // and the stack's remembered-visit restore. The request is guarded
-    // against repeats and a platform sub matches no section, so the return
-    // trip is carried by the restore path — pin it, because a refactor of
-    // either one alone would silently drop it.
+    // and the stack's remembered-visit restore. A pane swap ends the last
+    // request, so the return trip is a new one, and the restore would land
+    // on Routes as well — pin it, because a refactor of either one alone
+    // could silently drop it.
     render(
       <SettingsScreen
         settings={createSettingsState()}
