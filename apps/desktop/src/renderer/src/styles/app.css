@@ -104,6 +104,16 @@
   --status-warning: #d99a3d;
   --status-suspended: #6b6660;
   --status-error: #c45a3a;
+  /* Token Miser verdict, by degrees (`classifyTokenMiserSavings`). Every
+     surface that reports what the gate did to the bill reads these four, so
+     a win is green and a loss is orange wherever the operator meets it. The
+     exceptional tier shares great's ink; its card changes instead. */
+  --savings-great: var(--success-text);
+  --savings-great-soft: var(--success-soft);
+  --savings-great-border: var(--success-border);
+  --savings-good: var(--status-ok);
+  --savings-even: var(--text-secondary);
+  --savings-over: var(--status-warning);
   /* Closed-without-merge PR dot. Intentionally black (not GitHub's red) —
      product choice. Pure black reads correctly in light theme; on dark
      surfaces it's the `--pr-dot-ring` hairline that keeps it visible. Both
@@ -417,6 +427,11 @@
   --status-warning: #a86b00;
   --status-suspended: #6b6660;
   --status-error: #a8472a;
+
+  /* A verdict is a figure the operator reads, not an 8px pip, and
+     --status-warning is 4.0:1 on the rail card here. This amber is 5.0:1.
+     The other savings tokens follow their base tokens into this theme. */
+  --savings-over: #945c00;
 
   /* Button text on accent flips: white reads better on the darker
      light-theme accent (vs. near-black on the brighter dark-theme one). */
@@ -20400,7 +20415,10 @@ a.transcript-message__messaging-origin:focus-visible {
 }
 
 .incident-explorer__savings-figure strong {
-  color: var(--accent);
+  /* The verdict's ink once the gates are priced. Before that the figure is
+     tokens kept out, which is not yet a verdict, so it keeps body ink rather
+     than borrowing the accent: orange is what a loss looks like here. */
+  color: var(--savings-verdict, var(--text-primary));
   font-family: var(--font-mono);
   font-size: 30px;
   font-weight: 600;
@@ -20412,6 +20430,14 @@ a.transcript-message__messaging-origin:focus-visible {
 .incident-explorer__savings-figure span {
   color: var(--text-secondary);
   font-size: 12.5px;
+}
+
+.incident-explorer__savings-percent {
+  color: var(--savings-verdict, var(--text-secondary));
+  font-family: var(--font-mono);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 /* Savings is term 1 minus terms 2 and 3, so the terms are laid out as that
@@ -20475,7 +20501,7 @@ a.transcript-message__messaging-origin:focus-visible {
 
 .incident-explorer__savings-term[data-result="true"] dt,
 .incident-explorer__savings-term[data-result="true"] dd {
-  color: var(--accent);
+  color: var(--savings-verdict, var(--text-primary));
 }
 
 /* Token terms for a thread whose gates are not priced yet. Deliberately not
@@ -20531,8 +20557,10 @@ a.transcript-message__messaging-origin:focus-visible {
   height: 100%;
 }
 
+/* The bar is drawn only for a saving, so the avoided share always has a
+   verdict to wear. The gate share stays amber: it is a cost at every tier. */
 .incident-explorer__savings-split i[data-part="avoided"] {
-  background: var(--accent);
+  background: var(--savings-verdict, var(--savings-good));
 }
 
 .incident-explorer__savings-split i[data-part="gate"] {
@@ -27851,24 +27879,16 @@ a.transcript-message__messaging-origin:focus-visible {
   overflow-wrap: anywhere;
 }
 
+/* The total row wears the gate's verdict, so an overhead never reads as a
+   saving. One gate has no bill of its own to divide by, so its tier comes
+   from the sign alone. */
 .rail-card__token-miser-savings > div[data-total="true"] {
-  background: color-mix(in srgb, var(--accent) 7%, var(--bg-panel));
+  background: color-mix(in srgb, var(--savings-verdict) 8%, var(--bg-panel));
 }
 
 .rail-card__token-miser-savings > div[data-total="true"] dt,
 .rail-card__token-miser-savings > div[data-total="true"] dd strong {
-  color: var(--accent);
-}
-
-/* A gate that cost more than it saved: the total row carries the warning
-   tone instead of the accent, so overhead never reads as a saving. */
-.rail-card__token-miser-savings[data-negative="true"] > div[data-total="true"] {
-  background: color-mix(in srgb, var(--status-warning) 9%, var(--bg-panel));
-}
-
-.rail-card__token-miser-savings[data-negative="true"] > div[data-total="true"] dt,
-.rail-card__token-miser-savings[data-negative="true"] > div[data-total="true"] dd strong {
-  color: var(--status-warning);
+  color: var(--savings-verdict);
 }
 
 /* Turn card hierarchy. The cost is the answer the card exists to give, so it
@@ -28098,7 +28118,7 @@ a.transcript-message__messaging-origin:focus-visible {
   grid-column: 3;
   justify-self: end;
   min-width: 0;
-  color: var(--accent);
+  color: var(--savings-verdict, var(--text-secondary));
   font-family: var(--font-mono);
   font-size: 11px;
   font-weight: 600;
@@ -28110,16 +28130,19 @@ a.transcript-message__messaging-origin:focus-visible {
   text-align: right;
 }
 
-.pricing-token-miser__verdict[data-negative="true"] {
-  color: var(--status-warning);
-}
-
 /* Awaiting pricing is not a verdict. The figure there is what the gates have
    cost so far, not what they saved — in the settled colors it would read as
    good news that has not been measured yet, so it ranks as metadata until a
    savings number exists. */
 .pricing-token-miser__verdict[data-pending="true"] {
   color: var(--text-secondary);
+}
+
+/* The turn's percentage, after the money: it is why a saving can be gray. */
+.pricing-token-miser__verdict-percent {
+  color: var(--text-muted);
+  font-weight: 400;
+  white-space: nowrap;
 }
 
 /* The body scrolls inside a bounded height so a long list of gates moves
@@ -28180,14 +28203,98 @@ button.pricing-token-miser__folded:focus-visible {
   outline-offset: 2px;
 }
 
+/* Token Miser verdict tiers (`classifyTokenMiserSavings`). A surface marks
+   the element that holds its figure with `data-savings-tier`, and each part
+   of it that states the verdict reads --savings-verdict — so no surface can
+   choose its own color for a win or a loss. Great and exceptional share an
+   ink; at exceptional the rail card around it changes too. */
+[data-savings-tier="exceptional"],
+[data-savings-tier="great"] {
+  --savings-verdict: var(--savings-great);
+}
+
+[data-savings-tier="good"] {
+  --savings-verdict: var(--savings-good);
+}
+
+[data-savings-tier="even"] {
+  --savings-verdict: var(--savings-even);
+}
+
+[data-savings-tier="over"] {
+  --savings-verdict: var(--savings-over);
+}
+
+/* At great and above the percentage becomes the one filled shape on the
+   card, so a big win reads from across the rail. Below great it stays ink. */
+.token-miser-summary-card:is([data-savings-tier="great"], [data-savings-tier="exceptional"]) .token-miser-summary-card__percent,
+.incident-explorer__savings-headline:is([data-savings-tier="great"], [data-savings-tier="exceptional"]) .incident-explorer__savings-percent {
+  display: inline-block;
+  padding: 1px 7px;
+  border: 1px solid var(--savings-great-border);
+  border-radius: 999px;
+  background: var(--savings-great-soft);
+}
+
 /* Thread-level gate result, above the turn rows. It borrows the pricing
    summary card wholesale — same shell, same eyebrow, same key/value rows, and
    the section action the Tool calls tab already uses — so the two read as one
-   stack rather than as a summary and a widget. The figure keeps the card's own
-   text color; only an overhead is colored, and the accent stays a surface and
-   border signal. */
-.token-miser-summary-card__figure[data-negative="true"] {
-  color: var(--danger-text);
+   stack rather than as a summary and a widget. The figure and its percentage
+   wear the verdict; before pricing lands there is no verdict, and the figure
+   keeps the card's own text color. */
+.token-miser-summary-card__figure {
+  color: var(--savings-verdict, var(--text-primary));
+}
+
+.token-miser-summary-card__percent {
+  color: var(--savings-verdict, var(--text-secondary));
+  font-weight: 600;
+}
+
+/* Exceptional: the card itself celebrates, with a green edge and the Savings
+   window's avoided / gate / revealed bar in miniature. */
+.token-miser-summary-card[data-savings-tier="exceptional"] {
+  border-color: var(--savings-great-border);
+  background: color-mix(in srgb, var(--savings-great) 5%, transparent);
+}
+
+.token-miser-summary-card__split {
+  display: flex;
+  height: 5px;
+  margin-top: 9px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--bg-panel-hover);
+}
+
+.token-miser-summary-card__split i {
+  display: block;
+  height: 100%;
+}
+
+.token-miser-summary-card__split i[data-part="avoided"] {
+  background: var(--savings-verdict);
+}
+
+.token-miser-summary-card__split i[data-part="gate"] {
+  background: var(--status-warning);
+}
+
+.token-miser-summary-card__split i[data-part="revealed"] {
+  background: color-mix(in srgb, var(--text-secondary) 42%, transparent);
+}
+
+.token-miser-summary-card__split-caption {
+  margin-top: 5px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.token-miser-summary-card__split-caption b {
+  color: var(--text-secondary);
+  font-weight: 500;
 }
 
 /* The rail's action is the section action, stretched: the card has a full

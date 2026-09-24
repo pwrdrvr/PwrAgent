@@ -225,6 +225,32 @@ The light block is **not** uniformly AA-clean. These predate the accent retune a
 | `--status-suspended` | `#6b6660` | `#6b6660` |
 | `--status-error` | `#c45a3a` | `#a8472a` |
 
+#### Token Miser verdict
+
+Token Miser colors its savings by degrees. `classifyTokenMiserSavings` in
+`@pwragent/shared` places the printed percentage (savings over the estimated
+unfiltered cost, rounded to 0.1) on this scale:
+
+| Tier | Range | Token | Dark | Light |
+|---|---|---|---|---|
+| `exceptional` | ≥ 30% | `--savings-great` | `var(--success-text)` | `var(--success-text)` |
+| `great` | 10% to < 30% | `--savings-great` | `var(--success-text)` | `var(--success-text)` |
+| `good` | 5% to < 10% | `--savings-good` | `var(--status-ok)` | `var(--status-ok)` |
+| `even` | between −5% and 5% | `--savings-even` | `var(--text-secondary)` | `var(--text-secondary)` |
+| `over` | ≤ −5% | `--savings-over` | `var(--status-warning)` | `#945c00` |
+
+- Only `--savings-over` has a light override. `--status-warning` measures
+  4.0:1 on a light panel. The theme contract measures all four inks in both
+  themes.
+- `--savings-great-soft` and `--savings-great-border` alias the `--success-*`
+  pair. They draw the pill that great and exceptional put around the
+  percentage, and the exceptional card's border.
+- Surfaces do not read the tier tokens directly. The element that holds the
+  figure gets `data-savings-tier`, which sets the local `--savings-verdict`.
+  Each colored part reads `var(--savings-verdict, <neutral>)`.
+- A verdict is never the accent. The accent says "look here", and it used to
+  say that for a saving and an overhead alike.
+
 #### One-off accents
 
 | Token | Dark | Light |

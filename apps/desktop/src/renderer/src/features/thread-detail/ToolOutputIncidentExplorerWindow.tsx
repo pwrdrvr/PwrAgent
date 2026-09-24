@@ -42,6 +42,8 @@ import {
 } from "./token-miser-savings-layout";
 import type { SavingsSectionKey } from "./token-miser-savings-layout";
 import {
+  buildTokenMiserSavingsSplit,
+  classifyTokenMiserSavings,
   describeSameTrajectoryCostChange,
   TOKEN_MISER_PENDING_PRICING_CAPTION,
 } from "./token-miser-savings-summary";
@@ -1150,47 +1152,6 @@ function SavingsConfidence(props: { savings: ThreadTokenMiserSavings }) {
   );
 }
 
-type SavingsSplit = {
-  avoided: number;
-  gate: number;
-  revealed: number;
-  /**
-   * The caption's whole percents. The last term absorbs the rounding instead
-   * of being rounded itself: three shares of one whole, each rounded on its
-   * own, read as "51% · 3% · 47%" often enough to invite the reader to notice
-   * that the decomposition under the bar does not close.
-   */
-  rounded: { avoided: number; gate: number; revealed: number };
-};
-
-/**
- * The three terms as shares of the unfiltered cost.
- *
- * Only drawn when the gate came out ahead. With negative savings the parts sum
- * past the whole, and a bar overflowing its own track reads as a rendering
- * fault rather than as an overspend — that case states itself in words above.
- */
-function buildSavingsSplit(
-  savings: ThreadTokenMiserSavings,
-): SavingsSplit | undefined {
-  const whole = savings.withoutGateCostMicros;
-  if (whole <= 0 || savings.savingsMicros <= 0) return undefined;
-  const avoided = savings.savingsMicros / whole * 100;
-  const gate = savings.gateCostMicros / whole * 100;
-  const roundedAvoided = Math.round(avoided);
-  const roundedGate = Math.round(gate);
-  return {
-    avoided,
-    gate,
-    revealed: savings.revealedCostMicros / whole * 100,
-    rounded: {
-      avoided: roundedAvoided,
-      gate: roundedGate,
-      revealed: Math.max(0, 100 - roundedAvoided - roundedGate),
-    },
-  };
-}
-
 type SavingsDetailMeasurement = {
   /**
    * The height the two panes share: the detail stack plus the results list,
@@ -1604,13 +1565,24 @@ function TokenMiserSavingsLens(props: {
         savings.savingsMicros,
       )
     : undefined;
-  const split = savings ? buildSavingsSplit(savings) : undefined;
+  // The rail card's verdict, on the same bill, so the popup it opens never
+  // disagrees with it about how well the gate did.
+  const verdict = savings
+    ? classifyTokenMiserSavings({
+        observedCostMicros: props.threadCostMicros,
+        savingsMicros: savings.savingsMicros,
+      })
+    : undefined;
+  const split = savings ? buildTokenMiserSavingsSplit(savings) : undefined;
   const summarizedCount = tokenMiser.interceptionCount
     - (tokenMiser.passThroughCount ?? 0);
   return (
     <div className="incident-explorer__savings">
       <div className="incident-explorer__savings-hero">
-        <div className="incident-explorer__savings-headline">
+        <div
+          className="incident-explorer__savings-headline"
+          data-savings-tier={verdict?.tier}
+        >
           {savings ? (
             <>
               <p className="incident-explorer__eyebrow">
@@ -1626,7 +1598,12 @@ function TokenMiserSavingsLens(props: {
                   )}
                 </strong>
                 {sameTrajectoryCostChange ? (
-                  <span>{sameTrajectoryCostChange.sentence}</span>
+                  <span>
+                    <b className="incident-explorer__savings-percent">
+                      {sameTrajectoryCostChange.short}
+                    </b>{" "}
+                    {sameTrajectoryCostChange.tail}
+                  </span>
                 ) : null}
               </p>
               <dl className="incident-explorer__savings-equation">

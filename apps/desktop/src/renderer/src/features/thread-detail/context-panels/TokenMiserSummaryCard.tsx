@@ -1,9 +1,12 @@
 import { formatTokenUsageMicrosAsUsd } from "@pwragent/shared";
 import { PopoutIcon } from "../../../icons";
 import {
+  buildTokenMiserSavingsSplit,
+  classifyTokenMiserSavings,
   describeSameTrajectoryCostChange,
   TOKEN_MISER_PENDING_PRICING_CAPTION,
   type TokenMiserSavingsSummary,
+  type TokenMiserVerdictTier,
 } from "../token-miser-savings-summary";
 import { formatCompactCount, RailSummaryRow } from "./context-rail-shared";
 
@@ -26,7 +29,7 @@ export function TokenMiserSummaryCard(props: {
 }) {
   const summary = props.summary;
   const terms = summary.terms;
-  const headline = describeHeadline(summary);
+  const headline = describeHeadline(summary, props.observedCostMicros);
   // Only the dollar headline has a percentage to compare against; a thread
   // showing tokens or a bare decision count has no observed bill to divide by.
   const savingsMicros =
@@ -36,9 +39,18 @@ export function TokenMiserSummaryCard(props: {
       ? describeSameTrajectoryCostChange(props.observedCostMicros, savingsMicros)
       : undefined;
   const unpricedCount = summary.decisionCount - summary.pricedDecisionCount;
+  // Only an exceptional result draws the bar; below that the card's shell is
+  // the same as every other summary card's.
+  const split =
+    headline.tier === "exceptional" && terms
+      ? buildTokenMiserSavingsSplit(terms)
+      : undefined;
 
   return (
-    <div className="rail-summary-card token-miser-summary-card">
+    <div
+      className="rail-summary-card token-miser-summary-card"
+      data-savings-tier={headline.tier}
+    >
       <div className="rail-summary-card__header">
         <span className="rail-summary-card__eyebrow">Token Miser</span>
         <span className="rail-summary-card__meta">
@@ -47,20 +59,31 @@ export function TokenMiserSummaryCard(props: {
         </span>
       </div>
       <div className="rail-summary-card__headline">
-        <span
-          className="rail-summary-card__primary token-miser-summary-card__figure"
-          data-negative={headline.negative}
-        >
+        <span className="rail-summary-card__primary token-miser-summary-card__figure">
           {headline.text}
         </span>
         {/* The percentage is the popup's, in the shorter of the two widths the
             comparison publishes. Its sentence stays under the headline. */}
         {costChange ? (
-          <span className="rail-summary-card__secondary">
+          <span className="rail-summary-card__secondary token-miser-summary-card__percent">
             {costChange.short}
           </span>
         ) : null}
       </div>
+      {split ? (
+        <>
+          <span aria-hidden="true" className="token-miser-summary-card__split">
+            <i data-part="avoided" style={{ width: `${split.avoided}%` }} />
+            <i data-part="gate" style={{ width: `${split.gate}%` }} />
+            <i data-part="revealed" style={{ width: `${split.revealed}%` }} />
+          </span>
+          <div className="token-miser-summary-card__split-caption">
+            <b>{split.rounded.avoided}%</b> avoided
+            {" · "}<b>{split.rounded.gate}%</b> gate
+            {" · "}<b>{split.rounded.revealed}%</b> revealed
+          </div>
+        </>
+      ) : null}
       <div className="rail-summary-card__caption">
         {describeCaption({
           decisionCount: summary.decisionCount,
@@ -141,8 +164,11 @@ export function TokenMiserSummaryCard(props: {
 }
 
 type TokenMiserHeadline = {
-  /** True when the figure is a cost the gate added rather than one it removed. */
-  negative: boolean;
+  /**
+   * Where the figure sits on the verdict scale. Absent while the figure is not
+   * a verdict yet: a count, or tokens kept out before pricing lands.
+   */
+  tier?: TokenMiserVerdictTier;
   text: string;
 };
 
@@ -151,23 +177,29 @@ type TokenMiserHeadline = {
  * has real decisions and no rates yet, and "$0.00 saved" would be a lie about
  * a number that simply has not arrived.
  *
- * Whichever figure lands here is also the one `negative` describes — a card
- * that colored the dollars and not the tokens would render an overhead as a
- * win the moment pricing was still pending.
+ * Whichever figure lands here is also the one `tier` describes — a card that
+ * colored the dollars and not the tokens would render an overhead as a win
+ * the moment pricing was still pending. Tokens kept out are not a verdict on
+ * the bill, so only tokens added to context carry one.
  */
 function describeHeadline(
   summary: TokenMiserSavingsSummary,
+  observedCostMicros: number | undefined,
 ): TokenMiserHeadline {
   const savingsMicros =
     summary.decisionCount > 0 ? summary.terms?.savingsMicros : undefined;
   if (savingsMicros !== undefined) {
+    const { tier } = classifyTokenMiserSavings({
+      ...(observedCostMicros === undefined ? {} : { observedCostMicros }),
+      savingsMicros,
+    });
     return savingsMicros >= 0
       ? {
-          negative: false,
+          tier,
           text: `${formatTokenUsageMicrosAsUsd(savingsMicros)} saved`,
         }
       : {
-          negative: true,
+          tier,
           text: `${formatTokenUsageMicrosAsUsd(
             Math.abs(savingsMicros),
           )} net overhead`,
@@ -179,21 +211,17 @@ function describeHeadline(
     // Summaries that ran longer than the payloads they replaced put more in
     // the parent's context than passing the output through would have.
     return avoided >= 0
-      ? { negative: false, text: `${formatCompactCount(avoided)} kept out` }
+      ? { text: `${formatCompactCount(avoided)} kept out` }
       : {
-          negative: true,
+          tier: "over",
           text: `${formatCompactCount(Math.abs(avoided))} added to context`,
         };
   }
   if (summary.decisionCount > 0) {
-    return {
-      negative: false,
-      text: `${summary.decisionCount.toLocaleString()} gated`,
-    };
+    return { text: `${summary.decisionCount.toLocaleString()} gated` };
   }
   const callCount = summary.codeModeCallCount ?? 0;
   return {
-    negative: false,
     text: `${callCount.toLocaleString()} Code Mode call${
       callCount === 1 ? "" : "s"
     }`,

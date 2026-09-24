@@ -26,6 +26,7 @@ import {
   formatTokenUsageMicrosAsUsd,
 } from "@pwragent/shared";
 import { memo, useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { classifyTokenMiserSavings } from "../token-miser-savings-summary";
 import {
   ChipContextMenu,
   type ChipContextMenuItem,
@@ -701,6 +702,20 @@ function TokenMiserTurnGroup(props: {
     : savingsMicros >= 0
       ? `${formatTokenUsageMicrosAsUsd(savingsMicros)} saved`
       : `${formatTokenUsageMicrosAsUsd(Math.abs(savingsMicros))} net overhead`;
+  // Judged against the whole turn — the parent's own bill plus what its gates
+  // cost — so a saving that is a rounding error on a big turn reads as even.
+  // An orphan group, or a turn not priced yet, has no bill to divide by and
+  // falls back to the sign alone.
+  const turnCostMicros =
+    !props.row.orphan && props.row.line.priceStatus === "priced"
+      ? props.row.line.totalCostMicros + gateCostMicros
+      : undefined;
+  const savingsVerdict = awaitingPricing
+    ? undefined
+    : classifyTokenMiserSavings({
+        ...(turnCostMicros === undefined ? {} : { observedCostMicros: turnCostMicros }),
+        savingsMicros,
+      });
 
   return (
     <div className="pricing-token-miser" data-expanded={expanded ? "true" : "false"}>
@@ -714,10 +729,18 @@ function TokenMiserTurnGroup(props: {
         <span className="pricing-token-miser__label">Token Miser</span>
         <span
           className="pricing-token-miser__verdict"
-          data-negative={!awaitingPricing && savingsMicros < 0}
           data-pending={awaitingPricing}
+          data-savings-tier={savingsVerdict?.tier}
         >
           {verdict}
+          {savingsVerdict?.percent !== undefined ? (
+            <>
+              {" "}
+              <span className="pricing-token-miser__verdict-percent">
+                · {Math.abs(savingsVerdict.percent).toFixed(1)}%
+              </span>
+            </>
+          ) : null}
         </span>
         <span className="pricing-token-miser__count">
           {count.toLocaleString()} {countLabel}

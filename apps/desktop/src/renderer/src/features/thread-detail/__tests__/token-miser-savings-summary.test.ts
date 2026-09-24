@@ -4,7 +4,9 @@ import type {
   TokenMiserSubAgentAccounting,
 } from "@pwragent/shared";
 import {
+  buildTokenMiserSavingsSplit,
   buildTokenMiserSavingsSummary,
+  classifyTokenMiserSavings,
   describeSameTrajectoryCostChange,
 } from "../token-miser-savings-summary";
 
@@ -230,6 +232,7 @@ describe("describeSameTrajectoryCostChange", () => {
     expect(describeSameTrajectoryCostChange(512_000, 500_000)).toEqual({
       short: "49.4% less",
       sentence: "49.4% less than estimated unfiltered cost",
+      tail: "than estimated unfiltered cost",
     });
   });
 
@@ -237,6 +240,7 @@ describe("describeSameTrajectoryCostChange", () => {
     expect(describeSameTrajectoryCostChange(120_000, -20_000)).toEqual({
       short: "20.0% more",
       sentence: "20.0% more than estimated unfiltered cost",
+      tail: "than estimated unfiltered cost",
     });
   });
 
@@ -244,6 +248,7 @@ describe("describeSameTrajectoryCostChange", () => {
     expect(describeSameTrajectoryCostChange(100_000, 0)).toEqual({
       short: "0.0% change",
       sentence: "0.0% change from estimated unfiltered cost",
+      tail: "from estimated unfiltered cost",
     });
   });
 
@@ -253,5 +258,95 @@ describe("describeSameTrajectoryCostChange", () => {
 
   it("says nothing when the unfiltered cost is not positive", () => {
     expect(describeSameTrajectoryCostChange(10_000, -10_000)).toBeUndefined();
+  });
+});
+
+/**
+ * Savings as a percentage of what the same trajectory would have cost with
+ * nothing filtered: `savings / (observed + savings)`. With a $1.00 unfiltered
+ * bill, each saving below is also its own percentage.
+ */
+function verdictAt(savingsMicros: number) {
+  return classifyTokenMiserSavings({
+    observedCostMicros: 1_000_000 - savingsMicros,
+    savingsMicros,
+  });
+}
+
+describe("classifyTokenMiserSavings", () => {
+  it("is proud by degrees", () => {
+    expect(verdictAt(400_000)).toEqual({ tier: "exceptional", percent: 40 });
+    expect(verdictAt(200_000)).toEqual({ tier: "great", percent: 20 });
+    expect(verdictAt(70_000)).toEqual({ tier: "good", percent: 7 });
+    expect(verdictAt(20_000)).toEqual({ tier: "even", percent: 2 });
+    expect(verdictAt(-20_000)).toEqual({ tier: "even", percent: -2 });
+    expect(verdictAt(-70_000)).toEqual({ tier: "over", percent: -7 });
+  });
+
+  it("puts each threshold in the tier above it", () => {
+    expect(verdictAt(300_000).tier).toBe("exceptional");
+    expect(verdictAt(299_000).tier).toBe("great");
+    expect(verdictAt(100_000).tier).toBe("great");
+    expect(verdictAt(99_000).tier).toBe("good");
+    expect(verdictAt(50_000).tier).toBe("good");
+    expect(verdictAt(49_000).tier).toBe("even");
+    // The even band is symmetric but open at the bottom: 5% more is over.
+    expect(verdictAt(-49_000).tier).toBe("even");
+    expect(verdictAt(-50_000).tier).toBe("over");
+  });
+
+  it("judges the percentage it prints, not the one it computed", () => {
+    // 9.96% prints as "10.0% less". A green that disagreed with the figure
+    // beside it would read as a bug in one of them.
+    const verdict = verdictAt(99_600);
+    expect(describeSameTrajectoryCostChange(900_400, 99_600)?.short).toBe(
+      "10.0% less",
+    );
+    expect(verdict).toEqual({ tier: "great", percent: 10 });
+  });
+
+  it("calls an overhead that rounds away even, and unsigned", () => {
+    expect(verdictAt(-400)).toEqual({ tier: "even", percent: 0 });
+  });
+
+  it("falls back to the sign without a priced bill to compare against", () => {
+    expect(classifyTokenMiserSavings({ savingsMicros: 500_000 })).toEqual({
+      tier: "good",
+    });
+    expect(classifyTokenMiserSavings({ savingsMicros: -500_000 })).toEqual({
+      tier: "over",
+    });
+    expect(classifyTokenMiserSavings({ savingsMicros: 0 })).toEqual({
+      tier: "even",
+    });
+    expect(
+      classifyTokenMiserSavings({ observedCostMicros: 0, savingsMicros: 500_000 }),
+    ).toEqual({ tier: "good" });
+  });
+});
+
+describe("buildTokenMiserSavingsSplit", () => {
+  it("divides the unfiltered cost into avoided, gate, and revealed", () => {
+    const split = buildTokenMiserSavingsSplit(threadAccounting.savings!);
+    expect(split?.avoided).toBeCloseTo(88.89, 2);
+    expect(split?.gate).toBeCloseTo(4.44, 2);
+    expect(split?.revealed).toBeCloseTo(6.67, 2);
+    // The printed shares always add up, so revealed absorbs the rounding.
+    expect(split?.rounded).toEqual({ avoided: 89, gate: 4, revealed: 7 });
+  });
+
+  it("draws nothing for an overhead or an empty baseline", () => {
+    expect(
+      buildTokenMiserSavingsSplit({
+        ...threadAccounting.savings!,
+        savingsMicros: -10_000,
+      }),
+    ).toBeUndefined();
+    expect(
+      buildTokenMiserSavingsSplit({
+        ...threadAccounting.savings!,
+        withoutGateCostMicros: 0,
+      }),
+    ).toBeUndefined();
   });
 });
