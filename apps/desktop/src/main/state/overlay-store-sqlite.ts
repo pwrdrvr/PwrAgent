@@ -8286,10 +8286,11 @@ function mergeThreadUsageLineForUpsert(
 
   // A refresh can retain all measured tokens but lack the request breakdown
   // used to price them (for example after a restart). Do not erase that exact
-  // price with an unpriceable aggregate. Changed usage or settings must still
-  // be priced afresh; retaining the old cost there would hide unpriced work.
+  // price with an aggregate estimate. Changed usage or settings must still
+  // be priced afresh; retaining the old cost there would hide additional work.
   if (
-    merged.priceStatus === "unpriced"
+    merged.pricingBasis !== "request-components"
+    && merged.scope !== "latest-request"
     && existing.priceStatus === "priced"
     && existing.pricingBasis === "request-components"
     && merged.provider === existing.provider
