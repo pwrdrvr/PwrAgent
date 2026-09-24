@@ -230,7 +230,18 @@ export class McpOAuthSessionCoordinator {
       const detail = errorMessage(error);
       // An abandoned browser flow can time out after a newer one succeeded.
       // Its caller still needs the failure, but it no longer owns our state.
-      if (isCurrent()) this.setState("reauthorization_required", detail);
+      if (isCurrent()) {
+        // A timed-out or failed browser attempt did not replace the old token.
+        // Keep the connection's prior state when that credential is still here.
+        if (previous?.tokens?.access_token && this.credential === previous) {
+          this.setState(
+            this.stateBeforeAuthorization ?? "ready",
+            this.detailBeforeAuthorization,
+          );
+        } else {
+          this.setState("reauthorization_required", detail);
+        }
+      }
       throw new Error(detail, { cause: error });
     } finally {
       if (this.liveAuthorizationAttempt === attempt) {
