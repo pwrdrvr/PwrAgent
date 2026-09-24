@@ -1451,7 +1451,18 @@ export function TranscriptList(props: TranscriptListProps) {
         className="transcript-list__items"
         role="list"
         tabIndex={0}
+        onFocus={(event) => {
+          // A click focuses the scroller without :focus-visible, and Chromium
+          // promotes it on the next keystroke, which ringed the whole pane.
+          // Record how focus arrived so app.css rings only a keyboard arrival.
+          if (event.target !== event.currentTarget) return;
+          event.currentTarget.dataset.focusOrigin =
+            event.currentTarget.matches(":focus-visible") ? "keyboard" : "pointer";
+        }}
         onPointerDown={(event) => {
+          // A click in the pane already holding keyboard focus hands it back
+          // to the pointer; the next keyboard arrival resets it in onFocus.
+          event.currentTarget.dataset.focusOrigin = "pointer";
           const container = event.currentTarget;
           const rect = container.getBoundingClientRect();
           if (event.clientX >= rect.left + container.clientWidth) disableBottomGlue();

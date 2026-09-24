@@ -10,8 +10,10 @@ import { launchElectronApp } from "./fixtures/electron-app";
  * element to :focus-visible on the next keystroke, which used to draw
  * the OS-accent UA focus ring around the ENTIRE transcript — click any
  * transcript text, press an arrow key, and the whole pane grew an
- * outline. app.css now suppresses the outline on the scroller; this
- * pins the repro so the UA ring can't come back.
+ * outline. The scroller records how focus arrived (`data-focus-origin`),
+ * and app.css rings it only when it arrived by keyboard: a click and a
+ * keystroke draw nothing, and Tab draws the house ring, since a Tab stop
+ * that shows nothing fails WCAG 2.4.7. This pins both halves.
  */
 
 async function createTranscriptFixture(): Promise<{
@@ -87,7 +89,7 @@ async function createTranscriptFixture(): Promise<{
   };
 }
 
-test("keystroke after clicking the transcript draws no outline around it", async () => {
+test("keystroke after clicking the transcript draws no outline, Tab draws the ring", async () => {
   const fixture = await createTranscriptFixture();
   const app = await launchElectronApp({ fixturePath: fixture.fixturePath });
   try {
@@ -120,6 +122,28 @@ test("keystroke after clicking the transcript draws no outline around it", async
     expect(focusState?.focused).toBe(true);
     expect(focusState?.outlineStyle).toBe("none");
     expect(focusState?.outlineWidth).toBe("0px");
+
+    // Leave and come back by keyboard: this arrival is a Tab stop, and it
+    // draws the ring.
+    await window.keyboard.press("Shift+Tab");
+    await window.keyboard.press("Tab");
+    const tabbedState = await window.evaluate(() => {
+      const items = document.querySelector(".transcript-list__items");
+      if (!items) return null;
+      const style = getComputedStyle(items);
+      return {
+        focused: items === document.activeElement,
+        outlineColor: style.outlineColor,
+        outlineStyle: style.outlineStyle,
+        outlineWidth: style.outlineWidth,
+      };
+    });
+    expect(tabbedState).toEqual({
+      focused: true,
+      outlineColor: "rgb(255, 138, 31)",
+      outlineStyle: "solid",
+      outlineWidth: "2px",
+    });
   } finally {
     await app.close();
     await fixture.cleanup();

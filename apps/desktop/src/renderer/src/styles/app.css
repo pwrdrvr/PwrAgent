@@ -18607,14 +18607,16 @@ a.button {
    promotes the focus to :focus-visible on the next keystroke, which drew
    the OS-accent UA ring around the ENTIRE transcript (repro in any
    window: click transcript text, press an arrow key; reported from a
-   federation window). That ring was suppressed outright, which left a
-   Tab stop that showed nothing at all (WCAG 2.4.7). It draws the house
-   ring instead, inset so it stays inside the pane. */
+   federation window). Suppressing it outright left a Tab stop that showed
+   nothing at all (WCAG 2.4.7). TranscriptList records how focus arrived
+   (`data-focus-origin`), so a click followed by a keystroke still draws
+   nothing (`transcript-focus-ring.spec.ts` pins that), while arriving by
+   Tab draws the house ring, inset so it stays inside the pane. */
 .transcript-list__items:focus {
   outline: none;
 }
 
-.transcript-list__items:focus-visible {
+.transcript-list__items:focus-visible:not([data-focus-origin="pointer"]) {
   outline: 2px solid var(--focus-ring);
   outline-offset: -2px;
 }
@@ -18688,7 +18690,8 @@ a.button {
   scroll-margin-block: 22px;
 }
 
-.transcript-list:has(> .transcript-list__items:focus-visible) .transcript-list__fade {
+.transcript-list:has(> .transcript-list__items:focus-visible:not([data-focus-origin="pointer"]))
+  .transcript-list__fade {
   opacity: 0;
 }
 
