@@ -491,6 +491,22 @@ Hover, focus, selected, loading, and disabled states must not cause layout shift
 
 Focus states should be visible and tangerine-led, but contained so they do not create clipped halos or stray outlines.
 
+### Focus rings
+
+- **The ring is `outline: 2px solid var(--focus-ring)`.** A zero-specificity `:where(:focus-visible)` rule near the top of `app.css` draws it for any control that has no rule of its own, so a new control only chooses where the ring sits. Ring with `--focus-ring`, not `--accent` or `--accent-bright`: they resolve alike today, but only the token follows a change to the ring.
+- **The same rule sets `scroll-margin: 5px`**, the ring's reach plus 1px, so a control that Tab scrolls into view keeps its whole ring. A ring that reaches further needs a larger margin of its own.
+- **Offset by how the control sits.** `2px` outset for a standalone control, `1px` for chips, fields, and tight clusters, and `-2px` inset for rows and menu items that touch their neighbours or sit in a clipped list.
+- **A tint, halo, fill, or border change may accompany the ring, never replace it.** The tints `app.css` used measured under 3:1 against rest wherever the keyboard walk reached them (WCAG 1.4.11), and several were the same paint as hover.
+- **A borderless field puts the ring on its wrapper**, with `:has()` (the composer, the picker and jump palette search rows, the archive filter).
+- **An `aria-activedescendant` cursor row takes the ring too**, inset. DOM focus stays in the field, but that row is the one Enter picks, and a hover tint does not tell it apart from a hovered row.
+- **Clip with room for the ring.** `overflow: hidden` cuts an outset ring at the box. Use `overflow: clip` plus `overflow-clip-margin` equal to the ring's reach, on both axes: Chromium ignores the margin unless both clip.
+- **Opacity dims a ring with its control**, and so do `filter: opacity()` and a `mask`. An `aria-disabled` control that fades trades the fade for a muted paint at full opacity while focused: `--border-subtle`, `--text-subtle`, no fill. A container dimmed only for emphasis, such as an Access Control node off the trace, returns to full opacity while focus is inside it.
+
+### Focus containment
+
+- **Dialogs and menus contain focus through shared hooks.** An `aria-modal` dialog uses `useModalDialog`, and a `role="menu"` popup uses `useMenuNavigation`. [apps/desktop/AGENTS.md](../apps/desktop/AGENTS.md) has the rules under "Modal dialogs and overlays" and "Menus".
+- **A full-window layer makes what it covers `inert`.** Settings and Automations cover the sidebar and main, which go inert while either is open, so Tab cannot walk controls nobody can see. The layer takes focus on open, because its opener went inert with them, and draws no ring, since it is not a Tab stop. On close, focus returns to the control that opened it, but only when focus fell to `<body>`: a close that moved focus on purpose, such as a thread taking the composer, keeps it.
+
 ## Tooltips
 
 Two patterns. Pick the right one:

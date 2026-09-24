@@ -3240,6 +3240,31 @@ describe("Sidebar", () => {
       ]);
     });
 
+    it("shows active and unread children even when their selected parent is outside Attention", () => {
+      const parent = { ...idleThread, subthreadsCollapsed: true };
+      const children = [activeThread, unreadThread].map((thread) => ({ ...thread,
+        parentThreadId: parent.id, parentThreadBackend: parent.source,
+      }));
+      render(
+        <Sidebar
+          backends={backends}
+          browseMode="attention"
+          directories={directories}
+          loading={false}
+          selectedItemKey={`codex:${parent.id}`}
+          threads={[parent, ...children]}
+          onBrowseModeChange={vi.fn()}
+          onCreateThread={async () => undefined}
+          onOpenLaunchpad={async () => undefined}
+          onSelectThread={vi.fn()}
+        />,
+      );
+      expect(screen.getByRole("tab", { name: "Attention, 1 active thread, 1 thread to review" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Active thread" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Unread thread" })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Idle thread" })).not.toBeInTheDocument();
+    });
+
     it("holds row order while live turns keep re-sorting the snapshot", () => {
       // The snapshot arrives in most-recently-updated order, and a running
       // turn rewrites `updatedAt` on every streamed item, so the incoming

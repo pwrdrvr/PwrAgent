@@ -752,7 +752,9 @@ describe("Tangerine Terminal theme contract", () => {
     expect(statusBarRule).toContain("min-width: max-content;");
     expect(eyebrowRowRule).toContain("min-width: 0;");
     expect(compactTitleRule).toContain("flex: 0 1 auto;");
-    expect(compactTitleRule).toContain("overflow: hidden;");
+    // `clip`, not `hidden`: `hidden` cut the title button's whole focus ring.
+    expect(compactTitleRule).toContain("overflow: clip;");
+    expect(compactTitleRule).toContain("overflow-clip-margin: 4px;");
     expect(css).toMatch(
       /\.thread-header__eyebrow-row > \.thread-row__chip\s*\{[\s\S]*?flex:\s*0 0 auto;[\s\S]*?\}/
     );
@@ -1014,11 +1016,13 @@ describe("Tangerine Terminal theme contract", () => {
     // header's right edge is the context rail — measured at 1280 with the rail
     // pinned, the last chip reached x=890 against a rail edge at 852 and
     // painted over the panel. Clipping keeps the spill inside the header.
-    // `clip` on x only, not `overflow: hidden` — hidden would also cut the 4px
-    // focus ring on the title button off at the row's top and bottom.
+    // `clip` with a 4px clip margin, not `overflow: hidden`, which would cut
+    // the title button's 4px focus ring. Both axes: Chromium ignores
+    // `overflow-clip-margin` unless both clip, and an x-only clip cut the
+    // ring's left edge at the row's border.
     const eyebrowRow = extractRuleBody(css, ".thread-header__eyebrow-row");
-    expect(eyebrowRow).toContain("overflow-x: clip;");
-    expect(eyebrowRow).toContain("overflow-y: visible;");
+    expect(eyebrowRow).toContain("overflow: clip;");
+    expect(eyebrowRow).toContain("overflow-clip-margin: 4px;");
     expect(eyebrowRow).not.toContain("overflow: hidden;");
   });
 

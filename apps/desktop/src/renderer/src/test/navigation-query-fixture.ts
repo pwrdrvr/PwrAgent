@@ -117,6 +117,8 @@ export function navigationQueryFixture(
         launchpadPresent: Boolean(directory.launchpad), launchpadBackend: directory.launchpad?.backend };
     });
   const size = request.pageSize ?? 100;
+  const attentionMemberKeys = query.kind === "lens" && query.lens === "attention"
+    ? new Set(threads.map(key)) : undefined;
   const anchor = request.anchor;
   const offset = anchor ? anchor.kind === "directory"
     ? descriptors.findIndex((directory) => directory.key === anchor.key)
@@ -148,7 +150,8 @@ export function navigationQueryFixture(
         queueCount: 0, queueState: "unknown",
       };
       const resolvedParent = byKey.get(resolveParentKey(thread) ?? "");
-      return { row, orderKey: String(offset + index), placement: thread.parentThreadId
+      const parentInCollection = !attentionMemberKeys || attentionMemberKeys.has(resolveParentKey(thread) ?? "");
+      return { row, orderKey: String(offset + index), placement: thread.parentThreadId && parentInCollection
         ? { kind: "child", parent: { backend: thread.parentThreadBackend ?? resolvedParent?.source ?? thread.source, threadId: thread.parentThreadId,
             ownerInstanceId: thread.parentThreadInstanceId ?? row.ref.ownerInstanceId } }
         : { kind: "root" } };

@@ -143,6 +143,11 @@ test("renders the desktop shell with the black-first Tangerine Terminal theme", 
     const selectedRow = app.window.locator(".thread-row.is-selected").first();
     const primaryButton = app.window.locator(".composer__send-split-pill").first();
     const composerInput = app.window.getByLabel("Reply");
+    // The editor fills its scroller edge to edge, which clipped all of its
+    // own outline, so the box around it draws the ring.
+    const composerBox = app.window.locator(".composer-tiptap-input", {
+      has: composerInput,
+    });
     const sendButton = app.window.getByRole("button", { name: "Send" });
 
     await expect(shell).toHaveCSS("background-color", "rgb(0, 0, 0)");
@@ -201,7 +206,7 @@ test("renders the desktop shell with the black-first Tangerine Terminal theme", 
     });
 
     await assertTangerineFocusRing(activeLens);
-    await assertTangerineFocusRing(composerInput);
+    await assertTangerineFocusRing(composerBox, composerInput);
     await composerInput.fill("Focus ring check");
     await expect(sendButton).toBeEnabled();
     await assertTangerineFocusRing(primaryButton, sendButton);

@@ -124,11 +124,15 @@ export function RecentsList(props: RecentsListProps) {
     ? entries.filter((entry) => entry.placement.kind === "root" && visibleKeys.has(entry.key))
       .map((entry) => threadByKey.get(entry.key)).filter((thread): thread is NavigationThreadSummary => Boolean(thread))
     : props.threads.filter((thread) => !thread.parentThreadId);
+  const topLevelKeys = new Set(topLevelThreads.map(threadSummaryIdentityKey));
   const childrenByParentKey = new Map<string, NavigationThreadSummary[]>();
   const childEntries = [...entries ?? [], ...[...props.pagedNavigation?.resources.values() ?? []]
     .filter((resource) => resource.state.request.query.kind === "children").flatMap((resource) => presentation.get(resource.id) ?? [])];
   for (const entry of childEntries) {
-    if (entry.placement.kind !== "child") continue;
+    // A lens can promote a descendant whose parent does not qualify. Its
+    // root placement owns both the row and its subtree, even when an expanded
+    // ancestor's child pages also carry its original parent relationship.
+    if (entry.placement.kind !== "child" || topLevelKeys.has(entry.key)) continue;
     const parentKey = navigationThreadSelectionKey(entry.placement.parent);
     const children = childrenByParentKey.get(parentKey) ?? [];
     const key = entry.key;

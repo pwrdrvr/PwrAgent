@@ -7,6 +7,7 @@ import {
   useState,
   type FocusEvent,
   type ReactNode,
+  type RefObject,
 } from "react";
 
 import {
@@ -923,11 +924,15 @@ export function AccessControlSettings(props: { desktopApi: DesktopApi }) {
           </div>
         </div>
 
-        {/* Permission reverse-map tooltip */}
-        {trace?.kind === "perm" ? (
+        {/* Permission reverse-map tooltip. Hidden while focus or the pointer
+            rests on another card: a pinned permission's tip would otherwise
+            sit over the card Tab lands on next. */}
+        {trace?.kind === "perm" && (!hover || matchesSelection(hover, trace)) ? (
           <PermTooltip
             perm={catalog.find((p) => p.id === trace.id)}
-            rows={reverseByPerm.get(trace.id) ?? []}
+            rows={reverseByPerm.get(trace.id) ?? NO_REACH}
+            cards={permRefs}
+            wires={wires}
           />
         ) : null}
       </div>
@@ -948,14 +953,84 @@ export function AccessControlSettings(props: { desktopApi: DesktopApi }) {
   );
 }
 
+/** The space between a permission card and its tip. */
+const TIP_GAP = 6;
+
+/** One empty list, so a permission no actor reaches keeps a stable `rows`. */
+const NO_REACH: Array<{ subject: RbacKnownSubject; role: RbacRoleDefinition }> = [];
+
+/** The band of the viewport that the element's scroller shows. */
+function visibleBand(el: HTMLElement): { top: number; bottom: number } {
+  for (let p = el.parentElement; p; p = p.parentElement) {
+    if (/(auto|scroll)/.test(getComputedStyle(p).overflowY)) {
+      const r = p.getBoundingClientRect();
+      return { top: r.top, bottom: r.bottom };
+    }
+  }
+  return { top: 0, bottom: window.innerHeight };
+}
+
+/**
+ * The reverse map sits under its card, or over it when the scroller shows no
+ * room below. A fixed corner of the graph covered the first cards, the one
+ * traced included, and was scrolled out of view for every card further down.
+ */
 function PermTooltip(props: {
   perm?: MessagingPermissionDescriptor;
   rows: Array<{ subject: RbacKnownSubject; role: RbacRoleDefinition }>;
+  cards: RefObject<Record<string, HTMLElement | null>>;
+  /** A new value whenever the graph's cards move. */
+  wires: Wires;
 }) {
+  const tipRef = useRef<HTMLDivElement | null>(null);
+  const [place, setPlace] = useState({ top: 0, right: 0, above: false });
+  const permId = props.perm?.id;
+
+  // Re-placed for a new card, for rows that change the tip's height, and when
+  // the cards move. The guard compares against the rendered place before
+  // dispatching, so a settled tip dispatches nothing.
+  useLayoutEffect(() => {
+    const tip = tipRef.current;
+    const graph = tip?.parentElement;
+    const card = permId ? props.cards.current[permId] : null;
+    if (!tip || !graph || !card) return;
+    const g = graph.getBoundingClientRect();
+    const c = card.getBoundingClientRect();
+    const band = visibleBand(graph);
+    const low = Math.max(g.top, band.top);
+    const high = Math.min(g.bottom, band.bottom);
+    const height = tip.offsetHeight;
+    const below = c.bottom + TIP_GAP;
+    const above = c.top - TIP_GAP - height;
+    const fitsBelow = below + height <= high;
+    const fitsAbove = above >= low;
+    const onTop = !fitsBelow && (fitsAbove || c.top - low > high - c.bottom);
+    // `top` and `right` resolve against the graph's padding box, inside its
+    // border. The graph clips rather than scrolls, so no scrollbar sits in
+    // the width it doesn't report as client width.
+    const rightBorder = graph.offsetWidth - graph.clientWidth - graph.clientLeft;
+    const next = {
+      top: (onTop ? above : below) - g.top - graph.clientTop,
+      right: g.right - c.right - rightBorder,
+      above: onTop,
+    };
+    if (
+      next.top !== place.top
+      || next.right !== place.right
+      || next.above !== place.above
+    ) {
+      setPlace(next);
+    }
+  }, [permId, props.cards, props.rows, props.wires, place]);
+
   if (!props.perm) return null;
   const roleCount = new Set(props.rows.map((r) => r.role.id)).size;
   return (
-    <div className="rbac-tip" style={{ right: 18, top: 64 }}>
+    <div
+      ref={tipRef}
+      className={`rbac-tip${place.above ? " is-above" : ""}`}
+      style={{ top: place.top, right: place.right }}
+    >
       <div className="rbac-tip__title">{props.perm.label}</div>
       <div className="rbac-tip__lede">
         Reachable by <b style={{ color: "var(--text-primary)" }}>{props.rows.length}</b> actor

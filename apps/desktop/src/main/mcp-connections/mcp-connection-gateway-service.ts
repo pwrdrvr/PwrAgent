@@ -629,6 +629,8 @@ export class McpConnectionGatewayService {
       );
     }
     const connection = this.requireConnection(connectionId);
+    // Restore the first attempt's state before its callback rejection runs.
+    this.coordinatorFor(connection).abandonAuthorization();
     this.abandonPendingAuthorization(
       connectionId,
       `A newer ${connection.displayName} authorization replaced this one.`,

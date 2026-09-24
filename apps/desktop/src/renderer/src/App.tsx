@@ -204,6 +204,31 @@ const SETTINGS_SECTIONS = new Set<SettingsSection>([
 /** Which full-window surface the shell shows. */
 type MainView = "thread" | "settings" | "automations" | "search";
 
+/** The views drawn in `.app-shell__settings-layer`, over the whole shell. */
+function isLayerView(view: MainView): boolean {
+  return view === "settings" || view === "automations";
+}
+
+/**
+ * Hand focus back to the layer's opener once the layer has gone. Only when
+ * focus fell to <body> with it: a close that moved focus on purpose (a thread
+ * taking the composer) keeps it.
+ */
+function restoreFocusIfDropped(
+  target: HTMLElement | null,
+  layer: HTMLElement | null,
+): void {
+  const active = document.activeElement;
+  const dropped =
+    active === null
+    || active === document.body
+    || (layer?.contains(active) ?? false);
+  if (!dropped || !target || !target.isConnected || target.closest("[inert]")) {
+    return;
+  }
+  target.focus({ preventScroll: true });
+}
+
 const LazySettingsScreen = lazy(async () => ({
   default: (await import("./features/settings/SettingsScreen")).SettingsScreen,
 }));
@@ -348,6 +373,11 @@ function DesktopAppShell(props: {
   );
   const [mainView, setMainViewState] = useState<MainView>("thread");
   const mainViewRef = useRef<MainView>(mainView);
+  // The control that opened Settings or Automations. The layer covers the
+  // sidebar and main, which go inert under it, so focus returns here on
+  // close rather than dropping to <body>.
+  const layerOpenerRef = useRef<HTMLElement | null>(null);
+  const layerRef = useRef<HTMLDivElement>(null);
   // Settings can hold edits the operator has not saved. Every way out of the
   // overlay (Exit, a menu command, a notification, history) asks Settings
   // first, so those edits get a Save / Discard prompt instead of vanishing.
@@ -369,6 +399,11 @@ function DesktopAppShell(props: {
       const current = mainViewRef.current;
       const target = typeof next === "function" ? next(current) : next;
       const show = () => {
+        if (!isLayerView(current) && isLayerView(target)) {
+          const opener = document.activeElement;
+          layerOpenerRef.current =
+            opener instanceof HTMLElement && opener !== document.body ? opener : null;
+        }
         mainViewRef.current = target;
         setMainViewState(target);
         onShown?.();
@@ -382,6 +417,18 @@ function DesktopAppShell(props: {
     },
     [],
   );
+  // The opener went inert with the sidebar or main, so focus moves onto the
+  // layer, and Tab starts at its first control. On close, or on a switch
+  // between the two layers, focus that fell with the layer goes back.
+  const layerView = isLayerView(mainView) ? mainView : undefined;
+  useEffect(() => {
+    if (!layerView) return;
+    const layer = layerRef.current;
+    if (layer && !layer.contains(document.activeElement)) {
+      layer.focus({ preventScroll: true });
+    }
+    return () => restoreFocusIfDropped(layerOpenerRef.current, layer);
+  }, [layerView]);
   // In-thread find bar (⌘F). `manualFindOpen` is the ⌘F toggle; `findRequest`
   // is a deep-link from a search result (seeded query + its target thread).
   // The bar is open when either applies (see `threadFindOpen` below).
@@ -2845,6 +2892,7 @@ function DesktopAppShell(props: {
         style={{ "--sidebar-width": `${sidebarWidthRef.current}px` } as CSSProperties}
       >
         <Sidebar
+          inert={layerView !== undefined}
           directoryDisclosure={navigation.directoryDisclosure}
           pendingLaunchpadCreations={navigation.pendingLaunchpadCreations}
           onSelectPendingLaunchpad={(creation) => {
@@ -3025,6 +3073,7 @@ function DesktopAppShell(props: {
             sidebar's border, which the aside's overflow clip would cut off. */}
         {sidebarHidden ? null : (
           <SidebarResizeHandle
+            inert={layerView !== undefined}
             onResizeStart={startSidebarResize}
             onResizeByKeyboard={(delta) => resizeSidebar(sidebarWidthRef.current + delta)}
             sidebarWidth={sidebarWidth}
@@ -3034,6 +3083,7 @@ function DesktopAppShell(props: {
         )}
 
         <main
+          inert={layerView ? true : undefined}
           className={`app-main${
             threadDetailPending ? " app-main--thread-detail-pending" : ""
           }${
@@ -3139,7 +3189,7 @@ function DesktopAppShell(props: {
         </main>
 
         {mainView === "settings" ? (
-          <div className="app-shell__settings-layer">
+          <div ref={layerRef} className="app-shell__settings-layer" tabIndex={-1}>
             <Suspense fallback={null}>
               <LazySettingsScreen
                 appearanceController={props.appearanceController}
@@ -3163,7 +3213,7 @@ function DesktopAppShell(props: {
         ) : null}
 
         {mainView === "automations" ? (
-          <div className="app-shell__settings-layer">
+          <div ref={layerRef} className="app-shell__settings-layer" tabIndex={-1}>
             <AutomationsScreen
               desktopApi={desktopApi}
               directories={navigation.directories}

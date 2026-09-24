@@ -35,6 +35,139 @@ function refreshAuth(
 }
 
 describe("McpOAuthSessionCoordinator", () => {
+  it("keeps an existing authorization when a reauthorization times out", async () => {
+    const { vault, writes } = createVault({
+      resourceUrl: "https://mcp.example.com/mcp",
+      discoveryState: { authorizationServerUrl: "https://auth.example.com" },
+      tokens: {
+        access_token: "existing-access",
+        refresh_token: "existing-refresh",
+        token_type: "bearer",
+      },
+    });
+    const fetchFn = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      new Response("ok"));
+    const coordinator = new McpOAuthSessionCoordinator({
+      authFn: vi.fn(async () => "REDIRECT" as const) as unknown as typeof auth,
+      connectionId: "example",
+      fetchFn,
+      serverUrl: new URL("https://mcp.example.com/mcp"),
+      vault,
+    });
+
+    await expect(coordinator.configured()).resolves.toBe(true);
+    expect(coordinator.state).toBe("ready");
+    await expect(coordinator.authorize({
+      redirectUrl: new URL("http://127.0.0.1:4040/oauth/callback"),
+      onRedirect: vi.fn(),
+      waitForCode: async () => { throw new Error("Authorization timed out."); },
+    })).rejects.toThrow("Authorization timed out.");
+
+    expect(coordinator.state).toBe("ready");
+    expect(coordinator.detail).toBeUndefined();
+    expect(writes).toHaveLength(0);
+    await coordinator.authorizedFetch()("https://mcp.example.com/mcp");
+    expect(fetchFn).toHaveBeenCalledWith(
+      "https://mcp.example.com/mcp",
+      expect.objectContaining({
+        headers: expect.any(Headers),
+      }),
+    );
+    const request = fetchFn.mock.calls[0]?.[1];
+    expect(new Headers(request?.headers).get("authorization")).toBe("Bearer existing-access");
+  });
+
+  it("does not restore a token rejected while reauthorization waits for consent", async () => {
+    const { vault } = createVault({
+      resourceUrl: "https://mcp.example.com/mcp",
+      discoveryState: { authorizationServerUrl: "https://auth.example.com" },
+      tokens: {
+        access_token: "expired-access",
+        refresh_token: "invalid-refresh",
+        token_type: "bearer",
+      },
+    });
+    let rejectCode: ((error: Error) => void) | undefined;
+    const coordinator = new McpOAuthSessionCoordinator({
+      authFn: vi.fn(async () => {
+        if (!rejectCode) return "REDIRECT" as const;
+        throw new Error("invalid_grant: refresh token is invalid");
+      }) as unknown as typeof auth,
+      connectionId: "example",
+      fetchFn: vi.fn(async () => new Response("expired", { status: 401 })),
+      serverUrl: new URL("https://mcp.example.com/mcp"),
+      vault,
+    });
+
+    const authorization = coordinator.authorize({
+      redirectUrl: new URL("http://127.0.0.1:4040/oauth/callback"),
+      onRedirect: vi.fn(),
+      waitForCode: () => new Promise<string>((_resolve, reject) => {
+        rejectCode = reject;
+      }),
+    });
+    await vi.waitFor(() => expect(rejectCode).toBeDefined());
+    await expect(coordinator.authorizedFetch()("https://mcp.example.com/mcp"))
+      .rejects.toThrow("can no longer be refreshed");
+    expect(coordinator.state).toBe("reauthorization_required");
+
+    rejectCode?.(new Error("Authorization timed out."));
+    await expect(authorization).rejects.toThrow("Authorization timed out.");
+    expect(coordinator.state).toBe("reauthorization_required");
+    expect(coordinator.detail).toContain("invalid_grant");
+  });
+
+  it("keeps a credential committed just before its authorization is superseded", async () => {
+    const { vault } = createVault({
+      resourceUrl: "https://mcp.example.com/mcp",
+      discoveryState: { authorizationServerUrl: "https://auth.example.com" },
+    });
+    let committed: (() => void) | undefined;
+    let release: (() => void) | undefined;
+    const tokenCommitted = new Promise<void>((resolve) => { committed = resolve; });
+    const authFn = vi.fn(async (
+      provider: OAuthClientProvider,
+      options: { authorizationCode?: string },
+    ) => {
+      if (!options.authorizationCode) return "REDIRECT" as const;
+      await provider.saveTokens?.({
+        access_token: "committed-access",
+        token_type: "bearer",
+      });
+      committed?.();
+      await new Promise<void>((resolve) => { release = resolve; });
+      return "AUTHORIZED" as const;
+    }) as unknown as typeof auth;
+    const coordinator = new McpOAuthSessionCoordinator({
+      authFn,
+      connectionId: "example",
+      serverUrl: new URL("https://mcp.example.com/mcp"),
+      vault,
+    });
+
+    const first = coordinator.authorize({
+      redirectUrl: new URL("http://127.0.0.1:4040/oauth/callback"),
+      onRedirect: vi.fn(),
+      waitForCode: async () => "first",
+    });
+    const firstFailure = first.catch((error: unknown) => error);
+    await tokenCommitted;
+    expect(coordinator.state).toBe("connecting");
+
+    coordinator.abandonAuthorization();
+    expect(coordinator.state).toBe("ready");
+    const second = coordinator.authorize({
+      redirectUrl: new URL("http://127.0.0.1:4041/oauth/callback"),
+      onRedirect: vi.fn(),
+      waitForCode: async () => { throw new Error("Authorization timed out."); },
+    });
+    release?.();
+    expect(await firstFailure).toBeInstanceOf(Error);
+    await expect(second).rejects.toThrow("Authorization timed out.");
+    expect(coordinator.state).toBe("ready");
+    await expect(coordinator.configured()).resolves.toBe(true);
+  });
+
   it("reports an HTML registration failure before opening browser consent", async () => {
     const { vault, writes } = createVault({
       resourceUrl: "https://mcp.example.com/mcp",

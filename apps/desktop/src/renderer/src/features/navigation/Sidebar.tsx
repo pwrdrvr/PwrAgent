@@ -161,6 +161,8 @@ import type { NavigationDirectoryDisclosure } from "../../lib/useNavigationDirec
 
 type SidebarProps = {
   directoryDisclosure?: NavigationDirectoryDisclosure;
+  /** True while a full-window layer (Settings, Automations) covers it. */
+  inert?: boolean;
   backends: BackendSummary[];
   browseMode: BrowseMode;
   directories: NavigationDirectorySummary[];
@@ -1839,7 +1841,11 @@ export function Sidebar(props: SidebarProps) {
     directoryMenuCanPin || directoryMenuShowMoveItems;
 
   return (
-    <aside className="sidebar" aria-label="Threads">
+    <aside
+      className="sidebar"
+      aria-label="Threads"
+      inert={props.inert ? true : undefined}
+    >
       {/* Mounted here because this is where the thread set and the jump
           handlers already live, but it PORTALS onto document.body — the
           sidebar is a container-query element (a containing block for fixed

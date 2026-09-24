@@ -399,6 +399,54 @@ describe("App", () => {
     ).toBeInTheDocument();
   });
 
+  // Settings and Automations draw over the whole shell. The sidebar and main
+  // go inert under them, so Tab cannot walk the invisible controls behind,
+  // and focus goes back to the control that opened the layer on exit.
+  it("makes the shell behind Automations inert and returns focus on exit", async () => {
+    Object.defineProperty(window, "pwragent", {
+      configurable: true,
+      value: ownerApi({
+        platform: "darwin",
+        listBackends: async () => ({ fetchedAt: Date.now(), backends: [] }),
+        getNavigationSnapshot: async () => ({
+          backend: "all" as const,
+          fetchedAt: Date.now(),
+          unchanged: false,
+          inboxThreadKeys: [],
+          threads: [],
+          directories: [],
+          launchpadDefaults: {
+            backend: "codex" as const,
+            executionMode: "default" as const,
+          },
+        }),
+        readSettings: async () =>
+          await new Promise<never>(() => {
+            // Keep the shell mounted without needing a full settings fixture.
+          }),
+      }),
+    });
+
+    const { container } = render(<App />);
+    const opener = await screen.findByRole("button", { name: "Open automations" });
+    act(() => opener.focus());
+    fireEvent.click(opener);
+
+    const exit = await screen.findByRole("button", { name: /Exit Automations/ });
+    const layer = exit.closest(".app-shell__settings-layer");
+    expect(layer).toHaveFocus();
+    expect(container.querySelector("aside.sidebar")).toHaveAttribute("inert");
+    expect(container.querySelector("main.app-main")).toHaveAttribute("inert");
+    expect(layer).not.toHaveAttribute("inert");
+
+    fireEvent.click(exit);
+
+    expect(container.querySelector(".app-shell__settings-layer")).toBeNull();
+    expect(container.querySelector("aside.sidebar")).not.toHaveAttribute("inert");
+    expect(container.querySelector("main.app-main")).not.toHaveAttribute("inert");
+    expect(opener).toHaveFocus();
+  });
+
   // `useDesktopApi` resolves the preload bridge by polling, so the header's
   // Star Map control mounts and is clickable whether or not the bridge has
   // landed — and `desktopApi?.openStarMapWindow?.()` used to drop that click
