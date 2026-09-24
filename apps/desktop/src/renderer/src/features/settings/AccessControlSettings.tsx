@@ -7,6 +7,7 @@ import {
   useState,
   type FocusEvent,
   type ReactNode,
+  type RefObject,
 } from "react";
 
 import {
@@ -929,7 +930,7 @@ export function AccessControlSettings(props: { desktopApi: DesktopApi }) {
         {trace?.kind === "perm" && (!hover || matchesSelection(hover, trace)) ? (
           <PermTooltip
             perm={catalog.find((p) => p.id === trace.id)}
-            rows={reverseByPerm.get(trace.id) ?? []}
+            rows={reverseByPerm.get(trace.id) ?? NO_REACH}
             cards={permRefs}
             wires={wires}
           />
@@ -955,6 +956,9 @@ export function AccessControlSettings(props: { desktopApi: DesktopApi }) {
 /** The space between a permission card and its tip. */
 const TIP_GAP = 6;
 
+/** One empty list, so a permission no actor reaches keeps a stable `rows`. */
+const NO_REACH: Array<{ subject: RbacKnownSubject; role: RbacRoleDefinition }> = [];
+
 /** The band of the viewport that the element's scroller shows. */
 function visibleBand(el: HTMLElement): { top: number; bottom: number } {
   for (let p = el.parentElement; p; p = p.parentElement) {
@@ -974,7 +978,7 @@ function visibleBand(el: HTMLElement): { top: number; bottom: number } {
 function PermTooltip(props: {
   perm?: MessagingPermissionDescriptor;
   rows: Array<{ subject: RbacKnownSubject; role: RbacRoleDefinition }>;
-  cards: { current: Record<string, HTMLElement | null> };
+  cards: RefObject<Record<string, HTMLElement | null>>;
   /** A new value whenever the graph's cards move. */
   wires: Wires;
 }) {
@@ -1001,9 +1005,13 @@ function PermTooltip(props: {
     const fitsBelow = below + height <= high;
     const fitsAbove = above >= low;
     const onTop = !fitsBelow && (fitsAbove || c.top - low > high - c.bottom);
+    // `top` and `right` resolve against the graph's padding box, inside its
+    // border. The graph clips rather than scrolls, so no scrollbar sits in
+    // the width it doesn't report as client width.
+    const rightBorder = graph.offsetWidth - graph.clientWidth - graph.clientLeft;
     const next = {
-      top: (onTop ? above : below) - g.top,
-      right: g.right - c.right,
+      top: (onTop ? above : below) - g.top - graph.clientTop,
+      right: g.right - c.right - rightBorder,
       above: onTop,
     };
     if (
