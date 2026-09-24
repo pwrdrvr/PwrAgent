@@ -12,7 +12,6 @@ export type PagedDirectoryPresentation = {
   childThreadsByParentKey: Map<string, NavigationThreadSummary[]>;
   directoryThreadsCollapsed: boolean;
   directoryUnpinnedThreadCount: number;
-  selectionOrder: string[];
 };
 
 /** Presentation of admitted entries only. Placement and counts remain owner authority. */
@@ -88,10 +87,5 @@ export function buildPagedDirectoryPresentation(params: {
   return {
     directoryPinnedThreads, unpinnedThreads, selectedUnpinnedThreads, childThreadsByParentKey, directoryThreadsCollapsed,
     directoryUnpinnedThreadCount: params.directory.unpinnedRootCount ?? 0,
-    selectionOrder: [...directoryPinnedThreads, ...selectedUnpinnedThreads, ...unpinnedThreads].flatMap((thread) => {
-      const key = threadSummaryIdentityKey(thread);
-      return [key, ...(thread.subthreadsCollapsed ? [] : (childThreadsByParentKey.get(key) ?? []).map((child) =>
-        threadSummaryIdentityKey(child)))];
-    }),
   };
 }

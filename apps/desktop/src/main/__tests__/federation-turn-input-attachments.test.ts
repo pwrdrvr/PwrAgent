@@ -309,7 +309,8 @@ describe("federation turn input attachments", () => {
     );
     await mkdir(path.dirname(destination), { recursive: true });
     await writeFile(destination, Buffer.from([9, 9, 9, 9]));
-    const corruptInode = (await stat(destination)).ino;
+    // Windows file IDs can exceed Number.MAX_SAFE_INTEGER; compare them losslessly.
+    const corruptInode = (await stat(destination, { bigint: true })).ino;
     const envelope = blobEnvelope({
       data,
       name: "screen.png",
@@ -328,9 +329,9 @@ describe("federation turn input attachments", () => {
     await resolved;
 
     await expect(readFile(destination)).resolves.toEqual(data);
-    expect((await stat(destination)).ino).not.toBe(corruptInode);
+    expect((await stat(destination, { bigint: true })).ino).not.toBe(corruptInode);
 
-    const verifiedInode = (await stat(destination)).ino;
+    const verifiedInode = (await stat(destination, { bigint: true })).ino;
     const reuseEnvelope = {
       ...envelope,
       id: "blob-reuse",
@@ -342,7 +343,7 @@ describe("federation turn input attachments", () => {
     );
     await receiver.receive(reuseEnvelope, "source_one");
     await reused;
-    expect((await stat(destination)).ino).toBe(verifiedInode);
+    expect((await stat(destination, { bigint: true })).ino).toBe(verifiedInode);
   });
 
   it("expires old receiver-owned blob files after a later transfer", async () => {
@@ -378,7 +379,7 @@ describe("federation turn input attachments", () => {
       name: "paste.png",
     });
     await writeFile(first.path, Buffer.from([0, 0, 0]));
-    const corruptInode = (await stat(first.path)).ino;
+    const corruptInode = (await stat(first.path, { bigint: true })).ino;
 
     const replaced = await stageTurnInputAttachment({
       type: "localImage",
@@ -386,15 +387,15 @@ describe("federation turn input attachments", () => {
       name: "paste.png",
     });
     await expect(readFile(replaced.path)).resolves.toEqual(Buffer.from(data));
-    expect((await stat(replaced.path)).ino).not.toBe(corruptInode);
+    expect((await stat(replaced.path, { bigint: true })).ino).not.toBe(corruptInode);
 
-    const verifiedInode = (await stat(replaced.path)).ino;
+    const verifiedInode = (await stat(replaced.path, { bigint: true })).ino;
     await stageTurnInputAttachment({
       type: "localImage",
       data,
       name: "paste.png",
     });
-    expect((await stat(replaced.path)).ino).toBe(verifiedInode);
+    expect((await stat(replaced.path, { bigint: true })).ino).toBe(verifiedInode);
   });
 
   it("refreshes reused local staging directories before age cleanup", async () => {
