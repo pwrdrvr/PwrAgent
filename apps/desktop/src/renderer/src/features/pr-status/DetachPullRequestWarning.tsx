@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { PrSummary } from "@pwragent/shared";
+import { useModalDialog } from "../../lib/useModalDialog";
 
 const DETACH_PR_WARNING_DISMISSED_KEY = "pwragent.detachPrWarning.dismissed";
 
@@ -28,6 +29,13 @@ type DetachPullRequestWarningProps = {
 export function DetachPullRequestWarning(props: DetachPullRequestWarningProps) {
   const [dontShowAgain, setDontShowAgain] = useState(false);
   const prLabel = `${props.pr.org}/${props.pr.repo}#${props.pr.number}`;
+  // Cancel, not the first control: this confirms a destructive action, so
+  // focus starts on the choice that changes nothing.
+  const cancelRef = useRef<HTMLButtonElement>(null);
+  const dialogRef = useModalDialog({
+    onClose: props.onCancel,
+    initialFocus: cancelRef,
+  });
 
   return (
     <div
@@ -40,6 +48,7 @@ export function DetachPullRequestWarning(props: DetachPullRequestWarningProps) {
       }}
     >
       <div
+        ref={dialogRef}
         aria-labelledby="pr-detach-warning-title"
         aria-modal="true"
         className="pr-detach-warning-dialog"
@@ -59,7 +68,7 @@ export function DetachPullRequestWarning(props: DetachPullRequestWarningProps) {
           <span>Don't show me this again</span>
         </label>
         <div className="pr-detach-warning-dialog__actions">
-          <button type="button" onClick={props.onCancel}>
+          <button ref={cancelRef} type="button" onClick={props.onCancel}>
             Cancel
           </button>
           <button

@@ -16,6 +16,7 @@ import type {
 } from "@pwragent/shared";
 import { MAX_STAR_MAP_INTAKE_IMAGE_UPLOADS } from "../../../../shared/star-map-intake";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { useModalDialog } from "../../lib/useModalDialog";
 import {
   imageDataUrlToBytes,
   normalizeImageFile,
@@ -156,10 +157,16 @@ export function IntakeDialog(props: {
     closedRef.current = true;
     onClose();
   }, [onClose]);
-
-  useEffect(() => {
-    textareaRef.current?.focus();
-  }, []);
+  // While the thread is being created every control is disabled, so Tab
+  // holds focus on the dialog's own element (tabIndex={-1}). Escape is
+  // refused then, but still claimed, so the map's layer does not drop the
+  // operator's selection behind the dialog.
+  const dialogRef = useModalDialog({
+    onClose: () => {
+      if (dismissable) close();
+    },
+    initialFocus: textareaRef,
+  });
 
   useEffect(() => {
     const previewUrls = previewUrlsRef.current;
@@ -445,16 +452,12 @@ export function IntakeDialog(props: {
 
   return createPortal(
     <div
+      ref={dialogRef}
       className="star-map-intake"
       role="dialog"
       aria-modal="true"
       aria-label={`New thread on ${props.target.label}`}
-      onKeyDown={(event) => {
-        if (event.key === "Escape" && dismissable) {
-          event.stopPropagation();
-          close();
-        }
-      }}
+      tabIndex={-1}
     >
       <button
         type="button"

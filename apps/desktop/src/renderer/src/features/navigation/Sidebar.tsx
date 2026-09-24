@@ -4,6 +4,7 @@ import type { useBoundedNavigationWindow } from "../../lib/useBoundedNavigationW
 import { navigationThreadSelectionKey } from "../../lib/navigation-query-state";
 import { useEventCallback } from "../../lib/useEventCallback";
 import { useLensScrollRestoration } from "../../lib/useLensScrollRestoration";
+import { useModalDialog } from "../../lib/useModalDialog";
 import type { NavigationDirectoryView as NavigationDirectorySummary } from "../../lib/navigation-loaded-rows";
 import type { PendingLaunchpadCreation } from "../../lib/useThreadNavigation";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -418,6 +419,10 @@ export function Sidebar(props: SidebarProps) {
   const federationLabel = readRendererFederationLabel();
   const federationTarget = readRendererFederationTarget();
   const contextMenuRef = useRef<HTMLDivElement>(null);
+  // What had focus when the thread context menu opened: the row's ⋮ button,
+  // or wherever focus was for a right-click. A dialog opened from the menu
+  // returns focus here, since the menu item that opened it is gone.
+  const contextMenuOpenerRef = useRef<HTMLElement | null>(null);
   const directoryContextMenuRef = useRef<HTMLDivElement>(null);
   const directoryTargetMenuRef = useRef<HTMLDivElement>(null);
   const federationThreadTargets = props.newThreadFederationTargets ?? [];
@@ -492,6 +497,12 @@ export function Sidebar(props: SidebarProps) {
   const [renameThread, setRenameThread] = useState<NavigationThreadSummary>();
   const [renameDraft, setRenameDraft] = useState("");
   const [renameValidationError, setRenameValidationError] = useState<string>();
+  const renameDialogRef = useModalDialog<HTMLElement>({
+    open: Boolean(renameThread),
+    onClose: () => setRenameThread(undefined),
+    initialFocus: renameInputRef,
+    returnFocus: contextMenuOpenerRef,
+  });
   const onArchiveThread = props.onArchiveThread ?? (async () => undefined);
   const onRenameThread = props.onRenameThread ?? (async () => undefined);
   const [copiedRuntimeValue, setCopiedRuntimeValue] = useState<"branch" | "cwd">();
@@ -1152,10 +1163,21 @@ export function Sidebar(props: SidebarProps) {
     return selectedDirectories.length > 0 ? selectedDirectories : [directory];
   };
 
+  const rememberContextMenuOpener = (): void => {
+    const active = document.activeElement;
+    // A second right-click while the menu holds focus keeps the first opener.
+    if (contextMenuRef.current?.contains(active)) {
+      return;
+    }
+    contextMenuOpenerRef.current =
+      active instanceof HTMLElement && active !== document.body ? active : null;
+  };
+
   const openThreadContextMenu = useEventCallback((
     thread: NavigationThreadSummary,
     position: ThreadContextMenuPosition
   ): void => {
+    rememberContextMenuOpener();
     setRenameThread(undefined);
     // Symmetric with `openDirectoryContextMenu`'s
     // `setContextMenu(undefined)` — a `contextmenu` event doesn't
@@ -1176,6 +1198,7 @@ export function Sidebar(props: SidebarProps) {
     pullRequest: PrSummary,
     position: ThreadContextMenuPosition,
   ): void => {
+    rememberContextMenuOpener();
     setRenameThread(undefined);
     setDirectoryContextMenu(undefined);
     setContextMenu({
@@ -2780,6 +2803,7 @@ export function Sidebar(props: SidebarProps) {
       {renameThread ? (
         <div className="rename-thread-backdrop" role="presentation">
           <section
+            ref={renameDialogRef}
             aria-labelledby="rename-thread-title"
             aria-modal="true"
             className="rename-thread-dialog"
@@ -2797,9 +2821,7 @@ export function Sidebar(props: SidebarProps) {
                   setRenameValidationError(undefined);
                 }}
                 onKeyDown={(event) => {
-                  if (event.key === "Escape") {
-                    setRenameThread(undefined);
-                  } else if (event.key === "Enter") {
+                  if (event.key === "Enter") {
                     event.preventDefault();
                     submitRename();
                   } else if (

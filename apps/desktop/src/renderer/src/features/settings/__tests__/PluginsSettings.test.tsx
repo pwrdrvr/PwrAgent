@@ -17,6 +17,7 @@ import type {
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { PluginsSettings as PluginsSettingsComponent } from "../PluginsSettings";
+import { pressEscape, tabEscapes } from "../../../test/tab-walk";
 
 afterEach(() => {
   cleanup();
@@ -1194,5 +1195,61 @@ describe("PluginsSettings", () => {
       expect(row.getByText("Offer it to threads first.")).toBeInTheDocument();
       expect(row.getByText("Parked")).toBeInTheDocument();
     });
+  });
+});
+
+describe("PluginsSettings dialogs, keyboard", () => {
+  function openFrom(button: HTMLElement): void {
+    button.focus();
+    act(() => button.click());
+  }
+
+  it("keeps the connection dialogs contained and returns focus to their buttons", async () => {
+    const api = createDesktopApi([]);
+    api.listMcpConnections = vi.fn().mockResolvedValue({ connections: [{
+      id: "rovo", displayName: "Atlassian Rovo",
+      serverUrl: "https://mcp.atlassian.com/v2/mcp",
+      kind: "remote", authMode: "oauth", enabled: true, configured: true,
+      state: "ready", createdAt: 0, updatedAt: 0,
+    }] });
+    render(<PluginsSettings desktopApi={api} snapshot={createSnapshot()} />);
+
+    const edit = await screen.findByRole("button", { name: "Edit" });
+    openFrom(edit);
+    const editDialog = screen.getByRole("dialog", { name: "Edit connection" });
+    expect(editDialog.contains(document.activeElement)).toBe(true);
+    expect(tabEscapes(editDialog)).toEqual({ forward: [], backward: [] });
+    pressEscape();
+    expect(editDialog).not.toBeInTheDocument();
+    expect(document.activeElement).toBe(edit);
+
+    const remove = screen.getByRole("button", { name: "Remove" });
+    openFrom(remove);
+    const removeDialog = screen.getByRole("dialog", { name: "Remove connection?" });
+    expect(removeDialog.contains(document.activeElement)).toBe(true);
+    expect(tabEscapes(removeDialog)).toEqual({ forward: [], backward: [] });
+    pressEscape();
+    expect(removeDialog).not.toBeInTheDocument();
+    expect(document.activeElement).toBe(remove);
+  });
+
+  it("keeps Remove MCP server contained and returns focus to the row's menu button", async () => {
+    render(
+      <PluginsSettings
+        desktopApi={createDesktopApi([server({ name: "linear" })])}
+        snapshot={createSnapshot()}
+      />,
+    );
+    const more = await screen.findByRole("button", { name: "More actions for linear" });
+    openFrom(more);
+    const item = screen.getByRole("menuitem", { name: "Remove linear" });
+    item.focus();
+    act(() => item.click());
+    const dialog = screen.getByRole("dialog", { name: "Remove MCP server?" });
+    expect(dialog.contains(document.activeElement)).toBe(true);
+    expect(tabEscapes(dialog)).toEqual({ forward: [], backward: [] });
+    pressEscape();
+    expect(dialog).not.toBeInTheDocument();
+    expect(document.activeElement).toBe(more);
   });
 });

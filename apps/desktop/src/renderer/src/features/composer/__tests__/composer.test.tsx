@@ -38,6 +38,7 @@ import { PullRequestLinkProvider } from "../../../lib/pull-request-links";
 import { ThreadLinkProvider } from "../../../lib/thread-links";
 import { Composer as ProductionComposer } from "../Composer";
 import { navigationQueryFixture } from "../../../test/navigation-query-fixture";
+import { pressEscape, tabEscapes } from "../../../test/tab-walk";
 import { REMOTE_NATIVE_PICKER_TOOLTIP } from "../native-picker-boundary";
 import { useComposerDraftStore } from "../useComposerDraftStore";
 
@@ -14197,6 +14198,48 @@ describe("Composer", () => {
     await waitFor(() => expect(onHandoffThreadWorkspace).toHaveBeenCalledWith({
       direction: "to-project", targetPath: "/projects/demo",
     }));
+  });
+
+  it("keeps Move to Project keyboard-contained, and gives Escape to its project picker first", async () => {
+    const getNavigationQueryPage = vi.fn(async (request) => navigationQueryFixture(request, {
+      directories: [{ key: "/projects/demo", kind: "directory", label: "Demo", path: "/projects/demo" }],
+    }));
+    render(
+      <Composer
+        backends={[]}
+        desktopApi={{ getNavigationQueryPage }}
+        onHandoffThreadWorkspace={vi.fn()}
+        skills={[]}
+        thread={{
+          id: "scratch-thread", title: "Research", titleSource: "explicit",
+          source: "acp:grok", projectKey: "/scratch/research", linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+    const workspaceMode = screen.getByLabelText("Workspace mode");
+    workspaceMode.focus();
+    act(() => workspaceMode.click());
+    const item = screen.getByRole("menuitem", { name: "Move to Project" });
+    item.focus();
+    act(() => item.click());
+    const dialog = screen.getByRole("dialog", { name: "Move to Project" });
+    expect(dialog.contains(document.activeElement)).toBe(true);
+    expect(tabEscapes(dialog)).toEqual({ forward: [], backward: [] });
+
+    const picker = within(dialog).getByRole("button", { name: "Choose a project" });
+    picker.focus();
+    act(() => picker.click());
+    await within(dialog).findByRole("option", { name: /Demo/ });
+    pressEscape();
+    expect(within(dialog).queryByRole("listbox")).not.toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Move to Project" })).toBeInTheDocument();
+    expect(document.activeElement).toBe(picker);
+
+    pressEscape();
+    expect(screen.queryByRole("dialog", { name: "Move to Project" })).not.toBeInTheDocument();
+    // The menu item that opened the dialog is gone; its menu's button is not.
+    expect(document.activeElement).toBe(workspaceMode);
   });
 
   it("shows thread access in the composer and opens workspace handoff", async () => {

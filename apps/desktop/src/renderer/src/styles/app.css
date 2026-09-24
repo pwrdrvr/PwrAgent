@@ -13262,7 +13262,8 @@ a.button {
 }
 
 .settings-thread-migration-dialog:focus,
-.settings-unsaved-dialog:focus {
+.settings-unsaved-dialog:focus,
+.settings-codex-profile-dialog:focus {
   outline: none;
 }
 
@@ -14329,6 +14330,12 @@ a.button {
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+/* Holds focus itself while the thread is being created: every control in it
+   is disabled then. */
+.star-map-intake:focus {
+  outline: none;
 }
 
 /* These overlays are body-portaled and full-window, so their top edge
@@ -29914,6 +29921,12 @@ button.pricing-token-miser__folded:focus-visible {
   -webkit-app-region: no-drag;
 }
 
+/* Focused as a whole on open, so arrows and Tab start here. Its ring would
+   outline the entire window. */
+.image-lightbox:focus {
+  outline: none;
+}
+
 /* The two platforms that paint their own title strip. `MACOS_TRAFFIC_LIGHT_POSITION`
    handles the third, by this dialog leaving the top-left corner empty. */
 :root:is([data-platform="win32"], [data-platform="linux"]) .image-lightbox {
@@ -33813,6 +33826,11 @@ button.pricing-token-miser__folded:focus-visible {
   align-items: center;
   justify-content: center;
   -webkit-app-region: no-drag;
+}
+/* Focused as a whole on open, ahead of its first control (Close
+   onboarding). Its ring would outline the entire window. */
+.onboarding-wizard-overlay:focus {
+  outline: none;
 }
 .onboarding-wizard-overlay__scrim {
   position: absolute;

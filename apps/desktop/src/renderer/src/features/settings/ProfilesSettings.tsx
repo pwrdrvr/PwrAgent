@@ -7,6 +7,7 @@ import type {
 import { normalizeProfileName } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { tildifyPath } from "../../lib/tildify-path";
+import { useModalDialog } from "../../lib/useModalDialog";
 import {
   usePwrAgentProfiles,
   type PwrAgentProfilesState,
@@ -269,9 +270,15 @@ function ProfileDeleteDialog(props: {
 }) {
   const movingToTrash = props.platform === "darwin";
   const actionLabel = movingToTrash ? "Move profile to Trash" : "Delete profile";
+  const dialogRef = useModalDialog({
+    onClose: () => {
+      if (!props.busy) props.onCancel();
+    },
+  });
   return (
     <div className="settings-confirm-modal" role="presentation">
       <div
+        ref={dialogRef}
         aria-labelledby="delete-profile-heading"
         aria-modal="true"
         className="settings-confirm-dialog settings-confirm-dialog--danger"
@@ -333,10 +340,16 @@ function ProfileCreateDialog(props: {
     (profile) => profile.name === normalizedName,
   );
   const canCreate = Boolean(hasInput && normalizedName && !exists);
+  const dialogRef = useModalDialog({
+    onClose: () => {
+      if (!props.busy) props.onCancel();
+    },
+  });
 
   return (
     <div className="settings-confirm-modal" role="presentation">
       <div
+        ref={dialogRef}
         aria-labelledby="create-profile-heading"
         aria-modal="true"
         className="settings-confirm-dialog settings-profile-create-dialog"

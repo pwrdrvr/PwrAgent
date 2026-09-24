@@ -2,6 +2,7 @@ import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ImageLightbox } from "../ImageLightbox";
+import { addTabSentinels, pressTab, walkTab } from "../../../test/tab-walk";
 
 afterEach(() => {
   cleanup();
@@ -286,6 +287,42 @@ describe("ImageLightbox", () => {
     unmount();
     fireEvent.keyDown(window, { key: "Escape" });
     expect(onClose).not.toHaveBeenCalled();
+  });
+});
+
+describe("ImageLightbox, keyboard containment", () => {
+  it("keeps 60 Tabs inside the lightbox in both directions", () => {
+    render(
+      <ImageLightbox
+        src="https://example.test/cat.png"
+        alt="A cat"
+        caption="cat.png"
+        onClose={() => {}}
+      />,
+    );
+    const sentinels = addTabSentinels();
+    const dialog = screen.getByRole("dialog", { name: "Expanded image" });
+    const forward = walkTab(60);
+    // The zoom controls led on into the transcript behind the scrim.
+    expect(forward.filter((el) => !dialog.contains(el))).toEqual([]);
+    const backward = walkTab(60, { shift: true });
+    expect(backward.filter((el) => !dialog.contains(el))).toEqual([]);
+    sentinels.remove();
+  });
+
+  it("sends Shift+Tab straight after opening to the last control, not behind the scrim", () => {
+    // The lightbox focuses its frame on open. The frame is inside the dialog
+    // but on neither edge, so the first Shift+Tab walked backwards out of it.
+    const sentinels = addTabSentinels();
+    render(
+      <ImageLightbox src="https://example.test/cat.png" alt="A cat" onClose={() => {}} />,
+    );
+    const dialog = screen.getByRole("dialog", { name: "Expanded image" });
+    expect(document.activeElement).toBe(dialog);
+    pressTab({ shift: true });
+    expect(dialog.contains(document.activeElement)).toBe(true);
+    expect(document.activeElement).not.toBe(dialog);
+    sentinels.remove();
   });
 });
 

@@ -10,6 +10,7 @@ import {
 } from "../../icons";
 import { ImageCopyButton } from "./ImageCopyButton";
 import { useLightboxGestures } from "./useLightboxGestures";
+import { useModalDialog } from "../../lib/useModalDialog";
 import {
   tooltipHandlers,
   useViewportTooltip,
@@ -68,7 +69,9 @@ export function ImageLightbox({
   onNext,
   onPrevious,
 }: ImageLightboxProps) {
-  const dialogRef = useRef<HTMLDivElement>(null);
+  // Focus lands on the frame rather than the first control, so opening the
+  // lightbox raises no control's tooltip.
+  const dialogRef = useModalDialog<HTMLDivElement>({ onClose, initialFocus: "dialog" });
   /**
    * Recorded in the capture phase, because the image stops pointer events from
    * reaching the dialog — that is what keeps a pan from being read as a press
@@ -81,10 +84,8 @@ export function ImageLightbox({
   const gallery = typeof total === "number" && total > 1;
 
   useEffect(() => {
-    const previousFocus = document.activeElement;
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
-    dialogRef.current?.focus();
     const dialog = dialogRef.current;
     const wheel = (event: WheelEvent) => {
       event.stopPropagation();
@@ -94,19 +95,11 @@ export function ImageLightbox({
     return () => {
       dialog?.removeEventListener("wheel", wheel);
       document.body.style.overflow = previousOverflow;
-      if (previousFocus instanceof HTMLElement && previousFocus.isConnected) {
-        previousFocus.focus();
-      }
     };
-  }, []);
+  }, [dialogRef]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.stopPropagation();
-        onClose();
-        return;
-      }
       // The focused image viewport owns arrows for panning; the rest of
       // the dialog retains gallery navigation.
       if (event.target instanceof HTMLElement && event.target.matches(".image-lightbox__viewport")) return;
@@ -127,7 +120,7 @@ export function ImageLightbox({
     return () => {
       window.removeEventListener("keydown", handleKeyDown, true);
     };
-  }, [onClose, onNext, onPrevious]);
+  }, [onNext, onPrevious]);
 
   if (typeof document === "undefined") {
     return null;
