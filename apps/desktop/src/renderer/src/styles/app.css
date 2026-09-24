@@ -30819,8 +30819,8 @@ button.pricing-token-miser__folded:focus-visible {
 /* ---- Branch picker specifics ---- */
 .branch-picker__menu {
   /* Anchor to the trigger's right edge so the panel opens leftward — the
-     branch chip lives near the right of the composer toolbar. A viewport
-     clamp in BranchPicker nudges it back in on narrow windows. */
+     branch chip lives near the right of the composer toolbar.
+     `useComposerPopoverClamp` keeps it inside the settings row. */
   right: 0;
   left: auto;
   min-width: max(100%, 360px);
@@ -31370,9 +31370,9 @@ button.pricing-token-miser__folded:focus-visible {
      over the composer/transcript — the "+" trigger is the LAST control in
      the setup row, so a left-edge anchor would push the panel past the
      viewport's right gutter on almost every window width (and the focused
-     search input would then drag overflow-hidden ancestors sideways). A
-     viewport clamp in ReferencePicker nudges it back in on narrow windows,
-     mirroring the branch picker. */
+     search input would then drag overflow-hidden ancestors sideways).
+     `useComposerPopoverClamp` keeps it inside the settings row, shifting it
+     and narrowing it when the chat column is narrower than 440px. */
   right: 0;
   left: auto;
   width: 440px;

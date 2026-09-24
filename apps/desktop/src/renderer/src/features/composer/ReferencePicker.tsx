@@ -2,7 +2,6 @@ import type { NavigationDirectoryView as NavigationDirectorySummary } from "../.
 import {
   useEffect,
   useId,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -13,6 +12,7 @@ import type { } from "@pwragent/shared";
 import { FileCodeIcon, FolderIcon, SearchIcon } from "../../icons";
 import { tildifyPath } from "../../lib/tildify-path";
 import { REMOTE_NATIVE_PICKER_TOOLTIP } from "./native-picker-boundary";
+import { useComposerPopoverClamp } from "./useComposerPopoverClamp";
 
 /**
  * Combined reference picker for the composer's setup-row "+" button.
@@ -86,7 +86,6 @@ export function ReferencePicker(props: ReferencePickerProps): ReactElement {
   const { onClose, open } = props;
   const [tab, setTab] = useState<ReferencePickerTab>("projects");
   const [query, setQuery] = useState("");
-  const [menuShift, setMenuShift] = useState(0);
   const containerRef = useRef<HTMLSpanElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -114,42 +113,13 @@ export function ReferencePicker(props: ReferencePickerProps): ReactElement {
     };
   }, [onClose, open]);
 
-  // The popover is anchored to the trigger, which sits near the right edge of
-  // the composer toolbar — keep it inside the viewport by nudging it back in
-  // when it would overflow either gutter (same clamp as the BranchPicker).
-  // Runs before paint so there's no visible jump, and re-clamps on resize
-  // while open. Keeping the panel in-viewport is what lets it FLOAT over the
-  // transcript: an off-viewport panel would make the focused search input
-  // scroll overflow-hidden ancestors sideways to chase it, shoving the whole
-  // chat surface under the sidebar.
-  useLayoutEffect(() => {
-    if (!props.open) {
-      setMenuShift(0);
-      return;
-    }
-    const clamp = (): void => {
-      const menu = menuRef.current;
-      if (!menu) {
-        return;
-      }
-      const gutter = 12;
-      const rect = menu.getBoundingClientRect();
-      const overflowRight = rect.right - (window.innerWidth - gutter);
-      const overflowLeft = gutter - rect.left;
-      setMenuShift((current) => {
-        if (overflowRight > 0) {
-          return current - overflowRight;
-        }
-        if (overflowLeft > 0) {
-          return current + overflowLeft;
-        }
-        return current;
-      });
-    };
-    clamp();
-    window.addEventListener("resize", clamp);
-    return () => window.removeEventListener("resize", clamp);
-  }, [props.open]);
+  // The popover is anchored to the trigger, which is the last control in the
+  // composer's settings row, and opens leftward over the transcript. Clamp it
+  // to that row, not just the window: the main pane is overflow-hidden and
+  // starts where the sidebar ends, so a window-only clamp let a narrow chat
+  // column cut off the panel's left edge. Runs before paint and re-clamps on
+  // resize while open.
+  const menuStyle = useComposerPopoverClamp(props.open, menuRef);
 
   // Focus the search input AFTER the clamp above has positioned the panel
   // (not via `autoFocus`, which fires during commit, before layout effects).
@@ -212,9 +182,7 @@ export function ReferencePicker(props: ReferencePickerProps): ReactElement {
           ref={menuRef}
           role="dialog"
           aria-label="Add reference"
-          style={
-            menuShift ? { transform: `translateX(${menuShift}px)` } : undefined
-          }
+          style={menuStyle}
         >
           <div
             className="reference-picker__tabs"
