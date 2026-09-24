@@ -36588,6 +36588,11 @@ button.pricing-token-miser__folded:focus-visible {
   padding: 10px 12px;
   pointer-events: none;
 }
+/* Over its card, the tip casts its shadow up and away: cast down, it reaches
+   44px and dims the card's top edge, where the name's focus ring runs. */
+.rbac-tip.is-above {
+  box-shadow: 0 -12px 32px color-mix(in srgb, var(--bg-app) 70%, transparent);
+}
 .rbac-tip__title {
   font: 700 12px/1.2 var(--font-sans);
   color: var(--text-primary);
