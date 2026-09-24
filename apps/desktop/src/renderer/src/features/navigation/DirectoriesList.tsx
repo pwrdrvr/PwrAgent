@@ -97,6 +97,8 @@ type DirectoriesListProps = {
   queuedMessageThreadKeys?: Record<string, ThreadQueuedMessageState>;
   draftThreadKeys?: Record<string, boolean>;
   composerSourceThreadKey?: string;
+  /** The thread whose ⋮ actions menu is open, for that button's `aria-expanded`. */
+  actionsMenuThreadKey?: string;
   directories: NavigationDirectorySummary[];
   revealSelectedThreadRequest?: number;
   selectedItemKey?: string;
@@ -1324,6 +1326,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                 queuedMessageThreadKeys={props.queuedMessageThreadKeys}
                 draftThreadKeys={props.draftThreadKeys}
                 composerSourceThreadKey={props.composerSourceThreadKey}
+                actionsMenuOpen={childKey === props.actionsMenuThreadKey}
                 compact
                 directoryKey={directory.key}
                 draggable={reorderable && directChildKeySet.has(childKey)}
@@ -1472,6 +1475,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
             queuedMessageThreadKeys={props.queuedMessageThreadKeys}
             draftThreadKeys={props.draftThreadKeys}
             composerSourceThreadKey={props.composerSourceThreadKey}
+            actionsMenuOpen={threadKey === props.actionsMenuThreadKey}
             compact
             directoryKey={directory.key}
             pointerDraggable={Boolean(props.onReorderThreadPins)}
@@ -1902,6 +1906,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                           queuedMessageThreadKeys={props.queuedMessageThreadKeys}
                           draftThreadKeys={props.draftThreadKeys}
                           composerSourceThreadKey={props.composerSourceThreadKey}
+                          actionsMenuOpen={threadKey === props.actionsMenuThreadKey}
                           compact
                           directoryKey={directory.key}
                           pointerDraggable={Boolean(props.onReorderThreadPins)}

@@ -114,6 +114,13 @@ type ThreadRowProps = {
   threadPinState?: "pinned" | "unpinned";
   retainedForSelection?: boolean;
   thread: NavigationThreadSummary;
+  /**
+   * This row's actions menu is open. The menu renders outside the row, so
+   * the ⋮ button's `aria-expanded` is the only thing tying the two together.
+   * A boolean rather than the open row's key, so opening a menu re-renders
+   * one row and not the whole list.
+   */
+  actionsMenuOpen?: boolean;
   onOpenContextMenu: (
     thread: NavigationThreadSummary,
     position: { x: number; y: number; anchorTop?: number }
@@ -649,6 +656,7 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
         ) : null}
 
         <button
+          aria-expanded={props.actionsMenuOpen === true}
           aria-haspopup="menu"
           aria-label="Open thread actions"
           className="thread-row__overflow-button"

@@ -4,6 +4,7 @@ import type { useBoundedNavigationWindow } from "../../lib/useBoundedNavigationW
 import { navigationThreadSelectionKey } from "../../lib/navigation-query-state";
 import { useEventCallback } from "../../lib/useEventCallback";
 import { useLensScrollRestoration } from "../../lib/useLensScrollRestoration";
+import { useMenuNavigation } from "../../lib/useMenuNavigation";
 import { useModalDialog } from "../../lib/useModalDialog";
 import type { NavigationDirectoryView as NavigationDirectorySummary } from "../../lib/navigation-loaded-rows";
 import type { PendingLaunchpadCreation } from "../../lib/useThreadNavigation";
@@ -12,6 +13,7 @@ import type {
   ComponentType,
   MouseEvent as ReactMouseEvent,
   ReactNode,
+  RefObject,
 } from "react";
 import type {
   AppServerBackendKind,
@@ -420,11 +422,16 @@ export function Sidebar(props: SidebarProps) {
   const federationTarget = readRendererFederationTarget();
   const contextMenuRef = useRef<HTMLDivElement>(null);
   // What had focus when the thread context menu opened: the row's ⋮ button,
-  // or wherever focus was for a right-click. A dialog opened from the menu
-  // returns focus here, since the menu item that opened it is gone.
+  // or wherever focus was for a right-click. Escape, Tab and a finished
+  // action return focus here, and so does a dialog opened from the menu,
+  // since the menu item that opened it is gone.
   const contextMenuOpenerRef = useRef<HTMLElement | null>(null);
   const directoryContextMenuRef = useRef<HTMLDivElement>(null);
+  const directoryContextMenuOpenerRef = useRef<HTMLElement | null>(null);
   const directoryTargetMenuRef = useRef<HTMLDivElement>(null);
+  const directoryTargetMenuOpenerRef = useRef<HTMLElement | null>(null);
+  const profileMenuRef = useRef<HTMLDivElement>(null);
+  const profileMenuTriggerRef = useRef<HTMLButtonElement | null>(null);
   const federationThreadTargets = props.newThreadFederationTargets ?? [];
   const renameInputRef = useRef<HTMLInputElement>(null);
   const handledRevealRequestRef = useRef(0);
@@ -507,6 +514,11 @@ export function Sidebar(props: SidebarProps) {
   const onRenameThread = props.onRenameThread ?? (async () => undefined);
   const [copiedRuntimeValue, setCopiedRuntimeValue] = useState<"branch" | "cwd">();
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
+  const profileMenuVisible =
+    profileMenuOpen
+    && !federationLabel
+    && Boolean(props.activeProfile)
+    && Boolean(props.profiles?.length);
   const runtimeGitRefLabel = props.runtimeIdentity
     ? formatRuntimeGitRef(props.runtimeIdentity)
     : undefined;
@@ -927,25 +939,20 @@ export function Sidebar(props: SidebarProps) {
         backend.capabilities.forkThread === true
     );
 
+  // Escape and the rest of the keyboard belong to `useMenuNavigation` below.
+  // These effects only close a menu on a click or right-click elsewhere.
   useEffect(() => {
     if (!contextMenu) {
       return;
     }
 
     const closeMenu = (): void => setContextMenu(undefined);
-    const closeOnEscape = (event: KeyboardEvent): void => {
-      if (event.key === "Escape") {
-        closeMenu();
-      }
-    };
 
     window.addEventListener("click", closeMenu);
     window.addEventListener("contextmenu", closeMenu, true);
-    window.addEventListener("keydown", closeOnEscape);
     return () => {
       window.removeEventListener("click", closeMenu);
       window.removeEventListener("contextmenu", closeMenu, true);
-      window.removeEventListener("keydown", closeOnEscape);
     };
   }, [contextMenu]);
 
@@ -955,19 +962,12 @@ export function Sidebar(props: SidebarProps) {
     }
 
     const closeMenu = (): void => setDirectoryContextMenu(undefined);
-    const closeOnEscape = (event: KeyboardEvent): void => {
-      if (event.key === "Escape") {
-        closeMenu();
-      }
-    };
 
     window.addEventListener("click", closeMenu);
     window.addEventListener("contextmenu", closeMenu, true);
-    window.addEventListener("keydown", closeOnEscape);
     return () => {
       window.removeEventListener("click", closeMenu);
       window.removeEventListener("contextmenu", closeMenu, true);
-      window.removeEventListener("keydown", closeOnEscape);
     };
   }, [directoryContextMenu]);
 
@@ -986,19 +986,12 @@ export function Sidebar(props: SidebarProps) {
     }
 
     const closeMenu = (): void => setDirectoryTargetMenu(undefined);
-    const closeOnEscape = (event: KeyboardEvent): void => {
-      if (event.key === "Escape") {
-        closeMenu();
-      }
-    };
 
     window.addEventListener("click", closeMenu);
     window.addEventListener("contextmenu", closeMenu, true);
-    window.addEventListener("keydown", closeOnEscape);
     return () => {
       window.removeEventListener("click", closeMenu);
       window.removeEventListener("contextmenu", closeMenu, true);
-      window.removeEventListener("keydown", closeOnEscape);
     };
   }, [directoryTargetMenu]);
 
@@ -1008,21 +1001,44 @@ export function Sidebar(props: SidebarProps) {
     }
 
     const closeMenu = (): void => setProfileMenuOpen(false);
-    const closeOnEscape = (event: KeyboardEvent): void => {
-      if (event.key === "Escape") {
-        closeMenu();
-      }
-    };
 
     window.addEventListener("click", closeMenu);
     window.addEventListener("contextmenu", closeMenu, true);
-    window.addEventListener("keydown", closeOnEscape);
     return () => {
       window.removeEventListener("click", closeMenu);
       window.removeEventListener("contextmenu", closeMenu, true);
-      window.removeEventListener("keydown", closeOnEscape);
     };
   }, [profileMenuOpen]);
+
+  // The three floating menus measure themselves at `visibility: hidden` and
+  // then place themselves, so each opens for the keyboard only once it has a
+  // position. Chromium will not focus an element that is still hidden.
+  useMenuNavigation({
+    open: contextMenu?.position !== undefined,
+    menuRef: contextMenuRef,
+    triggerRef: contextMenuOpenerRef,
+    onClose: () => setContextMenu(undefined),
+  });
+  useMenuNavigation({
+    open: directoryContextMenu?.position !== undefined,
+    menuRef: directoryContextMenuRef,
+    triggerRef: directoryContextMenuOpenerRef,
+    onClose: () => setDirectoryContextMenu(undefined),
+  });
+  useMenuNavigation({
+    open:
+      directoryTargetMenu?.position !== undefined
+      && federationThreadTargets.length > 0,
+    menuRef: directoryTargetMenuRef,
+    triggerRef: directoryTargetMenuOpenerRef,
+    onClose: () => setDirectoryTargetMenu(undefined),
+  });
+  useMenuNavigation({
+    open: profileMenuVisible,
+    menuRef: profileMenuRef,
+    triggerRef: profileMenuTriggerRef,
+    onClose: () => setProfileMenuOpen(false),
+  });
 
   useLayoutEffect(() => {
     if (!contextMenu) {
@@ -1163,13 +1179,16 @@ export function Sidebar(props: SidebarProps) {
     return selectedDirectories.length > 0 ? selectedDirectories : [directory];
   };
 
-  const rememberContextMenuOpener = (): void => {
+  const rememberMenuOpener = (
+    openerRef: RefObject<HTMLElement | null>,
+    menuRef: RefObject<HTMLElement | null>,
+  ): void => {
     const active = document.activeElement;
     // A second right-click while the menu holds focus keeps the first opener.
-    if (contextMenuRef.current?.contains(active)) {
+    if (menuRef.current?.contains(active)) {
       return;
     }
-    contextMenuOpenerRef.current =
+    openerRef.current =
       active instanceof HTMLElement && active !== document.body ? active : null;
   };
 
@@ -1177,7 +1196,7 @@ export function Sidebar(props: SidebarProps) {
     thread: NavigationThreadSummary,
     position: ThreadContextMenuPosition
   ): void => {
-    rememberContextMenuOpener();
+    rememberMenuOpener(contextMenuOpenerRef, contextMenuRef);
     setRenameThread(undefined);
     // Symmetric with `openDirectoryContextMenu`'s
     // `setContextMenu(undefined)` — a `contextmenu` event doesn't
@@ -1198,7 +1217,7 @@ export function Sidebar(props: SidebarProps) {
     pullRequest: PrSummary,
     position: ThreadContextMenuPosition,
   ): void => {
-    rememberContextMenuOpener();
+    rememberMenuOpener(contextMenuOpenerRef, contextMenuRef);
     setRenameThread(undefined);
     setDirectoryContextMenu(undefined);
     setContextMenu({
@@ -1288,6 +1307,7 @@ export function Sidebar(props: SidebarProps) {
     directory: NavigationDirectorySummary,
     position: ThreadContextMenuPosition,
   ): void => {
+    rememberMenuOpener(directoryContextMenuOpenerRef, directoryContextMenuRef);
     setContextMenu(undefined);
     setRenameThread(undefined);
     setDirectoryContextMenu({
@@ -1301,6 +1321,7 @@ export function Sidebar(props: SidebarProps) {
     directory: NavigationDirectorySummary,
     position: ThreadContextMenuPosition,
   ): void => {
+    rememberMenuOpener(directoryTargetMenuOpenerRef, directoryTargetMenuRef);
     setContextMenu(undefined);
     setDirectoryContextMenu(undefined);
     setProfileMenuOpen(false);
@@ -1605,6 +1626,11 @@ export function Sidebar(props: SidebarProps) {
       || contextMenu?.thread.gitBranch,
     );
   const contextMenuThreadKey = contextMenu ? threadSummaryIdentityKey(contextMenu.thread) : undefined;
+  // The row whose ⋮ button owns the open menu, for its `aria-expanded`. A PR
+  // chip's right-click menu is a different menu, so it leaves ⋮ collapsed.
+  const actionsMenuThreadKey = contextMenu?.pullRequest
+    ? undefined
+    : contextMenuThreadKey;
   const [worktreeAvailability, setWorktreeAvailability] = useState<{ key: string; available: boolean }>();
   const readThreadWorktreeAvailability = props.readThreadWorktreeAvailability;
   const contextMenuThread = contextMenu?.thread;
@@ -1924,7 +1950,10 @@ export function Sidebar(props: SidebarProps) {
       {!federationLabel && props.activeProfile ? (
         <div className="runtime-identity" aria-label="PwrAgent profile">
           <ProfileIdentityButton
+            buttonRef={profileMenuTriggerRef}
+            hasMenu={Boolean(props.profiles?.length)}
             label={profileLabel ?? `profile:${props.activeProfile}`}
+            menuOpen={profileMenuVisible}
             tooltipText={profileTooltip}
             onRefresh={props.onRefreshRateLimits}
             onToggle={(event) => {
@@ -1932,10 +1961,15 @@ export function Sidebar(props: SidebarProps) {
               setProfileMenuOpen((open) => !open);
             }}
           />
-          {profileMenuOpen && props.profiles?.length ? (
+          {profileMenuVisible && props.profiles ? (
             <div
+              ref={profileMenuRef}
               className="sidebar__menu sidebar__menu--profile"
               role="menu"
+              // Every profile can be disabled at once: the only one is the
+              // current one, or this window cannot open another. Focus then
+              // lands on the menu, where Escape and Tab still work.
+              tabIndex={-1}
               onClick={(event) => event.stopPropagation()}
             >
               {props.profiles.map((profile) => (
@@ -2059,6 +2093,7 @@ export function Sidebar(props: SidebarProps) {
               queuedMessageThreadKeys={props.queuedMessageThreadKeys}
               draftThreadKeys={props.draftThreadKeys}
               composerSourceThreadKey={props.composerSourceThreadKey}
+              actionsMenuThreadKey={actionsMenuThreadKey}
               directories={renderedDirectories}
               revealSelectedThreadRequest={directoryRevealRequest}
               selectedItemKey={props.selectedItemKey}
@@ -2137,6 +2172,7 @@ export function Sidebar(props: SidebarProps) {
                 queuedMessageThreadKeys={props.queuedMessageThreadKeys}
                 draftThreadKeys={props.draftThreadKeys}
                 composerSourceThreadKey={props.composerSourceThreadKey}
+                actionsMenuThreadKey={actionsMenuThreadKey}
                 revealSelectedThreadRequest={revealSelectedThreadRequest}
                 selectedThreadKey={props.selectedItemKey}
                 selectedThreadKeys={selectedThreadKeys}
@@ -2949,7 +2985,10 @@ function placeThreadContextMenu(
 }
 
 function ProfileIdentityButton(props: {
+  buttonRef: RefObject<HTMLButtonElement | null>;
+  hasMenu: boolean;
   label: string;
+  menuOpen: boolean;
   onRefresh?: () => void;
   tooltipText?: string;
   onToggle: (event: ReactMouseEvent<HTMLButtonElement>) => void;
@@ -2969,8 +3008,11 @@ function ProfileIdentityButton(props: {
   return (
     <>
       <button
+        ref={props.buttonRef}
         aria-label="Open PwrAgent profile menu"
         aria-describedby={tooltip.visible ? tooltip.tooltipId : undefined}
+        aria-expanded={props.hasMenu ? props.menuOpen : undefined}
+        aria-haspopup={props.hasMenu ? "menu" : undefined}
         className="runtime-identity__button"
         type="button"
         onBlur={tooltip.hide}
