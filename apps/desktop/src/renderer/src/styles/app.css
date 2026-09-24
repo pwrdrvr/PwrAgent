@@ -24232,6 +24232,28 @@ a.transcript-message__messaging-origin:focus-visible {
   gap: 8px;
 }
 
+.transcript-async-questions {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.transcript-async-questions__question {
+  display: grid;
+  gap: 8px;
+}
+
+.transcript-async-questions__question p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--transcript-text-size);
+}
+
+.transcript-async-questions__hint {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
 .transcript-questionnaire__option {
   width: 100%;
   display: flex;
