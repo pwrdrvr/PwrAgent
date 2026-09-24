@@ -219,6 +219,7 @@ import {
   type ComposerQueuedTurnSnapshot,
 } from "./useComposerDraftStore";
 import { useComposerMentionSources } from "./useComposerMentionSources";
+import { useComposerPopoverClamp } from "./useComposerPopoverClamp";
 import { useOwnedComposerDraftStore } from "./useOwnedComposerDraftStore";
 
 type ComposerProps = {
@@ -1622,13 +1623,8 @@ function ComposerThreadOptionsMenu(props: {
   onTokenMiserChange?: (enabled: boolean | null) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const [menuShift, setMenuShift] = useState(0);
-  const [menuWidthLimit, setMenuWidthLimit] = useState<number>();
   const menuId = useId();
   const menuRef = useRef<HTMLDivElement>(null);
-  const menuShiftRef = useRef(0);
-  const menuWidthLimitRef = useRef<number | undefined>(undefined);
-  const naturalMenuWidthRef = useRef(0);
   const ref = useDismissableMenu<HTMLDivElement>(open, () => setOpen(false));
   const getTooltipHorizontalBounds = useCallback((target: HTMLElement) => {
     const composerSetup = target.closest<HTMLElement>(".composer__setup");
@@ -1677,65 +1673,7 @@ function ComposerThreadOptionsMenu(props: {
   // The menu usually opens left from the final settings control. When that
   // control wraps onto a new row, though, opening left would put the panel
   // underneath the thread sidebar. Keep it inside the settings row instead.
-  useLayoutEffect(() => {
-    if (!open) {
-      menuShiftRef.current = 0;
-      menuWidthLimitRef.current = undefined;
-      naturalMenuWidthRef.current = 0;
-      setMenuShift(0);
-      setMenuWidthLimit(undefined);
-      return;
-    }
-    const clamp = (): void => {
-      const menu = menuRef.current;
-      if (!menu) {
-        return;
-      }
-      const gutter = 12;
-      const rect = menu.getBoundingClientRect();
-      const composerSetup = menu.closest<HTMLElement>(".composer__setup");
-      const composerBounds = composerSetup?.getBoundingClientRect();
-      const leftBoundary = Math.max(gutter, composerBounds?.left ?? gutter);
-      const rightBoundary = Math.max(
-        leftBoundary,
-        Math.min(
-          window.innerWidth - gutter,
-          composerBounds?.right ?? window.innerWidth - gutter,
-        ),
-      );
-      const availableWidth = Math.max(0, rightBoundary - leftBoundary);
-      naturalMenuWidthRef.current = Math.max(
-        naturalMenuWidthRef.current,
-        rect.width,
-      );
-      const targetWidth = Math.min(
-        naturalMenuWidthRef.current,
-        availableWidth,
-      );
-      const nextWidthLimit =
-        targetWidth < naturalMenuWidthRef.current ? targetWidth : undefined;
-      const unshiftedRight = rect.right - menuShiftRef.current;
-      const unshiftedLeft = unshiftedRight - targetWidth;
-      const maxLeft = rightBoundary - targetWidth;
-      const targetLeft = Math.min(
-        Math.max(unshiftedLeft, leftBoundary),
-        maxLeft,
-      );
-      const nextShift = targetLeft - unshiftedLeft;
-
-      if (menuWidthLimitRef.current !== nextWidthLimit) {
-        menuWidthLimitRef.current = nextWidthLimit;
-        setMenuWidthLimit(nextWidthLimit);
-      }
-      if (menuShiftRef.current !== nextShift) {
-        menuShiftRef.current = nextShift;
-        setMenuShift(nextShift);
-      }
-    };
-    clamp();
-    window.addEventListener("resize", clamp);
-    return () => window.removeEventListener("resize", clamp);
-  }, [open]);
+  const menuStyle = useComposerPopoverClamp(open, menuRef);
 
   const threadOptionsTooltip = props.mcpConnectionCount
     ? `Thread options — ${props.mcpConnectionCount} PwrAgent ${
@@ -1787,21 +1725,7 @@ function ComposerThreadOptionsMenu(props: {
           id={menuId}
           ref={menuRef}
           role="menu"
-          style={
-            menuShift || menuWidthLimit !== undefined
-              ? {
-                  ...(menuShift
-                    ? { transform: `translateX(${menuShift}px)` }
-                    : {}),
-                  ...(menuWidthLimit !== undefined
-                    ? {
-                        maxWidth: `${menuWidthLimit}px`,
-                        minWidth: `${menuWidthLimit}px`,
-                      }
-                    : {}),
-                }
-              : undefined
-          }
+          style={menuStyle}
         >
           <div
             className="composer-thread-options__item"
@@ -1990,15 +1914,10 @@ function BranchPicker(props: {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
-  const [menuShift, setMenuShift] = useState(0);
-  const [menuWidthLimit, setMenuWidthLimit] = useState<number>();
   const listboxId = useId();
   const selectedLabelId = useId();
   const inputRef = useRef<HTMLInputElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
-  const menuShiftRef = useRef(0);
-  const menuWidthLimitRef = useRef<number | undefined>(undefined);
-  const naturalMenuWidthRef = useRef(0);
   const ref = useDismissableMenu<HTMLDivElement>(open, () => setOpen(false));
 
   const normalizedQuery = query.trim().toLowerCase();
@@ -2052,65 +1971,7 @@ function BranchPicker(props: {
   // it cannot extend beneath the thread sidebar; dialog uses fall back to the
   // viewport gutters. Runs before paint so there's no visible jump, and
   // re-clamps on resize while open.
-  useLayoutEffect(() => {
-    if (!open) {
-      menuShiftRef.current = 0;
-      menuWidthLimitRef.current = undefined;
-      naturalMenuWidthRef.current = 0;
-      setMenuShift(0);
-      setMenuWidthLimit(undefined);
-      return;
-    }
-    const clamp = (): void => {
-      const menu = menuRef.current;
-      if (!menu) {
-        return;
-      }
-      const gutter = 12;
-      const rect = menu.getBoundingClientRect();
-      const composerSetup = menu.closest<HTMLElement>(".composer__setup");
-      const composerBounds = composerSetup?.getBoundingClientRect();
-      const leftBoundary = Math.max(gutter, composerBounds?.left ?? gutter);
-      const rightBoundary = Math.max(
-        leftBoundary,
-        Math.min(
-          window.innerWidth - gutter,
-          composerBounds?.right ?? window.innerWidth - gutter,
-        ),
-      );
-      const availableWidth = Math.max(0, rightBoundary - leftBoundary);
-      naturalMenuWidthRef.current = Math.max(
-        naturalMenuWidthRef.current,
-        rect.width,
-      );
-      const targetWidth = Math.min(
-        naturalMenuWidthRef.current,
-        availableWidth,
-      );
-      const nextWidthLimit =
-        targetWidth < naturalMenuWidthRef.current ? targetWidth : undefined;
-      const unshiftedRight = rect.right - menuShiftRef.current;
-      const unshiftedLeft = unshiftedRight - targetWidth;
-      const maxLeft = rightBoundary - targetWidth;
-      const targetLeft = Math.min(
-        Math.max(unshiftedLeft, leftBoundary),
-        maxLeft,
-      );
-      const nextShift = targetLeft - unshiftedLeft;
-
-      if (menuWidthLimitRef.current !== nextWidthLimit) {
-        menuWidthLimitRef.current = nextWidthLimit;
-        setMenuWidthLimit(nextWidthLimit);
-      }
-      if (menuShiftRef.current !== nextShift) {
-        menuShiftRef.current = nextShift;
-        setMenuShift(nextShift);
-      }
-    };
-    clamp();
-    window.addEventListener("resize", clamp);
-    return () => window.removeEventListener("resize", clamp);
-  }, [open]);
+  const menuStyle = useComposerPopoverClamp(open, menuRef);
 
   const nowMs = Date.now();
   const selectedOption =
@@ -2255,21 +2116,7 @@ function BranchPicker(props: {
         <div
           className="branch-picker__menu"
           ref={menuRef}
-          style={
-            menuShift || menuWidthLimit !== undefined
-              ? {
-                  ...(menuShift
-                    ? { transform: `translateX(${menuShift}px)` }
-                    : {}),
-                  ...(menuWidthLimit !== undefined
-                    ? {
-                        maxWidth: `${menuWidthLimit}px`,
-                        minWidth: `${menuWidthLimit}px`,
-                      }
-                    : {}),
-                }
-              : undefined
-          }
+          style={menuStyle}
         >
           <div className="branch-picker__search">
             <span aria-hidden="true" className="branch-picker__search-icon">
