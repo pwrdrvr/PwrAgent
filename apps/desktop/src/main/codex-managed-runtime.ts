@@ -173,7 +173,7 @@ type ManagedCodexSigstoreVerification = {
 };
 
 type BundleValidationOptions = {
-  reuseVersionValidation?: boolean;
+  validation: "install" | "reuse";
   applicationCommand: string;
   platform: NodeJS.Platform;
   probeVersion?: ManagedCodexRuntimeOptions["probeVersion"];
@@ -1265,7 +1265,7 @@ async function validateExtractedBundle(
   managedCodexLog.info("managed Codex bundle files checked", {
     durationMs: Math.round(performance.now() - startedAt),
   });
-  if (options.platform === "darwin") {
+  if (options.validation === "install" && options.platform === "darwin") {
     const entitlementsStartedAt = performance.now();
     await (
       options.verifyMacosCodeModeHostEntitlements
@@ -1276,7 +1276,8 @@ async function validateExtractedBundle(
     });
   }
   if (
-    options.requirePlatformSignature
+    options.validation === "install"
+    && options.requirePlatformSignature
     && (options.platform === "darwin" || options.platform === "win32")
   ) {
     const verify = options.verifyPlatformSignature
@@ -1293,8 +1294,11 @@ async function validateExtractedBundle(
 
   const expectedVersion = versionForTag(options.tag);
   const banners = expectedCodexVersionBanners(options.platform, expectedVersion);
-  // Persist only version-probe results. File containment, entitlements and
-  // required platform signatures are still checked on every cache read.
+  // Every download verifies Sigstore provenance and archive hashes before
+  // extraction, including development installs. Installation also checks
+  // entitlements and, when required, the platform signer before publishing
+  // managed-release.json. Reuse trusts that receipt-time verification and checks
+  // file containment and the version fingerprint without platform tools.
   const validationPath = path.join(directory, ".pwragent-version-validation.json");
   const fingerprint = JSON.stringify({
     schemaVersion: 1,
@@ -1306,7 +1310,7 @@ async function validateExtractedBundle(
         entry.mtimeNs, entry.ctimeNs, entry.mode].map(String);
     })),
   });
-  const cachedFingerprint = options.reuseVersionValidation
+  const cachedFingerprint = options.validation === "reuse"
     ? await readFile(validationPath, "utf8").catch(() => undefined)
     : undefined;
   const reusedVersions = cachedFingerprint === fingerprint;
@@ -1389,6 +1393,7 @@ function bundleValidationOptions(
   options: ManagedCodexRuntimeOptions,
 ): Omit<BundleValidationOptions, "tag"> {
   return {
+    validation: "install",
     applicationCommand: options.applicationCommand ?? process.execPath,
     platform: options.platform ?? process.platform,
     ...(options.probeVersion ? { probeVersion: options.probeVersion } : {}),
@@ -1466,8 +1471,8 @@ async function readCachedRuntime(
     }
     const versionRoot = path.join(rootDir, "versions", metadata.tag);
     await validateExtractedBundle(versionRoot, {
-      reuseVersionValidation: true,
       ...bundleValidationOptions(options),
+      validation: "reuse",
       tag: metadata.tag,
     });
     return runtimeAtRoot(
@@ -1513,8 +1518,8 @@ export async function retainManagedCodexCommand(
   const rootDir = options.rootDir ?? managedCodexRoot();
   const versionRoot = path.dirname(command);
   if (path.dirname(versionRoot) !== path.join(rootDir, "versions")) return;
-  // Last-known-good is a selection hint, not proof the installed bundle is
-  // still valid. Reuse the same cache validation as managed runtime discovery.
+  // Check the installed bundle's metadata and required files before retaining
+  // it. Signature and entitlement verification belong to installation.
   const runtime = await readCachedRuntime(rootDir, options);
   if (!runtime || runtime.command !== command) {
     throw new Error("Cached managed Codex selection is no longer valid");
