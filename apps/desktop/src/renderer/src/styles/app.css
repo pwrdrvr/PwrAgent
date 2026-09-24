@@ -35948,6 +35948,29 @@ button.pricing-token-miser__folded:focus-visible {
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 50%, transparent),
     0 8px 28px color-mix(in srgb, var(--accent) 25%, transparent);
 }
+/* The card's name is the button that traces and pins it, so it draws as the
+   name did. It is not a card-sized overlay: axe reads an element painted over
+   text as hiding it from the contrast check, and counts a focusable box around
+   the role chips as their neighbour for target spacing. The ring takes the 1px
+   offset of a tight cluster: the sub-line's box starts 2px below the name, and
+   its glyphs clear the ring's 3px reach. `scroll-margin` is that reach plus
+   1px. */
+.rbac-node__trace {
+  appearance: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: inherit;
+  text-align: inherit;
+  cursor: inherit;
+  scroll-margin: 4px;
+}
+.rbac-node__trace:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
 .rbac-node--add {
   justify-content: center;
   color: var(--accent);
