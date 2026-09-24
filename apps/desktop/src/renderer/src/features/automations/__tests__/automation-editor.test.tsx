@@ -322,6 +322,77 @@ describe("AutomationEditor", () => {
     ).toBeInTheDocument();
   });
 
+  it("picks the coalescing window from presets and keeps a saved window outside them", async () => {
+    const onSubmit = vi.fn(async () => undefined);
+    const automation: AutomationDetail = {
+      backend: "codex",
+      threadId: "thread-1",
+      id: "auto-1",
+      name: "Slack alerts",
+      status: "enabled",
+      triggers: [
+        {
+          id: "t",
+          kind: "inbound_message",
+          conversation: { channel: "slack", conversationId: "C0IN" },
+          textFilter: { mode: "contains", text: "ERROR" },
+        },
+      ],
+      scheduleSummary: "On inbound message",
+      backlogPolicy: "coalesce",
+      inboundCoalesceWindowMs: 45_000,
+      updatedAt: 1,
+      createdAt: 1,
+      taskPrompt: "Investigate.",
+      outputActions: [{ id: "agent-context", kind: "agent_context" }],
+    };
+
+    render(
+      <AutomationEditor
+        desktopApi={fakeDesktopApi(fakeSettings({ enabled: { slack: true } }))}
+        mode={{ kind: "edit", automation }}
+        onCancel={() => undefined}
+        onSubmit={onSubmit}
+      />,
+    );
+
+    // 45 seconds is not a preset. It is offered in order among them, so the
+    // field shows what is saved instead of the nearest preset.
+    const windowField = screen.getByLabelText("Coalesce window");
+    expect(windowField).toHaveValue("45");
+    expect(
+      within(windowField)
+        .getAllByRole("option")
+        .map((option) => option.textContent),
+    ).toEqual([
+      "Off",
+      "15 seconds",
+      "30 seconds",
+      "45 seconds",
+      "1 minute",
+      "2 minutes",
+      "5 minutes",
+      "15 minutes",
+    ]);
+
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        request: expect.objectContaining({ inboundCoalesceWindowMs: 45_000 }),
+      }),
+    );
+
+    fireEvent.change(windowField, { target: { value: "0" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(2));
+    expect(onSubmit).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        request: expect.objectContaining({ inboundCoalesceWindowMs: 0 }),
+      }),
+    );
+  });
+
   it("offers a Slack channel picker from authorized channels", async () => {
     const onSubmit = vi.fn(async () => undefined);
 

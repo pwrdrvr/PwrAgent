@@ -26,6 +26,7 @@ import type {
   UpdateAutomationRequest,
 } from "@pwragent/shared";
 import {
+  AUTOMATION_COALESCE_WINDOW_SECONDS_OPTIONS,
   AUTOMATION_RUN_RATE_PER_HOUR_OPTIONS,
   AUTOMATION_WEEKDAYS,
   DEFAULT_AUTOMATION_MAX_RUNS_PER_HOUR,
@@ -360,6 +361,18 @@ export function AutomationEditor(props: AutomationEditorProps) {
       ? String(Math.round(initialAutomation.inboundCoalesceWindowMs / 1000))
       : "60",
   );
+  // A window saved outside the presets (by an Agent tool, or before the
+  // presets existed) stays selectable, in order, rather than showing as a
+  // preset it is not.
+  const coalesceWindowOptions = useMemo(() => {
+    const options: number[] = [...AUTOMATION_COALESCE_WINDOW_SECONDS_OPTIONS];
+    const current = Number(coalesceWindowSeconds);
+    if (Number.isFinite(current) && current >= 0 && !options.includes(current)) {
+      options.push(current);
+      options.sort((left, right) => left - right);
+    }
+    return options.map(String);
+  }, [coalesceWindowSeconds]);
   const [maxRunsPerHour, setMaxRunsPerHour] = useState(
     initialAutomation?.maxRunsPerHour === null
       ? "unlimited"
@@ -2307,22 +2320,26 @@ export function AutomationEditor(props: AutomationEditorProps) {
 
             <AutomationStage verb="Group" title="Coalescing & rate limit">
                   <div className="automation-field-group">
-                    <label className="automation-field automation-field--narrow">
-                      <span>Coalesce window (seconds)</span>
-                      <input
-                        min={0}
-                        type="number"
+                    <label className="automation-field automation-field--compact">
+                      <span>Coalesce window</span>
+                      <select
                         value={coalesceWindowSeconds}
                         onChange={(event) => {
                           setCoalesceWindowSeconds(event.currentTarget.value);
                           setValidationError(undefined);
                         }}
-                      />
+                      >
+                        {coalesceWindowOptions.map((option) => (
+                          <option key={option} value={option}>
+                            {formatCoalesceWindow(Number(option))}
+                          </option>
+                        ))}
+                      </select>
                     </label>
                     <p className="automation-field__hint">
                       The first matching message runs immediately; more messages within
                       this window are batched into a single run. Protects against bursts
-                      and loops. Set to 0 to run once per message.
+                      and loops. Choose Off to run once per message.
                     </p>
                   </div>
 
@@ -3451,6 +3468,15 @@ function buildExecutionProfile(params: {
     ...(mcpAllowlist.length > 0 ? { mcpAllowlist } : {}),
     ...(toolAllowlist.length > 0 ? { toolAllowlist } : {}),
   };
+}
+
+function formatCoalesceWindow(seconds: number): string {
+  if (seconds === 0) return "Off";
+  if (seconds % 60 === 0) {
+    const minutes = seconds / 60;
+    return `${minutes} ${minutes === 1 ? "minute" : "minutes"}`;
+  }
+  return `${seconds} ${seconds === 1 ? "second" : "seconds"}`;
 }
 
 function parseCoalesceWindowMs(value: string): number | undefined {

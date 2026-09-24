@@ -25890,9 +25890,15 @@ a.transcript-message__messaging-origin:focus-visible {
   max-width: 380px;
 }
 
+/* The condition editor's controls sit outside any `.automation-field` label,
+   so they name this chrome directly. Without it they fell back to Chromium's
+   grey native fields at the 16px document size, and the house focus ring
+   drew a second outline around the native one. */
 .automation-field input,
 .automation-field select,
-.automation-field textarea {
+.automation-field textarea,
+.automation-condition__select,
+.automation-condition__input {
   width: 100%;
   min-width: 0;
   border: 1px solid var(--border-subtle);
@@ -25903,7 +25909,9 @@ a.transcript-message__messaging-origin:focus-visible {
 }
 
 .automation-field input,
-.automation-field select {
+.automation-field select,
+.automation-condition__select,
+.automation-condition__input {
   min-height: 32px;
   padding: 0 9px;
 }
@@ -25937,7 +25945,10 @@ a.transcript-message__messaging-origin:focus-visible {
 
 .automation-field input:focus,
 .automation-field select:focus,
-.automation-field textarea:focus {
+.automation-field textarea:focus,
+.automation-condition__select:focus,
+.automation-condition__input:focus,
+.automation-sender-picker__field:has(.automation-sender-picker__input:focus) {
   border-color: var(--accent-border);
   outline: 2px solid var(--focus-ring);
   outline-offset: 1px;
@@ -26813,27 +26824,76 @@ a.transcript-message__messaging-origin:focus-visible {
   font-size: 12px;
 }
 
+/* The list is the width container, so a condition lays out by the room the
+   stage gives it rather than by the window. */
 .automation-conditions__list {
+  container-type: inline-size;
   display: flex;
   flex-direction: column;
-  gap: 8px;
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
-.automation-condition {
+/* Each condition is one card, so a clause whose value wraps (a list of
+   senders) still reads as one clause. The chrome is `.automation-lane`'s. */
+.automation-condition__card {
   display: grid;
-  grid-template-columns: 34px minmax(96px, 132px) minmax(110px, 168px) minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(96px, 132px) minmax(110px, 168px) minmax(0, 1fr) auto auto;
   align-items: start;
   gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-input);
+  font-size: 12px;
+  font-weight: 600;
 }
 
+/* The word that joins two cards sits between them, so "or" reads as part of
+   the sentence and not as a label on the second clause. The left padding is
+   the card's border and padding, which lines it up with the controls. */
 .automation-condition__joiner {
-  padding-top: 8px;
+  display: block;
+  padding: 6px 0 6px 11px;
   color: var(--text-muted);
-  font-size: 11px;
-  text-align: right;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+/* Below this width a one-line clause leaves the value about 130px, which
+   holds one sender chip and cuts the placeholder off. The value takes its
+   own line instead, with the case toggle beside it and Remove on the first
+   line. */
+@container (max-width: 560px) {
+  .automation-condition__card {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  }
+
+  .automation-condition__value {
+    grid-row: 2;
+    grid-column: 1 / -1;
+  }
+
+  .automation-condition__value:has(+ .automation-condition__case) {
+    grid-column: 1 / 3;
+  }
+
+  .automation-condition__case {
+    grid-row: 2;
+    grid-column: 3;
+  }
+
+  .automation-condition__icon-spacer {
+    display: none;
+  }
+
+  .automation-condition__remove {
+    grid-row: 1;
+    grid-column: 3;
+  }
 }
 
 .automation-condition__control {
@@ -26857,17 +26917,13 @@ a.transcript-message__messaging-origin:focus-visible {
   min-width: 0;
 }
 
-.automation-condition__value input,
-.automation-condition__value select {
-  width: 100%;
-}
-
+/* 32px, the height of the fields beside them. */
 .automation-condition__icon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 30px;
-  min-height: 30px;
+  min-width: 32px;
+  min-height: 32px;
   padding: 0 6px;
   border: 1px solid var(--border-subtle);
   border-radius: 6px;
@@ -26889,12 +26945,18 @@ a.transcript-message__messaging-origin:focus-visible {
 }
 
 .automation-condition__icon-spacer {
-  min-width: 30px;
+  min-width: 32px;
 }
 
 .automation-conditions__actions {
   display: flex;
   gap: 8px;
+}
+
+/* The size of the Preview button in the same stage; the button otherwise
+   inherits the 16px document size. */
+.automation-conditions__actions .button {
+  font-size: 12px;
 }
 
 /* Working directory + Browse button on one line; the path takes the slack. */
@@ -26933,13 +26995,50 @@ a.transcript-message__messaging-origin:focus-visible {
   gap: 6px;
 }
 
+/* The picked senders sit inside the field, like addresses on a To: line, so
+   one outline holds the whole value however many are picked. The field wears
+   `.automation-condition__input`'s chrome and takes its focus ring through
+   `:has()`; the input inside is bare. 3px of padding around a 24px chip
+   keeps the field at the 32px of the controls beside it. */
+.automation-sender-picker__field {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  min-height: 32px;
+  padding: 3px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-app);
+  cursor: text;
+}
+
 .automation-sender-picker__chips {
   display: flex;
   flex-wrap: wrap;
-  gap: 5px;
+  gap: 4px;
+  min-width: 0;
   margin: 0;
   padding: 0;
   list-style: none;
+}
+
+/* Wraps under the chips once fewer than 140px are left beside them, so the
+   operator always has room to type. */
+.automation-sender-picker__input {
+  flex: 1 1 140px;
+  min-width: 0;
+  height: 24px;
+  padding: 0 6px;
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  outline: none;
+}
+
+.automation-sender-picker__field:has(.automation-sender-picker__input:disabled) {
+  cursor: default;
 }
 
 /* Composes the app-wide .chip primitive; this class only adds the selected
@@ -26974,6 +27073,17 @@ a.transcript-message__messaging-origin:focus-visible {
 
 .automation-sender-chip__remove:hover {
   color: var(--text-primary);
+}
+
+/* `.chip` clips its overflow, which cut the remove button's own ring. The
+   button is the chip's only stop, so the chip wears the ring instead. */
+.automation-sender-chip__remove:focus-visible {
+  outline: none;
+}
+
+.automation-sender-chip:has(.automation-sender-chip__remove:focus-visible) {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
 }
 
 /* An inbound trigger's source list. The source open in the fields keeps the

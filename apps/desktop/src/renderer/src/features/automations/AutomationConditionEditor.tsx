@@ -8,6 +8,7 @@ import {
   type MessagingChannelKind,
   type MessagingSenderSuggestion,
 } from "@pwragent/shared";
+import { CloseIcon } from "../../icons";
 import { AutomationSenderPicker } from "./AutomationSenderPicker";
 
 /**
@@ -169,149 +170,157 @@ export function AutomationConditionEditor(
       <ul className="automation-conditions__list">
         {group.conditions.map((condition, index) => (
           <li className="automation-condition" key={condition.id}>
-            <span className="automation-condition__joiner" aria-hidden="true">
-              {index === 0 ? "" : group.join === "any" ? "or" : "and"}
-            </span>
-            <label className="automation-condition__control">
-              <span className="automation-condition__label">Field</span>
-              <select
-                value={condition.field}
-                onChange={(event) => {
-                  const field = event.target.value as AutomationInboundConditionField;
-                  // Operators are field-scoped, so switching fields must also
-                  // land on an operator that field actually offers — and the
-                  // old value is meaningless in the new field.
-                  updateCondition(condition.id, {
-                    field,
-                    operator: OPERATORS_BY_FIELD[field][0],
-                    values: field === "message_text" ? [""] : [],
-                  });
-                }}
-              >
-                {(
-                  Object.keys(FIELD_LABELS) as AutomationInboundConditionField[]
-                ).map((field) => (
-                  <option key={field} value={field}>
-                    {FIELD_LABELS[field]}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label className="automation-condition__control">
-              <span className="automation-condition__label">Operator</span>
-              <select
-                value={condition.operator}
-                onChange={(event) =>
-                  updateCondition(condition.id, {
-                    operator: event.target
-                      .value as AutomationInboundConditionOperator,
-                  })
-                }
-              >
-                {OPERATORS_BY_FIELD[condition.field].map((operator) => (
-                  <option key={operator} value={operator}>
-                    {OPERATOR_LABELS[operator]}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <div className="automation-condition__value">
-              {condition.field === "message_text" ? (
-                <label>
-                  <span className="automation-condition__label">Value</span>
-                  <input
-                    type="text"
-                    value={condition.values[0] ?? ""}
-                    placeholder={
-                      condition.operator === "matches_regex"
-                      || condition.operator === "not_matches_regex"
-                        ? "p99 .*above SLO"
-                        : "ERROR"
-                    }
-                    onChange={(event) =>
-                      updateCondition(condition.id, { values: [event.target.value] })
-                    }
-                  />
-                </label>
-              ) : condition.field === "sender_type" ? (
-                <label>
-                  <span className="automation-condition__label">Sender type</span>
-                  <select
-                    value={condition.values[0] ?? "human"}
-                    onChange={(event) =>
-                      updateCondition(condition.id, { values: [event.target.value] })
-                    }
-                  >
-                    {SENDER_TYPE_VALUES.map((entry) => (
-                      <option key={entry.value} value={entry.value}>
-                        {entry.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              ) : (
-                <AutomationSenderPicker
-                  selected={condition.values}
-                  labels={props.senderLabels}
-                  observedSenders={props.observedSenders}
-                  provider={props.provider}
-                  conversationId={props.conversationId}
-                  searchSenders={props.searchSenders}
-                  onChange={(values, labels) => {
-                    updateCondition(condition.id, { values });
-                    // Prune labels no sender condition references any more, so
-                    // removing a chip does not leave its display name behind
-                    // to accumulate for the life of the editor.
-                    const referenced = new Set(
-                      group.conditions.flatMap((entry) =>
-                        entry.field === "sender"
-                          ? entry.id === condition.id
-                            ? values
-                            : entry.values
-                          : [],
-                      ),
-                    );
-                    const merged = { ...props.senderLabels, ...labels };
-                    props.onSenderLabelsChange(
-                      Object.fromEntries(
-                        Object.entries(merged).filter(([id]) => referenced.has(id)),
-                      ),
-                    );
+            {index === 0 ? null : (
+              <span className="automation-condition__joiner" aria-hidden="true">
+                {group.join === "any" ? "or" : "and"}
+              </span>
+            )}
+            <div className="automation-condition__card">
+              <label className="automation-condition__control">
+                <span className="automation-condition__label">Field</span>
+                <select
+                  className="automation-condition__select"
+                  value={condition.field}
+                  onChange={(event) => {
+                    const field = event.target.value as AutomationInboundConditionField;
+                    // Operators are field-scoped, so switching fields must also
+                    // land on an operator that field actually offers — and the
+                    // old value is meaningless in the new field.
+                    updateCondition(condition.id, {
+                      field,
+                      operator: OPERATORS_BY_FIELD[field][0],
+                      values: field === "message_text" ? [""] : [],
+                    });
                   }}
-                />
-              )}
-            </div>
+                >
+                  {(
+                    Object.keys(FIELD_LABELS) as AutomationInboundConditionField[]
+                  ).map((field) => (
+                    <option key={field} value={field}>
+                      {FIELD_LABELS[field]}
+                    </option>
+                  ))}
+                </select>
+              </label>
 
-            {condition.field === "message_text" ? (
+              <label className="automation-condition__control">
+                <span className="automation-condition__label">Operator</span>
+                <select
+                  className="automation-condition__select"
+                  value={condition.operator}
+                  onChange={(event) =>
+                    updateCondition(condition.id, {
+                      operator: event.target
+                        .value as AutomationInboundConditionOperator,
+                    })
+                  }
+                >
+                  {OPERATORS_BY_FIELD[condition.field].map((operator) => (
+                    <option key={operator} value={operator}>
+                      {OPERATOR_LABELS[operator]}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <div className="automation-condition__value">
+                {condition.field === "message_text" ? (
+                  <label>
+                    <span className="automation-condition__label">Value</span>
+                    <input
+                      className="automation-condition__input"
+                      type="text"
+                      value={condition.values[0] ?? ""}
+                      placeholder={
+                        condition.operator === "matches_regex"
+                        || condition.operator === "not_matches_regex"
+                          ? "p99 .*above SLO"
+                          : "ERROR"
+                      }
+                      onChange={(event) =>
+                        updateCondition(condition.id, { values: [event.target.value] })
+                      }
+                    />
+                  </label>
+                ) : condition.field === "sender_type" ? (
+                  <label>
+                    <span className="automation-condition__label">Sender type</span>
+                    <select
+                      className="automation-condition__select"
+                      value={condition.values[0] ?? "human"}
+                      onChange={(event) =>
+                        updateCondition(condition.id, { values: [event.target.value] })
+                      }
+                    >
+                      {SENDER_TYPE_VALUES.map((entry) => (
+                        <option key={entry.value} value={entry.value}>
+                          {entry.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                ) : (
+                  <AutomationSenderPicker
+                    selected={condition.values}
+                    labels={props.senderLabels}
+                    observedSenders={props.observedSenders}
+                    provider={props.provider}
+                    conversationId={props.conversationId}
+                    searchSenders={props.searchSenders}
+                    onChange={(values, labels) => {
+                      updateCondition(condition.id, { values });
+                      // Prune labels no sender condition references any more, so
+                      // removing a chip does not leave its display name behind
+                      // to accumulate for the life of the editor.
+                      const referenced = new Set(
+                        group.conditions.flatMap((entry) =>
+                          entry.field === "sender"
+                            ? entry.id === condition.id
+                              ? values
+                              : entry.values
+                            : [],
+                        ),
+                      );
+                      const merged = { ...props.senderLabels, ...labels };
+                      props.onSenderLabelsChange(
+                        Object.fromEntries(
+                          Object.entries(merged).filter(([id]) => referenced.has(id)),
+                        ),
+                      );
+                    }}
+                  />
+                )}
+              </div>
+
+              {condition.field === "message_text" ? (
+                <button
+                  type="button"
+                  className="automation-condition__icon automation-condition__case"
+                  aria-pressed={condition.caseSensitive === true}
+                  title="Case sensitive"
+                  aria-label={`Case sensitive matching for condition ${index + 1}`}
+                  onClick={() =>
+                    updateCondition(condition.id, {
+                      caseSensitive: !condition.caseSensitive,
+                    })
+                  }
+                >
+                  Aa
+                </button>
+              ) : (
+                <span className="automation-condition__icon-spacer" aria-hidden="true" />
+              )}
+
               <button
                 type="button"
-                className="automation-condition__icon"
-                aria-pressed={condition.caseSensitive === true}
-                title="Case sensitive"
-                aria-label={`Case sensitive matching for condition ${index + 1}`}
-                onClick={() =>
-                  updateCondition(condition.id, {
-                    caseSensitive: !condition.caseSensitive,
-                  })
-                }
+                className="automation-condition__icon automation-condition__remove"
+                aria-label={`Remove condition ${index + 1}`}
+                title="Remove condition"
+                onClick={() => removeCondition(condition.id)}
               >
-                Aa
+                <CloseIcon size={14} aria-hidden="true" />
               </button>
-            ) : (
-              <span className="automation-condition__icon-spacer" aria-hidden="true" />
-            )}
-
-            <button
-              type="button"
-              className="automation-condition__icon"
-              aria-label={`Remove condition ${index + 1}`}
-              title="Remove condition"
-              onClick={() => removeCondition(condition.id)}
-            >
-              ✕
-            </button>
+            </div>
           </li>
         ))}
       </ul>

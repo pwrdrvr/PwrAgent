@@ -51,6 +51,7 @@ export function AutomationSenderPicker(
     directoryTruncated?: boolean;
   }>({ suggestions: [], directorySupported: false });
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
   // Several sender conditions render several pickers; a hardcoded id would
   // duplicate in the DOM and leave aria-controls pointing at an ambiguous
   // target (which the axe WCAG gate flags as duplicate-id-aria).
@@ -147,51 +148,68 @@ export function AutomationSenderPicker(
 
   return (
     <div className="automation-sender-picker" ref={containerRef}>
-      {props.selected.length > 0 ? (
-        <ul className="automation-sender-picker__chips">
-          {props.selected.map((platformUserId) => (
-            <li className="chip automation-sender-chip" key={platformUserId}>
-              <span className="automation-sender-chip__avatar" aria-hidden="true">
-                {initials(props.labels[platformUserId] ?? platformUserId)}
-              </span>
-              <span className="automation-sender-chip__label">
-                {props.labels[platformUserId] ?? platformUserId}
-              </span>
-              <button
-                type="button"
-                className="automation-sender-chip__remove"
-                aria-label={`Remove ${props.labels[platformUserId] ?? platformUserId}`}
-                onClick={() => remove(platformUserId)}
-              >
-                ×
-              </button>
-            </li>
-          ))}
-        </ul>
-      ) : undefined}
+      {/* The chips sit inside the field, so a press on the field's own
+          padding puts the caret in the input, as it would in a text box. */}
+      <div
+        className="automation-sender-picker__field"
+        onMouseDown={(event) => {
+          if (event.target !== event.currentTarget) return;
+          event.preventDefault();
+          inputRef.current?.focus();
+        }}
+      >
+        {props.selected.length > 0 ? (
+          <ul className="automation-sender-picker__chips">
+            {props.selected.map((platformUserId) => (
+              <li className="chip automation-sender-chip" key={platformUserId}>
+                <span className="automation-sender-chip__avatar" aria-hidden="true">
+                  {initials(props.labels[platformUserId] ?? platformUserId)}
+                </span>
+                <span className="automation-sender-chip__label">
+                  {props.labels[platformUserId] ?? platformUserId}
+                </span>
+                <button
+                  type="button"
+                  className="automation-sender-chip__remove"
+                  aria-label={`Remove ${props.labels[platformUserId] ?? platformUserId}`}
+                  onClick={() => remove(platformUserId)}
+                >
+                  ×
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : undefined}
 
-      <input
-        type="text"
-        value={query}
-        placeholder={
-          props.conversationId
-            ? "Add a sender — search people, bots, or apps…"
-            : "Choose a conversation first"
-        }
-        disabled={!props.conversationId}
-        autoComplete="off"
-        role="combobox"
-        aria-expanded={open}
-        aria-controls={listId}
-        onFocus={() => setOpen(true)}
-        onChange={(event) => {
-          setQuery(event.target.value);
-          setOpen(true);
-        }}
-        onKeyDown={(event) => {
-          if (event.key === "Escape") setOpen(false);
-        }}
-      />
+        <input
+          ref={inputRef}
+          className="automation-sender-picker__input"
+          type="text"
+          value={query}
+          placeholder={
+            !props.conversationId
+              ? "Choose a conversation first"
+              // Beside chips the input can be ~130px wide; the long hint
+              // has already been read by then.
+              : props.selected.length > 0
+                ? "Add another…"
+                : "Add a sender — search people, bots, or apps…"
+          }
+          disabled={!props.conversationId}
+          autoComplete="off"
+          role="combobox"
+          aria-expanded={open}
+          aria-controls={listId}
+          onFocus={() => setOpen(true)}
+          onChange={(event) => {
+            setQuery(event.target.value);
+            setOpen(true);
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") setOpen(false);
+          }}
+        />
+      </div>
 
       {open ? (
         <div className="automation-sender-picker__menu" id={listId}>
