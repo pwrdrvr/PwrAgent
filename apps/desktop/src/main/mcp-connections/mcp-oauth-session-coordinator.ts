@@ -82,8 +82,11 @@ export class McpOAuthSessionCoordinator {
   private liveAuthorizationAttempt = 0;
   private stateBeforeAuthorization?: McpConnectionRuntimeState;
   private detailBeforeAuthorization?: string;
+  private connectingStateVersion = 0;
+  private credentialGenerationBeforeAuthorization = 0;
   private runtimeState: McpConnectionRuntimeState = "disconnected";
   private runtimeDetail?: string;
+  private stateVersion = 0;
 
   constructor(options: McpOAuthSessionCoordinatorOptions) {
     this.connectionId = options.connectionId;
@@ -115,30 +118,29 @@ export class McpOAuthSessionCoordinator {
    * Abandon the in-flight authorization without holding its failure against
    * the connection.
    *
-   * `authorize` reports a failed attempt as `reauthorization_required`, which
-   * is right for a flow that broke and wrong for one the operator called off:
-   * a `ready` connection whose credentials were never touched would start
-   * claiming "Login required". Bumping the attempt counter is the mechanism
-   * that already exists for "this attempt no longer owns our state" -- it
-   * makes the in-flight `isCurrent()` false, so its catch reports the failure
-   * to its own caller and leaves the state alone -- and the state the attempt
-   * overwrote with `connecting` is put back.
+   * Bumping the attempt counter makes the in-flight `isCurrent()` false, so
+   * its catch reports the failure to its caller without changing the state.
+   * Restore the state overwritten by `connecting` only if no other operation
+   * changed it. A token committed during this attempt makes it ready instead.
    *
    * The caller still has to end the flow it is waiting on; this only decides
    * what the abandoned one is allowed to say on its way out.
    */
   abandonAuthorization(): void {
-    // Nothing in flight means there is no attempt to retire and, more to the
-    // point, no state of its to put back: the snapshot still holds whatever
-    // preceded the *last* authorization, so acting here would knock a `ready`
-    // connection back to whatever it was before it was authorized.
+    // The snapshot still holds whatever preceded the last authorization, so
+    // acting with no attempt in flight could roll a ready connection back.
     if (this.liveAuthorizationAttempt === 0) return;
     this.authorizationAttempt += 1;
     this.liveAuthorizationAttempt = 0;
-    this.setState(
-      this.stateBeforeAuthorization ?? "disconnected",
-      this.detailBeforeAuthorization,
-    );
+    if (this.stateVersion !== this.connectingStateVersion) return;
+    if (this.generation !== this.credentialGenerationBeforeAuthorization) {
+      this.setState("ready");
+    } else {
+      this.setState(
+        this.stateBeforeAuthorization ?? "disconnected",
+        this.detailBeforeAuthorization,
+      );
+    }
   }
 
   async authorize(params: {
@@ -162,6 +164,8 @@ export class McpOAuthSessionCoordinator {
       }
     };
     this.setState("connecting");
+    this.connectingStateVersion = this.stateVersion;
+    this.credentialGenerationBeforeAuthorization = this.generation;
     const previous = this.credential;
     const redirectChanged =
       previous?.redirectUrl !== undefined
@@ -230,10 +234,13 @@ export class McpOAuthSessionCoordinator {
       const detail = errorMessage(error);
       // An abandoned browser flow can time out after a newer one succeeded.
       // Its caller still needs the failure, but it no longer owns our state.
-      if (isCurrent()) {
-        // A timed-out or failed browser attempt did not replace the old token.
-        // Keep the connection's prior state when that credential is still here.
-        if (previous?.tokens?.access_token && this.credential === previous) {
+      if (isCurrent() && this.stateVersion === this.connectingStateVersion) {
+        // A refresh or rejected request may have changed the state while the
+        // browser was open. Only this attempt's untouched connecting state
+        // can be replaced by its prior state or a newly committed credential.
+        if (this.generation !== this.credentialGenerationBeforeAuthorization) {
+          this.setState("ready");
+        } else if (previous?.tokens?.access_token && this.credential === previous) {
           this.setState(
             this.stateBeforeAuthorization ?? "ready",
             this.detailBeforeAuthorization,
@@ -509,6 +516,7 @@ export class McpOAuthSessionCoordinator {
     state: McpConnectionRuntimeState,
     detail?: string,
   ): void {
+    this.stateVersion += 1;
     this.runtimeState = state;
     this.runtimeDetail = detail;
     this.onStateChange?.(state, detail);
