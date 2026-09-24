@@ -82,6 +82,15 @@ export function pressEscape(): KeyboardEvent {
 }
 
 /**
+ * Any other key, dispatched on the focused element. Unlike `pressTab`, it
+ * moves nothing itself: for an arrow or Home in a menu, the handler under
+ * test is the only thing that can move focus.
+ */
+export function pressKey(key: string): KeyboardEvent {
+  return keydown(key, false);
+}
+
+/**
  * Presses Tab `count` times and returns every element focus visited, in
  * order. 60 is the walk the headless-Chromium check uses.
  */

@@ -5,7 +5,7 @@ import { createPortal } from "react-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useMenuNavigation } from "../useMenuNavigation";
 import { useModalDialog } from "../useModalDialog";
-import { pressEscape, pressTab } from "../../test/tab-walk";
+import { pressEscape, pressKey, pressTab } from "../../test/tab-walk";
 
 afterEach(() => {
   cleanup();
@@ -17,18 +17,6 @@ const focusedLabel = (): string | undefined =>
 
 const button = (label: string): HTMLButtonElement =>
   screen.getByRole("button", { name: label });
-
-function press(key: string): KeyboardEvent {
-  const event = new KeyboardEvent("keydown", {
-    key,
-    bubbles: true,
-    cancelable: true,
-  });
-  act(() => {
-    (document.activeElement ?? document.body).dispatchEvent(event);
-  });
-  return event;
-}
 
 type Item = { label: string; disabled?: boolean; closes?: boolean };
 
@@ -155,29 +143,29 @@ describe("useMenuNavigation, arrows", () => {
     openMenu();
     const visited: Array<string | undefined> = [];
     for (let i = 0; i < 4; i++) {
-      press("ArrowDown");
+      pressKey("ArrowDown");
       visited.push(focusedLabel());
     }
     expect(visited).toEqual(["Rename", "Archive", "Pin", "Rename"]);
-    press("ArrowUp");
+    pressKey("ArrowUp");
     expect(focusedLabel()).toBe("Pin");
-    press("ArrowUp");
+    pressKey("ArrowUp");
     expect(focusedLabel()).toBe("Archive");
   });
 
   it("jumps to either end with Home and End", () => {
     render(<MenuButton items={ITEMS} />);
     openMenu();
-    press("End");
+    pressKey("End");
     expect(focusedLabel()).toBe("Archive");
-    press("Home");
+    pressKey("Home");
     expect(focusedLabel()).toBe("Pin");
   });
 
   it("claims the arrows it spends and leaves modified ones alone", () => {
     render(<MenuButton items={ITEMS} />);
     openMenu();
-    expect(press("ArrowDown").defaultPrevented).toBe(true);
+    expect(pressKey("ArrowDown").defaultPrevented).toBe(true);
     const chord = new KeyboardEvent("keydown", {
       key: "ArrowDown",
       metaKey: true,
@@ -196,7 +184,7 @@ describe("useMenuNavigation, arrows", () => {
     render(<MenuButton items={ITEMS} />);
     openMenu();
     button("Before trigger").focus();
-    expect(press("ArrowDown").defaultPrevented).toBe(false);
+    expect(pressKey("ArrowDown").defaultPrevented).toBe(false);
     expect(focusedLabel()).toBe("Before trigger");
   });
 });
@@ -220,7 +208,7 @@ describe("useMenuNavigation, closing", () => {
   it("closes on Tab and moves on from the trigger", () => {
     render(<MenuButton items={ITEMS} />);
     openMenu();
-    press("ArrowDown");
+    pressKey("ArrowDown");
     pressTab();
     expect(screen.queryByRole("menu")).toBeNull();
     expect(focusedLabel()).toBe("After trigger");
@@ -238,7 +226,7 @@ describe("useMenuNavigation, closing", () => {
     const onSelect = vi.fn();
     render(<MenuButton items={ITEMS} onSelect={onSelect} />);
     openMenu();
-    press("ArrowDown");
+    pressKey("ArrowDown");
     act(() => (document.activeElement as HTMLElement).click());
     expect(onSelect).toHaveBeenCalledWith("Rename");
     expect(screen.queryByRole("menu")).toBeNull();

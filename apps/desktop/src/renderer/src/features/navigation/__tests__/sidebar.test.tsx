@@ -26,6 +26,7 @@ import { FixtureSidebar as Sidebar } from "../../../test/navigation-presentation
 import {
   documentTabStops,
   pressEscape,
+  pressKey,
   pressTab,
   tabEscapes,
 } from "../../../test/tab-walk";
@@ -55,18 +56,6 @@ async function clickElement(element: HTMLElement): Promise<void> {
 }
 
 /** A key pressed on whatever holds focus, as the keyboard sends it. */
-function pressMenuKey(key: string): KeyboardEvent {
-  const event = new KeyboardEvent("keydown", {
-    key,
-    bubbles: true,
-    cancelable: true,
-  });
-  act(() => {
-    (document.activeElement ?? document.body).dispatchEvent(event);
-  });
-  return event;
-}
-
 function withMockScrollIntoView(): {
   scrollIntoView: ReturnType<typeof vi.fn>;
   restore: () => void;
@@ -6964,9 +6953,9 @@ describe("Sidebar directory pinning", () => {
     const items = within(menu).getAllByRole("menuitem");
     expect(items).toHaveLength(2);
     expect(items[0]).toHaveFocus();
-    pressMenuKey("ArrowDown");
+    pressKey("ArrowDown");
     expect(items[1]).toHaveFocus();
-    pressMenuKey("ArrowDown");
+    pressKey("ArrowDown");
     expect(items[0]).toHaveFocus();
 
     expect(pressEscape().defaultPrevented).toBe(true);
@@ -6988,9 +6977,9 @@ describe("Sidebar directory pinning", () => {
     const pin = screen.getByRole("menuitem", { name: "Pin Directory" });
     const remove = screen.getByRole("menuitem", { name: "Remove Directory" });
     expect(pin).toHaveFocus();
-    pressMenuKey("End");
+    pressKey("End");
     expect(remove).toHaveFocus();
-    pressMenuKey("Home");
+    pressKey("Home");
     expect(pin).toHaveFocus();
 
     pressEscape();
@@ -7761,15 +7750,15 @@ describe("Sidebar menus from the keyboard", () => {
     const items = enabledItems(screen.getByRole("menu"));
     expect(items.length).toBeGreaterThan(2);
 
-    pressMenuKey("ArrowDown");
+    pressKey("ArrowDown");
     expect(items[1]).toHaveFocus();
-    pressMenuKey("End");
+    pressKey("End");
     expect(items[items.length - 1]).toHaveFocus();
-    pressMenuKey("ArrowDown");
+    pressKey("ArrowDown");
     expect(items[0]).toHaveFocus();
-    pressMenuKey("ArrowUp");
+    pressKey("ArrowUp");
     expect(items[items.length - 1]).toHaveFocus();
-    pressMenuKey("Home");
+    pressKey("Home");
     expect(items[0]).toHaveFocus();
   });
 
@@ -7777,7 +7766,7 @@ describe("Sidebar menus from the keyboard", () => {
     const windowListener = vi.fn();
     renderThreadSidebar();
     const actions = openThreadActions();
-    pressMenuKey("ArrowDown");
+    pressKey("ArrowDown");
 
     window.addEventListener("keydown", windowListener);
     const event = pressEscape();
@@ -7826,7 +7815,7 @@ describe("Sidebar menus from the keyboard", () => {
     const pin = screen.getByRole("menuitem", { name: "Pin Thread" });
     // Bounded: a menu that ignores the arrows must fail here, not hang.
     for (let i = 0; i < 20 && document.activeElement !== pin; i++) {
-      pressMenuKey("ArrowDown");
+      pressKey("ArrowDown");
     }
     expect(pin).toHaveFocus();
 
@@ -7916,7 +7905,7 @@ describe("Sidebar menus from the keyboard", () => {
     expect(trigger).toHaveAttribute("aria-expanded", "true");
     // The current profile is disabled, so the walk starts after it.
     expect(screen.getByRole("menuitem", { name: /^personal/ })).toHaveFocus();
-    pressMenuKey("ArrowDown");
+    pressKey("ArrowDown");
     expect(screen.getByRole("menuitem", { name: /^studio/ })).toHaveFocus();
 
     pressEscape();
@@ -7940,5 +7929,90 @@ describe("Sidebar menus from the keyboard", () => {
     const stops = documentTabStops();
     const at = stops.indexOf(trigger);
     expect(document.activeElement).toBe(stops[(at + 1) % stops.length]);
+  });
+
+  it("keeps one menu open at a time", () => {
+    render(
+      <Sidebar
+        backends={backends}
+        activeProfile="work"
+        profiles={[profile("work", true), profile("personal", false)]}
+        browseMode="recents"
+        directories={directories}
+        inboxThreads={[sharedThread]}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-1"
+        threads={[sharedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onOpenProfile={async () => undefined}
+        onSelectThread={() => undefined}
+      />,
+    );
+    const trigger = screen.getByRole("button", {
+      name: "Open PwrAgent profile menu",
+    });
+    // Both triggers stop their click, so neither reaches the other menu's
+    // outside-click listener.
+    trigger.focus();
+    act(() => trigger.click());
+    const actions = openThreadActions();
+    expect(screen.getAllByRole("menu")).toHaveLength(1);
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    expect(actions).toHaveAttribute("aria-expanded", "true");
+
+    trigger.focus();
+    act(() => trigger.click());
+    expect(screen.getAllByRole("menu")).toHaveLength(1);
+    expect(actions).toHaveAttribute("aria-expanded", "false");
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("returns focus to the PR chip after the detach dialog closes", () => {
+    try {
+      window.localStorage.removeItem("pwragent.detachPrWarning.dismissed");
+    } catch {
+      // The warning shows when storage is unavailable too.
+    }
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        directories={directories}
+        inboxThreads={[pullRequestThread]}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-1"
+        threads={[pullRequestThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onDetachPullRequest={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />,
+    );
+    const chip = screen.getByRole("button", {
+      name: "Open ExampleOrg/ExampleApp#202 (ready for review · checks passing) in browser",
+    });
+    chip.focus();
+    fireEvent.contextMenu(chip, { clientX: 48, clientY: 64 });
+    const detach = screen.getByRole("menuitem", { name: "Detach Pull Request" });
+    for (let i = 0; i < 20 && document.activeElement !== detach; i++) {
+      pressKey("ArrowDown");
+    }
+    expect(detach).toHaveFocus();
+
+    // The dialog's opener is this item, which the menu removes as it closes.
+    // The PR chip's menu leaves ⋮ collapsed, so nothing marks the chip as the
+    // trigger either.
+    act(() => detach.click());
+    expect(
+      screen.getByRole("dialog", { name: "Detach pull request?" }),
+    ).toBeInTheDocument();
+    pressEscape();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(chip).toHaveFocus();
   });
 });

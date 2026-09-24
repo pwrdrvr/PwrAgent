@@ -1203,8 +1203,11 @@ export function Sidebar(props: SidebarProps) {
     // trigger the document-level `click` listener that normally
     // dismisses menus, so without this explicit clear a user could
     // right-click a directory and then right-click a thread and
-    // see both menus stacked on top of each other.
+    // see both menus stacked on top of each other. The ⋮ button stops its
+    // click, so the profile and directory target menus need the same.
     setDirectoryContextMenu(undefined);
+    setDirectoryTargetMenu(undefined);
+    setProfileMenuOpen(false);
     setContextMenu({
       requestedPosition: position,
       thread,
@@ -1220,6 +1223,8 @@ export function Sidebar(props: SidebarProps) {
     rememberMenuOpener(contextMenuOpenerRef, contextMenuRef);
     setRenameThread(undefined);
     setDirectoryContextMenu(undefined);
+    setDirectoryTargetMenu(undefined);
+    setProfileMenuOpen(false);
     setContextMenu({
       requestedPosition: position,
       pullRequest,
@@ -1309,6 +1314,8 @@ export function Sidebar(props: SidebarProps) {
   ): void => {
     rememberMenuOpener(directoryContextMenuOpenerRef, directoryContextMenuRef);
     setContextMenu(undefined);
+    setDirectoryTargetMenu(undefined);
+    setProfileMenuOpen(false);
     setRenameThread(undefined);
     setDirectoryContextMenu({
       requestedPosition: position,
@@ -1957,7 +1964,12 @@ export function Sidebar(props: SidebarProps) {
             tooltipText={profileTooltip}
             onRefresh={props.onRefreshRateLimits}
             onToggle={(event) => {
+              // Stopped, so the other menus' outside-click listeners never
+              // see this click. Close them here instead.
               event.stopPropagation();
+              setContextMenu(undefined);
+              setDirectoryContextMenu(undefined);
+              setDirectoryTargetMenu(undefined);
               setProfileMenuOpen((open) => !open);
             }}
           />
@@ -2682,6 +2694,7 @@ export function Sidebar(props: SidebarProps) {
       {pendingDetachPullRequest ? (
         <DetachPullRequestWarning
           pr={pendingDetachPullRequest.pr}
+          returnFocus={contextMenuOpenerRef}
           onCancel={() => setPendingDetachPullRequest(undefined)}
           onConfirm={() => {
             const pending = pendingDetachPullRequest;
