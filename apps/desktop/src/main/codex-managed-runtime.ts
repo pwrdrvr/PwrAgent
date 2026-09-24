@@ -1294,9 +1294,11 @@ async function validateExtractedBundle(
 
   const expectedVersion = versionForTag(options.tag);
   const banners = expectedCodexVersionBanners(options.platform, expectedVersion);
-  // Signatures and entitlements are verified before installation publishes
-  // managed-release.json. Reusing that installed runtime checks file containment
-  // and its version fingerprint without spawning platform signature tools again.
+  // Every download verifies Sigstore provenance and archive hashes before
+  // extraction, including development installs. Installation also checks
+  // entitlements and, when required, the platform signer before publishing
+  // managed-release.json. Reuse trusts that receipt-time verification and checks
+  // file containment and the version fingerprint without platform tools.
   const validationPath = path.join(directory, ".pwragent-version-validation.json");
   const fingerprint = JSON.stringify({
     schemaVersion: 1,

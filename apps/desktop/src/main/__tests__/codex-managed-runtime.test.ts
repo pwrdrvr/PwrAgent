@@ -507,7 +507,7 @@ describe("ensureManagedCodexRuntime", () => {
     );
   });
 
-  it.each(["valid", "signature", "entitlements"])("verifies installation before trusting the cached runtime: %s", async (scenario) => {
+  it.each(["valid", "signature", "entitlements", "development install"])("verifies installation before trusting the cached runtime: %s", async (scenario) => {
     const rootDir = await temporaryRoot();
     const tag = "pwragent-v0.200.0-pwragent.1";
     const version = "0.200.0-pwragent.1";
@@ -537,12 +537,12 @@ describe("ensureManagedCodexRuntime", () => {
       }) as typeof globalThis.fetch,
       platform: "darwin" as const,
       probeVersion,
-      requirePlatformSignature: true,
+      requirePlatformSignature: scenario !== "development install",
       rootDir,
       verifyMacosCodeModeHostEntitlements,
       verifyPlatformSignature,
     };
-    if (scenario !== "valid") {
+    if (scenario === "signature" || scenario === "entitlements") {
       await expect(ensureManagedCodexRuntime(options)).rejects.toThrow(
         scenario === "signature" ? "Invalid signature" : "Missing entitlement",
       );
@@ -553,28 +553,38 @@ describe("ensureManagedCodexRuntime", () => {
     }
     const installed = await ensureManagedCodexRuntime(options);
 
+    // Development downloads authenticate our release provenance too, even
+    // though unsigned Electron cannot supply a matching platform signer.
+    expect(verifySigstoreMock).toHaveBeenCalledOnce();
     expect(verifyMacosCodeModeHostEntitlements).toHaveBeenCalledOnce();
     expect(verifyMacosCodeModeHostEntitlements).toHaveBeenCalledWith(
       expect.stringMatching(/codex-code-mode-host$/u),
     );
-    expect(verifyPlatformSignature).toHaveBeenCalledTimes(3);
-    expect(verifyPlatformSignature).toHaveBeenCalledWith(
-      expect.stringMatching(/codex-app-server$/u),
-      "/Applications/PwrAgent.app/Contents/MacOS/PwrAgent",
-      "darwin",
-    );
-    expect(verifyPlatformSignature).toHaveBeenCalledWith(
-      expect.stringMatching(/codex-code-mode-host$/u),
-      "/Applications/PwrAgent.app/Contents/MacOS/PwrAgent",
-      "darwin",
-    );
+    if (scenario === "development install") {
+      expect(verifyPlatformSignature).not.toHaveBeenCalled();
+    } else {
+      expect(verifyPlatformSignature).toHaveBeenCalledTimes(3);
+      expect(verifyPlatformSignature).toHaveBeenCalledWith(
+        expect.stringMatching(/codex-app-server$/u),
+        "/Applications/PwrAgent.app/Contents/MacOS/PwrAgent",
+        "darwin",
+      );
+      expect(verifyPlatformSignature).toHaveBeenCalledWith(
+        expect.stringMatching(/codex-code-mode-host$/u),
+        "/Applications/PwrAgent.app/Contents/MacOS/PwrAgent",
+        "darwin",
+      );
+    }
     verifyPlatformSignature.mockClear();
     verifyMacosCodeModeHostEntitlements.mockClear();
     probeVersion.mockClear();
-    // Startup retention and Settings discovery both reuse the installation.
-    await retainManagedCodexCommand(installed.command, options);
-    await ensureManagedCodexRuntime({ ...options, checkMode: "ttl" });
-    await retainManagedCodexCommand(installed.command, options);
+    // Packaged startup and Settings reuse the receipt-time verification even
+    // when development installed the runtime in the shared managed directory.
+    const packagedOptions = { ...options, requirePlatformSignature: true };
+    await retainManagedCodexCommand(installed.command, packagedOptions);
+    await ensureManagedCodexRuntime({ ...packagedOptions, checkMode: "ttl" });
+    await retainManagedCodexCommand(installed.command, packagedOptions);
+    expect(verifySigstoreMock).toHaveBeenCalledOnce();
     expect(verifyPlatformSignature).not.toHaveBeenCalled();
     expect(verifyMacosCodeModeHostEntitlements).not.toHaveBeenCalled();
     expect(probeVersion).not.toHaveBeenCalled();
