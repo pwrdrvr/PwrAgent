@@ -113,7 +113,7 @@ describe("managed Codex release selection", () => {
 });
 
 describe("retaining a managed startup selection", () => {
-  it.each(["valid", "obsolete", "platform", "missing companion", "entitlements", "signature", "marker"])(
+  it.each(["valid", "obsolete", "platform", "missing companion", "marker"])(
     "validates the cached bundle before retaining it: %s", async (scenario) => {
       const rootDir = await temporaryRoot();
       const tag = "pwragent-v0.200.0-pwragent.1";
@@ -134,20 +134,18 @@ describe("retaining a managed startup selection", () => {
       const marker = path.join(directory, `.pwragent-use-${process.pid}`);
       if (scenario === "marker") await mkdir(marker);
       const verifyPlatformSignature = vi.fn(async () => {
-        if (scenario === "signature") throw new Error("Invalid signature");
+        throw new Error("Installed runtimes must not repeat signature checks");
       });
       const verifyMacosCodeModeHostEntitlements = vi.fn(async () => {
-        if (scenario === "entitlements") throw new Error("Missing entitlement");
+        throw new Error("Installed runtimes must not repeat entitlement checks");
       });
       const options = { rootDir, platform: "darwin" as const, arch: "arm64" as const,
         requirePlatformSignature: true, verifyPlatformSignature, verifyMacosCodeModeHostEntitlements,
         probeVersion: vi.fn(versionProbe(version)) };
       if (scenario === "valid") {
         await retainManagedCodexCommand(command, options);
-        expect(verifyPlatformSignature).toHaveBeenCalledTimes(3);
         expect(options.probeVersion).toHaveBeenCalledTimes(3);
         await retainManagedCodexCommand(command, options);
-        expect(verifyPlatformSignature).toHaveBeenCalledTimes(6);
         expect(options.probeVersion).toHaveBeenCalledTimes(3);
       } else {
         await expect(retainManagedCodexCommand(command, options)).rejects.toThrow();
@@ -158,6 +156,8 @@ describe("retaining a managed startup selection", () => {
           expect(existsSync(marker)).toBe(false);
         }
       }
+      expect(verifyPlatformSignature).not.toHaveBeenCalled();
+      expect(verifyMacosCodeModeHostEntitlements).not.toHaveBeenCalled();
     },
   );
 });
@@ -507,21 +507,26 @@ describe("ensureManagedCodexRuntime", () => {
     );
   });
 
-  it("verifies every executable against the packaged PwrAgent signer", async () => {
+  it.each(["valid", "signature", "entitlements"])("verifies installation before trusting the cached runtime: %s", async (scenario) => {
     const rootDir = await temporaryRoot();
     const tag = "pwragent-v0.200.0-pwragent.1";
     const version = "0.200.0-pwragent.1";
     const archiveName = `pwragent-codex-${version}-macos-aarch64.tar.gz`;
     const archive = Buffer.from("signed codex archive");
     const digest = createHash("sha256").update(archive).digest("hex");
-    const verifyMacosCodeModeHostEntitlements = vi.fn(async () => undefined);
-    const verifyPlatformSignature = vi.fn(async () => undefined);
+    const verifyMacosCodeModeHostEntitlements = vi.fn(async () => {
+      if (scenario === "entitlements") throw new Error("Missing entitlement");
+    });
+    const verifyPlatformSignature = vi.fn(async () => {
+      if (scenario === "signature") throw new Error("Invalid signature");
+    });
+    const probeVersion = vi.fn(versionProbe(version));
 
-    await ensureManagedCodexRuntime({
+    const options = {
       applicationCommand: "/Applications/PwrAgent.app/Contents/MacOS/PwrAgent",
-      arch: "arm64",
-      checkMode: "force",
-      extractArchive: async (_archivePath, targetDir) => {
+      arch: "arm64" as const,
+      checkMode: "force" as const,
+      extractArchive: async (_archivePath: string, targetDir: string) => {
         await writeFakeBundle(targetDir, "darwin");
       },
       fetch: releaseFetch({
@@ -530,13 +535,23 @@ describe("ensureManagedCodexRuntime", () => {
         digest,
         tag,
       }) as typeof globalThis.fetch,
-      platform: "darwin",
-      probeVersion: versionProbe(version),
+      platform: "darwin" as const,
+      probeVersion,
       requirePlatformSignature: true,
       rootDir,
       verifyMacosCodeModeHostEntitlements,
       verifyPlatformSignature,
-    });
+    };
+    if (scenario !== "valid") {
+      await expect(ensureManagedCodexRuntime(options)).rejects.toThrow(
+        scenario === "signature" ? "Invalid signature" : "Missing entitlement",
+      );
+      expect(existsSync(path.join(rootDir, "managed-release.json"))).toBe(false);
+      expect(existsSync(path.join(rootDir, "versions", tag))).toBe(false);
+      expect(probeVersion).not.toHaveBeenCalled();
+      return;
+    }
+    const installed = await ensureManagedCodexRuntime(options);
 
     expect(verifyMacosCodeModeHostEntitlements).toHaveBeenCalledOnce();
     expect(verifyMacosCodeModeHostEntitlements).toHaveBeenCalledWith(
@@ -553,6 +568,16 @@ describe("ensureManagedCodexRuntime", () => {
       "/Applications/PwrAgent.app/Contents/MacOS/PwrAgent",
       "darwin",
     );
+    verifyPlatformSignature.mockClear();
+    verifyMacosCodeModeHostEntitlements.mockClear();
+    probeVersion.mockClear();
+    // Startup retention and Settings discovery both reuse the installation.
+    await retainManagedCodexCommand(installed.command, options);
+    await ensureManagedCodexRuntime({ ...options, checkMode: "ttl" });
+    await retainManagedCodexCommand(installed.command, options);
+    expect(verifyPlatformSignature).not.toHaveBeenCalled();
+    expect(verifyMacosCodeModeHostEntitlements).not.toHaveBeenCalled();
+    expect(probeVersion).not.toHaveBeenCalled();
   });
 });
 
