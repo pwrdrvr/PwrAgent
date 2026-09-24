@@ -183,8 +183,7 @@ describe("real Playwright worker shutdown diagnostics", () => {
     expect(started.child.exitCode !== null || started.child.signalCode !== null).toBe(true);
   });
 
-  // TEMPORARY: repeats and the [tree-timing:worker] line measure the query in CI. Remove before merge.
-  it("names the process, originating test and unresolved close before Playwright times out", { timeout: 20_000, repeats: 7 }, async () => {
+  it("names the process, originating test and unresolved close before Playwright times out", async () => {
     const result = await probe("process");
     expect(result.code, result.stdout + result.stderr).toBe(1);
     expect(result.stdout).toContain("1 passed");
@@ -200,12 +199,11 @@ describe("real Playwright worker shutdown diagnostics", () => {
     expect(snapshot.resources.some(({ type }) => type === "PROCESSWRAP")).toBe(true);
     expect(snapshot.report.libuv.length).toBeGreaterThan(0);
     const tree = JSON.parse(result.artifacts.find(({ file }) => file.endsWith("process-tree.json")).text);
-    process.stderr.write(`[tree-timing:worker] ${JSON.stringify({ ...tree, processes: tree.processes?.length })}\n`);
     // The probe root is deleted after the run, so this message is the only
     // copy of the failure classification a CI log keeps.
     expect(tree.error, JSON.stringify(tree)).toBeUndefined();
     expect(tree.processes.some(({ pid }) => pid === pending.pid)).toBe(true);
-  });
+  }, 20_000);
 
   it("distinguishes a worker fixture hang from process cleanup", async () => {
     const result = await probe("fixture");
