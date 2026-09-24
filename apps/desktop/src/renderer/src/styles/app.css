@@ -7241,6 +7241,13 @@ a.button {
   background: var(--bg-app);
 }
 
+/* The layer takes focus on open, because the control that opened it went
+   inert under it; Tab moves on to its first control. Not a Tab stop itself
+   (tabindex -1), and a ring here would trace the whole shell. */
+.app-shell__settings-layer:focus {
+  outline: none;
+}
+
 /* Search reuses the shared thread title bar (ThreadPlaceholderHeader) for its
    chrome — MSG status, sidebar toggle, disabled rail toggle — via the
    `.thread-view` column layout. The section only owns the scrolling body

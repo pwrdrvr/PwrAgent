@@ -5,6 +5,8 @@ import type {
 } from "react";
 
 type SidebarResizeHandleProps = {
+  /** True while a full-window layer (Settings, Automations) covers it. */
+  inert?: boolean;
   onResizeStart?: (event: PointerEvent<HTMLElement>) => void;
   onResizeByKeyboard?: (delta: number) => void;
   /**
@@ -38,6 +40,7 @@ export function SidebarResizeHandle(
       aria-valuemin={props.sidebarMinWidth}
       aria-valuemax={props.sidebarMaxWidth}
       className="sidebar__resize-handle"
+      inert={props.inert ? true : undefined}
       role="separator"
       tabIndex={0}
       onKeyDown={(event: ReactKeyboardEvent<HTMLElement>) => {

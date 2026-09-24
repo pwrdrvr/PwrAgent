@@ -6057,6 +6057,59 @@ describe("Sidebar", () => {
     expect(input.selectionEnd).toBe("Cross-project cleanup".length);
   });
 
+  // The menu takes focus from the overflow button so the keyboard reaches its
+  // items. Every way out hands focus back to that button, including the
+  // Rename dialog opened from an item: the item is gone by the time the
+  // dialog closes.
+  it("moves focus into the thread menu and back to its opener through Rename", () => {
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        directories={directories}
+        inboxThreads={[sharedThread]}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-1"
+        threads={[sharedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+        onRenameThread={async () => undefined}
+      />
+    );
+
+    const overflow = screen.getByRole("button", { name: "Open thread actions" });
+    act(() => overflow.focus());
+    fireEvent.click(overflow);
+    const firstItem = screen.getAllByRole("menuitem")[0]!;
+    expect(firstItem).toHaveFocus();
+
+    fireEvent.keyDown(firstItem, { key: "Escape" });
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(overflow).toHaveFocus();
+
+    fireEvent.click(overflow);
+    const renameItem = screen.getByRole("menuitem", { name: "Rename Thread" });
+    act(() => renameItem.focus());
+    fireEvent.click(renameItem);
+    const dialog = screen.getByRole("dialog", { name: "Rename Thread" });
+    const input = within(dialog).getByLabelText("Name");
+    const submit = within(dialog).getByRole("button", { name: "Rename Thread" });
+    expect(input).toHaveFocus();
+
+    act(() => submit.focus());
+    fireEvent.keyDown(submit, { key: "Tab" });
+    expect(input).toHaveFocus();
+
+    fireEvent.keyDown(within(dialog).getByRole("button", { name: "Cancel" }), {
+      key: "Escape",
+    });
+    expect(screen.queryByRole("dialog", { name: "Rename Thread" })).toBeNull();
+    expect(overflow).toHaveFocus();
+  });
+
   it("collapses a fully selected rename field to either end with arrow keys", () => {
     render(
       <Sidebar

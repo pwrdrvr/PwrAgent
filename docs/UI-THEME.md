@@ -476,6 +476,13 @@ Focus states should be visible and tangerine-led, but contained so they do not c
 - **Clip with room for the ring.** `overflow: hidden` cuts an outset ring at the box. Use `overflow: clip` plus `overflow-clip-margin` equal to the ring's reach, on both axes: Chromium ignores the margin unless both clip.
 - **Opacity dims a ring with its control**, and so do `filter: opacity()` and a `mask`. An `aria-disabled` control that fades trades the fade for a muted paint at full opacity while focused: `--border-subtle`, `--text-subtle`, no fill. A container dimmed only for emphasis, such as an Access Control node off the trace, returns to full opacity while focus is inside it.
 
+### Focus containment
+
+- **A modal dialog uses `useDialogFocus`** (`renderer/src/lib/useDialogFocus.ts`). It moves focus in on open, keeps Tab and Shift+Tab inside, closes on Escape, and returns focus to the opener on close. A destructive confirmation starts on Cancel. A dialog opened from a menu item names the menu's opener as `returnFocus`, since the item is gone when the dialog closes.
+- **A `role="menu"` popup uses `useMenuFocus`** (`renderer/src/lib/useMenuFocus.ts`). The first item takes focus once the menu is placed, and the arrow keys, Home, and End move between items. Escape and Tab hand focus back to the opener, and Tab then moves on from it.
+- **A full-window layer makes what it covers `inert`.** Settings and Automations cover the sidebar and main, which go inert while either is open, so Tab cannot walk controls nobody can see. The layer takes focus on open and draws no ring, since it is not a Tab stop. On close, focus returns to the control that opened it.
+- **Focus goes back only when it fell to `<body>`.** A close that moved focus on purpose, such as a thread taking the composer, keeps it.
+
 ## Tooltips
 
 Two patterns. Pick the right one:

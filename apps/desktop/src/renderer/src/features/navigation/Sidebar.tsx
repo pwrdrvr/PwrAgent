@@ -2,8 +2,10 @@ import { getThreadPrimaryDirectory } from "../../lib/subthread-launchpads";
 import { readNavigationPresentationOrder } from "./navigation-presentation-order";
 import type { useBoundedNavigationWindow } from "../../lib/useBoundedNavigationWindow";
 import { navigationThreadSelectionKey } from "../../lib/navigation-query-state";
+import { useDialogFocus } from "../../lib/useDialogFocus";
 import { useEventCallback } from "../../lib/useEventCallback";
 import { useLensScrollRestoration } from "../../lib/useLensScrollRestoration";
+import { useMenuFocus } from "../../lib/useMenuFocus";
 import type { NavigationDirectoryView as NavigationDirectorySummary } from "../../lib/navigation-loaded-rows";
 import type { PendingLaunchpadCreation } from "../../lib/useThreadNavigation";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -158,6 +160,8 @@ import type { NavigationDirectoryDisclosure } from "../../lib/useNavigationDirec
 
 type SidebarProps = {
   directoryDisclosure?: NavigationDirectoryDisclosure;
+  /** True while a full-window layer (Settings, Automations) covers it. */
+  inert?: boolean;
   backends: BackendSummary[];
   browseMode: BrowseMode;
   directories: NavigationDirectorySummary[];
@@ -422,6 +426,7 @@ export function Sidebar(props: SidebarProps) {
   const directoryTargetMenuRef = useRef<HTMLDivElement>(null);
   const federationThreadTargets = props.newThreadFederationTargets ?? [];
   const renameInputRef = useRef<HTMLInputElement>(null);
+  const renameDialogRef = useRef<HTMLElement>(null);
   const handledRevealRequestRef = useRef(0);
   const selectionAnchorKeyRef = useRef<string | undefined>(
     props.selectedItemKey,
@@ -492,6 +497,23 @@ export function Sidebar(props: SidebarProps) {
   const [renameThread, setRenameThread] = useState<NavigationThreadSummary>();
   const [renameDraft, setRenameDraft] = useState("");
   const [renameValidationError, setRenameValidationError] = useState<string>();
+  const contextMenuOpenerRef = useMenuFocus(
+    contextMenuRef,
+    Boolean(contextMenu?.position),
+    () => setContextMenu(undefined),
+  );
+  useMenuFocus(
+    directoryContextMenuRef,
+    Boolean(directoryContextMenu?.position),
+    () => setDirectoryContextMenu(undefined),
+  );
+  // Rename opens from the thread menu, whose item unmounts on the way, so
+  // focus returns to the control that opened the menu.
+  useDialogFocus(renameDialogRef, renameThread !== undefined, {
+    initialFocus: renameInputRef,
+    onEscape: () => setRenameThread(undefined),
+    returnFocus: () => contextMenuOpenerRef.current,
+  });
   const onArchiveThread = props.onArchiveThread ?? (async () => undefined);
   const onRenameThread = props.onRenameThread ?? (async () => undefined);
   const [copiedRuntimeValue, setCopiedRuntimeValue] = useState<"branch" | "cwd">();
@@ -1783,7 +1805,11 @@ export function Sidebar(props: SidebarProps) {
     directoryMenuCanPin || directoryMenuShowMoveItems;
 
   return (
-    <aside className="sidebar" aria-label="Threads">
+    <aside
+      className="sidebar"
+      aria-label="Threads"
+      inert={props.inert ? true : undefined}
+    >
       {/* Mounted here because this is where the thread set and the jump
           handlers already live, but it PORTALS onto document.body — the
           sidebar is a container-query element (a containing block for fixed
@@ -2623,6 +2649,7 @@ export function Sidebar(props: SidebarProps) {
       {pendingDetachPullRequest ? (
         <DetachPullRequestWarning
           pr={pendingDetachPullRequest.pr}
+          returnFocus={() => contextMenuOpenerRef.current}
           onCancel={() => setPendingDetachPullRequest(undefined)}
           onConfirm={() => {
             const pending = pendingDetachPullRequest;
@@ -2780,6 +2807,7 @@ export function Sidebar(props: SidebarProps) {
       {renameThread ? (
         <div className="rename-thread-backdrop" role="presentation">
           <section
+            ref={renameDialogRef}
             aria-labelledby="rename-thread-title"
             aria-modal="true"
             className="rename-thread-dialog"
@@ -2797,9 +2825,7 @@ export function Sidebar(props: SidebarProps) {
                   setRenameValidationError(undefined);
                 }}
                 onKeyDown={(event) => {
-                  if (event.key === "Escape") {
-                    setRenameThread(undefined);
-                  } else if (event.key === "Enter") {
+                  if (event.key === "Enter") {
                     event.preventDefault();
                     submitRename();
                   } else if (
