@@ -1,11 +1,13 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   BUILT_IN_ROLES,
   MESSAGING_PERMISSION_CATALOG,
   RBAC_BUILT_IN_ROLE_IDS,
+  type RbacRoleDefinition,
   type ReadRbacKnownSubjectsResponse,
   type ReadRbacPolicyResponse,
 } from "@pwragent/shared";
@@ -50,6 +52,28 @@ function makeApi(overrides?: Partial<DesktopApi>): DesktopApi {
     setRbacEnforced: vi.fn(async () => ({ ok: true })),
     ...overrides,
   } as unknown as DesktopApi;
+}
+
+type User = ReturnType<typeof userEvent.setup>;
+
+// Walks Tab until `target` has focus rather than focusing it directly, so a
+// pass proves the keyboard can reach it. The bound is past every stop on the
+// screen, so an unreachable target cycles round and fails the assertion.
+async function tabTo(user: User, target: HTMLElement): Promise<void> {
+  for (let step = 0; step < 200 && document.activeElement !== target; step += 1) {
+    await user.tab();
+  }
+  expect(target).toHaveFocus();
+}
+
+function traceButton(label: string): HTMLElement {
+  return screen.getByRole("button", { name: `Trace ${label}` });
+}
+
+function nodeOf(element: HTMLElement): HTMLElement {
+  const node = element.closest<HTMLElement>(".rbac-node");
+  expect(node).not.toBeNull();
+  return node as HTMLElement;
 }
 
 describe("AccessControlSettings", () => {
@@ -99,11 +123,132 @@ describe("AccessControlSettings", () => {
       screen.getByRole("button", { name: /Clear selection/i }),
     ).toBeInTheDocument();
     expect((roleNode as Element).className).toContain("is-pinned");
+    expect(traceButton("Chat User")).toHaveAttribute("aria-pressed", "true");
     // Clicking again unpins.
     fireEvent.click(roleNode as Element);
     expect(
       screen.queryByRole("button", { name: /Clear selection/i }),
     ).not.toBeInTheDocument();
+    // The name is the card's own button, so a click on it pins once, not twice.
+    fireEvent.click(traceButton("Chat User"));
+    expect(traceButton("Chat User")).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("reaches each kind of node by Tab and pins it with Enter or Space", async () => {
+    const user = userEvent.setup();
+    render(<AccessControlSettings desktopApi={makeApi()} />);
+    await waitFor(() => expect(screen.getByText("Alice")).toBeInTheDocument());
+    for (const label of ["Alice", "Chat User", MESSAGING_PERMISSION_CATALOG[0].label]) {
+      const trace = traceButton(label);
+      await tabTo(user, trace);
+      expect(trace).toHaveAttribute("aria-pressed", "false");
+
+      await user.keyboard("{Enter}");
+      expect(trace).toHaveAttribute("aria-pressed", "true");
+      expect(nodeOf(trace)).toHaveClass("is-pinned");
+      expect(
+        screen.getByRole("button", { name: /Clear selection/i }),
+      ).toBeInTheDocument();
+
+      await user.keyboard(" ");
+      expect(trace).toHaveAttribute("aria-pressed", "false");
+      expect(nodeOf(trace)).not.toHaveClass("is-pinned");
+      expect(
+        screen.queryByRole("button", { name: /Clear selection/i }),
+      ).not.toBeInTheDocument();
+    }
+  });
+
+  it("traces a node while focus is anywhere inside it", async () => {
+    const user = userEvent.setup();
+    render(<AccessControlSettings desktopApi={makeApi()} />);
+    await waitFor(() => expect(screen.getByText("Alice")).toBeInTheDocument());
+    const alice = nodeOf(traceButton("Alice"));
+    const bucket = nodeOf(traceButton("Any channel user"));
+
+    await tabTo(user, traceButton("Alice"));
+    expect(alice).toHaveClass("is-active");
+    expect(bucket).toHaveClass("is-dim");
+    // A preview, not a pin.
+    expect(traceButton("Alice")).toHaveAttribute("aria-pressed", "false");
+
+    // Tab walks on into Alice's role chips, and her card stays traced.
+    await user.tab();
+    expect(alice).toContainElement(document.activeElement as HTMLElement);
+    expect(alice).toHaveClass("is-active");
+
+    // The trace follows focus to the next card.
+    await tabTo(user, traceButton("Any channel user"));
+    expect(bucket).toHaveClass("is-active");
+    expect(alice).toHaveClass("is-dim");
+
+    // A focused permission opens its reverse map, as hovering one does.
+    await tabTo(user, traceButton(MESSAGING_PERMISSION_CATALOG[0].label));
+    expect(screen.getByText(/Reachable by/)).toBeInTheDocument();
+
+    // Focus leaving the graph ends the preview.
+    await user.click(document.body);
+    expect(screen.queryByText(/Reachable by/)).not.toBeInTheDocument();
+    expect(alice).not.toHaveClass("is-active");
+    expect(alice).not.toHaveClass("is-dim");
+  });
+
+  it("keeps a focused card traced when the pointer leaves another card", async () => {
+    const user = userEvent.setup();
+    render(<AccessControlSettings desktopApi={makeApi()} />);
+    await waitFor(() => expect(screen.getByText("Alice")).toBeInTheDocument());
+    const alice = nodeOf(traceButton("Alice"));
+    const bucket = nodeOf(traceButton("Any channel user"));
+
+    await user.hover(bucket);
+    expect(bucket).toHaveClass("is-active");
+    await tabTo(user, traceButton("Alice"));
+    expect(alice).toHaveClass("is-active");
+
+    await user.unhover(bucket);
+    expect(alice).toHaveClass("is-active");
+    expect(bucket).toHaveClass("is-dim");
+  });
+
+  it("keeps role chips and Edit as their own Tab stops, apart from the pin", async () => {
+    const custom: RbacRoleDefinition = {
+      id: "triage",
+      name: "Triage",
+      builtIn: false,
+      permissions: [MESSAGING_PERMISSION_CATALOG[0].id],
+    };
+    const policy: ReadRbacPolicyResponse = {
+      enforced: true,
+      roles: [...BUILT_IN_ROLES, custom],
+      attachments: [
+        {
+          subject: { kind: "actor", platform: "slack", actorId: "U1" },
+          roleIds: [RBAC_BUILT_IN_ROLE_IDS.chatUser],
+          displayName: "Alice",
+        },
+      ],
+      permissionCatalog: MESSAGING_PERMISSION_CATALOG,
+    };
+    const api = makeApi({ readRbacPolicy: vi.fn(async () => policy) });
+    const user = userEvent.setup();
+    render(<AccessControlSettings desktopApi={api} />);
+    await waitFor(() => expect(screen.getByText("Alice")).toBeInTheDocument());
+
+    const chip = within(nodeOf(traceButton("Alice"))).getByRole("button", { name: "Power User" });
+    await tabTo(user, chip);
+    await user.keyboard("{Enter}");
+    await waitFor(() => expect(api.writeRbacAttachment).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(chip).toBeEnabled());
+    expect(traceButton("Alice")).toHaveAttribute("aria-pressed", "false");
+    expect(
+      screen.queryByRole("button", { name: /Clear selection/i }),
+    ).not.toBeInTheDocument();
+
+    const edit = within(nodeOf(traceButton("Triage"))).getByRole("button", { name: "Edit" });
+    await tabTo(user, edit);
+    await user.keyboard("{Enter}");
+    expect(screen.getByRole("dialog", { name: "Edit role" })).toBeInTheDocument();
+    expect(traceButton("Triage")).toHaveAttribute("aria-pressed", "false");
   });
 
   it("warns when a persisted role reused a built-in id", async () => {
