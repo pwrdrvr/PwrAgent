@@ -261,6 +261,13 @@ type ComposerProps = {
   contextWindow?: ThreadContextWindowState;
   composerImplementation?: DesktopChatReplyComposer;
   draftStore?: ComposerDraftStore;
+  /** A transcript async-question choice to add to the current reply draft. */
+  replySuggestion?: {
+    id: number;
+    threadId: string;
+    backend: AppServerBackendKind;
+    text: string;
+  };
   launchpad?: NavigationLaunchpadDraft;
   launchpadError?: string;
   launchpadMaterializing?: boolean;
@@ -3480,6 +3487,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     setDraft(hydrated.draft);
     setSkillTokens(hydrated.skillTokens);
   };
+  const appliedReplySuggestionId = useRef<number | undefined>(undefined);
   const clearComposerDraft = (): void => {
     deletedSkillTokenHistoryRef.current = [];
     setEditorDocument(undefined);
@@ -3605,6 +3613,41 @@ export const Composer = memo(function Composer(props: ComposerProps) {
 
     draftStore.set(scopeKey, state);
   };
+  useEffect(() => {
+    const suggestion = props.replySuggestion;
+    if (
+      !suggestion
+      || appliedReplySuggestionId.current === suggestion.id
+      || suggestion.threadId !== props.thread?.id
+      || suggestion.backend !== props.thread?.source
+    ) {
+      return;
+    }
+    appliedReplySuggestionId.current = suggestion.id;
+    const current = latestDraftSnapshotRef.current.snapshot;
+    const nextDraft = current.draft.trim()
+      ? `${current.draft.trimEnd()}\n\n${suggestion.text}`
+      : suggestion.text;
+    const hydrated = hydrateComposerDraft(
+      nextDraft,
+      props.skills,
+      threadLinks,
+      pullRequestLinks,
+    );
+    const nextSnapshot: ComposerDraftSnapshot = {
+      ...current,
+      draft: hydrated.draft,
+      editorDocument: undefined,
+      skillTokens: hydrated.skillTokens,
+    };
+    latestDraftSnapshotRef.current = { scopeKey: composerScopeKey, snapshot: nextSnapshot };
+    saveComposerDraftSnapshot(composerScopeKey, nextSnapshot);
+    deletedSkillTokenHistoryRef.current = [];
+    setEditorDocument(undefined);
+    setDraft(hydrated.draft);
+    setSkillTokens(hydrated.skillTokens);
+    requestAnimationFrame(() => inputRef.current?.focus());
+  }, [props.replySuggestion, props.thread?.id, props.thread?.source, props.skills, threadLinks, pullRequestLinks, composerScopeKey, saveComposerDraftSnapshot]);
   const clearComposerDraftSnapshot = (scopeKey: string): void => {
     if (isDraftStoreScope(scopeKey)) {
       draftStore.delete(scopeKey);

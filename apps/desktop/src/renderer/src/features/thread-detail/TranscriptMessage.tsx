@@ -63,6 +63,7 @@ type TranscriptMessageProps = {
   subAgents?: ThreadSubAgentSummary[];
   threadLinkSource?: ThreadLinkSource;
   onOpenImage?: (image: AppServerThreadImagePart) => void;
+  onChooseAsyncQuestionAnswer?: (question: string, answer: string) => void;
 };
 
 // Keep text-only markdown props referentially stable when protocol refreshes
@@ -365,6 +366,41 @@ export const TranscriptMessage = memo(function TranscriptMessage(props: Transcri
               threadLinkSource: props.threadLinkSource,
             })}
           </div>
+          {index === messageSegments.length - 1
+            && props.message.delivery === "async"
+            && props.message.questions?.length ? (
+              <div className="transcript-async-questions" role="group" aria-label="Questions from Codex">
+                <span className="chip chip--mode">Question</span>
+                <span className="transcript-async-questions__hint">
+                  Choose an option to add it to your reply.
+                </span>
+                {props.message.questions.map((question, questionIndex) => (
+                  <div className="transcript-async-questions__question" key={`${question.title}:${questionIndex}`}>
+                    {props.message.questions?.length !== 1
+                      || !props.message.text.includes(question.title)
+                      ? <p>{question.title}</p>
+                      : null}
+                    {question.options?.length ? (
+                      <div className="transcript-questionnaire__options">
+                        {question.options.map((option) => (
+                          <button
+                            className="transcript-questionnaire__option"
+                            type="button"
+                            key={option}
+                            disabled={!props.onChooseAsyncQuestionAnswer}
+                            onClick={() => props.onChooseAsyncQuestionAnswer?.(question.title, option)}
+                          >
+                            <span className="transcript-questionnaire__option-label">{option}</span>
+                          </button>
+                        ))}
+                      </div>
+                    ) : (
+                      <span className="transcript-async-questions__hint">Reply in the composer.</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            ) : null}
         </article>
       ))}
     </>

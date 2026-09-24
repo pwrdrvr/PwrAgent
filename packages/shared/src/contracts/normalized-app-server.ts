@@ -592,6 +592,9 @@ export type AppServerThreadMessage = {
   id: string;
   role: "user" | "assistant";
   text: string;
+  /** Codex async questions are agent messages, not blocking server requests. */
+  delivery?: "async";
+  questions?: Array<{ title: string; options: string[] | null }>;
   parts?: AppServerThreadMessagePart[];
   origin?: AppServerThreadMessageOrigin;
   createdAt?: number;

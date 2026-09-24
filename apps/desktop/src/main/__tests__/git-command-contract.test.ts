@@ -69,8 +69,9 @@ describe("Git command contract", () => {
     })).stdout.trim()).toBe("0");
     await writeFile(path.join(repo, "large.txt"), "x".repeat(16_384));
     await run(["add", "--", "large.txt"]);
+    // A deliberate output overflow must also own Git for Windows descendants.
     await expect(runGitCommand(repo, ["show", ":large.txt"], {
-      env, maxBuffer: 1_024,
+      env, maxBuffer: 1_024, ownProcessTree: true,
     })).rejects.toMatchObject({ code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" });
   });
 
