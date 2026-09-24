@@ -4797,7 +4797,8 @@ a.button {
 .thread-row-shell:hover .thread-row__time,
 .thread-row-shell:has(.thread-row__overflow-button:focus-visible) .thread-row__time,
 .thread-row-shell:has(.thread-row__chip--add-reaction:focus-visible) .thread-row__time,
-.thread-row-shell:has(.thread-row__chip--add-reaction.is-open) .thread-row__time {
+.thread-row-shell:has(.thread-row__chip--add-reaction.is-open) .thread-row__time,
+.thread-row-shell:has(.thread-row__overflow-button[aria-expanded="true"]) .thread-row__time {
   opacity: 0;
 }
 
@@ -4807,7 +4808,8 @@ a.button {
 .thread-row-shell:hover .thread-row__pin-button,
 .thread-row__pin-button:focus-visible,
 .thread-row-shell:hover .thread-row__overflow-button,
-.thread-row__overflow-button:focus-visible {
+.thread-row__overflow-button:focus-visible,
+.thread-row__overflow-button[aria-expanded="true"] {
   opacity: 1;
   pointer-events: auto;
 }
@@ -4850,17 +4852,20 @@ a.button {
 .thread-row-shell:has(.thread-row__overflow-button:focus-visible) .thread-row--retained .thread-row__heading,
 .thread-row-shell:has(.thread-row__chip--add-reaction:focus-visible) .thread-row--retained .thread-row__heading,
 .thread-row-shell:has(.thread-row__chip--add-reaction.is-open) .thread-row--retained .thread-row__heading,
+.thread-row-shell:has(.thread-row__overflow-button[aria-expanded="true"]) .thread-row--retained .thread-row__heading,
 .thread-row-shell:hover .thread-row--pinned .thread-row__heading,
 .thread-row-shell:has(.thread-row__overflow-button:focus-visible) .thread-row--pinned .thread-row__heading,
 .thread-row-shell:has(.thread-row__chip--add-reaction:focus-visible) .thread-row--pinned .thread-row__heading,
-.thread-row-shell:has(.thread-row__chip--add-reaction.is-open) .thread-row--pinned .thread-row__heading {
+.thread-row-shell:has(.thread-row__chip--add-reaction.is-open) .thread-row--pinned .thread-row__heading,
+.thread-row-shell:has(.thread-row__overflow-button[aria-expanded="true"]) .thread-row--pinned .thread-row__heading {
   padding-right: 46px;
 }
 
 .thread-row__pin-button:hover,
 .thread-row__pin-button:focus-visible,
 .thread-row__overflow-button:hover,
-.thread-row__overflow-button:focus-visible {
+.thread-row__overflow-button:focus-visible,
+.thread-row__overflow-button[aria-expanded="true"] {
   border-color: var(--accent-border);
   background: var(--bg-row-active);
   color: var(--accent-bright);
@@ -13464,7 +13469,8 @@ a.button {
 }
 
 .settings-thread-migration-dialog:focus,
-.settings-unsaved-dialog:focus {
+.settings-unsaved-dialog:focus,
+.settings-codex-profile-dialog:focus {
   outline: none;
 }
 
@@ -14543,6 +14549,12 @@ a.button {
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+/* Holds focus itself while the thread is being created: every control in it
+   is disabled then. */
+.star-map-intake:focus {
+  outline: none;
 }
 
 /* These overlays are body-portaled and full-window, so their top edge
@@ -30242,9 +30254,8 @@ button.pricing-token-miser__folded:focus-visible {
   -webkit-app-region: no-drag;
 }
 
-/* The dialog takes focus on open so Escape and the arrows reach it; Tab moves
-   on to the close cookie. A ring here would trace the window's own edge,
-   entirely off screen. */
+/* Focused as a whole on open, so arrows and Tab start here. Its ring would
+   outline the entire window. */
 .image-lightbox:focus {
   outline: none;
 }
@@ -31198,8 +31209,8 @@ button.pricing-token-miser__folded:focus-visible {
 /* ---- Branch picker specifics ---- */
 .branch-picker__menu {
   /* Anchor to the trigger's right edge so the panel opens leftward — the
-     branch chip lives near the right of the composer toolbar. A viewport
-     clamp in BranchPicker nudges it back in on narrow windows. */
+     branch chip lives near the right of the composer toolbar.
+     `useComposerPopoverClamp` keeps it inside the settings row. */
   right: 0;
   left: auto;
   min-width: max(100%, 360px);
@@ -31753,9 +31764,9 @@ button.pricing-token-miser__folded:focus-visible {
      over the composer/transcript — the "+" trigger is the LAST control in
      the setup row, so a left-edge anchor would push the panel past the
      viewport's right gutter on almost every window width (and the focused
-     search input would then drag overflow-hidden ancestors sideways). A
-     viewport clamp in ReferencePicker nudges it back in on narrow windows,
-     mirroring the branch picker. */
+     search input would then drag overflow-hidden ancestors sideways).
+     `useComposerPopoverClamp` keeps it inside the settings row, shifting it
+     and narrowing it when the chat column is narrower than 440px. */
   right: 0;
   left: auto;
   width: 440px;
@@ -34223,6 +34234,11 @@ button.pricing-token-miser__folded:focus-visible {
   justify-content: center;
   -webkit-app-region: no-drag;
 }
+/* Focused as a whole on open, ahead of its first control (Close
+   onboarding). Its ring would outline the entire window. */
+.onboarding-wizard-overlay:focus {
+  outline: none;
+}
 .onboarding-wizard-overlay__scrim {
   position: absolute;
   inset: 0;
@@ -36356,6 +36372,29 @@ button.pricing-token-miser__folded:focus-visible {
   border-color: var(--accent-bright);
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 50%, transparent),
     0 8px 28px color-mix(in srgb, var(--accent) 25%, transparent);
+}
+/* The card's name is the button that traces and pins it, so it draws as the
+   name did. It is not a card-sized overlay: axe reads an element painted over
+   text as hiding it from the contrast check, and counts a focusable box around
+   the role chips as their neighbour for target spacing. The ring takes the 1px
+   offset of a tight cluster: the sub-line's box starts 2px below the name, and
+   its glyphs clear the ring's 3px reach. `scroll-margin` is that reach plus
+   1px. */
+.rbac-node__trace {
+  appearance: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: inherit;
+  text-align: inherit;
+  cursor: inherit;
+  scroll-margin: 4px;
+}
+.rbac-node__trace:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
 }
 .rbac-node--add {
   justify-content: center;

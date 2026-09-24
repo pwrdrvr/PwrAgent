@@ -15,6 +15,7 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   BackendSummary,
+  DesktopPwrAgentProfileSummary,
   NavigationDirectorySummary,
   NavigationThreadSummary,
 } from "@pwragent/shared";
@@ -22,6 +23,13 @@ import type { FederationThreadTarget } from "../../chrome/federation-thread-targ
 import { HOVER_TRANSITION_GRACE_MS } from "../../../lib/useHoverTransitionGrace";
 import { threadSummaryIdentityKey } from "../../../lib/federated-thread-events";
 import { FixtureSidebar as Sidebar } from "../../../test/navigation-presentation-fixture";
+import {
+  documentTabStops,
+  pressEscape,
+  pressKey,
+  pressTab,
+  tabEscapes,
+} from "../../../test/tab-walk";
 
 /**
  * The whole row card for a thread, given any element inside it (the
@@ -47,6 +55,7 @@ async function clickElement(element: HTMLElement): Promise<void> {
   });
 }
 
+/** A key pressed on whatever holds focus, as the keyboard sends it. */
 function withMockScrollIntoView(): {
   scrollIntoView: ReturnType<typeof vi.fn>;
   restore: () => void;
@@ -6057,11 +6066,7 @@ describe("Sidebar", () => {
     expect(input.selectionEnd).toBe("Cross-project cleanup".length);
   });
 
-  // The menu takes focus from the overflow button so the keyboard reaches its
-  // items. Every way out hands focus back to that button, including the
-  // Rename dialog opened from an item: the item is gone by the time the
-  // dialog closes.
-  it("moves focus into the thread menu and back to its opener through Rename", () => {
+  it("keeps the rename dialog keyboard-contained and returns focus to the thread actions button", () => {
     render(
       <Sidebar
         backends={backends}
@@ -6080,34 +6085,19 @@ describe("Sidebar", () => {
       />
     );
 
-    const overflow = screen.getByRole("button", { name: "Open thread actions" });
-    act(() => overflow.focus());
-    fireEvent.click(overflow);
-    const firstItem = screen.getAllByRole("menuitem")[0]!;
-    expect(firstItem).toHaveFocus();
+    const actions = screen.getByRole("button", { name: "Open thread actions" });
+    actions.focus();
+    act(() => actions.click());
+    const item = screen.getByRole("menuitem", { name: "Rename Thread" });
+    item.focus();
+    act(() => item.click());
 
-    fireEvent.keyDown(firstItem, { key: "Escape" });
-    expect(screen.queryByRole("menu")).toBeNull();
-    expect(overflow).toHaveFocus();
-
-    fireEvent.click(overflow);
-    const renameItem = screen.getByRole("menuitem", { name: "Rename Thread" });
-    act(() => renameItem.focus());
-    fireEvent.click(renameItem);
     const dialog = screen.getByRole("dialog", { name: "Rename Thread" });
-    const input = within(dialog).getByLabelText("Name");
-    const submit = within(dialog).getByRole("button", { name: "Rename Thread" });
-    expect(input).toHaveFocus();
-
-    act(() => submit.focus());
-    fireEvent.keyDown(submit, { key: "Tab" });
-    expect(input).toHaveFocus();
-
-    fireEvent.keyDown(within(dialog).getByRole("button", { name: "Cancel" }), {
-      key: "Escape",
-    });
-    expect(screen.queryByRole("dialog", { name: "Rename Thread" })).toBeNull();
-    expect(overflow).toHaveFocus();
+    expect(tabEscapes(dialog)).toEqual({ forward: [], backward: [] });
+    pressEscape();
+    expect(screen.queryByRole("dialog", { name: "Rename Thread" })).not.toBeInTheDocument();
+    // The menu item that opened the dialog went with its menu.
+    expect(actions).toHaveFocus();
   });
 
   it("collapses a fully selected rename field to either end with arrow keys", () => {
@@ -6935,6 +6925,68 @@ describe("Sidebar directory pinning", () => {
     expect(onOpenLaunchpad).toHaveBeenCalledTimes(1);
   });
 
+  it("walks the machine menu from the keyboard and returns focus to the chevron", () => {
+    renderSidebar([projectADirectory], {
+      onCreateThreadOnFederationTarget: async () => undefined,
+      newThreadFederationTargets: [
+        {
+          availability: "available",
+          instanceId: "studio-work",
+          label: "Studio Mac / work",
+        },
+        {
+          availability: "available",
+          instanceId: "laptop-home",
+          label: "Laptop / home",
+        },
+      ],
+    });
+
+    const chevron = screen.getByRole("button", {
+      name: "Start a new thread on another machine (from ProjectA)",
+    });
+    chevron.focus();
+    act(() => chevron.click());
+    const menu = screen.getByRole("menu", {
+      name: "Start a new thread on another machine",
+    });
+    const items = within(menu).getAllByRole("menuitem");
+    expect(items).toHaveLength(2);
+    expect(items[0]).toHaveFocus();
+    pressKey("ArrowDown");
+    expect(items[1]).toHaveFocus();
+    pressKey("ArrowDown");
+    expect(items[0]).toHaveFocus();
+
+    expect(pressEscape().defaultPrevented).toBe(true);
+    expect(menu).not.toBeInTheDocument();
+    expect(chevron).toHaveFocus();
+    expect(chevron).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("opens a directory's context menu on its first item and returns focus to the row", () => {
+    renderSidebar([projectBDirectory], {
+      onSetDirectoryPin: async () => undefined,
+      onRemoveDirectory: () => undefined,
+    });
+
+    // Shift+F10 or the context-menu key fires `contextmenu` on the focused row.
+    const summary = getDirectorySummary(/ProjectB/i);
+    summary.focus();
+    fireEvent.contextMenu(summary);
+    const pin = screen.getByRole("menuitem", { name: "Pin Directory" });
+    const remove = screen.getByRole("menuitem", { name: "Remove Directory" });
+    expect(pin).toHaveFocus();
+    pressKey("End");
+    expect(remove).toHaveFocus();
+    pressKey("Home");
+    expect(pin).toHaveFocus();
+
+    pressEscape();
+    expect(pin).not.toBeInTheDocument();
+    expect(summary).toHaveFocus();
+  });
+
   it("hides the whole launchpad cluster on a directory this instance cannot host", () => {
     // The unconfigured guard wraps icon AND chevron. Offering "new chat on
     // <machine>" from a row with no local launchpad would reintroduce the
@@ -7636,4 +7688,331 @@ it("marks an unloaded directory through owner membership rather than a visible r
   fireEvent.click(screen.getByRole("menuitem", { name: "Mark Read" }));
   expect(onMarkDirectoriesSeen).toHaveBeenCalledWith([directory.key]);
   expect(onMarkThreadsSeen).not.toHaveBeenCalled();
+});
+
+describe("Sidebar menus from the keyboard", () => {
+  const renderThreadSidebar = (overrides: {
+    threads?: NavigationThreadSummary[];
+    onSetThreadPin?: (
+      thread: NavigationThreadSummary,
+      pinned: boolean,
+    ) => Promise<void>;
+  } = {}) =>
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        directories={directories}
+        inboxThreads={overrides.threads ?? [sharedThread]}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-1"
+        threads={overrides.threads ?? [sharedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+        onRenameThread={async () => undefined}
+        onMarkThreadsSeen={async () => undefined}
+        onSetThreadPin={overrides.onSetThreadPin ?? (async () => undefined)}
+      />,
+    );
+
+  const enabledItems = (menu: HTMLElement): HTMLElement[] =>
+    within(menu)
+      .getAllByRole("menuitem")
+      .filter((item) => !item.hasAttribute("disabled"));
+
+  /** Focus a ⋮ button and press it, as Enter or Space would. */
+  const openThreadActions = (
+    actions = screen.getByRole("button", { name: "Open thread actions" }),
+  ): HTMLElement => {
+    actions.focus();
+    act(() => actions.click());
+    return actions;
+  };
+
+  it("opens the thread actions menu on its first item and marks ⋮ expanded", () => {
+    renderThreadSidebar();
+    const actions = screen.getByRole("button", { name: "Open thread actions" });
+    expect(actions).toHaveAttribute("aria-haspopup", "menu");
+    expect(actions).toHaveAttribute("aria-expanded", "false");
+
+    openThreadActions();
+    const menu = screen.getByRole("menu");
+    expect(actions).toHaveAttribute("aria-expanded", "true");
+    expect(enabledItems(menu)[0]).toHaveFocus();
+  });
+
+  it("steps through the thread actions with the arrows, Home and End", () => {
+    renderThreadSidebar();
+    openThreadActions();
+    const items = enabledItems(screen.getByRole("menu"));
+    expect(items.length).toBeGreaterThan(2);
+
+    pressKey("ArrowDown");
+    expect(items[1]).toHaveFocus();
+    pressKey("End");
+    expect(items[items.length - 1]).toHaveFocus();
+    pressKey("ArrowDown");
+    expect(items[0]).toHaveFocus();
+    pressKey("ArrowUp");
+    expect(items[items.length - 1]).toHaveFocus();
+    pressKey("Home");
+    expect(items[0]).toHaveFocus();
+  });
+
+  it("closes the thread actions on Escape and returns focus to ⋮", () => {
+    const windowListener = vi.fn();
+    renderThreadSidebar();
+    const actions = openThreadActions();
+    pressKey("ArrowDown");
+
+    window.addEventListener("keydown", windowListener);
+    const event = pressEscape();
+    window.removeEventListener("keydown", windowListener);
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(actions).toHaveFocus();
+    expect(actions).toHaveAttribute("aria-expanded", "false");
+    // The thread find bar closes on an Escape that reaches window unclaimed.
+    expect(event.defaultPrevented).toBe(true);
+    expect(windowListener).not.toHaveBeenCalled();
+  });
+
+  it("closes the thread actions on Tab and moves on from ⋮", () => {
+    renderThreadSidebar({
+      threads: [
+        sharedThread,
+        { ...sharedThread, id: "thread-2", title: "Second cleanup" },
+      ],
+    });
+    // The first row's ⋮, so the stop after it is the next row. The menu
+    // renders after the whole list, so a Tab that carried on from the menu
+    // would land somewhere else.
+    const stops = documentTabStops();
+    const actions = screen
+      .getAllByRole("button", { name: "Open thread actions" })
+      .sort((a, b) => stops.indexOf(a) - stops.indexOf(b))[0]!;
+    const at = stops.indexOf(actions);
+    expect(at).toBeGreaterThan(0);
+    expect(at).toBeLessThan(stops.length - 1);
+
+    openThreadActions(actions);
+    pressTab();
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(document.activeElement).toBe(stops[at + 1]);
+
+    openThreadActions(actions);
+    pressTab({ shift: true });
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(document.activeElement).toBe(stops[at - 1]);
+  });
+
+  it("returns focus to ⋮ after a thread action", () => {
+    const onSetThreadPin = vi.fn(async () => undefined);
+    renderThreadSidebar({ onSetThreadPin });
+    const actions = openThreadActions();
+    const pin = screen.getByRole("menuitem", { name: "Pin Thread" });
+    // Bounded: a menu that ignores the arrows must fail here, not hang.
+    for (let i = 0; i < 20 && document.activeElement !== pin; i++) {
+      pressKey("ArrowDown");
+    }
+    expect(pin).toHaveFocus();
+
+    act(() => pin.click());
+    expect(onSetThreadPin).toHaveBeenCalledWith(
+      expect.objectContaining({ id: sharedThread.id }),
+      true,
+    );
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(actions).toHaveFocus();
+  });
+
+  it("returns focus to the right-clicked row when its menu closes", () => {
+    renderThreadSidebar();
+    const row = screen.getByRole("button", { name: /^Cross-project cleanup/ });
+    // A right-click focuses the row before `contextmenu` fires.
+    row.focus();
+    fireEvent.contextMenu(row, { clientX: 12, clientY: 34 });
+    expect(enabledItems(screen.getByRole("menu"))[0]).toHaveFocus();
+    // ⋮ reports its row's menu however it was opened.
+    expect(
+      screen.getByRole("button", { name: "Open thread actions" }),
+    ).toHaveAttribute("aria-expanded", "true");
+
+    pressEscape();
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(row).toHaveFocus();
+  });
+
+  const profile = (
+    name: string,
+    active: boolean,
+  ): DesktopPwrAgentProfileSummary => ({
+    name,
+    displayName: name,
+    active,
+    default: false,
+    profileDir: `/home/example/.pwragent/profiles/${name}`,
+    canDelete: false,
+    codexProfile: {
+      name,
+      displayName: name,
+      codexHome: `/home/example/.codex/profiles/${name}`,
+      source: "directory",
+      exists: true,
+      selected: true,
+      hasAuthFile: true,
+      hasConfigFile: true,
+    },
+  });
+
+  const renderProfileSidebar = (profiles: DesktopPwrAgentProfileSummary[]) =>
+    render(
+      <Sidebar
+        backends={backends}
+        activeProfile="work"
+        profiles={profiles}
+        browseMode="recents"
+        directories={directories}
+        inboxThreads={[]}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey={undefined}
+        threads={[]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onOpenProfile={async () => undefined}
+        onSelectThread={() => undefined}
+      />,
+    );
+
+  it("opens the profile menu on the first profile it can open", () => {
+    renderProfileSidebar([
+      profile("work", true),
+      profile("personal", false),
+      profile("studio", false),
+    ]);
+    const trigger = screen.getByRole("button", {
+      name: "Open PwrAgent profile menu",
+    });
+    expect(trigger).toHaveAttribute("aria-haspopup", "menu");
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+
+    trigger.focus();
+    act(() => trigger.click());
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+    // The current profile is disabled, so the walk starts after it.
+    expect(screen.getByRole("menuitem", { name: /^personal/ })).toHaveFocus();
+    pressKey("ArrowDown");
+    expect(screen.getByRole("menuitem", { name: /^studio/ })).toHaveFocus();
+
+    pressEscape();
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("holds focus on a profile menu whose only profile is the current one", () => {
+    renderProfileSidebar([profile("work", true)]);
+    const trigger = screen.getByRole("button", {
+      name: "Open PwrAgent profile menu",
+    });
+    trigger.focus();
+    act(() => trigger.click());
+    const menu = screen.getByRole("menu");
+    expect(menu).toHaveFocus();
+
+    pressTab();
+    expect(menu).not.toBeInTheDocument();
+    const stops = documentTabStops();
+    const at = stops.indexOf(trigger);
+    expect(document.activeElement).toBe(stops[(at + 1) % stops.length]);
+  });
+
+  it("keeps one menu open at a time", () => {
+    render(
+      <Sidebar
+        backends={backends}
+        activeProfile="work"
+        profiles={[profile("work", true), profile("personal", false)]}
+        browseMode="recents"
+        directories={directories}
+        inboxThreads={[sharedThread]}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-1"
+        threads={[sharedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onOpenProfile={async () => undefined}
+        onSelectThread={() => undefined}
+      />,
+    );
+    const trigger = screen.getByRole("button", {
+      name: "Open PwrAgent profile menu",
+    });
+    // Both triggers stop their click, so neither reaches the other menu's
+    // outside-click listener.
+    trigger.focus();
+    act(() => trigger.click());
+    const actions = openThreadActions();
+    expect(screen.getAllByRole("menu")).toHaveLength(1);
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    expect(actions).toHaveAttribute("aria-expanded", "true");
+
+    trigger.focus();
+    act(() => trigger.click());
+    expect(screen.getAllByRole("menu")).toHaveLength(1);
+    expect(actions).toHaveAttribute("aria-expanded", "false");
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("returns focus to the PR chip after the detach dialog closes", () => {
+    try {
+      window.localStorage.removeItem("pwragent.detachPrWarning.dismissed");
+    } catch {
+      // The warning shows when storage is unavailable too.
+    }
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        directories={directories}
+        inboxThreads={[pullRequestThread]}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-1"
+        threads={[pullRequestThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onDetachPullRequest={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />,
+    );
+    const chip = screen.getByRole("button", {
+      name: "Open ExampleOrg/ExampleApp#202 (ready for review · checks passing) in browser",
+    });
+    chip.focus();
+    fireEvent.contextMenu(chip, { clientX: 48, clientY: 64 });
+    const detach = screen.getByRole("menuitem", { name: "Detach Pull Request" });
+    for (let i = 0; i < 20 && document.activeElement !== detach; i++) {
+      pressKey("ArrowDown");
+    }
+    expect(detach).toHaveFocus();
+
+    // The dialog's opener is this item, which the menu removes as it closes.
+    // The PR chip's menu leaves ⋮ collapsed, so nothing marks the chip as the
+    // trigger either.
+    act(() => detach.click());
+    expect(
+      screen.getByRole("dialog", { name: "Detach pull request?" }),
+    ).toBeInTheDocument();
+    pressEscape();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(chip).toHaveFocus();
+  });
 });

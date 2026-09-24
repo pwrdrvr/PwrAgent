@@ -299,6 +299,44 @@ describe("ReplayClient", () => {
     });
   });
 
+  it("keeps the active thread list available until archive completes", async () => {
+    const thread = {
+      id: "thread-1",
+      title: "Archive fixture thread",
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      linkedDirectories: [],
+    };
+    const client = ReplayClient.fromFixture({
+      metadata: { backend: "codex", scenario: "archive-list-causality" },
+      steps: [
+        {
+          id: "initialize-1",
+          kind: "response",
+          method: "initialize",
+          result: {
+            serverInfo: { name: "Replay Codex", version: "1.0.0" },
+            methods: ["thread/list", "thread/archive"],
+          },
+        },
+        { id: "thread-list-active", kind: "response", method: "thread/list", result: [thread] },
+        { id: "thread-archive-1", kind: "response", method: "thread/archive", result: { threadId: thread.id } },
+        {
+          id: "thread-list-post-archive",
+          afterResponseId: "thread-archive-1",
+          kind: "response",
+          method: "thread/list",
+          result: [],
+        },
+      ],
+    });
+
+    await expect(client.listThreads()).resolves.toMatchObject([thread]);
+    await expect(client.listThreads()).resolves.toMatchObject([thread]);
+    await expect(client.archiveThread({ threadId: thread.id })).resolves.toEqual({ threadId: thread.id });
+    await expect(client.listThreads()).resolves.toEqual([]);
+  });
+
   it("supports workspace updates for existing threads", async () => {
     const client = ReplayClient.fromFixture(buildFixture());
 

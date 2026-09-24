@@ -1502,6 +1502,17 @@ function pricingEntryMatchesInputTokens(
   if (entry.requiresRequestInputTokens && inputTokenScope !== "request") {
     return false;
   }
+  // Aggregates cannot establish that any one request crossed the OpenAI
+  // long-context boundary. Estimate them at the cheaper band; only measured
+  // request input may select the long-context surcharge.
+  if (
+    inputTokenScope !== "request"
+    && entry.provider === "openai"
+    && entry.maximumInputTokens !== undefined
+    && entry.minimumInputTokens === undefined
+  ) {
+    return true;
+  }
   if (
     entry.minimumInputTokens !== undefined
     && inputTokens < entry.minimumInputTokens

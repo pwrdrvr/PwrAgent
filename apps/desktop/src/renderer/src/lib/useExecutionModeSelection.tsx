@@ -8,6 +8,7 @@ import {
 import { createPortal } from "react-dom";
 import type { ThreadExecutionMode } from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
+import { useModalDialog } from "./useModalDialog";
 
 /**
  * The renderer's single gate on escalating a thread to Full Access.
@@ -133,6 +134,14 @@ export function useExecutionModeSelection(
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>();
   const [readDismissed, setReadDismissed] = useState(dismissedCache ?? false);
+  // Escape is Cancel, the choice that leaves the mode where it was, and it
+  // refuses while the acceptance is saving, as Cancel does.
+  const dialogRef = useModalDialog({
+    open: dialogOpen,
+    onClose: () => {
+      if (!saving) setDialogOpen(false);
+    },
+  });
 
   const ownsPreference = options.dismissed === undefined;
   const desktopApi = options.desktopApi;
@@ -224,6 +233,7 @@ export function useExecutionModeSelection(
           onPointerDown={(event) => event.stopPropagation()}
         >
           <div
+            ref={dialogRef}
             aria-labelledby="full-access-warning-title"
             aria-modal="true"
             className="full-access-warning-dialog"

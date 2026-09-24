@@ -15,7 +15,6 @@ import {
   useContext,
   useEffect,
   useMemo,
-  useRef,
   useState,
   type ClipboardEvent,
   type MouseEvent,
@@ -45,6 +44,7 @@ import {
   usePullRequestLinks,
 } from "../../lib/pull-request-links";
 import { expandTildePath, tildifyPath } from "../../lib/tildify-path";
+import { useModalDialog } from "../../lib/useModalDialog";
 import { SkillChip } from "../composer/SkillChip";
 import {
   PullRequestLinkChip,
@@ -787,8 +787,10 @@ function MarkdownDocumentModal(props: {
   skills?: AppServerSkillSummary[];
   target: MarkdownViewerTarget;
 }) {
-  const onClose = props.onClose;
-  const contentRef = useRef<HTMLDivElement>(null);
+  // The message hands this a fresh onClose each time it renders. The hook
+  // reads the latest one on Escape. The effect it replaced depended on it, so
+  // any re-render of the message sent focus back to the first control.
+  const contentRef = useModalDialog({ onClose: props.onClose });
   const [loadState, setLoadState] = useState<
     | { status: "loading" }
     | { status: "loaded"; content: string }
@@ -835,55 +837,6 @@ function MarkdownDocumentModal(props: {
       cancelled = true;
     };
   }, [props.desktopApi, props.target.path]);
-
-  useEffect(() => {
-    const restoreFocus = document.activeElement as HTMLElement | null;
-    const focusables = (): HTMLElement[] =>
-      Array.from(
-        contentRef.current?.querySelectorAll<HTMLElement>(
-          'button, a[href], [tabindex]:not([tabindex="-1"])',
-        ) ?? [],
-      ).filter((element) => !element.hasAttribute("disabled"));
-
-    focusables()[0]?.focus();
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        onClose();
-        return;
-      }
-
-      if (event.key !== "Tab") {
-        return;
-      }
-
-      const items = focusables();
-      if (items.length === 0) {
-        return;
-      }
-
-      const first = items[0]!;
-      const last = items[items.length - 1]!;
-      const active = document.activeElement;
-      if (!contentRef.current?.contains(active)) {
-        event.preventDefault();
-        first.focus();
-      } else if (event.shiftKey && active === first) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && active === last) {
-        event.preventDefault();
-        first.focus();
-      }
-    };
-
-    window.addEventListener("keydown", handleKeyDown, true);
-    return () => {
-      window.removeEventListener("keydown", handleKeyDown, true);
-      restoreFocus?.focus?.();
-    };
-  }, [onClose]);
 
   if (typeof document === "undefined") {
     return null;

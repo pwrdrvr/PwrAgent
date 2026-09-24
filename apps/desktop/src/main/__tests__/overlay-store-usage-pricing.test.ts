@@ -289,7 +289,7 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
     expect(await store.readThreadPricing({ backend: "codex", threadId: "thread-1" })).toEqual(pricing);
   });
 
-  it("prices a protected Astra aggregate when hydration supplies its missing context ceiling", async () => {
+  it("keeps a protected Astra aggregate priced when hydration supplies a context ceiling", async () => {
     const first = buildUsageLine(buildAstraAggregateOverrides({
       source: "live", cumulativeTotalTokens: 1_658_805,
     }));
@@ -298,7 +298,7 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
       ...first, usageLineId: "line-2", turnId: "turn-2", cumulativeTotalTokens: 3_317_610,
     } });
     const before = await store.readThreadPricing({ backend: "codex", threadId: "thread-1" });
-    expect(before.lines.find((line) => line.turnId === "turn-1")?.priceStatus).toBe("unpriced");
+    expect(before.lines.find((line) => line.turnId === "turn-1")?.priceStatus).toBe("priced");
     await store.upsertThreadUsageLine({ line: {
       ...first, source: "hydration", usageLineId: "hydrated-astra",
       modelContextWindow: 258_400, totalTokens: 9_999_999, cumulativeTotalTokens: 9_999_999,
@@ -395,10 +395,10 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
         inputTokens: 400_000, uncachedInputTokens: 200_000,
         cachedInputTokens: 200_000, outputTokens: 20_000,
         reasoningOutputTokens: 0, totalTokens: 420_000,
-        totalCostMicros: 3_200_000, uncachedInputCostMicros: 2_000_000,
-        cachedInputCostMicros: 200_000, outputCostMicros: 1_000_000,
+        totalCostMicros: 5_900_000, uncachedInputCostMicros: 4_000_000,
+        cachedInputCostMicros: 400_000, outputCostMicros: 1_500_000,
         pricingBasis: "request-components", pricingCatalogVersion: "2026-09-04",
-        pricingRateId: "openai:2026-09-04:gpt-6-astra:standard:input-lte-272k",
+        pricingRateId: "openai:2026-09-04:gpt-6-astra:standard:input-gt-272k",
       });
       await store.upsertThreadUsageLine({ line });
       await store.upsertThreadUsageLine({ line: {
@@ -416,15 +416,15 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
       expect(pricing.lines[0]).toMatchObject({
         completedAt: line.createdAt + 60_000,
         status: "finalized",
-        priceStatus: unchanged ? "priced" : "unpriced",
-        totalCostMicros: unchanged ? line.totalCostMicros : 0,
+        priceStatus: change === "settings" ? "unpriced" : "priced",
+        totalCostMicros: unchanged ? line.totalCostMicros : change === "tokens" ? 3_250_000 : 0,
       });
       if (unchanged) {
         expect(pricing.lines[0]).toMatchObject({
           pricingBasis: "request-components",
-          cachedInputCostMicros: 200_000,
-          uncachedInputCostMicros: 2_000_000,
-          outputCostMicros: 1_000_000,
+          cachedInputCostMicros: 400_000,
+          uncachedInputCostMicros: 4_000_000,
+          outputCostMicros: 1_500_000,
         });
         expect(pricing.lines[0]?.priceUnavailableReason).toBeUndefined();
         expect(pricing.summaries[0]?.totalCostMicros).toBe(line.totalCostMicros);
@@ -1165,7 +1165,7 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
     });
   });
 
-  it("labels aggregate Astra usage as missing a request breakdown", async () => {
+  it("estimates aggregate Astra usage at the cheaper rate without a request breakdown", async () => {
     await store.upsertThreadUsageLine({
       line: buildUsageLine({
         cachedInputCostMicros: 0,
@@ -1194,9 +1194,10 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
     });
 
     expect(pricing.lines[0]).toMatchObject({
-      priceStatus: "unpriced",
-      priceUnavailableReason: "insufficient-token-breakdown",
+      priceStatus: "priced",
+      totalCostMicros: 2_600_000,
     });
+    expect(pricing.lines[0]?.priceUnavailableReason).toBeUndefined();
   });
 
   it("prices an aggregate Astra turn when its context window keeps every request under 272K", async () => {

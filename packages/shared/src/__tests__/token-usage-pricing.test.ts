@@ -6,7 +6,6 @@ import {
   listOpenAiTokenUsagePricingRates,
   listTokenUsagePricingRates,
   resolveOpenAiPricingServiceTier,
-  resolveTokenUsagePriceUnavailableReason,
 } from "../token-usage-pricing";
 
 describe("token usage pricing", () => {
@@ -377,7 +376,12 @@ describe("token usage pricing", () => {
       .toBeUndefined();
     if (inputTokens > 272_000) {
       expect(estimateOpenAiTokenUsageCost({ ...params, inputTokenScope: "aggregate" }))
-        .toBeUndefined();
+        .toMatchObject({
+          inputUsdPerMillion: inputRate / 2,
+          cachedInputUsdPerMillion: cachedRate / 2,
+          cacheWriteInputUsdPerMillion: writeRate / 2,
+          outputUsdPerMillion: outputRate / 1.5,
+        });
     }
   });
 
@@ -503,26 +507,35 @@ describe("token usage pricing", () => {
     });
   });
 
-  it("leaves ambiguous multi-request Astra aggregates unpriced", () => {
-    expect(
-      estimateOpenAiTokenUsageCost({
-        at: Date.UTC(2026, 8, 4),
-        cachedInputTokens: 72_001,
-        model: "gpt-6-astra",
-        outputTokens: 100_000,
-        uncachedInputTokens: 200_000,
-      }),
-    ).toBeUndefined();
-    expect(
-      resolveTokenUsagePriceUnavailableReason({
-        at: Date.UTC(2026, 8, 4),
-        cachedInputTokens: 72_001,
-        inputTokenScope: "aggregate",
-        model: "gpt-6-astra",
-        serviceTier: "standard",
-        uncachedInputTokens: 200_000,
-      }),
-    ).toBe("insufficient-token-breakdown");
+  it("estimates ambiguous multi-request Astra aggregates at the cheaper rate", () => {
+    expect(estimateOpenAiTokenUsageCost({
+      at: Date.UTC(2026, 8, 4),
+      cachedInputTokens: 72_001,
+      model: "gpt-6-astra",
+      outputTokens: 100_000,
+      uncachedInputTokens: 200_000,
+    })).toMatchObject({
+      inputUsdPerMillion: 10,
+      cachedInputUsdPerMillion: 1,
+      outputUsdPerMillion: 50,
+      totalCostMicros: 7_072_001,
+    });
+  });
+
+  it("prices the reported cumulative Luna monitor usage at the cheaper rate", () => {
+    expect(estimateOpenAiTokenUsageCost({
+      at: Date.UTC(2026, 8, 23),
+      model: "gpt-6-luna",
+      cachedInputTokens: 2_348_800,
+      uncachedInputTokens: 90_296,
+      outputTokens: 11_003,
+      reasoningOutputTokens: 1_317,
+    })).toMatchObject({
+      inputUsdPerMillion: 0.1,
+      cachedInputUsdPerMillion: 0.01,
+      outputUsdPerMillion: 0.5,
+      totalCostMicros: 38_678,
+    });
   });
 
   it("prices a multi-request Astra aggregate when the context window caps every request under 272K", () => {
@@ -552,7 +565,7 @@ describe("token usage pricing", () => {
     });
   });
 
-  it("keeps an Astra aggregate unpriced when the context window admits requests above 272K", () => {
+  it("uses the cheaper aggregate rate even when the context window admits larger requests", () => {
     const usage = {
       at: Date.UTC(2026, 8, 5),
       cachedInputTokens: 72_001,
@@ -563,10 +576,11 @@ describe("token usage pricing", () => {
       uncachedInputTokens: 200_000,
     };
 
-    expect(estimateOpenAiTokenUsageCost(usage)).toBeUndefined();
-    expect(resolveTokenUsagePriceUnavailableReason(usage)).toBe(
-      "insufficient-token-breakdown",
-    );
+    expect(estimateOpenAiTokenUsageCost(usage)).toMatchObject({
+      inputUsdPerMillion: 10,
+      outputUsdPerMillion: 50,
+      totalCostMicros: 7_072_001,
+    });
   });
 
   it("keeps unsupported GPT-6 Astra billing modes unpriced", () => {

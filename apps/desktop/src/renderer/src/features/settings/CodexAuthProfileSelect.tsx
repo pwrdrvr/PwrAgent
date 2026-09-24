@@ -7,6 +7,7 @@ import { normalizeProfileName } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { tildifyPath } from "../../lib/tildify-path";
 import { BACKEND_SUMMARIES_REFRESH_EVENT } from "../../lib/useBackendSummaries";
+import { useModalDialog } from "../../lib/useModalDialog";
 import { SettingsSplitPath } from "./SettingsSplitPath";
 
 const CREATE_VALUE = "__create_codex_profile__";
@@ -218,6 +219,11 @@ function CodexAuthProfileCreateDialog(props: {
   const [loginUrl, setLoginUrl] = useState<string>();
   const [statusDetail, setStatusDetail] = useState<string>();
   const authenticatedRef = useRef(false);
+  const dialogRef = useModalDialog({
+    onClose: () => {
+      if (!busy) props.onCancel();
+    },
+  });
   const normalizedName = normalizeProfileName(profileName);
   const hasInput = profileName.trim().length > 0;
   const existingNames = new Set(props.existingProfiles.map((profile) => profile.name));
@@ -319,10 +325,12 @@ function CodexAuthProfileCreateDialog(props: {
   return (
     <div className="settings-confirm-modal" role="presentation">
       <div
+        ref={dialogRef}
         aria-labelledby="create-codex-profile-heading"
         aria-modal="true"
         className="settings-confirm-dialog settings-codex-profile-dialog"
         role="dialog"
+        tabIndex={-1}
       >
         <h2 id="create-codex-profile-heading">Create Codex profile</h2>
         {step === "form" ? (
@@ -461,6 +469,30 @@ export function CodexAuthProfileLoginDialog(props: {
     props.desktopApi?.startCodexAuthProfileLogin
       && props.desktopApi.checkCodexAuthProfileStatus,
   );
+  const finish = () => {
+    void (async () => {
+      await props.onAuthenticated?.();
+      window.dispatchEvent(new Event(BACKEND_SUMMARIES_REFRESH_EVENT));
+      props.onCancel();
+    })();
+  };
+  // Escape answers as the visible button would: Done once the login has
+  // succeeded, Cancel otherwise, and nothing while Cancel is disabled.
+  //
+  // Focus starts on the dialog itself, which is why it carries
+  // tabIndex={-1}. The login starts as the dialog opens and disables every
+  // control, and Chromium drops focus to <body> from a control that becomes
+  // disabled, so focus on Cancel lasted one render.
+  const dialogRef = useModalDialog({
+    onClose: () => {
+      if (authenticated) {
+        finish();
+      } else if (!busy) {
+        props.onCancel();
+      }
+    },
+    initialFocus: "dialog",
+  });
 
   const startLogin = async () => {
     if (!canLogin) return;
@@ -551,10 +583,12 @@ export function CodexAuthProfileLoginDialog(props: {
   return (
     <div className="settings-confirm-modal" role="presentation">
       <div
+        ref={dialogRef}
         aria-labelledby="login-codex-profile-heading"
         aria-modal="true"
         className="settings-confirm-dialog settings-codex-profile-dialog"
         role="dialog"
+        tabIndex={-1}
       >
         <h2 id="login-codex-profile-heading">Log in to Codex profile</h2>
         {authenticated ? (
@@ -598,13 +632,7 @@ export function CodexAuthProfileLoginDialog(props: {
             <button
               className="button button--primary"
               type="button"
-              onClick={() => {
-                void (async () => {
-                  await props.onAuthenticated?.();
-                  window.dispatchEvent(new Event(BACKEND_SUMMARIES_REFRESH_EVENT));
-                  props.onCancel();
-                })();
-              }}
+              onClick={finish}
             >
               Done
             </button>

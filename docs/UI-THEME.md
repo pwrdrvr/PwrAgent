@@ -478,10 +478,8 @@ Focus states should be visible and tangerine-led, but contained so they do not c
 
 ### Focus containment
 
-- **A modal dialog uses `useDialogFocus`** (`renderer/src/lib/useDialogFocus.ts`). It moves focus in on open, keeps Tab and Shift+Tab inside, closes on Escape, and returns focus to the opener on close. A destructive confirmation starts on Cancel. A dialog opened from a menu item names the menu's opener as `returnFocus`, since the item is gone when the dialog closes.
-- **A `role="menu"` popup uses `useMenuFocus`** (`renderer/src/lib/useMenuFocus.ts`). The first item takes focus once the menu is placed, and the arrow keys, Home, and End move between items. Escape and Tab hand focus back to the opener, and Tab then moves on from it.
-- **A full-window layer makes what it covers `inert`.** Settings and Automations cover the sidebar and main, which go inert while either is open, so Tab cannot walk controls nobody can see. The layer takes focus on open and draws no ring, since it is not a Tab stop. On close, focus returns to the control that opened it.
-- **Focus goes back only when it fell to `<body>`.** A close that moved focus on purpose, such as a thread taking the composer, keeps it.
+- **Dialogs and menus contain focus through shared hooks.** An `aria-modal` dialog uses `useModalDialog`, and a `role="menu"` popup uses `useMenuNavigation`. [apps/desktop/AGENTS.md](../apps/desktop/AGENTS.md) has the rules under "Modal dialogs and overlays" and "Menus".
+- **A full-window layer makes what it covers `inert`.** Settings and Automations cover the sidebar and main, which go inert while either is open, so Tab cannot walk controls nobody can see. The layer takes focus on open, because its opener went inert with them, and draws no ring, since it is not a Tab stop. On close, focus returns to the control that opened it, but only when focus fell to `<body>`: a close that moved focus on purpose, such as a thread taking the composer, keeps it.
 
 ## Tooltips
 

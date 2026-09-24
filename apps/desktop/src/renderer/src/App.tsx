@@ -84,7 +84,6 @@ import { useAppearance, type AppearanceController } from "./lib/useAppearance";
 import { useBackendSummaries } from "./lib/useBackendSummaries";
 import { useDesktopApi, type DesktopApi } from "./lib/desktop-api";
 import { useDesktopApplications } from "./lib/useDesktopApplications";
-import { restoreFocusIfDropped } from "./lib/useDialogFocus";
 import { useEventCallback } from "./lib/useEventCallback";
 import {
   readRendererFederationLabel,
@@ -208,6 +207,26 @@ type MainView = "thread" | "settings" | "automations" | "search";
 /** The views drawn in `.app-shell__settings-layer`, over the whole shell. */
 function isLayerView(view: MainView): boolean {
   return view === "settings" || view === "automations";
+}
+
+/**
+ * Hand focus back to the layer's opener once the layer has gone. Only when
+ * focus fell to <body> with it: a close that moved focus on purpose (a thread
+ * taking the composer) keeps it.
+ */
+function restoreFocusIfDropped(
+  target: HTMLElement | null,
+  layer: HTMLElement | null,
+): void {
+  const active = document.activeElement;
+  const dropped =
+    active === null
+    || active === document.body
+    || (layer?.contains(active) ?? false);
+  if (!dropped || !target || !target.isConnected || target.closest("[inert]")) {
+    return;
+  }
+  target.focus({ preventScroll: true });
 }
 
 const LazySettingsScreen = lazy(async () => ({

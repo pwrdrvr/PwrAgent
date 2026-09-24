@@ -1,37 +1,32 @@
 import "@testing-library/jest-dom/vitest";
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import { useState } from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PrSummary } from "@pwragent/shared";
+import { afterEach, describe, expect, it } from "vitest";
 import { DetachPullRequestWarning } from "../DetachPullRequestWarning";
+import { pressEscape, tabEscapes } from "../../../test/tab-walk";
 
-const pr: PrSummary = {
-  provider: "github.com",
-  number: 412,
-  org: "example-org",
-  repo: "sample-app",
-  state: "passing",
-  checkState: "passing",
-  lifecycleState: "open",
-  reviewState: "ready_for_review",
-  mergeState: "mergeable",
-  url: "https://github.com/example-org/sample-app/pull/412",
-};
+afterEach(() => {
+  cleanup();
+});
 
-function Harness(props: { onCancel?: () => void }) {
+const pr = {
+  org: "acme",
+  repo: "sprocket",
+  number: 42,
+} as PrSummary;
+
+function Host() {
   const [open, setOpen] = useState(false);
   return (
     <>
       <button type="button" onClick={() => setOpen(true)}>
-        Detach example-org/sample-app#412 from thread
+        Detach
       </button>
       {open ? (
         <DetachPullRequestWarning
           pr={pr}
-          onCancel={() => {
-            props.onCancel?.();
-            setOpen(false);
-          }}
+          onCancel={() => setOpen(false)}
           onConfirm={() => setOpen(false)}
         />
       ) : null}
@@ -39,37 +34,33 @@ function Harness(props: { onCancel?: () => void }) {
   );
 }
 
-afterEach(() => {
-  cleanup();
-});
+function open(): HTMLElement {
+  render(<Host />);
+  const opener = screen.getByRole("button", { name: "Detach" });
+  opener.focus();
+  act(() => opener.click());
+  return screen.getByRole("dialog", { name: "Detach pull request?" });
+}
 
-describe("DetachPullRequestWarning focus", () => {
-  it("opens on Cancel, keeps Tab inside, and returns focus on Escape", () => {
-    const onCancel = vi.fn();
-    render(<Harness onCancel={onCancel} />);
-    const opener = screen.getByRole("button", {
-      name: "Detach example-org/sample-app#412 from thread",
-    });
-    act(() => opener.focus());
-    fireEvent.click(opener);
+describe("DetachPullRequestWarning, keyboard", () => {
+  it("opens with focus on Cancel, the action that changes nothing", () => {
+    open();
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", { name: "Cancel" }),
+    );
+  });
 
-    const dialog = screen.getByRole("dialog", { name: "Detach pull request?" });
-    const cancel = within(dialog).getByRole("button", { name: "Cancel" });
-    const detach = within(dialog).getByRole("button", { name: "Detach PR" });
-    const checkbox = within(dialog).getByRole("checkbox");
-    // The destructive action is never where focus starts.
-    expect(cancel).toHaveFocus();
+  it("keeps Tab inside the dialog", () => {
+    const dialog = open();
+    expect(tabEscapes(dialog)).toEqual({ forward: [], backward: [] });
+  });
 
-    act(() => detach.focus());
-    fireEvent.keyDown(detach, { key: "Tab" });
-    expect(checkbox).toHaveFocus();
-    fireEvent.keyDown(checkbox, { key: "Tab", shiftKey: true });
-    expect(detach).toHaveFocus();
-
-    fireEvent.keyDown(detach, { key: "Escape" });
-
-    expect(onCancel).toHaveBeenCalledTimes(1);
+  it("cancels on Escape and returns focus to the opener", () => {
+    open();
+    pressEscape();
     expect(screen.queryByRole("dialog")).toBeNull();
-    expect(opener).toHaveFocus();
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", { name: "Detach" }),
+    );
   });
 });

@@ -1,5 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -16,6 +17,7 @@ import { REMOTE_NATIVE_PICKER_TOOLTIP } from "../native-picker-boundary";
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   delete (window as unknown as { __pwragentHomeDir?: unknown }).__pwragentHomeDir;
 });
 
@@ -33,6 +35,49 @@ function mockPanelRect(left: number, right: number): void {
     y: 0,
     toJSON: () => ({}),
   } as DOMRect);
+}
+
+type RowLayout = {
+  /** The trigger's right edge, where the unshifted panel's right edge sits. */
+  triggerRight: number;
+  naturalWidth: number;
+  row: { left: number; right: number };
+};
+
+/** Lay the panel out from its trigger and its own inline clamp style, inside
+ *  a `.composer__setup` row, the way the browser does. Mutate `layout` to
+ *  move the trigger or resize the row. */
+function mockRowLayout(layout: RowLayout): void {
+  const rect = (left: number, right: number): DOMRect => ({
+    left,
+    right,
+    top: 0,
+    bottom: 420,
+    width: right - left,
+    height: 420,
+    x: left,
+    y: 0,
+    toJSON: () => ({}),
+  });
+  vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
+    function getBoundingClientRect(this: Element) {
+      if (this.classList.contains("composer__setup")) {
+        return rect(layout.row.left, layout.row.right);
+      }
+      if (this.classList.contains("reference-picker__pop")) {
+        const style = (this as HTMLElement).style;
+        const shift = Number(
+          /translateX\((-?[\d.]+)px\)/.exec(style.transform)?.[1] ?? 0,
+        );
+        const width = style.maxWidth
+          ? Number.parseFloat(style.maxWidth)
+          : layout.naturalWidth;
+        const right = layout.triggerRight + shift;
+        return rect(right - width, right);
+      }
+      return rect(0, 0);
+    },
+  );
 }
 
 const dirA: NavigationDirectorySummary = {
@@ -279,6 +324,91 @@ describe("ReferencePicker", () => {
     expect(
       screen.getByRole("dialog", { name: "Add reference" }),
     ).not.toHaveAttribute("style");
+  });
+
+  it("clamps the panel to the composer's settings row, not just the window", () => {
+    // Measured at 1280x800 with the sidebar and context rail open. The main
+    // pane is overflow-hidden and starts at 408, so a window-only clamp left
+    // this 316..756 panel 92px under the sidebar.
+    mockRowLayout({
+      naturalWidth: 440,
+      row: { left: 424, right: 836 },
+      triggerRight: 755.890625,
+    });
+    render(
+      <div className="composer__setup">
+        <ReferencePicker
+          directories={[dirA]}
+          open
+          recentFiles={[]}
+          onClose={() => undefined}
+          onSelectDirectory={() => undefined}
+          onSelectFile={() => undefined}
+        />
+      </div>,
+    );
+
+    expect(screen.getByRole("dialog", { name: "Add reference" })).toHaveStyle({
+      maxWidth: "412px",
+      minWidth: "412px",
+      transform: "translateX(80.109375px)",
+    });
+  });
+
+  it("re-clamps when the settings row resizes without a window resize", () => {
+    // Shrinking the window changes the pinned rail's width, and the layout
+    // animates the padding that reserves it, so the row keeps resizing after
+    // the last `resize` event. Only an observer on the row sees that.
+    const observed: Element[] = [];
+    const callbacks: Array<() => void> = [];
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(callback: () => void) {
+          callbacks.push(callback);
+        }
+
+        observe(target: Element): void {
+          observed.push(target);
+        }
+
+        disconnect(): void {}
+      },
+    );
+    const layout: RowLayout = {
+      naturalWidth: 440,
+      row: { left: 424, right: 836 },
+      triggerRight: 755.890625,
+    };
+    mockRowLayout(layout);
+    const { container } = render(
+      <div className="composer__setup">
+        <ReferencePicker
+          directories={[dirA]}
+          open
+          recentFiles={[]}
+          onClose={() => undefined}
+          onSelectDirectory={() => undefined}
+          onSelectFile={() => undefined}
+        />
+      </div>,
+    );
+    expect(observed).toEqual([container.querySelector(".composer__setup")]);
+
+    // The 960x640 layout: the row wraps and the trigger lands at 434.
+    layout.row = { left: 376, right: 656 };
+    layout.triggerRight = 434;
+    act(() => {
+      for (const callback of callbacks) {
+        callback();
+      }
+    });
+
+    expect(screen.getByRole("dialog", { name: "Add reference" })).toHaveStyle({
+      maxWidth: "280px",
+      minWidth: "280px",
+      transform: "translateX(222px)",
+    });
   });
 
   it("renders nothing but the trigger child when closed", () => {

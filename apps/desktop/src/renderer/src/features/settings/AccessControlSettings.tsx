@@ -5,6 +5,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type FocusEvent,
   type ReactNode,
 } from "react";
 
@@ -172,7 +173,7 @@ export function AccessControlSettings(props: { desktopApi: DesktopApi }) {
   const [hover, setHover] = useState<HoverTarget>(null);
   // A pinned selection persists the highlight so you can scroll the long
   // permissions column while a role/actor stays traced. Hover only previews
-  // when nothing is pinned.
+  // when nothing is pinned. Keyboard focus previews through the same state.
   const [selected, setSelected] = useState<HoverTarget>(null);
   const [busy, setBusy] = useState(false);
   const [editingRole, setEditingRole] = useState<RbacRoleDefinition | "new" | null>(null);
@@ -336,6 +337,43 @@ export function AccessControlSettings(props: { desktopApi: DesktopApi }) {
   const toggleSelect = (target: NonNullable<HoverTarget>) => {
     setSelected((current) => (matchesSelection(current, target) ? null : target));
   };
+
+  // Each clears only its own node's preview: focus can rest on one card while
+  // the pointer leaves another, and that leave must not drop the focused trace.
+  const preview = (target: NonNullable<HoverTarget>) => {
+    setHover((current) => (matchesSelection(current, target) ? current : target));
+  };
+  const endPreview = (target: NonNullable<HoverTarget>) => {
+    setHover((current) => (matchesSelection(current, target) ? null : current));
+  };
+  const nodeHandlers = (target: NonNullable<HoverTarget>) => ({
+    onMouseEnter: () => preview(target),
+    onMouseLeave: () => endPreview(target),
+    // Focus, not just the trace button's: Tab walks on into a card's chips
+    // and Edit button, and the card stays traced while it does.
+    onFocus: () => preview(target),
+    onBlur: (event: FocusEvent<HTMLDivElement>) => {
+      if (!event.currentTarget.contains(event.relatedTarget)) endPreview(target);
+    },
+    // A click anywhere on the card, including the trace button's own click
+    // from Enter or Space, lands here.
+    onClick: () => toggleSelect(target),
+  });
+  // The card's name is its button, the keyboard's way to trace and pin it.
+  // The card cannot be the button: subject cards hold role chips and custom
+  // roles an Edit button, and a button's contents are presentational, which
+  // would hide those controls from assistive tech. The name sits beside them
+  // instead, so each stays its own control.
+  const traceButton = (target: NonNullable<HoverTarget>, label: string) => (
+    <button
+      type="button"
+      className="rbac-node__trace"
+      aria-label={`Trace ${label}`}
+      aria-pressed={isPinned(target)}
+    >
+      {label}
+    </button>
+  );
 
   // ---- SVG connector wires ----
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -551,9 +589,9 @@ export function AccessControlSettings(props: { desktopApi: DesktopApi }) {
           <>
             Bind messaging-platform actors to one or more role profiles.
             Permissions are <b>strictly additive</b> — if any bound role grants a
-            capability, the actor has it. Hover any node to trace the path, or{" "}
-            <b>click to pin</b> it so the highlight stays while you scroll the
-            permissions column.
+            capability, the actor has it. Hover or focus any node to trace the
+            path, or <b>click to pin</b> it so the highlight stays while you
+            scroll the permissions column.
           </>
         }
         action={
@@ -705,6 +743,7 @@ export function AccessControlSettings(props: { desktopApi: DesktopApi }) {
               {subjects.map((known) => {
                 const key = subjectKey(known.subject);
                 const attached = rolesForSubjectKey(key);
+                const label = subjectLabel(known.subject, known.displayName);
                 const sub = `${platformLabel(known.subject.platform)} · ${subjectSub(known.subject)}`;
                 return (
                   <div
@@ -713,14 +752,12 @@ export function AccessControlSettings(props: { desktopApi: DesktopApi }) {
                       actorRefs.current[key] = el;
                     }}
                     className={`rbac-node${nodeClass(isSubjectActive(key))}${known.bucket ? " is-danger" : ""}${isPinned({ kind: "subject", key }) ? " is-pinned" : ""}`}
-                    onMouseEnter={() => setHover({ kind: "subject", key })}
-                    onMouseLeave={() => setHover(null)}
-                    onClick={() => toggleSelect({ kind: "subject", key })}
+                    {...nodeHandlers({ kind: "subject", key })}
                   >
                     <Avatar subject={known.subject} displayName={known.displayName} bucket={known.bucket} />
                     <div className="rbac-node__main">
                       <div className="rbac-node__name">
-                        {subjectLabel(known.subject, known.displayName)}
+                        {traceButton({ kind: "subject", key }, label)}
                         {known.bucket ? <span className="rbac-node__badge is-danger">bucket</span> : null}
                       </div>
                       <div className="rbac-node__sub" title={sub}>
@@ -776,9 +813,7 @@ export function AccessControlSettings(props: { desktopApi: DesktopApi }) {
                     roleRefs.current[role.id] = el;
                   }}
                   className={`rbac-node${role.danger ? " is-danger" : ""}${nodeClass(isRoleActive(role.id))}${isPinned({ kind: "role", id: role.id }) ? " is-pinned" : ""}`}
-                  onMouseEnter={() => setHover({ kind: "role", id: role.id })}
-                  onMouseLeave={() => setHover(null)}
-                  onClick={() => toggleSelect({ kind: "role", id: role.id })}
+                  {...nodeHandlers({ kind: "role", id: role.id })}
                 >
                   <span
                     className={`rbac-avatar${role.danger ? " is-bucket" : ""}`}
@@ -787,7 +822,9 @@ export function AccessControlSettings(props: { desktopApi: DesktopApi }) {
                     {role.danger ? <Alert /> : <Lock />}
                   </span>
                   <div className="rbac-node__main">
-                    <div className="rbac-node__name">{role.name}</div>
+                    <div className="rbac-node__name">
+                      {traceButton({ kind: "role", id: role.id }, role.name)}
+                    </div>
                     <div
                       className="rbac-node__sub"
                       style={{ fontFamily: "var(--font-sans)" }}
@@ -836,9 +873,7 @@ export function AccessControlSettings(props: { desktopApi: DesktopApi }) {
                       permRefs.current[perm.id] = el;
                     }}
                     className={`rbac-node${perm.danger === "high" ? " is-danger" : ""}${nodeClass(isPermActive(perm.id))}${isPinned({ kind: "perm", id: perm.id }) ? " is-pinned" : ""}`}
-                    onMouseEnter={() => setHover({ kind: "perm", id: perm.id })}
-                    onMouseLeave={() => setHover(null)}
-                    onClick={() => toggleSelect({ kind: "perm", id: perm.id })}
+                    {...nodeHandlers({ kind: "perm", id: perm.id })}
                   >
                     <span
                       className={`rbac-avatar${perm.danger === "high" ? " is-bucket" : ""}`}
@@ -847,7 +882,9 @@ export function AccessControlSettings(props: { desktopApi: DesktopApi }) {
                       {perm.danger === "high" ? <Alert /> : perm.danger === "med" ? <Eye /> : <Check />}
                     </span>
                     <div className="rbac-node__main">
-                      <div className="rbac-node__name">{perm.label}</div>
+                      <div className="rbac-node__name">
+                        {traceButton({ kind: "perm", id: perm.id }, perm.label)}
+                      </div>
                       <div
                         className="rbac-node__sub"
                         style={{ fontFamily: "var(--font-sans)" }}

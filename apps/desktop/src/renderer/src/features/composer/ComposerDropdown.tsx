@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import type { ReactNode } from "react";
+import { useDismissableLayer } from "../../lib/useDismissableLayer";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 
 /**
@@ -30,6 +31,11 @@ export function useDismissableMenu<T extends HTMLElement>(
   onDismiss: () => void,
 ) {
   const ref = useRef<T>(null);
+  // A layer, so a menu open inside a modal dialog (BranchPicker in Handoff to
+  // New Worktree) answers Escape before the dialog does. The dialog claims
+  // the key at window capture, so the document listener below never sees it
+  // there; it still closes a menu that focus has left outside any dialog.
+  useDismissableLayer({ open, onDismiss, surfaceRef: ref });
 
   useEffect(() => {
     if (!open) {

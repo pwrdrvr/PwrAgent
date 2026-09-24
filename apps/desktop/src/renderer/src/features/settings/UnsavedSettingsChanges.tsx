@@ -8,6 +8,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { useModalDialog } from "../../lib/useModalDialog";
 
 /** What a pane holding unsaved edits offers when the operator leaves it. */
 export type UnsavedSettingsChanges = {
@@ -161,23 +162,16 @@ function UnsavedSettingsDialog(props: {
   onKeepEditing: () => void;
   onSave: () => void;
 }) {
-  const dialogRef = useRef<HTMLDivElement | null>(null);
   const headingId = useId();
   const descriptionId = useId();
-  const { onKeepEditing, saving } = props;
-  useEffect(() => {
-    dialogRef.current?.focus();
-  }, []);
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.key === "Escape" && !saving) {
-        event.preventDefault();
-        onKeepEditing();
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [onKeepEditing, saving]);
+  // Focus starts on the prompt itself rather than on one of its answers. A
+  // save in flight disables all three, and Escape refuses with them.
+  const dialogRef = useModalDialog({
+    onClose: () => {
+      if (!props.saving) props.onKeepEditing();
+    },
+    initialFocus: "dialog",
+  });
 
   return (
     <div className="settings-confirm-modal" role="presentation">

@@ -312,7 +312,7 @@ describe("ProjectPicker", () => {
     ).toHaveAttribute("aria-pressed", "false");
   });
 
-  it("closes the popover when Escape is pressed", () => {
+  it("closes the popover when Escape is pressed, and returns focus to its button", () => {
     render(
       <ProjectPicker
         directories={[dirA]}
@@ -321,14 +321,18 @@ describe("ProjectPicker", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /choose a project/i }));
+    const trigger = screen.getByRole("button", { name: /choose a project/i });
+    fireEvent.click(trigger);
     expect(
       screen.getByRole("listbox", { name: /tracked directories/i }),
     ).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Find a directory")).toHaveFocus();
 
-    fireEvent.keyDown(document, { key: "Escape" });
+    fireEvent.keyDown(document.activeElement!, { key: "Escape" });
     expect(
       screen.queryByRole("listbox", { name: /tracked directories/i }),
     ).not.toBeInTheDocument();
+    // The search field that held focus is gone; focus was left on <body>.
+    expect(trigger).toHaveFocus();
   });
 });

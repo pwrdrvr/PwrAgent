@@ -3,6 +3,7 @@ import { useEffect, useId, useMemo, useRef, useState, type ReactElement } from "
 import type { } from "@pwragent/shared";
 import { FolderIcon, SearchIcon } from "../../icons";
 import { tildifyPath } from "../../lib/tildify-path";
+import { useDismissableLayer } from "../../lib/useDismissableLayer";
 import { REMOTE_NATIVE_PICKER_TOOLTIP } from "./native-picker-boundary";
 
 /**
@@ -70,8 +71,18 @@ export function ProjectPicker(props: ProjectPickerProps): ReactElement {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const containerRef = useRef<HTMLSpanElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
   const listboxId = useId();
   const errorId = useId();
+  // A layer, not a document listener: in the composer's Move to Project
+  // dialog, the dialog would otherwise take the Escape meant for this popover
+  // and close with it.
+  useDismissableLayer({
+    open,
+    onDismiss: () => setOpen(false),
+    surfaceRef: containerRef,
+    triggerRef,
+  });
 
   useEffect(() => {
     if (!open) {
@@ -82,16 +93,9 @@ export function ProjectPicker(props: ProjectPickerProps): ReactElement {
         setOpen(false);
       }
     };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setOpen(false);
-      }
-    };
     document.addEventListener("pointerdown", onPointerDown);
-    document.addEventListener("keydown", onKeyDown);
     return () => {
       document.removeEventListener("pointerdown", onPointerDown);
-      document.removeEventListener("keydown", onKeyDown);
     };
   }, [open]);
 
@@ -122,6 +126,7 @@ export function ProjectPicker(props: ProjectPickerProps): ReactElement {
       data-state={open ? "open" : "closed"}
     >
       <button
+        ref={triggerRef}
         type="button"
         aria-haspopup="listbox"
         aria-expanded={open}

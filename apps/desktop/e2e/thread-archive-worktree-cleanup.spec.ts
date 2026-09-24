@@ -149,6 +149,7 @@ async function createArchiveWorktreeFixture(): Promise<{
           },
           {
             id: "thread-list-post-archive",
+            afterResponseId: "thread-archive-1",
             kind: "response",
             method: "thread/list",
             result: [],

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { useModalDialog } from "../../lib/useModalDialog";
 
 /**
  * Rename one thread from its card kebab.
@@ -18,11 +19,14 @@ export function StarMapRenameDialog(props: {
   const [draft, setDraft] = useState(props.currentTitle);
   const [validationError, setValidationError] = useState<string>();
   const inputRef = useRef<HTMLInputElement>(null);
+  const dialogRef = useModalDialog({
+    onClose: props.onCancel,
+    initialFocus: inputRef,
+  });
 
   // Selected, not just focused: the operator opened this to replace a
   // generated title far more often than to append to one.
   useEffect(() => {
-    inputRef.current?.focus();
     inputRef.current?.select();
   }, []);
 
@@ -37,19 +41,11 @@ export function StarMapRenameDialog(props: {
 
   return createPortal(
     <div
+      ref={dialogRef}
       className="star-map-rename"
       role="dialog"
       aria-modal="true"
       aria-label={`Rename ${props.currentTitle}`}
-      // Portaled to the body, but React events still travel the component
-      // tree: without this the map layer's Escape would also see the key
-      // and clear the selection behind the dialog.
-      onKeyDown={(event) => {
-        if (event.key === "Escape") {
-          event.stopPropagation();
-          props.onCancel();
-        }
-      }}
     >
       <button
         type="button"

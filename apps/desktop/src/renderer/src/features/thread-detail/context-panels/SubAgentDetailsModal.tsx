@@ -9,6 +9,7 @@ import { CloseIcon } from "../../../icons";
 import { formatBackendLabel } from "../../../lib/backend-label";
 import { copyText } from "../../../lib/copy-text";
 import { useDesktopApi } from "../../../lib/desktop-api";
+import { useModalDialog } from "../../../lib/useModalDialog";
 import { formatTimestamp } from "./context-rail-shared";
 import {
   formatSubAgentUsageEstimates,
@@ -47,77 +48,20 @@ type SubAgentDetailsModalProps = {
  */
 export function SubAgentDetailsModal(props: SubAgentDetailsModalProps) {
   const { onClose, subAgent } = props;
-  const contentRef = useRef<HTMLDivElement>(null);
+  // Close explicitly, not the first control: the header's timing line is
+  // tabbable once the run settles (its duration carries the exact end
+  // timestamp), and it precedes the actions in DOM order. Taking the first
+  // control would open a finished sub-agent with focus parked on a span and
+  // its tooltip already showing.
+  const closeRef = useRef<HTMLButtonElement>(null);
+  // The dialog stays mounted while the sub-agent streams updates, and the
+  // opener hands it a fresh `onClose` on every one of those renders. The hook
+  // reads the latest one on Escape without re-running its focus effect:
+  // re-running it would re-focus Close on each poll, and the browser would
+  // scroll it into view, yanking a half-read prompt back to the top.
+  const contentRef = useModalDialog({ onClose, initialFocus: closeRef });
   const desktopApi = useDesktopApi();
   const openSubAgentTranscriptWindow = desktopApi?.openSubAgentTranscriptWindow;
-
-  // The dialog stays mounted while the sub-agent streams updates, and the
-  // opener hands us a fresh `onClose` on every one of those renders. Reading
-  // it through a ref keeps the focus effect below a true mount/unmount effect:
-  // re-running it would re-focus the header on each poll, and the browser
-  // would scroll the focused element into view — silently yanking a
-  // half-read prompt back to the top.
-  const onCloseRef = useRef(onClose);
-  useEffect(() => {
-    onCloseRef.current = onClose;
-  }, [onClose]);
-
-  // Dialog focus management: move focus into the dialog on open, keep Tab
-  // cycling within it (so focus can't fall behind the scrim), restore focus
-  // to the opener on close, and close on Escape.
-  useEffect(() => {
-    const restoreFocus = document.activeElement as HTMLElement | null;
-    const focusables = (): HTMLElement[] =>
-      Array.from(
-        contentRef.current?.querySelectorAll<HTMLElement>(
-          'button, a[href], [tabindex]:not([tabindex="-1"])',
-        ) ?? [],
-      ).filter((el) => !el.hasAttribute("disabled"));
-
-    // Close explicitly, not `focusables()[0]`: the header's timing line is
-    // tabbable once the run settles (its duration carries the exact end
-    // timestamp), and it precedes the actions in DOM order. Taking the first
-    // focusable would open a finished sub-agent with focus parked on a span
-    // and its tooltip already showing.
-    const closeButton = contentRef.current?.querySelector<HTMLElement>(
-      ".subagent-modal__close",
-    );
-    (closeButton ?? focusables()[0])?.focus();
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        onCloseRef.current();
-        return;
-      }
-      if (event.key !== "Tab") {
-        return;
-      }
-      const items = focusables();
-      if (items.length === 0) {
-        return;
-      }
-      const first = items[0]!;
-      const last = items[items.length - 1]!;
-      const active = document.activeElement;
-      if (!contentRef.current?.contains(active)) {
-        event.preventDefault();
-        first.focus();
-      } else if (event.shiftKey && active === first) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && active === last) {
-        event.preventDefault();
-        first.focus();
-      }
-    };
-
-    window.addEventListener("keydown", handleKeyDown, true);
-    return () => {
-      window.removeEventListener("keydown", handleKeyDown, true);
-      restoreFocus?.focus?.();
-    };
-  }, []);
 
   const tone = subAgentTone(subAgent.status);
   const usage = subAgent.monitorUsage;
@@ -219,6 +163,7 @@ export function SubAgentDetailsModal(props: SubAgentDetailsModalProps) {
             ) : null}
             <button
               type="button"
+              ref={closeRef}
               className="subagent-modal__close"
               aria-label="Close"
               title="Close"
