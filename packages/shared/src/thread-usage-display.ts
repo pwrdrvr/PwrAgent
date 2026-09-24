@@ -293,6 +293,22 @@ export function buildTurnUsageActivityEntryFromLine(params: {
     )
     .map((detail) => {
       const exactCostMicros = exactCostsByDetailId.get(detail.id);
+      // Request components can span context bands. The aggregate estimate's
+      // unit rates and band label do not describe these measured costs.
+      if (line.pricingBasis === "request-components") {
+        if (exactCostMicros !== undefined) {
+          return {
+            ...detail,
+            label: `${detail.label.split(":")[0]}: ${formatTokenUsageMicrosAsUsd(exactCostMicros)} list price`,
+          };
+        }
+        if (detail.id === `${id}-cost`) {
+          return {
+            ...detail,
+            label: `Cost: ${formatTokenUsageMicrosAsUsd(line.totalCostMicros)} list price`,
+          };
+        }
+      }
       if (exactCostMicros !== undefined && detail.label.includes(" = ")) {
         return {
           ...detail,

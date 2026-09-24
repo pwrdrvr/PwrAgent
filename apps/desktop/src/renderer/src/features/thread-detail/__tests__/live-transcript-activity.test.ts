@@ -610,6 +610,14 @@ describe("buildTokenUsageActivityEntry", () => {
       expect.stringContaining("Cost unavailable"),
     );
     expect(entry?.details.at(-1)?.label).toBe("Cost: $6.63 list price");
+    expect(entry?.details.map((detail) => detail.label)).toEqual(expect.arrayContaining([
+      "Uncached input cost: $4.70 list price",
+      "Cache write cost: $0.38 list price",
+      "Cached input cost: $0.30 list price",
+      "Output cost: $1.25 list price",
+    ]));
+    expect(entry?.details.map((detail) => detail.label).join("\n"))
+      .not.toMatch(/ at \$|<=272K/);
   });
 
   it("prices the Grok ACP build model alias without double-billing reasoning", () => {
