@@ -218,7 +218,6 @@ const EMPTY_EXPANDED_DIRECTORY_THREAD_MODEL: PagedDirectoryPresentation = {
   directoryPinnedThreads: [],
   directoryThreadsCollapsed: false,
   directoryUnpinnedThreadCount: 0,
-  selectionOrder: [],
 };
 
 /**
@@ -1448,8 +1447,23 @@ export function DirectoriesList(props: DirectoriesListProps) {
       directoryPinnedThreads,
       directoryThreadsCollapsed,
       directoryUnpinnedThreadCount,
-      selectionOrder,
     } = expandedThreadModel;
+    // Range selection must use the same ordered, depth-first trays as the
+    // rendered rows. Raw child pages can have a different order and omit
+    // visible grandchildren from the range.
+    const selectionOrder = [
+      ...directoryPinnedThreads,
+      ...selectedUnpinnedThreads,
+      ...unpinnedThreads,
+    ].flatMap((thread) => {
+      const key = threadSummaryIdentityKey(thread);
+      return [
+        key,
+        ...(isSubthreadSectionCollapsed(thread)
+          ? []
+          : trays.subtree(key).map(threadSummaryIdentityKey)),
+      ];
+    });
     rowContextByDirectoryKey.set(directory.key, { directory, selectionOrder });
     const renderPinnedAppendTarget = Boolean(
       props.onReorderThreadPins
