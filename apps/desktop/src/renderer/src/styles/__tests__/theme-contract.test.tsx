@@ -483,6 +483,9 @@ describe("Tangerine Terminal theme contract", () => {
       // Live run strip row height — defined on `.live-strip`, not `:root`.
       // The four-row scroll cap is derived from it, so the two cannot drift.
       "live-strip-row-h",
+      // Toast stack inset — defined on `.app-toast-stack`, not `:root`. Both
+      // of its edges and `useToastStackPlacement` read it. Layout, not theme.
+      "app-toast-stack-edge",
       // Automations table sticky stack — defined on `.automations-table`, not
       // `:root`. Column-header height, and the measured row height its run
       // lines offset themselves by; both are layout, not theme.
@@ -1247,6 +1250,23 @@ describe("Tangerine Terminal theme contract", () => {
     expect(readZIndex(toastThreadMenuRule)).toBeGreaterThan(
       readZIndex(toastStackRule),
     );
+  });
+
+  it("anchors both toast stack edges to the properties the placement hook reads", () => {
+    // `useToastStackPlacement` works out where the stack would sit on the
+    // other edge from `--app-toast-stack-edge` and `--chrome-band-h`. A
+    // renamed property reads as 0 there, and jsdom lays nothing out to
+    // notice. The top edge stays under the chrome band, because macOS draws
+    // the traffic lights inside the window's top-left.
+    const toastStackRule = extractRuleBody(css, ".app-toast-stack");
+    expect(toastStackRule).toContain("--app-toast-stack-edge: 16px;");
+    expect(toastStackRule).toContain("left: var(--app-toast-stack-edge);");
+    expect(toastStackRule).toContain("bottom: var(--app-toast-stack-edge);");
+    const topRule = extractRuleBody(css, '.app-toast-stack[data-placement="top"]');
+    expect(topRule).toContain(
+      "top: calc(var(--chrome-band-h) + var(--app-toast-stack-edge));",
+    );
+    expect(topRule).toContain("bottom: auto;");
   });
 
   it("scopes the Star Map window's card z-scale inside its own stacking context", () => {
