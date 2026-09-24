@@ -60,6 +60,57 @@ function request(
 }
 
 describe("navigation query projection", () => {
+  it.each(["active", "unread"])("shows an Attention child whose parent is outside the lens (%s)", (signal) => {
+    const child = thread("child", {
+      parentThreadId: "parent", parentThreadBackend: "codex",
+      threadStatus: signal === "active" ? "active" : "idle",
+      inbox: { inInbox: signal === "unread" },
+    });
+    const source = snapshot([thread("parent", { subthreadsCollapsed: true }), child]);
+    const attention = projectNavigationQuery({ index: source, request: request({ kind: "lens", lens: "attention" }) });
+
+    expect(attention.entries.map(({ row }) => row.id)).toEqual(["child"]);
+    expect(attention.entries[0]?.placement).toEqual({ kind: "root" });
+    expect(attention.entries[0]?.row).toMatchObject({ parentThreadId: "parent", parentThreadBackend: "codex" });
+    // A presentation root is not an unlink. The ordinary lenses still group it.
+    const inbox = projectNavigationQuery({ index: source, request: request({ kind: "lens", lens: "inbox" }) });
+    expect(inbox.entries.find(({ row }) => row.id === "child")?.placement).toEqual({
+      kind: "child", parent: { backend: "codex", threadId: "parent" },
+    });
+  });
+
+  it("keeps Attention grouping only under a parent that matches the same filtered collection", () => {
+    const source = snapshot([
+      thread("parent", { title: "Parent", inbox: { inInbox: true } }),
+      thread("child", { title: "Match child", parentThreadId: "parent", inbox: { inInbox: true } }),
+    ]);
+    const grouped = projectNavigationQuery({ index: source, request: request({ kind: "lens", lens: "attention" }) });
+    expect(grouped.entries.find(({ row }) => row.id === "child")?.placement).toEqual({
+      kind: "child", parent: { backend: "codex", threadId: "parent" },
+    });
+    const filtered = projectNavigationQuery({ index: source, request: request({ kind: "lens", lens: "attention", filter: "Match" }) });
+    expect(filtered.entries.map(({ row, placement }) => [row.id, placement.kind])).toEqual([["child", "root"]]);
+  });
+
+  it("does not hide an Attention child under a different owner's matching parent ID", () => {
+    const localParent = thread("parent", { inbox: { inInbox: true } });
+    const child = thread("child", { parentThreadId: "parent", parentThreadBackend: "codex",
+      parentThreadInstanceId: "peer", inbox: { inInbox: true } });
+    const source = snapshot([localParent, child]);
+    const attention = projectNavigationQuery({ index: source, request: request({ kind: "lens", lens: "attention" }) });
+    expect(attention.entries.find(({ row }) => row.id === "child")?.placement).toEqual({ kind: "root" });
+    expect(attention.entries.find(({ row }) => row.id === "child")?.row.parentThreadInstanceId).toBe("peer");
+  });
+
+  it("waits for owner coverage before declaring an Attention parent outside the collection", () => {
+    const source = snapshot([thread("child", { parentThreadId: "parent", inbox: { inInbox: true } })]);
+    const query = request({ kind: "lens", lens: "attention" });
+    const checking = projectNavigationQuery({ index: { ...source, coverage: { state: "checking" } }, request: query });
+    expect(checking.entries[0]?.placement).toEqual({ kind: "child", parent: { backend: "codex", threadId: "parent" } });
+    const complete = projectNavigationQuery({ index: { ...source, coverage: { state: "complete" } }, request: query });
+    expect(complete.entries[0]?.placement).toEqual({ kind: "root" });
+  });
+
   it("cold_navigation_fetches_only_visible_membership", () => {
     const source = snapshot([
       thread("1", { pinnedRank: "1" }),
