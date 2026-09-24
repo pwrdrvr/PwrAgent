@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   formatReviewCommand,
+  isCodexReviewPromptText,
   normalizeReviewDisplayText,
   parseReviewCommand,
 } from "../review-command";
+import { pullRequestReviewPrompt, pullRequestReviewUrl } from "./fixtures/pull-request-review";
 
 describe("parseReviewCommand", () => {
   it("parses bare review as uncommitted changes", () => {
@@ -60,6 +62,25 @@ describe("formatReviewCommand", () => {
 });
 
 describe("normalizeReviewDisplayText", () => {
+  it("uses the same PR label for the optimistic card and generated review hints", () => {
+    const label = parseReviewCommand(`/review --pr ${pullRequestReviewUrl}`)?.displayText;
+    expect(normalizeReviewDisplayText(pullRequestReviewPrompt)).toBe(label);
+    expect(normalizeReviewDisplayText(pullRequestReviewPrompt.replace(/\s+/g, " "))).toBe(label);
+    expect(isCodexReviewPromptText(pullRequestReviewPrompt)).toBe(true);
+  });
+
+  it("does not classify quoted, incomplete, or extended PR instructions as generated prompts", () => {
+    for (const text of [
+      `Explain this: ${pullRequestReviewPrompt}`,
+      `${pullRequestReviewPrompt}\nAlso check my local edits.`,
+      pullRequestReviewPrompt.split("\n").slice(0, -1).join("\n"),
+      "Review the complete pull request diff please.",
+    ]) {
+      expect(isCodexReviewPromptText(text)).toBe(false);
+      expect(normalizeReviewDisplayText(text)).not.toBe(`Review ${pullRequestReviewUrl}`);
+    }
+  });
+
   it("normalizes Codex review hints to the composer display text", () => {
     expect(normalizeReviewDisplayText("changes against 'main'")).toBe(
       "Review changes against main"

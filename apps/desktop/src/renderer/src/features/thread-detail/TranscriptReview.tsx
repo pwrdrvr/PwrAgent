@@ -8,6 +8,7 @@ import type {
 import { formatPathRelativeToDirectories } from "@pwragent/shared";
 import { useCallback, useMemo, type MouseEvent } from "react";
 import { normalizeReviewDisplayText } from "../../../../shared/review-command";
+import { pullRequestReviewPromptUrl } from "../../../../shared/pull-request-review";
 import { withoutRedundantPriorityTag } from "../../../../shared/review-output";
 import { formatBackendLabel } from "../../lib/backend-label";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
@@ -266,8 +267,11 @@ export function TranscriptReview(props: TranscriptReviewProps) {
     [output, plainReview],
   );
   const findingCount = output?.findings.length;
+  const displayText = props.entry.displayText;
   const summary =
-    props.entry.displayText ??
+    (displayText && pullRequestReviewPromptUrl(displayText)
+      ? normalizeReviewDisplayText(displayText)
+      : displayText) ??
     (findingCount === undefined
       ? "Code review"
       : `${findingCount} review ${findingCount === 1 ? "finding" : "findings"}`);

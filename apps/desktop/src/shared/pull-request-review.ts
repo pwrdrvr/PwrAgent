@@ -8,6 +8,25 @@ import type { AppServerReviewTarget, PrSummary } from "@pwragent/shared";
 export const EXPLICIT_REVIEW_PULL_REQUEST_URL =
   /^https:\/\/(github\.com)\/([^/]+)\/([^/]+)\/pull\/([1-9][0-9]*)$/;
 
+const PULL_REQUEST_REVIEW_INTRO =
+  "Review the complete pull request diff at the following immutable commits.";
+const PULL_REQUEST_REVIEW_END =
+  "Report findings against the pinned head's file paths and line numbers.";
+
+/** Recognize our generated instructions, including whitespace-folded review hints. */
+export function pullRequestReviewPromptUrl(value: string): string | undefined {
+  const normalized = value.trim().replace(/\s+/g, " ");
+  if (
+    !normalized.startsWith(`${PULL_REQUEST_REVIEW_INTRO} Pull request: `)
+    || !normalized.endsWith(PULL_REQUEST_REVIEW_END)
+  ) {
+    return undefined;
+  }
+  const url = normalized.slice(`${PULL_REQUEST_REVIEW_INTRO} Pull request: `.length)
+    .split(";", 1)[0];
+  return EXPLICIT_REVIEW_PULL_REQUEST_URL.test(url) ? url : undefined;
+}
+
 /** Navigation filtering is advisory; the owner verifies fresh Git remotes. */
 export function attachedPullRequestsForWorkspace(params: {
   prs: PrSummary[];
@@ -46,14 +65,14 @@ export function nativeReviewTarget(
   return {
     type: "custom",
     instructions: [
-      `Review the complete pull request diff at the following immutable commits.`,
+      PULL_REQUEST_REVIEW_INTRO,
       `Pull request: ${snapshot.pullRequest.url}; base branch: ${snapshot.pullRequest.baseRefName}; head branch: ${snapshot.pullRequest.headRefName}; captured at: ${snapshot.capturedAt}.`,
       `Base tip: ${snapshot.baseCommit}; head: ${snapshot.headCommit}; merge base: ${snapshot.mergeBaseCommit}.`,
       `Inspect git diff --no-ext-diff ${snapshot.mergeBaseCommit} ${snapshot.headCommit} --`,
       `Read every target file and surrounding context using git show '${snapshot.headCommit}:path/to/file' (substitute the actual path).`,
       "The active checkout may contain another stacked PR and uncommitted work. Do not read working-tree files as the reviewed version, compare against HEAD, or include later commits or local changes.",
       "Do not checkout, switch, reset, stash, or modify the workspace. If an object is unavailable, report that the review cannot proceed; do not substitute another revision.",
-      "Report findings against the pinned head's file paths and line numbers.",
+      PULL_REQUEST_REVIEW_END,
     ].join("\n"),
   };
 }

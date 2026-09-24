@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppServerNotification, AppServerThreadSummary } from "@pwragent/shared";
 import type { JsonRpcTransport } from "@pwrdrvr/agent-transport";
+import { pullRequestReviewPrompt, pullRequestReviewUrl } from "../../shared/__tests__/fixtures/pull-request-review";
 import gitBudgets from "./fixtures/git-subprocess-budgets.json";
 import type { InitializeResponse } from "@pwrdrvr/codex-app-server-protocol";
 import type {
@@ -7262,19 +7263,26 @@ describe("CodexAppServerClient", () => {
     expect(replay.messages.map((message) => message.id)).toEqual(["authored"]);
   });
 
-  it.each(["userMessage", "message"])("suppresses native review instructions on replay with %s shape", async (type) => {
+  it.each([
+    ["userMessage", "branch"], ["message", "branch"],
+    ["userMessage", "pullRequest"], ["message", "pullRequest"],
+  ])("suppresses native review instructions on replay with %s shape and %s target", async (type, target) => {
     const { extractThreadReplayFromReadResult } = await import("../codex-app-server/client");
-    const text = "Review the code changes against the base branch 'origin/main'. The merge base commit for this comparison is abc123. Run git diff abc123 to inspect the changes relative to origin/main. Provide prioritized, actionable findings.";
+    const text = target === "pullRequest" ? pullRequestReviewPrompt
+      : "Review the code changes against the base branch 'origin/main'. The merge base commit for this comparison is abc123. Run git diff abc123 to inspect the changes relative to origin/main. Provide prioritized, actionable findings.";
     const replay = extractThreadReplayFromReadResult({ thread: { turns: [
       { id: "user-turn", items: [{ type: "userMessage", id: "authored", content: [{ type: "text", text }] }] },
       { id: "review-turn", items: [
         { type, role: "user", id: "generated", content: [{ type: "text", text }] },
-        { type: "enteredReviewMode", id: "review", review: "changes against 'origin/main'" },
+        { type: "enteredReviewMode", id: "review", review: target === "pullRequest" ? text : "changes against 'origin/main'" },
         { type: "userMessage", id: "steer", content: [{ type: "text", text: "Review these code changes for security and provide prioritized findings." }] },
       ] },
     ] } });
     expect(replay.entries.map((entry) => entry.id)).toEqual(["authored", "review", "steer"]);
     expect(replay.messages.map((message) => message.id)).toEqual(["authored", "steer"]);
+    expect(replay.entries.find((entry) => entry.id === "review")).toMatchObject({
+      displayText: target === "pullRequest" ? `Review ${pullRequestReviewUrl}` : "Review changes against origin/main",
+    });
   });
 
   it("retains user-authored review instructions without a native review marker", async () => {
