@@ -5538,27 +5538,32 @@ describe("SettingsScreen", () => {
       />,
     );
 
-    // The nav's Slack sub-item shares the name, so scope to the pane.
     const pane = screen.getByRole("region", {
       name: "Slack messaging settings",
     });
-    const slackHeader = within(pane).getByRole("button", { name: "Slack" });
-    if (slackHeader.getAttribute("aria-expanded") !== "true") {
-      fireEvent.click(slackHeader);
-    }
-    const slackSection = slackHeader.closest("section");
-    expect(slackSection).not.toBeNull();
-    const slackControls = within(slackSection as HTMLElement);
+    const openSection = (title: string) => {
+      const header = within(pane).getByRole("button", { name: title });
+      if (header.getAttribute("aria-expanded") !== "true") {
+        fireEvent.click(header);
+      }
+      const section = header.closest("section");
+      expect(section).not.toBeNull();
+      return within(section as HTMLElement);
+    };
 
+    // Pairing is a step of Start talking, just before the default Agent.
+    const startControls = openSection("Start talking");
     expect(
-      slackControls.queryByRole("radio", { name: "User via channel" }),
+      startControls.queryByRole("radio", { name: "User via channel" }),
     ).not.toBeInTheDocument();
     expect(
-      slackControls.queryByRole("radio", { name: "Workspace" }),
+      startControls.queryByRole("radio", { name: "Workspace" }),
     ).not.toBeInTheDocument();
     expect(
-      slackControls.getByText(/approve the observed user or channel/i),
+      startControls.getByText(/approve the observed user or channel/i),
     ).toBeInTheDocument();
+
+    const slackControls = openSection("Access & responses");
     expect(slackControls.getByText("Authorized Team IDs")).toBeInTheDocument();
     expect(slackControls.getByText("Team access default")).toBeInTheDocument();
     expect(slackControls.getByText("Channel access default")).toBeInTheDocument();
@@ -5607,7 +5612,7 @@ describe("SettingsScreen", () => {
       />,
     );
 
-    const signingSecretInput = screen.getByLabelText("Signing Secret (Optional)");
+    const signingSecretInput = screen.getByLabelText("Signing Secret");
     const signingSecretControls = signingSecretInput.closest(".settings-secret");
     expect(signingSecretInput).toBeEnabled();
     expect(signingSecretControls).not.toBeNull();
@@ -5629,6 +5634,144 @@ describe("SettingsScreen", () => {
     });
   });
 
+  it("walks Slack setup as ordered steps with the next one marked", () => {
+    const snapshot = createSnapshot();
+    snapshot.messaging.slack.botToken = {
+      configured: true,
+      source: "keychain",
+      writable: true,
+    };
+    const settings = createSettingsState(snapshot);
+
+    render(
+      <SettingsScreen
+        settings={settings}
+        initialSection="messaging"
+        initialSubsection="slack"
+        onClose={() => undefined}
+      />,
+    );
+
+    const pane = screen.getByRole("region", {
+      name: "Slack messaging settings",
+    });
+    expect(
+      within(pane)
+        .getAllByRole("heading", { level: 2 })
+        .map((heading) => heading.textContent),
+    ).toEqual(["Connect", "Access & responses", "Start talking", "Advanced"]);
+
+    const connect = within(pane)
+      .getByRole("button", { name: "Connect" })
+      .closest("section") as HTMLElement;
+    const stages = Array.from(
+      connect.querySelectorAll<HTMLElement>(".automation-stage"),
+    );
+    expect(
+      stages.map((stage) => [
+        stage.querySelector(".automation-stage__title")?.textContent,
+        stage.querySelector(".automation-stage__progress")?.textContent,
+      ]),
+    ).toEqual([
+      ["Slack app", "Created"],
+      ["Bot User OAuth Token", "Saved"],
+      ["App-Level Token", "Next"],
+      ["Signing Secret", "Waiting"],
+      ["Connection", "Waiting"],
+    ]);
+    expect(stages[2]).toHaveAttribute("aria-current", "step");
+    // The app-level token needs exactly one scope, picked in Slack's dialog.
+    expect(within(stages[2]).getByText("connections:write")).toBeInTheDocument();
+    expect(
+      within(stages[1]).getByText("Bot User OAuth Token", { selector: "strong" }),
+    ).toBeInTheDocument();
+  });
+
+  it("saves a secret when focus leaves the field, and on Enter", async () => {
+    const settings = createSettingsState();
+    render(
+      <SettingsScreen
+        settings={settings}
+        initialSection="messaging"
+        initialSubsection="slack"
+        onClose={() => undefined}
+      />,
+    );
+
+    const botToken = screen.getByLabelText("Bot Token");
+    fireEvent.change(botToken, { target: { value: "xoxb-0000-fake" } });
+    fireEvent.blur(botToken, { relatedTarget: document.body });
+
+    await waitFor(() => {
+      expect(settings.replaceSecret).toHaveBeenCalledWith(
+        "slackBotToken",
+        "xoxb-0000-fake",
+      );
+    });
+    await waitFor(() => expect(botToken).toHaveValue(""));
+    const botControls = botToken.closest(".settings-secret") as HTMLElement;
+    expect(within(botControls).getByRole("status")).toHaveTextContent("Saved");
+
+    const appToken = screen.getByLabelText("App Token");
+    fireEvent.change(appToken, { target: { value: "xapp-1-fake" } });
+    fireEvent.keyDown(appToken, { key: "Enter" });
+
+    await waitFor(() => {
+      expect(settings.replaceSecret).toHaveBeenCalledWith(
+        "slackAppToken",
+        "xapp-1-fake",
+      );
+    });
+  });
+
+  it("does not save a secret draft when focus moves to its own Discard", () => {
+    const settings = createSettingsState();
+    render(
+      <SettingsScreen
+        settings={settings}
+        initialSection="messaging"
+        initialSubsection="slack"
+        onClose={() => undefined}
+      />,
+    );
+
+    const botToken = screen.getByLabelText("Bot Token");
+    fireEvent.change(botToken, { target: { value: "xoxb-0000-fake" } });
+    const discard = within(
+      botToken.closest(".settings-secret") as HTMLElement,
+    ).getByRole("button", { name: "Discard" });
+    fireEvent.blur(botToken, { relatedTarget: discard });
+    fireEvent.click(discard);
+
+    expect(botToken).toHaveValue("");
+    expect(settings.replaceSecret).not.toHaveBeenCalled();
+  });
+
+  it("keeps an app token pasted into the Slack bot token box instead of saving it", async () => {
+    const settings = createSettingsState();
+    render(
+      <SettingsScreen
+        settings={settings}
+        initialSection="messaging"
+        initialSubsection="slack"
+        onClose={() => undefined}
+      />,
+    );
+
+    const botToken = screen.getByLabelText("Bot Token");
+    fireEvent.change(botToken, { target: { value: "xapp-1-fake" } });
+    fireEvent.blur(botToken, { relatedTarget: document.body });
+
+    expect(
+      await screen.findByText(
+        "That is an App-Level Token (xapp-). The Bot User OAuth Token starts with xoxb-.",
+      ),
+    ).toBeInTheDocument();
+    expect(botToken).toHaveValue("xapp-1-fake");
+    expect(botToken).toHaveAttribute("aria-invalid", "true");
+    expect(settings.replaceSecret).not.toHaveBeenCalled();
+  });
+
   it("does not offer the unimplemented Slack Events API inbound mode", () => {
     const settings = createSettingsState();
 
@@ -5641,7 +5784,8 @@ describe("SettingsScreen", () => {
       />,
     );
 
-    expect(screen.getByRole("radio", { name: "Socket Mode" })).toBeInTheDocument();
+    // Socket Mode is the only inbound path, so there is nothing to choose.
+    expect(screen.queryByRole("radio", { name: "Socket Mode" })).not.toBeInTheDocument();
     expect(screen.queryByRole("radio", { name: "Events API" })).not.toBeInTheDocument();
   });
 
@@ -6205,10 +6349,6 @@ describe("SettingsScreen", () => {
     expect(
       screen.getByText("Events API is not implemented. PwrAgent will use Socket Mode."),
     ).toBeInTheDocument();
-    expect(screen.getByRole("radio", { name: "Socket Mode" })).toHaveAttribute(
-      "aria-checked",
-      "true",
-    );
     expect(screen.queryByRole("radio", { name: "Events API" })).not.toBeInTheDocument();
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({

@@ -47,6 +47,7 @@ import {
   type MessagingToolUpdateMode,
   type InspectDiscordThreadPermissionsResponse,
   type ListDiscordThreadPermissionChannelsResponse,
+  type SettingsCredentialTestResult,
 } from "@pwragent/shared";
 import {
   CheckIcon,
@@ -72,18 +73,28 @@ import {
   SettingsField,
   SettingsIndexRow,
   SettingsPanelHead,
+  SettingsPendingIndicator,
   SettingsSection,
   SettingsSectionStack,
   ToggleField,
   type SettingsChipTone,
 } from "./SettingsLayout";
+import { AutomationStage } from "../automations/AutomationFunnel";
 import { SlackConnectCard } from "../messaging/SlackConnectCard";
+import {
+  SlackAppTokenSteps,
+  SlackBotTokenSteps,
+  SlackSigningSecretSteps,
+} from "../messaging/SlackCredentialSteps";
 import { SLACK_EVENTS_API_UNIMPLEMENTED_NOTICE } from "../messaging/slack-connect-copy";
+import { slackCredentialProblem } from "../messaging/slack-token-shape";
 import { SettingsTestBlock } from "./SettingsTestBlock";
 import {
   ApprovedSurfaceDefaultAgent,
+  PlatformDefaultAgentSetup,
   MessagingRoutesProvider,
   MessagingRoutesSettings,
+  usePlatformDefaultAgent,
 } from "./MessagingRoutesSettings";
 import {
   RESPONSE_MODE_OPTIONS,
@@ -257,6 +268,33 @@ export function MessagingSettings(props: {
     && slack.authorizedUserIds.value.length === 0
     && slack.authorizedChannels.value.length === 0
     && slack.authorizedWorkspaces.value.length === 0;
+  const [slackTestPassed, setSlackTestPassed] = useState(false);
+  const onSlackTestResult = useCallback(
+    (result: SettingsCredentialTestResult | undefined) => {
+      setSlackTestPassed(result?.status === "ok");
+    },
+    [],
+  );
+  // One step is "Next": the first not yet done, as in Cloudflare setup.
+  // Creating the app leaves nothing to observe until a bot token exists.
+  const slackConnectSteps = [
+    { key: "create", done: slack.botToken.configured, label: "Created" },
+    { key: "bot", done: slack.botToken.configured, label: "Saved" },
+    { key: "app", done: slack.appToken.configured, label: "Saved" },
+    { key: "signing", done: slack.signingSecret.configured, label: "Saved" },
+    { key: "test", done: slackTestPassed, label: "Connected" },
+  ] as const;
+  const slackConnectCurrent = slackConnectSteps.find((step) => !step.done)?.key;
+  const slackConnectProgress = (
+    key: (typeof slackConnectSteps)[number]["key"],
+  ): SetupStageProgress => {
+    const step = slackConnectSteps.find((entry) => entry.key === key);
+    return step?.done
+      ? { state: "done", label: step.label }
+      : key === slackConnectCurrent
+        ? { state: "current", label: "Next" }
+        : { state: "waiting", label: "Waiting" };
+  };
   const leaseHolderLabel = runtimeMessaging.leaseHolder
     ? [
         runtimeMessaging.leaseHolder.cwdHint,
@@ -1261,9 +1299,13 @@ export function MessagingSettings(props: {
       ) : null}
 
       {props.focus === "slack" ? (
+      <>
       <SettingsSection
-        eyebrow="Messaging"
-        title="Slack"
+        eyebrow="Slack"
+        title="Connect"
+        // The platform's own id, which the Settings nav asks this pane to
+        // focus; it was the single Slack card's before the page split.
+        sectionId="slack"
         chip={chipLabelForBotToken(slack.botToken)}
         chipKind={chipKindForBotToken(slack.botToken)}
       >
@@ -1281,72 +1323,97 @@ export function MessagingSettings(props: {
               });
             }}
           />
-          <SettingsGroupLabel>Connection</SettingsGroupLabel>
           {slack.inboundMode.value === "events" ? (
             <p className="settings-inline-notice" role="status">
               {SLACK_EVENTS_API_UNIMPLEMENTED_NOTICE}
             </p>
           ) : null}
-          <SettingsField
-            label="Connect Slack"
-            sub="Set up the Slack app, then paste the two tokens below."
-            control={
+        </div>
+        <div className="slack-setup">
+          <div className="automation-funnel">
+            <AutomationStage
+              verb="Create"
+              title="Slack app"
+              progress={slackConnectProgress("create")}
+            >
               <SlackConnectCard
                 desktopApi={props.desktopApi}
                 variant="settings"
               />
-            }
-          />
-          <SecretField
-            disabled={props.saving || !slack.botToken.writable}
-            label="Bot Token"
-            sub="Stored in the system keychain. Use a Slack bot token that starts with xoxb-."
-            secret="slackBotToken"
-            state={slack.botToken}
-            onClearSecret={props.onClearSecret}
-            onReplaceSecret={props.onReplaceSecret}
-          />
-          <SecretField
-            disabled={props.saving || !slack.appToken.writable}
-            label="App Token"
-            sub="Stored in the system keychain. Required for Socket Mode; starts with xapp-."
-            secret="slackAppToken"
-            state={slack.appToken}
-            onClearSecret={props.onClearSecret}
-            onReplaceSecret={props.onReplaceSecret}
-          />
-          <SettingsField
-            label="Connection test"
-            sub="Validates the bot token with Slack auth.test and opens a Socket Mode handshake."
-            control={
+            </AutomationStage>
+            <AutomationStage
+              verb="Install"
+              title="Bot User OAuth Token"
+              progress={slackConnectProgress("bot")}
+            >
+              <SlackBotTokenSteps />
+              <SecretField
+                disabled={props.saving || !slack.botToken.writable}
+                label="Bot Token"
+                secret="slackBotToken"
+                state={slack.botToken}
+                validate={(value) => slackCredentialProblem("bot", value)}
+                onClearSecret={props.onClearSecret}
+                onReplaceSecret={props.onReplaceSecret}
+              />
+            </AutomationStage>
+            <AutomationStage
+              verb="Generate"
+              title="App-Level Token"
+              progress={slackConnectProgress("app")}
+            >
+              <SlackAppTokenSteps />
+              <SecretField
+                disabled={props.saving || !slack.appToken.writable}
+                label="App Token"
+                secret="slackAppToken"
+                state={slack.appToken}
+                validate={(value) => slackCredentialProblem("app", value)}
+                onClearSecret={props.onClearSecret}
+                onReplaceSecret={props.onReplaceSecret}
+              />
+            </AutomationStage>
+            <AutomationStage
+              verb="Copy"
+              title="Signing Secret"
+              progress={slackConnectProgress("signing")}
+            >
+              <SlackSigningSecretSteps />
+              <SecretField
+                disabled={props.saving || !slack.signingSecret.writable}
+                label="Signing Secret"
+                secret="slackSigningSecret"
+                state={slack.signingSecret}
+                validate={(value) => slackCredentialProblem("signing", value)}
+                onClearSecret={props.onClearSecret}
+                onReplaceSecret={props.onReplaceSecret}
+              />
+            </AutomationStage>
+            <AutomationStage
+              verb="Test"
+              title="Connection"
+              progress={slackConnectProgress("test")}
+            >
               <SettingsTestBlock
                 kind="slack"
                 desktopApi={props.desktopApi}
                 icon={<SlackIcon size={14} />}
                 defaultName="Your bot"
-                defaultSub="auth.test + Socket Mode"
+                defaultSub="Checks the bot token with Slack auth.test, then opens a Socket Mode handshake."
+                onResult={onSlackTestResult}
                 prerequisites={[
                   { label: "Bot Token", met: slack.botToken.configured },
                   { label: "App Token", met: slack.appToken.configured },
-                  {
-                    label: "Workspace URL",
-                    met: isLikelyWorkspaceUrl(slack.workspaceUrl.value),
-                    optional: true,
-                  },
                 ]}
               />
-            }
-          />
+            </AutomationStage>
+          </div>
+        </div>
+      </SettingsSection>
 
-          <SettingsGroupLabel>Authorization</SettingsGroupLabel>
-          <PairingTokenField
-            desktopApi={props.desktopApi}
-            disabled={platformControlsDisabled || !slack.enabled.value}
-            highlight={slackNeedsPairingCta}
-            onSettingsChanged={props.onPairingSettingsChanged}
-            platform="slack"
-            supportsBucket
-          />
+      <SettingsSection eyebrow="Slack" title="Access & responses">
+        <div className="settings-fields">
+          <SettingsGroupLabel>Who can reach the bot</SettingsGroupLabel>
           <AuthorizedListField
             disabled={props.saving}
             lookup={contactLookup(
@@ -1355,7 +1422,7 @@ export function MessagingSettings(props: {
               "user",
             )}
             label="Authorized User IDs"
-            sub="Slack user IDs that count as authorized users below. An authorized user can also reach the bot in a group DM (the bot replies when @mentioned there)."
+            sub="Slack users who count as authorized in the rules below."
             help="Slack user IDs start with U or W, e.g. U012ABCDEF0. Rejected Slack messages show the user ID in Messaging Activity."
             source={optionalListSourceBadge(slack.authorizedUserIds)}
             validateEntry={validateSlackUserIdEntry}
@@ -1375,7 +1442,7 @@ export function MessagingSettings(props: {
           <SegmentedField
             disabled={props.saving}
             label="DM access"
-            sub="Who may DM the bot directly (1:1). Authorized users only is the safest default; the team and channel gates below do not apply to DMs."
+            sub="Who may DM the bot. Team and channel rules do not apply to DMs."
             options={DM_ACCESS_MODE_OPTIONS}
             source={sourceBadge(slack.dmAccessMode)}
             value={slack.dmAccessMode.value}
@@ -1389,7 +1456,7 @@ export function MessagingSettings(props: {
           <SegmentedField
             disabled={props.saving}
             label="Group DM access"
-            sub="Whether the bot participates in group DMs (multi-person DMs). Closed by default. When set to Authorized users, an Authorized User in the group DM can interact and the bot replies when @mentioned; team and channel gates do not apply."
+            sub="Whether the bot joins group DMs. With Authorized users, it replies when one @mentions it."
             options={GROUP_DM_ACCESS_MODE_OPTIONS}
             source={sourceBadge(slack.groupDmAccessMode)}
             value={slack.groupDmAccessMode.value}
@@ -1406,7 +1473,7 @@ export function MessagingSettings(props: {
           <SegmentedField
             disabled={props.saving}
             label="Team access default"
-            sub="Whether channel messages must come from an Authorized Team. Team IDs mainly restrict Slack Connect and other shared-channel traffic; they do not affect DMs."
+            sub="Whether channel messages must come from an Authorized Team. Matters mainly for Slack Connect."
             options={TEAM_AUTHORIZATION_MODE_OPTIONS}
             source={sourceBadge(slack.teamAuthorizationMode)}
             value={slack.teamAuthorizationMode.value}
@@ -1434,7 +1501,7 @@ export function MessagingSettings(props: {
                 "workspace",
               )}
               label="Authorized Team IDs"
-              sub="Broad allowlist for Slack teams. Add a Team ID only when every channel or group DM in that team where the bot is present should be approved."
+              sub="Approves every channel and group DM the bot is in, in a listed team."
               help="Slack team IDs start with T, e.g. T012ABCDEF0. These are not channel IDs, and the Workspace URL is only display text."
               source={optionalListSourceBadge(slack.authorizedWorkspaces)}
               validateEntry={validateSlackWorkspaceIdEntry}
@@ -1453,7 +1520,7 @@ export function MessagingSettings(props: {
           <SegmentedField
             disabled={props.saving}
             label="Channel access default"
-            sub="Whether Slack messages must come from an Authorized Channel. Require listed channels is the safest default."
+            sub="Whether messages must come from an Authorized Channel. Require listed channels is the safest default."
             options={CHANNEL_AUTHORIZATION_MODE_OPTIONS}
             source={sourceBadge(slack.channelAuthorizationMode)}
             value={slack.channelAuthorizationMode.value}
@@ -1481,7 +1548,7 @@ export function MessagingSettings(props: {
                 "channel",
               )}
               label="Authorized Channels"
-              sub="Slack channel, private channel, DM, or group DM IDs approved individually."
+              sub="Conversations approved one at a time."
               help="Slack conversation IDs start with C, G, or D, e.g. C012ABCDEF0. Use Channel pairing to add one from chat, or add a row here to override that channel's response mode."
               source={optionalListSourceBadge(slack.authorizedChannels)}
               validateEntry={validateSlackChannelIdEntry}
@@ -1503,7 +1570,7 @@ export function MessagingSettings(props: {
             <SegmentedField
               disabled={props.saving}
               label="Channel user access"
-              sub="Which senders in an authorized channel the bot responds to. Authorized users only is the safest default."
+              sub="Who the bot answers in an authorized channel."
               options={CHANNEL_USER_ACCESS_MODE_OPTIONS}
               source={sourceBadge(slack.channelUserAccessMode)}
               value={slack.channelUserAccessMode.value}
@@ -1522,7 +1589,7 @@ export function MessagingSettings(props: {
             <SegmentedField
               disabled={props.saving}
               label="Channel response default"
-              sub="Default response behavior after a Slack channel message passes the access checks above. Group DMs are separate: any authorized user can reach the bot there, but it only replies when @mentioned."
+              sub="When the bot answers a channel message that passes the checks above."
               options={RESPONSE_MODE_OPTIONS}
               source={sourceBadge(slack.responseMode)}
               value={slack.responseMode.value}
@@ -1537,12 +1604,58 @@ export function MessagingSettings(props: {
               }}
             />
           </div>
+          <SettingsGroupLabel>Responses</SettingsGroupLabel>
+          <ToggleField
+            checked={slack.liveWorkingCards.value}
+            disabled={props.saving}
+            label="Live Working Updates card"
+            sub="Shows Working Updates in one Slack task card per turn when Slack stream APIs are available; otherwise uses text updates."
+            source={sourceBadge(slack.liveWorkingCards)}
+            onChange={(liveWorkingCards) => {
+              return props.onSaveSlack({
+                ...slack,
+                liveWorkingCards: {
+                  ...slack.liveWorkingCards,
+                  value: liveWorkingCards,
+                },
+              });
+            }}
+          />
+          <ToggleField
+            checked={slack.streamingResponses.value}
+            disabled={props.saving}
+            label="Streaming responses"
+            sub="Sends partial assistant text as Slack message edits."
+            help={STREAMING_RESPONSES_WARNING}
+            source={sourceBadge(slack.streamingResponses)}
+            onChange={(streamingResponses) => {
+              if (streamingResponses) maybeNudgeForStreaming("slack", "Slack");
+              return props.onSaveSlack({
+                ...slack,
+                streamingResponses: {
+                  ...slack.streamingResponses,
+                  value: streamingResponses,
+                },
+              });
+            }}
+          />
+        </div>
+      </SettingsSection>
 
-          <SettingsGroupLabel>Advanced</SettingsGroupLabel>
+      <SlackStartSection
+        desktopApi={props.desktopApi}
+        pairingDisabled={platformControlsDisabled || !slack.enabled.value}
+        paired={!slackNeedsPairingCta}
+        onOpenThread={props.onOpenThread}
+        onPairingSettingsChanged={props.onPairingSettingsChanged}
+      />
+
+      <SettingsSection eyebrow="Slack" title="Advanced">
+        <div className="settings-fields">
           <TextField
             disabled={props.saving}
             label="Workspace URL"
-            sub="Display URL for the Slack workspace, e.g. so links back to Slack resolve."
+            sub="Used for links back to Slack."
             help={<code>https://example.slack.com</code>}
             source={optionalStringSourceBadge(slack.workspaceUrl)}
             value={slack.workspaceUrl.value}
@@ -1550,29 +1663,6 @@ export function MessagingSettings(props: {
               void props.onSaveSlack({
                 ...slack,
                 workspaceUrl: { ...slack.workspaceUrl, value: workspaceUrl },
-              });
-            }}
-          />
-          <SecretField
-            disabled={props.saving || !slack.signingSecret.writable}
-            label="Signing Secret (Optional)"
-            sub="Optional. Used to sign in-app button callbacks. Not required for Socket Mode."
-            secret="slackSigningSecret"
-            state={slack.signingSecret}
-            onClearSecret={props.onClearSecret}
-            onReplaceSecret={props.onReplaceSecret}
-          />
-          <SegmentedField
-            disabled={props.saving}
-            label="Inbound Mode"
-            sub="Socket Mode is the only implemented inbound path. Events API is not available."
-            options={SLACK_INBOUND_MODE_OPTIONS}
-            source={sourceBadge(slack.inboundMode)}
-            value={slack.inboundMode.value === "events" ? "socket" : slack.inboundMode.value}
-            onChange={(inboundMode) => {
-              return props.onSaveSlack({
-                ...slack,
-                inboundMode: { ...slack.inboundMode, value: inboundMode },
               });
             }}
           />
@@ -1610,42 +1700,9 @@ export function MessagingSettings(props: {
               }}
             />
           </div>
-          <ToggleField
-            checked={slack.liveWorkingCards.value}
-            disabled={props.saving}
-            label="Live Working Updates card"
-            sub="Shows Working Updates in one Slack task card per turn when Slack stream APIs are available; otherwise uses text updates."
-            source={sourceBadge(slack.liveWorkingCards)}
-            onChange={(liveWorkingCards) => {
-              return props.onSaveSlack({
-                ...slack,
-                liveWorkingCards: {
-                  ...slack.liveWorkingCards,
-                  value: liveWorkingCards,
-                },
-              });
-            }}
-          />
-          <ToggleField
-            checked={slack.streamingResponses.value}
-            disabled={props.saving}
-            label="Streaming responses"
-            sub="Sends partial assistant text as Slack message edits."
-            help={STREAMING_RESPONSES_WARNING}
-            source={sourceBadge(slack.streamingResponses)}
-            onChange={(streamingResponses) => {
-              if (streamingResponses) maybeNudgeForStreaming("slack", "Slack");
-              return props.onSaveSlack({
-                ...slack,
-                streamingResponses: {
-                  ...slack.streamingResponses,
-                  value: streamingResponses,
-                },
-              });
-            }}
-          />
         </div>
       </SettingsSection>
+      </>
       ) : null}
 
       {props.focus === "feishu" ? (
@@ -2548,13 +2605,6 @@ const FULL_ACCESS_WARNING_USER_POLICY_OPTIONS: Array<{
   { label: "Never warn", value: "never" },
 ];
 
-const SLACK_INBOUND_MODE_OPTIONS: Array<{
-  label: string;
-  value: "socket" | "events";
-}> = [
-  { label: "Socket Mode", value: "socket" },
-];
-
 const FEISHU_TENANT_REGION_OPTIONS: Array<{
   label: string;
   value: "feishu" | "lark";
@@ -2613,12 +2663,6 @@ function chipKindForBotToken(
 /** Uppercase labeled divider that groups related fields within a section. */
 function SettingsGroupLabel(props: { children: ReactNode }) {
   return <div className="settings-group-label">{props.children}</div>;
-}
-
-/** Best-effort "looks like a URL" check for the Workspace URL prerequisite. */
-function isLikelyWorkspaceUrl(value: string): boolean {
-  const trimmed = value.trim();
-  return /^https?:\/\/[^\s.]+\.[^\s]+$/i.test(trimmed);
 }
 
 function ToolUpdateBindingResetActions(props: {
@@ -2788,6 +2832,68 @@ function NumberField(props: {
   );
 }
 
+type SetupStageProgress = {
+  state: "done" | "current" | "waiting";
+  label: string;
+};
+
+/**
+ * The last mile: pair, then give the bot something to answer with. Its own
+ * component because the default Agent comes from the routes context, which
+ * `MessagingSettings` provides below its own hooks.
+ */
+function SlackStartSection(props: {
+  desktopApi?: DesktopApi;
+  pairingDisabled: boolean;
+  paired: boolean;
+  onOpenThread?: (target: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }) => void;
+  onPairingSettingsChanged?: () => Promise<void>;
+}) {
+  const defaultAgent = usePlatformDefaultAgent("slack");
+  const answering = Boolean(defaultAgent.route);
+  const pairProgress: SetupStageProgress = props.paired
+    ? { state: "done", label: "Paired" }
+    : { state: "current", label: "Next" };
+  const answerProgress: SetupStageProgress = answering
+    ? { state: "done", label: "Answering" }
+    : props.paired
+      ? { state: "current", label: "Next" }
+      : { state: "waiting", label: "Waiting" };
+
+  return (
+    <SettingsSection eyebrow="Slack" title="Start talking">
+      <div className="slack-setup">
+        <div className="automation-funnel">
+          <AutomationStage verb="Pair" title="Your Slack account" progress={pairProgress}>
+            <p className="slack-connect__step">
+              {pairingFieldDescription("slack")}
+            </p>
+            <PairingTokenField
+              desktopApi={props.desktopApi}
+              disabled={props.pairingDisabled}
+              hideDescription
+              highlight={!props.paired}
+              onSettingsChanged={props.onPairingSettingsChanged}
+              platform="slack"
+              supportsBucket
+            />
+          </AutomationStage>
+          <AutomationStage verb="Answer" title="Default Agent" progress={answerProgress}>
+            <PlatformDefaultAgentSetup
+              desktopApi={props.desktopApi}
+              platform="slack"
+              onOpenThread={props.onOpenThread}
+            />
+          </AutomationStage>
+        </div>
+      </div>
+    </SettingsSection>
+  );
+}
+
 function PairingTokenField(props: {
   desktopApi?: DesktopApi;
   disabled: boolean;
@@ -2797,6 +2903,8 @@ function PairingTokenField(props: {
   platform: MessagingChannelKind;
   scopeOptions?: PairingScopeOption[];
   supportsBucket?: boolean;
+  /** Leave the description to a surrounding setup step, which has the width. */
+  hideDescription?: boolean;
 }) {
   const [scope, setScope] = useState<MessagingPairingScope>("user_dm");
   const [message, setMessage] = useState<string | undefined>(undefined);
@@ -2968,7 +3076,7 @@ function PairingTokenField(props: {
   return (
     <SettingsField
       label="Pairing"
-      sub={pairingFieldDescription(props.platform)}
+      sub={props.hideDescription ? undefined : pairingFieldDescription(props.platform)}
       error={error}
       control={
         <div className="settings-pairing">
@@ -4131,6 +4239,12 @@ function SecretField(props: {
    * so users don't have to leave the app to run openssl.
    */
   onGenerate?: () => string;
+  /**
+   * Rejects a draft before it is written, with the message to show. The draft
+   * stays in the box for correction. Blur saves without a click, so a token
+   * pasted into the wrong box would otherwise be stored as the other one.
+   */
+  validate?: (value: string) => string | undefined;
   onClearSecret: (secret: DesktopSettingsSecretName) => Promise<boolean>;
   onReplaceSecret: (
     secret: DesktopSettingsSecretName,
@@ -4138,9 +4252,35 @@ function SecretField(props: {
   ) => Promise<boolean>;
 }) {
   const [value, setValue] = useState("");
+  const [invalid, setInvalid] = useState<string | undefined>(undefined);
+  const [writing, setWriting] = useState(false);
+  const [saved, setSaved] = useState(false);
+  // Blur and a Save click land together when the click moves focus out of the
+  // input; state would not show the first write until the next render.
+  const writingRef = useRef(false);
   const dirty = value.length > 0;
   const status = props.state.configured ? "Set" : "Not set";
   const source = formatSourceLabel(props.state.source, props.state.overriddenByEnv);
+
+  const save = async (): Promise<void> => {
+    const nextValue = value.trim();
+    if (!nextValue || props.disabled || writingRef.current) return;
+    const problem = props.validate?.(nextValue);
+    setInvalid(problem);
+    if (problem) return;
+    writingRef.current = true;
+    setWriting(true);
+    try {
+      if (await props.onReplaceSecret(props.secret, nextValue)) {
+        // Keep anything typed while the write was out.
+        setValue((current) => (current.trim() === nextValue ? "" : current));
+        setSaved(true);
+      }
+    } finally {
+      writingRef.current = false;
+      setWriting(false);
+    }
+  };
 
   return (
     <SettingsField
@@ -4148,17 +4288,41 @@ function SecretField(props: {
       sub={props.sub}
       help={props.help}
       source={`${status} · ${source}`}
-      error={props.state.unavailableReason}
+      error={invalid ?? props.state.unavailableReason}
       control={
-        <div className="settings-secret">
+        <div
+          className="settings-secret"
+          onBlur={(event) => {
+            // A pasted value is saved on the way out. Operators pasted a
+            // token, moved on, and the adapter never started, because the
+            // draft only reached the keychain through Save. Focus moving to
+            // this row's own buttons is not leaving it: Discard must not
+            // store the draft it is about to throw away.
+            if (event.currentTarget.contains(event.relatedTarget as Node | null)) {
+              return;
+            }
+            void save();
+          }}
+        >
           <input
             aria-label={props.label}
+            aria-invalid={invalid ? true : undefined}
             className="settings-input"
             disabled={props.disabled}
             placeholder="••••••••"
             type="password"
             value={value}
-            onChange={(event) => setValue(event.currentTarget.value)}
+            onChange={(event) => {
+              setValue(event.currentTarget.value);
+              setInvalid(undefined);
+              setSaved(false);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                void save();
+              }
+            }}
           />
           {props.onGenerate ? (
             <button
@@ -4167,6 +4331,8 @@ function SecretField(props: {
               type="button"
               onClick={() => {
                 setValue(props.onGenerate!());
+                setInvalid(undefined);
+                setSaved(false);
               }}
             >
               Generate
@@ -4177,12 +4343,7 @@ function SecretField(props: {
             disabled={props.disabled || !value.trim()}
             type="button"
             onClick={() => {
-              const nextValue = value.trim();
-              void props.onReplaceSecret(props.secret, nextValue).then((saved) => {
-                if (saved) {
-                  setValue("");
-                }
-              });
+              void save();
             }}
           >
             Save
@@ -4192,7 +4353,10 @@ function SecretField(props: {
               className="button button--ghost"
               disabled={props.disabled}
               type="button"
-              onClick={() => setValue("")}
+              onClick={() => {
+                setValue("");
+                setInvalid(undefined);
+              }}
             >
               Discard
             </button>
@@ -4202,11 +4366,19 @@ function SecretField(props: {
             disabled={props.disabled || props.state.source === "env"}
             type="button"
             onClick={() => {
+              setSaved(false);
               void props.onClearSecret(props.secret);
             }}
           >
             Clear
           </button>
+          {writing ? (
+            <SettingsPendingIndicator pending />
+          ) : saved && !dirty ? (
+            <span className="settings-pending" role="status">
+              Saved
+            </span>
+          ) : null}
         </div>
       }
     />

@@ -121,7 +121,7 @@ export function SlackConnectCard(props: {
           action: "create",
           kind: "status",
           message:
-            "Opened Slack in your browser. Finish the checklist, then paste both tokens.",
+            "Opened Slack in your browser. Create the app there, then follow the steps below.",
         });
         return;
       }
@@ -191,9 +191,10 @@ export function SlackConnectCard(props: {
       data-testid="slack-connect-card"
     >
       <div className="slack-connect__intro">
-        Create a customer-owned Slack app from PwrAgent&rsquo;s official
-        manifest. Socket Mode stays on your computer — no PwrAgent Slack
-        app, and no client secret in this desktop build.
+        Opens Slack with PwrAgent&rsquo;s official manifest filled in. Pick
+        your workspace and click <strong>Create</strong>. It is a
+        customer-owned Slack app: Socket Mode runs from this computer, with no
+        PwrAgent-hosted Slack app and no client secret in this desktop build.
       </div>
       <div className="slack-connect__actions">
         <button
@@ -229,18 +230,21 @@ export function SlackConnectCard(props: {
               : "Copy link for an admin"}
         </button>
       </div>
-      <ol className="slack-connect__checklist">
-        {SLACK_CONNECT_CHECKLIST.map((step) => (
-          <li key={step}>{step}</li>
-        ))}
-      </ol>
-      <p className="slack-connect__admin">{SLACK_ADMIN_APPROVAL_COPY}</p>
       {renderFeedback(["create", "link"])}
+      <p className="slack-connect__admin">{SLACK_ADMIN_APPROVAL_COPY}</p>
+      {/* Settings walks the rest as numbered steps beside each token box. */}
+      {props.variant === "onboarding" ? (
+        <ol className="slack-connect__checklist">
+          {SLACK_CONNECT_CHECKLIST.map((step) => (
+            <li key={step}>{step}</li>
+          ))}
+        </ol>
+      ) : null}
       {props.variant === "settings" ? (
-        <div className="slack-connect__update">
-          <p className="slack-connect__grouplabel">
-            Already have a PwrAgent app
-          </p>
+        <details className="slack-connect__update">
+          <summary className="slack-connect__grouplabel">
+            Already have a PwrAgent app? Update its manifest
+          </summary>
           <p className="slack-connect__admin">{SLACK_MANIFEST_BLURB}</p>
           <div className="slack-connect__copyrow">
             <code className="slack-connect__manifest">
@@ -282,7 +286,7 @@ export function SlackConnectCard(props: {
               <li key={step}>{step}</li>
             ))}
           </ol>
-        </div>
+        </details>
       ) : null}
     </div>
   );

@@ -10009,6 +10009,28 @@ a.button {
   line-height: 1.5;
 }
 
+.slack-connect__step {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+/* Slack's own labels, bold so they can be matched against Slack's page. */
+.slack-connect__checklist strong,
+.slack-connect__step strong,
+.slack-connect__intro strong {
+  color: var(--text-primary);
+  font-weight: 650;
+}
+
+.slack-connect__checklist code,
+.slack-connect__step code {
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+}
+
 .slack-connect__status {
   color: var(--text-secondary);
 }
@@ -10019,7 +10041,8 @@ a.button {
 
 /* Existing-app manifest block. Kept out of the create row because the two
    are different jobs for different people: creating an app is first-run,
-   replacing a manifest is maintenance a connected operator returns for. */
+   replacing a manifest is maintenance a connected operator returns for.
+   Collapsed, since the create step is where a first-run operator starts. */
 .slack-connect__update {
   display: flex;
   flex-direction: column;
@@ -10027,6 +10050,10 @@ a.button {
   margin-top: 4px;
   padding-top: 12px;
   border-top: 1px solid var(--border-subtle);
+}
+
+.slack-connect__update > summary {
+  cursor: pointer;
 }
 
 /* Card-local echo of `.settings-group-label`. Same tokens; the panel-level
@@ -10065,6 +10092,81 @@ a.button {
   font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Slack's guided setup. The steps reuse the automation funnel's numbered
+   rail; they sit a step apart instead of behind captioned connectors, which
+   would add a line of reading per step to a screen that was already long. */
+.slack-setup {
+  padding: 18px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.settings-section__body > .slack-setup:first-child {
+  border-top: 0;
+}
+
+.slack-setup .automation-funnel {
+  gap: 18px;
+}
+
+/* Carry the rail across that gap to the next node. */
+.slack-setup .automation-stage__rail::before {
+  bottom: -19px;
+}
+
+/* A field inside a step is already inset by the rail; its row padding and
+   divider would indent and box it a second time. The step explains the
+   value, so the row carries only its label and status, and a narrow label
+   column leaves the box and its buttons one line. */
+.slack-setup .automation-stage__body > .settings-field {
+  grid-template-columns: 120px minmax(0, 1fr);
+  padding: 0;
+  border-top: 0;
+}
+
+.slack-setup .settings-button-row {
+  padding: 0;
+}
+
+.messaging-default-agent {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.messaging-default-agent__note {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.messaging-default-agent__current {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.messaging-default-agent__current strong {
+  color: var(--text-primary);
+}
+
+.messaging-default-agent__existing {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.messaging-default-agent__existing .settings-select {
+  flex: 1 1 240px;
+  width: auto;
 }
 
 .settings-update-channel {

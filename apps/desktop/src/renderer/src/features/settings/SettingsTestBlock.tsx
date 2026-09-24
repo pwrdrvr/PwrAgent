@@ -47,12 +47,19 @@ export function SettingsTestBlock(props: {
   /** Optional prerequisite checklist (present/valid-looking inputs). */
   prerequisites?: SettingsTestPrerequisite[];
   desktopApi?: DesktopApi;
+  /** Latest result, remembered or fresh, for a guided setup's progress. */
+  onResult?: (result: SettingsCredentialTestResult | undefined) => void;
 }) {
   const desktopApi = props.desktopApi;
   const [result, setResult] = useState<SettingsCredentialTestResult | undefined>(
     undefined,
   );
   const [testing, setTesting] = useState(false);
+  const onResult = props.onResult;
+
+  useEffect(() => {
+    onResult?.(result);
+  }, [onResult, result]);
 
   // Pull the last result on mount so reopening the panel shows
   // "Connected · 2m ago" without re-probing. The main-process tester

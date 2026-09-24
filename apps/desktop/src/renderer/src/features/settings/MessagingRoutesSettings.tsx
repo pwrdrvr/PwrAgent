@@ -28,6 +28,7 @@ import {
   formatMessagingPlatformName,
 } from "../../lib/messaging-platform-branding";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { createDesktopAgentThread } from "../../lib/agent-thread";
 import { MessagingSurfacePicker } from "../../components/MessagingSurfacePicker";
 import { SettingsSection } from "./SettingsLayout";
 import { RESPONSE_MODE_OPTIONS, responseModeTitle } from "./settings-fields";
@@ -609,6 +610,266 @@ export function ApprovedSurfaceDefaultAgent(props: {
       >
         {routeState.loading ? "Checking..." : assignment ? "Change" : "Assign"}
       </button>
+    </div>
+  );
+}
+
+/**
+ * The default Agent that answers a message on `platform` when no thread is
+ * attached to its conversation. Without one an authorized DM gets only the
+ * command list, which reads as a bot that does not work. Conversation and
+ * parent defaults are left out because they answer one channel, not the
+ * operator's DM. Most specific first, matching the controller's lookup, and
+ * only a target that still exists: the controller revokes the others on the
+ * next message.
+ */
+function platformCatchAllDefault(
+  defaultAgents: readonly DesktopMessagingDefaultAgentRoute[],
+  platform: MessagingChannelKind,
+): DesktopMessagingDefaultAgentRoute | undefined {
+  const rank = (scope: DesktopMessagingDefaultAgentScope): number | undefined => {
+    if (scope.kind === "provider" && scope.platform === platform) return 0;
+    if (scope.kind === "workspace" && scope.platform === platform) return 1;
+    if (scope.kind === "profile") return 2;
+    return undefined;
+  };
+  let best: { route: DesktopMessagingDefaultAgentRoute; rank: number } | undefined;
+  for (const route of defaultAgents) {
+    const routeRank = rank(route.scope);
+    if (routeRank === undefined || !route.target.available) continue;
+    if (!best || routeRank < best.rank) best = { route, rank: routeRank };
+  }
+  return best?.route;
+}
+
+/** Whether a platform's unbound messages reach an Agent, for setup progress. */
+export function usePlatformDefaultAgent(platform: MessagingChannelKind): {
+  loading: boolean;
+  route?: DesktopMessagingDefaultAgentRoute;
+} {
+  const { loading, routes } = useMessagingRoutes();
+  return {
+    loading,
+    route: platformCatchAllDefault(routes.defaultAgents, platform),
+  };
+}
+
+function platformAgent(platformName: string): { name: string; instructions: string } {
+  const agent = createDesktopAgentThread();
+  return {
+    name: `${platformName} Agent`,
+    instructions: `${agent.instructions} You are the default Agent for ${platformName}: messages to the PwrAgent bot there reach this thread when no other thread is attached to the conversation.`,
+  };
+}
+
+/**
+ * Create an Agent thread and make it the platform's default in one step, or
+ * point the default at an Agent that already exists.
+ */
+export function PlatformDefaultAgentSetup(props: {
+  desktopApi?: DesktopApi;
+  disabled?: boolean;
+  platform: MessagingChannelKind;
+  onOpenThread?: (target: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }) => void;
+}) {
+  const { error: routesError, loadRoutes, loading, routes } = useMessagingRoutes();
+  const route = platformCatchAllDefault(routes.defaultAgents, props.platform);
+  const platformName = formatMessagingPlatformName(props.platform);
+  const [busy, setBusy] = useState<"create" | "assign" | undefined>(undefined);
+  const [error, setError] = useState<string | null>(null);
+  const [changing, setChanging] = useState(false);
+  const [targetValue, setTargetValue] = useState("");
+  const api = props.desktopApi;
+  const canCreate = Boolean(
+    api?.startThread && api.startTurn && api.setMessagingDefaultAgent,
+  );
+  const canAssign = Boolean(api?.setMessagingDefaultAgent);
+  const disabled = props.disabled || busy !== undefined || loading;
+  // Replace this platform's own catch-all, even one whose Agent is gone,
+  // rather than stacking a second beside it. A profile-wide default stays;
+  // the platform default outranks it.
+  const replaceAssignmentId = routes.defaultAgents.find(
+    (candidate) =>
+      candidate.scope.kind === "provider"
+      && candidate.scope.platform === props.platform,
+  )?.assignmentId;
+
+  const assign = async (target: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): Promise<void> => {
+    await api!.setMessagingDefaultAgent!({
+      ...(replaceAssignmentId ? { assignmentId: replaceAssignmentId } : {}),
+      scope: { kind: "provider", platform: props.platform },
+      target,
+    });
+    await loadRoutes();
+    setChanging(false);
+    setTargetValue("");
+  };
+
+  const run = async (
+    action: "create" | "assign",
+    work: () => Promise<void>,
+  ): Promise<void> => {
+    setBusy(action);
+    setError(null);
+    try {
+      await work();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setBusy(undefined);
+    }
+  };
+
+  const createAgent = () => run("create", async () => {
+    const started = await api!.startThread!({
+      backend: "codex",
+      agent: platformAgent(platformName),
+    });
+    // Codex writes a thread's rollout at its first turn, and a thread without
+    // one cannot be resumed after PwrAgent restarts. A default pointing at it
+    // would work until the first restart and then fail on the next message.
+    await api!.startTurn!({
+      backend: started.backend,
+      threadId: started.threadId,
+      input: [{
+        type: "text",
+        text: `${platformName} messages to the PwrAgent bot now come to this thread when no other thread is attached to the conversation. Reply with one short line to say you are ready.`,
+      }],
+    });
+    await assign({ backend: started.backend, threadId: started.threadId });
+  });
+
+  const selectedTarget = targetValue ? decodeTarget(targetValue) : undefined;
+  const choices = routes.eligibleAgents.filter(
+    (agent) =>
+      !route
+      || agent.backend !== route.target.backend
+      || agent.threadId !== route.target.threadId,
+  );
+
+  if (loading) {
+    return <p className="messaging-default-agent__note">Checking the {platformName} default Agent…</p>;
+  }
+
+  return (
+    <div className="messaging-default-agent">
+      {route && !changing ? (
+        <>
+          <div className="messaging-default-agent__current">
+            <span>
+              {platformName} messages with no attached thread go to{" "}
+              <strong>{route.target.label}</strong>
+              {route.scope.kind === "provider"
+                ? null
+                : ` through the ${formatScopeLabel(route.scope)} default`}
+              .
+            </span>
+            <ProviderChip
+              available={route.target.backendAvailable}
+              label={route.target.backendLabel}
+            />
+          </div>
+          <div className="settings-button-row">
+            {props.onOpenThread ? (
+              <button
+                className="button button--secondary"
+                type="button"
+                onClick={() => props.onOpenThread?.({
+                  backend: route.target.backend,
+                  threadId: route.target.threadId,
+                })}
+              >
+                Open thread
+              </button>
+            ) : null}
+            <button
+              className="button button--ghost"
+              disabled={disabled}
+              type="button"
+              onClick={() => setChanging(true)}
+            >
+              Change
+            </button>
+          </div>
+        </>
+      ) : (
+        <>
+          <p className="messaging-default-agent__note">
+            {route
+              ? `Choose the Agent that answers ${platformName} messages with no attached thread.`
+              : `Nothing answers yet: a message with no attached thread gets the command list. An Agent thread can answer instead, and start or attach threads for you.`}
+          </p>
+          <div className="settings-button-row">
+            <button
+              className="button button--primary"
+              disabled={disabled || !canCreate}
+              type="button"
+              onClick={() => {
+                void createAgent();
+              }}
+            >
+              {busy === "create" ? "Creating…" : `Create ${platformName} Agent`}
+            </button>
+            {changing ? (
+              <button
+                className="button button--ghost"
+                disabled={busy !== undefined}
+                type="button"
+                onClick={() => {
+                  setChanging(false);
+                  setError(null);
+                }}
+              >
+                Cancel
+              </button>
+            ) : null}
+          </div>
+          <p className="messaging-default-agent__note">
+            Starts a Codex Agent thread, sends it a short hello so the thread is
+            saved, and makes it the {platformName} default.
+          </p>
+          {choices.length > 0 ? (
+            <div className="messaging-default-agent__existing">
+              <select
+                aria-label={`Existing Agent for ${platformName}`}
+                className="settings-select"
+                disabled={disabled || !canAssign}
+                value={targetValue}
+                onChange={(event) => setTargetValue(event.target.value)}
+              >
+                <option value="">Or use an existing Agent…</option>
+                {choices.map((agent) => (
+                  <option key={encodeTarget(agent)} value={encodeTarget(agent)}>
+                    {agent.label} - {agent.backendLabel}
+                  </option>
+                ))}
+              </select>
+              <button
+                className="button button--secondary"
+                disabled={disabled || !canAssign || !selectedTarget}
+                type="button"
+                onClick={() => {
+                  if (!selectedTarget) return;
+                  void run("assign", () => assign(selectedTarget));
+                }}
+              >
+                {busy === "assign" ? "Saving…" : "Use this Agent"}
+              </button>
+            </div>
+          ) : null}
+        </>
+      )}
+      {error ?? routesError ? (
+        <p className="settings-row__error" role="alert">
+          {error ?? routesError}
+        </p>
+      ) : null}
     </div>
   );
 }

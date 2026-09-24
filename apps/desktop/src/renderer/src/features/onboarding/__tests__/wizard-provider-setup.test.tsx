@@ -15,6 +15,7 @@ import type {
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { BACKEND_SUMMARIES_REFRESH_EVENT } from "../../../lib/useBackendSummaries";
+import { slackCredentialProblem } from "../../messaging/slack-token-shape";
 import type { DesktopSettingsState } from "../../settings/useDesktopSettings";
 import {
   BackendRequirementsStep,
@@ -527,6 +528,75 @@ describe("SecretFieldRow live-write contract", () => {
     // the buffer (asserted above).
     await Promise.resolve();
     expect(clearSecret).not.toHaveBeenCalled();
+  });
+});
+
+describe("SecretFieldRow saves on the way out", () => {
+  function renderRow(validate?: (value: string) => string | undefined) {
+    const onBuffer = vi.fn();
+    const replaceSecret = vi.fn(
+      async (_secret: DesktopSettingsSecretName, _value: string) => true,
+    );
+    render(
+      <SecretFieldRow
+        field={{
+          kind: "secret",
+          name: "slackBotToken",
+          label: "Bot token",
+          placeholder: "xoxb-",
+          validate,
+        }}
+        bufferedValue=""
+        onBuffer={onBuffer}
+        replaceSecret={replaceSecret}
+        clearSecret={vi.fn(async () => true)}
+      />,
+    );
+    return {
+      input: screen.getByPlaceholderText("xoxb-"),
+      onBuffer,
+      replaceSecret,
+    };
+  }
+
+  it("buffers and writes a pasted value when focus leaves the row", async () => {
+    const { input, onBuffer, replaceSecret } = renderRow();
+    fireEvent.change(input, { target: { value: "xoxb-0000-fake" } });
+    fireEvent.blur(input, { relatedTarget: document.body });
+
+    await waitFor(() => {
+      expect(replaceSecret).toHaveBeenCalledWith(
+        "slackBotToken",
+        "xoxb-0000-fake",
+      );
+    });
+    expect(onBuffer).toHaveBeenCalledWith("xoxb-0000-fake");
+  });
+
+  it("does not save when focus moves to the row's own button", () => {
+    const { input, replaceSecret } = renderRow();
+    fireEvent.change(input, { target: { value: "xoxb-0000-fake" } });
+    fireEvent.blur(input, {
+      relatedTarget: screen.getByRole("button", { name: "Use this" }),
+    });
+
+    expect(replaceSecret).not.toHaveBeenCalled();
+  });
+
+  it("rejects a value that is recognizably another Slack credential", () => {
+    const { input, onBuffer, replaceSecret } = renderRow(
+      (value) => slackCredentialProblem("bot", value),
+    );
+    fireEvent.change(input, { target: { value: "xapp-1-fake" } });
+    fireEvent.blur(input, { relatedTarget: document.body });
+
+    expect(
+      screen.getByText(
+        "That is an App-Level Token (xapp-). The Bot User OAuth Token starts with xoxb-.",
+      ),
+    ).toBeInTheDocument();
+    expect(onBuffer).not.toHaveBeenCalled();
+    expect(replaceSecret).not.toHaveBeenCalled();
   });
 });
 

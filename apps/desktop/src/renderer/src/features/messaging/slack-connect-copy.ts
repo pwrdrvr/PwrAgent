@@ -2,12 +2,20 @@ export const SLACK_EVENTS_API_UNIMPLEMENTED_NOTICE =
   "Events API is not implemented. PwrAgent will use Socket Mode.";
 
 export const SLACK_ADMIN_APPROVAL_COPY =
-  "This workspace only allows owners to install unpublished apps. Copy the link for an admin, or ask them to approve your request. PwrAgent never needs their Slack password.";
+  "If Slack says only owners can install apps in your workspace, copy the link for an admin, or ask them to approve your request. PwrAgent never needs their Slack password.";
 
+/**
+ * The onboarding card's condensed version of `SlackCredentialSteps`. The old
+ * list said "Install to Workspace" and "Basic Information → App-Level Tokens"
+ * and left out the rest: that the bot token only appears on Install App after
+ * installing, and that the app-level token needs exactly one scope, picked in
+ * a dialog.
+ */
 export const SLACK_CONNECT_CHECKLIST = [
-  "In the new app, click Install to Workspace and Allow.",
-  "Copy the Bot User OAuth Token (it starts with xoxb-) and paste it below.",
-  "Under Basic Information → App-Level Tokens, generate a token with connections:write and paste the xapp- token below.",
+  "In the new app’s sidebar, open Install App, click Install to Workspace, then Allow.",
+  "Under OAuth Tokens, copy the Bot User OAuth Token (xoxb-) and paste it below.",
+  "Open Basic Information → App-Level Tokens, click Generate Token and Scopes, add only the connections:write scope, and paste the xapp- token below.",
+  "On Basic Information → App Credentials, copy the Signing Secret and paste it below.",
 ] as const;
 
 /**
