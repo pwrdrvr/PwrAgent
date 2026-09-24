@@ -691,6 +691,23 @@ textarea,
   user-select: text;
 }
 
+/* The house focus ring, for any control without a `:focus-visible` rule of
+   its own. Without it Chromium draws `outline: auto 1px`, a pale blue ring
+   that belongs to no theme and that the keyboard walk found on row buttons,
+   links, `<summary>` toggles, and native checkboxes. `:where()` keeps it at
+   zero specificity, so every component rule, including a deliberate
+   `outline: none`, still wins.
+
+   `scroll-margin` is the ring's reach plus 1px. When Tab moves focus below
+   the fold, Chromium scrolls only until the border box is in view, which
+   cut the bottom of outset rings in Settings. Chromium honours the margin
+   from inside a `:focus-visible` rule. */
+:where(:focus-visible) {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+  scroll-margin: 5px;
+}
+
 .app-shell {
   display: grid;
   position: relative;
@@ -859,7 +876,13 @@ textarea,
 .new-thread-menu__item:focus-visible {
   background: var(--accent-soft);
   color: var(--accent-bright);
-  outline: none;
+}
+
+/* Focus had only the hover tint, which is under 3:1. Inset, as menu rows fill
+   the card. */
+.new-thread-menu__item:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
 }
 
 .new-thread-menu__item:disabled,
@@ -1102,7 +1125,7 @@ textarea,
 .app-titlebar__control:focus-visible {
   background: var(--bg-panel-hover);
   color: var(--text-primary);
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 1px;
 }
 
@@ -1409,6 +1432,15 @@ textarea,
   color: var(--text-muted);
 }
 
+/* The field is borderless, and its caret was the only sign of focus: Tab
+   walks the active row's PR chips and back, and nothing said focus had
+   returned. The row rings inset, on the panel's inner corners. */
+.jump-palette__field:has(.jump-palette__input:focus-visible) {
+  border-radius: 7px 7px 0 0;
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
 .jump-palette__esc {
   flex: none;
   padding: 3px 7px;
@@ -1451,10 +1483,13 @@ textarea,
 }
 
 /* The tint alone is a near-invisible delta against the elevated panel in dark
-   theme, and this is the one surface steered entirely by that cue. */
+   theme, and this is the one surface steered entirely by that cue. The row is
+   the `aria-activedescendant` cursor, the one Enter opens, so it takes the
+   focus ring: the 1px `--accent-border` line it had was under 3:1. */
 .jump-palette__row.is-active {
   background: var(--bg-row-active);
-  box-shadow: inset 0 0 0 1px var(--accent-border);
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
 }
 
 .jump-palette__row-title {
@@ -1501,9 +1536,12 @@ textarea,
 }
 
 /* `direction: rtl` puts the ellipsis at the START, so a long `agent/…` prefix
-   gives way before the branch leaf does. Safe for branch names, which git
-   forbids from starting or ending in the neutral characters that would
-   reorder under an RTL paragraph direction.
+   gives way before the branch leaf does. It also makes the paragraph RTL, and
+   git allows a branch to start or end in a neutral character (`fix-`,
+   `wip_`, `(draft)`, `#123`, `ship!`) that an RTL paragraph moves to the
+   other end: `fix-` drew as `-fix`. A left-to-right mark at each end, in
+   generated content so a copy of the name stays clean, gives those
+   characters a strong LTR neighbour on both sides.
 
    Shrinks twice as fast as the title and caps at 40% of the row: with equal
    shrink factors a long branch beside a long title clips both, and the title
@@ -1520,6 +1558,11 @@ textarea,
   text-align: right;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.jump-palette__row-branch::before,
+.jump-palette__row-branch::after {
+  content: "\200E";
 }
 
 .jump-palette__row-repo {
@@ -1688,6 +1731,14 @@ textarea,
 .sidebar__resize-handle:hover:not(:focus-visible)::after,
 .context-rail__resize-handle:hover:not(:focus-visible)::after {
   transition-delay: 120ms;
+}
+
+/* Focus lit the same 1px seam hover does, so a focused handle looked
+   hovered. It stays one seam, centred on the border pixel, 3px wide. */
+.sidebar__resize-handle:focus-visible::after,
+.context-rail__resize-handle:focus-visible::after {
+  background: var(--focus-ring);
+  box-shadow: 0 0 0 1px var(--focus-ring);
 }
 
 .sidebar__resize-handle:focus-visible,
@@ -1881,7 +1932,7 @@ textarea,
 }
 
 .panel-toggle__chip:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 1px;
 }
 
@@ -1941,7 +1992,7 @@ textarea,
 
 .thread-header__terminal-toggle:focus-visible,
 .thread-header__rewind-toggle:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 1px;
 }
 
@@ -2032,7 +2083,7 @@ textarea,
 }
 
 .history-nav__chip:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 1px;
 }
 
@@ -2132,7 +2183,11 @@ textarea,
 .messaging-status-controller[aria-expanded="true"] {
   border-color: var(--accent-border);
   background: var(--bg-panel-elevated);
-  outline: none;
+}
+
+.messaging-status-controller:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
 }
 
 .messaging-status-controller.is-off {
@@ -2239,7 +2294,7 @@ textarea,
 .messaging-status-popover__settings:focus-visible {
   background: var(--bg-panel-hover);
   color: var(--text-primary);
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 1px;
 }
 
@@ -2337,7 +2392,12 @@ textarea,
 .messaging-status-popover__activity:hover,
 .messaging-status-popover__activity:focus-visible {
   color: var(--accent-bright);
-  outline: none;
+}
+
+.messaging-status-popover__activity:focus-visible {
+  border-radius: 3px;
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
 }
 
 .messaging-status-popover__error {
@@ -3112,10 +3172,11 @@ textarea,
   color: var(--text-secondary);
 }
 
+/* Was a 1px inset `--accent-shadow` halo, 34% of the accent and under 3:1. */
 .messaging-activity-pane__header:focus-visible {
-  outline: none;
   border-radius: 8px;
-  box-shadow: inset 0 0 0 1px var(--accent-shadow);
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
 }
 
 .messaging-activity-pane__chevron {
@@ -3264,8 +3325,8 @@ textarea,
 
 .messaging-activity-row__copy:focus-visible {
   border-color: var(--accent-border);
-  outline: none;
-  box-shadow: 0 0 0 1px var(--accent-shadow);
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
 }
 
 .messaging-activity-row__copy code {
@@ -3311,7 +3372,7 @@ textarea,
 .sidebar__icon-button:focus-visible {
   background: var(--bg-panel-hover);
   color: var(--text-primary);
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 1px;
 }
 
@@ -4041,7 +4102,6 @@ a.button {
 .button:focus,
 .thread-row:focus,
 .transcript-activity__toggle:focus,
-.composer-tiptap-input__editor:focus,
 .composer__select:focus,
 .composer__review-input:focus,
 .composer__review-option:focus,
@@ -4051,7 +4111,6 @@ a.button {
 .button:focus-visible,
 .thread-row:focus-visible,
 .transcript-activity__toggle:focus-visible,
-.composer-tiptap-input__editor:focus-visible,
 .composer__select:focus-visible,
 .composer__review-input:focus-visible,
 .composer__review-option:focus-visible,
@@ -4807,6 +4866,14 @@ a.button {
   color: var(--accent-bright);
 }
 
+/* The paint above is the hover paint, so on its own a focused button looked
+   hovered and drew Chromium's `outline: auto` ring. */
+.thread-row__pin-button:focus-visible,
+.thread-row__overflow-button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
 /* Reaction + add-reaction controls share the .thread-row__chip primitive
    below; only their content (emoji glyph) differs from a meta chip.
    The add control is a hover-only row affordance, positioned outside the
@@ -4833,7 +4900,7 @@ a.button {
 .thread-row__chip--add-reaction:focus-visible {
   border-color: var(--accent-border);
   background: var(--bg-row-active);
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }
 
@@ -4916,7 +4983,12 @@ a.button {
 .reaction-picker__option:focus-visible {
   border-color: var(--accent-border);
   background: var(--bg-row-active);
-  outline: none;
+}
+
+/* Inset: the options sit in a tight grid. */
+.reaction-picker__option:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
 }
 
 .reaction-picker__option.is-active {
@@ -4953,7 +5025,8 @@ a.button {
 
 .reaction-picker__custom-input:focus-visible {
   border-color: var(--accent-border);
-  outline: none;
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
 }
 
 .reaction-picker__custom-submit {
@@ -4978,7 +5051,11 @@ a.button {
 .reaction-picker__custom-submit:focus-visible {
   background: var(--accent);
   color: var(--button-text);
-  outline: none;
+}
+
+.reaction-picker__custom-submit:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
 }
 
 .reaction-picker__custom-submit:disabled {
@@ -5303,7 +5380,7 @@ a.button {
    reaction, add-reaction). Span-with-role doesn't get the browser's
    default focus outline. */
 .thread-row__chips [role="button"]:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }
 
@@ -5566,7 +5643,7 @@ a.button {
 }
 
 .tooltip-target:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }
 
@@ -5625,7 +5702,13 @@ a.button {
 .pr-chip:focus-visible {
   border-color: var(--accent-border);
   background: var(--bg-panel-hover);
-  outline: none;
+}
+
+/* Outside a thread row, where `.thread-row__chips [role="button"]` rings it,
+   focus had only the hover paint. */
+.pr-chip:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
 }
 
 .pr-chip__dot {
@@ -5795,7 +5878,11 @@ a.button {
 .pr-chip__detach:focus-visible {
   background: var(--danger-soft);
   color: var(--danger-text);
-  outline: none;
+}
+
+.pr-chip__detach:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
 }
 
 /* Portal-rendered hover card for a PR chip (rendered by useViewportTooltip).
@@ -6086,7 +6173,11 @@ a.button {
 .pr-detach-warning-dialog__actions button:hover,
 .pr-detach-warning-dialog__actions button:focus-visible {
   border-color: var(--border-strong);
-  outline: none;
+}
+
+.pr-detach-warning-dialog__actions button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
 }
 
 .pr-detach-warning-dialog__actions .button--danger {
@@ -6505,7 +6596,13 @@ a.button {
 .directory-row__launchpad-cluster .directory-row__launchpad-targets-button:focus-visible {
   background: var(--accent-soft);
   color: var(--accent-bright);
-  outline: none;
+}
+
+/* Inset: the two buttons share one cluster border. */
+.directory-row__launchpad-cluster .directory-row__launchpad-button:focus-visible,
+.directory-row__launchpad-cluster .directory-row__launchpad-targets-button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
 }
 
 /* An unsent draft outranks the group tint: hovering the chevron must not dim
@@ -6968,7 +7065,13 @@ a.button {
 .thread-context-menu button:focus-visible:not(:disabled) {
   background: var(--accent-soft);
   color: var(--accent-bright);
-  outline: none;
+}
+
+/* Focus had only the hover tint, which is under 3:1. Inset, as menu rows fill
+   the card. */
+.thread-context-menu button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
 }
 
 .thread-context-menu button:disabled {
@@ -7709,7 +7812,7 @@ a.button {
 .quit-blocker-queue__row:focus-visible {
   border-color: var(--accent-border);
   background: var(--bg-panel-hover);
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--focus-ring);
   outline-offset: -2px;
 }
 
@@ -7846,7 +7949,11 @@ a.button {
   border-color: var(--accent-border);
   background: var(--accent-soft);
   color: var(--accent-bright);
-  outline: none;
+}
+
+.app-notice-toast__icon-button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
 }
 
 .app-notice-toast__icon-button:disabled {
@@ -7940,7 +8047,7 @@ a.button {
 }
 
 .app-update-banner__notes:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 1px;
 }
 
@@ -8395,7 +8502,12 @@ a.button {
 .automations-table__thread-link:hover,
 .automations-table__thread-link:focus-visible {
   color: var(--accent-bright);
-  outline: none;
+}
+
+.automations-table__thread-link:focus-visible {
+  border-radius: 3px;
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
 }
 
 .automations-table__actions {
@@ -8550,7 +8662,11 @@ a.button {
 .automations-table__menu-item:hover,
 .automations-table__menu-item:focus-visible {
   background: var(--bg-panel-hover);
-  outline: none;
+}
+
+.automations-table__menu-item:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
 }
 
 .automations-table__menu-item--danger {
@@ -8681,8 +8797,14 @@ a.button {
 .settings-titlebar__crumb:hover,
 .settings-titlebar__crumb:focus-visible {
   color: var(--text-primary);
-  outline: none;
   text-decoration: underline;
+}
+
+/* Focus had only the hover paint: a colour step and an underline. */
+.settings-titlebar__crumb:focus-visible {
+  border-radius: 3px;
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
 }
 
 .settings-titlebar__current {
@@ -8823,7 +8945,13 @@ a.button {
 .settings-nav__exit:hover,
 .settings-nav__exit:focus-visible {
   color: var(--accent);
-  outline: none;
+}
+
+/* Inset, like the nav rows below: the row spans the nav's lane. */
+.settings-nav__exit:focus-visible {
+  border-radius: 6px;
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
 }
 
 /* Quiet create action in the Automations nav, under Exit. It sits where the
@@ -8859,6 +8987,11 @@ a.button {
 .settings-nav__new:focus-visible {
   background: var(--bg-panel-hover);
   color: var(--text-primary);
+}
+
+.settings-nav__new:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
 }
 
 .settings-nav__new-plus {
@@ -8956,7 +9089,8 @@ a.button {
 
 .settings-nav__caret:focus-visible {
   background: var(--accent-soft);
-  outline: none;
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
 }
 
 .settings-nav__caret:hover .settings-nav__caret-mark,
@@ -9018,7 +9152,14 @@ a.button {
   border-color: var(--accent-border);
   background: var(--accent-soft);
   color: var(--text-primary);
-  outline: none;
+}
+
+/* Focus shared the paint above with hover and with the active page, so a
+   focused row read as a second current page. Inset: the rows sit 2px apart
+   and an outset ring would lie across the next row's border. */
+.settings-nav__button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
 }
 
 /* Collapsible sublist under a group row — the same 120ms grid-rows
@@ -9086,7 +9227,13 @@ a.button {
 .settings-nav__subbutton.is-active {
   border-left-color: var(--accent);
   color: var(--accent);
-  outline: none;
+}
+
+/* Inset: `.settings-nav__sublist-clip` clips anything outside the row. */
+.settings-nav__subbutton:focus-visible {
+  border-radius: 0 4px 4px 0;
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
 }
 
 .settings-nav__subdot {
@@ -9317,7 +9464,13 @@ a.button {
 .settings-index__row:focus-visible {
   border-color: var(--accent-border);
   background: var(--bg-panel-hover);
-  outline: none;
+}
+
+/* Inset: the collapsible section body clips, and an outset ring lost its
+   top and sides to it. */
+.settings-index__row:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
 }
 
 .settings-index__row:hover .settings-index__open,
@@ -10159,7 +10312,7 @@ a.button {
 }
 
 .settings-update-channel__notes:focus-visible {
-  outline: 2px solid var(--accent-bright);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
   border-radius: 3px;
   color: var(--accent);
@@ -10250,7 +10403,7 @@ a.button {
    app installs. Without a focus ring distinct from `.is-selected` there is
    no way to see which tile Space would commit. */
 .settings-release-slot:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 1px;
 }
 
@@ -10363,7 +10516,7 @@ a.button {
 }
 
 .settings-release-slot__notes:focus-visible {
-  outline: 2px solid var(--accent-bright);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
   border-radius: 3px;
   color: var(--accent);
@@ -10934,8 +11087,15 @@ a.button {
 .settings-input:focus,
 .settings-input:focus-visible {
   border-color: var(--accent-border);
-  outline: none;
   box-shadow: 0 0 0 1px var(--accent-shadow);
+}
+
+/* The tint above is the resting border stepped to `--accent-border` plus a
+   1px `--accent-shadow` halo, well under 3:1 against the field. It stays;
+   the ring is the indicator. */
+.settings-input:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
 }
 
 .settings-input:disabled {
@@ -10969,8 +11129,12 @@ a.button {
 .settings-select:focus,
 .settings-select:focus-visible {
   border-color: var(--accent-border);
-  outline: none;
   box-shadow: 0 0 0 1px var(--accent-shadow);
+}
+
+.settings-select:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
 }
 
 /* The surface picker's trigger is a `.settings-select` that is never natively
@@ -10980,6 +11144,17 @@ a.button {
 .messaging-surface-picker__trigger[aria-disabled="true"] {
   cursor: not-allowed;
   opacity: 0.55;
+}
+
+/* Opacity fades an element's outline with it, so the focused trigger drew
+   its ring at 55%. While focused it trades the fade for a muted paint at
+   full opacity: it still reads as unavailable, and the ring keeps its
+   strength. */
+.messaging-surface-picker__trigger[aria-disabled="true"]:focus-visible {
+  border-color: var(--border-subtle);
+  background-color: transparent;
+  color: var(--text-subtle);
+  opacity: 1;
 }
 
 /* Provider defaults use the same compact, content-sized pill language as the
@@ -11443,7 +11618,12 @@ a.button {
 .settings-segmented__button:hover,
 .settings-segmented__button:focus-visible {
   color: var(--text-primary);
-  outline: none;
+}
+
+/* Inset, inside the group's 3px padding, like `.lens-switch__button`. */
+.settings-segmented__button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
 }
 
 .settings-segmented__button.is-active {
@@ -11483,7 +11663,11 @@ a.button {
 .settings-switch:hover,
 .settings-switch:focus-visible {
   border-color: var(--accent-border);
-  outline: none;
+}
+
+.settings-switch:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
 }
 
 .settings-switch:disabled {
@@ -11936,7 +12120,7 @@ a.button {
 }
 
 .settings-pathrow--selectable:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 1px;
 }
 
@@ -12854,6 +13038,14 @@ a.button {
   box-shadow: 0 0 0 1px var(--accent-shadow);
 }
 
+/* The field is borderless inside this box, so the box rings. Keyed to the
+   field rather than `:focus-within`, because the Clear button inside rings
+   itself. */
+.settings-archive-filter:has(.settings-archive-filter__input:focus-visible) {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
 .settings-archive-filter__icon {
   flex: 0 0 auto;
 }
@@ -12871,6 +13063,7 @@ a.button {
 .settings-archive-filter__input:focus,
 .settings-archive-filter__input:focus-visible {
   border-color: transparent;
+  outline: none;
   box-shadow: none;
 }
 
@@ -13122,10 +13315,12 @@ a.button {
   transform: translateY(-1px) rotate(-45deg);
 }
 
+/* The input is visually hidden, so its box rings. This was a 2px
+   `--accent-shadow` halo, 34% of the accent and under 3:1. */
 .settings-thread-management__checkbox-input:focus-visible
   + .settings-thread-management__checkbox {
-  outline: none;
-  box-shadow: 0 0 0 2px var(--accent-shadow);
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
 }
 
 .settings-thread-management__controls {
@@ -13317,7 +13512,11 @@ a.button {
 .settings-thread-migration-dialog__option:hover,
 .settings-thread-migration-dialog__option:focus-visible {
   background: var(--bg-panel-hover);
-  outline: none;
+}
+
+.settings-thread-migration-dialog__option:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
 }
 
 .settings-thread-migration-dialog__option[aria-selected="true"] {
@@ -13493,7 +13692,11 @@ a.button {
 .settings-comp-opt:focus-visible {
   border-color: var(--border-strong);
   background: var(--bg-panel-hover);
-  outline: none;
+}
+
+.settings-comp-opt:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
 }
 
 .settings-comp-opt.is-active {
@@ -13622,6 +13825,10 @@ a.button {
   text-decoration: underline;
 }
 
+.settings-aboutkv dd a:focus-visible {
+  border-radius: 3px;
+}
+
 /* The version is mono; its link is not. A tag-shaped mono label beside the
    number would read as a second version rather than as a way to go read
    about the first. */
@@ -13653,7 +13860,7 @@ a.button {
 }
 
 .settings-aboutkv__notes:focus-visible {
-  outline: 2px solid var(--accent-bright);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
   border-radius: 3px;
   color: var(--accent);
@@ -13714,7 +13921,7 @@ a.button {
 }
 
 .thread-header__star-map-toggle:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 1px;
 }
 
@@ -13985,7 +14192,7 @@ a.button {
 }
 
 .star-map-instance__body:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 4px;
 }
 
@@ -14172,7 +14379,7 @@ a.button {
 }
 
 .star-map-instance__action:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 1px;
 }
 
@@ -14257,7 +14464,7 @@ a.button {
 }
 
 .star-map-load-card__dismiss:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 1px;
 }
 
@@ -14298,7 +14505,7 @@ a.button {
 }
 
 .star-map-load-card__metrics dd:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }
 
@@ -14420,7 +14627,7 @@ a.button {
 
 .star-map-intake__input:focus-visible,
 .star-map-rename__input:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 1px;
 }
 
@@ -14470,7 +14677,11 @@ a.button {
 .star-map-intake__attachment-remove:focus-visible {
   border-color: var(--accent-border);
   color: var(--accent-bright);
-  outline: none;
+}
+
+.star-map-intake__attachment-remove:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
 }
 
 .star-map-intake__hint {
@@ -16654,7 +16865,11 @@ a.button {
 .compact-composer__attachment-remove:focus-visible {
   border-color: var(--accent-border);
   color: var(--accent-bright);
-  outline: none;
+}
+
+.compact-composer__attachment-remove:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
 }
 
 .compact-composer__files {
@@ -16707,7 +16922,11 @@ a.button {
 .compact-composer__file-remove:focus-visible {
   background: var(--bg-panel-hover);
   color: var(--accent-bright);
-  outline: none;
+}
+
+.compact-composer__file-remove:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
 }
 
 .compact-composer__strip {
@@ -17769,14 +17988,14 @@ a.button {
   max-width: 100%;
   min-width: 0;
   /* The chips below do not shrink, so the ROW has to clip — see the note on
-     them. `clip` rather than `hidden`, and on x only, because `overflow:
-     hidden` would also cut the 4px focus ring on `.thread-header__title-button`
-     off at the row's top and bottom; `visible` on the cross axis is legal
-     only when the other axis is `clip`. The 4px clip margin is that same ring,
-     so a focused title flush against either end still shows its outline while
-     an overflowing chip (which overflows by tens of pixels) still gets cut. */
-  overflow-x: clip;
-  overflow-y: visible;
+     them. `clip` rather than `hidden`, because `hidden` would also cut the
+     4px focus ring on `.thread-header__title-button`. The 4px clip margin is
+     that same ring, so a focused title flush against either end still shows
+     its outline while an overflowing chip (which overflows by tens of pixels)
+     still gets cut. Both axes clip: Chromium ignores `overflow-clip-margin`
+     unless they do, and an x-only clip cut the ring's left edge at the row's
+     border. Nothing in the row paints more than 4px past it vertically. */
+  overflow: clip;
   overflow-clip-margin: 4px;
 }
 
@@ -17847,7 +18066,11 @@ a.button {
   max-width: min(58vw, 520px);
   min-width: 0;
   margin: 0;
-  overflow: hidden;
+  /* `clip` with a margin, for the same reason as the row above: `hidden`
+     cut all of `.thread-header__title-button`'s 4px focus ring. The button
+     ellipsizes its own text, so nothing else paints in the margin. */
+  overflow: clip;
+  overflow-clip-margin: 4px;
   padding-bottom: 2px;
   color: var(--text-primary);
   font-size: 14px;
@@ -18381,14 +18604,19 @@ a.button {
 
 /* The scroller is tabIndex=0 only so keyboard users can scroll it (axe
    scrollable-region-focusable). A click focuses it, and Chromium then
-   promotes the focus to :focus-visible on the next keystroke — drawing
+   promotes the focus to :focus-visible on the next keystroke, which drew
    the OS-accent UA ring around the ENTIRE transcript (repro in any
    window: click transcript text, press an arrow key; reported from a
-   federation window). A viewport-sized ring is noise, not a usable
-   focus cue — suppress it, matching the resize-handle precedent. */
-.transcript-list__items:focus,
-.transcript-list__items:focus-visible {
+   federation window). That ring was suppressed outright, which left a
+   Tab stop that showed nothing at all (WCAG 2.4.7). It draws the house
+   ring instead, inset so it stays inside the pane. */
+.transcript-list__items:focus {
   outline: none;
+}
+
+.transcript-list__items:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
 }
 
 /* Trim the bottom over-scroll reserve when the thinking line is the last
@@ -18448,6 +18676,19 @@ a.button {
 
 .transcript-list[data-fade-top="hidden"] .transcript-list__fade--top,
 .transcript-list[data-fade-bottom="hidden"] .transcript-list__fade--bottom {
+  opacity: 0;
+}
+
+/* The fades paint `--bg-app` over the scroller's top and bottom 18px, and a
+   focus ring there dissolves into them. A control that Tab scrolls to the
+   edge stops clear of the band (18px plus the ring's 4px reach), and the
+   fades step aside while the scroller itself holds keyboard focus, since
+   its inset ring runs along both edges. */
+.transcript-list__items :where(:focus-visible) {
+  scroll-margin-block: 22px;
+}
+
+.transcript-list:has(> .transcript-list__items:focus-visible) .transcript-list__fade {
   opacity: 0;
 }
 
@@ -19521,7 +19762,11 @@ a.transcript-message__messaging-origin:focus-visible {
 .markdown-document-modal__path-copy:focus-visible {
   background: var(--bg-row-active);
   color: var(--text-primary);
-  outline: none;
+}
+
+.markdown-document-modal__path-copy:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
 }
 
 .markdown-document-modal__actions {
@@ -20629,7 +20874,7 @@ a.transcript-message__messaging-origin:focus-visible {
 }
 
 .incident-explorer__savings-grip:focus-visible {
-  outline: 1px solid var(--accent);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }
 
@@ -22996,7 +23241,7 @@ a.transcript-message__messaging-origin:focus-visible {
 .edits-panel__dock-toggle:focus-visible {
   border-color: var(--accent-border);
   color: var(--text-primary);
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 1px;
 }
 
@@ -23443,7 +23688,11 @@ a.transcript-message__messaging-origin:focus-visible {
 .review-chip--project:focus-visible {
   border-color: var(--accent-border-soft);
   background: color-mix(in srgb, var(--accent) 18%, transparent);
-  outline: none;
+}
+
+.review-chip--project:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
 }
 
 /* "no PR at review time" is an answer, not a control. Dashed and muted so it
@@ -23931,7 +24180,12 @@ a.transcript-message__messaging-origin:focus-visible {
 .transcript-mcp__field input:focus,
 .transcript-mcp__field select:focus {
   border-color: var(--accent-border);
-  outline: none;
+}
+
+.transcript-mcp__field input:focus-visible,
+.transcript-mcp__field select:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
 }
 
 .transcript-mcp__toggle input {
@@ -23975,7 +24229,12 @@ a.transcript-message__messaging-origin:focus-visible {
 .transcript-questionnaire__option.is-selected {
   border-color: var(--accent-border);
   background: var(--accent-soft);
-  outline: none;
+}
+
+/* Focus shared the paint above with hover and with the selected answer. */
+.transcript-questionnaire__option:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
 }
 
 .transcript-questionnaire__option-label {
@@ -24043,7 +24302,11 @@ a.transcript-message__messaging-origin:focus-visible {
 
 .transcript-questionnaire__freeform textarea:focus {
   border-color: var(--accent-border);
-  outline: none;
+}
+
+.transcript-questionnaire__freeform textarea:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
 }
 
 .thinking-scanner {
@@ -24255,7 +24518,7 @@ a.transcript-message__messaging-origin:focus-visible {
 }
 
 .transcript-activity__image-button:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 3px;
 }
 
@@ -25086,7 +25349,12 @@ a.transcript-message__messaging-origin:focus-visible {
   border-color: var(--border-subtle);
   background: var(--bg-row-active);
   color: var(--text-primary);
-  outline: none;
+}
+
+/* Focus had only the hover paint. Inset, as `.lens-switch__button` does. */
+.context-rail__tab:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
 }
 
 .context-rail__tab.is-active {
@@ -25213,6 +25481,14 @@ a.transcript-message__messaging-origin:focus-visible {
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
+}
+
+/* The loading and error lines sit straight in the scroller, outside any
+   section, so they had no gutter. Their text touched the rail's edge, and at
+   960px a Retry that wrapped to the start of a line lost the left of its
+   focus ring to the scroller. The sections' 12px gutter fixes both. */
+.context-panel__scroll > .context-empty {
+  padding-inline: 12px;
 }
 
 .context-panel__section {
@@ -25348,6 +25624,12 @@ a.transcript-message__messaging-origin:focus-visible {
   gap: 8px;
   min-width: 0;
   overflow-wrap: anywhere;
+  /* The shared title rule clips this with `overflow: hidden`, which cut all
+     but 3% of the ring on a `.context-tooltip-value` path inside it. A flex
+     container ellipsizes nothing, so clipping was all that rule did here;
+     `clip` keeps it and leaves room for the ring's 4px reach. */
+  overflow: clip;
+  overflow-clip-margin: 4px;
 }
 
 .context-list__actions {
@@ -25370,7 +25652,11 @@ a.transcript-message__messaging-origin:focus-visible {
 .context-list__action:hover,
 .context-list__action:focus-visible {
   border-color: var(--border-strong);
-  outline: none;
+}
+
+.context-list__action:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
 }
 
 .context-list__action:disabled {
@@ -25978,7 +26264,11 @@ a.transcript-message__messaging-origin:focus-visible {
   border-color: var(--accent-border);
   background: var(--accent-soft);
   color: var(--accent-bright);
-  outline: none;
+}
+
+.automation-agent-help:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
 }
 
 .automation-agent-picker {
@@ -26069,7 +26359,12 @@ a.transcript-message__messaging-origin:focus-visible {
   border-color: var(--accent-border);
   background: var(--bg-row-active);
   color: var(--accent-bright);
-  outline: none;
+}
+
+/* Focus shared the paint above with hover and with the active tab. */
+.automation-agent-picker__tab:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
 }
 
 .automation-agent-picker__search {
@@ -26139,7 +26434,11 @@ a.transcript-message__messaging-origin:focus-visible {
 .automation-agent-picker__option[aria-selected="true"] {
   background: var(--bg-row-active);
   color: var(--accent-bright);
-  outline: none;
+}
+
+.automation-agent-picker__option:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
 }
 
 .automation-agent-picker__option--action {
@@ -26664,7 +26963,7 @@ a.transcript-message__messaging-origin:focus-visible {
 }
 
 .automation-source-chip__open:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 1px;
 }
 
@@ -26938,7 +27237,7 @@ a.transcript-message__messaging-origin:focus-visible {
 
 .context-tooltip-value:focus-visible {
   border-radius: 5px;
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }
 
@@ -27101,7 +27400,11 @@ a.transcript-message__messaging-origin:focus-visible {
   border-color: var(--border-subtle);
   background: var(--bg-row-active);
   color: var(--text-primary);
-  outline: none;
+}
+
+.context-copy-button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
 }
 
 .context-mode-switch {
@@ -27600,7 +27903,7 @@ a.transcript-message__messaging-origin:focus-visible {
 }
 
 .pricing-spend-row__summary:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--focus-ring);
   outline-offset: -2px;
 }
 
@@ -27709,7 +28012,7 @@ a.transcript-message__messaging-origin:focus-visible {
 }
 
 .pricing-token-miser__summary:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--focus-ring);
   outline-offset: -2px;
 }
 
@@ -27829,7 +28132,7 @@ button.pricing-token-miser__folded {
 }
 
 button.pricing-token-miser__folded:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }
 
@@ -28761,6 +29064,21 @@ button.pricing-token-miser__folded:focus-visible {
   line-height: 1.6;
 }
 
+/* The editor fills this scroller edge to edge, so the scroller clipped all
+   of the editor's own outset ring and the reply box showed no focus at all.
+   The box rings instead while the editor holds focus. `:focus`, like the
+   rest of the composer's fields: a contenteditable matches `:focus-visible`
+   on a click anyway. */
+.composer-tiptap-input:has(.composer-tiptap-input__editor:focus) {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+  scroll-margin: 4px;
+}
+
+.composer-tiptap-input__editor:focus {
+  outline: none;
+}
+
 .composer-tiptap-input__editor {
   position: relative;
   /* Tracks the wrapper's floor minus its 1px border on each side, so
@@ -29202,7 +29520,7 @@ button.pricing-token-miser__folded:focus-visible {
 }
 
 .composer__queued-env-action-summary:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--focus-ring);
   outline-offset: -2px;
 }
 
@@ -29914,6 +30232,13 @@ button.pricing-token-miser__folded:focus-visible {
   -webkit-app-region: no-drag;
 }
 
+/* The dialog takes focus on open so Escape and the arrows reach it; Tab moves
+   on to the close cookie. A ring here would trace the window's own edge,
+   entirely off screen. */
+.image-lightbox:focus {
+  outline: none;
+}
+
 /* The two platforms that paint their own title strip. `MACOS_TRAFFIC_LIGHT_POSITION`
    handles the third, by this dialog leaving the top-left corner empty. */
 :root:is([data-platform="win32"], [data-platform="linux"]) .image-lightbox {
@@ -29999,7 +30324,7 @@ button.pricing-token-miser__folded:focus-visible {
 }
 
 .image-lightbox__close:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }
 
@@ -30115,7 +30440,7 @@ button.pricing-token-miser__folded:focus-visible {
 }
 
 .image-lightbox__tool:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }
 
@@ -30128,6 +30453,14 @@ button.pricing-token-miser__folded:focus-visible {
 .image-lightbox__tool[aria-disabled="true"] {
   opacity: 0.32;
   cursor: default;
+}
+
+/* Opacity fades an element's outline with it, which left a focused zoom or
+   fit control a ring at 32%. While focused, the fade becomes a muted paint
+   at full opacity, as on the surface picker's trigger. */
+.image-lightbox__tool[aria-disabled="true"]:focus-visible {
+  color: var(--text-subtle);
+  opacity: 1;
 }
 
 .image-lightbox__tool[data-status="copied"] {
@@ -30195,7 +30528,7 @@ button.pricing-token-miser__folded:focus-visible {
 }
 
 .image-lightbox__nav:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }
 
@@ -30206,6 +30539,14 @@ button.pricing-token-miser__folded:focus-visible {
 .image-lightbox__nav[aria-disabled="true"] {
   opacity: 0.32;
   cursor: default;
+}
+
+/* Same trade as the pill's controls. The fill stays, because the control
+   sits over the picture. */
+.image-lightbox__nav[aria-disabled="true"]:focus-visible {
+  border-color: var(--border-subtle);
+  color: var(--text-subtle);
+  opacity: 1;
 }
 
 /* Narrow: give the image back the side band rather than moving the edge
@@ -30328,7 +30669,11 @@ button.pricing-token-miser__folded:focus-visible {
 .composer__application-button:focus-visible {
   border-color: var(--accent-border);
   background: var(--bg-panel-hover);
-  outline: none;
+}
+
+.composer__application-button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
 }
 
 .composer__application-button span:last-child {
@@ -30705,6 +31050,16 @@ button.pricing-token-miser__folded:focus-visible {
   border-bottom: 1px solid var(--border-subtle);
 }
 
+/* The field is borderless in this row, and the caret was its only sign of
+   focus: coming back to it from a row, nothing said focus had returned. */
+.project-picker__search:has(.project-picker__search-input:focus-visible),
+.branch-picker__search:has(.branch-picker__search-input:focus-visible),
+.reference-picker__search:has(.reference-picker__search-input:focus-visible) {
+  border-radius: 6px;
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
 .project-picker__search-icon,
 .branch-picker__search-icon,
 .reference-picker__search-icon {
@@ -30785,7 +31140,21 @@ button.pricing-token-miser__folded:focus-visible {
 .reference-picker__row:focus-visible:not(:disabled) {
   background: var(--accent-soft);
   color: var(--accent-bright);
-  outline: none;
+}
+
+/* The tint above is under 3:1 and is also the hover paint. A row that holds
+   DOM focus rings inset. So does the keyboard cursor of a picker that keeps
+   focus in its search field and follows the row with
+   `aria-activedescendant`, because that row is the one Enter picks. The
+   branch picker's pointer moves its cursor too. The surface picker's does
+   not, so a hovered row and the cursor were two rows in the same paint. */
+.project-picker__row:focus-visible,
+.messaging-surface-picker__list .project-picker__row.is-cursor,
+.branch-picker__option:focus-visible,
+.branch-picker__option.is-active,
+.reference-picker__row:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
 }
 
 .project-picker__row:disabled,
@@ -31180,7 +31549,11 @@ button.pricing-token-miser__folded:focus-visible {
 .project-picker[data-state="open"] .project-picker__trigger {
   border-color: var(--accent-border);
   background: var(--bg-panel-hover);
-  outline: none;
+}
+
+.project-picker__trigger:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
 }
 
 .project-picker__trigger:disabled {
@@ -31407,7 +31780,11 @@ button.pricing-token-miser__folded:focus-visible {
 .reference-picker__tab:hover,
 .reference-picker__tab:focus-visible {
   color: var(--text-primary);
-  outline: none;
+}
+
+.reference-picker__tab:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
 }
 
 .reference-picker__tab.is-active {
@@ -31532,7 +31909,11 @@ button.pricing-token-miser__folded:focus-visible {
 .rewind-dialog__point:focus-visible {
   border-color: var(--accent-border);
   background: var(--bg-panel-hover);
-  outline: none;
+}
+
+.rewind-dialog__point:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
 }
 
 .rewind-dialog__point[aria-checked="true"] {
@@ -31574,7 +31955,11 @@ button.pricing-token-miser__folded:focus-visible {
 .rewind-dialog__actions button:hover:not(:disabled),
 .rewind-dialog__actions button:focus-visible:not(:disabled) {
   border-color: var(--border-strong);
-  outline: none;
+}
+
+.rewind-dialog__actions button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
 }
 
 .rewind-dialog__actions .rewind-dialog__confirm {
@@ -31769,7 +32154,7 @@ button.pricing-token-miser__folded:focus-visible {
 
 .workspace-handoff-dialog__text-input:focus-visible {
   border-color: var(--accent);
-  outline: 2px solid color-mix(in srgb, var(--accent) 24%, transparent);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 1px;
 }
 
@@ -31984,6 +32369,13 @@ button.pricing-token-miser__folded:focus-visible {
 .composer__toggle:focus-visible {
   border-color: var(--accent-border);
   color: var(--text-primary);
+}
+
+/* The toggles that carry `.tooltip-target` ring through that class; Thread
+   options carries none and fell back to Chromium's ring. */
+.composer__toggle:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
 }
 
 .composer__toggle.is-active {
@@ -32630,7 +33022,14 @@ button.pricing-token-miser__folded:focus-visible {
 .review-commit-picker__option.is-active {
   background: var(--accent-soft);
   color: var(--accent-bright);
-  outline: none;
+}
+
+/* `.is-active` is the `aria-activedescendant` cursor, which the pointer also
+   moves: the row Enter picks, ringed like the branch picker's. */
+.review-commit-picker__option:focus-visible,
+.review-commit-picker__option.is-active {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
 }
 
 .review-commit-picker__sha {
@@ -36068,6 +36467,15 @@ button.pricing-token-miser__folded:focus-visible {
   background: var(--danger-soft);
   color: var(--danger-text);
 }
+.rbac-chip:focus-visible,
+.rbac-node__edit:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+/* A trace dims every node off its path, and a dimmed node's chips and Edit
+   button stay tabbable. Opacity fades a ring with its node, so the node
+   comes back to full strength while focus is inside it. */
+.rbac-node.is-dim:has(:focus-visible) { opacity: 1; }
 
 .rbac-revcount {
   display: inline-flex; align-items: center; gap: 4px;
@@ -36499,7 +36907,8 @@ button.pricing-token-miser__folded:focus-visible {
 }
 
 .queued-message-inspector:focus-visible {
-  outline: 1px solid var(--focus-ring);
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
 }
 
 .turn-input-content img {
