@@ -7632,12 +7632,15 @@ a.button {
 }
 
 .app-toast-stack {
+  /* Read by `useToastStackPlacement` too, which works out where the stack
+     would sit on either edge. */
+  --app-toast-stack-edge: 16px;
   position: fixed;
   /* App-level notices must remain visible over full-window surfaces such as
      the Settings layer (120). */
   z-index: 140;
-  left: 16px;
-  bottom: 16px;
+  left: var(--app-toast-stack-edge);
+  bottom: var(--app-toast-stack-edge);
   display: flex;
   width: min(420px, calc(100vw - 32px));
   max-width: min(420px, calc(100vw - 32px));
@@ -7645,6 +7648,14 @@ a.button {
   align-items: flex-start;
   gap: 10px;
   pointer-events: none;
+}
+
+/* Keyboard focus on a control the stack covers moves it to the top edge
+   until focus moves on (`toast-stack-placement.ts`). It stays under the
+   chrome band: macOS draws the traffic lights inside the window's top-left. */
+.app-toast-stack[data-placement="top"] {
+  top: calc(var(--chrome-band-h) + var(--app-toast-stack-edge));
+  bottom: auto;
 }
 
 .app-toast-stack > * {

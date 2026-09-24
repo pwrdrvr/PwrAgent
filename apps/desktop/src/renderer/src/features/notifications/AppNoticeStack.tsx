@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { DesktopApi } from "../../lib/desktop-api";
 import type { ResolvedThreadLink } from "../../lib/thread-links";
 import { AppNoticeToast, type AppNoticeToastNotice } from "./AppNoticeToast";
+import { useToastStackPlacement } from "./toast-stack-placement";
 
 export function AppNoticeStack(props: {
   children?: ReactNode;
@@ -16,6 +17,8 @@ export function AppNoticeStack(props: {
 }) {
   const [activeId, setActiveId] = useState<string>();
   const lastActiveIndexRef = useRef(0);
+  const stackRef = useRef<HTMLDivElement>(null);
+  const placement = useToastStackPlacement(stackRef);
   const durableNotices = props.durableNotices;
   const activeIndex = Math.max(
     0,
@@ -53,7 +56,12 @@ export function AppNoticeStack(props: {
   };
 
   return (
-    <div className="app-toast-stack" aria-live="polite">
+    <div
+      ref={stackRef}
+      className="app-toast-stack"
+      data-placement={placement}
+      aria-live="polite"
+    >
       {props.transientNotices?.map(({ notice, onDismiss }) =>
         notice ? (
           <AppNoticeToast

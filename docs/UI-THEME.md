@@ -480,6 +480,7 @@ Focus states should be visible and tangerine-led, but contained so they do not c
 
 - **Dialogs and menus contain focus through shared hooks.** An `aria-modal` dialog uses `useModalDialog`, and a `role="menu"` popup uses `useMenuNavigation`. [apps/desktop/AGENTS.md](../apps/desktop/AGENTS.md) has the rules under "Modal dialogs and overlays" and "Menus".
 - **A full-window layer makes what it covers `inert`.** Settings and Automations cover the sidebar and main, which go inert while either is open, so Tab cannot walk controls nobody can see. The layer takes focus on open, because its opener went inert with them, and draws no ring, since it is not a Tab stop. On close, focus returns to the control that opened it, but only when focus fell to `<body>`: a close that moved focus on purpose, such as a thread taking the composer, keeps it.
+- **Something that floats over the app gets out of the way of keyboard focus** (WCAG 2.4.11). The notice stack sits at the bottom-left over everything, and an error notice stays until dismissed, so when keyboard focus lands on a control the stack covers, the stack moves to the top edge under the chrome band (`toast-stack-placement.ts`). It stays there until focus lands on something the top edge covers, or the last notice closes. It does not claim Escape: that key belongs to the layer stack.
 
 ## Tooltips
 
