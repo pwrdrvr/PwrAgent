@@ -123,22 +123,38 @@ test("keystroke after clicking the transcript draws no outline, Tab draws the ri
     expect(focusState?.outlineStyle).toBe("none");
     expect(focusState?.outlineWidth).toBe("0px");
 
-    // Leave and come back by keyboard: this arrival is a Tab stop, and it
-    // draws the ring.
-    await window.keyboard.press("Shift+Tab");
+    // Come back by keyboard: this arrival is a Tab stop, and it draws the
+    // ring. Tab in from a throwaway stop placed directly before the
+    // scroller, so the arrival does not depend on which header controls
+    // precede it — Shift+Tab then Tab left the scroller unfocused on
+    // macOS CI only.
+    await window.evaluate(() => {
+      const items = document.querySelector(".transcript-list__items");
+      const sentinel = document.createElement("div");
+      sentinel.className = "e2e-tab-sentinel";
+      sentinel.tabIndex = 0;
+      items?.before(sentinel);
+      sentinel.focus();
+    });
     await window.keyboard.press("Tab");
     const tabbedState = await window.evaluate(() => {
       const items = document.querySelector(".transcript-list__items");
       if (!items) return null;
+      const active = document.activeElement;
       const style = getComputedStyle(items);
+      document.querySelector(".e2e-tab-sentinel")?.remove();
       return {
-        focused: items === document.activeElement,
-        outlineColor: style.outlineColor,
-        outlineStyle: style.outlineStyle,
-        outlineWidth: style.outlineWidth,
+        active: active ? `${active.tagName.toLowerCase()}.${active.className}` : "none",
+        ring: {
+          focused: items === active,
+          outlineColor: style.outlineColor,
+          outlineStyle: style.outlineStyle,
+          outlineWidth: style.outlineWidth,
+        },
       };
     });
-    expect(tabbedState).toEqual({
+    expect(tabbedState).not.toBeNull();
+    expect(tabbedState?.ring, `Tab focused ${tabbedState?.active}`).toEqual({
       focused: true,
       outlineColor: "rgb(255, 138, 31)",
       outlineStyle: "solid",
