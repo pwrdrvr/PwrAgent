@@ -148,6 +148,7 @@ import {
   useFederatedThreadSearch,
 } from "../../lib/useFederatedThreadSearch";
 import { useExecutionModeSelection } from "../../lib/useExecutionModeSelection";
+import { useModalDialog } from "../../lib/useModalDialog";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import {
   findSkillTrigger,
@@ -9691,6 +9692,12 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       setNewLocalBranch(buildHandoffBranchSuggestion(sourceBranch));
     }
   };
+  const handoffDialogRef = useModalDialog({
+    open: Boolean(handoffDialog && threadWorkspace),
+    onClose: () => {
+      if (!handoffSubmitting) setHandoffDialog(undefined);
+    },
+  });
 
   const submitHandoff = async (): Promise<void> => {
     if (!threadWorkspace || !props.onHandoffThreadWorkspace) {
@@ -10212,6 +10219,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       ? createPortal(
           <div className="workspace-handoff-modal">
             <div
+              ref={handoffDialogRef}
               aria-label={
                 handoffDialog === "to-project"
                   ? "Move to Project"

@@ -22,6 +22,7 @@ import type { FederationThreadTarget } from "../../chrome/federation-thread-targ
 import { HOVER_TRANSITION_GRACE_MS } from "../../../lib/useHoverTransitionGrace";
 import { threadSummaryIdentityKey } from "../../../lib/federated-thread-events";
 import { FixtureSidebar as Sidebar } from "../../../test/navigation-presentation-fixture";
+import { pressEscape, tabEscapes } from "../../../test/tab-walk";
 
 /**
  * The whole row card for a thread, given any element inside it (the
@@ -6055,6 +6056,40 @@ describe("Sidebar", () => {
     expect(input).toHaveFocus();
     expect(input.selectionStart).toBe(0);
     expect(input.selectionEnd).toBe("Cross-project cleanup".length);
+  });
+
+  it("keeps the rename dialog keyboard-contained and returns focus to the thread actions button", () => {
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        directories={directories}
+        inboxThreads={[sharedThread]}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-1"
+        threads={[sharedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+        onRenameThread={async () => undefined}
+      />
+    );
+
+    const actions = screen.getByRole("button", { name: "Open thread actions" });
+    actions.focus();
+    act(() => actions.click());
+    const item = screen.getByRole("menuitem", { name: "Rename Thread" });
+    item.focus();
+    act(() => item.click());
+
+    const dialog = screen.getByRole("dialog", { name: "Rename Thread" });
+    expect(tabEscapes(dialog)).toEqual({ forward: [], backward: [] });
+    pressEscape();
+    expect(screen.queryByRole("dialog", { name: "Rename Thread" })).not.toBeInTheDocument();
+    // The menu item that opened the dialog went with its menu.
+    expect(actions).toHaveFocus();
   });
 
   it("collapses a fully selected rename field to either end with arrow keys", () => {

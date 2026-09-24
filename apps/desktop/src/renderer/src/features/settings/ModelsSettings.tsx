@@ -14,6 +14,7 @@ import type {
 import type { DesktopApi } from "../../lib/desktop-api";
 import { useNavigationSettingsPreview, isNavigationPreviewCancelled } from "../../lib/navigation-settings-preview";
 import { BACKEND_SUMMARIES_REFRESH_EVENT } from "../../lib/useBackendSummaries";
+import { useModalDialog } from "../../lib/useModalDialog";
 import {
   SettingsContextStrip,
   SettingsField,
@@ -1071,10 +1072,17 @@ function ThreadMigrationDialog(props: {
   onConfirm: () => void;
   onSelectionChange: (selectedSourceKeys: string[]) => void;
 }) {
-  const dialogRef = useRef<HTMLDivElement>(null);
+  // The pane hands this a fresh onCancel on every render, and toggling an
+  // option re-renders it. The hook reads the latest one on Escape without
+  // re-running its focus effect, which sent focus from the option back to
+  // the dialog on every toggle.
+  const dialogRef = useModalDialog({
+    onClose: () => {
+      if (!props.applying) props.onCancel();
+    },
+    initialFocus: "dialog",
+  });
   const selectionAnchorRef = useRef<number | undefined>(undefined);
-  const applying = props.applying;
-  const onCancel = props.onCancel;
   const selectedSourceKeys = new Set(props.migration.selectedSourceKeys);
   const selectedThreadCount = props.migration.sourceGroups.reduce(
     (count, group) =>
@@ -1102,18 +1110,6 @@ function ThreadMigrationDialog(props: {
   );
   const pendingThreadCount =
     Math.max(0, selectedThreadCount - selectedAcknowledgedThreadCount);
-
-  useEffect(() => {
-    dialogRef.current?.focus();
-    const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.key === "Escape" && !applying) {
-        event.preventDefault();
-        onCancel();
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [applying, onCancel]);
 
   const toggleSourceGroup = (index: number, shiftKey: boolean): void => {
     const group = props.migration.sourceGroups[index];

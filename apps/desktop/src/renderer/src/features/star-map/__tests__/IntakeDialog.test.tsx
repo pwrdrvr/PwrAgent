@@ -1,7 +1,9 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { IntakeDialog } from "../IntakeDialog";
+import { pressEscape, tabEscapes } from "../../../test/tab-walk";
 
 const normalizeImageFileMock = vi.hoisted(() => vi.fn());
 
@@ -664,5 +666,97 @@ describe("IntakeDialog", () => {
       "imageUploads",
     );
     expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:intake-image");
+  });
+});
+
+describe("IntakeDialog, keyboard", () => {
+  function creatingApi(onLayerKeyDown?: (key: string) => void) {
+    const listeners = new Set<(event: never) => void>();
+    const desktopApi: DesktopApi = {
+      dispatchStarMapIntake: vi.fn(async (request: { requestId: string }) => {
+        for (const listener of listeners) {
+          listener({
+            notification: {
+              method: "starMap/intake/status",
+              params: { requestId: request.requestId, phase: "creating" },
+            },
+          } as never);
+        }
+        return new Promise(() => {}) as never;
+      }),
+      onAgentEvent: vi.fn((listener: (event: never) => void) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      }),
+    };
+    return { desktopApi, onLayerKeyDown };
+  }
+
+  /** The map's [+] opens the intake; its layer reads keys through React. */
+  function Host(props: {
+    desktopApi?: DesktopApi;
+    onLayerKeyDown?: (key: string) => void;
+  }) {
+    const [open, setOpen] = useState(false);
+    return (
+      <div onKeyDown={(event) => props.onLayerKeyDown?.(event.key)}>
+        <button type="button" onClick={() => setOpen(true)}>
+          New thread
+        </button>
+        {open ? (
+          <IntakeDialog
+            desktopApi={props.desktopApi}
+            target={target}
+            onClose={() => setOpen(false)}
+            onCreated={vi.fn()}
+          />
+        ) : null}
+      </div>
+    );
+  }
+
+  function open(props: Parameters<typeof Host>[0] = {}): HTMLElement {
+    render(<Host {...props} />);
+    const opener = screen.getByRole("button", { name: "New thread" });
+    opener.focus();
+    act(() => opener.click());
+    return screen.getByRole("dialog", { name: "New thread on Mac-Mini-M4" });
+  }
+
+  it("keeps Tab inside the intake", () => {
+    const dialog = open();
+    expect(tabEscapes(dialog)).toEqual({ forward: [], backward: [] });
+  });
+
+  it("holds Tab inside while the thread is being created and nothing is enabled", async () => {
+    const dialog = open(creatingApi());
+    submitText("Something being created");
+    await waitFor(() => {
+      expect(screen.getByRole("status").textContent).toContain("Creating the thread");
+    });
+    expect(tabEscapes(dialog)).toEqual({ forward: [], backward: [] });
+  });
+
+  it("does not let a refused Escape reach the map behind it", async () => {
+    // Escape while creating is refused. It used to go on to the map's layer,
+    // which dropped the operator's card selection behind the dialog.
+    const onLayerKeyDown = vi.fn();
+    open(creatingApi(onLayerKeyDown));
+    submitText("Something being created");
+    await waitFor(() => {
+      expect(screen.getByRole("status").textContent).toContain("Creating the thread");
+    });
+    pressEscape();
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    expect(onLayerKeyDown).not.toHaveBeenCalledWith("Escape");
+  });
+
+  it("returns focus to the opener when it closes", () => {
+    open();
+    pressEscape();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", { name: "New thread" }),
+    );
   });
 });

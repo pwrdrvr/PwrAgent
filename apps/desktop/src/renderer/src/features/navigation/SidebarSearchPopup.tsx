@@ -18,6 +18,7 @@ import {
 } from "@pwragent/shared";
 import { SearchIcon } from "../../icons";
 import { getDesktopApi } from "../../lib/desktop-api";
+import { useModalDialog } from "../../lib/useModalDialog";
 import { useNavigationOwnerSearch } from "../../lib/useNavigationOwnerSearch";
 import { threadSummaryIdentityKey } from "../../lib/federated-thread-events";
 import {
@@ -75,10 +76,14 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
   const idPrefix = useId();
   const listId = `${idPrefix}-results`;
   const rowId = (index: number): string => `${idPrefix}-row-${index}`;
-
-  useEffect(() => {
-    inputRef.current?.focus();
-  }, []);
+  // A layer and a trap like any dialog, so Escape and Tab have one owner
+  // when ⌘K opens this over a dialog, and focus goes back on close. The
+  // Tab order inside stays this component's own: see handleKeyDown.
+  const panelRef = useModalDialog({
+    onClose: props.onClose,
+    initialFocus: inputRef,
+    ownTabOrder: true,
+  });
 
   const trimmed = query.trim();
   const ownerSearch = useNavigationOwnerSearch({ query: trimmed, desktopApi: getDesktopApi() });
@@ -170,11 +175,6 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
   };
 
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
-    if (event.key === "Escape") {
-      event.preventDefault();
-      props.onClose();
-      return;
-    }
     if (event.key === "Tab") {
       event.preventDefault();
       const target = event.target instanceof HTMLElement
@@ -323,6 +323,7 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
       }}
     >
       <div
+        ref={panelRef}
         className="jump-palette__panel"
         role="dialog"
         aria-modal="true"
@@ -330,8 +331,9 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
         // Bound on the panel, not the field: pressing any non-focusable chrome
         // in here (the footer legend, the padding around the input) moves focus
         // to <body> in Chromium, and a handler on the input alone would leave
-        // the palette in a dead state where Escape, ↑↓, and typing all do
-        // nothing. Keydown bubbles from the field either way.
+        // the palette in a dead state where ↑↓ and typing do nothing. (Escape
+        // is the modal layer's, which answers from <body> too.) Keydown
+        // bubbles from the field either way.
         onKeyDown={handleKeyDown}
         // And keep the caret there in the first place. Suppressing the default
         // focus move on every press but the field's own costs nothing — click

@@ -29,6 +29,7 @@ import type {
 } from "@pwragent/shared";
 import { GIT_LFS_UNAVAILABLE_REASON } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
+import { pressEscape, tabEscapes } from "../../../test/tab-walk";
 import { SettingsScreen } from "../SettingsScreen";
 import type { ConfirmSettingsLeave } from "../UnsavedSettingsChanges";
 import type { DesktopSettingsState } from "../useDesktopSettings";
@@ -3093,12 +3094,22 @@ describe("SettingsScreen", () => {
     const migrationDialog = await screen.findByRole("dialog", {
       name: "Choose Codex threads to update",
     });
+    expect(document.activeElement).toBe(migrationDialog);
+    expect(tabEscapes(migrationDialog)).toEqual({ forward: [], backward: [] });
     expect(
       within(migrationDialog).getByText("2 selected of 3 threads"),
     ).toBeInTheDocument();
     const terraGroup = within(migrationDialog).getByRole("option", {
       name: /GPT-5.6-Terra.*1 thread/,
     });
+    // Toggling an option re-renders the pane, which hands the dialog a fresh
+    // onCancel. Its focus effect depended on that, so every toggle sent focus
+    // from the option back to the dialog.
+    terraGroup.focus();
+    fireEvent.click(terraGroup);
+    expect(document.activeElement).toBe(terraGroup);
+    fireEvent.click(terraGroup);
+    expect(terraGroup).toHaveAttribute("aria-selected", "true");
     const oldModelGroup = within(migrationDialog).getByRole("option", {
       name: /GPT-5.5.*1 thread/,
     });
@@ -6615,6 +6626,74 @@ describe("SettingsScreen", () => {
     await waitFor(() => {
       expect(setDefaultProfile).toHaveBeenCalledWith("work");
     });
+  });
+
+  it("keeps the profile dialogs keyboard-contained and returns focus to what opened them", async () => {
+    const profile = (name: string, active: boolean) => ({
+      name,
+      displayName: name,
+      active,
+      default: false,
+      profileDir: `/home/example/.pwragent/profiles/${name}`,
+      canDelete: !active,
+      codexProfile: {
+        name: "",
+        displayName: "System default",
+        codexHome: "/home/example/.codex",
+        source: "default" as const,
+        exists: true,
+        selected: true,
+        hasAuthFile: true,
+        hasConfigFile: true,
+      },
+    });
+    render(
+      <SettingsScreen
+        initialSection="profiles"
+        profiles={{
+          activeProfile: "dev",
+          createProfile: vi.fn(async () => undefined),
+          defaultProfile: "default",
+          deleteProfile: vi.fn(async () => undefined),
+          loading: false,
+          openProfile: vi.fn(async () => undefined),
+          profiles: [profile("dev", true), profile("work", false)],
+          refresh: vi.fn(async () => undefined),
+          setCodexProfile: vi.fn(async () => undefined),
+          setDefaultProfile: vi.fn(async () => undefined),
+        }}
+        settings={createSettingsState()}
+      />,
+    );
+    const openFrom = (button: HTMLElement) => {
+      button.focus();
+      act(() => button.click());
+    };
+
+    const addProfile = screen.getByRole("button", { name: "Add profile" });
+    openFrom(addProfile);
+    const createDialog = screen.getByRole("dialog", { name: "Add PwrAgent profile" });
+    expect(document.activeElement).toBe(
+      within(createDialog).getByRole("textbox", { name: "PwrAgent profile name" }),
+    );
+    expect(tabEscapes(createDialog)).toEqual({ forward: [], backward: [] });
+    pressEscape();
+    expect(createDialog).not.toBeInTheDocument();
+    expect(document.activeElement).toBe(addProfile);
+
+    const workRow = screen
+      .getByTitle("/home/example/.pwragent/profiles/work")
+      .closest(".settings-profile-card") as HTMLElement;
+    const deleteButton = within(workRow).getByRole("button", { name: "Delete" });
+    openFrom(deleteButton);
+    const deleteDialog = screen.getByRole("dialog", { name: "Delete profile?" });
+    expect(document.activeElement).toBe(
+      within(deleteDialog).getByRole("button", { name: "Cancel" }),
+    );
+    expect(tabEscapes(deleteDialog)).toEqual({ forward: [], backward: [] });
+    pressEscape();
+    expect(deleteDialog).not.toBeInTheDocument();
+    expect(document.activeElement).toBe(deleteButton);
   });
 
   it("renders About license attribution and opens bundled notices", async () => {

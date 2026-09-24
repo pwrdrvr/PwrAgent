@@ -1,5 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
+import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildFederatedThreadRef,
@@ -10,6 +11,8 @@ import {
   type PrSummary,
 } from "@pwragent/shared";
 import { SidebarSearchPopup } from "../SidebarSearchPopup";
+import { useModalDialog } from "../../../lib/useModalDialog";
+import { pressEscape, pressTab, tabEscapes } from "../../../test/tab-walk";
 
 const jumpSearchRemoteThreads = vi.fn(
   async (
@@ -760,6 +763,100 @@ describe("SidebarSearchPopup", () => {
     });
 
     expect(screen.getByText("1 result")).toBeInTheDocument();
+    await settleRemoteSearch();
+  });
+});
+
+/** The sidebar's ⌘K, or the Star Map's Fly to thread button. */
+function Opener(props: {
+  onLayerKeyDown?: (key: string) => void;
+  threads?: NavigationThreadSummary[];
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    // The Star Map hosts the palette, and its layer reads keys through the
+    // React tree the palette portals out of.
+    <div onKeyDown={(event) => props.onLayerKeyDown?.(event.key)}>
+      <button type="button" onClick={() => setOpen(true)}>
+        Jump
+      </button>
+      {open ? (
+        <SidebarSearchPopup
+          threads={props.threads ?? [localThread({})]}
+          onJumpToThread={vi.fn()}
+          onClose={() => setOpen(false)}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function openFromButton(props: Parameters<typeof Opener>[0] = {}): HTMLElement {
+  render(<Opener {...props} />);
+  const button = screen.getByRole("button", { name: "Jump" });
+  button.focus();
+  act(() => button.click());
+  return button;
+}
+
+/** A dialog already open when ⌘K opens the palette over it. */
+function DialogBeneath(props: { onFocusIn: () => void }) {
+  const ref = useModalDialog({ onClose: () => undefined });
+  return (
+    <div ref={ref} role="dialog" aria-label="Dialog beneath" onFocus={props.onFocusIn}>
+      <button type="button">Beneath first</button>
+      <button type="button">Beneath last</button>
+    </div>
+  );
+}
+
+describe("SidebarSearchPopup, focus", () => {
+  it("returns focus to what opened it when Escape closes it", async () => {
+    const button = openFromButton();
+    expect(screen.getByRole("textbox", { name: "Jump to thread" })).toHaveFocus();
+    pressEscape();
+    expect(screen.queryByRole("dialog", { name: "Jump to thread" })).toBeNull();
+    expect(button).toHaveFocus();
+    await settleRemoteSearch();
+  });
+
+  it("keeps its Escape from the tree it portals out of", async () => {
+    const onLayerKeyDown = vi.fn();
+    openFromButton({ onLayerKeyDown });
+    pressEscape();
+    expect(screen.queryByRole("dialog", { name: "Jump to thread" })).toBeNull();
+    expect(onLayerKeyDown).not.toHaveBeenCalledWith("Escape");
+    await settleRemoteSearch();
+  });
+
+  it("keeps a 60-Tab walk inside, through the active row's PR chips", async () => {
+    openFromButton({
+      threads: [localThread({ id: "stacked", title: "Stacked", prs: [pr(16), pr(18)] })],
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: "Jump to thread" }), {
+      target: { value: "Stacked" },
+    });
+    const dialog = screen.getByRole("dialog", { name: "Jump to thread" });
+    expect(tabEscapes(dialog)).toEqual({ forward: [], backward: [] });
+    await settleRemoteSearch();
+  });
+
+  it("answers Tab alone when it opens over a dialog", async () => {
+    // Both would otherwise act on one keypress: the dialog beneath pulled
+    // focus to its own first control, and the palette pulled it back.
+    const onFocusIn = vi.fn();
+    render(<DialogBeneath onFocusIn={onFocusIn} />);
+    openFromButton({
+      threads: [localThread({ id: "stacked", title: "Stacked", prs: [pr(16)] })],
+    });
+    const input = screen.getByRole("textbox", { name: "Jump to thread" });
+    fireEvent.change(input, { target: { value: "Stacked" } });
+    onFocusIn.mockClear();
+    pressTab();
+    expect(screen.getByRole("button", { name: /Open pwrdrvr\/PwrAgent#16/ })).toHaveFocus();
+    pressTab();
+    expect(input).toHaveFocus();
+    expect(onFocusIn).not.toHaveBeenCalled();
     await settleRemoteSearch();
   });
 });

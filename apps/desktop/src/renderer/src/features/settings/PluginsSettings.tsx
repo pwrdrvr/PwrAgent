@@ -28,6 +28,7 @@ import {
   type ChipContextMenuPosition,
 } from "../chrome/ChipContextMenu";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { useModalDialog } from "../../lib/useModalDialog";
 import {
   SettingsField,
   SettingsPanelHead,
@@ -304,6 +305,24 @@ export function PluginsSettings(props: {
   const [removeCandidate, setRemoveCandidate] =
     useState<CodexMcpServerSummary>();
   const [notice, setNotice] = useState<ActionNotice>();
+  // Escape answers as each dialog's Cancel does, which a connection change in
+  // flight disables.
+  const removeDialogRef = useModalDialog({
+    open: removeCandidate !== undefined,
+    onClose: () => setRemoveCandidate(undefined),
+  });
+  const connectionEditDialogRef = useModalDialog<HTMLFormElement>({
+    open: connectionEdit !== undefined,
+    onClose: () => {
+      if (!connectionPending) setConnectionEdit(undefined);
+    },
+  });
+  const connectionRemoveDialogRef = useModalDialog({
+    open: connectionRemoveCandidate !== undefined,
+    onClose: () => {
+      if (!connectionPending) setConnectionRemoveCandidate(undefined);
+    },
+  });
   const selectedProfile = props.snapshot.models.codex.profiles.profiles.find(
     (profile) => profile.selected,
   );
@@ -1441,6 +1460,7 @@ export function PluginsSettings(props: {
       {removeCandidate ? (
         <div className="settings-confirm-modal" role="presentation">
           <div
+            ref={removeDialogRef}
             aria-labelledby="remove-mcp-server-heading"
             aria-modal="true"
             className="settings-confirm-dialog settings-confirm-dialog--danger"
@@ -1476,6 +1496,7 @@ export function PluginsSettings(props: {
       {connectionEdit ? (
         <div className="settings-confirm-modal" role="presentation">
           <form
+            ref={connectionEditDialogRef}
             aria-labelledby="edit-managed-mcp-heading"
             aria-modal="true"
             className="settings-confirm-dialog"
@@ -1551,6 +1572,7 @@ export function PluginsSettings(props: {
       {connectionRemoveCandidate ? (
         <div className="settings-confirm-modal" role="presentation">
           <div
+            ref={connectionRemoveDialogRef}
             aria-labelledby="remove-managed-mcp-heading"
             aria-modal="true"
             className="settings-confirm-dialog settings-confirm-dialog--danger"

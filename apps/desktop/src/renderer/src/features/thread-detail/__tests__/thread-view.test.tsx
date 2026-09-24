@@ -20,6 +20,7 @@ import type {
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { ThreadLinkProvider } from "../../../lib/thread-links";
+import { pressEscape, tabEscapes } from "../../../test/tab-walk";
 import type { PendingMcpInteractionState } from "../mcp-elicitation";
 import type { PendingQuestionnaireState } from "../questionnaire";
 
@@ -297,6 +298,76 @@ describe("ThreadView", () => {
       });
       expect(onReloadThread).toHaveBeenCalledOnce();
     });
+  });
+
+  it("keeps the Grok rewind and workflow-budget dialogs keyboard-contained", async () => {
+    render(
+      <ThreadView
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[]}
+        clearPendingRequest={() => undefined}
+        composerDisabled={false}
+        desktopApi={{
+          configureGrokWorkflowBudget: vi.fn(async () => ({
+            backend: "acp:grok" as const,
+            threadId: "grok-thread",
+            policy: { defaultAgentBudget: 128, maxAgentBudget: 1024 },
+          })),
+          listAcpThreadRewindPoints: vi.fn(async () => ({
+            backend: "acp:grok" as const,
+            threadId: "grok-thread",
+            rewindPoints: [
+              {
+                promptIndex: 0,
+                fileSnapshotCount: 1,
+                hasFileChanges: true,
+                promptPreview: "Write a breakfast poem",
+              },
+            ],
+          })),
+        }}
+        loading={false}
+        loadingMore={false}
+        messageCount={1}
+        onLoadOlder={async () => undefined}
+        removeOptimisticMessage={(_id) => undefined}
+        selectedThread={{
+          id: "grok-thread",
+          title: "Breakfast",
+          titleSource: "explicit",
+          source: "acp:grok",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: true },
+        }}
+        skills={[]}
+        transcriptEntries={[]}
+      />,
+    );
+    const openFrom = (button: HTMLElement) => {
+      button.focus();
+      act(() => button.click());
+    };
+
+    const rewind = screen.getByRole("button", { name: "Rewind Grok conversation" });
+    openFrom(rewind);
+    const rewindDialog = screen.getByRole("dialog", { name: "Rewind Grok conversation" });
+    await within(rewindDialog).findByText("Write a breakfast poem");
+    expect(rewindDialog.contains(document.activeElement)).toBe(true);
+    expect(tabEscapes(rewindDialog)).toEqual({ forward: [], backward: [] });
+    pressEscape();
+    expect(rewindDialog).not.toBeInTheDocument();
+    expect(document.activeElement).toBe(rewind);
+
+    const budgets = screen.getByRole("button", { name: "Configure Grok workflow budgets" });
+    openFrom(budgets);
+    const budgetDialog = screen.getByRole("dialog", { name: "Grok workflow budgets" });
+    await within(budgetDialog).findByRole("spinbutton", { name: /Default when omitted/ });
+    expect(budgetDialog.contains(document.activeElement)).toBe(true);
+    expect(tabEscapes(budgetDialog)).toEqual({ forward: [], backward: [] });
+    pressEscape();
+    expect(budgetDialog).not.toBeInTheDocument();
+    expect(document.activeElement).toBe(budgets);
   });
 
   it("reads and updates distinct Grok workflow default and maximum budgets", async () => {
@@ -5511,6 +5582,54 @@ describe("ThreadView", () => {
       });
     });
     expect(refreshNavigation).toHaveBeenCalled();
+  });
+
+  it("gives Escape to the branch drift dialog, not the find bar behind it", async () => {
+    const onFindOpenChange = vi.fn();
+    render(
+      <ThreadView
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[]}
+        composerDisabled={false}
+        desktopApi={{}}
+        findOpen
+        loading={false}
+        loadingMore={false}
+        messageCount={1}
+        selectedThread={{
+          id: "thread-branch",
+          title: "Branch drift",
+          titleSource: "explicit",
+          source: "codex",
+          gitBranch: "feature/old",
+          observedGitBranch: "main",
+          updatedAt: Date.now(),
+          linkedDirectories: [],
+          inbox: {
+            inInbox: false,
+          },
+        }}
+        skills={[]}
+        transcriptEntries={[]}
+        clearPendingRequest={() => undefined}
+        onFindOpenChange={onFindOpenChange}
+        onLoadOlder={async () => undefined}
+        removeOptimisticMessage={(_id) => undefined}
+      />,
+    );
+
+    const dialog = await screen.findByRole("dialog", { name: "Thread branch changed" });
+    expect(dialog.contains(document.activeElement)).toBe(true);
+    expect(tabEscapes(dialog)).toEqual({ forward: [], backward: [] });
+    // The dialog closed on Escape without claiming it, so ThreadFindBar's own
+    // Escape listener closed the find bar behind it in the same keypress.
+    pressEscape();
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("dialog", { name: "Thread branch changed" }),
+      ).not.toBeInTheDocument();
+    });
+    expect(onFindOpenChange).not.toHaveBeenCalled();
   });
 
   it("can dismiss the branch drift dialog while keeping a visible drift indicator", async () => {

@@ -32,6 +32,7 @@ import {
   slackApprovalSequence,
 } from "../../lib/slack-pairing-approval";
 import type { AppearanceController } from "../../lib/useAppearance";
+import { useModalDialog } from "../../lib/useModalDialog";
 import { SlackConnectCard } from "../messaging/SlackConnectCard";
 import { SLACK_EVENTS_API_UNIMPLEMENTED_NOTICE } from "../messaging/slack-connect-copy";
 import type { DesktopSettingsState } from "../settings/useDesktopSettings";
@@ -277,39 +278,6 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
     [selectedProviders],
   );
   const currentProvider = orderedProviders[providerSetupIndex];
-
-  // ESC = dismiss without persisting onboarding.completed. Previous
-  // behavior wrote completed=true on ESC during first-run, which left
-  // the operator with a profile that *says* it finished onboarding but
-  // has no working backend configured. The user's #467 follow-up
-  // explicitly called this out: "don't write anything to the config
-  // saying we succeeded with the wizard until we really truly did."
-  //
-  // Now:
-  //   - In active-profile mode (Replay): ESC dismisses immediately.
-  //   - In bootstrap mode: ESC opens the dismiss-confirmation modal
-  //     so the operator gets the explicit fork (Cancel / Skip and
-  //     use default / Exit) instead of silently bailing into a
-  //     half-state. If the modal is already open, ESC closes it.
-  //
-  // `bootInfoModeRef` lets the keydown handler read the current mode
-  // without re-binding on every render — the handler closes over it
-  // by ref so we don't churn `addEventListener` calls.
-  const bootInfoModeRef = useRef(props.bootInfo?.mode);
-  bootInfoModeRef.current = props.bootInfo?.mode;
-  useEffect(() => {
-    const handler = (event: KeyboardEvent): void => {
-      if (event.key !== "Escape" || submitting) return;
-      event.preventDefault();
-      if (bootInfoModeRef.current === "bootstrap") {
-        setDismissModalOpen((prev) => !prev ? true : prev);
-      } else {
-        props.onDismiss(false);
-      }
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [props, submitting]);
 
   // Reset the naming step's defaults when the operator changes Step 2's
   // selection. Isolated → single canonical default "pwragent" (unless
@@ -897,6 +865,25 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
     props.onDismiss(false);
   }, [inBootstrapMode, props]);
 
+  // ESC = Skip, and never persists onboarding.completed. Previous
+  // behavior wrote completed=true on ESC during first-run, which left
+  // the operator with a profile that *says* it finished onboarding but
+  // has no working backend configured. The user's #467 follow-up
+  // explicitly called this out: "don't write anything to the config
+  // saying we succeeded with the wizard until we really truly did."
+  //
+  // So in Replay ESC dismisses, and in bootstrap mode it opens the
+  // dismiss-confirmation modal, whose own ESC closes just the modal.
+  //
+  // Focus starts on the wizard itself: its first control is Close
+  // onboarding, the wrong first stop for someone setting up.
+  const wizardRef = useModalDialog({
+    onClose: () => {
+      if (!submitting) handleSkip();
+    },
+    initialFocus: "dialog",
+  });
+
   // "Skip and use default" path from the dismiss modal: reuses the
   // same Shared-mode bootstrap provisioning logic as
   // `persistAndComplete` — create a `default` profile mapped to
@@ -957,10 +944,12 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
 
   return (
     <div
+      ref={wizardRef}
       className="onboarding-wizard-overlay"
       role="dialog"
       aria-modal="true"
       aria-label="First-run setup"
+      tabIndex={-1}
     >
       <div className="onboarding-wizard-overlay__scrim" />
       {/* Single consistent frame width across all steps. Earlier
@@ -1186,8 +1175,18 @@ function DismissConfirmModal(props: {
   onSkipAndUseDefault: () => void;
   onExit: () => void;
 }) {
+  // Cancel, not Exit PwrAgent, which comes first: focus starts on the
+  // choice that changes nothing.
+  const cancelRef = useRef<HTMLButtonElement>(null);
+  const modalRef = useModalDialog({
+    onClose: () => {
+      if (!props.submitting) props.onCancel();
+    },
+    initialFocus: cancelRef,
+  });
   return (
     <div
+      ref={modalRef}
       className="onboarding-wizard__dismiss-modal"
       role="dialog"
       aria-modal="true"
@@ -1224,6 +1223,7 @@ function DismissConfirmModal(props: {
           </button>
           <span className="onboarding-wizard__spacer" />
           <button
+            ref={cancelRef}
             type="button"
             className="onboarding-wizard__btn onboarding-wizard__btn--ghost"
             disabled={props.submitting}

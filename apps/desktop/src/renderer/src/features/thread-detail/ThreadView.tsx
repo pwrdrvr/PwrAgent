@@ -64,6 +64,7 @@ import {
 import type { DesktopApi } from "../../lib/desktop-api";
 import { agentEventMatchesThread } from "../../lib/federated-thread-events";
 import { useCelestialIcons } from "../../lib/useCelestialIcons";
+import { useModalDialog } from "../../lib/useModalDialog";
 import { CelestialWatermark } from "../../components/CelestialWatermark";
 import { readRendererFederationTarget } from "../../lib/federation-window";
 import { isThreadRemoteWorkHere } from "../navigation/ThreadRowStatus";
@@ -1424,6 +1425,26 @@ export function ThreadView(props: ThreadViewProps) {
     useState<BranchDriftDialogState>();
   const [branchDriftError, setBranchDriftError] = useState<string>();
   const [branchDriftBusy, setBranchDriftBusy] = useState(false);
+  // Escape answers as each dialog's close button does, which its own request
+  // in flight disables.
+  const rewindDialogRef = useModalDialog({
+    open: rewindDialog !== undefined,
+    onClose: () => {
+      if (!rewindDialog?.busy) setRewindDialog(undefined);
+    },
+  });
+  const workflowBudgetDialogRef = useModalDialog({
+    open: workflowBudgetDialog !== undefined,
+    onClose: () => {
+      if (!workflowBudgetDialog?.busy) setWorkflowBudgetDialog(undefined);
+    },
+  });
+  const branchDriftDialogRef = useModalDialog({
+    open: Boolean(branchDriftDialog && selectedThread),
+    onClose: () => {
+      if (!branchDriftBusy) setBranchDriftDialog(undefined);
+    },
+  });
 
   // Canonical thread identity — the same key the sidebar rows and the quit
   // blockers use. A hand-rolled `${source}:${id}` is ambiguous for ACP
@@ -2032,19 +2053,6 @@ export function ThreadView(props: ThreadViewProps) {
       setSetupFailureContinuing(false);
     }
   };
-
-  useEffect(() => {
-    if (!branchDriftDialog) return;
-
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !branchDriftBusy) {
-        setBranchDriftDialog(undefined);
-      }
-    };
-
-    document.addEventListener("keydown", closeOnEscape);
-    return () => document.removeEventListener("keydown", closeOnEscape);
-  }, [branchDriftBusy, branchDriftDialog]);
 
   const branchDriftRetentionKey = (
     thread: NavigationThreadSummary,
@@ -4074,6 +4082,7 @@ export function ThreadView(props: ThreadViewProps) {
       {rewindDialog ? (
         <div className="workspace-handoff-modal">
           <div
+            ref={rewindDialogRef}
             aria-labelledby="grok-rewind-title"
             aria-modal="true"
             className="workspace-handoff-dialog rewind-dialog"
@@ -4169,6 +4178,7 @@ export function ThreadView(props: ThreadViewProps) {
       {workflowBudgetDialog ? (
         <div className="workspace-handoff-modal">
           <div
+            ref={workflowBudgetDialogRef}
             aria-labelledby="grok-workflow-budget-title"
             aria-modal="true"
             className="workspace-handoff-dialog rewind-dialog"
@@ -4280,6 +4290,7 @@ export function ThreadView(props: ThreadViewProps) {
       {branchDriftDialog && selectedThread ? (
         <div className="workspace-handoff-modal">
           <div
+            ref={branchDriftDialogRef}
             aria-labelledby="branch-drift-title"
             aria-modal="true"
             className="workspace-handoff-dialog"

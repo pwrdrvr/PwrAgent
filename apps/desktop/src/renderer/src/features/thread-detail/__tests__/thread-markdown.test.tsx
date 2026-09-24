@@ -1,8 +1,9 @@
 import "@testing-library/jest-dom/vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MarkdownRenderingOptionsProvider } from "../../../lib/markdown-rendering-options";
 import { ThreadMarkdown } from "../ThreadMarkdown";
+import { pressEscape, pressTab, walkTab } from "../../../test/tab-walk";
 
 const copyText = vi.hoisted(() => vi.fn(async (
   text: string,
@@ -1432,5 +1433,85 @@ describe("ThreadMarkdown", () => {
       delete (window as unknown as { __pwragentHomeDir?: string })
         .__pwragentHomeDir;
     }
+  });
+});
+
+describe("ThreadMarkdown document viewer, keyboard", () => {
+  const documents: Record<string, string> = {
+    "/repo/PwrAgent/AGENTS.md": "# AGENTS\n\nSee [CONTRIBUTING.md](/repo/PwrAgent/CONTRIBUTING.md).",
+    "/repo/PwrAgent/CONTRIBUTING.md": "# CONTRIBUTING\n\nOpen a pull request.",
+  };
+  const readMarkdownFile = vi.fn(async (request: { path: string }) => ({
+    path: request.path,
+    content: documents[request.path] ?? "",
+  }));
+  const fileViewerContext = () => ({
+    key: "codex:thread-1",
+    title: "Files - Thread title",
+    threadTitle: "Thread title",
+    projectPath: "/repo/PwrAgent",
+  });
+
+  async function openViewer() {
+    const view = render(
+      <ThreadMarkdown
+        desktopApi={{ readMarkdownFile }}
+        fileViewerContext={fileViewerContext()}
+        text={"I updated [AGENTS.md](/repo/PwrAgent/AGENTS.md)."}
+      />,
+    );
+    fireEvent.click(screen.getByRole("link", { name: "AGENTS.md" }));
+    const dialog = await screen.findByRole("dialog", {
+      name: "Markdown document: AGENTS.md",
+    });
+    await screen.findByRole("heading", { name: "AGENTS" });
+    return { dialog, view };
+  }
+
+  it("walks a document opened from inside the viewer, then closes only that one", async () => {
+    const { dialog: outer } = await openViewer();
+    const link = screen.getByRole("link", { name: "CONTRIBUTING.md" });
+    link.focus();
+    fireEvent.click(link);
+    const inner = await screen.findByRole("dialog", {
+      name: "Markdown document: CONTRIBUTING.md",
+    });
+    await screen.findByRole("heading", { name: "CONTRIBUTING" });
+    expect(inner.contains(document.activeElement)).toBe(true);
+
+    // Both viewers used to trap from their own capture listener: the outer one
+    // dragged every Tab to its own first control, the inner one dragged it
+    // back to its first, and Tab never moved.
+    const start = document.activeElement;
+    pressTab();
+    expect(document.activeElement).not.toBe(start);
+    expect(walkTab(60).filter((el) => !inner.contains(el))).toEqual([]);
+
+    // And one Escape closed both.
+    pressEscape();
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("dialog", { name: "Markdown document: CONTRIBUTING.md" }),
+      ).toBeNull();
+    });
+    expect(outer).toBeInTheDocument();
+    expect(document.activeElement).toBe(link);
+  });
+
+  it("leaves focus where it is when the transcript re-renders", async () => {
+    const { dialog, view } = await openViewer();
+    const close = within(dialog).getByRole("button", { name: "Close" });
+    close.focus();
+    // A streaming transcript re-renders the message, which hands the viewer a
+    // fresh onClose. The viewer's focus effect depended on it, so every
+    // re-render sent focus back to the first control.
+    view.rerender(
+      <ThreadMarkdown
+        desktopApi={{ readMarkdownFile }}
+        fileViewerContext={fileViewerContext()}
+        text={"I updated [AGENTS.md](/repo/PwrAgent/AGENTS.md)."}
+      />,
+    );
+    expect(document.activeElement).toBe(close);
   });
 });

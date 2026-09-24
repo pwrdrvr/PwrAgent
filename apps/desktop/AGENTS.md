@@ -725,6 +725,55 @@ pnpm --filter @pwragent/desktop exec playwright test \
 build first; the `playwright test` form above skips that when you've
 already built once.)
 
+### Modal dialogs and overlays
+
+Every `aria-modal` dialog goes through
+[`useModalDialog`](src/renderer/src/lib/useModalDialog.ts). Put its ref on the
+element that holds every control of the dialog. Focus then enters on open,
+Tab and Shift+Tab stay inside (WCAG 2.1 SC 2.4.3), Escape closes only the
+topmost layer, and focus goes back to the opener on close. Before it existed,
+most dialogs here had no Escape and no trap, and Tab walked into the dimmed
+app behind them.
+
+- **Do not add your own Escape or Tab listener to a dialog.** It becomes a
+  second owner of the key. Traps and layers resolve one owner per keypress
+  (the one holding focus, deepest first, else the newest), and a private
+  listener outside that stack is how one Escape used to close a dialog and
+  the find bar behind it.
+- **A popup inside a dialog registers with
+  [`useDismissableLayer`](src/renderer/src/lib/useDismissableLayer.ts),** or
+  the dialog takes its Escape and both close. `ProjectPicker` in Move to
+  Project is the example.
+- **A claimed Escape is prevented and stopped.** A window listener that closes
+  something on Escape must check `defaultPrevented`, as `ThreadFindBar` and
+  the composer autocomplete do. The stop is for React handlers in a tree the
+  dialog portals out of: the Star Map layer drops the card selection on any
+  Escape that reaches it.
+- **A busy dialog refuses in `onClose`, and the key is still claimed.** Mirror
+  the disabled Cancel button; do not let Escape through to what is behind.
+- **The opener is captured during render,** because `autoFocus` moves focus
+  before any effect can look. A dialog opened from a menu item returns focus
+  to the menu's trigger (found through `aria-controls`, or an expanded
+  `aria-haspopup` beside the menu). Pass `returnFocus` where nothing marks the
+  trigger, as the sidebar's context menu does.
+- **`tabIndex={-1}` on the dialog element** when it is the initial focus
+  (`initialFocus: "dialog"`), or when every control in it can be disabled at
+  once (the Codex login dialog while the login starts). Otherwise focus stays
+  behind the scrim. Give such an element `:focus { outline: none }`.
+- **Chromium makes an overflowing scroller with nothing focusable in it a Tab
+  stop**, though its `tabIndex` reads -1. The trap counts those; a trap that
+  cannot see them wraps past them.
+- **A dialog with its own Tab order passes `ownTabOrder`.** The jump palette
+  steps through the active row's PR chips only; the trap still owns the key
+  against a dialog beneath it and fetches stray focus back in.
+
+Test a new dialog with `tabEscapes(dialog)` from
+[`src/renderer/src/test/tab-walk.ts`](src/renderer/src/test/tab-walk.ts). It
+walks 60 Tabs each way between sentinel buttons placed before and after the
+page, and names every stop outside the dialog that focus reached. jsdom runs
+no sequential focus navigation and has no layout, so the helper emulates the
+walk and cannot see scroller stops. Check those in headless Chromium.
+
 ## Config File Evolution
 
 Before changing `config.toml` keys in a backwards-incompatible way, read
