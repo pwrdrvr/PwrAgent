@@ -14838,6 +14838,62 @@ describe("Composer", () => {
     });
   });
 
+  it("closes the handoff leave-branch picker on Escape, not the dialog around it", () => {
+    render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        disabled={false}
+        directory={{
+          key: "directory:/repo",
+          kind: "directory",
+          label: "PwrAgent",
+          path: "/repo",
+          gitStatus: {
+            currentBranch: "feature/handoff",
+            defaultBranch: "main",
+            branches: ["feature/handoff", "main", "release"],
+            handoffBranches: ["main", "release"],
+            syncState: "untracked",
+          },
+        }}
+        onHandoffThreadWorkspace={vi.fn(async () => undefined)}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Build Codex client",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          gitBranch: "feature/handoff",
+          linkedDirectories: [
+            { id: "dir-1", label: "PwrAgent", path: "/repo", kind: "local" },
+          ],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    fireEvent.click(screen.getByLabelText("Workspace mode"));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Handoff to New Worktree" }));
+    fireEvent.click(screen.getByRole("radio", { name: /Handoff Current Branch/ }));
+    const branchButton = screen.getByRole("button", { name: "Leave current checkout on" });
+    branchButton.focus();
+    fireEvent.click(branchButton);
+    expect(
+      screen.getByRole("listbox", { name: "Leave current checkout on options" })
+    ).toBeInTheDocument();
+
+    // The dialog claims Escape at window capture, so a menu listening on the
+    // document never saw it and one press closed the whole dialog.
+    pressEscape();
+    expect(
+      screen.queryByRole("listbox", { name: "Leave current checkout on options" })
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("dialog", { name: "Handoff to New Worktree" })
+    ).toBeInTheDocument();
+  });
+
   it("filters the handoff leave-branch picker and shows branch metadata", async () => {
     const onHandoffThreadWorkspace = vi.fn(async () => undefined);
     const nowSeconds = Math.floor(Date.now() / 1000);
