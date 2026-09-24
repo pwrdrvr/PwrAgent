@@ -17,6 +17,7 @@ import { AccessControlSettings } from "../AccessControlSettings";
 
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
 });
 
 function makeApi(overrides?: Partial<DesktopApi>): DesktopApi {
@@ -74,6 +75,23 @@ function nodeOf(element: HTMLElement): HTMLElement {
   const node = element.closest<HTMLElement>(".rbac-node");
   expect(node).not.toBeNull();
   return node as HTMLElement;
+}
+
+// jsdom lays nothing out, so a placement test gives each box its own rect.
+function placeAt(
+  element: Element,
+  rect: { top: number; bottom: number; right: number },
+): void {
+  element.getBoundingClientRect = () =>
+    ({
+      ...rect,
+      left: rect.right - 300,
+      x: rect.right - 300,
+      y: rect.top,
+      width: 300,
+      height: rect.bottom - rect.top,
+      toJSON: () => rect,
+    }) as DOMRect;
 }
 
 describe("AccessControlSettings", () => {
@@ -208,6 +226,55 @@ describe("AccessControlSettings", () => {
     await user.unhover(bucket);
     expect(alice).toHaveClass("is-active");
     expect(bucket).toHaveClass("is-dim");
+  });
+
+  it("opens a permission's reverse map beside its card, never over it", async () => {
+    const user = userEvent.setup();
+    render(<AccessControlSettings desktopApi={makeApi()} />);
+    await waitFor(() => expect(screen.getByText("Alice")).toBeInTheDocument());
+    const [first, second] = MESSAGING_PERMISSION_CATALOG;
+    const graph = document.querySelector(".rbac-graph");
+    expect(graph).not.toBeNull();
+    placeAt(graph as Element, { top: 100, bottom: 2000, right: 1200 });
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(100);
+    // jsdom's window is 768px tall, and nothing above the graph scrolls.
+    placeAt(nodeOf(traceButton(first.label)), { top: 300, bottom: 360, right: 1180 });
+    placeAt(nodeOf(traceButton(second.label)), { top: 650, bottom: 710, right: 1180 });
+
+    // Room below: the tip opens 6px under the card, on its right edge.
+    await tabTo(user, traceButton(first.label));
+    const below = screen.getByText(/Reachable by/).closest<HTMLElement>(".rbac-tip");
+    expect(below?.style.top).toBe("266px");
+    expect(below?.style.right).toBe("20px");
+    expect(below).not.toHaveClass("is-above");
+
+    // No room below before the window's edge: it opens above instead.
+    await tabTo(user, traceButton(second.label));
+    const above = screen.getByText(/Reachable by/).closest<HTMLElement>(".rbac-tip");
+    expect(above?.style.top).toBe("444px");
+    // Its shadow then casts up, off the card's ring.
+    expect(above).toHaveClass("is-above");
+  });
+
+  it("hides a pinned permission's reverse map while focus rests on another card", async () => {
+    const user = userEvent.setup();
+    render(<AccessControlSettings desktopApi={makeApi()} />);
+    await waitFor(() => expect(screen.getByText("Alice")).toBeInTheDocument());
+    const [first, second] = MESSAGING_PERMISSION_CATALOG;
+
+    await tabTo(user, traceButton(first.label));
+    await user.keyboard("{Enter}");
+    expect(nodeOf(traceButton(first.label))).toHaveClass("is-pinned");
+    expect(screen.getByText(/Reachable by/)).toBeInTheDocument();
+
+    // The pin holds the trace, but its tip would sit over this card.
+    await tabTo(user, traceButton(second.label));
+    expect(nodeOf(traceButton(first.label))).toHaveClass("is-pinned");
+    expect(screen.queryByText(/Reachable by/)).not.toBeInTheDocument();
+
+    // Focus leaving the graph brings the pinned tip back.
+    await user.click(document.body);
+    expect(screen.getByText(/Reachable by/)).toBeInTheDocument();
   });
 
   it("keeps role chips and Edit as their own Tab stops, apart from the pin", async () => {
