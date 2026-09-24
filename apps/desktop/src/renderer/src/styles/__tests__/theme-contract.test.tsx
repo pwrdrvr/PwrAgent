@@ -300,7 +300,7 @@ describe("Tangerine Terminal theme contract", () => {
 
     // A 24px target is worthless while something paints over it — the
     // pinned-row hover reserve keeps the revealed cluster off the
-    // in-title unpin pin. Pinned (all four reveal arms + the value + the
+    // in-title unpin pin. Pinned (all five reveal arms + the value + the
     // cluster-side literals it is derived from) so a cluster resize or a
     // dropped keyboard arm revisits the derivation in the rule's comment
     // in the same commit.
@@ -310,7 +310,8 @@ describe("Tangerine Terminal theme contract", () => {
         ".thread-row-shell:hover .thread-row--pinned .thread-row__heading,\n"
           + ".thread-row-shell:has(.thread-row__overflow-button:focus-visible) .thread-row--pinned .thread-row__heading,\n"
           + ".thread-row-shell:has(.thread-row__chip--add-reaction:focus-visible) .thread-row--pinned .thread-row__heading,\n"
-          + ".thread-row-shell:has(.thread-row__chip--add-reaction.is-open) .thread-row--pinned .thread-row__heading",
+          + ".thread-row-shell:has(.thread-row__chip--add-reaction.is-open) .thread-row--pinned .thread-row__heading,\n"
+          + ".thread-row-shell:has(.thread-row__overflow-button[aria-expanded=\"true\"]) .thread-row--pinned .thread-row__heading",
       ),
     ).toMatch(/padding-right:\s*46px;/);
     expect(extractRuleBody(css, ".thread-row__actions")).toMatch(
@@ -1006,18 +1007,20 @@ describe("Tangerine Terminal theme contract", () => {
       /\.thread-row-shell:hover \.thread-row__chip--add-reaction,\s*\.thread-row__chip--add-reaction:focus-visible,\s*\.thread-row__chip--add-reaction\.is-open\s*\{[\s\S]*?pointer-events:\s*auto;[\s\S]*?\}/
     );
     expect(css).toMatch(
-      /\.thread-row-shell:hover \.thread-row__overflow-button,\s*\.thread-row__overflow-button:focus-visible\s*\{[\s\S]*?pointer-events:\s*auto;[\s\S]*?\}/
+      /\.thread-row-shell:hover \.thread-row__overflow-button,\s*\.thread-row__overflow-button:focus-visible,\s*\.thread-row__overflow-button\[aria-expanded="true"\]\s*\{[\s\S]*?pointer-events:\s*auto;[\s\S]*?\}/
     );
   });
 
   it("hides thread row timestamps behind focused or open row actions", () => {
-    // Pins the FULL five-selector fade list (it once silently grew a
+    // Pins the FULL six-selector fade list (it once silently grew a
     // pin-button arm this regex didn't describe, so the test matched a
     // suffix and stopped being the authoritative statement of the
     // list). The pinned-row heading reserve mirrors this state set —
-    // its own pin lives with the target-size block above.
+    // its own pin lives with the target-size block above. The last arm
+    // is ⋮ with its menu open: focus has moved into the menu, so without
+    // it the trigger faded out from under the menu it opened.
     expect(css).toMatch(
-      /\.thread-row-shell:has\(\.thread-row__pin-button:focus-visible\) \.thread-row__time,\s*\.thread-row-shell:hover \.thread-row__time,\s*\.thread-row-shell:has\(\.thread-row__overflow-button:focus-visible\) \.thread-row__time,\s*\.thread-row-shell:has\(\.thread-row__chip--add-reaction:focus-visible\) \.thread-row__time,\s*\.thread-row-shell:has\(\.thread-row__chip--add-reaction\.is-open\) \.thread-row__time\s*\{[\s\S]*?opacity:\s*0;[\s\S]*?\}/
+      /\.thread-row-shell:has\(\.thread-row__pin-button:focus-visible\) \.thread-row__time,\s*\.thread-row-shell:hover \.thread-row__time,\s*\.thread-row-shell:has\(\.thread-row__overflow-button:focus-visible\) \.thread-row__time,\s*\.thread-row-shell:has\(\.thread-row__chip--add-reaction:focus-visible\) \.thread-row__time,\s*\.thread-row-shell:has\(\.thread-row__chip--add-reaction\.is-open\) \.thread-row__time,\s*\.thread-row-shell:has\(\.thread-row__overflow-button\[aria-expanded="true"\]\) \.thread-row__time\s*\{[\s\S]*?opacity:\s*0;[\s\S]*?\}/
     );
   });
 

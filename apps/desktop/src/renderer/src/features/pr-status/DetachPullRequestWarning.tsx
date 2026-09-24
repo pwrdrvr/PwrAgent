@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useRef, useState, type RefObject } from "react";
 import type { PrSummary } from "@pwragent/shared";
 import { useModalDialog } from "../../lib/useModalDialog";
 
@@ -24,6 +24,12 @@ type DetachPullRequestWarningProps = {
   pr: PrSummary;
   onCancel: () => void;
   onConfirm: () => void;
+  /**
+   * Where focus goes when the dialog closes. The menu item that opened it is
+   * gone by then, and the PR chip that opened that menu is not marked as its
+   * trigger.
+   */
+  returnFocus?: RefObject<HTMLElement | null>;
 };
 
 export function DetachPullRequestWarning(props: DetachPullRequestWarningProps) {
@@ -35,6 +41,7 @@ export function DetachPullRequestWarning(props: DetachPullRequestWarningProps) {
   const dialogRef = useModalDialog({
     onClose: props.onCancel,
     initialFocus: cancelRef,
+    ...(props.returnFocus === undefined ? {} : { returnFocus: props.returnFocus }),
   });
 
   return (

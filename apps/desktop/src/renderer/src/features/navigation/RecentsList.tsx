@@ -44,6 +44,8 @@ type RecentsListProps = {
   queuedMessageThreadKeys?: Record<string, ThreadQueuedMessageState>;
   draftThreadKeys?: Record<string, boolean>;
   composerSourceThreadKey?: string;
+  /** The thread whose ⋮ actions menu is open, for that button's `aria-expanded`. */
+  actionsMenuThreadKey?: string;
   revealSelectedThreadRequest?: number;
   selectedThreadKey?: string;
   selectedThreadKeys?: ReadonlySet<string>;
@@ -190,6 +192,7 @@ export function RecentsList(props: RecentsListProps) {
               queuedMessageThreadKeys={props.queuedMessageThreadKeys}
               draftThreadKeys={props.draftThreadKeys}
               composerSourceThreadKey={props.composerSourceThreadKey}
+              actionsMenuOpen={childKey === props.actionsMenuThreadKey}
               draggable={
                 canManageSubthreads
                 && directChildKeys.length > 1
@@ -345,6 +348,7 @@ export function RecentsList(props: RecentsListProps) {
           queuedMessageThreadKeys={props.queuedMessageThreadKeys}
           draftThreadKeys={props.draftThreadKeys}
           composerSourceThreadKey={props.composerSourceThreadKey}
+          actionsMenuOpen={key === props.actionsMenuThreadKey}
           includeLinkedDirectories
           revealSelectedThreadRequest={props.revealSelectedThreadRequest}
           selectedThreadKey={props.selectedThreadKey}

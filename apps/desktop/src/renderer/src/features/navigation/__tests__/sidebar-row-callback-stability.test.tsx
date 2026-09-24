@@ -1,5 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -16,6 +17,7 @@ import type {
 } from "@pwragent/shared";
 import { threadSummaryIdentityKey } from "../../../lib/federated-thread-events";
 import { FixtureSidebar as Sidebar } from "../../../test/navigation-presentation-fixture";
+import { pressEscape } from "../../../test/tab-walk";
 import { memoRenderObserver } from "../../../test/memo-render-observer";
 import { ThreadRow, type ThreadRowRef } from "../ThreadRow";
 
@@ -242,6 +244,42 @@ describe("sidebar thread row callback stability", () => {
 
     expect(rowRenders).toBe(settled);
   });
+
+  it.each(["directories", "inbox"] as const)(
+    "re-renders only the row whose actions menu opens or closes (%s)",
+    (browseMode) => {
+      // `aria-expanded` on ⋮ reaches the rows as a boolean. Handing every row
+      // the open row's key instead would re-render the whole list on each
+      // open and close, which is the churn the row memo exists to prevent.
+      const threads = THREADS.map((entry) => ({
+        ...entry,
+        inbox: { inInbox: true, reason: "new-thread" },
+      })) as NavigationThreadSummary[];
+      const rendered: string[] = [];
+      rowObserver.restore();
+      rowObserver.install((props) => {
+        rendered.push(props.thread.id);
+      });
+      render(sidebar({ browseMode, threads }));
+      expect(threadRowCount()).toBe(THREADS.length);
+
+      // The selected row. A menu opened on any other row selects that row
+      // first, and a selection change repaints every row by design.
+      const actions = within(row("Thread 1")).getByRole("button", {
+        name: "Open thread actions",
+      });
+      rendered.length = 0;
+      actions.focus();
+      act(() => actions.click());
+      expect(actions).toHaveAttribute("aria-expanded", "true");
+      expect([...new Set(rendered)]).toEqual(["thread-1"]);
+
+      rendered.length = 0;
+      pressEscape();
+      expect(actions).toHaveAttribute("aria-expanded", "false");
+      expect([...new Set(rendered)]).toEqual(["thread-1"]);
+    },
+  );
 
   it("hands every row callback an identity that survives a re-render", () => {
     // The render-cost tests above say the rows stopped re-rendering; this one

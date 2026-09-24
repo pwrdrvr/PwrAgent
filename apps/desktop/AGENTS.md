@@ -774,6 +774,35 @@ page, and names every stop outside the dialog that focus reached. jsdom runs
 no sequential focus navigation and has no layout, so the helper emulates the
 walk and cannot see scroller stops. Check those in headless Chromium.
 
+### Menus
+
+A `role="menu"` goes through
+[`useMenuNavigation`](src/renderer/src/lib/useMenuNavigation.ts). The role
+promises the ARIA menu keyboard, and a screen-reader user told "menu" reaches
+for the arrows. Focus moves to the first item on open, the arrows, Home and
+End move between items, Escape closes and returns focus to the trigger, and
+Tab closes and moves on from the trigger. The sidebar's menus said
+`role="menu"` and did none of it: opening one left focus on the ⋮ button, and
+the menu renders after the whole thread list, so Tab reached it only after
+every later row.
+
+- **The hook registers the menu with `useDismissableLayer`.** Do not add an
+  Escape listener, and do not register the menu again.
+- **Pass the trigger as `triggerRef`.** A menu opened by right-click has no
+  button, so record whatever held focus as it opened, as `Sidebar` does with
+  `rememberMenuOpener`. A dialog opened from the menu can use the same ref as
+  its `returnFocus`.
+- **Pass `open` only once the menu can take focus.** The sidebar's floating
+  menus measure themselves at `visibility: hidden` before they are placed,
+  and Chromium will not focus a hidden element. jsdom will, so only a
+  headless-Chromium check catches a menu that opens too early.
+- **Mark the trigger.** `aria-haspopup="menu"` plus `aria-expanded`. When the
+  trigger sits in a memoized row, pass the row a boolean, not the open row's
+  key, or every row re-renders on each open and close.
+- **`tabIndex={-1}` on the menu** when every item in it can be disabled at
+  once, as the profile menu's can. Focus then lands on the menu, where Escape
+  and Tab still work.
+
 ## Config File Evolution
 
 Before changing `config.toml` keys in a backwards-incompatible way, read
