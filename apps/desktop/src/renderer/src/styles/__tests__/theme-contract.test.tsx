@@ -191,6 +191,37 @@ describe("Tangerine Terminal theme contract", () => {
     }
   });
 
+  it("keeps every Token Miser verdict ink readable in both themes", () => {
+    // The verdict tokens alias status tokens in `:root`, and the light block
+    // overrides only the one whose alias fails there — `--status-warning` is
+    // 4.0:1 on a light panel. Resolve each alias through the theme it renders
+    // in, the way the cascade does, so a new override (or a changed status
+    // token) is measured instead of assumed.
+    const resolve = (theme: Record<string, string>, name: string): string => {
+      const alias = theme[name]?.match(/^var\(--([a-z0-9-]+)\)$/)?.[1];
+      return alias ? resolve(theme, alias) : theme[name];
+    };
+    const themes = {
+      dark: tokens,
+      light: { ...tokens, ...lightTokens },
+    };
+    for (const [themeName, theme] of Object.entries(themes)) {
+      for (const ink of [
+        "savings-great",
+        "savings-good",
+        "savings-even",
+        "savings-over",
+      ]) {
+        for (const surface of ["bg-panel", "bg-panel-elevated"]) {
+          expect(
+            contrastRatio(resolve(theme, ink), resolve(theme, surface)),
+            `${themeName}: ${ink} on ${surface}`,
+          ).toBeGreaterThanOrEqual(4.5);
+        }
+      }
+    }
+  });
+
   it("keeps light terminal ANSI white readable on a light canvas", () => {
     expect(lightTokens).toMatchObject({
       "terminal-bg": "#ffffff",
@@ -480,6 +511,11 @@ describe("Tangerine Terminal theme contract", () => {
       // win32 and linux, whose caption buttons the close control has to clear.
       // Platform geometry, not theme.
       "lightbox-os-chrome-h",
+      // Token Miser verdict — defined on whatever carries
+      // `data-savings-tier`, not `:root`, and set only to one of the
+      // `--savings-*` theme tokens. Every surface reads its verdict color
+      // through it, so the tier → color map exists once.
+      "savings-verdict",
     ]);
     const tokenReferences = [...css.matchAll(/var\(--([a-z0-9-]+)\)/g)].map(
       ([, token]) => token

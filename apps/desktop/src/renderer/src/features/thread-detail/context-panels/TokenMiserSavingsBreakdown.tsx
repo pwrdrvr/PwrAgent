@@ -1,5 +1,6 @@
 import type { ThreadSubAgentSummary } from "@pwragent/shared";
 import { formatTokenUsageMicrosAsUsd } from "@pwragent/shared";
+import { classifyTokenMiserSavings } from "../token-miser-savings-summary";
 
 export function TokenMiserSavingsBreakdown(props: {
   accounting: NonNullable<ThreadSubAgentSummary["tokenMiserAccounting"]>;
@@ -13,10 +14,16 @@ export function TokenMiserSavingsBreakdown(props: {
   const cachedBaselineCostMicros = accounting.cachedBaselineCostMicros ?? 0;
   const cachedRevealedTokens = accounting.cachedRevealedTokens ?? 0;
   const cachedRevealedCostMicros = accounting.cachedRevealedCostMicros ?? 0;
+  // One gate has no bill of its own to judge against — its payload is the
+  // whole of what it replaced — so the total row colors by sign alone.
+  const { tier } = classifyTokenMiserSavings({
+    savingsMicros: accounting.savingsMicros,
+  });
   return (
     <dl
       aria-label="Token Miser savings"
       className="rail-card__token-miser-savings"
+      data-savings-tier={tier}
     >
       <div>
         <dt>{passedThrough ? "1 · Ordinary result" : "1 · Without gate"}</dt>

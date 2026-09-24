@@ -3144,6 +3144,14 @@ describe("ThreadContextPanel", () => {
     // A settled verdict is not pending, and says nothing about pricing.
     expect(summary.querySelector(".pricing-token-miser__verdict"))
       .toHaveAttribute("data-pending", "false");
+    // Judged against the whole turn: the parent's $0.125 plus both gates'
+    // $0.002 each. 254,000 / (129,000 + 254,000) is 66.3%; leaving the gates
+    // out of the bill would print 67.0%.
+    expect(summary.querySelector(".pricing-token-miser__verdict"))
+      .toHaveAttribute("data-savings-tier", "exceptional");
+    expect(
+      summary.querySelector(".pricing-token-miser__verdict-percent"),
+    ).toHaveTextContent("· 66.3%");
     expect(summary).not.toHaveTextContent("not priced yet");
     expect(summary).toHaveAttribute("aria-expanded", "false");
 
@@ -3435,6 +3443,8 @@ describe("ThreadContextPanel", () => {
     // header row beside "Token Miser", where only a short string fits.
     expect(verdict).toHaveTextContent("$0.002 evaluating");
     expect(verdict).not.toHaveTextContent("not priced yet");
+    // What the gates have cost so far is not a verdict on what they saved.
+    expect(verdict).not.toHaveAttribute("data-savings-tier");
     // Cost-so-far is not a savings verdict, and must not wear its colors.
     expect(verdict).toHaveAttribute("data-pending", "true");
     // The reason there is no savings figure is detail, and detail lives on the

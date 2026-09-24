@@ -819,8 +819,17 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     await screen.findByRole("tab", { name: /Savings/, selected: true });
     expect(screen.getByText("Estimated same-trajectory savings"))
       .toBeInTheDocument();
-    expect(screen.getByText("49.3% less than estimated unfiltered cost"))
-      .toBeInTheDocument();
+    // The percentage is its own element so the verdict can color it, and a
+    // saving this large wears the rail card's tier.
+    expect(screen.getByText("49.3% less")).toHaveClass(
+      "incident-explorer__savings-percent",
+    );
+    expect(screen.getByText("49.3% less").parentElement).toHaveTextContent(
+      "49.3% less than estimated unfiltered cost",
+    );
+    expect(
+      document.querySelector(".incident-explorer__savings-headline"),
+    ).toHaveAttribute("data-savings-tier", "exceptional");
     // The terms are laid out as the subtraction they are, so the headline and
     // the result of the equation are the same figure printed twice.
     expect(screen.getAllByText("$0.35")).toHaveLength(2);
@@ -911,8 +920,12 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     render(<ToolOutputIncidentExplorerWindow />);
 
     await screen.findByText("Estimated same-trajectory overhead");
-    expect(screen.getByText("33.3% more than estimated unfiltered cost"))
-      .toBeInTheDocument();
+    expect(screen.getByText("33.3% more").parentElement).toHaveTextContent(
+      "33.3% more than estimated unfiltered cost",
+    );
+    expect(
+      document.querySelector(".incident-explorer__savings-headline"),
+    ).toHaveAttribute("data-savings-tier", "over");
     /* With negative savings the parts sum past the whole, and a bar
        overflowing its own track reads as a rendering fault. The overspend
        states itself in words above instead. */

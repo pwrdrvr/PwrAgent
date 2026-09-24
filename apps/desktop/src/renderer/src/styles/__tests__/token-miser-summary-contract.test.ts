@@ -93,3 +93,63 @@ describe("Token Miser summary line", () => {
     );
   });
 });
+
+/**
+ * Token Miser's verdict is colored by degrees, and every surface — the rail
+ * card, the per-turn fold, a gate's breakdown, and the savings window — takes
+ * that color from one place.
+ *
+ * Before this, a 20% saving on the rail card painted in `--text-primary`,
+ * exactly like a figure with no verdict at all, while the window painted the
+ * same saving in the accent orange that marks an overhead elsewhere. The
+ * operator could not tell a win from a loss at a glance.
+ */
+describe("Token Miser verdict colors", () => {
+  it("maps each tier to exactly one verdict token", () => {
+    expect(ruleBody('[data-savings-tier="good"]')).toMatch(
+      /--savings-verdict:\s*var\(--savings-good\);/,
+    );
+    expect(ruleBody('[data-savings-tier="even"]')).toMatch(
+      /--savings-verdict:\s*var\(--savings-even\);/,
+    );
+    expect(ruleBody('[data-savings-tier="over"]')).toMatch(
+      /--savings-verdict:\s*var\(--savings-over\);/,
+    );
+    // Exceptional is great's ink with more around it, not a brighter green.
+    expect(
+      ruleBody('[data-savings-tier="exceptional"],\n[data-savings-tier="great"]'),
+    ).toMatch(/--savings-verdict:\s*var\(--savings-great\);/);
+  });
+
+  it("colors every verdict figure through --savings-verdict", () => {
+    for (const selector of [
+      ".token-miser-summary-card__figure",
+      ".token-miser-summary-card__percent",
+      ".pricing-token-miser__verdict",
+      ".incident-explorer__savings-percent",
+      ".incident-explorer__savings-figure strong",
+    ]) {
+      expect(ruleBody(selector), selector).toMatch(
+        /color:\s*var\(--savings-verdict,/,
+      );
+    }
+  });
+
+  it("never paints a verdict in the accent", () => {
+    // The accent is the product's one highlight color. It said "look here"
+    // for a saving and an overhead alike, which is what hid the sign.
+    for (const selector of [
+      ".token-miser-summary-card__figure",
+      ".pricing-token-miser__verdict",
+      ".incident-explorer__savings-figure strong",
+    ]) {
+      expect(ruleBody(selector), selector).not.toMatch(/var\(--accent/);
+    }
+  });
+
+  it("keeps the retired sign flag out of the stylesheet", () => {
+    // `data-negative` carried two states; the tier carries five. A rule left
+    // on the old flag would match nothing and look like it still worked.
+    expect(css).not.toMatch(/token-miser[^{]*\[data-negative/);
+  });
+});

@@ -63,6 +63,65 @@ export type TokenMiserSavingsTerms = {
 export type TokenMiserSameTrajectoryChange = {
   short: string;
   sentence: string;
+  /**
+   * The words after `short` in `sentence`, for a view that styles the
+   * percentage on its own — the popup sets it as a pill — without cutting
+   * the sentence apart itself.
+   */
+  tail: string;
+};
+
+/**
+ * How well the gate did for the bill, by degrees.
+ *
+ * Every surface that reports a Token Miser result colors it from this one
+ * scale, so a win reads as a win wherever the operator meets it. The rail
+ * card used to leave a saving in body ink and color only an overhead, while
+ * the popup painted the brand accent for either sign: a 21.5% saving looked
+ * like nothing in one place and like a loss in the other.
+ */
+export type TokenMiserVerdictTier =
+  | "over"
+  | "even"
+  | "good"
+  | "great"
+  | "exceptional";
+
+export type TokenMiserVerdict = {
+  tier: TokenMiserVerdictTier;
+  /**
+   * Saving over the estimated unfiltered cost, in percent, signed so a saving
+   * is positive. Rounded to the one decimal the views print, so a figure that
+   * reads "10.0% less" is always classified as ten. Absent without a priced
+   * bill to divide by.
+   */
+  percent?: number;
+};
+
+/** Within this many percent either way, the gate broke even. */
+export const TOKEN_MISER_EVEN_BAND_PERCENT = 5;
+/** A saving of at least this much is great, and gets the pill. */
+export const TOKEN_MISER_GREAT_PERCENT = 10;
+/** A saving of at least this much is exceptional, and the card itself says so. */
+export const TOKEN_MISER_EXCEPTIONAL_PERCENT = 30;
+
+/**
+ * The avoided, gate, and revealed shares of term 1, for the bar under a
+ * savings figure. Absent unless the gate saved something: with an overhead
+ * the parts sum past the whole, and a bar overflowing its own track reads as
+ * a rendering fault.
+ */
+export type TokenMiserSavingsSplit = {
+  avoided: number;
+  gate: number;
+  revealed: number;
+  /**
+   * The caption's whole percents. The last term absorbs the rounding instead
+   * of being rounded itself: three shares of one whole, each rounded on its
+   * own, read as "51% · 3% · 47%" often enough to invite the reader to notice
+   * that the decomposition under the bar does not close.
+   */
+  rounded: { avoided: number; gate: number; revealed: number };
 };
 
 /**
@@ -141,18 +200,91 @@ export function describeSameTrajectoryCostChange(
   observedCostMicros: number,
   savingsMicros: number,
 ): TokenMiserSameTrajectoryChange | undefined {
+  const percent = sameTrajectoryPercent(observedCostMicros, savingsMicros);
+  if (percent === undefined) return undefined;
+  const [short, tail] = savingsMicros === 0
+    ? [`${percent.toFixed(1)}% change`, "from estimated unfiltered cost"]
+    : [
+        `${percent.toFixed(1)}% ${savingsMicros > 0 ? "less" : "more"}`,
+        "than estimated unfiltered cost",
+      ];
+  return { short, sentence: `${short} ${tail}`, tail };
+}
+
+/**
+ * Place a saving on the verdict scale.
+ *
+ * The percentage is the one `describeSameTrajectoryCostChange` prints, so a
+ * color can never disagree with the number beside it. Without a priced bill
+ * there is no percentage, and the sign is all there is to go on: a saving is
+ * good, an overhead is over, and nothing at all is even.
+ */
+export function classifyTokenMiserSavings(params: {
+  observedCostMicros?: number;
+  savingsMicros: number;
+}): TokenMiserVerdict {
+  const magnitude = sameTrajectoryPercent(
+    params.observedCostMicros ?? 0,
+    params.savingsMicros,
+  );
+  if (magnitude === undefined) {
+    return {
+      tier: params.savingsMicros > 0
+        ? "good"
+        : params.savingsMicros < 0
+          ? "over"
+          : "even",
+    };
+  }
+  const rounded = Number(magnitude.toFixed(1));
+  // An overhead that rounds to 0.0% is zero, not negative zero.
+  const percent =
+    params.savingsMicros < 0 && rounded > 0 ? -rounded : rounded;
+  return { tier: tierForPercent(percent), percent };
+}
+
+function tierForPercent(percent: number): TokenMiserVerdictTier {
+  if (percent >= TOKEN_MISER_EXCEPTIONAL_PERCENT) return "exceptional";
+  if (percent >= TOKEN_MISER_GREAT_PERCENT) return "great";
+  if (percent >= TOKEN_MISER_EVEN_BAND_PERCENT) return "good";
+  if (percent > -TOKEN_MISER_EVEN_BAND_PERCENT) return "even";
+  return "over";
+}
+
+/**
+ * Unsigned: the caller already knows the direction from the saving's sign,
+ * and the printed figure never carries one.
+ */
+function sameTrajectoryPercent(
+  observedCostMicros: number,
+  savingsMicros: number,
+): number | undefined {
   if (observedCostMicros <= 0) return undefined;
   const unfilteredCostMicros = observedCostMicros + savingsMicros;
   if (unfilteredCostMicros <= 0) return undefined;
-  const percent = Math.abs(savingsMicros) / unfilteredCostMicros * 100;
-  if (savingsMicros === 0) {
-    return {
-      short: `${percent.toFixed(1)}% change`,
-      sentence: `${percent.toFixed(1)}% change from estimated unfiltered cost`,
-    };
-  }
-  const short = `${percent.toFixed(1)}% ${savingsMicros > 0 ? "less" : "more"}`;
-  return { short, sentence: `${short} than estimated unfiltered cost` };
+  return Math.abs(savingsMicros) / unfilteredCostMicros * 100;
+}
+
+/** Shared by the popup's bar and the rail card's miniature of it. */
+export function buildTokenMiserSavingsSplit(
+  terms: TokenMiserSavingsTerms,
+): TokenMiserSavingsSplit | undefined {
+  const whole = terms.withoutGateCostMicros;
+  if (whole <= 0 || terms.savingsMicros <= 0) return undefined;
+  const avoided = terms.savingsMicros / whole * 100;
+  const gate = terms.gateCostMicros / whole * 100;
+  const roundedAvoided = Math.round(avoided);
+  const roundedGate = Math.round(gate);
+  return {
+    avoided,
+    gate,
+    revealed: terms.revealedCostMicros / whole * 100,
+    rounded: {
+      avoided: roundedAvoided,
+      gate: roundedGate,
+      revealed: Math.max(0, 100 - roundedAvoided - roundedGate),
+    },
+  };
 }
 
 /**
