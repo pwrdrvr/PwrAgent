@@ -6405,6 +6405,7 @@ describe("Composer", () => {
   });
 
   it("adds async question choices to the reply draft for review before sending", async () => {
+    const draftStore = createComposerDraftStore();
     const thread: NavigationThreadSummary = {
       id: "thread-async-question",
       title: "Dependency update",
@@ -6416,9 +6417,11 @@ describe("Composer", () => {
     };
     const props = {
       backends: [backendSummary("codex")],
+      draftStore,
       skills: [],
       thread,
     };
+    const scopeKey = buildThreadComposerScopeKey("codex", thread.id);
     const view = render(<Composer {...props} replySuggestion={{
       id: 1,
       threadId: thread.id,
@@ -6426,6 +6429,9 @@ describe("Composer", () => {
       text: "Answer to install policy: Allow one command",
     }} />);
     expect(await screen.findByRole("textbox", { name: "Reply" })).toHaveValue(
+      "Answer to install policy: Allow one command",
+    );
+    expect(draftStore.get(scopeKey)?.draft).toBe(
       "Answer to install policy: Allow one command",
     );
 
@@ -6438,6 +6444,9 @@ describe("Composer", () => {
     await waitFor(() => expect(screen.getByRole("textbox", { name: "Reply" })).toHaveValue(
       "Answer to install policy: Allow one command\n\nAnswer to global hook: Keep active",
     ));
+    expect(draftStore.get(scopeKey)?.draft).toBe(
+      "Answer to install policy: Allow one command\n\nAnswer to global hook: Keep active",
+    );
   });
 
   it("says why an unavailable review mode is unavailable, and refuses it", async () => {
