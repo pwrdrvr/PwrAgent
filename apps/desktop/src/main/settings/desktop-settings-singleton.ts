@@ -79,6 +79,13 @@ export function getDesktopSettingsService(): DesktopSettingsService {
           webContents.send(SETTINGS_RUNTIME_CHANGED_EVENT_CHANNEL);
         }
       },
+      onStartupDiscoveryResult: () => {
+        for (const webContents of subscribersForChannel(
+          SETTINGS_RUNTIME_CHANGED_EVENT_CHANNEL,
+        )) {
+          webContents.send(SETTINGS_RUNTIME_CHANGED_EVENT_CHANNEL);
+        }
+      },
     });
     const service = desktopSettingsService;
     setGitCommandResolver(() => service.resolveGitCommandPreference());
