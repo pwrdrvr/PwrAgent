@@ -554,6 +554,25 @@ therefore parks the pointer at (-10, -10) via `sendInputEvent` after
 placing the window. No capture drives hover deliberately; if one ever
 needs to, it has to set the hover after `bringToFront`, not before.
 
+The window must also be key in the active app when it is photographed.
+macOS draws any other window inactive: grey traffic lights and a
+smaller shadow, so the PNG changes size too. The README
+closed-by-default capture is 2184x1664 px active and 2096x1576 px
+inactive. The noise filter keeps an inactive capture, because it has
+different pixels. The old raise requested focus, waited a fixed 500 ms,
+and checked nothing. A click in the terminal or IDE running the spec
+could take activation back, and the inactive frame was captured with no
+error. `bringToFront` now activates with `app.focus({ steal: true })` and
+then polls `win.isFocused()`. That call is `-[NSWindow isKeyWindow]`, which
+is false for every window of an inactive app. The helper asks for focus
+again until the check passes, and it throws `CaptureWindowNotFocusedError`
+after 3 s. The error names the app that holds focus, which is usually a
+second capture run. Do not start two capture runs at the same time,
+because each run takes focus from the other. `bringToFront` does not cover
+the time after it returns. If another app takes focus during the rest of
+the spec's assertions or while `capture-window.swift` starts, the capture
+is still inactive. Do not switch apps while a capture is running.
+
 Pieces, all under `apps/desktop/`:
 
 | File | What it does |
@@ -562,7 +581,7 @@ Pieces, all under `apps/desktop/`:
 | `e2e/docs-site-screenshots.inspect.spec.ts` | Tests producing PNGs for `docs.pwragent.ai` (Settings panels + per-provider Messaging panels + Recents hero + composer features + first-run onboarding wizard + live work rail). Gated behind `PWRAGENT_DOCS_SITE_SCREENSHOT_CAPTURE=1`. Output lands in the **sibling docs repo's** `assets/screenshots/` (default `~/github/docs.pwragent.ai/`, override with `PWRAGENT_DOCS_SITE_REPO`). |
 | `e2e/fixtures/readme-recents-hero/replay.fixture.json` | Hand-crafted populated thread list for the hero shot. Edit by hand to retune. |
 | `e2e/fixtures/readme-state-seeding.ts` | Direct sqlite/config seeders for messaging bindings, activity log entries, pairing tokens, and Telegram-enabled config. |
-| `e2e/fixtures/capture-window-placement.ts` | Shared `bringToFront` for both capture specs. Resolves the target window once (optionally by title substring, case-insensitively, matching `capture-window.swift --title=`), centers it on a Retina display so `screencapture` renders at 2x, then raises it so the window-list lookup resolves it. Exports the pure selection rule (`pickCaptureDisplay`, `centeredIn`, `overflowsWorkArea`) so it can be tested. |
+| `e2e/fixtures/capture-window-placement.ts` | Shared `bringToFront` for both capture specs. Resolves the target window once (optionally by title substring, case-insensitively, matching `capture-window.swift --title=`), centers it on a Retina display so `screencapture` renders at 2x, then activates the app and raises the window so the window-list lookup resolves it, and waits until the window reports key (throws `CaptureWindowNotFocusedError` otherwise). Exports the pure selection rule (`pickCaptureDisplay`, `centeredIn`, `overflowsWorkArea`) and the focus wait (`waitForWindowFocus`, `parseLsappinfoInfo`) so they can be tested. |
 | `e2e/fixtures/docs-site-state-seeding.ts` | All-providers-enabled `config.toml` seeder so the per-platform Settings → Messaging captures can scroll directly to each platform's section without driving the Enabled toggle in the UI. It also saves a Slack agent name (`PwrAgent - riley`), so the Slack capture shows Connect past its Name step instead of the suggestion built from the OS username of whoever runs it. |
 | `scripts/capture-window.swift` | Resolves the Electron window's CGWindowID and runs `screencapture -l <wid>`. Stages to a temp file and refuses (exit 6) to overwrite the destination with a sub-Retina capture, or with one it cannot decode to verify. Replaces atomically via `replaceItemAt`. Optional `--title=<substring>` for multi-window apps, `--allow-low-dpi` to bypass the scale check; an unrecognized argument is an error (exit 2), not a silent no-op. |
 | `scripts/filter-noise-screenshots.mjs` | Post-capture cleanup. Iterates modified PNGs in the current repo (default: under `docs/assets/screenshots/` only) or another repo (via `--root <path>`, used by `screenshot:docs-site` against the sibling docs repo). Decodes HEAD and working-tree to TIFF via `sips`, SHA-256 compares. Identical → `git restore --source=HEAD --worktree`. Visually different → kept for review. Net-new PNGs (untracked) are left alone. |

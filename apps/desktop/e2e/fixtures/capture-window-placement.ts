@@ -28,10 +28,17 @@
  * `__tests__/capture-window-placement.test.ts`.
  */
 
+import { execFileSync } from "node:child_process";
 import type { ElectronApplication } from "@playwright/test";
 
 /** Below this, `screencapture` is not producing a Retina asset. */
 export const MINIMUM_RETINA_SCALE_FACTOR = 2;
+
+/** How long `bringToFront` keeps asking for focus before it gives up. */
+export const FOCUS_TIMEOUT_MS = 3_000;
+
+/** Pause between focus checks while waiting for the window to become key. */
+export const FOCUS_POLL_INTERVAL_MS = 100;
 
 /** A rectangle in Electron's screen coordinates. */
 export type Rect = { x: number; y: number; width: number; height: number };
@@ -135,6 +142,121 @@ export class CaptureWindowNotFoundError extends Error {
 }
 
 /**
+ * Call `check` until it reports the window is key, pausing between calls.
+ *
+ * `check` both observes and re-requests: it returns `true` once the
+ * window is key, and otherwise asks for focus again so the next call has
+ * something to observe. Activation is asynchronous — the app hears
+ * `did-become-active` on a later tick than the request — so a single
+ * check straight after the request is not evidence either way.
+ *
+ * Returns whether the window became key before `timeoutMs` elapsed. The
+ * clock and the pause are injectable so the retry rule can be tested
+ * without real time.
+ */
+export async function waitForWindowFocus(
+  check: () => Promise<boolean>,
+  options: {
+    timeoutMs?: number;
+    intervalMs?: number;
+    now?: () => number;
+    sleep?: (ms: number) => Promise<void>;
+  } = {},
+): Promise<boolean> {
+  const {
+    timeoutMs = FOCUS_TIMEOUT_MS,
+    intervalMs = FOCUS_POLL_INTERVAL_MS,
+    now = Date.now,
+    sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  } = options;
+  const deadline = now() + timeoutMs;
+  for (;;) {
+    if (await check()) return true;
+    if (now() >= deadline) return false;
+    await sleep(intervalMs);
+  }
+}
+
+/** The app macOS reports as frontmost, as far as `lsappinfo` could say. */
+export type FrontmostApp = { name?: string; pid?: number };
+
+/**
+ * Parse `lsappinfo info -only name -only pid <ASN>`, which prints one
+ * `"key"=value` line per field:
+ *
+ *     "LSDisplayName"="Electron"
+ *     "pid"=85077
+ *
+ * Returns `undefined` when neither field is present.
+ */
+export function parseLsappinfoInfo(output: string): FrontmostApp | undefined {
+  const name = /"LSDisplayName"="([^"]*)"/.exec(output)?.[1];
+  const pid = /"pid"=(\d+)/.exec(output)?.[1];
+  if (name === undefined && pid === undefined) return undefined;
+  return { name, pid: pid === undefined ? undefined : Number(pid) };
+}
+
+/**
+ * Best-effort read of the frontmost app, for the not-focused diagnostic.
+ * Only called on the failure path, so it never costs a passing capture.
+ */
+function readFrontmostApp(): FrontmostApp | undefined {
+  if (process.platform !== "darwin") return undefined;
+  try {
+    const asn = execFileSync("/usr/bin/lsappinfo", ["front"], {
+      encoding: "utf8",
+    }).trim();
+    if (!asn) return undefined;
+    return parseLsappinfoInfo(
+      execFileSync(
+        "/usr/bin/lsappinfo",
+        ["info", "-only", "name", "-only", "pid", asn],
+        { encoding: "utf8" },
+      ),
+    );
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Thrown when the window a capture targets cannot be made key.
+ *
+ * macOS draws any window that is not key in the active app differently —
+ * grey traffic lights and a smaller shadow, which also changes the PNG's
+ * pixel dimensions — and the noise filter keeps any PNG whose pixels
+ * changed.
+ * Capturing anyway would commit the inactive frame as a README or
+ * docs-site image, so refusing is the only safe outcome.
+ */
+export class CaptureWindowNotFocusedError extends Error {
+  constructor(details: {
+    titleSubstring: string | undefined;
+    timeoutMs: number;
+    appPid: number | undefined;
+    frontmost: FrontmostApp | undefined;
+  }) {
+    const { titleSubstring, timeoutMs, appPid, frontmost } = details;
+    const target = titleSubstring === undefined
+      ? "the capture window"
+      : `the window whose title contains "${titleSubstring}"`;
+    const holder = frontmost
+      ? `The frontmost app is "${frontmost.name ?? "unknown"}"`
+        + (frontmost.pid === undefined ? "" : ` (pid ${frontmost.pid})`)
+      : "The frontmost app could not be read";
+    const self = appPid === undefined ? "" : `; this app is pid ${appPid}`;
+    super(
+      `${target} did not become key within ${timeoutMs} ms, so it would be `
+      + "captured inactive (grey traffic lights, smaller shadow, different "
+      + `PNG dimensions). ${holder}${self}. Another app is keeping focus — `
+      + "most often a second capture run, or a window clicked during this "
+      + "one.",
+    );
+    this.name = "CaptureWindowNotFocusedError";
+  }
+}
+
+/**
  * Report each distinct placement outcome once rather than on all ~21
  * captures of a run — but re-report when the outcome *changes*, since a
  * display can be connected or disconnected mid-run and a latch keyed on
@@ -150,16 +272,33 @@ function report(line: string, level: "log" | "warn"): void {
 }
 
 /**
- * Move the app window onto a Retina display and bring it forward so
- * `screencapture`'s window-list lookup resolves it.
+ * Move the app window onto a Retina display, bring it forward so
+ * `screencapture`'s window-list lookup resolves it, and make it the key
+ * window of the active app so it is drawn active.
  *
  * Without the raise, a recently-launched Electron window can stay behind
  * whatever the user/IDE had focused, and `screencapture -l` silently
  * captures a stale frame or an off-screen position.
  *
- * Both steps run before every capture, not just at launch: a display can
- * be connected or disconnected mid-run, and the operation is cheap and
- * idempotent.
+ * Asking for focus is not proof of it. Activation lands asynchronously,
+ * and another app can take it between the request and the capture — a
+ * click in the terminal or IDE running the spec is enough. A fixed wait
+ * with no check photographed that window inactive: grey traffic lights
+ * and the smaller inactive shadow, so the README's closed-by-default
+ * capture came back at 2096x1576 px instead of 2184x1664 px, and the
+ * noise filter keeps both, since they are different pixels. So this
+ * activates with `app.focus({ steal: true })` — `win.focus()` alone
+ * passes `activateIgnoringOtherApps:NO`, which AppKit documents as a
+ * no-op while another app is active — then polls until the window
+ * reports key, asking again each time it does not.
+ *
+ * It cannot cover what happens after it returns: focus taken during the
+ * spec's remaining assertions or while `capture-window.swift` starts up
+ * still produces an inactive capture.
+ *
+ * All of it runs before every capture, not just at launch: a display can
+ * be connected or disconnected mid-run, focus can move mid-run, and the
+ * operation is cheap and idempotent.
  *
  * Pass `titleSubstring` when the capture targets an auxiliary window —
  * it must match what goes to `capture-window.swift --title=`, or the
@@ -167,6 +306,8 @@ function report(line: string, level: "log" | "warn"): void {
  * match here is case-insensitive, as it is on the Swift side.
  *
  * @throws {CaptureWindowNotFoundError} when no window matches.
+ * @throws {CaptureWindowNotFocusedError} when the window does not become
+ *   key within {@link FOCUS_TIMEOUT_MS}.
  */
 export async function bringToFront(
   electronApp: ElectronApplication,
@@ -217,15 +358,20 @@ export async function bringToFront(
     );
   }
 
-  // Write. Place (when we have somewhere to place it) and raise, then
-  // read back where the window actually landed — `setBounds` is
-  // fire-and-forget and macOS can constrain the frame, so the run's only
-  // placement diagnostic should be an observation, not a claim.
+  // Write. Place (when we have somewhere to place it), activate, and
+  // raise, then read back where the window actually landed — `setBounds`
+  // is fire-and-forget and macOS can constrain the frame, so the run's
+  // only placement diagnostic should be an observation, not a claim.
   const placed = await electronApp.evaluate(
-    ({ BrowserWindow, screen }, options) => {
+    ({ app, BrowserWindow, screen }, options) => {
       const win = BrowserWindow.fromId(options.id);
       if (!win) return null;
       if (options.rect) win.setBounds(options.rect);
+      // Take activation from whichever app has it. Activate before
+      // focusing, so `win.focus()` — not whichever window the app had
+      // key last — decides which window ends up key. For an auxiliary
+      // capture those differ.
+      if (process.platform === "darwin") app.focus({ steal: true });
       win.show();
       win.focus();
       win.moveTop();
@@ -280,7 +426,38 @@ export async function bringToFront(
     }
   }
 
+  // Verify. Activation lands asynchronously, and another app can take it
+  // back at any point, so ask again until the window reports key.
+  // `isFocused()` is `-[NSWindow isKeyWindow]`, which is false for every
+  // window of an inactive app — true here means the window is key *and*
+  // the app is active, which is what paints the colored traffic lights.
+  const id = snapshot.id;
+  const focused = await waitForWindowFocus(() =>
+    electronApp.evaluate(({ app, BrowserWindow }, windowId) => {
+      const win = BrowserWindow.fromId(windowId);
+      if (!win) {
+        throw new Error(`capture window ${windowId} closed before it became key`);
+      }
+      if (win.isFocused()) return true;
+      if (process.platform === "darwin") app.focus({ steal: true });
+      win.focus();
+      return false;
+    }, id),
+  );
+  if (!focused) {
+    const appPid = await electronApp
+      .evaluate(() => process.pid)
+      .catch(() => undefined);
+    throw new CaptureWindowNotFocusedError({
+      titleSubstring,
+      timeoutMs: FOCUS_TIMEOUT_MS,
+      appPid,
+      frontmost: readFrontmostApp(),
+    });
+  }
+
   // Give the compositor a tick to actually raise the window (and settle
-  // the move) before screencapture inspects the on-screen window list.
+  // the move and the switch to the active frame) before screencapture
+  // inspects the on-screen window list.
   await new Promise((resolve) => setTimeout(resolve, 500));
 }
