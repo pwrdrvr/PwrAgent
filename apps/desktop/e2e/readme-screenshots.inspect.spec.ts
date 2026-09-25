@@ -304,28 +304,32 @@ test("closed-by-default — Messaging Activity rejecting unauthorized inbound", 
     await activityWindow.waitForLoadState("load");
 
     // Diagnostic: confirm the activity window actually mounted its
-    // hash-routed surface (and not the full app shell).
-    const surfaceInfo = await activityWindow.evaluate(() => ({
-      hash: window.location.hash,
-      title: document.title,
-      hasActivityScreen: !!document.querySelector(".activity-screen"),
-      hasApp: !!document.querySelector(".app"),
-      bodyChildren: document.body.children.length,
-      rootHTML: document
-        .getElementById("root")
-        ?.innerHTML.slice(0, 200),
-    }));
-    test
-      .info()
-      .annotations.push({
-        type: "activity-window-surface",
-        description: JSON.stringify(surfaceInfo),
-      });
-    if (!surfaceInfo.hasActivityScreen) {
-      throw new Error(
-        `activity window did not mount the activity surface: ${JSON.stringify(surfaceInfo)}`,
-      );
-    }
+    // hash-routed surface (and not the full app shell). Poll rather than
+    // sample once: `main.tsx` mounts every auxiliary window's root through
+    // `React.lazy`, so at `load` #root still holds the empty Suspense
+    // fallback and the surface lands a couple hundred ms later, once its
+    // chunk resolves. On timeout the last snapshot prints in the failure
+    // diff — an empty root means the route never resolved, `hasApp`
+    // means the hash fell through to the main shell.
+    await expect
+      .poll(
+        () =>
+          activityWindow.evaluate(() => ({
+            hash: window.location.hash,
+            title: document.title,
+            hasActivityScreen: !!document.querySelector(".activity-screen"),
+            hasApp: !!document.querySelector(".app"),
+            bodyChildren: document.body.children.length,
+            rootHTML: document
+              .getElementById("root")
+              ?.innerHTML.slice(0, 200),
+          })),
+        {
+          message: "activity window did not mount the activity surface",
+          timeout: 15_000,
+        },
+      )
+      .toMatchObject({ hasActivityScreen: true, hasApp: false });
 
     // Place and raise the activity window. The BrowserWindow was created
     // with `show: false` and is normally shown on `ready-to-show`, but
