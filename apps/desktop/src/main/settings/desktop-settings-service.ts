@@ -319,6 +319,14 @@ type DesktopSettingsServiceOptions = {
     transcriptTextSize: DesktopTextSize;
   }) => void;
   onManagedCodexRuntimeSwitchComplete?: () => void;
+  /**
+   * Invoked when a startup discovery leg that `readSettingsProjection` does
+   * not wait for (git, the desktop-application scan) publishes its result.
+   * A window reads settings once when it mounts, so one that read while the
+   * leg was still probing holds its empty result until told to read again.
+   * The production wiring broadcasts the settings-runtime-changed event.
+   */
+  onStartupDiscoveryResult?: () => void;
 };
 
 export const MANAGED_CODEX_UPDATE_POLL_INTERVAL_MS = 60 * 60_000;
@@ -2358,12 +2366,21 @@ export class DesktopSettingsService {
       }
       const applications = this.configStore.read("applications");
       const configuredGhCommand = applications.gh?.path;
+      // The projection settles the forge legs before reading, and the Codex
+      // leg's durable write announces itself through the config store. The
+      // other two are read as whatever has landed, so each has to say when
+      // it lands: without this, a Settings pane read before git finished
+      // probing reported no git at all until the operator pressed Re-check.
+      const announce = async (landed: Promise<unknown>): Promise<void> => {
+        await landed;
+        this.options.onStartupDiscoveryResult?.();
+      };
       this.startupDiscoveryPromise = Promise.allSettled([
         measure("codex", () => this.runCodexDiscovery(permit)),
         measure("gh", () => this.discoverGhCommandsCached(configuredGhCommand)),
         measure("glab", () => this.discoverGlabCommandsCached(applications.glab?.path)),
-        measure("git", () => this.discoverGitCommandsCached(applications.git?.path)),
-        measure("desktop-applications", () => this.discoverDesktopApplicationsCached()),
+        announce(measure("git", () => this.discoverGitCommandsCached(applications.git?.path))),
+        announce(measure("desktop-applications", () => this.discoverDesktopApplicationsCached())),
       ]).then(() => undefined).finally(() => {
         this.startupDiscoveryPromise = undefined;
       });
