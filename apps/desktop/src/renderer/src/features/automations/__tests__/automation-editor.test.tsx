@@ -1905,13 +1905,21 @@ describe("AutomationEditor Discord channels", () => {
 
   it("lists channels from authorized servers and saves one as the trigger", async () => {
     const onSubmit = vi.fn(async () => undefined);
+    // Channel IDs are snowflakes, unique across all of Discord. The two server
+    // IDs differ only in their last two digits, so each server's channels get
+    // their own IDs: shared ones collide as picker keys, and a save of Lab's
+    // #alerts would pass the Ops assertion below.
+    const channelIds: Record<string, { alerts: string; general: string }> = {
+      [OPS_SERVER]: { alerts: "1480556454498009371", general: "1480556454498009372" },
+      [LAB_SERVER]: { alerts: "1480556454498009381", general: "1480556454498009382" },
+    };
     const list = vi.fn(async ({ guildId }: { guildId: string }) => ({
       guildId,
       guildName: guildId === OPS_SERVER ? "Ops" : "Lab",
       status: "ok" as const,
       channels: [
-        { id: `${guildId.slice(0, -2)}71`, kind: "text" as const, name: "alerts" },
-        { id: `${guildId.slice(0, -2)}72`, kind: "text" as const, name: "general" },
+        { id: channelIds[guildId].alerts, kind: "text" as const, name: "alerts" },
+        { id: channelIds[guildId].general, kind: "text" as const, name: "general" },
       ],
     }));
     render(
