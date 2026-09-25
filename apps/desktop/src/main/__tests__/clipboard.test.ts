@@ -1,14 +1,23 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const handlers = new Map<string, (...args: unknown[]) => Promise<unknown>>();
-const writeMock = vi.fn();
-const writeTextMock = vi.fn();
+const writeMock = vi.fn(async (_items: unknown[]) => {});
+const writeTextMock = vi.fn(async (_text: string) => {});
+
+class ClipboardItemMock {
+  readonly items: Record<string, string>;
+
+  constructor(items: Record<string, string>) {
+    this.items = items;
+  }
+}
 
 vi.mock("electron", () => ({
   clipboard: {
     write: writeMock,
     writeText: writeTextMock,
   },
+  ClipboardItem: ClipboardItemMock,
   ipcMain: {
     handle: vi.fn((channel: string, handler: (...args: unknown[]) => Promise<unknown>) => {
       handlers.set(channel, handler);
@@ -61,10 +70,33 @@ describe("clipboard ipc", () => {
     });
 
     expect(writeTextMock).toHaveBeenCalledWith("plain text");
-    expect(writeMock).toHaveBeenCalledWith({
-      html: "<strong>rich text</strong>",
-      text: "rich text",
-    });
+    expect(writeMock).toHaveBeenCalledWith([
+      new ClipboardItemMock({
+        "text/html": "<strong>rich text</strong>",
+        "text/plain": "rich text",
+      }),
+    ]);
+  });
+
+  it("rejects the IPC call when the system clipboard write fails", async () => {
+    const { registerClipboardIpcHandlers } = await import("../ipc/clipboard");
+    const {
+      CLIPBOARD_WRITE_RICH_TEXT_CHANNEL,
+      CLIPBOARD_WRITE_TEXT_CHANNEL,
+    } = await import("../../shared/ipc");
+    registerClipboardIpcHandlers();
+    writeTextMock.mockRejectedValueOnce(new Error("pasteboard unavailable"));
+    writeMock.mockRejectedValueOnce(new Error("pasteboard unavailable"));
+
+    await expect(
+      handlers.get(CLIPBOARD_WRITE_TEXT_CHANNEL)?.({}, "plain text"),
+    ).rejects.toThrow("pasteboard unavailable");
+    await expect(
+      handlers.get(CLIPBOARD_WRITE_RICH_TEXT_CHANNEL)?.({}, {
+        html: "<strong>rich text</strong>",
+        text: "rich text",
+      }),
+    ).rejects.toThrow("pasteboard unavailable");
   });
 
   it("keeps clipboard writes in memory during local E2E", async () => {
@@ -112,9 +144,11 @@ describe("clipboard ipc", () => {
       text: "rich text",
     });
     expect(writeTextMock).toHaveBeenCalledWith("plain text");
-    expect(writeMock).toHaveBeenCalledWith({
-      html: "<strong>rich text</strong>",
-      text: "rich text",
-    });
+    expect(writeMock).toHaveBeenCalledWith([
+      new ClipboardItemMock({
+        "text/html": "<strong>rich text</strong>",
+        "text/plain": "rich text",
+      }),
+    ]);
   });
 });

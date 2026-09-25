@@ -28,7 +28,7 @@ const rendererMonitorStopMock = vi.fn();
 const mainMonitorStartMock = vi.fn();
 const mainMonitorStopMock = vi.fn();
 const shellOpenExternalMock = vi.fn();
-const clipboardWriteTextMock = vi.fn();
+const clipboardWriteTextMock = vi.fn(async (_text: string) => {});
 const addWordToSpellCheckerDictionaryMock = vi.fn();
 const replaceMisspellingMock = vi.fn();
 const copyImageAtMock = vi.fn();
