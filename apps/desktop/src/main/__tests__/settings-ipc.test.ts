@@ -2629,13 +2629,13 @@ describe("settings ipc", () => {
     }
   });
 
-  it("probes providers together and cancels the one that hangs", async () => {
+  it.each([false, true])("probes providers together and cancels the one that hangs (Claude enabled: %s)", async (claudeEnabled) => {
     const tempRoot = fs.mkdtempSync(
       path.join(os.tmpdir(), "pwragent-settings-ipc-"),
     );
     tempRoots.push(tempRoot);
     vi.stubEnv("PWRAGENT_HOME", tempRoot);
-    const localRecord = (registryId: "grok" | "kimi", name: string) => ({
+    const localRecord = (registryId: "grok" | "kimi" | "claude-acp", name: string) => ({
       backendId: `acp:${registryId}` as const,
       registryId,
       name,
@@ -2659,6 +2659,9 @@ describe("settings ipc", () => {
     });
     const grok = localRecord("grok", "Grok");
     const kimi = localRecord("kimi", "Kimi Code CLI");
+    claudeAcpRuntimeMock.discoverManagedClaudeAcpRuntime.mockResolvedValue(
+      localRecord("claude-acp", "Claude Agent"),
+    );
     // Grok first: a sequential pass would never reach Kimi.
     localAcpDiscoveryMock.discoverLocalAcpAgentRecords.mockResolvedValue([
       grok,
@@ -2682,7 +2685,7 @@ describe("settings ipc", () => {
         agent: { registryId: string },
         options: { signal?: AbortSignal; onStage?: (stage: string) => void },
       ) => {
-        if (agent.registryId === "kimi") {
+        if (agent.registryId === "kimi" || agent.registryId === "claude-acp") {
           return {
             runtimeCapabilities: {
               schemaVersion: 1,
@@ -2717,6 +2720,9 @@ describe("settings ipc", () => {
       secretStore: new MemoryDesktopSecretStore(),
       now: () => 20,
     });
+    await service.writeConfigPatchTargeted({
+      experimental: { claudeAcp: claudeEnabled },
+    });
     const providerState = (
       state: ProviderCatalogRefreshState | undefined,
       id: string,
@@ -2744,6 +2750,7 @@ describe("settings ipc", () => {
         "grok",
         "kimi",
         "qwen",
+        ...(claudeEnabled ? ["claude-acp"] : []),
       ]);
 
       await vi.waitFor(async () => {
@@ -2752,6 +2759,14 @@ describe("settings ipc", () => {
           status: "succeeded",
           modelCount: 2,
         });
+        if (claudeEnabled) {
+          expect(providerState(state, "claude-acp")).toMatchObject({
+            status: "succeeded",
+            modelCount: 2,
+          });
+          expect(new AcpAgentStore(getAppStateDb()).getInstalledAgent("acp:claude-acp")?.authStatus)
+            .toBe("authenticated");
+        }
         expect(providerState(state, "grok")).toMatchObject({
           status: "running",
           detail: "Opening a session",

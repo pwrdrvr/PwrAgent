@@ -154,7 +154,6 @@ import { discoverLocalAcpAgentRecords } from "../acp/acp-instance-discovery";
 import {
   ensureAcpRuntimeDiscoveryWorkspace,
   probeAcpRuntimeCapabilities,
-  refreshAcpRuntimeCapabilities,
 } from "../acp/acp-capability-probe";
 import {
   CLAUDE_ACP_BACKEND_ID,
@@ -934,7 +933,10 @@ async function listInstalledAndLocalAcpAgents(
         };
       });
       progress?.onPhase(undefined);
-      if (claudeExperimental) {
+      if (
+        claudeExperimental
+        && (!options.registryIds || options.registryIds.includes(CLAUDE_ACP_REGISTRY_ID))
+      ) {
         const managedClaude = await discoverManagedClaudeAcpRuntime({
           ...(options?.env ? { env: options.env } : {}),
         });
@@ -1690,14 +1692,20 @@ function createProviderCatalogRefresh(
     },
     listAcpProviders: () => {
       const providers = getService(service).readProvidersConfig();
-      return LOCAL_ACP_REGISTRY_IDS.filter(
+      const registryIds = [
+        ...LOCAL_ACP_REGISTRY_IDS,
+        ...(getService(service).readExperimentalConfig().claudeAcp === true
+          ? [CLAUDE_ACP_REGISTRY_ID]
+          : []),
+      ];
+      return registryIds.filter(
         (registryId) =>
           !isBannedAcpRegistryId(registryId)
           && acpProviderEnabledFromSnapshot(providers, registryId),
       ).map((registryId) => ({
         id: registryId,
         label:
-          BUILT_IN_ACP_STRATEGIES.find((strategy) => strategy.id === registryId)
+          SUPPORTED_ACP_AGENT_CATALOG.find((strategy) => strategy.id === registryId)
             ?.displayName ?? registryId,
       }));
     },

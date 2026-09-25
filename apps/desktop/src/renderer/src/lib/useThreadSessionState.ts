@@ -2776,40 +2776,6 @@ function normalizeThreadContextWindowState(
   };
 }
 
-function contextWindowStateFromTotals(params: {
-  modelContextWindow: number;
-  totalTokens: number;
-}): ThreadContextWindowState {
-  const rawUsedPercent =
-    (params.totalTokens / params.modelContextWindow) * 100;
-  const usedPercent = Math.max(0, Math.min(100, rawUsedPercent));
-  const remainingTokens = Math.max(
-    0,
-    params.modelContextWindow - params.totalTokens
-  );
-  const remainingPercent = Math.max(
-    0,
-    Math.min(100, (remainingTokens / params.modelContextWindow) * 100)
-  );
-  return {
-    cachedInputTokens: undefined,
-    cumulativeCachedInputTokens: undefined,
-    cumulativeInputTokens: undefined,
-    cumulativeOutputTokens: undefined,
-    cumulativeReasoningOutputTokens: undefined,
-    cumulativeTotalTokens: undefined,
-    inputTokens: undefined,
-    modelContextWindow: params.modelContextWindow,
-    outputTokens: undefined,
-    phase: getContextWindowMoonPhase(rawUsedPercent),
-    reasoningOutputTokens: undefined,
-    remainingPercent,
-    remainingTokens,
-    totalTokens: params.totalTokens,
-    usedPercent,
-  };
-}
-
 function isContextCompactionItemNotification(
   notification: AppServerNotification
 ): boolean {
