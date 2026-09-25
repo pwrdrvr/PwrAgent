@@ -31,6 +31,14 @@ export const DEFAULT_AUTOMATION_BACKLOG_POLICY: AutomationBacklogPolicy =
 export const DEFAULT_AUTOMATION_INBOUND_COALESCE_WINDOW_MS = 60_000;
 
 /**
+ * Operator-selectable coalescing windows surfaced in the editor, in seconds.
+ * 0 is Off: one run per message.
+ */
+export const AUTOMATION_COALESCE_WINDOW_SECONDS_OPTIONS = [
+  0, 15, 30, 60, 120, 300, 900,
+] as const;
+
+/**
  * Default cap on how many inbound-triggered runs an automation may START per
  * hour. Enforced as a per-automation token bucket (an idle automation may burst
  * up to the rate, then settles to the steady rate). This is a cost backstop
