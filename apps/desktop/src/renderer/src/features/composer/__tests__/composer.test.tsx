@@ -5840,10 +5840,14 @@ describe("Composer", () => {
     expect(screen.getByLabelText("Review project")).toHaveValue("/worktrees/other");
     expect(screen.getByRole("button", { name: "Review run mode" })).toHaveTextContent("PwrAgent Sub Agent");
     expect(screen.queryByText(/Reviewing the pull request skips this checkout/)).not.toBeInTheDocument();
+    expect(screen.getByText(
+      "Reviews in Other. PwrAgent Sub Agent is required because the selected project is not this thread's primary workspace.",
+    )).toBeInTheDocument();
     if (project === "primary") {
       fireEvent.change(picker, { target: { value: prs[0].url } });
       expect(screen.getByLabelText("Review project")).toHaveValue("/repo/project");
       expect(screen.getByRole("button", { name: "Review run mode" })).toHaveTextContent("Codex Sub Agent");
+      expect(screen.queryByText(/^Reviews in /)).not.toBeInTheDocument();
     }
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Start review" })); });
     expect(startReview).toHaveBeenCalledWith(expect.objectContaining({

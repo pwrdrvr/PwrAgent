@@ -9498,6 +9498,27 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       };
   const reviewSubmissionUnavailable =
     reviewRunModeDecision.submissionUnavailable;
+  // A PR from another attached repository moves the review to that project
+  // and forces its run mode, and both controls sit away from the picker. Say
+  // so beside the choice, in the resolver's words, so this line and the mode
+  // chip's tooltip cannot disagree.
+  const reviewPullRequestWorkspaceNote =
+    reviewConfig?.target === "pullRequest"
+    && selectedReviewPullRequest
+    && reviewWorkspaceSelectionRequired
+    && reviewConfig.workspaceCwd
+    && props.thread
+    && !reviewWorkspacePathMatches(
+      reviewConfig.workspaceCwd,
+      findPrimaryReviewWorkspaceCwd(props.thread),
+    )
+      ? [
+          `Reviews in ${reviewWorkspaceOptions.find((option) =>
+            option.cwd === reviewConfig.workspaceCwd
+          )?.label ?? reviewConfig.workspaceCwd}.`,
+          reviewRunModeDecision.helpText,
+        ].filter(Boolean).join(" ")
+      : undefined;
   // A remembered combination is only offered while it still resolves against
   // the owner's current catalog. Recents are disposable, so a dead row is
   // noise rather than a preference worth preserving.
@@ -11334,6 +11355,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                   <small>
                     This checkout is clean and sits on this pull request&apos;s
                     head, so a local review would cover the same commits.
+                  </small>
+                ) : null}
+                {reviewPullRequestWorkspaceNote ? (
+                  <small className="composer__review-workspace-note">
+                    {reviewPullRequestWorkspaceNote}
                   </small>
                 ) : null}
               </label>
