@@ -414,25 +414,38 @@ export function Select<T extends string>(props: {
   }, [close]);
 
   // Before paint, so the list never shows unplaced. The first pass renders it
-  // hidden at the origin to measure it.
+  // hidden at the origin to measure it. Every render while open, not just the
+  // opening one: relabelled options change the height a flipped list is
+  // pinned by, and a new `minWidth` changes the width the left clamp used.
+  // `samePlacement` stops it once the measurement settles.
   useLayoutEffect(() => {
     if (open) place();
-  }, [open, options.length, place]);
+  });
 
   useEffect(() => {
     if (!open) return;
+    let frame = 0;
+    // One reposition per frame: momentum scrolling fires many events a frame.
+    const schedule = (): void => {
+      if (frame !== 0) return;
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        place();
+      });
+    };
     const handleScroll = (event: Event): void => {
       // The list scrolling its own rows moves nothing.
       if (listboxRef.current?.contains(event.target as Node)) return;
-      place();
+      schedule();
     };
     // Capture: the trigger sits in a scrolling pane, and a pane's scroll
     // event does not bubble to window.
     window.addEventListener("scroll", handleScroll, true);
-    window.addEventListener("resize", place);
+    window.addEventListener("resize", schedule);
     return () => {
+      cancelAnimationFrame(frame);
       window.removeEventListener("scroll", handleScroll, true);
-      window.removeEventListener("resize", place);
+      window.removeEventListener("resize", schedule);
     };
   }, [open, place]);
 
@@ -587,7 +600,6 @@ export function Select<T extends string>(props: {
         // A press, a wrapping label's click, and a screen reader's activation
         // all arrive here. Enter and Space are handled on keydown.
         onClick={() => {
-          if (props.disabled) return;
           if (open) close();
           else openAt(restingIndex);
         }}
