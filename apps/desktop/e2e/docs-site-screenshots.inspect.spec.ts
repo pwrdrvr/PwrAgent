@@ -72,7 +72,15 @@ async function launchDocsSiteApp(
   // it opened on a 1x monitor and 170.5 when it opened on the Retina
   // panel, and the per-capture `bringToFront` then photographed the same
   // screen one device pixel apart.
-  await bringToFront(app.electronApp);
+  //
+  // Callers only close the app from their own `finally`, which a throw here
+  // would skip.
+  try {
+    await bringToFront(app.electronApp);
+  } catch (error) {
+    await app.close();
+    throw error;
+  }
   return app;
 }
 
