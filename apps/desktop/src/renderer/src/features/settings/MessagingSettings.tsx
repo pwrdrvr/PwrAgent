@@ -184,9 +184,10 @@ export function MessagingSettings(props: {
   onSaveMattermost: (
     patch: NonNullable<DesktopSettingsSnapshot["messaging"]["mattermost"]>,
   ) => Promise<void>;
+  /** Resolves false when the write failed; nothing to write counts as saved. */
   onSaveSlack: (
     patch: NonNullable<DesktopSettingsSnapshot["messaging"]["slack"]>,
-  ) => Promise<void>;
+  ) => Promise<boolean | void>;
   onSaveFeishu: (
     patch: NonNullable<DesktopSettingsSnapshot["messaging"]["feishu"]>,
   ) => Promise<void>;
@@ -317,7 +318,15 @@ export function MessagingSettings(props: {
     { key: "bot", done: slack.botToken.configured, label: "Saved" },
     { key: "app", done: slack.appToken.configured, label: "Saved" },
     { key: "signing", done: slack.signingSecret.configured, label: "Saved" },
-    { key: "test", done: slackTestPassed, label: "Connected" },
+    // A remembered pass says nothing once a token it tested is cleared.
+    {
+      key: "test",
+      done:
+        slackTestPassed
+        && slack.botToken.configured
+        && slack.appToken.configured,
+      label: "Connected",
+    },
     { key: "pair", done: slackPaired, label: "Paired" },
   ] as const;
   const slackConnectCurrent = slackConnectSteps.find((step) => !step.done)?.key;
@@ -1377,14 +1386,16 @@ export function MessagingSettings(props: {
                 appName={slack.appName}
                 disabled={props.saving}
                 variant="settings"
-                onSave={(appName) =>
-                  props.onSaveSlack({
+                onSave={async (appName) => {
+                  const saved = await props.onSaveSlack({
                     ...slack,
                     // "config" even for the unedited suggestion: taking it
                     // is the choice the source records.
                     appName: { ...slack.appName, value: appName, source: "config" },
-                  })
-                }
+                  });
+                  // The field shows Saved only for a write that landed.
+                  if (saved === false) throw new Error("Could not save the agent name.");
+                }}
               />
             </AutomationStage>
             <AutomationStage
@@ -3142,7 +3153,7 @@ function PairingTokenField(props: {
   return (
     <SettingsField
       label="Pairing"
-      sub={props.hideDescription ? undefined : pairingFieldDescription()}
+      sub={props.hideDescription ? undefined : PAIRING_FIELD_DESCRIPTION}
       error={error}
       control={
         <div className="settings-pairing">
@@ -3327,10 +3338,9 @@ function defaultPairingScopeOptions(platform: MessagingChannelKind): PairingScop
   ];
 }
 
-function pairingFieldDescription(): ReactNode {
-  // Slack's pairing step has its own steps (`SlackPairSteps`).
-  return "Generate a short-lived code to approve a user or group from chat.";
-}
+// Slack's pairing step has its own steps (`SlackPairSteps`).
+const PAIRING_FIELD_DESCRIPTION =
+  "Generate a short-lived code to approve a user or group from chat.";
 
 function platformLabel(platform: MessagingChannelKind): string {
   return platform.charAt(0).toUpperCase() + platform.slice(1);

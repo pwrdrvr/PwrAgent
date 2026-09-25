@@ -178,7 +178,6 @@ import { normalizeProfileName } from "../profile";
 
 const settingsIpcLog = getMainLogger("pwragent:settings");
 const ACP_UPDATE_SNOOZE_MS = 24 * 60 * 60_000;
-const SLACK_APP_MANAGEMENT_URL = "https://api.slack.com/apps";
 // Codex profile login now runs through @pwrdrvr/codex-discovery's
 // CodexLoginManager (extracted from this file's inline flow). PwrAgnt owns the
 // instance so the Electron seam — `shell.openExternal` — is injected and the
@@ -2079,7 +2078,7 @@ export function registerSettingsIpcHandlers(
         manifest: slackProvider.buildOfficialSlackAppManifest({ appName }),
       });
       const url = request.mode === "update"
-        ? SLACK_APP_MANAGEMENT_URL
+        ? slackProvider.SLACK_APP_MANAGEMENT_URL
         : prepared.url;
       const shouldOpen = request.open !== false;
       let opened = false;

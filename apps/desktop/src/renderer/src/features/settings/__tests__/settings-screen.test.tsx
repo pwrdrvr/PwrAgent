@@ -5848,6 +5848,82 @@ describe("SettingsScreen", () => {
     expect(testSettingsCredentials).toHaveBeenCalledOnce();
   });
 
+  it("says the agent name was not saved when the write fails", async () => {
+    const settings = createSettingsState();
+    settings.writeConfig = vi.fn(async () => false);
+    render(
+      <SettingsScreen
+        settings={settings}
+        initialSection="messaging"
+        initialSubsection="slack"
+        onClose={() => undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Use this name" }));
+
+    expect(await screen.findByText("Could not save the agent name.")).toHaveAttribute(
+      "role",
+      "alert",
+    );
+    expect(screen.queryByText("Saved")).not.toBeInTheDocument();
+  });
+
+  it("stops counting the connection test once a token it tested is cleared", async () => {
+    const configured = {
+      configured: true,
+      source: "keychain",
+      writable: true,
+    } as const;
+    const snapshot = createSnapshot();
+    snapshot.messaging.slack.appName = {
+      value: "PwrAgent - fixture-user",
+      source: "config",
+    };
+    snapshot.messaging.slack.botToken = configured;
+    snapshot.messaging.slack.appToken = configured;
+    snapshot.messaging.slack.signingSecret = configured;
+    const desktopApi = {
+      readLastSettingsCredentialTest: vi.fn(async () => ({
+        kind: "slack",
+        status: "ok",
+        testedAt: Date.now(),
+        durationMs: 5,
+      })),
+    } as unknown as DesktopApi;
+    const renderWith = (next: typeof snapshot) => (
+      <SettingsScreen
+        settings={createSettingsState(next)}
+        desktopApi={desktopApi}
+        initialSection="messaging"
+        initialSubsection="slack"
+        onClose={() => undefined}
+      />
+    );
+    const view = render(renderWith(snapshot));
+    const connectionProgress = () => {
+      const stage = screen
+        .getByText("Connection", { selector: ".automation-stage__title" })
+        .closest(".automation-stage") as HTMLElement;
+      return stage.querySelector(".automation-stage__progress")?.textContent;
+    };
+    await waitFor(() => expect(connectionProgress()).toBe("Connected"));
+
+    view.rerender(
+      renderWith({
+        ...snapshot,
+        messaging: {
+          ...snapshot.messaging,
+          slack: {
+            ...snapshot.messaging.slack,
+            botToken: { configured: false, source: "unset", writable: true },
+          },
+        },
+      }),
+    );
+    expect(connectionProgress()).not.toBe("Connected");
+  });
+
   it("does not test Slack just because Settings opened", async () => {
     const configured = {
       configured: true,

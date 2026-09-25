@@ -251,6 +251,7 @@ vi.mock("@pwragent/messaging-provider-slack", async (importOriginal) => {
     normalizeSlackAppName: actual.normalizeSlackAppName,
     buildSlackCreateAppUrl: providerMocks.buildSlackCreateAppUrl,
     buildSlackAppSettingsUrl: providerMocks.buildSlackAppSettingsUrl,
+    SLACK_APP_MANAGEMENT_URL: actual.SLACK_APP_MANAGEMENT_URL,
     buildSlackAppDeepLink: actual.buildSlackAppDeepLink,
     buildSlackAppMessagesUrl: actual.buildSlackAppMessagesUrl,
     slackAppIdFromAppToken: actual.slackAppIdFromAppToken,

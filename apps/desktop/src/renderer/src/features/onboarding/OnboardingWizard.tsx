@@ -4569,13 +4569,15 @@ export function SecretFieldRow(props: {
   const isRuntimeSecret = isMessagingRuntimeSecret(props.field.name);
 
   const save = async (): Promise<void> => {
-    if (!value || busy) return;
-    const problem = props.field.validate?.(value.trim());
+    // What is checked is what is stored: a copy often brings a newline.
+    const nextValue = value.trim();
+    if (!nextValue || busy) return;
+    const problem = props.field.validate?.(nextValue);
     setLiveError(problem);
     if (problem) return;
     // Always buffer first — graduation reads from the buffer when
     // copying secrets onto the target profile.
-    props.onBuffer(value);
+    props.onBuffer(nextValue);
     if (isRuntimeSecret) {
       // Messaging-runtime secrets must also land in the *current*
       // profile's keychain *now* so the runtime can start and the
@@ -4585,7 +4587,7 @@ export function SecretFieldRow(props: {
       // re-write the value onto the target profile from the buffer.
       setBusy(true);
       try {
-        const ok = await props.replaceSecret(props.field.name, value);
+        const ok = await props.replaceSecret(props.field.name, nextValue);
         if (!ok) {
           setLiveError("Could not enable this provider — try again.");
           return;

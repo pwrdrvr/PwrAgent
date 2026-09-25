@@ -573,6 +573,17 @@ describe("SecretFieldRow saves on the way out", () => {
     expect(onBuffer).toHaveBeenCalledWith("xoxb-0000-fake");
   });
 
+  it("stores the trimmed value it checked, without a copied newline", async () => {
+    const { input, onBuffer, replaceSecret } = renderRow();
+    fireEvent.change(input, { target: { value: "  xoxb-0000-fake\n" } });
+    fireEvent.blur(input, { relatedTarget: document.body });
+
+    await waitFor(() => {
+      expect(replaceSecret).toHaveBeenCalledWith("slackBotToken", "xoxb-0000-fake");
+    });
+    expect(onBuffer).toHaveBeenCalledWith("xoxb-0000-fake");
+  });
+
   it("does not save when focus moves to the row's own button", () => {
     const { input, replaceSecret } = renderRow();
     fireEvent.change(input, { target: { value: "xoxb-0000-fake" } });

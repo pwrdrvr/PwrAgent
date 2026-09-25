@@ -1198,8 +1198,8 @@ function SettingsSectionBody(props: {
             props.snapshot.messaging.slack,
             slack,
           );
-          if (delta === undefined) return;
-          await props.settings.writeConfig({
+          if (delta === undefined) return true;
+          return await props.settings.writeConfig({
             messaging: { slack: delta },
           });
         }}
