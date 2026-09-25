@@ -652,11 +652,11 @@ body,
 /* Every window's own edge, on the one platform that draws us none.
 
    Electron gives a frameless Linux window an `OpaqueFrameView`: no border, no
-   rounded corners, and no drop shadow on X11. There is no option to get them
-   back — `roundedCorners` is handled inside `#if BUILDFLAG(IS_WIN)`, and the
-   only way to round a frameless window is `transparent: true`, which Electron
-   documents as giving up resizing. So the edge is a hairline we paint, and the
-   corners stay square. (Resizing itself is unaffected: `FramelessView::
+   rounded corners, and no drop shadow on X11. Electron 43 made
+   `roundedCorners` round it under client-side decorations, but only there, so
+   the main window passes `roundedCorners: false` (`main-window-chrome.ts`):
+   the edge is a hairline we paint, and the corners stay square on every
+   Linux desktop. (Resizing itself is unaffected: `FramelessView::
    ResizingBorderHitTest` uses an inside-bounds resize border with 16px corner
    grabs, under this overlay, which takes no clicks.)
 

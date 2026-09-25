@@ -6,6 +6,7 @@ import type { BootstrapAppearance } from "./settings/appearance-bootstrap";
 export type MainWindowChromeOptions = Pick<
   BrowserWindowConstructorOptions,
   | "autoHideMenuBar"
+  | "roundedCorners"
   | "titleBarStyle"
   | "titleBarOverlay"
   | "trafficLightPosition"
@@ -61,7 +62,12 @@ export function mainWindowChromeOptions(
   }
 
   if (platform === "linux") {
-    return { titleBarStyle: "hidden" };
+    // Electron 43 made `roundedCorners` apply on Linux and default to true, so
+    // under a desktop with client-side decorations a frameless window comes
+    // back with rounded corners. The window edge is a square hairline the
+    // renderer paints (`#root::after` in app.css), and rounding the window
+    // would clip its corners, so keep the frame square as it was on 41.
+    return { titleBarStyle: "hidden", roundedCorners: false };
   }
 
   return {};
