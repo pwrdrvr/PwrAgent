@@ -201,10 +201,11 @@ export type SeedPairingEntry = {
   expiresAt: number;
   observedAt?: number;
   /**
-   * Caller-controlled token text. Real generation derives this from a
-   * secret HMAC — for screenshot purposes any plausible-looking opaque
-   * string is fine. The renderer renders this as the "pair <token>"
-   * line under the Pairing field's Generate button.
+   * Caller-controlled `token_hmac` column. Real generation stores the
+   * HMAC of a random token here, and nothing reads it back for display.
+   * The "pair <token>" line under Generate shows the plaintext token from
+   * the Generate response, which only exists in the renderer's state, so
+   * seeding this does not change that line.
    */
   tokenHmac?: string;
   payload?: Record<string, unknown>;

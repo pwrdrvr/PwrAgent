@@ -1,5 +1,10 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import {
+  readProfilesRegistry,
+  resolveProfilesRegistryPath,
+  writeProfilesRegistry,
+} from "../../src/main/profile";
 
 // Test-only config seed helpers for the docs-site screenshot spec.
 //
@@ -17,6 +22,54 @@ import path from "node:path";
 
 export function configTomlPathForHomeRoot(homeRoot: string): string {
   return path.join(homeRoot, ".pwragent/profiles/default/config.toml");
+}
+
+/**
+ * A fixed home root for captures that print a path under it.
+ *
+ * The harness otherwise makes a fresh `mkdtemp` home per launch, and
+ * Settings → Worktrees prints its effective path in full — once as
+ * `/var/folders/…/T/pwragent-desktop-e2e-home-0iALmw/.pwragent/worktrees`,
+ * then with a different six-character suffix on the next run. A fixed
+ * path is the same on every run and every Mac, and reads as an example.
+ * The launch's `close()` removes it; this clears whatever a failed launch
+ * left behind, since the harness keeps a failed launch's home as evidence.
+ */
+export const DOCS_SITE_STABLE_HOME_ROOT = "/tmp/pwragent-docs-home";
+
+export function resetDocsSiteStableHomeRoot(): string {
+  rmSync(DOCS_SITE_STABLE_HOME_ROOT, { recursive: true, force: true });
+  mkdirSync(DOCS_SITE_STABLE_HOME_ROOT, { recursive: true });
+  return DOCS_SITE_STABLE_HOME_ROOT;
+}
+
+/**
+ * Rewrite a profile's `last_used` in `profiles.toml`.
+ *
+ * Main stamps `last_used` with the wall clock as the profile opens, which is
+ * before a spec can reach it, so Settings → Profiles showed a different
+ * "Last used …" on every run. Call this after launch, then reload the window:
+ * `App` reads the profile list once at startup.
+ */
+export function pinProfileLastUsed(
+  homeRoot: string,
+  profileName: string,
+  lastUsed: Date,
+): void {
+  // Empty env: resolve under `homeRoot` even if the runner's shell exports
+  // PWRAGENT_HOME, which the launch harness strips for the same reason.
+  const options = { env: {}, homeDir: homeRoot };
+  const registry = readProfilesRegistry(options);
+  const entry = registry.profiles.find(
+    (profile) => profile.name === profileName,
+  );
+  if (!entry?.last_used) {
+    throw new Error(
+      `pinProfileLastUsed: no last_used for profile "${profileName}" in ${resolveProfilesRegistryPath(options)}`,
+    );
+  }
+  entry.last_used = lastUsed.toISOString();
+  writeProfilesRegistry(registry, options);
 }
 
 /**
