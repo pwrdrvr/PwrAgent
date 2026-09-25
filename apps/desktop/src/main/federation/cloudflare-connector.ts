@@ -96,7 +96,7 @@ export class CloudflareConnector {
     if (this.running()) return;
     this.metricsUrl = undefined;
     this.lastFailure = undefined;
-    const child = spawn(this.command, ["tunnel", "--no-autoupdate", "--logformat", "json", "--metrics", "127.0.0.1:0", "run"], {
+    const child = spawn(this.command, ["--output", "json", "tunnel", "--no-autoupdate", "--metrics", "127.0.0.1:0", "run"], {
       env: { ...buildPwrAgentChildProcessEnv(process.env), TUNNEL_TOKEN: token },
       windowsHide: true,
       stdio: ["ignore", "ignore", "pipe"],

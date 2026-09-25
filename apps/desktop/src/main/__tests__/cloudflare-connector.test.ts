@@ -98,7 +98,9 @@ describe("cloudflared readiness", () => {
     fetcher.mockRejectedValueOnce(new Error("timeout"));
     expect((await connector.health()).state).toBe("unavailable");
     const [, args, options] = vi.mocked(spawn).mock.calls.at(-1)!;
-    expect(args).toContain("127.0.0.1:0");
+    // --output is a global flag. The nonexistent --logformat flag prints help
+    // and exits zero, so a successful spawn cannot validate this CLI contract.
+    expect(args).toEqual(["--output", "json", "tunnel", "--no-autoupdate", "--metrics", "127.0.0.1:0", "run"]);
     expect(args).not.toContain("secret-token");
     expect(options?.env?.TUNNEL_TOKEN).toBe("secret-token");
     await connector.stop();
