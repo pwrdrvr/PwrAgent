@@ -33534,9 +33534,11 @@ button.pricing-token-miser__folded:focus-visible {
   line-height: 1.4;
 }
 
-/* What a local review would cover that the picked target will not. Carried by
-   wording, not by color alone — it is a distinction, not an error. */
-.composer__review-field small.composer__review-divergence {
+/* What a local review would cover that the picked target will not, or where a
+   picked PR moved the review and how it will run. Carried by wording, not by
+   color alone — it is a distinction, not an error. */
+.composer__review-field small.composer__review-divergence,
+.composer__review-field small.composer__review-workspace-note {
   color: var(--text-primary);
 }
 

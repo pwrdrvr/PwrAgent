@@ -5784,7 +5784,7 @@ describe("Composer", () => {
     expect(screen.queryByRole("button", { name: "Send now" })).not.toBeInTheDocument();
   });
 
-  it("selects the attached stacked PR and clears it when the project changes", async () => {
+  it.each(["primary", "secondary"])("offers attached PRs across worktrees and routes the %s selection", async (project) => {
     const startReview = vi.fn(async (request: StartReviewRequest) => ({
       backend: request.backend, threadId: request.threadId,
       reviewThreadId: request.threadId, turnId: "review-pr-1",
@@ -5796,17 +5796,30 @@ describe("Composer", () => {
       baseRefName: number === 1 ? "main" : "stack-1", headSha: String(number).repeat(40),
       ...(number === 2 ? { linkedDirectoryPaths: ["/repo/project"] } : {}),
     }));
+    const secondaryPr = {
+      ...prs[0], repo: "other", title: "Other change",
+      url: "https://github.com/fixture/other/pull/1",
+      linkedDirectoryPaths: ["/repo/other"],
+    };
+    const backend = backendSummary("codex");
+    backend.capabilities = { ...backend.capabilities, startReview: true, reviewRunMode: true, reviewRunner: true, reviewCodexSubAgent: true };
     render(<Composer
+      backends={[backend]}
+      directory={{ key: "project", kind: "directory", label: "Project", path: "/repo/project",
+        gitStatus: { originRepository: "github.com/fixture/project", syncState: "untracked" } }}
       desktopApi={{ onAgentEvent: () => () => undefined, startReview }}
       disabled={false} skills={[]}
       thread={{
         id: "thread-1", title: "Stacked review", titleSource: "explicit",
         source: "codex", executionMode: "default", inbox: { inInbox: false },
+        projectKey: "/repo/project",
+        observedGitBranch: "primary-branch",
+        gitWorkingState: { dirtyFiles: 3, untrackedFiles: 1, unpushedCommits: 2, dirtyAdditions: 5, dirtyDeletions: 1 },
         linkedDirectories: [
           { id: "one", kind: "local", label: "Project", path: "/repo/project" },
-          { id: "two", kind: "local", label: "Other", path: "/repo/other" },
+          { id: "two", kind: "worktree", label: "Other", path: "/repo/other", worktreePath: "/worktrees/other" },
         ],
-        prs: [...prs, { ...prs[0], number: 3, repo: "other", url: "https://github.com/fixture/other/pull/3", linkedDirectoryPaths: ["/repo/other"] }],
+        prs: [...prs, secondaryPr, { ...prs[0], repo: "unattached", url: "https://github.com/fixture/unattached/pull/1", linkedDirectoryPaths: ["/repo/unattached"] }],
       }}
     />);
     fireEvent.change(screen.getByLabelText("Reply"), { target: { value: "/review" } });
@@ -5814,19 +5827,110 @@ describe("Composer", () => {
     fireEvent.change(screen.getByLabelText("Review project"), { target: { value: "/repo/project" } });
     fireEvent.click(screen.getByRole("button", { name: /Attached PR/ }));
     const picker = screen.getByLabelText("Attached pull request");
-    expect(within(picker).getByRole("option", { name: /#1/ })).toBeInTheDocument();
+    expect(within(picker).getByRole("option", { name: /^project#1 Stack 1/ })).toBeInTheDocument();
     expect(within(picker).getByRole("option", { name: /#2/ })).toBeInTheDocument();
-    expect(within(picker).queryByRole("option", { name: /#3/ })).not.toBeInTheDocument();
+    expect(within(picker).getByRole("option", { name: /^other#1 Other change/ })).toBeInTheDocument();
+    expect(within(picker).queryByRole("option", { name: /unattached/ })).not.toBeInTheDocument();
     fireEvent.change(picker, { target: { value: prs[0].url } });
     expect(screen.getByText(/stack-1 . main/)).toHaveTextContent("at 1111111");
-    fireEvent.change(screen.getByLabelText("Review project"), { target: { value: "/repo/other" } });
+    fireEvent.change(screen.getByLabelText("Review project"), { target: { value: "/worktrees/other" } });
     expect(screen.getByLabelText("Attached pull request")).toHaveValue("");
     fireEvent.change(screen.getByLabelText("Review project"), { target: { value: "/repo/project" } });
-    fireEvent.change(screen.getByLabelText("Attached pull request"), { target: { value: prs[0].url } });
+    fireEvent.change(picker, { target: { value: secondaryPr.url } });
+    expect(screen.getByLabelText("Review project")).toHaveValue("/worktrees/other");
+    expect(screen.getByRole("button", { name: "Review run mode" })).toHaveTextContent("PwrAgent Sub Agent");
+    expect(screen.queryByText(/Reviewing the pull request skips this checkout/)).not.toBeInTheDocument();
+    expect(screen.getByText(
+      "Reviews in Other. PwrAgent Sub Agent is required because the selected project is not this thread's primary workspace.",
+    )).toBeInTheDocument();
+    if (project === "primary") {
+      fireEvent.change(picker, { target: { value: prs[0].url } });
+      expect(screen.getByLabelText("Review project")).toHaveValue("/repo/project");
+      expect(screen.getByRole("button", { name: "Review run mode" })).toHaveTextContent("Codex Sub Agent");
+      expect(screen.queryByText(/^Reviews in /)).not.toBeInTheDocument();
+    }
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Start review" })); });
     expect(startReview).toHaveBeenCalledWith(expect.objectContaining({
-      cwd: "/repo/project", target: { type: "pullRequest", url: prs[0].url },
+      cwd: project === "primary" ? "/repo/project" : "/worktrees/other",
+      target: { type: "pullRequest", url: project === "primary" ? prs[0].url : secondaryPr.url },
+      runMode: project === "primary" ? "codex-sub-agent" : "pwragent-sub-agent",
     }));
+  });
+
+  it.each(["click", "keyboard"])("routes a sole secondary PR with its required review mode via %s", async (input) => {
+    const startReview = vi.fn(async () => ({ backend: "codex" as const, threadId: "thread-1", reviewThreadId: "thread-1", turnId: "review" }));
+    const backend = backendSummary("codex");
+    backend.capabilities = { ...backend.capabilities, startReview: true, reviewRunMode: true, reviewRunner: true, reviewCodexSubAgent: true };
+    const url = "https://github.com/fixture/secondary/pull/2";
+    render(<Composer
+      backends={[backend]}
+      desktopApi={{ onAgentEvent: () => () => undefined, startReview }}
+      disabled={false} skills={[]}
+      thread={{
+        id: "thread-1", title: "Review workspaces", titleSource: "explicit", source: "codex",
+        executionMode: "default", inbox: { inInbox: false }, projectKey: "/repo/primary",
+        linkedDirectories: [
+          { id: "primary", kind: "local", label: "Primary", path: "/repo/primary" },
+          { id: "secondary", kind: "worktree", label: "Secondary", path: "/repo/secondary", worktreePath: "/worktrees/secondary" },
+        ],
+        prs: [{ provider: "github.com", org: "fixture", repo: "secondary", number: 2,
+          title: "Secondary change", url, state: "passing", linkedDirectoryPaths: ["/repo/secondary"] }],
+      }}
+    />);
+    openReviewComposer();
+    fireEvent.change(screen.getByLabelText("Review project"), { target: { value: "/repo/primary" } });
+    const target = screen.getByRole("button", { name: /Attached PR/ });
+    if (input === "keyboard") {
+      fireEvent.keyDown(target, { key: "Enter" });
+    } else {
+      fireEvent.click(target);
+      expect(screen.getByLabelText("Review project")).toHaveValue("/worktrees/secondary");
+      fireEvent.click(screen.getByRole("button", { name: "Start review" }));
+    }
+    await waitFor(() => expect(startReview).toHaveBeenCalledWith(expect.objectContaining({
+      cwd: "/worktrees/secondary", target: { type: "pullRequest", url }, runMode: "pwragent-sub-agent",
+    })));
+  });
+
+  it("keeps a PR across worktrees of its repository and names repositories only when they differ", () => {
+    const pr = (org: string, repo: string, number: number, path: string) => ({
+      provider: "github.com" as const, org, repo, number, title: `Change ${number}`,
+      url: `https://github.com/${org}/${repo}/pull/${number}`, state: "passing" as const,
+      linkedDirectoryPaths: [path],
+    });
+    const thread = (prs: ReturnType<typeof pr>[]): NavigationThreadSummary => ({
+      id: "thread-1", title: "Worktrees", titleSource: "explicit", source: "codex",
+      executionMode: "default", inbox: { inInbox: false }, projectKey: "/repo/tool",
+      linkedDirectories: [
+        { id: "main", kind: "local", label: "Tool", path: "/repo/tool" },
+        { id: "wt", kind: "worktree", label: "Tool fix", path: "/repo/tool", worktreePath: "/worktrees/tool-fix" },
+        { id: "fork", kind: "local", label: "Fork", path: "/repo/fork" },
+      ],
+      prs,
+    });
+    const { rerender } = render(<Composer
+      desktopApi={{ onAgentEvent: () => () => undefined }}
+      disabled={false} skills={[]}
+      thread={thread([pr("alpha", "tool", 1, "/repo/tool"), pr("alpha", "tool", 2, "/repo/tool")])}
+    />);
+    openReviewComposer();
+    fireEvent.change(screen.getByLabelText("Review project"), { target: { value: "/repo/tool" } });
+    fireEvent.click(screen.getByRole("button", { name: /Attached PR/ }));
+    const picker = screen.getByLabelText("Attached pull request");
+    expect(within(picker).getByRole("option", { name: /^#1 Change 1/ })).toBeInTheDocument();
+    fireEvent.change(picker, { target: { value: "https://github.com/alpha/tool/pull/2" } });
+    fireEvent.change(screen.getByLabelText("Review project"), { target: { value: "/worktrees/tool-fix" } });
+    expect(screen.getByLabelText("Attached pull request")).toHaveValue("https://github.com/alpha/tool/pull/2");
+
+    rerender(<Composer
+      desktopApi={{ onAgentEvent: () => () => undefined }}
+      disabled={false} skills={[]}
+      thread={thread([pr("alpha", "tool", 1, "/repo/tool"), pr("beta", "tool", 2, "/repo/fork")])}
+    />);
+    const options = within(screen.getByLabelText("Attached pull request")).getAllByRole("option");
+    expect(options.map((option) => option.textContent)).toEqual([
+      "Choose pull request", "alpha/tool#1 Change 1", "beta/tool#2 Change 2",
+    ]);
   });
 
   const reviewTargetThread = (params: {
@@ -5834,6 +5938,7 @@ describe("Composer", () => {
     unpushedCommits?: number;
     untrackedFiles?: number;
     withPullRequest?: boolean;
+    workspacePath?: string;
   }): NavigationThreadSummary => ({
     id: "thread-1",
     title: "Attached PR review",
@@ -5842,8 +5947,9 @@ describe("Composer", () => {
     executionMode: "default",
     inbox: { inInbox: false },
     observedGitBranch: "feat/stack-1",
+    projectKey: params.workspacePath,
     linkedDirectories: [
-      { id: "one", kind: "local", label: "Project", path: "/repo/project" },
+      { id: "one", kind: "local", label: "Project", path: params.workspacePath ?? "/repo/project" },
     ],
     gitWorkingState: {
       dirtyAdditions: 0,
@@ -5864,7 +5970,7 @@ describe("Composer", () => {
       headRefName: "feat/stack-1",
       baseRefName: "main",
       headSha: "a".repeat(40),
-      linkedDirectoryPaths: ["/repo/project"],
+      linkedDirectoryPaths: [params.workspacePath ?? "/repo/project"],
     }],
   });
 
@@ -5887,12 +5993,12 @@ describe("Composer", () => {
       .toHaveAttribute("aria-pressed", "true");
   });
 
-  it("defaults to the attached PR when the checkout is clean on its head", () => {
+  it.each(["/repo/project", "C:\\repos\\project", "\\\\server\\share\\project\\"])("defaults to the attached PR when %s is clean on its head", (workspacePath) => {
     render(<Composer
       desktopApi={{ onAgentEvent: () => () => undefined }}
       disabled={false} skills={[]}
-      thread={reviewTargetThread({})}
-      directory={{ key: "project", kind: "directory", label: "Project", path: "/repo/project",
+      thread={reviewTargetThread({ workspacePath })}
+      directory={{ key: "project", kind: "directory", label: "Project", path: workspacePath.replace(/\\/g, "/"),
         gitStatus: { currentBranch: "feat/stack-1", branches: ["main", "feat/stack-1"], syncState: "in-sync",
           recentCommits: [{ sha: "a".repeat(40), shortSha: "aaaaaaa", subject: "Published head" }] },
       }}
@@ -5940,11 +6046,11 @@ describe("Composer", () => {
     }));
   });
 
-  it("keeps the local default and names what the PR omits when they differ", () => {
+  it.each(["/repo/project", "C:\\repos\\project", "\\\\server\\share\\project\\"])("keeps the local default and names what the PR omits in %s", (workspacePath) => {
     render(<Composer
       desktopApi={{ onAgentEvent: () => () => undefined }}
       disabled={false} skills={[]}
-      thread={reviewTargetThread({ dirtyFiles: 2, unpushedCommits: 1 })}
+      thread={reviewTargetThread({ dirtyFiles: 2, unpushedCommits: 1, workspacePath })}
     />);
     openReviewComposer();
     const group = screen.getByRole("group", { name: "Review target" });
