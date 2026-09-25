@@ -14,8 +14,10 @@ export {
 } from "./slack-app-manifest.ts";
 export {
   SLACK_APP_MANAGEMENT_URL,
+  SLACK_APP_REDIRECT_URL,
   SLACK_CREATE_APP_URL_BASE,
   SLACK_CREATE_APP_URL_MAX_LENGTH,
+  buildSlackAppMessagesUrl,
   buildSlackAppSettingsUrl,
   buildSlackCreateAppUrl,
   slackAppIdFromAppToken,
@@ -23,6 +25,7 @@ export {
 } from "./slack-create-app-url.ts";
 export {
   SLACK_CREDENTIAL_ERROR,
+  readSlackTeamId,
   validateCredentials,
 } from "./validate-credentials.ts";
 export type { SlackCredentialValidationConfig } from "./validate-credentials.ts";

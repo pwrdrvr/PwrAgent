@@ -49,6 +49,7 @@ import type {
   SettingsCredentialTestResult,
   OpenDiscordThreadPermissionRequest,
   OpenDiscordThreadPermissionResponse,
+  OpenSlackAppMessagesResponse,
   OpenSlackAppSettingsResponse,
   SlackCreateAppRequest,
   SlackCreateAppResponse,
@@ -77,6 +78,7 @@ import {
   SETTINGS_INSPECT_DISCORD_THREAD_PERMISSIONS_CHANNEL,
   SETTINGS_LIST_DISCORD_THREAD_PERMISSION_CHANNELS_CHANNEL,
   SETTINGS_OPEN_DISCORD_THREAD_PERMISSION_CHANNEL,
+  SETTINGS_OPEN_SLACK_APP_MESSAGES_CHANNEL,
   SETTINGS_OPEN_SLACK_APP_SETTINGS_CHANNEL,
   SETTINGS_OPEN_SLACK_CREATE_APP_CHANNEL,
   SETTINGS_INSPECT_CODE_SIGNATURES_CHANNEL,
@@ -2100,6 +2102,33 @@ export function registerSettingsIpcHandlers(
       return target;
     },
   );
+  ipcMain.removeHandler(SETTINGS_OPEN_SLACK_APP_MESSAGES_CHANNEL);
+  ipcMain.handle(
+    SETTINGS_OPEN_SLACK_APP_MESSAGES_CHANNEL,
+    async (): Promise<OpenSlackAppMessagesResponse> => {
+      const settings = getService(service);
+      const slackProvider = await import("@pwragent/messaging-provider-slack");
+      // Tokens stay in main; only the IDs they lead to reach the URL.
+      const appId = slackProvider.slackAppIdFromAppToken(
+        settings.resolveSlackAppTokenSync(),
+      );
+      if (!appId) {
+        throw new Error(
+          "Save the App-Level Token first. PwrAgent reads your app's ID from it.",
+        );
+      }
+      const botToken = settings.resolveSlackBotTokenSync();
+      const teamId = botToken
+        ? await slackProvider.readSlackTeamId(botToken)
+        : undefined;
+      const url = slackProvider.buildSlackAppMessagesUrl({ appId, teamId });
+      if (!isSafeExternalOpenUrl(url)) {
+        throw new Error("Refused to open an unsafe Slack URL.");
+      }
+      await shell.openExternal(url);
+      return { url, workspaceKnown: new URL(url).searchParams.has("team") };
+    },
+  );
 
   ipcMain.removeHandler(SETTINGS_LIST_DISCORD_THREAD_PERMISSION_CHANNELS_CHANNEL);
   ipcMain.handle(
@@ -2272,6 +2301,7 @@ export function disposeSettingsIpcHandlers(): void {
   ipcMain.removeHandler(SETTINGS_LAST_CREDENTIAL_TEST_CHANNEL);
   ipcMain.removeHandler(SETTINGS_OPEN_SLACK_CREATE_APP_CHANNEL);
   ipcMain.removeHandler(SETTINGS_OPEN_SLACK_APP_SETTINGS_CHANNEL);
+  ipcMain.removeHandler(SETTINGS_OPEN_SLACK_APP_MESSAGES_CHANNEL);
   ipcMain.removeHandler(SETTINGS_LIST_DISCORD_THREAD_PERMISSION_CHANNELS_CHANNEL);
   ipcMain.removeHandler(SETTINGS_INSPECT_DISCORD_THREAD_PERMISSIONS_CHANNEL);
   ipcMain.removeHandler(SETTINGS_OPEN_DISCORD_THREAD_PERMISSION_CHANNEL);

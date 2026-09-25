@@ -11380,6 +11380,16 @@ a.button {
   flex-wrap: wrap;
 }
 
+/* A setup step's own controls ride beside Generate; a failure they report
+   takes a line of its own under the row. */
+.settings-pairing__controls--actions {
+  flex-wrap: wrap;
+}
+
+.settings-pairing__action-note {
+  flex-basis: 100%;
+}
+
 .settings-pairing__message code {
   min-width: 0;
   overflow: hidden;

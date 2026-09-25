@@ -2310,6 +2310,12 @@ export type OpenSlackAppSettingsResponse = {
   appSpecific: boolean;
 };
 
+export type OpenSlackAppMessagesResponse = {
+  url: string;
+  /** False when Slack did not name the bot's workspace, so Slack may ask. */
+  workspaceKnown: boolean;
+};
+
 export type SlackCreateAppResponse = {
   url: string;
   oversized: boolean;

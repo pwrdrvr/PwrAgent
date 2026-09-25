@@ -473,6 +473,7 @@ import type {
   ListDiscordThreadPermissionChannelsResponse,
   OpenDiscordThreadPermissionRequest,
   OpenDiscordThreadPermissionResponse,
+  OpenSlackAppMessagesResponse,
   OpenSlackAppSettingsResponse,
   SlackCreateAppRequest,
   SlackCreateAppResponse,
@@ -1075,6 +1076,8 @@ export type DesktopApi = {
   ) => Promise<SlackCreateAppResponse>;
   /** Open the connected Slack app's Basic Information page. */
   openSlackAppSettings?: () => Promise<OpenSlackAppSettingsResponse>;
+  /** Open a direct message with the connected Slack app. */
+  openSlackAppMessages?: () => Promise<OpenSlackAppMessagesResponse>;
   /** Start a native drag of PwrAgent's app icon file; call from `dragstart`. */
   startAppIconDrag?: () => void;
   listDiscordThreadPermissionChannels?: (

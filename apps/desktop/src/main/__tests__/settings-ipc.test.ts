@@ -75,6 +75,7 @@ const providerMocks = vi.hoisted(() => ({
   ),
   resolveMattermostContact: vi.fn(),
   resolveSlackContact: vi.fn(),
+  readSlackTeamId: vi.fn(async (): Promise<string | undefined> => "T0FAKETEAM1"),
   buildSlackCreateAppUrl: vi.fn(() => ({
     url: "https://api.slack.com/apps?new_app=1&manifest_json=%7B%7D",
     fullUrl: "https://api.slack.com/apps?new_app=1&manifest_json=%7B%7D",
@@ -245,6 +246,9 @@ vi.mock("@pwragent/messaging-provider-slack", async (importOriginal) => {
     normalizeSlackAppName: actual.normalizeSlackAppName,
     buildSlackCreateAppUrl: providerMocks.buildSlackCreateAppUrl,
     buildSlackAppSettingsUrl: providerMocks.buildSlackAppSettingsUrl,
+    buildSlackAppMessagesUrl: actual.buildSlackAppMessagesUrl,
+    slackAppIdFromAppToken: actual.slackAppIdFromAppToken,
+    readSlackTeamId: providerMocks.readSlackTeamId,
   };
 });
 
@@ -768,6 +772,71 @@ describe("settings ipc", () => {
     expect(electronMocks.openExternal).toHaveBeenCalledExactlyOnceWith(
       "https://api.slack.com/apps/A0FAKEAPP01/general",
     );
+
+    disposeSettingsIpcHandlers();
+  });
+
+  it("opens a direct message with the Slack app in the bot's workspace", async () => {
+    const service = {
+      readSettings: vi.fn(),
+      resolveSlackAppTokenSync: vi.fn(
+        () => "xapp-1-A0FAKEAPP01-1234567890123-0123456789abcdef",
+      ),
+      resolveSlackBotTokenSync: vi.fn(() => "xoxb-fake-bot-token"),
+    } as unknown as DesktopSettingsService;
+    const { registerSettingsIpcHandlers, disposeSettingsIpcHandlers } = await import(
+      "../ipc/settings"
+    );
+    const { SETTINGS_OPEN_SLACK_APP_MESSAGES_CHANNEL } = await import("../../shared/ipc");
+
+    disposeSettingsIpcHandlers();
+    registerSettingsIpcHandlers(service);
+
+    await expect(
+      handlers.get(SETTINGS_OPEN_SLACK_APP_MESSAGES_CHANNEL)?.({}),
+    ).resolves.toEqual({
+      url: "https://slack.com/app_redirect?app=A0FAKEAPP01&team=T0FAKETEAM1",
+      workspaceKnown: true,
+    });
+    expect(providerMocks.readSlackTeamId).toHaveBeenCalledExactlyOnceWith(
+      "xoxb-fake-bot-token",
+    );
+    expect(electronMocks.openExternal).toHaveBeenCalledExactlyOnceWith(
+      "https://slack.com/app_redirect?app=A0FAKEAPP01&team=T0FAKETEAM1",
+    );
+
+    // Slack not naming the workspace still opens the app; Slack asks which.
+    providerMocks.readSlackTeamId.mockResolvedValueOnce(undefined);
+    electronMocks.openExternal.mockClear();
+    await expect(
+      handlers.get(SETTINGS_OPEN_SLACK_APP_MESSAGES_CHANNEL)?.({}),
+    ).resolves.toEqual({
+      url: "https://slack.com/app_redirect?app=A0FAKEAPP01",
+      workspaceKnown: false,
+    });
+
+    disposeSettingsIpcHandlers();
+  });
+
+  it("refuses to open a Slack DM before an app-level token names the app", async () => {
+    const service = {
+      readSettings: vi.fn(),
+      resolveSlackAppTokenSync: vi.fn(() => undefined),
+      resolveSlackBotTokenSync: vi.fn(() => "xoxb-fake-bot-token"),
+    } as unknown as DesktopSettingsService;
+    const { registerSettingsIpcHandlers, disposeSettingsIpcHandlers } = await import(
+      "../ipc/settings"
+    );
+    const { SETTINGS_OPEN_SLACK_APP_MESSAGES_CHANNEL } = await import("../../shared/ipc");
+
+    disposeSettingsIpcHandlers();
+    registerSettingsIpcHandlers(service);
+    electronMocks.openExternal.mockClear();
+
+    await expect(
+      handlers.get(SETTINGS_OPEN_SLACK_APP_MESSAGES_CHANNEL)?.({}),
+    ).rejects.toThrow("Save the App-Level Token first.");
+    expect(electronMocks.openExternal).not.toHaveBeenCalled();
 
     disposeSettingsIpcHandlers();
   });

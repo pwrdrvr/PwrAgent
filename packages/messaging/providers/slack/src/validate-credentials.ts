@@ -108,6 +108,31 @@ export async function validateCredentials(
   }
 }
 
+/**
+ * The workspace a bot token belongs to, from auth.test, or undefined when
+ * Slack does not say. One short try: someone clicked a button and is waiting.
+ */
+export async function readSlackTeamId(
+  botToken: string,
+  options: Pick<SlackValidateCredentialsOptions, "authTest"> = {},
+): Promise<string | undefined> {
+  try {
+    const authTest =
+      options.authTest
+      ?? (async () => {
+        const client = new WebClient(botToken, {
+          rejectRateLimitedCalls: true,
+          retryConfig: { retries: 0 },
+          timeout: 5_000,
+        });
+        return await client.auth.test();
+      });
+    return (await authTest()).team_id || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 const SLACK_AUTH_ERROR_CODES = new Set([
   "account_inactive",
   "invalid_auth",

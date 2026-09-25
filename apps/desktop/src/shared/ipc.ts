@@ -437,6 +437,14 @@ export const SETTINGS_OPEN_SLACK_CREATE_APP_CHANNEL =
 export const SETTINGS_OPEN_SLACK_APP_SETTINGS_CHANNEL =
   "settings:open-slack-app-settings";
 /**
+ * Opens a direct message with the connected Slack app (its Messages tab)
+ * through Slack's app redirect. Main reads the app ID from the stored
+ * app-level token and the workspace ID from auth.test.
+ * Response: `OpenSlackAppMessagesResponse`.
+ */
+export const SETTINGS_OPEN_SLACK_APP_MESSAGES_CHANNEL =
+  "settings:open-slack-app-messages";
+/**
  * Fire-and-forget (`send`, not `invoke`): starts a native drag of PwrAgent's
  * app icon file from the sender window, so it can be dropped into another
  * app's upload field. Must arrive during the renderer's `dragstart`.

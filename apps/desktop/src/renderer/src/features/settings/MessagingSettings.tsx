@@ -90,6 +90,10 @@ import {
   SlackBotTokenSteps,
   SlackSigningSecretSteps,
 } from "../messaging/SlackCredentialSteps";
+import {
+  SlackOpenAppMessagesButton,
+  SlackPairSteps,
+} from "../messaging/SlackPairSteps";
 import { SLACK_EVENTS_API_UNIMPLEMENTED_NOTICE } from "../messaging/slack-connect-copy";
 import { slackCredentialProblem } from "../messaging/slack-token-shape";
 import { SettingsTestBlock } from "./SettingsTestBlock";
@@ -279,6 +283,28 @@ export function MessagingSettings(props: {
     },
     [],
   );
+  // Counts Slack secret saves. Once all three are in, each save runs the
+  // connection test by itself, so saving the last one (or replacing one)
+  // tests what was just entered without anyone knowing to press Test.
+  const [slackSecretSaves, setSlackSecretSaves] = useState(0);
+  const onReplaceSecret = props.onReplaceSecret;
+  const replaceSlackSecret = useCallback(
+    async (secret: DesktopSettingsSecretName, value: string): Promise<boolean> => {
+      const saved = await onReplaceSecret(secret, value);
+      if (saved) setSlackSecretSaves((count) => count + 1);
+      return saved;
+    },
+    [onReplaceSecret],
+  );
+  const slackSecretsEntered =
+    slack.botToken.configured
+    && slack.appToken.configured
+    && slack.signingSecret.configured;
+  // Anyone approved counts, however they were approved.
+  const slackPaired =
+    slack.authorizedUserIds.value.length > 0
+    || slack.authorizedChannels.value.length > 0
+    || slack.authorizedWorkspaces.value.length > 0;
   // One step is "Next": the first not yet done, as in Cloudflare setup.
   // Creating the app leaves nothing to observe until a bot token exists.
   const slackConnectSteps = [
@@ -292,6 +318,7 @@ export function MessagingSettings(props: {
     { key: "app", done: slack.appToken.configured, label: "Saved" },
     { key: "signing", done: slack.signingSecret.configured, label: "Saved" },
     { key: "test", done: slackTestPassed, label: "Connected" },
+    { key: "pair", done: slackPaired, label: "Paired" },
   ] as const;
   const slackConnectCurrent = slackConnectSteps.find((step) => !step.done)?.key;
   const slackConnectProgress = (
@@ -1385,7 +1412,7 @@ export function MessagingSettings(props: {
                 state={slack.botToken}
                 validate={(value) => slackCredentialProblem("bot", value)}
                 onClearSecret={props.onClearSecret}
-                onReplaceSecret={props.onReplaceSecret}
+                onReplaceSecret={replaceSlackSecret}
               />
             </AutomationStage>
             <AutomationStage
@@ -1401,7 +1428,7 @@ export function MessagingSettings(props: {
                 state={slack.appToken}
                 validate={(value) => slackCredentialProblem("app", value)}
                 onClearSecret={props.onClearSecret}
-                onReplaceSecret={props.onReplaceSecret}
+                onReplaceSecret={replaceSlackSecret}
               />
             </AutomationStage>
             <AutomationStage
@@ -1417,7 +1444,7 @@ export function MessagingSettings(props: {
                 state={slack.signingSecret}
                 validate={(value) => slackCredentialProblem("signing", value)}
                 onClearSecret={props.onClearSecret}
-                onReplaceSecret={props.onReplaceSecret}
+                onReplaceSecret={replaceSlackSecret}
               />
             </AutomationStage>
             <AutomationStage
@@ -1432,10 +1459,33 @@ export function MessagingSettings(props: {
                 defaultName="Your bot"
                 defaultSub="Checks the bot token with Slack auth.test, then opens a Socket Mode handshake."
                 onResult={onSlackTestResult}
+                autoRun={{ key: slackSecretSaves, ready: slackSecretsEntered }}
                 prerequisites={[
                   { label: "Bot Token", met: slack.botToken.configured },
                   { label: "App Token", met: slack.appToken.configured },
                 ]}
+              />
+            </AutomationStage>
+            <AutomationStage
+              verb="Pair"
+              title="Your Slack account"
+              progress={slackConnectProgress("pair")}
+            >
+              <SlackPairSteps appName={chosenSlackAppName(slack.appName)} />
+              <PairingTokenField
+                desktopApi={props.desktopApi}
+                disabled={platformControlsDisabled || !slack.enabled.value}
+                hideDescription
+                highlight={slackNeedsPairingCta}
+                onSettingsChanged={props.onPairingSettingsChanged}
+                platform="slack"
+                supportsBucket
+                actions={
+                  <SlackOpenAppMessagesButton
+                    desktopApi={props.desktopApi}
+                    disabled={!slack.appToken.configured}
+                  />
+                }
               />
             </AutomationStage>
           </div>
@@ -1675,10 +1725,8 @@ export function MessagingSettings(props: {
 
       <SlackStartSection
         desktopApi={props.desktopApi}
-        pairingDisabled={platformControlsDisabled || !slack.enabled.value}
-        paired={!slackNeedsPairingCta}
+        paired={slackPaired}
         onOpenThread={props.onOpenThread}
-        onPairingSettingsChanged={props.onPairingSettingsChanged}
       />
 
       <SettingsSection eyebrow="Slack" title="Advanced">
@@ -2876,21 +2924,17 @@ type SetupStageProgress = {
  * component because the default Agent comes from the routes context, which
  * `MessagingSettings` provides below its own hooks.
  */
+/** Pairing is Connect's last step; this is what comes after it. */
 function SlackStartSection(props: {
   desktopApi?: DesktopApi;
-  pairingDisabled: boolean;
   paired: boolean;
   onOpenThread?: (target: {
     backend: AppServerBackendKind;
     threadId: string;
   }) => void;
-  onPairingSettingsChanged?: () => Promise<void>;
 }) {
   const defaultAgent = usePlatformDefaultAgent("slack");
   const answering = Boolean(defaultAgent.route);
-  const pairProgress: SetupStageProgress = props.paired
-    ? { state: "done", label: "Paired" }
-    : { state: "current", label: "Next" };
   const answerProgress: SetupStageProgress = answering
     ? { state: "done", label: "Answering" }
     : props.paired
@@ -2901,20 +2945,6 @@ function SlackStartSection(props: {
     <SettingsSection eyebrow="Slack" title="Start talking">
       <div className="slack-setup">
         <div className="automation-funnel">
-          <AutomationStage verb="Pair" title="Your Slack account" progress={pairProgress}>
-            <p className="slack-connect__step">
-              {pairingFieldDescription("slack")}
-            </p>
-            <PairingTokenField
-              desktopApi={props.desktopApi}
-              disabled={props.pairingDisabled}
-              hideDescription
-              highlight={!props.paired}
-              onSettingsChanged={props.onPairingSettingsChanged}
-              platform="slack"
-              supportsBucket
-            />
-          </AutomationStage>
           <AutomationStage verb="Answer" title="Default Agent" progress={answerProgress}>
             <PlatformDefaultAgentSetup
               desktopApi={props.desktopApi}
@@ -2939,6 +2969,8 @@ function PairingTokenField(props: {
   supportsBucket?: boolean;
   /** Leave the description to a surrounding setup step, which has the width. */
   hideDescription?: boolean;
+  /** Controls placed after Generate, in the order a setup step walks them. */
+  actions?: ReactNode;
 }) {
   const [scope, setScope] = useState<MessagingPairingScope>("user_dm");
   const [message, setMessage] = useState<string | undefined>(undefined);
@@ -3110,11 +3142,15 @@ function PairingTokenField(props: {
   return (
     <SettingsField
       label="Pairing"
-      sub={props.hideDescription ? undefined : pairingFieldDescription(props.platform)}
+      sub={props.hideDescription ? undefined : pairingFieldDescription()}
       error={error}
       control={
         <div className="settings-pairing">
-          <div className="settings-pairing__controls">
+          <div
+            className={`settings-pairing__controls${
+              props.actions ? " settings-pairing__controls--actions" : ""
+            }`}
+          >
             {availableScopeOptions.length > 1 ? (
               <div
                 aria-label={`${platformLabel(props.platform)} pairing target`}
@@ -3150,6 +3186,7 @@ function PairingTokenField(props: {
             >
               {busyId === "generate" ? "Generating..." : "Generate"}
             </button>
+            {props.actions}
           </div>
           {message ? (
             <div className="settings-pairing__message">
@@ -3290,10 +3327,8 @@ function defaultPairingScopeOptions(platform: MessagingChannelKind): PairingScop
   ];
 }
 
-function pairingFieldDescription(platform: MessagingChannelKind): ReactNode {
-  if (platform === "slack") {
-    return "Generate a short-lived code. Send it in a Slack DM or channel, then approve the observed user or channel.";
-  }
+function pairingFieldDescription(): ReactNode {
+  // Slack's pairing step has its own steps (`SlackPairSteps`).
   return "Generate a short-lived code to approve a user or group from chat.";
 }
 

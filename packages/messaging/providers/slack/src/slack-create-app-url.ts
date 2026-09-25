@@ -73,3 +73,23 @@ export function buildSlackAppSettingsUrl(appToken: string | undefined): {
     ? { url: `${SLACK_APP_MANAGEMENT_URL}/${appId}/general`, appSpecific: true }
     : { url: SLACK_APP_MANAGEMENT_URL, appSpecific: false };
 }
+
+/** Slack's redirect into a conversation, which the browser can hand to the app. */
+export const SLACK_APP_REDIRECT_URL = "https://slack.com/app_redirect";
+
+/**
+ * A direct message with the app: its Messages tab. Slack lists a new app
+ * under Apps, not with direct messages, so "DM the bot" means finding the
+ * app and switching tabs. The workspace ID stops Slack asking which
+ * workspace when the operator is signed in to more than one.
+ */
+export function buildSlackAppMessagesUrl(input: {
+  appId: string;
+  teamId?: string;
+}): string {
+  const params = new URLSearchParams({ app: input.appId });
+  if (input.teamId && /^[TE][A-Z0-9]{6,20}$/u.test(input.teamId)) {
+    params.set("team", input.teamId);
+  }
+  return `${SLACK_APP_REDIRECT_URL}?${params.toString()}`;
+}
