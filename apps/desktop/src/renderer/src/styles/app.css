@@ -10043,7 +10043,8 @@ a.button {
   gap: 6px;
 }
 
-.slack-connect__name-label {
+/* Labels a block inside the card: the agent name, the app icon. */
+.slack-connect__label {
   color: var(--text-primary);
   font-size: 12px;
   font-weight: 650;
@@ -10157,7 +10158,7 @@ a.button {
 .slack-icon-step {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 6px;
 }
 
 .slack-icon-step__row {

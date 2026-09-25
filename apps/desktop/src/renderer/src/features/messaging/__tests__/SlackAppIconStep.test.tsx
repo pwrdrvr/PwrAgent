@@ -18,6 +18,7 @@ describe("SlackAppIconStep", () => {
     const startAppIconDrag = vi.fn();
     render(
       <SlackAppIconStep
+        variant="settings"
         desktopApi={{ startAppIconDrag } as unknown as DesktopApi}
       />,
     );
@@ -38,6 +39,7 @@ describe("SlackAppIconStep", () => {
     }));
     render(
       <SlackAppIconStep
+        variant="settings"
         desktopApi={{ openSlackAppSettings } as unknown as DesktopApi}
       />,
     );
@@ -57,6 +59,7 @@ describe("SlackAppIconStep", () => {
     }));
     render(
       <SlackAppIconStep
+        variant="settings"
         desktopApi={{ openSlackAppSettings } as unknown as DesktopApi}
       />,
     );
@@ -69,7 +72,7 @@ describe("SlackAppIconStep", () => {
   });
 
   it("offers no drag where main cannot start one", () => {
-    render(<SlackAppIconStep desktopApi={{} as unknown as DesktopApi} />);
+    render(<SlackAppIconStep variant="settings" desktopApi={{} as unknown as DesktopApi} />);
 
     expect(screen.getByRole("img", { name: "PwrAgent app icon" })).toHaveAttribute(
       "draggable",

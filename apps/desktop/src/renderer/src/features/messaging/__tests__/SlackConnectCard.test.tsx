@@ -261,7 +261,7 @@ describe("SlackConnectCard", () => {
     expect(screen.getByRole("button", { name: "Create Slack app" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Copy link for an admin" })).toBeDisabled();
     expect(
-      screen.getByText("Choose the agent name first. Slack creates the app with it."),
+      screen.getByText("Save the agent name above first. Slack creates the app with it."),
     ).toBeInTheDocument();
 
     fireEvent.keyDown(screen.getByRole("textbox", { name: "Agent name" }), {
@@ -282,6 +282,24 @@ describe("SlackConnectCard", () => {
     expect(screen.getByRole("button", { name: "Create Slack app" })).toBeEnabled();
     // Nothing to save until the name is edited.
     expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+  });
+
+  // Settings asks for the name in a step of its own, ahead of the card.
+  it("leaves the name to the caller, and still holds Create for it", () => {
+    render(
+      <SlackConnectCard
+        appName={{ value: CHOSEN_NAME, source: "default" }}
+        desktopApi={{ openSlackCreateApp: vi.fn() } as unknown as DesktopApi}
+        variant="settings"
+      />,
+    );
+
+    expect(screen.queryByRole("textbox", { name: "Agent name" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create Slack app" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Copy manifest" })).toBeDisabled();
+    expect(
+      screen.getByText("Save the agent name above first. Slack creates the app with it."),
+    ).toBeInTheDocument();
   });
 
   it("holds the manifest actions while a settings write is out", () => {

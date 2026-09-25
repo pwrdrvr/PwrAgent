@@ -5642,6 +5642,10 @@ describe("SettingsScreen", () => {
       source: "keychain",
       writable: true,
     };
+    snapshot.messaging.slack.appName = {
+      value: "PwrAgent - fixture-user",
+      source: "config",
+    };
     const settings = createSettingsState(snapshot);
 
     render(
@@ -5674,19 +5678,22 @@ describe("SettingsScreen", () => {
         stage.querySelector(".automation-stage__progress")?.textContent,
       ]),
     ).toEqual([
+      ["Your agent", "Named"],
       ["Slack app", "Created"],
       ["Bot User OAuth Token", "Saved"],
       ["App-Level Token", "Next"],
       ["Signing Secret", "Waiting"],
-      // Nothing reports whether Slack has an icon, so it never becomes Next.
-      ["PwrAgent icon", "Optional"],
       ["Connection", "Waiting"],
     ]);
-    expect(stages[2]).toHaveAttribute("aria-current", "step");
+    expect(stages[3]).toHaveAttribute("aria-current", "step");
     // The app-level token needs exactly one scope, picked in Slack's dialog.
-    expect(within(stages[2]).getByText("connections:write")).toBeInTheDocument();
+    expect(within(stages[3]).getByText("connections:write")).toBeInTheDocument();
     expect(
-      within(stages[1]).getByText("Bot User OAuth Token", { selector: "strong" }),
+      within(stages[2]).getByText("Bot User OAuth Token", { selector: "strong" }),
+    ).toBeInTheDocument();
+    // Creating the app leaves the operator on the page that takes the icon.
+    expect(
+      within(stages[1]).getByRole("img", { name: "PwrAgent app icon" }),
     ).toBeInTheDocument();
   });
 
@@ -5851,6 +5858,17 @@ describe("SettingsScreen", () => {
 
     const name = screen.getByRole("textbox", { name: "Agent name" });
     expect(name).toHaveValue("PwrAgent - fixture-user");
+    // The name is step 1, ahead of the Create it unlocks.
+    const nameStage = name.closest(".automation-stage") as HTMLElement;
+    expect(nameStage).toHaveAttribute("aria-current", "step");
+    expect(
+      within(nameStage).getByText("Your agent", { selector: "h3" }),
+    ).toBeInTheDocument();
+    expect(
+      within(nameStage.nextElementSibling as HTMLElement).getByRole("button", {
+        name: "Create Slack app",
+      }),
+    ).toBeDisabled();
     expect(screen.getByRole("button", { name: "Create Slack app" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Copy link for an admin" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Copy manifest" })).toBeDisabled();

@@ -80,7 +80,10 @@ import {
   type SettingsChipTone,
 } from "./SettingsLayout";
 import { AutomationStage } from "../automations/AutomationFunnel";
-import { SlackAppIconStep } from "../messaging/SlackAppIconStep";
+import {
+  SlackAppNameField,
+  chosenSlackAppName,
+} from "../messaging/SlackAppNameField";
 import { SlackConnectCard } from "../messaging/SlackConnectCard";
 import {
   SlackAppTokenSteps,
@@ -279,6 +282,11 @@ export function MessagingSettings(props: {
   // One step is "Next": the first not yet done, as in Cloudflare setup.
   // Creating the app leaves nothing to observe until a bot token exists.
   const slackConnectSteps = [
+    {
+      key: "name",
+      done: chosenSlackAppName(slack.appName) !== undefined,
+      label: "Named",
+    },
     { key: "create", done: slack.botToken.configured, label: "Created" },
     { key: "bot", done: slack.botToken.configured, label: "Saved" },
     { key: "app", done: slack.appToken.configured, label: "Saved" },
@@ -1332,6 +1340,26 @@ export function MessagingSettings(props: {
         </div>
         <div className="slack-setup">
           <div className="automation-funnel">
+            {/* Its own step because it is what unlocks Create. */}
+            <AutomationStage
+              verb="Name"
+              title="Your agent"
+              progress={slackConnectProgress("name")}
+            >
+              <SlackAppNameField
+                appName={slack.appName}
+                disabled={props.saving}
+                variant="settings"
+                onSave={(appName) =>
+                  props.onSaveSlack({
+                    ...slack,
+                    // "config" even for the unedited suggestion: taking it
+                    // is the choice the source records.
+                    appName: { ...slack.appName, value: appName, source: "config" },
+                  })
+                }
+              />
+            </AutomationStage>
             <AutomationStage
               verb="Create"
               title="Slack app"
@@ -1342,14 +1370,6 @@ export function MessagingSettings(props: {
                 desktopApi={props.desktopApi}
                 saving={props.saving}
                 variant="settings"
-                onSaveAppName={(appName) =>
-                  props.onSaveSlack({
-                    ...slack,
-                    // "config" even for the unedited suggestion: taking it
-                    // is the choice the source records.
-                    appName: { ...slack.appName, value: appName, source: "config" },
-                  })
-                }
               />
             </AutomationStage>
             <AutomationStage
@@ -1399,14 +1419,6 @@ export function MessagingSettings(props: {
                 onClearSecret={props.onClearSecret}
                 onReplaceSecret={props.onReplaceSecret}
               />
-            </AutomationStage>
-            <AutomationStage
-              verb="Add"
-              title="PwrAgent icon"
-              // Nothing reports whether Slack has an icon, and nothing needs one.
-              progress={{ state: "waiting", label: "Optional" }}
-            >
-              <SlackAppIconStep desktopApi={props.desktopApi} />
             </AutomationStage>
             <AutomationStage
               verb="Test"

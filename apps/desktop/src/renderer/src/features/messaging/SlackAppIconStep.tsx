@@ -7,10 +7,13 @@ import pwragentAppIcon from "../../../../../build/icon.png";
 /**
  * Slack's manifest has no icon field, and the only API that sets one works
  * for apps created through a Slack "manager" app, which a customer-owned app
- * is not. So the icon is one drag: open the app's Basic Information page, and
- * drop the file on Slack's upload window.
+ * is not. So the icon is one drag, offered in the Create step: creating the
+ * app leaves the operator on its Basic Information page, which takes it.
  */
-export function SlackAppIconStep(props: { desktopApi?: DesktopApi }) {
+export function SlackAppIconStep(props: {
+  desktopApi?: DesktopApi;
+  variant: "settings" | "onboarding";
+}) {
   const [opening, setOpening] = useState(false);
   const [feedback, setFeedback] = useState<
     { kind: "status" | "error"; message: string } | undefined
@@ -43,8 +46,10 @@ export function SlackAppIconStep(props: { desktopApi?: DesktopApi }) {
 
   return (
     <div className="slack-icon-step">
+      <span className="slack-connect__label">App icon · optional</span>
       <p className="slack-connect__step">
-        Optional. On <strong>Basic Information</strong>, under{" "}
+        After <strong>Create</strong>, Slack opens your app&rsquo;s{" "}
+        <strong>Basic Information</strong> page. Under{" "}
         <strong>Display Information</strong>, click{" "}
         <strong>Add App Icon</strong>, then drag this icon into Slack&rsquo;s
         upload window or file picker.
@@ -65,7 +70,11 @@ export function SlackAppIconStep(props: { desktopApi?: DesktopApi }) {
           }}
         />
         <button
-          className="button button--secondary"
+          className={
+            props.variant === "onboarding"
+              ? "onboarding-wizard__btn onboarding-wizard__btn--ghost"
+              : "button button--secondary"
+          }
           disabled={!openSettings || opening}
           type="button"
           onClick={() => {
