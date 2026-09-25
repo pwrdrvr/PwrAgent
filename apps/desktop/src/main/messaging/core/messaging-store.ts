@@ -589,6 +589,23 @@ export class MessagingStore {
     );
   }
 
+  async findActivePendingAsyncQuestionnaires(params: {
+    backend: MessagingBindingRecord["backend"];
+    threadId: MessagingBindingRecord["threadId"];
+    now?: number;
+  }): Promise<MessagingPendingIntentRecord[]> {
+    const now = params.now ?? Date.now();
+    return await this.withReadData((data) =>
+      Object.values(data.pendingIntents)
+        .filter((intent) =>
+          intent.expiresAt > now
+          && isAsyncQuestionnaireForThread(intent, params)
+        )
+        .sort((a, b) => b.createdAt - a.createdAt)
+        .map((intent) => structuredClone(intent)),
+    );
+  }
+
   async deletePendingIntent(id: string): Promise<void> {
     await this.withData((data) => {
       delete data.pendingIntents[id];
@@ -986,6 +1003,21 @@ function sanitizeBinding(binding: MessagingBindingRecord): MessagingBindingRecor
     statusSurface: sanitizeSurfaceRef(binding.statusSurface),
     targetKind: normalizeMessagingBindingTargetKind(binding.targetKind),
   };
+}
+
+export function isAsyncQuestionnaireForThread(
+  pendingIntent: MessagingPendingIntentRecord,
+  params: {
+    backend: MessagingBindingRecord["backend"];
+    threadId: MessagingBindingRecord["threadId"];
+  },
+): boolean {
+  const intent = pendingIntent.intent;
+  return (
+    intent.kind === "questionnaire"
+    && intent.asyncReply?.backend === params.backend
+    && intent.asyncReply.threadId === params.threadId
+  );
 }
 
 function sanitizePendingIntent(

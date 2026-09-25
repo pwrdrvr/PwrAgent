@@ -858,7 +858,11 @@ export type MessagingQuestionnaireAnswer =
       value: string;
     };
 
-export type MessagingQuestionnairePhase = "answering" | "review" | "submitted";
+export type MessagingQuestionnairePhase =
+  | "answering"
+  | "review"
+  | "submitted"
+  | "skipped";
 
 export type MessagingApprovalDecision =
   | "accept"
@@ -1039,6 +1043,17 @@ export type MessagingQuestionnaireIntent = MessagingBaseSurfaceIntent & {
   currentIndex: number;
   phase: MessagingQuestionnairePhase;
   questions: MessagingQuestionnaireQuestion[];
+  /**
+   * Set when the agent asked without pausing its turn. No request is waiting
+   * for the answer: it goes back to the thread as an ordinary message that
+   * names the agent message holding the questions, and the operator may skip
+   * the questions instead.
+   */
+  asyncReply?: {
+    backend: AppServerBackendKind;
+    itemId: string;
+    threadId: ThreadIdentifier;
+  };
 };
 
 export type MessagingReviewPhase =
@@ -1119,9 +1134,19 @@ export function messagingQuestionnaireActions(
   intent: MessagingQuestionnaireIntent,
 ): MessagingSurfaceAction[] {
   const normalized = normalizeMessagingQuestionnaireIntent(intent);
-  if (normalized.phase === "submitted") {
+  if (normalized.phase === "submitted" || normalized.phase === "skipped") {
     return [];
   }
+  const skipActions: MessagingSurfaceAction[] = normalized.asyncReply
+    ? [
+        {
+          id: "questionnaire:skip",
+          label: "Skip",
+          style: "navigation",
+          fallbackText: "skip",
+        },
+      ]
+    : [];
 
   if (normalized.phase === "review") {
     return [
@@ -1137,6 +1162,7 @@ export function messagingQuestionnaireActions(
         style: "primary",
         fallbackText: "submit",
       },
+      ...skipActions,
     ];
   }
 
@@ -1169,6 +1195,7 @@ export function messagingQuestionnaireActions(
       fallbackText: isFinalQuestion ? "submit" : "next",
     });
   }
+  actions.push(...skipActions);
 
   return actions;
 }
@@ -1200,6 +1227,15 @@ export function formatMessagingQuestionnaireText(
   intent: MessagingQuestionnaireIntent,
 ): string {
   const normalized = normalizeMessagingQuestionnaireIntent(intent);
+  if (normalized.phase === "skipped") {
+    return [
+      "Skipped questions",
+      "",
+      ...normalized.questions.map((question, index) =>
+        `${index + 1}. ${[question.header, question.question].filter(Boolean).join(": ")}`
+      ),
+    ].join("\n");
+  }
   if (normalized.phase === "review" || normalized.phase === "submitted") {
     const lines = [
       normalized.phase === "submitted" ? "Submitted answers" : "Review answers",
@@ -1250,7 +1286,12 @@ export function formatMessagingQuestionnaireText(
   });
 
   if (question.allowFreeform) {
-    lines.push("", "Other: reply with a free-form answer.");
+    lines.push(
+      "",
+      question.options.length > 0
+        ? "Other: reply with a free-form answer."
+        : "Reply with your answer.",
+    );
   }
 
   const currentAnswer = messagingQuestionnaireAnswerDisplay(
@@ -1267,7 +1308,12 @@ export function formatMessagingQuestionnaireText(
 function isMessagingQuestionnairePhase(
   value: unknown,
 ): value is MessagingQuestionnairePhase {
-  return value === "answering" || value === "review" || value === "submitted";
+  return (
+    value === "answering"
+    || value === "review"
+    || value === "submitted"
+    || value === "skipped"
+  );
 }
 
 export type MessagingApprovalIntent = MessagingBaseSurfaceIntent & {

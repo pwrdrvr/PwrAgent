@@ -20,7 +20,7 @@ type PendingQuestionnaireProps = {
 const FREEFORM_MAX_ROWS = 4;
 const FREEFORM_FALLBACK_LINE_HEIGHT = 19;
 
-function resizeFreeformTextarea(element: HTMLTextAreaElement | null): void {
+export function resizeFreeformTextarea(element: HTMLTextAreaElement | null): void {
   if (!element) {
     return;
   }

@@ -24586,25 +24586,86 @@ a.transcript-message__messaging-origin:focus-visible {
 }
 
 .transcript-async-questions {
-  display: grid;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-top: 10px;
+}
+
+/* A row, so the label keeps its own width instead of stretching across the
+   message like an input field. */
+.transcript-async-questions__header {
+  display: flex;
+  align-items: center;
   gap: 8px;
-  margin-top: 12px;
+}
+
+.transcript-async-questions__status {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
 }
 
 .transcript-async-questions__question {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 8px;
 }
 
-.transcript-async-questions__question p {
-  margin: 0;
-  color: var(--text-secondary);
-  font-size: var(--transcript-text-size);
+.transcript-async-questions__question + .transcript-async-questions__question {
+  padding-top: 14px;
+  border-top: 1px solid var(--border-subtle);
 }
 
-.transcript-async-questions__hint {
+.transcript-async-questions__title {
+  margin: 0;
+}
+
+.transcript-async-questions__answer {
+  display: flex;
+  gap: 10px;
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--transcript-text-size);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.transcript-async-questions__answer-label {
+  flex: 0 0 auto;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-weight: 650;
+}
+
+.transcript-async-questions__options {
+  margin: 0;
+  padding-left: 20px;
+  color: var(--text-secondary);
+  font-size: var(--transcript-text-size);
+  line-height: 1.5;
+}
+
+.transcript-question-replies__item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.transcript-question-replies__question {
+  margin: 0;
+  padding-left: 10px;
+  border-left: 2px solid var(--border-subtle);
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.transcript-question-replies__answer {
+  margin: 0;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .transcript-questionnaire__option {

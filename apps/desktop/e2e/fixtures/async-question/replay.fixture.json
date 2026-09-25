@@ -1,0 +1,125 @@
+{
+  "metadata": {
+    "backend": "codex",
+    "scenario": "async-question",
+    "sourceCaptureId": "synthetic-async-question",
+    "threadId": "thread-async-question"
+  },
+  "steps": [
+    {
+      "id": "initialize-1",
+      "kind": "response",
+      "method": "initialize",
+      "result": {
+        "serverInfo": {
+          "name": "Replay Codex",
+          "version": "1.0.0"
+        },
+        "methods": [
+          "thread/list",
+          "thread/read",
+          "skills/list",
+          "turn/start"
+        ]
+      }
+    },
+    {
+      "id": "thread-list-1",
+      "kind": "response",
+      "method": "thread/list",
+      "result": [
+        {
+          "id": "thread-async-question",
+          "title": "Gateway endpoint fallback",
+          "titleSource": "explicit",
+          "summary": "Replay seeded async questions",
+          "source": "codex",
+          "executionMode": "default",
+          "linkedDirectories": [],
+          "inbox": {
+            "inInbox": true,
+            "reason": "new-thread"
+          },
+          "updatedAt": 1760000002000
+        }
+      ]
+    },
+    {
+      "id": "thread-read-1",
+      "kind": "response",
+      "method": "thread/read",
+      "result": {
+        "entries": [
+          {
+            "type": "message",
+            "id": "message-1",
+            "role": "user",
+            "text": "Why does an unreachable endpoint hold up the fallback?"
+          },
+          {
+            "type": "message",
+            "id": "call-endpoints",
+            "role": "assistant",
+            "text": "Which gateway endpoints does the failing profile list, in order?",
+            "delivery": "async",
+            "questions": [
+              {
+                "title": "Which gateway endpoints does the failing profile list, in order?",
+                "options": null
+              }
+            ]
+          },
+          {
+            "type": "message",
+            "id": "call-retry",
+            "role": "assistant",
+            "text": "How should the fallback retry?\n- Try the next endpoint after 20 seconds\n- Try every endpoint at once",
+            "delivery": "async",
+            "questions": [
+              {
+                "title": "How should the fallback retry?",
+                "options": [
+                  "Try the next endpoint after 20 seconds",
+                  "Try every endpoint at once"
+                ]
+              }
+            ]
+          },
+          {
+            "type": "message",
+            "id": "message-4",
+            "role": "assistant",
+            "text": "Network failures move on to the next saved endpoint after at most 20 seconds."
+          }
+        ],
+        "messages": [
+          {
+            "id": "message-1",
+            "role": "user",
+            "text": "Why does an unreachable endpoint hold up the fallback?"
+          },
+          {
+            "id": "message-4",
+            "role": "assistant",
+            "text": "Network failures move on to the next saved endpoint after at most 20 seconds."
+          }
+        ],
+        "lastUserMessage": "Why does an unreachable endpoint hold up the fallback?",
+        "lastAssistantMessage": "Network failures move on to the next saved endpoint after at most 20 seconds.",
+        "pagination": {
+          "supportsPagination": false,
+          "hasPreviousPage": false
+        }
+      }
+    },
+    {
+      "id": "turn-start-1",
+      "kind": "response",
+      "method": "turn/start",
+      "result": {
+        "threadId": "thread-async-question",
+        "turnId": "turn-answer-2"
+      }
+    }
+  ]
+}

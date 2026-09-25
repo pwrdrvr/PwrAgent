@@ -72,7 +72,9 @@ import {
   findPreferredReviewWorkspaceCwd,
   findPrimaryReviewWorkspaceCwd,
   normalizeGitOriginUrl,
+  parseCodexAsyncQuestionReply,
   readCodexEnvironmentActionRuns,
+  summarizeCodexAsyncQuestionReply,
 } from "@pwragent/shared";
 import {
   BranchIcon,
@@ -262,13 +264,19 @@ type ComposerProps = {
   contextWindow?: ThreadContextWindowState;
   composerImplementation?: DesktopChatReplyComposer;
   draftStore?: ComposerDraftStore;
-  /** A transcript async-question choice to add to the current reply draft. */
-  replySuggestion?: {
+  /**
+   * A reply written outside the composer, such as an answer to an agent's
+   * question. It takes the same start, steer, and queue paths as a typed
+   * reply and leaves the operator's draft alone. Each id is sent once, and
+   * `onReplySubmissionSettled` says whether the composer took it.
+   */
+  replySubmission?: {
     id: number;
     threadId: string;
     backend: AppServerBackendKind;
     text: string;
   };
+  onReplySubmissionSettled?: (id: number, accepted: boolean) => void;
   launchpad?: NavigationLaunchpadDraft;
   launchpadError?: string;
   launchpadMaterializing?: boolean;
@@ -1271,6 +1279,10 @@ function formatDraftPreview(draft: QueuedTurnDraft): string {
   }
 
   const text = draft.text.trim();
+  const questionReplies = parseCodexAsyncQuestionReply(text);
+  if (questionReplies) {
+    return summarizeCodexAsyncQuestionReply(questionReplies);
+  }
   if (text) {
     return text;
   }
@@ -3493,7 +3505,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     setDraft(hydrated.draft);
     setSkillTokens(hydrated.skillTokens);
   };
-  const appliedReplySuggestionId = useRef<number | undefined>(undefined);
+  const appliedReplySubmissionId = useRef<number | undefined>(undefined);
   const clearComposerDraft = (): void => {
     deletedSkillTokenHistoryRef.current = [];
     setEditorDocument(undefined);
@@ -3620,40 +3632,24 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     draftStore.set(scopeKey, state);
   };
   useEffect(() => {
-    const suggestion = props.replySuggestion;
-    if (
-      !suggestion
-      || appliedReplySuggestionId.current === suggestion.id
-      || suggestion.threadId !== props.thread?.id
-      || suggestion.backend !== props.thread?.source
-    ) {
+    const submission = props.replySubmission;
+    if (!submission || appliedReplySubmissionId.current === submission.id) {
       return;
     }
-    appliedReplySuggestionId.current = suggestion.id;
-    const current = latestDraftSnapshotRef.current.snapshot;
-    const nextDraft = current.draft.trim()
-      ? `${current.draft.trimEnd()}\n\n${suggestion.text}`
-      : suggestion.text;
-    const hydrated = hydrateComposerDraft(
-      nextDraft,
-      props.skills,
-      threadLinks,
-      pullRequestLinks,
-    );
-    const nextSnapshot: ComposerDraftSnapshot = {
-      ...current,
-      draft: hydrated.draft,
-      editorDocument: undefined,
-      skillTokens: hydrated.skillTokens,
-    };
-    latestDraftSnapshotRef.current = { scopeKey: composerScopeKey, snapshot: nextSnapshot };
-    saveComposerDraftSnapshot(composerScopeKey, nextSnapshot);
-    deletedSkillTokenHistoryRef.current = [];
-    setEditorDocument(undefined);
-    setDraft(hydrated.draft);
-    setSkillTokens(hydrated.skillTokens);
-    requestAnimationFrame(() => inputRef.current?.focus());
-  }, [props.replySuggestion, props.thread?.id, props.thread?.source, props.skills, threadLinks, pullRequestLinks, composerScopeKey, saveComposerDraftSnapshot]);
+    appliedReplySubmissionId.current = submission.id;
+    if (
+      submission.threadId !== props.thread?.id
+      || submission.backend !== props.thread?.source
+    ) {
+      props.onReplySubmissionSettled?.(submission.id, false);
+      return;
+    }
+    void submitReplyText(submission.text)
+      .catch(() => false)
+      .then((accepted) => props.onReplySubmissionSettled?.(submission.id, accepted));
+    // submitReplyText is recreated each render; the id guard sends once.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.replySubmission]);
   const clearComposerDraftSnapshot = (scopeKey: string): void => {
     if (isDraftStoreScope(scopeKey)) {
       draftStore.delete(scopeKey);
@@ -6426,7 +6422,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       payload?: ComposerTurnPayload;
       queueClaimed?: boolean;
     },
-  ): Promise<void> => {
+  ): Promise<boolean> => {
     const backendQueueSubmission = options?.backendQueueProjection;
     const submittedScopeKey =
       backendQueueSubmission?.scopeKey ?? composerScopeKey;
@@ -6454,7 +6450,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       if (queued && options?.queueClaimed) {
         globalQueuedTurnReleaseScopeKeys.delete(composerScopeKey);
       }
-      return;
+      return false;
     }
 
     const payloadOrPromise =
@@ -6485,7 +6481,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       if (queued && options?.queueClaimed) {
         globalQueuedTurnReleaseScopeKeys.delete(composerScopeKey);
       }
-      return;
+      return false;
     }
 
     const collaborationMode =
@@ -6629,6 +6625,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
           "sent",
         );
       }
+      return true;
     } catch (error) {
       if (backendQueueSubmission) {
         removeQueuedTurnInScope(
@@ -6668,6 +6665,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       if (queued && options?.queueClaimed) {
         globalQueuedTurnReleaseScopeKeys.delete(composerScopeKey);
       }
+      return false;
     }
   };
 
@@ -7685,6 +7683,72 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     } else {
       continueSteering(created);
     }
+  };
+
+  /**
+   * Sends text that did not come from the draft. It is passed to each path
+   * as its own queued draft, so a failure never restores it into the
+   * operator's reply and a success never clears what they were typing.
+   */
+  const submitReplyText = async (text: string): Promise<boolean> => {
+    if (
+      !props.thread
+      || props.launchpad
+      || props.disabled
+      || !props.desktopApi?.startTurn
+      || turnPayloadPreparationInFlightRef.current
+      || sendPreparationRef.current
+    ) {
+      return false;
+    }
+    const input: AppServerTurnInputItem[] = [{ type: "text", text }];
+    const payload: ComposerTurnPayload = { displayText: text, imageParts: [], input };
+    const reply: QueuedTurnDraft = {
+      id: createQueuedTurnId(),
+      text,
+      imageAttachments: [],
+      fileAttachments: [],
+      input,
+    };
+
+    if (shouldQueueThreadSubmit()) {
+      const turnId = activeTurnIdRef.current;
+      if (turnId && supportsSteering && !pendingSteer) {
+        const created = createPendingSteer(reply, turnId, composerScopeKey);
+        const pending = isPromiseLike(created) ? await created : created;
+        if (pending) {
+          // A steer that fails stays parked in the composer and retries.
+          void submitPendingSteer(pending, turnId, composerScopeKey);
+          return true;
+        }
+      }
+      const queueEntryId = createQueuedTurnId();
+      const backendQueueProjection: QueuedTurnDraft = {
+        ...reply,
+        id: queueEntryId,
+        backendQueuePending: true,
+        queueEntryId,
+      };
+      setSendError(undefined);
+      updateSending(true);
+      enqueueQueuedTurnInScope(composerScopeKey, backendQueueProjection);
+      return await sendThreadTurn(reply, {
+        backendQueueProjection: {
+          queued: backendQueueProjection,
+          scopeKey: composerScopeKey,
+          submittedSnapshot: latestDraftSnapshotRef.current.snapshot,
+        },
+        payload,
+      });
+    }
+
+    const prepared = await prepareThreadTurnPayload(payload);
+    if (!prepared) {
+      return false;
+    }
+    setSendError(undefined);
+    updateSending(true);
+    return await sendThreadTurn(reply, { payload: prepared });
   };
 
   const submitTurn = async (mode: "default" | "steer" = "default"): Promise<void> => {
@@ -10663,19 +10727,23 @@ export const Composer = memo(function Composer(props: ComposerProps) {
           <div className="composer__queued-actions">
             {pendingSteer.status === "pending" ? (
               <>
-                <button
-                  className="composer__secondary-action"
-                  type="button"
-                  onClick={() => {
-                    setComposerDraftFromCanonical(pendingSteer.text);
-                    setImageAttachments(pendingSteer.imageAttachments);
-                    setFileAttachments(pendingSteer.fileAttachments);
-                    setPendingSteer(undefined);
-                    requestAnimationFrame(() => inputRef.current?.focus());
-                  }}
-                >
-                  Edit
-                </button>
+                {/* An answer to an agent's question was never a draft, and
+                    editing it would replace the operator's own. */}
+                {parseCodexAsyncQuestionReply(pendingSteer.text) ? null : (
+                  <button
+                    className="composer__secondary-action"
+                    type="button"
+                    onClick={() => {
+                      setComposerDraftFromCanonical(pendingSteer.text);
+                      setImageAttachments(pendingSteer.imageAttachments);
+                      setFileAttachments(pendingSteer.fileAttachments);
+                      setPendingSteer(undefined);
+                      requestAnimationFrame(() => inputRef.current?.focus());
+                    }}
+                  >
+                    Edit
+                  </button>
+                )}
                 <button
                   className="composer__secondary-action"
                   type="button"

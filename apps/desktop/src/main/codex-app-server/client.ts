@@ -14,6 +14,7 @@ import {
   formatTokenUsageUsdPerMillion,
   isToolManagedWorktreePath,
   navigationQueryEventRequiresRefresh,
+  normalizeCodexAsyncQuestions,
   parseCodexTurnErrorMessage,
   resolveOpenAiPricingServiceTier,
   resolveTokenUsagePriceUnavailableReason,
@@ -2650,24 +2651,10 @@ function asyncQuestionMetadata(record: Record<string, unknown>): Pick<
   if (record.delivery !== "async") {
     return {};
   }
-  const questions = Array.isArray(record.questions)
-    ? record.questions.flatMap((value) => {
-        const question = asRecord(value);
-        if (!question || typeof question.title !== "string" || !question.title.trim()) {
-          return [];
-        }
-        const options = question.options === null
-          ? null
-          : Array.isArray(question.options)
-            && question.options.every((option) => typeof option === "string")
-            ? question.options as string[]
-            : null;
-        return [{ title: question.title, options }];
-      })
-    : [];
+  const questions = normalizeCodexAsyncQuestions(record.questions);
   return {
     delivery: "async",
-    ...(questions.length > 0 ? { questions } : {}),
+    ...(questions ? { questions } : {}),
   };
 }
 

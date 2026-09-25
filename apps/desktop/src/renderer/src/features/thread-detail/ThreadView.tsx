@@ -56,6 +56,7 @@ import {
   buildThreadIdentityKey,
   isBranchDrifted,
   isRemoteFederationTarget,
+  parseCodexAsyncQuestionReply,
   PWRSNAP_MCP_CONNECTION_ID,
   PWRGIT_MCP_CONNECTION_ID,
   readCodexEnvironmentActionRuns,
@@ -1218,12 +1219,22 @@ export function ThreadView(props: ThreadViewProps) {
   const [pendingRequestBusy, setPendingRequestBusy] = useState(false);
   const [pendingRequestError, setPendingRequestError] = useState<string>();
   const asyncQuestionReplyId = useRef(0);
+  const asyncQuestionReplySettlers = useRef(new Map<number, (accepted: boolean) => void>());
+  const asyncQuestionSubmissions = useRef(new Map<number, { threadKey: string; text: string }>());
   const [asyncQuestionReply, setAsyncQuestionReply] = useState<{
     id: number;
     threadId: string;
     backend: NavigationThreadSummary["source"];
     text: string;
   }>();
+  // Dismissing Codex's async questions only hides their controls, so it is
+  // this window's choice for the session, as skipping is in Codex's own UI.
+  const [dismissedAsyncQuestions, setDismissedAsyncQuestions] =
+    useState<ReadonlySet<string>>(() => new Set());
+  // Answers the composer took that the transcript may not show yet, as when
+  // one waits in the queue. Kept here so a card mounted again still has them.
+  const [sentAsyncQuestionAnswers, setSentAsyncQuestionAnswers] =
+    useState<ReadonlyMap<string, string>>(() => new Map());
   const [expandedImage, setExpandedImage] = useState<AppServerThreadImagePart>();
   const [contextRailResizing, setContextRailResizing] = useState(false);
   const [transcriptReglueRequestKey, setTranscriptReglueRequestKey] = useState(0);
@@ -2204,6 +2215,92 @@ export function ThreadView(props: ThreadViewProps) {
     }
   };
 
+  const asyncQuestionThreadKey = selectedThread
+    ? `${selectedThread.source}:${selectedThread.id}`
+    : undefined;
+  const dismissedAsyncQuestionMessageIds = useMemo(() => {
+    const prefix = `${asyncQuestionThreadKey}\0`;
+    return new Set(
+      [...dismissedAsyncQuestions]
+        .filter((key) => key.startsWith(prefix))
+        .map((key) => key.slice(prefix.length)),
+    );
+  }, [asyncQuestionThreadKey, dismissedAsyncQuestions]);
+  const threadSentAsyncQuestionAnswers = useMemo(() => {
+    const prefix = `${asyncQuestionThreadKey}\0`;
+    return new Map(
+      [...sentAsyncQuestionAnswers]
+        .filter(([key]) => key.startsWith(prefix))
+        .map(([key, answer]) => [key.slice(prefix.length), answer]),
+    );
+  }, [asyncQuestionThreadKey, sentAsyncQuestionAnswers]);
+  useEffect(() => {
+    const settlers = asyncQuestionReplySettlers.current;
+    return () => {
+      // The composer drops a reply addressed to a thread it no longer shows.
+      for (const settle of settlers.values()) settle(false);
+      settlers.clear();
+      setAsyncQuestionReply(undefined);
+    };
+  }, [asyncQuestionThreadKey]);
+  const handleAnswerAsyncQuestions = useEventCallback((text: string): Promise<boolean> => {
+    // One answer at a time: the composer applies only the newest submission.
+    if (!selectedThread || asyncQuestionReplySettlers.current.size > 0) {
+      return Promise.resolve(false);
+    }
+    asyncQuestionReplyId.current += 1;
+    const id = asyncQuestionReplyId.current;
+    const thread = selectedThread;
+    asyncQuestionSubmissions.current.set(id, {
+      threadKey: `${thread.source}:${thread.id}`,
+      text,
+    });
+    return new Promise<boolean>((resolve) => {
+      asyncQuestionReplySettlers.current.set(id, resolve);
+      setAsyncQuestionReply({
+        id,
+        threadId: thread.id,
+        backend: thread.source,
+        text,
+      });
+    });
+  });
+  const handleReplySubmissionSettled = useEventCallback((id: number, accepted: boolean) => {
+    const settle = asyncQuestionReplySettlers.current.get(id);
+    asyncQuestionReplySettlers.current.delete(id);
+    // Record the answer even when the operator has left the thread, whose
+    // card was already told the send did not settle there.
+    const submission = asyncQuestionSubmissions.current.get(id);
+    asyncQuestionSubmissions.current.delete(id);
+    if (accepted && submission) {
+      setSentAsyncQuestionAnswers((current) => {
+        const next = new Map(current);
+        for (const reply of parseCodexAsyncQuestionReply(submission.text) ?? []) {
+          next.set(`${submission.threadKey}\0${reply.questionItemId}`, reply.answer);
+        }
+        return next;
+      });
+    }
+    settle?.(accepted);
+    // A Composer mounted later, as after the launchpad, must not send it again.
+    setAsyncQuestionReply((current) => (current?.id === id ? undefined : current));
+  });
+  const handleAsyncQuestionsDismissedChange = useEventCallback(
+    (messageId: string, dismissed: boolean) => {
+      if (!asyncQuestionThreadKey) return;
+      const key = `${asyncQuestionThreadKey}\0${messageId}`;
+      setDismissedAsyncQuestions((current) => {
+        if (current.has(key) === dismissed) return current;
+        const next = new Set(current);
+        if (dismissed) {
+          next.add(key);
+        } else {
+          next.delete(key);
+        }
+        return next;
+      });
+    },
+  );
   const handleBeforeStartTurn = useEventCallback(async (signal?: AbortSignal) => {
     const drifted = await checkSelectedThreadBranchDrift("turn", signal);
     // An aborted check reports no drift. It must still prevent sending.
@@ -3855,16 +3952,10 @@ export function ThreadView(props: ThreadViewProps) {
               onLoadOlder={loadOlderTranscript}
               onLinkedMessageHandled={props.onLinkedMessageHandled}
               onOpenImage={setExpandedImage}
-              onChooseAsyncQuestionAnswer={(question, answer) => {
-                if (!selectedThread) return;
-                asyncQuestionReplyId.current += 1;
-                setAsyncQuestionReply({
-                  id: asyncQuestionReplyId.current,
-                  threadId: selectedThread.id,
-                  backend: selectedThread.source,
-                  text: `Answer to “${question}”: ${answer}`,
-                });
-              }}
+              dismissedAsyncQuestionMessageIds={dismissedAsyncQuestionMessageIds}
+              sentAsyncQuestionAnswers={threadSentAsyncQuestionAnswers}
+              onAnswerAsyncQuestions={handleAnswerAsyncQuestions}
+              onAsyncQuestionsDismissedChange={handleAsyncQuestionsDismissedChange}
               onExpandedActivityIdsChange={
                 props.onExpandedTranscriptActivityIdsChange
               }
@@ -3950,7 +4041,8 @@ export function ThreadView(props: ThreadViewProps) {
             mcpConnectionCount={threadMcpConnectionCount}
             composerImplementation={props.composerImplementation}
             draftStore={props.composerDraftStore}
-            replySuggestion={asyncQuestionReply}
+            replySubmission={asyncQuestionReply}
+            onReplySubmissionSettled={handleReplySubmissionSettled}
             directory={props.selectedDirectory}
             directories={props.directories}
             disabled={props.composerDisabled}

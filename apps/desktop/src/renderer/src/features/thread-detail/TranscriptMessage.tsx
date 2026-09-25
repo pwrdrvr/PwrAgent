@@ -8,7 +8,10 @@ import {
   type MouseEvent,
   type ReactNode,
 } from "react";
-import { stripCodexGitActionDirectives } from "@pwragent/shared";
+import {
+  parseCodexAsyncQuestionReply,
+  stripCodexGitActionDirectives,
+} from "@pwragent/shared";
 import type {
   AppServerBackendKind,
   DesktopApplicationsSnapshot,
@@ -35,6 +38,7 @@ import {
 } from "../../lib/thread-links";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import { InstanceChip } from "../federation/InstanceGlyph";
+import { AsyncQuestionCard } from "./AsyncQuestionCard";
 import { ThreadChip } from "./ThreadChip";
 import { TranscriptImage } from "./TranscriptImage";
 import { renderMarkdownToClipboardHtml } from "./markdown-clipboard-html";
@@ -63,7 +67,13 @@ type TranscriptMessageProps = {
   subAgents?: ThreadSubAgentSummary[];
   threadLinkSource?: ThreadLinkSource;
   onOpenImage?: (image: AppServerThreadImagePart) => void;
-  onChooseAsyncQuestionAnswer?: (question: string, answer: string) => void;
+  /** Answers to Codex async questions found anywhere in the transcript. */
+  asyncQuestionReplies?: ReadonlyMap<string, string>;
+  /** Answers sent from this window that the transcript may not show yet. */
+  asyncQuestionSentAnswers?: ReadonlyMap<string, string>;
+  asyncQuestionsDismissed?: boolean;
+  onAnswerAsyncQuestions?: (text: string) => Promise<boolean>;
+  onAsyncQuestionsDismissedChange?: (messageId: string, dismissed: boolean) => void;
 };
 
 // Keep text-only markdown props referentially stable when protocol refreshes
@@ -89,9 +99,19 @@ export const TranscriptMessage = memo(function TranscriptMessage(props: Transcri
     },
     [props.message.parts, props.message.role, props.message.text],
   );
+  const questionReplies = useMemo(
+    () => props.message.role === "user"
+      ? parseCodexAsyncQuestionReply(props.message.text)
+      : undefined,
+    [props.message.role, props.message.text],
+  );
   const messageCopyText = useMemo(
-    () => buildMessageCopyText(props.message, contentParts),
-    [contentParts, props.message]
+    () => questionReplies
+      ? questionReplies
+          .map((reply) => `> ${reply.question}\n\n${reply.answer}`)
+          .join("\n\n")
+      : buildMessageCopyText(props.message, contentParts),
+    [contentParts, props.message, questionReplies]
   );
   const imageParts = useMemo(() => {
     const parts = contentParts.filter(
@@ -307,6 +327,81 @@ export const TranscriptMessage = memo(function TranscriptMessage(props: Transcri
     );
   }
 
+  const asyncQuestions = props.message.role === "assistant"
+    && props.message.delivery === "async"
+    ? props.message.questions
+    : undefined;
+  if (asyncQuestions?.length) {
+    // Codex also writes the questions into the message text. The card shows
+    // them once, with the controls to answer.
+    const messageId = props.message.id;
+    const onDismissedChange = props.onAsyncQuestionsDismissedChange;
+    return (
+      <article
+        className={`transcript-message ${messageToneClass(props.message)}`}
+      >
+        {renderMessageHeader({
+          continuation: false,
+          desktopApi: props.desktopApi,
+          message: props.message,
+          sourceThreadLink,
+          threadLinks,
+          text: messageCopyText,
+        })}
+        <AsyncQuestionCard
+          messageId={messageId}
+          questions={asyncQuestions}
+          replies={props.asyncQuestionReplies}
+          sentAnswers={props.asyncQuestionSentAnswers}
+          dismissed={props.asyncQuestionsDismissed}
+          onAnswer={props.onAnswerAsyncQuestions}
+          onDismissedChange={onDismissedChange
+            ? (dismissed) => onDismissedChange(messageId, dismissed)
+            : undefined}
+          renderTitle={(title) => (
+            <ThreadMarkdown
+              applications={props.applications}
+              className="transcript-message__text-block"
+              desktopApi={props.desktopApi}
+              fileViewerContext={props.fileViewerContext}
+              skills={props.skills}
+              text={title}
+              threadLinkSource={props.threadLinkSource}
+            />
+          )}
+        />
+      </article>
+    );
+  }
+
+  if (questionReplies) {
+    return (
+      <article
+        className={`transcript-message ${messageToneClass(props.message)}`}
+      >
+        {renderMessageHeader({
+          continuation: false,
+          desktopApi: props.desktopApi,
+          message: props.message,
+          sourceThreadLink,
+          threadLinks,
+          text: messageCopyText,
+        })}
+        <div className="transcript-message__text transcript-question-replies">
+          {questionReplies.map((reply, index) => (
+            <div
+              className="transcript-question-replies__item"
+              key={`${reply.questionItemId}:${index}`}
+            >
+              <p className="transcript-question-replies__question">{reply.question}</p>
+              <p className="transcript-question-replies__answer">{reply.answer}</p>
+            </div>
+          ))}
+        </div>
+      </article>
+    );
+  }
+
   if (messageSegments.length === 0) {
     return (
       <article
@@ -366,41 +461,6 @@ export const TranscriptMessage = memo(function TranscriptMessage(props: Transcri
               threadLinkSource: props.threadLinkSource,
             })}
           </div>
-          {index === messageSegments.length - 1
-            && props.message.delivery === "async"
-            && props.message.questions?.length ? (
-              <div className="transcript-async-questions" role="group" aria-label="Questions from Codex">
-                <span className="chip chip--mode">Question</span>
-                <span className="transcript-async-questions__hint">
-                  Choose an option to add it to your reply.
-                </span>
-                {props.message.questions.map((question, questionIndex) => (
-                  <div className="transcript-async-questions__question" key={`${question.title}:${questionIndex}`}>
-                    {props.message.questions?.length !== 1
-                      || !props.message.text.includes(question.title)
-                      ? <p>{question.title}</p>
-                      : null}
-                    {question.options?.length ? (
-                      <div className="transcript-questionnaire__options">
-                        {question.options.map((option) => (
-                          <button
-                            className="transcript-questionnaire__option"
-                            type="button"
-                            key={option}
-                            disabled={!props.onChooseAsyncQuestionAnswer}
-                            onClick={() => props.onChooseAsyncQuestionAnswer?.(question.title, option)}
-                          >
-                            <span className="transcript-questionnaire__option-label">{option}</span>
-                          </button>
-                        ))}
-                      </div>
-                    ) : (
-                      <span className="transcript-async-questions__hint">Reply in the composer.</span>
-                    )}
-                  </div>
-                ))}
-              </div>
-            ) : null}
         </article>
       ))}
     </>

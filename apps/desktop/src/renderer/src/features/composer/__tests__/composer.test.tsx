@@ -6511,49 +6511,110 @@ describe("Composer", () => {
     await waitFor(() => expect(startReview).toHaveBeenCalledWith(expect.objectContaining({ runMode, delivery: "inline" })));
   });
 
-  it("adds async question choices to the reply draft for review before sending", async () => {
-    const draftStore = createComposerDraftStore();
+  describe("async question replies", () => {
+    const reply = "<send_user_message_question_reply>\n"
+      + "[{\"answer\":\"Staging\",\"question\":\"Which environment?\","
+      + "\"questionItemId\":\"[\\\"request_user_input_async\\\",\\\"call-1\\\",0]\"}]\n"
+      + "</send_user_message_question_reply>";
     const thread: NavigationThreadSummary = {
       id: "thread-async-question",
-      title: "Dependency update",
+      title: "Deploy",
       titleSource: "explicit",
       source: "codex",
       executionMode: "default",
       linkedDirectories: [],
       inbox: { inInbox: false },
     };
-    const props = {
-      backends: [backendSummary("codex")],
-      draftStore,
-      skills: [],
-      thread,
-    };
-    const scopeKey = buildThreadComposerScopeKey("codex", thread.id);
-    const view = render(<Composer {...props} replySuggestion={{
-      id: 1,
-      threadId: thread.id,
-      backend: "codex",
-      text: "Answer to install policy: Allow one command",
-    }} />);
-    expect(await screen.findByRole("textbox", { name: "Reply" })).toHaveValue(
-      "Answer to install policy: Allow one command",
-    );
-    expect(draftStore.get(scopeKey)?.draft).toBe(
-      "Answer to install policy: Allow one command",
-    );
 
-    view.rerender(<Composer {...props} replySuggestion={{
-      id: 2,
-      threadId: thread.id,
-      backend: "codex",
-      text: "Answer to global hook: Keep active",
-    }} />);
-    await waitFor(() => expect(screen.getByRole("textbox", { name: "Reply" })).toHaveValue(
-      "Answer to install policy: Allow one command\n\nAnswer to global hook: Keep active",
-    ));
-    expect(draftStore.get(scopeKey)?.draft).toBe(
-      "Answer to install policy: Allow one command\n\nAnswer to global hook: Keep active",
-    );
+    it("sends the reply as its own turn and leaves the operator's draft alone", async () => {
+      const startTurn = vi.fn(async (request: StartTurnRequest) => ({
+        backend: request.backend,
+        threadId: request.threadId,
+        turnId: "turn-answer",
+      }));
+      const onReplySubmissionSettled = vi.fn();
+      const addOptimisticUserMessage = vi.fn(() => "optimistic-answer");
+      const onUserRepliedToThread = vi.fn();
+      const props = {
+        addOptimisticUserMessage,
+        backends: [backendSummary("codex")],
+        desktopApi: { onAgentEvent: () => () => undefined, startTurn },
+        onReplySubmissionSettled,
+        onUserRepliedToThread,
+        skills: [],
+        thread,
+      };
+      const view = render(<Composer {...props} />);
+      const textarea = screen.getByLabelText("Reply");
+      fireEvent.change(textarea, { target: { value: "An unrelated draft" } });
+
+      view.rerender(<Composer {...props} replySubmission={{
+        id: 1,
+        threadId: thread.id,
+        backend: "codex",
+        text: reply,
+      }} />);
+
+      await waitFor(() => expect(onReplySubmissionSettled).toHaveBeenCalledWith(1, true));
+      expect(startTurn).toHaveBeenCalledTimes(1);
+      expect(startTurn).toHaveBeenCalledWith(expect.objectContaining({
+        threadId: thread.id,
+        input: [{ type: "text", text: reply }],
+      }));
+      expect(addOptimisticUserMessage).toHaveBeenCalledWith(reply, []);
+      expect(onUserRepliedToThread).toHaveBeenCalledWith(thread);
+      expect(textarea).toHaveValue("An unrelated draft");
+    });
+
+    it("queues the reply behind a busy thread and previews its answer", async () => {
+      const startTurn = vi.fn(async (request: StartTurnRequest) => ({
+        backend: request.backend,
+        threadId: request.threadId,
+        turnId: "queue-entry-1",
+        queueStatus: "queued" as const,
+        queueEntryId: "queue-entry-1",
+      }));
+      const onReplySubmissionSettled = vi.fn();
+      const props = {
+        backends: [backendSummary("codex")],
+        desktopApi: { onAgentEvent: () => () => undefined, startTurn },
+        onReplySubmissionSettled,
+        skills: [],
+        thread,
+        threadBusy: true,
+      };
+      const view = render(<Composer {...props} />);
+
+      view.rerender(<Composer {...props} replySubmission={{
+        id: 1,
+        threadId: thread.id,
+        backend: "codex",
+        text: reply,
+      }} />);
+
+      await waitFor(() => expect(onReplySubmissionSettled).toHaveBeenCalledWith(1, true));
+      expect(startTurn).toHaveBeenCalledWith(expect.objectContaining({
+        input: [{ type: "text", text: reply }],
+      }));
+      expect(screen.getByLabelText("Queued message")).toHaveTextContent("Answer: Staging");
+      expect(screen.getByLabelText("Queued message")).not.toHaveTextContent("send_user_message");
+    });
+
+    it("refuses a reply addressed to another thread", async () => {
+      const startTurn = vi.fn();
+      const onReplySubmissionSettled = vi.fn();
+      render(<Composer
+        backends={[backendSummary("codex")]}
+        desktopApi={{ onAgentEvent: () => () => undefined, startTurn }}
+        onReplySubmissionSettled={onReplySubmissionSettled}
+        replySubmission={{ id: 7, threadId: "another-thread", backend: "codex", text: reply }}
+        skills={[]}
+        thread={thread}
+      />);
+
+      await waitFor(() => expect(onReplySubmissionSettled).toHaveBeenCalledWith(7, false));
+      expect(startTurn).not.toHaveBeenCalled();
+    });
   });
 
   it("says why an unavailable review mode is unavailable, and refuses it", async () => {

@@ -1,6 +1,13 @@
 import "@testing-library/jest-dom/vitest";
-import { buildThreadPricingDisplay } from "@pwragent/shared";
-import type { AppServerReadThreadResponse, NavigationThreadSummary } from "@pwragent/shared";
+import {
+  buildThreadPricingDisplay,
+  parseCodexAsyncQuestionReply,
+} from "@pwragent/shared";
+import type {
+  AppServerReadThreadResponse,
+  AppServerThreadMessageEntry,
+  NavigationThreadSummary,
+} from "@pwragent/shared";
 import {
   act,
   cleanup,
@@ -2134,35 +2141,199 @@ Implementation notes remain in a readable bubble.`;
     );
   });
 
-  it("presents Codex async questions as reply choices", () => {
-    const onChooseAsyncQuestionAnswer = vi.fn();
-    render(
+  describe("Codex async questions", () => {
+    const freeTextQuestion = {
+      type: "message" as const,
+      id: "call-question",
+      role: "assistant" as const,
+      text: "Which endpoints does the failing profile list?",
+      delivery: "async" as const,
+      questions: [{
+        title: "Which endpoints does the failing profile list?",
+        options: null,
+      }],
+    };
+    const choiceQuestion = {
+      type: "message" as const,
+      id: "call-choice",
+      role: "assistant" as const,
+      text: "Which install policy should I use?\n- Allow one command\n- Keep policy",
+      delivery: "async" as const,
+      questions: [{
+        title: "Which install policy should I use?",
+        options: ["Allow one command", "Keep policy"],
+      }],
+    };
+    const replyText = (itemId: string, question: string, answer: string) =>
+      `<send_user_message_question_reply>\n${JSON.stringify([{
+        answer,
+        question,
+        questionItemId: JSON.stringify(["request_user_input_async", itemId, 0]),
+      }])}\n</send_user_message_question_reply>`;
+    const renderList = (
+      entries: AppServerThreadMessageEntry[],
+      props: Partial<Parameters<typeof TranscriptList>[0]> = {},
+    ) => render(
       <TranscriptList
-        entries={[{
-          type: "message",
-          id: "call-question",
-          role: "assistant",
-          text: "Which install policy should I use?",
-          delivery: "async",
-          questions: [{
-            title: "Which install policy should I use?",
-            options: ["Allow one command", "Keep policy"],
-          }],
-        }]}
+        entries={entries}
         loading={false}
         loadingMore={false}
         threadId="thread-1"
-        onChooseAsyncQuestionAnswer={onChooseAsyncQuestionAnswer}
         onLoadOlder={async () => undefined}
+        {...props}
       />
     );
 
-    expect(screen.getByRole("group", { name: "Questions from Codex" })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Allow one command" }));
-    expect(onChooseAsyncQuestionAnswer).toHaveBeenCalledWith(
-      "Which install policy should I use?",
-      "Allow one command",
-    );
+    it("asks a free-text question with an answer field and sends a structured reply", async () => {
+      // ThreadView records what the composer took and passes it back.
+      const view = renderList([freeTextQuestion]);
+      const onAnswerAsyncQuestions = vi.fn(async (text: string) => {
+        view.rerender(
+          <TranscriptList
+            entries={[freeTextQuestion]}
+            loading={false}
+            loadingMore={false}
+            threadId="thread-1"
+            onLoadOlder={async () => undefined}
+            onAnswerAsyncQuestions={onAnswerAsyncQuestions}
+            sentAsyncQuestionAnswers={new Map(
+              (parseCodexAsyncQuestionReply(text) ?? []).map((reply) => [
+                reply.questionItemId,
+                reply.answer,
+              ]),
+            )}
+          />
+        );
+        return true;
+      });
+      view.rerender(
+        <TranscriptList
+          entries={[freeTextQuestion]}
+          loading={false}
+          loadingMore={false}
+          threadId="thread-1"
+          onLoadOlder={async () => undefined}
+          onAnswerAsyncQuestions={onAnswerAsyncQuestions}
+        />
+      );
+
+      const card = screen.getByRole("group", { name: "Question from Codex" });
+      expect(within(card).getByText("Question")).toBeInTheDocument();
+      expect(within(card).queryByText(/Choose an option/)).not.toBeInTheDocument();
+      const answer = within(card).getByRole("button", { name: "Answer" });
+      expect(answer).toBeDisabled();
+
+      fireEvent.change(within(card).getByLabelText("Your answer"), {
+        target: { value: "ws://mini.example:47830 first" },
+      });
+      fireEvent.click(answer);
+
+      await waitFor(() => expect(onAnswerAsyncQuestions).toHaveBeenCalledWith(
+        replyText(
+          "call-question",
+          "Which endpoints does the failing profile list?",
+          "ws://mini.example:47830 first",
+        ),
+      ));
+      expect(await within(card).findByText("Sent")).toBeInTheDocument();
+      expect(within(card).getByText("ws://mini.example:47830 first")).toBeInTheDocument();
+      expect(within(card).queryByLabelText("Your answer")).not.toBeInTheDocument();
+    });
+
+    it("preselects the recommended option and lets typed text replace it", async () => {
+      const onAnswerAsyncQuestions = vi.fn(async () => false);
+      renderList([choiceQuestion], { onAnswerAsyncQuestions });
+
+      const card = screen.getByRole("group", { name: "Question from Codex" });
+      const recommended = within(card).getByRole("button", { name: /Allow one command/ });
+      expect(recommended).toHaveAttribute("aria-pressed", "true");
+      expect(recommended).toHaveTextContent("Recommended");
+
+      fireEvent.click(within(card).getByRole("button", { name: /Keep policy/ }));
+      fireEvent.click(within(card).getByRole("button", { name: "Answer" }));
+      await waitFor(() => expect(onAnswerAsyncQuestions).toHaveBeenLastCalledWith(
+        replyText("call-choice", "Which install policy should I use?", "Keep policy"),
+      ));
+
+      fireEvent.change(within(card).getByLabelText("Or type an answer"), {
+        target: { value: "Ask me each time" },
+      });
+      expect(within(card).getByRole("button", { name: /Keep policy/ }))
+        .toHaveAttribute("aria-pressed", "false");
+      fireEvent.click(within(card).getByRole("button", { name: "Answer" }));
+      await waitFor(() => expect(onAnswerAsyncQuestions).toHaveBeenLastCalledWith(
+        replyText("call-choice", "Which install policy should I use?", "Ask me each time"),
+      ));
+      // The composer did not take either reply, so the controls stay.
+      expect(within(card).getByLabelText("Or type an answer")).toHaveValue("Ask me each time");
+
+      // Pressing the chosen option again leaves the question unanswered.
+      fireEvent.click(within(card).getByRole("button", { name: /Keep policy/ }));
+      fireEvent.click(within(card).getByRole("button", { name: /Keep policy/ }));
+      expect(within(card).getByRole("button", { name: /Keep policy/ }))
+        .toHaveAttribute("aria-pressed", "false");
+      expect(within(card).getByRole("button", { name: "Answer" })).toBeDisabled();
+    });
+
+    it("shows a reply from the transcript as the answer, not as raw envelope text", () => {
+      renderList([
+        choiceQuestion,
+        {
+          type: "message",
+          id: "user-reply",
+          role: "user",
+          text: replyText("call-choice", "Which install policy should I use?", "Keep policy"),
+        },
+      ], { onAnswerAsyncQuestions: vi.fn(async () => true) });
+
+      const card = screen.getByRole("group", { name: "Question from Codex" });
+      expect(within(card).getByText("Answered")).toBeInTheDocument();
+      expect(within(card).queryByRole("button", { name: "Answer" })).not.toBeInTheDocument();
+      expect(screen.queryByText(/send_user_message_question_reply/)).not.toBeInTheDocument();
+      const replyMessage = screen.getAllByText("Keep policy")
+        .map((element) => element.closest("article"))
+        .find((article) => article?.classList.contains("transcript-message--user"));
+      expect(replyMessage).toHaveTextContent("Which install policy should I use?");
+    });
+
+    it("dismisses the questions and brings them back", () => {
+      const onAsyncQuestionsDismissedChange = vi.fn();
+      const onAnswerAsyncQuestions = vi.fn(async () => true);
+      const view = renderList([freeTextQuestion], {
+        onAnswerAsyncQuestions,
+        onAsyncQuestionsDismissedChange,
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+      expect(onAsyncQuestionsDismissedChange).toHaveBeenCalledWith("call-question", true);
+
+      view.rerender(
+        <TranscriptList
+          entries={[freeTextQuestion]}
+          loading={false}
+          loadingMore={false}
+          threadId="thread-1"
+          dismissedAsyncQuestionMessageIds={new Set(["call-question"])}
+          onAnswerAsyncQuestions={onAnswerAsyncQuestions}
+          onAsyncQuestionsDismissedChange={onAsyncQuestionsDismissedChange}
+          onLoadOlder={async () => undefined}
+        />
+      );
+      const card = screen.getByRole("group", { name: "Question from Codex" });
+      expect(within(card).getByText("Dismissed")).toBeInTheDocument();
+      expect(within(card).queryByLabelText("Your answer")).not.toBeInTheDocument();
+      fireEvent.click(within(card).getByRole("button", { name: "Show questions" }));
+      expect(onAsyncQuestionsDismissedChange).toHaveBeenLastCalledWith("call-question", false);
+    });
+
+    it("lists the options without controls where the thread cannot be answered", () => {
+      renderList([choiceQuestion]);
+
+      const card = screen.getByRole("group", { name: "Question from Codex" });
+      expect(within(card).getAllByRole("listitem").map((item) => item.textContent))
+        .toEqual(["Allow one command", "Keep policy"]);
+      expect(within(card).queryByRole("button")).not.toBeInTheDocument();
+    });
   });
 
   it("replaces a transient assistant message in transcript order", () => {
