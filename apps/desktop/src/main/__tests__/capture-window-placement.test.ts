@@ -280,7 +280,7 @@ describe("captureWhileFocused", () => {
     expect(capture).toHaveBeenCalledTimes(2);
     expect(raise).toHaveBeenCalledTimes(1);
     expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining("the capture came out below 2x"),
+      expect.stringContaining("the capture was refused as below 2x"),
     );
     warn.mockRestore();
   });

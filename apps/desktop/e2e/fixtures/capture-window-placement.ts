@@ -206,7 +206,8 @@ export async function waitForSteadyFocus(
 export const CAPTURE_INACTIVE_EXIT_STATUS = 7;
 /**
  * `capture-window.swift`'s exit status when the capture came out below
- * Retina scale, meaning the window sat on a 1x display. It wrote nothing.
+ * Retina scale, meaning the window sat on a 1x display, or when the staged
+ * file would not decode so its scale could not be checked. It wrote nothing.
  */
 export const CAPTURE_LOW_RESOLUTION_EXIT_STATUS = 6;
 export const CAPTURE_ATTEMPTS = 3;
@@ -262,7 +263,9 @@ export async function captureWhileFocused(
       }
       const cause = isInactiveCaptureRefusal(error)
         ? "the window lost focus"
-        : "the capture came out below 2x";
+        // Exit 6 also covers a staged file that would not decode, which
+        // the resolution check could not verify.
+        : "the capture was refused as below 2x or unverifiable";
       console.warn(
         `[capture] ${cause}; raising it and capturing again `
         + `(attempt ${attempt + 1} of ${attempts})`,
