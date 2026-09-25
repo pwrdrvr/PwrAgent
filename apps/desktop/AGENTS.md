@@ -554,6 +554,19 @@ therefore parks the pointer at (-10, -10) via `sendInputEvent` after
 placing the window. No capture drives hover deliberately; if one ever
 needs to, it has to set the hover after `bringToFront`, not before.
 
+Scroll position is the third trap. Chromium snaps a scroll offset to the
+device pixels of the display the window is on when the scroll lands, and
+moving the window afterwards does not re-snap it. Settings → Messaging →
+Slack opens with a smooth scroll to its Connect section, which came to
+rest at `scrollTop` 171 when macOS opened the window on a 1x monitor and
+at 170.5 when it opened on the Retina panel. The two captures differed
+by one device pixel across the whole content pane, so the noise filter
+kept both. The docs-site spec therefore calls `bringToFront` once right
+after launch, before any navigation, as well as before each capture.
+`waitForSettingsScrollToSettle` then holds a Settings capture until the
+scroll pane has kept one `scrollTop` for 10 rendered frames, instead of
+trusting a fixed delay to outlast the ~250ms smooth scroll.
+
 Pieces, all under `apps/desktop/`:
 
 | File | What it does |

@@ -55,15 +55,25 @@ const WINDOW_SIZE = { width: 1440, height: 900 } as const;
 // See `fixtures/screenshot-appearance.ts` for the env-var contract.
 const SCREENSHOT_APPEARANCE = resolveScreenshotAppearance();
 
-function launchDocsSiteApp(
+async function launchDocsSiteApp(
   params: Parameters<typeof launchElectronApp>[0],
 ): ReturnType<typeof launchElectronApp> {
-  return launchElectronApp({
+  const app = await launchElectronApp({
     ...params,
     // Preserve production-like writable credential controls without allowing
     // unsigned screenshot Electron to invoke the macOS keychain.
     secretStorage: "memory",
   });
+  // Put the window on the display it will be captured on before anything
+  // scrolls. Chromium snaps a scroll offset to the device pixels of the
+  // display the window is on when the scroll lands, and moving the window
+  // later does not re-snap it. macOS opens the window on whichever display
+  // it likes, so Settings → Messaging → Slack rested at scrollTop 171 when
+  // it opened on a 1x monitor and 170.5 when it opened on the Retina
+  // panel, and the per-capture `bringToFront` then photographed the same
+  // screen one device pixel apart.
+  await bringToFront(app.electronApp);
+  return app;
 }
 
 test.skip(
@@ -155,6 +165,53 @@ async function openMessagingPlatformScreen(
     .first();
   await platformHeading.waitFor({ state: "visible", timeout: 10_000 });
   await new Promise((resolve) => setTimeout(resolve, 250));
+  await waitForSettingsScrollToSettle(page);
+}
+
+/** Consecutive rendered frames the pane must hold one `scrollTop` for. */
+const SCROLL_SETTLE_FRAMES = 10;
+
+/**
+ * Resolve once the Settings scroll pane has held the same `scrollTop` for
+ * `SCROLL_SETTLE_FRAMES` rendered frames in a row.
+ *
+ * A platform screen opens with a nav focus request, which SettingsLayout
+ * answers with a smooth `scrollIntoView`. The animation ran 230–265ms from
+ * the click and creeps its last pixels one frame at a time, which the fixed
+ * 250ms settle above does not cover. Captures only landed after it because
+ * `bringToFront` and the Swift capture add latency of their own. Emulating
+ * `reducedMotion` would not shorten it: Chromium animates a smooth
+ * `scrollIntoView` either way. Counting frames rather than milliseconds also
+ * keeps a stalled (occluded, unpainted) window from passing as settled.
+ */
+async function waitForSettingsScrollToSettle(page: Page): Promise<void> {
+  await page.locator(".settings-content").evaluate(
+    (pane, stableFrames) =>
+      new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          reject(
+            new Error(
+              `Settings scroll pane still moving after 5s (scrollTop ${pane.scrollTop})`,
+            ),
+          );
+        }, 5_000);
+        let last = pane.scrollTop;
+        let still = 0;
+        const tick = () => {
+          const top = pane.scrollTop;
+          still = top === last ? still + 1 : 0;
+          last = top;
+          if (still >= stableFrames) {
+            clearTimeout(timeout);
+            resolve();
+            return;
+          }
+          requestAnimationFrame(tick);
+        };
+        requestAnimationFrame(tick);
+      }),
+    SCROLL_SETTLE_FRAMES,
+  );
 }
 
 // ────────────────────── Settings — non-messaging ──────────────────────
@@ -416,6 +473,9 @@ async function navigateToTelegramPairing(page: Page): Promise<void> {
     .getByRole("radiogroup", { name: /^Telegram pairing target$/i })
     .first();
   await pairingTarget.waitFor({ state: "visible" });
+  // Opening the screen starts a smooth scroll to its Connect section. Let it
+  // finish, so it can't race the instant scroll below for the final framing.
+  await waitForSettingsScrollToSettle(page);
   await pairingTarget.evaluate((node) => {
     node.scrollIntoView({ behavior: "instant", block: "center" });
   });
