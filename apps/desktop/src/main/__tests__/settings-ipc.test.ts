@@ -2713,7 +2713,7 @@ describe("settings ipc", () => {
     // discovery round-trips need headroom over the 5s default under CI load.
   }, 20_000);
 
-  it("coalesces forced ACP refreshes across overlapping provider scopes", async () => {
+  it.each(["gemini", "claude-acp"] as const)("coalesces forced ACP refreshes across overlapping provider scopes for %s", async (registryId) => {
     const tempRoot = fs.mkdtempSync(
       path.join(os.tmpdir(), "pwragent-settings-ipc-"),
     );
@@ -2721,8 +2721,8 @@ describe("settings ipc", () => {
     vi.stubEnv("PWRAGENT_HOME", tempRoot);
     localAcpDiscoveryMock.discoverLocalAcpAgentRecords.mockResolvedValue([
       {
-        backendId: "acp:gemini",
-        registryId: "gemini",
+        backendId: `acp:${registryId}` as const,
+        registryId,
         name: "Gemini CLI",
         version: "0.42.0",
         distributionKind: "local",
@@ -2734,8 +2734,8 @@ describe("settings ipc", () => {
         installedAt: 1234,
         updatedAt: 1234,
         launchDescriptor: {
-          backendId: "acp:gemini",
-          registryId: "gemini",
+          backendId: `acp:${registryId}` as const,
+          registryId,
           distributionKind: "local",
           command: "gemini",
           args: ["--acp", "--skip-trust"],
@@ -2743,6 +2743,11 @@ describe("settings ipc", () => {
         },
       },
     ]);
+    if (registryId === "claude-acp") {
+      const [record] = await localAcpDiscoveryMock.discoverLocalAcpAgentRecords();
+      claudeAcpRuntimeMock.discoverManagedClaudeAcpRuntime.mockResolvedValue(record);
+      localAcpDiscoveryMock.discoverLocalAcpAgentRecords.mockResolvedValue([]);
+    }
     const probedAt = Date.now();
     acpRuntimeDiscoveryMock.discoverAcpRuntimeCapabilities.mockResolvedValue({
       runtimeCapabilities: {
@@ -2766,6 +2771,9 @@ describe("settings ipc", () => {
       now: () => 20,
     });
 
+    await service.writeConfigPatchTargeted({
+      experimental: { claudeAcp: registryId === "claude-acp" },
+    });
     initializeAppState();
     try {
       registerSettingsIpcHandlers(service);
@@ -2788,7 +2796,7 @@ describe("settings ipc", () => {
       const regularFollower = handler?.({}, { refresh: true, discoveryIntent: "settings-user-action" });
       const targetedForced = handler?.(
         {},
-        { refresh: true, discoveryIntent: "settings-user-action", force: true, registryIds: ["gemini"] },
+        { refresh: true, discoveryIntent: "settings-user-action", force: true, registryIds: [registryId] },
       );
       releaseProbe?.();
       await Promise.all([
@@ -2814,7 +2822,7 @@ describe("settings ipc", () => {
       );
       const targetedFirst = handler?.(
         {},
-        { refresh: true, discoveryIntent: "settings-user-action", force: true, registryIds: ["gemini"] },
+        { refresh: true, discoveryIntent: "settings-user-action", force: true, registryIds: [registryId] },
       );
       await vi.waitFor(() => expect(probe).toHaveBeenCalledTimes(2));
       localAcpDiscoveryMock.discoverLocalAcpAgentRecords.mockResolvedValue([]);
@@ -2826,7 +2834,9 @@ describe("settings ipc", () => {
         localAcpDiscoveryMock.discoverLocalAcpAgentRecords,
       ).toHaveBeenLastCalledWith(
         expect.objectContaining({
-          enabledRegistryIds: ["grok", "kimi", "qwen"],
+          enabledRegistryIds: registryId === "gemini"
+            ? ["grok", "kimi", "qwen"]
+            : ["gemini", "grok", "kimi", "qwen"],
         }),
       );
     } finally {
