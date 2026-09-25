@@ -1,4 +1,5 @@
 import { configureBundledGit } from "./bundled-git";
+import { installLinuxPasswordStore } from "./linux-password-store";
 import { app, BrowserWindow, dialog, Menu, nativeImage, shell } from "electron";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
@@ -240,6 +241,17 @@ const PWRAGENT_ISSUE_REPORTER_URL =
 const isMac = process.platform === "darwin";
 const isDevelopment = process.env.NODE_ENV !== "production";
 const mainLog = getMainLogger("pwragent:main");
+// Chromium chooses the Linux password store in PostCreateMainMessageLoop,
+// which is after this module's top-level code. Unrecognized desktops would
+// otherwise get basic_text, and secret writes then fail closed.
+const linuxPasswordStore = installLinuxPasswordStore({
+  appendSwitch: (backend) => {
+    app.commandLine.appendSwitch("password-store", backend);
+  },
+});
+if (linuxPasswordStore) {
+  mainLog.info("linux secret store selected", { backend: linuxPasswordStore });
+}
 const mainProcessStartedAt = Date.now();
 const RENDERER_WINDOW_SHUTDOWN_TIMEOUT_MS = 2_000;
 const MAIN_PROCESS_SHUTDOWN_TIMEOUT_MS = 12_000;
