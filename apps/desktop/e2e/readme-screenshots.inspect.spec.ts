@@ -2,9 +2,10 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { expect, test } from "@playwright/test";
+import { expect, test, type ElectronApplication } from "@playwright/test";
 import { bringToFront } from "./fixtures/capture-window-placement";
 import { launchElectronApp } from "./fixtures/electron-app";
+import { captureWindowPng } from "./fixtures/native-capture";
 import { resolveScreenshotAppearance } from "./fixtures/screenshot-appearance";
 
 // Resolved once per spec module from PWRAGENT_SCREENSHOT_THEME /
@@ -47,10 +48,6 @@ import {
 const specDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(specDir, "../../..");
 const screenshotDir = path.join(repoRoot, "docs/assets/screenshots");
-const captureScript = path.resolve(
-  specDir,
-  "../scripts/capture-window.swift",
-);
 
 const WINDOW_SIZE = { width: 1440, height: 900 } as const;
 
@@ -93,27 +90,17 @@ test.skip(
   "Set PWRAGENT_SCREENSHOT_CAPTURE=1 via the package script to capture README screenshots.",
 );
 
-function captureNative(
+async function captureNative(
+  electronApp: ElectronApplication,
   outputBasename: string,
   options?: { titleSubstring?: string },
-): void {
+): Promise<void> {
   mkdirSync(screenshotDir, { recursive: true });
-  const outputPath = path.join(screenshotDir, outputBasename);
-  const args = ["Electron", outputPath];
-  if (options?.titleSubstring) {
-    args.push(`--title=${options.titleSubstring}`);
-  }
-  // The Swift script refuses a sub-Retina capture and tells the operator to
-  // "Pass --allow-low-dpi" — which is only actionable if something here can
-  // pass it. On a 1x-only machine (external-display-only desk, a VM, the
-  // Tart lab guest) this is the difference between a documented override
-  // and one that requires editing the spec.
-  if (process.env.PWRAGENT_SCREENSHOT_ALLOW_LOW_DPI === "1") {
-    args.push("--allow-low-dpi");
-  }
-  execFileSync(captureScript, args, {
-    stdio: "inherit",
-  });
+  await captureWindowPng(
+    electronApp,
+    path.join(screenshotDir, outputBasename),
+    options,
+  );
 }
 
 test("recents-hero — populated Recents lens", async () => {
@@ -158,7 +145,7 @@ test("recents-hero — populated Recents lens", async () => {
     ).toBeVisible();
 
     await bringToFront(app.electronApp);
-    captureNative("screenshot-recents-hero.png");
+    await captureNative(app.electronApp, "screenshot-recents-hero.png");
   } finally {
     await app.close();
   }
@@ -360,7 +347,7 @@ test("closed-by-default — Messaging Activity rejecting unauthorized inbound", 
       ),
     ).toBeVisible();
 
-    captureNative("screenshot-closed-by-default.png", {
+    await captureNative(app.electronApp, "screenshot-closed-by-default.png", {
       titleSubstring: "Messaging Activity",
     });
   } finally {
@@ -405,7 +392,7 @@ test("messenger-status — Settings → Messaging surface", async () => {
     ).toBeVisible();
 
     await bringToFront(app.electronApp);
-    captureNative("screenshot-messenger-status.png");
+    await captureNative(app.electronApp, "screenshot-messenger-status.png");
   } finally {
     await app.close();
   }
@@ -546,7 +533,7 @@ test("pairing — Generate → observe → approve sequence (animated GIF)", asy
     await expect(pairCode).toBeVisible({ timeout: 10_000 });
 
     await bringToFront(app.electronApp);
-    execFileSync(captureScript, ["Electron", frame1Path], { stdio: "inherit" });
+    await captureWindowPng(app.electronApp, frame1Path);
 
     // ──────── FRAME 2: observed entry, approval prompt visible ────────
     // Look up the row the renderer just generated and mutate it to
@@ -589,7 +576,7 @@ test("pairing — Generate → observe → approve sequence (animated GIF)", asy
     await expect(telegramApproveButton).toBeVisible({ timeout: 10_000 });
 
     await bringToFront(app.electronApp);
-    execFileSync(captureScript, ["Electron", frame2Path], { stdio: "inherit" });
+    await captureWindowPng(app.electronApp, frame2Path);
 
     // ──────── FRAME 3: approved — user lands in Authorized Users ────────
     // Click Approve. This triggers `approveMessagingPairing` IPC,
@@ -620,7 +607,7 @@ test("pairing — Generate → observe → approve sequence (animated GIF)", asy
       });
 
     await bringToFront(app.electronApp);
-    execFileSync(captureScript, ["Electron", frame3Path], { stdio: "inherit" });
+    await captureWindowPng(app.electronApp, frame3Path);
 
     // ──────── Stitch into a looping GIF ────────
     stitchGif({
@@ -686,7 +673,7 @@ test("bound-thread — thread row + detail with messenger chip", async () => {
     ).toBeVisible();
 
     await bringToFront(app.electronApp);
-    captureNative("screenshot-bound-thread.png");
+    await captureNative(app.electronApp, "screenshot-bound-thread.png");
   } finally {
     await app.close();
   }

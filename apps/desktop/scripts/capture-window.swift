@@ -45,6 +45,14 @@ import Foundation
 //     refused, not waved through. The replace itself goes through
 //     `replaceItemAt`, so a failure there cannot leave the destination
 //     missing.
+//   * macOS draws a window that is not key in the active app with grey
+//     traffic lights and a smaller shadow, which also changes the PNG's
+//     pixel size. Whoever runs the capture is usually working on the same
+//     machine, and one click elsewhere is enough. So the window must be
+//     drawn active both just before and just after `screencapture` runs,
+//     or the capture is refused (exit 7). A focus change during the
+//     capture would have to fail one of those two checks. The caller is
+//     expected to raise the window again and retry.
 //   * Screen Recording permission is required for `screencapture -l`.
 //     The first invocation triggers the system prompt; subsequent runs
 //     are silent. CI environments will need this granted to whichever
@@ -58,6 +66,9 @@ import Foundation
 //   5 — output file not produced, or could not be moved into place
 //   6 — capture came out below Retina scale, or could not be decoded to
 //       check (see --allow-low-dpi)
+//   7 — the window was not drawn active (its app was not frontmost, or
+//       another of the app's windows was in front of it) just before or
+//       just after the capture
 
 let args = CommandLine.arguments
 
@@ -156,6 +167,72 @@ let stagingPath = FileManager.default.temporaryDirectory
   .appendingPathComponent("capture-window-\(UUID().uuidString).png")
   .path
 
+// Refuse a capture of a window macOS is not drawing as active. The check
+// runs just before and just after `screencapture`, so a focus change
+// during the capture fails one of them.
+let ownerPID = target[kCGWindowOwnerPID as String] as? pid_t ?? -1
+
+func frontmostPID() -> pid_t? {
+  // NSWorkspace updates `frontmostApplication` from notifications that
+  // arrive on the main run loop, and a script never runs one. Without
+  // this spin, every read after the first returns the value cached at
+  // that first read. Measured: an app switch 2.5 s into a run was
+  // invisible until the loop had run.
+  RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+  return NSWorkspace.shared.frontmostApplication?.processIdentifier
+}
+
+/// `nil` when the window is drawn active, otherwise why it is not.
+func inactiveReason() -> String? {
+  guard let front = frontmostPID(), front == ownerPID else {
+    let front = NSWorkspace.shared.frontmostApplication
+    let name = front?.localizedName ?? "unknown"
+    let pid = front.map { String($0.processIdentifier) } ?? "?"
+    return "the frontmost app is \(name) (pid \(pid)), not the window's owner (pid \(ownerPID))"
+  }
+  // The key window of the active app is its front-most window. Fresh
+  // list: `infoList` was read before the script's startup cost.
+  let current =
+    CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
+    as? [[String: Any]] ?? []
+  let frontOfOwner = current.first { info in
+    guard (info[kCGWindowOwnerPID as String] as? pid_t) == ownerPID,
+      (info[kCGWindowLayer as String] as? Int) == 0,
+      let bounds = info[kCGWindowBounds as String] as? [String: CGFloat],
+      let width = bounds["Width"], width > 1,
+      let height = bounds["Height"], height > 1
+    else { return false }
+    return true
+  }
+  guard let frontWindow = frontOfOwner?[kCGWindowNumber as String] as? CGWindowID else {
+    return "the window is no longer on screen"
+  }
+  if frontWindow != windowNumber {
+    let title = frontOfOwner?[kCGWindowName as String] as? String ?? ""
+    return "another window of the same app (\(frontWindow) '\(title)') is in front of it"
+  }
+  return nil
+}
+
+func refuseInactive(_ moment: String, _ reason: String) -> Never {
+  try? FileManager.default.removeItem(atPath: stagingPath)
+  FileHandle.standardError.write(
+    Data(
+      """
+      refusing to write an inactive capture: \(moment), \(reason). macOS draws a \
+      window that is not key in the active app with grey traffic lights and a smaller \
+      shadow. \(outputPath) was left untouched. Raise the window and retry.
+
+      """.utf8
+    )
+  )
+  exit(7)
+}
+
+if let reason = inactiveReason() {
+  refuseInactive("before the capture", reason)
+}
+
 let process = Process()
 process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
 // `-l <wid>`: capture the window with the given CGWindowID.
@@ -200,6 +277,10 @@ guard FileManager.default.fileExists(atPath: stagingPath) else {
     Data("screencapture reported success but \(stagingPath) does not exist\n".utf8)
   )
   exit(5)
+}
+
+if let reason = inactiveReason() {
+  refuseInactive("after the capture", reason)
 }
 
 // `screencapture -l` renders at the backing scale of whichever display the

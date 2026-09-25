@@ -16,7 +16,8 @@
  * `capture-window.swift` now refuses to overwrite a destination with a
  * sub-Retina capture, but refusing mid-run is a poor experience when the
  * fix is mechanical. So move the window onto a Retina display first and
- * let the Swift check stay a backstop.
+ * let the Swift check stay a backstop. The displays are probed once, on
+ * the first `bringToFront` of a run, and trusted after that.
  *
  * The display arithmetic is deliberately split out of the
  * `electronApp.evaluate` callbacks. Playwright serializes those bodies
@@ -34,8 +35,15 @@ import type { ElectronApplication } from "@playwright/test";
 /** Below this, `screencapture` is not producing a Retina asset. */
 export const MINIMUM_RETINA_SCALE_FACTOR = 2;
 
-/** How long `bringToFront` keeps asking for focus before it gives up. */
-export const FOCUS_TIMEOUT_MS = 3_000;
+/**
+ * How long `bringToFront` keeps asking for focus before it gives up.
+ *
+ * Generous on purpose. The person running the capture is often working
+ * on the same machine, and while they are busy in another app macOS can
+ * refuse activation for seconds at a time, `steal: true` included. The
+ * first pause in their input is enough.
+ */
+export const FOCUS_TIMEOUT_MS = 10_000;
 
 /** Pause between focus checks while waiting for the window to become key. */
 export const FOCUS_POLL_INTERVAL_MS = 100;
@@ -258,11 +266,38 @@ export class CaptureWindowNotFocusedError extends Error {
 
 /**
  * Report each distinct placement outcome once rather than on all ~21
- * captures of a run — but re-report when the outcome *changes*, since a
- * display can be connected or disconnected mid-run and a latch keyed on
- * "have we ever printed" would hide exactly that.
+ * captures of a run — but re-report when the outcome *changes*. Windows
+ * of different sizes can land differently, and a latch keyed on "have we
+ * ever printed" would hide that.
  */
 let lastReported: string | undefined;
+
+/**
+ * The displays as probed by the first `bringToFront` of this run.
+ *
+ * Probed once and then trusted. A capture sequence lasts minutes, and
+ * re-deciding for each capture would let one mid-run display change send
+ * later captures somewhere the earlier ones did not go. If a window lands
+ * on a 1x display anyway, `capture-window.swift` refuses the capture, and
+ * the retry places it again against this same probe.
+ */
+let probedDisplays: DisplaySummary[] | undefined;
+
+/** Whether this run's display probe found a display that captures at 2x. */
+export function probedRetinaDisplay(): boolean {
+  return (probedDisplays ?? []).some(
+    (display) => display.scaleFactor >= MINIMUM_RETINA_SCALE_FACTOR,
+  );
+}
+
+function describeDisplays(displays: readonly DisplaySummary[]): string {
+  return displays
+    .map((display) =>
+      `${display.internal ? "built-in" : "external"} ${display.scaleFactor}x `
+      + `${display.workArea.width}x${display.workArea.height}`,
+    )
+    .join(", ") || "none";
+}
 
 function report(line: string, level: "log" | "warn"): void {
   if (lastReported === line) return;
@@ -292,13 +327,15 @@ function report(line: string, level: "log" | "warn"): void {
  * no-op while another app is active — then polls until the window
  * reports key, asking again each time it does not.
  *
- * It cannot cover what happens after it returns: focus taken during the
- * spec's remaining assertions or while `capture-window.swift` starts up
- * still produces an inactive capture.
+ * Focus lost after this returns is caught at the capture itself.
+ * `capture-window.swift` refuses a window that is not drawn active
+ * (exit 7), and `captureWindowPng` then calls this again and retries.
  *
- * All of it runs before every capture, not just at launch: a display can
- * be connected or disconnected mid-run, focus can move mid-run, and the
- * operation is cheap and idempotent.
+ * Placement, activation, and the focus check run before every capture
+ * attempt, because focus can move at any point in a run. They are cheap
+ * when nothing changed: the settle wait is skipped unless the window was
+ * hidden, moved, or had to wait for focus. The displays are probed only
+ * on the first call of the run; see `probedDisplays`.
  *
  * Pass `titleSubstring` when the capture targets an auxiliary window —
  * it must match what goes to `capture-window.swift --title=`, or the
@@ -315,8 +352,9 @@ export async function bringToFront(
 ): Promise<void> {
   // Read. Resolve the window once and return its id, so the write below
   // acts on the same window even if the window list changes in between.
-  const snapshot = await electronApp.evaluate(({ BrowserWindow, screen }, needle) => {
+  const snapshot = await electronApp.evaluate(({ BrowserWindow, screen }, options) => {
     const windows = BrowserWindow.getAllWindows();
+    const needle = options.needle;
     const win = needle === undefined
       ? windows[0]
       : windows.find((candidate) =>
@@ -329,34 +367,42 @@ export async function bringToFront(
       id: win.id,
       titles: [] as string[],
       bounds: win.getBounds(),
-      displays: screen.getAllDisplays().map((display) => ({
-        internal: display.internal,
-        scaleFactor: display.scaleFactor,
-        workArea: display.workArea,
-      })),
+      visible: win.isVisible(),
+      displays: options.probe
+        ? screen.getAllDisplays().map((display) => ({
+          internal: display.internal,
+          scaleFactor: display.scaleFactor,
+          workArea: display.workArea,
+        }))
+        : null,
     };
-  }, titleSubstring);
+  }, { needle: titleSubstring, probe: probedDisplays === undefined });
 
   if (snapshot.id === null) {
     throw new CaptureWindowNotFoundError(titleSubstring, snapshot.titles);
   }
 
+  if (probedDisplays === undefined) {
+    probedDisplays = snapshot.displays ?? [];
+    console.log(
+      `[capture] displays, probed once for this run: ${describeDisplays(probedDisplays)}`,
+    );
+    if (!probedRetinaDisplay()) {
+      // Not fatal here — capture-window.swift refuses per capture with a
+      // message naming the observed scale, and `--allow-low-dpi` exists
+      // for anyone who deliberately wants a 1x asset.
+      console.warn(
+        "[capture] no Retina display attached. Captures will be below 2x and "
+        + "capture-window.swift will refuse them.",
+      );
+    }
+  }
+
   // Choose. Pure, and the only part of this file a unit test can reach.
   const bounds = snapshot.bounds!;
-  const displays = snapshot.displays!;
-  const target = pickCaptureDisplay(displays, bounds);
-
-  if (!target) {
-    // Not fatal here — capture-window.swift refuses per capture with a
-    // message naming the observed scale, and `--allow-low-dpi` exists
-    // for anyone who deliberately wants a 1x asset.
-    report(
-      "[capture] no Retina display attached (scale factors: "
-      + `${displays.map((d) => d.scaleFactor).join(", ") || "none"}). Captures `
-      + "will be below 2x and capture-window.swift will refuse them.",
-      "warn",
-    );
-  }
+  const target = pickCaptureDisplay(probedDisplays, bounds);
+  const rect = target ? centeredIn(target.workArea, bounds) : null;
+  const moves = rect !== null && (rect.x !== bounds.x || rect.y !== bounds.y);
 
   // Write. Place (when we have somewhere to place it), activate, and
   // raise, then read back where the window actually landed — `setBounds`
@@ -397,10 +443,7 @@ export async function bringToFront(
         scaleFactor: display.scaleFactor,
       };
     },
-    {
-      id: snapshot.id,
-      rect: target ? centeredIn(target.workArea, bounds) : null,
-    },
+    { id: snapshot.id, rect },
   );
 
   if (placed) {
@@ -432,8 +475,10 @@ export async function bringToFront(
   // window of an inactive app — true here means the window is key *and*
   // the app is active, which is what paints the colored traffic lights.
   const id = snapshot.id;
-  const focused = await waitForWindowFocus(() =>
-    electronApp.evaluate(({ app, BrowserWindow }, windowId) => {
+  let checks = 0;
+  const focused = await waitForWindowFocus(() => {
+    checks += 1;
+    return electronApp.evaluate(({ app, BrowserWindow }, windowId) => {
       const win = BrowserWindow.fromId(windowId);
       if (!win) {
         throw new Error(`capture window ${windowId} closed before it became key`);
@@ -442,8 +487,8 @@ export async function bringToFront(
       if (process.platform === "darwin") app.focus({ steal: true });
       win.focus();
       return false;
-    }, id),
-  );
+    }, id);
+  });
   if (!focused) {
     const appPid = await electronApp
       .evaluate(() => process.pid)
@@ -458,6 +503,10 @@ export async function bringToFront(
 
   // Give the compositor a tick to actually raise the window (and settle
   // the move and the switch to the active frame) before screencapture
-  // inspects the on-screen window list.
-  await new Promise((resolve) => setTimeout(resolve, 500));
+  // inspects the on-screen window list. Nothing to settle when the window
+  // was already showing, stayed put, and was key on the first check —
+  // the common case when a capture re-raises what the spec just raised.
+  if (!snapshot.visible || moves || checks > 1) {
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
 }

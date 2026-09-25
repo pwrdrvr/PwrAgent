@@ -1,11 +1,16 @@
-import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { expect, test, type Page } from "@playwright/test";
+import {
+  expect,
+  test,
+  type ElectronApplication,
+  type Page,
+} from "@playwright/test";
 import { launchElectronApp } from "./fixtures/electron-app";
 import { bringToFront } from "./fixtures/capture-window-placement";
+import { captureWindowPng } from "./fixtures/native-capture";
 import { resolveScreenshotAppearance } from "./fixtures/screenshot-appearance";
 import { seedAllMessagingProvidersEnabledConfig } from "./fixtures/docs-site-state-seeding";
 import {
@@ -44,7 +49,6 @@ const docsSiteRepo =
   process.env.PWRAGENT_DOCS_SITE_REPO?.replace(/^~(?=$|\/)/, os.homedir()) ??
   path.join(os.homedir(), "github", "docs.pwragent.ai");
 const screenshotDir = path.join(docsSiteRepo, "assets", "screenshots");
-const captureScript = path.resolve(specDir, "../scripts/capture-window.swift");
 
 const WINDOW_SIZE = { width: 1440, height: 900 } as const;
 
@@ -84,25 +88,17 @@ if (process.env.PWRAGENT_DOCS_SITE_SCREENSHOT_CAPTURE === "1") {
   }
 }
 
-function captureNative(
+async function captureNative(
+  electronApp: ElectronApplication,
   outputBasename: string,
   options?: { titleSubstring?: string },
-): void {
+): Promise<void> {
   mkdirSync(screenshotDir, { recursive: true });
-  const outputPath = path.join(screenshotDir, outputBasename);
-  const args = ["Electron", outputPath];
-  if (options?.titleSubstring) {
-    args.push(`--title=${options.titleSubstring}`);
-  }
-  // The Swift script refuses a sub-Retina capture and tells the operator to
-  // "Pass --allow-low-dpi" — which is only actionable if something here can
-  // pass it. On a 1x-only machine (external-display-only desk, a VM, the
-  // Tart lab guest) this is the difference between a documented override
-  // and one that requires editing the spec.
-  if (process.env.PWRAGENT_SCREENSHOT_ALLOW_LOW_DPI === "1") {
-    args.push("--allow-low-dpi");
-  }
-  execFileSync(captureScript, args, { stdio: "inherit" });
+  await captureWindowPng(
+    electronApp,
+    path.join(screenshotDir, outputBasename),
+    options,
+  );
 }
 
 /**
@@ -175,7 +171,7 @@ test("settings-applications — Settings → Applications panel", async () => {
     });
 
     await bringToFront(app.electronApp);
-    captureNative("settings-applications.png");
+    await captureNative(app.electronApp, "settings-applications.png");
   } finally {
     await app.close();
   }
@@ -197,7 +193,7 @@ test("settings-worktrees — Settings → Worktrees panel", async () => {
     });
 
     await bringToFront(app.electronApp);
-    captureNative("settings-worktrees.png");
+    await captureNative(app.electronApp, "settings-worktrees.png");
   } finally {
     await app.close();
   }
@@ -232,7 +228,7 @@ test("settings-models — Settings → AI Providers panel", async () => {
     await new Promise((resolve) => setTimeout(resolve, 250));
 
     await bringToFront(app.electronApp);
-    captureNative("settings-models.png");
+    await captureNative(app.electronApp, "settings-models.png");
   } finally {
     await app.close();
   }
@@ -254,7 +250,7 @@ test("settings-profiles — Settings → Profiles panel", async () => {
     });
 
     await bringToFront(app.electronApp);
-    captureNative("settings-profiles.png");
+    await captureNative(app.electronApp, "settings-profiles.png");
   } finally {
     await app.close();
   }
@@ -276,7 +272,7 @@ test("settings-general — Settings → General panel", async () => {
     });
 
     await bringToFront(app.electronApp);
-    captureNative("settings-general.png");
+    await captureNative(app.electronApp, "settings-general.png");
   } finally {
     await app.close();
   }
@@ -301,7 +297,7 @@ test("settings-updates — Settings → Updates panel", async () => {
     });
 
     await bringToFront(app.electronApp);
-    captureNative("settings-updates.png");
+    await captureNative(app.electronApp, "settings-updates.png");
   } finally {
     await app.close();
   }
@@ -323,7 +319,7 @@ test("settings-experimental — Settings → Experimental panel", async () => {
     });
 
     await bringToFront(app.electronApp);
-    captureNative("settings-experimental.png");
+    await captureNative(app.electronApp, "settings-experimental.png");
   } finally {
     await app.close();
   }
@@ -370,7 +366,7 @@ for (const shot of MESSAGING_PLATFORM_SHOTS) {
       ).toHaveCount(0);
 
       await bringToFront(app.electronApp);
-      captureNative(shot.filename);
+      await captureNative(app.electronApp, shot.filename);
     } finally {
       await app.close();
     }
@@ -457,7 +453,7 @@ test("messaging-pairing — frame 1: pairing token generated", async () => {
     await expect(pairCode).toBeVisible({ timeout: 10_000 });
 
     await bringToFront(app.electronApp);
-    captureNative("messaging-pairing-frame-1.png");
+    await captureNative(app.electronApp, "messaging-pairing-frame-1.png");
   } finally {
     await app.close();
   }
@@ -530,7 +526,7 @@ test("messaging-pairing — frame 2: observed, approval prompt visible", async (
     await expect(telegramApproveButton).toBeVisible({ timeout: 10_000 });
 
     await bringToFront(app.electronApp);
-    captureNative("messaging-pairing-frame-2.png");
+    await captureNative(app.electronApp, "messaging-pairing-frame-2.png");
   } finally {
     await app.close();
   }
@@ -620,7 +616,7 @@ test("messaging-pairing — frame 3: approved, user in authorized list", async (
       });
 
     await bringToFront(app.electronApp);
-    captureNative("messaging-pairing-frame-3.png");
+    await captureNative(app.electronApp, "messaging-pairing-frame-3.png");
   } finally {
     await app.close();
   }
@@ -750,7 +746,7 @@ test("messaging-activity-blocked — Messaging Activity showing rejected inbound
       activityWindow.getByText(/Rejected inbound from Riley Chen/).first(),
     ).toBeVisible();
 
-    captureNative("messaging-activity-blocked.png", {
+    await captureNative(app.electronApp, "messaging-activity-blocked.png", {
       titleSubstring: "Messaging Activity",
     });
   } finally {
@@ -796,7 +792,7 @@ test("desktop-recents — Recents lens populated", async () => {
     ).toBeVisible();
 
     await bringToFront(app.electronApp);
-    captureNative("desktop-recents.png");
+    await captureNative(app.electronApp, "desktop-recents.png");
   } finally {
     await app.close();
   }
@@ -846,7 +842,7 @@ test("desktop-skills-autocomplete — composer $ autocomplete showing skill list
     ).toBeVisible();
 
     await bringToFront(app.electronApp);
-    captureNative("desktop-skills-autocomplete.png");
+    await captureNative(app.electronApp, "desktop-skills-autocomplete.png");
   } finally {
     await app.close();
   }
@@ -991,7 +987,7 @@ test("desktop-queued-turns — composer with /review queued behind an in-flight 
     ).toBeVisible();
 
     await bringToFront(app.electronApp);
-    captureNative("desktop-queued-turns.png");
+    await captureNative(app.electronApp, "desktop-queued-turns.png");
   } finally {
     await app.close();
     await rm(tmpRoot, { recursive: true, force: true });
@@ -1052,7 +1048,7 @@ test("desktop-onboarding-wizard — Codex profile step", async () => {
     ).toBeVisible();
 
     await bringToFront(app.electronApp);
-    captureNative("desktop-onboarding-codex-profile.png");
+    await captureNative(app.electronApp, "desktop-onboarding-codex-profile.png");
   } finally {
     await app.close();
   }
@@ -1105,7 +1101,7 @@ test("desktop-live-work-rail — in-flight turn with diff + plan in the rail", a
     ).toBeVisible();
 
     await bringToFront(app.electronApp);
-    captureNative("desktop-live-work-rail.png");
+    await captureNative(app.electronApp, "desktop-live-work-rail.png");
   } finally {
     await app.close();
   }
