@@ -1019,7 +1019,7 @@ export class DesktopSettingsService {
         ),
         markdownMathRendering: this.resolveConfigBoolean(
           config.experimental?.markdownMathRendering,
-          false,
+          true,
         ),
         threadPricingSummary: this.resolveConfigBoolean(
           config.experimental?.threadPricingSummary,

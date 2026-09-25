@@ -7,6 +7,10 @@ boolean setting; runtime completion updates requesting messages locally.
 Ordinary siblings neither receive that update nor acquire math plugins or the
 LaTeX normalizer. Detection is memoized by source and setting.
 
+Math rendering is on by default. Operators can turn it off in Experimental
+settings or set `experimental.markdown_math_rendering = false` in their profile
+config. An explicit `true` or `false` keeps its existing meaning.
+
 `ThreadMarkdown` is the sole runtime hook consumer. Transcript messages, plans,
 reviews, activity and input content inherit the existing main thread-view
 provider. Standalone Markdown/changelog viewers without that provider retain

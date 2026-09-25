@@ -3186,7 +3186,7 @@ function DesktopAppShell(props: {
           ) : ThreadViewComponent ? (
             <MarkdownRenderingOptionsProvider
               mathEnabled={
-                settings.snapshot?.experimental.markdownMathRendering?.value ?? false
+                settings.snapshot?.experimental.markdownMathRendering?.value ?? true
               }
             >
               <ThreadViewComponent {...threadViewProps} />

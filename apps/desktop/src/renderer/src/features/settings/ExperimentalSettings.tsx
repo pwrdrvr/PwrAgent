@@ -17,7 +17,7 @@ const DEFAULT_LIVE_TRANSCRIPT_EVENT_FILTERING = {
 };
 
 const DEFAULT_MARKDOWN_MATH_RENDERING = {
-  value: false,
+  value: true,
   source: "default" as const,
 };
 
@@ -232,7 +232,7 @@ export function ExperimentalSettings(props: {
       <SettingsSection
         eyebrow="Experimental"
         title="Markdown Math Rendering"
-        description="Render LaTeX math delimiters in thread transcripts with KaTeX. Disabled by default while rendering quality and performance are evaluated."
+        description="Render LaTeX math delimiters in thread transcripts with KaTeX. On by default; turn it off if rendering causes problems."
         chip={markdownMathRendering.value ? "On" : "Off"}
         chipKind={markdownMathRendering.value ? "ok" : "default"}
       >
@@ -242,7 +242,7 @@ export function ExperimentalSettings(props: {
             disabled={props.saving}
             label="Enable Markdown math rendering"
             sub="Render \\(…\\) and \\[…\\] expressions as typeset math."
-            help="The KaTeX runtime is loaded on demand after this setting is enabled. Turning it off restores literal Markdown rendering."
+            help="The KaTeX runtime loads only for messages with potential math. Turning this off restores literal Markdown rendering."
             source={sourceBadge(markdownMathRendering)}
             onChange={(enabled) => {
               return props.onMarkdownMathRenderingChange(enabled);
