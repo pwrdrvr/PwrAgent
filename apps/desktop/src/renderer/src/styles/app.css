@@ -25893,12 +25893,14 @@ a.transcript-message__messaging-origin:focus-visible {
 /* The condition editor's controls sit outside any `.automation-field` label,
    so they name this chrome directly. Without it they fell back to Chromium's
    grey native fields at the 16px document size, and the house focus ring
-   drew a second outline around the native one. */
+   drew a second outline around the native one. The sender picker's token
+   field wears the same chrome around its bare input. */
 .automation-field input,
 .automation-field select,
 .automation-field textarea,
 .automation-condition__select,
-.automation-condition__input {
+.automation-condition__input,
+.automation-sender-picker__field {
   width: 100%;
   min-width: 0;
   border: 1px solid var(--border-subtle);
@@ -26996,10 +26998,10 @@ a.transcript-message__messaging-origin:focus-visible {
 }
 
 /* The picked senders sit inside the field, like addresses on a To: line, so
-   one outline holds the whole value however many are picked. The field wears
-   `.automation-condition__input`'s chrome and takes its focus ring through
-   `:has()`; the input inside is bare. 3px of padding around a 24px chip
-   keeps the field at the 32px of the controls beside it. */
+   one outline holds the whole value however many are picked. The field joins
+   the `.automation-field` control chrome above and takes its focus ring
+   through `:has()`; the input inside is bare. 3px of padding around a 24px
+   chip keeps the field at the 32px of the controls beside it. */
 .automation-sender-picker__field {
   display: flex;
   flex-wrap: wrap;
@@ -27007,9 +27009,6 @@ a.transcript-message__messaging-origin:focus-visible {
   gap: 4px;
   min-height: 32px;
   padding: 3px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 6px;
-  background: var(--bg-app);
   cursor: text;
 }
 

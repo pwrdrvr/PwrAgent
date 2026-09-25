@@ -90,8 +90,23 @@ describe("AutomationConditionEditor", () => {
     expect(field).toContainElement(input);
     expect(input).toHaveAttribute("placeholder", "Add another…");
 
+    expect(input).toHaveAccessibleName("Add a sender");
+
     fireEvent.mouseDown(field!);
     expect(input).toHaveFocus();
+
+    // The blank end of a wrapped chip line belongs to the chip list, not the
+    // field, and still reads as part of the text box.
+    input!.blur();
+    fireEvent.mouseDown(
+      container.querySelector(".automation-sender-picker__chips")!,
+    );
+    expect(input).toHaveFocus();
+
+    // A chip's remove button keeps its own press.
+    input!.blur();
+    fireEvent.mouseDown(screen.getByRole("button", { name: "Remove Datadog" }));
+    expect(input).not.toHaveFocus();
   });
 
   it("offers the full search hint before any sender is picked", () => {

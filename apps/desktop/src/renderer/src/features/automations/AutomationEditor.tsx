@@ -356,23 +356,28 @@ export function AutomationEditor(props: AutomationEditorProps) {
   const [inboundIncludeReplies, setInboundIncludeReplies] = useState(
     initialInboundTrigger?.includeThreadReplies ?? false,
   );
-  const [coalesceWindowSeconds, setCoalesceWindowSeconds] = useState(
+  // Unrounded: a window that is not a whole number of seconds must re-save as
+  // itself, and rounding 400ms to "0" would turn coalescing Off on any edit.
+  const savedCoalesceWindowSeconds =
     initialAutomation?.inboundCoalesceWindowMs !== undefined
-      ? String(Math.round(initialAutomation.inboundCoalesceWindowMs / 1000))
-      : "60",
+      ? String(initialAutomation.inboundCoalesceWindowMs / 1000)
+      : "60";
+  const [coalesceWindowSeconds, setCoalesceWindowSeconds] = useState(
+    savedCoalesceWindowSeconds,
   );
   // A window saved outside the presets (by an Agent tool, or before the
   // presets existed) stays selectable, in order, rather than showing as a
-  // preset it is not.
+  // preset it is not. It stays offered after another window is picked, so
+  // the operator can go back to it.
   const coalesceWindowOptions = useMemo(() => {
     const options: number[] = [...AUTOMATION_COALESCE_WINDOW_SECONDS_OPTIONS];
-    const current = Number(coalesceWindowSeconds);
-    if (Number.isFinite(current) && current >= 0 && !options.includes(current)) {
-      options.push(current);
+    const saved = Number(savedCoalesceWindowSeconds);
+    if (Number.isFinite(saved) && saved >= 0 && !options.includes(saved)) {
+      options.push(saved);
       options.sort((left, right) => left - right);
     }
     return options.map(String);
-  }, [coalesceWindowSeconds]);
+  }, [savedCoalesceWindowSeconds]);
   const [maxRunsPerHour, setMaxRunsPerHour] = useState(
     initialAutomation?.maxRunsPerHour === null
       ? "unlimited"
@@ -3482,7 +3487,7 @@ function formatCoalesceWindow(seconds: number): string {
 function parseCoalesceWindowMs(value: string): number | undefined {
   const seconds = Number(value.trim());
   if (!Number.isFinite(seconds) || seconds < 0) return undefined;
-  return Math.floor(seconds) * 1000;
+  return Math.round(seconds * 1000);
 }
 
 function parseMaxRunsPerHour(value: string): number | null {

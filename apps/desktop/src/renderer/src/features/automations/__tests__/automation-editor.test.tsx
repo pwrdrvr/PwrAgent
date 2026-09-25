@@ -384,11 +384,60 @@ describe("AutomationEditor", () => {
     );
 
     fireEvent.change(windowField, { target: { value: "0" } });
+    // The saved window stays offered, so the operator can go back to it.
+    expect(
+      within(windowField).getByRole("option", { name: "45 seconds" }),
+    ).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(2));
     expect(onSubmit).toHaveBeenLastCalledWith(
       expect.objectContaining({
         request: expect.objectContaining({ inboundCoalesceWindowMs: 0 }),
+      }),
+    );
+  });
+
+  it("re-saves a coalescing window that is not a whole number of seconds", async () => {
+    const onSubmit = vi.fn(async () => undefined);
+    const automation: AutomationDetail = {
+      backend: "codex",
+      threadId: "thread-1",
+      id: "auto-1",
+      name: "Slack alerts",
+      status: "enabled",
+      triggers: [
+        {
+          id: "t",
+          kind: "inbound_message",
+          conversation: { channel: "slack", conversationId: "C0IN" },
+          textFilter: { mode: "contains", text: "ERROR" },
+        },
+      ],
+      scheduleSummary: "On inbound message",
+      backlogPolicy: "coalesce",
+      inboundCoalesceWindowMs: 400,
+      updatedAt: 1,
+      createdAt: 1,
+      taskPrompt: "Investigate.",
+      outputActions: [{ id: "agent-context", kind: "agent_context" }],
+    };
+
+    render(
+      <AutomationEditor
+        desktopApi={fakeDesktopApi(fakeSettings({ enabled: { slack: true } }))}
+        mode={{ kind: "edit", automation }}
+        onCancel={() => undefined}
+        onSubmit={onSubmit}
+      />,
+    );
+
+    // Rounding to whole seconds would load 400ms as Off and save 0.
+    expect(screen.getByLabelText("Coalesce window")).toHaveValue("0.4");
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        request: expect.objectContaining({ inboundCoalesceWindowMs: 400 }),
       }),
     );
   });

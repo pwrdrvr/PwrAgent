@@ -148,12 +148,14 @@ export function AutomationSenderPicker(
 
   return (
     <div className="automation-sender-picker" ref={containerRef}>
-      {/* The chips sit inside the field, so a press on the field's own
-          padding puts the caret in the input, as it would in a text box. */}
+      {/* The chips sit inside the field, so a press anywhere in it but a
+          chip's remove button (the padding, the gaps between chips, the
+          blank end of a wrapped chip line) puts the caret in the input, as
+          it would in a text box. */}
       <div
         className="automation-sender-picker__field"
         onMouseDown={(event) => {
-          if (event.target !== event.currentTarget) return;
+          if ((event.target as Element).closest("button, input")) return;
           event.preventDefault();
           inputRef.current?.focus();
         }}
@@ -197,6 +199,8 @@ export function AutomationSenderPicker(
           }
           disabled={!props.conversationId}
           autoComplete="off"
+          // The placeholder changes as senders are picked; the name must not.
+          aria-label="Add a sender"
           role="combobox"
           aria-expanded={open}
           aria-controls={listId}
