@@ -1,5 +1,9 @@
 import { configureBundledGit } from "./bundled-git";
-import { app, BrowserWindow, dialog, Menu, nativeImage, shell } from "electron";
+import {
+  applyRememberedLinuxPasswordStore,
+  relaunchForLinuxSecretStore,
+} from "./linux-password-store";
+import { app, BrowserWindow, dialog, Menu, nativeImage, safeStorage, shell } from "electron";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { getDesktopBackendRegistry } from "./app-server/backend-registry";
@@ -208,12 +212,16 @@ import {
   PWRAGENT_PROFILE_AUTO_CREATE_ENV,
   resolveActiveProfileName,
   resolveProfileBootDecision,
+  resolvePwragentRoot,
   startProfileFocusRequestWatcher,
   writeDockProfileSnapshot,
   type ProfileBootDecision,
   type ProfileFocusRequestWatcher,
 } from "./profile";
-import { SECRET_STORAGE_DISABLED_ENV } from "./settings/desktop-secret-store";
+import {
+  isSecretStorageDisabledByEnv,
+  SECRET_STORAGE_DISABLED_ENV,
+} from "./settings/desktop-secret-store";
 import {
   SQLITE_WRITE_METRICS_ENV,
   SQLITE_WRITE_METRICS_FILE_ENV,
@@ -1240,8 +1248,55 @@ export function bootstrapApp(): void {
   });
   installProcessShutdownHandlers();
   installBootErrorHandlers();
+  // Chromium reads --password-store in PostCreateMainMessageLoop, after this
+  // function returns. An env override or a store remembered from an earlier
+  // launch has to be appended here, still during the initial module evaluation.
+  const linuxPasswordStoreRoot = process.platform === "linux"
+    && !isSecretStorageDisabledByEnv()
+    && process.env.PWRAGENT_E2E !== "1"
+    ? resolvePwragentRoot()
+    : undefined;
+  const rememberedLinuxPasswordStore = linuxPasswordStoreRoot
+    ? applyRememberedLinuxPasswordStore({
+      platform: process.platform,
+      argv: process.argv,
+      env: process.env,
+      pwragentRoot: linuxPasswordStoreRoot,
+      appendSwitch: (backend) => {
+        app.commandLine.appendSwitch("password-store", backend);
+      },
+    })
+    : undefined;
+  if (rememberedLinuxPasswordStore) {
+    mainLog.info("linux secret store selected before ready", {
+      backend: rememberedLinuxPasswordStore,
+    });
+  }
 
   app.whenReady().then(async () => {
+    if (linuxPasswordStoreRoot && relaunchForLinuxSecretStore({
+      platform: process.platform,
+      argv: process.argv,
+      env: process.env,
+      pwragentRoot: linuxPasswordStoreRoot,
+      selectedStore: rememberedLinuxPasswordStore,
+      encryptionAvailable: safeStorage.isEncryptionAvailable(),
+      backend: safeStorage.getSelectedStorageBackend?.() ?? null,
+      relaunch: (args) => {
+        app.relaunch({ args });
+      },
+      exit: (code) => {
+        app.exit(code);
+      },
+      info: (message, fields) => {
+        mainLog.info(message, fields);
+      },
+      warn: (message, fields) => {
+        mainLog.warn(message, fields);
+      },
+    })) {
+      return;
+    }
     const startupCpuProfiler = new StartupCpuProfiler();
     startupCpuProfilerForNewWindows = startupCpuProfiler;
     await startupCpuProfiler.start();

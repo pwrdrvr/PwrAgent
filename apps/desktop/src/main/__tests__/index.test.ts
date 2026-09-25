@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentEvent } from "@pwragent/shared";
+import { resolve } from "node:path";
+import type {
+  applyRememberedLinuxPasswordStore,
+  relaunchForLinuxSecretStore,
+} from "../linux-password-store";
 
 const appEventHandlers = new Map<string, (...args: unknown[]) => void>();
 const processEventHandlers = new Map<string, (...args: unknown[]) => void>();
@@ -192,6 +197,13 @@ const appFocusMock = vi.fn();
 const getAppPathMock = vi.fn(() => "/test/app");
 const getVersionMock = vi.fn(() => "1.0.0-alpha.0");
 const whenReadyMock = vi.fn(() => Promise.resolve());
+const appendSwitchMock = vi.fn();
+const relaunchMock = vi.fn();
+const exitMock = vi.fn();
+const isEncryptionAvailableMock = vi.fn(() => true);
+const getSelectedStorageBackendMock = vi.fn(() => "gnome_libsecret");
+const applyRememberedLinuxPasswordStoreMock = vi.fn<typeof applyRememberedLinuxPasswordStore>();
+const relaunchForLinuxSecretStoreMock = vi.fn<typeof relaunchForLinuxSecretStore>();
 const quitMock = vi.fn();
 const getAllWindowsMock = vi.fn<() => unknown[]>(() => []);
 const dockSetIconMock = vi.fn();
@@ -258,6 +270,9 @@ vi.mock("electron", () => ({
     showAboutPanel: showAboutPanelMock,
     focus: appFocusMock,
     whenReady: whenReadyMock,
+    commandLine: { appendSwitch: appendSwitchMock },
+    relaunch: relaunchMock,
+    exit: exitMock,
     dock: {
       setIcon: dockSetIconMock,
       setMenu: dockSetMenuMock,
@@ -269,6 +284,10 @@ vi.mock("electron", () => ({
   },
   BrowserWindow: {
     getAllWindows: getAllWindowsMock,
+  },
+  safeStorage: {
+    isEncryptionAvailable: isEncryptionAvailableMock,
+    getSelectedStorageBackend: getSelectedStorageBackendMock,
   },
   Menu: {
     setApplicationMenu: setApplicationMenuMock,
@@ -289,6 +308,11 @@ vi.mock("electron", () => ({
   nativeImage: {
     createFromPath: nativeImageCreateFromPathMock,
   },
+}));
+
+vi.mock("../linux-password-store", () => ({
+  applyRememberedLinuxPasswordStore: applyRememberedLinuxPasswordStoreMock,
+  relaunchForLinuxSecretStore: relaunchForLinuxSecretStoreMock,
 }));
 
 vi.mock("../window", () => ({
@@ -562,6 +586,8 @@ vi.mock("../settings/desktop-settings-singleton", () => ({
 }));
 
 vi.mock("../profile", () => ({
+  resolvePwragentRoot: vi.fn(() => resolve(process.env.PWRAGENT_HOME ?? "test-pwragent-root")),
+  PWRAGENT_PROFILE_AUTO_CREATE_ENV: "PWRAGENT_PROFILE_AUTO_CREATE",
   buildDockProfileSnapshot: buildDockProfileSnapshotMock,
   resolveActiveProfileName: resolveActiveProfileNameMock,
   startProfileFocusRequestWatcher: startProfileFocusRequestWatcherMock,
@@ -893,8 +919,15 @@ describe("bootstrapApp", () => {
     startupProfilerInstance.start.mockReset();
     startupProfilerInstance.attachWindow.mockReset();
     StartupCpuProfilerMock.mockClear();
+    applyRememberedLinuxPasswordStoreMock.mockReset();
+    relaunchForLinuxSecretStoreMock.mockReset();
+    relaunchForLinuxSecretStoreMock.mockReturnValue(false);
+    isEncryptionAvailableMock.mockReset().mockReturnValue(true);
+    getSelectedStorageBackendMock.mockReset().mockReturnValue("gnome_libsecret");
     vi.resetModules();
     vi.stubEnv("PWRAGENT_DISABLE_MESSAGING", undefined);
+    vi.stubEnv("PWRAGENT_DEV_DISABLE_SECRET_STORAGE", undefined);
+    vi.stubEnv("PWRAGENT_E2E", undefined);
   });
 
   afterEach(() => {
@@ -902,6 +935,110 @@ describe("bootstrapApp", () => {
     vi.restoreAllMocks();
     vi.useRealTimers();
     vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
+  it.each([
+    ["darwin", undefined],
+    ["darwin", "1"],
+    ["win32", undefined],
+  ])("does not access Linux secret storage on %s with opt-out %s", async (platform, disabled) => {
+    vi.stubGlobal("process", Object.create(process, { platform: { value: platform } }));
+    vi.stubEnv("PWRAGENT_DEV_DISABLE_SECRET_STORAGE", disabled);
+
+    await import("../index");
+    await flushMicrotasks();
+
+    expect(applyRememberedLinuxPasswordStoreMock).not.toHaveBeenCalled();
+    expect(relaunchForLinuxSecretStoreMock).not.toHaveBeenCalled();
+    expect(isEncryptionAvailableMock).not.toHaveBeenCalled();
+    expect(getSelectedStorageBackendMock).not.toHaveBeenCalled();
+    expect(createMainWindowMock).toHaveBeenCalled();
+  });
+
+  it.each(["1", "true", "yes"])("honors the Linux secret-storage opt-out %s before safeStorage access", async (value) => {
+    vi.stubGlobal("process", Object.create(process, { platform: { value: "linux" } }));
+    vi.stubEnv("PWRAGENT_DEV_DISABLE_SECRET_STORAGE", value);
+
+    await import("../index");
+    await flushMicrotasks();
+
+    expect(applyRememberedLinuxPasswordStoreMock).not.toHaveBeenCalled();
+    expect(relaunchForLinuxSecretStoreMock).not.toHaveBeenCalled();
+    expect(isEncryptionAvailableMock).not.toHaveBeenCalled();
+    expect(getSelectedStorageBackendMock).not.toHaveBeenCalled();
+    expect(createMainWindowMock).toHaveBeenCalled();
+  });
+
+  it("does not access the Linux keyring in E2E mode", async () => {
+    vi.stubGlobal("process", Object.create(process, { platform: { value: "linux" } }));
+    vi.stubEnv("PWRAGENT_E2E", "1");
+
+    await import("../index");
+    await flushMicrotasks();
+
+    expect(applyRememberedLinuxPasswordStoreMock).not.toHaveBeenCalled();
+    expect(relaunchForLinuxSecretStoreMock).not.toHaveBeenCalled();
+    expect(isEncryptionAvailableMock).not.toHaveBeenCalled();
+    expect(getSelectedStorageBackendMock).not.toHaveBeenCalled();
+  });
+
+  it("applies the root's remembered store before ready and preserves that selection after a failed unlock", async () => {
+    vi.stubGlobal("process", Object.create(process, { platform: { value: "linux" } }));
+    const pwragentRoot = resolve("isolated-linux-secret-store");
+    vi.stubEnv("PWRAGENT_HOME", pwragentRoot);
+    applyRememberedLinuxPasswordStoreMock.mockImplementation((options) => {
+      expect(whenReadyMock).not.toHaveBeenCalled();
+      options.appendSwitch("kwallet6");
+      return "kwallet6";
+    });
+    isEncryptionAvailableMock.mockReturnValue(false);
+    getSelectedStorageBackendMock.mockReturnValue("kwallet6");
+
+    await import("../index");
+    await flushMicrotasks();
+
+    expect(applyRememberedLinuxPasswordStoreMock).toHaveBeenCalledWith(expect.objectContaining({
+      platform: "linux",
+      pwragentRoot,
+    }));
+    expect(appendSwitchMock).toHaveBeenCalledWith("password-store", "kwallet6");
+    expect(relaunchForLinuxSecretStoreMock).toHaveBeenCalledWith(expect.objectContaining({
+      platform: "linux",
+      pwragentRoot,
+      selectedStore: "kwallet6",
+      encryptionAvailable: false,
+      backend: "kwallet6",
+    }));
+    expect(createMainWindowMock).toHaveBeenCalled();
+  });
+
+  it("exits for a Linux secret-store relaunch before initializing app state", async () => {
+    vi.stubGlobal("process", Object.create(process, { platform: { value: "linux" } }));
+    const pwragentRoot = resolve("another-linux-secret-store");
+    vi.stubEnv("PWRAGENT_HOME", pwragentRoot);
+    isEncryptionAvailableMock.mockReturnValue(false);
+    getSelectedStorageBackendMock.mockReturnValue("basic_text");
+    relaunchForLinuxSecretStoreMock.mockImplementation((options) => {
+      options.relaunch(["--password-store=gnome-libsecret"]);
+      options.exit(0);
+      return true;
+    });
+
+    await import("../index");
+    await flushMicrotasks();
+
+    expect(relaunchForLinuxSecretStoreMock).toHaveBeenCalledWith(expect.objectContaining({
+      pwragentRoot,
+      selectedStore: undefined,
+      encryptionAvailable: false,
+      backend: "basic_text",
+    }));
+    expect(relaunchMock).toHaveBeenCalledWith({ args: ["--password-store=gnome-libsecret"] });
+    expect(exitMock).toHaveBeenCalledWith(0);
+    expect(StartupCpuProfilerMock).not.toHaveBeenCalled();
+    expect(initializeAppStateMock).not.toHaveBeenCalled();
+    expect(createMainWindowMock).not.toHaveBeenCalled();
   });
 
   it("awaits startup CPU profiling before creating the first window", async () => {
