@@ -26,14 +26,16 @@ export const SLACK_APPROVAL_TARGET_LABELS: Record<
 > = {
   actor: { approve: "Approve user", approved: "User approved" },
   conversation: { approve: "Approve channel", approved: "Channel approved" },
-  team: { approve: "Approve team", approved: "Team approved" },
+  // `team` is Slack's API name for a workspace; operators know it as the
+  // workspace.
+  team: { approve: "Approve workspace", approved: "Workspace approved" },
 };
 
 /**
  * Which approval targets apply to a Slack observed request: always the user,
  * the channel unless it's a DM, and the team only when a *valid* workspace ID
  * (starts with T) was observed — a channel/DM id that leaked into `bucketId`
- * must not offer a bogus "Approve team".
+ * must not offer a bogus "Approve workspace".
  */
 export function slackApplicableApprovalTargets(
   observed: SlackObservedChatFacts | undefined,

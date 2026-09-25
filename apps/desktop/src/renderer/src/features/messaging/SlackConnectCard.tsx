@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from "react";
+import type { DesktopSettingsValue } from "@pwragent/shared";
 import { copyText } from "../../lib/copy-text";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { SlackAppIconStep } from "./SlackAppIconStep";
+import { SlackAppNameField, chosenSlackAppName } from "./SlackAppNameField";
 import {
   SLACK_ADMIN_APPROVAL_COPY,
   SLACK_CONNECT_CHECKLIST,
@@ -42,6 +45,16 @@ function formatManifestSize(manifestJson: string): string {
 export function SlackConnectCard(props: {
   desktopApi?: DesktopApi;
   variant: "settings" | "onboarding";
+  /** Undefined while settings load. */
+  appName: DesktopSettingsValue<string> | undefined;
+  /**
+   * Given, the card asks for the name itself, above Create: the onboarding
+   * wizard has no numbered steps. Settings leaves it out and asks in a step of
+   * its own ahead of this one, because the name is what unlocks Create.
+   */
+  onSaveAppName?: (appName: string) => Promise<unknown>;
+  /** A settings write is out; the name on screen may not be the saved one. */
+  saving?: boolean;
 }) {
   const [pending, setPending] = useState<SlackConnectAction | undefined>(
     undefined,
@@ -58,6 +71,9 @@ export function SlackConnectCard(props: {
   const copiedTimer = useRef<number | undefined>(undefined);
   const canOpen = Boolean(props.desktopApi?.openSlackCreateApp);
   const busy = pending !== undefined;
+  const appName = chosenSlackAppName(props.appName);
+  // A manifest built while the name is being written could carry the old one.
+  const named = appName !== undefined && !props.saving;
 
   useEffect(
     () => () => {
@@ -100,7 +116,7 @@ export function SlackConnectCard(props: {
 
   const run = async (open: boolean): Promise<void> => {
     await start(open ? "create" : "link", async (openSlackCreateApp) => {
-      const result = await openSlackCreateApp({ open });
+      const result = await openSlackCreateApp({ open, appName });
       if (open && result.oversized) {
         // The create URL could not carry the manifest, so the manifest —
         // not the link — is what landed on the clipboard. Acknowledge it on
@@ -121,7 +137,7 @@ export function SlackConnectCard(props: {
           action: "create",
           kind: "status",
           message:
-            "Opened Slack in your browser. Finish the checklist, then paste both tokens.",
+            "Opened Slack in your browser. Create the app there, then follow the steps below.",
         });
         return;
       }
@@ -145,7 +161,11 @@ export function SlackConnectCard(props: {
    */
   const copyManifest = async (): Promise<void> => {
     await start("manifest", async (openSlackCreateApp) => {
-      const result = await openSlackCreateApp({ mode: "update", open: false });
+      const result = await openSlackCreateApp({
+        mode: "update",
+        open: false,
+        appName,
+      });
       await copyText(result.manifestJson, props.desktopApi);
       setManifestSize(formatManifestSize(result.manifestJson));
       markCopied("manifest");
@@ -191,10 +211,20 @@ export function SlackConnectCard(props: {
       data-testid="slack-connect-card"
     >
       <div className="slack-connect__intro">
-        Create a customer-owned Slack app from PwrAgent&rsquo;s official
-        manifest. Socket Mode stays on your computer — no PwrAgent Slack
-        app, and no client secret in this desktop build.
+        {props.onSaveAppName ? "Name your agent, then open" : "Opens"} Slack
+        with PwrAgent&rsquo;s official manifest filled in. Pick your workspace
+        and click <strong>Create</strong>. It is a customer-owned Slack app:
+        Socket Mode runs from this computer, with no PwrAgent-hosted Slack app
+        and no client secret in this desktop build.
       </div>
+      {props.onSaveAppName ? (
+        <SlackAppNameField
+          appName={props.appName}
+          disabled={props.saving}
+          variant={props.variant}
+          onSave={props.onSaveAppName}
+        />
+      ) : null}
       <div className="slack-connect__actions">
         <button
           type="button"
@@ -203,7 +233,7 @@ export function SlackConnectCard(props: {
               ? "onboarding-wizard__btn onboarding-wizard__btn--ghost"
               : "button button--primary"
           }
-          disabled={busy || !canOpen}
+          disabled={busy || !canOpen || !named}
           onClick={() => {
             void run(true);
           }}
@@ -217,7 +247,7 @@ export function SlackConnectCard(props: {
               ? "onboarding-wizard__btn onboarding-wizard__btn--link"
               : "button button--ghost"
           }
-          disabled={busy || !canOpen}
+          disabled={busy || !canOpen || !named}
           onClick={() => {
             void run(false);
           }}
@@ -229,19 +259,33 @@ export function SlackConnectCard(props: {
               : "Copy link for an admin"}
         </button>
       </div>
-      <ol className="slack-connect__checklist">
-        {SLACK_CONNECT_CHECKLIST.map((step) => (
-          <li key={step}>{step}</li>
-        ))}
-      </ol>
-      <p className="slack-connect__admin">{SLACK_ADMIN_APPROVAL_COPY}</p>
+      {appName === undefined ? (
+        <p className="slack-connect__admin">
+          Save the agent name above first. Slack creates the app with it.
+        </p>
+      ) : null}
       {renderFeedback(["create", "link"])}
+      {/* Here, not later: Create leaves the operator on the very Slack page
+          that takes the icon. */}
+      <SlackAppIconStep desktopApi={props.desktopApi} variant={props.variant} />
+      <p className="slack-connect__admin">{SLACK_ADMIN_APPROVAL_COPY}</p>
+      {/* Settings walks the rest as numbered steps beside each token box. */}
+      {props.variant === "onboarding" ? (
+        <ol className="slack-connect__checklist">
+          {SLACK_CONNECT_CHECKLIST.map((step) => (
+            <li key={step}>{step}</li>
+          ))}
+        </ol>
+      ) : null}
       {props.variant === "settings" ? (
-        <div className="slack-connect__update">
-          <p className="slack-connect__grouplabel">
-            Already have a PwrAgent app
+        <details className="slack-connect__update">
+          <summary className="slack-connect__grouplabel">
+            Already have a PwrAgent app? Update its manifest
+          </summary>
+          <p className="slack-connect__admin">
+            {SLACK_MANIFEST_BLURB} The manifest carries the agent name above,
+            so set it to your app&rsquo;s name first.
           </p>
-          <p className="slack-connect__admin">{SLACK_MANIFEST_BLURB}</p>
           <div className="slack-connect__copyrow">
             <code className="slack-connect__manifest">
               {manifestSize
@@ -252,7 +296,7 @@ export function SlackConnectCard(props: {
               type="button"
               className="button button--secondary"
               data-testid="slack-copy-manifest"
-              disabled={busy || !canOpen}
+              disabled={busy || !canOpen || !named}
               onClick={() => {
                 void copyManifest();
               }}
@@ -282,7 +326,7 @@ export function SlackConnectCard(props: {
               <li key={step}>{step}</li>
             ))}
           </ol>
-        </div>
+        </details>
       ) : null}
     </div>
   );

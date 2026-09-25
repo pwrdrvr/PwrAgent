@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DesktopSettingsService } from "../settings/desktop-settings-service";
+import { suggestedSlackAppName } from "../messaging/messaging-settings-domain";
 import { managedGrokBuildsEnabledForRuntime } from "../settings/desktop-config";
 import {
   MemoryDesktopSecretStore,
@@ -2961,6 +2962,55 @@ describe("DesktopSettingsService", () => {
     expect(snapshot.messaging.telegram.authorizedUserIds.value).toEqual([
       { id: "111111111", displayName: "Harold" },
     ]);
+  });
+
+  /**
+   * Slack lists every teammate's PwrAgent as "PwrAgent" after @ unless each is
+   * renamed. The OS account name makes the suggestion, and a suggestion is
+   * not a choice: only a written `app_name` reports the config source.
+   */
+  it("suggests a Slack app name from the OS account and records the chosen one", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    const service = new DesktopSettingsService({
+      configPath,
+      env: { USER: "fixture-user" },
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    expect((await service.readSettingsProjection()).messaging.slack.appName).toEqual({
+      value: "PwrAgent - fixture-user",
+      source: "default",
+    });
+    expect(service.readMessagingSettings().slack.appName).toEqual({
+      value: "PwrAgent - fixture-user",
+      source: "default",
+    });
+
+    await service.writeConfigPatchTargeted({
+      messaging: { slack: { appName: "Fixture Agent" } },
+    });
+    expect(fs.readFileSync(configPath, "utf8")).toContain('app_name = "Fixture Agent"');
+    expect((await service.readSettingsProjection()).messaging.slack.appName).toEqual({
+      value: "Fixture Agent",
+      source: "config",
+    });
+
+    // A blank name is no choice.
+    await service.writeConfigPatchTargeted({
+      messaging: { slack: { appName: "" } },
+    });
+    expect(service.readMessagingSettings().slack.appName.source).toBe("default");
+  });
+
+  it("keeps the suggested Slack app name within Slack's 35 characters", () => {
+    expect(suggestedSlackAppName({ USERNAME: "fixture-user" })).toBe(
+      "PwrAgent - fixture-user",
+    );
+    expect(
+      suggestedSlackAppName({ USER: "an-exceedingly-long-account-name" }),
+    ).toBe("PwrAgent - an-exceedingly-long-acco");
+    expect(suggestedSlackAppName({})).toBe("PwrAgent");
   });
 
   it("defaults Slack Live Working Cards off without persisting the default", async () => {

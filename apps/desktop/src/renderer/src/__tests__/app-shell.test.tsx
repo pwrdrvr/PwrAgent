@@ -1897,6 +1897,7 @@ describe("App", () => {
           botToken: { configured: false, source: "unset", writable: true },
           appToken: { configured: false, source: "unset", writable: true },
           signingSecret: { configured: false, source: "unset", writable: true },
+          appName: { value: "PwrAgent - fixture-user", source: "default" },
           workspaceUrl: { value: "", source: "default" },
           inboundMode: { value: "socket", source: "default" },
           teamAuthorizationMode: { value: "approved_only", source: "default" },

@@ -224,6 +224,7 @@ export type DesktopSettingsConfig = {
       liveWorkingCards?: boolean;
       responseMode?: DesktopMessagingResponseMode;
       streamingResponses?: boolean;
+      appName?: string;
       workspaceUrl?: string;
       inboundMode?: "socket" | "events";
       teamAuthorizationMode?: DesktopMessagingAuthorizationMode;
@@ -1316,6 +1317,9 @@ export function desktopSettingsPatchToEdits(
   if (slack?.streamingResponses !== undefined) {
     set(["messaging", "slack", "streaming_responses"], slack.streamingResponses);
   }
+  if (slack?.appName !== undefined) {
+    set(["messaging", "slack", "app_name"], slack.appName);
+  }
   if (slack?.workspaceUrl !== undefined) {
     set(["messaging", "slack", "workspace_url"], slack.workspaceUrl);
   }
@@ -1963,6 +1967,7 @@ function normalizeDesktopConfig(
         liveWorkingCards: readBoolean(slack?.live_working_cards),
         responseMode: readMessagingResponseMode(slack?.response_mode),
         streamingResponses: readBoolean(slack?.streaming_responses),
+        appName: readString(slack?.app_name),
         workspaceUrl: readString(slack?.workspace_url),
         inboundMode: readSlackInboundMode(slack?.inbound_mode),
         teamAuthorizationMode: readMessagingAuthorizationMode(

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   SettingsCredentialTestKind,
   SettingsCredentialTestResult,
@@ -13,7 +13,8 @@ import type { DesktopApi } from "../../lib/desktop-api";
  *
  * Behavior contract:
  * - On mount: read the last-known result (if any) via the desktop
- *   API and render its status. Does NOT auto-probe.
+ *   API and render its status. Does NOT auto-probe: opening a page is
+ *   not entering anything. Only a new `autoRun.key` runs the probe unasked.
  * - On Test click: optimistically flip to `testing`, run the probe,
  *   show the result. Status pill stays on the latest result until
  *   the user clicks Test again.
@@ -47,12 +48,29 @@ export function SettingsTestBlock(props: {
   /** Optional prerequisite checklist (present/valid-looking inputs). */
   prerequisites?: SettingsTestPrerequisite[];
   desktopApi?: DesktopApi;
+  /** Latest result, remembered or fresh, for a guided setup's progress. */
+  onResult?: (result: SettingsCredentialTestResult | undefined) => void;
+  /**
+   * Runs the test once, by itself, for each new `key`, as soon as `ready`
+   * and the required prerequisites allow. A guided setup moves `key` on each
+   * save and sets `ready` once every input it asks for is in: an operator
+   * watched filling in Slack never knew to press Test. The key the block
+   * mounts with never runs, and `ready` turning true alone never does either.
+   * Saving is two renders, the snapshot and then the save resolving, and a
+   * single key that read "entered" ran the test once for each.
+   */
+  autoRun?: { key: number; ready: boolean };
 }) {
   const desktopApi = props.desktopApi;
   const [result, setResult] = useState<SettingsCredentialTestResult | undefined>(
     undefined,
   );
   const [testing, setTesting] = useState(false);
+  const onResult = props.onResult;
+
+  useEffect(() => {
+    onResult?.(result);
+  }, [onResult, result]);
 
   // Pull the last result on mount so reopening the panel shows
   // "Connected · 2m ago" without re-probing. The main-process tester
@@ -63,7 +81,8 @@ export function SettingsTestBlock(props: {
     if (!reader) return;
     void reader({ kind: props.kind })
       .then((value) => {
-        if (!cancelled) setResult(value);
+        // A test that finished first is newer than what main remembered.
+        if (!cancelled) setResult((current) => current ?? value);
       })
       .catch(() => undefined);
     return () => {
@@ -95,6 +114,18 @@ export function SettingsTestBlock(props: {
     (item) => !item.optional && !item.met,
   );
   const blockedByPrereqs = missingRequired.length > 0;
+
+  const autoRunKey = props.autoRun?.key;
+  const autoRunReady = props.autoRun?.ready ?? false;
+  const lastAutoRunKey = useRef(autoRunKey);
+  useEffect(() => {
+    if (autoRunKey === undefined || autoRunKey === lastAutoRunKey.current) return;
+    // Held, not dropped: a save can resolve before the snapshot shows it,
+    // and a test already running may have read the old inputs.
+    if (!autoRunReady || blockedByPrereqs || testing) return;
+    lastAutoRunKey.current = autoRunKey;
+    void onTest();
+  }, [autoRunKey, autoRunReady, blockedByPrereqs, onTest, testing]);
 
   const status = testing
     ? "testing"

@@ -336,6 +336,7 @@ function createSnapshot(
         botToken: { configured: false, source: "unset", writable: true },
         appToken: { configured: false, source: "unset", writable: true },
         signingSecret: { configured: false, source: "unset", writable: true },
+        appName: { value: "PwrAgent - fixture-user", source: "default" },
         workspaceUrl: { value: "", source: "default" },
         inboundMode: { value: "socket", source: "default" },
         teamAuthorizationMode: { value: "approved_only", source: "default" },
@@ -5424,7 +5425,7 @@ describe("SettingsScreen", () => {
 
     // A workspace was observed, so a team approval is offered too.
     fireEvent.click(within(requestCard as HTMLElement).getByRole("button", {
-      name: "Approve team",
+      name: "Approve workspace",
     }));
 
     await waitFor(() => {
@@ -5671,29 +5672,37 @@ describe("SettingsScreen", () => {
       />,
     );
 
-    // The nav's Slack sub-item shares the name, so scope to the pane.
     const pane = screen.getByRole("region", {
       name: "Slack messaging settings",
     });
-    const slackHeader = within(pane).getByRole("button", { name: "Slack" });
-    if (slackHeader.getAttribute("aria-expanded") !== "true") {
-      fireEvent.click(slackHeader);
-    }
-    const slackSection = slackHeader.closest("section");
-    expect(slackSection).not.toBeNull();
-    const slackControls = within(slackSection as HTMLElement);
+    const openSection = (title: string) => {
+      const header = within(pane).getByRole("button", { name: title });
+      if (header.getAttribute("aria-expanded") !== "true") {
+        fireEvent.click(header);
+      }
+      const section = header.closest("section");
+      expect(section).not.toBeNull();
+      return within(section as HTMLElement);
+    };
 
+    // Pairing is Connect's last step; Start talking keeps the default Agent.
+    const connectControls = openSection("Connect");
     expect(
-      slackControls.queryByRole("radio", { name: "User via channel" }),
+      connectControls.queryByRole("radio", { name: "User via channel" }),
     ).not.toBeInTheDocument();
     expect(
-      slackControls.queryByRole("radio", { name: "Workspace" }),
+      connectControls.queryByRole("radio", { name: "Workspace" }),
     ).not.toBeInTheDocument();
     expect(
-      slackControls.getByText(/approve the observed user or channel/i),
+      connectControls.getByText("Approve the request that appears here."),
     ).toBeInTheDocument();
-    expect(slackControls.getByText("Authorized Team IDs")).toBeInTheDocument();
-    expect(slackControls.getByText("Team access default")).toBeInTheDocument();
+    expect(
+      openSection("Start talking").queryByRole("button", { name: "Generate" }),
+    ).not.toBeInTheDocument();
+
+    const slackControls = openSection("Access & responses");
+    expect(slackControls.getByText("Authorized Workspaces")).toBeInTheDocument();
+    expect(slackControls.getByText("Workspace access default")).toBeInTheDocument();
     expect(slackControls.getByText("Channel access default")).toBeInTheDocument();
     expect(slackControls.getByText("Channel response default")).toBeInTheDocument();
     expect(slackControls.getByText("Authorized Channels")).toBeInTheDocument();
@@ -5740,7 +5749,7 @@ describe("SettingsScreen", () => {
       />,
     );
 
-    const signingSecretInput = screen.getByLabelText("Signing Secret (Optional)");
+    const signingSecretInput = screen.getByLabelText("Signing Secret");
     const signingSecretControls = signingSecretInput.closest(".settings-secret");
     expect(signingSecretInput).toBeEnabled();
     expect(signingSecretControls).not.toBeNull();
@@ -5762,6 +5771,451 @@ describe("SettingsScreen", () => {
     });
   });
 
+  it("walks Slack setup as ordered steps with the next one marked", () => {
+    const snapshot = createSnapshot();
+    snapshot.messaging.slack.botToken = {
+      configured: true,
+      source: "keychain",
+      writable: true,
+    };
+    snapshot.messaging.slack.appName = {
+      value: "PwrAgent - fixture-user",
+      source: "config",
+    };
+    const settings = createSettingsState(snapshot);
+
+    render(
+      <SettingsScreen
+        settings={settings}
+        initialSection="messaging"
+        initialSubsection="slack"
+        onClose={() => undefined}
+      />,
+    );
+
+    const pane = screen.getByRole("region", {
+      name: "Slack messaging settings",
+    });
+    expect(
+      within(pane)
+        .getAllByRole("heading", { level: 2 })
+        .map((heading) => heading.textContent),
+    ).toEqual(["Connect", "Access & responses", "Start talking", "Advanced"]);
+
+    const connect = within(pane)
+      .getByRole("button", { name: "Connect" })
+      .closest("section") as HTMLElement;
+    const stages = Array.from(
+      connect.querySelectorAll<HTMLElement>(".automation-stage"),
+    );
+    expect(
+      stages.map((stage) => [
+        stage.querySelector(".automation-stage__title")?.textContent,
+        stage.querySelector(".automation-stage__progress")?.textContent,
+      ]),
+    ).toEqual([
+      ["Your agent", "Named"],
+      ["Slack app", "Created"],
+      ["Bot User OAuth Token", "Saved"],
+      ["App-Level Token", "Next"],
+      ["Signing Secret", "Waiting"],
+      ["Connection", "Waiting"],
+      ["Your Slack account", "Waiting"],
+    ]);
+    expect(stages[3]).toHaveAttribute("aria-current", "step");
+    // The app-level token needs exactly one scope, picked in Slack's dialog.
+    expect(within(stages[3]).getByText("connections:write")).toBeInTheDocument();
+    expect(
+      within(stages[2]).getByText("Bot User OAuth Token", { selector: "strong" }),
+    ).toBeInTheDocument();
+    // Creating the app leaves the operator on the page that takes the icon.
+    expect(
+      within(stages[1]).getByRole("img", { name: "PwrAgent app icon" }),
+    ).toBeInTheDocument();
+  });
+
+  it("runs the Slack connection test by itself once the last secret is saved", async () => {
+    const configured = {
+      configured: true,
+      source: "keychain",
+      writable: true,
+    } as const;
+    const snapshot = createSnapshot();
+    snapshot.messaging.slack.appName = {
+      value: "PwrAgent - fixture-user",
+      source: "config",
+    };
+    snapshot.messaging.slack.botToken = configured;
+    snapshot.messaging.slack.appToken = configured;
+    const settings = createSettingsState(snapshot);
+    const testSettingsCredentials = vi.fn<
+      NonNullable<DesktopApi["testSettingsCredentials"]>
+    >(async () => ({
+      kind: "slack",
+      status: "ok",
+      testedAt: Date.now(),
+      durationMs: 5,
+      account: "fixture-bot",
+    }));
+    const desktopApi = { testSettingsCredentials } as unknown as DesktopApi;
+    const renderWith = (next: typeof snapshot) => (
+      <SettingsScreen
+        settings={{ ...settings, snapshot: next }}
+        desktopApi={desktopApi}
+        initialSection="messaging"
+        initialSubsection="slack"
+        onClose={() => undefined}
+      />
+    );
+    const view = render(renderWith(snapshot));
+
+    const signing = screen.getByLabelText("Signing Secret");
+    fireEvent.change(signing, { target: { value: "fixture-signing-secret" } });
+    fireEvent.keyDown(signing, { key: "Enter" });
+    expect(settings.replaceSecret).toHaveBeenCalledWith(
+      "slackSigningSecret",
+      "fixture-signing-secret",
+    );
+    // Saved, but the snapshot does not show the secret yet: two of three.
+    await within(signing.closest(".settings-secret") as HTMLElement).findByText(
+      "Saved",
+    );
+    expect(testSettingsCredentials).not.toHaveBeenCalled();
+
+    const entered = {
+      ...snapshot,
+      messaging: {
+        ...snapshot.messaging,
+        slack: { ...snapshot.messaging.slack, signingSecret: configured },
+      },
+    };
+    view.rerender(renderWith(entered));
+    await waitFor(() => {
+      expect(testSettingsCredentials).toHaveBeenCalledExactlyOnceWith({
+        kind: "slack",
+      });
+    });
+    const connect = screen
+      .getByRole("button", { name: "Connect" })
+      .closest("section") as HTMLElement;
+    const progress = () =>
+      Array.from(
+        connect.querySelectorAll<HTMLElement>(".automation-stage__progress"),
+      ).map((node) => node.textContent);
+    await waitFor(() => {
+      expect(progress().slice(-2)).toEqual(["Connected", "Next"]);
+    });
+
+    // A later render of the same inputs is not a new entry.
+    view.rerender(renderWith({ ...entered }));
+    expect(testSettingsCredentials).toHaveBeenCalledOnce();
+
+    // Replacing a token is: what was tested is no longer what is stored.
+    const botToken = screen.getByLabelText("Bot Token");
+    fireEvent.change(botToken, { target: { value: "xoxb-0000-fake" } });
+    fireEvent.keyDown(botToken, { key: "Enter" });
+    await waitFor(() => {
+      expect(testSettingsCredentials).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("tests Slack once when the snapshot shows the save before it resolves", async () => {
+    // useDesktopSettings sets the snapshot, then resolves the save: two
+    // renders, and each once looked like a new entry.
+    const configured = {
+      configured: true,
+      source: "keychain",
+      writable: true,
+    } as const;
+    const initial = createSnapshot();
+    initial.messaging.slack.botToken = configured;
+    initial.messaging.slack.appToken = configured;
+    const testSettingsCredentials = vi.fn<
+      NonNullable<DesktopApi["testSettingsCredentials"]>
+    >(async () => ({
+      kind: "slack",
+      status: "ok",
+      testedAt: Date.now(),
+      durationMs: 5,
+    }));
+    const desktopApi = { testSettingsCredentials } as unknown as DesktopApi;
+    function StatefulSettings() {
+      const [snapshot, setSnapshot] = useState(initial);
+      const settings = createSettingsState(snapshot);
+      settings.replaceSecret = async () => {
+        setSnapshot((current) => ({
+          ...current,
+          messaging: {
+            ...current.messaging,
+            slack: { ...current.messaging.slack, signingSecret: configured },
+          },
+        }));
+        await Promise.resolve();
+        return true;
+      };
+      return (
+        <SettingsScreen
+          settings={settings}
+          desktopApi={desktopApi}
+          initialSection="messaging"
+          initialSubsection="slack"
+          onClose={() => undefined}
+        />
+      );
+    }
+    render(<StatefulSettings />);
+
+    const signing = screen.getByLabelText("Signing Secret");
+    fireEvent.change(signing, { target: { value: "fixture-signing-secret" } });
+    fireEvent.keyDown(signing, { key: "Enter" });
+    await within(signing.closest(".settings-secret") as HTMLElement).findByText(
+      "Saved",
+    );
+    await waitFor(() => {
+      expect(testSettingsCredentials).toHaveBeenCalled();
+    });
+    // A second run would follow the first once it settles.
+    await screen.findByText("Connected", {
+      selector: ".settings-testblock__status",
+    });
+    expect(testSettingsCredentials).toHaveBeenCalledOnce();
+  });
+
+  it("says the agent name was not saved when the write fails", async () => {
+    const settings = createSettingsState();
+    settings.writeConfig = vi.fn(async () => false);
+    render(
+      <SettingsScreen
+        settings={settings}
+        initialSection="messaging"
+        initialSubsection="slack"
+        onClose={() => undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Use this name" }));
+
+    expect(await screen.findByText("Could not save the agent name.")).toHaveAttribute(
+      "role",
+      "alert",
+    );
+    expect(screen.queryByText("Saved")).not.toBeInTheDocument();
+  });
+
+  it("stops counting the connection test once a token it tested is cleared", async () => {
+    const configured = {
+      configured: true,
+      source: "keychain",
+      writable: true,
+    } as const;
+    const snapshot = createSnapshot();
+    snapshot.messaging.slack.appName = {
+      value: "PwrAgent - fixture-user",
+      source: "config",
+    };
+    snapshot.messaging.slack.botToken = configured;
+    snapshot.messaging.slack.appToken = configured;
+    snapshot.messaging.slack.signingSecret = configured;
+    const desktopApi = {
+      readLastSettingsCredentialTest: vi.fn(async () => ({
+        kind: "slack",
+        status: "ok",
+        testedAt: Date.now(),
+        durationMs: 5,
+      })),
+    } as unknown as DesktopApi;
+    const renderWith = (next: typeof snapshot) => (
+      <SettingsScreen
+        settings={createSettingsState(next)}
+        desktopApi={desktopApi}
+        initialSection="messaging"
+        initialSubsection="slack"
+        onClose={() => undefined}
+      />
+    );
+    const view = render(renderWith(snapshot));
+    const connectionProgress = () => {
+      const stage = screen
+        .getByText("Connection", { selector: ".automation-stage__title" })
+        .closest(".automation-stage") as HTMLElement;
+      return stage.querySelector(".automation-stage__progress")?.textContent;
+    };
+    await waitFor(() => expect(connectionProgress()).toBe("Connected"));
+
+    view.rerender(
+      renderWith({
+        ...snapshot,
+        messaging: {
+          ...snapshot.messaging,
+          slack: {
+            ...snapshot.messaging.slack,
+            botToken: { configured: false, source: "unset", writable: true },
+          },
+        },
+      }),
+    );
+    expect(connectionProgress()).not.toBe("Connected");
+  });
+
+  it("does not test Slack just because Settings opened", async () => {
+    const configured = {
+      configured: true,
+      source: "keychain",
+      writable: true,
+    } as const;
+    const snapshot = createSnapshot();
+    snapshot.messaging.slack.botToken = configured;
+    snapshot.messaging.slack.appToken = configured;
+    snapshot.messaging.slack.signingSecret = configured;
+    const testSettingsCredentials = vi.fn();
+    const readLastSettingsCredentialTest = vi.fn(async () => undefined);
+
+    render(
+      <SettingsScreen
+        settings={createSettingsState(snapshot)}
+        desktopApi={
+          {
+            testSettingsCredentials,
+            readLastSettingsCredentialTest,
+          } as unknown as DesktopApi
+        }
+        initialSection="messaging"
+        initialSubsection="slack"
+        onClose={() => undefined}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(readLastSettingsCredentialTest).toHaveBeenCalledWith({ kind: "slack" });
+    });
+    expect(testSettingsCredentials).not.toHaveBeenCalled();
+  });
+
+  it("opens the Slack app's direct messages from the pairing step", async () => {
+    const snapshot = createSnapshot();
+    const settings = createSettingsState(snapshot);
+    const openSlackAppMessages = vi.fn(async () => ({
+      url: "https://slack.com/app_redirect?app=A0FAKEAPP01",
+      workspaceKnown: false,
+      desktopApp: false,
+    }));
+    const renderWith = (next: typeof snapshot) => (
+      <SettingsScreen
+        settings={{ ...settings, snapshot: next }}
+        desktopApi={{ openSlackAppMessages } as unknown as DesktopApi}
+        initialSection="messaging"
+        initialSubsection="slack"
+        onClose={() => undefined}
+      />
+    );
+    const view = render(renderWith(snapshot));
+
+    // The app's ID comes from the app-level token.
+    expect(screen.getByRole("button", { name: "Open in Slack" })).toBeDisabled();
+
+    view.rerender(
+      renderWith({
+        ...snapshot,
+        messaging: {
+          ...snapshot.messaging,
+          slack: {
+            ...snapshot.messaging.slack,
+            appToken: { configured: true, source: "keychain", writable: true },
+          },
+        },
+      }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Open in Slack" }));
+    await waitFor(() => {
+      expect(openSlackAppMessages).toHaveBeenCalledOnce();
+    });
+  });
+
+  it("saves a secret when focus leaves the field, and on Enter", async () => {
+    const settings = createSettingsState();
+    render(
+      <SettingsScreen
+        settings={settings}
+        initialSection="messaging"
+        initialSubsection="slack"
+        onClose={() => undefined}
+      />,
+    );
+
+    const botToken = screen.getByLabelText("Bot Token");
+    fireEvent.change(botToken, { target: { value: "xoxb-0000-fake" } });
+    fireEvent.blur(botToken, { relatedTarget: document.body });
+
+    await waitFor(() => {
+      expect(settings.replaceSecret).toHaveBeenCalledWith(
+        "slackBotToken",
+        "xoxb-0000-fake",
+      );
+    });
+    await waitFor(() => expect(botToken).toHaveValue(""));
+    const botControls = botToken.closest(".settings-secret") as HTMLElement;
+    expect(within(botControls).getByRole("status")).toHaveTextContent("Saved");
+
+    const appToken = screen.getByLabelText("App Token");
+    fireEvent.change(appToken, { target: { value: "xapp-1-fake" } });
+    fireEvent.keyDown(appToken, { key: "Enter" });
+
+    await waitFor(() => {
+      expect(settings.replaceSecret).toHaveBeenCalledWith(
+        "slackAppToken",
+        "xapp-1-fake",
+      );
+    });
+  });
+
+  it("does not save a secret draft when focus moves to its own Discard", () => {
+    const settings = createSettingsState();
+    render(
+      <SettingsScreen
+        settings={settings}
+        initialSection="messaging"
+        initialSubsection="slack"
+        onClose={() => undefined}
+      />,
+    );
+
+    const botToken = screen.getByLabelText("Bot Token");
+    fireEvent.change(botToken, { target: { value: "xoxb-0000-fake" } });
+    const discard = within(
+      botToken.closest(".settings-secret") as HTMLElement,
+    ).getByRole("button", { name: "Discard" });
+    fireEvent.blur(botToken, { relatedTarget: discard });
+    fireEvent.click(discard);
+
+    expect(botToken).toHaveValue("");
+    expect(settings.replaceSecret).not.toHaveBeenCalled();
+  });
+
+  it("keeps an app token pasted into the Slack bot token box instead of saving it", async () => {
+    const settings = createSettingsState();
+    render(
+      <SettingsScreen
+        settings={settings}
+        initialSection="messaging"
+        initialSubsection="slack"
+        onClose={() => undefined}
+      />,
+    );
+
+    const botToken = screen.getByLabelText("Bot Token");
+    fireEvent.change(botToken, { target: { value: "xapp-1-fake" } });
+    fireEvent.blur(botToken, { relatedTarget: document.body });
+
+    expect(
+      await screen.findByText(
+        "That is an App-Level Token (xapp-). The Bot User OAuth Token starts with xoxb-.",
+      ),
+    ).toBeInTheDocument();
+    expect(botToken).toHaveValue("xapp-1-fake");
+    expect(botToken).toHaveAttribute("aria-invalid", "true");
+    expect(settings.replaceSecret).not.toHaveBeenCalled();
+  });
+
   it("does not offer the unimplemented Slack Events API inbound mode", () => {
     const settings = createSettingsState();
 
@@ -5774,12 +6228,18 @@ describe("SettingsScreen", () => {
       />,
     );
 
-    expect(screen.getByRole("radio", { name: "Socket Mode" })).toBeInTheDocument();
+    // Socket Mode is the only inbound path, so there is nothing to choose.
+    expect(screen.queryByRole("radio", { name: "Socket Mode" })).not.toBeInTheDocument();
     expect(screen.queryByRole("radio", { name: "Events API" })).not.toBeInTheDocument();
   });
 
   it("offers Connect Slack as the primary create-from-manifest path", async () => {
-    const settings = createSettingsState();
+    const snapshot = createSnapshot();
+    snapshot.messaging.slack.appName = {
+      value: "PwrAgent - fixture-user",
+      source: "config",
+    };
+    const settings = createSettingsState(snapshot);
     const openSlackCreateApp = vi.fn(async () => ({
       url: "https://api.slack.com/apps?new_app=1&manifest_json=%7B%7D",
       oversized: false,
@@ -5803,7 +6263,95 @@ describe("SettingsScreen", () => {
     expect(screen.getAllByText(/customer-owned Slack app/i).length).toBeGreaterThan(0);
     fireEvent.click(screen.getByRole("button", { name: "Create Slack app" }));
     await waitFor(() => {
-      expect(openSlackCreateApp).toHaveBeenCalledWith({ open: true });
+      expect(openSlackCreateApp).toHaveBeenCalledWith({
+        open: true,
+        appName: "PwrAgent - fixture-user",
+      });
+    });
+  });
+
+  /**
+   * Slack creates the app, and its @ name, from the manifest, and a pasted
+   * manifest renames an existing app. Nothing that carries one is offered
+   * until the operator has chosen the name; the suggestion alone is not a
+   * choice.
+   */
+  it("makes the operator choose the agent name before building a manifest", async () => {
+    const settings = createSettingsState();
+    const openSlackCreateApp = vi.fn();
+
+    render(
+      <SettingsScreen
+        settings={settings}
+        desktopApi={{ openSlackCreateApp }}
+        initialSection="messaging"
+        initialSubsection="slack"
+        onClose={() => undefined}
+      />,
+    );
+
+    const name = screen.getByRole("textbox", { name: "Agent name" });
+    expect(name).toHaveValue("PwrAgent - fixture-user");
+    // The name is step 1, ahead of the Create it unlocks.
+    const nameStage = name.closest(".automation-stage") as HTMLElement;
+    expect(nameStage).toHaveAttribute("aria-current", "step");
+    expect(
+      within(nameStage).getByText("Your agent", { selector: "h3" }),
+    ).toBeInTheDocument();
+    expect(
+      within(nameStage.nextElementSibling as HTMLElement).getByRole("button", {
+        name: "Create Slack app",
+      }),
+    ).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Create Slack app" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Copy link for an admin" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Copy manifest" })).toBeDisabled();
+    // Opening Slack's app list carries no manifest.
+    expect(screen.getByRole("button", { name: "Open Slack Apps" })).toBeEnabled();
+
+    // Passing through the box is not choosing its suggestion.
+    fireEvent.focus(name);
+    fireEvent.blur(name);
+    expect(settings.writeConfig).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Use this name" }));
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        messaging: { slack: { appName: "PwrAgent - fixture-user" } },
+      });
+    });
+    expect(openSlackCreateApp).not.toHaveBeenCalled();
+  });
+
+  it("saves an edited agent name on blur, and refuses one Slack would", async () => {
+    const settings = createSettingsState();
+
+    render(
+      <SettingsScreen
+        settings={settings}
+        initialSection="messaging"
+        initialSubsection="slack"
+        onClose={() => undefined}
+      />,
+    );
+
+    const name = screen.getByRole("textbox", { name: "Agent name" });
+    fireEvent.change(name, {
+      target: { value: "PwrAgent - a name far too long for Slack" },
+    });
+    fireEvent.blur(name);
+    expect(
+      await screen.findByText("Slack app names are at most 35 characters."),
+    ).toHaveAttribute("role", "alert");
+    expect(name).toHaveAttribute("aria-invalid", "true");
+    expect(settings.writeConfig).not.toHaveBeenCalled();
+
+    fireEvent.change(name, { target: { value: "  Fixture Agent " } });
+    fireEvent.blur(name);
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        messaging: { slack: { appName: "Fixture Agent" } },
+      });
     });
   });
 
@@ -6338,10 +6886,6 @@ describe("SettingsScreen", () => {
     expect(
       screen.getByText("Events API is not implemented. PwrAgent will use Socket Mode."),
     ).toBeInTheDocument();
-    expect(screen.getByRole("radio", { name: "Socket Mode" })).toHaveAttribute(
-      "aria-checked",
-      "true",
-    );
     expect(screen.queryByRole("radio", { name: "Events API" })).not.toBeInTheDocument();
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({

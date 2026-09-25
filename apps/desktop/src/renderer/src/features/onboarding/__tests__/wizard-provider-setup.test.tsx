@@ -15,6 +15,7 @@ import type {
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { BACKEND_SUMMARIES_REFRESH_EVENT } from "../../../lib/useBackendSummaries";
+import { slackCredentialProblem } from "../../messaging/slack-token-shape";
 import type { DesktopSettingsState } from "../../settings/useDesktopSettings";
 import {
   BackendRequirementsStep,
@@ -530,6 +531,86 @@ describe("SecretFieldRow live-write contract", () => {
   });
 });
 
+describe("SecretFieldRow saves on the way out", () => {
+  function renderRow(validate?: (value: string) => string | undefined) {
+    const onBuffer = vi.fn();
+    const replaceSecret = vi.fn(
+      async (_secret: DesktopSettingsSecretName, _value: string) => true,
+    );
+    render(
+      <SecretFieldRow
+        field={{
+          kind: "secret",
+          name: "slackBotToken",
+          label: "Bot token",
+          placeholder: "xoxb-",
+          validate,
+        }}
+        bufferedValue=""
+        onBuffer={onBuffer}
+        replaceSecret={replaceSecret}
+        clearSecret={vi.fn(async () => true)}
+      />,
+    );
+    return {
+      input: screen.getByPlaceholderText("xoxb-"),
+      onBuffer,
+      replaceSecret,
+    };
+  }
+
+  it("buffers and writes a pasted value when focus leaves the row", async () => {
+    const { input, onBuffer, replaceSecret } = renderRow();
+    fireEvent.change(input, { target: { value: "xoxb-0000-fake" } });
+    fireEvent.blur(input, { relatedTarget: document.body });
+
+    await waitFor(() => {
+      expect(replaceSecret).toHaveBeenCalledWith(
+        "slackBotToken",
+        "xoxb-0000-fake",
+      );
+    });
+    expect(onBuffer).toHaveBeenCalledWith("xoxb-0000-fake");
+  });
+
+  it("stores the trimmed value it checked, without a copied newline", async () => {
+    const { input, onBuffer, replaceSecret } = renderRow();
+    fireEvent.change(input, { target: { value: "  xoxb-0000-fake\n" } });
+    fireEvent.blur(input, { relatedTarget: document.body });
+
+    await waitFor(() => {
+      expect(replaceSecret).toHaveBeenCalledWith("slackBotToken", "xoxb-0000-fake");
+    });
+    expect(onBuffer).toHaveBeenCalledWith("xoxb-0000-fake");
+  });
+
+  it("does not save when focus moves to the row's own button", () => {
+    const { input, replaceSecret } = renderRow();
+    fireEvent.change(input, { target: { value: "xoxb-0000-fake" } });
+    fireEvent.blur(input, {
+      relatedTarget: screen.getByRole("button", { name: "Use this" }),
+    });
+
+    expect(replaceSecret).not.toHaveBeenCalled();
+  });
+
+  it("rejects a value that is recognizably another Slack credential", () => {
+    const { input, onBuffer, replaceSecret } = renderRow(
+      (value) => slackCredentialProblem("bot", value),
+    );
+    fireEvent.change(input, { target: { value: "xapp-1-fake" } });
+    fireEvent.blur(input, { relatedTarget: document.body });
+
+    expect(
+      screen.getByText(
+        "That is an App-Level Token (xapp-). The Bot User OAuth Token starts with xoxb-.",
+      ),
+    ).toBeInTheDocument();
+    expect(onBuffer).not.toHaveBeenCalled();
+    expect(replaceSecret).not.toHaveBeenCalled();
+  });
+});
+
 describe("Slack onboarding setup", () => {
   function slackSettings(
     inboundMode: "socket" | "events" = "socket",
@@ -551,6 +632,7 @@ describe("Slack onboarding setup", () => {
             botToken: unsetSecret,
             appToken: unsetSecret,
             signingSecret: unsetSecret,
+            appName: { value: "PwrAgent - fixture-user", source: "config" },
           },
           feishu: {
             appId: unsetSecret,
@@ -593,6 +675,29 @@ describe("Slack onboarding setup", () => {
     expect(screen.queryByRole("radio", { name: "Events API" })).not.toBeInTheDocument();
     expect(screen.queryByText(/Events API \(requires/i)).not.toBeInTheDocument();
     expect(screen.getByText(/Socket Mode is the only inbound path/i)).toBeInTheDocument();
+  });
+
+  it("saves the chosen agent name before offering Create Slack app", async () => {
+    const settings = slackSettings();
+    const slack = settings.snapshot!.messaging.slack;
+    slack.appName = { value: "PwrAgent - fixture-user", source: "default" };
+    render(
+      <ProviderSetupStep
+        provider="slack"
+        settings={settings}
+        desktopApi={{ openSlackCreateApp: vi.fn() } as unknown as DesktopApi}
+        bufferedSecrets={{}}
+        onBufferSecret={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Create Slack app" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Use this name" }));
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        messaging: { slack: { appName: "PwrAgent - fixture-user" } },
+      });
+    });
   });
 
   it("coerces leftover Events API configs and shows a notice", () => {

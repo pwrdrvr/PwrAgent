@@ -13,6 +13,7 @@ import {
   ApprovedSurfaceDefaultAgent,
   MessagingRoutesProvider,
   MessagingRoutesSettings,
+  PlatformDefaultAgentSetup,
 } from "../MessagingRoutesSettings";
 
 afterEach(() => {
@@ -1264,6 +1265,188 @@ describe("MessagingRoutesSettings", () => {
     await waitFor(() => {
       expect(api.unbindMessagingThread).toHaveBeenCalledWith({
         bindingId: "binding-1",
+      });
+    });
+  });
+});
+
+describe("PlatformDefaultAgentSetup", () => {
+  function slackDefault(
+    target: Partial<ListMessagingRoutesResponse["eligibleAgents"][number]> = {},
+  ): ListMessagingRoutesResponse["defaultAgents"][number] {
+    return {
+      assignmentId: "assignment-slack",
+      scope: { kind: "provider", platform: "slack" },
+      target: {
+        backend: "codex",
+        threadId: "agent-1",
+        label: "Orchard Agent",
+        backendLabel: "Codex",
+        backendAvailable: true,
+        available: true,
+        ...target,
+      },
+      createdAt: 1000,
+      updatedAt: 2000,
+    };
+  }
+
+  function buildAgentApi(routes = buildRoutes()) {
+    const api = buildDesktopApi(routes);
+    const calls: string[] = [];
+    const startThread = vi.fn<NonNullable<DesktopApi["startThread"]>>(
+      async (request) => {
+        calls.push("startThread");
+        return {
+          backend: request.backend,
+          threadId: "slack-agent-1",
+          executionMode: "default",
+        };
+      },
+    );
+    const startTurn = vi.fn<NonNullable<DesktopApi["startTurn"]>>(
+      async (request) => {
+        calls.push("startTurn");
+        return {
+          backend: request.backend,
+          threadId: request.threadId,
+          turnId: "turn-1",
+        };
+      },
+    );
+    api.setMessagingDefaultAgent.mockImplementation(async (request) => {
+      calls.push("setMessagingDefaultAgent");
+      return { assignmentId: request.assignmentId ?? "assignment-new" };
+    });
+    api.desktopApi.startThread = startThread;
+    api.desktopApi.startTurn = startTurn;
+    return { ...api, calls, startThread, startTurn };
+  }
+
+  function renderSetup(
+    desktopApi: DesktopApi,
+    onOpenThread?: (target: {
+      backend: AppServerBackendKind;
+      threadId: string;
+    }) => void,
+  ) {
+    return render(
+      <MessagingRoutesProvider desktopApi={desktopApi}>
+        <PlatformDefaultAgentSetup
+          desktopApi={desktopApi}
+          platform="slack"
+          onOpenThread={onOpenThread}
+        />
+      </MessagingRoutesProvider>,
+    );
+  }
+
+  it("creates an Agent thread, gives it a first turn, and makes it the Slack default", async () => {
+    // The fixture's only catch-all is a profile default whose Agent is gone,
+    // which answers nothing.
+    const api = buildAgentApi();
+    renderSetup(api.desktopApi);
+
+    expect(
+      await screen.findByText(/Nothing answers yet/),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Create Slack Agent" }));
+
+    await waitFor(() => {
+      expect(api.setMessagingDefaultAgent).toHaveBeenCalledWith({
+        scope: { kind: "provider", platform: "slack" },
+        target: { backend: "codex", threadId: "slack-agent-1" },
+      });
+    });
+    // The first turn has to land before the default: a Codex thread without
+    // one cannot be resumed after a restart.
+    expect(api.calls).toEqual([
+      "startThread",
+      "startTurn",
+      "setMessagingDefaultAgent",
+    ]);
+    expect(api.startThread).toHaveBeenCalledWith({
+      backend: "codex",
+      agent: expect.objectContaining({ name: "Slack Agent" }),
+    });
+    expect(api.startTurn).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "slack-agent-1",
+      input: [{ type: "text", text: expect.stringContaining("Slack messages") }],
+    });
+    expect(api.listMessagingRoutes).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not assign a default when the first turn fails", async () => {
+    const api = buildAgentApi();
+    api.startTurn.mockRejectedValueOnce(new Error("Codex is not signed in."));
+    renderSetup(api.desktopApi);
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Create Slack Agent" }),
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Codex is not signed in.",
+    );
+    expect(api.setMessagingDefaultAgent).not.toHaveBeenCalled();
+    expect(
+      screen.getByRole("button", { name: "Create Slack Agent" }),
+    ).toBeEnabled();
+  });
+
+  it("shows the Agent that answers Slack and replaces it in place", async () => {
+    const routes = buildRoutes();
+    routes.defaultAgents.push(slackDefault());
+    const api = buildAgentApi(routes);
+    const onOpenThread = vi.fn();
+    renderSetup(api.desktopApi, onOpenThread);
+
+    expect(await screen.findByText("Orchard Agent")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Open thread" }));
+    expect(onOpenThread).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "agent-1",
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Change" }));
+    // The current Agent is not offered as its own replacement.
+    const select = screen.getByRole("combobox", {
+      name: "Existing Agent for Slack",
+    });
+    expect(
+      within(select).queryByRole("option", { name: /Orchard Agent/ }),
+    ).not.toBeInTheDocument();
+    fireEvent.change(select, {
+      target: { value: JSON.stringify(["acp:grok", "agent-2"]) },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Use this Agent" }));
+
+    await waitFor(() => {
+      expect(api.setMessagingDefaultAgent).toHaveBeenCalledWith({
+        assignmentId: "assignment-slack",
+        scope: { kind: "provider", platform: "slack" },
+        target: { backend: "acp:grok", threadId: "agent-2" },
+      });
+    });
+    expect(api.startThread).not.toHaveBeenCalled();
+  });
+
+  it("replaces a Slack default whose Agent is gone instead of adding a second", async () => {
+    const routes = buildRoutes();
+    routes.defaultAgents.push(slackDefault({ available: false }));
+    const api = buildAgentApi(routes);
+    renderSetup(api.desktopApi);
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Create Slack Agent" }),
+    );
+
+    await waitFor(() => {
+      expect(api.setMessagingDefaultAgent).toHaveBeenCalledWith({
+        assignmentId: "assignment-slack",
+        scope: { kind: "provider", platform: "slack" },
+        target: { backend: "codex", threadId: "slack-agent-1" },
       });
     });
   });

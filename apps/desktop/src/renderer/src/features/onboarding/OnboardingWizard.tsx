@@ -35,6 +35,7 @@ import type { AppearanceController } from "../../lib/useAppearance";
 import { useModalDialog } from "../../lib/useModalDialog";
 import { SlackConnectCard } from "../messaging/SlackConnectCard";
 import { SLACK_EVENTS_API_UNIMPLEMENTED_NOTICE } from "../messaging/slack-connect-copy";
+import { slackCredentialProblem } from "../messaging/slack-token-shape";
 import type { DesktopSettingsState } from "../settings/useDesktopSettings";
 import { SettingsSwitch } from "../settings/SettingsSwitch";
 import { filterBufferedSecrets } from "./filterBufferedSecrets";
@@ -3859,6 +3860,8 @@ type ProviderField =
       label: string;
       sub?: string;
       placeholder?: string;
+      /** Rejects a value before it is buffered or written; see `SecretFieldRow`. */
+      validate?: (value: string) => string | undefined;
     }
   | {
       kind: "text";
@@ -4112,17 +4115,33 @@ const PROVIDER_SETUP_CONFIGS: Record<OnboardingProvider, ProviderSetupConfig> = 
       <>
         Create a customer-owned Slack app from PwrAgent&rsquo;s official
         manifest, install it to your workspace, then paste the bot token
-        (<code>xoxb-</code>) and app-level token (<code>xapp-</code>).
-        Socket Mode is the only inbound path.
+        (<code>xoxb-</code>), the app-level token (<code>xapp-</code>), and the
+        signing secret. Socket Mode is the only inbound path.
       </>
     ),
+    // Each box saves when focus leaves it, and rejects a value that is
+    // recognizably one of the other two.
     fields: [
-      { kind: "secret", name: "slackBotToken", label: "Bot token (xoxb-…)" },
+      {
+        kind: "secret",
+        name: "slackBotToken",
+        label: "Bot token (xoxb-…)",
+        sub: "Install App → OAuth Tokens → Bot User OAuth Token.",
+        validate: (value) => slackCredentialProblem("bot", value),
+      },
       {
         kind: "secret",
         name: "slackAppToken",
         label: "App-level token (xapp-…)",
-        sub: "Required for Socket Mode. Generate under Basic Information → App-Level Tokens.",
+        sub: "Required for Socket Mode. Basic Information → App-Level Tokens → Generate Token and Scopes, with only connections:write.",
+        validate: (value) => slackCredentialProblem("app", value),
+      },
+      {
+        kind: "secret",
+        name: "slackSigningSecret",
+        label: "Signing secret",
+        sub: "Basic Information → App Credentials. Signs the buttons PwrAgent posts.",
+        validate: (value) => slackCredentialProblem("signing", value),
       },
     ],
     pairingTitle: "Pair a Slack conversation",
@@ -4251,8 +4270,16 @@ export function ProviderSetupStep(props: {
       </header>
       {props.provider === "slack" ? (
         <SlackConnectCard
+          appName={snapshot?.messaging.slack.appName}
           desktopApi={props.desktopApi}
+          saving={props.settings.saving}
           variant="onboarding"
+          onSaveAppName={async (appName) => {
+            const saved = await props.settings.writeConfig({
+              messaging: { slack: { appName } },
+            });
+            if (!saved) throw new Error("Could not save the agent name.");
+          }}
         />
       ) : null}
       {leftoverEventsInbound ? (
@@ -4278,24 +4305,8 @@ export function ProviderSetupStep(props: {
       </div>
       {props.provider === "slack" ? (
         <details className="onboarding-wizard__advanced">
-          <summary>Advanced — existing tokens and optional fields</summary>
+          <summary>Advanced — optional fields</summary>
           <div className="onboarding-wizard__provider-fields">
-            <ProviderFieldRow
-              field={{
-                kind: "secret",
-                name: "slackSigningSecret",
-                label: "Signing secret",
-                sub: "Optional. Used to sign in-app button callbacks. Not required for Socket Mode.",
-              }}
-              provider={props.provider}
-              snapshot={snapshot}
-              saving={props.settings.saving}
-              bufferedSecrets={props.bufferedSecrets}
-              onBufferSecret={props.onBufferSecret}
-              writeConfig={props.settings.writeConfig}
-              replaceSecret={props.settings.replaceSecret}
-              clearSecret={props.settings.clearSecret}
-            />
             <ProviderFieldRow
               field={{
                 kind: "text",
@@ -4558,11 +4569,15 @@ export function SecretFieldRow(props: {
   const isRuntimeSecret = isMessagingRuntimeSecret(props.field.name);
 
   const save = async (): Promise<void> => {
-    if (!value || busy) return;
-    setLiveError(undefined);
+    // What is checked is what is stored: a copy often brings a newline.
+    const nextValue = value.trim();
+    if (!nextValue || busy) return;
+    const problem = props.field.validate?.(nextValue);
+    setLiveError(problem);
+    if (problem) return;
     // Always buffer first — graduation reads from the buffer when
     // copying secrets onto the target profile.
-    props.onBuffer(value);
+    props.onBuffer(nextValue);
     if (isRuntimeSecret) {
       // Messaging-runtime secrets must also land in the *current*
       // profile's keychain *now* so the runtime can start and the
@@ -4572,7 +4587,7 @@ export function SecretFieldRow(props: {
       // re-write the value onto the target profile from the buffer.
       setBusy(true);
       try {
-        const ok = await props.replaceSecret(props.field.name, value);
+        const ok = await props.replaceSecret(props.field.name, nextValue);
         if (!ok) {
           setLiveError("Could not enable this provider — try again.");
           return;
@@ -4613,7 +4628,18 @@ export function SecretFieldRow(props: {
       {props.field.sub ? (
         <span className="onboarding-wizard__field-sub">{props.field.sub}</span>
       ) : null}
-      <div className="onboarding-wizard__field-row">
+      <div
+        className="onboarding-wizard__field-row"
+        onBlur={(event) => {
+          // Leaving the row keeps what was pasted. An operator pasted both
+          // Slack tokens, never pressed the button, and the adapter never
+          // started. Focus moving to this row's own buttons is not leaving it.
+          if (event.currentTarget.contains(event.relatedTarget as Node | null)) {
+            return;
+          }
+          void save();
+        }}
+      >
         <input
           type="password"
           className="onboarding-wizard__input"

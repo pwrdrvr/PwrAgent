@@ -66,6 +66,7 @@ function slackSnapshot(overrides: Partial<Slack> = {}): Slack {
     botToken: { configured: false, source: "unset", writable: true },
     appToken: { configured: false, source: "unset", writable: true },
     signingSecret: { configured: false, source: "unset", writable: true },
+    appName: { value: "PwrAgent - fixture-user", source: "default" },
     workspaceUrl: { value: "", source: "default" },
     inboundMode: { value: "socket", source: "default" },
     teamAuthorizationMode: { value: "approved_only", source: "default" },
@@ -342,5 +343,29 @@ describe("buildSlackPatchDelta", () => {
     expect(buildSlackPatchDelta(snapshot, snapshot)).toEqual({
       inboundMode: "socket",
     });
+  });
+
+  // Main's suggestion and the saved choice can be the same string; only the
+  // source says whether the operator took it.
+  it("records taking the suggested app name, though the value is unchanged", () => {
+    const snapshot = slackSnapshot();
+    expect(
+      buildSlackPatchDelta(snapshot, {
+        ...snapshot,
+        appName: { value: snapshot.appName.value, source: "config" },
+      }),
+    ).toEqual({ appName: "PwrAgent - fixture-user" });
+  });
+
+  it("writes an edited app name", () => {
+    const snapshot = slackSnapshot({
+      appName: { value: "PwrAgent - fixture-user", source: "config" },
+    });
+    expect(
+      buildSlackPatchDelta(snapshot, {
+        ...snapshot,
+        appName: { value: "Fixture Agent", source: "config" },
+      }),
+    ).toEqual({ appName: "Fixture Agent" });
   });
 });

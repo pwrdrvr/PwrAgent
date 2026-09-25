@@ -106,6 +106,10 @@ import {
   registerPreloadLogIpcHandlers,
 } from "./ipc/preload-log";
 import {
+  disposeAppIconDragIpcHandlers,
+  registerAppIconDragIpcHandlers,
+} from "./ipc/app-icon-drag";
+import {
   disposeBootInfoIpcHandlers,
   registerBootInfoIpcHandlers,
 } from "./ipc/boot-info";
@@ -584,6 +588,7 @@ function disposeMainProcessResourcesSync(options?: {
   disposeQuitBlockerIpcHandlers();
   disposeProfilesIpcHandlers();
   disposeSettingsIpcHandlers();
+  disposeAppIconDragIpcHandlers();
   disposeDesktopConfigStore();
   disposeWindowPointerIpcHandlers();
   if (isDevelopment) {
@@ -1467,6 +1472,7 @@ export function bootstrapApp(): void {
       },
     });
     registerQuitBlockerIpcHandlers();
+    registerAppIconDragIpcHandlers();
     registerSettingsIpcHandlers(undefined, {
       onConfigPatchWritten: async (patch) => {
         // The registry observes the normalized provider domain, including

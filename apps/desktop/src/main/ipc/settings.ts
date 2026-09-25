@@ -49,6 +49,8 @@ import type {
   SettingsCredentialTestResult,
   OpenDiscordThreadPermissionRequest,
   OpenDiscordThreadPermissionResponse,
+  OpenSlackAppMessagesResponse,
+  OpenSlackAppSettingsResponse,
   SlackCreateAppRequest,
   SlackCreateAppResponse,
   StartDesktopCodexAuthProfileLoginRequest,
@@ -76,6 +78,8 @@ import {
   SETTINGS_INSPECT_DISCORD_THREAD_PERMISSIONS_CHANNEL,
   SETTINGS_LIST_DISCORD_THREAD_PERMISSION_CHANNELS_CHANNEL,
   SETTINGS_OPEN_DISCORD_THREAD_PERMISSION_CHANNEL,
+  SETTINGS_OPEN_SLACK_APP_MESSAGES_CHANNEL,
+  SETTINGS_OPEN_SLACK_APP_SETTINGS_CHANNEL,
   SETTINGS_OPEN_SLACK_CREATE_APP_CHANNEL,
   SETTINGS_INSPECT_CODE_SIGNATURES_CHANNEL,
   SETTINGS_PICK_GH_COMMAND_CHANNEL,
@@ -137,7 +141,7 @@ import {
   resolveCodexHomeForProfile,
   resolveDefaultCodexHome,
 } from "@pwrdrvr/codex-discovery";
-import { isSafeExternalOpenUrl } from "../external-url-policy";
+import { isSafeExternalOpenUrl, isSlackAppDeepLink } from "../external-url-policy";
 import { getMainLogger } from "../log";
 import { timeStartupProfileOperation } from "../diagnostics/startup-profile-events";
 import { BUILT_IN_ACP_STRATEGIES, type AcpAgentStrategy } from "@pwrdrvr/agent-acp";
@@ -174,7 +178,6 @@ import { normalizeProfileName } from "../profile";
 
 const settingsIpcLog = getMainLogger("pwragent:settings");
 const ACP_UPDATE_SNOOZE_MS = 24 * 60 * 60_000;
-const SLACK_APP_MANAGEMENT_URL = "https://api.slack.com/apps";
 // Codex profile login now runs through @pwrdrvr/codex-discovery's
 // CodexLoginManager (extracted from this file's inline flow). PwrAgnt owns the
 // instance so the Electron seam — `shell.openExternal` — is injected and the
@@ -1386,6 +1389,19 @@ function sanitizeMessagingContactLookupResponse(
   };
 }
 
+/**
+ * Whether the OS has an app for a URL's scheme. Handing an unclaimed scheme
+ * to `shell.openExternal` can put up the OS's own "no application" prompt
+ * before it fails, so ask first.
+ */
+function hasProtocolHandler(url: string): boolean {
+  try {
+    return app.getApplicationNameForProtocol(url) !== "";
+  } catch {
+    return false;
+  }
+}
+
 function unsupportedLookup(
   request: DesktopMessagingContactLookupRequest,
 ): DesktopMessagingContactLookupResponse {
@@ -2052,9 +2068,17 @@ export function registerSettingsIpcHandlers(
       request: SlackCreateAppRequest = {},
     ): Promise<SlackCreateAppResponse> => {
       const slackProvider = await import("@pwragent/messaging-provider-slack");
-      const prepared = slackProvider.buildSlackCreateAppUrl();
+      let appName: string | undefined;
+      if (request.appName !== undefined) {
+        const normalized = slackProvider.normalizeSlackAppName(request.appName);
+        if (!normalized.ok) throw new Error(normalized.error);
+        appName = normalized.appName;
+      }
+      const prepared = slackProvider.buildSlackCreateAppUrl({
+        manifest: slackProvider.buildOfficialSlackAppManifest({ appName }),
+      });
       const url = request.mode === "update"
-        ? SLACK_APP_MANAGEMENT_URL
+        ? slackProvider.SLACK_APP_MANAGEMENT_URL
         : prepared.url;
       const shouldOpen = request.open !== false;
       let opened = false;
@@ -2070,6 +2094,67 @@ export function registerSettingsIpcHandlers(
         oversized: prepared.oversized,
         manifestJson: prepared.manifestJson,
         opened,
+      };
+    },
+  );
+
+  ipcMain.removeHandler(SETTINGS_OPEN_SLACK_APP_SETTINGS_CHANNEL);
+  ipcMain.handle(
+    SETTINGS_OPEN_SLACK_APP_SETTINGS_CHANNEL,
+    async (): Promise<OpenSlackAppSettingsResponse> => {
+      const slackProvider = await import("@pwragent/messaging-provider-slack");
+      // The token stays in main; only the app ID it carries reaches the URL.
+      const target = slackProvider.buildSlackAppSettingsUrl(
+        getService(service).resolveSlackAppTokenSync(),
+      );
+      if (!isSafeExternalOpenUrl(target.url)) {
+        throw new Error("Refused to open an unsafe Slack app URL.");
+      }
+      await shell.openExternal(target.url);
+      return target;
+    },
+  );
+  ipcMain.removeHandler(SETTINGS_OPEN_SLACK_APP_MESSAGES_CHANNEL);
+  ipcMain.handle(
+    SETTINGS_OPEN_SLACK_APP_MESSAGES_CHANNEL,
+    async (): Promise<OpenSlackAppMessagesResponse> => {
+      const settings = getService(service);
+      const slackProvider = await import("@pwragent/messaging-provider-slack");
+      // Tokens stay in main; only the IDs they lead to reach the URL.
+      const appId = slackProvider.slackAppIdFromAppToken(
+        settings.resolveSlackAppTokenSync(),
+      );
+      if (!appId) {
+        throw new Error(
+          "Save the App-Level Token first. PwrAgent reads your app's ID from it.",
+        );
+      }
+      const botToken = settings.resolveSlackBotTokenSync();
+      const teamId = botToken
+        ? await slackProvider.readSlackTeamId(botToken)
+        : undefined;
+      // The desktop app opens straight on the Messages tab. Without one, the
+      // browser gets Slack's redirect, which lands on the same conversation.
+      const appLink = slackProvider.buildSlackAppDeepLink({ appId, teamId });
+      if (appLink && isSlackAppDeepLink(appLink) && hasProtocolHandler(appLink)) {
+        try {
+          await shell.openExternal(appLink);
+          return { url: appLink, workspaceKnown: true, desktopApp: true };
+        } catch (error) {
+          settingsIpcLog.warn("slack desktop app link failed; opening the browser", {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+      const url = slackProvider.buildSlackAppMessagesUrl({ appId, teamId });
+      if (!isSafeExternalOpenUrl(url)) {
+        throw new Error("Refused to open an unsafe Slack URL.");
+      }
+      await shell.openExternal(url);
+      return {
+        url,
+        workspaceKnown: new URL(url).searchParams.has("team"),
+        desktopApp: false,
       };
     },
   );
@@ -2244,6 +2329,8 @@ export function disposeSettingsIpcHandlers(): void {
   ipcMain.removeHandler(SETTINGS_TEST_CREDENTIALS_CHANNEL);
   ipcMain.removeHandler(SETTINGS_LAST_CREDENTIAL_TEST_CHANNEL);
   ipcMain.removeHandler(SETTINGS_OPEN_SLACK_CREATE_APP_CHANNEL);
+  ipcMain.removeHandler(SETTINGS_OPEN_SLACK_APP_SETTINGS_CHANNEL);
+  ipcMain.removeHandler(SETTINGS_OPEN_SLACK_APP_MESSAGES_CHANNEL);
   ipcMain.removeHandler(SETTINGS_LIST_DISCORD_THREAD_PERMISSION_CHANNELS_CHANNEL);
   ipcMain.removeHandler(SETTINGS_INSPECT_DISCORD_THREAD_PERMISSIONS_CHANNEL);
   ipcMain.removeHandler(SETTINGS_OPEN_DISCORD_THREAD_PERMISSION_CHANNEL);

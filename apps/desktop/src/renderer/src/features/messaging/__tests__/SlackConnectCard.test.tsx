@@ -11,6 +11,14 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+const CHOSEN_NAME = "PwrAgent - fixture-user";
+
+/** A card whose agent name is chosen, so the manifest actions are offered. */
+const namedProps = {
+  appName: { value: CHOSEN_NAME, source: "config" as const },
+  onSaveAppName: async () => undefined,
+};
+
 describe("SlackConnectCard", () => {
   it("opens the Slack create-from-manifest URL through desktop API", async () => {
     const openSlackCreateApp = vi.fn(async () => ({
@@ -22,6 +30,7 @@ describe("SlackConnectCard", () => {
 
     render(
       <SlackConnectCard
+        {...namedProps}
         variant="settings"
         desktopApi={{ openSlackCreateApp } as unknown as DesktopApi}
       />,
@@ -32,7 +41,7 @@ describe("SlackConnectCard", () => {
     fireEvent.click(screen.getByRole("button", { name: "Create Slack app" }));
 
     await waitFor(() => {
-      expect(openSlackCreateApp).toHaveBeenCalledWith({ open: true });
+      expect(openSlackCreateApp).toHaveBeenCalledWith({ open: true, appName: CHOSEN_NAME });
     });
   });
 
@@ -47,6 +56,7 @@ describe("SlackConnectCard", () => {
 
     render(
       <SlackConnectCard
+        {...namedProps}
         variant="onboarding"
         desktopApi={{ openSlackCreateApp, copyText } as unknown as DesktopApi}
       />,
@@ -55,7 +65,7 @@ describe("SlackConnectCard", () => {
     fireEvent.click(screen.getByRole("button", { name: "Copy link for an admin" }));
 
     await waitFor(() => {
-      expect(openSlackCreateApp).toHaveBeenCalledWith({ open: false });
+      expect(openSlackCreateApp).toHaveBeenCalledWith({ open: false, appName: CHOSEN_NAME });
       expect(copyText).toHaveBeenCalledWith(
         "https://api.slack.com/apps?new_app=1&manifest_json=%7B%7D",
       );
@@ -79,6 +89,7 @@ describe("SlackConnectCard", () => {
 
     render(
       <SlackConnectCard
+        {...namedProps}
         variant="settings"
         desktopApi={{ openSlackCreateApp, copyText } as unknown as DesktopApi}
       />,
@@ -90,6 +101,7 @@ describe("SlackConnectCard", () => {
       expect(openSlackCreateApp).toHaveBeenCalledWith({
         mode: "update",
         open: false,
+        appName: CHOSEN_NAME,
       });
       expect(copyText).toHaveBeenCalledWith("{\"features\":{\"agent_view\":{}}}");
     });
@@ -124,6 +136,7 @@ describe("SlackConnectCard", () => {
 
     render(
       <SlackConnectCard
+        {...namedProps}
         variant="settings"
         desktopApi={{ openSlackCreateApp, copyText } as unknown as DesktopApi}
       />,
@@ -150,6 +163,7 @@ describe("SlackConnectCard", () => {
 
     render(
       <SlackConnectCard
+        {...namedProps}
         variant="settings"
         desktopApi={{ openSlackCreateApp, copyText } as unknown as DesktopApi}
       />,
@@ -194,6 +208,7 @@ describe("SlackConnectCard", () => {
 
     render(
       <SlackConnectCard
+        {...namedProps}
         variant="settings"
         desktopApi={{ openSlackCreateApp, copyText } as unknown as DesktopApi}
       />,
@@ -217,6 +232,7 @@ describe("SlackConnectCard", () => {
 
     render(
       <SlackConnectCard
+        {...namedProps}
         variant="settings"
         desktopApi={{ openSlackCreateApp } as unknown as DesktopApi}
       />,
@@ -229,9 +245,81 @@ describe("SlackConnectCard", () => {
     );
   });
 
+  it("offers main's suggested name, and builds no manifest until one is chosen", async () => {
+    const openSlackCreateApp = vi.fn();
+    const onSaveAppName = vi.fn(async () => undefined);
+    const { rerender } = render(
+      <SlackConnectCard
+        appName={{ value: CHOSEN_NAME, source: "default" }}
+        desktopApi={{ openSlackCreateApp } as unknown as DesktopApi}
+        variant="onboarding"
+        onSaveAppName={onSaveAppName}
+      />,
+    );
+
+    expect(screen.getByRole("textbox", { name: "Agent name" })).toHaveValue(CHOSEN_NAME);
+    expect(screen.getByRole("button", { name: "Create Slack app" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Copy link for an admin" })).toBeDisabled();
+    expect(
+      screen.getByText("Save the agent name above first. Slack creates the app with it."),
+    ).toBeInTheDocument();
+
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "Agent name" }), {
+      key: "Enter",
+    });
+    await waitFor(() => {
+      expect(onSaveAppName).toHaveBeenCalledExactlyOnceWith(CHOSEN_NAME);
+    });
+
+    rerender(
+      <SlackConnectCard
+        appName={{ value: CHOSEN_NAME, source: "config" }}
+        desktopApi={{ openSlackCreateApp } as unknown as DesktopApi}
+        variant="onboarding"
+        onSaveAppName={onSaveAppName}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Create Slack app" })).toBeEnabled();
+    // Nothing to save until the name is edited.
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+  });
+
+  // Settings asks for the name in a step of its own, ahead of the card.
+  it("leaves the name to the caller, and still holds Create for it", () => {
+    render(
+      <SlackConnectCard
+        appName={{ value: CHOSEN_NAME, source: "default" }}
+        desktopApi={{ openSlackCreateApp: vi.fn() } as unknown as DesktopApi}
+        variant="settings"
+      />,
+    );
+
+    expect(screen.queryByRole("textbox", { name: "Agent name" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create Slack app" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Copy manifest" })).toBeDisabled();
+    expect(
+      screen.getByText("Save the agent name above first. Slack creates the app with it."),
+    ).toBeInTheDocument();
+  });
+
+  it("holds the manifest actions while a settings write is out", () => {
+    render(
+      <SlackConnectCard
+        {...namedProps}
+        saving
+        variant="settings"
+        desktopApi={{ openSlackCreateApp: vi.fn() } as unknown as DesktopApi}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Create Slack app" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Copy manifest" })).toBeDisabled();
+  });
+
   it("does not offer the existing-app manifest actions during onboarding", () => {
     render(
       <SlackConnectCard
+        {...namedProps}
         variant="onboarding"
         desktopApi={{ openSlackCreateApp: vi.fn() } as unknown as DesktopApi}
       />,

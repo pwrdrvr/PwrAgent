@@ -120,7 +120,10 @@ import {
   type ProviderProjection,
 } from "./config-store/config-domains";
 import { resolveRuntimeMessagingOverride } from "../runtime-flags";
-import { resolveMessagingSettingsDomain } from "../messaging/messaging-settings-domain";
+import {
+  resolveMessagingSettingsDomain,
+  slackAppNameSetting,
+} from "../messaging/messaging-settings-domain";
 import type { DesktopSecretStore } from "./desktop-secret-store";
 import {
   CHAT_REPLY_COMPOSER_ENV,
@@ -1309,6 +1312,10 @@ export class DesktopSettingsService {
           botToken: slackBotToken,
           appToken: slackAppToken,
           signingSecret: slackSigningSecret,
+          appName: slackAppNameSetting(
+            config.messaging?.slack?.appName,
+            this.env,
+          ),
           workspaceUrl: this.resolveString(
             config.messaging?.slack?.workspaceUrl,
             SLACK_WORKSPACE_URL_ENV,

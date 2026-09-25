@@ -67,6 +67,32 @@ import {
   readEnvString,
 } from "../settings/desktop-settings-env";
 
+/**
+ * Slack caps an app name at 35 characters, and the manifest writes the same
+ * string into the bot's display name, which allows 80.
+ */
+const SLACK_APP_NAME_MAX_LENGTH = 35;
+
+/**
+ * Every teammate's PwrAgent app is named "PwrAgent" after @ unless each is
+ * renamed, so the suggestion adds the one thing main knows that tells them
+ * apart: the OS account name.
+ */
+export function suggestedSlackAppName(env: NodeJS.ProcessEnv): string {
+  const user = readEnvString(env, "USER") ?? readEnvString(env, "USERNAME");
+  return user
+    ? `PwrAgent - ${user}`.slice(0, SLACK_APP_NAME_MAX_LENGTH).trimEnd()
+    : "PwrAgent";
+}
+
+/** A blank `app_name` is no choice at all, so it keeps the suggestion. */
+export function slackAppNameSetting(
+  configured: string | undefined,
+  env: NodeJS.ProcessEnv,
+): DesktopSettingsValue<string> {
+  return setting(configured || undefined, suggestedSlackAppName(env));
+}
+
 const LINE_DEFAULT_CALLBACK_BASE_URL = "http://127.0.0.1:47822";
 const FEISHU_DEFAULT_CALLBACK_BASE_URL = "http://127.0.0.1:47823";
 const FEISHU_DEFAULT_TENANT_URL = "https://open.feishu.cn";
@@ -263,6 +289,7 @@ export function resolveMessagingSettingsDomain(
       botToken: unreadSecretState(),
       appToken: unreadSecretState(),
       signingSecret: unreadSecretState(),
+      appName: slackAppNameSetting(config.slack?.appName, env),
       workspaceUrl: stringSetting(
         config.slack?.workspaceUrl,
         env,
