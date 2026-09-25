@@ -129,21 +129,6 @@ local processes that share the same profile database; they are not a
 cross-machine distributed lock for two different profile directories or two
 external deployments using the same credentials or identity.
 
-## Secret storage
-
-Bot tokens and API keys are encrypted with Electron `safeStorage` before they
-land in the `secrets` table. On Linux that encryption uses the desktop secret
-service (gnome-keyring via libsecret, or KWallet). Chromium only auto-selects
-one of those on desktops it recognizes (GNOME, KDE, XFCE, and a short list of
-others). Hyprland, sway, niri, LXQt, and COSMIC still get `basic_text`, which
-PwrAgent refuses.
-
-At startup on an unrecognized desktop, PwrAgent passes `--password-store` for
-the service that is actually running: `org.freedesktop.secrets` first, then
-KWallet 6, 5, and the older daemon. An explicit `--password-store` argument
-wins. `PWRAGENT_LINUX_PASSWORD_STORE` can force `gnome-libsecret`, `kwallet`,
-`kwallet5`, `kwallet6`, or `basic` (leave Chromium's choice alone).
-
 ## Migration
 
 On first launch after upgrade, the app migrates legacy JSON state files from their XDG locations into `state.db`:

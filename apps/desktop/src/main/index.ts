@@ -1,6 +1,9 @@
 import { configureBundledGit } from "./bundled-git";
-import { installLinuxPasswordStore } from "./linux-password-store";
-import { app, BrowserWindow, dialog, Menu, nativeImage, shell } from "electron";
+import {
+  applyRememberedLinuxPasswordStore,
+  relaunchForLinuxSecretStore,
+} from "./linux-password-store";
+import { app, BrowserWindow, dialog, Menu, nativeImage, safeStorage, shell } from "electron";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { getDesktopBackendRegistry } from "./app-server/backend-registry";
@@ -241,17 +244,6 @@ const PWRAGENT_ISSUE_REPORTER_URL =
 const isMac = process.platform === "darwin";
 const isDevelopment = process.env.NODE_ENV !== "production";
 const mainLog = getMainLogger("pwragent:main");
-// Chromium chooses the Linux password store in PostCreateMainMessageLoop,
-// which is after this module's top-level code. Unrecognized desktops would
-// otherwise get basic_text, and secret writes then fail closed.
-const linuxPasswordStore = installLinuxPasswordStore({
-  appendSwitch: (backend) => {
-    app.commandLine.appendSwitch("password-store", backend);
-  },
-});
-if (linuxPasswordStore) {
-  mainLog.info("linux secret store selected", { backend: linuxPasswordStore });
-}
 const mainProcessStartedAt = Date.now();
 const RENDERER_WINDOW_SHUTDOWN_TIMEOUT_MS = 2_000;
 const MAIN_PROCESS_SHUTDOWN_TIMEOUT_MS = 12_000;
@@ -1250,8 +1242,47 @@ export function bootstrapApp(): void {
   });
   installProcessShutdownHandlers();
   installBootErrorHandlers();
+  // Chromium reads --password-store in PostCreateMainMessageLoop, after this
+  // function returns. An env override or a store remembered from an earlier
+  // launch has to be appended here, still during the initial module evaluation.
+  const rememberedLinuxPasswordStore = applyRememberedLinuxPasswordStore({
+    platform: process.platform,
+    argv: process.argv,
+    env: process.env,
+    userDataDir: app.getPath("userData"),
+    appendSwitch: (backend) => {
+      app.commandLine.appendSwitch("password-store", backend);
+    },
+  });
+  if (rememberedLinuxPasswordStore) {
+    mainLog.info("linux secret store selected before ready", {
+      backend: rememberedLinuxPasswordStore,
+    });
+  }
 
   app.whenReady().then(async () => {
+    if (relaunchForLinuxSecretStore({
+      platform: process.platform,
+      argv: process.argv,
+      env: process.env,
+      userDataDir: app.getPath("userData"),
+      encryptionAvailable: safeStorage.isEncryptionAvailable(),
+      backend: safeStorage.getSelectedStorageBackend?.() ?? null,
+      relaunch: (args) => {
+        app.relaunch({ args });
+      },
+      exit: (code) => {
+        app.exit(code);
+      },
+      info: (message, fields) => {
+        mainLog.info(message, fields);
+      },
+      warn: (message, fields) => {
+        mainLog.warn(message, fields);
+      },
+    })) {
+      return;
+    }
     const startupCpuProfiler = new StartupCpuProfiler();
     startupCpuProfilerForNewWindows = startupCpuProfiler;
     await startupCpuProfiler.start();
