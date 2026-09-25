@@ -58,6 +58,7 @@ import Foundation
 //   5 — output file not produced, or could not be moved into place
 //   6 — capture came out below Retina scale, or could not be decoded to
 //       check (see --allow-low-dpi)
+//   7 — the window's app was not the active app when the capture was taken
 
 let args = CommandLine.arguments
 
@@ -142,6 +143,40 @@ else {
   exit(3)
 }
 
+// An inactive window is captured as it looks: grey traffic lights, dimmed
+// chrome, and a smaller shadow, which changes the PNG's size too. Every
+// check below passes it, and the noise filter keeps it as changed pixels,
+// so the window's app has to be the active app on both sides of the
+// capture. Another app taking focus back mid-run is what produced these.
+let ownerPID = target[kCGWindowOwnerPID as String] as? pid_t
+
+func ownerIsActive() -> Bool {
+  // NSWorkspace updates `frontmostApplication` from notifications, which
+  // arrive only while the run loop turns.
+  RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.05))
+  guard let ownerPID else { return false }
+  return NSWorkspace.shared.frontmostApplication?.processIdentifier == ownerPID
+}
+
+func refuseInactive(_ when: String) -> Never {
+  let active = NSWorkspace.shared.frontmostApplication?.localizedName ?? "another app"
+  FileHandle.standardError.write(
+    Data(
+      """
+      refusing to capture an inactive window: \(active) was the active app \(when), \
+      so the window would come out with grey traffic lights. Bring the window to \
+      the front and re-run. \(outputPath) was left untouched.
+
+      """.utf8
+    )
+  )
+  exit(7)
+}
+
+if !ownerIsActive() {
+  refuseInactive("before the capture")
+}
+
 // Logical (point) width of the window, used below to derive the backing
 // scale the capture actually came out at.
 let targetBounds = target[kCGWindowBounds as String] as? [String: CGFloat]
@@ -193,6 +228,12 @@ if process.terminationStatus != 0 {
     FileHandle.standardError.write(stderrData)
   }
   exit(4)
+}
+
+// Focus lost during the capture shows only afterwards.
+if !ownerIsActive() {
+  try? FileManager.default.removeItem(atPath: stagingPath)
+  refuseInactive("when the capture finished")
 }
 
 guard FileManager.default.fileExists(atPath: stagingPath) else {
