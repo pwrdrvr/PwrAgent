@@ -3168,7 +3168,9 @@ describe("SettingsScreen", () => {
     const migrationDialog = await screen.findByRole("dialog", {
       name: "Choose Codex threads to update",
     });
-    expect(document.activeElement).toBe(migrationDialog);
+    // Presence precedes useFocusTrap's passive effect. Wait for its focus
+    // handoff before exercising the dialog's keyboard ownership.
+    await waitFor(() => expect(document.activeElement).toBe(migrationDialog));
     expect(tabEscapes(migrationDialog)).toEqual({ forward: [], backward: [] });
     expect(
       within(migrationDialog).getByText("2 selected of 3 threads"),
