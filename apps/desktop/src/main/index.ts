@@ -788,7 +788,9 @@ async function disposeMainProcessResources(source: string): Promise<void> {
       // released, leaving the next process free to dispatch the same action.
       disposeScheduledThreadActionService();
       getExistingRuntimeLeaseManager()?.markExited();
-      disposeAppState();
+      // The barrier bounds waiting; it does not cancel timed-out work. Keep
+      // SQLite alive for late socket callbacks and the final lease release.
+      // Only the process exit hook closes it, after synchronous cleanup.
       mainProcessShutdownComplete = true;
       e2eShutdownDiagnostics.finishOverall("completed");
     } catch (error) {
@@ -1721,7 +1723,6 @@ export function bootstrapApp(): void {
 
   app.on("will-quit", () => {
     disposeMainProcessResourcesSync();
-    disposeAppState();
   });
 }
 

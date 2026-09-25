@@ -1894,6 +1894,10 @@ describe("bootstrapApp", () => {
     expect(disposeMcpConnectionIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(disposeSettingsIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(disposeAppServerIpcHandlersMock).toHaveBeenCalledTimes(1);
+    expect(disposeAppStateMock).not.toHaveBeenCalled();
+    appEventHandlers.get("will-quit")?.();
+    expect(disposeAppStateMock).not.toHaveBeenCalled();
+    processEventHandlers.get("exit")?.();
     expect(disposeAppServerIpcHandlersMock.mock.invocationCallOrder[0]).toBeLessThan(
       disposeAppStateMock.mock.invocationCallOrder[0],
     );
