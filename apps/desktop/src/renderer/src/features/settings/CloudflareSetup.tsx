@@ -41,9 +41,10 @@ const INVITE_HOURS = [1, 4, 8, 24];
  * in that stage, next to the button; at the foot of the section a failure in
  * step 4 rendered a screen away from the click, and off-screen in a short window.
  */
-type Stage = "account" | "connector" | "endpoint" | "verify" | "share" | "import" | "sign-in";
+type Stage = "gateway" | "account" | "connector" | "endpoint" | "verify" | "share" | "import" | "sign-in";
 
 const ACTION_STAGE: Partial<Record<CloudflareSetupRequest["action"], Stage>> = {
+  "set-gateway-enabled": "gateway",
   connect: "account", disconnect: "account", "token-link": "account", "save-draft": "account",
   "install-link": "connector", status: "connector",
   provision: "endpoint", remove: "endpoint", "set-emails": "endpoint",
@@ -172,6 +173,8 @@ export function CloudflareSetup(props: Props) {
   const disabled = Boolean(listenerBusy) || Boolean(busy) || !api?.configureFederationCloudflare;
   const created = Boolean(status?.hostname);
   const published = status?.phase === "Published";
+  const gatewayEnabled = status?.gatewayEnabled !== false;
+  const gatewayConnected = gatewayEnabled && status?.gatewayConnection?.state === "connected";
   // Readiness is transient. Refresh while the published gateway is visible,
   // without overlapping requests or allowing an old poll to undo an action.
   useEffect(() => {
@@ -188,9 +191,13 @@ export function CloudflareSetup(props: Props) {
         }
       } catch {
         if (active && generation === operationGeneration.current) {
-          setStatus((previous) => previous ? { ...previous, connectorHealth: {
-            state: "unavailable", detail: "Could not refresh gateway status. Check again to confirm connectivity.",
-          } } : previous);
+          setStatus((previous) => previous ? {
+            ...previous,
+            gatewayConnection: {
+              state: "unreachable", connector: "none",
+              detail: "Could not refresh gateway status. Check again to confirm connectivity.",
+            },
+          } : previous);
         }
       }
       if (active) timer = setTimeout(() => { void poll(); }, 5000);
@@ -347,7 +354,7 @@ export function CloudflareSetup(props: Props) {
   // After publishing, reconnecting the administration token is optional.
   const current = [
     { key: "account", done: connected || published },
-    { key: "connector", done: installed },
+    { key: "connector", done: installed || gatewayConnected },
     { key: "endpoint", done: published },
     { key: "verify", done: verified },
   ].find((entry) => !entry.done)?.key ?? "share";
@@ -357,15 +364,14 @@ export function CloudflareSetup(props: Props) {
         : { state: "waiting", label: "Waiting" };
 
   const failedChecks = Boolean(status?.checks?.some((check) => !check.passed));
-  const tunnelConnected = status?.connectorHealth?.state === "connected" && status.connectorRunning;
   const failedAction = error?.action ? ACTION_FAILED[error.action] : undefined;
   const [chip, chipKind]: [string, SettingsChipTone] =
-    failedAction ? [failedAction, "err"]
+    published && !gatewayEnabled ? ["Disabled", "muted"]
+    : failedAction ? [failedAction, "err"]
     : status?.signIn?.state === "sign-in-required" ? ["Sign-in required", "warn"]
       : failedChecks ? ["Check failed", "err"]
-        : published ? !status?.connectorRunning ? ["Connector stopped", "warn"]
-          : !status.gatewayListening ? ["Gateway unavailable", "warn"]
-            : tunnelConnected ? ["Tunnel connected", "ok"] : ["Connection unconfirmed", "warn"]
+        : published ? gatewayConnected ? ["Gateway connected", "ok"]
+            : !status?.gatewayListening ? ["Gateway unavailable", "warn"] : ["Connection unconfirmed", "warn"]
           : verified ? ["Verified", "ok"]
             : started ? ["Incomplete", "warn"]
               : status?.signIn?.state === "signed-in" ? ["Signed in", "ok"]
@@ -509,19 +515,31 @@ export function CloudflareSetup(props: Props) {
       {tab === "gateway" ? <>
         {published ? <div className="cloudflare-setup__state" role="status">
           <strong>Gateway setup saved · {status?.hostname}</strong>
-          <p>{!installed ? "PwrAgent cannot find cloudflared on this computer. Check the connector installation below."
-            : !status?.connectorRunning ? "The tunnel connector is stopped. Start it below to restore Cloudflare connectivity."
-              : !status.gatewayListening ? "The gateway is not listening on the tunnel’s saved origin port. Check Federation configuration and the endpoint’s listener below."
-                : tunnelConnected ? "Cloudflare’s edge is connected to this tunnel, and the local gateway is listening."
-                  : status.connectorHealth?.detail ?? "The connector is running; its connection to Cloudflare has not been confirmed."}</p>
-          {status?.connectorHealth?.state === "failed" ? <p>{status.connectorHealth.detail}</p> : null}
+          <div className="settings-button-row">
+            <button type="button" role="switch" aria-label="Cloudflare Access for this gateway" aria-checked={gatewayEnabled}
+              className="button button--secondary" disabled={disabled}
+              onClick={() => void run({ action: "set-gateway-enabled", enabled: !gatewayEnabled }, gatewayEnabled ? "Disabling Cloudflare Access…" : "Enabling Cloudflare Access…")}>
+              {gatewayEnabled ? "Enabled" : "Disabled"}
+            </button>
+            <SettingsPendingIndicator pending={busy?.action === "set-gateway-enabled"} label="Updating Cloudflare Access…" />
+          </div>
+          <p>{!gatewayEnabled ? "Cloudflare Access is disabled for this gateway. Saved setup is preserved; system-managed connectors are left running."
+            : gatewayConnected ? status?.gatewayConnection?.connector === "external"
+              ? "Cloudflare reaches this gateway through an externally managed tunnel. PwrAgent does not start or stop that service."
+              : "Cloudflare reaches this gateway. PwrAgent manages its connector and stops it when this app exits."
+              : !status?.gatewayListening ? "The gateway is not listening on the tunnel’s saved origin port. Check Federation configuration and the endpoint’s listener below."
+                : status.gatewayConnection?.detail ?? "The public endpoint’s connection to this gateway has not been confirmed."}</p>
+          {gatewayEnabled && !gatewayConnected && status?.connectorHealth?.state === "failed" ? <p>{status.connectorHealth.detail}</p> : null}
+          {status?.gatewayConnection?.checkedAt ? <small>Last checked {new Date(status.gatewayConnection.checkedAt).toLocaleTimeString()}.</small> : null}
           <p>{verified ? "Endpoint security validation passed this session."
             : "Client access still depends on the Access policy and credentials. Validate Endpoint Security checks that path."}</p>
           {!connected ? <p>No account API token is loaded. It is needed only to manage or validate the endpoint; it is not needed to run the saved gateway.</p> : null}
           <div className="settings-button-row">
-            {action("Check gateway status", { action: "status", refresh: true }, "Checking gateway…")}
-            {!status?.connectorRunning ? action("Start connector", { action: "start" }, "Starting connector…", false, !installed) : null}
+            {action("Check gateway status", { action: "status", refresh: true }, "Checking gateway…", false, !gatewayEnabled, "gateway")}
+            {gatewayEnabled && !gatewayConnected && !status?.connectorRunning
+              ? action("Start connector", { action: "start" }, "Checking for an existing tunnel, then starting connector…", false, !installed, "gateway") : null}
           </div>
+          {outcome("gateway")}
         </div> : null}
         {!published && started ? <p className="cloudflare-setup__state" role="status">
           {created
@@ -611,17 +629,18 @@ export function CloudflareSetup(props: Props) {
           </AutomationStage>
           <AutomationFlow caption="The tunnel connects outward from this computer; no inbound port opens" />
 
-          <AutomationStage verb="Install" title="Tunnel connector" progress={progress("connector", installed, "Installed")}>
-            <p>{status?.connectorRunning ? `cloudflared${connectorVersion} is running.`
-              : installed ? `cloudflared${connectorVersion} is installed. PwrAgent starts it with the gateway.`
+          <AutomationStage verb="Install" title="Tunnel connector" progress={progress("connector", installed || gatewayConnected, installed ? "Installed" : "External tunnel")}>
+            <p>{gatewayConnected && status?.gatewayConnection?.connector === "external" ? "An external tunnel already serves this gateway. PwrAgent leaves its service running."
+              : status?.connectorRunning ? `PwrAgent is running cloudflared${connectorVersion}.`
+                : installed ? `cloudflared${connectorVersion} is installed. When enabled, PwrAgent starts it if no working external tunnel reaches this gateway.`
                 : "Install cloudflared on this computer, then check again. PwrAgent runs it for you; there is nothing to configure in it."}</p>
-            {!installed ? <div className="settings-button-row">
+            {!installed && !gatewayConnected ? <div className="settings-button-row">
               {action("Install cloudflared", { action: "install-link" }, "Opening installation guide…")}
               {action("Check again", { action: "status", refresh: true }, "Checking connector…")}
             </div> : null}
             {installed && status?.connectorUpdate ? <div className="cloudflare-setup__notice" role="note">
               <strong>cloudflared {status.connectorUpdate} is available.</strong>
-              <p>Update it the way you installed it; with Homebrew, run <code>brew upgrade cloudflared</code>.{status.connectorRunning ? " The running connector keeps the old version until you stop and start it in step 5." : ""}</p>
+              <p>Update it the way you installed it; with Homebrew, run <code>brew upgrade cloudflared</code>.{status.connectorRunning ? " The running connector keeps the old version until you disable and re-enable Cloudflare Access." : ""}</p>
               <div className="settings-button-row">
                 {link("How to update cloudflared", "cloudflared-update-docs")}
                 {action("Check again", { action: "status", refresh: true }, "Checking connector…")}
@@ -692,8 +711,7 @@ export function CloudflareSetup(props: Props) {
             {status?.tunnelId ? <>
               <div className="settings-button-row">
                 {action("Audit Cloudflare settings", { action: "audit" }, "Auditing live Cloudflare configuration…", false, !connected)}
-                {action("Validate Endpoint Security", { action: "validate" }, oauth ? "Testing sign-in refusal and gateway observations…" : "Testing credential admission and gateway observations…", true, !connected || !status.connectorRunning)}
-                {status.connectorRunning ? action("Stop connector", { action: "stop" }, "Stopping connector…") : !published ? action("Start connector", { action: "start" }, "Starting connector…", false, true) : null}
+                {action("Validate Endpoint Security", { action: "validate" }, oauth ? "Testing sign-in refusal and gateway observations…" : "Testing credential admission and gateway observations…", true, !connected || !gatewayEnabled || !status.gatewayListening)}
               </div>
               <p className="cloudflare-setup__hint">Validation reads the live policy back, then sends HTTPS and WebSocket requests with and without {oauth ? "the gateway’s token" : `a ${mtls ? "certificate" : "service token"}`}. A pass needs Cloudflare to refuse the second at its edge and this gateway to see none of it.{!connected ? " Connect the Cloudflare account in step 2 to run it." : ""}</p>
               {status.checks ? <div className="cloudflare-setup__checks" aria-label="Endpoint security results">

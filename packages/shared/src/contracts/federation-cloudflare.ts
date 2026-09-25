@@ -98,6 +98,7 @@ export type CloudflareSetupRequest =
   | { action: "validate" }
   | { action: "start" }
   | { action: "stop" }
+  | { action: "set-gateway-enabled"; enabled: boolean }
   | {
       action: "export-client";
       label: string;
@@ -135,6 +136,13 @@ export type CloudflareSecurityCheck = {
 
 export type CloudflareSetupStatus = {
   connected: boolean;
+  gatewayEnabled?: boolean;
+  gatewayConnection?: {
+    state: "disabled" | "unconfigured" | "listener-unavailable" | "connected" | "unreachable";
+    connector: "pwragent" | "external" | "none";
+    checkedAt?: string;
+    detail?: string;
+  };
   /** The gate a provisioned endpoint uses; absent before one exists. */
   gate?: CloudflareFederationGate;
   accountId?: string;

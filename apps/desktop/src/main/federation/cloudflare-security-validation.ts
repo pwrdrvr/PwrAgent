@@ -23,6 +23,7 @@ export type CloudflareProbeRequest = {
   upgrade: boolean;
   credentials?: CloudflareProbeCredentials;
   cookie?: string;
+  timeoutMs?: number;
 };
 
 export async function requestCloudflareProbe(input: CloudflareProbeRequest): Promise<CloudflareProbeResponse> {
@@ -54,7 +55,7 @@ export async function requestCloudflareProbe(input: CloudflareProbeRequest): Pro
         } : {}),
       },
     });
-    const deadline = setTimeout(() => request.destroy(new Error("Endpoint probe timed out.")), 15_000);
+    const deadline = setTimeout(() => request.destroy(new Error("Endpoint probe timed out.")), input.timeoutMs ?? 15_000);
     const finish = (status: number, headers: Record<string, unknown>) => {
       clearTimeout(deadline);
       resolve({ status,

@@ -176,6 +176,7 @@ export type DesktopSettingsConfig = {
     cloudflareMtlsEnabled?: boolean;
     cloudflareAccessServiceAuthEnabled?: boolean;
     cloudflareAccessOAuthEnabled?: boolean;
+    cloudflareGatewayEnabled?: boolean;
   };
   messaging?: {
     enabled?: boolean;
@@ -1085,6 +1086,9 @@ export function desktopSettingsPatchToEdits(
       );
     }
   }
+  if (patch.federation?.cloudflareGatewayEnabled !== undefined) {
+    set(["federation", "cloudflare_gateway_enabled"], patch.federation.cloudflareGatewayEnabled);
+  }
   if (patch.federation?.cloudflareMtlsEnabled !== undefined) {
     if (patch.federation.cloudflareMtlsEnabled) {
       set(["federation", "cloudflare_mtls_enabled"], true);
@@ -1872,6 +1876,8 @@ function normalizeDesktopConfig(
       gatewayEndpoints: readEndpointList(federation?.gateway_endpoints),
       advertisedEndpoints: readEndpointList(federation?.advertised_endpoints),
       cloudflareEndpoint: readString(federation?.cloudflare_endpoint),
+      // Missing preserves the lifecycle of gateways created before the toggle.
+      cloudflareGatewayEnabled: readBoolean(federation?.cloudflare_gateway_enabled),
       cloudflareMtlsEnabled: readBoolean(
         federation?.cloudflare_mtls_enabled,
       ),

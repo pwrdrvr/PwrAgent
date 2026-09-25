@@ -29,8 +29,9 @@ const setup = new CloudflareSetupService({
   listeningPort: () => getDesktopFederationRuntime().loopbackListenPort(),
   connectorInstalled: () => cloudflareConnector.installed(),
   connectorRunning: () => cloudflareConnector.running(),
-  startConnector: (token) => cloudflareConnector.start(token),
-  stopConnector: () => cloudflareConnector.stop(),
+  gatewayEnabled: () => getDesktopSettingsService().readFederationConfig().cloudflareGatewayEnabled !== false,
+  startConnector: () => getDesktopFederationRuntime().startCloudflareGateway(),
+  stopConnector: () => getDesktopFederationRuntime().stopCloudflareGateway(),
   publishUrl: async (url) => {
     await getDesktopSettingsService().writeConfigPatchTargeted({ federation: { publicUrl: url } });
     await getDesktopFederationRuntime().restart();
@@ -96,8 +97,11 @@ async function describe(message?: string, options: { refreshConnector?: boolean 
   const connectorHealth = await cloudflareConnector.health();
   const gatewayListening = status.listenPort !== undefined
     && getDesktopFederationRuntime().loopbackListenPort() === status.listenPort;
+  const gatewayEnabled = federation.cloudflareGatewayEnabled !== false;
+  const gatewayConnection = await getDesktopFederationRuntime().cloudflareGatewayStatus(options.refreshConnector);
   return {
-    ...status, connectorVersion, connectorUpdate, connectorHealth, gatewayListening, draft, signIn, clientConnection, signInPending,
+    ...status, connectorVersion, connectorUpdate, connectorHealth, gatewayListening, gatewayEnabled, gatewayConnection,
+    draft, signIn, clientConnection, signInPending,
     ...(message ? { message } : {}),
   };
 }
@@ -218,6 +222,11 @@ export function registerCloudflareSetupIpc(): void {
           break;
         case "start": await setup.start(); break;
         case "stop": await setup.stop(); break;
+        case "set-gateway-enabled":
+          if (typeof request.enabled !== "boolean") throw new Error("Invalid Cloudflare gateway setting.");
+          await getDesktopSettingsService().writeConfigPatchTargeted({ federation: { cloudflareGatewayEnabled: request.enabled } });
+          await getDesktopFederationRuntime().applyCloudflareGatewaySetting();
+          return describe(request.enabled ? "Cloudflare Access enabled for this gateway." : "Cloudflare Access disabled for this gateway. External services were left running.");
         case "revoke-client":
           return describe(await setup.revoke(request.id)
             ? "Client revoked. Cloudflare no longer admits its credential, and the federation peer its setup file enrolled was revoked, which ends its session."

@@ -6,6 +6,15 @@ import {
 import { applyTomlEdits, parseTomlTables } from "../settings/toml-editor";
 
 describe("desktop config [federation] section", () => {
+  it.each([true, false])("preserves an explicit Cloudflare gateway switch %s", (cloudflareGatewayEnabled) => {
+    const original = '# Preserve this\n[federation]\nmode = "dual"\ncloudflare_access_oauth_enabled = true\n';
+    const written = applyTomlEdits(original, desktopSettingsPatchToEdits({ federation: { cloudflareGatewayEnabled } }));
+    expect(written).toContain("# Preserve this");
+    expect(parseDesktopSettingsToml(written, "test.toml").federation).toMatchObject({
+      mode: "dual", cloudflareAccessOAuthEnabled: true, cloudflareGatewayEnabled,
+    });
+    expect(parseDesktopSettingsToml(original, "test.toml").federation?.cloudflareGatewayEnabled).toBeUndefined();
+  });
   it.each([true, false])("round-trips compression %s without changing unrelated TOML", (compressionEnabled) => {
     const original = '# Keep this comment\n[federation]\nmode = "client"\n';
     const written = applyTomlEdits(original, desktopSettingsPatchToEdits({

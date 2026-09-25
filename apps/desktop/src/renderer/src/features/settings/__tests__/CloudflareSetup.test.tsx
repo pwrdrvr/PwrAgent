@@ -11,6 +11,30 @@ const connected: CloudflareSetupStatus = {
 };
 
 describe("Cloudflare setup flow", () => {
+  it("shows a working external tunnel and toggles gateway access without offering to stop its service", async () => {
+    let enabled = true;
+    const call = vi.fn(async (request: CloudflareSetupRequest): Promise<CloudflareSetupStatus> => {
+      if (request.action === "set-gateway-enabled") enabled = request.enabled;
+      return { ...connected, connected: false, hostname: "federation.example.com", phase: "Published",
+        gatewayEnabled: enabled, gatewayListening: true, connectorInstalled: false, connectorRunning: false,
+        gatewayConnection: { state: enabled ? "connected" : "disabled", connector: enabled ? "external" : "none" } };
+    });
+    render(<CloudflareSetup api={{ configureFederationCloudflare: call } as DesktopApi}
+      listenPort="47830" onWriteConfig={async () => true} onSettingsChanged={async () => {}} />);
+    await screen.findByText("Gateway connected");
+    expect(screen.getByText(/Cloudflare reaches this gateway through an externally managed tunnel/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Start connector" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Stop connector" })).not.toBeInTheDocument();
+    const toggle = screen.getByRole("switch", { name: "Cloudflare Access for this gateway" });
+    fireEvent.click(toggle);
+    await waitFor(() => expect(toggle).toHaveAttribute("aria-checked", "false"));
+    expect(call).toHaveBeenCalledWith({ action: "set-gateway-enabled", enabled: false });
+    expect(screen.getByText(/Cloudflare Access is disabled for this gateway/)).toBeInTheDocument();
+    await waitFor(() => expect(toggle).toBeEnabled());
+    fireEvent.click(toggle);
+    await waitFor(() => expect(toggle).toHaveAttribute("aria-checked", "true"));
+  });
+
   it("refreshes edge readiness and removes a green status if refreshing fails", async () => {
     const saved: CloudflareSetupStatus = {
       ...connected, hostname: "federation.example.com", phase: "Published", connectorRunning: true,
@@ -27,12 +51,12 @@ describe("Cloudflare setup flow", () => {
       view.rerender(<CloudflareSetup api={{ configureFederationCloudflare: call } as DesktopApi}
         listenPort="47830" onWriteConfig={async () => true} onSettingsChanged={async () => {}} />);
       await act(async () => {});
-      call.mockResolvedValue({ ...saved, connectorHealth: { state: "connected" } });
+      call.mockResolvedValue({ ...saved, gatewayConnection: { state: "connected", connector: "pwragent" } });
       await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
-      expect(screen.getByText("Tunnel connected")).toBeInTheDocument();
+      expect(screen.getByText("Gateway connected")).toBeInTheDocument();
       call.mockRejectedValue(new Error("IPC unavailable"));
       await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
-      expect(screen.queryByText("Tunnel connected")).not.toBeInTheDocument();
+      expect(screen.queryByText("Gateway connected")).not.toBeInTheDocument();
       expect(screen.getByText(/Could not refresh gateway status/)).toBeInTheDocument();
     } finally {
       view.unmount();
@@ -41,14 +65,15 @@ describe("Cloudflare setup flow", () => {
   });
 
   it.each([
-    { running: false, listening: true, health: "stopped" as const, message: /The tunnel connector is stopped/ },
-    { running: true, listening: true, health: "connecting" as const, message: /its connection to Cloudflare has not been confirmed/ },
+    { running: false, listening: true, health: "stopped" as const, message: /connection to this gateway has not been confirmed/ },
+    { running: true, listening: true, health: "connecting" as const, message: /connection to this gateway has not been confirmed/ },
     { running: true, listening: false, health: "connected" as const, message: /The gateway is not listening/ },
-    { running: true, listening: true, health: "connected" as const, message: /Cloudflare’s edge is connected to this tunnel/ },
+    { running: true, listening: true, health: "connected" as const, message: /PwrAgent manages its connector/ },
   ])("shows saved gateway readiness without an administration token ($health, listener $listening)", async ({ running, listening, health, message }) => {
     const call = vi.fn(async () => ({
       ...connected, connected: false, hostname: "federation.example.com", tunnelId: "tunnel", phase: "Published",
       connectorRunning: running, gatewayListening: listening, connectorHealth: { state: health },
+      gatewayConnection: health === "connected" && listening ? { state: "connected" as const, connector: "pwragent" as const } : undefined,
     }));
     render(<CloudflareSetup api={{ configureFederationCloudflare: call } as DesktopApi}
       listenPort="47830" onWriteConfig={async () => true} onSettingsChanged={async () => {}} />);
@@ -531,8 +556,8 @@ describe("Cloudflare setup flow", () => {
     render(<CloudflareSetup api={{ configureFederationCloudflare: call } as DesktopApi}
       listenPort="47830" onWriteConfig={async () => true} onSettingsChanged={async () => {}} />);
     await screen.findByText("cloudflared 2026.9.0 is available.");
-    expect(screen.getByText("cloudflared 2026.8.3 is running.")).toBeInTheDocument();
-    expect(screen.getByText(/keeps the old version until you stop and start it in step 5/)).toBeInTheDocument();
+    expect(screen.getByText("PwrAgent is running cloudflared 2026.8.3.")).toBeInTheDocument();
+    expect(screen.getByText(/keeps the old version until you disable and re-enable Cloudflare Access/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "How to update cloudflared" }));
     await waitFor(() => expect(call).toHaveBeenCalledWith({ action: "open-link", link: "cloudflared-update-docs" }));
   });
@@ -540,7 +565,7 @@ describe("Cloudflare setup flow", () => {
   it("says nothing about updates while the installed cloudflared is current", async () => {
     render(<CloudflareSetup api={{ configureFederationCloudflare: vi.fn(async () => ({ ...connected, connectorVersion: "2026.9.0" })) } as DesktopApi}
       listenPort="47830" onWriteConfig={async () => true} onSettingsChanged={async () => {}} />);
-    await screen.findByText("cloudflared 2026.9.0 is installed. PwrAgent starts it with the gateway.");
+    await screen.findByText("cloudflared 2026.9.0 is installed. When enabled, PwrAgent starts it if no working external tunnel reaches this gateway.");
     expect(screen.queryByRole("button", { name: "How to update cloudflared" })).toBeNull();
   });
 
