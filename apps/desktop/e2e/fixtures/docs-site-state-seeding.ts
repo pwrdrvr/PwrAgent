@@ -46,6 +46,10 @@ export function seedAllMessagingProvidersEnabledConfig(homeRoot: string): void {
       "",
       "[messaging.slack]",
       "enabled = true",
+      // A saved name, so Connect opens past its Name step on Create. Unsaved,
+      // the box would show main's suggestion, which carries the OS username
+      // of whoever runs the capture.
+      'app_name = "PwrAgent - riley"',
       "",
       "[messaging.mattermost]",
       "enabled = true",
