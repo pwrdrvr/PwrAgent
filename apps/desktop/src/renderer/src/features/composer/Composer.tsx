@@ -1133,7 +1133,7 @@ function normalizeReviewWorkspacePath(value?: string): string | undefined {
   if (!trimmed) {
     return undefined;
   }
-  return trimmed.replace(/\/+$/, "");
+  return trimmed.replace(/\\/g, "/").replace(/\/+$/, "");
 }
 
 function reviewWorkspacePathMatches(

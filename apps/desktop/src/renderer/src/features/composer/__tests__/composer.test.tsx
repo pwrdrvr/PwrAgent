@@ -5893,6 +5893,7 @@ describe("Composer", () => {
     unpushedCommits?: number;
     untrackedFiles?: number;
     withPullRequest?: boolean;
+    workspacePath?: string;
   }): NavigationThreadSummary => ({
     id: "thread-1",
     title: "Attached PR review",
@@ -5901,8 +5902,9 @@ describe("Composer", () => {
     executionMode: "default",
     inbox: { inInbox: false },
     observedGitBranch: "feat/stack-1",
+    projectKey: params.workspacePath,
     linkedDirectories: [
-      { id: "one", kind: "local", label: "Project", path: "/repo/project" },
+      { id: "one", kind: "local", label: "Project", path: params.workspacePath ?? "/repo/project" },
     ],
     gitWorkingState: {
       dirtyAdditions: 0,
@@ -5923,7 +5925,7 @@ describe("Composer", () => {
       headRefName: "feat/stack-1",
       baseRefName: "main",
       headSha: "a".repeat(40),
-      linkedDirectoryPaths: ["/repo/project"],
+      linkedDirectoryPaths: [params.workspacePath ?? "/repo/project"],
     }],
   });
 
@@ -5946,12 +5948,12 @@ describe("Composer", () => {
       .toHaveAttribute("aria-pressed", "true");
   });
 
-  it("defaults to the attached PR when the checkout is clean on its head", () => {
+  it.each(["/repo/project", "C:\\repos\\project", "\\\\server\\share\\project\\"])("defaults to the attached PR when %s is clean on its head", (workspacePath) => {
     render(<Composer
       desktopApi={{ onAgentEvent: () => () => undefined }}
       disabled={false} skills={[]}
-      thread={reviewTargetThread({})}
-      directory={{ key: "project", kind: "directory", label: "Project", path: "/repo/project",
+      thread={reviewTargetThread({ workspacePath })}
+      directory={{ key: "project", kind: "directory", label: "Project", path: workspacePath.replace(/\\/g, "/"),
         gitStatus: { currentBranch: "feat/stack-1", branches: ["main", "feat/stack-1"], syncState: "in-sync",
           recentCommits: [{ sha: "a".repeat(40), shortSha: "aaaaaaa", subject: "Published head" }] },
       }}
@@ -5999,11 +6001,11 @@ describe("Composer", () => {
     }));
   });
 
-  it("keeps the local default and names what the PR omits when they differ", () => {
+  it.each(["/repo/project", "C:\\repos\\project", "\\\\server\\share\\project\\"])("keeps the local default and names what the PR omits in %s", (workspacePath) => {
     render(<Composer
       desktopApi={{ onAgentEvent: () => () => undefined }}
       disabled={false} skills={[]}
-      thread={reviewTargetThread({ dirtyFiles: 2, unpushedCommits: 1 })}
+      thread={reviewTargetThread({ dirtyFiles: 2, unpushedCommits: 1, workspacePath })}
     />);
     openReviewComposer();
     const group = screen.getByRole("group", { name: "Review target" });
