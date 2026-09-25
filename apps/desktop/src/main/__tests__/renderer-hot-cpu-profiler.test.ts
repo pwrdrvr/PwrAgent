@@ -968,7 +968,8 @@ describe("HotCpuProfiler", () => {
 
     const { target, debuggerApi } = createTarget();
     const onHeapSnapshotLimitReached = vi.fn(async () => undefined);
-    const onProfileWritten = vi.fn();
+    const profileWritten = deferred();
+    const onProfileWritten = vi.fn(() => profileWritten.resolve());
     let nowCallCount = 0;
     const metrics = [
       createMetric(0, 100),
@@ -1004,12 +1005,12 @@ describe("HotCpuProfiler", () => {
       expect(debuggerApi.attach).toHaveBeenCalledWith("1.3");
       await vi.advanceTimersByTimeAsync(config.profileDurationMs);
 
-      await vi.waitFor(() => {
-        expect(target.takeHeapSnapshot).toHaveBeenCalledTimes(3);
-      });
-      await vi.waitFor(() => {
-        expect(onHeapSnapshotLimitReached).toHaveBeenCalledTimes(1);
-      });
+      // The stop snapshot follows real profile/artifact writes. Await their
+      // completion signal instead of polling disk work on a one-second budget
+      // (vi.waitFor also advances the fake profiler clock between polls).
+      await profileWritten.promise;
+      expect(target.takeHeapSnapshot).toHaveBeenCalledTimes(3);
+      expect(onHeapSnapshotLimitReached).toHaveBeenCalledTimes(1);
     } finally {
       await profiler.stop("test-complete");
     }
