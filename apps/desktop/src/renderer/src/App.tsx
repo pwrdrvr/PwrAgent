@@ -1,3 +1,4 @@
+import { FederationShutdownNotices } from "./features/notifications/FederationShutdownNotices";
 import { CodexAuthProfileLoginDialog } from "./features/settings/CodexAuthProfileSelect";
 import { navigationIdentityFromThreadKey } from "./lib/navigation-query-state";
 import { classifyDirectory } from "@pwragent/shared";
@@ -803,6 +804,11 @@ function DesktopAppShell(props: {
   useEffect(() => {
     if (bundledGitLfsNotice) showAppNotice(bundledGitLfsNotice);
   }, [bundledGitLfsNotice, showAppNotice]);
+
+  const syncFederationShutdownNotice = useCallback((instanceId: string, notice: AppNoticeToastNotice | undefined): void => {
+    if (notice) showAppNotice(notice);
+    else dispatchAppNotice({ type: "dismiss", id: `federation-shutdown:${instanceId}` });
+  }, [showAppNotice]);
 
   const syncMessagingErrorNotice = useCallback((
     platform: MessagingChannelKind,
@@ -3314,6 +3320,7 @@ function DesktopAppShell(props: {
         ) : null}
 
         <CodexConfigWarningBanner desktopApi={desktopApi} />
+        <FederationShutdownNotices desktopApi={desktopApi} onNoticeChanged={syncFederationShutdownNotice} />
         <MessagingErrorNotices
           desktopApi={desktopApi}
           onNoticeChanged={syncMessagingErrorNotice}

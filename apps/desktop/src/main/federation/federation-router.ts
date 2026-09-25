@@ -50,6 +50,7 @@ export class FederationRouter {
   constructor(
     private readonly options: {
       localInstanceId: FederationInstanceId;
+      isDraining?: () => boolean;
       methodCapabilities?: Record<string, FederationCapability>;
       additionalRequiredCapabilities?: (
         envelope: FederationRequestEnvelope,
@@ -136,6 +137,15 @@ export class FederationRouter {
         code: deadlineFailure.error.code,
         message: deadlineFailure.error.message,
       };
+    }
+
+    if (params.envelope.kind === "request" && this.options.isDraining?.()) {
+      const failure = this.errorEnvelope(params.envelope, {
+        code: "instance_shutting_down",
+        message: "This instance is preparing to shut down.",
+      });
+      this.replyToSource(params.sourcePeerId, failure);
+      return { status: "rejected", code: failure.error.code, message: failure.error.message };
     }
 
     if (params.envelope.kind === "request") {

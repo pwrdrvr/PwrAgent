@@ -1,3 +1,4 @@
+import { FederationShutdown } from "../federation/federation-shutdown";
 import { setFederationTrafficCapture, snapshotFederationTrafficHistory } from "../federation/federation-traffic-capture";
 import net from "node:net";
 import http from "node:http";
@@ -165,6 +166,40 @@ describe("federation transport", () => {
       envelope,
     }), "utf8");
     expect(federationTransportCodecForTest.decodeEnvelope(jsonWire)).toBeUndefined();
+  });
+
+  it("negotiates shutdown notices and delivers the deadline before a Going Away close", async () => {
+    const clientKeys = generateFederationIdentityKeyPair();
+    const invite = createFederationEnrollmentInvite({
+      store, token: "shutdown-invite", gatewayInstanceId: "gateway_one",
+      generatedAt: Date.now(), expiresAt: Date.now() + 60_000,
+    });
+    let connection!: FederationGatewayConnection;
+    server = new FederationGatewayWebSocketServer({
+      gatewayInstanceId: "gateway_one", gatewayPrivateKeyPem: gatewayKeyPair.privateKeyPem,
+      gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem, host: "127.0.0.1", port: 0, store,
+      onConnection: (peer) => { connection = peer; },
+    });
+    const { url } = await server.start();
+    let deliver!: (e: FederationProtocolEnvelope) => void;
+    const delivered = new Promise<FederationProtocolEnvelope>((resolve) => { deliver = resolve; });
+    let close!: (code: number | undefined) => void;
+    const closed = new Promise<number | undefined>((resolve) => { close = resolve; });
+    const client = await connectFederationClient({
+      url, mode: "enroll", gatewayInstanceId: "gateway_one", gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem,
+      peerInstanceId: "client_one", privateKeyPem: clientKeys.privateKeyPem, publicKeyPem: clientKeys.publicKeyPem,
+      capabilities: ["shutdown_notice"], inviteToken: invite.token, label: "Fixture client", role: "client",
+      onEnvelope: deliver, onClose: (info) => close(info?.code),
+    });
+    expect(client.capabilities).toContain("shutdown_notice");
+    const shutdown = new FederationShutdown({
+      instanceId: () => "gateway_one", connections: () => [connection], label: () => "Fixture gateway", changed: () => {},
+    });
+    const deadlineAt = Date.now() + 10_000;
+    shutdown.begin(deadlineAt);
+    await expect(delivered).resolves.toMatchObject({ kind: "notification", method: "federation/shutdown", params: { state: "scheduled", deadlineAt } });
+    await server.stop();
+    await expect(closed).resolves.toBe(1001);
   });
 
   it("authenticates a client and carries protocol envelopes", async () => {

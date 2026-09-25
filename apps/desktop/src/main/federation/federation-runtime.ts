@@ -1,3 +1,5 @@
+import { FederationShutdown } from "./federation-shutdown";
+import { FEDERATION_SHUTDOWN_CHANGED_METHOD } from "@pwragent/shared";
 import { projectThreadDisplayEvent } from "../app-server/thread-display-events";
 import { federationTrafficCaptureUntil, setFederationTrafficCapture, saveFederationTrafficHistory } from "./federation-traffic-capture";
 import type { CloudflareClientConnection, NavigationAttentionViewReleaseRequest } from "@pwragent/shared";
@@ -499,6 +501,7 @@ const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "turn_input_blobs",
   // Signed transport negotiation; not a user-authorized remote action.
   "transport_brotli",
+  "shutdown_notice",
 ];
 
 const REMOTE_THREAD_SUMMARY_EVENT_CONSUMER_ID =
@@ -873,6 +876,20 @@ export class DesktopFederationRuntime {
     string,
     Omit<FederationEndpointStatus, "url">
   >();
+  readonly shutdown = new FederationShutdown({
+    instanceId: () => this.ensureLocalInstanceId(),
+    connections: () => this.router?.listConnections() ?? [],
+    label: (peerId) => this.visiblePeers().find((peer) => peer.id === peerId)?.label ?? peerId,
+    changed: (notices) => this.publishAgentEvent?.({
+      backend: "codex",
+      notification: { method: FEDERATION_SHUTDOWN_CHANGED_METHOD, params: { notices } },
+    }),
+  });
+
+  connectedShutdownPeerCount(): number {
+    return this.router?.listConnections().length ?? 0;
+  }
+
   private readonly rpcByPeer = new Map<FederationInstanceId, FederationRpcEndpoint>();
   private readonly peerDirectoryReceivers = new Map<string, FederationReplacementReceiver<FederationPeerSummary>>();
   private readonly arrangementBootstrap = new FederationMergeBootstrap<StarMapArrangementEntry>();
@@ -1196,6 +1213,7 @@ export class DesktopFederationRuntime {
     this.parked = false;
     await cloudflareConnector.stop();
     this.connectionAttempt = undefined;
+    for (const peer of this.shutdown.snapshot()) this.shutdown.disconnected(peer.instanceId);
     this.connectionGeneration += 1;
     this.walkEpoch += 1;
     if (isAppStateInitialized()) {
@@ -1347,6 +1365,7 @@ export class DesktopFederationRuntime {
       listenUrl: this.listenUrl,
       unavailableReason: this.gatewayListenerError,
     });
+    health.shutdownNotices = this.shutdown.snapshot();
     if (
       config.mode === "client" ||
       config.mode === "dual"
@@ -2793,6 +2812,7 @@ export class DesktopFederationRuntime {
     const localInstanceId = this.ensureLocalInstanceId();
     const router = new FederationRouter({
       localInstanceId,
+      isDraining: () => this.shutdown.draining,
       trustedRelayPeerId: () =>
         this.gatewayInstanceId
         ?? (isAppStateInitialized()
@@ -3351,6 +3371,7 @@ export class DesktopFederationRuntime {
         client.sendEnvelope(envelope);
       },
     });
+    this.shutdown.connected(gatewayInstanceId);
     // This instance can also be the OWNER of remote PTY sessions the gateway
     // is viewing; a reconnect inside the grace keeps those alive.
     this.ptyService?.notifyPeerConnected(gatewayInstanceId);
@@ -3556,6 +3577,7 @@ export class DesktopFederationRuntime {
       sendEnvelope: connection.sendEnvelope,
       sendEnvelopeWithBackpressure: connection.sendEnvelopeWithBackpressure,
     });
+    this.shutdown.connected(connection.peerId);
     // A transport blip that healed inside the reap grace keeps the peer's
     // remote PTY sessions alive.
     this.ptyService?.notifyPeerConnected(connection.peerId);
@@ -3585,6 +3607,7 @@ export class DesktopFederationRuntime {
   }
 
   private unregisterPeer(peerId: FederationInstanceId): void {
+    this.shutdown.disconnected(peerId);
     this.peerDirectoryReceivers.delete(peerId);
     this.removeEventSubscriptionsForPeer(peerId);
     this.router?.unregisterConnection(peerId);
@@ -3650,6 +3673,7 @@ export class DesktopFederationRuntime {
       });
       return;
     }
+    if (this.shutdown.receive(envelope, sourcePeerId)) return;
     if (this.applyPeerDirectory(envelope)) {
       return;
     }
@@ -3830,6 +3854,12 @@ export class DesktopFederationRuntime {
     targetInstanceId: FederationInstanceId,
     envelope: FederationProtocolEnvelope,
   ): void {
+    if (envelope.kind === "request" && (this.shutdown.draining
+      || this.shutdown.peerDraining(targetInstanceId)
+      || (!this.router?.getConnection(targetInstanceId) && this.gatewayInstanceId
+        && this.shutdown.peerDraining(this.gatewayInstanceId)))) {
+      throw new Error("Federation is preparing to shut down. Try again after it reconnects.");
+    }
     if (this.router?.sendToPeer(targetInstanceId, envelope)) {
       return;
     }

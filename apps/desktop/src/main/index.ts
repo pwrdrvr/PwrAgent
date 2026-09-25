@@ -781,6 +781,9 @@ const runMainProcessShutdownBarrier = createShutdownBarrier({
 
 async function disposeMainProcessResources(source: string): Promise<void> {
   mainProcessShutdownPromise ??= (async () => {
+    // Includes immediate paths (signals and update installation). Send while
+    // the tunnel and sockets are still alive; never wait on peer acknowledgments.
+    getDesktopFederationRuntime().shutdown.exiting();
     getExistingRuntimeMessagingLeaseCoordinator()?.stopRecovery();
     getExistingRuntimeFederationLeaseCoordinator()?.stopRecovery();
     e2eShutdownDiagnostics.beginOverall();

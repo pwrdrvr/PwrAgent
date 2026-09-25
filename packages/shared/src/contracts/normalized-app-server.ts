@@ -12,6 +12,7 @@ import type { CelestialIconAssignment, CelestialIconId } from "./celestial";
 import type { StarMapArrangementEntry, StarMapIntakePhase } from "./star-map";
 import type {
   FederationConnectionState,
+  FederationPeerShutdown,
   FederationInstanceId,
   FederationTarget,
 } from "./federation";
@@ -2408,6 +2409,7 @@ export type AppServerNotification =
         collapsed: boolean;
       };
     }
+  | { method: "federation/shutdown/changed"; params: { notices: FederationPeerShutdown[] } }
   | FederationPeerStatusChangedNotification
   | FederationEventStreamChangedNotification
   | FederationCelestialIconsChangedNotification

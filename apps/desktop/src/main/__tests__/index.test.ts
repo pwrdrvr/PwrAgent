@@ -101,6 +101,7 @@ const isAppStateInitializedMock = vi.fn();
 const prewarmWindowsJobWrapperMock = vi.fn<() => Promise<void>>();
 const messagingRuntimeStartMock = vi.fn<() => Promise<void>>();
 const federationRuntimeRestartMock = vi.fn<() => Promise<void>>();
+const federationShutdownExitingMock = vi.fn();
 const disposeDesktopFederationRuntimeMock = vi.fn<() => Promise<void>>();
 const connectedPeerTargetsMock = vi.fn(() => [] as Array<{
   target: { scope: "remote"; instanceId: string };
@@ -538,6 +539,7 @@ vi.mock("../messaging/messaging-runtime", () => ({
 vi.mock("../federation/federation-runtime", () => ({
   federationEventClassForMethod: vi.fn(() => "transcript"),
   getDesktopFederationRuntime: vi.fn(() => ({
+    shutdown: { exiting: federationShutdownExitingMock },
     hydrateLiveThreadMessageOrigin: (event: AgentEvent) => event,
     restart: federationRuntimeRestartMock,
     connectedPeerTargets: connectedPeerTargetsMock,
@@ -798,6 +800,7 @@ describe("bootstrapApp", () => {
     startMcpConnectionGatewayServiceMock.mockResolvedValue();
     federationRuntimeRestartMock.mockReset();
     federationRuntimeRestartMock.mockResolvedValue();
+    federationShutdownExitingMock.mockReset();
     disposeDesktopFederationRuntimeMock.mockReset();
     disposeDesktopFederationRuntimeMock.mockResolvedValue();
     connectedPeerTargetsMock.mockReset();
@@ -2454,6 +2457,11 @@ describe("bootstrapApp", () => {
 
     sigtermHandler("SIGTERM");
     await vi.waitFor(() => expect(quitMock).toHaveBeenCalledTimes(1));
+
+    expect(federationShutdownExitingMock).toHaveBeenCalledTimes(1);
+    expect(federationShutdownExitingMock.mock.invocationCallOrder[0]).toBeLessThan(
+      disposeDesktopFederationRuntimeMock.mock.invocationCallOrder[0],
+    );
 
     // A replacement instance must not be able to acquire the profile lease
     // while this process's listener is still bound (EADDRINUSE deadlock).

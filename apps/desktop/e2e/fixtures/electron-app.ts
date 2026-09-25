@@ -1175,7 +1175,16 @@ export async function closeElectronApplication(
     requestQuit: async () => {
       await withTimeout(
         electronApp.evaluate(({ app }) => {
-          app.quit();
+          // Fixture teardown has already decided to quit. Use the app's
+          // immediate, bounded shutdown path so connected peers cannot open
+          // an interactive countdown and exhaust the fixture close budget.
+          // Emit inside Electron rather than killing its Windows launcher.
+          if (process.listenerCount("SIGTERM") > 0) {
+            process.emit("SIGTERM", "SIGTERM");
+          } else {
+            // Startup may fail before the app installs its shutdown handlers.
+            app.quit();
+          }
         }),
         ELECTRON_EVALUATE_QUIT_TIMEOUT_MS,
         "Electron quit evaluation timed out",

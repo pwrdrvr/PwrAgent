@@ -30,7 +30,36 @@ export const FEDERATION_CAPABILITIES = [
   "event_subscriptions",
   "turn_input_blobs",
   "transport_brotli",
+  "shutdown_notice",
 ] as const;
+
+export const FEDERATION_SHUTDOWN_METHOD = "federation/shutdown";
+export const FEDERATION_SHUTDOWN_CHANGED_METHOD = "federation/shutdown/changed";
+
+export type FederationShutdownNotice = {
+  shutdownId: string;
+  revision: number;
+  state: "scheduled" | "cancelled" | "exiting";
+  reason: "quit";
+  /** null means the operator paused automatic quit or is waiting for work. */
+  deadlineAt: number | null;
+};
+
+export type FederationPeerShutdown = FederationShutdownNotice & {
+  instanceId: FederationInstanceId;
+  label: string;
+};
+
+export function isFederationShutdownNotice(value: unknown): value is FederationShutdownNotice {
+  if (!value || typeof value !== "object") return false;
+  const notice = value as Partial<FederationShutdownNotice>;
+  return typeof notice.shutdownId === "string" && notice.shutdownId.length > 0
+    && notice.shutdownId.length <= 128
+    && Number.isSafeInteger(notice.revision) && notice.revision! > 0
+    && ["scheduled", "cancelled", "exiting"].includes(notice.state ?? "")
+    && notice.reason === "quit"
+    && (notice.deadlineAt === null || (typeof notice.deadlineAt === "number" && Number.isFinite(notice.deadlineAt)));
+}
 
 export type FederationCapability = (typeof FEDERATION_CAPABILITIES)[number];
 
@@ -392,6 +421,7 @@ export type FederationActiveConnection = {
 };
 
 export type FederationHealthStatus = {
+  shutdownNotices?: FederationPeerShutdown[];
   enabled: boolean;
   role: FederationInstanceRole;
   status: FederationConnectionState;

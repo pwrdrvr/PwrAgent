@@ -66,6 +66,8 @@ export type QuitBlockerSnapshot = {
 export type QuitManagerDependencies = {
   confirm?: (params: {
     countdownSeconds: number;
+    federationPeerCount?: number;
+    onCountdownChanged?: (deadlineAt: number | null) => void;
     inProgressThreadCount: number;
     terminalSessionCount: number;
     actionRunCount?: number;
@@ -78,6 +80,10 @@ export type QuitManagerDependencies = {
    * there is nothing to raise. See the `promptPromise` branch in `requestQuit`.
    */
   focusPendingConfirmation?: () => boolean;
+  getFederationPeerCount?: () => number;
+  announceShutdown?: (deadlineAt: number | null) => void;
+  cancelShutdown?: () => void;
+  commitShutdown?: () => void;
   getConfirmationEnabled: () => boolean;
   getFocusedWindow?: () => BrowserWindow | null;
   getQuitBlockers: () => QuitBlockerSnapshot;
@@ -136,7 +142,8 @@ export function createQuitManager(
     }
 
     const snapshot = dependencies.getQuitBlockers();
-    if (snapshot.count <= 0) {
+    const federationPeerCount = dependencies.getFederationPeerCount?.() ?? 0;
+    if (snapshot.count <= 0 && federationPeerCount === 0) {
       dependencies.log.info?.("quit requested with no active work", {
         source: options.source,
       });
@@ -145,7 +152,7 @@ export function createQuitManager(
       return true;
     }
 
-    if (!dependencies.getConfirmationEnabled()) {
+    if (!dependencies.getConfirmationEnabled() && federationPeerCount === 0) {
       dependencies.log.warn?.(
         "quit requested with active work; confirmation disabled",
         {
@@ -217,6 +224,8 @@ export function createQuitManager(
       try {
         resolution = await (dependencies.confirm ?? showQuitConfirmationDialog)({
           countdownSeconds: QUIT_CONFIRMATION_COUNTDOWN_SECONDS,
+          federationPeerCount,
+          onCountdownChanged: dependencies.announceShutdown,
           inProgressThreadCount: snapshot.threadIds.length,
           automationRunCount: snapshot.automationRunCount ?? 0,
           terminalSessionCount: snapshot.terminalSessionCount,
@@ -231,6 +240,7 @@ export function createQuitManager(
             ),
         });
       } catch (error) {
+        dependencies.cancelShutdown?.();
         clearPrompt();
         resumeAutomationDispatchAfterPrompt(resumeAutomationDispatch);
         throw error;
@@ -246,6 +256,7 @@ export function createQuitManager(
         threadIds: snapshot.threadIds,
       });
       if (resolution === "manual-cancel") {
+        dependencies.cancelShutdown?.();
         pendingPerformQuit = undefined;
         // The dialog is already gone. Release this prompt before gates and
         // backend submissions resume so a new quit request can open a visible
@@ -254,6 +265,7 @@ export function createQuitManager(
         resumeAutomationDispatchAfterPrompt(resumeAutomationDispatch);
         return false;
       }
+      dependencies.commitShutdown?.();
       quitAllowed = true;
       (pendingPerformQuit ?? dependencies.performQuit)();
       pendingPerformQuit = undefined;
@@ -648,6 +660,14 @@ export async function readQuitBlockerQueueSnapshot(): Promise<
 }
 
 export const appQuitManager = createQuitManager({
+  getFederationPeerCount: () => getDesktopFederationRuntime().connectedShutdownPeerCount(),
+  announceShutdown: (deadlineAt) => {
+    const shutdown = getDesktopFederationRuntime().shutdown;
+    if (deadlineAt === null) shutdown.pause();
+    else shutdown.begin(deadlineAt);
+  },
+  cancelShutdown: () => getDesktopFederationRuntime().shutdown.cancel(),
+  commitShutdown: () => getDesktopFederationRuntime().shutdown.exiting(),
   focusPendingConfirmation: () => focusActiveQuitConfirmationDialog(),
   getConfirmationEnabled: () =>
     getDesktopSettingsService().resolveConfirmQuitWithInProgressThreads(),

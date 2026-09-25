@@ -300,6 +300,35 @@ function applyEventSubscription(params: {
 }
 
 describe("DesktopFederationRuntime", () => {
+  it("publishes shutdown control notices without event subscriptions and prevents new remote requests", async () => {
+    const runtime = new DesktopFederationRuntime();
+    const harness = runtime as unknown as RuntimeHarness & {
+      receiveEnvelope: (envelope: FederationProtocolEnvelope, source: string) => Promise<void>;
+      sendEnvelopeToTarget: (target: string, envelope: FederationProtocolEnvelope) => void;
+    };
+    harness.localInstanceId = "viewer_one";
+    harness.router = new FederationRouter({ localInstanceId: "viewer_one" });
+    harness.visiblePeers = () => [{ id: "gateway_one", label: "Test gateway", status: "connected" }];
+    const sent = vi.fn();
+    harness.router.registerConnection(createConnection({ peerId: "gateway_one", capabilities: ["shutdown_notice"], sendEnvelope: sent }));
+    const published = vi.fn();
+    runtime.setAgentEventPublisher(published);
+    const announcement: FederationProtocolEnvelope = {
+      id: "shutdown", kind: "notification", method: "federation/shutdown",
+      protocolVersion: 1, sourceInstanceId: "gateway_one", targetInstanceId: "viewer_one", createdAt: Date.now(),
+      params: { shutdownId: "one", revision: 1, state: "scheduled", reason: "quit", deadlineAt: Date.now() + 10_000 },
+    };
+    await harness.receiveEnvelope(announcement, "gateway_one");
+    expect(published).toHaveBeenCalledWith(expect.objectContaining({ notification: {
+      method: "federation/shutdown/changed", params: { notices: [expect.objectContaining({ label: "Test gateway" })] },
+    } }));
+    const request: FederationProtocolEnvelope = { id: "request", kind: "request", method: "work", params: {}, protocolVersion: 1, sourceInstanceId: "viewer_one", createdAt: Date.now() };
+    expect(() => harness.sendEnvelopeToTarget("gateway_one", request)).toThrow("preparing to shut down");
+    runtime.shutdown.disconnected("gateway_one");
+    expect(() => harness.sendEnvelopeToTarget("gateway_one", request)).not.toThrow();
+    expect(sent).toHaveBeenCalledWith(request);
+  });
+
   it.each([false, true])("acknowledges and sequences live updates, recovering gaps through the same route (gateway=%s)", (viaGateway) => {
     const capabilities: FederationCapability[] = ["gateway_relay", "thread_navigation", "navigation_snapshot_deltas", "thread_detail", "pending_request_control", "event_subscriptions"];
     const viewer = new DesktopFederationRuntime() as unknown as RuntimeHarness;
