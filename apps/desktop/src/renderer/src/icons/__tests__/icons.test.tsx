@@ -1,6 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, render, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
+import type { ReactElement } from "react";
 import {
   BranchIcon,
   CalendarPlusIcon,
@@ -13,14 +14,17 @@ import {
   DraftIcon,
   FileCodeIcon,
   FolderIcon,
+  GrokIcon,
   HistoryIcon,
   MattermostIcon,
   MoreVerticalIcon,
   NewThreadIcon,
+  OpenAIIcon,
   PackageIcon,
   PinIcon,
   PlugIcon,
   PopoutIcon,
+  PwrAgentIcon,
   SettingsIcon,
   ShieldIcon,
   SkillIcon,
@@ -238,6 +242,77 @@ describe("icon library", () => {
       await waitFor(() => {
         expect(container.querySelector("img")).toHaveAttribute("src", denimSrc);
       });
+    });
+  });
+
+  // AI provider marks for the onboarding wizard. Each vendor publishes one
+  // file per colorway and forbids recoloring, so the icon picks a published
+  // file from the live theme — never a `currentColor` path.
+  describe.each([
+    [
+      "OpenAIIcon",
+      {
+        auto: (size?: number) => <OpenAIIcon size={size} />,
+        onLight: () => <OpenAIIcon variant="black" />,
+        onDark: () => <OpenAIIcon variant="white" />,
+      },
+    ],
+    [
+      "GrokIcon",
+      {
+        auto: (size?: number) => <GrokIcon size={size} />,
+        onLight: () => <GrokIcon variant="dark" />,
+        onDark: () => <GrokIcon variant="light" />,
+      },
+    ],
+  ] as const)("%s", (_name, icon) => {
+    const srcOf = (element: ReactElement) => {
+      const { container } = render(element);
+      const src = container.querySelector("img")?.getAttribute("src");
+      cleanup();
+      return src;
+    };
+
+    it("renders the official asset as an <img> at the requested size", () => {
+      const { container, rerender } = render(icon.auto());
+      const img = container.querySelector("img");
+      expect(img).toHaveAttribute("width", "16");
+      expect(img).toHaveAttribute("alt", "");
+      expect(img?.getAttribute("src") ?? "").toMatch(/svg|image/i);
+      expect(container.querySelector("svg")).not.toBeInTheDocument();
+      rerender(icon.auto(28));
+      expect(container.querySelector("img")).toHaveAttribute("height", "28");
+    });
+
+    it("picks the light-surface file on the light theme and follows changes", async () => {
+      const lightSrc = srcOf(icon.onLight());
+      const darkSrc = srcOf(icon.onDark());
+      expect(lightSrc).not.toBe(darkSrc);
+
+      const { container } = render(icon.auto());
+      expect(container.querySelector("img")).toHaveAttribute("src", darkSrc);
+
+      act(() => {
+        document.documentElement.setAttribute("data-theme", "light");
+      });
+
+      await waitFor(() => {
+        expect(container.querySelector("img")).toHaveAttribute("src", lightSrc);
+      });
+    });
+  });
+
+  describe("PwrAgentIcon", () => {
+    it("renders the app icon master as an <img> in both themes", () => {
+      const { container } = render(<PwrAgentIcon size={22} />);
+      const darkSrc = container.querySelector("img")?.getAttribute("src");
+      expect(darkSrc).toMatch(/png|image/i);
+      expect(container.querySelector("img")).toHaveAttribute("width", "22");
+      cleanup();
+
+      document.documentElement.setAttribute("data-theme", "light");
+      const { container: lightContainer } = render(<PwrAgentIcon size={22} />);
+      expect(lightContainer.querySelector("img")).toHaveAttribute("src", darkSrc);
     });
   });
 

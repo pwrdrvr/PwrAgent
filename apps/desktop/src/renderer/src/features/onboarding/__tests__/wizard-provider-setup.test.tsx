@@ -19,6 +19,7 @@ import { slackCredentialProblem } from "../../messaging/slack-token-shape";
 import type { DesktopSettingsState } from "../../settings/useDesktopSettings";
 import {
   BackendRequirementsStep,
+  CodexProfileStep,
   isBackendRequirementSatisfied,
   ProviderSetupStep,
   SecretFieldRow,
@@ -238,6 +239,71 @@ describe("AI provider onboarding", () => {
     expect(screen.getByText(/x\.ai\/cli\/install\.sh/i)).toBeVisible();
     expect(screen.queryByText(/xAI API key/i)).not.toBeInTheDocument();
     expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+  });
+
+  it("shows only published vendor marks, with a non-affiliation note per provider", () => {
+    const settings = {
+      snapshot: noCodexSnapshot,
+      refresh: vi.fn(async () => undefined),
+    } as unknown as DesktopSettingsState;
+
+    const { container } = render(
+      <BackendRequirementsStep
+        settings={settings}
+        acpEntries={[]}
+        onAcpEntriesChange={vi.fn()}
+      />,
+    );
+    const cardMark = () =>
+      container.querySelector(".onboarding-wizard__prereq-mark");
+
+    // OpenAI and xAI publish marks an integrator may use to identify their
+    // product; the other three stay on a generic glyph until they consent.
+    const expected = [
+      ["Codex CLI", "onboarding-wizard__mark--codex", "OpenAI"],
+      ["Gemini CLI", "onboarding-wizard__mark--cli", "Google"],
+      ["Kimi Code", "onboarding-wizard__mark--cli", "Moonshot AI"],
+      ["Qwen Code", "onboarding-wizard__mark--cli", "Alibaba Cloud"],
+      ["Grok Build", "onboarding-wizard__mark--grok", "SpaceXAI"],
+    ] as const;
+    for (const [tab, markClass, vendor] of expected) {
+      fireEvent.click(screen.getByRole("tab", { name: new RegExp(tab, "i") }));
+      expect(cardMark()).toHaveClass(markClass);
+      expect(cardMark()?.querySelector("img") !== null).toBe(
+        markClass !== "onboarding-wizard__mark--cli",
+      );
+      expect(
+        screen.getByText(
+          `not affiliated with, endorsed by, or sponsored by ${vendor}.`,
+          { exact: false },
+        ),
+      ).toBeVisible();
+    }
+  });
+
+  it("draws PwrAgent and Codex marks in the Codex profile diagrams", () => {
+    const { container } = render(
+      <CodexProfileStep value="shared" onChange={vi.fn()} />,
+    );
+
+    expect(screen.queryByText("PA")).not.toBeInTheDocument();
+    expect(screen.queryByText("CX")).not.toBeInTheDocument();
+    const pwragentMarks = container.querySelectorAll(
+      ".onboarding-wizard__mark--pwragent img",
+    );
+    const codexMarks = container.querySelectorAll(
+      ".onboarding-wizard__mark--codex img",
+    );
+    // Shared 1+1, Isolated 2+2, Multiple 4+4: every PwrAgent node pairs
+    // with a Codex node.
+    expect(pwragentMarks).toHaveLength(7);
+    expect(codexMarks).toHaveLength(7);
+    expect(
+      screen.getByText(
+        "not affiliated with, endorsed by, or sponsored by OpenAI.",
+        { exact: false },
+      ),
+    ).toBeVisible();
   });
 
   it("defers Gemini startup until the operator enables it and clicks login", async () => {

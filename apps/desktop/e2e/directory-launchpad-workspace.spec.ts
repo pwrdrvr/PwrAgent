@@ -1203,10 +1203,20 @@ test("local-to-worktree handoff records PwrAgent workspace state without rewriti
       ["-C", cwd!, "rev-parse", "--git-path", "codex-thread.json"],
       { encoding: "utf8" },
     ).trim();
-    await expect(readFile(ownerFile, "utf8").then(JSON.parse)).resolves.toEqual({
-      version: 1,
-      ownerThreadId: fixture.threadId,
-    });
+    // The handoff links the worktree in the overlay first, then syncs the
+    // Codex CWD and branch metadata, and only then writes this owner file.
+    // The overlay poll above is therefore no readiness signal for the file;
+    // wait on the file itself. A Windows runner lost that race twice in a row.
+    await expect
+      .poll(() =>
+        readFile(ownerFile, "utf8")
+          .then(JSON.parse)
+          .catch(() => undefined),
+      )
+      .toEqual({
+        version: 1,
+        ownerThreadId: fixture.threadId,
+      });
   } finally {
     await app.close();
     await fixture.cleanup();
