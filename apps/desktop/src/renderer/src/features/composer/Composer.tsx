@@ -70,6 +70,7 @@ import {
   buildReviewBranchOptions,
   federatedThreadIdentityKey,
   findPreferredReviewWorkspaceCwd,
+  findPrimaryReviewWorkspaceCwd,
   normalizeGitOriginUrl,
   readCodexEnvironmentActionRuns,
 } from "@pwragent/shared";
@@ -995,6 +996,9 @@ function reviewPullRequestsFor(params: {
     cwd: params.cwd,
     prs: params.thread?.prs ?? [],
     repository: params.directory?.gitStatus?.originRepository,
+    repositoryPath: params.thread?.linkedDirectories.find((directory) =>
+      reviewWorkspacePathMatches(directory.worktreePath ?? directory.path, params.cwd)
+    )?.path,
   }).filter((pr) => EXPLICIT_REVIEW_PULL_REQUEST_URL.test(pr.url));
   if (params.thread?.codexEnvironmentRuntime?.executionTarget === "remote") {
     // Resolving a pull request target fetches its commits into a checkout,
@@ -1009,13 +1013,15 @@ function reviewPullRequestsFor(params: {
   }
   return {
     candidates: attached,
-    checkedOut: findCheckedOutPullRequest({
+    checkedOut: params.thread && reviewWorkspacePathMatches(
+      params.cwd, findPrimaryReviewWorkspaceCwd(params.thread),
+    ) ? findCheckedOutPullRequest({
       currentBranch:
         params.thread?.observedGitBranch ?? params.thread?.gitBranch,
       directoryGitStatus: params.directory?.gitStatus,
       gitWorkingState: params.thread?.gitWorkingState,
       prs: attached,
-    }),
+    }) : undefined,
   };
 }
 
@@ -1127,7 +1133,7 @@ function normalizeReviewWorkspacePath(value?: string): string | undefined {
   if (!trimmed) {
     return undefined;
   }
-  return trimmed.replace(/\/+$/, "");
+  return trimmed.replace(/\\/g, "/").replace(/\/+$/, "");
 }
 
 function reviewWorkspacePathMatches(
@@ -1178,7 +1184,7 @@ function findReviewDirectoryForWorkspace(params: {
       reviewWorkspacePathMatches(directory.path, workspaceCwd)
   );
   if (!linkedDirectory) {
-    return params.directory;
+    return undefined;
   }
 
   return directories.find((directory) =>
@@ -1190,7 +1196,7 @@ function findReviewDirectoryForWorkspace(params: {
           : directory.key,
         linkedDirectory.path,
       )
-  ) ?? params.directory;
+  );
 }
 
 function buildConfiguredReviewCommand(
@@ -4741,13 +4747,54 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       props.thread,
     ],
   );
-  const reviewPullRequests = reviewPullRequestState.candidates;
+  // PR selection spans the thread's attached repositories. Keep the matching
+  // workspaces with each choice so choosing a PR also routes its review.
+  const reviewPullRequestOptions = useMemo(() => {
+    const options = new Map<string, { pr: PrSummary; workspaces: string[] }>();
+    for (const workspace of reviewWorkspaceOptions) {
+      const directory = findReviewDirectoryForWorkspace({
+        directories: props.directories,
+        directory: props.directory,
+        thread: props.thread,
+        workspaceCwd: workspace.cwd,
+      });
+      for (const pr of reviewPullRequestsFor({
+        cwd: workspace.cwd, directory, thread: props.thread,
+      }).candidates) {
+        const option = options.get(pr.url);
+        if (option) {
+          option.workspaces.push(workspace.cwd);
+        } else {
+          options.set(pr.url, { pr, workspaces: [workspace.cwd] });
+        }
+      }
+    }
+    return [...options.values()];
+  }, [reviewWorkspaceOptions, props.directories, props.directory, props.thread]);
+  const reviewPullRequests = reviewPullRequestOptions.map((option) => option.pr);
+  // A repository prefix only earns its width when the choices span more than
+  // one repository. Two worktrees of one repository list the same PRs, and a
+  // shared owner repeated on every row pushes the branch out of a narrow
+  // select. The owner returns only when two repositories share a name.
+  const reviewPullRequestRepositoryCount = new Set(
+    reviewPullRequests.map((pr) => `${pr.org}/${pr.repo}`.toLowerCase()),
+  ).size;
+  const reviewPullRequestRepositoryNamesAmbiguous = new Set(
+    reviewPullRequests.map((pr) => pr.repo.toLowerCase()),
+  ).size < reviewPullRequestRepositoryCount;
+  const reviewPullRequestRepositoryLabel = (pr: PrSummary): string =>
+    reviewPullRequestRepositoryCount < 2
+      ? ""
+      : reviewPullRequestRepositoryNamesAmbiguous
+        ? `${pr.org}/${pr.repo}`
+        : pr.repo;
   const selectedReviewPullRequest = reviewPullRequests.find(
     (pr) => pr.url === reviewConfig?.pullRequestUrl,
   );
   // What a local review would cover that this PR does not, so the two targets
   // never read as interchangeable when they are not.
-  const selectedReviewPullRequestSync = selectedReviewPullRequest
+  const selectedReviewPullRequestSync = selectedReviewPullRequest && props.thread
+    && reviewWorkspacePathMatches(reviewConfig?.workspaceCwd, findPrimaryReviewWorkspaceCwd(props.thread))
     ? describeAttachedPullRequestLocalSync({
         currentBranch:
           props.thread?.observedGitBranch ?? props.thread?.gitBranch,
@@ -4756,7 +4803,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         pr: selectedReviewPullRequest,
       })
     : undefined;
-  // Only the targets this workspace can actually run. An always-present row
+  // Only the targets the attached workspaces can actually run. An always-present row
   // that dead-ends on "no attached pull requests" is noise, and arrow-key
   // navigation has to walk the same list the operator can see.
   const reviewTargetOptions = REVIEW_TARGET_OPTIONS.filter(
@@ -6071,25 +6118,37 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const submitReviewConfig = async (
     config: ReviewConfigState | undefined,
   ): Promise<void> => {
-    if (config?.target === "pullRequest" && !reviewPullRequests.some((pr) => pr.url === config.pullRequestUrl)) {
-      setSendError("Choose an attached pull request for this project.");
+    if (config?.target === "pullRequest" && !reviewPullRequestOptions.some((option) =>
+      option.pr.url === config.pullRequestUrl && option.workspaces.includes(config.workspaceCwd ?? "")
+    )) {
+      setSendError("Choose an attached pull request.");
       return;
     }
     const configuredReviewCommand = buildConfiguredReviewCommand(config);
     if (!configuredReviewCommand) {
       return;
     }
-    if (reviewSubmissionUnavailable) {
+    // Enter can select a PR, change its workspace, and submit before React
+    // renders again. Resolve against the submitted config, not the old chips.
+    const runModeDecision = props.thread ? resolveReviewRunMode({
+      ownerSummary: reviewOwnerSummary,
+      requestedRunMode: config?.runModeChosen ? config.runMode : undefined,
+      reviewerBackend: reviewerSelection.backend,
+      reviewerSummary: reviewerSelection.summary,
+      thread: props.thread,
+      workspaceCwd: config?.workspaceCwd,
+    }) : reviewRunModeDecision;
+    if (runModeDecision.submissionUnavailable) {
       setSendError(
-        reviewRunModeDecision.helpText
+        runModeDecision.helpText
         ?? "A review subagent is unavailable for this reviewer.",
       );
       return;
     }
     const routedReviewCommand = {
       ...configuredReviewCommand,
-      runMode: reviewRunModeDecision.explicitRunModeSupported
-        ? reviewRunModeDecision.runMode : undefined,
+      runMode: runModeDecision.explicitRunModeSupported
+        ? runModeDecision.runMode : undefined,
     };
     if (futureScheduledDraftSendAt) {
       if (props.launchpad) {
@@ -6126,6 +6185,29 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     });
   };
 
+  const selectReviewPullRequest = (
+    config: ReviewConfigState,
+    pullRequestUrl: string | undefined,
+  ): ReviewConfigState => {
+    const option = reviewPullRequestOptions.find((candidate) => candidate.pr.url === pullRequestUrl);
+    const workspaceCwd = option?.workspaces.includes(config.workspaceCwd ?? "")
+      ? config.workspaceCwd : option?.workspaces[0] ?? config.workspaceCwd;
+    if (workspaceCwd === config.workspaceCwd) return { ...config, pullRequestUrl };
+    const directory = findReviewDirectoryForWorkspace({
+      directories: props.directories,
+      directory: props.directory,
+      thread: props.thread,
+      workspaceCwd,
+    });
+    return {
+      ...config,
+      pullRequestUrl,
+      workspaceCwd,
+      branch: buildReviewBranchOptions({ directory })[0] ?? "main",
+      branchSource: "auto",
+    };
+  };
+
   const getReviewConfigWithTarget = (
     target: ReviewTargetChoice,
     base?: ReviewConfigState,
@@ -6146,7 +6228,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
             ? reviewPullRequests[0]?.url
             : undefined)
         : current.pullRequestUrl;
-    return { ...current, pullRequestUrl, target };
+    return target === "pullRequest"
+      ? selectReviewPullRequest({ ...current, target }, pullRequestUrl)
+      : { ...current, target };
   };
 
   const selectReviewTarget = (
@@ -9414,6 +9498,27 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       };
   const reviewSubmissionUnavailable =
     reviewRunModeDecision.submissionUnavailable;
+  // A PR from another attached repository moves the review to that project
+  // and forces its run mode, and both controls sit away from the picker. Say
+  // so beside the choice, in the resolver's words, so this line and the mode
+  // chip's tooltip cannot disagree.
+  const reviewPullRequestWorkspaceNote =
+    reviewConfig?.target === "pullRequest"
+    && selectedReviewPullRequest
+    && reviewWorkspaceSelectionRequired
+    && reviewConfig.workspaceCwd
+    && props.thread
+    && !reviewWorkspacePathMatches(
+      reviewConfig.workspaceCwd,
+      findPrimaryReviewWorkspaceCwd(props.thread),
+    )
+      ? [
+          `Reviews in ${reviewWorkspaceOptions.find((option) =>
+            option.cwd === reviewConfig.workspaceCwd
+          )?.label ?? reviewConfig.workspaceCwd}.`,
+          reviewRunModeDecision.helpText,
+        ].filter(Boolean).join(" ")
+      : undefined;
   // A remembered combination is only offered while it still resolves against
   // the owner's current catalog. Recents are disposable, so a dead row is
   // noise rather than a preference worth preserving.
@@ -11150,7 +11255,12 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                       branch,
                       branchSource: "auto",
                       workspaceCwd,
-                      pullRequestUrl: undefined,
+                      // Choosing a PR picks its project, so the reverse keeps
+                      // a PR that this project can also review.
+                      pullRequestUrl: reviewPullRequestOptions.some((option) =>
+                        option.pr.url === current?.pullRequestUrl
+                        && option.workspaces.includes(workspaceCwd)
+                      ) ? current?.pullRequestUrl : undefined,
                     }));
                     setSendError(undefined);
                   }}
@@ -11212,14 +11322,16 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                   className="composer__review-input"
                   ref={reviewPullRequestSelectRef}
                   value={selectedReviewPullRequest?.url ?? ""}
-                  onChange={(event) => setReviewConfig((current) => current
-                    ? { ...current, pullRequestUrl: event.target.value }
-                    : current)}
+                  onChange={(event) => {
+                    const url = event.target.value;
+                    setReviewConfig((current) => current ? selectReviewPullRequest(current, url) : current);
+                    setSendError(undefined);
+                  }}
                 >
                   <option value="" disabled>Choose pull request</option>
                   {reviewPullRequests.map((pr) => (
                     <option key={pr.url} value={pr.url}>
-                      {`#${pr.number} ${pr.title ?? "Untitled pull request"}`}
+                      {`${reviewPullRequestRepositoryLabel(pr)}#${pr.number} ${pr.title ?? "Untitled pull request"}`}
                       {pr.headRefName ? ` — ${pr.headRefName}` : ""}
                     </option>
                   ))}
@@ -11243,6 +11355,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                   <small>
                     This checkout is clean and sits on this pull request&apos;s
                     head, so a local review would cover the same commits.
+                  </small>
+                ) : null}
+                {reviewPullRequestWorkspaceNote ? (
+                  <small className="composer__review-workspace-note">
+                    {reviewPullRequestWorkspaceNote}
                   </small>
                 ) : null}
               </label>

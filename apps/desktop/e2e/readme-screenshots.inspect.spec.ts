@@ -3,9 +3,12 @@ import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test, type ElectronApplication } from "@playwright/test";
-import { bringToFront } from "./fixtures/capture-window-placement";
+import {
+  bringToFront,
+  captureOwnerPidArg,
+  captureWhileFocused,
+} from "./fixtures/capture-window-placement";
 import { launchElectronApp } from "./fixtures/electron-app";
-import { captureWindowPng } from "./fixtures/native-capture";
 import { resolveScreenshotAppearance } from "./fixtures/screenshot-appearance";
 
 // Resolved once per spec module from PWRAGENT_SCREENSHOT_THEME /
@@ -48,6 +51,10 @@ import {
 const specDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(specDir, "../../..");
 const screenshotDir = path.join(repoRoot, "docs/assets/screenshots");
+const captureScript = path.resolve(
+  specDir,
+  "../scripts/capture-window.swift",
+);
 
 const WINDOW_SIZE = { width: 1440, height: 900 } as const;
 
@@ -96,10 +103,22 @@ async function captureNative(
   options?: { titleSubstring?: string },
 ): Promise<void> {
   mkdirSync(screenshotDir, { recursive: true });
-  await captureWindowPng(
-    electronApp,
-    path.join(screenshotDir, outputBasename),
-    options,
+  const outputPath = path.join(screenshotDir, outputBasename);
+  const args = ["Electron", outputPath, await captureOwnerPidArg(electronApp)];
+  if (options?.titleSubstring) {
+    args.push(`--title=${options.titleSubstring}`);
+  }
+  // The Swift script refuses a sub-Retina capture and tells the operator to
+  // "Pass --allow-low-dpi" — which is only actionable if something here can
+  // pass it. On a 1x-only machine (external-display-only desk, a VM, the
+  // Tart lab guest) this is the difference between a documented override
+  // and one that requires editing the spec.
+  if (process.env.PWRAGENT_SCREENSHOT_ALLOW_LOW_DPI === "1") {
+    args.push("--allow-low-dpi");
+  }
+  await captureWhileFocused(
+    () => execFileSync(captureScript, args, { stdio: "inherit" }),
+    () => bringToFront(electronApp, options?.titleSubstring),
   );
 }
 
@@ -507,6 +526,9 @@ test("pairing — Generate → observe → approve sequence (animated GIF)", asy
   mkdirSync(screenshotDir, { recursive: true });
 
   try {
+    // The app stays up for all three frames, so one PID serves them all.
+    const ownerPidArg = await captureOwnerPidArg(app.electronApp);
+
     // ──────── FRAME 1: Generate clicked, pair code visible ────────
     await navigateToTelegramPairing(app);
 
@@ -533,7 +555,10 @@ test("pairing — Generate → observe → approve sequence (animated GIF)", asy
     await expect(pairCode).toBeVisible({ timeout: 10_000 });
 
     await bringToFront(app.electronApp);
-    await captureWindowPng(app.electronApp, frame1Path);
+    await captureWhileFocused(
+      () => execFileSync(captureScript, ["Electron", frame1Path, ownerPidArg], { stdio: "inherit" }),
+      () => bringToFront(app.electronApp),
+    );
 
     // ──────── FRAME 2: observed entry, approval prompt visible ────────
     // Look up the row the renderer just generated and mutate it to
@@ -576,7 +601,10 @@ test("pairing — Generate → observe → approve sequence (animated GIF)", asy
     await expect(telegramApproveButton).toBeVisible({ timeout: 10_000 });
 
     await bringToFront(app.electronApp);
-    await captureWindowPng(app.electronApp, frame2Path);
+    await captureWhileFocused(
+      () => execFileSync(captureScript, ["Electron", frame2Path, ownerPidArg], { stdio: "inherit" }),
+      () => bringToFront(app.electronApp),
+    );
 
     // ──────── FRAME 3: approved — user lands in Authorized Users ────────
     // Click Approve. This triggers `approveMessagingPairing` IPC,
@@ -607,7 +635,10 @@ test("pairing — Generate → observe → approve sequence (animated GIF)", asy
       });
 
     await bringToFront(app.electronApp);
-    await captureWindowPng(app.electronApp, frame3Path);
+    await captureWhileFocused(
+      () => execFileSync(captureScript, ["Electron", frame3Path, ownerPidArg], { stdio: "inherit" }),
+      () => bringToFront(app.electronApp),
+    );
 
     // ──────── Stitch into a looping GIF ────────
     stitchGif({

@@ -8,6 +8,7 @@ import {
   type MessagingChannelKind,
   type MessagingSenderSuggestion,
 } from "@pwragent/shared";
+import { Select, type SelectOption } from "../../components/Select";
 import { CloseIcon } from "../../icons";
 import { AutomationSenderPicker } from "./AutomationSenderPicker";
 
@@ -38,6 +39,10 @@ const FIELD_LABELS: Readonly<Record<AutomationInboundConditionField, string>> = 
   sender: "Sender",
   sender_type: "Sender type",
 };
+
+const FIELD_OPTIONS: readonly SelectOption<AutomationInboundConditionField>[] = (
+  Object.keys(FIELD_LABELS) as AutomationInboundConditionField[]
+).map((field) => ({ value: field, label: FIELD_LABELS[field] }));
 
 const OPERATOR_LABELS: Readonly<
   Record<AutomationInboundConditionOperator, string>
@@ -178,11 +183,11 @@ export function AutomationConditionEditor(
             <div className="automation-condition__card">
               <label className="automation-condition__control">
                 <span className="automation-condition__label">Field</span>
-                <select
+                <Select
                   className="automation-condition__select"
                   value={condition.field}
-                  onChange={(event) => {
-                    const field = event.target.value as AutomationInboundConditionField;
+                  options={FIELD_OPTIONS}
+                  onChange={(field) => {
                     // Operators are field-scoped, so switching fields must also
                     // land on an operator that field actually offers — and the
                     // old value is meaningless in the new field.
@@ -192,35 +197,22 @@ export function AutomationConditionEditor(
                       values: field === "message_text" ? [""] : [],
                     });
                   }}
-                >
-                  {(
-                    Object.keys(FIELD_LABELS) as AutomationInboundConditionField[]
-                  ).map((field) => (
-                    <option key={field} value={field}>
-                      {FIELD_LABELS[field]}
-                    </option>
-                  ))}
-                </select>
+                />
               </label>
 
               <label className="automation-condition__control">
                 <span className="automation-condition__label">Operator</span>
-                <select
+                <Select
                   className="automation-condition__select"
                   value={condition.operator}
-                  onChange={(event) =>
-                    updateCondition(condition.id, {
-                      operator: event.target
-                        .value as AutomationInboundConditionOperator,
-                    })
+                  options={OPERATORS_BY_FIELD[condition.field].map((operator) => ({
+                    value: operator,
+                    label: OPERATOR_LABELS[operator],
+                  }))}
+                  onChange={(operator) =>
+                    updateCondition(condition.id, { operator })
                   }
-                >
-                  {OPERATORS_BY_FIELD[condition.field].map((operator) => (
-                    <option key={operator} value={operator}>
-                      {OPERATOR_LABELS[operator]}
-                    </option>
-                  ))}
-                </select>
+                />
               </label>
 
               <div className="automation-condition__value">
@@ -245,19 +237,14 @@ export function AutomationConditionEditor(
                 ) : condition.field === "sender_type" ? (
                   <label>
                     <span className="automation-condition__label">Sender type</span>
-                    <select
+                    <Select
                       className="automation-condition__select"
                       value={condition.values[0] ?? "human"}
-                      onChange={(event) =>
-                        updateCondition(condition.id, { values: [event.target.value] })
+                      options={SENDER_TYPE_VALUES}
+                      onChange={(value) =>
+                        updateCondition(condition.id, { values: [value] })
                       }
-                    >
-                      {SENDER_TYPE_VALUES.map((entry) => (
-                        <option key={entry.value} value={entry.value}>
-                          {entry.label}
-                        </option>
-                      ))}
-                    </select>
+                    />
                   </label>
                 ) : (
                   <AutomationSenderPicker

@@ -536,8 +536,12 @@ export class FederationGatewayWebSocketServer {
     for (const client of wsServer?.clients ?? []) {
       client.close();
     }
-    await new Promise<void>((resolve) => wsServer?.close(() => resolve()) ?? resolve());
-    await new Promise<void>((resolve) => httpServer?.close(() => resolve()) ?? resolve());
+    if (wsServer) {
+      await new Promise<void>((resolve) => wsServer.close(() => resolve()));
+    }
+    if (httpServer) {
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    }
   }
 
   closePeer(peerId: FederationInstanceId): boolean {

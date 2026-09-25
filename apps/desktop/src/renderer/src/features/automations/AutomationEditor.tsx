@@ -45,6 +45,7 @@ import {
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { MessagingSurfacePicker } from "../../components/MessagingSurfacePicker";
+import { Select, type SelectOption } from "../../components/Select";
 import {
   CODEX_AGENT_THREAD_CREATION_NOTE,
   canChangeExistingThreadAgentDesignation,
@@ -126,6 +127,35 @@ export const INBOUND_PROVIDER_LABELS: Partial<Record<MessagingChannelKind, strin
 const DEFAULT_INBOUND_PROVIDERS: MessagingChannelKind[] = ["slack", "telegram"];
 
 const MANUAL_GROUP_VALUE = "__manual__";
+
+const INTERVAL_UNIT_OPTIONS: readonly SelectOption<"minutes" | "hours">[] = [
+  { value: "minutes", label: "Minutes" },
+  { value: "hours", label: "Hours" },
+];
+
+const LOOKBACK_RUN_OPTIONS: readonly SelectOption[] = ["1", "3", "5", "10", "20"].map(
+  (count) => ({ value: count, label: count === "1" ? "1 run" : `${count} runs` }),
+);
+
+// "" = no age bound (count-only lookback).
+const LOOKBACK_AGE_OPTIONS: readonly SelectOption[] = [
+  { value: String(15 * 60 * 1000), label: "15 minutes" },
+  { value: String(60 * 60 * 1000), label: "1 hour" },
+  { value: String(6 * 60 * 60 * 1000), label: "6 hours" },
+  { value: String(24 * 60 * 60 * 1000), label: "24 hours" },
+  { value: "", label: "Any age" },
+];
+
+const BACKLOG_POLICY_OPTIONS: readonly SelectOption<AutomationBacklogPolicy>[] = [
+  { value: "coalesce", label: "Coalesce missed runs" },
+  { value: "drop_missed", label: "Drop missed runs" },
+];
+
+const RESULT_MODE_OPTIONS: readonly SelectOption<ResultMode>[] = [
+  { value: "reply_source", label: "Reply where the message came from" },
+  { value: "different", label: "Send to a different conversation" },
+  { value: "agent_only", label: "Only the Agent (no message back)" },
+];
 
 type ProviderConversation = {
   id: string;
@@ -309,7 +339,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
   // Every list action unmounts the control that was clicked (a chip becomes
   // the edited one, a button hides, a chip goes away), so focus moves to the
   // first field of the source now being edited, after that render lands.
-  const providerSelectRef = useRef<HTMLSelectElement>(null);
+  const providerSelectRef = useRef<HTMLButtonElement>(null);
   const fieldsFocusPendingRef = useRef(false);
   useEffect(() => {
     if (!fieldsFocusPendingRef.current) return;
@@ -517,6 +547,10 @@ export function AutomationEditor(props: AutomationEditorProps) {
     enabledProviders === undefined || enabledProviders.length === 0
       ? enabledProviders ?? DEFAULT_INBOUND_PROVIDERS
       : enabledProviders;
+  const providerOptions = availableProviders.map((provider) => ({
+    value: provider,
+    label: INBOUND_PROVIDER_LABELS[provider] ?? provider,
+  }));
   const noProvidersEnabled =
     enabledProviders !== undefined && enabledProviders.length === 0;
 
@@ -1726,15 +1760,11 @@ export function AutomationEditor(props: AutomationEditorProps) {
                     </label>
                     <label className="automation-field automation-field--compact">
                       <span>Unit</span>
-                      <select
+                      <Select
                         value={intervalUnit}
-                        onChange={(event) =>
-                          setIntervalUnit(event.currentTarget.value as "minutes" | "hours")
-                        }
-                      >
-                        <option value="minutes">Minutes</option>
-                        <option value="hours">Hours</option>
-                      </select>
+                        options={INTERVAL_UNIT_OPTIONS}
+                        onChange={setIntervalUnit}
+                      />
                     </label>
                   </div>
                 ) : (
@@ -1886,26 +1916,19 @@ export function AutomationEditor(props: AutomationEditorProps) {
                   <div className="automation-inline-fields">
                     <label className="automation-field">
                       <span>Provider</span>
-                      <select
+                      <Select
                         ref={providerSelectRef}
                         value={inboundProvider}
-                        onChange={(event) => {
-                          setInboundProvider(
-                            event.currentTarget.value as MessagingChannelKind,
-                          );
+                        options={providerOptions}
+                        onChange={(provider) => {
+                          setInboundProvider(provider);
                           setGroupSelection("");
                           setInboundGroupId("");
                           setTopicSelection("");
                           setInboundTopicId("");
                           setValidationError(undefined);
                         }}
-                      >
-                        {availableProviders.map((provider) => (
-                          <option key={provider} value={provider}>
-                            {INBOUND_PROVIDER_LABELS[provider] ?? provider}
-                          </option>
-                        ))}
-                      </select>
+                      />
                     </label>
                     {telegramGroups.length > 0 ? (
                       <div className="automation-field automation-field--picker">
@@ -2327,19 +2350,17 @@ export function AutomationEditor(props: AutomationEditorProps) {
                   <div className="automation-field-group">
                     <label className="automation-field automation-field--compact">
                       <span>Coalesce window</span>
-                      <select
+                      <Select
                         value={coalesceWindowSeconds}
-                        onChange={(event) => {
-                          setCoalesceWindowSeconds(event.currentTarget.value);
+                        options={coalesceWindowOptions.map((option) => ({
+                          value: option,
+                          label: formatCoalesceWindow(Number(option)),
+                        }))}
+                        onChange={(option) => {
+                          setCoalesceWindowSeconds(option);
                           setValidationError(undefined);
                         }}
-                      >
-                        {coalesceWindowOptions.map((option) => (
-                          <option key={option} value={option}>
-                            {formatCoalesceWindow(Number(option))}
-                          </option>
-                        ))}
-                      </select>
+                      />
                     </label>
                     <p className="automation-field__hint">
                       The first matching message runs immediately; more messages within
@@ -2351,20 +2372,20 @@ export function AutomationEditor(props: AutomationEditorProps) {
                   <div className="automation-field-group">
                     <label className="automation-field automation-field--compact">
                       <span>Max runs per hour</span>
-                      <select
+                      <Select
                         value={maxRunsPerHour}
-                        onChange={(event) => {
-                          setMaxRunsPerHour(event.currentTarget.value);
+                        options={[
+                          ...runRateOptions.map((option) => ({
+                            value: option,
+                            label: `${option}/hr`,
+                          })),
+                          { value: "unlimited", label: "Unlimited" },
+                        ]}
+                        onChange={(option) => {
+                          setMaxRunsPerHour(option);
                           setValidationError(undefined);
                         }}
-                      >
-                        {runRateOptions.map((option) => (
-                          <option key={option} value={option}>
-                            {option}/hr
-                          </option>
-                        ))}
-                        <option value="unlimited">Unlimited</option>
-                      </select>
+                      />
                     </label>
                     <p className="automation-field__hint">
                       Hard cap on how many inbound-triggered runs this automation starts
@@ -2486,29 +2507,19 @@ export function AutomationEditor(props: AutomationEditorProps) {
             <div className="automation-inline-fields">
               <label className="automation-field automation-field--compact">
                 <span>Include up to</span>
-                <select
+                <Select
                   value={lookbackRuns}
-                  onChange={(event) => setLookbackRuns(event.currentTarget.value)}
-                >
-                  {["1", "3", "5", "10", "20"].map((count) => (
-                    <option key={count} value={count}>
-                      {count === "1" ? "1 run" : `${count} runs`}
-                    </option>
-                  ))}
-                </select>
+                  options={LOOKBACK_RUN_OPTIONS}
+                  onChange={setLookbackRuns}
+                />
               </label>
               <label className="automation-field automation-field--compact">
                 <span>No older than</span>
-                <select
+                <Select
                   value={lookbackAgeMs}
-                  onChange={(event) => setLookbackAgeMs(event.currentTarget.value)}
-                >
-                  <option value={String(15 * 60 * 1000)}>15 minutes</option>
-                  <option value={String(60 * 60 * 1000)}>1 hour</option>
-                  <option value={String(6 * 60 * 60 * 1000)}>6 hours</option>
-                  <option value={String(24 * 60 * 60 * 1000)}>24 hours</option>
-                  <option value="">Any age</option>
-                </select>
+                  options={LOOKBACK_AGE_OPTIONS}
+                  onChange={setLookbackAgeMs}
+                />
               </label>
             </div>
           ) : null}
@@ -2805,15 +2816,11 @@ export function AutomationEditor(props: AutomationEditorProps) {
 
           <label className="automation-field">
             <span>Backlog</span>
-            <select
+            <Select
               value={backlogPolicy}
-              onChange={(event) =>
-                setBacklogPolicy(event.currentTarget.value as AutomationBacklogPolicy)
-              }
-            >
-              <option value="coalesce">Coalesce missed runs</option>
-              <option value="drop_missed">Drop missed runs</option>
-            </select>
+              options={BACKLOG_POLICY_OPTIONS}
+              onChange={setBacklogPolicy}
+            />
           </label>
           </details>
         </AutomationStage>
@@ -3012,19 +3019,14 @@ export function AutomationEditor(props: AutomationEditorProps) {
                       <div className="automation-field-group">
                         <label className="automation-field">
                           <span>Where should the result go?</span>
-                          <select
+                          <Select
                             value={resultMode}
-                            onChange={(event) => {
-                              setResultMode(event.currentTarget.value as ResultMode);
+                            options={RESULT_MODE_OPTIONS}
+                            onChange={(mode) => {
+                              setResultMode(mode);
                               setValidationError(undefined);
                             }}
-                          >
-                            <option value="reply_source">
-                              Reply where the message came from
-                            </option>
-                            <option value="different">Send to a different conversation</option>
-                            <option value="agent_only">Only the Agent (no message back)</option>
-                          </select>
+                          />
                         </label>
                         <p className="automation-field__hint">
                           The Agent thread always gets the analysis as context. This controls
@@ -3036,22 +3038,23 @@ export function AutomationEditor(props: AutomationEditorProps) {
                         <>
                           <label className="automation-field">
                             <span>Reply location</span>
-                            <select
+                            <Select
                               value={replyDestination}
-                              onChange={(event) => {
-                                setReplyDestination(
-                                  event.currentTarget.value as AutomationSourceMessageDestination,
-                                );
+                              options={[
+                                {
+                                  value: "source_thread",
+                                  label: replyThreadLabel(inboundProvider),
+                                },
+                                {
+                                  value: "source_channel",
+                                  label: replyChannelLabel(inboundProvider),
+                                },
+                              ]}
+                              onChange={(destination) => {
+                                setReplyDestination(destination);
                                 setValidationError(undefined);
                               }}
-                            >
-                              <option value="source_thread">
-                                {replyThreadLabel(inboundProvider)}
-                              </option>
-                              <option value="source_channel">
-                                {replyChannelLabel(inboundProvider)}
-                              </option>
-                            </select>
+                            />
                           </label>
                           {inboundProvider === "slack" ? (
                             <label className="automation-checkbox">
@@ -3073,24 +3076,17 @@ export function AutomationEditor(props: AutomationEditorProps) {
                           <div className="automation-inline-fields">
                             <label className="automation-field">
                               <span>Destination provider</span>
-                              <select
+                              <Select
                                 value={destProvider}
-                                onChange={(event) => {
-                                  setDestProvider(
-                                    event.currentTarget.value as MessagingChannelKind,
-                                  );
+                                options={providerOptions}
+                                onChange={(provider) => {
+                                  setDestProvider(provider);
                                   setDestGroupSelection("");
                                   setDestGroupId("");
                                   setDestTopicId("");
                                   setValidationError(undefined);
                                 }}
-                              >
-                                {availableProviders.map((provider) => (
-                                  <option key={provider} value={provider}>
-                                    {INBOUND_PROVIDER_LABELS[provider] ?? provider}
-                                  </option>
-                                ))}
-                              </select>
+                              />
                             </label>
                             {destGroups.length > 0 ? (
                               <div className="automation-field automation-field--picker">

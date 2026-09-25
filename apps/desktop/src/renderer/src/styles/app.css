@@ -11385,6 +11385,154 @@ a.button {
   background-color: var(--bg-panel-hover);
 }
 
+/* ============================================================
+   Select (components/Select.tsx) — the app's single-choice field,
+   in place of a native `<select>`, whose macOS menu CSS cannot reach.
+
+   The closed trigger takes its chrome (border, fill, height, type,
+   focus) from the surface it sits in: `.automation-field
+   .select-trigger`, `.automation-condition__select`. These rules draw
+   only what every trigger shares: one line that ellipsizes, and the
+   `.settings-select` chevron. The chevron is an element rather than a
+   background image, so a surface rule that sets the `background`
+   shorthand cannot erase it.
+
+   The list is the popover paint of the shared picker panel below
+   (`.messaging-surface-picker__panel`): a `--border-strong` rim, a
+   tinted lift, and rows with the popover highlight.
+   ============================================================ */
+.select-trigger {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  appearance: none;
+  text-align: left;
+  cursor: pointer;
+}
+
+.select-trigger:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.select-trigger__value {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.select-trigger__value--placeholder {
+  color: var(--text-muted);
+}
+
+/* The same two 5px triangles `.settings-select` paints, so a Select and a
+   surface picker side by side in one form draw one chevron. */
+.select-trigger__chevron {
+  flex: 0 0 10px;
+  width: 10px;
+  height: 5px;
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--text-muted) 50%),
+    linear-gradient(135deg, var(--text-muted) 50%, transparent 50%);
+  background-position:
+    0 0,
+    5px 0;
+  background-repeat: no-repeat;
+  background-size: 5px 5px;
+}
+
+/* Portalled to `document.body` and placed `fixed` against the trigger.
+   `top`, `left`, `min-width` and `max-height` are set inline from that
+   measurement.
+
+   The layer has to clear Settings and Automations (`z-index: 120`), which
+   are full-window surfaces in the same root stacking context, as
+   `.messaging-surface-picker__panel` does. Its typography is set outright
+   because nothing in the body is a field to inherit it from. */
+.select-listbox {
+  position: fixed;
+  z-index: 150;
+  width: max-content;
+  max-width: min(420px, calc(100vw - 24px));
+  padding: 4px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+  box-shadow: 0 12px 28px var(--shadow-tint-soft);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.35;
+}
+
+/* 4px radius inside the list's 4px padding keeps the corners concentric
+   with its 8px rim. The scroll margin is that padding, so an arrow key that
+   scrolls to either end shows the whole first or last row. */
+.select-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-height: 28px;
+  padding: 5px 10px 5px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  scroll-margin-block: 4px;
+}
+
+/* The keyboard cursor, which the pointer also moves, so there is no
+   separate hover paint. It is the popover highlight plus the inset ring an
+   `aria-activedescendant` row takes (UI-THEME.md, "Focus rings"): DOM
+   focus stays on the trigger, and this is the row Enter picks. */
+.select-option.is-active {
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.select-option[aria-disabled="true"] {
+  color: var(--text-muted);
+  cursor: default;
+}
+
+/* Leading check column, as in the composer and project pickers. One line
+   tall, so it sits on the label's line when a description wraps below. */
+.select-option__check {
+  display: inline-flex;
+  flex: 0 0 12px;
+  width: 12px;
+  height: 1lh;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent-bright);
+}
+
+.select-option__body {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.select-option__label {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Stays muted on the cursor row: it is the supporting clause, not the name
+   being picked. Matches `.composer-dropdown__option-description`. */
+.select-option__description {
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+
 .settings-input--invalid {
   border-color: var(--danger-border);
   box-shadow: 0 0 0 1px var(--status-error-ring-soft);
@@ -26082,12 +26230,12 @@ a.transcript-message__messaging-origin:focus-visible {
    unfinished, and a wide target for a two-character number is harder to scan,
    not easier. Widths are max-widths so narrow windows still collapse. */
 .automation-field--narrow input,
-.automation-field--narrow select {
+.automation-field--narrow .select-trigger {
   max-width: 116px;
 }
 
 .automation-field--compact input,
-.automation-field--compact select {
+.automation-field--compact .select-trigger {
   max-width: 196px;
 }
 
@@ -26101,7 +26249,7 @@ a.transcript-message__messaging-origin:focus-visible {
    drew a second outline around the native one. The sender picker's token
    field wears the same chrome around its bare input. */
 .automation-field input,
-.automation-field select,
+.automation-field .select-trigger,
 .automation-field textarea,
 .automation-condition__select,
 .automation-condition__input,
@@ -26116,14 +26264,14 @@ a.transcript-message__messaging-origin:focus-visible {
 }
 
 .automation-field input,
-.automation-field select,
+.automation-field .select-trigger,
 .automation-condition__select,
 .automation-condition__input {
   min-height: 32px;
   padding: 0 9px;
 }
 
-/* The surface picker's trigger stands in for `.automation-field select` here,
+/* The surface picker's trigger stands in for a Select trigger here,
    so it takes that control's chrome instead of the Settings field it was
    first built for. Only the background and type differ between the two; the
    chevron, border and radius come from `.settings-select` unchanged. */
@@ -26151,7 +26299,7 @@ a.transcript-message__messaging-origin:focus-visible {
 }
 
 .automation-field input:focus,
-.automation-field select:focus,
+.automation-field .select-trigger:focus,
 .automation-field textarea:focus,
 .automation-condition__select:focus,
 .automation-condition__input:focus,
@@ -33386,9 +33534,11 @@ button.pricing-token-miser__folded:focus-visible {
   line-height: 1.4;
 }
 
-/* What a local review would cover that the picked target will not. Carried by
-   wording, not by color alone — it is a distinction, not an error. */
-.composer__review-field small.composer__review-divergence {
+/* What a local review would cover that the picked target will not, or where a
+   picked PR moved the review and how it will run. Carried by wording, not by
+   color alone — it is a distinction, not an error. */
+.composer__review-field small.composer__review-divergence,
+.composer__review-field small.composer__review-workspace-note {
   color: var(--text-primary);
 }
 

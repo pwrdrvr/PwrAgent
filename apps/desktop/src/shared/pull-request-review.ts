@@ -31,6 +31,7 @@ export function pullRequestReviewPromptUrl(value: string): string | undefined {
 export function attachedPullRequestsForWorkspace(params: {
   prs: PrSummary[];
   cwd?: string;
+  repositoryPath?: string;
   repository?: string;
 }): PrSummary[] {
   if (!params.cwd) return [];
@@ -43,7 +44,8 @@ export function attachedPullRequestsForWorkspace(params: {
     return match ? `${match[1]}/${match[2]}/${match[3]}`.toLowerCase() : "";
   };
   const scoped = params.prs.filter((pr) => pr.linkedDirectoryPaths?.some(
-    (path) => normalizePath(path) === normalizePath(params.cwd!),
+    (path) => normalizePath(path) === normalizePath(params.cwd!)
+      || (params.repositoryPath && normalizePath(path) === normalizePath(params.repositoryPath)),
   ));
   const repositories = new Set([
     ...(params.repository ? [params.repository.toLowerCase()] : []),

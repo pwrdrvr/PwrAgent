@@ -1,7 +1,8 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AutomationInboundConditionGroup } from "@pwragent/shared";
+import { chooseSelectOption } from "../../../test/select";
 import { AutomationConditionEditor } from "../AutomationConditionEditor";
 
 afterEach(() => {
@@ -63,9 +64,17 @@ describe("AutomationConditionEditor", () => {
   it("gives every control the field chrome", () => {
     const { container } = renderEditor();
 
+    // The choices are themed Selects: a native `<select>` opens the macOS
+    // system menu, which CSS cannot reach.
+    expect(container.querySelector(".automation-condition__card select")).toBeNull();
+    // Field and Operator on each card.
+    expect(
+      container.querySelectorAll(".automation-condition__card button[role='combobox']"),
+    ).toHaveLength(4);
+
     // An unclassed control falls back to Chromium's native grey field.
     for (const control of container.querySelectorAll(
-      ".automation-condition__card select, .automation-condition__card input",
+      ".automation-condition__card button[role='combobox'], .automation-condition__card input",
     )) {
       expect(
         control.classList.contains("automation-condition__select")
@@ -123,5 +132,38 @@ describe("AutomationConditionEditor", () => {
       "placeholder",
       "Add a sender — search people, bots, or apps…",
     );
+  });
+
+  it("moves a condition to the new field's first operator and an empty value", () => {
+    const onChange = vi.fn();
+    render(
+      <AutomationConditionEditor
+        conversationId="C0ALERTS"
+        group={GROUP}
+        observedSenders={[]}
+        provider="slack"
+        senderLabels={{}}
+        onChange={onChange}
+        onSenderLabelsChange={() => undefined}
+      />,
+    );
+
+    const fields = screen.getAllByRole("combobox", { name: "Field" });
+    expect(fields).toHaveLength(2);
+    expect(fields[1]).toHaveTextContent("Message text");
+    chooseSelectOption(fields[1]!, "Sender type");
+
+    expect(onChange).toHaveBeenLastCalledWith({
+      join: "any",
+      conditions: [
+        GROUP.conditions[0],
+        {
+          id: "condition-text",
+          field: "sender_type",
+          operator: "is_one_of",
+          values: [],
+        },
+      ],
+    });
   });
 });

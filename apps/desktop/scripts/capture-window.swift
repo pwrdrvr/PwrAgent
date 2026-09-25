@@ -16,12 +16,20 @@ import Foundation
 //   capture-window.swift <owner-name-substring> <output-path>
 //   capture-window.swift <owner-name-substring> <output-path> --title=<title-substring>
 //   capture-window.swift <owner-name-substring> <output-path> --allow-low-dpi
+//   capture-window.swift <owner-name-substring> <output-path> --pid=<owner-pid>
 //
 // The owner-name substring is matched against `kCGWindowOwnerName`
 // case-insensitively. For an Electron-based app this is typically
 // "Electron" during dev or the productName from electron-builder for
 // signed builds. We pick the first on-screen, normal-layer window that
 // matches.
+//
+// "Electron" matches every unpackaged Electron app on the machine, so pass
+// `--pid=<owner-pid>` to restrict the match to windows owned by that
+// process. Without it, a docs-site run captured another Electron dev app
+// that was frontmost at the time and wrote it out as a PwrAgent
+// screenshot. The inactive-window check (exit 7) passed as well, because
+// the app it checked was the one that had been captured.
 //
 // When `--title=<substring>` is provided, the window's title
 // (`kCGWindowName`) must also contain that substring (case-insensitive)
@@ -45,14 +53,6 @@ import Foundation
 //     refused, not waved through. The replace itself goes through
 //     `replaceItemAt`, so a failure there cannot leave the destination
 //     missing.
-//   * macOS draws a window that is not key in the active app with grey
-//     traffic lights and a smaller shadow, which also changes the PNG's
-//     pixel size. Whoever runs the capture is usually working on the same
-//     machine, and one click elsewhere is enough. So the window must be
-//     drawn active both just before and just after `screencapture` runs,
-//     or the capture is refused (exit 7). A focus change during the
-//     capture would have to fail one of those two checks. The caller is
-//     expected to raise the window again and retry.
 //   * Screen Recording permission is required for `screencapture -l`.
 //     The first invocation triggers the system prompt; subsequent runs
 //     are silent. CI environments will need this granted to whichever
@@ -66,15 +66,13 @@ import Foundation
 //   5 — output file not produced, or could not be moved into place
 //   6 — capture came out below Retina scale, or could not be decoded to
 //       check (see --allow-low-dpi)
-//   7 — the window was not drawn active (its app was not frontmost, or
-//       another of the app's windows was in front of it) just before or
-//       just after the capture
+//   7 — the window's app was not the active app when the capture was taken
 
 let args = CommandLine.arguments
 
 let usage =
   "usage: capture-window.swift <owner-name-substring> <output-path> "
-  + "[--title=<title-substring>] [--allow-low-dpi]\n"
+  + "[--title=<title-substring>] [--pid=<owner-pid>] [--allow-low-dpi]\n"
 
 guard args.count >= 3 else {
   FileHandle.standardError.write(Data(usage.utf8))
@@ -85,10 +83,19 @@ let ownerSubstring = args[1]
 let outputPath = args[2]
 
 var titleSubstring: String? = nil
+var ownerPIDFilter: pid_t? = nil
 var allowLowResolution = false
 for raw in args.dropFirst(3) {
   if raw.hasPrefix("--title=") {
     titleSubstring = String(raw.dropFirst("--title=".count))
+  } else if raw.hasPrefix("--pid=") {
+    guard let pid = pid_t(raw.dropFirst("--pid=".count)), pid > 0 else {
+      FileHandle.standardError.write(
+        Data("--pid needs a positive process id, got '\(raw)'\n\(usage)".utf8)
+      )
+      exit(2)
+    }
+    ownerPIDFilter = pid
   } else if raw == "--allow-low-dpi" {
     allowLowResolution = true
   } else {
@@ -112,6 +119,9 @@ func windowMatches(_ info: [String: Any]) -> Bool {
   guard let owner = info[kCGWindowOwnerName as String] as? String,
     owner.localizedCaseInsensitiveContains(ownerSubstring)
   else { return false }
+  if let pid = ownerPIDFilter {
+    guard (info[kCGWindowOwnerPID as String] as? pid_t) == pid else { return false }
+  }
   // Only normal-layer windows; layer 0 is the standard application window.
   // Skip menus, popovers, sheets, drag images.
   guard let layer = info[kCGWindowLayer as String] as? Int, layer == 0 else { return false }
@@ -144,13 +154,48 @@ else {
   }
   .joined(separator: ", ")
   let titleClause = titleSubstring.map { " with title containing '\($0)'" } ?? ""
+  let pidClause = ownerPIDFilter.map { " owned by pid \($0)" } ?? ""
   FileHandle.standardError.write(
     Data(
-      "no on-screen window for owner matching '\(ownerSubstring)'\(titleClause) (on-screen windows: \(candidates))\n"
+      "no on-screen window for owner matching '\(ownerSubstring)'\(pidClause)\(titleClause) (on-screen windows: \(candidates))\n"
         .utf8
     )
   )
   exit(3)
+}
+
+// An inactive window is captured as it looks: grey traffic lights, dimmed
+// chrome, and a smaller shadow, which changes the PNG's size too. Every
+// check below passes it, and the noise filter keeps it as changed pixels,
+// so the window's app has to be the active app on both sides of the
+// capture. Another app taking focus back mid-run is what produced these.
+let ownerPID = target[kCGWindowOwnerPID as String] as? pid_t
+
+func ownerIsActive() -> Bool {
+  // NSWorkspace updates `frontmostApplication` from notifications, which
+  // arrive only while the run loop turns.
+  RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.05))
+  guard let ownerPID else { return false }
+  return NSWorkspace.shared.frontmostApplication?.processIdentifier == ownerPID
+}
+
+func refuseInactive(_ when: String) -> Never {
+  let active = NSWorkspace.shared.frontmostApplication?.localizedName ?? "another app"
+  FileHandle.standardError.write(
+    Data(
+      """
+      refusing to capture an inactive window: \(active) was the active app \(when), \
+      so the window would come out with grey traffic lights. Bring the window to \
+      the front and re-run. \(outputPath) was left untouched.
+
+      """.utf8
+    )
+  )
+  exit(7)
+}
+
+if !ownerIsActive() {
+  refuseInactive("before the capture")
 }
 
 // Logical (point) width of the window, used below to derive the backing
@@ -166,72 +211,6 @@ let logicalWidth = targetBounds?["Width"] ?? 0
 let stagingPath = FileManager.default.temporaryDirectory
   .appendingPathComponent("capture-window-\(UUID().uuidString).png")
   .path
-
-// Refuse a capture of a window macOS is not drawing as active. The check
-// runs just before and just after `screencapture`, so a focus change
-// during the capture fails one of them.
-let ownerPID = target[kCGWindowOwnerPID as String] as? pid_t ?? -1
-
-func frontmostPID() -> pid_t? {
-  // NSWorkspace updates `frontmostApplication` from notifications that
-  // arrive on the main run loop, and a script never runs one. Without
-  // this spin, every read after the first returns the value cached at
-  // that first read. Measured: an app switch 2.5 s into a run was
-  // invisible until the loop had run.
-  RunLoop.current.run(until: Date().addingTimeInterval(0.05))
-  return NSWorkspace.shared.frontmostApplication?.processIdentifier
-}
-
-/// `nil` when the window is drawn active, otherwise why it is not.
-func inactiveReason() -> String? {
-  guard let front = frontmostPID(), front == ownerPID else {
-    let front = NSWorkspace.shared.frontmostApplication
-    let name = front?.localizedName ?? "unknown"
-    let pid = front.map { String($0.processIdentifier) } ?? "?"
-    return "the frontmost app is \(name) (pid \(pid)), not the window's owner (pid \(ownerPID))"
-  }
-  // The key window of the active app is its front-most window. Fresh
-  // list: `infoList` was read before the script's startup cost.
-  let current =
-    CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
-    as? [[String: Any]] ?? []
-  let frontOfOwner = current.first { info in
-    guard (info[kCGWindowOwnerPID as String] as? pid_t) == ownerPID,
-      (info[kCGWindowLayer as String] as? Int) == 0,
-      let bounds = info[kCGWindowBounds as String] as? [String: CGFloat],
-      let width = bounds["Width"], width > 1,
-      let height = bounds["Height"], height > 1
-    else { return false }
-    return true
-  }
-  guard let frontWindow = frontOfOwner?[kCGWindowNumber as String] as? CGWindowID else {
-    return "the window is no longer on screen"
-  }
-  if frontWindow != windowNumber {
-    let title = frontOfOwner?[kCGWindowName as String] as? String ?? ""
-    return "another window of the same app (\(frontWindow) '\(title)') is in front of it"
-  }
-  return nil
-}
-
-func refuseInactive(_ moment: String, _ reason: String) -> Never {
-  try? FileManager.default.removeItem(atPath: stagingPath)
-  FileHandle.standardError.write(
-    Data(
-      """
-      refusing to write an inactive capture: \(moment), \(reason). macOS draws a \
-      window that is not key in the active app with grey traffic lights and a smaller \
-      shadow. \(outputPath) was left untouched. Raise the window and retry.
-
-      """.utf8
-    )
-  )
-  exit(7)
-}
-
-if let reason = inactiveReason() {
-  refuseInactive("before the capture", reason)
-}
 
 let process = Process()
 process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
@@ -272,15 +251,17 @@ if process.terminationStatus != 0 {
   exit(4)
 }
 
+// Focus lost during the capture shows only afterwards.
+if !ownerIsActive() {
+  try? FileManager.default.removeItem(atPath: stagingPath)
+  refuseInactive("when the capture finished")
+}
+
 guard FileManager.default.fileExists(atPath: stagingPath) else {
   FileHandle.standardError.write(
     Data("screencapture reported success but \(stagingPath) does not exist\n".utf8)
   )
   exit(5)
-}
-
-if let reason = inactiveReason() {
-  refuseInactive("after the capture", reason)
 }
 
 // `screencapture -l` renders at the backing scale of whichever display the

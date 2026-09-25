@@ -507,8 +507,8 @@ Two layers now prevent it:
 
 * `e2e/fixtures/capture-window-placement.ts` centers the window on a
   Retina display before every capture. It probes the displays once, on
-  the first capture of the run, and trusts that probe for the rest of
-  the run. Only 2x displays are eligible —
+  the first `bringToFront` of the run, and trusts that probe for the rest
+  of the run. Only 2x displays are eligible —
   a 1x panel cannot produce the asset at all — and among those it
   prefers one the window actually fits on, then the built-in panel (the
   usual laptop-docked-to-a-1x-monitor case), then the sharpest. It never
@@ -530,9 +530,20 @@ Two layers now prevent it:
   leave the destination missing. Pass `--allow-low-dpi` only if you
   genuinely want a 1x asset; both specs forward it when
   `PWRAGENT_SCREENSHOT_ALLOW_LOW_DPI=1`. If the probe found a Retina
-  display, a 1x refusal is retried: the window is placed again and
-  captured again (see focus below). If it found none, the refusal fails
-  the capture immediately.
+  display, `captureWhileFocused` treats a 1x refusal like an inactive-window
+  refusal. It raises the window, which places it back on the Retina
+  display, and captures again. If the probe found none, the refusal fails
+  the capture immediately, because every retry would land on the same 1x
+  display.
+
+Both specs pass `--pid=<Electron main pid>` to `capture-window.swift`
+through `captureOwnerPidArg`. The script's owner match is the name
+"Electron", and every unpackaged Electron app has that name. One run
+captured a different Electron dev app that was frontmost at the time,
+and wrote its window out as `settings-messaging-line.png`. The
+inactive-window check passed as well, because it checked the app that
+had been captured, and that app was active. Pass the PID on any new
+capture.
 
 Capturing off-screen is fine: `screencapture -l` pulls the window's
 full composited image from the window server, so the shadow is never
@@ -559,40 +570,57 @@ therefore parks the pointer at (-10, -10) via `sendInputEvent` after
 placing the window. No capture drives hover deliberately; if one ever
 needs to, it has to set the hover after `bringToFront`, not before.
 
-The window must also be key in the active app when it is photographed.
-macOS draws any other window inactive: grey traffic lights and a
-smaller shadow, so the PNG changes size too. The README
-closed-by-default capture is 2184x1664 px active and 2096x1576 px
-inactive. The noise filter keeps an inactive capture, because it has
-different pixels. Captures often run on a machine that someone is using.
-That person may not know a capture is running and can click another
-window at any moment. Three layers handle this:
+Scroll position is the third trap. Chromium snaps a scroll offset to the
+device pixels of the display the window is on when the scroll lands, and
+moving the window afterwards does not re-snap it. Settings → Messaging →
+Slack opens with a smooth scroll to its Connect section, which came to
+rest at `scrollTop` 171 when macOS opened the window on a 1x monitor and
+at 170.5 when it opened on the Retina panel. The two captures differed
+by one device pixel across the whole content pane, so the noise filter
+kept both. The docs-site spec therefore calls `bringToFront` once right
+after launch, before any navigation, as well as before each capture.
+`waitForSettingsScrollToSettle` then holds a Settings capture until the
+scroll pane has kept one `scrollTop` for 10 rendered frames, instead of
+trusting a fixed delay to outlast the ~250ms smooth scroll.
 
-* `bringToFront` activates with `app.focus({ steal: true })` and then
-  polls `win.isFocused()`. That call is `-[NSWindow isKeyWindow]`, which
-  is false for every window of an inactive app. The helper asks for
-  focus again until the check passes. It throws
-  `CaptureWindowNotFocusedError` after 10 s, and the error names the app
-  holding focus. The wait is long because macOS can refuse activation,
-  `steal` included, for several seconds while someone is busy in another
-  app.
-* `capture-window.swift` checks just before and just after
-  `screencapture` runs. The window's app must be frontmost, and the
-  window must be the front window of its app. If either check fails,
-  the script exits 7 and does not touch the destination. A focus change
-  during the capture fails one of the two checks.
-* `e2e/fixtures/native-capture.ts` (`captureWindowPng`) calls
-  `bringToFront` before every attempt and retries refusals by default:
-  exit 7, a `CaptureWindowNotFocusedError`, and exit 6 when the run has
-  a Retina display. It pauses 1 s before each retry and logs each one. A
-  capture gets 3 attempts. Set `PWRAGENT_SCREENSHOT_CAPTURE_ATTEMPTS` to
-  change that, or to `1` to turn retrying off. Every other failure
-  throws immediately.
+Content that changes on its own is the fourth trap. None of it is a
+rendering difference, so the noise filter keeps every variant. The
+docs-site spec pins each source it has met:
 
-Do not start two capture runs at the same time. Each run takes focus
-from the other, so both runs retry repeatedly and can still fail. While
-a run holds focus, typing goes into its window, so avoid typing during
-a capture.
+* **Motion.** `launchDocsSiteApp` emulates `prefers-reduced-motion`,
+  which parks the thinking scanner on its reduced-motion pose instead of
+  mid-sweep. It also hides the text caret, which blinks on Chromium's own
+  timer.
+* **Wall-clock time.** Captures that print a time launch with `TZ=UTC`.
+  `pinWallClock` pins `Date.now` in main and the renderer before a turn
+  stamps its rows, the way `visual-regression.spec.ts` does. Main stamps
+  a profile's `last_used` before the spec can reach it, so
+  `pinProfileLastUsed` rewrites `profiles.toml` after launch instead.
+* **Measured durations.** The thread context panel's "Initial load" row
+  reports how long the first read took, 0 or 1 ms against a replay.
+  `pinInitialLoad` sets it to a fixed value before the capture.
+* **Temp paths.** Settings → Worktrees prints a path under the home
+  root, so that capture launches on a fixed home root instead of an
+  `mkdtemp` one.
+* **Random tokens.** A pairing token exists only in the Generate
+  response; sqlite keeps its HMAC. `pinPairingToken` swaps the displayed
+  token for a fixed one of the same length.
+* **Host discovery.** Settings → AI Providers reads main's cached
+  provider catalog once, as the pane mounts. The spec waits for the
+  startup provider refresh to settle before opening it. The rows still
+  show whichever CLIs the capturing Mac has installed.
+
+What's left is GPU raster noise, which the spec doesn't pin. Any
+capture can come out with a few anti-aliased pixels, on rounded corners,
+icon strokes or glyph edges, a few levels off from the last run. Pairing
+frame 1's segment corners do it about one run in four. Rarely, one glyph
+comes out corrupt. `--disable-gpu-rasterization` isn't a fix. It moved
+the variance into other pixels and across batches of runs. Look at a
+diff that small before chasing it, and re-capture a corrupt glyph.
+
+Before adding a capture, check it for anything else in that list: dates,
+durations, generated IDs, temp paths, spinners, or discovery results.
+Then run the spec twice and compare decoded pixels, not PNG bytes.
 
 Pieces, all under `apps/desktop/`:
 
@@ -602,10 +630,9 @@ Pieces, all under `apps/desktop/`:
 | `e2e/docs-site-screenshots.inspect.spec.ts` | Tests producing PNGs for `docs.pwragent.ai` (Settings panels + per-provider Messaging panels + Recents hero + composer features + first-run onboarding wizard + live work rail). Gated behind `PWRAGENT_DOCS_SITE_SCREENSHOT_CAPTURE=1`. Output lands in the **sibling docs repo's** `assets/screenshots/` (default `~/github/docs.pwragent.ai/`, override with `PWRAGENT_DOCS_SITE_REPO`). |
 | `e2e/fixtures/readme-recents-hero/replay.fixture.json` | Hand-crafted populated thread list for the hero shot. Edit by hand to retune. |
 | `e2e/fixtures/readme-state-seeding.ts` | Direct sqlite/config seeders for messaging bindings, activity log entries, pairing tokens, and Telegram-enabled config. |
-| `e2e/fixtures/capture-window-placement.ts` | Shared `bringToFront` for both capture specs. Resolves the target window once (optionally by title substring, case-insensitively, matching `capture-window.swift --title=`), centers it on a Retina display so `screencapture` renders at 2x, then activates the app and raises the window so the window-list lookup resolves it, and waits until the window reports key (throws `CaptureWindowNotFocusedError` otherwise). Displays are probed on the first call of a run only. Exports the pure selection rule (`pickCaptureDisplay`, `centeredIn`, `overflowsWorkArea`) and the focus wait (`waitForWindowFocus`, `parseLsappinfoInfo`) so they can be tested. |
-| `e2e/fixtures/native-capture.ts` | `captureWindowPng`, the only way the specs run `capture-window.swift`. It raises the window with `bringToFront` before every attempt and retries refusals (exit 7, a focus timeout, and exit 6 when a Retina display exists). It defaults to 3 attempts, set by `PWRAGENT_SCREENSHOT_CAPTURE_ATTEMPTS`. It forwards `--allow-low-dpi` when `PWRAGENT_SCREENSHOT_ALLOW_LOW_DPI=1`. The retry rule (`classifyCaptureExit`, `retryCapture`, `captureAttemptsFromEnv`) is pure and unit-tested in `src/main/__tests__/native-capture.test.ts`. |
+| `e2e/fixtures/capture-window-placement.ts` | Shared `bringToFront` for both capture specs. Resolves the target window once (optionally by title substring, case-insensitively, matching `capture-window.swift --title=`), centers it on a Retina display so `screencapture` renders at 2x, then raises it and makes it the active app (`app.focus({ steal: true })`), waiting until focus holds for 2s so an app that takes focus back does so before the capture, not during it. `captureWhileFocused` wraps each capture: when `capture-window.swift` refuses an inactive window (exit 7), or a 1x capture (exit 6) while the run has a Retina display, it raises the window and captures again, up to 3 tries. Displays are probed on the first `bringToFront` of a run only. Exports the pure selection rule (`pickCaptureDisplay`, `centeredIn`, `overflowsWorkArea`) and the focus waits (`waitForSteadyFocus`, `captureWhileFocused`) so they can be tested. |
 | `e2e/fixtures/docs-site-state-seeding.ts` | All-providers-enabled `config.toml` seeder so the per-platform Settings → Messaging captures can scroll directly to each platform's section without driving the Enabled toggle in the UI. It also saves a Slack agent name (`PwrAgent - riley`), so the Slack capture shows Connect past its Name step instead of the suggestion built from the OS username of whoever runs it. |
-| `scripts/capture-window.swift` | Resolves the Electron window's CGWindowID and runs `screencapture -l <wid>`. Stages to a temp file and refuses (exit 6) to overwrite the destination with a sub-Retina capture, or with one it cannot decode to verify. It also refuses (exit 7) when the window is not drawn active just before or just after the shot: its app must be frontmost, and it must be that app's front window. Replaces atomically via `replaceItemAt`. Optional `--title=<substring>` for multi-window apps, `--allow-low-dpi` to bypass the scale check; an unrecognized argument is an error (exit 2), not a silent no-op. |
+| `scripts/capture-window.swift` | Resolves the Electron window's CGWindowID and runs `screencapture -l <wid>`. Stages to a temp file and refuses (exit 6) to overwrite the destination with a sub-Retina capture, or with one it cannot decode to verify. Replaces atomically via `replaceItemAt`. Also refuses (exit 7) when the window's app is not the active app before or after the capture, since an inactive window comes out with grey traffic lights and a smaller shadow. Optional `--title=<substring>` for multi-window apps, `--pid=<owner-pid>` to match only that process's windows, `--allow-low-dpi` to bypass the scale check; an unrecognized argument is an error (exit 2), not a silent no-op. |
 | `scripts/filter-noise-screenshots.mjs` | Post-capture cleanup. Iterates modified PNGs in the current repo (default: under `docs/assets/screenshots/` only) or another repo (via `--root <path>`, used by `screenshot:docs-site` against the sibling docs repo). Decodes HEAD and working-tree to TIFF via `sips`, SHA-256 compares. Identical → `git restore --source=HEAD --worktree`. Visually different → kept for review. Net-new PNGs (untracked) are left alone. |
 | `scripts/render-indicator-overlay.swift` | Paints a numbered step-indicator pill onto a single PNG via Core Graphics + Core Text. |
 | `scripts/stitch-demo-gif.ts` | Reusable GIF stitcher. Annotates each frame via the indicator-overlay Swift helper, then encodes via two-pass ffmpeg `palettegen`/`paletteuse`. CLI: `--output`, `--frame-duration-ms`, `--no-indicator`, `--indicator-position top|bottom`. |
@@ -843,6 +870,33 @@ every later row.
 - **`tabIndex={-1}` on the menu** when every item in it can be disabled at
   once, as the profile menu's can. Focus then lands on the menu, where Escape
   and Tab still work.
+
+### Selects
+
+A single choice from a list goes through
+[`Select`](src/renderer/src/components/Select.tsx), not a native `<select>`.
+On macOS, Chromium hands a `<select>` to the system menu, which opens over
+the control in the system font and blue highlight, and CSS cannot reach it.
+
+- **It is the ARIA select-only combobox.** The trigger is a
+  `<button role="combobox">` that keeps DOM focus while the list is open; the
+  keyboard cursor is `aria-activedescendant`. A wrapping `<label>` names it,
+  so `getByLabelText` still finds the field.
+- **The list is portalled to `document.body`** at `z-index: 150`, above
+  Settings and Automations, and registers with `useDismissableLayer`, so
+  Escape inside a dialog closes the list alone. Do not add an Escape listener.
+- **Tab closes without choosing.** The APG example commits on Tab. Here,
+  arrowing past an option on the way out must not change the value.
+- **The closed field's chrome comes from its surface,** through `className`
+  or a descendant rule (`.automation-field .select-trigger`). The list cannot
+  inherit type from the field, so a surface that needs it passes
+  `listboxClassName`.
+- **Tests drive it through [`test/select.ts`](src/renderer/src/test/select.ts).**
+  `fireEvent.change` does nothing to a button. Choose by label with
+  `chooseSelectOption`, read the list with `selectOptionLabels`, and read the
+  stored value from `data-value`. Options exist only while the list is open,
+  so waiting for `getByRole("option")` to disappear from a closed field passes
+  vacuously.
 
 ## Config File Evolution
 

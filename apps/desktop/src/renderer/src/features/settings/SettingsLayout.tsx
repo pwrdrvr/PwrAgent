@@ -53,7 +53,14 @@ function settingsChipClassName(kind?: SettingsChipTone): string {
 }
 
 type SettingsSectionRegistration = {
+  /** The section's header: its focus target and keyboard-walk stop. */
   element: HTMLElement;
+  /** The whole card, which a nav request scrolls to. Never the header: it is
+   *  `position: sticky`, and `scrollIntoView` aligns a sticky box where it is
+   *  painted right now. For a section above the viewport that is the card's
+   *  bottom edge, so scrolling up stopped with only the pinned header and the
+   *  last few pixels of the card showing. */
+  scrollTarget: HTMLElement;
   id: string;
   title: string;
 };
@@ -265,7 +272,7 @@ export function SettingsSectionStack(props: {
     // focusing the section is the part that has to happen. Throwing here
     // would abort both, which is what it did once the Messaging nav became
     // the first live caller of this path.
-    target.element.scrollIntoView?.({ block: "start", behavior: "smooth" });
+    target.scrollTarget.scrollIntoView?.({ block: "start", behavior: "smooth" });
     target.element.focus({ preventScroll: true });
   }, [props.focusSectionId, props.paneId, registeredSections, rememberSectionVisit]);
 
@@ -382,6 +389,7 @@ export function SettingsSection(props: {
 }) {
   const generatedId = useId();
   const pane = useContext(SettingsSectionPaneContext);
+  const sectionRef = useRef<HTMLElement | null>(null);
   const headerRef = useRef<HTMLDivElement | null>(null);
   const slug = slugForSettingsId(props.sectionId ?? props.title);
   const sectionId = `${pane?.paneId ?? "global"}-${slug || generatedId}`;
@@ -394,11 +402,13 @@ export function SettingsSection(props: {
 
   useLayoutEffect(() => {
     const element = headerRef.current;
-    if (!registerSection || !element) {
+    const scrollTarget = sectionRef.current;
+    if (!registerSection || !element || !scrollTarget) {
       return;
     }
     return registerSection({
       element,
+      scrollTarget,
       id: sectionId,
       title: props.title,
     });
@@ -460,6 +470,7 @@ export function SettingsSection(props: {
 
   return (
     <section
+      ref={sectionRef}
       aria-labelledby={headingId}
       aria-label={props["aria-label"]}
       className={`settings-panel settings-panel--has-body settings-panel--collapsible${

@@ -8,10 +8,6 @@
  * nothing inside one is reachable from Vitest. A comparator edit that
  * inverted the built-in preference would have typechecked and passed CI.
  *
- * The focus wait is here for the same reason. It decides whether a
- * capture goes ahead with the window drawn active, and the callback that
- * asks Electron for focus is just as unreachable.
- *
  * It lives here rather than beside the fixture for the same reason
  * `sub-agent-state-seeding.test.ts` does: `e2e/` is Playwright's
  * `testDir`, and its default `testMatch` claims `*.test.ts`, so a vitest
@@ -21,15 +17,17 @@
 
 import { describe, expect, it, vi } from "vitest";
 import {
-  CaptureWindowNotFocusedError,
+  CAPTURE_INACTIVE_EXIT_STATUS,
+  CAPTURE_LOW_RESOLUTION_EXIT_STATUS,
+  captureWhileFocused,
   centeredIn,
-  FOCUS_POLL_INTERVAL_MS,
-  FOCUS_TIMEOUT_MS,
+  isInactiveCaptureRefusal,
+  isRetriableCaptureRefusal,
   MINIMUM_RETINA_SCALE_FACTOR,
   overflowsWorkArea,
-  parseLsappinfoInfo,
   pickCaptureDisplay,
-  waitForWindowFocus,
+  probedRetinaDisplay,
+  waitForSteadyFocus,
   type DisplaySummary,
 } from "../../../e2e/fixtures/capture-window-placement";
 
@@ -188,134 +186,168 @@ describe("overflowsWorkArea", () => {
   });
 });
 
-/**
- * A clock that only moves when the loop sleeps, so the retry rule runs
- * without real time and every pause it takes is recorded.
- */
-function fakeClock() {
-  let now = 0;
-  const sleeps: number[] = [];
-  return {
-    sleeps,
-    now: () => now,
-    sleep: async (ms: number) => {
-      sleeps.push(ms);
-      now += ms;
-    },
+describe("waitForSteadyFocus", () => {
+  // macOS activates an app asynchronously, and the app that had focus can
+  // take it back about a second later. An inactive window is captured with
+  // grey traffic lights, so focus has to hold, not just arrive.
+  const answers = (...values: boolean[]) => {
+    const focus = vi.fn();
+    for (const value of values) focus.mockResolvedValueOnce(value);
+    return focus.mockResolvedValue(values[values.length - 1]);
   };
-}
 
-describe("waitForWindowFocus", () => {
-  it("returns at once when the window is already key", async () => {
-    const clock = fakeClock();
-    const check = vi.fn(async () => true);
-
-    await expect(waitForWindowFocus(check, clock)).resolves.toBe(true);
-    expect(check).toHaveBeenCalledTimes(1);
-    expect(clock.sleeps).toEqual([]);
-  });
-
-  it("keeps checking until activation lands", async () => {
-    // Activation is asynchronous: the check straight after the request
-    // still sees the inactive state, so one negative answer must not end
-    // the wait.
-    const clock = fakeClock();
-    const answers = [false, false, true];
-    const check = vi.fn(async () => answers.shift()!);
-
-    await expect(waitForWindowFocus(check, clock)).resolves.toBe(true);
-    expect(check).toHaveBeenCalledTimes(3);
-    expect(clock.sleeps).toEqual([
-      FOCUS_POLL_INTERVAL_MS,
-      FOCUS_POLL_INTERVAL_MS,
-    ]);
-  });
-
-  it("gives up once the timeout elapses, after a check at the deadline", async () => {
-    const clock = fakeClock();
-    const check = vi.fn(async () => false);
+  it("waits for focus to arrive and then hold", async () => {
+    const focus = answers(false, false, true, true, true);
+    const sleep = vi.fn(async () => {});
 
     await expect(
-      waitForWindowFocus(check, { ...clock, timeoutMs: 1_000, intervalMs: 250 }),
+      waitForSteadyFocus(focus, { steadyChecks: 3, maxChecks: 10, intervalMs: 100, sleep }),
+    ).resolves.toBe(true);
+    expect(focus).toHaveBeenCalledTimes(5);
+    expect(sleep).toHaveBeenCalledTimes(4);
+    expect(sleep).toHaveBeenCalledWith(100);
+  });
+
+  it("starts the count again when focus is taken back", async () => {
+    // Focus arrives, is taken back once, then holds.
+    const focus = answers(true, true, false, true, true, true);
+    const sleep = vi.fn(async () => {});
+
+    await expect(
+      waitForSteadyFocus(focus, { steadyChecks: 3, maxChecks: 10, sleep }),
+    ).resolves.toBe(true);
+    expect(focus).toHaveBeenCalledTimes(6);
+  });
+
+  it("gives up without a trailing wait when focus never holds", async () => {
+    const focus = answers(true, false, true, false);
+    const sleep = vi.fn(async () => {});
+
+    await expect(
+      waitForSteadyFocus(focus, { steadyChecks: 2, maxChecks: 4, sleep }),
     ).resolves.toBe(false);
-    // 0, 250, 500, 750, 1000.
-    expect(check).toHaveBeenCalledTimes(5);
-    expect(clock.now()).toBe(1_000);
-  });
-
-  it("waits the shared timeout by default", async () => {
-    const clock = fakeClock();
-
-    await expect(waitForWindowFocus(async () => false, clock)).resolves.toBe(
-      false,
-    );
-    expect(clock.now()).toBe(FOCUS_TIMEOUT_MS);
-  });
-
-  it("does not retry a check that throws", async () => {
-    // The check throws when the window has closed. That has to surface
-    // as itself, not be retried into a misleading not-focused timeout.
-    const clock = fakeClock();
-    const check = vi.fn(async (): Promise<boolean> => {
-      throw new Error("capture window 3 closed before it became key");
-    });
-
-    await expect(waitForWindowFocus(check, clock)).rejects.toThrow(
-      /closed before it became key/,
-    );
-    expect(check).toHaveBeenCalledTimes(1);
+    expect(focus).toHaveBeenCalledTimes(4);
+    expect(sleep).toHaveBeenCalledTimes(3);
   });
 });
 
-describe("parseLsappinfoInfo", () => {
-  it("reads the display name and pid", () => {
-    expect(
-      parseLsappinfoInfo('"LSDisplayName"="Electron"\n"pid"=85077\n'),
-    ).toEqual({ name: "Electron", pid: 85077 });
+describe("captureWhileFocused", () => {
+  // What `execFileSync` throws when the script exits non-zero.
+  const exited = (status: number) =>
+    Object.assign(new Error(`Command failed with status ${status}`), { status });
+
+  it("raises the window and captures again after an inactive refusal", async () => {
+    const capture = vi.fn()
+      .mockImplementationOnce(() => {
+        throw exited(CAPTURE_INACTIVE_EXIT_STATUS);
+      })
+      .mockImplementationOnce(() => {});
+    const raise = vi.fn(async () => {});
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    await captureWhileFocused(capture, raise, 3);
+    expect(capture).toHaveBeenCalledTimes(2);
+    expect(raise).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
   });
 
-  it("keeps whichever field is present", () => {
-    expect(parseLsappinfoInfo('"LSDisplayName"="Visual Studio Code"\n')).toEqual(
-      { name: "Visual Studio Code", pid: undefined },
+  it("throws any other failure at once, without raising", async () => {
+    // Exit 3 is "no matching window"; raising cannot conjure one.
+    const capture = vi.fn(() => {
+      throw exited(3);
+    });
+    const raise = vi.fn(async () => {});
+
+    await expect(
+      captureWhileFocused(capture, raise, 3, () => true),
+    ).rejects.toMatchObject({ status: 3 });
+    expect(capture).toHaveBeenCalledTimes(1);
+    expect(raise).not.toHaveBeenCalled();
+  });
+
+  it("raises and retries a sub-Retina refusal when the run has a Retina display", async () => {
+    // The window landed on the 1x display; the raise places it back on
+    // the Retina display the run probed.
+    const capture = vi.fn()
+      .mockImplementationOnce(() => {
+        throw exited(CAPTURE_LOW_RESOLUTION_EXIT_STATUS);
+      })
+      .mockImplementationOnce(() => {});
+    const raise = vi.fn(async () => {});
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    await captureWhileFocused(capture, raise, 3, () => true);
+    expect(capture).toHaveBeenCalledTimes(2);
+    expect(raise).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("the capture came out below 2x"),
     );
-    expect(parseLsappinfoInfo('"pid"=412\n')).toEqual({
-      name: undefined,
-      pid: 412,
-    });
+    warn.mockRestore();
   });
 
-  it("returns undefined when lsappinfo printed neither field", () => {
-    // `lsappinfo info` prints nothing for an ASN that has already exited.
-    expect(parseLsappinfoInfo("")).toBeUndefined();
-  });
-});
-
-describe("CaptureWindowNotFocusedError", () => {
-  it("names the app holding focus next to this app's pid", () => {
-    // Two "Electron" apps are indistinguishable by name — a second
-    // capture run is the usual culprit — so the pids are what let the
-    // operator tell which process to stop.
-    const error = new CaptureWindowNotFocusedError({
-      titleSubstring: "Messaging Activity",
-      timeoutMs: FOCUS_TIMEOUT_MS,
-      appPid: 1234,
-      frontmost: { name: "Electron", pid: 85077 },
+  it("throws a sub-Retina refusal at once when the run has no Retina display", async () => {
+    // Every retry would land on the same 1x display.
+    const capture = vi.fn(() => {
+      throw exited(CAPTURE_LOW_RESOLUTION_EXIT_STATUS);
     });
+    const raise = vi.fn(async () => {});
 
-    expect(error.name).toBe("CaptureWindowNotFocusedError");
-    expect(error.message).toContain('title contains "Messaging Activity"');
-    expect(error.message).toContain('"Electron" (pid 85077); this app is pid 1234');
+    await expect(
+      captureWhileFocused(capture, raise, 3, () => false),
+    ).rejects.toMatchObject({ status: CAPTURE_LOW_RESOLUTION_EXIT_STATUS });
+    expect(capture).toHaveBeenCalledTimes(1);
+    expect(raise).not.toHaveBeenCalled();
   });
 
-  it("still explains the failure when the frontmost app is unknown", () => {
-    const error = new CaptureWindowNotFocusedError({
-      titleSubstring: undefined,
-      timeoutMs: FOCUS_TIMEOUT_MS,
-      appPid: undefined,
-      frontmost: undefined,
+  it("does not retry a sub-Retina refusal before any display probe", async () => {
+    // The default reads this run's probe. With none yet, there is no known
+    // Retina display to move the window onto.
+    const capture = vi.fn(() => {
+      throw exited(CAPTURE_LOW_RESOLUTION_EXIT_STATUS);
     });
+    const raise = vi.fn(async () => {});
 
-    expect(error.message).toMatch(/^the capture window did not become key/);
-    expect(error.message).toContain("could not be read.");
+    await expect(captureWhileFocused(capture, raise, 3)).rejects.toMatchObject({
+      status: CAPTURE_LOW_RESOLUTION_EXIT_STATUS,
+    });
+    expect(raise).not.toHaveBeenCalled();
+  });
+
+  it("gives up after the last attempt and throws the refusal", async () => {
+    const capture = vi.fn(() => {
+      throw exited(CAPTURE_INACTIVE_EXIT_STATUS);
+    });
+    const raise = vi.fn(async () => {});
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    await expect(captureWhileFocused(capture, raise, 3)).rejects.toMatchObject({
+      status: CAPTURE_INACTIVE_EXIT_STATUS,
+    });
+    expect(capture).toHaveBeenCalledTimes(3);
+    expect(raise).toHaveBeenCalledTimes(2);
+    warn.mockRestore();
+  });
+
+  it("recognizes only the inactive-window exit status", () => {
+    expect(isInactiveCaptureRefusal(exited(CAPTURE_INACTIVE_EXIT_STATUS))).toBe(true);
+    expect(isInactiveCaptureRefusal(exited(6))).toBe(false);
+    expect(isInactiveCaptureRefusal(new Error("spawn failed"))).toBe(false);
+    expect(isInactiveCaptureRefusal(undefined)).toBe(false);
+  });
+
+  it("treats a sub-Retina refusal as retriable only with a Retina display", () => {
+    const lowRes = exited(CAPTURE_LOW_RESOLUTION_EXIT_STATUS);
+    const inactive = exited(CAPTURE_INACTIVE_EXIT_STATUS);
+
+    expect(isRetriableCaptureRefusal(lowRes, true)).toBe(true);
+    expect(isRetriableCaptureRefusal(lowRes, false)).toBe(false);
+    expect(isRetriableCaptureRefusal(inactive, false)).toBe(true);
+    expect(isRetriableCaptureRefusal(exited(3), true)).toBe(false);
+    expect(isRetriableCaptureRefusal(undefined, true)).toBe(false);
+  });
+
+  it("sees no Retina display until a run has probed", () => {
+    // Nothing in this file calls `bringToFront`, so nothing has probed.
+    expect(probedRetinaDisplay()).toBe(false);
   });
 });
