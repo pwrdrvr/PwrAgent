@@ -183,7 +183,7 @@ function createSnapshot(
         source: "default",
       },
       markdownMathRendering: {
-        value: false,
+        value: true,
         source: "default",
       },
       threadPricingSummary: {
@@ -2361,7 +2361,7 @@ describe("SettingsScreen", () => {
     });
   });
 
-  it("defaults missing experimental flags off and persists each when enabled", async () => {
+  it("defaults missing experimental flags appropriately and persists changes", async () => {
     const snapshot = createSnapshot();
     const experimental = snapshot.experimental as Partial<
       typeof snapshot.experimental
@@ -2391,7 +2391,7 @@ describe("SettingsScreen", () => {
 
     expect(filteringSwitch).toHaveAttribute("aria-checked", "false");
     expect(questionsSwitch).toHaveAttribute("aria-checked", "false");
-    expect(mathSwitch).toHaveAttribute("aria-checked", "false");
+    expect(mathSwitch).toHaveAttribute("aria-checked", "true");
 
     fireEvent.click(filteringSwitch);
     await waitFor(() => {
@@ -2410,7 +2410,7 @@ describe("SettingsScreen", () => {
     fireEvent.click(mathSwitch);
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
-        experimental: { markdownMathRendering: true },
+        experimental: { markdownMathRendering: false },
       });
     });
   });

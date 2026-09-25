@@ -32,9 +32,9 @@ They ship locally; no CDN or rendering service is contacted. Other diagram types
 add their own code when used. Browser verification of a normal Markdown message
 observed no Mermaid requests.
 
-Math rendering has different behavior: `MarkdownRenderingOptionsProvider` imports
-its KaTeX runtime when the math setting is enabled, without first detecting math.
-This feature does not change that setting or its loading behavior.
+Math rendering has different behavior: `ThreadMarkdown` requests its KaTeX runtime
+only when math rendering is enabled and a message contains potential math.
+Mermaid rendering does not change that setting or its loading behavior.
 
 ## Rendering boundaries
 

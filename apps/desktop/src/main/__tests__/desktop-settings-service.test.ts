@@ -4248,7 +4248,7 @@ describe("DesktopSettingsService", () => {
     );
   });
 
-  it("defaults Markdown math rendering to false and persists it", async () => {
+  it("defaults Markdown math rendering to true and persists an explicit opt-out", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");
     const service = new DesktopSettingsService({
@@ -4259,23 +4259,23 @@ describe("DesktopSettingsService", () => {
 
     const initial = await service.readSettingsProjection();
     expect(initial.experimental.markdownMathRendering).toEqual({
-      value: false,
+      value: true,
       source: "default",
     });
 
     await service.writeConfigPatchTargeted({
       experimental: {
-        markdownMathRendering: true,
+        markdownMathRendering: false,
       },
     });
 
     const updated = await service.readSettingsProjection();
     expect(updated.experimental.markdownMathRendering).toEqual({
-      value: true,
+      value: false,
       source: "config",
     });
     expect(fs.readFileSync(configPath, "utf8")).toContain(
-      "markdown_math_rendering = true",
+      "markdown_math_rendering = false",
     );
   });
 
