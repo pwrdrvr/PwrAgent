@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 /**
@@ -128,8 +128,8 @@ export function parseDbusNameList(stdout: string): string[] {
   return [...names];
 }
 
-export function linuxPasswordStorePath(userDataDir: string): string {
-  return join(userDataDir, LINUX_PASSWORD_STORE_FILE);
+export function linuxPasswordStorePath(pwragentRoot: string): string {
+  return join(pwragentRoot, LINUX_PASSWORD_STORE_FILE);
 }
 
 function isLinuxSecretStore(value: string): value is LinuxSecretStore {
@@ -154,17 +154,18 @@ function forcedStore(
   return isLinuxSecretStore(raw) ? raw : undefined;
 }
 
-function readStoreFile(userDataDir: string): LinuxSecretStore | undefined {
+function readStoreFile(pwragentRoot: string): LinuxSecretStore | undefined {
   try {
-    const text = readFileSync(linuxPasswordStorePath(userDataDir), "utf8").trim();
+    const text = readFileSync(linuxPasswordStorePath(pwragentRoot), "utf8").trim();
     return isLinuxSecretStore(text) ? text : undefined;
   } catch {
     return undefined;
   }
 }
 
-function writeStoreFile(userDataDir: string, store: LinuxSecretStore): void {
-  writeFileSync(linuxPasswordStorePath(userDataDir), `${store}\n`, "utf8");
+function writeStoreFile(pwragentRoot: string, store: LinuxSecretStore): void {
+  mkdirSync(pwragentRoot, { recursive: true });
+  writeFileSync(linuxPasswordStorePath(pwragentRoot), `${store}\n`, "utf8");
 }
 
 function storeForNames(names: readonly string[]): LinuxSecretStore | undefined {
@@ -272,7 +273,7 @@ export function applyRememberedLinuxPasswordStore(options: {
   platform: NodeJS.Platform;
   argv: readonly string[];
   env: NodeJS.ProcessEnv;
-  userDataDir: string;
+  pwragentRoot: string;
   appendSwitch: (store: LinuxSecretStore) => void;
 }): LinuxSecretStore | undefined {
   if (options.platform !== "linux") return undefined;
@@ -282,7 +283,7 @@ export function applyRememberedLinuxPasswordStore(options: {
   if (forced === "basic") return undefined;
   const store = forced && forced !== "auto"
     ? forced
-    : readStoreFile(options.userDataDir);
+    : readStoreFile(options.pwragentRoot);
   if (!store) return undefined;
   options.appendSwitch(store);
   return store;
@@ -290,14 +291,16 @@ export function applyRememberedLinuxPasswordStore(options: {
 
 /**
  * When this process already came up on basic_text, relaunch once with the
- * service that is on the bus. A usable backend is not replaced.
+ * service that is on the bus. A usable or explicitly selected backend is not
+ * replaced, even when a remembered keyring is temporarily unavailable.
  * Returns true when the process is exiting for that relaunch.
  */
 export function relaunchForLinuxSecretStore(options: {
   platform: NodeJS.Platform;
   argv: readonly string[];
   env: NodeJS.ProcessEnv;
-  userDataDir: string;
+  pwragentRoot: string;
+  selectedStore: LinuxSecretStore | undefined;
   encryptionAvailable: boolean;
   backend: string | null;
   probe?: SecretServiceProbe;
@@ -310,6 +313,9 @@ export function relaunchForLinuxSecretStore(options: {
   if (options.platform !== "linux") return false;
   if (options.env.PWRAGENT_E2E === "1") return false;
   if (argvSelectsPasswordStore(options.argv)) return false;
+  // Electron's appendSwitch does not update process.argv. Preserve the store
+  // applied before ready when an unlock is cancelled or the service is down.
+  if (options.selectedStore) return false;
 
   const forced = forcedStore(options.env);
   if (forced === "basic" || (forced && forced !== "auto")) return false;
@@ -325,7 +331,7 @@ export function relaunchForLinuxSecretStore(options: {
   if (!store) return false;
 
   try {
-    writeStoreFile(options.userDataDir, store);
+    writeStoreFile(options.pwragentRoot, store);
   } catch (error) {
     options.warn("failed to remember linux secret store", {
       error: error instanceof Error ? error.message : String(error),

@@ -26,8 +26,8 @@ function tempDir(): string {
   return root;
 }
 
-function remember(userDataDir: string, store: string): void {
-  writeFileSync(linuxPasswordStorePath(userDataDir), `${store}\n`);
+function remember(pwragentRoot: string, store: string): void {
+  writeFileSync(linuxPasswordStorePath(pwragentRoot), `${store}\n`);
 }
 
 const secretsProbe: SecretServiceProbe = {
@@ -106,68 +106,68 @@ describe("probeSecretServices", () => {
 
 describe("applyRememberedLinuxPasswordStore", () => {
   it("appends an env override and ignores a remembered file", () => {
-    const userDataDir = tempDir();
-    remember(userDataDir, "kwallet6");
+    const pwragentRoot = tempDir();
+    remember(pwragentRoot, "kwallet6");
     const appendSwitch = vi.fn();
     expect(applyRememberedLinuxPasswordStore({
       platform: "linux",
       argv: ["pwragent"],
       env: { PWRAGENT_LINUX_PASSWORD_STORE: "gnome-libsecret" },
-      userDataDir,
+      pwragentRoot,
       appendSwitch,
     })).toBe("gnome-libsecret");
     expect(appendSwitch).toHaveBeenCalledWith("gnome-libsecret");
   });
 
   it("still uses the remembered store when the override is auto", () => {
-    const userDataDir = tempDir();
-    remember(userDataDir, "gnome-libsecret");
+    const pwragentRoot = tempDir();
+    remember(pwragentRoot, "gnome-libsecret");
     const appendSwitch = vi.fn();
     expect(applyRememberedLinuxPasswordStore({
       platform: "linux",
       argv: ["pwragent"],
       env: { PWRAGENT_LINUX_PASSWORD_STORE: "auto" },
-      userDataDir,
+      pwragentRoot,
       appendSwitch,
     })).toBe("gnome-libsecret");
   });
 
   it("appends the remembered store when the operator did not choose one", () => {
-    const userDataDir = tempDir();
-    remember(userDataDir, "kwallet5");
+    const pwragentRoot = tempDir();
+    remember(pwragentRoot, "kwallet5");
     const appendSwitch = vi.fn();
     expect(applyRememberedLinuxPasswordStore({
       platform: "linux",
       argv: ["pwragent", "--profile", "default"],
       env: {},
-      userDataDir,
+      pwragentRoot,
       appendSwitch,
     })).toBe("kwallet5");
   });
 
   it("does not append when argv, basic opt-out, or another platform already decided", () => {
-    const userDataDir = tempDir();
-    remember(userDataDir, "gnome-libsecret");
+    const pwragentRoot = tempDir();
+    remember(pwragentRoot, "gnome-libsecret");
     const appendSwitch = vi.fn();
     expect(applyRememberedLinuxPasswordStore({
       platform: "linux",
       argv: ["pwragent", "--password-store=kwallet6"],
       env: {},
-      userDataDir,
+      pwragentRoot,
       appendSwitch,
     })).toBeUndefined();
     expect(applyRememberedLinuxPasswordStore({
       platform: "linux",
       argv: ["pwragent"],
       env: { PWRAGENT_LINUX_PASSWORD_STORE: "basic" },
-      userDataDir,
+      pwragentRoot,
       appendSwitch,
     })).toBeUndefined();
     expect(applyRememberedLinuxPasswordStore({
       platform: "darwin",
       argv: ["pwragent"],
       env: { PWRAGENT_LINUX_PASSWORD_STORE: "gnome-libsecret" },
-      userDataDir,
+      pwragentRoot,
       appendSwitch,
     })).toBeUndefined();
     expect(appendSwitch).not.toHaveBeenCalled();
@@ -178,7 +178,7 @@ describe("relaunchForLinuxSecretStore", () => {
   function relaunchWith(
     overrides: Partial<Parameters<typeof relaunchForLinuxSecretStore>[0]>,
   ) {
-    const userDataDir = tempDir();
+    const pwragentRoot = tempDir();
     const relaunch = vi.fn();
     const exit = vi.fn();
     const info = vi.fn();
@@ -187,7 +187,8 @@ describe("relaunchForLinuxSecretStore", () => {
       platform: "linux",
       argv: ["/usr/bin/pwragent", "--profile", "default"],
       env: {},
-      userDataDir,
+      pwragentRoot,
+      selectedStore: undefined,
       encryptionAvailable: false,
       backend: "basic_text",
       probe: secretsProbe,
@@ -197,7 +198,7 @@ describe("relaunchForLinuxSecretStore", () => {
       warn,
       ...overrides,
     });
-    return { exited, relaunch, exit, info, warn, userDataDir };
+    return { exited, relaunch, exit, info, warn, pwragentRoot };
   }
 
   it("relaunches on basic_text and prefers an owned service over an activatable one", () => {
@@ -215,7 +216,7 @@ describe("relaunchForLinuxSecretStore", () => {
       "--password-store=kwallet6",
     ]);
     expect(result.exit).toHaveBeenCalledWith(0);
-    expect(readFileSync(linuxPasswordStorePath(result.userDataDir), "utf8")).toBe("kwallet6\n");
+    expect(readFileSync(linuxPasswordStorePath(result.pwragentRoot), "utf8")).toBe("kwallet6\n");
   });
 
   it("uses an activatable secret service when nothing is running", () => {
@@ -231,6 +232,45 @@ describe("relaunchForLinuxSecretStore", () => {
       "default",
       "--password-store=gnome-libsecret",
     ]);
+  });
+
+  it("creates the preference beneath a new PwrAgent root", () => {
+    const pwragentRoot = join(tempDir(), "isolated", "pwragent");
+    const result = relaunchWith({ pwragentRoot });
+    expect(result.exited).toBe(true);
+    expect(readFileSync(linuxPasswordStorePath(pwragentRoot), "utf8"))
+      .toBe("gnome-libsecret\n");
+  });
+
+  it("preserves a remembered KWallet selection when unlocking fails", () => {
+    const pwragentRoot = tempDir();
+    remember(pwragentRoot, "kwallet6");
+    const argv = ["pwragent"];
+    const appendSwitch = vi.fn();
+    const selectedStore = applyRememberedLinuxPasswordStore({
+      platform: "linux",
+      argv,
+      env: {},
+      pwragentRoot,
+      appendSwitch,
+    });
+    expect(appendSwitch).toHaveBeenCalledWith("kwallet6");
+    const exec = vi.fn<CommandExec>();
+    const result = relaunchWith({
+      argv,
+      pwragentRoot,
+      selectedStore,
+      encryptionAvailable: false,
+      backend: "kwallet6",
+      probe: undefined,
+      exec,
+    });
+    expect(result.exited).toBe(false);
+    expect(exec).not.toHaveBeenCalled();
+    expect(result.relaunch).not.toHaveBeenCalled();
+    expect(result.exit).not.toHaveBeenCalled();
+    expect(readFileSync(linuxPasswordStorePath(pwragentRoot), "utf8"))
+      .toBe("kwallet6\n");
   });
 
   it("leaves a usable backend alone", () => {

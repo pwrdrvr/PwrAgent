@@ -1,60 +1,35 @@
 import { createRequire } from "node:module";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   linuxPasswordStorePath,
   probeSecretServices,
 } from "../linux-password-store";
 
 const require = createRequire(import.meta.url);
-const electronBinary = require("electron") as string;
-const repoRoot = join(import.meta.dirname, "../../../../../");
 const fixture = join(import.meta.dirname, "fixtures", "linux-password-store-electron.cjs");
 const source = join(import.meta.dirname, "..", "linux-password-store.ts");
-const root = mkdtempSync(join(tmpdir(), "pwragent-secret-store-electron-"));
-const bundled = join(root, "linux-password-store.cjs");
-const userDataDir = join(root, "user-data");
-mkdirSync(userDataDir);
-const cipherPath = join(root, "cipher.bin");
-
-const esbuildPackage = readdirSync(join(repoRoot, "node_modules/.pnpm"))
-  .find((entry) => entry.startsWith("esbuild@"));
-if (!esbuildPackage) {
-  throw new Error("esbuild is not installed");
-}
-const esbuildBinary = join(
-  repoRoot,
-  "node_modules/.pnpm",
-  esbuildPackage,
-  "node_modules/esbuild/bin/esbuild",
-);
-const bundledBuild = spawnSync(esbuildBinary, [
-  source,
-  "--bundle",
-  "--platform=node",
-  "--format=cjs",
-  `--outfile=${bundled}`,
-], {
-  cwd: repoRoot,
-  encoding: "utf8",
-});
-if (bundledBuild.status !== 0) {
-  throw new Error(bundledBuild.stderr || bundledBuild.stdout || "esbuild failed");
-}
-
-afterAll(() => {
-  rmSync(root, { recursive: true, force: true });
-});
-
-const secretsAvailable = (() => {
+// This test accesses a real keyring. Opt in only inside a disposable Linux
+// session with its own D-Bus and secret service; ordinary Vitest must not use
+// the operator's keyring. No setup or D-Bus probe runs on other platforms.
+const enabled = process.platform === "linux"
+  && process.env.PWRAGENT_TEST_LINUX_SECRET_STORE === "1";
+const secretsAvailable = enabled && (() => {
   const probe = probeSecretServices();
   return probe.status === "ok"
     && (probe.owned.includes("org.freedesktop.secrets")
       || probe.activatable.includes("org.freedesktop.secrets"));
 })();
+
+let root: string;
+let userDataDir: string;
+let pwragentRoot: string;
+let cipherPath: string;
+let electronBinary: string;
+let tsxLoader: string;
 
 type ProbeResult = {
   selected: string | null;
@@ -78,7 +53,9 @@ function launch(env: Record<string, string | undefined>): ProbeResult {
       ...env,
       PWRAGENT_SECRET_STORE_USER_DATA: userDataDir,
       PWRAGENT_SECRET_STORE_RESULT: resultPath,
-      PWRAGENT_SECRET_STORE_MODULE: bundled,
+      PWRAGENT_HOME: pwragentRoot,
+      PWRAGENT_SECRET_STORE_MODULE: source,
+      PWRAGENT_SECRET_STORE_TSX: tsxLoader,
     },
   });
   if (child.error) {
@@ -92,11 +69,26 @@ function launch(env: Record<string, string | undefined>): ProbeResult {
   return JSON.parse(readFileSync(resultPath, "utf8")) as ProbeResult;
 }
 
-describe("linux password store inside Electron", () => {
-  it.skipIf(!secretsAvailable)(
+describe.skipIf(!secretsAvailable)("linux password store inside Electron", () => {
+  beforeAll(() => {
+    electronBinary = require("electron") as string;
+    tsxLoader = require.resolve("tsx/cjs/api");
+    root = mkdtempSync(join(tmpdir(), "pwragent-secret-store-electron-"));
+    userDataDir = join(root, "user-data");
+    pwragentRoot = join(root, "pwragent");
+    mkdirSync(userDataDir);
+    mkdirSync(pwragentRoot);
+    cipherPath = join(root, "cipher.bin");
+  });
+
+  afterAll(() => {
+    if (root) rmSync(root, { recursive: true, force: true });
+  });
+
+  it(
     "uses a remembered libsecret store for a later process",
     () => {
-      writeFileSync(linuxPasswordStorePath(userDataDir), "gnome-libsecret\n");
+      writeFileSync(linuxPasswordStorePath(pwragentRoot), "gnome-libsecret\n");
       const first = launch({
         PWRAGENT_SECRET_STORE_CIPHER_OUT: cipherPath,
       });

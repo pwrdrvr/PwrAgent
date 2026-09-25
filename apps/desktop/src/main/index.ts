@@ -212,12 +212,16 @@ import {
   PWRAGENT_PROFILE_AUTO_CREATE_ENV,
   resolveActiveProfileName,
   resolveProfileBootDecision,
+  resolvePwragentRoot,
   startProfileFocusRequestWatcher,
   writeDockProfileSnapshot,
   type ProfileBootDecision,
   type ProfileFocusRequestWatcher,
 } from "./profile";
-import { SECRET_STORAGE_DISABLED_ENV } from "./settings/desktop-secret-store";
+import {
+  isSecretStorageDisabledByEnv,
+  SECRET_STORAGE_DISABLED_ENV,
+} from "./settings/desktop-secret-store";
 import {
   SQLITE_WRITE_METRICS_ENV,
   SQLITE_WRITE_METRICS_FILE_ENV,
@@ -1245,15 +1249,22 @@ export function bootstrapApp(): void {
   // Chromium reads --password-store in PostCreateMainMessageLoop, after this
   // function returns. An env override or a store remembered from an earlier
   // launch has to be appended here, still during the initial module evaluation.
-  const rememberedLinuxPasswordStore = applyRememberedLinuxPasswordStore({
-    platform: process.platform,
-    argv: process.argv,
-    env: process.env,
-    userDataDir: app.getPath("userData"),
-    appendSwitch: (backend) => {
-      app.commandLine.appendSwitch("password-store", backend);
-    },
-  });
+  const linuxPasswordStoreRoot = process.platform === "linux"
+    && !isSecretStorageDisabledByEnv()
+    && process.env.PWRAGENT_E2E !== "1"
+    ? resolvePwragentRoot()
+    : undefined;
+  const rememberedLinuxPasswordStore = linuxPasswordStoreRoot
+    ? applyRememberedLinuxPasswordStore({
+      platform: process.platform,
+      argv: process.argv,
+      env: process.env,
+      pwragentRoot: linuxPasswordStoreRoot,
+      appendSwitch: (backend) => {
+        app.commandLine.appendSwitch("password-store", backend);
+      },
+    })
+    : undefined;
   if (rememberedLinuxPasswordStore) {
     mainLog.info("linux secret store selected before ready", {
       backend: rememberedLinuxPasswordStore,
@@ -1261,11 +1272,12 @@ export function bootstrapApp(): void {
   }
 
   app.whenReady().then(async () => {
-    if (relaunchForLinuxSecretStore({
+    if (linuxPasswordStoreRoot && relaunchForLinuxSecretStore({
       platform: process.platform,
       argv: process.argv,
       env: process.env,
-      userDataDir: app.getPath("userData"),
+      pwragentRoot: linuxPasswordStoreRoot,
+      selectedStore: rememberedLinuxPasswordStore,
       encryptionAvailable: safeStorage.isEncryptionAvailable(),
       backend: safeStorage.getSelectedStorageBackend?.() ?? null,
       relaunch: (args) => {
