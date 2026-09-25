@@ -10,7 +10,11 @@ import {
   captureWhileFocused,
 } from "./fixtures/capture-window-placement";
 import { resolveScreenshotAppearance } from "./fixtures/screenshot-appearance";
-import { seedAllMessagingProvidersEnabledConfig } from "./fixtures/docs-site-state-seeding";
+import {
+  pinProfileLastUsed,
+  resetDocsSiteStableHomeRoot,
+  seedAllMessagingProvidersEnabledConfig,
+} from "./fixtures/docs-site-state-seeding";
 import {
   findLatestPairingEntryId,
   markPairingObserved,
@@ -58,9 +62,18 @@ const WINDOW_SIZE = { width: 1440, height: 900 } as const;
 // See `fixtures/screenshot-appearance.ts` for the env-var contract.
 const SCREENSHOT_APPEARANCE = resolveScreenshotAppearance();
 
+/**
+ * The wall-clock time a capture shows, wherever it shows one. Captures that
+ * use it also launch with `TZ=UTC`, so the time they render does not depend
+ * on the timezone of whoever runs the spec.
+ */
+const DOCS_SITE_CLOCK_TIME = new Date("2026-09-01T16:30:00.000Z");
+
+type DocsSiteApp = Awaited<ReturnType<typeof launchElectronApp>>;
+
 async function launchDocsSiteApp(
   params: Parameters<typeof launchElectronApp>[0],
-): ReturnType<typeof launchElectronApp> {
+): Promise<DocsSiteApp> {
   const app = await launchElectronApp({
     ...params,
     // Preserve production-like writable credential controls without allowing
@@ -80,11 +93,131 @@ async function launchDocsSiteApp(
   // would skip.
   try {
     await bringToFront(app.electronApp);
+    await holdMotionStill(app.window);
   } catch (error) {
     await app.close();
     throw error;
   }
   return app;
+}
+
+/**
+ * Stop the two things that move on their own clock, so a capture cannot land
+ * on a different frame of either from one run to the next.
+ *
+ * - Reduced motion parks every thinking scanner on the pose `app.css` gives
+ *   it for that preference: centred, at full opacity. Running, the beam
+ *   sweeps an 1800ms loop pinned to the document timeline, so where it sat
+ *   in `desktop-queued-turns` and `desktop-live-work-rail` depended on how
+ *   long the run took to reach the capture.
+ * - The text caret blinks on Chromium's own timer, so a focused composer
+ *   came out with or without it. It is hidden the way Playwright's own
+ *   screenshots hide it (`caret: "hide"`).
+ *
+ * Both outlast a reload: the page keeps its emulated media, and the caret
+ * rule is also installed as an init script.
+ */
+async function holdMotionStill(page: Page): Promise<void> {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.addInitScript(hideTextCaret);
+  await page.evaluate(hideTextCaret);
+}
+
+/** Runs in the page, so it can only use what the page has. */
+function hideTextCaret(): void {
+  const install = (): void => {
+    const style = document.createElement("style");
+    style.textContent =
+      "*, *::before, *::after { caret-color: transparent !important; }";
+    document.documentElement.append(style);
+  };
+  // An init script runs before the document has an element to append to.
+  if (document.documentElement) {
+    install();
+  } else {
+    document.addEventListener("DOMContentLoaded", install, { once: true });
+  }
+}
+
+/**
+ * Pin the wall clock in both processes to `time`.
+ *
+ * A turn sent from the composer stamps its user message and its live diff
+ * row with `Date.now()`, so `desktop-queued-turns` and
+ * `desktop-live-work-rail` showed whatever minute the spec ran in. This follows `visual-regression.spec.ts`: main is pinned
+ * as well, because IPC read deadlines cross the two processes and have to
+ * share an epoch, and the window reloads so that nothing admitted before
+ * the change ends up in the capture.
+ */
+async function pinWallClock(app: DocsSiteApp, time: Date): Promise<void> {
+  await app.electronApp.evaluate((_electron, now) => {
+    // Playwright evaluates in a separate VM context. Patch the application's
+    // realm, since its IPC deadlines use that realm's Date constructor.
+    const { runInThisContext } = process.getBuiltinModule("vm");
+    runInThisContext(`Date.now = () => ${now}`);
+  }, time.getTime());
+  await app.window.clock.setFixedTime(time);
+  await app.window.reload();
+  expect(await app.window.evaluate(() => Date.now())).toBe(time.getTime());
+}
+
+/** What the thread context panel's "Initial load" row shows in a capture. */
+const PINNED_INITIAL_LOAD = "1 ms";
+
+/**
+ * Show `PINNED_INITIAL_LOAD` in the thread context panel's "Initial load" row.
+ *
+ * The row reports how long the thread's first read took, and the replay
+ * answers it in 0 or 1 ms from one run to the next. `visual-regression.spec.ts`
+ * normalizes the same row for the same reason.
+ */
+async function pinInitialLoad(page: Page): Promise<void> {
+  const duration = page
+    .getByText("Initial load", { exact: true })
+    .locator("xpath=following-sibling::dd");
+  await expect(duration).toBeVisible();
+  await duration.evaluate((element, text) => {
+    element.textContent = text;
+  }, PINNED_INITIAL_LOAD);
+}
+
+/**
+ * Resolve once main's startup provider refresh has settled. That refresh
+ * runs Codex discovery and the ACP CLI discovery that fills the provider
+ * catalog cache. A navigation query page reports it as `coverage`, which
+ * stays "checking" until both finish.
+ *
+ * Coverage also reads "complete" before the refresh has recorded any state,
+ * but main records "checking" while it prewarms the thread list right after
+ * creating the window, well before the launch harness reports the renderer
+ * ready. Every probe run saw "checking" first.
+ */
+async function waitForStartupProviderRefresh(page: Page): Promise<void> {
+  await expect
+    .poll(
+      async () =>
+        await page.evaluate(async () => {
+          const bridge = globalThis as typeof globalThis & {
+            pwragent?: {
+              getNavigationQueryPage?: (request: unknown) => Promise<{
+                coverage?: { state: string };
+              }>;
+            };
+          };
+          const queryPage = await bridge.pwragent?.getNavigationQueryPage?.({
+            protocol: 2,
+            consumer: "settings",
+            query: { kind: "directory-index" },
+            pageSize: 1,
+          });
+          return queryPage?.coverage?.state ?? "unavailable";
+        }),
+      {
+        message: "startup provider refresh did not settle",
+        timeout: 30_000,
+      },
+    )
+    .toMatch(/^(?:complete|degraded)$/);
 }
 
 test.skip(
@@ -257,6 +390,8 @@ test("settings-worktrees — Settings → Worktrees panel", async () => {
   test.setTimeout(120_000);
 
   const app = await launchDocsSiteApp({
+    // The panel prints its effective path, which sits under the home root.
+    homeRoot: resetDocsSiteStableHomeRoot(),
     fixturePath: path.resolve(specDir, "fixtures/smoke/replay.fixture.json"),
     windowSize: WINDOW_SIZE,
     appearance: SCREENSHOT_APPEARANCE,
@@ -285,16 +420,23 @@ test("settings-models — Settings → AI Providers panel", async () => {
   });
 
   try {
+    // The provider index reads main's cached provider catalog once, as it
+    // mounts. Main fills that cache from its startup discovery of installed
+    // CLIs, which finished before the pane opened on some runs and after on
+    // others: the same Mac captured Kimi, Grok, Qwen and Gemini as "Not
+    // installed" once and as "Discovered" with versions the next time. Open
+    // the pane only after startup discovery settles. A fresh home runs no
+    // capability probe after it, so nothing rewrites the cache before the
+    // capture. The rows still show whichever CLIs this Mac has installed.
+    await waitForStartupProviderRefresh(app.window);
+
     await openSettingsSection(app.window, {
       navLabel: "AI Providers",
       regionLabel: "Model settings",
     });
 
-    // The provider index populates asynchronously (cached catalog read,
-    // then the mount probe's re-read mutating status chips). Wait for
-    // the discovery placeholder to clear and give the probe the same
-    // settle window the messaging shots use, so regens don't capture a
-    // different intermediate frame each run.
+    // Wait for the index to render its rows, then give it the same settle
+    // window the messaging shots use.
     await expect(
       app.window.getByRole("button", { name: "Open Codex settings" }),
     ).toBeVisible();
@@ -317,9 +459,15 @@ test("settings-profiles — Settings → Profiles panel", async () => {
     fixturePath: path.resolve(specDir, "fixtures/smoke/replay.fixture.json"),
     windowSize: WINDOW_SIZE,
     appearance: SCREENSHOT_APPEARANCE,
+    env: { TZ: "UTC" },
   });
 
   try {
+    // The profile card prints "Last used <date>, <time>", which main stamps
+    // with the launch time.
+    pinProfileLastUsed(app.homeRoot, "default", DOCS_SITE_CLOCK_TIME);
+    await app.window.reload();
+
     await openSettingsSection(app.window, {
       navLabel: "Profiles",
       regionLabel: "Profile settings",
@@ -460,6 +608,31 @@ const PAIRING_PERSONA = {
   telegramPeerId: "5550199999",
 } as const;
 
+/** Shown in place of the generated token. Drawn from the token alphabet. */
+const PINNED_PAIRING_TOKEN = "Rk7mQ2vXw9HcTzP4nYb3JdLf8sGaEu6h";
+
+/**
+ * Show `PINNED_PAIRING_TOKEN` in place of the token Generate produced.
+ *
+ * Main draws each token from `randomBytes` and hands it to the renderer only
+ * in the Generate response. sqlite keeps just its HMAC, so there is no row a
+ * seeder could write that the Pairing field would display. The text is
+ * swapped in the DOM instead, as `visual-regression.spec.ts` does for its
+ * measured "Initial load" duration. The swap keeps the command word and
+ * checks the token length, so the capture keeps the layout the app produced.
+ */
+async function pinPairingToken(page: Page): Promise<void> {
+  const pairCode = page.locator(".settings-pairing__message code").first();
+  await pairCode.evaluate((code, pinned) => {
+    const shown = code.textContent ?? "";
+    const match = /^(\S+) (\S+)$/.exec(shown);
+    if (!match || match[2].length !== pinned.length) {
+      throw new Error(`unexpected pairing message: ${JSON.stringify(shown)}`);
+    }
+    code.textContent = `${match[1]} ${pinned}`;
+  }, PINNED_PAIRING_TOKEN);
+}
+
 /**
  * Drive the renderer from the main shell into Settings → Messaging
  * with the Telegram Pairing field scrolled into the center of the
@@ -526,10 +699,19 @@ test("messaging-pairing — frame 1: pairing token generated", async () => {
     // Wait for the pair code to render. The renderer puts the
     // generated token inside a `<code>` element under the Pairing
     // field's `.settings-pairing__message` row.
-    const pairCode = app.window
-      .locator(".settings-pairing__message code")
+    const pairingMessage = app.window
+      .locator(".settings-pairing__message")
       .first();
+    const pairCode = pairingMessage.locator("code");
     await expect(pairCode).toBeVisible({ timeout: 10_000 });
+
+    // Generate also copies the code and shows "Copied" for 1.5s. Capture
+    // after it reverts, rather than on whichever side of that the capture
+    // happens to land.
+    await expect(
+      pairingMessage.getByRole("button", { name: "Copy", exact: true }),
+    ).toBeVisible();
+    await pinPairingToken(app.window);
 
     await bringToFront(app.electronApp);
     await captureNative(app.electronApp, "messaging-pairing-frame-1.png");
@@ -869,6 +1051,7 @@ test("desktop-recents — Recents lens populated", async () => {
         name: "Migrate auth from JWT to session cookies",
       }),
     ).toBeVisible();
+    await pinInitialLoad(app.window);
 
     await bringToFront(app.electronApp);
     await captureNative(app.electronApp, "desktop-recents.png");
@@ -919,6 +1102,7 @@ test("desktop-skills-autocomplete — composer $ autocomplete showing skill list
     await expect(
       app.window.getByRole("listbox", { name: "Skills" }),
     ).toBeVisible();
+    await pinInitialLoad(app.window);
 
     await bringToFront(app.electronApp);
     await captureNative(app.electronApp, "desktop-skills-autocomplete.png");
@@ -1019,9 +1203,13 @@ test("desktop-queued-turns — composer with /review queued behind an in-flight 
     fixturePath,
     windowSize: WINDOW_SIZE,
     appearance: SCREENSHOT_APPEARANCE,
+    env: { TZ: "UTC" },
   });
 
   try {
+    // The message sent below stamps its time in the transcript header.
+    await pinWallClock(app, DOCS_SITE_CLOCK_TIME);
+
     await app.window
       .getByRole("button", { name: /Convert OAuth flow to PKCE/i })
       .first()
@@ -1064,6 +1252,7 @@ test("desktop-queued-turns — composer with /review queued behind an in-flight 
         .getByLabel("Queued message")
         .filter({ hasText: "squash and push" }),
     ).toBeVisible();
+    await pinInitialLoad(app.window);
 
     await bringToFront(app.electronApp);
     await captureNative(app.electronApp, "desktop-queued-turns.png");
@@ -1149,9 +1338,14 @@ test("desktop-live-work-rail — in-flight turn with diff + plan in the rail", a
     ),
     windowSize: WINDOW_SIZE,
     appearance: SCREENSHOT_APPEARANCE,
+    env: { TZ: "UTC" },
   });
 
   try {
+    // The turn sent below stamps the time on its user message and its
+    // "Edited 2 files" row.
+    await pinWallClock(app, DOCS_SITE_CLOCK_TIME);
+
     await app.window
       .getByRole("button", { name: /LiveWorkRail chevron toggle replay/i })
       .first()
@@ -1178,6 +1372,7 @@ test("desktop-live-work-rail — in-flight turn with diff + plan in the rail", a
     await expect(
       app.window.getByRole("complementary", { name: /Edited 2 files/i }),
     ).toBeVisible();
+    await pinInitialLoad(app.window);
 
     await bringToFront(app.electronApp);
     await captureNative(app.electronApp, "desktop-live-work-rail.png");

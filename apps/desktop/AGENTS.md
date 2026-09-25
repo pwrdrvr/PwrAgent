@@ -567,6 +567,45 @@ after launch, before any navigation, as well as before each capture.
 scroll pane has kept one `scrollTop` for 10 rendered frames, instead of
 trusting a fixed delay to outlast the ~250ms smooth scroll.
 
+Content that changes on its own is the fourth trap. None of it is a
+rendering difference, so the noise filter keeps every variant. The
+docs-site spec pins each source it has met:
+
+* **Motion.** `launchDocsSiteApp` emulates `prefers-reduced-motion`,
+  which parks the thinking scanner on its reduced-motion pose instead of
+  mid-sweep. It also hides the text caret, which blinks on Chromium's own
+  timer.
+* **Wall-clock time.** Captures that print a time launch with `TZ=UTC`.
+  `pinWallClock` pins `Date.now` in main and the renderer before a turn
+  stamps its rows, the way `visual-regression.spec.ts` does. Main stamps
+  a profile's `last_used` before the spec can reach it, so
+  `pinProfileLastUsed` rewrites `profiles.toml` after launch instead.
+* **Measured durations.** The thread context panel's "Initial load" row
+  reports how long the first read took, 0 or 1 ms against a replay.
+  `pinInitialLoad` sets it to a fixed value before the capture.
+* **Temp paths.** Settings → Worktrees prints a path under the home
+  root, so that capture launches on a fixed home root instead of an
+  `mkdtemp` one.
+* **Random tokens.** A pairing token exists only in the Generate
+  response; sqlite keeps its HMAC. `pinPairingToken` swaps the displayed
+  token for a fixed one of the same length.
+* **Host discovery.** Settings → AI Providers reads main's cached
+  provider catalog once, as the pane mounts. The spec waits for the
+  startup provider refresh to settle before opening it. The rows still
+  show whichever CLIs the capturing Mac has installed.
+
+What's left is GPU raster noise, which the spec doesn't pin. Any
+capture can come out with a few anti-aliased pixels, on rounded corners,
+icon strokes or glyph edges, a few levels off from the last run. Pairing
+frame 1's segment corners do it about one run in four. Rarely, one glyph
+comes out corrupt. `--disable-gpu-rasterization` isn't a fix. It moved
+the variance into other pixels and across batches of runs. Look at a
+diff that small before chasing it, and re-capture a corrupt glyph.
+
+Before adding a capture, check it for anything else in that list: dates,
+durations, generated IDs, temp paths, spinners, or discovery results.
+Then run the spec twice and compare decoded pixels, not PNG bytes.
+
 Pieces, all under `apps/desktop/`:
 
 | File | What it does |
