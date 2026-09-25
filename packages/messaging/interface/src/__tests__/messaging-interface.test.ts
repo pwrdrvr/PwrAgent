@@ -201,6 +201,37 @@ describe("messaging interface package", () => {
     ]);
   });
 
+  it("lets an asked-without-pausing questionnaire be skipped and asks for typed answers", () => {
+    const intent: MessagingQuestionnaireIntent = {
+      id: "intent-async-question",
+      kind: "questionnaire",
+      createdAt: 1000,
+      answers: [null],
+      asyncReply: { backend: "codex", itemId: "call-question", threadId: "thread-1" },
+      currentIndex: 0,
+      phase: "answering",
+      questions: [{
+        id: "q1",
+        question: "Which endpoints does the profile list?",
+        options: [],
+        allowFreeform: true,
+      }],
+    };
+
+    expect(messagingQuestionnaireActions(intent)).toEqual([
+      expect.objectContaining({ id: "questionnaire:skip", label: "Skip", fallbackText: "skip" }),
+    ]);
+    expect(formatMessagingQuestionnaireText(intent)).toContain("Reply with your answer.");
+    expect(formatMessagingQuestionnaireText(intent)).not.toContain("Other:");
+
+    const skipped = { ...intent, phase: "skipped" as const };
+    expect(messagingQuestionnaireActions(skipped)).toEqual([]);
+    expect(formatMessagingQuestionnaireText(skipped)).toBe(
+      "Skipped questions\n\n1. Which endpoints does the profile list?",
+    );
+    expect(messagingQuestionnaireActions({ ...intent, asyncReply: undefined })).toEqual([]);
+  });
+
   it("masks secret questionnaire answers in provider-visible text", () => {
     const intent = {
       id: "intent-questionnaire-secret",

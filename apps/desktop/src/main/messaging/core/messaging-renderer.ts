@@ -1,6 +1,7 @@
 import type {
   AppServerReviewTarget,
   AppServerToolRequestUserInputNotification,
+  CodexAsyncQuestion,
   NavigationSnapshot,
 } from "@pwragent/shared";
 import { coalesceToolActivityBurst } from "@pwragent/shared";
@@ -404,6 +405,48 @@ export function buildErrorIntent(params: {
     createdAt: params.createdAt,
     recoverable: params.recoverable,
     title: params.title,
+  };
+}
+
+/**
+ * Presents the questions a Codex `request_user_input_async` message asked.
+ * Codex lets the operator pick an option or type an answer for every
+ * question, a question without options takes typed text only, and the agent
+ * puts its recommended option first. Question ids include the intent id so an
+ * option on an older question card never matches a newer one.
+ */
+export function buildAsyncQuestionnaireIntent(params: {
+  asyncReply: NonNullable<MessagingQuestionnaireIntent["asyncReply"]>;
+  capabilityProfile?: MessagingCapabilityProfile;
+  createdAt: number;
+  id: string;
+  questions: readonly CodexAsyncQuestion[];
+}): MessagingQuestionnaireIntent {
+  const labelLimit = params.capabilityProfile?.actions?.maxLabelLength;
+  return {
+    id: params.id,
+    kind: "questionnaire",
+    createdAt: params.createdAt,
+    answers: params.questions.map(() => null),
+    asyncReply: params.asyncReply,
+    currentIndex: 0,
+    phase: "answering",
+    fallbackText: "Reply with an option or your own answer, or Skip.",
+    questions: params.questions.map((question, questionIndex) => {
+      const questionId = `${params.id}:question:${questionIndex + 1}`;
+      return {
+        id: questionId,
+        question: question.title,
+        allowFreeform: true,
+        options: (question.options ?? []).map((option, index) => ({
+          id: `${questionId}:option:${index + 1}`,
+          label: labelLimit === undefined ? option : truncateMessagingLabel(option, labelLimit),
+          fallbackText: String(index + 1),
+          recommended: index === 0,
+          value: option,
+        })),
+      };
+    }),
   };
 }
 

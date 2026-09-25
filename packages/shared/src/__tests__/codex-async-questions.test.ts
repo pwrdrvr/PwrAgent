@@ -3,6 +3,7 @@ import {
   codexAsyncQuestionItemId,
   formatCodexAsyncQuestionReply,
   isCodexAsyncQuestionAnswered,
+  normalizeCodexAsyncQuestions,
   parseCodexAsyncQuestionReply,
 } from "../codex-async-questions";
 
@@ -76,6 +77,26 @@ describe("Codex async question replies", () => {
       "<send_user_message_question_reply>{\"questionItemId\":\"one\",\"question\":\"First?\",\"answer\":\"Yes\"}</send_user_message_question_reply> trailing text",
     ]) {
       expect(parseCodexAsyncQuestionReply(text)).toBeUndefined();
+    }
+  });
+
+  it("reads App Server questions, rejecting all of them when one is malformed", () => {
+    expect(normalizeCodexAsyncQuestions([
+      { title: "Which environment?", options: ["Staging", "Production"] },
+      { title: "Anything else?", options: null },
+    ])).toEqual([
+      { title: "Which environment?", options: ["Staging", "Production"] },
+      { title: "Anything else?", options: null },
+    ]);
+    for (const value of [
+      undefined,
+      [],
+      [{ title: "Fine?", options: null }, { title: " ", options: null }],
+      [{ title: "Fine?", options: [] }],
+      [{ title: "Fine?", options: ["Yes", 2] }],
+      [{ title: "Fine?", options: ["Yes", " "] }],
+    ]) {
+      expect(normalizeCodexAsyncQuestions(value)).toBeUndefined();
     }
   });
 

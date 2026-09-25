@@ -38,6 +38,42 @@ export function codexAsyncQuestionItemId(messageId: string, index: number): stri
 }
 
 /**
+ * Reads the `questions` of an App Server agent message. A reply names each
+ * question by its position, so one malformed question rejects them all
+ * rather than shifting every later position.
+ */
+export function normalizeCodexAsyncQuestions(
+  value: unknown,
+): CodexAsyncQuestion[] | undefined {
+  if (!Array.isArray(value) || value.length === 0) {
+    return undefined;
+  }
+  const questions: CodexAsyncQuestion[] = [];
+  for (const entry of value) {
+    const record = entry && typeof entry === "object"
+      ? entry as Record<string, unknown>
+      : undefined;
+    if (!record || typeof record.title !== "string" || !record.title.trim()) {
+      return undefined;
+    }
+    const options = record.options;
+    if (options === null || options === undefined) {
+      questions.push({ title: record.title, options: null });
+      continue;
+    }
+    if (
+      !Array.isArray(options)
+      || options.length === 0
+      || !options.every((option) => typeof option === "string" && option.trim())
+    ) {
+      return undefined;
+    }
+    questions.push({ title: record.title, options: options as string[] });
+  }
+  return questions;
+}
+
+/**
  * Builds the user-message text that answers one or more async questions.
  * Returns undefined when no reply carries a non-empty answer.
  */
@@ -106,6 +142,14 @@ export function parseCodexAsyncQuestionReply(
     });
   }
   return replies.length > 0 ? replies : undefined;
+}
+
+/** One line for surfaces that preview a reply, such as a queued message. */
+export function summarizeCodexAsyncQuestionReply(
+  replies: readonly Pick<CodexAsyncQuestionReply, "answer">[],
+): string {
+  const answers = replies.map((reply) => reply.answer.trim()).filter(Boolean);
+  return `${answers.length === 1 ? "Answer" : "Answers"}: ${answers.join("; ")}`;
 }
 
 /**

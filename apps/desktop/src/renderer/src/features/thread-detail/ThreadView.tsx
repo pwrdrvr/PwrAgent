@@ -1218,12 +1218,17 @@ export function ThreadView(props: ThreadViewProps) {
   const [pendingRequestBusy, setPendingRequestBusy] = useState(false);
   const [pendingRequestError, setPendingRequestError] = useState<string>();
   const asyncQuestionReplyId = useRef(0);
+  const asyncQuestionReplySettlers = useRef(new Map<number, (accepted: boolean) => void>());
   const [asyncQuestionReply, setAsyncQuestionReply] = useState<{
     id: number;
     threadId: string;
     backend: NavigationThreadSummary["source"];
     text: string;
   }>();
+  // Dismissing Codex's async questions only hides their controls, so it is
+  // this window's choice for the session, as skipping is in Codex's own UI.
+  const [dismissedAsyncQuestions, setDismissedAsyncQuestions] =
+    useState<ReadonlySet<string>>(() => new Set());
   const [expandedImage, setExpandedImage] = useState<AppServerThreadImagePart>();
   const [contextRailResizing, setContextRailResizing] = useState(false);
   const [transcriptReglueRequestKey, setTranscriptReglueRequestKey] = useState(0);
@@ -2204,6 +2209,64 @@ export function ThreadView(props: ThreadViewProps) {
     }
   };
 
+  const asyncQuestionThreadKey = selectedThread
+    ? `${selectedThread.source}:${selectedThread.id}`
+    : undefined;
+  const dismissedAsyncQuestionMessageIds = useMemo(() => {
+    const prefix = `${asyncQuestionThreadKey}\0`;
+    return new Set(
+      [...dismissedAsyncQuestions]
+        .filter((key) => key.startsWith(prefix))
+        .map((key) => key.slice(prefix.length)),
+    );
+  }, [asyncQuestionThreadKey, dismissedAsyncQuestions]);
+  useEffect(() => {
+    const settlers = asyncQuestionReplySettlers.current;
+    return () => {
+      // The composer drops a reply addressed to a thread it no longer shows.
+      for (const settle of settlers.values()) settle(false);
+      settlers.clear();
+    };
+  }, [asyncQuestionThreadKey]);
+  const handleAnswerAsyncQuestions = useEventCallback((text: string): Promise<boolean> => {
+    // One answer at a time: the composer applies only the newest submission.
+    if (!selectedThread || asyncQuestionReplySettlers.current.size > 0) {
+      return Promise.resolve(false);
+    }
+    asyncQuestionReplyId.current += 1;
+    const id = asyncQuestionReplyId.current;
+    const thread = selectedThread;
+    return new Promise<boolean>((resolve) => {
+      asyncQuestionReplySettlers.current.set(id, resolve);
+      setAsyncQuestionReply({
+        id,
+        threadId: thread.id,
+        backend: thread.source,
+        text,
+      });
+    });
+  });
+  const handleReplySubmissionSettled = useEventCallback((id: number, accepted: boolean) => {
+    const settle = asyncQuestionReplySettlers.current.get(id);
+    asyncQuestionReplySettlers.current.delete(id);
+    settle?.(accepted);
+  });
+  const handleAsyncQuestionsDismissedChange = useEventCallback(
+    (messageId: string, dismissed: boolean) => {
+      if (!asyncQuestionThreadKey) return;
+      const key = `${asyncQuestionThreadKey}\0${messageId}`;
+      setDismissedAsyncQuestions((current) => {
+        if (current.has(key) === dismissed) return current;
+        const next = new Set(current);
+        if (dismissed) {
+          next.add(key);
+        } else {
+          next.delete(key);
+        }
+        return next;
+      });
+    },
+  );
   const handleBeforeStartTurn = useEventCallback(async (signal?: AbortSignal) => {
     const drifted = await checkSelectedThreadBranchDrift("turn", signal);
     // An aborted check reports no drift. It must still prevent sending.
@@ -3855,16 +3918,9 @@ export function ThreadView(props: ThreadViewProps) {
               onLoadOlder={loadOlderTranscript}
               onLinkedMessageHandled={props.onLinkedMessageHandled}
               onOpenImage={setExpandedImage}
-              onChooseAsyncQuestionAnswer={(question, answer) => {
-                if (!selectedThread) return;
-                asyncQuestionReplyId.current += 1;
-                setAsyncQuestionReply({
-                  id: asyncQuestionReplyId.current,
-                  threadId: selectedThread.id,
-                  backend: selectedThread.source,
-                  text: `Answer to “${question}”: ${answer}`,
-                });
-              }}
+              dismissedAsyncQuestionMessageIds={dismissedAsyncQuestionMessageIds}
+              onAnswerAsyncQuestions={handleAnswerAsyncQuestions}
+              onAsyncQuestionsDismissedChange={handleAsyncQuestionsDismissedChange}
               onExpandedActivityIdsChange={
                 props.onExpandedTranscriptActivityIdsChange
               }
@@ -3950,7 +4006,8 @@ export function ThreadView(props: ThreadViewProps) {
             mcpConnectionCount={threadMcpConnectionCount}
             composerImplementation={props.composerImplementation}
             draftStore={props.composerDraftStore}
-            replySuggestion={asyncQuestionReply}
+            replySubmission={asyncQuestionReply}
+            onReplySubmissionSettled={handleReplySubmissionSettled}
             directory={props.selectedDirectory}
             directories={props.directories}
             disabled={props.composerDisabled}

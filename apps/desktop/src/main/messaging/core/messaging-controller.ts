@@ -11,13 +11,18 @@ import {
   buildReviewBranchOptions,
   buildFederatedThreadRef,
   buildThreadIdentityKey,
+  codexAsyncQuestionItemId,
   findPreferredReviewWorkspaceCwd,
   findPrimaryReviewWorkspaceCwd,
   federatedThreadIdentityKey,
+  formatCodexAsyncQuestionReply,
   isAcpBackendId,
   isAppServerBackendKind,
+  isCodexAsyncQuestionAnswered,
   isMessagingBindingTargetKind,
+  normalizeCodexAsyncQuestions,
   normalizeRenamedTitleSource,
+  parseCodexAsyncQuestionReply,
   parseCodexTurnErrorMessage,
   parseThreadIdentityKey,
   permissionForActionId,
@@ -28,6 +33,9 @@ import {
   resolveNewThreadBackend,
   selectableNewThreadBackends,
   stripCodexGitActionDirectives,
+  summarizeCodexAsyncQuestionReply,
+  type CodexAsyncQuestion,
+  type CodexAsyncQuestionReply,
 } from "@pwragent/shared";
 import type {
   AgentEvent,
@@ -178,6 +186,7 @@ import type { MessagingActivityLog } from "../messaging-activity-log.js";
 import {
   buildActivityIntent,
   buildApprovalIntent,
+  buildAsyncQuestionnaireIntent,
   buildConfirmationIntent,
   buildErrorIntent,
   buildQuestionnaireIntent,
@@ -1535,6 +1544,14 @@ export class MessagingController {
       // semantics that it must never inherit.
       return;
     }
+    const asyncQuestionReplies = asyncQuestionRepliesForBackendEvent(event);
+    if (asyncQuestionReplies) {
+      await this.retireAnsweredAsyncQuestionnaires(
+        event,
+        threadId,
+        asyncQuestionReplies,
+      );
+    }
     const scheduledAction = scheduledActionForBackendEvent(event);
     if (
       scheduledAction?.origin === "messaging"
@@ -2032,7 +2049,17 @@ export class MessagingController {
             event,
             binding,
           );
+          const asyncQuestions = asyncQuestionsForBackendEvent(event);
           if (!assistantMessageClaimed) {
+            await this.deliverAssistantImages(assistantImages, event, binding);
+          } else if (asyncQuestions) {
+            // Codex writes the questions into the message text as well; the
+            // questionnaire presents the same content with answer controls.
+            await this.deliverAsyncQuestionnaire(
+              asyncQuestions,
+              event,
+              binding,
+            );
             await this.deliverAssistantImages(assistantImages, event, binding);
           } else {
             const deliveredFinalStream = await this.flushAssistantStreamForEvent(
@@ -5579,11 +5606,14 @@ export class MessagingController {
       return;
     }
 
-    const pendingIntent = await this.options.store.findActivePendingIntentForChannel({
-      actorId: event.actor.platformUserId,
-      channel: event.channel,
-      now: this.now(),
-    });
+    const pendingIntent = await this.pendingIntentForCallback(
+      event,
+      await this.options.store.findActivePendingIntentForChannel({
+        actorId: event.actor.platformUserId,
+        channel: event.channel,
+        now: this.now(),
+      }),
+    );
     if (pendingIntent) {
       const action = actionsForIntent(pendingIntent.intent).find(
         (candidate) => candidate.id === (event.actionId ?? event.interaction.id),
@@ -6324,6 +6354,18 @@ export class MessagingController {
     }
 
     const intent = normalizeMessagingQuestionnaireIntent(pendingIntent.intent);
+    if (action.id === "questionnaire:skip") {
+      if (intent.asyncReply) {
+        await this.options.store.deletePendingIntent(pendingIntent.id);
+        await this.deliverQuestionnaireIntent(
+          pendingIntent,
+          { ...intent, phase: "skipped" },
+          event,
+        );
+      }
+      return;
+    }
+
     if (action.id === "questionnaire:back") {
       await this.updateQuestionnairePendingIntent(
         pendingIntent,
@@ -6449,6 +6491,10 @@ export class MessagingController {
     intent: MessagingQuestionnaireIntent,
     event: MessagingInboundCallbackEvent | MessagingInboundTextEvent,
   ): Promise<void> {
+    if (intent.asyncReply) {
+      await this.submitAsyncQuestionnaire(pendingIntent, intent, event);
+      return;
+    }
     const submittedIntent: MessagingQuestionnaireIntent = {
       ...intent,
       phase: "submitted",
@@ -6497,13 +6543,13 @@ export class MessagingController {
   private async deliverQuestionnaireIntent(
     pendingIntent: MessagingPendingIntentRecord,
     intent: MessagingQuestionnaireIntent,
-    event: MessagingInboundCallbackEvent | MessagingInboundTextEvent,
+    event?: MessagingInboundCallbackEvent | MessagingInboundTextEvent,
   ): Promise<MessagingDeliveryResult> {
     const binding = pendingIntent.bindingId
       ? await this.options.store.getBinding(pendingIntent.bindingId)
       : undefined;
     const targetSurface = pendingIntent.surface ?? (
-      event.kind === "callback" ? event.interaction : undefined
+      event?.kind === "callback" ? event.interaction : undefined
     );
     const deliveryIntent: MessagingQuestionnaireIntent = targetSurface
       ? {
@@ -6517,6 +6563,299 @@ export class MessagingController {
         }
       : intent;
     return await this.deliver(deliveryIntent, binding, event);
+  }
+
+  /**
+   * Presents the questions a Codex async question message asked. Nothing is
+   * waiting on the answer, so the turn keeps its working state.
+   */
+  private async deliverAsyncQuestionnaire(
+    asyncQuestions: { itemId: string; questions: CodexAsyncQuestion[] },
+    event: AgentEvent,
+    binding: MessagingBindingRecord,
+  ): Promise<void> {
+    const threadId = threadIdForBackendEvent(event) ?? binding.threadId;
+    const intent = buildAsyncQuestionnaireIntent({
+      asyncReply: {
+        backend: event.backend,
+        itemId: asyncQuestions.itemId,
+        threadId,
+      },
+      capabilityProfile: this.capabilityProfile,
+      createdAt: this.now(),
+      id: this.newIntentId("async-question"),
+      questions: asyncQuestions.questions,
+    });
+    intent.bindingId = binding.id;
+    intent.audit = buildMessagingAuditContext({
+      action: "async_question.presented",
+      actor: {
+        platformUserId: binding.authorizedActorIds[0] ?? "unknown",
+      },
+      backend: event.backend,
+      bindingId: binding.id,
+      channel: binding.channel,
+      now: this.now(),
+      threadId,
+    });
+    const pendingIntent = await this.storePendingIntent(intent, binding);
+    const delivery = await this.deliver(intent, binding);
+    if (delivery.surface) {
+      await this.options.store.upsertPendingIntent({
+        ...pendingIntent,
+        surface: delivery.surface,
+      });
+    }
+  }
+
+  /**
+   * A Codex async question has no pending request to answer. The answers go
+   * back as one message in Codex's reply envelope: steered into the turn when
+   * one is running, as Codex expects, and otherwise as a new turn.
+   */
+  private async submitAsyncQuestionnaire(
+    pendingIntent: MessagingPendingIntentRecord,
+    intent: MessagingQuestionnaireIntent,
+    event: MessagingInboundCallbackEvent | MessagingInboundTextEvent,
+  ): Promise<void> {
+    const asyncReply = intent.asyncReply;
+    if (!asyncReply) {
+      return;
+    }
+    const binding = pendingIntent.bindingId
+      ? await this.options.store.getBinding(pendingIntent.bindingId)
+      : undefined;
+    const text = formatCodexAsyncQuestionReply(
+      intent.questions.map((question, index) => ({
+        questionItemId: codexAsyncQuestionItemId(asyncReply.itemId, index),
+        question: question.question,
+        answer: intent.answers[index]?.value ?? "",
+      })),
+    );
+    if (!binding || binding.revokedAt || !text) {
+      await this.options.store.deletePendingIntent(pendingIntent.id);
+      await this.deliver(
+        buildErrorIntent({
+          id: this.newIntentId("async-question-unavailable"),
+          createdAt: this.now(),
+          title: "Question unavailable",
+          body: "This conversation is no longer bound to the thread that asked.",
+          recoverable: true,
+        }),
+        undefined,
+        event,
+      );
+      return;
+    }
+    if (
+      !(await this.requirePermission(
+        event,
+        "message.reply",
+        "questionnaire:async-reply",
+      ))
+      || !(await this.requireRemoteScopeForBinding(
+        event,
+        binding,
+        "questionnaire:async-reply:remote-instance",
+      ))
+    ) {
+      return;
+    }
+
+    // Retire the card before sending: the reply's own echo would otherwise
+    // find it still pending and close it a second time.
+    await this.options.store.deletePendingIntent(pendingIntent.id);
+    const sent = await this.sendAsyncQuestionReply({
+      binding,
+      event,
+      preview: summarizeCodexAsyncQuestionReply(
+        intent.answers.map((answer) => ({ answer: answer?.value ?? "" })),
+      ),
+      text,
+    });
+    if (!sent) {
+      await this.updateQuestionnairePendingIntent(pendingIntent, intent, event);
+      return;
+    }
+    await this.deliverQuestionnaireIntent(
+      pendingIntent,
+      { ...intent, phase: "submitted" },
+      event,
+    );
+  }
+
+  private async sendAsyncQuestionReply(params: {
+    binding: MessagingBindingRecord;
+    event: MessagingInboundCallbackEvent | MessagingInboundTextEvent;
+    preview: string;
+    text: string;
+  }): Promise<boolean> {
+    const { binding, event } = params;
+    const input: AppServerTurnInputItem[] = [{ type: "text", text: params.text }];
+    const threadKey = threadKeyForBinding(binding);
+    let admissionState: MessagingThreadAdmissionState;
+    try {
+      admissionState = await this.options.backend.getThreadAdmissionState({
+        backend: binding.backend,
+        federationTarget: federationTargetForBinding(binding),
+        threadId: binding.threadId,
+      });
+    } catch (error) {
+      await this.deliver(
+        buildErrorIntent({
+          id: this.newIntentId("async-question-reply-failed"),
+          createdAt: this.now(),
+          title: "Answer could not be sent",
+          body: error instanceof Error ? error.message : String(error),
+          recoverable: true,
+        }),
+        binding,
+        event,
+      );
+      return false;
+    }
+
+    if (await this.isTurnOccupied(binding, threadKey, admissionState)) {
+      const activeTurn = await this.resolveSteerableActiveTurn(
+        binding,
+        "async_question_reply",
+      );
+      if (
+        this.options.backend.steerTurn
+        && activeTurn
+        && ["working", "waiting"].includes(activeTurn.status)
+      ) {
+        try {
+          await this.options.backend.steerTurn({
+            backend: binding.backend,
+            federationTarget: federationTargetForBinding(binding),
+            threadId: binding.threadId,
+            expectedTurnId: activeTurn.turnId,
+            input,
+            requestId: this.newIntentId("async-question-reply"),
+            messageOrigin: messageOriginForInboundEvent(event),
+          });
+          return true;
+        } catch (error) {
+          this.logger.warn?.("messaging async question reply could not steer", {
+            bindingId: binding.id,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+      // The queued notice offers Steer, and the queue starts the reply
+      // after the turn ends.
+      await this.queuePreparedInput({
+        binding,
+        event,
+        input,
+        preview: params.preview,
+        threadKey,
+      });
+      return true;
+    }
+
+    const started = await this.startPreparedInput({
+      admissionState,
+      binding,
+      event,
+      input,
+      preview: params.preview,
+      threadKey,
+    });
+    return started !== "failed";
+  }
+
+  /**
+   * An async question answered anywhere closes its card here, so a later
+   * chat message is not captured as a second answer.
+   */
+  private async retireAnsweredAsyncQuestionnaires(
+    event: AgentEvent,
+    threadId: ThreadIdentifier,
+    replies: readonly CodexAsyncQuestionReply[],
+  ): Promise<void> {
+    const answers = new Map(
+      replies.map((reply) => [reply.questionItemId, reply.answer]),
+    );
+    const answeredIds = new Set(answers.keys());
+    const pendingIntents =
+      await this.options.store.findActivePendingAsyncQuestionnaires({
+        backend: event.backend,
+        threadId,
+        now: this.now(),
+      });
+    for (const pendingIntent of pendingIntents) {
+      if (
+        pendingIntent.intent.kind !== "questionnaire"
+        || !this.isChannelInScope(pendingIntent.channel)
+      ) {
+        continue;
+      }
+      const intent = normalizeMessagingQuestionnaireIntent(pendingIntent.intent);
+      const itemId = intent.asyncReply?.itemId;
+      if (
+        !itemId
+        || !intent.questions.some((_, index) =>
+          isCodexAsyncQuestionAnswered(answeredIds, itemId, index)
+        )
+      ) {
+        continue;
+      }
+      const binding = pendingIntent.bindingId
+        ? await this.options.store.getBinding(pendingIntent.bindingId)
+        : undefined;
+      if (binding && !bindingMatchesFederationTarget(binding, event.federationTarget)) {
+        continue;
+      }
+      const answered: MessagingQuestionnaireIntent = {
+        ...intent,
+        answers: intent.questions.map((question, index) => {
+          const value = answers.get(codexAsyncQuestionItemId(itemId, index))
+            ?? answers.get(itemId);
+          if (!value) {
+            return intent.answers[index] ?? null;
+          }
+          const option = question.options.find((candidate) => candidate.value === value);
+          return option
+            ? { kind: "option", optionId: option.id, value }
+            : { kind: "custom", value };
+        }),
+        phase: "submitted",
+      };
+      await this.options.store.deletePendingIntent(pendingIntent.id);
+      await this.deliverQuestionnaireIntent(pendingIntent, answered);
+    }
+  }
+
+  /**
+   * A channel's newest pending intent answers its callbacks, but an agent can
+   * ask a second async question while an earlier card is still open. A click
+   * on the earlier card must act on that card, not on the newest question.
+   */
+  private async pendingIntentForCallback(
+    event: MessagingInboundCallbackEvent,
+    newest: MessagingPendingIntentRecord | undefined,
+  ): Promise<MessagingPendingIntentRecord | undefined> {
+    const clicked = event.sourceSurface;
+    if (!clicked || (newest && isSameMessagingSurface(clicked, newest.surface))) {
+      return newest;
+    }
+    const binding = await this.options.store.findActiveBindingForChannel(event.channel);
+    if (!binding) {
+      return newest;
+    }
+    const questionnaires =
+      await this.options.store.findActivePendingAsyncQuestionnaires({
+        backend: binding.backend,
+        threadId: binding.threadId,
+        now: this.now(),
+      });
+    return questionnaires.find((candidate) =>
+      candidate.bindingId === binding.id
+      && candidate.allowedActorIds.includes(event.actor.platformUserId)
+      && isSameMessagingSurface(clicked, candidate.surface)
+    ) ?? newest;
   }
 
   private async submitQuestionnaireIntent(
@@ -16637,7 +16976,11 @@ export class MessagingController {
   ): Promise<MessagingDeliveryResult> {
     if (binding && shouldFlushToolUpdatesBeforeIntent(intent)) {
       await this.flushToolUpdatesForBinding(binding, { clear: false });
-      if (intent.kind === "approval" || intent.kind === "questionnaire") {
+      // A question asked without pausing the turn leaves the agent working.
+      if (
+        intent.kind === "approval"
+        || (intent.kind === "questionnaire" && !intent.asyncReply)
+      ) {
         await this.markWorkingCardWaiting(binding);
       }
     }
@@ -21882,6 +22225,53 @@ function sleepUntil(
   return new Promise((resolve) => {
     setTimeout(resolve, delayMs);
   });
+}
+
+/**
+ * The questions a Codex `request_user_input_async` message asked. The reply
+ * names each question by this item id, so a message without one cannot be
+ * answered and stays ordinary assistant text.
+ */
+function asyncQuestionsForBackendEvent(
+  event: AgentEvent,
+): { itemId: string; questions: CodexAsyncQuestion[] } | undefined {
+  if (event.notification.method !== "item/completed") {
+    return undefined;
+  }
+  const item = (event.notification.params as {
+    item?: { delivery?: unknown; questions?: unknown; type?: unknown };
+  }).item;
+  if (item?.type !== "agentMessage" || item.delivery !== "async") {
+    return undefined;
+  }
+  const itemId = assistantItemIdForBackendEvent(event);
+  const questions = normalizeCodexAsyncQuestions(item.questions);
+  return itemId && questions ? { itemId, questions } : undefined;
+}
+
+/**
+ * Codex reads an async question reply only from a user message whose single
+ * text input is the reply envelope; skill and mention inputs may accompany it.
+ */
+function asyncQuestionRepliesForBackendEvent(
+  event: AgentEvent,
+): CodexAsyncQuestionReply[] | undefined {
+  if (event.notification.method !== "item/completed") {
+    return undefined;
+  }
+  const item = (event.notification.params as {
+    item?: { content?: unknown; type?: unknown };
+  }).item;
+  if (item?.type !== "userMessage" || !Array.isArray(item.content)) {
+    return undefined;
+  }
+  const inputs = (item.content as Array<{ text?: unknown; type?: unknown } | null>)
+    .filter((input) => input?.type !== "skill" && input?.type !== "mention");
+  const [input] = inputs;
+  if (inputs.length !== 1 || input?.type !== "text" || typeof input.text !== "string") {
+    return undefined;
+  }
+  return parseCodexAsyncQuestionReply(input.text);
 }
 
 function assistantTextForBackendEvent(event: AgentEvent): string | undefined {

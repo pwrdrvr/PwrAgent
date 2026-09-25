@@ -48,6 +48,7 @@ import {
   type MessagingInboundTextEvent,
   type MessagingJsonValue,
   type MessagingSurfaceIntent,
+  messagingQuestionnaireActions,
 } from "@pwragent/messaging-interface";
 import { PERMISSIVE_CAPABILITY_PROFILE } from "@pwragent/messaging-interface/testing";
 import { textForDiscordIntent } from "@pwragent/messaging-provider-discord";
@@ -20064,6 +20065,198 @@ describe("MessagingController", () => {
     expect(harness.delivered.at(-2)).toMatchObject({
       kind: "questionnaire",
       phase: "submitted",
+    });
+  });
+
+  describe("Codex async questions", () => {
+    type QuestionnaireIntent = Extract<MessagingSurfaceIntent, { kind: "questionnaire" }>;
+    const asyncQuestionEvent = (): AgentEvent => ({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            id: "call-question",
+            type: "agentMessage",
+            phase: "final_answer",
+            text: "Which environment?\n- Staging\n- Production\n\nAnything to skip?",
+            delivery: "async",
+            questions: [
+              { title: "Which environment?", options: ["Staging", "Production"] },
+              { title: "Anything to skip?", options: null },
+            ],
+          },
+        },
+      },
+    });
+    const turnCompletedEvent = (): AgentEvent => ({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: { id: "turn-1", status: "completed", output: [] },
+        },
+      },
+    });
+    const questionItemId = (index: number) =>
+      JSON.stringify(["request_user_input_async", "call-question", index]);
+    const expectedReply = `<send_user_message_question_reply>\n${JSON.stringify([
+      { answer: "Production", question: "Which environment?", questionItemId: questionItemId(0) },
+      { answer: "The smoke tests", question: "Anything to skip?", questionItemId: questionItemId(1) },
+    ])}\n</send_user_message_question_reply>`;
+    const questionnaires = (delivered: MessagingSurfaceIntent[]) =>
+      delivered.filter((intent): intent is QuestionnaireIntent => intent.kind === "questionnaire");
+
+    it("presents the questions as a skippable questionnaire without pausing the turn", async () => {
+      const harness = await createHarness();
+      await bindThread(harness);
+      harness.delivered.length = 0;
+
+      await harness.controller.handleBackendEvent(asyncQuestionEvent());
+
+      const [questionnaire] = questionnaires(harness.delivered);
+      expect(questionnaire).toMatchObject({
+        phase: "answering",
+        asyncReply: { backend: "codex", itemId: "call-question", threadId: "thread-1" },
+        questions: [
+          {
+            question: "Which environment?",
+            allowFreeform: true,
+            options: [
+              expect.objectContaining({ label: "Staging", recommended: true }),
+              expect.objectContaining({ label: "Production", recommended: false }),
+            ],
+          },
+          { question: "Anything to skip?", allowFreeform: true, options: [] },
+        ],
+      });
+      expect(messagingQuestionnaireActions(questionnaire!).map((action) => action.id))
+        .toContain("questionnaire:skip");
+      // The questionnaire replaces the message text Codex derived from the questions.
+      expect(harness.delivered.some((intent) =>
+        intent.kind === "message" && intent.role === "assistant"
+      )).toBe(false);
+      expect(harness.submitServerRequest).not.toHaveBeenCalled();
+    });
+
+    it("answers with Codex's reply envelope as a new turn once the thread is idle", async () => {
+      const harness = await createHarness();
+      await bindThread(harness);
+      await harness.controller.handleBackendEvent(asyncQuestionEvent());
+      await harness.controller.handleBackendEvent(turnCompletedEvent());
+      const [questionnaire] = questionnaires(harness.delivered);
+      harness.startTurn.mockClear();
+
+      await harness.controller.handleInboundEvent(buildCallbackEvent({
+        actionId: questionnaire!.questions[0]!.options[1]!.id,
+      }));
+      await harness.controller.handleInboundEvent(buildTextEvent("The smoke tests"));
+      await vi.waitFor(() => expect(harness.startTurn).toHaveBeenCalledTimes(1));
+
+      expect(harness.startTurn).toHaveBeenCalledWith(expect.objectContaining({
+        backend: "codex",
+        threadId: "thread-1",
+        input: [{ type: "text", text: expectedReply }],
+      }));
+      expect(harness.steerTurn).not.toHaveBeenCalled();
+      expect(harness.submitServerRequest).not.toHaveBeenCalled();
+      expect(questionnaires(harness.delivered).at(-1)).toMatchObject({ phase: "submitted" });
+      expect(await harness.store.findActivePendingAsyncQuestionnaires({
+        backend: "codex",
+        threadId: "thread-1",
+      })).toEqual([]);
+    });
+
+    it("steers the reply into the turn that is still running", async () => {
+      const harness = await createHarness({
+        readActiveTurn: async () => ({
+          backend: "codex",
+          threadId: "thread-1",
+          turnId: "turn-1",
+        }),
+      });
+      await bindThread(harness);
+      await harness.controller.handleBackendEvent(asyncQuestionEvent());
+      const [questionnaire] = questionnaires(harness.delivered);
+      harness.startTurn.mockClear();
+
+      await harness.controller.handleInboundEvent(buildCallbackEvent({
+        actionId: questionnaire!.questions[0]!.options[1]!.id,
+      }));
+      await harness.controller.handleInboundEvent(buildTextEvent("The smoke tests"));
+
+      await vi.waitFor(() => expect(harness.steerTurn).toHaveBeenCalledTimes(1));
+      expect(harness.steerTurn).toHaveBeenCalledWith(expect.objectContaining({
+        backend: "codex",
+        threadId: "thread-1",
+        expectedTurnId: "turn-1",
+        input: [{ type: "text", text: expectedReply }],
+      }));
+      expect(harness.startTurn).not.toHaveBeenCalled();
+    });
+
+    it("skips the questions so later chat text reaches the thread as usual", async () => {
+      const harness = await createHarness();
+      await bindThread(harness);
+      await harness.controller.handleBackendEvent(asyncQuestionEvent());
+      await harness.controller.handleBackendEvent(turnCompletedEvent());
+
+      await harness.controller.handleInboundEvent(
+        buildCallbackEvent({ actionId: "questionnaire:skip" }),
+      );
+
+      expect(questionnaires(harness.delivered).at(-1)).toMatchObject({ phase: "skipped" });
+      expect(messagingQuestionnaireActions(questionnaires(harness.delivered).at(-1)!)).toEqual([]);
+      expect(await harness.store.findActivePendingAsyncQuestionnaires({
+        backend: "codex",
+        threadId: "thread-1",
+      })).toEqual([]);
+      harness.startTurn.mockClear();
+
+      await harness.controller.handleInboundEvent(buildTextEvent("Deploy it anyway"));
+      await vi.waitFor(() => expect(harness.startTurn).toHaveBeenCalledTimes(1));
+      expect(harness.startTurn).toHaveBeenCalledWith(expect.objectContaining({
+        input: [expect.objectContaining({ type: "text", text: "Deploy it anyway" })],
+      }));
+    });
+
+    it("closes the questionnaire when another client answers", async () => {
+      const harness = await createHarness();
+      await bindThread(harness);
+      await harness.controller.handleBackendEvent(asyncQuestionEvent());
+      harness.delivered.length = 0;
+
+      await harness.controller.handleBackendEvent({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-2",
+            item: {
+              id: "user-reply",
+              type: "userMessage",
+              content: [{ type: "text", text: expectedReply }],
+            },
+          },
+        },
+      });
+
+      expect(questionnaires(harness.delivered).at(-1)).toMatchObject({
+        phase: "submitted",
+        answers: [
+          expect.objectContaining({ kind: "option", value: "Production" }),
+          { kind: "custom", value: "The smoke tests" },
+        ],
+      });
+      expect(await harness.store.findActivePendingAsyncQuestionnaires({
+        backend: "codex",
+        threadId: "thread-1",
+      })).toEqual([]);
     });
   });
 

@@ -39,6 +39,7 @@ import {
   type MessagingBindingChannelMetadataUpdate,
   type MessagingManagedTopicObservationMerge,
 } from "../messaging/core/messaging-store-merge.js";
+import { isAsyncQuestionnaireForThread } from "../messaging/core/messaging-store.js";
 
 const SECRET_KEY_PATTERN = /token|secret|password|authorization|api[_-]?key/i;
 
@@ -837,6 +838,21 @@ export class SqliteMessagingStore {
       .sort((a, b) => b.createdAt - a.createdAt);
   }
 
+  async findActivePendingAsyncQuestionnaires(params: {
+    backend: MessagingBindingRecord["backend"];
+    threadId: MessagingBindingRecord["threadId"];
+    now?: number;
+  }): Promise<MessagingPendingIntentRecord[]> {
+    const now = params.now ?? Date.now();
+    const rows = this.stateDb.raw
+      .prepare("SELECT payload FROM pending_intents WHERE expires_at > ?")
+      .all(now) as { payload: string }[];
+    return rows
+      .map((r) => JSON.parse(r.payload) as MessagingPendingIntentRecord)
+      .filter((intent) => isAsyncQuestionnaireForThread(intent, params))
+      .sort((a, b) => b.createdAt - a.createdAt);
+  }
+
   async deletePendingIntent(id: string): Promise<void> {
     this.stateDb.raw
       .prepare("DELETE FROM pending_intents WHERE intent_id = ?")
@@ -1569,6 +1585,7 @@ export type MessagingStoreLike = Pick<
   | "getPendingIntent"
   | "findActivePendingIntentForChannel"
   | "findActivePendingIntentsForRequest"
+  | "findActivePendingAsyncQuestionnaires"
   | "deletePendingIntent"
   | "deletePendingIntentsForChannel"
   | "deletePendingIntentsForThread"

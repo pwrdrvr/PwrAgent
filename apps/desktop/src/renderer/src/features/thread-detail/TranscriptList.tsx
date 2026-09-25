@@ -34,6 +34,7 @@ import type {
 import {
   buildPendingRequestActions,
   buildPendingRequestApprovalContext,
+  parseCodexAsyncQuestionReply,
 } from "@pwragent/shared";
 import { injectMessagingBindingTransitions } from "./messaging-binding-transition-entries";
 import { injectPermissionTransitions } from "./permission-transition-entries";
@@ -132,7 +133,11 @@ type TranscriptListProps = {
   subAgents?: ThreadSubAgentSummary[];
   onExpandedActivityIdsChange?: (activityIds: string[]) => void;
   onOpenImage?: (image: AppServerThreadImagePart) => void;
-  onChooseAsyncQuestionAnswer?: (question: string, answer: string) => void;
+  /** Sends an answer to a Codex async question; true once the composer took it. */
+  onAnswerAsyncQuestions?: (text: string) => Promise<boolean>;
+  /** Messages whose async questions the operator dismissed in this window. */
+  dismissedAsyncQuestionMessageIds?: ReadonlySet<string>;
+  onAsyncQuestionsDismissedChange?: (messageId: string, dismissed: boolean) => void;
   onExpandedWorkPhaseGroupIdsChange?: (groupIds: string[]) => void;
   onViewportChange?: (viewport?: TranscriptViewport) => void;
   onRespondToPendingRequest?: (action: PendingRequestAction) => Promise<void>;
@@ -903,6 +908,28 @@ export function TranscriptList(props: TranscriptListProps) {
     props.questionnaireActivities,
     props.turnFailures,
   ]);
+  // Replies to Codex async questions, keyed by the question they name. The
+  // window is a contiguous tail, so a reply to any visible question is here.
+  // The string key keeps the map, and every row it reaches, stable until a
+  // reply actually changes.
+  const asyncQuestionReplyKey = useMemo(
+    () =>
+      JSON.stringify(
+        transcriptEntries.flatMap((entry) =>
+          entry.type === "message" && entry.role === "user"
+            ? (parseCodexAsyncQuestionReply(entry.text) ?? []).map((reply) => [
+                reply.questionItemId,
+                reply.answer,
+              ])
+            : []
+        ),
+      ),
+    [transcriptEntries],
+  );
+  const asyncQuestionReplies = useMemo(
+    () => new Map<string, string>(JSON.parse(asyncQuestionReplyKey) as Array<[string, string]>),
+    [asyncQuestionReplyKey],
+  );
   const alwaysVisibleTransientMessageIds = useMemo(
     () =>
       new Set(
@@ -1584,7 +1611,10 @@ export function TranscriptList(props: TranscriptListProps) {
                   subAgents={props.subAgents}
                   threadLinkSource={props.threadLinkSource}
                   onOpenImage={props.onOpenImage}
-                  onChooseAsyncQuestionAnswer={props.onChooseAsyncQuestionAnswer}
+                  asyncQuestionReplies={asyncQuestionReplies}
+                  asyncQuestionsDismissed={props.dismissedAsyncQuestionMessageIds?.has(item.entry.id)}
+                  onAnswerAsyncQuestions={props.onAnswerAsyncQuestions}
+                  onAsyncQuestionsDismissedChange={props.onAsyncQuestionsDismissedChange}
                 />
               );
             return (
