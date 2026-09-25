@@ -134,6 +134,17 @@ describe("explicit attached PR review", () => {
     })).toEqual([upstream, prs[1]]);
   });
 
+  it("matches a worktree through its attached repository path without widening to unrelated repositories", () => {
+    const scoped = { ...prs[0], linkedDirectoryPaths: [cwd] };
+    const unrelated = { ...prs[0], url: "https://github.com/fixture/other/pull/3", linkedDirectoryPaths: ["/other"] };
+    expect(attachedPullRequestsForWorkspace({
+      cwd: "/worktrees/project", repositoryPath: cwd, prs: [scoped, prs[1], unrelated],
+    })).toEqual([scoped, prs[1]]);
+    expect(attachedPullRequestsForWorkspace({
+      cwd: "/worktrees/project", repositoryPath: "/elsewhere", prs: [scoped, unrelated],
+    })).toEqual([]);
+  });
+
   it.each([undefined, { currentBranch: "stack-1" }, { currentBranch: "main", behind: 0 }])(
     "does not infer head equality from clean counters with status %j", (directoryGitStatus) => {
       const pr = { ...prs[0], headRefName: "stack-1", lifecycleState: "open" as const };
