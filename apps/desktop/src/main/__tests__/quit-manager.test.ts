@@ -62,6 +62,32 @@ beforeEach(() => {
 });
 
 describe("createQuitManager", () => {
+  it.each(["manual-confirm", "countdown-expired", "manual-cancel"] as const)("coordinates peer-only quit with %s even when active-work confirmation is disabled", async (resolution) => {
+    const { createQuitManager } = await import("../quit-manager");
+    const announceShutdown = vi.fn();
+    const cancelShutdown = vi.fn();
+    const commitShutdown = vi.fn();
+    const performQuit = vi.fn();
+    const manager = createQuitManager({
+      getFederationPeerCount: () => 2,
+      announceShutdown, cancelShutdown, commitShutdown, performQuit,
+      getConfirmationEnabled: () => false,
+      getQuitBlockers: () => ({ count: 0, terminalSessionCount: 0, terminalThreadKeys: [], threadIds: [], actionRunCount: 0, items: [] }),
+      log: {},
+      confirm: async (options) => {
+        expect(options.federationPeerCount).toBe(2);
+        options.onCountdownChanged?.(10_000);
+        options.onCountdownChanged?.(null);
+        return resolution;
+      },
+    });
+    await expect(manager.requestQuit({ source: "menu" })).resolves.toBe(resolution !== "manual-cancel");
+    expect(announceShutdown.mock.calls).toEqual([[10_000], [null]]);
+    expect(cancelShutdown).toHaveBeenCalledTimes(resolution === "manual-cancel" ? 1 : 0);
+    expect(commitShutdown).toHaveBeenCalledTimes(resolution === "manual-cancel" ? 0 : 1);
+    expect(performQuit).toHaveBeenCalledTimes(resolution === "manual-cancel" ? 0 : 1);
+  });
+
   it("quits immediately when no threads are in progress", async () => {
     const { createQuitManager } = await import("../quit-manager");
     const performQuit = vi.fn();

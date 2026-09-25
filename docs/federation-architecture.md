@@ -77,6 +77,38 @@ The scheduled-action RPC surface is part of federation protocol v1 while the
 protocol remains under development. Peers must authorize `scheduled_actions`
 explicitly; `turn_control` does not imply scheduler access.
 
+### Coordinated quit
+
+Peers negotiate `shutdown_notice` within protocol v1. A normal interactive quit
+with any connected peer opens the existing quit countdown even when no local
+work is running or the active-work confirmation preference is off. The dialog
+announces its actual deadline (including time added for listed work). Pausing
+the countdown or choosing Wait for Work sends a null deadline; Stay Open sends
+cancellation and resumes dispatch. Quit Now commits shutdown immediately.
+
+`federation/shutdown` notifications carry a shutdown ID, monotonic revision,
+`scheduled` / `cancelled` / `exiting` state, `quit` reason, and deadline. They
+travel only between authenticated direct neighbors, outside thread event
+subscriptions. A gateway's notice describes loss of access through that gateway,
+not termination of work on every relayed machine. Legacy peers receive ordinary
+transport closure. A peer connecting during the countdown receives the current
+notice. There are no acknowledgment waits.
+
+During the notice period the router rejects new requests (including relay
+requests); requests already executing can finish and response/event traffic
+continues. The announcing instance also pauses automation dispatch. Receiving
+instances reject new requests through the departing peer. Cancel restores
+request admission. Clients display a local countdown based on the announced
+remaining duration so clock skew does not change it, and clear the notice on
+cancellation or connection turnover. The state and countdown are in memory;
+there are no per-tick network messages or SQLite writes.
+
+Notices precede renderer teardown, tunnel shutdown, and the bounded shutdown
+barrier. Signals and update installation retain their immediate path and send
+an `exiting` notice without a countdown. Final gateway socket closure uses
+WebSocket code 1001. Crash/kill cannot promise advance notice. Normal reconnect
+backoff still applies after disconnect; a notice does not disable reconnection.
+
 ### Remote PTY
 
 - Remote PTY control uses a dedicated `remote_pty` capability and never falls

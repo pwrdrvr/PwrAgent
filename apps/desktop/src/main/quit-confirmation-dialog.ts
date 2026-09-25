@@ -22,6 +22,8 @@ export type QuitConfirmationDialogResult =
 export type { QuitBlockerItem } from "../shared/quit-blockers";
 
 export type QuitConfirmationDialogOptions = {
+  federationPeerCount?: number;
+  onCountdownChanged?: (deadlineAt: number | null) => void;
   countdownSeconds: number;
   inProgressThreadCount: number;
   automationRunCount?: number;
@@ -167,7 +169,7 @@ export async function showQuitConfirmationDialog(
     // The list is scrollable, but a dialog that always reserves room for ten
     // rows would look absurd when nothing is running. Grow with the content up
     // to a ceiling, then let the list scroll inside it.
-    height: quitDialogHeight(items.length),
+    height: quitDialogHeight(items.length) + (options.federationPeerCount ? 72 : 0),
     resizable: false,
     minimizable: false,
     maximizable: false,
@@ -318,6 +320,7 @@ export async function showQuitConfirmationDialog(
       // main-process hard ceiling, which would otherwise quit out from under a
       // user who is mid-scroll.
       if (action === "countdown-cancel") {
+        options.onCountdownChanged?.(null);
         if (hardCeiling) {
           clearTimeout(hardCeiling);
           hardCeiling = undefined;
@@ -326,6 +329,7 @@ export async function showQuitConfirmationDialog(
       }
 
       if (action === "wait-for-work") {
+        options.onCountdownChanged?.(null);
         waitForWork = true;
         if (hardCeiling) {
           clearTimeout(hardCeiling);
@@ -383,6 +387,7 @@ export async function showQuitConfirmationDialog(
       }
     });
     window.once("closed", () => finish("manual-cancel"));
+    options.onCountdownChanged?.(Date.now() + countdownSeconds * 1000);
     hardCeiling = setTimeout(
       () => finish("countdown-expired"),
       countdownSeconds * 1000 + HARD_CEILING_GRACE_MS,
@@ -391,6 +396,7 @@ export async function showQuitConfirmationDialog(
     const dialogUrl = `data:text/html;charset=utf-8,${encodeURIComponent(
       buildQuitConfirmationHtml({
         countdownSeconds,
+        federationPeerCount: options.federationPeerCount,
         inProgressThreadCount: options.inProgressThreadCount,
         automationRunCount: options.automationRunCount ?? 0,
         terminalSessionCount: options.terminalSessionCount,
@@ -583,6 +589,7 @@ function buildQuitItemListHtml(options: {
 }
 
 export function buildQuitConfirmationHtml(options: {
+  federationPeerCount?: number;
   countdownSeconds: number;
   inProgressThreadCount: number;
   automationRunCount?: number;
@@ -865,6 +872,7 @@ export function buildQuitConfirmationHtml(options: {
     </header>
     <main class="content">
       <h1>Quit PwrAgent?</h1>
+      ${options.federationPeerCount ? `<p>${options.federationPeerCount} connected peer${options.federationPeerCount === 1 ? "" : "s"} will lose access through this instance. Peers that support shutdown notices have been notified.</p>` : ""}
       <p id="blocker-count">${escapeHtml(countText)}</p>
       <p id="blocker-impact">${escapeHtml(interruptionText)}</p>
       ${listHtml}

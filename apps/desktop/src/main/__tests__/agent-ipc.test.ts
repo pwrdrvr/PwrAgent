@@ -1260,6 +1260,18 @@ describe("agent ipc", () => {
     expect(unrelatedSend).not.toHaveBeenCalled();
   });
 
+  it("delivers process-owned shutdown notices to remote windows without thread demand", async () => {
+    const { broadcastAgentEvent } = await import("../ipc/agent-ipc");
+    const localSend = vi.fn();
+    const remoteSend = vi.fn();
+    channelSubscribers = [{ id: 1, send: localSend }, { id: 2, send: remoteSend }];
+    channelSubscriberTargets.set(2, { scope: "remote", instanceId: "owner_one" });
+    federationMock.runtime.rendererWantsRemoteEvent.mockReturnValue(false);
+    broadcastAgentEvent({ backend: "codex", notification: { method: "federation/shutdown/changed", params: { notices: [] } } });
+    expect(localSend).toHaveBeenCalledTimes(1);
+    expect(remoteSend).toHaveBeenCalledTimes(1);
+  });
+
   it.each(["disconnected", "connected"])("delivers process-owned %s status without thread demand", async (status) => {
     const { broadcastAgentEvent } = await import("../ipc/agent-ipc");
     const { AGENT_EVENT_CHANNEL } = await import("../../shared/ipc");

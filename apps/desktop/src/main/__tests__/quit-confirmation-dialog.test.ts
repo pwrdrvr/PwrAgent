@@ -134,6 +134,27 @@ import {
   type QuitBlockerItem,
 } from "../quit-confirmation-dialog";
 
+it("announces the actual scaled deadline and reports countdown pauses", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(1_000);
+  try {
+    const changed = vi.fn();
+    const pending = showQuitConfirmationDialog({
+      countdownSeconds: 10, federationPeerCount: 2, onCountdownChanged: changed,
+      inProgressThreadCount: 0, terminalSessionCount: 0,
+    });
+    const window = dialogWindows.at(-1)!;
+    expect(changed).toHaveBeenCalledWith(11_000);
+    expect(decodeURIComponent(window.loadedUrl!)).toContain("2 connected peers will lose access");
+    sendDialogAction(window, "countdown-cancel");
+    expect(changed).toHaveBeenLastCalledWith(null);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(window.closed).toBe(0);
+    sendDialogAction(window, "manual-confirm");
+    await expect(pending).resolves.toBe("manual-confirm");
+  } finally { vi.useRealTimers(); }
+});
+
 describe("quit dialog row links", () => {
   it("round-trips a codex thread key", () => {
     const item: QuitBlockerItem = {

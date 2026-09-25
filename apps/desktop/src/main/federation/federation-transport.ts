@@ -534,7 +534,7 @@ export class FederationGatewayWebSocketServer {
     this.httpServer = undefined;
     this.connections.clear();
     for (const client of wsServer?.clients ?? []) {
-      client.close();
+      client.close(1001, "Instance shutting down");
     }
     if (wsServer) {
       await new Promise<void>((resolve) => wsServer.close(() => resolve()));

@@ -416,7 +416,7 @@ export function broadcastAgentEvent(event: AgentEvent): void {
       ) {
         continue;
       }
-    } else if (windowTarget) {
+    } else if (windowTarget && hydratedEvent.notification.method !== "federation/shutdown/changed") {
       continue;
     }
     webContents.send(AGENT_EVENT_CHANNEL, rendererEvent);
