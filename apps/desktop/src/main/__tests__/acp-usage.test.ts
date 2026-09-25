@@ -4,7 +4,6 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   foldAcpTurnUsage,
-  readAcpContextWindowUpdate,
   readAcpSelectedModel,
   readAcpUsageEnvelope,
   type AcpTokenUsage,
@@ -110,13 +109,7 @@ describe("ACP usage normalization", () => {
         totalTokens: 1_070,
       },
     });
-    expect(
-      readAcpContextWindowUpdate({
-        sessionUpdate: "usage_update",
-        used: 96_000,
-        size: 200_000,
-      }),
-    ).toEqual({ used: 96_000, size: 200_000 });
+
   });
 
   // Grok Build reports each model call on `response_completed`, a transient

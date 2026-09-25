@@ -14,11 +14,6 @@ export type AcpUsageEnvelope = {
   tokenUsage: AcpTokenUsage;
 };
 
-export type AcpContextWindowUpdate = {
-  size: number;
-  used: number;
-};
-
 /**
  * ACP running totals are PER TURN, not per session. That is the convention for
  * this transport, deliberately, not an accident of one provider.
@@ -141,19 +136,6 @@ export function readAcpUsageEnvelope(
       ...(totalTokens !== undefined ? { totalTokens } : {}),
     },
   };
-}
-
-export function readAcpContextWindowUpdate(
-  update: Record<string, unknown>,
-): AcpContextWindowUpdate | undefined {
-  if (readAcpUpdateKind(update) !== "usage_update") {
-    return undefined;
-  }
-  const used = readFiniteNumber(update.used);
-  const size = readFiniteNumber(update.size);
-  return used !== undefined && used >= 0 && size !== undefined && size > 0
-    ? { size, used }
-    : undefined;
 }
 
 /**
