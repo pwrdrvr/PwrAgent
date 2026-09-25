@@ -278,7 +278,7 @@ function acpRefreshRegistryIds(
     ? new Set(request.registryIds)
     : undefined;
   return new Set(
-    LOCAL_ACP_REGISTRY_IDS.filter(
+    [...LOCAL_ACP_REGISTRY_IDS, CLAUDE_ACP_REGISTRY_ID].filter(
       (registryId) => !requested || requested.has(registryId),
     ),
   );
