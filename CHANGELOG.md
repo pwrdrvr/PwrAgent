@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.1.0 - 2026-09-25
+
+- Federation and Remote Work - Connect PwrAgent installations securely and work across them as one workspace, with mounted threads, live viewers, remote terminals, and cross-instance search.
+- Star Map - Navigate local and federated projects in a full-screen workspace that brings thread activity, attention, sub-agents, and agent-driven actions together.
+- Messaging Access and Automations - Govern messaging with role-based access control and auditable decisions. A rebuilt automation editor makes triggers, filters, execution identity, routing, and run status usable day to day.
+- Slack and Messaging - Show which agent replied and share working progress without flooding a channel, alongside stronger agent sessions and agent-delivered files.
+- Agent Runtimes and Tools - Add a managed Grok Build, local Codex-compatible models, and operator-authorized MCP connections.
+- Performance and Cost - Keep large transcripts and remote work responsive, while Token Miser and per-model accounting make replay costs easier to control.
+- Reviews and CI Recovery - Expand managed review across providers and let the owning agent respond to failed PR checks and merge conflicts through bounded repair turns.
+- Desktop Portability - Bundle Git and Git LFS, and add a native Apple Silicon download and update path.
+
 ## v1.1.0-beta.5 - 2026-09-23
 
 - Update Banner - Kept Cancel and release-note actions clear of download progress, stabilized the banner width across update states, and prevented a late download completion from turning an intended Cancel click into Restart.
