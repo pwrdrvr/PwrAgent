@@ -172,6 +172,32 @@ export function CloudflareSetup(props: Props) {
   const disabled = Boolean(listenerBusy) || Boolean(busy) || !api?.configureFederationCloudflare;
   const created = Boolean(status?.hostname);
   const published = status?.phase === "Published";
+  // Readiness is transient. Refresh while the published gateway is visible,
+  // without overlapping requests or allowing an old poll to undo an action.
+  useEffect(() => {
+    const configure = api?.configureFederationCloudflare;
+    if (!published || tab !== "gateway" || busy || listenerBusy || !configure) return;
+    let active = true;
+    let timer: ReturnType<typeof setTimeout>;
+    const poll = async () => {
+      const generation = operationGeneration.current;
+      try {
+        const next = await configure({ action: "status" });
+        if (active && generation === operationGeneration.current) {
+          setStatus((previous) => ({ ...next, message: previous?.message }));
+        }
+      } catch {
+        if (active && generation === operationGeneration.current) {
+          setStatus((previous) => previous ? { ...previous, connectorHealth: {
+            state: "unavailable", detail: "Could not refresh gateway status. Check again to confirm connectivity.",
+          } } : previous);
+        }
+      }
+      if (active) timer = setTimeout(() => { void poll(); }, 5000);
+    };
+    timer = setTimeout(() => { void poll(); }, 5000);
+    return () => { active = false; clearTimeout(timer); };
+  }, [api, published, tab, busy, listenerBusy]);
   // Once the account is connected, offer a free conventional name as a real
   // value. As a placeholder it read as already filled in, while Create stayed
   // disabled. The main process picks one nothing in the zone uses yet, since
@@ -318,10 +344,9 @@ export function CloudflareSetup(props: Props) {
     password.length < 12 && "a transfer password of 12+ characters",
   ]);
 
-  // One stage is "Next": the first whose work is not done. After publishing,
-  // the API token is gone on relaunch, and auditing or issuing needs it back.
+  // After publishing, reconnecting the administration token is optional.
   const current = [
-    { key: "account", done: connected },
+    { key: "account", done: connected || published },
     { key: "connector", done: installed },
     { key: "endpoint", done: published },
     { key: "verify", done: verified },
@@ -332,13 +357,16 @@ export function CloudflareSetup(props: Props) {
         : { state: "waiting", label: "Waiting" };
 
   const failedChecks = Boolean(status?.checks?.some((check) => !check.passed));
+  const tunnelConnected = status?.connectorHealth?.state === "connected" && status.connectorRunning;
   const failedAction = error?.action ? ACTION_FAILED[error.action] : undefined;
   const [chip, chipKind]: [string, SettingsChipTone] =
     failedAction ? [failedAction, "err"]
     : status?.signIn?.state === "sign-in-required" ? ["Sign-in required", "warn"]
-      : verified ? ["Verified", "ok"]
-        : failedChecks ? ["Check failed", "err"]
-          : published ? [GATE_NAMES[effectiveGate], "ok"]
+      : failedChecks ? ["Check failed", "err"]
+        : published ? !status?.connectorRunning ? ["Connector stopped", "warn"]
+          : !status.gatewayListening ? ["Gateway unavailable", "warn"]
+            : tunnelConnected ? ["Tunnel connected", "ok"] : ["Connection unconfirmed", "warn"]
+          : verified ? ["Verified", "ok"]
             : started ? ["Incomplete", "warn"]
               : status?.signIn?.state === "signed-in" ? ["Signed in", "ok"]
                 : props.manualConfigured ? ["Client set up", "ok"]
@@ -479,6 +507,22 @@ export function CloudflareSetup(props: Props) {
       </div>
 
       {tab === "gateway" ? <>
+        {published ? <div className="cloudflare-setup__state" role="status">
+          <strong>Gateway setup saved · {status?.hostname}</strong>
+          <p>{!installed ? "PwrAgent cannot find cloudflared on this computer. Check the connector installation below."
+            : !status?.connectorRunning ? "The tunnel connector is stopped. Start it below to restore Cloudflare connectivity."
+              : !status.gatewayListening ? "The gateway is not listening on the tunnel’s saved origin port. Check Federation configuration and the endpoint’s listener below."
+                : tunnelConnected ? "Cloudflare’s edge is connected to this tunnel, and the local gateway is listening."
+                  : status.connectorHealth?.detail ?? "The connector is running; its connection to Cloudflare has not been confirmed."}</p>
+          {status?.connectorHealth?.state === "failed" ? <p>{status.connectorHealth.detail}</p> : null}
+          <p>{verified ? "Endpoint security validation passed this session."
+            : "Client access still depends on the Access policy and credentials. Validate Endpoint Security checks that path."}</p>
+          {!connected ? <p>No account API token is loaded. It is needed only to manage or validate the endpoint; it is not needed to run the saved gateway.</p> : null}
+          <div className="settings-button-row">
+            {action("Check gateway status", { action: "status", refresh: true }, "Checking gateway…")}
+            {!status?.connectorRunning ? action("Start connector", { action: "start" }, "Starting connector…", false, !installed) : null}
+          </div>
+        </div> : null}
         {!published && started ? <p className="cloudflare-setup__state" role="status">
           {created
             ? "Endpoint creation stopped partway. Resume it or start over in step 4; nothing is published until every check passes."
@@ -527,7 +571,8 @@ export function CloudflareSetup(props: Props) {
           </AutomationStage>
           <AutomationFlow caption="PwrAgent creates everything in your Cloudflare account through a scoped API token" />
 
-          <AutomationStage verb="Connect" title="Cloudflare account" progress={progress("account", connected, "Connected")}>
+          <AutomationStage verb="Connect" title="Cloudflare account" progress={published && !connected
+            ? { state: "waiting", label: "Optional · manage endpoint" } : progress("account", connected, "Connected")}>
             {connected ? <div className="cloudflare-setup__account">
               <span>Connected · {status?.zoneName}</span>
               {action("Disconnect API token", { action: "disconnect" }, "Disconnecting…")}
@@ -648,7 +693,7 @@ export function CloudflareSetup(props: Props) {
               <div className="settings-button-row">
                 {action("Audit Cloudflare settings", { action: "audit" }, "Auditing live Cloudflare configuration…", false, !connected)}
                 {action("Validate Endpoint Security", { action: "validate" }, oauth ? "Testing sign-in refusal and gateway observations…" : "Testing credential admission and gateway observations…", true, !connected || !status.connectorRunning)}
-                {status.connectorRunning ? action("Stop connector", { action: "stop" }, "Stopping connector…") : action("Start connector", { action: "start" }, "Starting connector…", false, !published)}
+                {status.connectorRunning ? action("Stop connector", { action: "stop" }, "Stopping connector…") : !published ? action("Start connector", { action: "start" }, "Starting connector…", false, true) : null}
               </div>
               <p className="cloudflare-setup__hint">Validation reads the live policy back, then sends HTTPS and WebSocket requests with and without {oauth ? "the gateway’s token" : `a ${mtls ? "certificate" : "service token"}`}. A pass needs Cloudflare to refuse the second at its edge and this gateway to see none of it.{!connected ? " Connect the Cloudflare account in step 2 to run it." : ""}</p>
               {status.checks ? <div className="cloudflare-setup__checks" aria-label="Endpoint security results">

@@ -158,6 +158,13 @@ export type CloudflareSetupStatus = {
   resources?: string[];
   connectorRunning: boolean;
   connectorInstalled: boolean;
+  /** Live edge readiness from this process's connector, not an Access policy audit. */
+  connectorHealth?: {
+    state: "stopped" | "connecting" | "connected" | "unavailable" | "failed";
+    detail?: string;
+  };
+  /** The current gateway listener matches the published tunnel's origin port. */
+  gatewayListening?: boolean;
   /** The installed cloudflared's version, when it reports one. */
   connectorVersion?: string;
   /**

@@ -11,6 +11,55 @@ const connected: CloudflareSetupStatus = {
 };
 
 describe("Cloudflare setup flow", () => {
+  it("refreshes edge readiness and removes a green status if refreshing fails", async () => {
+    const saved: CloudflareSetupStatus = {
+      ...connected, hostname: "federation.example.com", phase: "Published", connectorRunning: true,
+      gatewayListening: true, connectorHealth: { state: "connecting" },
+    };
+    const call = vi.fn(async () => saved);
+    const view = render(<CloudflareSetup api={{ configureFederationCloudflare: call } as DesktopApi}
+      listenPort="47830" onWriteConfig={async () => true} onSettingsChanged={async () => {}} />);
+    await screen.findByText("Connection unconfirmed");
+    // Re-render the polling effect under the fake clock, without waiting for
+    // the real interval or replacing the component's saved setup.
+    vi.useFakeTimers();
+    try {
+      view.rerender(<CloudflareSetup api={{ configureFederationCloudflare: call } as DesktopApi}
+        listenPort="47830" onWriteConfig={async () => true} onSettingsChanged={async () => {}} />);
+      await act(async () => {});
+      call.mockResolvedValue({ ...saved, connectorHealth: { state: "connected" } });
+      await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+      expect(screen.getByText("Tunnel connected")).toBeInTheDocument();
+      call.mockRejectedValue(new Error("IPC unavailable"));
+      await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+      expect(screen.queryByText("Tunnel connected")).not.toBeInTheDocument();
+      expect(screen.getByText(/Could not refresh gateway status/)).toBeInTheDocument();
+    } finally {
+      view.unmount();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    { running: false, listening: true, health: "stopped" as const, message: /The tunnel connector is stopped/ },
+    { running: true, listening: true, health: "connecting" as const, message: /its connection to Cloudflare has not been confirmed/ },
+    { running: true, listening: false, health: "connected" as const, message: /The gateway is not listening/ },
+    { running: true, listening: true, health: "connected" as const, message: /Cloudflare’s edge is connected to this tunnel/ },
+  ])("shows saved gateway readiness without an administration token ($health, listener $listening)", async ({ running, listening, health, message }) => {
+    const call = vi.fn(async () => ({
+      ...connected, connected: false, hostname: "federation.example.com", tunnelId: "tunnel", phase: "Published",
+      connectorRunning: running, gatewayListening: listening, connectorHealth: { state: health },
+    }));
+    render(<CloudflareSetup api={{ configureFederationCloudflare: call } as DesktopApi}
+      listenPort="47830" onWriteConfig={async () => true} onSettingsChanged={async () => {}} />);
+    await screen.findByText("Gateway setup saved · federation.example.com");
+    expect(screen.getByText(message)).toBeInTheDocument();
+    expect(screen.getByText("Optional · manage endpoint")).toBeInTheDocument();
+    expect(screen.getByText(/No account API token is loaded/)).toBeInTheDocument();
+    expect(screen.queryByText("Incomplete.")).not.toBeInTheDocument();
+    if (!running) expect(screen.getByRole("button", { name: "Start connector" })).toBeEnabled();
+  });
+
   it("preserves the listener address and existing client role when provisioning", async () => {
     const events: string[] = [];
     const call = vi.fn(async (request: CloudflareSetupRequest) => {

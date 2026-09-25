@@ -93,8 +93,11 @@ async function describe(message?: string, options: { refreshConnector?: boolean 
   const connectorUpdate = connectorVersion && latest && compareCloudflaredVersions(latest, connectorVersion) === 1
     ? latest
     : undefined;
+  const connectorHealth = await cloudflareConnector.health();
+  const gatewayListening = status.listenPort !== undefined
+    && getDesktopFederationRuntime().loopbackListenPort() === status.listenPort;
   return {
-    ...status, connectorVersion, connectorUpdate, draft, signIn, clientConnection, signInPending,
+    ...status, connectorVersion, connectorUpdate, connectorHealth, gatewayListening, draft, signIn, clientConnection, signInPending,
     ...(message ? { message } : {}),
   };
 }

@@ -2950,8 +2950,10 @@ export class DesktopFederationRuntime {
             && !startupAborted()) {
             await cloudflareConnector.start(cloudflare.tunnelToken);
           }
-        } catch {
-          log.warn("Cloudflare connector was not started. Check Federation settings.");
+        } catch (error) {
+          log.warn("Cloudflare connector was not started. Check Federation settings.", {
+            reason: redactFederationDiagnostic(error instanceof Error ? error.message : String(error)),
+          });
         }
       } catch (error) {
         this.gatewayListenerError = redactFederationDiagnostic(
