@@ -845,8 +845,11 @@ export class SqliteMessagingStore {
   }): Promise<MessagingPendingIntentRecord[]> {
     const now = params.now ?? Date.now();
     const rows = this.stateDb.raw
-      .prepare("SELECT payload FROM pending_intents WHERE expires_at > ?")
-      .all(now) as { payload: string }[];
+      .prepare(
+        "SELECT payload FROM pending_intents WHERE expires_at > ?"
+        + " AND json_extract(payload, '$.intent.asyncReply.threadId') = ?",
+      )
+      .all(now, params.threadId) as { payload: string }[];
     return rows
       .map((r) => JSON.parse(r.payload) as MessagingPendingIntentRecord)
       .filter((intent) => isAsyncQuestionnaireForThread(intent, params))

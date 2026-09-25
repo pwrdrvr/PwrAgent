@@ -2234,6 +2234,13 @@ Implementation notes remain in a readable bubble.`;
       ));
       // The composer did not take either reply, so the controls stay.
       expect(within(card).getByLabelText("Or type an answer")).toHaveValue("Ask me each time");
+
+      // Pressing the chosen option again leaves the question unanswered.
+      fireEvent.click(within(card).getByRole("button", { name: /Keep policy/ }));
+      fireEvent.click(within(card).getByRole("button", { name: /Keep policy/ }));
+      expect(within(card).getByRole("button", { name: /Keep policy/ }))
+        .toHaveAttribute("aria-pressed", "false");
+      expect(within(card).getByRole("button", { name: "Answer" })).toBeDisabled();
     });
 
     it("shows a reply from the transcript as the answer, not as raw envelope text", () => {

@@ -211,7 +211,12 @@ function AsyncQuestionItem(props: {
                     type="button"
                     aria-pressed={selected}
                     disabled={props.busy}
-                    onClick={() => props.onDraftChange({ option, text: "" })}
+                    // Pressing the chosen option again leaves the question
+                    // out of the answer.
+                    onClick={() => props.onDraftChange({
+                      option: selected ? undefined : option,
+                      text: "",
+                    })}
                   >
                     <span className="transcript-questionnaire__option-label">
                       <span className="transcript-questionnaire__option-key">

@@ -6632,7 +6632,10 @@ export class MessagingController {
         answer: intent.answers[index]?.value ?? "",
       })),
     );
-    if (!binding || binding.revokedAt || !text) {
+    if (!text) {
+      return;
+    }
+    if (!binding || binding.revokedAt) {
       await this.options.store.deletePendingIntent(pendingIntent.id);
       await this.deliver(
         buildErrorIntent({
@@ -6838,7 +6841,13 @@ export class MessagingController {
     newest: MessagingPendingIntentRecord | undefined,
   ): Promise<MessagingPendingIntentRecord | undefined> {
     const clicked = event.sourceSurface;
-    if (!clicked || (newest && isSameMessagingSurface(clicked, newest.surface))) {
+    const actionId = event.actionId ?? event.interaction.id;
+    if (
+      !clicked
+      || (newest && isSameMessagingSurface(clicked, newest.surface))
+      // Only a questionnaire button can belong to an older async card.
+      || !(actionId.startsWith("questionnaire:") || actionId.startsWith("async-question:"))
+    ) {
       return newest;
     }
     const binding = await this.options.store.findActiveBindingForChannel(event.channel);

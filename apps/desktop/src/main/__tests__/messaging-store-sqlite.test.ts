@@ -9,6 +9,7 @@ import type {
   MessagingManagedTopicRecord,
   MessagingMonitorSubscriptionRecord,
   MessagingPendingIntentRecord,
+  MessagingQuestionnaireIntent,
   MessagingThreadTopicLinkRecord,
   MessagingTopicCleanupProposalRecord,
 } from "@pwragent/messaging-interface";
@@ -801,6 +802,60 @@ describe("SqliteMessagingStore", () => {
         path: "/skills/ce-plan/SKILL.md",
       },
     });
+  });
+
+  it("finds the unexpired async questionnaires a thread asked", async () => {
+    const store = await createStore();
+    const asyncQuestionnaire = (
+      id: string,
+      asyncReply: { backend: "codex" | "acp:gemini"; threadId: string },
+      overrides: Partial<MessagingPendingIntentRecord> = {},
+    ): MessagingPendingIntentRecord => {
+      const intent: MessagingQuestionnaireIntent = {
+        id,
+        kind: "questionnaire",
+        createdAt: 1000,
+        answers: [null],
+        asyncReply: { ...asyncReply, itemId: `call-${id}` },
+        currentIndex: 0,
+        phase: "answering",
+        questions: [{
+          id: `${id}:question:1`,
+          question: "Which endpoint?",
+          allowFreeform: true,
+          options: [],
+        }],
+      };
+      return buildPendingIntent({ id, intent, ...overrides });
+    };
+    await store.upsertPendingIntent(buildPendingIntent());
+    await store.upsertPendingIntent(
+      asyncQuestionnaire("older", { backend: "codex", threadId: "thread-1" }),
+    );
+    await store.upsertPendingIntent(
+      asyncQuestionnaire("newer", { backend: "codex", threadId: "thread-1" }, {
+        createdAt: 1500,
+      }),
+    );
+    await store.upsertPendingIntent(
+      asyncQuestionnaire("expired", { backend: "codex", threadId: "thread-1" }, {
+        expiresAt: 1100,
+      }),
+    );
+    await store.upsertPendingIntent(
+      asyncQuestionnaire("other-thread", { backend: "codex", threadId: "thread-2" }),
+    );
+    await store.upsertPendingIntent(
+      asyncQuestionnaire("other-backend", { backend: "acp:gemini", threadId: "thread-1" }),
+    );
+
+    const found = await store.findActivePendingAsyncQuestionnaires({
+      backend: "codex",
+      threadId: "thread-1",
+      now: 1200,
+    });
+
+    expect(found.map((intent) => intent.id)).toEqual(["newer", "older"]);
   });
 
   it("sweeps binding and channel state when a binding is revoked", async () => {

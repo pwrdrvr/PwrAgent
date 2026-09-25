@@ -2226,6 +2226,7 @@ export function ThreadView(props: ThreadViewProps) {
       // The composer drops a reply addressed to a thread it no longer shows.
       for (const settle of settlers.values()) settle(false);
       settlers.clear();
+      setAsyncQuestionReply(undefined);
     };
   }, [asyncQuestionThreadKey]);
   const handleAnswerAsyncQuestions = useEventCallback((text: string): Promise<boolean> => {
@@ -2250,6 +2251,8 @@ export function ThreadView(props: ThreadViewProps) {
     const settle = asyncQuestionReplySettlers.current.get(id);
     asyncQuestionReplySettlers.current.delete(id);
     settle?.(accepted);
+    // A Composer mounted later, as after the launchpad, must not send it again.
+    setAsyncQuestionReply((current) => (current?.id === id ? undefined : current));
   });
   const handleAsyncQuestionsDismissedChange = useEventCallback(
     (messageId: string, dismissed: boolean) => {
