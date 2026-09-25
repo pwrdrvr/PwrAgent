@@ -26,6 +26,7 @@ export function FederationShutdownNotices(props: {
   desktopApi?: Pick<DesktopApi, "onAgentEvent" | "readFederationHealth">;
   onNoticeChanged: (instanceId: string, notice: AppNoticeToastNotice | undefined) => void;
 }) {
+  const { onNoticeChanged } = props;
   const [peers, setPeers] = useState<FederationPeerShutdown[]>([]);
   const [now, setNow] = useState(Date.now);
   const dismissed = useRef(new Map<string, string>());
@@ -36,7 +37,7 @@ export function FederationShutdownNotices(props: {
     const unsubscribe = props.desktopApi?.onAgentEvent?.((event) => {
       if (event.federationTarget || event.notification.method !== FEDERATION_SHUTDOWN_CHANGED_METHOD) return;
       receivedEvent = true;
-      setPeers(event.notification.params.notices);
+      setPeers((event.notification.params as { notices: FederationPeerShutdown[] }).notices);
       setNow(Date.now());
     });
     void props.desktopApi?.readFederationHealth?.({}).then(({ health }) => {
@@ -60,16 +61,16 @@ export function FederationShutdownNotices(props: {
       const notice = buildFederationShutdownNotice(peer, now);
       notice.onDismiss = () => {
         dismissed.current.set(peer.instanceId, peer.shutdownId);
-        props.onNoticeChanged(peer.instanceId, undefined);
+        onNoticeChanged(peer.instanceId, undefined);
       };
       const signature = JSON.stringify(notice);
       next.set(peer.instanceId, signature);
-      if (published.current.get(peer.instanceId) !== signature) props.onNoticeChanged(peer.instanceId, notice);
+      if (published.current.get(peer.instanceId) !== signature) onNoticeChanged(peer.instanceId, notice);
     }
     for (const id of published.current.keys()) {
-      if (!next.has(id)) props.onNoticeChanged(id, undefined);
+      if (!next.has(id)) onNoticeChanged(id, undefined);
     }
     published.current = next;
-  }, [peers, now, props.onNoticeChanged]);
+  }, [peers, now, onNoticeChanged]);
   return null;
 }

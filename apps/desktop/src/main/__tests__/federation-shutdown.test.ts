@@ -50,7 +50,7 @@ describe("Federation shutdown", () => {
     const { shutdown, connections, sent } = fixture();
     connections[0].sendEnvelope = () => { throw new Error("closed"); };
     expect(() => shutdown.exiting()).not.toThrow();
-    connections[0].sendEnvelope = (e) => { sent.push(e); };
+    connections[0].sendEnvelope = (e: FederationProtocolEnvelope) => { sent.push(e); };
     shutdown.connected("client");
     expect(sent).toEqual([expect.objectContaining({ params: expect.objectContaining({ state: "exiting", deadlineAt: 100_000 }) })]);
   });
@@ -64,6 +64,8 @@ describe("Federation shutdown", () => {
     shutdown.receive(announcement(scheduled), "client");
     expect(changed).toHaveBeenCalledTimes(2);
     shutdown.receive(announcement({ ...scheduled, revision: 3, state: "cancelled" }), "client");
+    expect(shutdown.snapshot()).toEqual([]);
+    shutdown.receive(announcement(scheduled), "client");
     expect(shutdown.snapshot()).toEqual([]);
     shutdown.receive(announcement({ ...scheduled, shutdownId: "next" }), "client");
     shutdown.connected("client");

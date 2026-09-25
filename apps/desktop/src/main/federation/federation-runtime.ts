@@ -1213,6 +1213,7 @@ export class DesktopFederationRuntime {
     this.parked = false;
     await cloudflareConnector.stop();
     this.connectionAttempt = undefined;
+    for (const peer of this.shutdown.snapshot()) this.shutdown.disconnected(peer.instanceId);
     this.connectionGeneration += 1;
     this.walkEpoch += 1;
     if (isAppStateInitialized()) {

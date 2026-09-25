@@ -145,7 +145,10 @@ it("announces the actual scaled deadline and reports countdown pauses", async ()
     });
     const window = dialogWindows.at(-1)!;
     expect(changed).toHaveBeenCalledWith(11_000);
-    expect(decodeURIComponent(window.loadedUrl!)).toContain("2 connected peers will lose access");
+    const html = decodeURIComponent(window.loadedUrl!);
+    expect(html).toContain("2 connected peers will lose access");
+    expect(html).toContain("Work on other machines may continue");
+    expect(html).not.toContain('id="wait"');
     sendDialogAction(window, "countdown-cancel");
     expect(changed).toHaveBeenLastCalledWith(null);
     await vi.advanceTimersByTimeAsync(60_000);

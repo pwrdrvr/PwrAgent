@@ -661,7 +661,11 @@ export async function readQuitBlockerQueueSnapshot(): Promise<
 
 export const appQuitManager = createQuitManager({
   getFederationPeerCount: () => getDesktopFederationRuntime().connectedShutdownPeerCount(),
-  announceShutdown: (deadlineAt) => getDesktopFederationRuntime().shutdown.begin(deadlineAt),
+  announceShutdown: (deadlineAt) => {
+    const shutdown = getDesktopFederationRuntime().shutdown;
+    if (deadlineAt === null) shutdown.pause();
+    else shutdown.begin(deadlineAt);
+  },
   cancelShutdown: () => getDesktopFederationRuntime().shutdown.cancel(),
   commitShutdown: () => getDesktopFederationRuntime().shutdown.exiting(),
   focusPendingConfirmation: () => focusActiveQuitConfirmationDialog(),

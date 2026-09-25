@@ -63,12 +63,16 @@ export class FederationShutdown {
   }
 
   connected(peerId: string): void {
-    this.received.delete(peerId);
     this.disconnected(peerId);
     if (this.local) this.send(peerId);
   }
 
   disconnected(peerId: string): void {
+    this.received.delete(peerId);
+    this.clearRemote(peerId);
+  }
+
+  private clearRemote(peerId: string): void {
     if (this.remote.delete(peerId)) this.options.changed(this.snapshot());
   }
 
@@ -88,7 +92,7 @@ export class FederationShutdown {
     if (notice.state === "cancelled" && previous?.shutdownId !== notice.shutdownId) return true;
     this.received.set(sourcePeerId, notice);
     if (notice.state === "cancelled") {
-      if (previous?.shutdownId === notice.shutdownId) this.disconnected(sourcePeerId);
+      if (previous?.shutdownId === notice.shutdownId) this.clearRemote(sourcePeerId);
       return true;
     }
     // Count down from the sender's remaining duration, not its wall clock.

@@ -273,6 +273,10 @@ export async function showQuitConfirmationDialog(
         latestSnapshot = snapshot;
         const signature = JSON.stringify(snapshot);
         const payload = buildQuitDialogUpdatePayload(snapshot, navigationPrefix);
+        if (options.federationPeerCount && payload.totalCount === 0) {
+          payload.countText = "No local work is running.";
+          payload.impactText = "Work on other machines may continue after this instance disconnects.";
+        }
         lastTotalCount = payload.totalCount;
         if (lastTotalCount === 0) {
           scheduleCompletion();
@@ -600,13 +604,18 @@ export function buildQuitConfirmationHtml(options: {
   colorScheme: "dark" | "light";
   palette: QuitDialogPalette;
 }): string {
-  const countText = describeQuitBlockers({
+  const peerOnly = Boolean(options.federationPeerCount)
+    && options.inProgressThreadCount === 0
+    && (options.automationRunCount ?? 0) === 0
+    && options.terminalSessionCount === 0
+    && options.actionRunCount === 0;
+  const countText = peerOnly ? "No local work is running." : describeQuitBlockers({
     inProgressThreadCount: options.inProgressThreadCount,
     automationRunCount: options.automationRunCount,
     terminalSessionCount: options.terminalSessionCount,
     actionRunCount: options.actionRunCount,
   });
-  const interruptionText = describeQuitImpact({
+  const interruptionText = peerOnly ? "Work on other machines may continue after this instance disconnects." : describeQuitImpact({
     inProgressThreadCount: options.inProgressThreadCount,
     automationRunCount: options.automationRunCount,
     terminalSessionCount: options.terminalSessionCount,
@@ -879,7 +888,7 @@ export function buildQuitConfirmationHtml(options: {
       <p class="countdown" id="countdown"></p>
       <div class="actions">
         <button id="stay" class="secondary" type="button">Stay Open</button>
-        <button id="wait" class="secondary" type="button">Wait for Work</button>
+        ${peerOnly ? "" : '<button id="wait" class="secondary" type="button">Wait for Work</button>'}
         <button id="quit" class="primary" type="button" autofocus>Quit Now</button>
       </div>
     </main>
@@ -976,7 +985,7 @@ export function buildQuitConfirmationHtml(options: {
 
       document.getElementById("stay").addEventListener("click", () => send("manual-cancel"));
       document.getElementById("close").addEventListener("click", () => send("manual-cancel"));
-      document.getElementById("wait").addEventListener("click", () => {
+      document.getElementById("wait")?.addEventListener("click", () => {
         cancelCountdown();
         waitingForWork = true;
         countdown.textContent = "Waiting for running work to finish...";

@@ -1,3 +1,4 @@
+import { createQuitManager } from "../quit-manager";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const backendRegistryMock = vi.hoisted(() => ({
@@ -63,7 +64,6 @@ beforeEach(() => {
 
 describe("createQuitManager", () => {
   it.each(["manual-confirm", "countdown-expired", "manual-cancel"] as const)("coordinates peer-only quit with %s even when active-work confirmation is disabled", async (resolution) => {
-    const { createQuitManager } = await import("../quit-manager");
     const announceShutdown = vi.fn();
     const cancelShutdown = vi.fn();
     const commitShutdown = vi.fn();
