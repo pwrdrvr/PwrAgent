@@ -1254,6 +1254,39 @@ describe("auto updater", () => {
     }
   });
 
+  it.each(["manual", "menu", "startup", "periodic"] as const)(
+    "offers a staged final to beta/prerelease during %s",
+    async (trigger) => {
+      appVersionMock.mockReturnValue("1.1.0-beta.5");
+      autoUpdaterMock.currentVersion = { version: "1.1.0-beta.5" };
+      resolveUpdateTrainMock.mockReturnValue("beta");
+      resolveUpdateChannelMock.mockReturnValue("prerelease");
+      mockGitHubReleases([
+        githubRelease("v1.1.0-beta.5", { prerelease: true }),
+        githubRelease("v1.1.0", { prerelease: true }),
+        githubRelease("v1.0.6"),
+      ]);
+      checkForUpdatesMock.mockResolvedValue({ updateInfo: { version: "1.1.0" } });
+      const updater = await importAutoUpdater();
+
+      await expect(updater.checkForAppUpdatesNow(trigger)).resolves.toEqual({
+        status: "available",
+        version: "1.1.0",
+      });
+      expect(setFeedURLMock).toHaveBeenCalledWith({
+        provider: "generic",
+        url: "https://github.com/pwrdrvr/PwrAgent/releases/download/v1.1.0/",
+      });
+      const versions = await updater.readAppUpdateReleaseVersions();
+      expect(versions.stable.latest.version).toBe("v1.0.6");
+      expect(versions.stable.prerelease.version).toBe("v1.1.0");
+      expect(versions.beta.latest.version).toBe("v1.1.0-beta.5");
+      expect(versions.beta.prerelease.version).toBe("v1.1.0");
+      expect(resolveUpdateTrainMock()).toBe("beta");
+      expect(resolveUpdateChannelMock()).toBe("prerelease");
+    },
+  );
+
   it("pins the beta train to the smoke-checked main-train tag", async () => {
     resolveUpdateTrainMock.mockReturnValue("beta");
     resolveUpdateChannelMock.mockReturnValue("latest");
@@ -1796,6 +1829,34 @@ describe("selectChannelReleases", () => {
 });
 
 describe("selectAppUpdateReleases", () => {
+  it.each(["v1.2.0-alpha.1", "v1.2.0-beta.1"])(
+    "prefers newer %s over a staged final",
+    async (tag) => {
+      const { selectAppUpdateReleases } = await import("../auto-updater");
+      const selected = selectAppUpdateReleases([
+        githubRelease("v1.1.0", { prerelease: true }),
+        githubRelease(tag, { prerelease: true }),
+        githubRelease("v1.0.6"),
+      ]);
+      expect(selected.betaPrerelease?.tag_name).toBe(tag);
+    },
+  );
+
+  it.each([
+    { draft: true },
+    { assets: [] },
+    { assets: [{ name: "latest-mac.yml" }] },
+    { assets: [{ name: "PwrAgent.zip" }] },
+  ])("ignores an ineligible staged final (%j)", async (options) => {
+    const { selectAppUpdateReleases } = await import("../auto-updater");
+    const selected = selectAppUpdateReleases([
+      githubRelease("v1.1.0", { prerelease: true, ...options }),
+      githubRelease("v1.1.0-beta.5", { prerelease: true }),
+      githubRelease("v1.0.6"),
+    ]);
+    expect(selected.betaPrerelease?.tag_name).toBe("v1.1.0-beta.5");
+  });
+
   it("prefers newer eligible alpha and beta releases over the stable fallback", async () => {
     const { selectAppUpdateReleases } = await import("../auto-updater");
     const selected = selectAppUpdateReleases([

@@ -1140,7 +1140,8 @@ export type SelectedUpdateReleases = {
 //                          non-prerelease when no suffix-free tag exists
 //   - stable prerelease  → max(stable latest, 1.0 `-prerelease` / legacy `-beta`)
 //   - beta latest        → highest `-beta` whose core is ahead of Stable Latest
-//   - beta prerelease    → max(beta latest, highest `-alpha` on a newer core)
+//   - beta prerelease    → max(beta latest, highest `-alpha` on a newer core,
+//                          suffix-free release staged as GitHub prerelease)
 // Both Beta slots fall back to Stable Latest so installed alphas and betas
 // can upgrade to their final release. The saved selection stays on Beta to
 // follow the next eligible `main` tag after a Stable promotion.
@@ -1177,9 +1178,14 @@ export function selectChannelReleases(
     }
     return !isBetaLatestRelease(release, stableLatest, publicReleases);
   });
+  // A final version can still be staged as a GitHub prerelease for smoke
+  // testing. Prerelease followers must see it before promotion, while the
+  // Latest slots continue to wait for their smoke-checked release.
   const betaPrerelease = byPrecedenceDesc.find((release) =>
-    isBetaTrainRelease(release, stableLatest, publicReleases),
-  ) ?? stableLatest;
+    release === stableLatest
+    || (release.prerelease === true && isSuffixFreeStableTag(release.tag_name))
+    || isBetaTrainRelease(release, stableLatest, publicReleases),
+  );
   return {
     latest: stableLatest,
     prerelease: stablePrerelease,
