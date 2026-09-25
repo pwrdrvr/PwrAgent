@@ -17,6 +17,7 @@ export {
   SLACK_APP_REDIRECT_URL,
   SLACK_CREATE_APP_URL_BASE,
   SLACK_CREATE_APP_URL_MAX_LENGTH,
+  buildSlackAppDeepLink,
   buildSlackAppMessagesUrl,
   buildSlackAppSettingsUrl,
   buildSlackCreateAppUrl,

@@ -141,7 +141,7 @@ import {
   resolveCodexHomeForProfile,
   resolveDefaultCodexHome,
 } from "@pwrdrvr/codex-discovery";
-import { isSafeExternalOpenUrl } from "../external-url-policy";
+import { isSafeExternalOpenUrl, isSlackAppDeepLink } from "../external-url-policy";
 import { getMainLogger } from "../log";
 import { timeStartupProfileOperation } from "../diagnostics/startup-profile-events";
 import { BUILT_IN_ACP_STRATEGIES, type AcpAgentStrategy } from "@pwrdrvr/agent-acp";
@@ -1390,6 +1390,19 @@ function sanitizeMessagingContactLookupResponse(
   };
 }
 
+/**
+ * Whether the OS has an app for a URL's scheme. Handing an unclaimed scheme
+ * to `shell.openExternal` can put up the OS's own "no application" prompt
+ * before it fails, so ask first.
+ */
+function hasProtocolHandler(url: string): boolean {
+  try {
+    return app.getApplicationNameForProtocol(url) !== "";
+  } catch {
+    return false;
+  }
+}
+
 function unsupportedLookup(
   request: DesktopMessagingContactLookupRequest,
 ): DesktopMessagingContactLookupResponse {
@@ -2121,12 +2134,29 @@ export function registerSettingsIpcHandlers(
       const teamId = botToken
         ? await slackProvider.readSlackTeamId(botToken)
         : undefined;
+      // The desktop app opens straight on the Messages tab. Without one, the
+      // browser gets Slack's redirect, which lands on the same conversation.
+      const appLink = slackProvider.buildSlackAppDeepLink({ appId, teamId });
+      if (appLink && isSlackAppDeepLink(appLink) && hasProtocolHandler(appLink)) {
+        try {
+          await shell.openExternal(appLink);
+          return { url: appLink, workspaceKnown: true, desktopApp: true };
+        } catch (error) {
+          settingsIpcLog.warn("slack desktop app link failed; opening the browser", {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
       const url = slackProvider.buildSlackAppMessagesUrl({ appId, teamId });
       if (!isSafeExternalOpenUrl(url)) {
         throw new Error("Refused to open an unsafe Slack URL.");
       }
       await shell.openExternal(url);
-      return { url, workspaceKnown: new URL(url).searchParams.has("team") };
+      return {
+        url,
+        workspaceKnown: new URL(url).searchParams.has("team"),
+        desktopApp: false,
+      };
     },
   );
 

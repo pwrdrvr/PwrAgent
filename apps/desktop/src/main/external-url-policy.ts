@@ -35,3 +35,31 @@ function isLoopbackHost(hostname: string): boolean {
     || normalized === "::1"
   );
 }
+
+/**
+ * Gate for the one `slack:` link PwrAgent opens: a direct message with the
+ * connected Slack app, built by main from IDs Slack returned. It is kept out
+ * of `isSafeExternalOpenUrl`, which also vets links from rendered markdown,
+ * where a `slack:` scheme has no business being opened.
+ */
+export function isSlackAppDeepLink(url: string): boolean {
+  let parsed: URL;
+
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+
+  const keys = [...parsed.searchParams.keys()].sort().join(",");
+  return (
+    parsed.protocol === "slack:"
+    && parsed.hostname === "app"
+    && parsed.pathname === ""
+    && parsed.hash === ""
+    && keys === "id,tab,team"
+    && /^A[A-Z0-9]{6,20}$/u.test(parsed.searchParams.get("id") ?? "")
+    && /^[TE][A-Z0-9]{6,20}$/u.test(parsed.searchParams.get("team") ?? "")
+    && parsed.searchParams.get("tab") === "messages"
+  );
+}

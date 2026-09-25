@@ -2314,6 +2314,8 @@ export type OpenSlackAppMessagesResponse = {
   url: string;
   /** False when Slack did not name the bot's workspace, so Slack may ask. */
   workspaceKnown: boolean;
+  /** True when Slack's desktop app took a `slack:` link; false for the browser. */
+  desktopApp: boolean;
 };
 
 export type SlackCreateAppResponse = {

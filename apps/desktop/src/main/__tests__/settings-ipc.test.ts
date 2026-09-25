@@ -60,7 +60,9 @@ const acpRuntimeDiscoveryMock = vi.hoisted(() => ({
   discoverAcpRuntimeCapabilities: vi.fn(async () => ({} as unknown)),
 }));
 const electronMocks = vi.hoisted(() => ({
-  openExternal: vi.fn(async () => undefined),
+  openExternal: vi.fn(async (_url: string): Promise<void> => undefined),
+  // No app claims slack: unless a test says one does.
+  getApplicationNameForProtocol: vi.fn((_url: string) => ""),
 }));
 const providerMocks = vi.hoisted(() => ({
   resolveTelegramContact: vi.fn(),
@@ -153,7 +155,10 @@ function createMockSpawnChild(
 }
 
 vi.mock("electron", () => ({
-  app: { isPackaged: false },
+  app: {
+    isPackaged: false,
+    getApplicationNameForProtocol: electronMocks.getApplicationNameForProtocol,
+  },
   ipcMain: {
     handle: vi.fn((channel: string, handler: (...args: unknown[]) => Promise<unknown>) => {
       handlers.set(channel, handler);
@@ -246,6 +251,7 @@ vi.mock("@pwragent/messaging-provider-slack", async (importOriginal) => {
     normalizeSlackAppName: actual.normalizeSlackAppName,
     buildSlackCreateAppUrl: providerMocks.buildSlackCreateAppUrl,
     buildSlackAppSettingsUrl: providerMocks.buildSlackAppSettingsUrl,
+    buildSlackAppDeepLink: actual.buildSlackAppDeepLink,
     buildSlackAppMessagesUrl: actual.buildSlackAppMessagesUrl,
     slackAppIdFromAppToken: actual.slackAppIdFromAppToken,
     readSlackTeamId: providerMocks.readSlackTeamId,
@@ -797,6 +803,7 @@ describe("settings ipc", () => {
     ).resolves.toEqual({
       url: "https://slack.com/app_redirect?app=A0FAKEAPP01&team=T0FAKETEAM1",
       workspaceKnown: true,
+      desktopApp: false,
     });
     expect(providerMocks.readSlackTeamId).toHaveBeenCalledExactlyOnceWith(
       "xoxb-fake-bot-token",
@@ -813,9 +820,63 @@ describe("settings ipc", () => {
     ).resolves.toEqual({
       url: "https://slack.com/app_redirect?app=A0FAKEAPP01",
       workspaceKnown: false,
+      desktopApp: false,
     });
 
     disposeSettingsIpcHandlers();
+  });
+
+  it("opens the Slack desktop app on the Messages tab when it is installed", async () => {
+    const service = {
+      readSettings: vi.fn(),
+      resolveSlackAppTokenSync: vi.fn(
+        () => "xapp-1-A0FAKEAPP01-1234567890123-0123456789abcdef",
+      ),
+      resolveSlackBotTokenSync: vi.fn(() => "xoxb-fake-bot-token"),
+    } as unknown as DesktopSettingsService;
+    const { registerSettingsIpcHandlers, disposeSettingsIpcHandlers } = await import(
+      "../ipc/settings"
+    );
+    const { SETTINGS_OPEN_SLACK_APP_MESSAGES_CHANNEL } = await import("../../shared/ipc");
+    const appLink = "slack://app?team=T0FAKETEAM1&id=A0FAKEAPP01&tab=messages";
+
+    disposeSettingsIpcHandlers();
+    registerSettingsIpcHandlers(service);
+    electronMocks.getApplicationNameForProtocol.mockReturnValue("Slack");
+    try {
+      await expect(
+        handlers.get(SETTINGS_OPEN_SLACK_APP_MESSAGES_CHANNEL)?.({}),
+      ).resolves.toEqual({ url: appLink, workspaceKnown: true, desktopApp: true });
+      expect(electronMocks.getApplicationNameForProtocol).toHaveBeenCalledWith(appLink);
+      expect(electronMocks.openExternal).toHaveBeenCalledExactlyOnceWith(appLink);
+
+      // The app claimed the scheme but would not open it: the browser still can.
+      electronMocks.openExternal.mockClear();
+      electronMocks.openExternal.mockImplementation(async (url: string) => {
+        if (url.startsWith("slack:")) throw new Error("no handler");
+      });
+      await expect(
+        handlers.get(SETTINGS_OPEN_SLACK_APP_MESSAGES_CHANNEL)?.({}),
+      ).resolves.toMatchObject({ desktopApp: false });
+      expect(electronMocks.openExternal.mock.calls.map(([url]) => url)).toEqual([
+        appLink,
+        "https://slack.com/app_redirect?app=A0FAKEAPP01&team=T0FAKETEAM1",
+      ]);
+
+      // Without a workspace there is no desktop link to try.
+      electronMocks.openExternal.mockClear();
+      providerMocks.readSlackTeamId.mockResolvedValueOnce(undefined);
+      await expect(
+        handlers.get(SETTINGS_OPEN_SLACK_APP_MESSAGES_CHANNEL)?.({}),
+      ).resolves.toMatchObject({ desktopApp: false, workspaceKnown: false });
+      expect(electronMocks.openExternal).toHaveBeenCalledExactlyOnceWith(
+        "https://slack.com/app_redirect?app=A0FAKEAPP01",
+      );
+    } finally {
+      electronMocks.getApplicationNameForProtocol.mockReturnValue("");
+      electronMocks.openExternal.mockImplementation(async () => undefined);
+      disposeSettingsIpcHandlers();
+    }
   });
 
   it("refuses to open a Slack DM before an app-level token names the app", async () => {

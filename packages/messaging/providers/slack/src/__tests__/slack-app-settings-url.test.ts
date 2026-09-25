@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildSlackAppDeepLink,
   buildSlackAppMessagesUrl,
   buildSlackAppSettingsUrl,
   slackAppIdFromAppToken,
@@ -43,6 +44,15 @@ describe("Slack app settings URL", () => {
     // Only something shaped like a workspace ID becomes one.
     expect(buildSlackAppMessagesUrl({ appId: "A0FAKEAPP01", teamId: "T0&x=1" }))
       .toBe("https://slack.com/app_redirect?app=A0FAKEAPP01");
+  });
+
+  it("links the desktop app to the Messages tab, only with a workspace", () => {
+    expect(buildSlackAppDeepLink({ appId: "A0FAKEAPP01", teamId: "T0FAKETEAM1" }))
+      .toBe("slack://app?team=T0FAKETEAM1&id=A0FAKEAPP01&tab=messages");
+    expect(buildSlackAppDeepLink({ appId: "A0FAKEAPP01", teamId: undefined }))
+      .toBeUndefined();
+    expect(buildSlackAppDeepLink({ appId: "A0FAKEAPP01", teamId: "T0&x=1" }))
+      .toBeUndefined();
   });
 
   it("reads the bot token's workspace ID, and nothing when Slack fails", async () => {

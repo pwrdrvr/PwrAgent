@@ -18,8 +18,9 @@ export function SlackPairSteps(props: {
       </li>
       <li>
         Click <strong>Open in Slack</strong> to open a direct message with{" "}
-        {app}. Or, in Slack, find {app} under <strong>Apps</strong> in the
-        sidebar and switch to its <strong>Messages</strong> tab.
+        {app}, in the Slack app if you have it or else your browser. Or, in
+        Slack, find {app} under <strong>Apps</strong> in the sidebar and
+        switch to its <strong>Messages</strong> tab.
       </li>
       <li>Paste the message and send it.</li>
       <li>Approve the request that appears here.</li>
@@ -27,7 +28,10 @@ export function SlackPairSteps(props: {
   );
 }
 
-/** Opens a direct message with the connected app through Slack's redirect. */
+/**
+ * Opens a direct message with the connected app: in Slack's desktop app on
+ * the Messages tab when one is installed, else through Slack's web redirect.
+ */
 export function SlackOpenAppMessagesButton(props: {
   desktopApi?: DesktopApi;
   disabled?: boolean;

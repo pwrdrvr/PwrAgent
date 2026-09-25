@@ -88,8 +88,28 @@ export function buildSlackAppMessagesUrl(input: {
   teamId?: string;
 }): string {
   const params = new URLSearchParams({ app: input.appId });
-  if (input.teamId && /^[TE][A-Z0-9]{6,20}$/u.test(input.teamId)) {
+  if (input.teamId && SLACK_TEAM_ID.test(input.teamId)) {
     params.set("team", input.teamId);
   }
   return `${SLACK_APP_REDIRECT_URL}?${params.toString()}`;
 }
+
+/**
+ * The same conversation in Slack's desktop app, opened on the Messages tab
+ * rather than the Home tab a new app opens on. Slack requires the workspace,
+ * so there is no link without one.
+ */
+export function buildSlackAppDeepLink(input: {
+  appId: string;
+  teamId: string | undefined;
+}): string | undefined {
+  if (!input.teamId || !SLACK_TEAM_ID.test(input.teamId)) return undefined;
+  const params = new URLSearchParams({
+    team: input.teamId,
+    id: input.appId,
+    tab: "messages",
+  });
+  return `slack://app?${params.toString()}`;
+}
+
+const SLACK_TEAM_ID = /^[TE][A-Z0-9]{6,20}$/u;

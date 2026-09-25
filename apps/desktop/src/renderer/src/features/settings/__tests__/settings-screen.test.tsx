@@ -5888,6 +5888,7 @@ describe("SettingsScreen", () => {
     const openSlackAppMessages = vi.fn(async () => ({
       url: "https://slack.com/app_redirect?app=A0FAKEAPP01",
       workspaceKnown: false,
+      desktopApp: false,
     }));
     const renderWith = (next: typeof snapshot) => (
       <SettingsScreen
