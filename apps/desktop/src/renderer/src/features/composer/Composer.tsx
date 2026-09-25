@@ -4772,6 +4772,22 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     return [...options.values()];
   }, [reviewWorkspaceOptions, props.directories, props.directory, props.thread]);
   const reviewPullRequests = reviewPullRequestOptions.map((option) => option.pr);
+  // A repository prefix only earns its width when the choices span more than
+  // one repository. Two worktrees of one repository list the same PRs, and a
+  // shared owner repeated on every row pushes the branch out of a narrow
+  // select. The owner returns only when two repositories share a name.
+  const reviewPullRequestRepositoryCount = new Set(
+    reviewPullRequests.map((pr) => `${pr.org}/${pr.repo}`.toLowerCase()),
+  ).size;
+  const reviewPullRequestRepositoryNamesAmbiguous = new Set(
+    reviewPullRequests.map((pr) => pr.repo.toLowerCase()),
+  ).size < reviewPullRequestRepositoryCount;
+  const reviewPullRequestRepositoryLabel = (pr: PrSummary): string =>
+    reviewPullRequestRepositoryCount < 2
+      ? ""
+      : reviewPullRequestRepositoryNamesAmbiguous
+        ? `${pr.org}/${pr.repo}`
+        : pr.repo;
   const selectedReviewPullRequest = reviewPullRequests.find(
     (pr) => pr.url === reviewConfig?.pullRequestUrl,
   );
@@ -6105,7 +6121,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     if (config?.target === "pullRequest" && !reviewPullRequestOptions.some((option) =>
       option.pr.url === config.pullRequestUrl && option.workspaces.includes(config.workspaceCwd ?? "")
     )) {
-      setSendError("Choose an attached pull request for this project.");
+      setSendError("Choose an attached pull request.");
       return;
     }
     const configuredReviewCommand = buildConfiguredReviewCommand(config);
@@ -11218,7 +11234,12 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                       branch,
                       branchSource: "auto",
                       workspaceCwd,
-                      pullRequestUrl: undefined,
+                      // Choosing a PR picks its project, so the reverse keeps
+                      // a PR that this project can also review.
+                      pullRequestUrl: reviewPullRequestOptions.some((option) =>
+                        option.pr.url === current?.pullRequestUrl
+                        && option.workspaces.includes(workspaceCwd)
+                      ) ? current?.pullRequestUrl : undefined,
                     }));
                     setSendError(undefined);
                   }}
@@ -11289,7 +11310,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                   <option value="" disabled>Choose pull request</option>
                   {reviewPullRequests.map((pr) => (
                     <option key={pr.url} value={pr.url}>
-                      {`${reviewWorkspaceSelectionRequired ? `${pr.org}/${pr.repo}` : ""}#${pr.number} ${pr.title ?? "Untitled pull request"}`}
+                      {`${reviewPullRequestRepositoryLabel(pr)}#${pr.number} ${pr.title ?? "Untitled pull request"}`}
                       {pr.headRefName ? ` — ${pr.headRefName}` : ""}
                     </option>
                   ))}

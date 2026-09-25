@@ -5827,9 +5827,9 @@ describe("Composer", () => {
     fireEvent.change(screen.getByLabelText("Review project"), { target: { value: "/repo/project" } });
     fireEvent.click(screen.getByRole("button", { name: /Attached PR/ }));
     const picker = screen.getByLabelText("Attached pull request");
-    expect(within(picker).getByRole("option", { name: /fixture\/project#1/ })).toBeInTheDocument();
+    expect(within(picker).getByRole("option", { name: /^project#1 Stack 1/ })).toBeInTheDocument();
     expect(within(picker).getByRole("option", { name: /#2/ })).toBeInTheDocument();
-    expect(within(picker).getByRole("option", { name: /fixture\/other#1/ })).toBeInTheDocument();
+    expect(within(picker).getByRole("option", { name: /^other#1 Other change/ })).toBeInTheDocument();
     expect(within(picker).queryByRole("option", { name: /unattached/ })).not.toBeInTheDocument();
     fireEvent.change(picker, { target: { value: prs[0].url } });
     expect(screen.getByText(/stack-1 . main/)).toHaveTextContent("at 1111111");
@@ -5886,6 +5886,47 @@ describe("Composer", () => {
     await waitFor(() => expect(startReview).toHaveBeenCalledWith(expect.objectContaining({
       cwd: "/worktrees/secondary", target: { type: "pullRequest", url }, runMode: "pwragent-sub-agent",
     })));
+  });
+
+  it("keeps a PR across worktrees of its repository and names repositories only when they differ", () => {
+    const pr = (org: string, repo: string, number: number, path: string) => ({
+      provider: "github.com" as const, org, repo, number, title: `Change ${number}`,
+      url: `https://github.com/${org}/${repo}/pull/${number}`, state: "passing" as const,
+      linkedDirectoryPaths: [path],
+    });
+    const thread = (prs: ReturnType<typeof pr>[]): NavigationThreadSummary => ({
+      id: "thread-1", title: "Worktrees", titleSource: "explicit", source: "codex",
+      executionMode: "default", inbox: { inInbox: false }, projectKey: "/repo/tool",
+      linkedDirectories: [
+        { id: "main", kind: "local", label: "Tool", path: "/repo/tool" },
+        { id: "wt", kind: "worktree", label: "Tool fix", path: "/repo/tool", worktreePath: "/worktrees/tool-fix" },
+        { id: "fork", kind: "local", label: "Fork", path: "/repo/fork" },
+      ],
+      prs,
+    });
+    const { rerender } = render(<Composer
+      desktopApi={{ onAgentEvent: () => () => undefined }}
+      disabled={false} skills={[]}
+      thread={thread([pr("alpha", "tool", 1, "/repo/tool"), pr("alpha", "tool", 2, "/repo/tool")])}
+    />);
+    openReviewComposer();
+    fireEvent.change(screen.getByLabelText("Review project"), { target: { value: "/repo/tool" } });
+    fireEvent.click(screen.getByRole("button", { name: /Attached PR/ }));
+    const picker = screen.getByLabelText("Attached pull request");
+    expect(within(picker).getByRole("option", { name: /^#1 Change 1/ })).toBeInTheDocument();
+    fireEvent.change(picker, { target: { value: "https://github.com/alpha/tool/pull/2" } });
+    fireEvent.change(screen.getByLabelText("Review project"), { target: { value: "/worktrees/tool-fix" } });
+    expect(screen.getByLabelText("Attached pull request")).toHaveValue("https://github.com/alpha/tool/pull/2");
+
+    rerender(<Composer
+      desktopApi={{ onAgentEvent: () => () => undefined }}
+      disabled={false} skills={[]}
+      thread={thread([pr("alpha", "tool", 1, "/repo/tool"), pr("beta", "tool", 2, "/repo/fork")])}
+    />);
+    const options = within(screen.getByLabelText("Attached pull request")).getAllByRole("option");
+    expect(options.map((option) => option.textContent)).toEqual([
+      "Choose pull request", "alpha/tool#1 Change 1", "beta/tool#2 Change 2",
+    ]);
   });
 
   const reviewTargetThread = (params: {
