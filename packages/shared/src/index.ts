@@ -4,6 +4,7 @@ export * from "./command-action-labels";
 export * from "./codex-environment-action-runs";
 export * from "./codex-turn-error";
 export * from "./codex-git-action-directives";
+export * from "./codex-async-questions";
 export * from "./contracts/backend";
 export * from "./contracts/agent";
 export * from "./contracts/agent-tools";
