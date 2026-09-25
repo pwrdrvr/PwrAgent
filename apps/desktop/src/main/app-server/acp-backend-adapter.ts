@@ -79,7 +79,6 @@ import {
 } from "../acp/acp-live-notifications";
 import {
   foldAcpTurnUsage,
-  readAcpContextWindowUpdate,
   readAcpSelectedModel,
   readAcpUsageEnvelope,
   type AcpTokenUsage,
@@ -2450,14 +2449,15 @@ export class AcpBackendAdapter {
             ),
           )
         : undefined;
-      const agents = this.mergeAndPersistDiscoveredAgents([
+      const discoveredAgents = [
         ...localDiscovery.agents.filter(
           (agent) => agent.registryId !== CLAUDE_ACP_REGISTRY_ID,
         ),
         ...(managedClaudeDiscovery.agent
           ? [managedClaudeDiscovery.agent]
           : []),
-      ]);
+      ];
+      const agents = this.mergeAndPersistDiscoveredAgents(discoveredAgents);
       for (const agent of agents) {
         if (agent.registryId === "grok" && agent.installStatus === "installed") {
           this.refreshGrokUpdateStatusInBackground(agent);
@@ -2465,7 +2465,7 @@ export class AcpBackendAdapter {
       }
       if (recordedBackendIds) {
         const discoveredBackendIds = new Set(
-          discovery.agents.map((agent) => agent.backendId),
+          discoveredAgents.map((agent) => agent.backendId),
         );
         this.probeChangedRuntimesInBackground(
           agents.filter(
@@ -2959,7 +2959,6 @@ export class AcpBackendAdapter {
         update,
       }) => {
         const updateKind = readAcpUpdateKind(update);
-        const contextWindowUpdate = readAcpContextWindowUpdate(update);
         const usageEnvelope = readAcpUsageEnvelope(update);
         let liveUsageNotification: AppServerNotification | undefined;
         if (usageEnvelope && turnId) {
@@ -3092,19 +3091,6 @@ export class AcpBackendAdapter {
                 commands:
                   this.getSession(agent.backendId, sessionId)?.availableCommands ??
                   [],
-              },
-            },
-          });
-        }
-        if (contextWindowUpdate) {
-          await this.emit({
-            backend: agent.backendId,
-            notification: {
-              method: "thread/contextWindow/updated",
-              params: {
-                threadId: sessionId,
-                usedTokens: contextWindowUpdate.used,
-                modelContextWindow: contextWindowUpdate.size,
               },
             },
           });

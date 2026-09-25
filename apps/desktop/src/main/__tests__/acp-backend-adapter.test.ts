@@ -1272,6 +1272,7 @@ describe("AcpBackendAdapter", () => {
           method: "thread/contextWindow/updated",
           params: {
             threadId: session.sessionId,
+            turnId: "turn-claude",
             usedTokens: 96_000,
             modelContextWindow: 200_000,
           },

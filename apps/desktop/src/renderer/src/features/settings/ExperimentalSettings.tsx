@@ -17,7 +17,6 @@ import {
   SettingsSectionStack,
   ToggleField,
 } from "./SettingsLayout";
-import { SettingsSwitch } from "./SettingsSwitch";
 import { sourceBadge } from "./settings-fields";
 
 const DEFAULT_LIVE_TRANSCRIPT_EVENT_FILTERING = {
