@@ -123,6 +123,44 @@ describe("SettingsLayout", () => {
     expect(alpha).toHaveFocus();
   });
 
+  it("scrolls a nav-requested section by its card, not its sticky header", async () => {
+    // The header is `position: sticky`. Chromium aligns a sticky box where it
+    // is painted, which for a section above the viewport is the card's bottom
+    // edge, so aiming at the header left only the pinned header in view.
+    const scrolled: Element[] = [];
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+      configurable: true,
+      value(this: HTMLElement) {
+        scrolled.push(this);
+      },
+    });
+    try {
+      render(
+        <SettingsSectionStack
+          paneId={`focus-pane-${paneIndex++}`}
+          aria-label="Test settings"
+          focusSectionId="beta"
+        >
+          <SettingsSection eyebrow="Test" title="Alpha">
+            <button type="button">Alpha action</button>
+          </SettingsSection>
+          <SettingsSection eyebrow="Test" title="Beta">
+            <button type="button">Beta action</button>
+          </SettingsSection>
+        </SettingsSectionStack>,
+      );
+
+      const beta = screen.getByRole("button", { name: "Beta" });
+      await waitFor(() => {
+        expect(beta).toHaveFocus();
+      });
+      expect(scrolled).toEqual([beta.closest("section")]);
+    } finally {
+      delete (HTMLElement.prototype as { scrollIntoView?: unknown })
+        .scrollIntoView;
+    }
+  });
+
   it("persists collapsed state and restores focus within the session", async () => {
     const paneId = `persistent-pane-${paneIndex++}`;
     const firstRender = renderSectionStack(paneId);
