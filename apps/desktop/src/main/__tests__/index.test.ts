@@ -2325,6 +2325,32 @@ describe("bootstrapApp", () => {
     );
   });
 
+  it.each(["failed", "timed-out"])("keeps SQLite open through final quit hooks after %s federation shutdown", async (outcome) => {
+    vi.useFakeTimers();
+    let databaseOpen = true;
+    disposeAppStateMock.mockImplementation(() => { databaseOpen = false; });
+    federationLeaseShutdownSyncMock.mockImplementation(() => {
+      if (!databaseOpen) throw new TypeError("The database connection is not open");
+    });
+    disposeDesktopFederationRuntimeMock.mockImplementation(() => outcome === "failed"
+      ? Promise.reject(new Error("stop failed"))
+      : new Promise<void>(() => {}));
+    startupProfilerInstance.start.mockResolvedValue();
+    await import("../index");
+    await flushMicrotasks();
+    processEventHandlers.get("SIGTERM")?.("SIGTERM");
+    await vi.advanceTimersByTimeAsync(13_000);
+    expect(quitMock).toHaveBeenCalledTimes(1);
+    expect(databaseOpen).toBe(true);
+    expect(() => appEventHandlers.get("will-quit")?.()).not.toThrow();
+    // Socket close events can still arrive between will-quit and process exit.
+    expect(databaseOpen).toBe(true);
+    processEventHandlers.get("exit")?.();
+    expect(federationLeaseShutdownSyncMock).toHaveBeenCalledTimes(1);
+    expect(databaseOpen).toBe(false);
+    expect(disposeAppStateMock).toHaveBeenCalledTimes(1);
+  });
+
   it("releases the federation lease from will-quit when the federation shutdown phase rejects", async () => {
     startupProfilerInstance.start.mockResolvedValue();
     disposeDesktopFederationRuntimeMock.mockRejectedValue(new Error("boom"));

@@ -46,6 +46,37 @@ let server: FederationGatewayWebSocketServer | undefined;
 let rawServer: WebSocketServer | undefined;
 let gatewayKeyPair: ReturnType<typeof generateFederationIdentityKeyPair>;
 
+it("waits for both server close callbacks before completing stop", async () => {
+  server = new FederationGatewayWebSocketServer({
+    gatewayInstanceId: "gateway_one",
+    gatewayPrivateKeyPem: gatewayKeyPair.privateKeyPem,
+    gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem,
+    host: "127.0.0.1",
+    port: 0,
+    store,
+    onEnvelope: vi.fn(),
+  });
+  let finishWebSocketClose!: () => void;
+  let finishHttpClose!: () => void;
+  const httpClose = vi.fn((callback: () => void) => { finishHttpClose = callback; });
+  Object.assign(server, {
+    wsServer: { clients: new Set(), close: (callback: () => void) => { finishWebSocketClose = callback; } },
+    httpServer: { close: httpClose },
+  });
+  let stopped = false;
+  const pending = server.stop().then(() => { stopped = true; });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  expect(httpClose).not.toHaveBeenCalled();
+  expect(stopped).toBe(false);
+  finishWebSocketClose();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  expect(httpClose).toHaveBeenCalledOnce();
+  expect(stopped).toBe(false);
+  finishHttpClose();
+  await pending;
+  expect(stopped).toBe(true);
+});
+
 beforeEach(() => {
   vi.clearAllMocks();
   stateDb = openInMemoryStateDb();
