@@ -130,6 +130,9 @@ export function MessagingSettings(props: {
   focusSectionId?: string;
   /** Navigate between the hub (undefined) and a focused platform screen. */
   onFocusChange?: (focus?: MessagingSettingsFocus) => void;
+  /** Navigate to the hub's Routes section, where the default Agent editor
+   *  opens for an approved surface's Assign or Change. */
+  onOpenRoutes?: () => void;
   onOpenThread?: (target: {
     backend: AppServerBackendKind;
     threadId: string;
@@ -390,7 +393,10 @@ export function MessagingSettings(props: {
   };
 
   return (
-    <MessagingRoutesProvider desktopApi={props.desktopApi}>
+    <MessagingRoutesProvider
+      desktopApi={props.desktopApi}
+      onEditorRequest={props.onOpenRoutes}
+    >
       <SettingsSectionStack
         focusSectionId={props.focusSectionId}
         paneId={props.focus ? `messaging-${props.focus}` : "messaging"}

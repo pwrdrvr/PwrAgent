@@ -102,6 +102,7 @@ export function SettingsSectionStack(props: {
     Record<string, boolean>
   >(() => savedCollapsedSectionsByPane.get(props.paneId) ?? {});
   const didRestoreFocusRef = useRef(false);
+  const requestedFocusRef = useRef<string | undefined>(undefined);
   const stackRef = useRef<HTMLElement | null>(null);
   const paneChangedRef = useRef(false);
   const [seededPaneId, setSeededPaneId] = useState(props.paneId);
@@ -115,6 +116,10 @@ export function SettingsSectionStack(props: {
     setCollapsedSections(savedCollapsedSectionsByPane.get(props.paneId) ?? {});
     setRegisteredSections([]);
     didRestoreFocusRef.current = false;
+    // A focus request belongs to the pane it was made on. A sub that names
+    // no section on its own pane (Feishu's) never replaces it, so a return
+    // to the section asked for last would otherwise read as a repeat.
+    requestedFocusRef.current = undefined;
     paneChangedRef.current = true;
   }
 
@@ -233,7 +238,6 @@ export function SettingsSectionStack(props: {
   // Runs after the restore effect above, which only fires once per pane.
   // A nav-driven focus is an explicit request and must win over the
   // remembered section, so it re-runs on every change of the request.
-  const requestedFocusRef = useRef<string | undefined>(undefined);
   useEffect(() => {
     const requested = props.focusSectionId;
     // Leaving for the pane's own label ends the request, so asking for the

@@ -1078,6 +1078,7 @@ function SettingsSectionBody(props: {
         focus={messagingPlatformFromSub(props.sub)}
         focusSectionId={props.sub}
         onFocusChange={(focus) => props.onOpenRoute("messaging", focus)}
+        onOpenRoutes={() => props.onOpenRoute("messaging", "routes")}
         onOpenThread={props.onOpenThread}
         saving={props.settings.saving}
         snapshot={props.snapshot}
