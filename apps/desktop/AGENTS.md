@@ -803,6 +803,33 @@ every later row.
   once, as the profile menu's can. Focus then lands on the menu, where Escape
   and Tab still work.
 
+### Selects
+
+A single choice from a list goes through
+[`Select`](src/renderer/src/components/Select.tsx), not a native `<select>`.
+On macOS, Chromium hands a `<select>` to the system menu, which opens over
+the control in the system font and blue highlight, and CSS cannot reach it.
+
+- **It is the ARIA select-only combobox.** The trigger is a
+  `<button role="combobox">` that keeps DOM focus while the list is open; the
+  keyboard cursor is `aria-activedescendant`. A wrapping `<label>` names it,
+  so `getByLabelText` still finds the field.
+- **The list is portalled to `document.body`** at `z-index: 150`, above
+  Settings and Automations, and registers with `useDismissableLayer`, so
+  Escape inside a dialog closes the list alone. Do not add an Escape listener.
+- **Tab closes without choosing.** The APG example commits on Tab. Here,
+  arrowing past an option on the way out must not change the value.
+- **The closed field's chrome comes from its surface,** through `className`
+  or a descendant rule (`.automation-field .select-trigger`). The list cannot
+  inherit type from the field, so a surface that needs it passes
+  `listboxClassName`.
+- **Tests drive it through [`test/select.ts`](src/renderer/src/test/select.ts).**
+  `fireEvent.change` does nothing to a button. Choose by label with
+  `chooseSelectOption`, read the list with `selectOptionLabels`, and read the
+  stored value from `data-value`. Options exist only while the list is open,
+  so waiting for `getByRole("option")` to disappear from a closed field passes
+  vacuously.
+
 ## Config File Evolution
 
 Before changing `config.toml` keys in a backwards-incompatible way, read

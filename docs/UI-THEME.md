@@ -385,7 +385,7 @@ background: var(--accent-soft);
 color: var(--accent-bright);
 ```
 
-Used by `.project-picker__row`, `.branch-picker__option`, `.reference-picker__row`, and every `.composer__autocomplete-option`. No bar, no outline.
+Used by `.project-picker__row`, `.branch-picker__option`, `.reference-picker__row`, every `.composer__autocomplete-option`, and the Select's cursor row, `.select-option.is-active`. No bar, no outline.
 
 **Row selection — "this is what you're looking at."** Persistent, survives navigation, coexists with hover.
 

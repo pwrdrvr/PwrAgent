@@ -20,7 +20,8 @@ import type {
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { CODEX_AGENT_THREAD_CREATION_NOTE } from "../../../lib/agent-thread";
-import { AutomationEditor } from "../AutomationEditor";
+import { chooseSelectOption, selectOptionLabels } from "../../../test/select";
+import { AutomationEditor, INBOUND_PROVIDER_LABELS } from "../AutomationEditor";
 
 afterEach(() => {
   cleanup();
@@ -47,8 +48,8 @@ async function pickConversation(field: string, option: RegExp) {
 /**
  * Wait until the editor's state is actually on `provider`. It starts on
  * Telegram and moves to the first enabled provider one render after the
- * settings arrive, and the Provider select is no evidence of that: a
- * controlled select whose value matches no option reports its first option.
+ * settings arrive, and the Provider list is no evidence of that: it offers
+ * the enabled providers a render before the state moves to one.
  * Telegram's scope control renders only while the state is Telegram, so its
  * departure is. Without this, a picker opened in that gap is Telegram's, and
  * it remounts — closing its panel — when the switch lands.
@@ -60,6 +61,18 @@ async function waitForInboundProvider(provider: MessagingChannelKind): Promise<v
       screen.queryByRole("group", { name: "Telegram scope" }),
     ).not.toBeInTheDocument(),
   );
+}
+
+/**
+ * Wait for the settings read to offer `label` as a provider, then pick it.
+ * The Provider field lists only enabled providers, and the list arrives
+ * after the first render.
+ */
+async function chooseProvider(label: string): Promise<void> {
+  await waitFor(() =>
+    expect(selectOptionLabels(screen.getByLabelText("Provider"))).toContain(label),
+  );
+  chooseSelectOption(screen.getByLabelText("Provider"), label);
 }
 
 /** Manual entry is an action beside the list, not one of its options. */
@@ -151,12 +164,7 @@ describe("AutomationEditor", () => {
       target: { value: "Investigate the alert and summarize likely causes." },
     });
     fireEvent.click(screen.getByRole("button", { name: "Inbound message" }));
-    await waitFor(() =>
-      expect(screen.getByRole("option", { name: "Slack" })).toBeInTheDocument(),
-    );
-    fireEvent.change(screen.getByLabelText("Provider"), {
-      target: { value: "slack" },
-    });
+    await chooseProvider("Slack");
     fireEvent.change(screen.getByLabelText("Channel ID"), {
       target: { value: "C123" },
     });
@@ -177,9 +185,7 @@ describe("AutomationEditor", () => {
     fireEvent.click(screen.getByRole("option", { name: "gpt-5" }));
     fireEvent.click(screen.getByRole("button", { name: "Automation reasoning" }));
     fireEvent.click(screen.getByRole("option", { name: "high" }));
-    fireEvent.change(screen.getByLabelText("Max runs per hour"), {
-      target: { value: "5" },
-    });
+    chooseSelectOption(screen.getByLabelText("Max runs per hour"), "5/hr");
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
@@ -255,12 +261,7 @@ describe("AutomationEditor", () => {
       target: { value: "If this happened before, raise the urgency." },
     });
     fireEvent.click(screen.getByRole("button", { name: "Inbound message" }));
-    await waitFor(() =>
-      expect(screen.getByRole("option", { name: "Slack" })).toBeInTheDocument(),
-    );
-    fireEvent.change(screen.getByLabelText("Provider"), {
-      target: { value: "slack" },
-    });
+    await chooseProvider("Slack");
     fireEvent.change(screen.getByLabelText("Channel ID"), {
       target: { value: "C123" },
     });
@@ -271,12 +272,8 @@ describe("AutomationEditor", () => {
     fireEvent.click(
       screen.getByLabelText("Show this run the outcomes of its own recent runs"),
     );
-    fireEvent.change(screen.getByLabelText("Include up to"), {
-      target: { value: "10" },
-    });
-    fireEvent.change(screen.getByLabelText("No older than"), {
-      target: { value: String(60 * 60 * 1000) },
-    });
+    chooseSelectOption(screen.getByLabelText("Include up to"), "10 runs");
+    chooseSelectOption(screen.getByLabelText("No older than"), "1 hour");
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
@@ -359,12 +356,9 @@ describe("AutomationEditor", () => {
     // 45 seconds is not a preset. It is offered in order among them, so the
     // field shows what is saved instead of the nearest preset.
     const windowField = screen.getByLabelText("Coalesce window");
-    expect(windowField).toHaveValue("45");
-    expect(
-      within(windowField)
-        .getAllByRole("option")
-        .map((option) => option.textContent),
-    ).toEqual([
+    expect(windowField).toHaveAttribute("data-value", "45");
+    expect(windowField).toHaveTextContent("45 seconds");
+    expect(selectOptionLabels(windowField)).toEqual([
       "Off",
       "15 seconds",
       "30 seconds",
@@ -383,11 +377,9 @@ describe("AutomationEditor", () => {
       }),
     );
 
-    fireEvent.change(windowField, { target: { value: "0" } });
+    chooseSelectOption(windowField, "Off");
     // The saved window stays offered, so the operator can go back to it.
-    expect(
-      within(windowField).getByRole("option", { name: "45 seconds" }),
-    ).toBeInTheDocument();
+    expect(selectOptionLabels(windowField)).toContain("45 seconds");
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(2));
     expect(onSubmit).toHaveBeenLastCalledWith(
@@ -432,7 +424,10 @@ describe("AutomationEditor", () => {
     );
 
     // Rounding to whole seconds would load 400ms as Off and save 0.
-    expect(screen.getByLabelText("Coalesce window")).toHaveValue("0.4");
+    expect(screen.getByLabelText("Coalesce window")).toHaveAttribute(
+      "data-value",
+      "0.4",
+    );
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
     expect(onSubmit).toHaveBeenLastCalledWith(
@@ -469,12 +464,7 @@ describe("AutomationEditor", () => {
       target: { value: "Investigate the alert." },
     });
     fireEvent.click(screen.getByRole("button", { name: "Inbound message" }));
-    await waitFor(() =>
-      expect(screen.getByRole("option", { name: "Slack" })).toBeInTheDocument(),
-    );
-    fireEvent.change(screen.getByLabelText("Provider"), {
-      target: { value: "slack" },
-    });
+    await chooseProvider("Slack");
     await pickConversation("Conversation", /Alerts/);
     fireEvent.change(screen.getByLabelText("Value"), {
       target: { value: "ERROR" },
@@ -531,12 +521,14 @@ describe("AutomationEditor", () => {
     fireEvent.change(screen.getByLabelText("Value"), {
       target: { value: "ERROR" },
     });
-    fireEvent.change(screen.getByLabelText("Where should the result go?"), {
-      target: { value: "different" },
-    });
-    fireEvent.change(screen.getByLabelText("Destination provider"), {
-      target: { value: provider },
-    });
+    chooseSelectOption(
+      screen.getByLabelText("Where should the result go?"),
+      "Send to a different conversation",
+    );
+    chooseSelectOption(
+      screen.getByLabelText("Destination provider"),
+      INBOUND_PROVIDER_LABELS[provider] ?? provider,
+    );
     await pickConversation("Destination", /Peer/);
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
 
@@ -670,10 +662,16 @@ describe("AutomationEditor", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Inbound message" }));
+    // The Provider list renders its options only while open, so read it
+    // through the trigger rather than querying the document for them.
     await waitFor(() =>
-      expect(screen.queryByRole("option", { name: "Slack" })).not.toBeInTheDocument(),
+      expect(selectOptionLabels(screen.getByLabelText("Provider"))).not.toContain(
+        "Slack",
+      ),
     );
-    expect(screen.getByRole("option", { name: "Telegram" })).toBeInTheDocument();
+    expect(selectOptionLabels(screen.getByLabelText("Provider"))).toContain(
+      "Telegram",
+    );
     // The authorized group is a row inside the conversation picker, so it is
     // listed once the field is opened.
     await openConversationPicker("Conversation");
@@ -776,12 +774,11 @@ describe("AutomationEditor", () => {
       target: { value: "Summarize what they asked for." },
     });
     fireEvent.click(screen.getByRole("button", { name: "Inbound message" }));
-    // Not `toHaveValue("slack")` on the Provider select. The editor starts on
-    // Telegram and moves to the first enabled provider in an effect one render
-    // after the Slack-only option list arrives, and a controlled select whose
-    // value matches no option reports its first option — so the select reads
-    // "slack" while the form below it is still Telegram's. "Channel ID" is only
-    // rendered once the state itself is Slack.
+    // Not the Provider field. The editor starts on Telegram and moves to the
+    // first enabled provider in an effect one render after the Slack-only
+    // option list arrives, so the field offers Slack while the form below it
+    // is still Telegram's. "Channel ID" is only rendered once the state itself
+    // is Slack.
     await screen.findByLabelText("Channel ID");
     fireEvent.click(screen.getByRole("button", { name: "Direct message" }));
     // The field asks for the sender's member ID, because that is what the
@@ -824,7 +821,7 @@ describe("AutomationEditor", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Inbound message" }));
-    // Waits on the Slack field, not the select — see the test above.
+    // Waits on the Slack field, not the Provider field — see the test above.
     fireEvent.change(await screen.findByLabelText("Channel ID"), {
       target: { value: "U03QW7ELB19" },
     });
@@ -854,9 +851,10 @@ describe("AutomationEditor", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Inbound message" }));
-    fireEvent.change(screen.getByLabelText("Where should the result go?"), {
-      target: { value: "different" },
-    });
+    chooseSelectOption(
+      screen.getByLabelText("Where should the result go?"),
+      "Send to a different conversation",
+    );
     await pickConversation("Destination", /Ops Room/);
     expect(
       screen.getByLabelText("Destination topic ID (optional)"),
@@ -1245,9 +1243,10 @@ describe("AutomationEditor", () => {
     fireEvent.change(screen.getByLabelText("Value"), {
       target: { value: "ERROR" },
     });
-    fireEvent.change(screen.getByLabelText("Where should the result go?"), {
-      target: { value: "agent_only" },
-    });
+    chooseSelectOption(
+      screen.getByLabelText("Where should the result go?"),
+      "Only the Agent (no message back)",
+    );
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
@@ -1342,9 +1341,10 @@ describe("AutomationEditor", () => {
     fireEvent.change(screen.getByLabelText("Value"), {
       target: { value: "ERROR" },
     });
-    fireEvent.change(screen.getByLabelText("Where should the result go?"), {
-      target: { value: "different" },
-    });
+    chooseSelectOption(
+      screen.getByLabelText("Where should the result go?"),
+      "Send to a different conversation",
+    );
     await pickManualEntry("Destination", /Enter Group ID manually/);
     fireEvent.change(screen.getByLabelText("Destination group ID"), {
       target: { value: "-200" },
@@ -2075,7 +2075,7 @@ describe("AutomationEditor Discord channels", () => {
     fireEvent.click(screen.getByRole("button", { name: "Inbound message" }));
     await screen.findByLabelText("Channel ID");
     expect(list).not.toHaveBeenCalled();
-    fireEvent.change(screen.getByLabelText("Provider"), { target: { value: "discord" } });
+    chooseSelectOption(screen.getByLabelText("Provider"), "Discord");
     await waitFor(() => expect(list).toHaveBeenCalledTimes(1));
   });
 });
@@ -2110,9 +2110,10 @@ describe("AutomationEditor DM wording", () => {
       screen.getByText(/History can't be read back for a contact's direct messages/),
     ).toBeInTheDocument();
 
-    fireEvent.change(screen.getByLabelText("Where should the result go?"), {
-      target: { value: "different" },
-    });
+    chooseSelectOption(
+      screen.getByLabelText("Where should the result go?"),
+      "Send to a different conversation",
+    );
     await pickConversation("Destination", /Avery Quill/);
     expect(
       screen.getByText(
@@ -2143,9 +2144,10 @@ describe("AutomationEditor DM wording", () => {
       target: { value: "C0INBOUND" },
     });
     fireEvent.change(screen.getByLabelText("Value"), { target: { value: "ERROR" } });
-    fireEvent.change(screen.getByLabelText("Where should the result go?"), {
-      target: { value: "different" },
-    });
+    chooseSelectOption(
+      screen.getByLabelText("Where should the result go?"),
+      "Send to a different conversation",
+    );
     fireEvent.change(await screen.findByLabelText("Destination channel ID"), {
       target: { value: "C0RESULTS" },
     });
@@ -2228,9 +2230,7 @@ describe("AutomationEditor DM wording", () => {
     );
 
     await waitFor(() =>
-      expect(
-        screen.getByLabelText("Provider").querySelectorAll("option"),
-      ).toHaveLength(2),
+      expect(selectOptionLabels(screen.getByLabelText("Provider"))).toHaveLength(2),
     );
     // Discord's example ID is a snowflake; Slack's is C0123ABCD.
     expect(screen.getByLabelText("Channel ID")).toHaveAttribute(
@@ -2240,9 +2240,10 @@ describe("AutomationEditor DM wording", () => {
     expect(screen.getByLabelText("Channel ID")).toHaveValue("1480556454498009371");
     // The destination defaults to the trigger's provider and must not have
     // been moved by the placeholder either.
-    fireEvent.change(screen.getByLabelText("Where should the result go?"), {
-      target: { value: "different" },
-    });
+    chooseSelectOption(
+      screen.getByLabelText("Where should the result go?"),
+      "Send to a different conversation",
+    );
     expect(await screen.findByLabelText("Destination channel ID")).toHaveAttribute(
       "placeholder",
       "e.g. 123456789012345678",
@@ -2386,12 +2387,7 @@ describe("AutomationEditor with several watched conversations", () => {
       target: { value: "Investigate." },
     });
     fireEvent.click(screen.getByRole("button", { name: "Inbound message" }));
-    await waitFor(() =>
-      expect(screen.getByRole("option", { name: "Slack" })).toBeInTheDocument(),
-    );
-    fireEvent.change(screen.getByLabelText("Provider"), {
-      target: { value: "slack" },
-    });
+    await chooseProvider("Slack");
   }
 
   it("keeps every watched conversation, its id, and its title when re-saved", async () => {
