@@ -15,12 +15,16 @@
  * `describe`.
  */
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
+  CAPTURE_INACTIVE_EXIT_STATUS,
+  captureWhileFocused,
   centeredIn,
+  isInactiveCaptureRefusal,
   MINIMUM_RETINA_SCALE_FACTOR,
   overflowsWorkArea,
   pickCaptureDisplay,
+  waitForSteadyFocus,
   type DisplaySummary,
 } from "../../../e2e/fixtures/capture-window-placement";
 
@@ -176,5 +180,105 @@ describe("overflowsWorkArea", () => {
     expect(
       overflowsWorkArea({ x: 0, y: 0, width: 1500, height: 880 }, CAPTURE_WINDOW),
     ).toBe(true);
+  });
+});
+
+describe("waitForSteadyFocus", () => {
+  // macOS activates an app asynchronously, and the app that had focus can
+  // take it back about a second later. An inactive window is captured with
+  // grey traffic lights, so focus has to hold, not just arrive.
+  const answers = (...values: boolean[]) => {
+    const focus = vi.fn();
+    for (const value of values) focus.mockResolvedValueOnce(value);
+    return focus.mockResolvedValue(values[values.length - 1]);
+  };
+
+  it("waits for focus to arrive and then hold", async () => {
+    const focus = answers(false, false, true, true, true);
+    const sleep = vi.fn(async () => {});
+
+    await expect(
+      waitForSteadyFocus(focus, { steadyChecks: 3, maxChecks: 10, intervalMs: 100, sleep }),
+    ).resolves.toBe(true);
+    expect(focus).toHaveBeenCalledTimes(5);
+    expect(sleep).toHaveBeenCalledTimes(4);
+    expect(sleep).toHaveBeenCalledWith(100);
+  });
+
+  it("starts the count again when focus is taken back", async () => {
+    // Focus arrives, is taken back once, then holds.
+    const focus = answers(true, true, false, true, true, true);
+    const sleep = vi.fn(async () => {});
+
+    await expect(
+      waitForSteadyFocus(focus, { steadyChecks: 3, maxChecks: 10, sleep }),
+    ).resolves.toBe(true);
+    expect(focus).toHaveBeenCalledTimes(6);
+  });
+
+  it("gives up without a trailing wait when focus never holds", async () => {
+    const focus = answers(true, false, true, false);
+    const sleep = vi.fn(async () => {});
+
+    await expect(
+      waitForSteadyFocus(focus, { steadyChecks: 2, maxChecks: 4, sleep }),
+    ).resolves.toBe(false);
+    expect(focus).toHaveBeenCalledTimes(4);
+    expect(sleep).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe("captureWhileFocused", () => {
+  // What `execFileSync` throws when the script exits non-zero.
+  const exited = (status: number) =>
+    Object.assign(new Error(`Command failed with status ${status}`), { status });
+
+  it("raises the window and captures again after an inactive refusal", async () => {
+    const capture = vi.fn()
+      .mockImplementationOnce(() => {
+        throw exited(CAPTURE_INACTIVE_EXIT_STATUS);
+      })
+      .mockImplementationOnce(() => {});
+    const raise = vi.fn(async () => {});
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    await captureWhileFocused(capture, raise, 3);
+    expect(capture).toHaveBeenCalledTimes(2);
+    expect(raise).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
+  });
+
+  it("throws any other failure at once, without raising", async () => {
+    // Exit 6 is the sub-Retina refusal; moving focus cannot fix it.
+    const capture = vi.fn(() => {
+      throw exited(6);
+    });
+    const raise = vi.fn(async () => {});
+
+    await expect(captureWhileFocused(capture, raise, 3)).rejects.toMatchObject({ status: 6 });
+    expect(capture).toHaveBeenCalledTimes(1);
+    expect(raise).not.toHaveBeenCalled();
+  });
+
+  it("gives up after the last attempt and throws the refusal", async () => {
+    const capture = vi.fn(() => {
+      throw exited(CAPTURE_INACTIVE_EXIT_STATUS);
+    });
+    const raise = vi.fn(async () => {});
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    await expect(captureWhileFocused(capture, raise, 3)).rejects.toMatchObject({
+      status: CAPTURE_INACTIVE_EXIT_STATUS,
+    });
+    expect(capture).toHaveBeenCalledTimes(3);
+    expect(raise).toHaveBeenCalledTimes(2);
+    warn.mockRestore();
+  });
+
+  it("recognizes only the inactive-window exit status", () => {
+    expect(isInactiveCaptureRefusal(exited(CAPTURE_INACTIVE_EXIT_STATUS))).toBe(true);
+    expect(isInactiveCaptureRefusal(exited(6))).toBe(false);
+    expect(isInactiveCaptureRefusal(new Error("spawn failed"))).toBe(false);
+    expect(isInactiveCaptureRefusal(undefined)).toBe(false);
   });
 });

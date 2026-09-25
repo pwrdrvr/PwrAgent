@@ -135,6 +135,111 @@ export class CaptureWindowNotFoundError extends Error {
 }
 
 /**
+ * Thrown when the capture window cannot hold focus.
+ *
+ * `screencapture -l` photographs an inactive window as it looks: grey
+ * traffic lights, dimmed chrome, and a smaller shadow, which also changes
+ * the PNG's size. The capture still succeeds and the noise filter keeps
+ * it, because those are different pixels, so the only safe outcome is to
+ * stop before capturing and leave the committed PNG.
+ */
+export class CaptureWindowNotFocusedError extends Error {
+  constructor(steadyMs: number, waitedMs: number) {
+    super(
+      `the capture window did not stay the active window for ${steadyMs}ms `
+        + `within ${waitedMs}ms, so it would be captured with grey traffic `
+        + "lights. Another app kept taking focus back: a full-screen app, a "
+        + "system dialog, or input during the run. Clear it and rerun.",
+    );
+    this.name = "CaptureWindowNotFocusedError";
+  }
+}
+
+export const CAPTURE_FOCUS_INTERVAL_MS = 100;
+/**
+ * How long the window must stay focused before a capture. The app that had
+ * focus when the run started can take it back 0.8–2.3s after Electron
+ * activates, sometimes more than once (observed from the Claude desktop
+ * app). Holding for 2s lets most take-backs land before the capture;
+ * `captureWhileFocused` retries the rest.
+ */
+export const CAPTURE_FOCUS_STEADY_CHECKS = 20;
+export const CAPTURE_FOCUS_MAX_CHECKS = 80;
+
+/**
+ * Call `focus` until it has reported the window focused on `steadyChecks`
+ * checks in a row, at most `maxChecks` times. `focus` both asks for focus
+ * and reports whether it has it: macOS activates an app asynchronously,
+ * so the first answer is usually no, and asking again wins focus back
+ * from an app that took it. A lost check restarts the count.
+ */
+export async function waitForSteadyFocus(
+  focus: () => Promise<boolean>,
+  options: {
+    steadyChecks?: number;
+    maxChecks?: number;
+    intervalMs?: number;
+    sleep?: (ms: number) => Promise<void>;
+  } = {},
+): Promise<boolean> {
+  const steadyChecks = options.steadyChecks ?? CAPTURE_FOCUS_STEADY_CHECKS;
+  const maxChecks = options.maxChecks ?? CAPTURE_FOCUS_MAX_CHECKS;
+  const intervalMs = options.intervalMs ?? CAPTURE_FOCUS_INTERVAL_MS;
+  const sleep = options.sleep
+    ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  let steady = 0;
+  for (let check = 1; check <= maxChecks; check += 1) {
+    steady = (await focus()) ? steady + 1 : 0;
+    if (steady >= steadyChecks) return true;
+    if (check < maxChecks) await sleep(intervalMs);
+  }
+  return false;
+}
+
+/**
+ * `capture-window.swift`'s exit status when the window's app was not the
+ * active app before or after the capture. It wrote nothing.
+ */
+export const CAPTURE_INACTIVE_EXIT_STATUS = 7;
+export const CAPTURE_ATTEMPTS = 3;
+
+/** Whether `execFileSync` threw because the capture script refused an inactive window. */
+export function isInactiveCaptureRefusal(error: unknown): boolean {
+  return (
+    typeof error === "object"
+    && error !== null
+    && (error as { status?: unknown }).status === CAPTURE_INACTIVE_EXIT_STATUS
+  );
+}
+
+/**
+ * Run `capture`, which calls `capture-window.swift`, and when the script
+ * refuses because the window lost focus, `raise` it and capture again, up
+ * to `attempts` times. A steady-focus wait alone is not enough: the app
+ * that had focus when the run started can take it back more than once,
+ * seconds apart. Any other failure is thrown at once.
+ */
+export async function captureWhileFocused(
+  capture: () => void,
+  raise: () => Promise<void>,
+  attempts: number = CAPTURE_ATTEMPTS,
+): Promise<void> {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      capture();
+      return;
+    } catch (error) {
+      if (!isInactiveCaptureRefusal(error) || attempt >= attempts) throw error;
+      console.warn(
+        "[capture] the window lost focus; raising it and capturing again "
+        + `(attempt ${attempt + 1} of ${attempts})`,
+      );
+      await raise();
+    }
+  }
+}
+
+/**
  * Report each distinct placement outcome once rather than on all ~21
  * captures of a run — but re-report when the outcome *changes*, since a
  * display can be connected or disconnected mid-run and a latch keyed on
@@ -166,7 +271,14 @@ function report(line: string, level: "log" | "warn"): void {
  * main window gets placed while a different one is photographed. The
  * match here is case-insensitive, as it is on the Swift side.
  *
+ * The raise has to make the app active and keep it active, not just order
+ * the window front. A run started from another app captured the window
+ * inactive, with grey traffic lights, on some runs and not others: that
+ * app took focus back while the capture ran. So this waits until focus
+ * holds, and `capture-window.swift` refuses a capture taken without it.
+ *
  * @throws {CaptureWindowNotFoundError} when no window matches.
+ * @throws {CaptureWindowNotFocusedError} when the window never becomes active.
  */
 export async function bringToFront(
   electronApp: ElectronApplication,
@@ -278,6 +390,26 @@ export async function bringToFront(
         "warn",
       );
     }
+  }
+
+  // Activate, then wait out a take-back. `steal` makes Electron the active
+  // app even while another app is; without it, `focus()` only reorders
+  // windows within Electron.
+  const focused = await waitForSteadyFocus(() =>
+    electronApp.evaluate(({ app, BrowserWindow }, id) => {
+      const win = BrowserWindow.fromId(id);
+      if (!win) return false;
+      if (win.isFocused()) return true;
+      if (process.platform === "darwin") app.focus({ steal: true });
+      win.focus();
+      return win.isFocused();
+    }, snapshot.id),
+  );
+  if (!focused) {
+    throw new CaptureWindowNotFocusedError(
+      CAPTURE_FOCUS_STEADY_CHECKS * CAPTURE_FOCUS_INTERVAL_MS,
+      CAPTURE_FOCUS_MAX_CHECKS * CAPTURE_FOCUS_INTERVAL_MS,
+    );
   }
 
   // Give the compositor a tick to actually raise the window (and settle
