@@ -1,5 +1,8 @@
 import "@testing-library/jest-dom/vitest";
-import { buildThreadPricingDisplay } from "@pwragent/shared";
+import {
+  buildThreadPricingDisplay,
+  parseCodexAsyncQuestionReply,
+} from "@pwragent/shared";
 import type {
   AppServerReadThreadResponse,
   AppServerThreadMessageEntry,
@@ -2182,8 +2185,37 @@ Implementation notes remain in a readable bubble.`;
     );
 
     it("asks a free-text question with an answer field and sends a structured reply", async () => {
-      const onAnswerAsyncQuestions = vi.fn(async () => true);
-      renderList([freeTextQuestion], { onAnswerAsyncQuestions });
+      // ThreadView records what the composer took and passes it back.
+      const view = renderList([freeTextQuestion]);
+      const onAnswerAsyncQuestions = vi.fn(async (text: string) => {
+        view.rerender(
+          <TranscriptList
+            entries={[freeTextQuestion]}
+            loading={false}
+            loadingMore={false}
+            threadId="thread-1"
+            onLoadOlder={async () => undefined}
+            onAnswerAsyncQuestions={onAnswerAsyncQuestions}
+            sentAsyncQuestionAnswers={new Map(
+              (parseCodexAsyncQuestionReply(text) ?? []).map((reply) => [
+                reply.questionItemId,
+                reply.answer,
+              ]),
+            )}
+          />
+        );
+        return true;
+      });
+      view.rerender(
+        <TranscriptList
+          entries={[freeTextQuestion]}
+          loading={false}
+          loadingMore={false}
+          threadId="thread-1"
+          onLoadOlder={async () => undefined}
+          onAnswerAsyncQuestions={onAnswerAsyncQuestions}
+        />
+      );
 
       const card = screen.getByRole("group", { name: "Question from Codex" });
       expect(within(card).getByText("Question")).toBeInTheDocument();

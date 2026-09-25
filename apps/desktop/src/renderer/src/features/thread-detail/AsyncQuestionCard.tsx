@@ -11,6 +11,8 @@ type AsyncQuestionCardProps = {
   questions: readonly CodexAsyncQuestion[];
   /** Answers found in the transcript, by question item id or message id. */
   replies?: ReadonlyMap<string, string>;
+  /** Answers the composer took that the transcript may not show yet. */
+  sentAnswers?: ReadonlyMap<string, string>;
   dismissed?: boolean;
   /** Resolves true once the composer has taken the reply. */
   onAnswer?: (text: string) => Promise<boolean>;
@@ -37,13 +39,12 @@ export function AsyncQuestionCard(props: AsyncQuestionCardProps) {
       text: "",
     }))
   );
-  const [sentAnswers, setSentAnswers] = useState<Array<string | undefined>>([]);
   const [sending, setSending] = useState(false);
 
   const answers = props.questions.map((_, index) =>
     props.replies?.get(codexAsyncQuestionItemId(props.messageId, index))
     ?? props.replies?.get(props.messageId)
-    ?? sentAnswers[index]
+    ?? props.sentAnswers?.get(codexAsyncQuestionItemId(props.messageId, index))
   );
   const openIndexes = props.questions.flatMap((_, index) =>
     answers[index] === undefined ? [index] : []
@@ -75,12 +76,11 @@ export function AsyncQuestionCard(props: AsyncQuestionCardProps) {
     if (!props.onAnswer || sending) {
       return;
     }
-    const submitted = new Map(readyIndexes.map((index) => [index, draftAnswer(index)]));
     const text = formatCodexAsyncQuestionReply(
-      [...submitted].map(([index, answer]) => ({
+      readyIndexes.map((index) => ({
         questionItemId: codexAsyncQuestionItemId(props.messageId, index),
         question: props.questions[index]?.title ?? "",
-        answer,
+        answer: draftAnswer(index),
       }))
     );
     if (!text) {
@@ -88,13 +88,10 @@ export function AsyncQuestionCard(props: AsyncQuestionCardProps) {
     }
     setSending(true);
     try {
-      if (await props.onAnswer(text)) {
-        // A queued reply does not reach the transcript until the turn
-        // ends, so hold the answers here until it does.
-        setSentAnswers((current) =>
-          props.questions.map((_, index) => submitted.get(index) ?? current[index])
-        );
-      }
+      // The host records accepted answers and passes them back as
+      // `sentAnswers`, since a queued reply reaches the transcript only
+      // after the turn ends.
+      await props.onAnswer(text);
     } finally {
       setSending(false);
     }

@@ -20141,6 +20141,39 @@ describe("MessagingController", () => {
         intent.kind === "message" && intent.role === "assistant"
       )).toBe(false);
       expect(harness.submitServerRequest).not.toHaveBeenCalled();
+      expect(await harness.store.findActivePendingAsyncQuestionnaires({
+        backend: "codex",
+        threadId: "thread-1",
+        now: 1000,
+      })).toHaveLength(1);
+    });
+
+    it("drops a questionnaire the channel never showed", async () => {
+      const harness = await createHarness({
+        deliver: async (intent) => intent.kind === "questionnaire"
+          ? {
+              channel: "telegram" as const,
+              deliveredAt: 1,
+              errorMessage: "Forbidden",
+              outcome: "failed" as const,
+            }
+          : {
+              channel: "telegram" as const,
+              deliveredAt: 1,
+              outcome: "presented" as const,
+              surface: { channel: "telegram" as const, id: `surface:${intent.id}` },
+            },
+      });
+      await bindThread(harness);
+
+      await harness.controller.handleBackendEvent(asyncQuestionEvent());
+
+      // Otherwise the next chat message would silently answer it.
+      expect(await harness.store.findActivePendingAsyncQuestionnaires({
+        backend: "codex",
+        threadId: "thread-1",
+        now: 1000,
+      })).toEqual([]);
     });
 
     it("answers with Codex's reply envelope as a new turn once the thread is idle", async () => {
@@ -20168,6 +20201,7 @@ describe("MessagingController", () => {
       expect(await harness.store.findActivePendingAsyncQuestionnaires({
         backend: "codex",
         threadId: "thread-1",
+        now: 1000,
       })).toEqual([]);
     });
 
@@ -20214,6 +20248,7 @@ describe("MessagingController", () => {
       expect(await harness.store.findActivePendingAsyncQuestionnaires({
         backend: "codex",
         threadId: "thread-1",
+        now: 1000,
       })).toEqual([]);
       harness.startTurn.mockClear();
 
@@ -20256,6 +20291,7 @@ describe("MessagingController", () => {
       expect(await harness.store.findActivePendingAsyncQuestionnaires({
         backend: "codex",
         threadId: "thread-1",
+        now: 1000,
       })).toEqual([]);
     });
   });

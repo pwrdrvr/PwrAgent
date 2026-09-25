@@ -56,6 +56,7 @@ import {
   buildThreadIdentityKey,
   isBranchDrifted,
   isRemoteFederationTarget,
+  parseCodexAsyncQuestionReply,
   PWRSNAP_MCP_CONNECTION_ID,
   PWRGIT_MCP_CONNECTION_ID,
   readCodexEnvironmentActionRuns,
@@ -1219,6 +1220,7 @@ export function ThreadView(props: ThreadViewProps) {
   const [pendingRequestError, setPendingRequestError] = useState<string>();
   const asyncQuestionReplyId = useRef(0);
   const asyncQuestionReplySettlers = useRef(new Map<number, (accepted: boolean) => void>());
+  const asyncQuestionSubmissions = useRef(new Map<number, { threadKey: string; text: string }>());
   const [asyncQuestionReply, setAsyncQuestionReply] = useState<{
     id: number;
     threadId: string;
@@ -1229,6 +1231,10 @@ export function ThreadView(props: ThreadViewProps) {
   // this window's choice for the session, as skipping is in Codex's own UI.
   const [dismissedAsyncQuestions, setDismissedAsyncQuestions] =
     useState<ReadonlySet<string>>(() => new Set());
+  // Answers the composer took that the transcript may not show yet, as when
+  // one waits in the queue. Kept here so a card mounted again still has them.
+  const [sentAsyncQuestionAnswers, setSentAsyncQuestionAnswers] =
+    useState<ReadonlyMap<string, string>>(() => new Map());
   const [expandedImage, setExpandedImage] = useState<AppServerThreadImagePart>();
   const [contextRailResizing, setContextRailResizing] = useState(false);
   const [transcriptReglueRequestKey, setTranscriptReglueRequestKey] = useState(0);
@@ -2220,6 +2226,14 @@ export function ThreadView(props: ThreadViewProps) {
         .map((key) => key.slice(prefix.length)),
     );
   }, [asyncQuestionThreadKey, dismissedAsyncQuestions]);
+  const threadSentAsyncQuestionAnswers = useMemo(() => {
+    const prefix = `${asyncQuestionThreadKey}\0`;
+    return new Map(
+      [...sentAsyncQuestionAnswers]
+        .filter(([key]) => key.startsWith(prefix))
+        .map(([key, answer]) => [key.slice(prefix.length), answer]),
+    );
+  }, [asyncQuestionThreadKey, sentAsyncQuestionAnswers]);
   useEffect(() => {
     const settlers = asyncQuestionReplySettlers.current;
     return () => {
@@ -2237,6 +2251,10 @@ export function ThreadView(props: ThreadViewProps) {
     asyncQuestionReplyId.current += 1;
     const id = asyncQuestionReplyId.current;
     const thread = selectedThread;
+    asyncQuestionSubmissions.current.set(id, {
+      threadKey: `${thread.source}:${thread.id}`,
+      text,
+    });
     return new Promise<boolean>((resolve) => {
       asyncQuestionReplySettlers.current.set(id, resolve);
       setAsyncQuestionReply({
@@ -2250,6 +2268,19 @@ export function ThreadView(props: ThreadViewProps) {
   const handleReplySubmissionSettled = useEventCallback((id: number, accepted: boolean) => {
     const settle = asyncQuestionReplySettlers.current.get(id);
     asyncQuestionReplySettlers.current.delete(id);
+    // Record the answer even when the operator has left the thread, whose
+    // card was already told the send did not settle there.
+    const submission = asyncQuestionSubmissions.current.get(id);
+    asyncQuestionSubmissions.current.delete(id);
+    if (accepted && submission) {
+      setSentAsyncQuestionAnswers((current) => {
+        const next = new Map(current);
+        for (const reply of parseCodexAsyncQuestionReply(submission.text) ?? []) {
+          next.set(`${submission.threadKey}\0${reply.questionItemId}`, reply.answer);
+        }
+        return next;
+      });
+    }
     settle?.(accepted);
     // A Composer mounted later, as after the launchpad, must not send it again.
     setAsyncQuestionReply((current) => (current?.id === id ? undefined : current));
@@ -3922,6 +3953,7 @@ export function ThreadView(props: ThreadViewProps) {
               onLinkedMessageHandled={props.onLinkedMessageHandled}
               onOpenImage={setExpandedImage}
               dismissedAsyncQuestionMessageIds={dismissedAsyncQuestionMessageIds}
+              sentAsyncQuestionAnswers={threadSentAsyncQuestionAnswers}
               onAnswerAsyncQuestions={handleAnswerAsyncQuestions}
               onAsyncQuestionsDismissedChange={handleAsyncQuestionsDismissedChange}
               onExpandedActivityIdsChange={

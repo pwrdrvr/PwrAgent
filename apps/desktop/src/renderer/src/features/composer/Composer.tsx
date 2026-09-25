@@ -10622,19 +10622,23 @@ export const Composer = memo(function Composer(props: ComposerProps) {
           <div className="composer__queued-actions">
             {pendingSteer.status === "pending" ? (
               <>
-                <button
-                  className="composer__secondary-action"
-                  type="button"
-                  onClick={() => {
-                    setComposerDraftFromCanonical(pendingSteer.text);
-                    setImageAttachments(pendingSteer.imageAttachments);
-                    setFileAttachments(pendingSteer.fileAttachments);
-                    setPendingSteer(undefined);
-                    requestAnimationFrame(() => inputRef.current?.focus());
-                  }}
-                >
-                  Edit
-                </button>
+                {/* An answer to an agent's question was never a draft, and
+                    editing it would replace the operator's own. */}
+                {parseCodexAsyncQuestionReply(pendingSteer.text) ? null : (
+                  <button
+                    className="composer__secondary-action"
+                    type="button"
+                    onClick={() => {
+                      setComposerDraftFromCanonical(pendingSteer.text);
+                      setImageAttachments(pendingSteer.imageAttachments);
+                      setFileAttachments(pendingSteer.fileAttachments);
+                      setPendingSteer(undefined);
+                      requestAnimationFrame(() => inputRef.current?.focus());
+                    }}
+                  >
+                    Edit
+                  </button>
+                )}
                 <button
                   className="composer__secondary-action"
                   type="button"

@@ -69,6 +69,8 @@ type TranscriptMessageProps = {
   onOpenImage?: (image: AppServerThreadImagePart) => void;
   /** Answers to Codex async questions found anywhere in the transcript. */
   asyncQuestionReplies?: ReadonlyMap<string, string>;
+  /** Answers sent from this window that the transcript may not show yet. */
+  asyncQuestionSentAnswers?: ReadonlyMap<string, string>;
   asyncQuestionsDismissed?: boolean;
   onAnswerAsyncQuestions?: (text: string) => Promise<boolean>;
   onAsyncQuestionsDismissedChange?: (messageId: string, dismissed: boolean) => void;
@@ -350,6 +352,7 @@ export const TranscriptMessage = memo(function TranscriptMessage(props: Transcri
           messageId={messageId}
           questions={asyncQuestions}
           replies={props.asyncQuestionReplies}
+          sentAnswers={props.asyncQuestionSentAnswers}
           dismissed={props.asyncQuestionsDismissed}
           onAnswer={props.onAnswerAsyncQuestions}
           onDismissedChange={onDismissedChange

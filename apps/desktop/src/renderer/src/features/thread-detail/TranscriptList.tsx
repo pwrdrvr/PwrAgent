@@ -137,6 +137,8 @@ type TranscriptListProps = {
   onAnswerAsyncQuestions?: (text: string) => Promise<boolean>;
   /** Messages whose async questions the operator dismissed in this window. */
   dismissedAsyncQuestionMessageIds?: ReadonlySet<string>;
+  /** Answers the composer took that the transcript may not show yet. */
+  sentAsyncQuestionAnswers?: ReadonlyMap<string, string>;
   onAsyncQuestionsDismissedChange?: (messageId: string, dismissed: boolean) => void;
   onExpandedWorkPhaseGroupIdsChange?: (groupIds: string[]) => void;
   onViewportChange?: (viewport?: TranscriptViewport) => void;
@@ -1612,6 +1614,7 @@ export function TranscriptList(props: TranscriptListProps) {
                   threadLinkSource={props.threadLinkSource}
                   onOpenImage={props.onOpenImage}
                   asyncQuestionReplies={asyncQuestionReplies}
+                  asyncQuestionSentAnswers={props.sentAsyncQuestionAnswers}
                   asyncQuestionsDismissed={props.dismissedAsyncQuestionMessageIds?.has(item.entry.id)}
                   onAnswerAsyncQuestions={props.onAnswerAsyncQuestions}
                   onAsyncQuestionsDismissedChange={props.onAsyncQuestionsDismissedChange}

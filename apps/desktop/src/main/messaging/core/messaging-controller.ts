@@ -2059,6 +2059,7 @@ export class MessagingController {
               asyncQuestions,
               event,
               binding,
+              eventTurnId ?? activeTurn?.turnId,
             );
             await this.deliverAssistantImages(assistantImages, event, binding);
           } else {
@@ -6573,6 +6574,7 @@ export class MessagingController {
     asyncQuestions: { itemId: string; questions: CodexAsyncQuestion[] },
     event: AgentEvent,
     binding: MessagingBindingRecord,
+    turnId: string | undefined,
   ): Promise<void> {
     const threadId = threadIdForBackendEvent(event) ?? binding.threadId;
     const intent = buildAsyncQuestionnaireIntent({
@@ -6599,7 +6601,14 @@ export class MessagingController {
       threadId,
     });
     const pendingIntent = await this.storePendingIntent(intent, binding);
+    await this.flushPendingTurnProseBeforeElicitation(binding, turnId);
     const delivery = await this.deliver(intent, binding);
+    if (delivery.outcome === "failed") {
+      // No turn end retires an async card, so one nobody can see would take
+      // the operator's next message as its answer.
+      await this.options.store.deletePendingIntent(pendingIntent.id);
+      return;
+    }
     if (delivery.surface) {
       await this.options.store.upsertPendingIntent({
         ...pendingIntent,
