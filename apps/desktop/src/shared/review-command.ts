@@ -1,4 +1,4 @@
-import { nativeReviewTarget } from "./pull-request-review";
+import { nativeReviewTarget, pullRequestReviewPromptUrl } from "./pull-request-review";
 import type { AppServerReviewOutput, AppServerReviewTarget } from "@pwragent/shared";
 import { normalizeReviewConfidenceScore } from "./review-output";
 
@@ -84,6 +84,11 @@ export function normalizeReviewDisplayText(value: string): string {
   const normalized = value.trim().replace(/\s+/g, " ");
   if (!normalized) {
     return "";
+  }
+
+  const pullRequestUrl = pullRequestReviewPromptUrl(normalized);
+  if (pullRequestUrl) {
+    return `Review ${pullRequestUrl}`;
   }
 
   if (/^current changes$/i.test(normalized)) {
@@ -259,8 +264,9 @@ export function normalizeReviewOutputRecord(
 /** Wording is only a candidate; callers must also establish a native review turn. */
 export function isCodexReviewPromptText(text: string): boolean {
   const normalized = text.trim().replace(/\s+/g, " ");
-  return /^review the (?:current )?code changes\b/i.test(normalized)
-    && /provide prioritized(?:, actionable)? findings\.$/i.test(normalized);
+  return Boolean(pullRequestReviewPromptUrl(normalized))
+    || (/^review the (?:current )?code changes\b/i.test(normalized)
+      && /provide prioritized(?:, actionable)? findings\.$/i.test(normalized));
 }
 
 /** Explicit persisted envelope for an ordinary turn/start used as an inline review. */

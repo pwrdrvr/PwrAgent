@@ -16,12 +16,29 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PullRequestLinkProvider } from "../../../lib/pull-request-links";
 import { TranscriptReview } from "../TranscriptReview";
+import { pullRequestReviewPrompt, pullRequestReviewUrl } from "../../../../../shared/__tests__/fixtures/pull-request-review";
 
 afterEach(() => {
   cleanup();
 });
 
 describe("TranscriptReview", () => {
+  it("renders an older PR review hint as a compact title without repeating its instructions", () => {
+    const { container } = render(
+      <TranscriptReview
+        entry={{
+          type: "review",
+          id: "pr-review",
+          displayText: pullRequestReviewPrompt.replace(/\s+/g, " "),
+          review: pullRequestReviewPrompt,
+        }}
+      />,
+    );
+    expect(screen.getByText(`Review ${pullRequestReviewUrl}`)).toBeInTheDocument();
+    expect(container).not.toHaveTextContent("immutable commits");
+    expect(container.querySelector(".transcript-review__body")).toBeNull();
+  });
+
   it("renders review summary metadata and prioritized findings", () => {
     render(
       <TranscriptReview

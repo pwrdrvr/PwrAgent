@@ -1,5 +1,6 @@
 import type { AppServerThreadEntry, AppServerThreadMessageEntry } from "@pwragent/shared";
 import { describe, expect, it } from "vitest";
+import { pullRequestReviewPrompt } from "../../../../shared/__tests__/fixtures/pull-request-review";
 import {
   addTranscriptReviewSegmentToIndex,
   createTranscriptReviewHistoryIndex,
@@ -28,8 +29,11 @@ describe("native review prompt presentation", () => {
     expect([...result.excludedHistoryMessageIds]).toEqual(["internal"]);
   });
 
-  it.each([true, false])("correlates prompts and markers across history pages (prompt in history: %s)", (promptInHistory) => {
-    const text = "Review the code changes against the base branch 'origin/main'. Run git diff abc123 to inspect the changes relative to origin/main. Provide prioritized, actionable findings.";
+  it.each([
+    [true, "branch"], [false, "branch"], [true, "pullRequest"], [false, "pullRequest"],
+  ] as const)("correlates prompts and markers across history pages (prompt in history: %s, target: %s)", (promptInHistory, target) => {
+    const text = target === "pullRequest" ? pullRequestReviewPrompt
+      : "Review the code changes against the base branch 'origin/main'. Run git diff abc123 to inspect the changes relative to origin/main. Provide prioritized, actionable findings.";
     const prompt: AppServerThreadMessageEntry = {
       type: "message", id: "prompt", role: "user", text,
       turn: { id: "native-review", status: "completed" },

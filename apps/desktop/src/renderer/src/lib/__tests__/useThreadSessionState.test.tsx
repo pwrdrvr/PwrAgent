@@ -25,6 +25,7 @@ import {
   THREAD_HISTORY_PAGE_LIMIT,
 } from "../thread-history-limits";
 import { readRendererSequence } from "../../features/thread-detail/live-transcript-activity";
+import { pullRequestReviewPrompt, pullRequestReviewUrl } from "../../../../shared/__tests__/fixtures/pull-request-review";
 
 function buildThread(params: {
   codexEnvironmentRuntime?: NavigationThreadSummary["codexEnvironmentRuntime"];
@@ -13590,7 +13591,10 @@ describe("useThreadSessionState", () => {
     expect(entry.type === "review" && entry.context?.pullRequest).toBeNull();
   });
 
-  it("keeps a review turn active when a separate turn/started arrives", async () => {
+  it.each([
+    ["Review changes against main", "Review changes against main"],
+    [`Review ${pullRequestReviewUrl}`, pullRequestReviewPrompt],
+  ])("reconciles %s and keeps its review turn active when a separate turn/started arrives", async (displayText, reviewPrompt) => {
     let agentEventHandler:
       | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
       | undefined;
@@ -13624,7 +13628,7 @@ describe("useThreadSessionState", () => {
     await waitForThreadHydration(result);
 
     act(() => {
-      result.current.addOptimisticReviewEntry("Review changes against main");
+      result.current.addOptimisticReviewEntry(displayText);
       agentEventHandler?.({
         backend: "codex",
         notification: {
@@ -13635,11 +13639,18 @@ describe("useThreadSessionState", () => {
             item: {
               id: "turn-review-entered",
               type: "enteredReviewMode",
-              review: "Review changes against main",
+              review: reviewPrompt,
             },
           },
         },
       });
+    });
+
+    expect(result.current.entries.filter((entry) => entry.type === "review")).toEqual([
+      expect.objectContaining({ id: "turn-review-entered", displayText }),
+    ]);
+
+    act(() => {
       agentEventHandler?.({
         backend: "codex",
         notification: {
