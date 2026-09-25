@@ -7,9 +7,11 @@ import {
   ChevronDownIcon,
   CloseIcon,
   GitHubIcon,
+  GrokIcon,
   MattermostIcon,
   MoreVerticalIcon,
   NewThreadIcon,
+  OpenAIIcon,
   PinIcon,
   SmileyIcon,
   WorktreeIcon,
@@ -179,11 +181,13 @@ describe("icon render cost", () => {
   it.each([
     ["GitHubIcon", GitHubIcon],
     ["MattermostIcon", MattermostIcon],
+    ["OpenAIIcon", OpenAIIcon],
+    ["GrokIcon", GrokIcon],
   ] as const)(
     "%s still follows the theme across the memo boundary",
     async (_name, Icon) => {
       // The other half of the contract, and the case a blanket memo could
-      // plausibly break: these two vendor marks cannot be recolored, so with
+      // plausibly break: these vendor marks cannot be recolored, so with
       // no explicit variant they pick a published asset from a live theme
       // subscription rather than from a prop. Nothing re-renders the parent
       // here — only the external store changes — so a memo that swallowed

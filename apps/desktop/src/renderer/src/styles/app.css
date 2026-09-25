@@ -35498,23 +35498,47 @@ button.pricing-token-miser__folded:focus-visible {
   padding: 6px 8px;
   gap: 8px;
 }
-.onboarding-wizard__codex-avatar {
-  width: 26px;
-  height: 26px;
-  border-radius: 50%;
-  background: var(--bg-panel-elevated);
-  border: 1px solid var(--border-strong);
+/* PwrAgent's app icon is its own tile; a vendor mark sits on a neutral one,
+   so each diagram pairing reads as two apps at equal weight. Corner radii
+   track the app icon's (~22% of its edge). */
+.onboarding-wizard__mark {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font: 700 10px/1 var(--font-sans, sans-serif);
-  color: var(--text-secondary);
   flex-shrink: 0;
+  box-sizing: border-box;
+  border-radius: 6px;
+  background: var(--bg-panel-elevated);
+  border: 1px solid var(--border-strong);
+  color: var(--text-secondary);
+}
+.onboarding-wizard__mark > img,
+.onboarding-wizard__mark > svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.onboarding-wizard__mark--pwragent {
+  background: none;
+  border: 0;
+}
+/* The Blossom file carries OpenAI's own clear space (the mark covers about
+   half its canvas), so it fills the tile. The Grok logomark runs to the
+   edges of its file, so it is inset to the same optical size. Vendor marks
+   are never cropped, recolored, or faded. */
+.onboarding-wizard__mark--grok > img,
+.onboarding-wizard__mark--cli > svg {
+  width: 54%;
+  height: 54%;
+}
+.onboarding-wizard__codex-avatar {
+  width: 26px;
+  height: 26px;
 }
 .onboarding-wizard__codex-node.is-compact .onboarding-wizard__codex-avatar {
   width: 22px;
   height: 22px;
-  font-size: 9px;
+  border-radius: 5px;
 }
 .onboarding-wizard__codex-label {
   font: 600 11px/1.2 var(--font-sans, sans-serif);
@@ -35575,7 +35599,7 @@ button.pricing-token-miser__folded:focus-visible {
 .onboarding-wizard__codex-node.is-tight .onboarding-wizard__codex-avatar {
   width: 18px;
   height: 18px;
-  font-size: 8px;
+  border-radius: 4px;
 }
 .onboarding-wizard__codex-node.is-tight .onboarding-wizard__codex-label {
   font-size: 10px;
@@ -35590,8 +35614,12 @@ button.pricing-token-miser__folded:focus-visible {
 .onboarding-wizard__codex-node-text {
   min-width: 0;
 }
+/* Fade the words, not the node: a node-level opacity would also fade the
+   Codex mark, and OpenAI's guidelines forbid altering it. */
 .onboarding-wizard__codex-node.is-muted {
   background: transparent;
+}
+.onboarding-wizard__codex-node.is-muted .onboarding-wizard__codex-node-text {
   opacity: 0.7;
 }
 .onboarding-wizard__codex-node.is-muted .onboarding-wizard__codex-label,
@@ -36542,6 +36570,18 @@ button.pricing-token-miser__folded:focus-visible {
   justify-content: space-between;
   gap: 12px;
 }
+.onboarding-wizard__prereq-identity {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.onboarding-wizard__prereq-mark {
+  width: 32px;
+  height: 32px;
+  border-radius: 7px;
+  background: var(--bg-panel);
+}
 .onboarding-wizard__prereq-title {
   font: 650 14px/1.2 var(--font-sans, sans-serif);
   color: var(--text-primary);
@@ -36641,6 +36681,15 @@ button.pricing-token-miser__folded:focus-visible {
 .onboarding-wizard__prereq-install-note {
   margin: 0 0 8px;
   color: var(--text-muted);
+}
+/* Non-affiliation line under a surface that shows a vendor's name or mark. */
+.onboarding-wizard__trademark-note {
+  margin: 0;
+  font: 400 11px/1.45 var(--font-sans, sans-serif);
+  color: var(--text-muted);
+}
+.onboarding-wizard__choices + .onboarding-wizard__trademark-note {
+  margin-top: 14px;
 }
 .onboarding-wizard__prereq-install a {
   color: var(--accent);

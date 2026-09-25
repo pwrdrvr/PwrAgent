@@ -47,11 +47,15 @@ import {
 import {
   DiscordIcon,
   FeishuIcon,
+  GrokIcon,
   LineIcon,
   MattermostIcon,
+  OpenAIIcon,
   PinIcon,
+  PwrAgentIcon,
   SlackIcon,
   TelegramIcon,
+  TerminalIcon,
 } from "../../icons";
 
 export type OnboardingProvider =
@@ -1695,6 +1699,19 @@ const ONBOARDING_BACKENDS: ReadonlyArray<{
   id: OnboardingBackendId;
   name: string;
   description: string;
+  /**
+   * The vendor's official mark, shown on the provider card. OpenAI and
+   * SpaceXAI publish terms that let an integrator show their mark to
+   * identify the product. Kimi's logo license covers only editorial and
+   * non-commercial use, Qwen's terms require written consent, and Google
+   * asks for a permission request, so those three keep a generic glyph
+   * until the vendor agrees.
+   */
+  mark?: Extract<WizardMarkId, "codex" | "grok">;
+  /** The company the non-affiliation note names. */
+  vendor: string;
+  /** The trademark attribution sentence that opens that note. */
+  trademarks: string;
   docsUrl: string;
   installCommands: Record<
     OnboardingDesktopPlatform,
@@ -1707,6 +1724,9 @@ const ONBOARDING_BACKENDS: ReadonlyArray<{
     name: "Codex CLI",
     description:
       "OpenAI's coding agent. Sign in with your ChatGPT account after install.",
+    mark: "codex",
+    vendor: "OpenAI",
+    trademarks: "OpenAI, Codex, and the OpenAI logo are trademarks of OpenAI.",
     docsUrl: "https://learn.chatgpt.com/docs/codex/cli",
     installCommands: {
       darwin: [
@@ -1739,6 +1759,8 @@ const ONBOARDING_BACKENDS: ReadonlyArray<{
     name: "Gemini CLI",
     description:
       "Google's terminal coding agent with Google-account and API-key login options.",
+    vendor: "Google",
+    trademarks: "Gemini is a trademark of Google LLC.",
     docsUrl: "https://geminicli.com/docs/get-started/installation/",
     installCommands: {
       darwin: [
@@ -1758,6 +1780,8 @@ const ONBOARDING_BACKENDS: ReadonlyArray<{
     name: "Kimi Code",
     description:
       "Moonshot AI's Node.js coding agent. Run /login for OAuth or an API key.",
+    vendor: "Moonshot AI",
+    trademarks: "Kimi is a trademark of Moonshot AI.",
     docsUrl: "https://moonshotai.github.io/kimi-code/en/guides/getting-started",
     installCommands: {
       darwin: [
@@ -1801,6 +1825,8 @@ const ONBOARDING_BACKENDS: ReadonlyArray<{
     name: "Qwen Code",
     description:
       "Qwen's coding agent. Run /auth for ModelStudio, third-party, or custom providers.",
+    vendor: "Alibaba Cloud",
+    trademarks: "Qwen is a trademark of Alibaba Cloud.",
     docsUrl: "https://qwenlm.github.io/qwen-code-docs/en/users/quickstart/",
     installCommands: {
       darwin: [
@@ -1851,6 +1877,9 @@ const ONBOARDING_BACKENDS: ReadonlyArray<{
     name: "Grok Build",
     description:
       "xAI's coding agent. The CLI opens browser sign-in on first launch.",
+    mark: "grok",
+    vendor: "SpaceXAI",
+    trademarks: "Grok and the Grok logo are trademarks of SpaceXAI, formerly xAI.",
     docsUrl: "https://docs.x.ai/build/overview",
     installCommands: {
       darwin: [
@@ -1874,6 +1903,13 @@ const ONBOARDING_BACKENDS: ReadonlyArray<{
     },
   },
 ];
+
+function backendTrademarkNotice(id: OnboardingBackendId): string {
+  const backend =
+    ONBOARDING_BACKENDS.find((candidate) => candidate.id === id)
+    ?? ONBOARDING_BACKENDS[0];
+  return `${backend.trademarks} PwrAgent is independently developed and is not affiliated with, endorsed by, or sponsored by ${backend.vendor}.`;
+}
 
 function installedOnboardingBackendNames(
   snapshot: DesktopSettingsSnapshot | undefined,
@@ -2141,12 +2177,18 @@ export function BackendRequirementsStep(props: {
         aria-labelledby={`onboarding-backend-tab-${activeBackend}`}
       >
         <div className="onboarding-wizard__prereq-head">
-          <div>
-            <div className="onboarding-wizard__prereq-title">
-              {activeDefinition.name}
-            </div>
-            <div className="onboarding-wizard__prereq-sub">
-              {activeDefinition.description}
+          <div className="onboarding-wizard__prereq-identity">
+            <WizardMark
+              mark={activeDefinition.mark ?? "cli"}
+              className="onboarding-wizard__prereq-mark"
+            />
+            <div>
+              <div className="onboarding-wizard__prereq-title">
+                {activeDefinition.name}
+              </div>
+              <div className="onboarding-wizard__prereq-sub">
+                {activeDefinition.description}
+              </div>
             </div>
           </div>
           <span
@@ -2265,6 +2307,9 @@ export function BackendRequirementsStep(props: {
           ) : null}
         </div>
       </div>
+      <p className="onboarding-wizard__trademark-note">
+        {backendTrademarkNotice(activeBackend)}
+      </p>
     </div>
   );
 }
@@ -2490,7 +2535,7 @@ function ThreadPresentationStep(props: {
   );
 }
 
-function CodexProfileStep(props: {
+export function CodexProfileStep(props: {
   value: DesktopCodexProfileModel;
   onChange: (value: DesktopCodexProfileModel) => void;
 }) {
@@ -2538,6 +2583,9 @@ function CodexProfileStep(props: {
           preview={<CodexDiagramMultiple />}
         />
       </div>
+      <p className="onboarding-wizard__trademark-note">
+        {backendTrademarkNotice("codex")}
+      </p>
     </div>
   );
 }
@@ -3103,11 +3151,11 @@ function DensityMissionControlPreview() {
 function CodexDiagramShared() {
   return (
     <div className="onboarding-wizard__codex">
-      <CodexNode label="PwrAgent" avatar="PA" accent />
+      <CodexNode label="PwrAgent" mark="pwragent" accent />
       <span className="onboarding-wizard__codex-link onboarding-wizard__codex-link--accent">
         ↔
       </span>
-      <CodexNode label="Codex Desktop" meta="same threads" avatar="CX" />
+      <CodexNode label="Codex Desktop" meta="same threads" mark="codex" />
     </div>
   );
 }
@@ -3124,11 +3172,11 @@ function CodexDiagramIsolated() {
     <div className="onboarding-wizard__codex onboarding-wizard__codex--multiple">
       <div className="onboarding-wizard__codex-multi-pairs">
         <div className="onboarding-wizard__codex-multi-pair">
-          <CodexNode label="pwragent" avatar="PA" accent compact tight />
+          <CodexNode label="pwragent" mark="pwragent" accent compact tight />
           <span className="onboarding-wizard__codex-link onboarding-wizard__codex-link--small">→</span>
           <CodexNode
             label="pwragent"
-            avatar="CX"
+            mark="codex"
             meta="new — your login"
             compact
             tight
@@ -3139,13 +3187,13 @@ function CodexDiagramIsolated() {
         <span className="onboarding-wizard__codex-multi-default-label">
           Untouched
         </span>
-        <CodexNode label="(default)" avatar="PA" muted dashed compact tight />
+        <CodexNode label="(default)" mark="pwragent" muted dashed compact tight />
         <span className="onboarding-wizard__codex-link onboarding-wizard__codex-link--dashed">
           ╌╌
         </span>
         <CodexNode
           label="Codex default"
-          avatar="CX"
+          mark="codex"
           meta="your existing login"
           muted
           dashed
@@ -3170,33 +3218,33 @@ function CodexDiagramMultiple() {
     <div className="onboarding-wizard__codex onboarding-wizard__codex--multiple">
       <div className="onboarding-wizard__codex-multi-pairs">
         <div className="onboarding-wizard__codex-multi-pair">
-          <CodexNode label="work" avatar="PA" accent compact tight />
+          <CodexNode label="work" mark="pwragent" accent compact tight />
           <span className="onboarding-wizard__codex-link onboarding-wizard__codex-link--small">→</span>
           <CodexNode
             label="work"
-            avatar="CX"
+            mark="codex"
             meta="work@example.com"
             compact
             tight
           />
         </div>
         <div className="onboarding-wizard__codex-multi-pair">
-          <CodexNode label="personal" avatar="PA" accent compact tight />
+          <CodexNode label="personal" mark="pwragent" accent compact tight />
           <span className="onboarding-wizard__codex-link onboarding-wizard__codex-link--small">→</span>
           <CodexNode
             label="personal"
-            avatar="CX"
+            mark="codex"
             meta="joe@example.com"
             compact
             tight
           />
         </div>
         <div className="onboarding-wizard__codex-multi-pair">
-          <CodexNode label="projects" avatar="PA" accent compact tight />
+          <CodexNode label="projects" mark="pwragent" accent compact tight />
           <span className="onboarding-wizard__codex-link onboarding-wizard__codex-link--small">→</span>
           <CodexNode
             label="projects"
-            avatar="CX"
+            mark="codex"
             meta="joe@example.com"
             compact
             tight
@@ -3207,13 +3255,13 @@ function CodexDiagramMultiple() {
         <span className="onboarding-wizard__codex-multi-default-label">
           Untouched
         </span>
-        <CodexNode label="(default)" avatar="PA" muted dashed compact tight />
+        <CodexNode label="(default)" mark="pwragent" muted dashed compact tight />
         <span className="onboarding-wizard__codex-link onboarding-wizard__codex-link--dashed">
           ╌╌
         </span>
         <CodexNode
           label="Codex default"
-          avatar="CX"
+          mark="codex"
           meta="your existing login"
           muted
           dashed
@@ -3227,7 +3275,7 @@ function CodexDiagramMultiple() {
 
 function CodexNode(props: {
   label: string;
-  avatar: string;
+  mark: Extract<WizardMarkId, "pwragent" | "codex">;
   meta?: string;
   accent?: boolean;
   compact?: boolean;
@@ -3246,7 +3294,7 @@ function CodexNode(props: {
   if (props.dashed) classes.push("is-dashed");
   return (
     <div className={classes.join(" ")}>
-      <span className="onboarding-wizard__codex-avatar">{props.avatar}</span>
+      <WizardMark mark={props.mark} className="onboarding-wizard__codex-avatar" />
       <div className="onboarding-wizard__codex-node-text">
         <div className="onboarding-wizard__codex-label">{props.label}</div>
         {props.meta ? (
@@ -3254,6 +3302,34 @@ function CodexNode(props: {
         ) : null}
       </div>
     </div>
+  );
+}
+
+type WizardMarkId = "pwragent" | "codex" | "grok" | "cli";
+
+/**
+ * An app or provider mark for the wizard's diagrams and provider cards.
+ * PwrAgent's app icon is its own tile. A vendor mark is the vendor's
+ * official file (see `assets/openai/` and `assets/grok/`) drawn on a neutral
+ * tile beside it. A provider without an approved mark gets a generic
+ * terminal glyph, never a lookalike of its logo.
+ */
+function WizardMark(props: { mark: WizardMarkId; className: string }) {
+  return (
+    <span
+      aria-hidden="true"
+      className={`onboarding-wizard__mark onboarding-wizard__mark--${props.mark} ${props.className}`}
+    >
+      {props.mark === "pwragent" ? (
+        <PwrAgentIcon />
+      ) : props.mark === "codex" ? (
+        <OpenAIIcon />
+      ) : props.mark === "grok" ? (
+        <GrokIcon />
+      ) : (
+        <TerminalIcon />
+      )}
+    </span>
   );
 }
 
