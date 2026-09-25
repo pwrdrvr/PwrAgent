@@ -4,10 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createRequire } from "node:module";
 import { afterEach, describe, expect, it } from "vitest";
-import { assembleMacRelease } from "./assemble-mac-release.mjs";
+import { assembleMacRelease, MINIMUM_MACOS_KERNEL_VERSION } from "./assemble-mac-release.mjs";
 
 const require = createRequire(import.meta.url);
 const { MacUpdater } = require("electron-updater/out/MacUpdater.js");
+const updaterSemver = createRequire(require.resolve("electron-updater/package.json"))("semver");
 const roots = [];
 
 function fixture() {
@@ -47,6 +48,24 @@ describe("paired macOS release assembly", () => {
     expect(readFileSync(join(dirs[0], "PwrAgent.dmg"), "utf8")).toBe("DMG universal");
     expect(readFileSync(join(dirs[0], "PwrAgent-arm64.dmg"), "utf8")).toBe("DMG arm64");
     expect(readFileSync(join(dirs[0], "PwrAgent-macos-SHA256SUMS"), "utf8").trim().split("\n")).toHaveLength(9);
+  });
+
+  it("withholds the update from a macOS the packaged app cannot launch on", () => {
+    const dirs = fixture();
+    assembleMacRelease(...dirs);
+    const published = readFileSync(join(dirs[0], "latest-mac.yml"), "utf8");
+    expect(published).toContain(`minimumSystemVersion: ${MINIMUM_MACOS_KERNEL_VERSION}`);
+
+    // The manifest speaks Darwin kernel versions; Info.plist speaks macOS
+    // versions. macOS N (11 and later) ships Darwin N + 9.
+    const builderConfig = readFileSync(new URL("../electron-builder.yml", import.meta.url), "utf8");
+    const macosMajor = Number(/LSMinimumSystemVersion:\s*"(\d+)\./.exec(builderConfig)?.[1]);
+    expect(Number(MINIMUM_MACOS_KERNEL_VERSION.split(".")[0])).toBe(macosMajor + 9);
+
+    // AppUpdater.checkIfUpdateSupported skips the update when
+    // semver.lt(os.release(), minimumSystemVersion).
+    expect(updaterSemver.lt("21.6.0", MINIMUM_MACOS_KERNEL_VERSION)).toBe(true);
+    expect(updaterSemver.lt("22.1.0", MINIMUM_MACOS_KERNEL_VERSION)).toBe(false);
   });
 
   it("rejects a corrupted ZIP before merging or publishing metadata", () => {
