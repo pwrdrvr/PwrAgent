@@ -97,8 +97,9 @@ describe("pwragent thread orchestration agent tools", () => {
               additionalProperties: false,
               properties: expect.objectContaining({
                 direction: expect.objectContaining({
-                  enum: ["local-to-worktree", "worktree-to-local"],
+                  enum: ["local-to-worktree", "worktree-to-local", "to-project"],
                 }),
+                targetPath: expect.objectContaining({ type: "string" }),
                 strategy: expect.objectContaining({
                   enum: ["move-branch", "detached-changes", "new-branch"],
                 }),
@@ -693,6 +694,42 @@ describe("pwragent thread orchestration agent tools", () => {
         leaveLocalBranch: "main",
       },
     });
+  });
+
+  it.each([
+    { direction: "to-project" },
+    { direction: "to-project", targetPath: " " },
+    { targetPath: "/existing" },
+    { targetPath: 123 },
+    ...["strategy", "sourcePath", "repositoryPath", "sourceBranch", "leaveLocalBranch", "newBranchName"]
+      .map((field) => ({ direction: "to-project", targetPath: "/existing", [field]: field === "strategy" ? "move-branch" : "/source" })),
+  ])("rejects incomplete or conflicting existing-workspace args: %j", async (args) => {
+    const handler = vi.fn();
+    const router = buildPwrAgentThreadOrchestrationToolRouter(handler);
+    const result = await router.handleDynamicToolCall({
+      backend: "codex",
+      call: {
+        threadId: "thread-1", turnId: "turn-1", callId: "call-1", namespace: "pwragent",
+        tool: "move_thread_workspace", arguments: args,
+      },
+    });
+    expect(result).toMatchObject({ success: false });
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("preserves an existing workspace target through move tool normalization", async () => {
+    const handler = vi.fn(async () => ({ ok: false as const, error: { code: "internal_error" as const, message: "fixture" } }));
+    const router = buildPwrAgentThreadOrchestrationToolRouter(handler);
+    await router.handleDynamicToolCall({
+      backend: "codex",
+      call: {
+        threadId: "thread-1", turnId: "turn-1", callId: "call-1", namespace: "pwragent",
+        tool: "move_thread_workspace", arguments: { direction: "to-project", targetPath: " /claude-worktrees/demo/odd-name " },
+      },
+    });
+    expect(handler).toHaveBeenCalledWith(expect.objectContaining({
+      args: { direction: "to-project", targetPath: "/claude-worktrees/demo/odd-name" },
+    }));
   });
 
   it("normalizes attach_thread_directory args and dispatches with caller context", async () => {

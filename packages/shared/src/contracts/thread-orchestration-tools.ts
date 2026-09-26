@@ -188,10 +188,12 @@ export type StartReviewToolArgs = {
 export type MoveThreadWorkspaceToolArgs = {
   /**
    * Optional backend override. Omitted defaults to the invoking thread backend.
-   * The first implementation supports Codex self-move only.
+   * A same-thread move must use the invoking thread backend.
    */
   backend?: AppServerBackendKind;
   direction?: ThreadWorkspaceHandoffDirection;
+  /** Existing checkout/worktree root for direction="to-project". */
+  targetPath?: string;
   strategy?: ThreadWorkspaceHandoffStrategy;
   /** Repository/local checkout path that owns the worktree relationship. */
   repositoryPath?: string;

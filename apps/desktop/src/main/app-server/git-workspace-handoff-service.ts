@@ -399,7 +399,7 @@ export class GitWorkspaceHandoffService {
         label: pathBaseName(repositoryPath),
         path: repositoryPath,
         kind: isWorktree ? "worktree" : "local",
-        ...(isWorktree ? { worktreePath: targetPath } : {}),
+        ...(isWorktree ? { worktreePath: targetPath, worktreeOwnership: "external" as const } : {}),
       },
       warnings: [],
       completedAt: params.now ?? Date.now(),

@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
+import { classifyDirectory } from "@pwragent/shared";
 import { GitWorkspaceHandoffService } from "../app-server/git-workspace-handoff-service";
 
 const execFileAsync = promisify(execFile);
@@ -127,6 +128,41 @@ describe("GitWorkspaceHandoffService", () => {
     await expect(move(path.join(repo, ".git"))).rejects.toThrow("Git project");
     await mkdir(path.join(repo, "subdir"));
     await expect(move(path.join(repo, "subdir"))).rejects.toThrow("root");
+  });
+
+  it("adopts an external Claude worktree under its Git parent project without changing files or branches", async () => {
+    const repo = await createRepo();
+    const target = path.join(path.dirname(repo), "claude-worktrees", "PwrAgent", "interesting-poitras");
+    await git(repo, ["worktree", "add", "-b", "claude/feature", target, "HEAD"]);
+    await writeFile(path.join(target, "README.md"), "uncommitted edits\n");
+    await writeFile(path.join(target, "notes.txt"), "untracked notes\n");
+    const before = await Promise.all([
+      git(target, ["status", "--porcelain"]),
+      git(repo, ["worktree", "list", "--porcelain"]),
+    ]);
+    const result = await new GitWorkspaceHandoffService().handoff({
+      backend: "codex", threadId: "thread-1", direction: "to-project", targetPath: target,
+    });
+    const repositoryPath = toForwardSlashes(await realpath(repo));
+    expect(result).toMatchObject({
+      targetPath: toForwardSlashes(await realpath(target)),
+      repositoryPath,
+      branch: "claude/feature",
+      workMode: "worktree",
+      linkedDirectory: {
+        label: "PwrAgent", path: repositoryPath,
+        worktreePath: toForwardSlashes(await realpath(target)),
+        worktreeOwnership: "external",
+      },
+    });
+    expect(classifyDirectory(result.linkedDirectory)).toMatchObject({
+      key: `directory:${repositoryPath}`, label: "PwrAgent", path: repositoryPath,
+    });
+    expect(result.archivedSourceWorktree).toBeUndefined();
+    expect(await Promise.all([
+      git(target, ["status", "--porcelain"]),
+      git(repo, ["worktree", "list", "--porcelain"]),
+    ])).toEqual(before);
   });
 
   it("moves a dirty local branch to a new worktree and leaves local on the selected branch", async () => {
