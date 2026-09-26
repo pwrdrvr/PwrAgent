@@ -1030,7 +1030,9 @@ ownership, both because claiming it would assert a freshness we do not
 have:
 
 - **Non-primary attachments.** The test is the PR matching a local
-  thread's *primary* repository, matching `collectPrPollTargets`. A PR
+  thread's *primary* repository, matching `collectPrPollTargets`. Fork
+  contributions match their separate `sourceRepository`; their status key
+  still belongs to the destination repository. A PR
   attached to a local thread some other way is not polled by us either,
   so the peer's observation is the fresher one.
 - **Before the first local snapshot.** `attachedPrsByThreadKey` is

@@ -75,6 +75,7 @@ import {
   MAX_TURN_FAILURE_LOG_ENTRIES,
   NAVIGATION_QUERY_MAX_RESULT_BYTES,
   buildPullRequestStatusKey,
+  resolvePullRequestIdentity,
   buildFederatedThreadRef,
   federatedThreadIdentityKey,
   buildThreadIdentityKey,
@@ -341,7 +342,7 @@ function normalizePrSummary(pr: PrSummary): PrSummary {
   )?.[0];
   const normalized: PrSummary = {
     ...pr,
-    provider: normalizePullRequestProvider(pr.provider),
+    ...resolvePullRequestIdentity(pr),
     state: checkState,
     checkState,
     lifecycleState: pr.lifecycleState ?? legacyPrLifecycleState(pr.state),
@@ -487,10 +488,6 @@ function legacyPrLifecycleState(state: string | undefined): PrSummary["lifecycle
 
 function legacyPrReviewState(state: string | undefined): PrSummary["reviewState"] {
   return state === "draft" ? "draft" : "ready_for_review";
-}
-
-function getPrStatusCacheKey(pr: PrSummary): string {
-  return `${normalizePullRequestProvider(pr.provider)}/${pr.org.toLowerCase()}/${pr.repo.toLowerCase()}#${pr.number}`;
 }
 
 function getPrLookupCacheKey(entry: {
@@ -4803,10 +4800,13 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
           ...(JSON.parse(row.payload) as PrSummary),
           provider,
         });
-        const prKey = getPrStatusCacheKey(pr);
+        const prKey = buildPullRequestStatusKey(pr);
+        // A legacy source-repo key and a corrected destination key can both
+        // survive on disk. Row order must not choose the older observation.
+        if ((entries[prKey]?.fetchedAt ?? -Infinity) > row.fetched_at) continue;
         entries[prKey] = {
           prKey,
-          provider,
+          provider: pr.provider,
           fetchedAt: row.fetched_at,
           pr,
         };
@@ -4842,14 +4842,15 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     );
     const write = this.stateDb.raw.transaction(() => {
       for (const entry of entries) {
+        const pr = normalizePrSummary(entry.pr);
         insert.run(
-          entry.prKey,
-          normalizePullRequestProvider(entry.provider),
-          entry.pr.org,
-          entry.pr.repo,
-          entry.pr.number,
+          buildPullRequestStatusKey(pr),
+          pr.provider,
+          pr.org,
+          pr.repo,
+          pr.number,
           entry.fetchedAt,
-          JSON.stringify(normalizePrSummary(entry.pr)),
+          JSON.stringify(pr),
         );
       }
     });

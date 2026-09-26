@@ -756,6 +756,9 @@ function prSummariesEqual(
       candidate.provider === pr.provider &&
       candidate.org === pr.org &&
       candidate.repo === pr.repo &&
+      candidate.sourceRepository?.provider === pr.sourceRepository?.provider &&
+      candidate.sourceRepository?.org === pr.sourceRepository?.org &&
+      candidate.sourceRepository?.repo === pr.sourceRepository?.repo &&
       candidate.title === pr.title &&
       candidate.state === pr.state &&
       candidate.checkState === pr.checkState &&

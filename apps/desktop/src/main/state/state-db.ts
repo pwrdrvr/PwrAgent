@@ -9,12 +9,13 @@ import {
   type ThreadUsageLineRecord,
 } from "@pwragent/shared";
 import { getNativeBinding } from "./native-binding.js";
+import { migratePrReferenceIdentities } from "./migrate-pr-reference-identities.js";
 import {
   attachSqliteWriteMetrics,
   isSqliteWriteMetricsEnabled,
 } from "./sqlite-write-metrics.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 62;
+export const CURRENT_STATE_DB_USER_VERSION = 63;
 export const STATE_DB_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const STATE_DB_JOURNAL_SIZE_LIMIT_BYTES = 16 * 1024 * 1024;
 
@@ -1809,6 +1810,12 @@ export class StateDb {
       if ((db.pragma("user_version", { simple: true }) as number) < 62) {
         db.transaction(() => {
           db.exec(TOKEN_MISER_SCHEMA);
+          db.pragma("user_version = 62");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 63) {
+        db.transaction(() => {
+          migratePrReferenceIdentities(db);
           db.pragma(`user_version = ${CURRENT_STATE_DB_USER_VERSION}`);
         })();
       }

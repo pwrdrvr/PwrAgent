@@ -1,6 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import type { NavigationThreadSummary, PrSummary } from "@pwragent/shared";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   parseGitHubPullRequestUrl,
@@ -8,6 +8,7 @@ import {
   PullRequestLinkProvider,
 } from "../../../lib/pull-request-links";
 import { ThreadMarkdown } from "../ThreadMarkdown";
+import { TOOLTIP_HOVER_DELAY_MS } from "../../../lib/useViewportTooltip";
 
 const PR_URL = "https://github.com/ExampleOrg/catalog-service/pull/13290";
 
@@ -80,9 +81,29 @@ function projectThread(params: {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 describe("pull request links in transcript markdown", () => {
+  it("hydrates fork and upstream hover cards independently despite legacy source-repo identities", () => {
+    vi.useFakeTimers();
+    const fork = prSummary({ number: 38, org: "fork", repo: "diskhound", title: "Fork scan progress",
+      url: "https://github.com/fork/diskhound/pull/38", additions: 100 });
+    const upstream = { ...fork, title: "Upstream build warnings", additions: 8,
+      url: "https://github.com/upstream/diskhound/pull/38" };
+    renderWithPullRequests(`[Fork](${fork.url}) [Upstream](${upstream.url})`, [upstream, fork]);
+    const forkChip = screen.getByRole("button", { name: /Open fork\/diskhound#38/ });
+    fireEvent.mouseEnter(forkChip);
+    act(() => { vi.advanceTimersByTime(TOOLTIP_HOVER_DELAY_MS); });
+    expect(screen.getByRole("tooltip")).toHaveTextContent("Fork scan progress");
+    expect(screen.getByRole("tooltip")).not.toHaveTextContent("Upstream build warnings");
+    fireEvent.mouseLeave(forkChip);
+    fireEvent.mouseEnter(screen.getByRole("button", { name: /Open upstream\/diskhound#38/ }));
+    act(() => { vi.advanceTimersByTime(TOOLTIP_HOVER_DELAY_MS); });
+    expect(screen.getByRole("tooltip")).toHaveTextContent("Upstream build warnings");
+    expect(screen.getByRole("tooltip")).toHaveTextContent("upstream/diskhound#38");
+  });
+
   it("renders a known GitHub PR link with the shared live status chip", () => {
     const open = vi.spyOn(window, "open").mockImplementation(() => null);
     renderWithPullRequests(`Draft PR: [ExampleOrg/catalog-service#13290](${PR_URL})`, [
