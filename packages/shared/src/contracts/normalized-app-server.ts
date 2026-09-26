@@ -299,6 +299,10 @@ export type LinkedDirectorySummary = {
    * commands, VS Code, and terminal launches should prefer this over path.
    */
   worktreePath?: string;
+  /** Adopted worktrees are borrowed; thread archival must not remove them.
+   * Absent on legacy entries, which retain their existing cleanup behavior.
+   */
+  worktreeOwnership?: "external";
   /** Best-effort branch observed for this linked directory/worktree. */
   gitBranch?: string;
   kind: "local" | "worktree";

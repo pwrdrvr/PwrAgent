@@ -83,7 +83,13 @@ describe("sqlite write metrics", () => {
     expect((await store.getThreadOverlayState({ backend: "codex", threadId: "auto-thread" }))?.executionMode).toBe("auto");
   });
 
-  it("replaces project workspace and clears project runtime in one commit", async () => {
+  it.each([false, true])("replaces project workspace and clears project runtime in one commit (external worktree: %s)", async (externalWorktree) => {
+    const directory = {
+      id: "pwragent-handoff:codex:move-project", label: "demo", path: "/demo",
+      ...(externalWorktree
+        ? { kind: "worktree" as const, worktreePath: "/claude-worktrees/demo/odd-name", worktreeOwnership: "external" as const }
+        : { kind: "local" as const }),
+    };
     await store.replaceWorkspaceLinkedDirectory({
       backend: "codex", threadId: "move-project", gitBranch: "old-branch",
       directory: { id: "pwragent-handoff:codex:move-project", label: "old", path: "/old", kind: "local" },
@@ -98,7 +104,7 @@ describe("sqlite write metrics", () => {
     const { writes } = await measureSqliteWrites(async () => {
       await store.replaceWorkspaceLinkedDirectory({
         backend: "codex", threadId: "move-project", gitBranch: "main", resetProjectState: true,
-        directory: { id: "pwragent-handoff:codex:move-project", label: "demo", path: "/demo", kind: "local" },
+        directory,
       });
     });
     expectSqliteWriteBudget({
@@ -109,9 +115,10 @@ describe("sqlite write metrics", () => {
     const overlay = await store.getThreadOverlayState({ backend: "codex", threadId: "move-project" });
     expect(overlay?.codexEnvironmentRuntime).toBeUndefined();
     expect(overlay?.gitBranch).toBe("main");
-    expect(overlay?.extraLinkedDirectories).toEqual([
-      { id: "pwragent-handoff:codex:move-project", label: "demo", path: "/demo", kind: "local" },
-    ]);
+    expect(overlay?.extraLinkedDirectories).toEqual([directory]);
+    const reopenedStore = new SqliteOverlayStore(stateDb);
+    expect((await reopenedStore.getThreadOverlayState({ backend: "codex", threadId: "move-project" }))?.extraLinkedDirectories)
+      .toEqual([directory]);
   });
 
   it("finalizes usage in the successor transaction and ignores stale writes", async () => {
