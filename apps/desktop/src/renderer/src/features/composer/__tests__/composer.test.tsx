@@ -6566,6 +6566,40 @@ describe("Composer", () => {
       expect(textarea).toHaveValue("An unrelated draft");
     });
 
+    it("rejects an answer before composer readiness and accepts a new submission once ready", async () => {
+      const startTurn = vi.fn(async (request: StartTurnRequest) => ({
+        backend: request.backend,
+        threadId: request.threadId,
+        turnId: "turn-answer",
+      }));
+      const onReplySubmissionSettled = vi.fn();
+      const props = {
+        backends: [backendSummary("codex")],
+        desktopApi: { onAgentEvent: () => () => undefined, startTurn },
+        onReplySubmissionSettled,
+        skills: [],
+        thread,
+      };
+      const submission = { id: 1, threadId: thread.id, backend: "codex" as const, text: reply };
+      const view = render(<Composer {...props} disabled replySubmission={submission} />);
+      fireEvent.change(screen.getByLabelText("Reply"), { target: { value: "Unsent operator draft" } });
+      expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+      await waitFor(() => expect(onReplySubmissionSettled).toHaveBeenCalledWith(1, false));
+      expect(startTurn).not.toHaveBeenCalled();
+
+      view.rerender(<Composer {...props} disabled={false} replySubmission={submission} />);
+      expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
+      expect(startTurn).not.toHaveBeenCalled();
+
+      view.rerender(<Composer {...props} disabled={false} replySubmission={{ ...submission, id: 2 }} />);
+      await waitFor(() => expect(onReplySubmissionSettled).toHaveBeenCalledWith(2, true));
+      expect(startTurn).toHaveBeenCalledTimes(1);
+      expect(startTurn).toHaveBeenCalledWith(expect.objectContaining({
+        threadId: thread.id,
+        input: [{ type: "text", text: reply }],
+      }));
+    });
+
     it("queues the reply behind a busy thread and previews its answer", async () => {
       const startTurn = vi.fn(async (request: StartTurnRequest) => ({
         backend: request.backend,
