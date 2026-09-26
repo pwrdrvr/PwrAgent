@@ -18,15 +18,93 @@ afterEach(() => {
 });
 
 describe("transcript PR subscriptions", () => {
+  function onDemandHarness(count: number, tryTakeToken = () => true) {
+    subscriptions.set(1, { removedUrls: [], updates: Array.from({ length: count }, (_, index) => ({
+      url: `https://gitlab.com/example/project/-/merge_requests/${index + 1}`, visible: true,
+    })) }, vi.fn());
+    const fetch = vi.fn().mockResolvedValue([]);
+    const listTargets = vi.fn(() => subscriptions.targets());
+    const scheduler = new PrPollingScheduler({
+      listTargets,
+      getFocusedThreadKeys: () => new Set(),
+      isWindowVisible: () => true,
+      tryTakeToken,
+      fetchPullRequests: fetch,
+      applyResults: async () => [],
+      onTargetsHandled: (keys) => subscriptions.markHandled(keys),
+    });
+    // Deliberately never call scheduler.start(): background polling is off.
+    const pendingTargets = () => subscriptions.pendingTargets();
+    subscriptions.requestRefresh(() => scheduler.tick(pendingTargets));
+    return { fetch, listTargets, scheduler };
+  }
+
+  it("drains four GitLab initial reads across the three-batch cap without background polling", async () => {
+    const { fetch, listTargets } = onDemandHarness(4);
+    await vi.advanceTimersByTimeAsync(50);
+    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(subscriptions.pendingTargets()).toMatchObject([{ pr: { number: 4 } }]);
+    await vi.advanceTimersByTimeAsync(14_999);
+    expect(fetch).toHaveBeenCalledTimes(3);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fetch).toHaveBeenCalledTimes(4);
+    expect(fetch.mock.calls[3]?.[0]).toMatchObject([{ number: 4 }]);
+    expect(subscriptions.pendingTargets()).toEqual([]);
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(fetch).toHaveBeenCalledTimes(4);
+    expect(listTargets).not.toHaveBeenCalled();
+  });
+
+  it("retains initial reads while the shared budget is empty, then retries at a bounded cadence", async () => {
+    let available = false;
+    const budget = vi.fn(() => available);
+    const { fetch, listTargets } = onDemandHarness(1, budget);
+    await vi.advanceTimersByTimeAsync(50);
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(fetch).not.toHaveBeenCalled();
+    expect(budget).toHaveBeenCalledTimes(2);
+    expect(subscriptions.pendingTargets()).toHaveLength(1);
+    available = true;
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(listTargets).not.toHaveBeenCalled();
+  });
+
+  it("cancels deferred admission when the last window closes", async () => {
+    const budget = vi.fn(() => false);
+    const { fetch } = onDemandHarness(4, budget);
+    await vi.advanceTimersByTimeAsync(50);
+    subscriptions.clearSender(1);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(budget).toHaveBeenCalledTimes(1);
+    expect(fetch).not.toHaveBeenCalled();
+    expect(subscriptions.pendingTargets()).toEqual([]);
+  });
+
+  it("finishes pending work already satisfied by a fresh or merged observation", async () => {
+    const { fetch } = onDemandHarness(2);
+    const targets = subscriptions.targets();
+    subscriptions.observe(targets.map((target, index) => ({
+      ...target.pr, state: index === 0 ? "passing" : "merged",
+    })), Date.now());
+    await vi.advanceTimersByTimeAsync(50);
+    expect(subscriptions.pendingTargets()).toEqual([]);
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it("returns only changed targets and releases only the last owner's polling clock", () => {
     const inactive = vi.fn();
     const store = new TranscriptPrSubscriptions(inactive);
     store.set(1, { removedUrls: [], updates: Array.from({ length: 1_000 }, (_, index) => ({
       url: `https://github.com/example/project/pull/${index + 1}`, visible: false,
     })) }, vi.fn());
-    expect(store.takePendingTargets()).toHaveLength(1_000);
+    expect(store.pendingTargets()).toHaveLength(1_000);
+    store.markHandled(store.pendingTargets().map((target) => target.prKey));
     store.set(2, { removedUrls: [], updates: [{ url, visible: true }] }, vi.fn());
-    expect(store.takePendingTargets()).toMatchObject([{ pr: { number: 42 }, subscriptionTier: "focused" }]);
+    expect(store.pendingTargets()).toMatchObject([{ pr: { number: 42 }, subscriptionTier: "focused" }]);
     store.clearSender(2);
     expect(inactive).not.toHaveBeenCalled();
     store.set(1, { removedUrls: [url], updates: [] }, vi.fn());

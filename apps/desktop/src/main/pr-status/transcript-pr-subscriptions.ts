@@ -6,8 +6,10 @@ import {
 } from "@pwragent/shared";
 import { parseForgePrRefFromUrl } from "./forge-pr-ref";
 import type { PrPollTarget } from "./pr-polling-scheduler";
+import { getMainLogger } from "../log";
 
 const CACHE_GRACE_MS = 120_000;
+const REFRESH_RETRY_MS = 15_000;
 
 type CachedPr = {
   pr: PrSummary;
@@ -26,6 +28,9 @@ export class TranscriptPrSubscriptions {
   private readonly cache = new Map<string, CachedPr>();
   private readonly active = new Map<string, CachedPr>();
   private readonly pendingKeys = new Set<string>();
+  private refreshTimer: ReturnType<typeof setTimeout> | undefined;
+  private refreshing = false;
+  private refresh: (() => Promise<void>) | undefined;
 
   constructor(private readonly onInactive?: (prKey: string) => void) {}
 
@@ -82,14 +87,51 @@ export class TranscriptPrSubscriptions {
     return [...this.active].map(([prKey, cached]) => this.target(prKey, cached));
   }
 
-  takePendingTargets(): PrPollTarget[] {
+  pendingTargets(): PrPollTarget[] {
     const targets: PrPollTarget[] = [];
     for (const key of this.pendingKeys) {
       const cached = this.active.get(key);
       if (cached) targets.push(this.target(key, cached));
     }
-    this.pendingKeys.clear();
     return targets;
+  }
+
+  markHandled(prKeys: string[]): void {
+    for (const key of prKeys) this.pendingKeys.delete(key);
+    if (!this.pendingKeys.size) {
+      clearTimeout(this.refreshTimer);
+      this.refreshTimer = undefined;
+    }
+  }
+
+  requestRefresh(refresh: () => Promise<void>): void {
+    this.refresh = refresh;
+    this.scheduleRefresh(50);
+  }
+
+  private scheduleRefresh(delayMs: number): void {
+    if (this.refreshTimer || this.refreshing || !this.pendingKeys.size) return;
+    this.refreshTimer = setTimeout(() => {
+      this.refreshTimer = undefined;
+      this.refreshing = true;
+      void this.runRefresh();
+    }, delayMs);
+    this.refreshTimer.unref?.();
+  }
+
+  private async runRefresh(): Promise<void> {
+    try {
+      await this.refresh?.();
+    } catch (error) {
+      getMainLogger("pwragent:pr-poller").warn("failed to refresh transcript PR statuses", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      this.refreshing = false;
+      // Drain admission backlog even without the background polling timer.
+      // Only pending identities are revisited; admitted work never recurs here.
+      this.scheduleRefresh(REFRESH_RETRY_MS);
+    }
   }
 
   private target(prKey: string, cached: CachedPr): PrPollTarget {
@@ -124,6 +166,9 @@ export class TranscriptPrSubscriptions {
   }
 
   clear(): void {
+    clearTimeout(this.refreshTimer);
+    this.refreshTimer = undefined;
+    this.refresh = undefined;
     for (const cached of this.cache.values()) clearTimeout(cached.eviction);
     this.cache.clear();
     this.active.clear();
@@ -139,7 +184,7 @@ export class TranscriptPrSubscriptions {
     cached.subscribers.delete(sender);
     if (cached.subscribers.size) return;
     this.active.delete(key);
-    this.pendingKeys.delete(key);
+    this.markHandled([key]);
     this.onInactive?.(key);
     cached.eviction = setTimeout(() => this.cache.delete(key), CACHE_GRACE_MS);
     cached.eviction.unref?.();

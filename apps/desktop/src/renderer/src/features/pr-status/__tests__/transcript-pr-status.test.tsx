@@ -1,10 +1,11 @@
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildPullRequestStatusKey, type PrSummary, type TranscriptPullRequestStatuses } from "@pwragent/shared";
+import { buildPullRequestStatusKey, type NavigationThreadSummary, type PrSummary, type TranscriptPullRequestStatuses } from "@pwragent/shared";
 import { TranscriptPrStatusStore } from "../../../lib/transcript-pr-status";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { PullRequestLinkChip } from "../PullRequestLinkChip";
+import { PullRequestLinkProvider } from "../../../lib/pull-request-links";
 
 const url = "https://github.com/example/project/pull/42";
 const pr: PrSummary = { provider: "github.com", org: "example", repo: "project", number: 42, url, state: "unknown" };
@@ -97,6 +98,58 @@ describe("transcript PR renderer store", () => {
     expect(h.set).toHaveBeenLastCalledWith({ removedUrls: [], updates: [{ url, visible: true }] });
     releaseVisible();
     for (const release of releases) release();
+  });
+});
+
+describe("federation PR status authority", () => {
+  function peerTranscript(prs: PrSummary[]) {
+    const thread = {
+      id: "peer-thread", title: "Peer transcript", titleSource: "derived", source: "codex", prs,
+      linkedDirectories: [], inbox: { inInbox: true, unread: false },
+    } as NavigationThreadSummary;
+    return <PullRequestLinkProvider activeThread={thread} threads={[thread]}>
+      <PullRequestLinkChip pr={{ ...pr, url: `${url}/files#diff-123` }} />
+    </PullRequestLinkProvider>;
+  }
+
+  function viewerHarness() {
+    const h = apiHarness();
+    vi.stubGlobal("pwragent", h.api);
+    vi.stubGlobal("__pwragentFederationTarget", { scope: "remote", instanceId: "peer" });
+    vi.stubGlobal("IntersectionObserver", undefined);
+    vi.spyOn(document, "hidden", "get").mockReturnValue(false);
+    return h;
+  }
+
+  it("lets later peer observations replace a cached local read even inside the local cooldown", async () => {
+    const h = viewerHarness();
+    h.set.mockResolvedValue({ statuses: [{ pr: { ...pr, state: "passing" }, fetchedAt: Date.now() }] });
+    const view = render(peerTranscript([]));
+    await act(async () => { await vi.advanceTimersByTimeAsync(50); });
+    const chip = screen.getByRole("button");
+    expect(chip).toHaveAccessibleName(/checks passing/);
+
+    view.rerender(peerTranscript([{ ...pr, state: "failing" }]));
+    expect(chip).toHaveAccessibleName(/checks failing/);
+    // A late local event must not take authority back from the peer.
+    act(() => h.publish({ statuses: [{ pr: { ...pr, state: "passing" }, fetchedAt: Date.now() + 1 }] }));
+    expect(chip).toHaveAccessibleName(/checks failing/);
+    view.rerender(peerTranscript([{ ...pr, state: "merged", lifecycleState: "merged" }]));
+    expect(chip).toHaveAccessibleName(/merged/);
+    expect(chip).toHaveAttribute("data-pr-url", `${url}/files#diff-123`);
+    await act(async () => { await vi.advanceTimersByTimeAsync(50); });
+    expect(h.set).toHaveBeenLastCalledWith({ updates: [], removedUrls: [`${url}/files#diff-123`] });
+    expect(h.set).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(["unknown", "passing"] as const)("uses an existing %s peer snapshot without subscribing locally", async (state) => {
+    const h = viewerHarness();
+    const view = render(peerTranscript([{ ...pr, state }]));
+    await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+    expect(h.set).not.toHaveBeenCalled();
+    view.rerender(peerTranscript([{ ...pr, state: "merged", lifecycleState: "merged" }]));
+    expect(screen.getByRole("button")).toHaveAccessibleName(/merged/);
+    expect(h.set).not.toHaveBeenCalled();
   });
 });
 

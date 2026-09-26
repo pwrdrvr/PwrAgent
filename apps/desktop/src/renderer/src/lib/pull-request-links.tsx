@@ -16,6 +16,7 @@ import {
 } from "react";
 
 export type PullRequestLinkContextValue = {
+  hasSnapshot: (pr: PrSummary) => boolean;
   getSnapshot: (fallback: PrSummary) => PrSummary;
   getNumberSnapshot: (number: number) => PrSummary | undefined;
   resolve: (href: string) => PrSummary | undefined;
@@ -76,6 +77,10 @@ class PullRequestLinkMetadataStore {
       prsByKey: this.prs,
       threads,
     });
+  }
+
+  hasSnapshot(pr: PrSummary): boolean {
+    return this.prs.has(buildPullRequestStatusKey(pr));
   }
 
   getSnapshot(fallback: PrSummary): PrSummary {
@@ -308,6 +313,9 @@ export function PullRequestLinkProvider(props: {
 
   const value = useMemo<PullRequestLinkContextValue>(
     () => ({
+      hasSnapshot(pr) {
+        return store.hasSnapshot(pr);
+      },
       getSnapshot(fallback) {
         return store.getSnapshot(fallback);
       },

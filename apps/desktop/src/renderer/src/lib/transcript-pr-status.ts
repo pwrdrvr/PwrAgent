@@ -97,6 +97,7 @@ const stores = new WeakMap<DesktopApi, TranscriptPrStatusStore>();
 export function useTranscriptPullRequest(
   fallback: PrSummary,
   interest: { seen: boolean; visible: boolean },
+  preferNavigationSnapshot = false,
 ): PrSummary {
   const api = useDesktopApi();
   const store = useMemo(() => {
@@ -110,10 +111,14 @@ export function useTranscriptPullRequest(
   }, [api]);
   const key = buildPullRequestStatusKey(fallback);
   const subscribe = useCallback((listener: () => void) => {
-    if (!interest.seen || !store) return () => {};
+    if (!interest.seen || !store || preferNavigationSnapshot) return () => {};
     return store.subscribe(fallback, interest.visible, listener);
-  }, [fallback, interest.seen, interest.visible, store]);
+  }, [fallback, interest.seen, interest.visible, preferNavigationSnapshot, store]);
   const getSnapshot = useCallback(() => store?.getSnapshot(key), [key, store]);
   const live = useSyncExternalStore(subscribe, getSnapshot, () => undefined);
-  return useMemo(() => live ? { ...live, url: fallback.url } : fallback, [live, fallback]);
+  // A federation viewer's navigation snapshot is owned by the peer. Local
+  // fetches can fill a transcript-only gap, but must never mask that source.
+  return useMemo(() => live && !preferNavigationSnapshot
+    ? { ...live, url: fallback.url }
+    : fallback, [live, fallback, preferNavigationSnapshot]);
 }

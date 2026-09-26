@@ -1338,7 +1338,6 @@ class DesktopAppServerService {
   private readonly transcriptPrSubscriptions = new TranscriptPrSubscriptions((key) => {
     if (!this.primaryPrThreadsByKey.has(key)) this.prPollingScheduler?.forgetTarget(key);
   });
-  private transcriptPrRefreshTimer: ReturnType<typeof setTimeout> | undefined;
   private backgroundPrPollingEnabled = false;
   private prAutoDispatchAllowed = false;
   private prAutoDispatchBudgetConfig: PrAutoDispatchBudgetConfig = {
@@ -5303,30 +5302,19 @@ class DesktopAppServerService {
     publish: (statuses: TranscriptPullRequestStatuses) => void,
   ): TranscriptPullRequestStatuses {
     const snapshot = this.transcriptPrSubscriptions.set(senderKey, request, publish);
-    // Coalesce chip mounts and scrolling into one scheduler pass. Even with
-    // background polling off, a newly displayed chip gets an on-demand read.
-    if (this.transcriptPrSubscriptions.hasSubscribers && !this.transcriptPrRefreshTimer) {
-      this.transcriptPrRefreshTimer = setTimeout(() => {
-        this.transcriptPrRefreshTimer = undefined;
-        void Promise.all([this.loadPrStatusRegistry(), this.loadPrLookupRegistry()])
-          .then(() => {
-            if (!this.transcriptPrSubscriptions.hasSubscribers) return;
-            this.ensurePrPollingSchedulerStarted();
-            return this.prPollingScheduler?.tick(this.takePendingTranscriptPrTargets);
-          })
-          .catch((error) => {
-            appServerLog.warn("failed to refresh transcript PR statuses", {
-              error: error instanceof Error ? error.message : String(error),
-            });
-          });
-      }, 50);
-      this.transcriptPrRefreshTimer.unref?.();
-    }
+    this.transcriptPrSubscriptions.requestRefresh(this.refreshTranscriptPrTargets);
     return snapshot;
   }
 
-  private readonly takePendingTranscriptPrTargets = (): PrPollTarget[] =>
-    this.transcriptPrSubscriptions.takePendingTargets().map((target) => this.hydrateTranscriptPrTarget(target));
+  private readonly refreshTranscriptPrTargets = async (): Promise<void> => {
+    await Promise.all([this.loadPrStatusRegistry(), this.loadPrLookupRegistry()]);
+    if (!this.transcriptPrSubscriptions.hasSubscribers) return;
+    this.ensurePrPollingSchedulerStarted();
+    await this.prPollingScheduler?.tick(this.pendingTranscriptPrTargets);
+  };
+
+  private readonly pendingTranscriptPrTargets = (): PrPollTarget[] =>
+    this.transcriptPrSubscriptions.pendingTargets().map((target) => this.hydrateTranscriptPrTarget(target));
 
   private hydrateTranscriptPrTarget(target: PrPollTarget): PrPollTarget {
     const threadKey = this.primaryPrThreadsByKey.get(target.prKey)?.values().next().value;
@@ -5641,6 +5629,7 @@ class DesktopAppServerService {
       fetchPullRequestsAfterReconnect: async (refs) =>
         await this.fetchForgePullRequests(refs, true, true),
       getObservationTimestamp: () => this.nextPrObservationTimestamp(),
+      onTargetsHandled: (keys) => this.transcriptPrSubscriptions.markHandled(keys),
       applyResults: async (prs, fetchedAt) => {
         // Mention-only results must never enter persistence, transitions, or
         // automatic repair. Attached PRs keep their existing result path.
@@ -7694,8 +7683,6 @@ class DesktopAppServerService {
     this.prGraphqlClient = undefined;
     this.githubSamlBlockedRepositories.clear();
     this.prPollingFocus.clear();
-    clearTimeout(this.transcriptPrRefreshTimer);
-    this.transcriptPrRefreshTimer = undefined;
     this.transcriptPrSubscriptions.clear();
     this.prPollBackendByKey.clear();
     this.prStatusTransitionListeners.clear();

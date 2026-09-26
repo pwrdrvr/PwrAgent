@@ -105,6 +105,8 @@ export type PrPollingSchedulerDeps = {
   fetchPullRequestsAfterReconnect?: (refs: PrRef[]) => Promise<PrSummary[]>;
   /** Persist + publish. Returns the prKeys whose status actually changed. */
   applyResults: (prs: PrSummary[], fetchedAt: number) => Promise<string[]>;
+  /** Targets admitted for an attempt or already fresh/terminal; deferred work stays pending. */
+  onTargetsHandled?: (prKeys: string[]) => void;
   /** Allocate a globally ordered token immediately before starting a request. */
   getObservationTimestamp?: () => number;
   now?: () => number;
@@ -316,6 +318,7 @@ export class PrPollingScheduler {
 
     const due = this.selectDueTargets(targets, now, false, !requestedTargets);
     if (due.length === 0) {
+      this.deps.onTargetsHandled?.(targets.map((target) => target.prKey));
       return;
     }
 
@@ -332,6 +335,14 @@ export class PrPollingScheduler {
       }
       admitted.push(batch);
     }
+
+    const deferred = new Set(due.map((target) => target.prKey));
+    for (const batch of admitted) {
+      for (const target of batch) deferred.delete(target.prKey);
+    }
+    this.deps.onTargetsHandled?.(targets
+      .filter((target) => !deferred.has(target.prKey))
+      .map((target) => target.prKey));
 
     await Promise.all(admitted.map(async (batch) => await this.pollBatch(batch)));
   }
