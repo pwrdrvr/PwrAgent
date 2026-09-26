@@ -3,6 +3,7 @@
 import { execSync, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { personalizeMacExecutableFile } from "./macos-executable-uuid.mjs";
 
 function discoverSigningIdentity(context) {
   const configuredIdentity = context.packager?.config?.mac?.identity;
@@ -35,6 +36,10 @@ export default async function afterPackSignDockTilePlugin(context) {
   if (context.electronPlatformName !== "darwin") return;
 
   const appName = context.packager.appInfo.productFilename;
+  await personalizeMacExecutableFile(
+    join(context.appOutDir, `${appName}.app`, "Contents", "MacOS", appName),
+    `${context.packager.appInfo.id}/${context.packager.appInfo.version}/${context.packager.config.electronVersion}`,
+  );
   const pluginPath = join(
     context.appOutDir,
     `${appName}.app`,
