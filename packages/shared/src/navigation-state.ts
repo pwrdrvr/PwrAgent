@@ -37,7 +37,8 @@ function isHandoffDirectory(directory: LinkedDirectorySummary): boolean {
   );
 }
 
-function dedupeLinkedDirectories(
+/** Provider directories first, persisted overlay directories last. */
+export function mergeThreadLinkedDirectories(
   directories: LinkedDirectorySummary[],
 ): LinkedDirectorySummary[] {
   const normalizedDirectories = directories.map(normalizeLinkedDirectoryKind);
@@ -239,7 +240,7 @@ export function materializeNavigationThreads(params: {
   return params.threads.map((thread) => {
     const threadKey = buildThreadIdentityKey(thread.source, thread.id);
     const overlay = params.overlayByThreadKey[threadKey];
-    const linkedDirectories = dedupeLinkedDirectories([
+    const linkedDirectories = mergeThreadLinkedDirectories([
       ...thread.linkedDirectories,
       ...(overlay?.extraLinkedDirectories ?? []),
     ]);
@@ -604,6 +605,7 @@ export function buildNavigationSnapshotHash(params: {
         kind: directory.kind,
         path: directory.path,
         worktreePath: directory.worktreePath ?? null,
+        worktreeOwnership: directory.worktreeOwnership ?? null,
       })),
       worktreeSnapshots: (thread.worktreeSnapshots ?? []).map((snapshot) => ({
         id: snapshot.id,
