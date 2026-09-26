@@ -1,4 +1,5 @@
 import { Component, type ReactNode } from "react";
+import { setImmediate } from "node:timers";
 import { act, render, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { buildThreadIdentityKey } from "@pwragent/shared";
@@ -38,8 +39,10 @@ const population = {
 
 function fixture() {
   const read = vi.fn<NonNullable<DesktopApi["getNavigationQueryPage"]>>(async (request) => {
-    // Land each page in its own task, the way an IPC round trip does.
-    await new Promise((resolve) => setTimeout(resolve, 1));
+    // Land each page in its own task, the way an IPC round trip does. No
+    // wall-clock delay is required: Windows timer granularity and runner load
+    // must not pace the fixture's hundreds of queued collection completions.
+    await new Promise<void>((resolve) => setImmediate(resolve));
     return navigationQueryFixture(request, population);
   });
   const detail = vi.fn<NonNullable<DesktopApi["getNavigationSelectedDetail"]>>(async (request) => ({
