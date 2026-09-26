@@ -92,6 +92,25 @@ const problem120MathMarkdown = String.raw`Problem 1.20 is a good early logic exe
 The fourth is the most valuable one, because the English is slightly ambiguous. “Original number” could conceivably mean \(a\), which would instead describe \(0\): \(0\cdot b=0\). In context, though, it almost surely means the “other number” \(b\), so the intended answer is \(1\).`;
 
 describe("ThreadMarkdown", () => {
+  it("keeps home paths and approximate benchmark values literal", () => {
+    const text = "Bench results ~/github core 660663entries0errors: adaptive max16 default10s 11.064s CPU4.77 history1->2@10s; interval1s 6.663s CPU6.82 history1,2,4,2,1,2; 250ms6.989s CPU7.98 oscillatory 1..8. Baseline fixed4~3.49-4.15 CPU7-8;16~3.06-3.59 CPU22-23.";
+    const { container } = render(<ThreadMarkdown text={text} />);
+
+    expect(container.querySelector("del")).toBeNull();
+    expect(container.querySelector("p")?.textContent).toBe(text);
+  });
+
+  it("requires double tildes for strikethrough while preserving code and escapes", () => {
+    const { container } = render(
+      <ThreadMarkdown text={String.raw`~literal~ and ~~deleted~~ and \~\~escaped\~\~ and ` + "`~~code~~`"} />,
+    );
+
+    expect(container.querySelectorAll("del")).toHaveLength(1);
+    expect(container.querySelector("del")).toHaveTextContent("deleted");
+    expect(container.querySelector("p")).toHaveTextContent("~literal~ and deleted and ~~escaped~~ and ~~code~~");
+    expect(container.querySelector("code")).toHaveTextContent("~~code~~");
+  });
+
   it("renders markdown formatting and local file links", () => {
     render(
       <ThreadMarkdown

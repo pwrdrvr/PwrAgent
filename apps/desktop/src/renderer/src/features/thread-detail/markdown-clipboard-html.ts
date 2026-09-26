@@ -18,7 +18,8 @@ export function renderMarkdownToClipboardHtml(markdown: string): string {
   return renderToStaticMarkup(
     createElement(
       ReactMarkdown,
-      { remarkPlugins: [remarkBreaks, remarkGfm] },
+      // Match ThreadMarkdown: only double tildes mark strikethrough.
+      { remarkPlugins: [remarkBreaks, [remarkGfm, { singleTilde: false }]] },
       protectComposerHyphenListItems(repairNestedLanguageFences(markdown)),
     ),
   );
