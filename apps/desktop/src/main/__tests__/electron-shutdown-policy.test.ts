@@ -121,20 +121,13 @@ describe("Electron shutdown policy", () => {
         now = 6_100;
         return "timeout";
       },
-      hasExited: () => {
-        order.push("check-exit");
-        return false;
-      },
       forceKillTree: async () => {
         order.push("force-kill-tree");
       },
-      waitForForcedExit: async () => {
-        order.push("wait-forced-exit");
-        now = 6_150;
-        return true;
-      },
       waitForPostKillClose: async () => {
         order.push("wait-post-kill-close");
+        now = 6_150;
+        return "closed";
       },
     });
 
@@ -142,15 +135,34 @@ describe("Electron shutdown policy", () => {
       "request-quit",
       "start-close",
       "wait-graceful",
-      "check-exit",
       "force-kill-tree",
-      "wait-forced-exit",
       "wait-post-kill-close",
     ]);
     expect(result).toMatchObject({
       elapsedMs: 6_050,
       forced: true,
       forceExitOutcome: "exited",
+    });
+  });
+
+  it("keeps the owning close abnormal when launcher exit leaves pipes open", async () => {
+    let forceKillCalls = 0;
+    const result = await executeElectronClose({
+      now: () => 0,
+      requestQuit: async () => undefined,
+      startClose: () => new Promise<void>(() => undefined),
+      waitForGracefulClose: async () => "timeout",
+      forceKillTree: async () => {
+        forceKillCalls += 1;
+      },
+      waitForPostKillClose: async () => "timeout",
+    });
+
+    expect(forceKillCalls).toBe(1);
+    expect(result).toMatchObject({
+      forced: true,
+      gracefulCloseOutcome: "timeout",
+      forceExitOutcome: "timed-out",
     });
   });
 
@@ -211,6 +223,22 @@ describe("Electron shutdown policy", () => {
       "profile-process-cleanup",
       "remove-home-root",
     ]);
+  });
+
+  it("reports a single incomplete close on its owning test after cleanup", async () => {
+    const order: string[] = [];
+    const summary = trippedSummary();
+    summary.circuit.tripped = false;
+    await expect(finalizeElectronFixtureTeardown({
+      closeApplication: async () => summary,
+      cleanupProfileProcesses: async () => {
+        order.push("profile-process-cleanup");
+      },
+      removeHomeRoot: async () => {
+        order.push("remove-home-root");
+      },
+    })).rejects.toThrow("launcher pipe");
+    expect(order).toEqual(["profile-process-cleanup", "remove-home-root"]);
   });
 });
 

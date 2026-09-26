@@ -43,10 +43,30 @@ Start with `snapshot-1.json`, then use `timeline.jsonl` to reconstruct events:
   cleanup, and entry into each worker cleanup phase. It includes healthy
   launches so an earlier test's leftover process can be identified.
 
+A Windows Electron launcher can be `cmd.exe`; its exit is not the Electron
+tree's completion. Fixture teardown treats an unresolved `electronApp.close()`
+as abnormal even after that launcher exits. It captures the Electron main PID
+before quit and, on the abnormal path, checks process creation times before
+terminating that process or its direct surviving children. The owning test
+fails after profile and temporary-directory cleanup even if the process query
+could not find the holder. The process-tree snapshot cannot follow an orphan
+once its tracked launcher and intermediate parents have exited.
+
+The Windows reproduction left a suspended no-op `cmd.exe` from the startup
+Job-wrapper prewarm alive after the app exited. The app no longer starts this
+fire-and-forget prewarm. Vitest's separate prewarm setup still awaits its
+completion before tests begin.
+
 The recorder does not collect application output, environment variables, or
 process command lines. It selects useful sections from Node's report rather
 than uploading its credential-bearing raw report. Paths, test titles and local
 socket endpoints can appear in diagnostic stacks and handles.
+
+For a Windows pipe-holder investigation, run the inspect-only
+`e2e/windows-pipe-holder.inspect.spec.ts` with `PWRAGENT_PIPE_HOLDER_PROBE=1`.
+Its local JSON files preserve descendant ancestry across parent exit and report
+survivors and the launcher's close delay. Review and sanitize command lines
+before sharing results.
 
 ## Verification and upgrades
 

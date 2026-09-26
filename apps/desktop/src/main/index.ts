@@ -181,7 +181,6 @@ import {
   recordBootDecision,
 } from "./state/app-state";
 import type { AutoVacuumConversion } from "./state/state-db";
-import { prewarmWindowsJobWrapper } from "./windows-job-wrapper";
 import { createMainWindow } from "./window";
 import { registerManagedGrokSignatureRejectionBroadcast } from "./managed-grok-signature-broadcast";
 import { subscribersForChannel } from "./window-channels";
@@ -1589,11 +1588,6 @@ export function bootstrapApp(): void {
         error: error instanceof Error ? error.message : String(error),
       });
     });
-    // Windows only, and a no-op everywhere else. The first Job-wrapped command
-    // on a machine pays a cold PowerShell host launch and a helper compile that
-    // has measured in the tens of seconds; without this the bill lands on the
-    // operator's first worktree archive.
-    void prewarmWindowsJobWrapper();
     const messagingRuntime = getDesktopMessagingRuntime((options) =>
       loadDesktopMessagingConfigFromSettings(
         getDesktopSettingsService(),
