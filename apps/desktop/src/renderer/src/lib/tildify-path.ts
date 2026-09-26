@@ -1,3 +1,5 @@
+import { formatFilesystemPath } from "@pwragent/shared";
+
 /**
  * Compact display of absolute filesystem paths by collapsing the user's
  * home directory to `~` (`/Users/foo/dev/app` → `~/dev/app`). The home
@@ -18,7 +20,7 @@ export function getHomeDir(): string | undefined {
 
 /**
  * Replaces a leading home-directory prefix with `~`. Returns the path
- * unchanged when it doesn't live under home, or when the home directory is
+ * in native syntax when it doesn't live under home, or when the home directory is
  * unknown (e.g. in tests, or before the preload value is present).
  *
  * `~` is a POSIX shell convention, so Windows paths remain native even when
@@ -28,29 +30,26 @@ export function tildifyPath(
   absolutePath: string,
   homeDir: string | undefined = getHomeDir(),
 ): string {
+  const displayPath = formatFilesystemPath(absolutePath);
   if (!absolutePath || !homeDir) {
-    return absolutePath;
+    return displayPath;
   }
-  if (isWindowsPath(absolutePath)) {
-    return absolutePath;
+  // Only POSIX paths use home abbreviation. Windows and remote paths keep
+  // their drive/share even when they happen to match the local home.
+  if (!displayPath.startsWith("/") || !homeDir.startsWith("/")) {
+    return displayPath;
   }
-  const home = homeDir.replace(/[/\\]+$/, "");
+  const home = homeDir.replace(/\/+$/, "");
   if (!home) {
-    return absolutePath;
+    return displayPath;
   }
-  const normalizedPath = absolutePath.replace(/\\/g, "/");
-  const normalizedHome = home.replace(/\\/g, "/");
-  if (normalizedPath === normalizedHome) {
+  if (displayPath === home) {
     return "~";
   }
-  if (normalizedPath.startsWith(`${normalizedHome}/`)) {
-    return `~${absolutePath.slice(home.length)}`;
+  if (displayPath.startsWith(`${home}/`)) {
+    return `~${displayPath.slice(home.length)}`;
   }
-  return absolutePath;
-}
-
-function isWindowsPath(path: string): boolean {
-  return /^[A-Za-z]:[\\/]/.test(path) || path.startsWith("\\\\");
+  return displayPath;
 }
 
 /**
@@ -70,10 +69,10 @@ export function expandTildePath(
     return path;
   }
   if (path === "~") {
-    return home;
+    return formatFilesystemPath(home);
   }
   if (path.startsWith("~/") || path.startsWith("~\\")) {
-    return `${home}${path.slice(1)}`;
+    return formatFilesystemPath(`${home}${path.slice(1)}`);
   }
   return path;
 }

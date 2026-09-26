@@ -5,9 +5,19 @@ type NormalizedDirectoryPath = {
 };
 
 /**
+ * Render filesystem paths in their owning platform's syntax. Protocol and
+ * snapshot identifiers may use forward slashes on Windows; leave those ids
+ * untouched and format only at the display boundary. Infer from the path,
+ * not this machine's OS, because federation also displays remote paths.
+ */
+export function formatFilesystemPath(value: string): string {
+  return isWindowsFilesystemPath(value) ? value.replace(/\//g, "\\") : value;
+}
+
+/**
  * Display an absolute path relative to the longest known directory that
  * contains it. Relative paths use the separator style of a known Windows
- * directory; absolute paths outside the known directories are unchanged.
+ * directory; absolute paths outside the known directories use native syntax.
  */
 export function formatPathRelativeToDirectories(
   value: string,
@@ -19,12 +29,12 @@ export function formatPathRelativeToDirectories(
   }
 
   const normalizedValue = normalizePath(trimmed);
-  const valueIsWindowsPath = isWindowsPath(trimmed);
+  const valueIsWindowsPath = isWindowsFilesystemPath(trimmed);
   const roots = [...(directoryPaths ?? [])]
     .map((root): NormalizedDirectoryPath => ({
-      caseInsensitive: valueIsWindowsPath || isWindowsPath(root),
+      caseInsensitive: valueIsWindowsPath || isWindowsFilesystemPath(root),
       normalized: normalizePath(root),
-      separator: isWindowsPath(root) ? "\\" : "/",
+      separator: isWindowsFilesystemPath(root) ? "\\" : "/",
     }))
     .filter((root) => Boolean(root.normalized))
     .sort((left, right) => right.normalized.length - left.normalized.length);
@@ -58,7 +68,7 @@ export function formatPathRelativeToDirectories(
     }
   }
 
-  return trimmed;
+  return formatFilesystemPath(trimmed);
 }
 
 function formatSeparators(value: string, separator: "/" | "\\"): string {
@@ -67,15 +77,17 @@ function formatSeparators(value: string, separator: "/" | "\\"): string {
 
 function isAbsolutePath(value: string): boolean {
   const trimmed = value.trim();
-  return trimmed.startsWith("/") || isWindowsPath(trimmed);
+  return trimmed.startsWith("/") || isWindowsFilesystemPath(trimmed);
 }
 
-function isWindowsPath(value: string): boolean {
+/** Recognize drive-qualified and UNC paths, including normalized snapshots. */
+export function isWindowsFilesystemPath(value: string): boolean {
   const trimmed = value.trim();
-  return /^[a-z]:[\\/]/i.test(trimmed) || /^\\\\/.test(trimmed);
+  return /^[a-z]:[\\/]/i.test(trimmed) || /^[\\/]{2}[^\\/]+[\\/][^\\/]+/.test(trimmed);
 }
 
 function normalizePath(value: string): string {
-  const normalized = value.trim().replace(/\\/g, "/");
+  const trimmed = value.trim();
+  const normalized = isWindowsFilesystemPath(trimmed) ? trimmed.replace(/\\/g, "/") : trimmed;
   return normalized.length > 1 ? normalized.replace(/\/+$/, "") : normalized;
 }
