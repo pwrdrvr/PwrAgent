@@ -2245,7 +2245,11 @@ export function ThreadView(props: ThreadViewProps) {
   }, [asyncQuestionThreadKey]);
   const handleAnswerAsyncQuestions = useEventCallback((text: string): Promise<boolean> => {
     // One answer at a time: the composer applies only the newest submission.
-    if (!selectedThread || asyncQuestionReplySettlers.current.size > 0) {
+    if (
+      props.composerDisabled
+      || !selectedThread
+      || asyncQuestionReplySettlers.current.size > 0
+    ) {
       return Promise.resolve(false);
     }
     asyncQuestionReplyId.current += 1;
@@ -3954,7 +3958,9 @@ export function ThreadView(props: ThreadViewProps) {
               onOpenImage={setExpandedImage}
               dismissedAsyncQuestionMessageIds={dismissedAsyncQuestionMessageIds}
               sentAsyncQuestionAnswers={threadSentAsyncQuestionAnswers}
-              onAnswerAsyncQuestions={handleAnswerAsyncQuestions}
+              onAnswerAsyncQuestions={
+                props.composerDisabled ? undefined : handleAnswerAsyncQuestions
+              }
               onAsyncQuestionsDismissedChange={handleAsyncQuestionsDismissedChange}
               onExpandedActivityIdsChange={
                 props.onExpandedTranscriptActivityIdsChange
