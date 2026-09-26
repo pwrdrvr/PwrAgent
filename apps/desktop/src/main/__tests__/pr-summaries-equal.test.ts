@@ -37,6 +37,7 @@ describe("prSummariesEqual", () => {
   });
 
   it.each([
+    ["sourceRepository", { sourceRepository: { provider: "github.com", org: "fork", repo: "PwrAgent" } }],
     ["additions", { additions: 530 }],
     ["deletions", { deletions: 4 }],
     ["changedFiles", { changedFiles: 21 }],

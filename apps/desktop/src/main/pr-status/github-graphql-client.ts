@@ -465,8 +465,8 @@ export function mapGraphqlPrNode(
     ...resolvePullRequestIdentity({
       provider: parsePullRequestProvider(node.url),
       number: node.number,
-      org: "",
-      repo: "",
+      org: node.headRepositoryOwner?.login ?? "",
+      repo: node.headRepository?.name ?? "",
       url: node.url,
     }),
     ...(node.title?.trim() ? { title: node.title.trim() } : {}),

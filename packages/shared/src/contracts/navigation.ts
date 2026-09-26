@@ -457,6 +457,8 @@ export type PrSummary = {
   org: string;
   /** Destination repo name, e.g. "PwrAgent". PR numbers belong to this repo. */
   repo: string;
+  /** Source fork used for workspace eligibility; never part of the status key. */
+  sourceRepository?: { provider: PullRequestProvider; org: string; repo: string };
   /** Last observed pull request title, when the provider returns one. */
   title?: string;
   /**
@@ -560,8 +562,8 @@ type PullRequestIdentity = Pick<PrSummary, "provider" | "org" | "repo" | "number
  * explicit identity (for example detach requests).
  */
 export function resolvePullRequestIdentity(
-  pr: PullRequestIdentity & { url?: string },
-): PullRequestIdentity {
+  pr: PullRequestIdentity & { url?: string; sourceRepository?: PrSummary["sourceRepository"] },
+): PullRequestIdentity & Pick<PrSummary, "sourceRepository"> {
   if (pr.url) {
     try {
       // Shared contracts run without Node or DOM globals. Accept only absolute
@@ -575,7 +577,17 @@ export function resolvePullRequestIdentity(
           const org = match[1]!.split("/").map(decodeURIComponent).join("/");
           const repo = decodeURIComponent(match[2]!);
           if (Number.isSafeInteger(number)) {
-            return { provider: url[1]!.toLowerCase(), org, repo, number };
+            const provider = url[1]!.toLowerCase();
+            // Legacy GitHub rows stored the source fork in org/repo. Preserve
+            // that association before replacing their destination identity.
+            const sourceRepository = pr.sourceRepository ?? (
+              normalizePullRequestProvider(pr.provider) === provider
+              && pr.org && pr.repo
+              && (pr.org.toLowerCase() !== org.toLowerCase() || pr.repo.toLowerCase() !== repo.toLowerCase())
+                ? { provider, org: pr.org, repo: pr.repo }
+                : undefined
+            );
+            return { provider, org, repo, number, ...(sourceRepository ? { sourceRepository } : {}) };
           }
         }
       }
@@ -588,6 +600,7 @@ export function resolvePullRequestIdentity(
     org: pr.org,
     repo: pr.repo,
     number: pr.number,
+    ...(pr.sourceRepository ? { sourceRepository: pr.sourceRepository } : {}),
   };
 }
 

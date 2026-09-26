@@ -78,8 +78,8 @@ export function parseGhPrPayload(row: GhPrPayload): PrSummary {
     ...resolvePullRequestIdentity({
       provider: parsePullRequestProvider(row.url),
       number: row.number,
-      org: "",
-      repo: "",
+      org: row.headRepositoryOwner?.login ?? "",
+      repo: row.headRepository?.name ?? "",
       url: row.url,
     }),
     ...(row.title?.trim() ? { title: row.title.trim() } : {}),

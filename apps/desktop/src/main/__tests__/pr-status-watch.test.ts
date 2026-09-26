@@ -128,6 +128,51 @@ function createHarness(
 }
 
 describe("PrStatusWatchCoordinator", () => {
+  it("migrates a legacy fork-keyed watch and completes it only for its destination", async () => {
+    const dbPath = useFileStateDb();
+    const watch = await registerWatch();
+    const legacy = { ...watch, prKey: "github.com/fork/project#38",
+      prUrl: "https://github.com/upstream/project/pull/38", prNumber: 38 };
+    stateDb.raw.prepare("UPDATE pr_status_watches SET pr_key = ?, payload = ? WHERE watch_id = ?")
+      .run(legacy.prKey, JSON.stringify(legacy), watch.watchId);
+    stateDb.raw.pragma("user_version = 62");
+    stateDb.close();
+    stateDb = StateDb.open(dbPath);
+    store = new SqliteOverlayStore(stateDb);
+    expect(await store.listActiveThreadPrStatusWatches({ backend: "codex", threadId: "thread-1" }))
+      .toEqual([{ ...legacy, prKey: "github.com/upstream/project#38" }]);
+    const harness = createHarness();
+    const fork = pr({ number: 38, org: "fork", repo: "project", state: "passing", checkState: "passing",
+      url: "https://github.com/fork/project/pull/38" });
+    expect(await harness.coordinator.handleStatusSnapshot(fork, now)).toBe(0);
+    expect(await harness.coordinator.handleStatusSnapshot({ ...fork, org: "upstream", url: legacy.prUrl }, now)).toBe(1);
+    expect(harness.submitTurnIfIdle).toHaveBeenCalledTimes(1);
+  });
+
+  it("merges legacy and corrected active watches during upgrade without duplicate wakeups", async () => {
+    const dbPath = useFileStateDb();
+    const oldest = await registerWatch(store, ["failure"]);
+    const legacy = { ...oldest, prKey: "github.com/fork/pwragent#1105" };
+    stateDb.raw.prepare("UPDATE pr_status_watches SET pr_key = ?, payload = ? WHERE watch_id = ?")
+      .run(legacy.prKey, JSON.stringify(legacy), oldest.watchId);
+    now += 100;
+    await registerWatch(store, ["success"]);
+    stateDb.raw.pragma("user_version = 62");
+    stateDb.close();
+    stateDb = StateDb.open(dbPath);
+    store = new SqliteOverlayStore(stateDb);
+    const active = await store.listActiveThreadPrStatusWatches({ backend: "codex", threadId: "thread-1" });
+    expect(active).toEqual([{ ...oldest, notifyOn: ["failure", "success"] }]);
+    const afterUpgrade = stateDb.raw.prepare("SELECT * FROM pr_status_watches ORDER BY watch_id").all();
+    stateDb.close();
+    stateDb = StateDb.open(dbPath);
+    store = new SqliteOverlayStore(stateDb);
+    expect(stateDb.raw.prepare("SELECT * FROM pr_status_watches ORDER BY watch_id").all()).toEqual(afterUpgrade);
+    const harness = createHarness();
+    expect(await harness.coordinator.handleStatusSnapshot(pr({ state: "passing", checkState: "passing" }), now)).toBe(1);
+    expect(harness.submitTurnIfIdle).toHaveBeenCalledTimes(1);
+  });
+
   it("persists a one-shot watch across restart and dispatches success once", async () => {
     const dbPath = useFileStateDb();
     const watch = await registerWatch();

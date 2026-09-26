@@ -748,9 +748,10 @@ export function pullRequestMatchesRepositoryKey(
   pr: PrSummary,
   repositoryKey: string | undefined,
 ): boolean {
+  const repository = pr.sourceRepository ?? pr;
   return Boolean(
     repositoryKey
-    && buildPrRepositoryKey(pr.provider, pr.org, pr.repo) === repositoryKey,
+    && buildPrRepositoryKey(repository.provider, repository.org, repository.repo) === repositoryKey,
   );
 }
 

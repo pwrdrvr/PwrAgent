@@ -49,7 +49,11 @@ describe("parseGhPrPayload", () => {
       ...rawMergedPr(),
       headRepositoryOwner: { login: "contributor" },
       headRepository: { name: "renamed-fork" },
-    })).toMatchObject({ org: "pwrdrvr", repo: "PwrAgent" });
+    })).toMatchObject({
+      org: "pwrdrvr",
+      repo: "PwrAgent",
+      sourceRepository: { provider: "github.com", org: "contributor", repo: "renamed-fork" },
+    });
   });
 
   it("maps the pinned JSON shape into a PrSummary", () => {

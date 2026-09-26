@@ -306,6 +306,9 @@ describe("mapGraphqlPrNode", () => {
     );
     expect(summary.org).toBe("pwrdrvr");
     expect(summary.repo).toBe("PwrAgent");
+    expect(summary.sourceRepository).toEqual({
+      provider: "github.com", org: "contributor", repo: "PwrAgent-fork",
+    });
   });
 
   it("carries diff, commit, and timestamp stats for the hover card", () => {

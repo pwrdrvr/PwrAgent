@@ -112,6 +112,27 @@ function legacyLifecycleState(state: PrSummary["state"]): NonNullable<PrSummary[
 }
 
 describe("SqliteOverlayStore — thread PRs", () => {
+  it("migrates legacy detach tombstones without suppressing a same-number fork PR", async () => {
+    const dbPath = useFileStateDb();
+    const identity = { backend: "codex" as const, threadId: "legacy-detach" };
+    const fork = { ...prPassing, number: 38, org: "fork", repo: "project",
+      url: "https://github.com/fork/project/pull/38" };
+    const upstream = { ...fork, url: "https://github.com/upstream/project/pull/38" };
+    const overlay = await store.setThreadPullRequests({ ...identity, prs: [] });
+    stateDb.raw.prepare("UPDATE threads SET payload = ?").run(JSON.stringify({
+      ...overlay, detachedPrKeys: ["github.com/fork/project#38"], detachedPrs: [upstream],
+    }));
+    stateDb.raw.pragma("user_version = 62");
+    stateDb.close();
+    stateDb = StateDb.open(dbPath);
+    store = new SqliteOverlayStore(stateDb);
+    const migrated = await store.getThreadOverlayState(identity);
+    expect(migrated?.detachedPrKeys).toEqual(["github.com/upstream/project#38"]);
+    expect(migrated?.detachedPrs?.[0]).toMatchObject({ org: "upstream" });
+    const refreshed = await store.setThreadPullRequests({ ...identity, prs: [fork, upstream] });
+    expect(refreshed.prs).toEqual([fork]);
+  });
+
   it("starts with no prs on a thread that has never been touched", async () => {
     const overlay = await store.getThreadOverlayState({
       backend: "codex",
@@ -391,7 +412,7 @@ describe("SqliteOverlayStore — thread PRs", () => {
     const cached = await store.readPrStatusCache();
     expect(Object.keys(cached).sort()).toEqual(["github.com/fork/diskhound#38", "github.com/upstream/diskhound#38"]);
     expect(cached["github.com/fork/diskhound#38"]?.pr).toEqual(fork);
-    expect(cached["github.com/upstream/diskhound#38"]?.pr).toEqual({ ...upstream, org: "upstream" });
+    expect(cached["github.com/upstream/diskhound#38"]?.pr).toEqual({ ...upstream, org: "upstream", sourceRepository: { provider: "github.com", org: "fork", repo: "diskhound" } });
   });
 
   it("retains both colliding attachments and detaches only the requested destination", async () => {
@@ -409,9 +430,9 @@ describe("SqliteOverlayStore — thread PRs", () => {
     const identity = { backend: "codex" as const, threadId: "overlapping-prs" };
     await store.addThreadPullRequestReference({ ...identity, pr: fork });
     const attached = await store.addThreadPullRequestReference({ ...identity, pr: upstream });
-    expect(attached.prs).toEqual([fork, { ...upstream, org: "upstream" }]);
+    expect(attached.prs).toEqual([fork, { ...upstream, org: "upstream", sourceRepository: { provider: "github.com", org: "fork", repo: "diskhound" } }]);
     const detached = await store.detachThreadPullRequest({ ...identity, pr: fork });
-    expect(detached.prs).toEqual([{ ...upstream, org: "upstream" }]);
+    expect(detached.prs).toEqual([{ ...upstream, org: "upstream", sourceRepository: { provider: "github.com", org: "fork", repo: "diskhound" } }]);
     expect(detached.detachedPrKeys).toEqual(["github.com/fork/diskhound#38"]);
   });
 

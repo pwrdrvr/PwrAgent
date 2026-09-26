@@ -1692,7 +1692,10 @@ describe("app server ipc", () => {
     });
     registerAppServerIpcHandlers();
     const canonicalize = setThreadPullRequestCanonicalizer.mock.calls.at(-1)?.[0];
-    expect(await canonicalize?.([fork, { ...upstream, title: undefined }])).toEqual([fork, upstream]);
+    expect(await canonicalize?.([fork, { ...upstream, title: undefined }])).toEqual([
+      fork,
+      { ...upstream, sourceRepository: { provider: "github.com", org: "huntharo", repo: "diskhound" } },
+    ]);
   });
 
   it("hydrates the thread inspection PR canonicalizer from durable cache", async () => {
@@ -1846,13 +1849,16 @@ describe("app server ipc", () => {
     expect(read).not.toHaveProperty("automationsByThreadKey");
   });
 
-  it("initializes owner PR tracking without requesting a navigation page or snapshot", async () => {
+  it.each([false, true])("initializes owner PR tracking without a navigation page (fork: %s)", async (fork) => {
     const { startAppServerOwnerNavigation } = await import("../ipc/app-server");
     const { buildPullRequestStatusKey } = await import("@pwragent/shared");
     const pr = githubPr({ number: 91, org: "pwrdrvr", repo: "PwrAgent", state: "passing", title: "Off-page PR",
-      url: "https://github.com/pwrdrvr/PwrAgent/pull/91" });
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/91",
+      ...(fork ? { sourceRepository: { provider: "github.com", org: "contributor", repo: "PwrAgent" } } : {}),
+    });
     listThreads.mockResolvedValueOnce([{ id: "off-page", source: "codex", title: "Off-page", titleSource: "explicit",
-      gitOriginUrl: "git@github.com:pwrdrvr/PwrAgent.git", linkedDirectories: [], prs: [pr] }] as never);
+      gitOriginUrl: fork ? "git@github.com:contributor/PwrAgent.git" : "git@github.com:pwrdrvr/PwrAgent.git",
+      linkedDirectories: [], prs: [pr] }] as never);
     getStartupProviderRefreshStatus.mockReturnValueOnce({ state: "ready" });
     registerAppServerIpcHandlers();
     await startAppServerOwnerNavigation();

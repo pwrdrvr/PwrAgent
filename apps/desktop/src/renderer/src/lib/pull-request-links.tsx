@@ -32,6 +32,9 @@ function samePullRequestChip(
     && left.provider === right.provider
     && left.org === right.org
     && left.repo === right.repo
+    && left.sourceRepository?.provider === right.sourceRepository?.provider
+    && left.sourceRepository?.org === right.sourceRepository?.org
+    && left.sourceRepository?.repo === right.sourceRepository?.repo
     && left.number === right.number
     && left.title === right.title
     && left.additions === right.additions
