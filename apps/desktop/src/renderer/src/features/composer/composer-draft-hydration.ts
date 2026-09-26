@@ -119,6 +119,18 @@ export function hydrateComposerDraft(
   // it before either reference parser removes links and changes draft offsets.
   // CommonMark handles inline, fenced, indented, and nested code consistently.
   const visit = (node: MarkdownNode): void => {
+    if (node.type === "link") {
+      const start = node.position?.start.offset;
+      const end = node.position?.end.offset;
+      // Inline code in an explicit link's label belongs to that reference.
+      // Keep labels such as "Fix `foo` crash" intact for the hydrators. Only
+      // skip children when the whole source has the reference parsers' shape:
+      // a code example containing nested link syntax still needs protection.
+      if (start !== undefined && end !== undefined
+        && /^\[((?:\\.|[^\]\\\r\n])*)\]\(([^)\r\n]+)\)$/.test(canonicalDraft.slice(start, end))) {
+        return;
+      }
+    }
     if (node.type === "code" || node.type === "inlineCode") {
       const start = node.position?.start.offset;
       const end = node.position?.end.offset;
