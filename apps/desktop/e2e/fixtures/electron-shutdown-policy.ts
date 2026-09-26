@@ -99,15 +99,15 @@ export function memoizeElectronClose(
 
 type ElectronCloseActions = {
   forceKillTree(): Promise<void>;
-  hasExited(): boolean;
   now(): number;
   requestQuit(): Promise<void>;
   startClose(): Promise<void>;
-  waitForForcedExit(): Promise<boolean>;
   waitForGracefulClose(
     closePromise: Promise<void>,
   ): Promise<ElectronCloseHandshakeOutcome>;
-  waitForPostKillClose(closePromise: Promise<void>): Promise<void>;
+  waitForPostKillClose(
+    closePromise: Promise<void>,
+  ): Promise<ElectronCloseHandshakeOutcome>;
 };
 
 export async function executeElectronClose(
@@ -130,7 +130,7 @@ export async function executeElectronClose(
     closePromise.catch(() => undefined);
   }
   const gracefulCloseOutcome = await actions.waitForGracefulClose(closePromise);
-  if (actions.hasExited()) {
+  if (gracefulCloseOutcome === "closed") {
     return {
       elapsedMs: normalizeDuration(actions.now() - startedAt),
       forceExitOutcome: "not-needed",
@@ -141,11 +141,10 @@ export async function executeElectronClose(
   }
 
   await actions.forceKillTree();
-  const forcedExit = await actions.waitForForcedExit();
-  await actions.waitForPostKillClose(closePromise);
+  const postKillCloseOutcome = await actions.waitForPostKillClose(closePromise);
   return {
     elapsedMs: normalizeDuration(actions.now() - startedAt),
-    forceExitOutcome: forcedExit ? "exited" : "timed-out",
+    forceExitOutcome: postKillCloseOutcome === "closed" ? "exited" : "timed-out",
     forced: true,
     gracefulCloseOutcome,
     quitRequestOutcome,
@@ -304,7 +303,19 @@ export async function finalizeElectronFixtureTeardown(params: {
   if (summary.circuit.tripped) {
     throw new ElectronShutdownCircuitOpenError();
   }
+  assertElectronCloseCompleted(summary);
   return summary;
+}
+
+export function assertElectronCloseCompleted(summary: ElectronShutdownSummary): void {
+  if (
+    summary.gracefulCloseOutcome === "timeout"
+    || summary.forceExitOutcome === "timed-out"
+  ) {
+    throw new Error(
+      "Electron close timed out; the owning test had an open launcher pipe after app quit.",
+    );
+  }
 }
 
 export class ElectronShutdownCircuitOpenError extends Error {
