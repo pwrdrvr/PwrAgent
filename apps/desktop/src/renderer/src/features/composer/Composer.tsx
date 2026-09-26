@@ -3637,20 +3637,25 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     if (!submission || appliedReplySubmissionId.current === submission.id) {
       return;
     }
-    appliedReplySubmissionId.current = submission.id;
     if (
       submission.threadId !== props.thread?.id
       || submission.backend !== props.thread?.source
     ) {
+      appliedReplySubmissionId.current = submission.id;
       props.onReplySubmissionSettled?.(submission.id, false);
       return;
     }
+    // Transcript questions can render before thread configuration and queue
+    // readiness enable the composer. Keep the submitted answer pending until
+    // that gate opens instead of consuming its id and rejecting it silently.
+    if (props.disabled) return;
+    appliedReplySubmissionId.current = submission.id;
     void submitReplyText(submission.text)
       .catch(() => false)
       .then((accepted) => props.onReplySubmissionSettled?.(submission.id, accepted));
     // submitReplyText is recreated each render; the id guard sends once.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.replySubmission]);
+  }, [props.replySubmission, props.disabled, props.thread?.id, props.thread?.source]);
   const clearComposerDraftSnapshot = (scopeKey: string): void => {
     if (isDraftStoreScope(scopeKey)) {
       draftStore.delete(scopeKey);
