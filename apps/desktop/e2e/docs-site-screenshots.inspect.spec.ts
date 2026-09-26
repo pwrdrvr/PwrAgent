@@ -7,6 +7,7 @@ import { expect, test, type ElectronApplication, type Page } from "@playwright/t
 import { launchElectronApp } from "./fixtures/electron-app";
 import {
   bringToFront,
+  captureOwnerPidArg,
   captureWhileFocused,
 } from "./fixtures/capture-window-placement";
 import { resolveScreenshotAppearance } from "./fixtures/screenshot-appearance";
@@ -245,7 +246,7 @@ async function captureNative(
 ): Promise<void> {
   mkdirSync(screenshotDir, { recursive: true });
   const outputPath = path.join(screenshotDir, outputBasename);
-  const args = ["Electron", outputPath];
+  const args = ["Electron", outputPath, await captureOwnerPidArg(electronApp)];
   if (options?.titleSubstring) {
     args.push(`--title=${options.titleSubstring}`);
   }

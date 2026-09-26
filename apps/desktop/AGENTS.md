@@ -506,7 +506,9 @@ docs-site PNGs at half resolution, and 8 also caught a stray toast.
 Two layers now prevent it:
 
 * `e2e/fixtures/capture-window-placement.ts` centers the window on a
-  Retina display before every capture. Only 2x displays are eligible —
+  Retina display before every capture. It probes the displays once, on
+  the first `bringToFront` of the run, and trusts that probe for the rest
+  of the run. Only 2x displays are eligible —
   a 1x panel cannot produce the asset at all — and among those it
   prefers one the window actually fits on, then the built-in panel (the
   usual laptop-docked-to-a-1x-monitor case), then the sharpest. It never
@@ -527,7 +529,21 @@ Two layers now prevent it:
   The replace itself goes through `replaceItemAt`, so a failure cannot
   leave the destination missing. Pass `--allow-low-dpi` only if you
   genuinely want a 1x asset; both specs forward it when
-  `PWRAGENT_SCREENSHOT_ALLOW_LOW_DPI=1`.
+  `PWRAGENT_SCREENSHOT_ALLOW_LOW_DPI=1`. If the probe found a Retina
+  display, `captureWhileFocused` treats a 1x refusal like an inactive-window
+  refusal. It raises the window, which places it back on the Retina
+  display, and captures again. If the probe found none, the refusal fails
+  the capture immediately, because every retry would land on the same 1x
+  display.
+
+Both specs pass `--pid=<Electron main pid>` to `capture-window.swift`
+through `captureOwnerPidArg`. The script's owner match is the name
+"Electron", and every unpackaged Electron app has that name. One run
+captured a different Electron dev app that was frontmost at the time,
+and wrote its window out as `settings-messaging-line.png`. The
+inactive-window check passed as well, because it checked the app that
+had been captured, and that app was active. Pass the PID on any new
+capture.
 
 Capturing off-screen is fine: `screencapture -l` pulls the window's
 full composited image from the window server, so the shadow is never
@@ -614,9 +630,9 @@ Pieces, all under `apps/desktop/`:
 | `e2e/docs-site-screenshots.inspect.spec.ts` | Tests producing PNGs for `docs.pwragent.ai` (Settings panels + per-provider Messaging panels + Recents hero + composer features + first-run onboarding wizard + live work rail). Gated behind `PWRAGENT_DOCS_SITE_SCREENSHOT_CAPTURE=1`. Output lands in the **sibling docs repo's** `assets/screenshots/` (default `~/github/docs.pwragent.ai/`, override with `PWRAGENT_DOCS_SITE_REPO`). |
 | `e2e/fixtures/readme-recents-hero/replay.fixture.json` | Hand-crafted populated thread list for the hero shot. Edit by hand to retune. |
 | `e2e/fixtures/readme-state-seeding.ts` | Direct sqlite/config seeders for messaging bindings, activity log entries, pairing tokens, and Telegram-enabled config. |
-| `e2e/fixtures/capture-window-placement.ts` | Shared `bringToFront` for both capture specs. Resolves the target window once (optionally by title substring, case-insensitively, matching `capture-window.swift --title=`), centers it on a Retina display so `screencapture` renders at 2x, then raises it and makes it the active app (`app.focus({ steal: true })`), waiting until focus holds for 2s so an app that takes focus back does so before the capture, not during it. `captureWhileFocused` wraps each capture: when `capture-window.swift` refuses an inactive window (exit 7), it raises the window and captures again, up to 3 tries. Exports the pure selection rule (`pickCaptureDisplay`, `centeredIn`, `overflowsWorkArea`) and the focus waits (`waitForSteadyFocus`, `captureWhileFocused`) so they can be tested. |
+| `e2e/fixtures/capture-window-placement.ts` | Shared `bringToFront` for both capture specs. Resolves the target window once (optionally by title substring, case-insensitively, matching `capture-window.swift --title=`), centers it on a Retina display so `screencapture` renders at 2x, then raises it and makes it the active app (`app.focus({ steal: true })`), waiting until focus holds for 2s so an app that takes focus back does so before the capture, not during it. `captureWhileFocused` wraps each capture: when `capture-window.swift` refuses an inactive window (exit 7), or a 1x capture (exit 6) while the run has a Retina display, it raises the window and captures again, up to 3 tries. Displays are probed on the first `bringToFront` of a run only. Exports the pure selection rule (`pickCaptureDisplay`, `centeredIn`, `overflowsWorkArea`) and the focus waits (`waitForSteadyFocus`, `captureWhileFocused`) so they can be tested. |
 | `e2e/fixtures/docs-site-state-seeding.ts` | All-providers-enabled `config.toml` seeder so the per-platform Settings → Messaging captures can scroll directly to each platform's section without driving the Enabled toggle in the UI. It also saves a Slack agent name (`PwrAgent - riley`), so the Slack capture shows Connect past its Name step instead of the suggestion built from the OS username of whoever runs it. |
-| `scripts/capture-window.swift` | Resolves the Electron window's CGWindowID and runs `screencapture -l <wid>`. Stages to a temp file and refuses (exit 6) to overwrite the destination with a sub-Retina capture, or with one it cannot decode to verify. Replaces atomically via `replaceItemAt`. Also refuses (exit 7) when the window's app is not the active app before or after the capture, since an inactive window comes out with grey traffic lights and a smaller shadow. Optional `--title=<substring>` for multi-window apps, `--allow-low-dpi` to bypass the scale check; an unrecognized argument is an error (exit 2), not a silent no-op. |
+| `scripts/capture-window.swift` | Resolves the Electron window's CGWindowID and runs `screencapture -l <wid>`. Stages to a temp file and refuses (exit 6) to overwrite the destination with a sub-Retina capture, or with one it cannot decode to verify. Replaces atomically via `replaceItemAt`. Also refuses (exit 7) when the window's app is not the active app before or after the capture, since an inactive window comes out with grey traffic lights and a smaller shadow. Optional `--title=<substring>` for multi-window apps, `--pid=<owner-pid>` to match only that process's windows, `--allow-low-dpi` to bypass the scale check; an unrecognized argument is an error (exit 2), not a silent no-op. |
 | `scripts/filter-noise-screenshots.mjs` | Post-capture cleanup. Iterates modified PNGs in the current repo (default: under `docs/assets/screenshots/` only) or another repo (via `--root <path>`, used by `screenshot:docs-site` against the sibling docs repo). Decodes HEAD and working-tree to TIFF via `sips`, SHA-256 compares. Identical → `git restore --source=HEAD --worktree`. Visually different → kept for review. Net-new PNGs (untracked) are left alone. |
 | `scripts/render-indicator-overlay.swift` | Paints a numbered step-indicator pill onto a single PNG via Core Graphics + Core Text. |
 | `scripts/stitch-demo-gif.ts` | Reusable GIF stitcher. Annotates each frame via the indicator-overlay Swift helper, then encodes via two-pass ffmpeg `palettegen`/`paletteuse`. CLI: `--output`, `--frame-duration-ms`, `--no-indicator`, `--indicator-position top|bottom`. |

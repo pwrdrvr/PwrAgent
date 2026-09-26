@@ -18,12 +18,15 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   CAPTURE_INACTIVE_EXIT_STATUS,
+  CAPTURE_LOW_RESOLUTION_EXIT_STATUS,
   captureWhileFocused,
   centeredIn,
   isInactiveCaptureRefusal,
+  isRetriableCaptureRefusal,
   MINIMUM_RETINA_SCALE_FACTOR,
   overflowsWorkArea,
   pickCaptureDisplay,
+  probedRetinaDisplay,
   waitForSteadyFocus,
   type DisplaySummary,
 } from "../../../e2e/fixtures/capture-window-placement";
@@ -249,14 +252,64 @@ describe("captureWhileFocused", () => {
   });
 
   it("throws any other failure at once, without raising", async () => {
-    // Exit 6 is the sub-Retina refusal; moving focus cannot fix it.
+    // Exit 3 is "no matching window"; raising cannot conjure one.
     const capture = vi.fn(() => {
-      throw exited(6);
+      throw exited(3);
     });
     const raise = vi.fn(async () => {});
 
-    await expect(captureWhileFocused(capture, raise, 3)).rejects.toMatchObject({ status: 6 });
+    await expect(
+      captureWhileFocused(capture, raise, 3, () => true),
+    ).rejects.toMatchObject({ status: 3 });
     expect(capture).toHaveBeenCalledTimes(1);
+    expect(raise).not.toHaveBeenCalled();
+  });
+
+  it("raises and retries a sub-Retina refusal when the run has a Retina display", async () => {
+    // The window landed on the 1x display; the raise places it back on
+    // the Retina display the run probed.
+    const capture = vi.fn()
+      .mockImplementationOnce(() => {
+        throw exited(CAPTURE_LOW_RESOLUTION_EXIT_STATUS);
+      })
+      .mockImplementationOnce(() => {});
+    const raise = vi.fn(async () => {});
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    await captureWhileFocused(capture, raise, 3, () => true);
+    expect(capture).toHaveBeenCalledTimes(2);
+    expect(raise).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("the capture was refused as below 2x"),
+    );
+    warn.mockRestore();
+  });
+
+  it("throws a sub-Retina refusal at once when the run has no Retina display", async () => {
+    // Every retry would land on the same 1x display.
+    const capture = vi.fn(() => {
+      throw exited(CAPTURE_LOW_RESOLUTION_EXIT_STATUS);
+    });
+    const raise = vi.fn(async () => {});
+
+    await expect(
+      captureWhileFocused(capture, raise, 3, () => false),
+    ).rejects.toMatchObject({ status: CAPTURE_LOW_RESOLUTION_EXIT_STATUS });
+    expect(capture).toHaveBeenCalledTimes(1);
+    expect(raise).not.toHaveBeenCalled();
+  });
+
+  it("does not retry a sub-Retina refusal before any display probe", async () => {
+    // The default reads this run's probe. With none yet, there is no known
+    // Retina display to move the window onto.
+    const capture = vi.fn(() => {
+      throw exited(CAPTURE_LOW_RESOLUTION_EXIT_STATUS);
+    });
+    const raise = vi.fn(async () => {});
+
+    await expect(captureWhileFocused(capture, raise, 3)).rejects.toMatchObject({
+      status: CAPTURE_LOW_RESOLUTION_EXIT_STATUS,
+    });
     expect(raise).not.toHaveBeenCalled();
   });
 
@@ -280,5 +333,21 @@ describe("captureWhileFocused", () => {
     expect(isInactiveCaptureRefusal(exited(6))).toBe(false);
     expect(isInactiveCaptureRefusal(new Error("spawn failed"))).toBe(false);
     expect(isInactiveCaptureRefusal(undefined)).toBe(false);
+  });
+
+  it("treats a sub-Retina refusal as retriable only with a Retina display", () => {
+    const lowRes = exited(CAPTURE_LOW_RESOLUTION_EXIT_STATUS);
+    const inactive = exited(CAPTURE_INACTIVE_EXIT_STATUS);
+
+    expect(isRetriableCaptureRefusal(lowRes, true)).toBe(true);
+    expect(isRetriableCaptureRefusal(lowRes, false)).toBe(false);
+    expect(isRetriableCaptureRefusal(inactive, false)).toBe(true);
+    expect(isRetriableCaptureRefusal(exited(3), true)).toBe(false);
+    expect(isRetriableCaptureRefusal(undefined, true)).toBe(false);
+  });
+
+  it("sees no Retina display until a run has probed", () => {
+    // Nothing in this file calls `bringToFront`, so nothing has probed.
+    expect(probedRetinaDisplay()).toBe(false);
   });
 });
