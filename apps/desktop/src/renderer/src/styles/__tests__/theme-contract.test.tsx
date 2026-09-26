@@ -819,6 +819,17 @@ describe("Tangerine Terminal theme contract", () => {
     expect(titleButtonRule).not.toMatch(/(?:^|\n)\s*width:\s*100%;/);
   });
 
+  it("clips the thread pane without making it a scroll container", () => {
+    // `.celestial-watermark` bleeds past the pane's bottom-right corner. Under
+    // `overflow: hidden` that bleed was 56px of scroll range with no
+    // scrollbar, so a centered `scrollIntoView` slid the transcript, composer,
+    // and rail up under the header for good.
+    expect(extractRuleBody(css, ".celestial-watermark")).toContain("bottom: -56px;");
+    const layoutRule = extractRuleBody(css, ".thread-view__layout");
+    expect(layoutRule).toContain("overflow: clip;");
+    expect(layoutRule).not.toContain("overflow: hidden;");
+  });
+
   it("scrolls launchpad setup output while preserving the header and composer", () => {
     const setupComposerRule = extractRuleBody(
       css,

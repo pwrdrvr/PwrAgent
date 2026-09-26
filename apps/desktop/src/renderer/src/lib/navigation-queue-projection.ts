@@ -99,6 +99,17 @@ export async function readCompleteNavigationQueue(params: {
   throw new Error("Queue could not establish a complete baseline.");
 }
 
+/**
+ * A review queued behind a turn waits in the owner's pending-review list, not
+ * in its turn FIFO. Its `queueEntryId` is a pending-review id that no FIFO page
+ * ever reports, so a complete FIFO is no evidence that it is gone. The
+ * scheduled-action projection removes it once the review starts, fails, or is
+ * cancelled.
+ */
+function isScheduledReview(entry: ComposerQueuedTurnSnapshot): boolean {
+  return Boolean(entry.scheduledActionId && entry.reviewCommand);
+}
+
 /** Never prune a submission acknowledged or edited while this read was pending. */
 export function reconcileCompleteNavigationQueue(params: {
   owner: ComposerThreadOwner;
@@ -116,6 +127,7 @@ export function reconcileCompleteNavigationQueue(params: {
     || !entry.threadOwner
     || JSON.stringify(entry.threadOwner) !== ownerKey
     || entry.backendQueuePending
+    || isScheduledReview(entry)
     || ownerById.has(entry.queueEntryId)
     || capturedById.get(entry.id) !== entry);
   const mirrorsById = new Map(retained

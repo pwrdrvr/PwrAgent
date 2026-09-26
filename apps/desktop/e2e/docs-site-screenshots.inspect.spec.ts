@@ -1240,22 +1240,33 @@ test("desktop-queued-turns — composer with /review queued behind an in-flight 
     // "Review changes against main" label.
     await textbox.fill("/review main");
     await app.window.getByRole("button", { name: "Queue" }).click();
-    await expect(app.window.getByLabel("Queued message")).toContainText(
-      "Review changes against main",
-    );
+    await expect(
+      app.window.getByLabel("Queued message", { exact: true }),
+    ).toContainText("Review changes against main");
 
     // Stack a second queued follow-up so the screenshot shows the
     // FIFO-deep-queue capability, not just a single chip.
     await textbox.fill("now squash and push --force-with-lease");
     await app.window.getByRole("button", { name: "Queue" }).click();
     await expect(
-      app.window
-        .getByLabel("Queued message")
-        .filter({ hasText: "squash and push" }),
-    ).toBeVisible();
+      app.window.getByLabel("Queued message 2", { exact: true }),
+    ).toContainText("now squash and push --force-with-lease");
     await pinInitialLoad(app.window);
 
     await bringToFront(app.electronApp);
+    // Check both chips again after placement, right before the capture.
+    // The review waits in main's pending-review list rather than the turn
+    // FIFO, and the renderer reconciles its chips against main after they
+    // appear. That reconciliation has dropped the review chip, and has moved
+    // it behind the squash, after both asserts above had passed. `exact`,
+    // because a bare "Queued message" also matches "Queued message 2" and
+    // passed on 2026-09-25 with only the squash chip left.
+    await expect(
+      app.window.getByLabel("Queued message", { exact: true }),
+    ).toContainText("Review changes against main");
+    await expect(
+      app.window.getByLabel("Queued message 2", { exact: true }),
+    ).toContainText("now squash and push --force-with-lease");
     await captureNative(app.electronApp, "desktop-queued-turns.png");
   } finally {
     await app.close();
