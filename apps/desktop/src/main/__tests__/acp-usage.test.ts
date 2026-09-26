@@ -88,6 +88,30 @@ describe("ACP usage normalization", () => {
     });
   });
 
+  it("normalizes Claude prompt-response usage and context updates", () => {
+    expect(
+      readAcpUsageEnvelope({
+        kind: "turn_finished",
+        usage: {
+          inputTokens: 100,
+          outputTokens: 20,
+          cachedReadTokens: 900,
+          cachedWriteTokens: 50,
+          totalTokens: 1_070,
+        },
+      }),
+    ).toEqual({
+      scope: "turn",
+      tokenUsage: {
+        cachedInputTokens: 900,
+        inputTokens: 1_050,
+        outputTokens: 20,
+        totalTokens: 1_070,
+      },
+    });
+
+  });
+
   // Grok Build reports each model call on `response_completed`, a transient
   // xAI extension update that never reaches updates.jsonl. It was the only
   // mid-turn usage Grok emits and the parser ignored it outright, so a long

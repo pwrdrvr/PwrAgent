@@ -158,6 +158,8 @@ import type {
   CancelProviderCatalogRefreshRequest,
   ProviderCatalogRefreshState,
   ReadProviderCatalogRefreshResponse,
+  InstallAcpAgentRequest,
+  InstallAcpAgentResponse,
   AcknowledgeAcpAgentUpdateRequest,
   AcknowledgeAcpAgentUpdateResponse,
   ListDesktopPwrAgentProfilesResponse,
@@ -1006,6 +1008,9 @@ export type DesktopApi = {
   onProviderCatalogRefresh?: (
     callback: (state: ProviderCatalogRefreshState) => void,
   ) => () => void;
+  installAcpAgent?: (
+    request: InstallAcpAgentRequest,
+  ) => Promise<InstallAcpAgentResponse>;
   acknowledgeAcpAgentUpdate?: (
     request: AcknowledgeAcpAgentUpdateRequest,
   ) => Promise<AcknowledgeAcpAgentUpdateResponse>;

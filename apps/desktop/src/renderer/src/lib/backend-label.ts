@@ -39,6 +39,9 @@ export function formatBackendLabel(
   if (backend === "acp:qwen") {
     return "Qwen";
   }
+  if (backend === "acp:claude-acp") {
+    return "Claude Agent";
+  }
   const summary = summaries.find((candidate) => candidate.kind === backend);
   if (summary?.label) {
     return summary.label;
