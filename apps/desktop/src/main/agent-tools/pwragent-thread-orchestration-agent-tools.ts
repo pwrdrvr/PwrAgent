@@ -192,7 +192,7 @@ function descriptionForOperation(
     case "detach_thread_directory":
       return "Detach a secondary directory from the current PwrAgent thread. Use this only when the user requests cleanup. You cannot detach the primary provider/runtime cwd. Pass directoryId when known. Otherwise, pass path or worktreePath from get_thread_status.";
     case "move_thread_workspace":
-      return "Move the current thread workspace after this turn ends. Use direction=to-project with targetPath to adopt an existing Git checkout or worktree, including one managed by another agent. Files and branches stay in place, and adopted worktrees are preserved on thread archive. Default Access requires confirmation for an untrusted destination. Omit direction to create an isolated worktree; pass sourcePath if that source is unclear. Do not create a child thread. After success, stop work and end the turn. PwrAgent updates cwd, reconnects ACP when necessary, and starts a continuation. Check pendingWorkspaceMoves only after the turn.";
+      return "Move the current thread workspace after this turn ends. Use direction=to-project with targetPath to adopt an existing Git checkout or worktree, including one managed by another agent. Files and branches stay in place, and adopted worktrees are preserved on thread archive. Default Access requires confirmation for an untrusted destination. Omit direction to create an isolated worktree. Pass sourcePath if that source is unclear. Do not create a child thread. After success, stop work and end the turn. PwrAgent updates cwd, reconnects ACP when necessary, and starts a continuation. Check pendingWorkspaceMoves only after the turn.";
     case "send_message_to_thread":
       return "Send a follow-up as a new turn to another PwrAgent thread. If a turn is active, PwrAgent queues the follow-up. Batch related findings into one message. To update your own pending message, pass its queueEntryId as replaceQueueEntryId. Supply the complete consolidated prompt instead of appending another turn. Replacement preserves queue position and settings. It fails if the message is no longer pending. It never starts a new turn. Use steer_thread for guidance to the active turn. Use stop_thread for an urgent interruption. Find an unknown thread with search_threads or read_thread. Pass instanceId from a remote result when available. Set includeRemote=false for local resolution. Reply normally to the current thread. Return threadLink verbatim.";
     case "steer_thread":
@@ -359,7 +359,7 @@ function inputSchemaForOperation(
           targetPath: {
             type: "string",
             description:
-              "Absolute root of an existing Git checkout or worktree, required for direction=to-project. Files and branches stay in place; adopted worktrees are preserved when this thread is archived. Do not combine with branch strategies or source/repository fields.",
+              "Absolute root of an existing Git checkout or worktree, required for direction=to-project. Files and branches stay in place. Adopted worktrees are preserved when this thread is archived. Do not combine with branch strategies or source/repository fields.",
           },
           strategy: {
             type: "string",
