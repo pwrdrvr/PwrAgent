@@ -81,14 +81,28 @@ export function installShutdownDiagnostics({ outputDir, currentTest, captureAfte
       : ["-axo", "pid=,ppid=,comm="];
     const timeoutMs = 3_000;
     const started = Date.now();
-    const child = execFile(command, args, { timeout: timeoutMs, maxBuffer: 2 * 1024 * 1024, windowsHide: true }, safe((error, stdout, stderr) => {
-      const elapsedMs = Date.now() - started;
+    let child;
+    const finish = (data) => {
+      write("process-tree.json", { workerPid: process.pid, elapsedMs: Date.now() - started, timeoutMs, ...data });
+      process.removeListener("exit", interrupted);
+    };
+    const interrupted = safe((workerExitCode) => {
+      // Playwright explicitly exits its worker; neither an unref'ed query nor
+      // its callback owns that deadline. Preserve the incomplete observation
+      // synchronously and stop our query instead of leaving an orphan behind.
+      try { child?.kill(); } finally {
+        finish({ status: "interrupted", reason: "worker-exit", workerExitCode, queryPid: child?.pid });
+      }
+    });
+    write("process-tree.json", { status: "pending", workerPid: process.pid, timeoutMs });
+    process.once("exit", interrupted);
+    child = execFile(command, args, { timeout: timeoutMs, maxBuffer: 2 * 1024 * 1024, windowsHide: true }, safe((error, stdout, stderr) => {
       if (error) {
         // Node words a timeout kill and a silent non-zero exit identically
         // ("Command failed: <command>"), so the message alone cannot say which.
-        write("process-tree.json", {
+        finish({
           error: error.message, killed: error.killed, signal: error.signal, code: error.code,
-          stderr: String(stderr).slice(0, 2048), stdoutBytes: stdout.length, elapsedMs, timeoutMs,
+          stderr: String(stderr).slice(0, 2048), stdoutBytes: stdout.length,
         });
         return;
       }
@@ -106,7 +120,7 @@ export function installShutdownDiagnostics({ outputDir, currentTest, captureAfte
           if (owned.has(row.ppid) && !owned.has(row.pid)) { owned.add(row.pid); changed = true; }
         }
       }
-      write("process-tree.json", { workerPid: process.pid, elapsedMs, timeoutMs, processes: rows.filter((row) => owned.has(row.pid)) });
+      finish({ processes: rows.filter((row) => owned.has(row.pid)) });
     }));
     child.unref();
     child.stdout?.unref?.();
