@@ -38,7 +38,7 @@ jobs:
       - name: Install Node.js and dependencies
         uses: pwrdrvr/configure-nodejs@e1bd1cc1494a20f0ee91dae622b0d2523b6fb53c # v1.4.0
         with:
-          node-version: 24.18.0
+          node-version: 24.21.0
           cache-electron: "true"
 
       - name: Check release metadata
@@ -225,7 +225,7 @@ jobs:
       - name: Install Node.js and dependencies
         uses: pwrdrvr/configure-nodejs@e1bd1cc1494a20f0ee91dae622b0d2523b6fb53c # v1.4.0
         with:
-          node-version: 24.18.0
+          node-version: 24.21.0
           cache-electron: "true"
 
       - name: Check release metadata
@@ -280,7 +280,7 @@ jobs:
       - name: Install Node.js and dependencies
         uses: pwrdrvr/configure-nodejs@e1bd1cc1494a20f0ee91dae622b0d2523b6fb53c # v1.4.0
         with:
-          node-version: 24.18.0
+          node-version: 24.21.0
           working-directory: .
           cache-electron: "true"
 

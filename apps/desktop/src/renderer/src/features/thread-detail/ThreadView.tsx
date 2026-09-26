@@ -3955,6 +3955,7 @@ export function ThreadView(props: ThreadViewProps) {
               dismissedAsyncQuestionMessageIds={dismissedAsyncQuestionMessageIds}
               sentAsyncQuestionAnswers={threadSentAsyncQuestionAnswers}
               onAnswerAsyncQuestions={handleAnswerAsyncQuestions}
+              asyncQuestionAnswerDisabled={props.composerDisabled}
               onAsyncQuestionsDismissedChange={handleAsyncQuestionsDismissedChange}
               onExpandedActivityIdsChange={
                 props.onExpandedTranscriptActivityIdsChange

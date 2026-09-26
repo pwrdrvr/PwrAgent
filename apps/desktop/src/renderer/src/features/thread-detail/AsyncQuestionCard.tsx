@@ -16,6 +16,11 @@ type AsyncQuestionCardProps = {
   dismissed?: boolean;
   /** Resolves true once the composer has taken the reply. */
   onAnswer?: (text: string) => Promise<boolean>;
+  /**
+   * The composer cannot send yet, as while a newly opened thread's
+   * configuration loads. It would refuse the reply, so Answer waits.
+   */
+  answerDisabled?: boolean;
   onDismissedChange?: (dismissed: boolean) => void;
   renderTitle: (title: string) => ReactNode;
 };
@@ -127,7 +132,7 @@ export function AsyncQuestionCard(props: AsyncQuestionCardProps) {
         <div className="transcript-questionnaire__actions">
           <button
             className="button button--primary"
-            disabled={sending || readyIndexes.length === 0}
+            disabled={sending || readyIndexes.length === 0 || props.answerDisabled}
             type="button"
             onClick={() => {
               void submit();

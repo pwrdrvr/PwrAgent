@@ -11,7 +11,7 @@ beforePack: "scripts/beforepack-bundled-git.mjs"
 # and is therefore not present in the deploy stage's node_modules.
 # Keep this in sync with the apps/desktop Electron version resolved in
 # pnpm-lock.yaml. CI enforces the exact packaged/runtime match.
-electronVersion: 41.10.7
+electronVersion: 44.4.5
 
 # Bundle layout
 asar: true
@@ -144,7 +144,9 @@ mac:
     NSHumanReadableCopyright: "Copyright © 2026 PwrDrvr LLC."
     NSLocalNetworkUsageDescription: "PwrAgent connects to Federation gateways and other services you configure on your local network."
     NSUserNotificationAlertStyle: alert
-    LSMinimumSystemVersion: "12.0"
+    # Electron 44 dropped macOS 12. scripts/assemble-mac-release.mjs publishes
+    # the matching Darwin kernel floor in latest-mac.yml.
+    LSMinimumSystemVersion: "13.0"
     LSApplicationCategoryType: public.app-category.developer-tools
     NSDockTilePlugIn: PwrAgentDockTilePlugin.plugin
   target:

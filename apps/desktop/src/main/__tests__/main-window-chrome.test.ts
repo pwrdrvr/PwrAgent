@@ -36,13 +36,16 @@ describe("main window chrome", () => {
     expect(chrome.autoHideMenuBar).toBe(true);
   });
 
-  it("gives Linux a frameless window and nothing else", () => {
+  it("gives Linux a square frameless window and nothing else", () => {
     // `titleBarStyle: "hidden"` on Linux IS `frame: false` —
     // `has_frame_{options.ValueOrDefault(kFrame, true) && title_bar_style_ ==
     // kNormal}` in Electron's shell/browser/native_window.cc. There is no
-    // controls overlay to theme and no stoplights to place.
+    // controls overlay to theme and no stoplights to place. Since Electron 43
+    // `roundedCorners` defaults to true on Linux too; the renderer paints a
+    // square edge hairline, so the corners stay square.
     expect(mainWindowChromeOptions(appearance, "linux")).toEqual({
       titleBarStyle: "hidden",
+      roundedCorners: false,
     });
   });
 
