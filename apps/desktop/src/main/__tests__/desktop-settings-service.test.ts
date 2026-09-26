@@ -13,6 +13,10 @@ import {
 import { readBootstrapAppearance } from "../settings/appearance-bootstrap";
 import { issueProviderDiscoveryPermit } from "../settings/provider-discovery-permit";
 import { DesktopConfigStore } from "../settings/config-store/desktop-config-store";
+import { CodexDiscoveryCoordinator } from "../codex-discovery-coordinator";
+import { StateDb } from "../state/state-db";
+import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
+import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import { TestTokenMiserStore as TokenMiserStore } from "./token-miser-test-store";
 
 // `DesktopSettingsService` builds a real `CodexDiscoveryCoordinator` unless the
@@ -379,6 +383,79 @@ describe("DesktopSettingsService", () => {
     });
     expect(invalidate).toHaveBeenCalledOnce();
     expect(discover).toHaveBeenCalledOnce();
+  });
+
+  it("refreshes the saved Codex path, version, rejection, and auto selection before returning", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    fs.writeFileSync(configPath, "", "utf8");
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    const db = StateDb.open(path.join(root, "state.db"));
+    const configStore = new DesktopConfigStore({ configPath, stateDb: db });
+    const automatic = path.join(root, "auto-codex");
+    const standalone = path.join(root, "standalone-codex");
+    const invalid = path.join(root, "missing-codex");
+    const coordinator = new CodexDiscoveryCoordinator({
+      resolveEnv: async () => ({}),
+      discover: async (params) => {
+        const command = params?.configuredCommand || automatic;
+        const valid = command !== invalid;
+        const source = params?.configuredCommand ? "config" : "path";
+        return {
+          candidates: [{
+            command,
+            source,
+            executable: valid,
+            selected: valid,
+            ...(valid ? { version: "0.150.0" } : { failureReason: "not_executable" }),
+          }],
+          ...(valid ? { selectedCommand: command, selectedSource: source } : {}),
+        };
+      },
+    });
+    const service = new DesktopSettingsService({
+      configPath, configStore, env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+      codexDiscoveryCoordinator: coordinator,
+    });
+    const permit = issueProviderDiscoveryPermit("settings-user-action");
+    try {
+      await service.refreshCodexDiscovery(permit);
+      // Pin the old selection as a running session would.
+      await expect(service.resolveCodexCommand()).resolves.toMatchObject({ command: automatic });
+      const { writes } = await measureSqliteWrites(async () => {
+        await service.writeConfigPatchTargeted({ models: { codex: { path: standalone } } }, permit);
+      });
+      const snapshot = await service.readSettingsProjection();
+      expect(snapshot.models.codex.discovery).toMatchObject({
+        selectedCommand: standalone,
+        candidates: [expect.objectContaining({
+          command: standalone, source: "config", selected: true, version: "0.150.0",
+        })],
+      });
+      await expect(service.resolveCodexCommand()).resolves.toMatchObject({ command: standalone });
+      expectSqliteWriteBudget({
+        scenario: "settings-save-codex-path",
+        note: "one config publication and one discovery publication per explicit Codex path save; no idle writes",
+        writes,
+      });
+
+      await service.writeConfigPatchTargeted({ models: { codex: { path: invalid } } }, permit);
+      expect((await service.readSettingsProjection()).models.codex.discovery).toMatchObject({
+        candidates: [expect.objectContaining({
+          command: invalid, selected: false, failureReason: "not_executable",
+        })],
+      });
+      await expect(service.resolveCodexCommand()).rejects.toThrow("has not selected an executable");
+
+      await service.writeConfigPatchTargeted({ models: { codex: { path: "" } } }, permit);
+      expect((await service.readSettingsProjection()).models.codex.discovery.selectedCommand).toBe(automatic);
+      await expect(service.resolveCodexCommand()).resolves.toMatchObject({ command: automatic });
+    } finally {
+      configStore.dispose();
+      db.close();
+      vi.unstubAllEnvs();
+    }
   });
 
   it("loads TOML values from the desktop config path", async () => {
