@@ -9,6 +9,7 @@ import {
   nextRendererViewportRequest,
   raceTeardownTimeout,
   resolveSeedConfigPath,
+  selectWindowsElectronCleanupPids,
   waitForRendererReady,
 } from "../../../e2e/fixtures/electron-app";
 import { applyDesktopSettingsPatch } from "../settings/desktop-config";
@@ -18,6 +19,22 @@ import {
 } from "../settings/desktop-secret-store";
 
 describe("Electron E2E fixture teardown", () => {
+  it("kills only the identified Windows main process or its owned direct children", () => {
+    const mainProcess = { pid: 120, startedAt: 10_000 };
+    expect(selectWindowsElectronCleanupPids([
+      { pid: 120, parentPid: 80, startedAt: 10_100 },
+      { pid: 140, parentPid: 120, startedAt: 11_000 },
+    ], mainProcess, 12_000)).toEqual([120]);
+
+    expect(selectWindowsElectronCleanupPids([
+      { pid: 120, parentPid: 90, startedAt: 19_000 },
+      { pid: 140, parentPid: 120, startedAt: 11_000 },
+      { pid: 141, parentPid: 120, startedAt: 16_000 },
+      { pid: 142, parentPid: 120, startedAt: 7_000 },
+      { pid: 143, parentPid: 140, startedAt: 11_500 },
+    ], mainProcess, 12_000)).toEqual([140]);
+  });
+
   it("is a no-op after Playwright has already disposed a graduated bootstrap app", async () => {
     const electronApp = {
       process: vi.fn(() => {

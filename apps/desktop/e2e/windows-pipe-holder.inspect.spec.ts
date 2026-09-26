@@ -256,7 +256,11 @@ class DescendantTracker {
         if (this.processes.has(key)) continue;
         const parent = this.ownedByPid.get(row.ppid);
         const isRoot = row.pid === this.rootPid && this.processes.size === 0;
-        if (!isRoot && !(parent && compareStarted(row.started, parent.started) >= 0)) {
+        if (!isRoot && !(
+          parent
+          && compareStarted(row.started, parent.started) >= 0
+          && (parent.goneAt === undefined || processStartedAtMs(row.started) <= parent.goneAt)
+        )) {
           continue;
         }
         const tracked: TrackedProcess = {
@@ -311,6 +315,13 @@ function compareStarted(left: string, right: string): number {
   const a = BigInt(left || "0");
   const b = BigInt(right || "0");
   return a === b ? 0 : a > b ? 1 : -1;
+}
+
+function processStartedAtMs(started: string): number {
+  const value = BigInt(started || "0");
+  return process.platform === "win32"
+    ? Number((value - 621355968000000000n) / 10000n)
+    : Number(value);
 }
 
 function describeProcess(tracked: TrackedProcess): string {
@@ -431,8 +442,8 @@ async function probeLaunch(params: {
     (tracked) => tracked.pid !== launcherPid
       && tracked.pid !== mainPid
       && mainGoneAt !== undefined
-      // Present in a snapshot that no longer has the main process.
-      && tracked.lastSeenAt >= mainGoneAt,
+      // Require a later snapshot: one CIM query cannot order two exits.
+      && tracked.lastSeenAt > mainGoneAt,
   );
   const aliveAtDeadline = tracker.alive().filter(
     (tracked) => tracked.pid !== launcherPid && tracked.pid !== mainPid,

@@ -37,6 +37,7 @@ import {
 } from "../../src/main/e2e-shutdown-diagnostics";
 import {
   appendElectronShutdownSummary,
+  assertElectronCloseCompleted,
   assertElectronShutdownCircuitClosed,
   buildElectronShutdownSummary,
   classifyElectronClose,
@@ -581,6 +582,7 @@ async function finishElectronLaunch(args: {
       if (summary.circuit.tripped) {
         throw new ElectronShutdownCircuitOpenError();
       }
+      assertElectronCloseCompleted(summary);
     },
     close: async () => {
       // Bound the whole teardown. `closeElectronApplication` is already
@@ -1170,6 +1172,17 @@ export async function closeElectronApplication(
       options,
     );
   }
+  const mainProcess = process.platform === "win32"
+    ? await withTimeout(
+      electronApp.evaluate(() => ({
+        pid: process.pid,
+        startedAt: Date.now() - process.uptime() * 1000,
+      })),
+      ELECTRON_EVALUATE_QUIT_TIMEOUT_MS,
+      "Electron main PID evaluation timed out",
+    ).catch(() => undefined)
+    : undefined;
+  const quitStartedAt = Date.now();
   const execution = await executeElectronClose({
     now: performance.now.bind(performance),
     requestQuit: async () => {
@@ -1199,17 +1212,13 @@ export async function closeElectronApplication(
       closePromise,
       ELECTRON_CLOSE_TIMEOUT_MS,
     ),
-    hasExited: () => hasExited(child),
     forceKillTree: async () => {
-      await killProcessTree(child);
+      await killProcessTree(child, mainProcess, quitStartedAt);
     },
-    waitForForcedExit: async () => await waitForProcessExit(
-      child,
+    waitForPostKillClose: async (closePromise) => await waitForClose(
+      closePromise,
       ELECTRON_FORCE_EXIT_TIMEOUT_MS,
     ),
-    waitForPostKillClose: async (closePromise) => {
-      await waitForClose(closePromise, ELECTRON_FORCE_EXIT_TIMEOUT_MS);
-    },
   });
   return recordElectronCloseSummary(execution, options);
 }
@@ -1332,55 +1341,34 @@ function hasExited(child: ElectronChildProcess): boolean {
   return child.exitCode !== null || child.signalCode !== null;
 }
 
-async function waitForProcessExit(
+async function killProcessTree(
   child: ElectronChildProcess,
-  timeoutMs: number,
-): Promise<boolean> {
-  if (hasExited(child)) {
-    return true;
-  }
-  let timeout: NodeJS.Timeout | undefined;
-  try {
-    return await Promise.race<boolean>([
-      new Promise<true>((resolve) => {
-        child.once("exit", () => resolve(true));
-      }),
-      new Promise<false>((resolve) => {
-        timeout = setTimeout(() => resolve(false), timeoutMs);
-      }),
-    ]);
-  } finally {
-    if (timeout !== undefined) {
-      clearTimeout(timeout);
-    }
-  }
-}
-
-async function killProcessTree(child: ElectronChildProcess): Promise<void> {
-  if (hasExited(child)) {
-    return;
-  }
+  mainProcess?: { pid: number; startedAt: number },
+  quitStartedAt?: number,
+): Promise<void> {
   const pid = child.pid;
-  if (pid === undefined) {
-    if (!child.killed) {
-      child.kill("SIGKILL");
+  if (process.platform === "win32") {
+    if (pid !== undefined && !hasExited(child)) {
+      await taskkillTree(pid);
+    }
+    if (mainProcess && quitStartedAt !== undefined) {
+      // The Playwright child is cmd.exe. Its exit does not prove that Electron
+      // descendants have released the launcher's inherited pipes.
+      const rows = await listWindowsMainAndChildren(mainProcess.pid);
+      const pids = selectWindowsElectronCleanupPids(
+        rows,
+        mainProcess,
+        quitStartedAt,
+      );
+      await Promise.all(pids.map(taskkillTree));
     }
     return;
   }
-  if (process.platform === "win32") {
-    await new Promise<void>((resolve) => {
-      execFile(
-        "taskkill",
-        ["/pid", String(pid), "/T", "/F"],
-        { timeout: 5_000 },
-        (error) => {
-          if (error && !child.killed) {
-            child.kill("SIGKILL");
-          }
-          resolve();
-        },
-      );
-    });
+  if (hasExited(child)) {
+    return;
+  }
+  if (pid === undefined) {
+    if (!child.killed) child.kill("SIGKILL");
     return;
   }
 
@@ -1396,6 +1384,69 @@ async function killProcessTree(child: ElectronChildProcess): Promise<void> {
       // The descendant already exited between the ps snapshot and this kill.
     }
   }
+}
+
+async function taskkillTree(pid: number): Promise<void> {
+  await new Promise<void>((resolve) => {
+    execFile(
+      "taskkill",
+      ["/pid", String(pid), "/T", "/F"],
+      { timeout: 5_000, windowsHide: true },
+      () => resolve(),
+    );
+  });
+}
+
+type WindowsProcessIdentity = {
+  pid: number;
+  parentPid: number;
+  startedAt: number;
+};
+
+export function selectWindowsElectronCleanupPids(
+  rows: WindowsProcessIdentity[],
+  mainProcess: { pid: number; startedAt: number },
+  quitStartedAt: number,
+): number[] {
+  const liveMain = rows.find((row) =>
+    row.pid === mainProcess.pid
+    && Math.abs(row.startedAt - mainProcess.startedAt) < 2_000,
+  );
+  if (liveMain) {
+    return [liveMain.pid];
+  }
+  return rows.filter((row) =>
+    row.parentPid === mainProcess.pid
+    && row.startedAt >= mainProcess.startedAt - 2_000
+    && row.startedAt <= quitStartedAt + 3_000,
+  ).map((row) => row.pid);
+}
+
+async function listWindowsMainAndChildren(mainPid: number): Promise<WindowsProcessIdentity[]> {
+  const stdout = await new Promise<string>((resolve) => {
+    execFile(
+      "powershell.exe",
+      [
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        `Get-CimInstance Win32_Process -Filter 'ProcessId=${mainPid} OR ParentProcessId=${mainPid}'`
+          + " -Property ProcessId,ParentProcessId,CreationDate"
+          + ' | ForEach-Object { "$($_.ProcessId)`t$($_.ParentProcessId)`t$(([DateTimeOffset]$_.CreationDate).ToUnixTimeMilliseconds())" }',
+      ],
+      { timeout: 3_000, windowsHide: true },
+      (_error, output) => resolve(output ?? ""),
+    );
+  });
+  return stdout.split(/\r?\n/).flatMap((line) => {
+    const [pid, parentPid, startedAt] = line.trim().split("\t").map(Number);
+    return Number.isInteger(pid) && pid > 0
+      && Number.isInteger(parentPid) && parentPid >= 0
+      && Number.isFinite(startedAt)
+      ? [{ pid, parentPid, startedAt }]
+      : [];
+  });
 }
 
 async function listDescendantPids(rootPid: number): Promise<number[]> {
