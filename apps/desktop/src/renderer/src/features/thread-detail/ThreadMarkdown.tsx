@@ -743,7 +743,8 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
           remarkPlugins={[
             ...(mathRuntime?.remarkPlugins ?? []),
             remarkBreaks,
-            remarkGfm,
+            // Single tildes are common in home paths and approximate values.
+            [remarkGfm, { singleTilde: false }],
             remarkPullRequestReferences,
             remarkTableProfile,
           ]}
