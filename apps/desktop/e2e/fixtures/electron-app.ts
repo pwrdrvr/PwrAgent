@@ -104,13 +104,11 @@ const ELECTRON_FORCE_EXIT_TIMEOUT_MS = 1_000;
  * found with a timeout that names nothing. (Playwright's separate 30s
  * *worker* teardown timeout is what collects an Electron process no one
  * closed at all — see the catch in `launchElectronApp`.) The ceiling leaves
- * room for every step while still failing inside one test.
+ * time to report a cleanup failure from the owning test.
  *
- * Derivation, worst case: 1s evaluate + 6s graceful close + 1s force-kill +
- * 1s post-kill close + 5s leftover-profile wait + up to 1.8s `rm` (its retry
- * budget, see `temp-root-cleanup.ts`). Raised 15s → 20s when the graceful
- * close went 1s → 6s; all of that trade has to move together or the ceiling
- * starts cutting off the wait it is meant to contain.
+ * The Windows fallback also queries process identity and may run taskkill.
+ * If those steps exhaust the ceiling, reject from the owning test rather than
+ * treating an incomplete close as a warning.
  */
 const ELECTRON_TEARDOWN_TIMEOUT_MS = 20_000;
 /**
@@ -591,21 +589,13 @@ async function finishElectronLaunch(args: {
       // can stall. Specs call this from their own `finally`, so an
       // unbounded stall burns the rest of the 30s test budget and reports
       // as the test timing out — which buries whatever the test actually
-      // found. Warning and moving on keeps that result legible.
-      //
-      // ONLY the timeout is swallowed. A teardown that *fails* — an `rm`
-      // hitting ENOTEMPTY because a spawned profile survived the sweep,
-      // say — still rejects, because that is a real leak and a warning is
-      // not enough to get it noticed.
-      const running = teardown();
-      if (await raceTeardownTimeout(running, ELECTRON_TEARDOWN_TIMEOUT_MS)) {
-        // Still in flight, and now unobserved: keep a late rejection from
-        // surfacing as an unhandled promise rejection mid-suite.
-        running.catch(() => undefined);
-        console.warn(
-          `[pwragent-e2e-teardown] teardown exceeded ${ELECTRON_TEARDOWN_TIMEOUT_MS}ms`,
-        );
-      }
+      // found. A stalled cleanup is a failure of this test; withTimeout
+      // observes any late rejection from the still-running teardown.
+      await withTimeout(
+        teardown(),
+        ELECTRON_TEARDOWN_TIMEOUT_MS,
+        `[pwragent-e2e-teardown] teardown exceeded ${ELECTRON_TEARDOWN_TIMEOUT_MS}ms`,
+      );
     },
   };
 
@@ -1266,34 +1256,6 @@ function recordElectronCloseSummary(
   return summary;
 }
 
-/**
- * Resolve `true` when `running` is still pending after `timeoutMs`.
- *
- * Deliberately not `withTimeout`: that collapses "timed out" and "the
- * work rejected" into one rejection, and teardown needs to tell them
- * apart — one is a degraded runner to warn about, the other is a real
- * cleanup failure that must fail the test. A rejection before the
- * deadline propagates to the caller here.
- */
-export async function raceTeardownTimeout(
-  running: Promise<void>,
-  timeoutMs: number,
-): Promise<boolean> {
-  let timeout: NodeJS.Timeout | undefined;
-  try {
-    return await Promise.race<boolean>([
-      running.then(() => false),
-      new Promise<true>((resolve) => {
-        timeout = setTimeout(() => resolve(true), timeoutMs);
-      }),
-    ]);
-  } finally {
-    if (timeout !== undefined) {
-      clearTimeout(timeout);
-    }
-  }
-}
-
 export async function withTimeout<T>(
   promise: Promise<T>,
   timeoutMs: number,
@@ -1414,6 +1376,12 @@ export function selectWindowsElectronCleanupPids(
   );
   if (liveMain) {
     return [liveMain.pid];
+  }
+  // A replacement process can already own this PID. Its children have the
+  // same parent PID as Electron's former children, so the timestamp filter
+  // alone cannot establish ownership of any row in this snapshot.
+  if (rows.some((row) => row.pid === mainProcess.pid)) {
+    return [];
   }
   return rows.filter((row) =>
     row.parentPid === mainProcess.pid

@@ -47,10 +47,11 @@ A Windows Electron launcher can be `cmd.exe`; its exit is not the Electron
 tree's completion. Fixture teardown treats an unresolved `electronApp.close()`
 as abnormal even after that launcher exits. It captures the Electron main PID
 before quit and, on the abnormal path, checks process creation times before
-terminating that process or its direct surviving children. The owning test
-fails after profile and temporary-directory cleanup even if the process query
-could not find the holder. The process-tree snapshot cannot follow an orphan
-once its tracked launcher and intermediate parents have exited.
+terminating that process or its direct surviving children. It rejects a
+snapshot with a reused main PID. The owning test fails if the close remains
+unresolved or fixture teardown exceeds its 20-second deadline. The process-tree
+snapshot cannot follow an orphan once its tracked launcher and intermediate
+parents have exited.
 
 The Windows reproduction left a suspended no-op `cmd.exe` from the startup
 Job-wrapper prewarm alive after the app exited. The app no longer starts this

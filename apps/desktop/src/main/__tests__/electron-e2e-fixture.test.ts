@@ -7,10 +7,10 @@ import {
   closeElectronApplication,
   configureElectronE2eSecretStorageEnv,
   nextRendererViewportRequest,
-  raceTeardownTimeout,
   resolveSeedConfigPath,
   selectWindowsElectronCleanupPids,
   waitForRendererReady,
+  withTimeout,
 } from "../../../e2e/fixtures/electron-app";
 import { applyDesktopSettingsPatch } from "../settings/desktop-config";
 import {
@@ -27,7 +27,14 @@ describe("Electron E2E fixture teardown", () => {
     ], mainProcess, 12_000)).toEqual([120]);
 
     expect(selectWindowsElectronCleanupPids([
-      { pid: 120, parentPid: 90, startedAt: 19_000 },
+      { pid: 120, parentPid: 90, startedAt: 12_500 },
+      { pid: 140, parentPid: 120, startedAt: 13_000 },
+      { pid: 141, parentPid: 120, startedAt: 16_000 },
+      { pid: 142, parentPid: 120, startedAt: 7_000 },
+      { pid: 143, parentPid: 140, startedAt: 11_500 },
+    ], mainProcess, 12_000)).toEqual([]);
+
+    expect(selectWindowsElectronCleanupPids([
       { pid: 140, parentPid: 120, startedAt: 11_000 },
       { pid: 141, parentPid: 120, startedAt: 16_000 },
       { pid: 142, parentPid: 120, startedAt: 7_000 },
@@ -387,24 +394,21 @@ describe("Electron E2E renderer readiness", () => {
   });
 });
 
-// `close()` warns past its budget but must not turn a real cleanup
-// failure into a warning nobody reads.
+// `close()` fails the owning test when cleanup exceeds its budget or rejects.
 describe("Electron E2E teardown budget", () => {
-  it("reports a still-pending teardown as timed out", async () => {
+  it("rejects a still-pending teardown at its deadline", async () => {
     await expect(
-      raceTeardownTimeout(new Promise<void>(() => undefined), 5),
-    ).resolves.toBe(true);
+      withTimeout(new Promise<void>(() => undefined), 5, "teardown exceeded 5ms"),
+    ).rejects.toThrow("teardown exceeded 5ms");
   });
 
-  it("reports a teardown that finished in time as not timed out", async () => {
-    await expect(raceTeardownTimeout(Promise.resolve(), 5_000)).resolves.toBe(
-      false,
-    );
+  it("accepts a teardown that finished in time", async () => {
+    await expect(withTimeout(Promise.resolve(), 5_000, "timed out")).resolves.toBeUndefined();
   });
 
-  it("propagates a teardown failure rather than reporting a timeout", async () => {
+  it("propagates a teardown failure before its deadline", async () => {
     await expect(
-      raceTeardownTimeout(Promise.reject(new Error("ENOTEMPTY")), 5_000),
+      withTimeout(Promise.reject(new Error("ENOTEMPTY")), 5_000, "timed out"),
     ).rejects.toThrow("ENOTEMPTY");
   });
 });
