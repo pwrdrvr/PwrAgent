@@ -349,6 +349,7 @@ import {
 } from "./federation-ssh";
 import { noiseKeyPairFromRawPrivate } from "./federation-noise";
 import { federationReconnectDelayMs } from "./federation-reconnect-policy";
+import { federationLocalNetworkFailureHint, federationLocalNetworkNotice } from "./federation-local-network";
 
 const log = getMainLogger("pwragent:federation-runtime");
 
@@ -3096,6 +3097,11 @@ export class DesktopFederationRuntime {
       );
     }
     const pendingInviteToken = getAppStateDb().getMeta(PENDING_INVITE_TOKEN_META_KEY);
+    const noticeEpoch = this.walkEpoch;
+    await federationLocalNetworkNotice.beforeConnect(
+      gatewayUrl, () => !this.stopping && this.walkEpoch === noticeEpoch,
+    );
+    if (this.stopping || this.walkEpoch !== noticeEpoch) return;
     const connectionMode = pendingInviteToken ? "enroll" : "reconnect";
     const keyPair = await getDesktopSettingsService()
       .getOrCreateFederationIdentityKeyPair();
@@ -3510,7 +3516,8 @@ export class DesktopFederationRuntime {
     this.client = undefined;
     const rawMessage = error instanceof Error ? error.message : String(error);
     this.lastConnectionFailureKind = classifyFederationClientFailure(rawMessage);
-    this.lastConnectionError = redactFederationDiagnostic(rawMessage);
+    this.lastConnectionError = redactFederationDiagnostic(rawMessage)
+      + federationLocalNetworkFailureHint(rawMessage);
     if (this.gatewayInstanceId) {
       this.publishPeerStatus(
         this.gatewayInstanceId,
