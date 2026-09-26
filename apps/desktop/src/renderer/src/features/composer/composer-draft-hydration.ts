@@ -1,3 +1,4 @@
+import { fromMarkdown } from "mdast-util-from-markdown";
 import {
   findSharedSkillNames,
   isSharedSkillName,
@@ -10,6 +11,12 @@ import { parsePullRequestUrl, resolveLivePullRequest, type PullRequestLinkContex
 import { resolveThreadHref, type ThreadLinkContextValue } from "../../lib/thread-links";
 import type { ComposerSkillToken } from "./ComposerInputTypes";
 import { createComposerDirectoryToken, createComposerPullRequestToken, createComposerSkillToken, createComposerThreadToken } from "./composer-mention-tokens";
+
+type MarkdownNode = {
+  type: string;
+  position?: { start: { offset?: number }; end: { offset?: number } };
+  children?: MarkdownNode[];
+};
 
 export function hydrateComposerDraft(
   canonicalDraft: string,
@@ -73,39 +80,72 @@ export function hydrateComposerDraft(
     }
   };
 
-  // Thread and PR labels may legitimately begin with `$` or `@`, so recognize
-  // their destinations before passing surrounding Markdown through the skill
-  // and directory parser. Unknown links remain literal Markdown.
-  const referenceLinkPattern = /\[((?:\\.|[^\]\\\r\n])*)\]\((pwragent:\/\/thread\/[^)\s]+|https:\/\/[^)\s]+)\)/gi;
-  let cursor = 0;
-  for (const match of canonicalDraft.matchAll(referenceLinkPattern)) {
-    const matchIndex = match.index ?? 0;
-    hydrateSkillAndDirectoryParts(canonicalDraft.slice(cursor, matchIndex));
-    const href = match[2] ?? "";
-    const resolvedThread = resolveThreadHref(href, threadLinks);
-    if (resolvedThread) {
-      skillTokens.push(createComposerThreadToken(resolvedThread, draft.length));
-    } else {
-      const pullRequest = parsePullRequestUrl(href);
-      if (pullRequest) {
-        // The parsed summary knows the repo and the number and nothing else.
-        // Upgrading it through the live store before minting the token is what
-        // gives a restored draft the same colored chip the sidebar shows; an
-        // unseen PR falls back to the parsed summary and stays gray.
-        skillTokens.push(
-          createComposerPullRequestToken(
-            resolveLivePullRequest(pullRequest, pullRequestLinks),
-            draft.length,
-          ),
-        );
+  const hydrateReferences = (text: string): void => {
+    // Thread and PR labels may legitimately begin with `$` or `@`, so recognize
+    // their destinations before passing surrounding Markdown through the skill
+    // and directory parser. Unknown links remain literal Markdown.
+    const referenceLinkPattern = /\[((?:\\.|[^\]\\\r\n])*)\]\((pwragent:\/\/thread\/[^)\s]+|https:\/\/[^)\s]+)\)/gi;
+    let cursor = 0;
+    for (const match of text.matchAll(referenceLinkPattern)) {
+      const matchIndex = match.index ?? 0;
+      hydrateSkillAndDirectoryParts(text.slice(cursor, matchIndex));
+      const href = match[2] ?? "";
+      const resolvedThread = resolveThreadHref(href, threadLinks);
+      if (resolvedThread) {
+        skillTokens.push(createComposerThreadToken(resolvedThread, draft.length));
       } else {
-        draft += match[0];
+        const pullRequest = parsePullRequestUrl(href);
+        if (pullRequest) {
+          // The parsed summary knows the repo and the number and nothing else.
+          // Upgrading it through the live store before minting the token is what
+          // gives a restored draft the same colored chip the sidebar shows; an
+          // unseen PR falls back to the parsed summary and stays gray.
+          skillTokens.push(
+            createComposerPullRequestToken(
+              resolveLivePullRequest(pullRequest, pullRequestLinks),
+              draft.length,
+            ),
+          );
+        } else {
+          draft += match[0];
+        }
+      }
+      cursor = matchIndex + match[0].length;
+    }
+    hydrateSkillAndDirectoryParts(text.slice(cursor));
+  };
+
+  // Code is literal, including any Markdown links it demonstrates. Recognize
+  // it before either reference parser removes links and changes draft offsets.
+  // CommonMark handles inline, fenced, indented, and nested code consistently.
+  const visit = (node: MarkdownNode): void => {
+    if (node.type === "link") {
+      const start = node.position?.start.offset;
+      const end = node.position?.end.offset;
+      // Inline code in an explicit link's label belongs to that reference.
+      // Keep labels such as "Fix `foo` crash" intact for the hydrators. Only
+      // skip children when the whole source has the reference parsers' shape:
+      // a code example containing nested link syntax still needs protection.
+      if (start !== undefined && end !== undefined
+        && /^\[((?:\\.|[^\]\\\r\n])*)\]\(([^)\r\n]+)\)$/.test(canonicalDraft.slice(start, end))) {
+        return;
       }
     }
-    cursor = matchIndex + match[0].length;
-  }
-  hydrateSkillAndDirectoryParts(canonicalDraft.slice(cursor));
+    if (node.type === "code" || node.type === "inlineCode") {
+      const start = node.position?.start.offset;
+      const end = node.position?.end.offset;
+      if (start !== undefined && end !== undefined) {
+        hydrateReferences(canonicalDraft.slice(cursor, start));
+        draft += canonicalDraft.slice(start, end);
+        cursor = end;
+      }
+      return;
+    }
+    node.children?.forEach(visit);
+  };
+  let cursor = 0;
+  visit(fromMarkdown(canonicalDraft));
+  hydrateReferences(canonicalDraft.slice(cursor));
 
   return { draft, skillTokens };
 }
-
