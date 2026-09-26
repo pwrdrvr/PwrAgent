@@ -296,7 +296,7 @@ describe("mapGraphqlPrNode", () => {
     expect(mapGraphqlPrNode(node({ isDraft: true })).reviewState).toBe("draft");
   });
 
-  it("keys off the HEAD repo so fork PRs match the gh path's status key", () => {
+  it("keys fork contributions by the destination repository", () => {
     // Queried against base pwrdrvr/PwrAgent, but the PR came from a fork.
     const summary = mapGraphqlPrNode(
       node({
@@ -304,8 +304,8 @@ describe("mapGraphqlPrNode", () => {
         headRepository: { name: "PwrAgent-fork" },
       }),
     );
-    expect(summary.org).toBe("contributor");
-    expect(summary.repo).toBe("PwrAgent-fork");
+    expect(summary.org).toBe("pwrdrvr");
+    expect(summary.repo).toBe("PwrAgent");
   });
 
   it("carries diff, commit, and timestamp stats for the hover card", () => {

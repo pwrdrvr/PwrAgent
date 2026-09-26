@@ -1,5 +1,6 @@
 import {
   buildPullRequestStatusKey,
+  resolvePullRequestIdentity,
   type NavigationThreadSummary,
   type PrSummary,
 } from "@pwragent/shared";
@@ -194,7 +195,7 @@ function pullRequestsByKey(
     for (const pr of thread.prs ?? []) {
       const key = buildPullRequestStatusKey(pr);
       if (!prs.has(key)) {
-        prs.set(key, pr);
+        prs.set(key, { ...pr, ...resolvePullRequestIdentity(pr) });
       }
     }
   }

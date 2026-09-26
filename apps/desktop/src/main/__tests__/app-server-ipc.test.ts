@@ -1675,6 +1675,26 @@ describe("app server ipc", () => {
     });
   });
 
+  it("keeps legacy upstream status out of a fork with the same PR number", async () => {
+    const fork = githubPr({
+      number: 38, org: "huntharo", repo: "diskhound", title: "Fork changes",
+      state: "pending", url: "https://github.com/huntharo/diskhound/pull/38",
+    });
+    const upstream = githubPr({
+      ...fork, org: "tzarebczan", title: "Upstream warnings", state: "passing",
+      url: "https://github.com/tzarebczan/diskhound/pull/38",
+    });
+    readPrStatusCache.mockResolvedValueOnce({
+      "github.com/huntharo/diskhound#38": {
+        provider: "github.com", prKey: "github.com/huntharo/diskhound#38",
+        fetchedAt: Date.now(), pr: { ...upstream, org: "huntharo" },
+      },
+    });
+    registerAppServerIpcHandlers();
+    const canonicalize = setThreadPullRequestCanonicalizer.mock.calls.at(-1)?.[0];
+    expect(await canonicalize?.([fork, { ...upstream, title: undefined }])).toEqual([fork, upstream]);
+  });
+
   it("hydrates the thread inspection PR canonicalizer from durable cache", async () => {
     const stalePr = githubPr({
       number: 1132,

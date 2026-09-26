@@ -203,6 +203,7 @@ import {
   buildAppendPinRank,
   buildFederatedThreadRef,
   buildPullRequestStatusKey,
+  resolvePullRequestIdentity,
   buildThreadIdentityKey,
   federatedThreadIdentityKey,
   isAppServerBackendKind,
@@ -911,7 +912,7 @@ function normalizePrSummary(pr: PrSummary): PrSummary {
   )?.[0];
   const normalized: PrSummary = {
     ...pr,
-    provider: normalizePullRequestProvider(pr.provider),
+    ...resolvePullRequestIdentity(pr),
     state: checkState,
     checkState,
     lifecycleState: pr.lifecycleState ?? legacyPrLifecycleState(pr.state),
@@ -1042,7 +1043,7 @@ function legacyPrReviewState(state: string | undefined): PrSummary["reviewState"
 }
 
 function getPrStatusKey(
-  pr: Pick<PrSummary, "provider" | "org" | "repo" | "number">,
+  pr: Pick<PrSummary, "provider" | "org" | "repo" | "number"> & { url?: string },
 ): string {
   return buildPullRequestStatusKey(pr);
 }

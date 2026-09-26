@@ -453,9 +453,9 @@ export type PrSummary = {
    */
   provider: PullRequestProvider;
   number: number;
-  /** Repo owner login, e.g. "pwrdrvr". */
+  /** Destination repo owner/namespace, e.g. "pwrdrvr". Never the source fork. */
   org: string;
-  /** Repo name, e.g. "PwrAgent". */
+  /** Destination repo name, e.g. "PwrAgent". PR numbers belong to this repo. */
   repo: string;
   /** Last observed pull request title, when the provider returns one. */
   title?: string;
@@ -551,10 +551,51 @@ export function normalizePullRequestProvider(
     || DEFAULT_PULL_REQUEST_PROVIDER;
 }
 
+type PullRequestIdentity = Pick<PrSummary, "provider" | "org" | "repo" | "number">;
+
+/**
+ * The destination URL owns the number's namespace. Older GitHub observations
+ * persisted the source fork in org/repo, so every key and cache reader must
+ * prefer the URL over those legacy fields. URL-less references retain their
+ * explicit identity (for example detach requests).
+ */
+export function resolvePullRequestIdentity(
+  pr: PullRequestIdentity & { url?: string },
+): PullRequestIdentity {
+  if (pr.url) {
+    try {
+      // Shared contracts run without Node or DOM globals. Accept only absolute
+      // HTTP(S) forge links, excluding credentials, query strings and fragments.
+      const url = pr.url.trim().match(/^https?:\/\/([^/?#:@\s]+)(?::\d+)?(\/[^?#]*)/i);
+      if (url) {
+        const match = url[2]!.match(/^\/([^/]+)\/([^/]+)\/pull\/([1-9]\d*)(?:\/|$)/)
+          ?? url[2]!.match(/^\/(.+)\/([^/]+)\/-\/merge_requests\/([1-9]\d*)(?:\/|$)/);
+        if (match) {
+          const number = Number(match[3]);
+          const org = match[1]!.split("/").map(decodeURIComponent).join("/");
+          const repo = decodeURIComponent(match[2]!);
+          if (Number.isSafeInteger(number)) {
+            return { provider: url[1]!.toLowerCase(), org, repo, number };
+          }
+        }
+      }
+    } catch {
+      // An unrecognized URL cannot override an explicit reference identity.
+    }
+  }
+  return {
+    provider: normalizePullRequestProvider(pr.provider),
+    org: pr.org,
+    repo: pr.repo,
+    number: pr.number,
+  };
+}
+
 export function buildPullRequestStatusKey(
-  pr: Pick<PrSummary, "provider" | "org" | "repo" | "number">,
+  pr: PullRequestIdentity & { url?: string },
 ): string {
-  return `${normalizePullRequestProvider(pr.provider)}/${pr.org.toLowerCase()}/${pr.repo.toLowerCase()}#${pr.number}`;
+  const identity = resolvePullRequestIdentity(pr);
+  return `${identity.provider}/${identity.org.toLowerCase()}/${identity.repo.toLowerCase()}#${identity.number}`;
 }
 
 export type DirectorySummaryKind = "directory" | "workspace" | "unlinked";

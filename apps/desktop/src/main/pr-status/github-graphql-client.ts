@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { graphql } from "@octokit/graphql";
-import type { PrSummary } from "@pwragent/shared";
+import { resolvePullRequestIdentity, type PrSummary } from "@pwragent/shared";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { getMainLogger } from "../log";
 import { discoverGhCommands } from "../settings/gh-discovery";
@@ -462,12 +462,13 @@ export function mapGraphqlPrNode(
   const headSha = node.headRefOid?.trim() || commitShas[0];
 
   return {
-    provider: parsePullRequestProvider(node.url),
-    number: node.number,
-    // Head repo, NOT the base repo we queried — matches what the `gh` path
-    // writes, so both transports produce the same `buildPullRequestStatusKey`.
-    org: node.headRepositoryOwner?.login ?? "",
-    repo: node.headRepository?.name ?? "",
+    ...resolvePullRequestIdentity({
+      provider: parsePullRequestProvider(node.url),
+      number: node.number,
+      org: "",
+      repo: "",
+      url: node.url,
+    }),
     ...(node.title?.trim() ? { title: node.title.trim() } : {}),
     ...(node.baseRefOid ? { baseSha: node.baseRefOid } : {}),
     ...(node.baseRefName?.trim() ? { baseRefName: node.baseRefName.trim() } : {}),

@@ -5,7 +5,7 @@ import type {
   PrReviewState,
   PrSummary,
 } from "@pwragent/shared";
-import { DEFAULT_PULL_REQUEST_PROVIDER } from "@pwragent/shared";
+import { DEFAULT_PULL_REQUEST_PROVIDER, resolvePullRequestIdentity } from "@pwragent/shared";
 import { isSafeExternalOpenUrl } from "../external-url-policy";
 
 /**
@@ -75,10 +75,13 @@ export function parseGhPrPayload(row: GhPrPayload): PrSummary {
     row.commits?.[row.commits.length - 1]?.oid,
   ])[0];
   return {
-    provider: parsePullRequestProvider(row.url),
-    number: row.number,
-    org: row.headRepositoryOwner?.login ?? "",
-    repo: row.headRepository?.name ?? "",
+    ...resolvePullRequestIdentity({
+      provider: parsePullRequestProvider(row.url),
+      number: row.number,
+      org: "",
+      repo: "",
+      url: row.url,
+    }),
     ...(row.title?.trim() ? { title: row.title.trim() } : {}),
     ...(row.baseRefName?.trim() ? { baseRefName: row.baseRefName.trim() } : {}),
     ...(row.headRefName?.trim() ? { headRefName: row.headRefName.trim() } : {}),
