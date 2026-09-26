@@ -229,6 +229,7 @@ describe("AI provider onboarding", () => {
       screen.getByText(/chatgpt\.com\/codex\/install\.sh/i),
     ).toBeVisible();
     expect(screen.getByText(/brew install --cask codex/i)).toBeVisible();
+    expect(screen.queryByText(/install\.ps1/i)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("tab", { name: /Gemini CLI/i }));
     expect(screen.getByText(/@google\/gemini-cli/i)).toBeVisible();
     fireEvent.click(screen.getByRole("tab", { name: /Kimi Code/i }));
@@ -379,12 +380,13 @@ describe("AI provider onboarding", () => {
     });
   });
 
-  it("shows native Windows installers and Windows-only prerequisites", () => {
+  it("shows and copies native Windows installers and Windows-only prerequisites", async () => {
     const settings = {
       snapshot: noCodexSnapshot,
       refresh: vi.fn(async () => undefined),
     } as unknown as DesktopSettingsState;
-    const desktopApi = { platform: "win32" } as DesktopApi;
+    const copyText = vi.fn(async () => undefined);
+    const desktopApi = { platform: "win32", copyText } as unknown as DesktopApi;
 
     render(
       <BackendRequirementsStep
@@ -397,6 +399,16 @@ describe("AI provider onboarding", () => {
 
     expect(screen.getByText(/Codex CLI on Windows/i)).toBeVisible();
     expect(screen.getByText(/chatgpt\.com\/codex\/install\.ps1/i)).toBeVisible();
+    expect(screen.queryByText(/chatgpt\.com\/codex\/install\.sh/i)).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Open official setup guide/i })).toHaveAttribute(
+      "href",
+      "https://learn.chatgpt.com/docs/codex/cli#getting-started",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Copy PowerShell (recommended) command" }));
+    await waitFor(() => expect(screen.getByText("Copied")).toBeVisible());
+    expect(copyText).toHaveBeenCalledExactlyOnceWith(
+      'powershell -ExecutionPolicy ByPass -c "irm https://chatgpt.com/codex/install.ps1 | iex"',
+    );
     expect(screen.queryByText(/brew install/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/installed on this Mac/i)).not.toBeInTheDocument();
 
