@@ -5132,8 +5132,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       );
       if (hydrated.skillTokens.length > 0) {
         // The paste update retained a rich document without mention nodes.
-        // Let the controlled editor rebuild it from the hydrated tokens so
-        // the visual chips and canonical draft remain in lockstep.
+        // Let the controlled editor replace the literal references in place
+        // so the visual chips and canonical draft remain in lockstep without
+        // replaying the stale document over the hydrated result.
         setEditorDocument(undefined);
         setDraft(hydrated.draft);
         setSkillTokens(hydrated.skillTokens);

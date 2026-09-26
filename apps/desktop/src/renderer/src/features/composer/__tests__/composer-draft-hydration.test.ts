@@ -14,6 +14,34 @@ const release = (project: string, directoryIndex: number): AppServerSkillSummary
 });
 
 describe("hydrateComposerDraft skill chips", () => {
+  it.each([
+    "```\nCONTENT\n```",
+    "```markdown\nCONTENT\n```",
+    "~~~\nCONTENT\n~~~",
+    "```\nCONTENT",
+    "    CONTENT",
+    "`CONTENT`",
+    "``CONTENT with `backticks` ``",
+    "> ```\n> CONTENT\n> ```",
+  ])("keeps reference links literal inside code: %s", (wrapper) => {
+    const references = "[#42](https://github.com/fixture/project/pull/42) [$release](/skills/release/SKILL.md) [@src](~/project/src)";
+    const code = wrapper.replace("CONTENT", references);
+    const source = `Keep \`%APPDATA%\` intact.\n\n${code}\n\n`;
+    expect(hydrateComposerDraft(source, [], undefined, undefined)).toEqual({
+      draft: source,
+      skillTokens: [],
+    });
+  });
+
+  it("hydrates links outside code without moving their offsets across literal references", () => {
+    const link = "[#42](https://github.com/fixture/project/pull/42)";
+    const prefix = `Keep \`${link}\` literal.\n\nSee `;
+    const result = hydrateComposerDraft(`${prefix}${link}.`, [], undefined, undefined);
+    expect(result.draft).toBe(`${prefix}.`);
+    expect(result.skillTokens).toHaveLength(1);
+    expect(result.skillTokens[0]).toMatchObject({ kind: "pull-request", index: prefix.length });
+  });
+
   it("restores a same-named skill by its path, with its origin on the chip", () => {
     const { skillTokens } = hydrateComposerDraft(
       `Use [$release](${releasePath("PwrAgnt")})`,
