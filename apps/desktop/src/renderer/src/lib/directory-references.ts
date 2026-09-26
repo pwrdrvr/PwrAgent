@@ -211,6 +211,12 @@ function draftContainsPath(draft: string, candidate: string): boolean {
   return false;
 }
 
+/** Shared comparison key for scanned paths, restored tokens, and exclusions. */
+export function normalizeDirectoryReferencePath(value: string): string {
+  return formatFilesystemPath(value)
+    .replace(isWindowsFilesystemPath(value) ? /[/\\]+$/ : /\/+$/, "");
+}
+
 /**
  * Scan a draft for tracked directories it references by path — the
  * tilde-shortened form, the absolute form, or a deeper path under either.
@@ -235,11 +241,10 @@ export function listReferencedDirectories(
     .join("\n");
   const trimPath = (value: string) => value
     .replace(isWindowsFilesystemPath(value) ? /[/\\]+$/ : /\/+$/, "");
-  const nativePath = (value: string) => formatFilesystemPath(trimPath(value));
   const excluded = new Set(
     (options?.excludePaths ?? [])
       .filter((path): path is string => Boolean(path))
-      .map(nativePath),
+      .map(normalizeDirectoryReferencePath),
   );
   const seenPaths = new Set<string>();
   const referenced: NavigationDirectorySummary[] = [];
@@ -249,7 +254,7 @@ export function listReferencedDirectories(
       continue;
     }
     const path = trimPath(directory.path!);
-    const key = nativePath(path);
+    const key = normalizeDirectoryReferencePath(path);
     if (!path || seenPaths.has(key) || excluded.has(key)) {
       continue;
     }
@@ -268,12 +273,12 @@ export function listReferencedDirectories(
   // a tracked `~/dev`. Keep only the deepest match so the reference
   // resolves to the repo the path actually points into.
   return referenced.filter((directory) => {
-    const path = nativePath(directory.path!);
+    const path = normalizeDirectoryReferencePath(directory.path!);
     return !referenced.some((other) => {
       if (other === directory) {
         return false;
       }
-      const otherPath = nativePath(other.path!);
+      const otherPath = normalizeDirectoryReferencePath(other.path!);
       const separator = isWindowsFilesystemPath(path) ? "\\" : "/";
       return otherPath.startsWith(`${path}${separator}`);
     });

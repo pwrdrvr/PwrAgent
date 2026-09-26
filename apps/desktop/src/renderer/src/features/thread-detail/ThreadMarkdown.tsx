@@ -2,6 +2,7 @@ import {
   findSharedSkillNames,
   isSharedSkillName,
   isThreadUrl,
+  isWindowsFilesystemPath,
   PWRAGENT_URL_SCHEME,
   type AppServerSkillSummary,
   type AppServerThreadImagePart,
@@ -28,6 +29,7 @@ import { AppIcon } from "../../components/AppIcon";
 import { CloseIcon, CopyIcon, FolderIcon, PopoutIcon } from "../../icons";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { copyText } from "../../lib/copy-text";
+import { decodeMarkdownDestination } from "../../lib/directory-references";
 import {
   protectComposerHyphenListItems,
   repairNestedLanguageFences,
@@ -965,7 +967,10 @@ function MarkdownDocumentModal(props: {
 
 const normalizeMarkdownUrl: UrlTransform = (url) => {
   const trimmed = url.trim();
-  if (trimmed.startsWith("/")) {
+  if (trimmed.startsWith("/") || isWindowsFilesystemPath(decodeMarkdownDestination(trimmed))) {
+    // Directory chips serialize Windows separators as %5C. Classify the
+    // decoded path, but retain its encoding here so localFileTargetFromHref
+    // decodes exactly once (a filename containing literal %5C stays literal).
     return `file://${trimmed}`;
   }
   if (trimmed.startsWith("~/")) {

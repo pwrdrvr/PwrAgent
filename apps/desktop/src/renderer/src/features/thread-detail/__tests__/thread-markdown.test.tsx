@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MarkdownRenderingOptionsProvider } from "../../../lib/markdown-rendering-options";
 import { ThreadMarkdown } from "../ThreadMarkdown";
+import { buildDirectoryReferenceMarkdown } from "../../../lib/directory-references";
 import { pressEscape, pressTab, walkTab } from "../../../test/tab-walk";
 
 const copyText = vi.hoisted(() => vi.fn(async (
@@ -1434,6 +1435,30 @@ describe("ThreadMarkdown", () => {
         .__pwragentHomeDir;
     }
   });
+
+  it.each([
+    ["//server/share/repo", "\\\\server\\share\\repo"],
+    ["C:/Projects/repo", "C:\\Projects\\repo"],
+    ["//server/share/50% (old)/repo", "\\\\server\\share\\50% (old)\\repo"],
+    ["C:/Projects/%5Crepo", "C:\\Projects\\%5Crepo"],
+  ])("renders a serialized Windows reference to %s as a local chip", (path, expected) => {
+    const { container } = render(
+      <ThreadMarkdown text={buildDirectoryReferenceMarkdown({ label: "repo", path })} />,
+    );
+    const chip = container.querySelector(".directory-chip");
+    expect(chip).toHaveTextContent("@repo");
+    expect(chip).toHaveAttribute("data-tooltip", expected);
+    expect(screen.queryByRole("link", { name: "@repo" })).not.toBeInTheDocument();
+  });
+
+  it.each(["javascript:alert(1)", "%6Aavascript:alert%281%29", "https%3A%2F%2Fexample.test"])(
+    "does not treat an encoded or unsafe URL as a local path: %s",
+    (url) => {
+      const { container } = render(<ThreadMarkdown text={`[@repo](${url})`} />);
+      expect(container.querySelector(".directory-chip")).toBeNull();
+      expect(container.querySelector("a[href]")).toBeNull();
+    },
+  );
 });
 
 describe("ThreadMarkdown document viewer, keyboard", () => {
