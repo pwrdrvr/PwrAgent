@@ -29401,23 +29401,12 @@ export class DesktopBackendRegistry {
       (thread) =>
         thread.source === params.backend && thread.id === params.threadId,
     );
-    let archivedThreads: AppServerThreadSummary[] = [];
-    try {
-      archivedThreads = await this.listThreads({
-        backend: params.backend,
-        archived: true,
-        callerReason: "archive-cleanup",
-      });
-    } catch (error) {
-      if (!activeThread) {
-        throw error;
-      }
-      backendRegistryLog.warn("archive cleanup archived-thread lookup failed", {
-        backend: params.backend,
-        threadId: params.threadId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
+    // Ownership can belong to an archived thread on any backend. If this
+    // lookup fails, the caller must skip cleanup rather than assume ownership.
+    let archivedThreads = await this.listThreads({
+      archived: true,
+      callerReason: "archive-cleanup",
+    });
     // Provider listings do not contain PwrAgent's ownership marker and can
     // still report the old workspace after a move. Use the same overlay
     // precedence as navigation for adopted worktrees. Leave legacy cleanup
@@ -29451,7 +29440,9 @@ export class DesktopBackendRegistry {
       };
     }
 
-    const archivedThread = archivedThreads.find((thread) => thread.id === params.threadId);
+    const archivedThread = archivedThreads.find(
+      (thread) => thread.source === params.backend && thread.id === params.threadId,
+    );
     if (archivedThread) {
       return {
         activeThreads,
@@ -33647,37 +33638,42 @@ export class DesktopBackendRegistry {
       );
     }
 
-    const duplicateMove = [...this.pendingThreadWorkspaceMoves.values()].find(
-      (move) =>
-        (move.status === "queued" || move.status === "running") &&
-        move.sourceBackend === sourceBackend &&
-        move.sourceThreadId === sourceThreadId &&
-        move.sourceTurnId === sourceTurnId,
-    );
-    if (duplicateMove) {
-      const sameSource =
-        duplicateMove.direction === direction &&
-        path.resolve(duplicateMove.targetPath ?? "") === path.resolve(targetPath ?? "") &&
-        duplicateMove.strategy === strategy &&
-        (duplicateMove.leaveLocalBranch ?? "") ===
-          (request.args.leaveLocalBranch ?? "") &&
-        (duplicateMove.newBranchName ?? "") ===
-          (request.args.newBranchName ?? "") &&
-        path.resolve(duplicateMove.sourcePath ?? "") ===
-          path.resolve(candidate.sourcePath ?? "") &&
-        path.resolve(duplicateMove.repositoryPath ?? "") ===
-          path.resolve(candidate.repositoryPath ?? "");
-      if (sameSource) {
-        return {
-          ok: true,
-          data: this.pendingThreadWorkspaceMoveToResult(duplicateMove),
-        };
-      }
-      return threadOrchestrationFailure(
-        "unsupported_workspace",
-        "A workspace move is already queued for this thread turn. Wait for the continuation before requesting another workspace move.",
+    const duplicateResult = (): PwrAgentThreadOrchestrationResponse | undefined => {
+      const duplicateMove = [...this.pendingThreadWorkspaceMoves.values()].find(
+        (move) =>
+          (move.status === "queued" || move.status === "running") &&
+          move.sourceBackend === sourceBackend &&
+          move.sourceThreadId === sourceThreadId &&
+          move.sourceTurnId === sourceTurnId,
       );
-    }
+      if (duplicateMove) {
+        const sameSource =
+          duplicateMove.direction === direction &&
+          path.resolve(duplicateMove.targetPath ?? "") === path.resolve(targetPath ?? "") &&
+          duplicateMove.strategy === strategy &&
+          (duplicateMove.leaveLocalBranch ?? "") ===
+            (request.args.leaveLocalBranch ?? "") &&
+          (duplicateMove.newBranchName ?? "") ===
+            (request.args.newBranchName ?? "") &&
+          path.resolve(duplicateMove.sourcePath ?? "") ===
+            path.resolve(candidate.sourcePath ?? "") &&
+          path.resolve(duplicateMove.repositoryPath ?? "") ===
+            path.resolve(candidate.repositoryPath ?? "");
+        if (sameSource) {
+          return {
+            ok: true,
+            data: this.pendingThreadWorkspaceMoveToResult(duplicateMove),
+          };
+        }
+        return threadOrchestrationFailure(
+          "unsupported_workspace",
+          "A workspace move is already queued for this thread turn. Wait for the continuation before requesting another workspace move.",
+        );
+      }
+      return undefined;
+    };
+    const pendingResult = duplicateResult();
+    if (pendingResult) return pendingResult;
 
     if (targetPath) {
       const executionMode = this.activeCodexTurnModes.get(
@@ -33701,6 +33697,11 @@ export class DesktopBackendRegistry {
     if (!this.isLiveDynamicToolCall(sourceBackend, { threadId: sourceThreadId, turnId: sourceTurnId })) {
       return threadOrchestrationFailure("forbidden", "The invoking turn ended before the workspace move could be queued.");
     }
+
+    // Trust confirmation yields to other calls from this turn. Recheck with
+    // no await between admission and insertion so only one move can win.
+    const admittedResult = duplicateResult();
+    if (admittedResult) return admittedResult;
 
     const now = request.context.now ?? Date.now();
     const move = this.startPendingThreadWorkspaceMove({

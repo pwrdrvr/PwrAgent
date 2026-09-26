@@ -35923,6 +35923,70 @@ script = "printf setup"
     expect(codexClient.startTurnCallCount).toBe(0);
   });
 
+  it.each([false, true])("admits one workspace move after concurrent trust approvals (same destination: %s)", async (sameDestination) => {
+    const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-concurrent-move-")));
+    onTestFinished(() => rm(root, { recursive: true, force: true }));
+    const firstPath = path.join(root, "first");
+    const secondPath = sameDestination ? firstPath : path.join(root, "second");
+    await mkdir(firstPath);
+    if (!sameDestination) await mkdir(secondPath);
+    const thread: AppServerThreadSummary = {
+      id: "agent-thread", title: "Concurrent move", titleSource: "explicit", source: "codex", updatedAt: 1000,
+      linkedDirectories: [],
+    };
+    const codexClient = new MockBackendClient({ threads: [thread] });
+    const handoff = vi.fn(async (): Promise<HandoffThreadWorkspaceResponse> => ({
+      backend: "codex", threadId: thread.id, direction: "to-project", workMode: "local",
+      repositoryPath: expectedDir(firstPath), targetPath: expectedDir(firstPath),
+      linkedDirectory: { id: "pwragent-handoff:codex:agent-thread", kind: "local", label: "first", path: expectedDir(firstPath) },
+      warnings: [], completedAt: 1000,
+    }));
+    const registry = new DesktopBackendRegistry({
+      codexClient, overlayStore: createOverlayStoreMock({ overlays: { "codex:agent-thread": createAgentOverlay() } }),
+      gitWorkspaceHandoffService: { handoff } as never,
+    });
+    onTestFinished(() => registry.close());
+    vi.spyOn(registry, "ensureDirectoryLaunchpad").mockResolvedValue({} as never);
+    await registry.publishLocalEvent({ backend: "codex", notification: {
+      method: "turn/started", params: { threadId: thread.id, turnId: "turn-1", turn: { id: "turn-1" } },
+    } });
+    const events: AgentEvent[] = [];
+    const unsubscribe = registry.onEvent((event) => { events.push(event); });
+    onTestFinished(unsubscribe);
+    const callMove = (callId: string, targetPath: string) => codexClient.emitRequest({ method: "item/tool/call", params: {
+      threadId: thread.id, turnId: "turn-1", callId, requestId: callId, namespace: "pwragent",
+      tool: "move_thread_workspace", arguments: { direction: "to-project", targetPath },
+    } } as AppServerPendingRequestNotification);
+    const first = callMove("move-1", firstPath);
+    const second = callMove("move-2", secondPath);
+    await vi.waitFor(() => expect(events.filter((event) => event.notification.method === "item/tool/requestUserInput")).toHaveLength(2));
+    const approve = async (callId: string) => {
+      const request = events.find((event) => event.notification.method === "item/tool/requestUserInput"
+        && event.notification.params.itemId === callId)!.notification;
+      if (request.method !== "item/tool/requestUserInput") throw new Error("Expected trust request");
+      await registry.submitServerRequest({ backend: "codex", threadId: thread.id, turnId: "turn-1",
+        requestId: request.params.requestId,
+        response: { answers: { trust_directory: { answers: ["Trust directory (Recommended)"] } } },
+      });
+    };
+    const payload = (response: unknown) => JSON.parse((response as { contentItems: Array<{ text: string }> }).contentItems[0]!.text);
+    await approve("move-1");
+    const firstResult = payload(await first);
+    expect(firstResult.status).toBe("queued");
+    await approve("move-2");
+    const secondResult = payload(await second);
+    expect(secondResult).toMatchObject(sameDestination
+      ? { workspaceMoveId: firstResult.workspaceMoveId }
+      : { code: "unsupported_workspace" });
+    expect(handoff).not.toHaveBeenCalled();
+    await registry.publishLocalEvent({ backend: "codex", notification: {
+      method: "turn/completed", params: { threadId: thread.id, turnId: "turn-1", turn: { id: "turn-1", status: "completed", output: [] } },
+    } });
+    await vi.waitFor(() => expect(codexClient.startTurnCallCount).toBe(1));
+    expect(handoff).toHaveBeenCalledTimes(1);
+    expect(codexClient.lastStartTurnParams).toMatchObject({ threadId: thread.id, cwd: expectedDir(firstPath) });
+  });
+
   it("starts the workspace move continuation before queued same-thread turns", async () => {
     const thread: AppServerThreadSummary = {
       id: "ordinary-thread",
@@ -48253,6 +48317,50 @@ script = "printf setup"
     expect(result.cleanup).toEqual([expect.objectContaining({
       worktreePath, removedWorktree: false, deletedBranch: false,
       skippedReason: expect.stringContaining("Externally managed"),
+    })]);
+  });
+
+  it.each([false, true])("preserves a borrowed worktree whose ownership marker belongs to an archived ACP thread (lookup fails: %s)", async (lookupFails) => {
+    const worktreePath = "/claude-worktrees/demo/borrowed";
+    const codexClient = new MockBackendClient({
+      threads: [{
+        id: "codex-user", title: "Archive me", titleSource: "explicit", source: "codex", updatedAt: 1000,
+        linkedDirectories: [{ id: "provider-directory", kind: "worktree", label: "demo", path: "/repo/demo", worktreePath }],
+      }],
+      archivedThreads: [],
+    });
+    const archive = vi.fn();
+    const { registry } = createKimiAcpRegistry({
+      codexClient,
+      sessions: [{
+        backendId: "acp:kimi", sessionId: "archived-adopter", title: "Adopted worktree",
+        cwd: worktreePath, createdAt: 1, updatedAt: 2, archivedAt: 3, executionMode: "default", status: "idle",
+      }],
+      overlayStore: createOverlayStoreMock({ overlays: {
+        "acp:kimi:archived-adopter": {
+          backend: "acp:kimi", threadId: "archived-adopter", extraLinkedDirectories: [{
+            id: "pwragent-handoff:acp:kimi:archived-adopter", kind: "worktree", label: "demo",
+            path: "/repo/demo", worktreePath, worktreeOwnership: "external",
+          }],
+        },
+      } }),
+      worktreeArchiveService: { archive } as never,
+    });
+    onTestFinished(() => registry.close());
+    if (lookupFails) {
+      const listThreads = registry.listThreads.bind(registry);
+      vi.spyOn(registry, "listThreads").mockImplementation(async (params) => {
+        if (params?.archived && !params.backend) throw new Error("fixture archived backend unavailable");
+        return await listThreads(params);
+      });
+    }
+    const result = await registry.archiveThread({ backend: "codex", threadId: "codex-user" });
+    expect(codexClient.lastArchiveThreadParams).toEqual({ threadId: "codex-user" });
+    expect(archive).not.toHaveBeenCalled();
+    expect(result.cleanup).toEqual([expect.objectContaining({
+      ...(lookupFails ? {} : { worktreePath }),
+      removedWorktree: false,
+      skippedReason: expect.stringContaining(lookupFails ? "fixture archived backend unavailable" : "Externally managed"),
     })]);
   });
 
