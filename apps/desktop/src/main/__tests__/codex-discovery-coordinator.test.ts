@@ -1,5 +1,11 @@
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import type { CodexDiscoverySnapshot } from "@pwrdrvr/codex-discovery";
+import {
+  getCodexInstallCandidatePaths,
+  type CodexDiscoverySnapshot,
+  type DiscoverCodexCommandsParams,
+} from "@pwrdrvr/codex-discovery";
 import { CodexDiscoveryCoordinator } from "../codex-discovery-coordinator";
 
 function selectedSnapshot(command: string): CodexDiscoverySnapshot {
@@ -71,7 +77,51 @@ describe("CodexDiscoveryCoordinator", () => {
       configuredCommand: undefined,
       env,
       platform: "win32",
+      installCandidatePaths: expect.arrayContaining(getCodexInstallCandidatePaths("win32")),
     });
+  });
+
+  it.each([
+    { LOCALAPPDATA: "C:\\Users\\pwrtest\\AppData\\Local" },
+    { LocalAppData: "D:\\User Data\\Local" },
+    {},
+  ])("discovers standalone Windows installs without relying on PATH: %j", async (env) => {
+    const localAppData = Object.values(env)[0]
+      ?? path.win32.join(os.homedir(), "AppData", "Local");
+    const installRoot = path.win32.join(localAppData, "Programs", "OpenAI", "Codex");
+    const command = path.win32.join(installRoot, "bin", "codex.exe");
+    const discover = vi.fn(async (params?: DiscoverCodexCommandsParams) =>
+      params?.installCandidatePaths?.includes(command)
+        ? selectedSnapshot(command)
+        : notInstalledSnapshot(),
+    );
+    const coordinator = new CodexDiscoveryCoordinator({
+      discover,
+      platform: "win32",
+      resolveEnv: async () => env,
+    });
+
+    await expect(coordinator.resolve()).resolves.toMatchObject({ command });
+    expect(discover).toHaveBeenCalledWith(expect.objectContaining({
+      installCandidatePaths: [
+        ...getCodexInstallCandidatePaths("win32"),
+        command,
+        path.win32.join(installRoot, "codex.exe"),
+      ],
+    }));
+  });
+
+  it.each(["darwin", "linux"] as const)("keeps %s discovery defaults", async (platform) => {
+    const discover = vi.fn(async () => notInstalledSnapshot());
+    const env = { LOCALAPPDATA: "C:\\Users\\pwrtest\\AppData\\Local" };
+    const coordinator = new CodexDiscoveryCoordinator({
+      discover,
+      platform,
+      resolveEnv: async () => env,
+    });
+
+    await coordinator.discover();
+    expect(discover).toHaveBeenCalledWith({ configuredCommand: undefined, env, platform });
   });
 
   it("rejects executable-looking candidates whose Codex version did not validate", async () => {
@@ -165,10 +215,10 @@ describe("CodexDiscoveryCoordinator", () => {
     await expect(first).resolves.toEqual(selectedSnapshot("/nvm/bin/codex"));
     await expect(second).resolves.toEqual(selectedSnapshot("/nvm/bin/codex"));
     expect(discover).toHaveBeenCalledOnce();
-    expect(discover).toHaveBeenCalledWith({
+    expect(discover).toHaveBeenCalledWith(expect.objectContaining({
       configuredCommand: undefined,
       env: { PATH: "/nvm/bin:/usr/bin", NVM_DIR: "/nvm" },
-    });
+    }));
   });
 
   it("expires successful results and only serves them stale during a refresh", async () => {

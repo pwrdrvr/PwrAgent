@@ -475,6 +475,13 @@
     "rowsChanged": 0,
     "statements": 0
   },
+  "settings-save-codex-path": {
+    "commits": 2,
+    "note": "one config publication and one discovery publication per explicit Codex path save; no idle writes",
+    "observedWalBytes": 8240,
+    "rowsChanged": 2,
+    "statements": 2
+  },
   "star-map-intake-launchpad-initialization": {
     "commits": 2,
     "note": "initialize one missing directory launchpad for its first Star Map intake",

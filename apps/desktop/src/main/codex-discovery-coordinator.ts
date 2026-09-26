@@ -1,7 +1,10 @@
+import os from "node:os";
+import path from "node:path";
 import {
   CodexCliNotInstalledError,
   MINIMUM_CODEX_CLI_VERSION,
   discoverCodexCommands,
+  getCodexInstallCandidatePaths,
   type CodexDiscoverySnapshot,
   type ResolvedCodexCommandCandidate,
 } from "@pwrdrvr/codex-discovery";
@@ -231,6 +234,7 @@ export class CodexDiscoveryCoordinator {
   ): Promise<CodexDiscoverySnapshot> {
     try {
       const env = await this.options.resolveEnv();
+      const platform = this.options.platform ?? process.platform;
       // @pwrdrvr/codex-discovery resolves PATHEXT shims itself. Do not turn
       // its Windows PATH result into a configured candidate first: fixed and
       // automatic candidates are probed separately inside the package, which
@@ -238,6 +242,9 @@ export class CodexDiscoveryCoordinator {
       const discovered = await this.discoverFn({
         configuredCommand,
         env,
+        ...(platform === "win32"
+          ? { installCandidatePaths: windowsCodexInstallCandidatePaths(env) }
+          : {}),
         ...(this.options.platform ? { platform: this.options.platform } : {}),
       });
       const snapshot = normalizeCodexDiscoverySnapshot(discovered);
@@ -258,6 +265,19 @@ export class CodexDiscoveryCoordinator {
       throw error;
     }
   }
+}
+
+function windowsCodexInstallCandidatePaths(env: NodeJS.ProcessEnv): string[] {
+  const localAppData = Object.entries(env).find(
+    ([key]) => key.toUpperCase() === "LOCALAPPDATA",
+  )?.[1]?.trim() || path.win32.join(os.homedir(), "AppData", "Local");
+  const installRoot = path.win32.join(localAppData, "Programs", "OpenAI", "Codex");
+  return [
+    ...getCodexInstallCandidatePaths("win32"),
+    // The standalone installer exposes its current release through bin.
+    path.win32.join(installRoot, "bin", "codex.exe"),
+    path.win32.join(installRoot, "codex.exe"),
+  ];
 }
 
 function normalizeCodexDiscoverySnapshot(
