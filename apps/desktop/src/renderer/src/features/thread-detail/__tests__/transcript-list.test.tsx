@@ -2240,6 +2240,45 @@ Implementation notes remain in a readable bubble.`;
       expect(within(card).queryByLabelText("Your answer")).not.toBeInTheDocument();
     });
 
+    it("holds Answer until the composer can send", async () => {
+      const onAnswerAsyncQuestions = vi.fn(async () => true);
+      const view = renderList([freeTextQuestion], {
+        asyncQuestionAnswerDisabled: true,
+        onAnswerAsyncQuestions,
+      });
+
+      const card = screen.getByRole("group", { name: "Question from Codex" });
+      // The answer can be written while the thread loads; only sending waits.
+      fireEvent.change(within(card).getByLabelText("Your answer"), {
+        target: { value: "ws://mini.example:47830 first" },
+      });
+      const answer = within(card).getByRole("button", { name: "Answer" });
+      expect(answer).toBeDisabled();
+      fireEvent.click(answer);
+      expect(onAnswerAsyncQuestions).not.toHaveBeenCalled();
+
+      view.rerender(
+        <TranscriptList
+          entries={[freeTextQuestion]}
+          loading={false}
+          loadingMore={false}
+          threadId="thread-1"
+          onLoadOlder={async () => undefined}
+          asyncQuestionAnswerDisabled={false}
+          onAnswerAsyncQuestions={onAnswerAsyncQuestions}
+        />
+      );
+      expect(answer).toBeEnabled();
+      fireEvent.click(answer);
+      await waitFor(() => expect(onAnswerAsyncQuestions).toHaveBeenCalledWith(
+        replyText(
+          "call-question",
+          "Which endpoints does the failing profile list?",
+          "ws://mini.example:47830 first",
+        ),
+      ));
+    });
+
     it("preselects the recommended option and lets typed text replace it", async () => {
       const onAnswerAsyncQuestions = vi.fn(async () => false);
       renderList([choiceQuestion], { onAnswerAsyncQuestions });

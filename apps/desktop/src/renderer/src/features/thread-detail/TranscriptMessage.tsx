@@ -73,6 +73,7 @@ type TranscriptMessageProps = {
   asyncQuestionSentAnswers?: ReadonlyMap<string, string>;
   asyncQuestionsDismissed?: boolean;
   onAnswerAsyncQuestions?: (text: string) => Promise<boolean>;
+  asyncQuestionAnswerDisabled?: boolean;
   onAsyncQuestionsDismissedChange?: (messageId: string, dismissed: boolean) => void;
 };
 
@@ -355,6 +356,7 @@ export const TranscriptMessage = memo(function TranscriptMessage(props: Transcri
           sentAnswers={props.asyncQuestionSentAnswers}
           dismissed={props.asyncQuestionsDismissed}
           onAnswer={props.onAnswerAsyncQuestions}
+          answerDisabled={props.asyncQuestionAnswerDisabled}
           onDismissedChange={onDismissedChange
             ? (dismissed) => onDismissedChange(messageId, dismissed)
             : undefined}

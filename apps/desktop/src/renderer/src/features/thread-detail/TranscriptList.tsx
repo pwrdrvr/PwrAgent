@@ -135,6 +135,8 @@ type TranscriptListProps = {
   onOpenImage?: (image: AppServerThreadImagePart) => void;
   /** Sends an answer to a Codex async question; true once the composer took it. */
   onAnswerAsyncQuestions?: (text: string) => Promise<boolean>;
+  /** The composer cannot send yet, so an async question cannot be answered. */
+  asyncQuestionAnswerDisabled?: boolean;
   /** Messages whose async questions the operator dismissed in this window. */
   dismissedAsyncQuestionMessageIds?: ReadonlySet<string>;
   /** Answers the composer took that the transcript may not show yet. */
@@ -1617,6 +1619,11 @@ export function TranscriptList(props: TranscriptListProps) {
                   asyncQuestionSentAnswers={props.sentAsyncQuestionAnswers}
                   asyncQuestionsDismissed={props.dismissedAsyncQuestionMessageIds?.has(item.entry.id)}
                   onAnswerAsyncQuestions={props.onAnswerAsyncQuestions}
+                  // Only a question card reads it, so readiness changes do
+                  // not re-render every memoized message.
+                  asyncQuestionAnswerDisabled={item.entry.delivery === "async"
+                    ? props.asyncQuestionAnswerDisabled
+                    : undefined}
                   onAsyncQuestionsDismissedChange={props.onAsyncQuestionsDismissedChange}
                 />
               );
