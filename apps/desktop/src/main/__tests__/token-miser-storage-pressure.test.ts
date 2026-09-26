@@ -82,6 +82,30 @@ it("allows concurrent processes to import and clean up the same legacy directory
   await expect(fs.stat(root)).rejects.toMatchObject({ code: "ENOENT" });
 });
 
+it.each([true, false])("accepts Windows unlink EPERM only when the legacy file is gone (removed=%s)", async (removed) => {
+  const { store, root } = await fixture();
+  const file = path.join(root, (await fs.readdir(root)).find((name) => name.endsWith(".json"))!);
+  const rm = fs.rm.bind(fs);
+  const unlinkError = Object.assign(new Error("fixture concurrent Windows unlink"), { code: "EPERM" });
+  const remove = vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
+    if (target !== file) return await rm(target, options);
+    if (removed) await rm(target, options);
+    throw unlinkError;
+  });
+  if (removed) {
+    await store.prune({ maxAgeMs: 0, maxBytes: 0 });
+    await expect(fs.stat(root)).rejects.toMatchObject({ code: "ENOENT" });
+  } else {
+    await expect(store.prune({ maxAgeMs: 0, maxBytes: 0 })).rejects.toBe(unlinkError);
+    expect((await fs.stat(file)).isFile()).toBe(true);
+    remove.mockRestore();
+    // A failed cleanup must not mark migration complete and strand the file.
+    await new TokenMiserStore(root).prune({ maxAgeMs: 0, maxBytes: 0 });
+    await expect(fs.stat(root)).rejects.toMatchObject({ code: "ENOENT" });
+  }
+  expect(await store.listMetadata()).toHaveLength(40);
+});
+
 it.each([true, false])("accepts Windows cleanup EPERM only when the directory is gone (removed=%s)", async (removed) => {
   const { store, root } = await fixture();
   const rmdir = fs.rmdir.bind(fs);

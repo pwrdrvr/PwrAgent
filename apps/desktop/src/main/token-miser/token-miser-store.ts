@@ -1085,7 +1085,23 @@ export class TokenMiserStore {
       // An archive marker wins when a legacy directory also has a generation.
       for (const entry of retention.sort((a, b) => b.archived - a.archived)) marker.run(entry.key, entry.generation, entry.archived);
     }).immediate();
-    await mapTokenMiserFiles(files, (file) => withTokenMiserFileOperation(() => fs.rm(file, { force: true })));
+    await mapTokenMiserFiles(files, async (file) => {
+      await withTokenMiserFileOperation(() => fs.rm(file, { force: true })).catch(async (error: NodeJS.ErrnoException) => {
+        // Concurrent Windows unlink can report EPERM after another importer
+        // removed the file. Confirm absence before accepting that result.
+        if (error.code === "EPERM") {
+          const missing = await withTokenMiserFileOperation(() => fs.lstat(file)).then(
+            () => false,
+            (statError: NodeJS.ErrnoException) => {
+              if (statError.code === "ENOENT") return true;
+              throw statError;
+            },
+          );
+          if (missing) return;
+        }
+        throw error;
+      });
+    });
     for (const directory of [...directories.sort((a, b) => b.length - a.length), threadsRoot, this.rootDir]) {
       await withTokenMiserFileOperation(() => fs.rmdir(directory)).catch(async (error: NodeJS.ErrnoException) => {
         if (error.code === "ENOENT" || error.code === "ENOTEMPTY") return;
