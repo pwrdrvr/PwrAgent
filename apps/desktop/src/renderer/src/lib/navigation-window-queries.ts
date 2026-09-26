@@ -4,7 +4,7 @@ import type { DesktopApi } from "./desktop-api";
 import { federationTargetsEqual } from "./federated-thread-events";
 import {
   applyNavigationPage, beginNavigationPageRead, createNavigationPageState,
-  failNavigationPageRead, isNavigationCursorExpired, navigationRetainedRange, type NavigationPageState,
+  failNavigationPageRead, isNavigationCursorExpired, navigationIdentityKey, navigationRetainedRange, type NavigationPageState,
 } from "./navigation-query-state";
 
 const MAX_CONCURRENT_READS = 4;
@@ -196,6 +196,10 @@ export class NavigationWindowQueries {
       if (id && resource.value.id !== id) continue;
       if (owners && !owners.some((owner) => federationTargetsEqual(owner, resource.value.state.request.federationTarget))) continue;
       if (event && !this.eventAffectsResource(resource, event)) continue;
+      // Pinning moves a root between two independent directory queries. Its
+      // old section must stop using it as an anchor before the next read,
+      // including when another event has already invalidated that section.
+      if (event && this.movePinAnchor(resource, event)) changed = true;
       // Fence each physical read once. Further events before its replacement
       // carry no new presentation state and must not rerender every row.
       if (resource.invalidated) continue;
@@ -209,6 +213,32 @@ export class NavigationWindowQueries {
         pendingSequence: resource.value.state.pendingSequence + 1, stale: true } };
     }
     if (changed) this.publish();
+  }
+
+  private movePinAnchor(resource: Resource, event: AgentEvent): boolean {
+    const { request, page } = resource.value.state;
+    const anchor = resource.anchor;
+    if (request.query.kind !== "directory" || anchor?.kind !== "thread") return false;
+    const params = event.notification.params as { sourceMethod?: string; threadId?: string; instanceId?: string; pinned?: boolean };
+    const method = event.notification.method === "navigation/invalidated" ? params.sourceMethod : event.notification.method;
+    const viewerPin = method === "navigation/remoteThreadPins/changed";
+    const pinned = viewerPin ? params.pinned : method === "thread/pin/added" ? true
+      : method === "thread/pin/removed" ? false : undefined;
+    if (pinned === undefined || !params.threadId
+      || request.query.roots !== (pinned ? "unpinned" : "pinned")) return false;
+    // Owner pins never change a mounted thread's viewer-owned rank.
+    if (!federationTargetsEqual(request.federationTarget, event.federationTarget)
+      || (viewerPin && (request.federationTarget?.scope === "remote" || !params.instanceId))) return false;
+    const ref = { backend: event.backend, threadId: params.threadId,
+      ownerInstanceId: viewerPin ? params.instanceId
+        : event.federationTarget?.scope === "remote" ? event.federationTarget.instanceId : undefined };
+    if (navigationIdentityKey(anchor.ref) !== navigationIdentityKey(ref)) return false;
+    const entries = page?.entries ?? [];
+    const index = entries.findIndex(({ row }) => navigationIdentityKey(row.ref) === navigationIdentityKey(ref));
+    const neighbor = entries[index + 1] ?? entries[index - 1];
+    resource.anchor = neighbor ? { kind: "thread", ref: neighbor.row.ref } : undefined;
+    resource.value = { ...resource.value, state: { ...resource.value.state, rebaselineRequired: false } };
+    return true;
   }
 
   private eventAffectsResource(resource: Resource, event: AgentEvent): boolean {
@@ -239,10 +269,13 @@ export class NavigationWindowQueries {
     if (resource) resource.anchor = anchor;
   }
 
-  rebaseline(id: string, anchor: NavigationQueryAnchor): Promise<void> {
-    this.setVisibleAnchor(id, anchor);
+  async rebaseline(id: string, anchor: NavigationQueryAnchor): Promise<void> {
     const resource = this.resources.get(id);
-    return resource ? this.read(resource, false, anchor) : Promise.resolve();
+    if (!resource) return;
+    while (this.isCurrent(resource) && resource.pending) await resource.pending;
+    if (!this.isCurrent(resource)) return;
+    resource.anchor = anchor;
+    return this.read(resource, false, anchor);
   }
 
   /** Returning to the start after a removed anchor is an explicit viewer action. */
@@ -292,7 +325,9 @@ export class NavigationWindowQueries {
     }
     const explicitAnchor = anchor;
     anchor = continuation || fromStart ? undefined : anchor ?? resource.anchor;
-    if (resource.value.state.rebaselineRequired && !anchor) return Promise.resolve();
+    // A remembered anchor is not new recovery demand. Retrying it on every
+    // background event clears and re-adds the same error, moving the sidebar.
+    if (resource.value.state.rebaselineRequired && !explicitAnchor && !fromStart) return Promise.resolve();
     const cursor = continuation ? resource.value.state.page?.nextCursor : undefined;
     if (continuation && !cursor) return Promise.resolve();
     const started = beginNavigationPageRead(resource.value.state);
