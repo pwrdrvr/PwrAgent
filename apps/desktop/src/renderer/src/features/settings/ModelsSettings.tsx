@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { isValidatedDiscoveryCandidate } from "@pwragent/shared";
+import { formatFilesystemPath, isValidatedDiscoveryCandidate } from "@pwragent/shared";
 import type {
   BackendModelOption,
   BackendSummary,
@@ -411,7 +411,7 @@ export function ModelsSettings(props: {
                 desktopApi={props.desktopApi}
                 icon={<span aria-hidden="true">C</span>}
                 defaultName={
-                  codex.discovery.selectedCommand ?? "codex --version"
+                  formatFilesystemPath(codex.discovery.selectedCommand ?? "codex --version")
                 }
                 defaultSub={
                   codex.discovery.selectedCommand
@@ -1660,7 +1660,7 @@ function CodexCandidateRow(props: {
 
   return (
     <SettingsPathRow
-      title={candidate.command}
+      title={formatFilesystemPath(candidate.command)}
       path={commandDiscoveryFailureDetail(reason)}
       pathIsDetail
       chips={chips}

@@ -118,6 +118,7 @@ import {
   filterDirectoryReferenceCandidates,
   findDirectoryReferenceTrigger,
   listReferencedDirectories,
+  normalizeDirectoryReferencePath,
 } from "../../lib/directory-references";
 import {
   buildHashReferenceOptions,
@@ -4649,13 +4650,13 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         linked.worktreePath,
       ]),
     ].filter((path): path is string => Boolean(path));
-    const excluded = new Set(excludePaths.map((path) => path.replace(/[/\\]+$/, "")));
+    const excluded = new Set(excludePaths.map(normalizeDirectoryReferencePath));
     const scanned = listReferencedDirectories(text, props.directories ?? [], {
       excludePaths,
     });
     const seenPaths = new Set(
       scanned
-        .map((directory) => directory.path?.replace(/[/\\]+$/, ""))
+        .map((directory) => directory.path ? normalizeDirectoryReferencePath(directory.path) : undefined)
         .filter((path): path is string => Boolean(path)),
     );
     const fromTokens: NavigationDirectorySummary[] = [];
@@ -4666,13 +4667,13 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       if (token.kind !== "directory" || !token.path) {
         continue;
       }
-      const path = token.path.replace(/[/\\]+$/, "");
+      const path = normalizeDirectoryReferencePath(token.path);
       if (!path || seenPaths.has(path) || excluded.has(path)) {
         continue;
       }
       seenPaths.add(path);
       const tracked = (props.directories ?? []).find(
-        (directory) => directory.path?.replace(/[/\\]+$/, "") === path,
+        (directory) => directory.path && normalizeDirectoryReferencePath(directory.path) === path,
       );
       fromTokens.push(
         tracked ?? {

@@ -302,7 +302,7 @@ function ProfileDeleteDialog(props: {
         )}
         <p>
           Close any other PwrAgent windows using this profile first. Codex auth
-          homes under ~/.codex are not deleted.
+          homes are not deleted.
         </p>
         <div className="settings-confirm-dialog__actions">
           <button

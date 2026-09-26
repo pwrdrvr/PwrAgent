@@ -1,6 +1,8 @@
 import * as composerMentionSources from "../useComposerMentionSources";
 import { buildThreadComposerScopeKey } from "../useComposerDraftStore";
 import { handoffLaunchpadComposer } from "../launchpad-composer-handoff";
+import { hydrateComposerDraft } from "../composer-draft-hydration";
+import { buildDirectoryReferenceMarkdown } from "../../../lib/directory-references";
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
 import { StrictMode, useMemo, useState, type ComponentProps } from "react";
@@ -6639,6 +6641,40 @@ describe("Composer", () => {
       expect(addOptimisticUserMessage).toHaveBeenCalledWith(reply, []);
       expect(onUserRepliedToThread).toHaveBeenCalledWith(thread);
       expect(textarea).toHaveValue("An unrelated draft");
+    });
+
+    it("rejects an answer before composer readiness and accepts a new submission once ready", async () => {
+      const startTurn = vi.fn(async (request: StartTurnRequest) => ({
+        backend: request.backend,
+        threadId: request.threadId,
+        turnId: "turn-answer",
+      }));
+      const onReplySubmissionSettled = vi.fn();
+      const props = {
+        backends: [backendSummary("codex")],
+        desktopApi: { onAgentEvent: () => () => undefined, startTurn },
+        onReplySubmissionSettled,
+        skills: [],
+        thread,
+      };
+      const submission = { id: 1, threadId: thread.id, backend: "codex" as const, text: reply };
+      const view = render(<Composer {...props} disabled replySubmission={submission} />);
+      fireEvent.change(screen.getByLabelText("Reply"), { target: { value: "Unsent operator draft" } });
+      expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+      await waitFor(() => expect(onReplySubmissionSettled).toHaveBeenCalledWith(1, false));
+      expect(startTurn).not.toHaveBeenCalled();
+
+      view.rerender(<Composer {...props} disabled={false} replySubmission={submission} />);
+      expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
+      expect(startTurn).not.toHaveBeenCalled();
+
+      view.rerender(<Composer {...props} disabled={false} replySubmission={{ ...submission, id: 2 }} />);
+      await waitFor(() => expect(onReplySubmissionSettled).toHaveBeenCalledWith(2, true));
+      expect(startTurn).toHaveBeenCalledTimes(1);
+      expect(startTurn).toHaveBeenCalledWith(expect.objectContaining({
+        threadId: thread.id,
+        input: [{ type: "text", text: reply }],
+      }));
     });
 
     it("queues the reply behind a busy thread and previews its answer", async () => {
@@ -17168,6 +17204,76 @@ describe("Composer", () => {
     } finally {
       delete (window as unknown as { __pwragentHomeDir?: string })
         .__pwragentHomeDir;
+    }
+  });
+
+  it.each([
+    ["C:/Projects/repo", "unlinked"],
+    ["C:/Projects/repo", "linked"],
+    ["C:/Projects/repo", "worktree"],
+    ["//server/share/repo", "unlinked"],
+    ["//server/share/repo", "linked"],
+    ["//server/share/repo", "worktree"],
+  ])("merges restored Windows directory identities for %s (%s)", async (path, mode) => {
+    const directory: NavigationDirectorySummary = {
+      key: `directory:${path}`,
+      kind: "directory",
+      label: "Tracked repository",
+      path,
+      threadKeys: [],
+      needsAttentionCount: 0,
+    };
+    const markdown = buildDirectoryReferenceMarkdown({ label: "repo", path });
+    const draftStore = createComposerDraftStore();
+    draftStore.set(buildThreadComposerScopeKey("codex", "thread-windows-reference"), {
+      ...hydrateComposerDraft(markdown, [], undefined, undefined),
+      imageAttachments: [],
+    });
+    const startTurn = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-windows-reference",
+      turnId: "turn-1",
+    }));
+    const onAttachDirectoryReferences = vi.fn();
+    const { container } = render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        desktopApi={{ onAgentEvent: () => () => undefined, startTurn }}
+        directories={[directory]}
+        draftStore={draftStore}
+        onAttachDirectoryReferences={onAttachDirectoryReferences}
+        skills={[]}
+        thread={{
+          id: "thread-windows-reference",
+          title: "Restored reference",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: mode === "unlinked" ? [] : [{
+            id: "linked",
+            label: "Linked repository",
+            path: mode === "worktree" ? "C:/checkout" : `${path}/`,
+            worktreePath: mode === "worktree" ? `${path}/` : undefined,
+            kind: mode === "worktree" ? "worktree" : "local",
+          }],
+          inbox: { inInbox: false },
+        }}
+      />,
+    );
+    expect(container.querySelectorAll(".composer__directory-reference"))
+      .toHaveLength(mode === "unlinked" ? 1 : 0);
+    if (mode === "unlinked") {
+      expect(container.querySelector(".composer__directory-reference"))
+        .toHaveTextContent("Tracked repository");
+    }
+    await clickButton("Send");
+    await waitFor(() => expect(startTurn).toHaveBeenCalledTimes(1));
+    if (mode === "unlinked") {
+      expect(onAttachDirectoryReferences).toHaveBeenCalledExactlyOnceWith(
+        [path], { backend: "codex", threadId: "thread-windows-reference" },
+      );
+    } else {
+      expect(onAttachDirectoryReferences).not.toHaveBeenCalled();
     }
   });
 

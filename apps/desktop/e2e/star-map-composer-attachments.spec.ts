@@ -312,7 +312,11 @@ test("sends pasted, dropped, and local-file attachments from a Star Map chat car
 
     const textInput = request.input.find((item) => item.type === "text");
     expect(textInput?.text).toContain("Inspect these Star Map attachments");
-    expect(textInput?.text).toContain(`[@star-map-notes.txt](${notesPath})`);
+    const notesReference = textInput?.text?.match(/\[@star-map-notes\.txt\]\(([^)]+)\)/);
+    expect(notesReference).toBeTruthy();
+    // Markdown escapes Windows backslashes (including UNC prefixes). Assert
+    // that the destination still identifies the selected file after decoding.
+    expect(decodeURIComponent(notesReference![1]!)).toBe(notesPath);
 
     const imageInputs = request.input.filter(
       (item) => item.type === "localImage",

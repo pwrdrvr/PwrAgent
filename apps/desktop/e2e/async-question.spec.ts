@@ -32,6 +32,13 @@ test("answers a free-text async question with Codex's structured reply", async (
   const app = await openAsyncQuestionReplay();
 
   try {
+    // Question cards and the editable draft render before thread configuration
+    // and queue hydration necessarily enable sending. An unsent draft lets
+    // the Send button expose the readiness boundary used by question answers.
+    const draft = app.window.getByLabel("Reply", { exact: true });
+    await draft.fill("Unsent operator draft");
+    await expect(app.window.getByRole("button", { name: "Send", exact: true })).toBeEnabled();
+
     const cards = app.window.getByRole("group", { name: "Question from Codex" });
     await expect(cards).toHaveCount(2);
     const freeText = cards.nth(0);
@@ -50,30 +57,31 @@ test("answers a free-text async question with Codex's structured reply", async (
       .fill("ws://gateway.example:47830, then wss://edge.example/gateway");
     await freeText.getByRole("button", { name: "Answer" }).click();
 
-    await expect
-      .poll(async () => await app.getLastStartTurn())
-      .toMatchObject({
-        threadId: "thread-async-question",
-        input: [
-          {
-            type: "text",
-            text: "<send_user_message_question_reply>\n"
-              + JSON.stringify([{
-                answer: "ws://gateway.example:47830, then wss://edge.example/gateway",
-                question: "Which gateway endpoints does the failing profile list, in order?",
-                questionItemId: JSON.stringify([
-                  "request_user_input_async",
-                  "call-endpoints",
-                  0,
-                ]),
-              }])
-              + "\n</send_user_message_question_reply>"
-          }
-        ]
-      });
-
+    // Wait on the rendered acknowledgement before crossing into Electron's
+    // main process. An answered card proves the reply reached the transcript.
     await expect(freeText.getByText("Answered")).toBeVisible();
+    expect(await app.getLastStartTurn()).toMatchObject({
+      threadId: "thread-async-question",
+      input: [
+        {
+          type: "text",
+          text: "<send_user_message_question_reply>\n"
+            + JSON.stringify([{
+              answer: "ws://gateway.example:47830, then wss://edge.example/gateway",
+              question: "Which gateway endpoints does the failing profile list, in order?",
+              questionItemId: JSON.stringify([
+                "request_user_input_async",
+                "call-endpoints",
+                0,
+              ]),
+            }])
+            + "\n</send_user_message_question_reply>"
+        }
+      ]
+    });
+
     await expect(freeText.getByLabel("Your answer")).toHaveCount(0);
+    await expect(draft).toHaveText("Unsent operator draft");
     // The reply renders as the answered question, not as the raw envelope.
     await expect(
       app.window.getByText("<send_user_message_question_reply>")
