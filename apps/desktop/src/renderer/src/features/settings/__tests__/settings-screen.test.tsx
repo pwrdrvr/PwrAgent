@@ -4051,6 +4051,37 @@ describe("SettingsScreen", () => {
     );
   });
 
+  it("displays normalized Windows Codex paths natively without changing saved identifiers", async () => {
+    const snapshot = createSnapshot();
+    const codex = snapshot.models.codex;
+    const command = "C:/tools/codex.cmd";
+    codex.discovery.selectedCommand = command;
+    codex.discovery.candidates = [{ ...codex.discovery.candidates[0]!, command, selected: false }];
+    codex.profiles.profiles[0]!.codexHome = "C:/Users/operator/.codex";
+    codex.profiles.profiles[1]!.codexHome = "C:/Users/operator/.codex/profiles/work";
+    const settings = createSettingsState(snapshot);
+    render(
+      <SettingsScreen
+        initialSection="models"
+        initialSubsection="codex"
+        settings={settings}
+        onClose={() => undefined}
+      />,
+    );
+
+    expect(screen.getByText("C:\\Users\\operator\\.codex"))
+      .toHaveAttribute("title", "C:\\Users\\operator\\.codex");
+    expect(screen.getByText("C:\\Users\\operator\\.codex\\profiles\\work"))
+      .toHaveAttribute("title", "C:\\Users\\operator\\.codex\\profiles\\work");
+    expect(screen.getAllByText("C:\\tools\\codex.cmd")).toHaveLength(2);
+    const candidate = screen.getByTitle("C:\\tools\\codex.cmd").closest(".settings-pathrow")!;
+    fireEvent.click(within(candidate as HTMLElement).getByRole("button", { name: "Use" }));
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({ models: { codex: { path: command } } });
+    });
+    expect(codex.profiles.profiles[0]!.codexHome).toBe("C:/Users/operator/.codex");
+  });
+
   it("shows the installed version on a Codex rejected as too old", async () => {
     // Upstream builds a codex_too_old candidate as executable:false WITH a
     // version — the rejection is derived from parsing one. Gating the version
@@ -7221,7 +7252,7 @@ describe("SettingsScreen", () => {
     expect(dialog).toHaveClass("settings-confirm-dialog--danger");
     expect(dialog).toHaveTextContent("Move scratch to Trash.");
     expect(dialog).toHaveTextContent("Close any other PwrAgent windows using this profile first.");
-    expect(dialog).toHaveTextContent("Codex auth homes under ~/.codex are not deleted.");
+    expect(dialog).toHaveTextContent("Codex auth homes are not deleted.");
     fireEvent.click(
       within(dialog).getByRole("button", { name: "Move profile to Trash" }),
     );

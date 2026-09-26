@@ -56,10 +56,7 @@ function toRepoRelativePath(
   absolutePath: string,
   worktreeRoot?: string,
 ): string {
-  if (!worktreeRoot) {
-    return absolutePath;
-  }
-  return formatPathRelativeToDirectories(absolutePath, [worktreeRoot]);
+  return formatPathRelativeToDirectories(absolutePath, worktreeRoot ? [worktreeRoot] : []);
 }
 
 type EditedFileGroupListProps = {

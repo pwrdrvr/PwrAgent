@@ -1,6 +1,7 @@
 import type { NavigationDirectoryView as NavigationDirectorySummary } from "./navigation-loaded-rows";
-import type { } from "@pwragent/shared";
+import { formatFilesystemPath, isWindowsFilesystemPath } from "@pwragent/shared";
 import { getHomeDir, tildifyPath } from "./tildify-path";
+import { parseSkillMentionParts } from "./skill-mentions";
 
 /**
  * Composer `@`-directory references.
@@ -131,9 +132,10 @@ export function buildDirectoryReferenceTooltip(
  * Characters that would break the `[@label](path)` form: `%` so decoding
  * stays lossless, parens because they delimit the destination (both for
  * `parseSkillMentionParts` and CommonMark), and whitespace because a
- * CommonMark destination cannot contain an unescaped space.
+ * CommonMark destination cannot contain an unescaped space. Backslashes
+ * must survive CommonMark escape processing, especially the UNC prefix.
  */
-const MARKDOWN_DESTINATION_UNSAFE = /[%()\s]/g;
+const MARKDOWN_DESTINATION_UNSAFE = /[%()\\\s]/g;
 
 function encodeMarkdownDestination(path: string): string {
   return path.replace(MARKDOWN_DESTINATION_UNSAFE, (char) =>
@@ -180,7 +182,7 @@ export function buildDirectoryReferenceMarkdown(
 }
 
 /**
- * Characters that may legally follow a referenced path in prose. A `/`
+ * Characters that may legally follow a referenced path in prose. A separator
  * counts so a deeper reference (`~/dev/app/src/index.ts`) still resolves
  * to the tracked repo root it lives under.
  */
@@ -197,7 +199,11 @@ function draftContainsPath(draft: string, candidate: string): boolean {
       return false;
     }
     const after = draft.slice(index + candidate.length);
-    if (after.length === 0 || REFERENCE_BOUNDARY.test(after)) {
+    if (
+      after.length === 0
+      || REFERENCE_BOUNDARY.test(after)
+      || (isWindowsFilesystemPath(candidate) && after.startsWith("\\"))
+    ) {
       return true;
     }
     searchFrom = index + 1;
@@ -224,10 +230,16 @@ export function listReferencedDirectories(
     return [];
   }
   const homeDir = options?.homeDir ?? getHomeDir();
+  const referencePaths = parseSkillMentionParts(draft)
+    .flatMap((part) => part.type === "directory" ? [decodeMarkdownDestination(part.path)] : [])
+    .join("\n");
+  const trimPath = (value: string) => value
+    .replace(isWindowsFilesystemPath(value) ? /[/\\]+$/ : /\/+$/, "");
+  const nativePath = (value: string) => formatFilesystemPath(trimPath(value));
   const excluded = new Set(
     (options?.excludePaths ?? [])
       .filter((path): path is string => Boolean(path))
-      .map((path) => path.replace(/[/\\]+$/, "")),
+      .map(nativePath),
   );
   const seenPaths = new Set<string>();
   const referenced: NavigationDirectorySummary[] = [];
@@ -236,16 +248,18 @@ export function listReferencedDirectories(
     if (!isReferenceable(directory)) {
       continue;
     }
-    const path = directory.path!.replace(/[/\\]+$/, "");
-    if (!path || seenPaths.has(path) || excluded.has(path)) {
+    const path = trimPath(directory.path!);
+    const key = nativePath(path);
+    if (!path || seenPaths.has(key) || excluded.has(key)) {
       continue;
     }
     const tilde = tildifyPath(path, homeDir);
     if (
       draftContainsPath(draft, path)
       || (tilde !== path && draftContainsPath(draft, tilde))
+      || draftContainsPath(referencePaths, tilde)
     ) {
-      seenPaths.add(path);
+      seenPaths.add(key);
       referenced.push(directory);
     }
   }
@@ -254,13 +268,14 @@ export function listReferencedDirectories(
   // a tracked `~/dev`. Keep only the deepest match so the reference
   // resolves to the repo the path actually points into.
   return referenced.filter((directory) => {
-    const path = directory.path!.replace(/[/\\]+$/, "");
+    const path = nativePath(directory.path!);
     return !referenced.some((other) => {
       if (other === directory) {
         return false;
       }
-      const otherPath = other.path!.replace(/[/\\]+$/, "");
-      return otherPath.startsWith(`${path}/`);
+      const otherPath = nativePath(other.path!);
+      const separator = isWindowsFilesystemPath(path) ? "\\" : "/";
+      return otherPath.startsWith(`${path}${separator}`);
     });
   });
 }

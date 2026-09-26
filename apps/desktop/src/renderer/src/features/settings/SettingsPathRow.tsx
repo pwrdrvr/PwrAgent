@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { formatFilesystemPath } from "@pwragent/shared";
 import type { SettingsChipTone } from "./SettingsLayout";
 
 export interface SettingsPathRowChip {
@@ -101,6 +102,9 @@ export function SettingsPathRow(props: {
 }) {
   const useLabel = props.useLabel ?? "Use";
   const selectedLabel = props.selectedLabel ?? "Selected";
+  const displayPath = props.path && !props.pathIsDetail
+    ? formatFilesystemPath(props.path)
+    : props.path;
   const body = (
     <>
       {props.icon ? (
@@ -135,9 +139,9 @@ export function SettingsPathRow(props: {
             className={`settings-pathrow__path${
               props.pathIsDetail ? " settings-pathrow__path--detail" : ""
             }`}
-            title={props.path}
+            title={displayPath}
           >
-            {props.path}
+            {displayPath}
           </span>
         ) : null}
       </div>
