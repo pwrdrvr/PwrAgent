@@ -95,6 +95,8 @@ import {
   type RefreshOwnedThreadPullRequestsRequest,
   type RefreshThreadPullRequestsRequest,
   type SetPullRequestPollingFocusRequest,
+  type SetTranscriptPullRequestsRequest,
+  type TranscriptPullRequestStatuses,
   type RefreshThreadPullRequestsResponse,
   type RegisterDirectoryFromDiskRequest,
   type RegisterDirectoryFromDiskResponse,
@@ -288,6 +290,8 @@ import {
   NAVIGATION_PROBE_PR_POLLING_AFTER_RECONNECT_CHANNEL,
   NAVIGATION_REFRESH_THREAD_PRS_CHANNEL,
   NAVIGATION_SET_PR_POLLING_FOCUS_CHANNEL,
+  TRANSCRIPT_SET_PULL_REQUESTS_CHANNEL,
+  TRANSCRIPT_PULL_REQUEST_STATUSES_CHANNEL,
   NAVIGATION_REORDER_DIRECTORY_PINS_CHANNEL,
   NAVIGATION_REORDER_THREAD_PINS_CHANNEL,
   NAVIGATION_MARK_THREAD_SEEN_CHANNEL,
@@ -362,6 +366,8 @@ import {
   resolveGitHubReposForDirectory,
 } from "../pr-status/git-remote";
 import { PrPollingScheduler } from "../pr-status/pr-polling-scheduler";
+import { TranscriptPrSubscriptions } from "../pr-status/transcript-pr-subscriptions";
+import { PrThreadIndex } from "../pr-status/pr-thread-index";
 import type { PrPollTarget } from "../pr-status/pr-polling-scheduler";
 import { PrPollingFocusTracker } from "../pr-status/pr-polling-focus";
 import {
@@ -1329,6 +1335,10 @@ class DesktopAppServerService {
     (error) => appServerLog.warn("Could not persist bundled Git LFS advisory", { error }),
   );
   private prPollingScheduler: PrPollingScheduler | undefined;
+  private readonly transcriptPrSubscriptions = new TranscriptPrSubscriptions((key) => {
+    if (!this.primaryPrThreadsByKey.has(key)) this.prPollingScheduler?.forgetTarget(key);
+  });
+  private transcriptPrRefreshTimer: ReturnType<typeof setTimeout> | undefined;
   private backgroundPrPollingEnabled = false;
   private prAutoDispatchAllowed = false;
   private prAutoDispatchBudgetConfig: PrAutoDispatchBudgetConfig = {
@@ -1344,6 +1354,7 @@ class DesktopAppServerService {
   private ownerNavigationMetadataVersion = 0;
   private ownerNavigationMetadataRead: Promise<void> | undefined;
   private ownerNavigationMetadataAbort: AbortController | undefined;
+  private readonly primaryPrThreadsByKey = new PrThreadIndex();
   /** Owner thread→PR attachments plus the primary workspace's repository. */
   private readonly attachedPrsByThreadKey = new Map<
     string,
@@ -2665,6 +2676,17 @@ class DesktopAppServerService {
     }
   }
 
+  private setThreadPrAttachment(
+    threadKey: string,
+    attachment: { backend: AppServerBackendKind; primaryRepoKey?: string; prs: PrSummary[] } | undefined,
+  ): void {
+    this.primaryPrThreadsByKey.set(threadKey, (attachment?.prs ?? [])
+      .filter((pr) => pullRequestMatchesRepositoryKey(pr, attachment?.primaryRepoKey))
+      .map(getPrStatusKey));
+    if (attachment) this.attachedPrsByThreadKey.set(threadKey, attachment);
+    else this.attachedPrsByThreadKey.delete(threadKey);
+  }
+
   private async rememberThreadPrAttachments(
     threads: NavigationSnapshot["threads"],
     options: { replace: boolean; isCurrent?: () => boolean },
@@ -2688,7 +2710,7 @@ class DesktopAppServerService {
       const threadKey = buildThreadIdentityKey(thread.source, thread.id);
       liveThreadKeys.add(threadKey);
       const primaryRepoKey = primaryRepoKeys[index];
-      this.attachedPrsByThreadKey.set(threadKey, {
+      this.setThreadPrAttachment(threadKey, {
         backend: thread.source,
         ...(primaryRepoKey ? { primaryRepoKey } : {}),
         prs: thread.prs ?? [],
@@ -2703,7 +2725,7 @@ class DesktopAppServerService {
       for (const threadKey of this.attachedPrsByThreadKey.keys()) {
         if (options.isCurrent && !options.isCurrent()) return;
         if (!liveThreadKeys.has(threadKey)) {
-          this.attachedPrsByThreadKey.delete(threadKey);
+          this.setThreadPrAttachment(threadKey, undefined);
           const identity = parseThreadIdentityKey(threadKey);
           if (identity) {
             candidates.push({ ...identity, prKeys: [] });
@@ -2722,7 +2744,7 @@ class DesktopAppServerService {
   }): Promise<void> {
     const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
     const current = this.attachedPrsByThreadKey.get(threadKey);
-    this.attachedPrsByThreadKey.set(
+    this.setThreadPrAttachment(
       threadKey,
       {
         backend: params.backend,
@@ -4942,6 +4964,7 @@ class DesktopAppServerService {
         fetchedAt,
       });
       this.applyPrStatusToAttachments(pr);
+      this.transcriptPrSubscriptions.observe([pr], fetchedAt);
     }
     if (staleKeys.length > 0) {
       // Losing to a newer registry entry is ordinary bookkeeping: cache loads
@@ -5008,16 +5031,7 @@ class DesktopAppServerService {
 
   /** Resolve only primary visible attachments; detached and informational links never qualify. */
   private findThreadKeysForPrKey(prKey: string): string[] {
-    const threadKeys: string[] = [];
-    for (const [threadKey, attachment] of this.attachedPrsByThreadKey) {
-      if (attachment.prs.some((pr) =>
-        getPrStatusKey(pr) === prKey
-        && pullRequestMatchesRepositoryKey(pr, attachment.primaryRepoKey)
-      )) {
-        threadKeys.push(threadKey);
-      }
-    }
-    return threadKeys;
+    return [...(this.primaryPrThreadsByKey.get(prKey) ?? [])];
   }
 
   /**
@@ -5281,6 +5295,53 @@ class DesktopAppServerService {
   /** Drop a closed window's focus so its threads leave the fast tier. */
   clearPullRequestPollingFocusForSender(senderKey: number): void {
     this.prPollingFocus.clearSender(senderKey);
+  }
+
+  setTranscriptPullRequests(
+    request: SetTranscriptPullRequestsRequest,
+    senderKey: number,
+    publish: (statuses: TranscriptPullRequestStatuses) => void,
+  ): TranscriptPullRequestStatuses {
+    const snapshot = this.transcriptPrSubscriptions.set(senderKey, request, publish);
+    // Coalesce chip mounts and scrolling into one scheduler pass. Even with
+    // background polling off, a newly displayed chip gets an on-demand read.
+    if (this.transcriptPrSubscriptions.hasSubscribers && !this.transcriptPrRefreshTimer) {
+      this.transcriptPrRefreshTimer = setTimeout(() => {
+        this.transcriptPrRefreshTimer = undefined;
+        void Promise.all([this.loadPrStatusRegistry(), this.loadPrLookupRegistry()])
+          .then(() => {
+            if (!this.transcriptPrSubscriptions.hasSubscribers) return;
+            this.ensurePrPollingSchedulerStarted();
+            return this.prPollingScheduler?.tick(this.takePendingTranscriptPrTargets);
+          })
+          .catch((error) => {
+            appServerLog.warn("failed to refresh transcript PR statuses", {
+              error: error instanceof Error ? error.message : String(error),
+            });
+          });
+      }, 50);
+      this.transcriptPrRefreshTimer.unref?.();
+    }
+    return snapshot;
+  }
+
+  private readonly takePendingTranscriptPrTargets = (): PrPollTarget[] =>
+    this.transcriptPrSubscriptions.takePendingTargets().map((target) => this.hydrateTranscriptPrTarget(target));
+
+  private hydrateTranscriptPrTarget(target: PrPollTarget): PrPollTarget {
+    const threadKey = this.primaryPrThreadsByKey.get(target.prKey)?.values().next().value;
+    const attachment = threadKey ? this.attachedPrsByThreadKey.get(threadKey) : undefined;
+    if (attachment) this.prPollBackendByKey.set(target.prKey, attachment.backend);
+    const known = this.prStatusRegistry.get(target.prKey);
+    if (known && known.fetchedAt > (target.fetchedAt ?? 0)) {
+      this.transcriptPrSubscriptions.observe([known.pr], known.fetchedAt);
+      return { ...target, pr: known.pr, fetchedAt: known.fetchedAt };
+    }
+    return target;
+  }
+
+  clearTranscriptPullRequestsForSender(senderKey: number): void {
+    this.transcriptPrSubscriptions.clearSender(senderKey);
   }
 
   async probePullRequestPollingAfterReconnect(): Promise<void> {
@@ -5557,9 +5618,13 @@ class DesktopAppServerService {
    */
   private ensurePrPollingSchedulerStarted(): void {
     if (this.prPollingScheduler) {
+      if (this.backgroundPrPollingEnabled && this.prStatusRegistryLoaded && this.prLookupRegistryLoaded) {
+        this.prPollingScheduler.start();
+        this.startPrDiscoveryRefresh();
+      }
       return;
     }
-    appServerLog.info("background PR polling enabled — starting poller");
+    appServerLog.debug("creating PR polling scheduler");
     const scheduler = new PrPollingScheduler({
       listTargets: () => this.collectPrPollTargets(),
       getFocusedThreadKeys: () => this.prPollingFocus.union(),
@@ -5576,8 +5641,15 @@ class DesktopAppServerService {
       fetchPullRequestsAfterReconnect: async (refs) =>
         await this.fetchForgePullRequests(refs, true, true),
       getObservationTimestamp: () => this.nextPrObservationTimestamp(),
-      applyResults: async (prs, fetchedAt) =>
-        await this.applyPolledPrStatuses(prs, fetchedAt),
+      applyResults: async (prs, fetchedAt) => {
+        // Mention-only results must never enter persistence, transitions, or
+        // automatic repair. Attached PRs keep their existing result path.
+        this.transcriptPrSubscriptions.observe(prs, fetchedAt);
+        const attached = prs.filter((pr) =>
+          this.primaryPrThreadsByKey.has(getPrStatusKey(pr))
+        );
+        return attached.length ? await this.applyPolledPrStatuses(attached, fetchedAt) : [];
+      },
     });
     this.prPollingScheduler = scheduler;
 
@@ -5590,6 +5662,7 @@ class DesktopAppServerService {
         if (this.prPollingScheduler !== scheduler) {
           return;
         }
+        if (!this.backgroundPrPollingEnabled) return;
         scheduler.start();
         this.startPrDiscoveryRefresh();
         appServerLog.info("background PR polling started", {
@@ -5794,6 +5867,7 @@ class DesktopAppServerService {
     this.prPollBackendByKey.clear();
 
     for (const [threadKey, attachment] of this.attachedPrsByThreadKey) {
+      if (!this.backgroundPrPollingEnabled) break;
       for (const pr of attachment.prs.filter((candidate) =>
         pullRequestMatchesRepositoryKey(candidate, attachment.primaryRepoKey)
       )) {
@@ -5810,6 +5884,15 @@ class DesktopAppServerService {
         }
         byKey.set(prKey, { prKey, pr: latest, threadKeys: [threadKey] });
       }
+    }
+    for (const candidate of this.transcriptPrSubscriptions.targets()) {
+      const target = this.hydrateTranscriptPrTarget(candidate);
+      const existing = byKey.get(target.prKey);
+      byKey.set(target.prKey, existing ? {
+        ...existing,
+        subscriptionTier: target.subscriptionTier,
+        fetchedAt: target.fetchedAt,
+      } : target);
     }
     return [...byKey.values()];
   }
@@ -7611,12 +7694,16 @@ class DesktopAppServerService {
     this.prGraphqlClient = undefined;
     this.githubSamlBlockedRepositories.clear();
     this.prPollingFocus.clear();
+    clearTimeout(this.transcriptPrRefreshTimer);
+    this.transcriptPrRefreshTimer = undefined;
+    this.transcriptPrSubscriptions.clear();
     this.prPollBackendByKey.clear();
     this.prStatusTransitionListeners.clear();
     this.prAutoDispatchCoordinator?.close();
     this.prAutoDispatchCoordinator = undefined;
     this.prStatusWatchCoordinator = undefined;
     this.attachedPrsByThreadKey.clear();
+    this.primaryPrThreadsByKey.clear();
     this.publishedPrimaryGitRepositoriesByThreadKey.clear();
     this.pendingNavigationSnapshots.clear();
     this.remoteNavigationSnapshotCache.clear();
@@ -7908,6 +7995,7 @@ const navigationAttentionViewLeases = new NavigationAttentionViewLeases((request
 
 /** Sender ids that already have a destroyed-listener reaping their PR focus. */
 const prPollingFocusCleanupSenderIds = new Set<number>();
+const transcriptPrCleanupSenderIds = new Set<number>();
 
 let unsubscribeWorkingStateEvents: (() => void) | undefined;
 let unsubscribeNavigationRemoteEvents: (() => void) | undefined;
@@ -8542,6 +8630,32 @@ export function registerAppServerIpcHandlers(): void {
       return await appServerService.refreshThreadGitWorkingState(request);
     },
   );
+  ipcMain.removeHandler(TRANSCRIPT_SET_PULL_REQUESTS_CHANNEL);
+  ipcMain.handle(
+    TRANSCRIPT_SET_PULL_REQUESTS_CHANNEL,
+    (event, request: SetTranscriptPullRequestsRequest): TranscriptPullRequestStatuses => {
+      const sender = event.sender;
+      if (
+        !Array.isArray(request?.updates)
+        || !Array.isArray(request.removedUrls)
+        || request.updates.some((item) => typeof item?.url !== "string" || typeof item?.visible !== "boolean")
+        || request.removedUrls.some((url) => typeof url !== "string")
+      ) throw new Error("Invalid transcript PR subscriptions");
+      if (!transcriptPrCleanupSenderIds.has(sender.id)) {
+        transcriptPrCleanupSenderIds.add(sender.id);
+        const clear = (): void => appServerService.clearTranscriptPullRequestsForSender(sender.id);
+        sender.on("render-process-gone", clear);
+        sender.on("did-start-loading", clear);
+        sender.once("destroyed", () => {
+          transcriptPrCleanupSenderIds.delete(sender.id);
+          clear();
+        });
+      }
+      return appServerService.setTranscriptPullRequests(request, sender.id, (statuses) => {
+        if (!sender.isDestroyed()) sender.send(TRANSCRIPT_PULL_REQUEST_STATUSES_CHANNEL, statuses);
+      });
+    },
+  );
   ipcMain.removeHandler(NAVIGATION_SET_PR_POLLING_FOCUS_CHANNEL);
   ipcMain.handle(
     NAVIGATION_SET_PR_POLLING_FOCUS_CHANNEL,
@@ -9008,6 +9122,7 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(NAVIGATION_SET_THREAD_AGENT_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_REFRESH_THREAD_GIT_WORKING_STATE_CHANNEL);
+  ipcMain.removeHandler(TRANSCRIPT_SET_PULL_REQUESTS_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_PROBE_PR_POLLING_AFTER_RECONNECT_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_DETACH_THREAD_PR_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_REFRESH_DIRECTORY_GIT_STATUSES_CHANNEL);

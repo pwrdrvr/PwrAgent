@@ -41,6 +41,10 @@ export type PrPollTarget = {
   pr: PrSummary;
   /** Thread keys (`backend:threadId`) that show this PR. Drives tier + publish. */
   threadKeys: string[];
+  /** Transcript interest shares existing tiers without creating a thread attachment. */
+  subscriptionTier?: "focused" | "cold";
+  /** Reuse a status fetched by another consumer, including across remounts. */
+  fetchedAt?: number;
 };
 
 /** Target cadence per pollable tier, when the window is visible. */
@@ -140,15 +144,21 @@ export function assignTier(params: {
   lastInteractionAt: number;
   now: number;
 }): PrPollTier {
-  if (isTargetFocused(params.target, params.focusedThreadKeys)) {
+  if (
+    isTargetFocused(params.target, params.focusedThreadKeys)
+    || params.target.subscriptionTier === "focused"
+  ) {
     return "focused";
+  }
+  if (params.target.subscriptionTier && params.target.threadKeys.length === 0) {
+    return params.target.subscriptionTier;
   }
   // Either real movement on the PR or the operator touching its thread counts
   // as "still live" — neither alone should be able to freeze an active PR out.
   const lastActivityAt = Math.max(params.lastChangedAt, params.lastInteractionAt);
   const quietForMs = params.now - lastActivityAt;
   if (quietForMs > ICEBOX_AFTER_MS) {
-    return "icebox";
+    return params.target.subscriptionTier ?? "icebox";
   }
   return quietForMs <= QUIET_DEMOTION_MS ? "warm" : "cold";
 }
@@ -164,6 +174,8 @@ export class PrPollingScheduler {
   private readonly pendingInteractionThreadKeys = new Set<string>();
   private timer: NodeJS.Timeout | undefined;
   private ticking = false;
+  private tickPending = false;
+  private readonly pendingTargetLists = new Set<() => PrPollTarget[]>();
   private reconnectProbePending = false;
   private reconnectProbeWaitingForBudget = false;
   private lastReconnectProbeAt = Number.NEGATIVE_INFINITY;
@@ -193,10 +205,17 @@ export class PrPollingScheduler {
       this.timer = undefined;
     }
     this.pollState.clear();
+    this.tickPending = false;
+    this.pendingTargetLists.clear();
     this.pendingInteractionThreadKeys.clear();
     this.reconnectProbePending = false;
     this.reconnectProbeWaitingForBudget = false;
     this.lastReconnectProbeAt = Number.NEGATIVE_INFINITY;
+  }
+
+  /** Drop ephemeral clocks even when the background timer is disabled. */
+  forgetTarget(prKey: string): void {
+    this.pollState.delete(prKey);
   }
 
   /**
@@ -232,10 +251,12 @@ export class PrPollingScheduler {
   }
 
   /** One scheduling pass. Exposed so tests can drive it without timers. */
-  async tick(): Promise<void> {
+  async tick(targets?: () => PrPollTarget[]): Promise<void> {
     // Ticks must not overlap: a slow sweep would otherwise stack requests and
     // re-select the same not-yet-marked targets.
     if (this.ticking) {
+      if (targets) this.pendingTargetLists.add(targets);
+      else this.tickPending = true;
       return;
     }
     this.ticking = true;
@@ -243,7 +264,7 @@ export class PrPollingScheduler {
       if (this.reconnectProbeWaitingForBudget) {
         await this.runReconnectProbe();
       } else {
-        await this.runTick();
+        await this.runTick(targets?.());
       }
     } catch (error) {
       schedulerLog.warn("PR poll tick failed", {
@@ -269,19 +290,31 @@ export class PrPollingScheduler {
 
   private finishTick(): void {
     this.ticking = false;
-    if (!this.reconnectProbePending) {
+    if (this.reconnectProbePending) {
+      this.reconnectProbePending = false;
+      void this.runReconnectProbeExclusive();
       return;
     }
-    this.reconnectProbePending = false;
-    void this.runReconnectProbeExclusive();
+    if (this.tickPending) {
+      this.tickPending = false;
+      void this.tick();
+      return;
+    }
+    if (this.pendingTargetLists.size) {
+      const pending = [...this.pendingTargetLists];
+      this.pendingTargetLists.clear();
+      void this.tick(() => pending.flatMap((getTargets) => getTargets()));
+    }
   }
 
-  private async runTick(): Promise<void> {
+  private async runTick(requestedTargets?: PrPollTarget[]): Promise<void> {
     const now = this.now();
-    const targets = this.deps.listTargets();
-    this.prunePollState(targets);
+    const targets = requestedTargets ?? this.deps.listTargets();
+    // Incremental chip requests must neither scan the full registry nor prune
+    // the polling clocks of unrelated PRs.
+    if (!requestedTargets) this.prunePollState(targets);
 
-    const due = this.selectDueTargets(targets, now);
+    const due = this.selectDueTargets(targets, now, false, !requestedTargets);
     if (due.length === 0) {
       return;
     }
@@ -327,6 +360,7 @@ export class PrPollingScheduler {
     targets: PrPollTarget[],
     now: number,
     ignoreCadence = false,
+    drainInteractions = true,
   ): PrPollTarget[] {
     const focusedThreadKeys = this.deps.getFocusedThreadKeys();
     const cadenceMultiplier = this.deps.isWindowVisible()
@@ -335,9 +369,13 @@ export class PrPollingScheduler {
 
     const due: { target: PrPollTarget; tier: PollablePrTier; lastPolledAt: number }[] = [];
     for (const target of targets) {
-      // Merged/closed PRs cannot change again. The registry keeps them for
-      // display; polling them is pure waste.
-      if (isTerminalPullRequest(target.pr)) {
+      // Transcript links keep closed PRs eligible: a closed PR can reopen.
+      // Merged PRs need no recurring work.
+      if (isTerminalPullRequest(target.pr) && (
+        !target.subscriptionTier
+        || target.pr.lifecycleState === "merged"
+        || target.pr.state === "merged"
+      )) {
         continue;
       }
       const state = this.ensurePollState(target.prKey, now);
@@ -367,13 +405,14 @@ export class PrPollingScheduler {
         continue;
       }
       const cadence = TIER_CADENCE_MS[tier] * cadenceMultiplier;
-      if (!ignoreCadence && now - state.lastPolledAt < cadence) {
+      const lastPolledAt = Math.max(state.lastPolledAt, target.fetchedAt ?? 0);
+      if (!ignoreCadence && now - lastPolledAt < cadence) {
         continue;
       }
       due.push({ target, tier, lastPolledAt: state.lastPolledAt });
     }
     // Drained once per pass: every target has now had a chance to see them.
-    this.pendingInteractionThreadKeys.clear();
+    if (drainInteractions) this.pendingInteractionThreadKeys.clear();
 
     // Focused first, then least-recently-polled. The second key is what makes
     // the sweep round-robin instead of starving the tail of a long list.
