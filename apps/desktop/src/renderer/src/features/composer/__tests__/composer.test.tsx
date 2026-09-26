@@ -3859,6 +3859,81 @@ describe("Composer", () => {
     expect(chip?.querySelector(".pr-chip__draft-bar")).not.toBeNull();
   });
 
+  it.each(["code block", "blockquote"])("preserves the draft when pasting a PR reference into a %s", async (target) => {
+    const startTurn = vi.fn(async (_request: StartTurnRequest) => ({
+      backend: "codex" as const,
+      threadId: "paste-thread",
+      turnId: "turn-1",
+    }));
+    render(
+      <Composer
+        desktopApi={{ onAgentEvent: () => () => undefined, startTurn }}
+        skills={[]}
+        thread={{
+          id: "paste-thread",
+          title: "Paste test",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />,
+    );
+    const textbox = screen.getByRole("textbox", { name: "Reply" });
+    const initialHtml = [
+      "<p>Keep <code>%APPDATA%</code> intact.</p>",
+      target === "code block"
+        ? "<pre><code>Paste here</code></pre>"
+        : "<blockquote><p>Paste here</p></blockquote>",
+      "<blockquote><p>Collected metadata</p></blockquote>",
+    ].join("");
+    fireEvent.paste(textbox, {
+      clipboardData: {
+        getData: (type: string) => type === "text/html" ? initialHtml : "",
+        files: [],
+        items: [],
+        types: ["text/html"],
+      },
+    });
+    const value = (textbox as HTMLTextAreaElement).value;
+    const pasteIndex = value.indexOf("Paste here") + "Paste here".length;
+    act(() => (textbox as HTMLTextAreaElement).setSelectionRange(pasteIndex, pasteIndex));
+    const pasted = [
+      "Created [#42](https://github.com/fixture/project/pull/42) and [#43](https://github.com/fixture/project/pull/43).",
+      "",
+      "- Adds `Programs\\OpenAI\\Codex`, including `bin\\codex.exe`.",
+    ].join("\n");
+    fireEvent.paste(textbox, {
+      clipboardData: {
+        getData: (type: string) => type === "text/plain" ? pasted : "",
+        files: [],
+        items: [],
+        types: ["text/plain"],
+      },
+    });
+    await waitFor(() => {
+      expect(textbox.querySelector("p > code")?.textContent).toBe("%APPDATA%");
+      expect(textbox.querySelectorAll("blockquote")).toHaveLength(target === "code block" ? 1 : 2);
+      if (target === "code block") {
+        expect(textbox.querySelector("pre code")?.textContent).toBe(`Paste here${pasted}`);
+        expect(textbox.querySelector("[data-mention-kind]")).toBeNull();
+      } else {
+        expect(textbox.querySelectorAll("blockquote [data-mention-kind='pull-request']")).toHaveLength(2);
+      }
+    });
+    await clickButton("Send");
+    await waitFor(() => expect(startTurn).toHaveBeenCalled());
+    const request = startTurn.mock.calls[0]?.[0];
+    const quoted = `Paste here${pasted}`;
+    const expectedBlock = target === "code block"
+      ? `\`\`\`\n${quoted}\n\`\`\``
+      : quoted.split("\n").map((line) => `> ${line}`).join("\n");
+    expect(request?.input).toEqual([{
+      type: "text",
+      text: `Keep \`%APPDATA%\` intact.\n\n${expectedBlock}\n\n> Collected metadata`,
+    }]);
+  });
+
   it("rebuilds a GitLab merge request chip from a prompt-only launchpad restore", async () => {
     const url = "https://gitlab.com/pwrdrvr/platform/PwrAgent/-/merge_requests/49";
     const launchpad: NavigationLaunchpadDraft = {
