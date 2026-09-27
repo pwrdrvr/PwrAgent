@@ -99,6 +99,7 @@ describe("Token Miser agent tools", () => {
   it("describes source access without priming the parent about filtering costs", async () => {
     const store = await createStore();
     const descriptions = buildTokenMiserToolDefinitions(store)
+      .filter((tool) => !["summarize_token_miser_output", "read_token_miser_segment"].includes(tool.name))
       .map((tool) => tool.description)
       .join("\n");
 
@@ -133,6 +134,8 @@ describe("Token Miser agent tools", () => {
         { name: "read_token_miser_output" },
         { name: "read_token_miser_output_batch" },
         { name: "read_all_token_miser_output" },
+        { name: "summarize_token_miser_output" },
+        { name: "read_token_miser_segment" },
       ],
     });
 

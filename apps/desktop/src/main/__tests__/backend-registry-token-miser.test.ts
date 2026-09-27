@@ -1,3 +1,6 @@
+import type { TokenMiserServiceOptions } from "../token-miser/token-miser-service";
+import { attachSqliteWriteMetrics, isSqliteWriteMetricsEnabled, measureSqliteWrites } from "../state/sqlite-write-metrics";
+import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync, promises as fs } from "node:fs";
 import os from "node:os";
@@ -44,6 +47,43 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
     await registry.close();
     stateDb.close();
     rmSync(directory, { force: true, recursive: true });
+  });
+
+  it("attributes focused inference once to its requesting thread, including discarded answers, and subtracts it from savings", async () => {
+    // This measured path needs a real WAL; the other ledger tests use RAM.
+    stateDb.close();
+    stateDb = StateDb.open(path.join(directory, "focused-usage.db"));
+    store = new SqliteOverlayStore(stateDb);
+    Object.assign(registry, { overlayStore: store });
+    const internals = registry as unknown as {
+      recordTokenMiserFocusedInference: NonNullable<TokenMiserServiceOptions["onFocusedInference"]>;
+      buildTokenMiserThreadSavings(params: { backend: "codex"; threadId: string; entries: TokenMiserObjectMetadata[]; invocations: never[] }): Promise<{ gateCostMicros: number; savingsMicros: number }>;
+    };
+    const tokenMiserStore = new TokenMiserStore(path.join(directory, "focused-store"));
+    Object.assign(registry, { tokenMiserStore });
+    const entry = { ...metadata(randomUUID(), "gate-helper"), parentModel: "gpt-6-astra" };
+    const savingsParams = { backend: "codex" as const, threadId: "thread-parent", entries: [entry], invocations: [] as never[] };
+    const before = await internals.buildTokenMiserThreadSavings(savingsParams);
+    const params = {
+      threadId: "thread-parent", turnId: "turn-parent", inferenceId: "focused-inference",
+      usage: { status: "ok" as const, object: { invalid: "discarded answer" }, model: "gpt-6-luna",
+        helperThreadId: "focused-helper", helperTurnId: "focused-turn",
+        tokenUsage: { inputTokens: 2000, outputTokens: 100, totalTokens: 2100 } },
+    };
+    if (!isSqliteWriteMetricsEnabled()) attachSqliteWriteMetrics({ db: stateDb.raw, dbPath: stateDb.raw.name });
+    const { writes } = await measureSqliteWrites(() => internals.recordTokenMiserFocusedInference(params));
+    expectSqliteWriteBudget({ scenario: "token-miser-focused-inference", note: "One actual focused helper inference writes one parent-attributed usage line, independent of answer delivery.", writes });
+    await internals.recordTokenMiserFocusedInference(params);
+    const pricing = await store.readThreadPricing({ backend: "codex", threadId: "thread-parent" });
+    expect(pricing.lines).toHaveLength(1);
+    expect(pricing.lines[0]).toMatchObject({ parentThreadId: "thread-parent", threadId: "focused-helper", model: "gpt-6-luna", inputTokens: 2000, outputTokens: 100 });
+    expect(pricing.lines[0]!.totalCostMicros).toBeGreaterThan(0);
+    const after = await internals.buildTokenMiserThreadSavings(savingsParams);
+    expect(after.gateCostMicros - before.gateCostMicros).toBe(pricing.lines[0]!.totalCostMicros);
+    expect(before.savingsMicros - after.savingsMicros).toBe(pricing.lines[0]!.totalCostMicros);
+    expect((await store.readThreadPricing({ backend: "codex", threadId: "unrelated" })).lines).toHaveLength(0);
+    await internals.recordTokenMiserFocusedInference({ ...params, inferenceId: "unpriced-inference", usage: { ...params.usage, model: "unknown-fixture-model" } });
+    expect(await internals.buildTokenMiserThreadSavings(savingsParams)).toBeUndefined();
   });
 
   it("releases previous originals on turn start, while completion leaves them readable", async () => {
