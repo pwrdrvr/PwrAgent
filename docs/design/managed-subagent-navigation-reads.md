@@ -1,5 +1,86 @@
 # Managed subagent navigation reads
 
+## Current implementation: durable relationship projection (v64)
+
+Navigation reads `thread_navigation_relationships` in one statement. It no
+longer searches `threads.payload` for `monitorThreadId`, extracts relationships
+from full overlays, or maintains a managed-child cache. Both compact owner
+navigation and legacy snapshot reconciliation use this read. Federation consumes
+the owner's filtered index; the relation is profile-local, not a viewer-side
+cross-instance index.
+
+Parent overlay JSON remains authoritative for existing writers. A sparse row
+stores the parent's backend/ID and ordered child backend/monitor-ID projection,
+plus the child's ordinary-grouped-handoff flag. Compact JSON preserves backend
+fallback, JavaScript whitespace trimming, and malformed-entry prefix semantics.
+Storage keys retain the encoded backend representation. A child's grouped flag
+overrides stale parent references; missing child overlays do not erase those
+references. Completion, archive, and registry replacement do not erase them
+either. Multiple parents can reference one child.
+
+Built-in-only persistent SQLite triggers project the changed overlay by primary
+key, in its existing transaction. They cover older processes, direct SQL,
+replacement, rekeying, and deletion. They update a projection row only when its
+compact fields differ. No runtime function registration or foreign-key setting
+is required. Replacement explicitly clears obsolete rows even when SQLite's
+recursive delete triggers are disabled. If an external writer enables recursive
+triggers, REPLACE can delete/reinsert the projection; correctness is preserved,
+but that writer can incur additional projection writes.
+
+The v64 migration acquires an immediate transaction, rechecks the version,
+backfills once, and installs the projection and triggers atomically. A failed
+backfill rolls back and retries on reopen. Navigation never performs backfill.
+The complete relation read remains O(relationship data), independent of unrelated
+overlay histories. A normalized edge table and reverse-child index are not needed
+by these complete-set consumers. There is no additional polling or change log.
+
+### Validation and costs
+
+Regression coverage includes 30 cold/current/transaction reads after ten unrelated
+external commits, with zero overlay-payload queries. Independent legacy writers,
+an already-open pre-migration connection, migration failure/retry, a competing
+opener, savepoints, both recursive-trigger settings, grouped handoffs, malformed
+rows, and both navigation consumers are covered.
+
+The maintained benchmark below now creates the durable projection and invalidates
+the baseline with a raw thread write. A backend-only write no longer invalidates
+the later cache implementations. Against HEAD `5b7a5b289`, on Apple M5 Max,
+Node 24.18.0 / SQLite 3.53.2, the existing 629-parent/629-child/3,000-unrelated
+fixture measured complete invalidated helper median **48.39 → 0.51 ms** and p95
+**49.18 → 0.57 ms**. The new unchanged read measured 0.44 ms median; the old warm
+cache can be faster than that. The benefit is eliminating large-payload scans
+after invalidation, not making cache hits faster. These are synthetic timings,
+not a live Electron CPU claim.
+
+Checked-in write budgets measure five lifecycle overlay changes as **five
+commits**, with five additional projection mutations counted separately through
+`total_changes()`. Sixty metadata updates produce **zero projection mutations**
+and no additional commits. Navigation adds zero writes. The lifecycle fixture
+records 119,480 WAL bytes total, including existing overlay writes: at 100 such
+five-write lifecycles/day that is about **11.95 MB/day total**, not incremental.
+
+A separate contrived same-length relationship replacement measured 8,272 WAL
+bytes with projection versus 4,152 without: one additional 4,120-byte frame in
+that fixture. At 100 such changes/day this projects to **0.412 MB/day added**;
+at one/second it would be **356 MB/day**. Larger relationship arrays and page
+splits can cost more. Metadata-only and navigation projection writes add
+**0 MB/day** under the application's normal connection settings. Zero extra
+commits does not imply zero extra WAL bytes.
+
+On that 3,100-overlay, 60 MB synthetic fixture, the one-time backfill took about
+26 ms and 33 KB of WAL. Sixty metadata writes took about 4.7 ms with triggers
+versus 1.9 ms without, with identical WAL bytes. Write-time JSON extraction is a
+real tradeoff: it touches the changed overlay, even when projection rows remain
+unchanged. Migration duration scales with existing payload size and temporarily
+holds the writer lock. These measurements are fixture observations, not limits.
+
+## Historical measurement: PR #2032 and its integration
+
+The following records the earlier projection/cache optimization. It retained the
+payload scan and was superseded by the v64 read model above. PR #2065 subsequently
+preserved that cache across metadata writes; its initially proposed persistent
+projection was removed before merge.
+
 `SqliteOverlayStore.reconcileNavigationSnapshot` discovers managed workers from
 parent overlays, then excludes ordinary grouped handoffs by reading each
 candidate child's `handoffOrigin.groupingMode`. The relationship can be written

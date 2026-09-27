@@ -4,7 +4,7 @@ import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildThreadIdentityKey } from "@pwragent/shared";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
-import { StateDb } from "../state/state-db";
+import { CURRENT_STATE_DB_USER_VERSION, StateDb } from "../state/state-db";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import {
@@ -48,6 +48,15 @@ function useFileStateDb(): string {
   stateDb = StateDb.open(temp.dbPath);
   store = new SqliteOverlayStore(stateDb);
   return temp.dbPath;
+}
+
+function downgradeRelationshipSchema(): void {
+  stateDb.raw.exec(`DROP TRIGGER thread_navigation_relationships_insert;
+    DROP TRIGGER thread_navigation_relationships_update;
+    DROP TRIGGER thread_navigation_relationships_delete;
+    DROP VIEW thread_navigation_relationship_projection;
+    DROP TABLE thread_navigation_relationships;`);
+  stateDb.raw.pragma("user_version = 63");
 }
 
 beforeEach(() => {
@@ -102,6 +111,13 @@ describe("managed subagent navigation reads", () => {
     expect(keys()).toEqual([
       buildThreadIdentityKey("acp:grok", "parent"), "codex:child", "codex:malformed-child",
     ]);
+    const index = store.readNavigationQueryIndex({
+      backend: "all",
+      threads: ["child", "grouped"].map((id) => ({
+        id, title: id, titleSource: "explicit", source: "codex", linkedDirectories: [],
+      })),
+    });
+    expect(index.threads.map((thread) => thread.id)).toEqual(["grouped"]);
     const snapshot = await store.reconcileNavigationSnapshot({
       backend: "all", fetchedAt: 1, partial: true,
       threads: ["child", "grouped"].map((id) => ({
@@ -111,7 +127,7 @@ describe("managed subagent navigation reads", () => {
     expect(snapshot.threads.map((thread) => thread.id)).toEqual(["grouped"]);
   });
 
-  it("reuses only unchanged reads and detects local inserts, updates and deletes", () => {
+  it("reads compact relationships and detects local inserts, updates and deletes", () => {
     expect(keys()).toEqual([]);
     seed("parent", { subAgents: [{ monitorThreadId: "first" }] });
     expect(keys()).toEqual(["codex:first"]);
@@ -135,7 +151,155 @@ describe("managed subagent navigation reads", () => {
     expect(prepare.mock.calls.filter(([sql]) => sql.includes("AS projection FROM threads"))).toHaveLength(0);
   });
 
-  it("keeps the same in-memory set across ordinary overlay and worker metadata writes", async () => {
+  it("never reads overlay payloads after unrelated external commits, including cold and transaction reads", () => {
+    const dbPath = useFileStateDb();
+    seed("parent", { subAgents: [{ monitorThreadId: "child" }] });
+    for (let i = 0; i < 100; i++) seed(`ordinary-${i}`, { title: "unrelated".repeat(1000) });
+    const other = new Database(dbPath);
+    const prepare = vi.spyOn(stateDb.raw, "prepare");
+    try {
+      for (let i = 0; i < 10; i++) {
+        other.prepare("INSERT OR REPLACE INTO backends(scope, payload) VALUES (?, ?)").run("all", String(i));
+        expect(keys()).toEqual(["codex:child"]);
+        expect(keys(new SqliteOverlayStore(stateDb))).toEqual(["codex:child"]);
+        stateDb.raw.transaction(() => expect(keys()).toEqual(["codex:child"]))();
+      }
+      const reads = prepare.mock.calls.map(([sql]) => sql);
+      expect(reads.filter((sql) => sql.includes("FROM thread_navigation_relationships"))).toHaveLength(30);
+      expect(reads.some((sql) => /\bthreads\b|\bpayload\b/.test(sql))).toBe(false);
+    } finally {
+      other.close();
+    }
+  });
+
+  it("backfills once and supports a legacy connection opened before migration", () => {
+    const dbPath = useFileStateDb();
+    downgradeRelationshipSchema();
+    seed("parent", { subAgents: [{ monitorThreadId: "child" }, { monitorThreadId: "grouped" }] });
+    seed("grouped", { handoffOrigin: { groupingMode: "subthread" } });
+    stateDb.raw.prepare("INSERT INTO threads(thread_id, payload) VALUES (?, ?)").run("codex:broken", "not json");
+    const payloads = stateDb.raw.prepare("SELECT thread_id, payload FROM threads ORDER BY thread_id").all();
+    stateDb.close();
+    const legacy = new Database(dbPath);
+    try {
+      stateDb = StateDb.open(dbPath);
+      store = new SqliteOverlayStore(stateDb);
+      expect(stateDb.raw.pragma("user_version", { simple: true })).toBe(CURRENT_STATE_DB_USER_VERSION);
+      expect(keys()).toEqual(["codex:child"]);
+      expect(stateDb.raw.prepare("SELECT thread_id, payload FROM threads ORDER BY thread_id").all()).toEqual(payloads);
+      seed("parent", { subAgents: [{ monitorThreadId: "legacy-child" }] }, legacy);
+      expect(keys()).toEqual(["codex:legacy-child"]);
+      stateDb.close();
+      const exec = vi.spyOn(Database.prototype, "exec");
+      stateDb = StateDb.open(dbPath);
+      store = new SqliteOverlayStore(stateDb);
+      expect(exec.mock.calls.some(([sql]) => sql.includes("CREATE TABLE thread_navigation_relationships"))).toBe(false);
+      expect(keys()).toEqual(["codex:legacy-child"]);
+    } finally {
+      legacy.close();
+    }
+  });
+
+  it("rolls back interrupted backfill and retries without changing authoritative payloads", () => {
+    const dbPath = useFileStateDb();
+    downgradeRelationshipSchema();
+    seed("parent", { subAgents: [{ monitorThreadId: "child" }] });
+    stateDb.close();
+    const exec = Database.prototype.exec;
+    const failedConnections: Database.Database[] = [];
+    const spy = vi.spyOn(Database.prototype, "exec").mockImplementation(function(this: Database.Database, sql) {
+      const result = exec.call(this, sql);
+      if (sql.includes("CREATE TABLE thread_navigation_relationships")) {
+        failedConnections.push(this);
+        throw new Error("interrupted backfill");
+      }
+      return result;
+    });
+    try {
+      expect(() => StateDb.open(dbPath)).toThrow("interrupted backfill");
+      expect(failedConnections[0]!.pragma("user_version", { simple: true })).toBe(63);
+      expect(failedConnections[0]!.prepare("SELECT name FROM sqlite_master WHERE name LIKE 'thread_navigation_relationship%'").all()).toEqual([]);
+    } finally {
+      spy.mockRestore();
+      for (const connection of failedConnections) connection.close();
+      stateDb = StateDb.open(dbPath);
+      store = new SqliteOverlayStore(stateDb);
+    }
+    expect(keys()).toEqual(["codex:child"]);
+  });
+
+  it("rechecks schema version after a competing opener finishes migration", () => {
+    const dbPath = useFileStateDb();
+    downgradeRelationshipSchema();
+    seed("parent", { subAgents: [{ monitorThreadId: "child" }] });
+    stateDb.close();
+    const transaction = Database.prototype.transaction;
+    let competed = false;
+    const spy = vi.spyOn(Database.prototype, "transaction").mockImplementation(function(this: Database.Database, callback) {
+      const result = transaction.call(this, callback);
+      const immediate = result.immediate;
+      const wrapped = (...args: unknown[]) => result(...args);
+      Object.defineProperties(wrapped, {
+        ...Object.getOwnPropertyDescriptors(result),
+        immediate: { value: (...args: unknown[]) => {
+          if (!competed) {
+            competed = true;
+            const other = StateDb.open(dbPath);
+            other.close();
+          }
+          return immediate(...args);
+        } },
+      });
+      return wrapped as typeof result;
+    });
+    try {
+      stateDb = StateDb.open(dbPath);
+      store = new SqliteOverlayStore(stateDb);
+      expect(competed).toBe(true);
+      expect(keys()).toEqual(["codex:child"]);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it.each([false, true])("handles replacement, rekey and deletion with recursive triggers %s", (recursive) => {
+    stateDb.raw.pragma(`recursive_triggers = ${recursive ? "ON" : "OFF"}`);
+    seed("parent", { subAgents: [{ monitorThreadId: "child" }] });
+    seed("other-parent", { subAgents: [{ monitorThreadId: "child" }] });
+    seed("child", { handoffOrigin: { groupingMode: "subthread" } });
+    expect(keys()).toEqual([]);
+    stateDb.raw.prepare("DELETE FROM threads WHERE thread_id = ?").run("codex:child");
+    expect(keys()).toEqual(["codex:child"]);
+    stateDb.raw.prepare("UPDATE threads SET thread_id = ? WHERE thread_id = ?").run("codex:renamed", "codex:parent");
+    expect(stateDb.raw.prepare("SELECT thread_id FROM thread_navigation_relationships ORDER BY thread_id").all())
+      .toEqual([{ thread_id: "codex:other-parent" }, { thread_id: "codex:renamed" }]);
+    stateDb.raw.prepare("DELETE FROM threads WHERE thread_id = ?").run("codex:renamed");
+    expect(keys()).toEqual(["codex:child"]);
+    stateDb.raw.prepare("INSERT OR REPLACE INTO threads(thread_id, payload) VALUES (?, ?)").run("codex:other-parent", "malformed");
+    expect(keys()).toEqual([]);
+  });
+
+  it("maintains changed relationships in the existing overlay commits", async () => {
+    useFileStateDb();
+    const before = stateDb.raw.prepare("SELECT total_changes() AS n").get() as { n: number };
+    const { writes } = await measureSqliteWrites(async () => {
+      write("parent", { subAgents: [{ monitorThreadId: "first" }] });
+      write("parent", { subAgents: [{ monitorThreadId: "second" }] });
+      write("second", { handoffOrigin: { groupingMode: "subthread" } });
+      expect(keys()).toEqual([]);
+      write("second", {});
+      expect(keys()).toEqual(["codex:second"]);
+      write("parent", {});
+      expect(keys()).toEqual([]);
+    });
+    const after = stateDb.raw.prepare("SELECT total_changes() AS n").get() as { n: number };
+    expect(after.n - before.n).toBe(10); // Five overlay writes and five projection mutations.
+    expectSqliteWriteBudget({ scenario: "managed-relationships-lifecycle",
+      note: "5 overlay writes: add/replace parent child, group/ungroup child, clear parent; no separate relationship commits",
+      writes });
+  });
+
+  it("does not mutate the projection across ordinary overlay and worker metadata writes", async () => {
     // A real file: this scenario's WAL byte figure is only measurable there.
     useFileStateDb();
     seed("parent", { subAgents: [{ monitorThreadId: "child" }, { monitorThreadId: "grouped" }] });
@@ -143,6 +307,8 @@ describe("managed subagent navigation reads", () => {
     const original = store["listManagedSubAgentThreadKeys"]();
     expect([...original]).toEqual(["codex:child"]);
     const prepare = vi.spyOn(stateDb.raw, "prepare");
+    write("ordinary", {});
+    const before = stateDb.raw.prepare("SELECT total_changes() AS n").get() as { n: number };
     const { writes } = await measureSqliteWrites(async () => {
       for (let i = 0; i < 20; i++) {
         write("parent", { immutableUsageActivities: [{ text: "history".repeat(100) }], subAgents: [
@@ -151,13 +317,15 @@ describe("managed subagent navigation reads", () => {
         ] });
         write("ordinary", { title: String(i) });
         write("grouped", { title: String(i), handoffOrigin: { groupingMode: "subthread" } });
-        expect(store["listManagedSubAgentThreadKeys"]()).toBe(original);
+        expect(store["listManagedSubAgentThreadKeys"]()).toEqual(original);
       }
     });
+    const after = stateDb.raw.prepare("SELECT total_changes() AS n").get() as { n: number };
+    expect(after.n - before.n).toBe(60); // Includes trigger writes: no projection rows changed.
     expect(prepare.mock.calls.some(([sql]) => /SELECT[\s\S]*FROM threads/.test(sql))).toBe(false);
     expectSqliteWriteBudget({
       scenario: "managed-subagent-metadata-writes",
-      note: "20 parent metadata, 20 ordinary overlay, 20 grouped-child metadata updates and navigation reads; no relationship reads or additional writes",
+      note: "20 parent metadata, 20 ordinary overlay, 20 grouped-child metadata updates and navigation reads; no relationship mutations or additional commits",
       writes,
     });
   });
@@ -170,7 +338,7 @@ describe("managed subagent navigation reads", () => {
       { monitorThreadId: "\u00a0child\u2029" },
       { monitorThreadId: "child" }, { monitorThreadId: "parent" },
     ] });
-    expect(store["listManagedSubAgentThreadKeys"]()).toBe(original);
+    expect(store["listManagedSubAgentThreadKeys"]()).toEqual(original);
   });
 
   it("invalidates for new, removed or redirected parent references and relevant child grouping changes", () => {
@@ -223,13 +391,13 @@ describe("managed subagent navigation reads", () => {
     }
   });
 
-  it("retains metadata-only transaction writes but never certifies changed or rolled-back relationships", () => {
+  it("reads transaction changes without leaking rolled-back relationships", () => {
     seed("parent", { subAgents: [{ monitorThreadId: "child" }] });
     const original = store["listManagedSubAgentThreadKeys"]();
     stateDb.raw.exec("BEGIN");
     write("parent", { subAgents: [{ monitorThreadId: "child", status: "success" }] });
     stateDb.raw.exec("ROLLBACK");
-    expect(store["listManagedSubAgentThreadKeys"]()).toBe(original);
+    expect(store["listManagedSubAgentThreadKeys"]()).toEqual(original);
     stateDb.raw.exec("BEGIN");
     write("parent", { subAgents: [{ monitorThreadId: "new-child" }] });
     write("ordinary", { title: "cannot hide that relationship change" });
@@ -248,7 +416,7 @@ describe("managed subagent navigation reads", () => {
     expect(keys()).toEqual(["codex:committed"]);
   });
 
-  it("does not advance the cache after a failed write or extra trigger writes", () => {
+  it("keeps relationships consistent after failed writes and extra trigger writes", () => {
     seed("parent", { subAgents: [{ monitorThreadId: "child" }] });
     const original = store["listManagedSubAgentThreadKeys"]();
     stateDb.raw.exec(`CREATE TEMP TRIGGER reject_write BEFORE INSERT ON threads
@@ -261,7 +429,7 @@ describe("managed subagent navigation reads", () => {
         '{"backend":"codex","threadId":"extra","subAgents":[{"monitorThreadId":"extra-child"}]}'); END`);
     write("ordinary", {});
     expect(keys()).toEqual(["codex:child", "codex:extra-child"]);
-    expect(store["listManagedSubAgentThreadKeys"]()).not.toBe(original);
+    expect(store["listManagedSubAgentThreadKeys"]()).not.toEqual(original);
   });
 
   it("does not retain an empty set when malformed in-memory fields serialize into valid references", () => {
@@ -308,7 +476,7 @@ describe("managed subagent navigation reads", () => {
     expect(keys()).toEqual(["codex:other-process-child"]);
   });
 
-  it("installs local tracking outside a first-read transaction that rolls back", () => {
+  it("rolls back the first relationship write", () => {
     stateDb.raw.exec("BEGIN");
     seed("parent", { subAgents: [{ monitorThreadId: "rolled-back" }] });
     expect(keys()).toEqual(["codex:rolled-back"]);
@@ -336,20 +504,29 @@ describe("managed subagent navigation reads", () => {
     expect(keys()).toEqual(["codex:committed"]);
   });
 
-  it("does not certify a scan with a concurrent commit's newer generation", () => {
+  it("reads parent references and grouping flags in one statement snapshot", () => {
     const dbPath = useFileStateDb();
     seed("parent", { subAgents: [{ monitorThreadId: "first" }] });
     const other = new Database(dbPath);
     const prepare = stateDb.raw.prepare.bind(stateDb.raw);
     let committed = false;
     vi.spyOn(stateDb.raw, "prepare").mockImplementation((sql) => {
-      // Commit after the parent query but before the child query. That first
-      // result may reflect the prior snapshot, but it must not remain cached.
-      if (!committed && sql.includes("WHERE thread_id IN")) {
-        committed = true;
-        seed("parent", { subAgents: [{ monitorThreadId: "second" }] }, other);
+      const statement = prepare(sql);
+      if (sql.includes("FROM thread_navigation_relationships")) {
+        const all = statement.all.bind(statement);
+        vi.spyOn(statement, "all").mockImplementation((...args: unknown[]) => {
+          const rows = all(...args);
+          if (!committed) {
+            committed = true;
+            other.transaction(() => {
+              seed("parent", { subAgents: [{ monitorThreadId: "second" }] }, other);
+              seed("first", { handoffOrigin: { groupingMode: "subthread" } }, other);
+            })();
+          }
+          return rows;
+        });
       }
-      return prepare(sql);
+      return statement;
     });
     try {
       expect(keys()).toEqual(["codex:first"]);
@@ -359,7 +536,7 @@ describe("managed subagent navigation reads", () => {
     }
   });
 
-  it("bounds materialization for both parent and candidate queries and adds no writes", async () => {
+  it("bounds relationship materialization and adds no writes", async () => {
     // A real file: this scenario's WAL byte figure is only measurable there.
     useFileStateDb();
     const largeHistory = Array.from({ length: 2_000 }, (_, id) => ({ id, text: "fixture".repeat(40) }));
