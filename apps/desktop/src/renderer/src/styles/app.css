@@ -8066,6 +8066,18 @@ a.button {
   font-size: 13px;
 }
 
+.button.app-update-banner__restart,
+.button.settings-update-channel__restart-button {
+  border-color: var(--accent-strong);
+  background: var(--accent);
+  color: var(--button-text);
+}
+
+.button.app-update-banner__restart:hover:not([disabled]),
+.button.settings-update-channel__restart-button:hover:not([disabled]) {
+  background: var(--accent-strong);
+}
+
 /* "Release notes" — text among real buttons, on purpose. The card already
    carries the one action it exists for (Restart / Cancel) and the one way
    out of it (Dismiss); a third pill would make the operator choose between
@@ -10474,6 +10486,10 @@ a.button {
   font-family: var(--font-mono);
   font-size: 10.5px;
   font-weight: 500;
+}
+
+.settings-update-channel__restart-version {
+  color: inherit;
 }
 
 .settings-update-channel__result {
