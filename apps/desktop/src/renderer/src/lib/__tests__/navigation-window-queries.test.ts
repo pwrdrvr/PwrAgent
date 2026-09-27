@@ -1,6 +1,6 @@
 import type { DesktopApi } from "../desktop-api";
 import { expect, it, vi } from "vitest";
-import type { NavigationQueryPage, NavigationQueryRequest } from "@pwragent/shared";
+import type { AgentEvent, NavigationQueryEntry, NavigationQueryPage, NavigationQueryRequest } from "@pwragent/shared";
 import { NavigationWindowQueries } from "../navigation-window-queries";
 
 function request(filter = ""): NavigationQueryRequest {
@@ -253,6 +253,144 @@ it("retains a range with a removed anchor until explicit recovery and does not c
   expect(queries.getSnapshot().resources.get("lens")?.state.rebaselineRequired).toBe(false);
   await queries.refresh();
   expect(read.mock.calls[3]?.[0]).toMatchObject({ anchor, completeBaselineRevision: undefined });
+  queries.dispose();
+});
+
+it("does not retry a remembered missing anchor or flicker its error on background invalidations", async () => {
+  const read = vi.fn().mockResolvedValueOnce(page())
+    .mockRejectedValueOnce(new Error("[navigation_anchor_missing] The visible anchor was removed."))
+    .mockResolvedValue(page({ complete: true, nextCursor: undefined }));
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+  queries.setDemand(new Map([["lens", request()]]));
+  await vi.waitFor(() => expect(queries.getSnapshot().resources.get("lens")?.loading).toBe(false));
+  const anchor = { kind: "thread" as const, ref: { backend: "codex" as const, threadId: "removed" } };
+  queries.setVisibleAnchor("lens", anchor);
+  await queries.refresh();
+  const states: { loading: boolean; error?: string }[] = [];
+  queries.subscribe(() => {
+    const resource = queries.getSnapshot().resources.get("lens");
+    if (resource) states.push({ loading: resource.loading, error: resource.state.error });
+  });
+  for (let index = 0; index < 3; index += 1) {
+    queries.invalidate();
+    await queries.refresh();
+  }
+  expect(read).toHaveBeenCalledTimes(2);
+  expect(states.every((state) => !state.loading && state.error?.includes("navigation_anchor_missing"))).toBe(true);
+  await queries.restart("lens");
+  expect(read).toHaveBeenCalledTimes(3);
+  expect(read.mock.calls[2]?.[0].anchor).toBeUndefined();
+  expect(queries.getSnapshot().resources.get("lens")?.state.error).toBeUndefined();
+  queries.dispose();
+});
+
+it.each(["local", "viewer", "owner"] as const)("moves the %s directory anchor when pinning or unpinning changes its section", async (scope) => {
+  const federationTarget = scope === "owner" ? { scope: "remote" as const, instanceId: "peer" } : undefined;
+  const ref = { backend: "codex" as const, threadId: "selected", ...(scope !== "local" ? { ownerInstanceId: "peer" } : {}) };
+  const entry = (threadId: string): NavigationQueryEntry => ({
+    row: { id: threadId, source: "codex", title: threadId, titleSource: "explicit", ref: { ...ref, threadId },
+      rowRevision: "r", linkedDirectories: [], inbox: { inInbox: false }, ordinaryChildCount: 0,
+      nativeSubAgentGroupPresent: false, queueCount: 0, queueState: "unknown" },
+    placement: { kind: "root" }, orderKey: threadId,
+  });
+  for (const pinned of [true, false]) {
+    for (const hasNeighbor of [true, false]) {
+      const oldEntries = [entry("selected"), ...(hasNeighbor ? [entry("neighbor")] : [])];
+      let moved = false;
+      const read = vi.fn(async (request: NavigationQueryRequest) => {
+        if (moved && request.anchor?.kind === "thread" && request.anchor.ref.threadId === ref.threadId) {
+          throw new Error("[navigation_anchor_missing] The visible anchor was removed.");
+        }
+        return page({ complete: true, nextCursor: undefined, entries: moved ? oldEntries.slice(1) : oldEntries });
+      });
+      const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+      queries.setDemand(new Map([["directory", { ...request(), federationTarget,
+        query: { kind: "directory", directoryKey: "project", roots: pinned ? "unpinned" : "pinned" } }]]));
+      await vi.waitFor(() => expect(queries.getSnapshot().resources.get("directory")?.loading).toBe(false));
+      queries.setVisibleAnchor("directory", { kind: "thread", ref });
+      const event: AgentEvent = { backend: "codex", federationTarget, notification: scope === "viewer"
+        ? { method: "navigation/remoteThreadPins/changed", params: { instanceId: "peer", threadId: ref.threadId, pinned } }
+        : scope === "owner"
+          ? { method: "navigation/invalidated", params: { sourceMethod: pinned ? "thread/pin/added" : "thread/pin/removed", threadId: ref.threadId } }
+          : pinned ? { method: "thread/pin/added", params: { threadId: ref.threadId, pinnedRank: "1024" } }
+            : { method: "thread/pin/removed", params: { threadId: ref.threadId } } };
+      moved = true;
+      // A prior background event must not suppress the pin's anchor change.
+      queries.invalidate();
+      queries.invalidate(undefined, undefined, event);
+      await queries.refresh();
+      expect(read).toHaveBeenCalledTimes(2);
+      expect(read.mock.calls[1]?.[0].anchor).toEqual(hasNeighbor ? { kind: "thread", ref: { ...ref, threadId: "neighbor" } } : undefined);
+      const state = queries.getSnapshot().resources.get("directory")!.state;
+      expect(state.error).toBeUndefined();
+      expect(state.page?.entries).toEqual(oldEntries.slice(1));
+      queries.dispose();
+    }
+  }
+});
+
+it("keeps a mounted viewer anchor when only the owner's pin changes", async () => {
+  const read = vi.fn<NonNullable<DesktopApi["getNavigationQueryPage"]>>(async () => page({ complete: true, nextCursor: undefined }));
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+  queries.setDemand(new Map([["directory", { ...request(),
+    query: { kind: "directory", directoryKey: "project", roots: "unpinned" } }]]));
+  await vi.waitFor(() => expect(queries.getSnapshot().resources.get("directory")?.loading).toBe(false));
+  const anchor = { kind: "thread" as const, ref: { backend: "codex" as const, threadId: "selected", ownerInstanceId: "peer" } };
+  queries.setVisibleAnchor("directory", anchor);
+  queries.invalidate(undefined, undefined, { backend: "codex", federationTarget: { scope: "remote", instanceId: "peer" },
+    notification: { method: "navigation/invalidated", params: { sourceMethod: "thread/pin/added", threadId: "selected" } } });
+  await queries.refresh();
+  expect(read.mock.calls[1]?.[0].anchor).toEqual(anchor);
+  queries.dispose();
+});
+
+it("replaces an in-flight read of a pin's old section without publishing its late missing-anchor error", async () => {
+  const pending = deferred<NavigationQueryPage>();
+  const read = vi.fn().mockResolvedValueOnce(page({ complete: true, nextCursor: undefined }))
+    .mockImplementationOnce(async () => {
+      await pending.promise;
+      throw new Error("[navigation_anchor_missing] The visible anchor was removed.");
+    }).mockResolvedValue(page({ complete: true, nextCursor: undefined }));
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+  queries.setDemand(new Map([["directory", { ...request(),
+    query: { kind: "directory", directoryKey: "project", roots: "unpinned" } }]]));
+  await vi.waitFor(() => expect(queries.getSnapshot().resources.get("directory")?.loading).toBe(false));
+  queries.setVisibleAnchor("directory", { kind: "thread", ref: { backend: "codex", threadId: "selected", ownerInstanceId: "peer" } });
+  const refresh = queries.refresh();
+  await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+  queries.invalidate(undefined, undefined, { backend: "codex", notification: {
+    method: "navigation/remoteThreadPins/changed", params: { instanceId: "peer", threadId: "selected", pinned: true },
+  } });
+  const errors: (string | undefined)[] = [];
+  queries.subscribe(() => errors.push(queries.getSnapshot().resources.get("directory")?.state.error));
+  pending.resolve(page());
+  await refresh;
+  expect(read).toHaveBeenCalledTimes(3);
+  expect(read.mock.calls[2]?.[0].anchor).toBeUndefined();
+  expect(errors.every((error) => error === undefined)).toBe(true);
+  queries.dispose();
+});
+
+it("honors explicit recovery queued behind a failing anchor read", async () => {
+  const pending = deferred<NavigationQueryPage>();
+  const read = vi.fn().mockResolvedValueOnce(page())
+    .mockImplementationOnce(async () => {
+      await pending.promise;
+      throw new Error("[navigation_anchor_missing] The visible anchor was removed.");
+    }).mockResolvedValue(page({ complete: true, nextCursor: undefined }));
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+  queries.setDemand(new Map([["lens", request()]]));
+  await vi.waitFor(() => expect(queries.getSnapshot().resources.get("lens")?.loading).toBe(false));
+  queries.setVisibleAnchor("lens", { kind: "thread", ref: { backend: "codex", threadId: "old" } });
+  const refresh = queries.refresh();
+  await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+  const anchor = { kind: "thread" as const, ref: { backend: "codex" as const, threadId: "new" } };
+  const recovery = queries.rebaseline("lens", anchor);
+  pending.resolve(page());
+  await Promise.all([refresh, recovery]);
+  expect(read).toHaveBeenCalledTimes(3);
+  expect(read.mock.calls[2]?.[0].anchor).toEqual(anchor);
+  expect(queries.getSnapshot().resources.get("lens")?.state.error).toBeUndefined();
   queries.dispose();
 });
 

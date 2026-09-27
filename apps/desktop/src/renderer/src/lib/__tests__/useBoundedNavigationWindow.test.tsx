@@ -6,6 +6,8 @@ import type { DesktopApi } from "../desktop-api";
 import { useBoundedNavigationWindow } from "../useBoundedNavigationWindow";
 import { useNavigationDirectoryDisclosure } from "../useNavigationDirectoryDisclosure";
 import { Sidebar } from "../../features/navigation/Sidebar";
+import { navigationQueryFixture } from "../../test/navigation-query-fixture";
+import { navigationIdentityKey, navigationThreadSelectionKey } from "../navigation-query-state";
 
 const directory: NavigationDirectoryRow = { key: "directory:off-page", kind: "directory", label: "Project",
   counts: { total: 1000, active: 20, unread: 30, review: 10 }, pinnedRootCount: 4, unpinnedRootCount: 996, launchpadPresent: false };
@@ -465,6 +467,67 @@ it("reveals the viewer-local root of a remote child even when its owner cannot r
   expect(fixture.read.mock.calls.some(([request]) => request.query.kind === "directory"
     && request.anchor?.kind === "thread" && request.anchor.ref.threadId === childRef.threadId)).toBe(false);
   unmount();
+});
+
+it("pins a mounted thread beside an unavailable federation parent and its viewer-local child without stranding the directory", async () => {
+  const fixture = api();
+  const home = { ...directory, key: "directory:/viewer/repo", path: "/viewer/repo" };
+  const row = (id: string, owner?: string): NavigationRow => ({ id, source: "codex", title: id, titleSource: "explicit",
+    ref: { backend: "codex", threadId: id, ...(owner ? { ownerInstanceId: owner } : {}) }, rowRevision: "r",
+    linkedDirectories: [{ id: "repo", kind: "local", label: "Project", path: home.path }],
+    inbox: { inInbox: false }, ordinaryChildCount: 0, nativeSubAgentGroupPresent: false, queueCount: 0, queueState: "unknown",
+    ...(owner ? { federation: { ref: { backend: "codex", threadId: id, target: { scope: "remote", instanceId: owner } },
+      instanceLabel: owner, peerStatus: owner === "offline" ? "disconnected" : "connected" } } : {}),
+  });
+  const parent = { ...row("Unavailable parent", "offline"), pinnedRank: "1024", ordinaryChildCount: 1, subthreadsCollapsed: false };
+  const child = { ...row("Viewer child"), parentThreadId: parent.id, parentThreadBackend: "codex" as const, parentThreadInstanceId: "offline" };
+  let selected = row("Selected Windows thread", "windows");
+  // Selection starts beyond the first page and installs a real directory anchor.
+  const neighbors = Array.from({ length: 12 }, (_, i) => ({ ...row(`Neighbor ${i}`), createdAt: i + 1 }));
+  const population = () => ({ directories: [home], threads: [parent, child, ...neighbors, selected] });
+  fixture.read.mockImplementation(async (request) => {
+    if (request.federationTarget?.scope === "remote" && request.federationTarget.instanceId === "offline") {
+      throw new Error("Federation peer offline is not connected.");
+    }
+    const result = navigationQueryFixture(request, request.federationTarget?.scope === "remote"
+      ? { directories: [home], threads: [{ ...selected, pinnedRank: undefined }] } : population());
+    return { ...result, ...(request.query.kind === "exact" ? { selectionDirectory: home } : {}) };
+  });
+  let navigation!: ReturnType<typeof useBoundedNavigationWindow>;
+  function Window() {
+    navigation = useBoundedNavigationWindow({ ...base, desktopApi: fixture.desktopApi,
+      expandedByKey: { [home.key]: true }, selectedRef: selected.ref, disclosedParents: [parent.ref] });
+    return <Sidebar backends={[]} browseMode="directories" directories={navigation.directories}
+      threads={population().threads} pagedNavigation={navigation} selectedItemKey={navigationThreadSelectionKey(selected.ref)}
+      selectedThreadDirectoryKeys={navigation.selectedDirectoryKeys} loading={false}
+      onBrowseModeChange={() => undefined} onSelectThread={() => undefined}
+      onCreateThread={async () => undefined} onOpenLaunchpad={async () => undefined} />;
+  }
+  const view = render(<Window />);
+  const rootsId = `directory:${home.key}`;
+  const pinsId = `directory-pins:${home.key}`;
+  const childrenId = `children:${navigationIdentityKey(parent.ref)}`;
+  try {
+    await waitFor(() => expect(navigation.resources.get(rootsId)?.state.page?.rangeStart).toBe(12));
+    await waitFor(() => expect(navigation.resources.get(childrenId)?.state.error).toContain("not connected"));
+    await waitFor(() => expect(navigation.resources.get(`${childrenId}:viewer`)?.state.page?.entries[0]?.row.id).toBe(child.id));
+    expect(view.getByRole("button", { name: /Viewer child/ })).toBeTruthy();
+    selected = { ...selected, pinnedRank: "2048" };
+    fixture.emit({ backend: "codex", notification: { method: "navigation/remoteThreadPins/changed",
+      params: { instanceId: "windows", threadId: selected.id, pinned: true } } });
+    await act(() => navigation.refresh());
+    await waitFor(() => expect(navigation.resources.get(pinsId)?.state.page?.entries.map(({ row }) => row.id))
+      .toEqual([parent.id, selected.id]));
+    expect(navigation.resources.get(rootsId)?.state.error).toBeUndefined();
+    expect(navigation.resources.get(rootsId)?.state.page?.entries.some(({ row }) => row.id === selected.id)).toBe(false);
+    expect(view.queryByText(/anchor is no longer/)).toBeNull();
+    expect(view.getByRole("button", { name: /Viewer child/ })).toBeTruthy();
+    expect(view.getByRole("button", { name: /Selected Windows thread, pinned/ })).toBeTruthy();
+    fixture.emit({ backend: "codex", notification: { method: "thread/status/changed",
+      params: { threadId: neighbors[0]!.id, status: { type: "idle" } } } });
+    await act(() => navigation.refresh());
+    expect(navigation.resources.get(rootsId)?.state.error).toBeUndefined();
+  } finally { view.unmount(); }
 });
 
 it("keeps remote reads owned by semantic demand across bridge-wrapper rerenders", async () => {
