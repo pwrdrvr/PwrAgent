@@ -3521,6 +3521,33 @@ describe("SettingsScreen", () => {
     await waitFor(() => expect(settings.writeConfig).toHaveBeenCalledWith({ experimental: { codexToolDiscovery: false } }));
   });
 
+  it("offers default-off focused summaries inside Token Miser and saves the independent toggle", async () => {
+    const snapshot = createSnapshot();
+    snapshot.experimental.tokenMiserEnabled = { value: true, source: "config" };
+    const settings = createSettingsState(snapshot);
+    const view = render(<SettingsScreen desktopApi={{} as Parameters<typeof SettingsScreen>[0]["desktopApi"]}
+      initialSection="experimental" settings={settings} onClose={() => undefined} />);
+    const toggle = screen.getByRole("switch", { name: "Focused summaries — Token Miser" });
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+    expect(toggle).not.toBeDisabled();
+    fireEvent.click(toggle);
+    await waitFor(() => expect(settings.writeConfig).toHaveBeenCalledWith({ experimental: { tokenMiserFocusedSummariesEnabled: true } }));
+    const enabledSnapshot = { ...snapshot, experimental: { ...snapshot.experimental,
+      tokenMiserFocusedSummariesEnabled: { value: true, source: "config" as const },
+    } };
+    const enabledSettings = createSettingsState(enabledSnapshot);
+    view.rerender(<SettingsScreen desktopApi={{} as Parameters<typeof SettingsScreen>[0]["desktopApi"]}
+      initialSection="experimental" settings={enabledSettings} onClose={() => undefined} />);
+    expect(toggle).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(toggle);
+    await waitFor(() => expect(enabledSettings.writeConfig).toHaveBeenCalledWith({ experimental: { tokenMiserFocusedSummariesEnabled: false } }));
+    view.rerender(<SettingsScreen desktopApi={{} as Parameters<typeof SettingsScreen>[0]["desktopApi"]}
+      initialSection="experimental" settings={createSettingsState({ ...snapshot, experimental: {
+        ...snapshot.experimental, tokenMiserEnabled: { value: false, source: "config" },
+      } })} onClose={() => undefined} />);
+    expect(toggle).toBeDisabled();
+  });
+
   it("lets an available Token Miser experiment default threads on or off", async () => {
     const snapshot = createSnapshot();
     snapshot.experimental.tokenMiserEnabled = { value: true, source: "config" };

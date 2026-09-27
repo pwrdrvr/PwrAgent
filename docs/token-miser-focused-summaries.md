@@ -9,6 +9,27 @@ The four existing search/read tools, their inputs, object IDs, and read behavior
 are unchanged. The new tools are available through the unified PwrAgent catalog,
 including tool discovery, Code Mode and MCP.
 
+## Enablement
+
+In **Settings → Experimental → Token Miser**, enable **Focused summaries**.
+This additional feature defaults off, independently of ordinary Token Miser
+summaries and the inherited per-thread default. The profile setting is
+`[experimental].token_miser_focused_summaries_enabled`.
+
+The global Token Miser experiment and the invoking thread's Token Miser setting
+must also allow summaries. Turning focused summaries off hides the two new tools
+from discovery and rejects new inference requests, including calls from threads
+that already know the tool names. Existing segment references and the original
+exact-read tools remain usable within their retention limits. A helper already
+in flight retains its incurred usage accounting, but its answer is suppressed
+if the switch is off when it completes.
+
+This feature requires no additional changes to the custom Codex fork or its
+protocol. PwrAgent's TypeScript adapter uses the existing structured-helper and
+Code Mode delivery interfaces. It still requires the Token Miser-compatible
+Codex build used by the main experiment. Automated tests exercise mocked helper
+responses; answer quality and practical savings still need normal-use validation.
+
 ## Code Mode example
 
 A build produced a retained object. Ask separate questions about its beginning,

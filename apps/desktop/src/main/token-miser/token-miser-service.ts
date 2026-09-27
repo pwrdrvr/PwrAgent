@@ -149,6 +149,7 @@ export type TokenMiserServiceOptions = {
   store: TokenMiserStore;
   isEnabled: () => boolean;
   isEnabledByDefault?: () => boolean;
+  isFocusedEnabled?: () => boolean;
   /**
    * Per-thread override. `undefined` inherits `isEnabledByDefault`; neither
    * value can bypass the outer experiment gate in `isEnabled`.

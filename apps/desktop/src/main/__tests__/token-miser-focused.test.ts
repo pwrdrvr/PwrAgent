@@ -19,11 +19,12 @@ async function fixture(output = "first\r\nERROR one\r\nmiddle\r\nwarning two\r\n
     object: { answers: JSON.parse(prompt).requests.map((request: { id: string; question: string }) => ({ id: request.id, summary: `Answer: ${request.question}` })) },
   }));
   const onFocusedInference = vi.fn();
-  const service = new TokenMiserService({ store, isEnabled: () => true, generateSummary, onFocusedInference, postToolUseExactOutputVersion: () => 1 });
+  let focusedEnabled = true;
+  const service = new TokenMiserService({ store, isFocusedEnabled: () => focusedEnabled, isEnabled: () => true, generateSummary, onFocusedInference, postToolUseExactOutputVersion: () => 1 });
   const requests = [{ question: "What failed?", selections: [{ objectId: entry.objectId, mode: "search" as const, queries: ["error", "WARNING"] }] }];
   const tools = buildTokenMiserToolDefinitions(store, service.focused);
   const context = { threadId: "owner", turnId: "turn", transport: "codex_dynamic_tool" as const, backend: "codex" as const };
-  return { store, entry, service, generateSummary, onFocusedInference, requests, tools, context };
+  return { store, entry, service, generateSummary, onFocusedInference, requests, tools, context, setFocusedEnabled: (enabled: boolean) => { focusedEnabled = enabled; } };
 }
 
 function visible(result: { contentItems?: Array<{ type: string; text?: string }> }) {
@@ -31,6 +32,39 @@ function visible(result: { contentItems?: Array<{ type: string; text?: string }>
 }
 
 describe("focused Token Miser summaries", () => {
+  it("defaults focused summaries off and blocks stale tool calls when disabled without blocking exact reads", async () => {
+    const { store, service, requests, generateSummary, context, setFocusedEnabled } = await fixture();
+    const defaultService = new TokenMiserService({ store, isEnabled: () => true, generateSummary });
+    expect(defaultService.focused.isEnabled()).toBe(false);
+    await expect(defaultService.focused.summarize("owner", "turn", requests)).rejects.toThrow("disabled");
+    expect(generateSummary).not.toHaveBeenCalled();
+    const advertisedNames = () => new AgentToolRouter(buildTokenMiserToolDefinitions(store, service.focused)).buildMcpTools().map((tool) => tool.name);
+    expect(advertisedNames()).toContain("summarize_token_miser_output");
+    const staleTools = buildTokenMiserToolDefinitions(store, service.focused);
+    const [answer] = await service.focused.summarize("owner", "turn", requests);
+    setFocusedEnabled(false);
+    expect(advertisedNames()).toEqual(["search_token_miser_output", "read_token_miser_output", "read_token_miser_output_batch", "read_all_token_miser_output"]);
+    const rejected = await staleTools.find((tool) => tool.name === "summarize_token_miser_output")!.dispatch({ requests }, context);
+    expect(rejected.ok).toBe(false);
+    expect(generateSummary).toHaveBeenCalledTimes(1);
+    expect(await service.focused.read(answer!.segmentId, "owner", "turn")).toBeDefined();
+    setFocusedEnabled(true);
+    expect(advertisedNames()).toContain("summarize_token_miser_output");
+    expect((await service.focused.summarize("owner", "turn", requests))).toHaveLength(1);
+  });
+
+  it("records incurred usage but suppresses an answer if focused summaries are switched off during inference", async () => {
+    const { service, requests, generateSummary, onFocusedInference, setFocusedEnabled } = await fixture();
+    const original = generateSummary.getMockImplementation()!;
+    generateSummary.mockImplementation(async (params) => {
+      const result = await original(params);
+      setFocusedEnabled(false);
+      return result;
+    });
+    await expect(service.focused.summarize("owner", "turn", requests)).rejects.toThrow("disabled");
+    expect(onFocusedInference).toHaveBeenCalledTimes(1);
+  });
+
   it("answers 15 independently addressable selections in one configured helper call with exact lineage", async () => {
     const { service, requests, generateSummary, onFocusedInference, store, entry } = await fixture();
     const results = await service.focused.summarize("owner", "turn", Array.from({ length: 15 }, (_, index) => ({ ...requests[0]!, question: `Question ${index}` })));

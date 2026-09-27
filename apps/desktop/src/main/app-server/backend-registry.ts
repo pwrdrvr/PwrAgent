@@ -7429,12 +7429,13 @@ function buildCodexParentDynamicToolSpecs(
 
 function buildCodexTokenMiserDynamicToolSpecs(
   store: TokenMiserStore | undefined,
+  focused?: TokenMiserService["focused"],
 ): CodexDynamicToolSpec[] {
   if (!store) {
     return [];
   }
   return buildCodexParentDynamicToolSpecs(
-    resolveAgentToolCatalogs({ tokenMiserStore: store }).filter(
+    resolveAgentToolCatalogs({ tokenMiserStore: store, tokenMiserFocused: focused }).filter(
       (catalog) => catalog.id === "token_miser",
     ),
   );
@@ -9406,6 +9407,14 @@ export class DesktopBackendRegistry {
       const tokenMiserService = new TokenMiserService({
         store: this.tokenMiserStore,
         isEnabled: () => this.resolveTokenMiserEnabledFn(),
+        isFocusedEnabled: () => {
+          try {
+            return (settingsService ?? getDesktopSettingsService())
+              .resolveTokenMiserFocusedSummariesEnabled?.() ?? false;
+          } catch {
+            return false;
+          }
+        },
         isEnabledByDefault: () => this.resolveTokenMiserDefaultEnabledFn(),
         // A thread can override the inherited default while the experiment is
         // available; the global experimental flag remains the outer gate.
@@ -17940,7 +17949,7 @@ export class DesktopBackendRegistry {
         enabled: params.tokenMiserEnabled,
       });
     const tokenMiserDynamicTools = params.tokenMiserEnabled
-      ? buildCodexTokenMiserDynamicToolSpecs(this.tokenMiserStore)
+      ? buildCodexTokenMiserDynamicToolSpecs(this.tokenMiserStore, this.tokenMiserService?.focused)
       : [];
     const thread = await client.startThread({
       ...(params.cwd ? { cwd: params.cwd } : {}),

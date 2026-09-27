@@ -660,6 +660,7 @@ export class TokenMiserStore {
     threadId: string;
     turnId: string;
     visibleText: string;
+    kind?: "summary" | "source";
     generation: string;
   }): TokenMiserRetrievalDelivery | undefined {
     const now = Date.now();

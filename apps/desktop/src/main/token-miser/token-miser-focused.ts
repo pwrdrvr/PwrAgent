@@ -33,8 +33,12 @@ export class TokenMiserFocusedSummaries {
 
   constructor(private readonly options: TokenMiserServiceOptions) {}
 
+  isEnabled(): boolean {
+    return this.options.isEnabled() && (this.options.isFocusedEnabled?.() ?? false);
+  }
+
   async summarize(threadId: string, turnId: string | undefined, requests: FocusedRequest[]) {
-    if (!this.options.isEnabled()
+    if (!this.isEnabled()
       || (await this.options.isEnabledForThread?.(threadId)
         ?? this.options.isEnabledByDefault?.() ?? true) === false) {
       throw new Error("Focused summaries are disabled for this thread.");
@@ -67,6 +71,7 @@ export class TokenMiserFocusedSummaries {
       }
       const prompt = JSON.stringify({ requests: selected.map((entry) => ({ id: entry.segmentId, question: entry.question, sources: entry.sources })) });
       if (utf8ByteLength(prompt) > 78_000) throw new Error("Focused prompt exceeds the 78000-byte limit; narrow the selections.");
+      if (!this.isEnabled()) throw new Error("Focused summaries are disabled for this thread.");
       const generated = await this.options.generateSummary({
         reasoningEffort: "medium", disableExecution: true, system: FOCUSED_SYSTEM, prompt,
         timeoutMs: this.options.summaryTimeoutMs ?? 45_000,
@@ -79,6 +84,7 @@ export class TokenMiserFocusedSummaries {
       });
       // Inference happened even if validation, retention, or parent delivery later fails.
       await this.options.onFocusedInference?.({ threadId, turnId: selected[0]!.segment.turnId, inferenceId: randomUUID(), usage: generated });
+      if (!this.isEnabled()) throw new Error("Focused summaries are disabled for this thread.");
       if (generated.status !== "ok") throw new Error("Focused summary helper failed or is unavailable.");
       const answers = (generated.object as { answers?: unknown } | null)?.answers;
       if (!Array.isArray(answers) || answers.length !== selected.length) throw new Error("Invalid focused summary response.");

@@ -134,8 +134,6 @@ describe("Token Miser agent tools", () => {
         { name: "read_token_miser_output" },
         { name: "read_token_miser_output_batch" },
         { name: "read_all_token_miser_output" },
-        { name: "summarize_token_miser_output" },
-        { name: "read_token_miser_segment" },
       ],
     });
 

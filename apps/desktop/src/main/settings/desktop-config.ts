@@ -134,6 +134,7 @@ export type DesktopSettingsConfig = {
     tokenMiserEnabled?: boolean;
     tokenMiserDefaultEnabled?: boolean;
     codexToolDiscovery?: boolean;
+    tokenMiserFocusedSummariesEnabled?: boolean;
     threadToolAccounting?: boolean;
     codexDefaultModeRequestUserInput?: boolean;
     managedReview?: boolean;
@@ -757,6 +758,12 @@ export function desktopSettingsPatchToEdits(
     set(
       ["experimental", "token_miser_enabled"],
       patch.experimental.tokenMiserEnabled,
+    );
+  }
+  if (patch.experimental?.tokenMiserFocusedSummariesEnabled !== undefined) {
+    set(
+      ["experimental", "token_miser_focused_summaries_enabled"],
+      patch.experimental.tokenMiserFocusedSummariesEnabled,
     );
   }
   if (patch.experimental?.tokenMiserDefaultEnabled !== undefined) {
@@ -1838,6 +1845,8 @@ function normalizeDesktopConfig(
       tokenMiserEnabled:
         readBoolean(experimental?.token_miser_enabled)
         ?? readBoolean(general?.token_miser_enabled),
+      tokenMiserFocusedSummariesEnabled:
+        readBoolean(experimental?.token_miser_focused_summaries_enabled),
       tokenMiserDefaultEnabled:
         readBoolean(experimental?.token_miser_default_enabled),
       codexToolDiscovery: readBoolean(experimental?.codex_tool_discovery),

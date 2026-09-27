@@ -7,6 +7,7 @@ import { retrievalSuccess } from "./token-miser-delivery";
 export function buildFocusedTokenMiserTools(store: TokenMiserStore, focused?: TokenMiserFocusedSummaries): AgentToolDefinition[] {
   return [{
     namespace: PWRAGENT_TOOL_NAMESPACE,
+    advertise: focused?.isEnabled() ?? false,
     name: "summarize_token_miser_output",
     description: "Answer focused questions over selected preserved output using the configured summarizer, without returning source text. Supply up to 16 requests and 16 total selectors; each question can combine selections. Modes: head, tail, inclusive lines, or case-insensitive literal search (OR across queries, first maxMatches matching lines). Overlapping/adjacent spans within an answer merge. Limits: 60000 source bytes, 8000 total question bytes, 1000 answer bytes per request, two concurrent batches. Returns a plain authenticated string: Code Mode must emit it unchanged with text(result) for delivery accounting. segmentId retrieves the exact selected spans with read_token_miser_segment. References expire after five minutes or earlier cache eviction, source expiry, archive, restart, or next turn. Source IDs and read tools are unchanged.",
     inputSchema: {
@@ -47,6 +48,7 @@ export function buildFocusedTokenMiserTools(store: TokenMiserStore, focused?: To
     },
   }, {
     namespace: PWRAGENT_TOOL_NAMESPACE,
+    advertise: focused?.isEnabled() ?? false,
     name: "read_token_miser_segment",
     description: "Read exact selected source spans for a focused summary segmentId. Returns JSON spans with source objectId, optional memberId, one-based inclusive line bounds, zero-based UTF-16 [start,end) offsets and exact text (including original CRLF). Noncontiguous spans stay separate; zero line bounds indicate no matches. Code Mode receives an authenticated plain string: emit it unchanged. Pages contain at most 6000 source UTF-8 bytes and 16 spans. Follow nextCursor to recover the remaining exact text; offset is relative to its span. Parent output caps still apply. Thread-owned references expire after five minutes or earlier source expiry, eviction, archive, restart, or next turn.",
     inputSchema: { type: "object", additionalProperties: false, required: ["segmentId"], properties: {

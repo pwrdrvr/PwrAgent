@@ -50,6 +50,7 @@ export function ExperimentalSettings(props: {
   onMarkdownMathRenderingChange: (enabled: boolean) => Promise<void>;
   onThreadToolAccountingChange: (enabled: boolean) => Promise<void>;
   onTokenMiserEnabledChange: (enabled: boolean) => Promise<void>;
+  onTokenMiserFocusedSummariesEnabledChange: (enabled: boolean) => Promise<void>;
   onTokenMiserDefaultEnabledChange: (enabled: boolean) => Promise<void>;
   onCodexToolDiscoveryChange: (enabled: boolean) => Promise<void>;
   onCodexDefaultModeRequestUserInputChange: (
@@ -74,6 +75,9 @@ export function ExperimentalSettings(props: {
   const tokenMiserEnabled =
     props.snapshot.experimental.tokenMiserEnabled ??
     DEFAULT_TOKEN_MISER_ENABLED;
+  const tokenMiserFocusedSummariesEnabled =
+    props.snapshot.experimental.tokenMiserFocusedSummariesEnabled ??
+    { value: false, source: "default" as const };
   const tokenMiserDefaultEnabled =
     props.snapshot.experimental.tokenMiserDefaultEnabled ??
     DEFAULT_TOKEN_MISER_DEFAULT_ENABLED;
@@ -197,6 +201,16 @@ export function ExperimentalSettings(props: {
             onChange={(enabled) => {
               return props.onTokenMiserDefaultEnabledChange(enabled);
             }}
+          />
+          <ToggleField
+            checked={tokenMiserFocusedSummariesEnabled.value}
+            disabled={props.saving || !tokenMiserEnabled.value}
+            label="Focused summaries"
+            switchQualifier="Token Miser"
+            sub="Let agents ask specific questions about preserved output without reading the full source into context."
+            help="Off by default. Uses the configured Token Miser model and incurs additional helper usage. Turning this off stops new focused summaries; ordinary Token Miser summaries and exact-source reads remain available."
+            source={sourceBadge(tokenMiserFocusedSummariesEnabled)}
+            onChange={props.onTokenMiserFocusedSummariesEnabledChange}
           />
           {tokenMiserInert ? (
             <SettingsField

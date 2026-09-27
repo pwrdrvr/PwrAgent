@@ -1045,6 +1045,10 @@ export class DesktopSettingsService {
           config.experimental?.tokenMiserEnabled,
           false,
         ),
+        tokenMiserFocusedSummariesEnabled: this.resolveConfigBoolean(
+          config.experimental?.tokenMiserFocusedSummariesEnabled,
+          false,
+        ),
         tokenMiserDefaultEnabled: this.resolveConfigBoolean(
           config.experimental?.tokenMiserDefaultEnabled,
           true,
@@ -1899,6 +1903,11 @@ export class DesktopSettingsService {
 
   resolveTokenMiserEnabled(): boolean {
     return this.configStore.read("experimental").tokenMiserEnabled ?? false;
+  }
+
+  resolveTokenMiserFocusedSummariesEnabled(): boolean {
+    return this.configStore.read("experimental").tokenMiserFocusedSummariesEnabled
+      ?? false;
   }
 
   resolveTokenMiserDefaultEnabled(): boolean {
