@@ -4413,6 +4413,7 @@ describe("Sidebar", () => {
     render(<Sidebar backends={backends} browseMode="directories" directories={projects}
       inboxThreads={[]} threads={[sharedThread, secondThread, thirdThread]} loading={false}
       onBrowseModeChange={() => undefined} onCreateThread={async () => undefined}
+      onOpenLaunchpad={async () => undefined}
       onSelectThread={() => undefined} />);
     for (let index = 0; index < 3; index++) {
       fireEvent.click(screen.getByRole("button", { name: new RegExp(`^Project ${index}(,|$)`) }));
@@ -4433,6 +4434,7 @@ describe("Sidebar", () => {
     render(<Sidebar backends={backends} browseMode="directories" directories={projects}
       inboxThreads={[]} threads={[]} loading={false} onArchiveDirectories={onArchiveDirectories}
       onBrowseModeChange={() => undefined} onCreateThread={async () => undefined}
+      onOpenLaunchpad={async () => undefined}
       onSelectThread={() => undefined} />);
     const first = screen.getByRole("button", { name: "Project 0" });
     const last = screen.getByRole("button", { name: "Project 1" });

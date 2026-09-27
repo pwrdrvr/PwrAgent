@@ -6464,7 +6464,7 @@ export function useThreadNavigation(
     boundedNavigation.invalidate();
     await refresh();
     if (failures.length) setArchiveThreadError(failures.join("\n"));
-  }, [desktopApi, boundedNavigation.invalidate, refresh]);
+  }, [desktopApi, boundedNavigation, refresh]);
 
   /** The owner validates complete membership before local state is removed. */
   const removeDirectory = useCallback(
