@@ -1446,6 +1446,7 @@ export type DesktopSettingsConfigPatch = {
     cloudflareMtlsEnabled?: boolean;
     cloudflareAccessServiceAuthEnabled?: boolean;
     cloudflareAccessOAuthEnabled?: boolean;
+    cloudflareGatewayEnabled?: boolean;
   };
   messaging?: {
     enabled?: boolean;

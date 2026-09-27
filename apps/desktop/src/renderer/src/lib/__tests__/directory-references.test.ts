@@ -50,6 +50,34 @@ const UNLINKED = makeDirectory({
   latestUpdatedAt: 400,
 });
 
+describe("Windows directory reference round trips", () => {
+  it.each(["C:/Projects", "C:\\Projects", "//server/share", "\\\\server\\share"])(
+    "links the deepest directory after inserting a native path under %s",
+    (root) => {
+      const parent = makeDirectory({ key: "parent", path: root });
+      const child = makeDirectory({ key: "child", path: `${root}/app` });
+      const sibling = makeDirectory({ key: "sibling", path: `${root}/app-other` });
+      const nativePath = buildDirectoryReferenceInsertText(child);
+      const draft = `Read ${nativePath}\\src\\file.ts`;
+      expect(listReferencedDirectories(draft, [parent, child, sibling])).toEqual([child]);
+      expect(listReferencedDirectories(draft, [child], { excludePaths: [nativePath] })).toEqual([]);
+      expect(listReferencedDirectories(
+        `100% done: ${buildDirectoryReferenceMarkdown({ label: "app", path: child.path! })}`,
+        [parent, child],
+      )).toEqual([child]);
+    },
+  );
+
+  it("keeps POSIX backslashes as filename characters", () => {
+    const parent = makeDirectory({ key: "parent", path: "/repo" });
+    const sibling = makeDirectory({ key: "sibling", path: "/repo\\other" });
+    expect(listReferencedDirectories("Read /repo\\other/file.ts", [parent, sibling]))
+      .toEqual([sibling]);
+    expect(listReferencedDirectories("Read /repo and /repo\\other", [parent, sibling]))
+      .toEqual([parent, sibling]);
+  });
+});
+
 describe("findDirectoryReferenceTrigger", () => {
   it("matches a bare @ at the start of the draft", () => {
     expect(findDirectoryReferenceTrigger("@", 1)).toEqual({

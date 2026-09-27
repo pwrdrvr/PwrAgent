@@ -9,6 +9,7 @@ import {
 import type { PrSummary } from "@pwragent/shared";
 import { CloseIcon } from "../../icons";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
+import { observeElementVisibility } from "../../lib/observe-element-visibility";
 import { PrChipContextMenu } from "./PrChipContextMenu";
 import {
   prChipModifierClasses,
@@ -36,11 +37,19 @@ type PrChipProps = {
     position: { x: number; y: number; anchorTop?: number },
   ) => void;
   onDetach?: (pr: PrSummary) => void;
+  onVisibilityChange?: (visible: boolean) => void;
 };
 
 export const PrChip = memo(function PrChip(props: PrChipProps) {
   const { pr } = props;
   const contextMenuInvokerRef = useRef<HTMLSpanElement>(null);
+  const onVisibilityChange = props.onVisibilityChange;
+  useEffect(() => {
+    const element = contextMenuInvokerRef.current;
+    if (element && onVisibilityChange) {
+      return observeElementVisibility(element, onVisibilityChange);
+    }
+  }, [onVisibilityChange]);
   const [contextMenuPosition, setContextMenuPosition] = useState<{
     x: number;
     y: number;
@@ -136,6 +145,7 @@ export const PrChip = memo(function PrChip(props: PrChipProps) {
   return (
     <>
       <span
+        ref={contextMenuInvokerRef}
         role="button"
         tabIndex={0}
         aria-haspopup="menu"

@@ -340,6 +340,7 @@ import {
   applyCodexEnvironmentActionRunUpdate,
   buildPendingRequestResponse,
   buildThreadIdentityKey,
+  mergeThreadLinkedDirectories,
   federatedThreadIdentityKey,
   insertSubthreadIdAfter,
   resolveThreadParentKey,
@@ -911,6 +912,7 @@ type BackendClient = {
   startTurn(params: {
     threadId: string;
     input: AppServerTurnInputItem[];
+    onInputTextPrepared?: (text: string | undefined) => void;
     cwd?: string;
     approvalPolicy?: string;
     approvalsReviewer?: "user" | "auto_review";
@@ -973,6 +975,7 @@ type BackendClient = {
   steerTurn?(params: {
     threadId: string;
     input: AppServerTurnInputItem[];
+    onInputTextPrepared?: (text: string | undefined) => void;
     expectedTurnId: string;
   }): Promise<{ threadId: string; turnId: string }>;
   setTurnApprovalReviewer?(params: {
@@ -7915,6 +7918,7 @@ type PendingThreadMessageContext = {
   backend: AppServerBackendKind;
   createdAt: number;
   id: string;
+  messageId?: string;
   imageParts?: AppServerThreadImagePart[];
   retainedInput?: AppServerTurnInputItem[];
   origin?: AppServerThreadMessageOrigin;
@@ -16965,6 +16969,11 @@ export class DesktopBackendRegistry {
           const started = await client.startTurn({
             threadId: params.threadId,
             input,
+            ...(pendingMessageContextId ? {
+              onInputTextPrepared: (text: string | undefined) => {
+                this.updatePendingThreadMessageText(pendingMessageContextId, text);
+              },
+            } : {}),
             ...(cwd ? { cwd } : {}),
             collaborationMode: params.collaborationMode,
             ...turnParams,
@@ -17182,6 +17191,13 @@ export class DesktopBackendRegistry {
     return id;
   }
 
+  private updatePendingThreadMessageText(id: string, text: string | undefined): void {
+    const pending = this.pendingThreadMessageContexts.get(id);
+    if (pending) {
+      pending.text = text;
+    }
+  }
+
   private bindPendingThreadMessageContext(
     id: string | undefined,
     turnId: string,
@@ -17210,6 +17226,7 @@ export class DesktopBackendRegistry {
   private findPendingThreadMessageContext(params: {
     backend: AppServerBackendKind;
     threadId: string;
+    messageId?: string;
     text?: string;
     turnId?: string;
   }): PendingThreadMessageContext | undefined {
@@ -17218,6 +17235,7 @@ export class DesktopBackendRegistry {
         (pending) =>
           pending.backend === params.backend
           && pending.threadId === params.threadId
+          && (!pending.messageId || pending.messageId === params.messageId)
           && (
             !pending.turnId
             || !params.turnId
@@ -17225,14 +17243,19 @@ export class DesktopBackendRegistry {
           ),
       )
       .sort((left, right) => left.createdAt - right.createdAt);
+    if (params.messageId) {
+      // A started item owns its context until completion. A steer in the same
+      // turn must never consume that context, even when its text is identical.
+      const bound = candidates.find((pending) => pending.messageId === params.messageId);
+      if (bound) {
+        return bound;
+      }
+      // Turn identity alone is not message identity. Codex can deliver several
+      // user items in a turn, including operator steers with no pending origin.
+      return candidates.find((pending) => pending.text?.trim() === params.text?.trim());
+    }
     return (
       candidates.find(
-        (pending) =>
-          pending.text
-          && params.text
-          && pending.text.trim() === params.text.trim(),
-      )
-      ?? candidates.find(
         (pending) => pending.turnId && pending.turnId === params.turnId,
       )
       ?? candidates.find((pending) => !pending.turnId)
@@ -17293,15 +17316,28 @@ export class DesktopBackendRegistry {
     if (notification.params.item.type !== "userMessage") {
       return event;
     }
+    const content = Array.isArray(notification.params.item.content)
+      ? notification.params.item.content
+      : [];
+    const text = notification.params.item.text
+      ?? extractFirstMeaningfulTextInput(content.filter(
+        (part): part is Extract<AppServerTurnInputItem, { type: "text" }> =>
+          Boolean(part)
+          && typeof part === "object"
+          && part.type === "text"
+          && typeof part.text === "string",
+      ));
     const pending = this.findPendingThreadMessageContext({
       backend: event.backend,
       threadId: notification.params.threadId,
-      text: notification.params.item.text,
+      messageId: notification.params.item.id,
+      text,
       turnId: notification.params.turnId,
     });
     if (!pending) {
       return event;
     }
+    pending.messageId = notification.params.item.id;
     await this.persistThreadMessageOrigin({
       backend: event.backend,
       threadId: notification.params.threadId,
@@ -17311,9 +17347,6 @@ export class DesktopBackendRegistry {
     if (event.notification.method === "item/completed") {
       this.pendingThreadMessageContexts.delete(pending.id);
     }
-    const content = Array.isArray(notification.params.item.content)
-      ? notification.params.item.content
-      : [];
     const imageParts =
       pending.imageParts?.length && !contentHasRenderableImage(content)
         ? pending.imageParts
@@ -19311,6 +19344,11 @@ export class DesktopBackendRegistry {
       return await client.steerTurn({
         threadId: params.threadId,
         input,
+        ...(pendingMessageContextId ? {
+          onInputTextPrepared: (text: string | undefined) => {
+            this.updatePendingThreadMessageText(pendingMessageContextId, text);
+          },
+        } : {}),
         expectedTurnId: params.expectedTurnId,
       });
     };
@@ -21558,7 +21596,8 @@ export class DesktopBackendRegistry {
     });
   }
 
-  private async ensureThreadDirectoryAttachmentTrusted(params: {
+  private async ensureThreadWorkspacePathTrusted(params: {
+    operation?: "move";
     backend: AppServerBackendKind;
     cwd: string;
     executionMode: ThreadExecutionMode;
@@ -21585,7 +21624,7 @@ export class DesktopBackendRegistry {
       backend: params.backend,
       cwd: params.cwd,
       handoffId: [
-        "attach-directory",
+        params.operation === "move" ? "move-workspace" : "attach-directory",
         params.backend,
         params.sourceThreadId,
         params.sourceTurnId,
@@ -21594,8 +21633,10 @@ export class DesktopBackendRegistry {
       threadId: params.sourceThreadId,
       turnId: params.sourceTurnId,
       itemId: params.callId,
-      cancelLabel: "Cancel attachment",
-      cancelDescription: "Do not add this directory to the thread.",
+      cancelLabel: params.operation === "move" ? "Cancel move" : "Cancel attachment",
+      cancelDescription: params.operation === "move"
+        ? "Keep the thread in its current workspace."
+        : "Do not add this directory to the thread.",
     });
     if (!confirmed) {
       return threadOrchestrationFailure(
@@ -29389,7 +29430,7 @@ export class DesktopBackendRegistry {
     backend: AppServerBackendKind;
     threadId: string;
   }): Promise<ArchiveCleanupMetadata> {
-    const activeThreads = await this.listThreads({
+    let activeThreads = await this.listThreads({
       archived: false,
       callerReason: "archive-cleanup",
     });
@@ -29397,32 +29438,48 @@ export class DesktopBackendRegistry {
       (thread) =>
         thread.source === params.backend && thread.id === params.threadId,
     );
-    let archivedThreads: AppServerThreadSummary[] = [];
-    try {
-      archivedThreads = await this.listThreads({
-        backend: params.backend,
-        archived: true,
-        callerReason: "archive-cleanup",
+    // Ownership can belong to an archived thread on any backend. If this
+    // lookup fails, the caller must skip cleanup rather than assume ownership.
+    let archivedThreads = await this.listThreads({
+      archived: true,
+      callerReason: "archive-cleanup",
+    });
+    // Provider listings do not contain PwrAgent's ownership marker and can
+    // still report the old workspace after a move. Use the same overlay
+    // precedence as navigation for adopted worktrees. Leave legacy cleanup
+    // candidate discovery unchanged for threads without an ownership marker.
+    const allThreads = [...activeThreads, ...archivedThreads];
+    const overlaysByThreadKey = new Map<string, ThreadOverlayState | undefined>();
+    await Promise.all([...new Set(allThreads.map((thread) => thread.source))].map(async (backend) => {
+      const overlays = await this.overlayStore.getThreadOverlayStates({
+        backend,
+        threadIds: allThreads.filter((thread) => thread.source === backend).map((thread) => thread.id),
       });
-    } catch (error) {
-      if (!activeThread) {
-        throw error;
+      for (const [threadId, overlay] of Object.entries(overlays)) {
+        overlaysByThreadKey.set(buildThreadIdentityKey(backend, threadId), overlay);
       }
-      backendRegistryLog.warn("archive cleanup archived-thread lookup failed", {
-        backend: params.backend,
-        threadId: params.threadId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
+    }));
+    const withWorkspaceOverlay = (thread: AppServerThreadSummary): AppServerThreadSummary => {
+      const directories = overlaysByThreadKey.get(buildThreadIdentityKey(thread.source, thread.id))?.extraLinkedDirectories ?? [];
+      if (!directories.some((directory) => directory.worktreeOwnership === "external")) return thread;
+      return {
+        ...thread,
+        linkedDirectories: mergeThreadLinkedDirectories([...thread.linkedDirectories, ...directories]),
+      };
+    };
+    activeThreads = activeThreads.map(withWorkspaceOverlay);
+    archivedThreads = archivedThreads.map(withWorkspaceOverlay);
     if (activeThread) {
       return {
         activeThreads,
         archivedThreads,
-        thread: activeThread,
+        thread: withWorkspaceOverlay(activeThread),
       };
     }
 
-    const archivedThread = archivedThreads.find((thread) => thread.id === params.threadId);
+    const archivedThread = archivedThreads.find(
+      (thread) => thread.source === params.backend && thread.id === params.threadId,
+    );
     if (archivedThread) {
       return {
         activeThreads,
@@ -29609,6 +29666,16 @@ export class DesktopBackendRegistry {
     backend: AppServerBackendKind;
     thread: AppServerThreadSummary;
   }): Promise<ArchiveThreadCleanupResult[]> {
+    // Ownership may live on another (even archived) thread using the same
+    // checkout. A provider alias without the marker must not authorize removal.
+    const externalWorktreePaths = new Set(
+      [params.thread, ...params.activeThreads, ...params.archivedThreads]
+        .flatMap((thread) => thread.linkedDirectories)
+        .filter((directory) => directory.worktreeOwnership === "external")
+        .map(linkedDirectoryWorktreePath)
+        .filter((value): value is string => Boolean(value))
+        .map(normalizeWorktreePathForComparison),
+    );
     const candidates: WorktreeArchiveCandidate[] =
       params.thread.linkedDirectories.flatMap((directory) => {
         const worktreePath = linkedDirectoryWorktreePath(directory);
@@ -29646,6 +29713,14 @@ export class DesktopBackendRegistry {
     return await Promise.all(
       uniqueCandidates.map(async (candidate): Promise<ArchiveThreadCleanupResult> => {
         try {
+          if (externalWorktreePaths.has(normalizeWorktreePathForComparison(candidate.worktreePath))) {
+            return {
+              worktreePath: candidate.worktreePath,
+              removedWorktree: false,
+              deletedBranch: false,
+              skippedReason: "Externally managed worktree; thread archive leaves this checkout in place.",
+            };
+          }
           const activeUsers = this.findActiveThreadsUsingWorktree({
             activeThreads: params.activeThreads,
             archivedThreadId: params.thread.id,
@@ -33246,7 +33321,7 @@ export class DesktopBackendRegistry {
         throw new Error("path must be inside a Git repository.");
       }
       const repositoryPath = primaryPath ?? sourcePath;
-      const trustFailure = await this.ensureThreadDirectoryAttachmentTrusted({
+      const trustFailure = await this.ensureThreadWorkspacePathTrusted({
         backend,
         cwd: repositoryPath,
         executionMode,
@@ -33530,13 +33605,15 @@ export class DesktopBackendRegistry {
     }
 
     const direction = request.args.direction ?? "local-to-worktree";
-    if (direction !== "local-to-worktree") {
+    if (direction !== "local-to-worktree" && direction !== "to-project") {
       return threadOrchestrationFailure(
         "unsupported_workspace",
-        'move_thread_workspace currently supports direction="local-to-worktree" only.',
+        'move_thread_workspace supports direction="local-to-worktree" or "to-project".',
       );
     }
-    const strategy = this.resolveMoveThreadWorkspaceStrategy(request.args);
+    const strategy = direction === "to-project"
+      ? undefined
+      : this.resolveMoveThreadWorkspaceStrategy(request.args);
 
     const workspaceMoveId = [
       "workspace-move",
@@ -33565,17 +33642,29 @@ export class DesktopBackendRegistry {
       }),
     ]);
 
+    let targetPath: string | undefined;
     let candidate: {
       repositoryPath?: string;
       sourceBranch?: string;
       sourcePath?: string;
     };
     try {
-      candidate = this.resolveThreadWorkspaceMoveCandidate({
-        ...(sourceOverlay ? { overlay: sourceOverlay } : {}),
-        request,
-        ...(sourceThread ? { thread: sourceThread } : {}),
-      });
+      if (direction === "to-project") {
+        if (!request.args.targetPath || !path.isAbsolute(request.args.targetPath)) {
+          throw new Error("Moving to an existing workspace requires an absolute targetPath.");
+        }
+        targetPath = await realpath(request.args.targetPath);
+        if (!(await stat(targetPath)).isDirectory()) {
+          throw new Error("targetPath must be an existing directory.");
+        }
+        candidate = { sourcePath: resolveThreadWorkspaceCwd(sourceThread, sourceOverlay?.extraLinkedDirectories) };
+      } else {
+        candidate = this.resolveThreadWorkspaceMoveCandidate({
+          ...(sourceOverlay ? { overlay: sourceOverlay } : {}),
+          request,
+          ...(sourceThread ? { thread: sourceThread } : {}),
+        });
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       return threadOrchestrationFailure(
@@ -33586,36 +33675,70 @@ export class DesktopBackendRegistry {
       );
     }
 
-    const duplicateMove = [...this.pendingThreadWorkspaceMoves.values()].find(
-      (move) =>
-        (move.status === "queued" || move.status === "running") &&
-        move.sourceBackend === sourceBackend &&
-        move.sourceThreadId === sourceThreadId &&
-        move.sourceTurnId === sourceTurnId,
-    );
-    if (duplicateMove) {
-      const sameSource =
-        duplicateMove.direction === direction &&
-        duplicateMove.strategy === strategy &&
-        (duplicateMove.leaveLocalBranch ?? "") ===
-          (request.args.leaveLocalBranch ?? "") &&
-        (duplicateMove.newBranchName ?? "") ===
-          (request.args.newBranchName ?? "") &&
-        path.resolve(duplicateMove.sourcePath ?? "") ===
-          path.resolve(candidate.sourcePath ?? "") &&
-        path.resolve(duplicateMove.repositoryPath ?? "") ===
-          path.resolve(candidate.repositoryPath ?? "");
-      if (sameSource) {
-        return {
-          ok: true,
-          data: this.pendingThreadWorkspaceMoveToResult(duplicateMove),
-        };
-      }
-      return threadOrchestrationFailure(
-        "unsupported_workspace",
-        "A workspace move is already queued for this thread turn. Wait for the continuation before requesting another workspace move.",
+    const duplicateResult = (): PwrAgentThreadOrchestrationResponse | undefined => {
+      const duplicateMove = [...this.pendingThreadWorkspaceMoves.values()].find(
+        (move) =>
+          (move.status === "queued" || move.status === "running") &&
+          move.sourceBackend === sourceBackend &&
+          move.sourceThreadId === sourceThreadId &&
+          move.sourceTurnId === sourceTurnId,
       );
+      if (duplicateMove) {
+        const sameSource =
+          duplicateMove.direction === direction &&
+          path.resolve(duplicateMove.targetPath ?? "") === path.resolve(targetPath ?? "") &&
+          duplicateMove.strategy === strategy &&
+          (duplicateMove.leaveLocalBranch ?? "") ===
+            (request.args.leaveLocalBranch ?? "") &&
+          (duplicateMove.newBranchName ?? "") ===
+            (request.args.newBranchName ?? "") &&
+          path.resolve(duplicateMove.sourcePath ?? "") ===
+            path.resolve(candidate.sourcePath ?? "") &&
+          path.resolve(duplicateMove.repositoryPath ?? "") ===
+            path.resolve(candidate.repositoryPath ?? "");
+        if (sameSource) {
+          return {
+            ok: true,
+            data: this.pendingThreadWorkspaceMoveToResult(duplicateMove),
+          };
+        }
+        return threadOrchestrationFailure(
+          "unsupported_workspace",
+          "A workspace move is already queued for this thread turn. Wait for the continuation before requesting another workspace move.",
+        );
+      }
+      return undefined;
+    };
+    const pendingResult = duplicateResult();
+    if (pendingResult) return pendingResult;
+
+    if (targetPath) {
+      const executionMode = this.activeCodexTurnModes.get(
+        buildActiveTurnModeKey(sourceThreadId, sourceTurnId),
+      ) ?? sourceOverlay?.executionMode ?? (backend === "codex"
+        ? await this.resolveCodexThreadExecutionModeForActiveTurn(sourceThreadId)
+        : "default");
+      const trustFailure = await this.ensureThreadWorkspacePathTrusted({
+        operation: "move",
+        backend,
+        cwd: targetPath,
+        executionMode,
+        sourceOverlay: sourceOverlay ?? undefined,
+        sourceThread,
+        sourceThreadId,
+        sourceTurnId,
+        callId: request.context.callId,
+      });
+      if (trustFailure) return trustFailure;
     }
+    if (!this.isLiveDynamicToolCall(sourceBackend, { threadId: sourceThreadId, turnId: sourceTurnId })) {
+      return threadOrchestrationFailure("forbidden", "The invoking turn ended before the workspace move could be queued.");
+    }
+
+    // Trust confirmation yields to other calls from this turn. Recheck with
+    // no await between admission and insertion so only one move can win.
+    const admittedResult = duplicateResult();
+    if (admittedResult) return admittedResult;
 
     const now = request.context.now ?? Date.now();
     const move = this.startPendingThreadWorkspaceMove({
@@ -33628,7 +33751,8 @@ export class DesktopBackendRegistry {
       backend,
       threadId: sourceThreadId,
       direction,
-      strategy,
+      ...(strategy ? { strategy } : {}),
+      ...(targetPath ? { targetPath } : {}),
       ...(candidate.repositoryPath ? { repositoryPath: candidate.repositoryPath } : {}),
       ...(candidate.sourcePath ? { sourcePath: candidate.sourcePath } : {}),
       ...(candidate.sourceBranch ? { sourceBranch: candidate.sourceBranch } : {}),
@@ -33813,15 +33937,23 @@ export class DesktopBackendRegistry {
     this.updatePendingThreadWorkspaceMove(workspaceMoveId, {
       status: "running",
       phase: "preparing_workspace",
-      message: "Workspace move is preparing the managed worktree.",
+      message: "Workspace move is preparing the destination workspace.",
     });
 
     let handoffResult: HandoffThreadWorkspaceResponse;
     try {
+      if (
+        move.direction === "to-project"
+        && move.targetPath
+        && (await realpath(move.targetPath)) !== move.targetPath
+      ) {
+        throw new Error("The destination workspace changed since the move was requested. Request the move again.");
+      }
       handoffResult = await this.handoffThreadWorkspace({
         backend: move.backend,
         threadId: move.threadId,
         direction: move.direction,
+        ...(move.targetPath ? { targetPath: move.targetPath } : {}),
         ...(move.strategy ? { strategy: move.strategy } : {}),
         ...(move.repositoryPath ? { repositoryPath: move.repositoryPath } : {}),
         ...(move.sourcePath ? { sourcePath: move.sourcePath } : {}),
@@ -40921,6 +41053,7 @@ function toThreadInspectionSearchSummary(
       label: directory.label,
       path: directory.path,
       ...(directory.worktreePath ? { worktreePath: directory.worktreePath } : {}),
+      ...(directory.worktreeOwnership ? { worktreeOwnership: directory.worktreeOwnership } : {}),
     })),
     ...(thread.linkedRepositories?.length
       ? {

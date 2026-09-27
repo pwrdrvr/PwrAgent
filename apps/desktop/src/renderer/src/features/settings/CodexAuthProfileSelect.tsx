@@ -335,7 +335,7 @@ function CodexAuthProfileCreateDialog(props: {
         <h2 id="create-codex-profile-heading">Create Codex profile</h2>
         {step === "form" ? (
           <>
-            <p>Name the Codex auth profile to create under ~/.codex/profiles.</p>
+            <p>Name the Codex auth profile to create.</p>
             <input
               aria-label="Codex profile name"
               className="settings-input"

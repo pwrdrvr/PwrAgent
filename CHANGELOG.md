@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.1.1 - 2026-09-26
+
+- Federation - Restored Cloudflare gateway discovery in installed macOS builds, added a persistent gateway on/off control, and now warns connected peers before shutdown.
+- Linux Credentials - Detects an unencrypted secret backend and selects an available system secret store without disrupting an already working encrypted setup.
+- Updates - Beta Prerelease users can receive a suffix-free final release while it is staged as a GitHub Pre-release.
+- Codex Questions - Presents asynchronous questions as answerable cards in desktop and messaging, with replies Codex can recognize.
+- Reviews - Find and target pull requests across attached worktrees; queued reviews remain visible and run ahead of later follow-ups.
+- Writing and Automations - Enables Markdown math by default and gives the Automations editor consistent, keyboard-operable selectors.
+- Startup and Shutdown - Refreshes Git discovery in Settings when it finishes and keeps the database available through final shutdown cleanup.
+- Thread Navigation - Keeps the transcript and composer in place when Find or linked-message jumps reach the end of a thread.
+
 ## v1.1.0 - 2026-09-25
 
 - Federation and Remote Work - Connect PwrAgent installations securely and work across them as one workspace, with mounted threads, live viewers, remote terminals, and cross-instance search.

@@ -541,6 +541,7 @@ describe("settings ipc", () => {
     });
     const { registerSettingsIpcHandlers } = await import("../ipc/settings");
     const { SETTINGS_WRITE_CONFIG_CHANNEL } = await import("../../shared/ipc");
+    const refreshCodexDiscovery = vi.spyOn(service, "refreshCodexDiscovery");
 
     registerSettingsIpcHandlers(service);
 
@@ -557,6 +558,7 @@ describe("settings ipc", () => {
       },
     );
     expect(disposeDesktopBackendRegistryMock).not.toHaveBeenCalled();
+    expect(refreshCodexDiscovery).not.toHaveBeenCalled();
 
     await handlers.get(SETTINGS_WRITE_CONFIG_CHANNEL)?.(
       {},
@@ -570,6 +572,7 @@ describe("settings ipc", () => {
         },
       },
     );
+    expect(refreshCodexDiscovery).toHaveBeenCalledOnce();
     await handlers.get(SETTINGS_WRITE_CONFIG_CHANNEL)?.(
       {},
       {

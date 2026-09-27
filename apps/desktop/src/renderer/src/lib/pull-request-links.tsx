@@ -1,5 +1,6 @@
 import {
   buildPullRequestStatusKey,
+  resolvePullRequestIdentity,
   type NavigationThreadSummary,
   type PrSummary,
 } from "@pwragent/shared";
@@ -15,6 +16,7 @@ import {
 } from "react";
 
 export type PullRequestLinkContextValue = {
+  hasPeerStatusAuthority: (pr: PrSummary) => boolean;
   getSnapshot: (fallback: PrSummary) => PrSummary;
   getNumberSnapshot: (number: number) => PrSummary | undefined;
   resolve: (href: string) => PrSummary | undefined;
@@ -31,6 +33,9 @@ function samePullRequestChip(
     && left.provider === right.provider
     && left.org === right.org
     && left.repo === right.repo
+    && left.sourceRepository?.provider === right.sourceRepository?.provider
+    && left.sourceRepository?.org === right.sourceRepository?.org
+    && left.sourceRepository?.repo === right.sourceRepository?.repo
     && left.number === right.number
     && left.title === right.title
     && left.additions === right.additions
@@ -60,18 +65,25 @@ class PullRequestLinkMetadataStore {
   private listeners = new Map<string, Set<() => void>>();
   private numberListeners = new Map<number, Set<() => void>>();
   private prs = new Map<string, PrSummary>();
+  private peerOwnedKeys = new Set<string>();
   private shorthandPrs = new Map<number, PrSummary>();
 
   constructor(
     threads: NavigationThreadSummary[],
     activeThread: NavigationThreadSummary | undefined,
   ) {
-    this.prs = pullRequestsByKey(threads);
+    const candidates = pullRequestsByKey(threads);
+    this.prs = new Map([...candidates].map(([key, candidate]) => [key, candidate.pr]));
+    this.peerOwnedKeys = new Set([...candidates].filter(([, candidate]) => candidate.peerOwned).map(([key]) => key));
     this.shorthandPrs = pullRequestsByNumberForActiveProject({
       activeThread,
       prsByKey: this.prs,
       threads,
     });
+  }
+
+  hasPeerStatusAuthority(pr: PrSummary): boolean {
+    return this.peerOwnedKeys.has(buildPullRequestStatusKey(pr));
   }
 
   getSnapshot(fallback: PrSummary): PrSummary {
@@ -137,11 +149,16 @@ class PullRequestLinkMetadataStore {
   ): void {
     const candidates = pullRequestsByKey(threads);
     const nextPrs = new Map<string, PrSummary>();
+    const nextPeerOwnedKeys = new Set<string>();
     const changedKeys = new Set<string>();
 
-    for (const [key, candidate] of candidates) {
+    for (const [key, { pr: candidate, peerOwned }] of candidates) {
       const previous = this.prs.get(key);
-      const unchanged = samePullRequestChip(previous, candidate);
+      if (peerOwned) nextPeerOwnedKeys.add(key);
+      // An ownership-only transition must wake useSyncExternalStore too, even
+      // when both observations happen to have identical visible metadata.
+      const unchanged = samePullRequestChip(previous, candidate)
+        && this.peerOwnedKeys.has(key) === peerOwned;
       nextPrs.set(key, unchanged && previous ? previous : candidate);
       if (!unchanged) {
         changedKeys.add(key);
@@ -172,6 +189,7 @@ class PullRequestLinkMetadataStore {
     }
 
     this.prs = nextPrs;
+    this.peerOwnedKeys = nextPeerOwnedKeys;
     this.shorthandPrs = nextShorthandPrs;
     for (const key of changedKeys) {
       for (const listener of this.listeners.get(key) ?? []) {
@@ -186,15 +204,27 @@ class PullRequestLinkMetadataStore {
   }
 }
 
+type PullRequestCandidate = { pr: PrSummary; peerOwned: boolean; priority: number };
+
 function pullRequestsByKey(
   threads: NavigationThreadSummary[],
-): Map<string, PrSummary> {
-  const prs = new Map<string, PrSummary>();
+): Map<string, PullRequestCandidate> {
+  const prs = new Map<string, PullRequestCandidate>();
   for (const thread of threads) {
-    for (const pr of thread.prs ?? []) {
+    const peerOwned = thread.federation?.ref.target.scope === "remote";
+    for (const rawPr of thread.prs ?? []) {
+      const pr = { ...rawPr, ...resolvePullRequestIdentity(rawPr) };
       const key = buildPullRequestStatusKey(pr);
-      if (!prs.has(key)) {
-        prs.set(key, pr);
+      const repository = pr.sourceRepository ?? pr;
+      const repositoryKey = [repository.provider, repository.org, repository.repo]
+        .map((part) => part.trim().toLowerCase()).join("/");
+      // Main resolves this field with the same primary-workspace probe used by
+      // collectPrPollTargets. A local secondary attachment cannot claim status
+      // authority merely because it appears before a pinned peer in the list.
+      const localPrimary = !peerOwned && thread.primaryGitRepository === repositoryKey;
+      const priority = localPrimary ? 2 : peerOwned ? 1 : 0;
+      if (!prs.has(key) || priority > prs.get(key)!.priority) {
+        prs.set(key, { pr, peerOwned, priority });
       }
     }
   }
@@ -304,6 +334,9 @@ export function PullRequestLinkProvider(props: {
 
   const value = useMemo<PullRequestLinkContextValue>(
     () => ({
+      hasPeerStatusAuthority(pr) {
+        return store.hasPeerStatusAuthority(pr);
+      },
       getSnapshot(fallback) {
         return store.getSnapshot(fallback);
       },

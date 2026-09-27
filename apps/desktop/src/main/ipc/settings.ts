@@ -1732,8 +1732,10 @@ export function registerSettingsIpcHandlers(
       request: WriteDesktopSettingsConfigRequest,
     ): Promise<DesktopSettingsWriteResponse> => {
       const activeService = getService(service);
-      const discoveryPermit = request.patch.experimental?.tokenMiserEnabled
-        !== undefined
+      const discoveryPermit = (
+        request.patch.models?.codex?.path !== undefined
+        || request.patch.experimental?.tokenMiserEnabled !== undefined
+      )
         ? issueProviderDiscoveryPermit("settings-user-action")
         : undefined;
       const update = await activeService.writeConfigPatchTargeted(

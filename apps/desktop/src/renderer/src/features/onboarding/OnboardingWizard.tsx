@@ -1727,7 +1727,7 @@ const ONBOARDING_BACKENDS: ReadonlyArray<{
     mark: "codex",
     vendor: "OpenAI",
     trademarks: "OpenAI, Codex, and the OpenAI logo are trademarks of OpenAI.",
-    docsUrl: "https://learn.chatgpt.com/docs/codex/cli",
+    docsUrl: "https://learn.chatgpt.com/docs/codex/cli#getting-started",
     installCommands: {
       darwin: [
         {
@@ -1968,6 +1968,7 @@ export function BackendRequirementsStep(props: {
   onAcpEntriesChange: (entries: AcpAgentSettingsEntry[]) => void;
 }) {
   const [activeBackend, setActiveBackend] = useState<OnboardingBackendId>("codex");
+  const [copiedCommand, setCopiedCommand] = useState<string>();
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string>();
   const [optimisticEnabled, setOptimisticEnabled] = useState<
@@ -2249,6 +2250,22 @@ export function BackendRequirementsStep(props: {
             {activeInstallCommands.map((install) => (
               <li key={install.command}>
                 {install.label}: <code>{install.command}</code>
+                {props.desktopApi?.copyText ? (
+                  <button
+                    type="button"
+                    className="onboarding-wizard__btn onboarding-wizard__btn--microlink"
+                    aria-label={`Copy ${install.label} command`}
+                    onClick={() => {
+                      setCopiedCommand(undefined);
+                      void props.desktopApi?.copyText?.(install.command).then(
+                        () => setCopiedCommand(install.command),
+                        () => setError("Could not copy the command. Select and copy it manually."),
+                      );
+                    }}
+                  >
+                    {copiedCommand === install.command ? "Copied" : "Copy"}
+                  </button>
+                ) : null}
               </li>
             ))}
           </ul>

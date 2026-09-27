@@ -326,6 +326,8 @@ import type {
   RefreshThreadGitWorkingStateRequest,
   RefreshThreadGitWorkingStateResponse,
   SetPullRequestPollingFocusRequest,
+  SetTranscriptPullRequestsRequest,
+  TranscriptPullRequestStatuses,
   RefreshThreadPullRequestsResponse,
   RefreshDirectoryGitStatusesRequest,
   RefreshDirectoryGitStatusesResponse,
@@ -1273,6 +1275,12 @@ export type DesktopApi = {
   setPullRequestPollingFocus?: (
     request: SetPullRequestPollingFocusRequest
   ) => Promise<void>;
+  setTranscriptPullRequests?: (
+    request: SetTranscriptPullRequestsRequest,
+  ) => Promise<TranscriptPullRequestStatuses>;
+  onTranscriptPullRequestStatuses?: (
+    callback: (statuses: TranscriptPullRequestStatuses) => void,
+  ) => () => void;
   /** Allow one token-bounded GitHub probe after Chromium reports reconnection. */
   probePullRequestPollingAfterReconnect?: () => Promise<void>;
   detachThreadPullRequest?: (

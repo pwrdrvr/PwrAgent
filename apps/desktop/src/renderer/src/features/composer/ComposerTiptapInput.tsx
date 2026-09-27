@@ -34,6 +34,8 @@ import {
   findDirectoryReferenceTrigger,
 } from "../../lib/directory-references";
 import { findHashReferenceTrigger } from "../../lib/hash-references";
+import { parsePullRequestUrl } from "../../lib/pull-request-links";
+import { useComposerPullRequestHover } from "./useComposerPullRequestHover";
 import { tildifyPath } from "../../lib/tildify-path";
 import {
   ChipContextMenu,
@@ -233,8 +235,10 @@ const SkillMention = Mention.extend({
       ];
     }
     if (node.attrs.kind === "pull-request") {
-      const label = String(node.attrs.name ?? "pull request");
       const path = typeof node.attrs.path === "string" ? node.attrs.path : "";
+      const pr = parsePullRequestUrl(path);
+      // Restored editor documents may still carry the old bare #number name.
+      const label = pr ? `${pr.org}/${pr.repo}#${pr.number}` : String(node.attrs.name ?? "pull request");
       // A chip minted before any status was known keeps the gray dot; that is
       // the honest reading of "we have never seen this PR", not a default.
       const modifiers = readMentionPrChipModifiers(node.attrs) ?? [
@@ -256,7 +260,9 @@ const SkillMention = Mention.extend({
           "data-label": label,
           "data-skill-name": label,
           ...(path ? { "data-skill-path": path } : {}),
-          ...(path ? { "data-tooltip": path } : {}),
+          ...(node.attrs.description ? { "data-skill-description": node.attrs.description } : {}),
+          tabindex: "0",
+          "aria-label": `Pull request ${label}`,
         },
         ["span", { class: "pr-chip__dot", "aria-hidden": "true" }],
         ["span", { class: "pr-chip__label" }, label],
@@ -334,10 +340,14 @@ const SkillMention = Mention.extend({
     ];
   },
   renderText: ({ node }) => {
-    if (
-      node.attrs.kind === "thread"
-      || node.attrs.kind === "pull-request"
-    ) {
+    if (node.attrs.kind === "pull-request") {
+      const path = String(node.attrs.path ?? node.attrs.name ?? "");
+      const pr = parsePullRequestUrl(path);
+      // Plain-text clipboard consumers need the URL as well as the label.
+      // Markdown also lets another composer rebuild the repository-scoped chip.
+      return pr ? `[${pr.org}/${pr.repo}#${pr.number}](${path})` : path;
+    }
+    if (node.attrs.kind === "thread") {
       return String(node.attrs.path ?? node.attrs.name ?? "");
     }
     if (node.attrs.kind === "directory" || node.attrs.kind === "file") {
@@ -1470,13 +1480,14 @@ function appendMarkdownBlock(
 
 function readTiptapMarkdownContent(
   editor: NonNullable<ReturnType<typeof useEditor>>,
+  document = editor.state.doc,
 ): {
   skillTokens: ComposerSkillToken[];
   value: string;
 } {
   const state: TiptapReadState = { skillTokens: [], value: "" };
   const nodes: ProseMirrorNode[] = [];
-  editor.state.doc.forEach((node) => {
+  document.forEach((node) => {
     nodes.push(node);
   });
   let lastContentIndex = nodes.length - 1;
@@ -2358,6 +2369,66 @@ function insertMentionTokenAtSelection(params: {
   );
 }
 
+function applyExternalReferenceHydration(params: {
+  current: TiptapReadState;
+  editor: TiptapEditor;
+  nextSkillTokens: ComposerSkillToken[];
+  nextValue: string;
+  readMode: TiptapReadMode;
+}): boolean {
+  if (params.readMode !== "markdown"
+    || params.current.skillTokens.length > 0
+    || params.nextSkillTokens.length === 0) {
+    return false;
+  }
+
+  // Automatic reference hydration removes explicit links from the draft and
+  // replaces them with zero-width tokens. Apply just those replacements to the
+  // live document; rebuilding from the token-bearing plain draft loses every
+  // mark, code block, list, and blockquote around the pasted links.
+  const replacements: { from: number; to: number; token: ComposerSkillToken }[] = [];
+  let removedLength = 0;
+  let cursor = 0;
+  let nextValue = "";
+  for (const token of [...params.nextSkillTokens].sort((a, b) => a.index - b.index)) {
+    const start = token.index + removedLength;
+    const match = /^\[((?:\\.|[^\]\\\r\n])*)\]\(([^)\r\n]+)\)/.exec(
+      params.current.value.slice(start),
+    );
+    if (!match || start < cursor) {
+      return false;
+    }
+    nextValue += params.current.value.slice(cursor, start);
+    cursor = start + match[0].length;
+    removedLength += match[0].length;
+    replacements.push({
+      from: getPositionAtDraftIndex(params.editor, start, params.readMode),
+      to: getPositionAtDraftIndex(params.editor, cursor, params.readMode),
+      token,
+    });
+  }
+  nextValue += params.current.value.slice(cursor);
+  if (nextValue !== params.nextValue) {
+    return false;
+  }
+
+  const transaction = params.editor.state.tr;
+  for (const { from, to, token } of replacements.reverse()) {
+    transaction.replaceWith(from, to, params.editor.schema.nodes.mention.create(
+      getSkillMentionAttrs(token),
+    ));
+  }
+  const next = readTiptapMarkdownContent(params.editor, transaction.doc);
+  if (getContentSignature(next) !== getContentSignature({
+    value: params.nextValue,
+    skillTokens: params.nextSkillTokens,
+  })) {
+    return false;
+  }
+  params.editor.view.dispatch(closeHistory(transaction));
+  return true;
+}
+
 function applyExternalSkillInsertion(params: {
   current: TiptapReadState;
   editor: TiptapEditor;
@@ -2877,6 +2948,8 @@ export const ComposerTiptapInput = forwardRef<
       );
     },
   });
+  const pullRequestTooltip = useComposerPullRequestHover(editor?.view.dom);
+
   editorRef.current = editor;
 
   useLayoutEffect(() => {
@@ -3058,7 +3131,13 @@ export const ComposerTiptapInput = forwardRef<
       pushControlledUndoEntry(editor);
       controlledRedoStackRef.current = [];
     }
-    const inserted = applyExternalSkillInsertion({
+    const inserted = applyExternalReferenceHydration({
+      current,
+      editor,
+      nextSkillTokens: props.skillTokens,
+      nextValue: props.value,
+      readMode,
+    }) || applyExternalSkillInsertion({
       current,
       editor,
       nextSkillTokens: props.skillTokens,
@@ -3223,6 +3302,7 @@ export const ComposerTiptapInput = forwardRef<
           }
           return;
         }
+        if (attrs["data-mention-kind"] === "pull-request") return;
         // `data-skill-name`, not the text: a chip that names its origin
         // carries the origin label after the name.
         const tooltip = buildSkillTooltip(
@@ -3388,6 +3468,7 @@ export const ComposerTiptapInput = forwardRef<
       }}
     >
       <EditorContent editor={editor} />
+      {pullRequestTooltip}
       {threadContextMenu ? (
         <ChipContextMenu
           items={threadCopyTargets(

@@ -44,6 +44,18 @@ function rawMergedPr() {
 }
 
 describe("parseGhPrPayload", () => {
+  it("keys fork contributions by the destination repository", () => {
+    expect(parseGhPrPayload({
+      ...rawMergedPr(),
+      headRepositoryOwner: { login: "contributor" },
+      headRepository: { name: "renamed-fork" },
+    })).toMatchObject({
+      org: "pwrdrvr",
+      repo: "PwrAgent",
+      sourceRepository: { provider: "github.com", org: "contributor", repo: "renamed-fork" },
+    });
+  });
+
   it("maps the pinned JSON shape into a PrSummary", () => {
     expect(parseGhPrPayload(rawMergedPr())).toEqual({
       provider: "github.com",
@@ -70,14 +82,14 @@ describe("parseGhPrPayload", () => {
     );
   });
 
-  it("falls back to empty strings for missing repo/owner", () => {
+  it("retains destination identity after the source repository is deleted", () => {
     const summary = parseGhPrPayload({
       ...rawMergedPr(),
       headRepository: null,
       headRepositoryOwner: null,
     });
-    expect(summary.org).toBe("");
-    expect(summary.repo).toBe("");
+    expect(summary.org).toBe("pwrdrvr");
+    expect(summary.repo).toBe("PwrAgent");
   });
 
   it("retains the first safe failed-check destination", () => {

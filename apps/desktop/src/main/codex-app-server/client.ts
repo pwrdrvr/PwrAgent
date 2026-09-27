@@ -6914,6 +6914,7 @@ function toCodexUserInput(
 
 async function prepareCodexUserInput(params: {
   input: AppServerTurnInputItem[];
+  onInputTextPrepared?: (text: string | undefined) => void;
 }): Promise<CodexUserInput[]> {
   const prepared: CodexUserInput[] = [];
   const fileReferences: string[] = [];
@@ -6946,11 +6947,7 @@ async function prepareCodexUserInput(params: {
     });
   }
 
-  if (fileReferences.length === 0) {
-    return prepared;
-  }
-
-  return [
+  const input: CodexUserInput[] = fileReferences.length === 0 ? prepared : [
     {
       type: "text",
       text: [
@@ -6962,6 +6959,12 @@ async function prepareCodexUserInput(params: {
     },
     ...prepared,
   ];
+  // Publish the exact prepared text before any user-item notification can arrive.
+  // The registry must match the generated file preamble as well as the prompt.
+  params.onInputTextPrepared?.(input.flatMap((item) =>
+    item.type === "text" && item.text.trim() ? [item.text.trim()] : []
+  ).join("\n") || undefined);
+  return input;
 }
 
 function formatCodexFileReference(
@@ -9118,6 +9121,7 @@ export class CodexAppServerClient {
   async startTurn(params: {
     threadId: string;
     input: AppServerTurnInputItem[];
+    onInputTextPrepared?: (text: string | undefined) => void;
     cwd?: string;
     approvalPolicy?: string;
     approvalsReviewer?: ApprovalsReviewer;
@@ -9228,6 +9232,7 @@ export class CodexAppServerClient {
 
     const codexInput = await prepareCodexUserInput({
       input: params.input,
+      onInputTextPrepared: params.onInputTextPrepared,
     });
     const result = await requestWithFallbacks({
       client: connection,
@@ -10019,6 +10024,7 @@ export class CodexAppServerClient {
   async steerTurn(params: {
     threadId: string;
     input: AppServerTurnInputItem[];
+    onInputTextPrepared?: (text: string | undefined) => void;
     expectedTurnId: string;
   }): Promise<{ threadId: string; turnId: string }> {
     await this.ensureInitialized();
@@ -10038,6 +10044,7 @@ export class CodexAppServerClient {
 
     const codexInput = await prepareCodexUserInput({
       input: params.input,
+      onInputTextPrepared: params.onInputTextPrepared,
     });
     const payload: CodexTurnSteerParams = {
       threadId: params.threadId,

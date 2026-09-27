@@ -16,12 +16,20 @@ import Foundation
 //   capture-window.swift <owner-name-substring> <output-path>
 //   capture-window.swift <owner-name-substring> <output-path> --title=<title-substring>
 //   capture-window.swift <owner-name-substring> <output-path> --allow-low-dpi
+//   capture-window.swift <owner-name-substring> <output-path> --pid=<owner-pid>
 //
 // The owner-name substring is matched against `kCGWindowOwnerName`
 // case-insensitively. For an Electron-based app this is typically
 // "Electron" during dev or the productName from electron-builder for
 // signed builds. We pick the first on-screen, normal-layer window that
 // matches.
+//
+// "Electron" matches every unpackaged Electron app on the machine, so pass
+// `--pid=<owner-pid>` to restrict the match to windows owned by that
+// process. Without it, a docs-site run captured another Electron dev app
+// that was frontmost at the time and wrote it out as a PwrAgent
+// screenshot. The inactive-window check (exit 7) passed as well, because
+// the app it checked was the one that had been captured.
 //
 // When `--title=<substring>` is provided, the window's title
 // (`kCGWindowName`) must also contain that substring (case-insensitive)
@@ -64,7 +72,7 @@ let args = CommandLine.arguments
 
 let usage =
   "usage: capture-window.swift <owner-name-substring> <output-path> "
-  + "[--title=<title-substring>] [--allow-low-dpi]\n"
+  + "[--title=<title-substring>] [--pid=<owner-pid>] [--allow-low-dpi]\n"
 
 guard args.count >= 3 else {
   FileHandle.standardError.write(Data(usage.utf8))
@@ -75,10 +83,19 @@ let ownerSubstring = args[1]
 let outputPath = args[2]
 
 var titleSubstring: String? = nil
+var ownerPIDFilter: pid_t? = nil
 var allowLowResolution = false
 for raw in args.dropFirst(3) {
   if raw.hasPrefix("--title=") {
     titleSubstring = String(raw.dropFirst("--title=".count))
+  } else if raw.hasPrefix("--pid=") {
+    guard let pid = pid_t(raw.dropFirst("--pid=".count)), pid > 0 else {
+      FileHandle.standardError.write(
+        Data("--pid needs a positive process id, got '\(raw)'\n\(usage)".utf8)
+      )
+      exit(2)
+    }
+    ownerPIDFilter = pid
   } else if raw == "--allow-low-dpi" {
     allowLowResolution = true
   } else {
@@ -102,6 +119,9 @@ func windowMatches(_ info: [String: Any]) -> Bool {
   guard let owner = info[kCGWindowOwnerName as String] as? String,
     owner.localizedCaseInsensitiveContains(ownerSubstring)
   else { return false }
+  if let pid = ownerPIDFilter {
+    guard (info[kCGWindowOwnerPID as String] as? pid_t) == pid else { return false }
+  }
   // Only normal-layer windows; layer 0 is the standard application window.
   // Skip menus, popovers, sheets, drag images.
   guard let layer = info[kCGWindowLayer as String] as? Int, layer == 0 else { return false }
@@ -134,9 +154,10 @@ else {
   }
   .joined(separator: ", ")
   let titleClause = titleSubstring.map { " with title containing '\($0)'" } ?? ""
+  let pidClause = ownerPIDFilter.map { " owned by pid \($0)" } ?? ""
   FileHandle.standardError.write(
     Data(
-      "no on-screen window for owner matching '\(ownerSubstring)'\(titleClause) (on-screen windows: \(candidates))\n"
+      "no on-screen window for owner matching '\(ownerSubstring)'\(pidClause)\(titleClause) (on-screen windows: \(candidates))\n"
         .utf8
     )
   )

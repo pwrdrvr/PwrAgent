@@ -426,6 +426,20 @@
     "rowsChanged": 0,
     "statements": 0
   },
+  "pr-reference-identity-upgrade": {
+    "commits": 1,
+    "note": "100 detach references and 100 watches rekeyed in one upgrade transaction; runs once per profile, 0 MB/day recurring writes",
+    "observedWalBytes": 123600,
+    "rowsChanged": 300,
+    "statements": 300
+  },
+  "pr-reference-identity-upgrade-unchanged": {
+    "commits": 0,
+    "note": "Revisiting 100 corrected detach references and watches is read-only; 0 commits and 0 MB/day recurring writes",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 0
+  },
   "provider-thread-snapshot-refresh": {
     "commits": 1,
     "note": "one secret-free provider thread projection per successful full provider list, never per thread",
@@ -474,6 +488,13 @@
     "observedWalBytes": 0,
     "rowsChanged": 0,
     "statements": 0
+  },
+  "settings-save-codex-path": {
+    "commits": 2,
+    "note": "one config publication and one discovery publication per explicit Codex path save; no idle writes",
+    "observedWalBytes": 8240,
+    "rowsChanged": 2,
+    "statements": 2
   },
   "star-map-intake-launchpad-initialization": {
     "commits": 2,

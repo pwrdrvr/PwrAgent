@@ -1,3 +1,5 @@
+import { formatFilesystemPath } from "@pwragent/shared";
+
 /**
  * A filesystem path that truncates in the middle rather than at the tail.
  *
@@ -18,21 +20,22 @@ export function SettingsSplitPath(props: {
   /** Hover/`title` form. Defaults to `value`. Pass the untildified path. */
   title?: string;
 }) {
+  const value = formatFilesystemPath(props.value);
   const separator = Math.max(
-    props.value.lastIndexOf("/"),
-    props.value.lastIndexOf("\\"),
+    value.lastIndexOf("/"),
+    value.lastIndexOf("\\"),
   );
   // `> 0` rather than `>= 0`: a root-level `/work` has nothing to ellipsize,
   // so it stays one span instead of becoming an empty head plus the whole
   // value pinned, which would size the box to the full string.
   const split = separator > 0;
-  const head = split ? props.value.slice(0, separator) : props.value;
-  const tail = split ? props.value.slice(separator) : "";
+  const head = split ? value.slice(0, separator) : value;
+  const tail = split ? value.slice(separator) : "";
 
   return (
     <span
       className={`settings-splitpath${props.className ? ` ${props.className}` : ""}`}
-      title={props.title ?? props.value}
+      title={formatFilesystemPath(props.title ?? props.value)}
     >
       <span className="settings-splitpath__head">{head}</span>
       {tail ? <span className="settings-splitpath__tail">{tail}</span> : null}

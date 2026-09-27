@@ -2,8 +2,9 @@ appId: com.pwrdrvr.pwragent
 productName: PwrAgent
 copyright: "Copyright © 2026 PwrDrvr LLC."
 
-# Dock tile plug-ins are nested code. Sign the staged bundle before
-# electron-builder seals the parent PwrAgent.app for notarization.
+# Give the main executable a PwrAgent-specific UUID for macOS local network
+# privacy, and sign the nested Dock tile plug-in before electron-builder
+# seals the parent PwrAgent.app for notarization.
 afterPack: "scripts/afterpack-sign-dock-tile-plugin.mjs"
 beforePack: "scripts/beforepack-bundled-git.mjs"
 

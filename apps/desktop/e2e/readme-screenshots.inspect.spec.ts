@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { expect, test, type ElectronApplication } from "@playwright/test";
 import {
   bringToFront,
+  captureOwnerPidArg,
   captureWhileFocused,
 } from "./fixtures/capture-window-placement";
 import { launchElectronApp } from "./fixtures/electron-app";
@@ -103,7 +104,7 @@ async function captureNative(
 ): Promise<void> {
   mkdirSync(screenshotDir, { recursive: true });
   const outputPath = path.join(screenshotDir, outputBasename);
-  const args = ["Electron", outputPath];
+  const args = ["Electron", outputPath, await captureOwnerPidArg(electronApp)];
   if (options?.titleSubstring) {
     args.push(`--title=${options.titleSubstring}`);
   }
@@ -525,6 +526,9 @@ test("pairing — Generate → observe → approve sequence (animated GIF)", asy
   mkdirSync(screenshotDir, { recursive: true });
 
   try {
+    // The app stays up for all three frames, so one PID serves them all.
+    const ownerPidArg = await captureOwnerPidArg(app.electronApp);
+
     // ──────── FRAME 1: Generate clicked, pair code visible ────────
     await navigateToTelegramPairing(app);
 
@@ -552,7 +556,7 @@ test("pairing — Generate → observe → approve sequence (animated GIF)", asy
 
     await bringToFront(app.electronApp);
     await captureWhileFocused(
-      () => execFileSync(captureScript, ["Electron", frame1Path], { stdio: "inherit" }),
+      () => execFileSync(captureScript, ["Electron", frame1Path, ownerPidArg], { stdio: "inherit" }),
       () => bringToFront(app.electronApp),
     );
 
@@ -598,7 +602,7 @@ test("pairing — Generate → observe → approve sequence (animated GIF)", asy
 
     await bringToFront(app.electronApp);
     await captureWhileFocused(
-      () => execFileSync(captureScript, ["Electron", frame2Path], { stdio: "inherit" }),
+      () => execFileSync(captureScript, ["Electron", frame2Path, ownerPidArg], { stdio: "inherit" }),
       () => bringToFront(app.electronApp),
     );
 
@@ -632,7 +636,7 @@ test("pairing — Generate → observe → approve sequence (animated GIF)", asy
 
     await bringToFront(app.electronApp);
     await captureWhileFocused(
-      () => execFileSync(captureScript, ["Electron", frame3Path], { stdio: "inherit" }),
+      () => execFileSync(captureScript, ["Electron", frame3Path, ownerPidArg], { stdio: "inherit" }),
       () => bringToFront(app.electronApp),
     );
 

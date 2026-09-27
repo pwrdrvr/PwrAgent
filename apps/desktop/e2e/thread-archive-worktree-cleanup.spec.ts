@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, realpath, rm, stat, writeFile } from "node:fs/promises"
 import os from "node:os";
 import path from "node:path";
 import { expect, test } from "@playwright/test";
+import type { DesktopApi } from "../src/renderer/src/lib/desktop-api";
 import { launchElectronApp } from "./fixtures/electron-app";
 
 function git(cwd: string, args: string[]): string {
@@ -179,25 +180,27 @@ test("archiving a replay-backed thread removes its real Git worktree", async () 
   });
 
   try {
-    await app.window.getByRole("button", { name: /Archive worktree cleanup/i }).click();
-    await expect(
-      app.window.getByRole("heading", {
-        level: 2,
-        name: "Archive worktree cleanup",
+    // The archive response owns the Git cleanup. A first Windows Job-wrapper
+    // launch can still be compiling after the UI optimistically hides the row.
+    const response = await app.window.evaluate(async () => {
+      const api = (window as Window & { pwragent?: DesktopApi }).pwragent;
+      if (!api?.archiveThread) {
+        throw new Error("Desktop archive bridge is unavailable.");
+      }
+      return await api.archiveThread({
+        backend: "codex",
+        threadId: "thread-archive-worktree",
+      });
+    });
+    expect(response.cleanup).toEqual([
+      expect.objectContaining({
+        worktreePath: fixture.worktreePath,
+        removedWorktree: true,
       }),
-    ).toBeVisible();
-
-    await app.window.waitForTimeout(900);
-    await app.window.getByRole("button", { name: "Open thread actions" }).click();
-    await app.window.getByRole("menuitem", { name: "Archive Thread" }).click();
-
-    await expect
-      .poll(async () => await pathExists(fixture.worktreePath))
-      .toBe(false);
-    await expect
-      .poll(() => git(fixture.repoPath, ["worktree", "list", "--porcelain"]))
+    ]);
+    expect(await pathExists(fixture.worktreePath)).toBe(false);
+    expect(git(fixture.repoPath, ["worktree", "list", "--porcelain"]))
       .not.toContain(fixture.worktreePath);
-    await expect(app.window.getByRole("button", { name: /Archive worktree cleanup/i })).toHaveCount(0);
   } finally {
     await app.close();
     await fixture.cleanup();

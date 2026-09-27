@@ -1,6 +1,8 @@
 import * as composerMentionSources from "../useComposerMentionSources";
 import { buildThreadComposerScopeKey } from "../useComposerDraftStore";
 import { handoffLaunchpadComposer } from "../launchpad-composer-handoff";
+import { hydrateComposerDraft } from "../composer-draft-hydration";
+import { buildDirectoryReferenceMarkdown } from "../../../lib/directory-references";
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
 import { StrictMode, useMemo, useState, type ComponentProps } from "react";
@@ -3674,7 +3676,7 @@ describe("Composer", () => {
 
     const chip = await waitFor(() =>
       within(textbox)
-        .getByText("#123")
+        .getByText("pwrdrvr/PwrAgent#123")
         .closest("[data-mention-kind]"),
     );
     expect(chip).toHaveAttribute("data-mention-kind", "pull-request");
@@ -3688,7 +3690,7 @@ describe("Composer", () => {
         input: [
           {
             type: "text",
-            text: `See [#123](${pullRequest.url})`,
+            text: `See [pwrdrvr/PwrAgent#123](${pullRequest.url})`,
           },
         ],
       });
@@ -3781,7 +3783,7 @@ describe("Composer", () => {
     );
 
     const chip = await waitFor(() =>
-      within(textbox).getByText("#13268").closest("[data-mention-kind]"),
+      within(textbox).getByText("pwrdrvr/PwrAgent#13268").closest("[data-mention-kind]"),
     );
     expect(chip).toHaveClass("pr-chip--passing");
     expect(chip).not.toHaveClass("pr-chip--unknown");
@@ -3849,7 +3851,7 @@ describe("Composer", () => {
 
     const richInput = screen.getByTestId("composer-tiptap-input");
     const chip = await waitFor(() =>
-      within(richInput).getByText("#13268").closest("[data-mention-kind]"),
+      within(richInput).getByText("pwrdrvr/PwrAgent#13268").closest("[data-mention-kind]"),
     );
     expect(chip).toHaveClass("pr-chip--failing");
     expect(chip).toHaveClass("pr-chip--draft");
@@ -3857,6 +3859,84 @@ describe("Composer", () => {
     // The draft modifier only lifts the label; the bar is the affordance the
     // sidebar chip renders, so the composer chip has to draw it too.
     expect(chip?.querySelector(".pr-chip__draft-bar")).not.toBeNull();
+  });
+
+  it.each(["code block", "blockquote"])("preserves the draft when pasting a PR reference into a %s", async (target) => {
+    const startTurn = vi.fn(async (_request: StartTurnRequest) => ({
+      backend: "codex" as const,
+      threadId: "paste-thread",
+      turnId: "turn-1",
+    }));
+    render(
+      <Composer
+        desktopApi={{ onAgentEvent: () => () => undefined, startTurn }}
+        skills={[]}
+        thread={{
+          id: "paste-thread",
+          title: "Paste test",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />,
+    );
+    const textbox = screen.getByRole("textbox", { name: "Reply" });
+    const initialHtml = [
+      "<p>Keep <code>%APPDATA%</code> intact.</p>",
+      target === "code block"
+        ? "<pre><code>Paste here</code></pre>"
+        : "<blockquote><p>Paste here</p></blockquote>",
+      "<blockquote><p>Collected metadata</p></blockquote>",
+    ].join("");
+    fireEvent.paste(textbox, {
+      clipboardData: {
+        getData: (type: string) => type === "text/html" ? initialHtml : "",
+        files: [],
+        items: [],
+        types: ["text/html"],
+      },
+    });
+    const value = (textbox as HTMLTextAreaElement).value;
+    const pasteIndex = value.indexOf("Paste here") + "Paste here".length;
+    act(() => (textbox as HTMLTextAreaElement).setSelectionRange(pasteIndex, pasteIndex));
+    const pasted = [
+      "Created [#42](https://github.com/fixture/project/pull/42) and [#43](https://github.com/fixture/project/pull/43).",
+      "",
+      "- Adds `Programs\\OpenAI\\Codex`, including `bin\\codex.exe`.",
+    ].join("\n");
+    fireEvent.paste(textbox, {
+      clipboardData: {
+        getData: (type: string) => type === "text/plain" ? pasted : "",
+        files: [],
+        items: [],
+        types: ["text/plain"],
+      },
+    });
+    await waitFor(() => {
+      expect(textbox.querySelector("p > code")?.textContent).toBe("%APPDATA%");
+      expect(textbox.querySelectorAll("blockquote")).toHaveLength(target === "code block" ? 1 : 2);
+      if (target === "code block") {
+        expect(textbox.querySelector("pre code")?.textContent).toBe(`Paste here${pasted}`);
+        expect(textbox.querySelector("[data-mention-kind]")).toBeNull();
+      } else {
+        expect(textbox.querySelectorAll("blockquote [data-mention-kind='pull-request']")).toHaveLength(2);
+      }
+    });
+    await clickButton("Send");
+    await waitFor(() => expect(startTurn).toHaveBeenCalled());
+    const request = startTurn.mock.calls[0]?.[0];
+    const serializedPaste = target === "code block"
+      ? pasted
+      : pasted.replace(/\[#(42|43)\]/g, "[fixture/project#$1]");
+    const quoted = `Paste here${serializedPaste}`;
+    const expectedBlock = target === "code block"
+      ? `\`\`\`\n${quoted}\n\`\`\``
+      : quoted.split("\n").map((line) => `> ${line}`).join("\n");
+    expect(request?.input).toEqual([{
+      type: "text",
+      text: `Keep \`%APPDATA%\` intact.\n\n${expectedBlock}\n\n> Collected metadata`,
+    }]);
   });
 
   it("rebuilds a GitLab merge request chip from a prompt-only launchpad restore", async () => {
@@ -3895,7 +3975,7 @@ describe("Composer", () => {
 
     const richInput = screen.getByTestId("composer-tiptap-input");
     const chip = await waitFor(() =>
-      within(richInput).getByText("#49").closest("[data-mention-kind]"),
+      within(richInput).getByText("pwrdrvr/platform/PwrAgent#49").closest("[data-mention-kind]"),
     );
     expect(chip).toHaveAttribute("data-mention-kind", "pull-request");
     expect(chip).toHaveAttribute("data-skill-path", url);
@@ -3904,7 +3984,7 @@ describe("Composer", () => {
     await waitFor(() => {
       expect(onMaterializeLaunchpad).toHaveBeenCalledWith(
         "directory:/repo",
-        [{ type: "text", text: `check [#49](${url}) please` }],
+        [{ type: "text", text: `check [pwrdrvr/platform/PwrAgent#49](${url}) please` }],
         undefined,
         undefined,
         [],
@@ -6564,6 +6644,56 @@ describe("Composer", () => {
       expect(addOptimisticUserMessage).toHaveBeenCalledWith(reply, []);
       expect(onUserRepliedToThread).toHaveBeenCalledWith(thread);
       expect(textarea).toHaveValue("An unrelated draft");
+    });
+
+    it("keeps an async answer pending until the thread composer is ready", async () => {
+      const startTurn = vi.fn(async (request: StartTurnRequest) => ({
+        backend: request.backend,
+        threadId: request.threadId,
+        turnId: "turn-answer",
+      }));
+      const onReplySubmissionSettled = vi.fn();
+      const props = {
+        backends: [backendSummary("codex")],
+        desktopApi: { onAgentEvent: () => () => undefined, startTurn },
+        onReplySubmissionSettled,
+        replySubmission: { id: 1, threadId: thread.id, backend: "codex" as const, text: reply },
+        skills: [],
+        thread,
+      };
+      const view = render(<Composer {...props} disabled />);
+      await act(async () => undefined);
+      expect(startTurn).not.toHaveBeenCalled();
+      expect(onReplySubmissionSettled).not.toHaveBeenCalled();
+
+      view.rerender(<Composer {...props} disabled={false} />);
+      await waitFor(() => expect(onReplySubmissionSettled).toHaveBeenCalledWith(1, true));
+      expect(startTurn).toHaveBeenCalledTimes(1);
+      expect(startTurn).toHaveBeenCalledWith(expect.objectContaining({
+        threadId: thread.id,
+        input: [{ type: "text", text: reply }],
+      }));
+      view.rerender(<Composer {...props} disabled />);
+      view.rerender(<Composer {...props} disabled={false} />);
+      expect(startTurn).toHaveBeenCalledTimes(1);
+    });
+
+    it("drops a pending async answer when navigation leaves its thread", async () => {
+      const startTurn = vi.fn();
+      const onReplySubmissionSettled = vi.fn();
+      const props = {
+        backends: [backendSummary("codex")],
+        desktopApi: { onAgentEvent: () => () => undefined, startTurn },
+        onReplySubmissionSettled,
+        replySubmission: { id: 1, threadId: thread.id, backend: "codex" as const, text: reply },
+        skills: [],
+      };
+      const view = render(<Composer {...props} thread={thread} disabled />);
+      view.rerender(<Composer {...props} thread={{ ...thread, id: "another-thread" }} disabled />);
+      await waitFor(() => expect(onReplySubmissionSettled).toHaveBeenCalledWith(1, false));
+      view.rerender(<Composer {...props} thread={thread} disabled={false} />);
+      expect(startTurn).not.toHaveBeenCalled();
+      expect(onReplySubmissionSettled).toHaveBeenCalledTimes(1);
     });
 
     it("queues the reply behind a busy thread and previews its answer", async () => {
@@ -17093,6 +17223,76 @@ describe("Composer", () => {
     } finally {
       delete (window as unknown as { __pwragentHomeDir?: string })
         .__pwragentHomeDir;
+    }
+  });
+
+  it.each([
+    ["C:/Projects/repo", "unlinked"],
+    ["C:/Projects/repo", "linked"],
+    ["C:/Projects/repo", "worktree"],
+    ["//server/share/repo", "unlinked"],
+    ["//server/share/repo", "linked"],
+    ["//server/share/repo", "worktree"],
+  ])("merges restored Windows directory identities for %s (%s)", async (path, mode) => {
+    const directory: NavigationDirectorySummary = {
+      key: `directory:${path}`,
+      kind: "directory",
+      label: "Tracked repository",
+      path,
+      threadKeys: [],
+      needsAttentionCount: 0,
+    };
+    const markdown = buildDirectoryReferenceMarkdown({ label: "repo", path });
+    const draftStore = createComposerDraftStore();
+    draftStore.set(buildThreadComposerScopeKey("codex", "thread-windows-reference"), {
+      ...hydrateComposerDraft(markdown, [], undefined, undefined),
+      imageAttachments: [],
+    });
+    const startTurn = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-windows-reference",
+      turnId: "turn-1",
+    }));
+    const onAttachDirectoryReferences = vi.fn();
+    const { container } = render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        desktopApi={{ onAgentEvent: () => () => undefined, startTurn }}
+        directories={[directory]}
+        draftStore={draftStore}
+        onAttachDirectoryReferences={onAttachDirectoryReferences}
+        skills={[]}
+        thread={{
+          id: "thread-windows-reference",
+          title: "Restored reference",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: mode === "unlinked" ? [] : [{
+            id: "linked",
+            label: "Linked repository",
+            path: mode === "worktree" ? "C:/checkout" : `${path}/`,
+            worktreePath: mode === "worktree" ? `${path}/` : undefined,
+            kind: mode === "worktree" ? "worktree" : "local",
+          }],
+          inbox: { inInbox: false },
+        }}
+      />,
+    );
+    expect(container.querySelectorAll(".composer__directory-reference"))
+      .toHaveLength(mode === "unlinked" ? 1 : 0);
+    if (mode === "unlinked") {
+      expect(container.querySelector(".composer__directory-reference"))
+        .toHaveTextContent("Tracked repository");
+    }
+    await clickButton("Send");
+    await waitFor(() => expect(startTurn).toHaveBeenCalledTimes(1));
+    if (mode === "unlinked") {
+      expect(onAttachDirectoryReferences).toHaveBeenCalledExactlyOnceWith(
+        [path], { backend: "codex", threadId: "thread-windows-reference" },
+      );
+    } else {
+      expect(onAttachDirectoryReferences).not.toHaveBeenCalled();
     }
   });
 

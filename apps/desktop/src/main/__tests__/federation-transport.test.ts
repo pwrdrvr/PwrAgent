@@ -98,6 +98,46 @@ afterEach(async () => {
 });
 
 describe("federation transport", () => {
+  it("disables Cloudflare HTTP and upgrades while leaving direct ingress available", async () => {
+    let enabled = false;
+    server = new FederationGatewayWebSocketServer({
+      gatewayInstanceId: "gateway_one", gatewayPrivateKeyPem: gatewayKeyPair.privateKeyPem,
+      gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem, host: "127.0.0.1", port: 0, store,
+      cloudflareEnabled: () => enabled,
+    });
+    const { url } = await server.start();
+    const probe = server.securityProbes.arm();
+    const headers = { "cf-ray": "test-ray", "x-pwragent-security-probe": probe.id };
+    const response = await fetch(url.replace("ws:", "http:"), { headers });
+    expect(response.status).toBe(403);
+    expect(probe.observed()).toBe(false);
+    const rejected = new WebSocket(url, { headers });
+    const status = await new Promise<number>((resolve, reject) => {
+      rejected.on("unexpected-response", (_request, incoming) => { incoming.resume(); resolve(incoming.statusCode ?? 0); rejected.terminate(); });
+      rejected.on("error", reject);
+    });
+    expect(status).toBe(403);
+    const direct = await fetch(url.replace("ws:", "http:"), { headers: { "x-pwragent-security-probe": probe.id } });
+    expect(direct.status).toBe(204);
+    enabled = true;
+    const allowed = await fetch(url.replace("ws:", "http:"), { headers });
+    expect(allowed.status).toBe(204);
+    probe.close();
+  });
+
+  it("ends only Cloudflare connections when gateway access is disabled", () => {
+    server = new FederationGatewayWebSocketServer({
+      gatewayInstanceId: "gateway_one", gatewayPrivateKeyPem: gatewayKeyPair.privateKeyPem,
+      gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem, host: "127.0.0.1", port: 0, store,
+    });
+    const external = { via: "cloudflare-tunnel", terminate: vi.fn() };
+    const direct = { terminate: vi.fn() };
+    Object.assign(server, { connections: new Map([["external", external], ["direct", direct]]) });
+    server.closeCloudflareConnections();
+    expect(external.terminate).toHaveBeenCalledOnce();
+    expect(direct.terminate).not.toHaveBeenCalled();
+  });
+
   it("observes armed HTTP and upgrade probes before federation admission", async () => {
     const onEnvelope = vi.fn();
     server = new FederationGatewayWebSocketServer({

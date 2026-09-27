@@ -82,6 +82,7 @@ import {
   getDesktopFederationRuntime,
 } from "./federation/federation-runtime";
 import { createFederationWindow } from "./federation/federation-window";
+import { applyFederationConfigPatch, subscribeFederationConfig } from "./federation/federation-config-subscription";
 import {
   disposeIntegratedTerminalIpcHandlers,
   registerIntegratedTerminalIpcHandlers,
@@ -180,7 +181,6 @@ import {
   recordBootDecision,
 } from "./state/app-state";
 import type { AutoVacuumConversion } from "./state/state-db";
-import { prewarmWindowsJobWrapper } from "./windows-job-wrapper";
 import { createMainWindow } from "./window";
 import { registerManagedGrokSignatureRejectionBroadcast } from "./managed-grok-signature-broadcast";
 import { subscribersForChannel } from "./window-channels";
@@ -1542,10 +1542,9 @@ export function bootstrapApp(): void {
         await getDesktopBackendRegistry().synchronizeProviderRuntimeSelections();
         if (patch.federation !== undefined) {
           // Store subscriptions also cover external config-file edits. Keep
-          // direct settings writes awaiting the same single-flight restart so
-          // consecutive mode changes cannot collapse into the first restart
-          // and leave the runtime serving an obsolete mode.
-          await getDesktopFederationRuntime().restart();
+          // direct settings writes awaiting the runtime change, while the
+          // Cloudflare ingress switch leaves other peer sessions intact.
+          await applyFederationConfigPatch(getDesktopFederationRuntime(), patch.federation);
         }
         if (patch.general?.mcpGatewayEnabled === false) {
           // The switch forbids new bridges on its own, but a session opened
@@ -1571,13 +1570,15 @@ export function bootstrapApp(): void {
         }
       },
     });
-    getDesktopConfigStore().subscribe(["federation"], () => {
-      void getDesktopFederationRuntime().restart().catch((error) => {
+    subscribeFederationConfig(
+      getDesktopConfigStore(),
+      getDesktopFederationRuntime(),
+      (error) => {
         mainLog.error("federation runtime config refresh failed", {
           error: error instanceof Error ? error.message : String(error),
         });
-      });
-    });
+      },
+    );
     registerWindowPointerIpcHandlers();
     if (isDevelopment) {
       registerRuntimeIdentityIpcHandlers();
@@ -1587,11 +1588,6 @@ export function bootstrapApp(): void {
         error: error instanceof Error ? error.message : String(error),
       });
     });
-    // Windows only, and a no-op everywhere else. The first Job-wrapped command
-    // on a machine pays a cold PowerShell host launch and a helper compile that
-    // has measured in the tens of seconds; without this the bill lands on the
-    // operator's first worktree archive.
-    void prewarmWindowsJobWrapper();
     const messagingRuntime = getDesktopMessagingRuntime((options) =>
       loadDesktopMessagingConfigFromSettings(
         getDesktopSettingsService(),

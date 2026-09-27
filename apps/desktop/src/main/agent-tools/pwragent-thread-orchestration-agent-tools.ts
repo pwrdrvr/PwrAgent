@@ -188,11 +188,11 @@ function descriptionForOperation(
     case "handoff_task":
       return "Create a PwrAgent-managed thread for delegated work. Prefer this to backend spawning unless the user requests it or needs an unsupported feature. Agent settings inherit from the current turn. Same-project handoffs create grouped subthreads in new worktrees by default. Assigned worktrees remain authoritative for child threads. Children must not edit, build, or run Git in another worktree because a branch is checked out there. When the user names another local project, pass its path as cwd. Also pass cwd when the user links or references a local directory. Never put the target path only in task or context. For an isolated worktree in that project, set workspaceMode=new_worktree. Set branchName only to an existing base ref. Omit cwd only to inherit the current project. Cross-project handoffs are not grouped. Use fork or same_workspace only when the user requests them. Use project_local for the project checkout. workspaceMode=none creates an unscoped scratch workspace. Do not use none as a fallback for work in a named project. Provider overrides need a registered backend and exact model ID. Do not retry while startup is pending. Inspect pendingHandoffs and return threadLink verbatim.";
     case "attach_thread_directory":
-      return "Attach another Git directory to the current PwrAgent thread. Use this for user-requested cross-project work. Omit backend for the current thread. Use workspaceMode=local for the repository or new_worktree for a managed worktree. Default Access requires confirmation for an untrusted path. This tool does not change the primary cwd. Use detach_thread_directory to remove a temporary link.";
+      return "Attach another Git directory to the current PwrAgent thread. Use this for user-requested cross-project work. Omit backend for the current thread. Use workspaceMode=local for the repository or new_worktree for a managed worktree. Default Access requires confirmation for an untrusted path. This tool does not change the primary cwd. To continue this thread in an existing worktree, use move_thread_workspace with direction=to-project and targetPath. Use detach_thread_directory to remove a temporary link.";
     case "detach_thread_directory":
       return "Detach a secondary directory from the current PwrAgent thread. Use this only when the user requests cleanup. You cannot detach the primary provider/runtime cwd. Pass directoryId when known. Otherwise, pass path or worktreePath from get_thread_status.";
     case "move_thread_workspace":
-      return "Move the current thread workspace after this turn ends. Use this to move this thread to an isolated worktree. Do not create a child thread. Pass sourcePath when the thread has multiple directories or the source is unclear. After success, stop work and end the turn. PwrAgent moves the workspace, updates cwd, reconnects ACP when necessary, and starts a continuation. Check pendingWorkspaceMoves only after the turn.";
+      return "Move the current thread workspace after this turn ends. Use direction=to-project with targetPath to adopt an existing Git checkout or worktree, including one managed by another agent. Files and branches stay in place, and adopted worktrees are preserved on thread archive. Default Access requires confirmation for an untrusted destination. Omit direction to create an isolated worktree. Pass sourcePath if that source is unclear. Do not create a child thread. After success, stop work and end the turn. PwrAgent updates cwd, reconnects ACP when necessary, and starts a continuation. Check pendingWorkspaceMoves only after the turn.";
     case "send_message_to_thread":
       return "Send a follow-up as a new turn to another PwrAgent thread. If a turn is active, PwrAgent queues the follow-up. Batch related findings into one message. To update your own pending message, pass its queueEntryId as replaceQueueEntryId. Supply the complete consolidated prompt instead of appending another turn. Replacement preserves queue position and settings. It fails if the message is no longer pending. It never starts a new turn. Use steer_thread for guidance to the active turn. Use stop_thread for an urgent interruption. Find an unknown thread with search_threads or read_thread. Pass instanceId from a remote result when available. Set includeRemote=false for local resolution. Reply normally to the current thread. Return threadLink verbatim.";
     case "steer_thread":
@@ -352,9 +352,14 @@ function inputSchemaForOperation(
           },
           direction: {
             type: "string",
-            enum: THREAD_WORKSPACE_HANDOFF_DIRECTIONS.filter((direction) => direction !== "to-project"),
+            enum: THREAD_WORKSPACE_HANDOFF_DIRECTIONS,
             description:
-              "`local-to-worktree` is the default and first supported direction. `worktree-to-local` is reserved for compatible backends and may be rejected until implemented.",
+              "Use `to-project` with targetPath to continue in an existing checkout or worktree. `local-to-worktree` creates a worktree and is the default. `worktree-to-local` is reserved and may be rejected until implemented.",
+          },
+          targetPath: {
+            type: "string",
+            description:
+              "Absolute root of an existing Git checkout or worktree, required for direction=to-project. Files and branches stay in place. Adopted worktrees are preserved when this thread is archived. Do not combine with branch strategies or source/repository fields.",
           },
           strategy: {
             type: "string",
@@ -521,7 +526,7 @@ function invalidArgumentsMessageForOperation(
     case "handoff_task":
       return "handoff_task requires a non-empty task string.";
     case "move_thread_workspace":
-      return "move_thread_workspace accepts only known direction/strategy values and non-empty string fields.";
+      return "move_thread_workspace accepts known direction/strategy values and non-empty strings. direction=to-project requires targetPath and cannot include source/repository fields or branch strategies; other directions cannot include targetPath.";
     case "send_message_to_thread":
       return "send_message_to_thread requires non-empty backend, threadId, and prompt strings.";
     case "steer_thread":
@@ -952,6 +957,7 @@ function normalizeMoveThreadWorkspaceArgs(
 
   const optionalStringFields = [
     "backend",
+    "targetPath",
     "repositoryPath",
     "sourcePath",
     "sourceBranch",
@@ -964,6 +970,16 @@ function normalizeMoveThreadWorkspaceArgs(
     }
   }
   const backend = readTrimmedString(args.backend);
+  const targetPath = readTrimmedString(args.targetPath);
+  if (direction === "to-project") {
+    if (!targetPath || [
+      "strategy", "repositoryPath", "sourcePath", "sourceBranch", "leaveLocalBranch", "newBranchName",
+    ].some((field) => Object.hasOwn(args, field))) {
+      return undefined;
+    }
+  } else if (targetPath) {
+    return undefined;
+  }
   const repositoryPath = readTrimmedString(args.repositoryPath);
   const sourcePath = readTrimmedString(args.sourcePath);
   const sourceBranch = readTrimmedString(args.sourceBranch);
@@ -972,6 +988,7 @@ function normalizeMoveThreadWorkspaceArgs(
 
   return {
     direction,
+    ...(targetPath ? { targetPath } : {}),
     ...(strategy ? { strategy } : {}),
     ...(backend ? { backend: backend as MoveThreadWorkspaceToolArgs["backend"] } : {}),
     ...(repositoryPath ? { repositoryPath } : {}),

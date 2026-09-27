@@ -5223,6 +5223,12 @@ describe("App", () => {
     Object.defineProperty(window, "pwragent", {
       configurable: true,
       value: ownerApi({
+        readFederationHealth: async () => ({
+          health: {
+            instanceId: "pwr_viewer", enabled: true, role: "client", status: "connected",
+            peers: [{ id: "studio-mac", label: "Studio Mac", role: "client", status: "connected", capabilities: [] }],
+          },
+        }),
         addRemoteThreadPin,
         getNavigationSnapshot,
         listBackends: async () => ({
@@ -5290,7 +5296,12 @@ describe("App", () => {
                       + "&messageId=remote-message-7)",
                   },
                 ]
-              : [],
+              : [{
+                  type: "message" as const,
+                  id: "return-link",
+                  role: "assistant" as const,
+                  text: "See [parent thread](pwragent://thread/thread-local?backend=codex&instanceId=pwr_viewer)",
+                }],
             messages: request.threadId === "thread-local"
               ? [
                   {
@@ -5302,7 +5313,11 @@ describe("App", () => {
                       + "&messageId=remote-message-7)",
                   },
                 ]
-              : [],
+              : [{
+                  id: "return-link",
+                  role: "assistant" as const,
+                  text: "See [parent thread](pwragent://thread/thread-local?backend=codex&instanceId=pwr_viewer)",
+                }],
             pagination: {
               supportsPagination: false,
               hasPreviousPage: false,
@@ -5344,7 +5359,9 @@ describe("App", () => {
       name: remoteThread.title,
     })).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: /Local planning thread/i }));
+    fireEvent.click(await screen.findByRole("button", { name: "Open thread Local planning thread" }));
+    expect(addRemoteThreadPin).toHaveBeenCalledTimes(1);
+    expect(openFederationWindow).toHaveBeenCalledTimes(1);
     await screen.findByRole("heading", { level: 2, name: localThread.title });
     (window as typeof window & {
       __pwragentFederationTarget?: unknown;

@@ -118,6 +118,7 @@ import {
   filterDirectoryReferenceCandidates,
   findDirectoryReferenceTrigger,
   listReferencedDirectories,
+  normalizeDirectoryReferencePath,
 } from "../../lib/directory-references";
 import {
   buildHashReferenceOptions,
@@ -3636,20 +3637,25 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     if (!submission || appliedReplySubmissionId.current === submission.id) {
       return;
     }
-    appliedReplySubmissionId.current = submission.id;
     if (
       submission.threadId !== props.thread?.id
       || submission.backend !== props.thread?.source
     ) {
+      appliedReplySubmissionId.current = submission.id;
       props.onReplySubmissionSettled?.(submission.id, false);
       return;
     }
+    // Transcript questions can render before thread configuration and queue
+    // readiness enable the composer. Keep the submitted answer pending until
+    // that gate opens instead of consuming its id and rejecting it silently.
+    if (props.disabled) return;
+    appliedReplySubmissionId.current = submission.id;
     void submitReplyText(submission.text)
       .catch(() => false)
       .then((accepted) => props.onReplySubmissionSettled?.(submission.id, accepted));
     // submitReplyText is recreated each render; the id guard sends once.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.replySubmission]);
+  }, [props.replySubmission, props.disabled, props.thread?.id, props.thread?.source]);
   const clearComposerDraftSnapshot = (scopeKey: string): void => {
     if (isDraftStoreScope(scopeKey)) {
       draftStore.delete(scopeKey);
@@ -4649,13 +4655,13 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         linked.worktreePath,
       ]),
     ].filter((path): path is string => Boolean(path));
-    const excluded = new Set(excludePaths.map((path) => path.replace(/[/\\]+$/, "")));
+    const excluded = new Set(excludePaths.map(normalizeDirectoryReferencePath));
     const scanned = listReferencedDirectories(text, props.directories ?? [], {
       excludePaths,
     });
     const seenPaths = new Set(
       scanned
-        .map((directory) => directory.path?.replace(/[/\\]+$/, ""))
+        .map((directory) => directory.path ? normalizeDirectoryReferencePath(directory.path) : undefined)
         .filter((path): path is string => Boolean(path)),
     );
     const fromTokens: NavigationDirectorySummary[] = [];
@@ -4666,13 +4672,13 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       if (token.kind !== "directory" || !token.path) {
         continue;
       }
-      const path = token.path.replace(/[/\\]+$/, "");
+      const path = normalizeDirectoryReferencePath(token.path);
       if (!path || seenPaths.has(path) || excluded.has(path)) {
         continue;
       }
       seenPaths.add(path);
       const tracked = (props.directories ?? []).find(
-        (directory) => directory.path?.replace(/[/\\]+$/, "") === path,
+        (directory) => directory.path && normalizeDirectoryReferencePath(directory.path) === path,
       );
       fromTokens.push(
         tracked ?? {
@@ -5132,8 +5138,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       );
       if (hydrated.skillTokens.length > 0) {
         // The paste update retained a rich document without mention nodes.
-        // Let the controlled editor rebuild it from the hydrated tokens so
-        // the visual chips and canonical draft remain in lockstep.
+        // Let the controlled editor replace the literal references in place
+        // so the visual chips and canonical draft remain in lockstep without
+        // replaying the stale document over the hydrated result.
         setEditorDocument(undefined);
         setDraft(hydrated.draft);
         setSkillTokens(hydrated.skillTokens);

@@ -37,6 +37,7 @@ import {
 } from "../../src/main/e2e-shutdown-diagnostics";
 import {
   appendElectronShutdownSummary,
+  assertElectronCloseCompleted,
   assertElectronShutdownCircuitClosed,
   buildElectronShutdownSummary,
   classifyElectronClose,
@@ -103,13 +104,11 @@ const ELECTRON_FORCE_EXIT_TIMEOUT_MS = 1_000;
  * found with a timeout that names nothing. (Playwright's separate 30s
  * *worker* teardown timeout is what collects an Electron process no one
  * closed at all — see the catch in `launchElectronApp`.) The ceiling leaves
- * room for every step while still failing inside one test.
+ * time to report a cleanup failure from the owning test.
  *
- * Derivation, worst case: 1s evaluate + 6s graceful close + 1s force-kill +
- * 1s post-kill close + 5s leftover-profile wait + up to 1.8s `rm` (its retry
- * budget, see `temp-root-cleanup.ts`). Raised 15s → 20s when the graceful
- * close went 1s → 6s; all of that trade has to move together or the ceiling
- * starts cutting off the wait it is meant to contain.
+ * The Windows fallback also queries process identity and may run taskkill.
+ * If those steps exhaust the ceiling, reject from the owning test rather than
+ * treating an incomplete close as a warning.
  */
 const ELECTRON_TEARDOWN_TIMEOUT_MS = 20_000;
 /**
@@ -581,6 +580,7 @@ async function finishElectronLaunch(args: {
       if (summary.circuit.tripped) {
         throw new ElectronShutdownCircuitOpenError();
       }
+      assertElectronCloseCompleted(summary);
     },
     close: async () => {
       // Bound the whole teardown. `closeElectronApplication` is already
@@ -589,21 +589,13 @@ async function finishElectronLaunch(args: {
       // can stall. Specs call this from their own `finally`, so an
       // unbounded stall burns the rest of the 30s test budget and reports
       // as the test timing out — which buries whatever the test actually
-      // found. Warning and moving on keeps that result legible.
-      //
-      // ONLY the timeout is swallowed. A teardown that *fails* — an `rm`
-      // hitting ENOTEMPTY because a spawned profile survived the sweep,
-      // say — still rejects, because that is a real leak and a warning is
-      // not enough to get it noticed.
-      const running = teardown();
-      if (await raceTeardownTimeout(running, ELECTRON_TEARDOWN_TIMEOUT_MS)) {
-        // Still in flight, and now unobserved: keep a late rejection from
-        // surfacing as an unhandled promise rejection mid-suite.
-        running.catch(() => undefined);
-        console.warn(
-          `[pwragent-e2e-teardown] teardown exceeded ${ELECTRON_TEARDOWN_TIMEOUT_MS}ms`,
-        );
-      }
+      // found. A stalled cleanup is a failure of this test; withTimeout
+      // observes any late rejection from the still-running teardown.
+      await withTimeout(
+        teardown(),
+        ELECTRON_TEARDOWN_TIMEOUT_MS,
+        `[pwragent-e2e-teardown] teardown exceeded ${ELECTRON_TEARDOWN_TIMEOUT_MS}ms`,
+      );
     },
   };
 
@@ -1170,6 +1162,17 @@ export async function closeElectronApplication(
       options,
     );
   }
+  const mainProcess = process.platform === "win32"
+    ? await withTimeout(
+      electronApp.evaluate(() => ({
+        pid: process.pid,
+        startedAt: Date.now() - process.uptime() * 1000,
+      })),
+      ELECTRON_EVALUATE_QUIT_TIMEOUT_MS,
+      "Electron main PID evaluation timed out",
+    ).catch(() => undefined)
+    : undefined;
+  const quitStartedAt = Date.now();
   const execution = await executeElectronClose({
     now: performance.now.bind(performance),
     requestQuit: async () => {
@@ -1199,17 +1202,13 @@ export async function closeElectronApplication(
       closePromise,
       ELECTRON_CLOSE_TIMEOUT_MS,
     ),
-    hasExited: () => hasExited(child),
     forceKillTree: async () => {
-      await killProcessTree(child);
+      await killProcessTree(child, mainProcess, quitStartedAt);
     },
-    waitForForcedExit: async () => await waitForProcessExit(
-      child,
+    waitForPostKillClose: async (closePromise) => await waitForClose(
+      closePromise,
       ELECTRON_FORCE_EXIT_TIMEOUT_MS,
     ),
-    waitForPostKillClose: async (closePromise) => {
-      await waitForClose(closePromise, ELECTRON_FORCE_EXIT_TIMEOUT_MS);
-    },
   });
   return recordElectronCloseSummary(execution, options);
 }
@@ -1255,34 +1254,6 @@ function recordElectronCloseSummary(
     console.log(`[pwragent-e2e-shutdown] ${JSON.stringify(summary)}`);
   }
   return summary;
-}
-
-/**
- * Resolve `true` when `running` is still pending after `timeoutMs`.
- *
- * Deliberately not `withTimeout`: that collapses "timed out" and "the
- * work rejected" into one rejection, and teardown needs to tell them
- * apart — one is a degraded runner to warn about, the other is a real
- * cleanup failure that must fail the test. A rejection before the
- * deadline propagates to the caller here.
- */
-export async function raceTeardownTimeout(
-  running: Promise<void>,
-  timeoutMs: number,
-): Promise<boolean> {
-  let timeout: NodeJS.Timeout | undefined;
-  try {
-    return await Promise.race<boolean>([
-      running.then(() => false),
-      new Promise<true>((resolve) => {
-        timeout = setTimeout(() => resolve(true), timeoutMs);
-      }),
-    ]);
-  } finally {
-    if (timeout !== undefined) {
-      clearTimeout(timeout);
-    }
-  }
 }
 
 export async function withTimeout<T>(
@@ -1332,55 +1303,34 @@ function hasExited(child: ElectronChildProcess): boolean {
   return child.exitCode !== null || child.signalCode !== null;
 }
 
-async function waitForProcessExit(
+async function killProcessTree(
   child: ElectronChildProcess,
-  timeoutMs: number,
-): Promise<boolean> {
-  if (hasExited(child)) {
-    return true;
-  }
-  let timeout: NodeJS.Timeout | undefined;
-  try {
-    return await Promise.race<boolean>([
-      new Promise<true>((resolve) => {
-        child.once("exit", () => resolve(true));
-      }),
-      new Promise<false>((resolve) => {
-        timeout = setTimeout(() => resolve(false), timeoutMs);
-      }),
-    ]);
-  } finally {
-    if (timeout !== undefined) {
-      clearTimeout(timeout);
-    }
-  }
-}
-
-async function killProcessTree(child: ElectronChildProcess): Promise<void> {
-  if (hasExited(child)) {
-    return;
-  }
+  mainProcess?: { pid: number; startedAt: number },
+  quitStartedAt?: number,
+): Promise<void> {
   const pid = child.pid;
-  if (pid === undefined) {
-    if (!child.killed) {
-      child.kill("SIGKILL");
+  if (process.platform === "win32") {
+    if (pid !== undefined && !hasExited(child)) {
+      await taskkillTree(pid);
+    }
+    if (mainProcess && quitStartedAt !== undefined) {
+      // The Playwright child is cmd.exe. Its exit does not prove that Electron
+      // descendants have released the launcher's inherited pipes.
+      const rows = await listWindowsMainAndChildren(mainProcess.pid);
+      const pids = selectWindowsElectronCleanupPids(
+        rows,
+        mainProcess,
+        quitStartedAt,
+      );
+      await Promise.all(pids.map(taskkillTree));
     }
     return;
   }
-  if (process.platform === "win32") {
-    await new Promise<void>((resolve) => {
-      execFile(
-        "taskkill",
-        ["/pid", String(pid), "/T", "/F"],
-        { timeout: 5_000 },
-        (error) => {
-          if (error && !child.killed) {
-            child.kill("SIGKILL");
-          }
-          resolve();
-        },
-      );
-    });
+  if (hasExited(child)) {
+    return;
+  }
+  if (pid === undefined) {
+    if (!child.killed) child.kill("SIGKILL");
     return;
   }
 
@@ -1396,6 +1346,75 @@ async function killProcessTree(child: ElectronChildProcess): Promise<void> {
       // The descendant already exited between the ps snapshot and this kill.
     }
   }
+}
+
+async function taskkillTree(pid: number): Promise<void> {
+  await new Promise<void>((resolve) => {
+    execFile(
+      "taskkill",
+      ["/pid", String(pid), "/T", "/F"],
+      { timeout: 5_000, windowsHide: true },
+      () => resolve(),
+    );
+  });
+}
+
+type WindowsProcessIdentity = {
+  pid: number;
+  parentPid: number;
+  startedAt: number;
+};
+
+export function selectWindowsElectronCleanupPids(
+  rows: WindowsProcessIdentity[],
+  mainProcess: { pid: number; startedAt: number },
+  quitStartedAt: number,
+): number[] {
+  const liveMain = rows.find((row) =>
+    row.pid === mainProcess.pid
+    && Math.abs(row.startedAt - mainProcess.startedAt) < 2_000,
+  );
+  if (liveMain) {
+    return [liveMain.pid];
+  }
+  // A replacement process can already own this PID. Its children have the
+  // same parent PID as Electron's former children, so the timestamp filter
+  // alone cannot establish ownership of any row in this snapshot.
+  if (rows.some((row) => row.pid === mainProcess.pid)) {
+    return [];
+  }
+  return rows.filter((row) =>
+    row.parentPid === mainProcess.pid
+    && row.startedAt >= mainProcess.startedAt - 2_000
+    && row.startedAt <= quitStartedAt + 3_000,
+  ).map((row) => row.pid);
+}
+
+async function listWindowsMainAndChildren(mainPid: number): Promise<WindowsProcessIdentity[]> {
+  const stdout = await new Promise<string>((resolve) => {
+    execFile(
+      "powershell.exe",
+      [
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        `Get-CimInstance Win32_Process -Filter 'ProcessId=${mainPid} OR ParentProcessId=${mainPid}'`
+          + " -Property ProcessId,ParentProcessId,CreationDate"
+          + ' | ForEach-Object { "$($_.ProcessId)`t$($_.ParentProcessId)`t$(([DateTimeOffset]$_.CreationDate).ToUnixTimeMilliseconds())" }',
+      ],
+      { timeout: 3_000, windowsHide: true },
+      (_error, output) => resolve(output ?? ""),
+    );
+  });
+  return stdout.split(/\r?\n/).flatMap((line) => {
+    const [pid, parentPid, startedAt] = line.trim().split("\t").map(Number);
+    return Number.isInteger(pid) && pid > 0
+      && Number.isInteger(parentPid) && parentPid >= 0
+      && Number.isFinite(startedAt)
+      ? [{ pid, parentPid, startedAt }]
+      : [];
+  });
 }
 
 async function listDescendantPids(rootPid: number): Promise<number[]> {

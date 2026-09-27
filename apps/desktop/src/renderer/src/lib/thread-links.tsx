@@ -504,6 +504,8 @@ export function useThreadLinkHoverSource(
 
 export function ThreadLinkProvider(props: {
   children: ReactNode;
+  /** The instance represented by unqualified local navigation in this window. */
+  localInstanceId?: FederationInstanceId;
   onOpenRemoteViewer?: (request: {
     backend: AppServerBackendKind;
     instanceId: FederationInstanceId;
@@ -521,7 +523,7 @@ export function ThreadLinkProvider(props: {
   }) => void;
   threads: NavigationThreadSummary[];
 }) {
-  const { onShowThread, threads } = props;
+  const { localInstanceId, onShowThread, threads } = props;
   const metadataStoreRef = useRef<ThreadLinkMetadataStore | null>(null);
   if (!metadataStoreRef.current) {
     metadataStoreRef.current = new ThreadLinkMetadataStore(threads);
@@ -598,6 +600,12 @@ export function ThreadLinkProvider(props: {
         });
       },
       resolve(ref) {
+        // A remote transcript can link back to this viewer. Canonicalize its
+        // explicit owner before metadata lookup and fallback construction so
+        // title updates, hover targets and navigation all use the local key.
+        if (ref.instanceId && ref.instanceId === localInstanceId) {
+          ref = { ...ref, instanceId: undefined };
+        }
         let resolved: ResolvedThreadLink | undefined;
         if (ref.instanceId) {
           if (!ref.backend) {
@@ -655,10 +663,10 @@ export function ThreadLinkProvider(props: {
       },
       hoverTarget: hoverStore,
     };
-    // Rebuild only when membership changes; `threadsRef`/`onShowThreadRef`
-    // carry the freshest values so no other deps are needed.
+    // Rebuild when membership or the viewer identity changes; refs carry
+    // fresh metadata and callbacks without invalidating the whole transcript.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hoverStore, membershipKey, metadataStore]);
+  }, [hoverStore, localInstanceId, membershipKey, metadataStore]);
 
   return <ThreadLinkContext.Provider value={value}>{props.children}</ThreadLinkContext.Provider>;
 }

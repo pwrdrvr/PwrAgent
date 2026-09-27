@@ -73,6 +73,33 @@ describe("independent complete FIFO projection", () => {
     })).toEqual([acknowledged]);
   });
 
+  it("keeps a scheduled review that waits outside the turn FIFO", () => {
+    const review: ComposerQueuedTurnSnapshot = {
+      ...queued("pending-review:1"),
+      id: "scheduled-projection:review",
+      scheduledActionId: "review",
+      reviewCommand: {
+        displayText: "Review changes against main",
+        target: { type: "baseBranch", branch: "main" },
+      },
+    };
+    const turn = { ...queued("turn"), id: "scheduled-projection:turn", scheduledActionId: "turn" };
+    const followUp = queued("follow-up");
+    const current = [review, turn, followUp];
+    const reconciled = reconcileCompleteNavigationQueue({
+      owner,
+      projection: projection({
+        entries: [{ queueEntryId: "follow-up", createdAt: 1, displayText: "follow-up", origin: "manual", position: 0 }],
+      }),
+      atReadStart: current,
+      current,
+    });
+    // The FIFO never reports a pending review, but it does report every
+    // scheduled turn it holds, so the turn that left it is gone.
+    expect(reconciled.map((entry) => entry.id)).toEqual([review.id, followUp.id]);
+    expect(reconciled[0]).toBe(review);
+  });
+
   it("does not infer an owner from legacy scope or remove another owner's entry", () => {
     const legacy = { ...queued("legacy"), threadOwner: undefined };
     const foreign = { ...queued("foreign"), threadOwner: { ...owner, target: { scope: "local" as const } } };

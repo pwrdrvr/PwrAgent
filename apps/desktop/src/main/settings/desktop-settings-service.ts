@@ -2039,10 +2039,14 @@ export class DesktopSettingsService {
     if (patch.experimental?.tokenMiserEnabled !== undefined) {
       await this.managedCodexRuntimeSwitchAttempt;
     }
-    if (disablingTokenMiser && discoveryPermit) {
-      // Disabling also changes the executable. Complete the ordinary selection
-      // as part of this Settings action, without requiring a separate refresh.
-      this.managedCodexRuntime = undefined;
+    if (
+      discoveryPermit
+      && (patch.models?.codex?.path !== undefined || disablingTokenMiser)
+    ) {
+      // Saving a path (including auto discovery) changes the executable.
+      // Validate and publish its selection before returning the write snapshot,
+      // and release the previous session pin through the explicit refresh path.
+      if (disablingTokenMiser) this.managedCodexRuntime = undefined;
       await this.refreshCodexDiscovery(discoveryPermit);
     }
     return update;

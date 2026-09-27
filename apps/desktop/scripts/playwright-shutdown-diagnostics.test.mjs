@@ -77,7 +77,7 @@ async function stopProbe(probe) {
   if (!exited()) probe.child.kill("SIGKILL");
 }
 
-async function probe(mode) {
+async function probe(mode, { captureAfterMs = 100 } = {}) {
   mkdirSync(path.join(desktop, ".local"), { recursive: true });
   const root = mkdtempSync(path.join(desktop, ".local/shutdown-probe-"));
   roots.push(root);
@@ -90,7 +90,7 @@ async function probe(mode) {
     import playwright from ${JSON.stringify(pathToFileURL(require.resolve("@playwright/test")).href)};
     const { test } = playwright;
     import { installShutdownDiagnostics } from ${JSON.stringify(diagnostics)};
-    installShutdownDiagnostics({ outputDir: ${JSON.stringify(output)}, currentTest: () => test.info(), captureAfterMs: 100 });
+    installShutdownDiagnostics({ outputDir: ${JSON.stringify(output)}, currentTest: () => test.info(), captureAfterMs: ${captureAfterMs} });
     export default { testDir: '.', testMatch: '*.spec.cjs', outputDir: ${JSON.stringify(output)}, timeout: 5000, workers: 1, retries: 0, reporter: 'list' };
   `);
   writeFileSync(path.join(root, "probe.spec.cjs"), `
@@ -198,11 +198,20 @@ describe("real Playwright worker shutdown diagnostics", () => {
     expect(pending.launchStack).toContain("launchProcess");
     expect(snapshot.resources.some(({ type }) => type === "PROCESSWRAP")).toBe(true);
     expect(snapshot.report.libuv.length).toBeGreaterThan(0);
-    const tree = JSON.parse(result.artifacts.find(({ file }) => file.endsWith("process-tree.json")).text);
+    const artifact = result.artifacts.find(({ file }) => file.endsWith("process-tree.json"));
+    expect(artifact, result.stdout + result.stderr).toBeDefined();
+    const tree = JSON.parse(artifact.text);
     // The probe root is deleted after the run, so this message is the only
     // copy of the failure classification a CI log keeps.
     const record = JSON.stringify(tree);
-    if (tree.killed) {
+    if (tree.status === "interrupted") {
+      // The worker owns its exit deadline. A pending asynchronous query must
+      // report that boundary explicitly, rather than disappear with the worker.
+      expect(tree, record).toMatchObject({ reason: "worker-exit" });
+      expect(tree.workerExitCode, record).toBeTypeOf("number");
+      expect(tree.elapsedMs, record).toBeGreaterThanOrEqual(0);
+      expect(tree.processes, record).toBeUndefined();
+    } else if (tree.killed) {
       // The query is bounded, not guaranteed. Windows runners measured
       // 0.6-1.1s against the 3s bound, yet a loaded runner can still reach
       // it. A kill at the bound must say so; any other failure is a defect.
@@ -219,6 +228,32 @@ describe("real Playwright worker shutdown diagnostics", () => {
     expect(result.code, result.stdout + result.stderr).toBe(1);
     expect(result.stdout).toContain("1 passed");
     expect(result.snapshots.find(({ reason }) => reason === "slow-worker-cleanup").phase).toBe("worker-fixtures");
+  }, 20_000);
+
+  it("records an interrupted query when capture starts at the worker exit boundary", async () => {
+    // Trigger capture only from workerEnd after the existing teardown deadline.
+    // The asynchronous tree query cannot finish before this worker exits.
+    const result = await probe("process", { captureAfterMs: 60_000 });
+    expect(result.code, result.stdout + result.stderr).toBe(1);
+    expect(result.stdout).toContain("Worker teardown timeout");
+    expect(result.snapshots.some(({ reason }) => reason === "worker-cleanup-failed")).toBe(true);
+    const artifact = result.artifacts.find(({ file }) => file.endsWith("process-tree.json"));
+    expect(artifact, result.stdout + result.stderr).toBeDefined();
+    const tree = JSON.parse(artifact.text);
+    expect(tree).toMatchObject({ status: "interrupted", reason: "worker-exit" });
+    expect(tree.workerExitCode).toBeTypeOf("number");
+    expect(tree.elapsedMs).toBeGreaterThanOrEqual(0);
+    expect(tree.processes).toBeUndefined();
+    expect(tree.queryPid).toBeGreaterThan(0);
+    await expect.poll(() => {
+      try {
+        process.kill(tree.queryPid, 0);
+        return false;
+      } catch (error) {
+        if (error.code !== "ESRCH") throw error;
+        return true;
+      }
+    }).toBe(true);
   }, 20_000);
 
   // This fixture relies on POSIX inherited-fd lifetime: the grandchild keeps

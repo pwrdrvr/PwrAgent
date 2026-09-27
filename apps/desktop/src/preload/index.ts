@@ -296,6 +296,8 @@ import type {
   RefreshThreadGitWorkingStateRequest,
   RefreshThreadGitWorkingStateResponse,
   SetPullRequestPollingFocusRequest,
+  SetTranscriptPullRequestsRequest,
+  TranscriptPullRequestStatuses,
   RefreshThreadPullRequestsResponse,
   RefreshDirectoryGitStatusesRequest,
   RefreshDirectoryGitStatusesResponse,
@@ -770,6 +772,8 @@ import {
   NAVIGATION_REFRESH_THREAD_GIT_WORKING_STATE_CHANNEL,
   NAVIGATION_PROBE_PR_POLLING_AFTER_RECONNECT_CHANNEL,
   NAVIGATION_SET_PR_POLLING_FOCUS_CHANNEL,
+  TRANSCRIPT_SET_PULL_REQUESTS_CHANNEL,
+  TRANSCRIPT_PULL_REQUEST_STATUSES_CHANNEL,
   NAVIGATION_REFRESH_DIRECTORY_GIT_STATUSES_CHANNEL,
   NAVIGATION_RESOLVE_EDIT_COMMIT_STATES_CHANNEL,
   NAVIGATION_LIST_WORKTREE_OTHER_CHANGES_CHANNEL,
@@ -2238,6 +2242,20 @@ const desktopApi = Object.freeze({
     request: SetPullRequestPollingFocusRequest,
   ): Promise<void> =>
     await ipcRenderer.invoke(NAVIGATION_SET_PR_POLLING_FOCUS_CHANNEL, request),
+  setTranscriptPullRequests: async (
+    request: SetTranscriptPullRequestsRequest,
+  ): Promise<TranscriptPullRequestStatuses> =>
+    await ipcRenderer.invoke(TRANSCRIPT_SET_PULL_REQUESTS_CHANNEL, request),
+  onTranscriptPullRequestStatuses: (
+    callback: (statuses: TranscriptPullRequestStatuses) => void,
+  ): (() => void) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      statuses: TranscriptPullRequestStatuses,
+    ) => callback(statuses);
+    ipcRenderer.on(TRANSCRIPT_PULL_REQUEST_STATUSES_CHANNEL, listener);
+    return () => ipcRenderer.off(TRANSCRIPT_PULL_REQUEST_STATUSES_CHANNEL, listener);
+  },
   probePullRequestPollingAfterReconnect: async (): Promise<void> =>
     await ipcRenderer.invoke(
       NAVIGATION_PROBE_PR_POLLING_AFTER_RECONNECT_CHANNEL,

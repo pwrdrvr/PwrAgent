@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MarkdownRenderingOptionsProvider } from "../../../lib/markdown-rendering-options";
 import { ThreadMarkdown } from "../ThreadMarkdown";
+import { buildDirectoryReferenceMarkdown } from "../../../lib/directory-references";
 import { pressEscape, pressTab, walkTab } from "../../../test/tab-walk";
 
 const copyText = vi.hoisted(() => vi.fn(async (
@@ -92,6 +93,25 @@ const problem120MathMarkdown = String.raw`Problem 1.20 is a good early logic exe
 The fourth is the most valuable one, because the English is slightly ambiguous. “Original number” could conceivably mean \(a\), which would instead describe \(0\): \(0\cdot b=0\). In context, though, it almost surely means the “other number” \(b\), so the intended answer is \(1\).`;
 
 describe("ThreadMarkdown", () => {
+  it("keeps home paths and approximate benchmark values literal", () => {
+    const text = "Bench results ~/github core 660663entries0errors: adaptive max16 default10s 11.064s CPU4.77 history1->2@10s; interval1s 6.663s CPU6.82 history1,2,4,2,1,2; 250ms6.989s CPU7.98 oscillatory 1..8. Baseline fixed4~3.49-4.15 CPU7-8;16~3.06-3.59 CPU22-23.";
+    const { container } = render(<ThreadMarkdown text={text} />);
+
+    expect(container.querySelector("del")).toBeNull();
+    expect(container.querySelector("p")?.textContent).toBe(text);
+  });
+
+  it("requires double tildes for strikethrough while preserving code and escapes", () => {
+    const { container } = render(
+      <ThreadMarkdown text={String.raw`~literal~ and ~~deleted~~ and \~\~escaped\~\~ and ` + "`~~code~~`"} />,
+    );
+
+    expect(container.querySelectorAll("del")).toHaveLength(1);
+    expect(container.querySelector("del")).toHaveTextContent("deleted");
+    expect(container.querySelector("p")).toHaveTextContent("~literal~ and deleted and ~~escaped~~ and ~~code~~");
+    expect(container.querySelector("code")).toHaveTextContent("~~code~~");
+  });
+
   it("renders markdown formatting and local file links", () => {
     render(
       <ThreadMarkdown
@@ -1434,6 +1454,30 @@ describe("ThreadMarkdown", () => {
         .__pwragentHomeDir;
     }
   });
+
+  it.each([
+    ["//server/share/repo", "\\\\server\\share\\repo"],
+    ["C:/Projects/repo", "C:\\Projects\\repo"],
+    ["//server/share/50% (old)/repo", "\\\\server\\share\\50% (old)\\repo"],
+    ["C:/Projects/%5Crepo", "C:\\Projects\\%5Crepo"],
+  ])("renders a serialized Windows reference to %s as a local chip", (path, expected) => {
+    const { container } = render(
+      <ThreadMarkdown text={buildDirectoryReferenceMarkdown({ label: "repo", path })} />,
+    );
+    const chip = container.querySelector(".directory-chip");
+    expect(chip).toHaveTextContent("@repo");
+    expect(chip).toHaveAttribute("data-tooltip", expected);
+    expect(screen.queryByRole("link", { name: "@repo" })).not.toBeInTheDocument();
+  });
+
+  it.each(["javascript:alert(1)", "%6Aavascript:alert%281%29", "https%3A%2F%2Fexample.test"])(
+    "does not treat an encoded or unsafe URL as a local path: %s",
+    (url) => {
+      const { container } = render(<ThreadMarkdown text={`[@repo](${url})`} />);
+      expect(container.querySelector(".directory-chip")).toBeNull();
+      expect(container.querySelector("a[href]")).toBeNull();
+    },
+  );
 });
 
 describe("ThreadMarkdown document viewer, keyboard", () => {

@@ -342,6 +342,8 @@ export type FederationGatewayWebSocketServerOptions = {
   sessions?: FederationSessionRegistry;
   /** Allow negotiated compression. Changing this requires a new session. */
   compressionEnabled?: boolean;
+  /** Operational switch for Cloudflare ingress, independent of local federation. */
+  cloudflareEnabled?: () => boolean;
   /**
    * Gateway's Noise static keypair. When set, every connection runs a Noise_IK
    * handshake (responder role) before auth, and all frames are encrypted. When
@@ -448,6 +450,11 @@ export class FederationGatewayWebSocketServer {
     }
     this.stopping = false;
     this.httpServer = http.createServer((request, response) => {
+      if (this.cloudflareDisabled(request)) {
+        response.writeHead(403, { "Cache-Control": "no-store" });
+        response.end();
+        return;
+      }
       const proof = this.securityProbes.observe(request);
       response.writeHead(proof ? 204 : 404, {
         "Cache-Control": "no-store",
@@ -464,6 +471,10 @@ export class FederationGatewayWebSocketServer {
       perMessageDeflate: false,
     });
     this.httpServer.on("upgrade", (request, socket, head) => {
+      if (this.cloudflareDisabled(request)) {
+        socket.end("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
+        return;
+      }
       const proof = this.securityProbes.observe(request);
       if (proof) {
         socket.end(`HTTP/1.1 204 No Content\r\nConnection: close\r\nCache-Control: no-store\r\nX-PwrAgent-Probe-Proof: ${proof}\r\n\r\n`);
@@ -541,6 +552,19 @@ export class FederationGatewayWebSocketServer {
     }
     if (httpServer) {
       await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    }
+  }
+
+  private cloudflareDisabled(request: http.IncomingMessage): boolean {
+    // These headers identify the delivery route, never the peer's authority.
+    // Cloudflare supplies them on traffic forwarded by an external connector too.
+    return this.options.cloudflareEnabled?.() === false
+      && (typeof request.headers["cf-ray"] === "string" || typeof request.headers["cf-connecting-ip"] === "string");
+  }
+
+  closeCloudflareConnections(): void {
+    for (const connection of this.connections.values()) {
+      if (connection.via === "cloudflare-tunnel") (connection.terminate ?? connection.close)();
     }
   }
 
@@ -733,6 +757,8 @@ export class FederationGatewayWebSocketServer {
         (capability) => capability !== FEDERATION_BROTLI_CAPABILITY,
       );
     }
+    // The switch may have changed while Noise/authentication was in flight.
+    if (this.cloudflareDisabled(request)) { socket.close(); return; }
     const sessionId = `federation-session:${randomUUID()}`;
     this.sessions.openSession({
       sessionId,

@@ -110,6 +110,41 @@ describe("scheduled thread action projections", () => {
     });
   });
 
+  it("keeps a queued review ahead of a follow-up queued after it", () => {
+    const { result } = renderHook(() => useComposerDraftStore());
+    const store = result.current;
+    const scopeKey = buildThreadComposerScopeKey("codex", "thread-1");
+    const review = scheduledAction({
+      id: "review-1",
+      kind: "review",
+      status: "queued",
+      queueEntryId: "pending-review:1",
+      turn: undefined,
+      displayText: "Review changes against main",
+      review: { target: { type: "baseBranch", branch: "main" }, draftText: "/review main" },
+    });
+    applyScheduledActionProjection(store, review);
+    store.setQueuedTurns(scopeKey, [
+      ...store.getQueuedTurns(scopeKey),
+      {
+        id: "backend-queued:follow-up",
+        queueEntryId: "follow-up",
+        text: "now squash and push",
+        imageAttachments: [],
+        fileAttachments: [],
+      },
+    ]);
+
+    // The review starts when the active turn ends, before the turn FIFO
+    // releases the follow-up, so a refresh must not move it behind that.
+    syncScheduledActionProjections(store, [review]);
+
+    expect(store.getQueuedTurns(scopeKey).map((entry) => entry.id)).toEqual([
+      "scheduled-projection:review-1",
+      "backend-queued:follow-up",
+    ]);
+  });
+
   it("removes the projection when the backend action becomes terminal", () => {
     const { result } = renderHook(() => useComposerDraftStore());
     const store = result.current;

@@ -18539,7 +18539,14 @@ a.button {
   align-items: stretch;
   min-height: 0;
   min-width: 0;
-  overflow: hidden;
+  /* `clip`, not `hidden`: the celestial watermark bleeds 56px past the
+     bottom-right corner, and a `hidden` box keeps that as scroll range with
+     no scrollbar. Any `scrollIntoView` that asks for more than the transcript
+     can give (a `block: "center"` jump to a message near its end, or a
+     Playwright click retry) passed the rest up to this box. The transcript,
+     composer, and rail then slid up under the header with no way to scroll
+     them back. `clip` paints the same edge but is not a scroll container. */
+  overflow: clip;
   /* Issue #240: only reserve enough on the right for the 48px
      context-rail spine — the previous extra 24px gutter showed up
      as a visible band of empty bg-app between the composer's right
@@ -37571,6 +37578,7 @@ button.pricing-token-miser__folded:focus-visible {
 .federation-connections p { margin: 4px 0; }
 .federation-status-control__details { padding: 10px; overflow-wrap: anywhere; }
 .federation-status-control__details p { margin: 6px 0; }
+.federation-status-control__title { display: flex; align-items: center; gap: 4px; }
 /* This report owns its scroll area; the shared Activity chrome stays outside it. */
 .federation-activity-content { display: block; overflow: auto; }
 .federation-activity { max-width: 1000px; margin: 0 auto; padding: 16px; font-size: 13px; }

@@ -4,6 +4,7 @@ import { projectThreadDisplayEvent } from "../app-server/thread-display-events";
 import { federationTrafficCaptureUntil, setFederationTrafficCapture, saveFederationTrafficHistory } from "./federation-traffic-capture";
 import type { CloudflareClientConnection, NavigationAttentionViewReleaseRequest } from "@pwragent/shared";
 import { cloudflareConnector } from "./cloudflare-connector";
+import { CloudflareGateway } from "./cloudflare-gateway";
 import { loadCloudflareSetup } from "./cloudflare-setup-storage";
 import { getCloudflareAccessSignIn } from "./cloudflare-access-sign-in";
 import { CloudflareAccessRefusedError, CloudflareSignInRequiredError } from "./cloudflare-access-oauth";
@@ -349,6 +350,7 @@ import {
 } from "./federation-ssh";
 import { noiseKeyPairFromRawPrivate } from "./federation-noise";
 import { federationReconnectDelayMs } from "./federation-reconnect-policy";
+import { federationLocalNetworkFailureHint, federationLocalNetworkNotice } from "./federation-local-network";
 
 const log = getMainLogger("pwragent:federation-runtime");
 
@@ -863,6 +865,13 @@ export class DesktopFederationRuntime {
   private sessionEnabledOverride?: boolean;
   private router?: FederationRouter;
   private server?: FederationGatewayWebSocketServer;
+  private readonly cloudflareGateway = new CloudflareGateway({
+    load: loadCloudflareSetup,
+    enabled: () => getDesktopSettingsService().readFederationConfig().cloudflareGatewayEnabled !== false,
+    probes: (port) => this.loopbackListenPort() === port ? this.server?.securityProbes : undefined,
+    connector: cloudflareConnector,
+  });
+
   private client?: FederationClientWebSocketClient;
   private localInstanceId?: FederationInstanceId;
   private instanceLabel?: string;
@@ -1211,7 +1220,7 @@ export class DesktopFederationRuntime {
   async stop(): Promise<void> {
     this.stopping = true;
     this.parked = false;
-    await cloudflareConnector.stop();
+    await this.cloudflareGateway.stop();
     this.connectionAttempt = undefined;
     for (const peer of this.shutdown.snapshot()) this.shutdown.disconnected(peer.instanceId);
     this.connectionGeneration += 1;
@@ -1293,6 +1302,19 @@ export class DesktopFederationRuntime {
       ).mode,
       running: Boolean(this.listenUrl || this.client || this.reconnectTimer || this.connectionAttempt || this.parked),
     };
+  }
+
+  cloudflareGatewayStatus(refresh = false) { return this.cloudflareGateway.status(refresh); }
+  startCloudflareGateway() { return this.cloudflareGateway.start(); }
+  stopCloudflareGateway() { return this.cloudflareGateway.stop(); }
+
+  async applyCloudflareGatewaySetting(): Promise<void> {
+    if (getDesktopSettingsService().readFederationConfig().cloudflareGatewayEnabled === false) {
+      this.server?.closeCloudflareConnections();
+      await this.cloudflareGateway.stop();
+    } else if ((await loadCloudflareSetup())?.dnsId) {
+      await this.cloudflareGateway.start();
+    }
   }
 
   cloudflareSecurityProbes(listenPort: number) {
@@ -2911,6 +2933,7 @@ export class DesktopFederationRuntime {
         host: config.listenHost,
         port: config.listenPort,
         compressionEnabled: config.compressionEnabled,
+        cloudflareEnabled: () => getDesktopSettingsService().readFederationConfig().cloudflareGatewayEnabled !== false,
         store: this.store(),
         noiseStatic,
         onConnection: (connection) => this.registerGatewayConnection(connection),
@@ -2945,13 +2968,16 @@ export class DesktopFederationRuntime {
         log.info("federation gateway listening", { url: started.url });
         try {
           const cloudflare = await loadCloudflareSetup();
-          if (cloudflare?.dnsId && cloudflare.tunnelToken
+          if (getDesktopSettingsService().readFederationConfig().cloudflareGatewayEnabled !== false
+            && cloudflare?.dnsId && cloudflare.tunnelToken
             && this.loopbackListenPort() === cloudflare.listenPort
             && !startupAborted()) {
-            await cloudflareConnector.start(cloudflare.tunnelToken);
+            await this.cloudflareGateway.start();
           }
-        } catch {
-          log.warn("Cloudflare connector was not started. Check Federation settings.");
+        } catch (error) {
+          log.warn("Cloudflare connector was not started. Check Federation settings.", {
+            reason: redactFederationDiagnostic(error instanceof Error ? error.message : String(error)),
+          });
         }
       } catch (error) {
         this.gatewayListenerError = redactFederationDiagnostic(
@@ -3096,6 +3122,11 @@ export class DesktopFederationRuntime {
       );
     }
     const pendingInviteToken = getAppStateDb().getMeta(PENDING_INVITE_TOKEN_META_KEY);
+    const noticeEpoch = this.walkEpoch;
+    await federationLocalNetworkNotice.beforeConnect(
+      gatewayUrl, () => !this.stopping && this.walkEpoch === noticeEpoch,
+    );
+    if (this.stopping || this.walkEpoch !== noticeEpoch) return;
     const connectionMode = pendingInviteToken ? "enroll" : "reconnect";
     const keyPair = await getDesktopSettingsService()
       .getOrCreateFederationIdentityKeyPair();
@@ -3510,7 +3541,8 @@ export class DesktopFederationRuntime {
     this.client = undefined;
     const rawMessage = error instanceof Error ? error.message : String(error);
     this.lastConnectionFailureKind = classifyFederationClientFailure(rawMessage);
-    this.lastConnectionError = redactFederationDiagnostic(rawMessage);
+    this.lastConnectionError = redactFederationDiagnostic(rawMessage)
+      + federationLocalNetworkFailureHint(rawMessage);
     if (this.gatewayInstanceId) {
       this.publishPeerStatus(
         this.gatewayInstanceId,

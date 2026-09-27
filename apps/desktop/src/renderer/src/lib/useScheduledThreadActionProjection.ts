@@ -269,14 +269,14 @@ export function syncScheduledActionProjections(
         .map((action) => action.queueEntryId)
         .filter((queueEntryId): queueEntryId is string => Boolean(queueEntryId)),
     );
-    const placedHeldActions = new Set<string>();
+    const placedActions = new Set<string>();
     const reconciledCurrent = current.flatMap((entry) => {
       const actionId = entry.scheduledActionId ?? entry.failedScheduledActionId;
       if (actionId) {
         const action = actionsById.get(actionId);
         const projection = projectionsById.get(actionId);
-        if (action?.status === "held" && projection) {
-          placedHeldActions.add(actionId);
+        if (action && projection && keepsQueuePosition(action)) {
+          placedActions.add(actionId);
           return [projection];
         }
         return [];
@@ -292,7 +292,7 @@ export function syncScheduledActionProjections(
     const newHeld = scopedActions
       .filter(
         (action) =>
-          action.status === "held" && !placedHeldActions.has(action.id),
+          action.status === "held" && !placedActions.has(action.id),
       )
       .sort((left, right) => {
         const leftIsUnqueued = !left.queueEntryId;
@@ -306,7 +306,9 @@ export function syncScheduledActionProjections(
       })
       .map(projectionFromAction);
     const scheduled = scopedActions
-      .filter((action) => action.status !== "held")
+      .filter(
+        (action) => action.status !== "held" && !placedActions.has(action.id),
+      )
       .map(projectionFromAction);
     store.setQueuedTurns(
       scopeKey,
@@ -412,6 +414,21 @@ function projectionFromAction(action: ScheduledThreadAction) {
         }
       : {}),
   };
+}
+
+/**
+ * An admitted action keeps the place its chip already holds. A review queued
+ * behind the active turn starts before the turn FIFO releases, so moving it
+ * behind a follow-up queued after it would label that follow-up "Queued next".
+ * `applyScheduledActionProjection` keeps the same place for the same reason.
+ * Actions that are still waiting for their send time stay sorted by it.
+ */
+function keepsQueuePosition(action: ScheduledThreadAction): boolean {
+  return (
+    action.status === "held"
+    || action.status === "dispatching"
+    || action.status === "queued"
+  );
 }
 
 function isProjectableAction(action: ScheduledThreadAction): boolean {

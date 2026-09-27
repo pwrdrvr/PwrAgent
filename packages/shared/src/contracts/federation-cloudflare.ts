@@ -98,6 +98,7 @@ export type CloudflareSetupRequest =
   | { action: "validate" }
   | { action: "start" }
   | { action: "stop" }
+  | { action: "set-gateway-enabled"; enabled: boolean }
   | {
       action: "export-client";
       label: string;
@@ -135,6 +136,13 @@ export type CloudflareSecurityCheck = {
 
 export type CloudflareSetupStatus = {
   connected: boolean;
+  gatewayEnabled?: boolean;
+  gatewayConnection?: {
+    state: "disabled" | "unconfigured" | "listener-unavailable" | "connected" | "unreachable";
+    connector: "pwragent" | "external" | "none";
+    checkedAt?: string;
+    detail?: string;
+  };
   /** The gate a provisioned endpoint uses; absent before one exists. */
   gate?: CloudflareFederationGate;
   accountId?: string;
@@ -158,6 +166,13 @@ export type CloudflareSetupStatus = {
   resources?: string[];
   connectorRunning: boolean;
   connectorInstalled: boolean;
+  /** Live edge readiness from this process's connector, not an Access policy audit. */
+  connectorHealth?: {
+    state: "stopped" | "connecting" | "connected" | "unavailable" | "failed";
+    detail?: string;
+  };
+  /** The current gateway listener matches the published tunnel's origin port. */
+  gatewayListening?: boolean;
   /** The installed cloudflared's version, when it reports one. */
   connectorVersion?: string;
   /**

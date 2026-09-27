@@ -114,6 +114,7 @@ export type CloudflareSetupDependencies = {
   listeningPort?: () => number | undefined;
   connectorInstalled: () => Promise<boolean>;
   connectorRunning: () => boolean;
+  gatewayEnabled?: () => boolean;
   startConnector: (token: string) => Promise<void>;
   stopConnector: () => Promise<void>;
   publishUrl: (url: string) => Promise<void>;
@@ -432,7 +433,7 @@ export class CloudflareSetupService {
       await this.deps.save(state);
     }
     await this.deps.publishUrl(`wss://${hostname}`);
-    await this.start();
+    if (this.deps.gatewayEnabled?.() !== false) await this.start();
   }
 
   private ingress(state: CloudflareSetupState) {

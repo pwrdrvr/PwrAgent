@@ -38,6 +38,16 @@ describe("SettingsSplitPath", () => {
     });
   });
 
+  it("formats normalized snapshot paths in both the text and tooltip", () => {
+    const input = "C:/Users/operator/.pwragent/profiles/work";
+    expect(parts(input)).toEqual({
+      head: "C:\\Users\\operator\\.pwragent\\profiles",
+      tail: "\\work",
+      text: "C:\\Users\\operator\\.pwragent\\profiles\\work",
+    });
+    expect(screen.getByTitle("C:\\Users\\operator\\.pwragent\\profiles\\work")).toBeInTheDocument();
+  });
+
   it("keeps a root-level path whole", () => {
     // Splitting at index 0 would leave an empty head and pin the entire
     // string, which sizes the box to the full value and defeats the point.
