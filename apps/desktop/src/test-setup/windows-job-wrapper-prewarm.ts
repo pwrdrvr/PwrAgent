@@ -1,5 +1,6 @@
 // Pay the Windows Job wrapper's machine-level cold start once per run, before
-// any test file starts, exactly as the desktop app pays it once at startup.
+// any test file starts. This setup awaits completion, unlike a fire-and-forget
+// app startup prewarm that can leave a suspended target after quick quit.
 //
 // The wrapper owns `git worktree remove` on Windows (see
 // `apps/desktop/src/main/windows-job-wrapper.ts`). Its first launch on a

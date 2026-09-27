@@ -236,6 +236,41 @@ describe("ThreadView", () => {
     cleanup();
   });
 
+  it("offers async question answers only when the composer is ready", () => {
+    const props: Omit<ThreadViewProps, "terminals"> = {
+      addOptimisticUserMessage: (_text) => "optimistic-1",
+      backends: [],
+      clearPendingRequest: () => undefined,
+      composerDisabled: true,
+      desktopApi: {},
+      loading: false,
+      loadingMore: false,
+      messageCount: 1,
+      onLoadOlder: async () => undefined,
+      removeOptimisticMessage: (_id) => undefined,
+      selectedThread: buildTimestampTargetThread("thread-async", "Async question"),
+      skills: [],
+      transcriptEntries: [{
+        type: "message",
+        id: "call-endpoints",
+        role: "assistant",
+        text: "Which endpoint?",
+        delivery: "async",
+        questions: [{ title: "Which endpoint?", options: null }],
+      }],
+    };
+    const view = render(<ThreadView {...props} />);
+    const question = screen.getByRole("group", { name: "Question from Codex" });
+
+    expect(within(question).queryByRole("button", { name: "Answer" })).not.toBeInTheDocument();
+    view.rerender(<ThreadView {...props} composerDisabled={false} />);
+    expect(within(question).getByRole("button", { name: "Answer" })).toBeDisabled();
+    fireEvent.change(within(question).getByLabelText("Your answer"), {
+      target: { value: "ws://gateway.example" },
+    });
+    expect(within(question).getByRole("button", { name: "Answer" })).toBeEnabled();
+  });
+
   it("rewinds Grok with the explicit conversation-only UI flow", async () => {
     const listAcpThreadRewindPoints = vi.fn(async () => ({
       backend: "acp:grok" as const,

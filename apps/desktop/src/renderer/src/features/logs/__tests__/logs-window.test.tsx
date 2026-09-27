@@ -178,7 +178,7 @@ describe("LogsWindow", () => {
 
     expect(await screen.findByLabelText("Search logs")).toBeInTheDocument();
     expect(
-      screen.getByText("/Users/example/Library/Logs/PwrAgent/main.log"),
+      await screen.findByText("/Users/example/Library/Logs/PwrAgent/main.log"),
     ).toBeInTheDocument();
     expect(await screen.findByText("INFO booted")).toBeInTheDocument();
     expect(screen.getByText("Live app log stream")).toBeInTheDocument();

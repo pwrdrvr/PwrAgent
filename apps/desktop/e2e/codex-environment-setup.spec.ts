@@ -430,6 +430,11 @@ test("selected environments run setup and show transcript output", async () => {
         .locator('[aria-label="Setup command"]')
         .getByText(`$ ${setupCommand}`),
     ).toBeVisible();
+    // The first Windows Job host can still be compiling when the pending UI
+    // appears. Wait for the actual output before asserting its contents.
+    await app.window.locator('[aria-label="Setup output"]')
+      .getByText("setup-output")
+      .waitFor();
     await expect(app.window.locator('[aria-label="Setup output"]')).toContainText(
       "setup-output",
     );
