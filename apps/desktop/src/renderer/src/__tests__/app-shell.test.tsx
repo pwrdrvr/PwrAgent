@@ -5737,7 +5737,7 @@ describe("App", () => {
 
     // Search, then open the result (thread 1).
     await clickButton("Search threads");
-    fireEvent.change(screen.getByRole("textbox", { name: "Search threads" }), {
+    fireEvent.change(screen.getByRole("combobox", { name: "Search threads" }), {
       target: { value: "history" },
     });
     await clickButton("Search");
