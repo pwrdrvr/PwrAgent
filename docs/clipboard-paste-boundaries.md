@@ -25,11 +25,20 @@ checkout did not reproduce the incident or inspect the remote desktop:
 | Claude logged its main process blocked for 170,358 ms at 11:30:51, heuristically labeled sleep. | This is not a stack-based diagnosis. |
 | A controlled synthetic 2880 × 1920 PNG probe on M4 completed: shipped helper 33 ms, native PNG read 12 ms, native TIFF read 49 ms / 16.6 MB; no reset. | Dimensions and one normal helper/reader round trip did not reproduce the incident. This does not cover the original multi-app/clipboard-sync scenario. |
 
-The producer investigation owns PwrSnap helper timeout containment. A bounded
-helper with no synchronous native fallback after timeout can limit that
-producer's wait; it does not fix Chromium's consumer paste path or prove the
-original root cause. Remote evidence is retained by the diagnostics thread in
-its `.local/clipboard-incident-20260927` directory, outside this checkout.
+The producer investigation reports that PwrSnap's named-image writer used an
+unbounded `execFile`. Its containment change adds a 10-second timeout with
+`SIGKILL`, propagates a typed timeout through the setup wrapper, and skips both
+the synchronous Electron fallback and the changed-event read cascade on timeout.
+That thread reports 7,141 unit tests, lint and build passing. Independent fresh
+AppKit consumer E2E remains pending lab stale-lock recovery; those checks were
+not run from this checkout.
+
+The producer reports unchanged production formats: eager PNG, file URL and
+clip metadata, with no lazy provider or named-to-general pasteboard transfer.
+The investigated writer source matches v1.1.7. The timeout contains the
+producer's helper wait; it does not fix Chromium's consumer paste path or prove
+the original root cause. Remote evidence is retained by the diagnostics thread
+in its `.local/clipboard-incident-20260927` directory, outside this checkout.
 
 ## PwrAgent paths
 
