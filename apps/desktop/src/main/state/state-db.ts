@@ -10,13 +10,14 @@ import {
 } from "@pwragent/shared";
 import { THREAD_NAVIGATION_RELATIONSHIPS_SCHEMA } from "./thread-navigation-relationships.js";
 import { getNativeBinding } from "./native-binding.js";
+import { STORAGE_RETENTION_SCHEMA } from "./storage-maintenance.js";
 import { migratePrReferenceIdentities } from "./migrate-pr-reference-identities.js";
 import {
   attachSqliteWriteMetrics,
   isSqliteWriteMetricsEnabled,
 } from "./sqlite-write-metrics.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 64;
+export const CURRENT_STATE_DB_USER_VERSION = 65;
 export const STATE_DB_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const STATE_DB_JOURNAL_SIZE_LIMIT_BYTES = 16 * 1024 * 1024;
 
@@ -1828,7 +1829,13 @@ export class StateDb {
           if (tableExists(db, "threads") && !tableExists(db, "thread_navigation_relationships")) {
             db.exec(THREAD_NAVIGATION_RELATIONSHIPS_SCHEMA);
           }
-          db.pragma(`user_version = ${CURRENT_STATE_DB_USER_VERSION}`);
+          db.pragma("user_version = 64");
+        }).immediate();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 65) {
+        db.transaction(() => {
+          db.exec(STORAGE_RETENTION_SCHEMA);
+          db.pragma("user_version = 65");
         }).immediate();
       }
       // Keep current-version databases converged without asking pre-v36 profiles
@@ -1982,7 +1989,14 @@ export class StateDb {
     }
   }
 
-  cleanupExpired(now = Date.now()): void {
+  /** Startup maintenance owns initial cleanup and full rewrites off main. */
+  startDeferredGc(intervalMs = 60 * 60 * 1000): void {
+    this.stopGc();
+    this.gcTimer = setInterval(() => this.cleanupExpired(Date.now(), 256), intervalMs);
+    this.gcTimer.unref?.();
+  }
+
+  cleanupExpired(now = Date.now(), reclaimPages?: number): void {
     const cleanup = this.db.transaction(() => {
       this.db
         .prepare("DELETE FROM browse_sessions WHERE expires_at < ?")
@@ -2090,7 +2104,7 @@ export class StateDb {
         .run(now - COMPOSER_DRAFT_LATEST_RETENTION_MS);
     });
     cleanup();
-    this.db.pragma("incremental_vacuum");
+    if (reclaimPages !== 0) this.db.pragma(reclaimPages === undefined ? "incremental_vacuum" : `incremental_vacuum(${Math.max(0, Math.floor(reclaimPages))})`);
   }
 
   getMeta(key: string): string | undefined {

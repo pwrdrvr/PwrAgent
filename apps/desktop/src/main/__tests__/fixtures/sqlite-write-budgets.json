@@ -573,6 +573,27 @@
     "rowsChanged": 1,
     "statements": 1
   },
+  "storage-maintenance-archive-lifecycle": {
+    "commits": 3,
+    "note": "Archive receipt, duplicate observation and restore; duplicate writes no pages",
+    "observedWalBytes": 16480,
+    "rowsChanged": 2,
+    "statements": 3
+  },
+  "storage-maintenance-daily-bookkeeping": {
+    "commits": 2,
+    "note": "Daily admission and completion; no timer heartbeat",
+    "observedWalBytes": 12360,
+    "rowsChanged": 2,
+    "statements": 2
+  },
+  "storage-maintenance-detail-slice": {
+    "commits": 1,
+    "note": "128 synthetic 1 KiB objects plus retention fence, one bounded transaction; WAL measured after explicit truncation",
+    "observedWalBytes": 119512,
+    "rowsChanged": 129,
+    "statements": 2
+  },
   "streamed-command-output": {
     "commits": 2,
     "note": "500 streamed output deltas plus the completion for one command",

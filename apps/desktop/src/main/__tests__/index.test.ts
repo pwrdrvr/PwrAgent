@@ -98,6 +98,7 @@ const mainLogInfoMock = vi.fn();
 const mainLogWarnMock = vi.fn();
 const mainLogErrorMock = vi.fn();
 const initializeAppStateMock = vi.fn();
+const runStartupStorageMaintenanceMock = vi.fn<() => Promise<void>>();
 const disposeAppStateMock = vi.fn();
 const isAppStateInitializedMock = vi.fn();
 const prewarmWindowsJobWrapperMock = vi.fn<() => Promise<void>>();
@@ -566,6 +567,8 @@ vi.mock("../runtime-federation-lease", () => ({
 
 vi.mock("../state/app-state", () => ({
   initializeAppState: initializeAppStateMock,
+  hadExistingAppStateDatabase: vi.fn(() => true),
+  getAppStateDb: vi.fn(() => ({ raw: {} })),
   disposeAppState: disposeAppStateMock,
   isAppStateInitialized: isAppStateInitializedMock,
   getAppOverlayStore: vi.fn(() => ({
@@ -573,6 +576,11 @@ vi.mock("../state/app-state", () => ({
     listRemoteThreadTargets: vi.fn(),
   })),
   recordBootDecision: vi.fn(),
+}));
+
+vi.mock("../storage-maintenance", () => ({
+  runStartupStorageMaintenance: runStartupStorageMaintenanceMock,
+  interruptStartupStorageMaintenance: vi.fn(async () => {}),
 }));
 
 vi.mock("../settings/desktop-settings-singleton", () => ({
@@ -612,6 +620,7 @@ const runtimeFederationLeaseCoordinatorMock = {
 
 vi.mock("../app-server/backend-registry", () => ({
   getDesktopBackendRegistry: vi.fn(() => ({
+    onEvent: vi.fn(() => () => {}),
     synchronizeProviderRuntimeSelections: synchronizeProviderRuntimeSelectionsMock,
     listThreads: listThreadsMock,
     refreshProvidersAtStartup: refreshProvidersAtStartupMock,
@@ -918,6 +927,7 @@ describe("bootstrapApp", () => {
     // `bootstrapApp` reads `.autoVacuum` off this to log the one-time
     // `auto_vacuum` conversion, so the mock has to return the real shape.
     initializeAppStateMock.mockReturnValue({ autoVacuum: null });
+    runStartupStorageMaintenanceMock.mockReset().mockResolvedValue();
     startProfileFocusRequestWatcherMock.mockClear();
     startupProfilerInstance.start.mockReset();
     startupProfilerInstance.stop.mockReset().mockResolvedValue();
@@ -1044,6 +1054,22 @@ describe("bootstrapApp", () => {
     expect(StartupCpuProfilerMock).not.toHaveBeenCalled();
     expect(initializeAppStateMock).not.toHaveBeenCalled();
     expect(createMainWindowMock).not.toHaveBeenCalled();
+  });
+
+  it("continues startup after the storage job, including when its window closes", async () => {
+    let finish!: () => void;
+    runStartupStorageMaintenanceMock.mockImplementation(() => new Promise<void>((resolve) => { finish = resolve; }));
+    await import("../index");
+    await flushMicrotasks();
+    expect(runStartupStorageMaintenanceMock).toHaveBeenCalledWith(expect.objectContaining({
+      existingDatabase: true, onboardingCompleted: true,
+    }));
+    expect(createMainWindowMock).not.toHaveBeenCalled();
+    appEventHandlers.get("window-all-closed")?.();
+    expect(requestQuitMock).not.toHaveBeenCalled();
+    finish();
+    await flushMicrotasks();
+    expect(createMainWindowMock).toHaveBeenCalledOnce();
   });
 
   it("awaits startup CPU profiling before creating the first window", async () => {
@@ -2444,6 +2470,7 @@ describe("bootstrapApp", () => {
     // No cleanup at boot — we ARE the bootstrap session that will
     // own that dir; cleanup happens at graduation in Task E.
     expect(initializeAppStateMock).toHaveBeenCalledWith("bootstrap");
+    expect(runStartupStorageMaintenanceMock).not.toHaveBeenCalled();
     expect(cleanupBootstrapProfileMock).not.toHaveBeenCalled();
     if (process.platform === "darwin") {
       expect(writeDockProfileSnapshotMock).toHaveBeenCalledWith({

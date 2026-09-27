@@ -9313,6 +9313,20 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  it("propagates an authoritative refresh through the combined provider listing", async () => {
+    const codexClient = new MockBackendClient({
+      threads: [{ id: "fixture", title: "Before", titleSource: "explicit", linkedDirectories: [], source: "codex" }],
+    });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    try {
+      await registry.listThreads({ backend: "codex" });
+      codexClient.setThreads([{ id: "fixture", title: "After", titleSource: "explicit", linkedDirectories: [], source: "codex" }]);
+      await expect(registry.listThreads({ forceRefresh: true })).resolves.toEqual([
+        expect.objectContaining({ title: "After" }),
+      ]);
+    } finally { await registry.close(); }
+  });
+
   it("trusts a different explicit provider name over an unacknowledged observation", async () => {
     const codexClient = new MockBackendClient({
       threads: [
