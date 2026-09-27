@@ -78,7 +78,7 @@ test("keeps a hidden terminal alive and collapsed across a thread view remount",
     await test.step("remount ThreadView without expanding the terminal", async () => {
       await app.window.getByRole("button", { name: "Search threads" }).click();
       await expect(
-        app.window.getByRole("textbox", { name: "Search threads" })
+        app.window.getByRole("combobox", { name: "Search threads" })
       ).toBeVisible();
       await expect(
         app.window.getByLabel("Integrated terminal", { exact: true })
@@ -142,7 +142,7 @@ test("recovers a running terminal after the thread view unmounts", async () => {
     // Unmount ThreadView by switching to the search screen, then come back.
     await app.window.getByRole("button", { name: "Search threads" }).click();
     await expect(
-      app.window.getByRole("textbox", { name: "Search threads" }),
+      app.window.getByRole("combobox", { name: "Search threads" }),
     ).toBeVisible();
     await expect(
       app.window.getByLabel("Integrated terminal", { exact: true }),

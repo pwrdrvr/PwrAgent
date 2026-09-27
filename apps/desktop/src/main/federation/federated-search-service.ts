@@ -11,6 +11,9 @@ import type {
 import {
   buildFederatedThreadRef,
   buildThreadIdentityKey,
+  parseThreadSearchQuery,
+  threadSearchTextTerms,
+  matchesThreadSearchProjects,
 } from "@pwragent/shared";
 import type { FederationBackendOperations } from "./federation-backend-bridge";
 import {
@@ -172,8 +175,13 @@ export class FederatedSearchService {
           buildOwnerSearchRequest(query, request),
           rpcOptions,
         );
+    // Older peers may treat mentions as text. Never admit an out-of-scope hit.
+    const projects = parseThreadSearchQuery(query).projects;
+    const scopedThreads = ownerResponse.threads.filter((thread) =>
+      matchesThreadSearchProjects(thread, projects),
+    );
     return {
-      results: ownerResponse.threads.map((thread) => ({
+      results: scopedThreads.map((thread) => ({
         ref: buildFederatedThreadRef({
           backend: thread.source,
           threadId: thread.id,
@@ -182,7 +190,9 @@ export class FederatedSearchService {
         instanceLabel: "This Mac",
         score: scoreThread(thread, query),
       })),
-      totalCount: ownerResponse.totalCount,
+      totalCount: scopedThreads.length === ownerResponse.threads.length
+        ? ownerResponse.totalCount
+        : scopedThreads.length,
       truncated: ownerResponse.truncated,
     };
   }
@@ -205,8 +215,13 @@ export class FederatedSearchService {
       }
       throw new Error("Upgrade this PwrAgent peer and its gateways: bounded federated search is required.");
     }
+    // Older peers may treat mentions as text. Never admit an out-of-scope hit.
+    const projects = parseThreadSearchQuery(query).projects;
+    const scopedThreads = ownerResponse.threads.filter((thread) =>
+      matchesThreadSearchProjects(thread, projects),
+    );
     return {
-      results: ownerResponse.threads.map((thread) => ({
+      results: scopedThreads.map((thread) => ({
         ref: buildFederatedThreadRef({
           backend: thread.source,
           instanceId: peer.instanceId,
@@ -217,7 +232,9 @@ export class FederatedSearchService {
         peerStatus: peer.status,
         score: scoreThread(thread, query),
       })),
-      totalCount: ownerResponse.totalCount,
+      totalCount: scopedThreads.length === ownerResponse.threads.length
+        ? ownerResponse.totalCount
+        : scopedThreads.length,
       truncated: ownerResponse.truncated,
     };
   }
@@ -258,17 +275,20 @@ export async function searchFederatedThreadsOnOwner(
   rpcOptions?: FederationRpcRequestOptions,
 ): Promise<FederationThreadSearchResponse> {
   const limit = searchLimit(request.limit);
-  const query = request.query.trim();
+  const { query, projects } = parseThreadSearchQuery(request.query);
   const threads = await listFederatedSearchThreads(
     backendOperations,
     request,
     rpcOptions,
   );
-  const exact = looksLikeExactThreadId(query);
-  const normalized = query.toLowerCase();
-  const matches = threads.filter((thread) => exact
-    ? thread.id.toLowerCase() === normalized
-    : !query || scoreThread(thread, query) > 0 || thread.id.toLowerCase().includes(normalized));
+  const text = threadSearchTextTerms(query).map((term) => term.text).join(" ");
+  const exact = looksLikeExactThreadId(text);
+  const normalized = text.toLowerCase();
+  const matches = threads
+    .filter((thread) => matchesThreadSearchProjects(thread, projects))
+    .filter((thread) => exact
+      ? thread.id.toLowerCase() === normalized
+      : !query || scoreThread(thread, query) > 0 || thread.id.toLowerCase().includes(normalized));
   matches.sort(compareFederatedSearchThreads(query));
   checkSearchDeadline(rpcOptions);
   return {
@@ -367,6 +387,8 @@ function withTimeout<T>(
 }
 
 function scoreThread(thread: AppServerThreadSummary, query: string): number {
+  query = threadSearchTextTerms(parseThreadSearchQuery(query).query)
+    .map((term) => term.text).join(" ");
   if (!query) return 0;
   const normalized = query.toLowerCase();
   const title = thread.title.toLowerCase();

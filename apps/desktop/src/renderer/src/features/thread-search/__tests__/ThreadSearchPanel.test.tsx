@@ -10,6 +10,38 @@ import { basename, highlightSnippet, ThreadSearchPanel } from "../ThreadSearchPa
 import type { DesktopApi } from "../../../lib/desktop-api";
 
 describe("ThreadSearchPanel", () => {
+  it("toggles accessible search syntax help", () => {
+    render(<ThreadSearchPanel onOpenResult={vi.fn()} />);
+    const help = screen.getByRole("button", { name: "Search help" });
+    expect(help).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(help);
+    expect(help).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("region", { name: "Search syntax" })).toHaveTextContent("build in:@disk");
+    fireEvent.click(help);
+    expect(screen.queryByRole("region", { name: "Search syntax" })).not.toBeInTheDocument();
+  });
+
+  it("scopes client-side PR matches using the text remaining after mentions", async () => {
+    const searchThreads = vi.fn(async (): Promise<ThreadSearchResponse> => ({
+      backend: "all", contentMode: "available", fetchedAt: 1000, filters: {},
+      query: "#779 @disk", results: [], searchedScopes: [], semanticMode: "disabled",
+      unavailableScopes: [],
+    }));
+    const threads: NavigationThreadSummary[] = ["DiskHound", "Other"].map((projectKey) => ({
+      id: projectKey, title: `${projectKey} thread`, titleSource: "explicit", source: "codex",
+      projectKey, linkedDirectories: [], inbox: { inInbox: true },
+      prs: [{ provider: "github.com", number: 779, org: "example", repo: projectKey,
+        state: "pending", url: `https://github.com/example/${projectKey}/pull/779` }],
+    }));
+    render(<ThreadSearchPanel desktopApi={{ searchThreads } as DesktopApi}
+      threads={threads} onOpenResult={vi.fn()} />);
+    fireEvent.change(screen.getByLabelText("Search threads"), { target: { value: "#779 @disk" } });
+    fireEvent.click(screen.getByRole("button", { name: "Search" }));
+    expect(await screen.findByText("DiskHound thread")).toBeInTheDocument();
+    expect(screen.queryByText("Other thread")).not.toBeInTheDocument();
+    expect(searchThreads).toHaveBeenCalledWith(expect.objectContaining({ query: "#779 @disk" }));
+  });
+
   it("submits a search and opens a result", async () => {
     const searchThreads = vi.fn(async (): Promise<ThreadSearchResponse> => ({
       backend: "all",
@@ -209,6 +241,20 @@ describe("basename", () => {
 });
 
 describe("highlightSnippet", () => {
+  it("highlights whole quoted phrases with or without quotes in the snippet", () => {
+    const text = 'An Ad Hoc task, an "ad hoc" fix, and ad with hoc later';
+    const { container } = render(<>{highlightSnippet(text, '"ad hoc"')}</>);
+    expect(Array.from(container.querySelectorAll("mark"), (mark) => mark.textContent))
+      .toEqual(["Ad Hoc", "ad hoc"]);
+    expect(container.textContent).toBe(text);
+  });
+
+  it("highlights a quoted literal mention and unquoted terms together", () => {
+    const { container } = render(<>{highlightSnippet("Fix @disk handling", 'fix "@disk"')}</>);
+    expect(Array.from(container.querySelectorAll("mark"), (mark) => mark.textContent))
+      .toEqual(["Fix", "@disk"]);
+  });
+
   it("wraps each query token occurrence in a <mark>, case-insensitively", () => {
     const { container } = render(<>{highlightSnippet("the Bar and a bar", "bar")}</>);
     const marks = container.querySelectorAll("mark");

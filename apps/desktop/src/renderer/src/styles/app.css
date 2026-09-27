@@ -7314,6 +7314,21 @@ a.button {
   align-items: center;
 }
 
+/* Search uses the composer's directory suggestions below its query field. */
+.thread-search__projects.composer__autocomplete {
+  top: calc(100% + 8px);
+  bottom: auto;
+  left: 0;
+  width: min(520px, 100%);
+  max-height: min(320px, 45vh);
+}
+
+.thread-search__project-status {
+  padding: 8px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
 .thread-search__field-icon {
   position: absolute;
   left: 12px;
@@ -7355,6 +7370,20 @@ a.button {
   align-items: center;
   gap: 7px;
   white-space: nowrap;
+}
+
+.thread-search__help {
+  flex-shrink: 0;
+  padding: 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel);
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.thread-search__help p {
+  margin: 8px 0 0;
 }
 
 .thread-search__error {
