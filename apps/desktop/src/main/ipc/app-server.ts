@@ -6387,28 +6387,10 @@ class DesktopAppServerService {
   ): Promise<SetThreadAgentResponse> {
     const backend = request.backend ?? "codex";
 
-    const overlay = await this.getOverlayStore().setThreadAgent({
+    const overlay = await getDesktopBackendRegistry().setThreadAgent({
       backend,
       threadId: request.threadId,
       agent: request.agent,
-    });
-
-    logDebug("setThreadAgent", {
-      backend,
-      threadId: request.threadId,
-      agentName: overlay.agent?.name ?? null,
-      instructionLineCount: overlay.agent?.instructionLineCount ?? 0,
-      instructionsTooLong: overlay.agent?.instructionsTooLong ?? false,
-    });
-
-    await getDesktopBackendRegistry().publishLocalEvent({
-      backend,
-      notification: {
-        method: "thread/agent/updated",
-        params: {
-          threadId: request.threadId,
-        },
-      },
     });
 
     return {

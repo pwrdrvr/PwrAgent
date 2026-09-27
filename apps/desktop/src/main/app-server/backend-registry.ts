@@ -881,6 +881,10 @@ type BackendClient = {
     limit?: number;
   }): Promise<AppServerReadThreadResponse["replay"]>;
   readThreadActivity?(params: { threadId: string; turnId: string; entryId: string }): Promise<AppServerThreadActivityEntry>;
+  refreshThreadTools?(params: {
+    threadId: string;
+    dynamicTools: CodexDynamicToolSpec[];
+  }): Promise<void>;
   injectThreadItems?(params: { threadId: string; items: unknown[] }): Promise<void>;
   startThread(params: {
     cwd?: string;
@@ -8704,6 +8708,8 @@ export class DesktopBackendRegistry {
   private starMapHandler?: PwrAgentStarMapHandler;
   private agentThreadActions?: AgentThreadActions;
   private messagingAgentToolService?: MessagingAgentToolService;
+  private readonly changingCodexAgentThreadIds = new Set<string>();
+  private readonly inFlightCodexAttachments = new Map<string, number>();
   private readonly messagingHandler: PwrAgentMessagingHandler =
     async (request) => {
       const pdfResponse = await handlePwrAgentPdfToolRequest({
@@ -8713,19 +8719,62 @@ export class DesktopBackendRegistry {
       if (pdfResponse) {
         return pdfResponse;
       }
-      if (!this.messagingAgentToolService) {
-        return {
-          ok: false,
-          error: {
-            code: "unsupported_operation",
-            message: "PwrAgent messaging context tools are not available.",
-          },
-        };
+      if (request.context.backend === "codex" && request.operation === "attach_thread_here") {
+        const threadId = request.context.threadId;
+        if (this.changingCodexAgentThreadIds.has(threadId)) {
+          return {
+            ok: false,
+            error: {
+              code: "forbidden",
+              message: "Agent thread status is changing. Retry after the change completes.",
+            },
+          };
+        }
+        this.inFlightCodexAttachments.set(
+          threadId,
+          (this.inFlightCodexAttachments.get(threadId) ?? 0) + 1,
+        );
+        try {
+          const overlay = await this.overlayStore.getThreadOverlayState(request.context);
+          // Handoff threads retain their existing attachment authority. Neither
+          // a discovered tool definition nor an old binding grants authority.
+          if (!overlay?.agent && !overlay?.handoffOrigin) {
+            return {
+              ok: false,
+              error: {
+                code: "forbidden",
+                message: "Mark this thread as an Agent before managing messaging attachments.",
+              },
+            };
+          }
+          return await this.dispatchMessagingRequest(request);
+        } finally {
+          const remaining = this.inFlightCodexAttachments.get(threadId)! - 1;
+          if (remaining) {
+            this.inFlightCodexAttachments.set(threadId, remaining);
+          } else {
+            this.inFlightCodexAttachments.delete(threadId);
+          }
+        }
       }
-      return await this.messagingAgentToolService.handlePwrAgentMessagingRequest(
-        request,
-      );
+      return await this.dispatchMessagingRequest(request);
     };
+
+  private async dispatchMessagingRequest(
+    request: Parameters<PwrAgentMessagingHandler>[0],
+  ): Promise<Awaited<ReturnType<PwrAgentMessagingHandler>>> {
+    if (!this.messagingAgentToolService) {
+      return {
+        ok: false,
+        error: {
+          code: "unsupported_operation",
+          message: "PwrAgent messaging context tools are not available.",
+        },
+      };
+    }
+    return await this.messagingAgentToolService.handlePwrAgentMessagingRequest(request);
+  }
+
   private readonly threadInspectionHandler: PwrAgentThreadInspectionHandler =
     async (request) => await this.handleThreadInspectionRequest(request);
   private federatedThreadInspectionHandler:
@@ -11010,6 +11059,68 @@ export class DesktopBackendRegistry {
    */
   getThreadInfo(identity: ThreadInfoIdentity): ThreadInfo | undefined {
     return this.threadInfoStore.get(identity);
+  }
+
+  async setThreadAgent(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    agent: { name: string; instructions?: string } | null;
+  }): Promise<ThreadOverlayState> {
+    this.assertNotBootstrap("setThreadAgent");
+    const codex = params.backend === "codex";
+    if (codex) {
+      if (this.threadHasActiveTurn(params.threadId)
+        || this.inFlightCodexAttachments.has(params.threadId)) {
+        throw new Error("Wait for the current turn and any messaging attachment operation to finish, then change Agent thread status.");
+      }
+      // Reserve synchronously, just like turn/start and review/start. Neither a
+      // queued turn nor another toggle may race the runtime refresh and save.
+      this.reservedCodexStartThreadIds.add(params.threadId);
+      this.changingCodexAgentThreadIds.add(params.threadId);
+    }
+    try {
+      if (codex) {
+        await this.withCodexThreadClient(params.threadId, async (client) => {
+          const overlay = await this.overlayStore.getThreadOverlayState(params);
+          const dynamicTools = await this.buildSupportedCodexDynamicToolsRefresh({
+            client,
+            tokenMiserEnabled: this.resolveTokenMiserEnabledForOverride(overlay?.tokenMiserEnabled),
+          });
+          if (dynamicTools === undefined || !client.refreshThreadTools) {
+            throw new Error("This Codex runtime cannot refresh tools on an existing thread. Update to a supported PwrAgent managed Codex runtime, or create a new Agent thread.");
+          }
+          // Discovery changes advertisement, not authority. Send the same full
+          // catalog used for a new thread, even with discovery disabled. A
+          // failed resume (including a foreign active writer) must not save.
+          await client.refreshThreadTools({ threadId: params.threadId, dynamicTools });
+        });
+      }
+      const overlay = await this.overlayStore.setThreadAgent(params);
+      this.invalidateThreadListCache(params.backend);
+      await this.publishLocalEvent({
+        backend: params.backend,
+        notification: {
+          method: "thread/agent/updated",
+          params: { threadId: params.threadId },
+        },
+      });
+      return overlay;
+    } finally {
+      if (codex) {
+        this.changingCodexAgentThreadIds.delete(params.threadId);
+        this.reservedCodexStartThreadIds.delete(params.threadId);
+        // A manual/messaging submission may have queued behind this boundary.
+        // Resume it with the saved designation (or the old one after failure).
+        if (!this.threadHasActiveTurn(params.threadId)
+          && this.threadTurnQueue.getQueuedEntries(params).length > 0) {
+          void this.threadTurnQueue.releaseThread({
+            backend: params.backend,
+            threadId: params.threadId,
+            status: "agent_designation_settled",
+          });
+        }
+      }
+    }
   }
 
   async getThreadAgentMetadata(params: {
@@ -35507,7 +35618,9 @@ export class DesktopBackendRegistry {
           ? "current_conversation"
           : "auto";
     const explicitRequest = params.mode !== undefined;
-    const response = await this.messagingHandler({
+    // An ordinary thread may still attach the child it just created through
+    // handoff_task. This internal path is not the unrestricted attachment tool.
+    const response = await this.dispatchMessagingRequest({
       operation: "attach_thread_here",
       context: {
         backend: params.sourceBackend,

@@ -133,8 +133,7 @@ import {
 import { normalizeImageFile } from "../../lib/image-normalization";
 import {
   AGENT_THREAD_CAPABILITIES,
-  CODEX_AGENT_THREAD_CREATION_NOTE,
-  canChangeExistingThreadAgentDesignation,
+  CODEX_AGENT_THREAD_CHANGE_NOTE,
   createDesktopAgentThread,
 } from "../../lib/agent-thread";
 import {
@@ -1688,10 +1687,9 @@ function ComposerThreadOptionsMenu(props: {
   });
   const agentThreadChangeDisabled =
     props.disabled ||
-    props.existingCodexThread ||
     !props.onAgentThreadChange;
   const agentThreadTooltip = props.existingCodexThread
-    ? CODEX_AGENT_THREAD_CREATION_NOTE
+    ? `${AGENT_THREAD_CAPABILITIES} ${CODEX_AGENT_THREAD_CHANGE_NOTE}`
     : AGENT_THREAD_CAPABILITIES;
   const tokenMiserTooltip =
     "Summarize large tool results with a helper model before they "
@@ -9185,7 +9183,6 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     const thread = props.thread;
     if (
       !thread ||
-      !canChangeExistingThreadAgentDesignation(thread) ||
       !props.desktopApi?.setThreadAgent
     ) {
       return;
@@ -12749,7 +12746,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
             disabled={launchpadSubmitting || agentThreadSaving}
             existingCodexThread={
               props.thread !== undefined &&
-              !canChangeExistingThreadAgentDesignation(props.thread)
+              props.thread.source === "codex"
             }
             onAgentThreadChange={
               props.launchpad
@@ -12759,7 +12756,6 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                     }
                   : undefined
                 : props.thread &&
-                    canChangeExistingThreadAgentDesignation(props.thread) &&
                     props.desktopApi?.setThreadAgent
                   ? (agentThread) => {
                       void changeAgentThread(agentThread);

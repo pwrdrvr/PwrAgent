@@ -67,6 +67,7 @@ import type {
   NavigationSnapshot,
   NavigationLaunchpadDraft,
   NavigationThreadSummary,
+  PwrAgentMessagingResponse,
   PwrAgentThreadOrchestrationRequest,
   PwrAgentThreadOrchestrationResponse,
   PrSummary,
@@ -2096,6 +2097,8 @@ class MockBackendClient {
       },
     };
   }
+
+  refreshThreadTools = vi.fn(async (_params: { threadId: string; dynamicTools: unknown }): Promise<void> => {});
 
   async injectThreadItems(params: { threadId: string; items: unknown[] }): Promise<void> {
     this.injectedThreadItems.push(params);
@@ -4372,6 +4375,138 @@ describe("DesktopBackendRegistry", () => {
       reason: "codex_structured_generation_unavailable",
     });
     expect(generateStructuredObject).not.toHaveBeenCalled();
+  });
+
+  describe("existing Codex Agent designation", () => {
+    const agent = { name: "Fixture manager", instructions: "Manage requested messaging attachments." };
+    const capabilities = { codeModeOutputReducer: { protocolVersion: 1 as const, dynamicToolsResumeField: "dynamicTools" as const } };
+    const identity = { backend: "codex" as const, threadId: "existing-agent" };
+
+    it.each([false, true])("refreshes, persists and authorizes promotion independently of discovery (%s)", async (discovery) => {
+      const overlayStore = createOverlayStoreMock();
+      const codexClient = new MockBackendClient({ threads: [], serverCapabilities: capabilities });
+      const registry = new DesktopBackendRegistry({ codexClient, overlayStore, resolveCodexToolDiscovery: () => discovery });
+      const dispatch = vi.fn(async () => ({ ok: true, data: {} }) as PwrAgentMessagingResponse);
+      registry.setMessagingAgentToolService({ handlePwrAgentMessagingRequest: dispatch, checkDynamicToolPermission: () => ({ allowed: true }) });
+      const call = {
+        method: "item/tool/call",
+        params: { threadId: identity.threadId, turnId: "turn-attach", callId: "attach-1", requestId: "attach-1", namespace: "pwragent", tool: "attach_thread_here", arguments: { backend: "codex", threadId: "fixture-target" } },
+      } as AppServerPendingRequestNotification;
+      const start = async () => registry.publishLocalEvent({ backend: "codex", notification: { method: "turn/started", params: { threadId: identity.threadId, turnId: "turn-attach", turn: { id: "turn-attach" } } } });
+      try {
+        await start();
+        expect(await codexClient.emitRequest(call)).toMatchObject({ success: false });
+        expect(dispatch).not.toHaveBeenCalled();
+        await emitCompletedTurn(registry, "codex", identity.threadId, "turn-attach");
+        await registry.setThreadAgent({ ...identity, agent });
+        expect(await registry.getThreadAgentMetadata(identity)).toEqual(agent);
+        const tools = pwragentDynamicTools(codexClient.refreshThreadTools.mock.calls[0][0].dynamicTools);
+        expect(tools.some((tool) => tool.name === "attach_thread_here")).toBe(true);
+        expect(tools.some((tool) => tool.name === "tool_search")).toBe(discovery);
+        await registry.startThread({ backend: "codex", cwd: process.cwd(), agent });
+        expect(codexClient.refreshThreadTools.mock.calls[0][0].dynamicTools).toEqual(codexClient.lastStartThreadParams?.dynamicTools);
+        await start();
+        expect(await codexClient.emitRequest(call)).toMatchObject({ success: true });
+        expect(dispatch).toHaveBeenCalledOnce();
+        await expect(registry.setThreadAgent({ ...identity, agent: null })).rejects.toThrow("current turn");
+        expect(await registry.getThreadAgentMetadata(identity)).toEqual(agent);
+        await emitCompletedTurn(registry, "codex", identity.threadId, "turn-attach");
+        await registry.setThreadAgent({ ...identity, agent: null });
+        expect(await registry.getThreadAgentMetadata(identity)).toBeUndefined();
+        await start();
+        expect(await codexClient.emitRequest(call)).toMatchObject({ success: false });
+        expect(dispatch).toHaveBeenCalledOnce();
+      } finally {
+        await registry.close();
+      }
+      // A new registry reads the durable designation; no process-local grant.
+      const reloaded = new DesktopBackendRegistry({ codexClient: new MockBackendClient({ threads: [] }), overlayStore });
+      try {
+        expect(await reloaded.getThreadAgentMetadata(identity)).toBeUndefined();
+      } finally {
+        await reloaded.close();
+      }
+    });
+
+    it("rejects unsupported runtimes without saving", async () => {
+      const codexClient = new MockBackendClient({ threads: [], serverCapabilities: {} });
+      const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+      try {
+        await expect(registry.setThreadAgent({ ...identity, agent })).rejects.toThrow("Update to a supported");
+        expect(await registry.getThreadAgentMetadata(identity)).toBeUndefined();
+        expect(codexClient.refreshThreadTools).not.toHaveBeenCalled();
+      } finally { await registry.close(); }
+    });
+
+    it("keeps the previous designation on failed refresh and releases the reservation", async () => {
+      const codexClient = new MockBackendClient({ threads: [], serverCapabilities: capabilities });
+      const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+      try {
+        codexClient.refreshThreadTools.mockRejectedValueOnce(new Error("refresh refused"));
+        await expect(registry.setThreadAgent({ ...identity, agent })).rejects.toThrow("refresh refused");
+        expect(await registry.getThreadAgentMetadata(identity)).toBeUndefined();
+        await registry.setThreadAgent({ ...identity, agent });
+        codexClient.refreshThreadTools.mockRejectedValueOnce(new Error("refresh refused"));
+        await expect(registry.setThreadAgent({ ...identity, agent: null })).rejects.toThrow("refresh refused");
+        expect(await registry.getThreadAgentMetadata(identity)).toEqual(agent);
+        await registry.setThreadAgent({ ...identity, agent: null });
+      } finally { await registry.close(); }
+    });
+
+    it("blocks concurrent starts and toggles until the runtime transition completes", async () => {
+      const codexClient = new MockBackendClient({ threads: [], serverCapabilities: capabilities });
+      let release!: () => void;
+      codexClient.refreshThreadTools.mockImplementationOnce(() => new Promise<void>((resolve) => { release = resolve; }));
+      const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+      try {
+        const promotion = registry.setThreadAgent({ ...identity, agent });
+        await vi.waitFor(() => expect(codexClient.refreshThreadTools).toHaveBeenCalledOnce());
+        expect(await registry.getThreadAgentMetadata(identity)).toBeUndefined();
+        await expect(registry.setThreadAgent({ ...identity, agent: null })).rejects.toThrow("current turn");
+        await expect(registry.startTurn({ ...identity, input: [{ type: "text", text: "Fixture" }] })).rejects.toThrow("already active");
+        expect(await registry.submitTurn({ ...identity, input: [{ type: "text", text: "Queued fixture" }] })).toMatchObject({ status: "queued" });
+        release();
+        await promotion;
+        await vi.waitFor(() => expect(codexClient.startTurnCalls).toHaveLength(1));
+        expect(codexClient.lastStartTurnParams?.input).toEqual([{ type: "text", text: "Queued fixture" }]);
+        expect(await registry.getThreadAgentMetadata(identity)).toEqual(agent);
+      } finally { release?.(); await registry.close(); }
+    });
+
+    it("does not demote while an attachment dispatched by the previous turn is still in flight", async () => {
+      const codexClient = new MockBackendClient({ threads: [], serverCapabilities: capabilities });
+      const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+      let release!: () => void;
+      const dispatch = vi.fn(async () => {
+        await new Promise<void>((resolve) => { release = resolve; });
+        return { ok: true, data: {} } as PwrAgentMessagingResponse;
+      });
+      registry.setMessagingAgentToolService({ handlePwrAgentMessagingRequest: dispatch, checkDynamicToolPermission: () => ({ allowed: true }) });
+      try {
+        await registry.setThreadAgent({ ...identity, agent });
+        await registry.publishLocalEvent({ backend: "codex", notification: { method: "turn/started", params: { threadId: identity.threadId, turnId: "turn-attach", turn: { id: "turn-attach" } } } });
+        const attachment = codexClient.emitRequest({ method: "item/tool/call", params: {
+          threadId: identity.threadId, turnId: "turn-attach", requestId: "fixture-attach", callId: "fixture-attach", namespace: "pwragent", tool: "attach_thread_here", arguments: { backend: "codex", threadId: "fixture-target" },
+        } } as AppServerPendingRequestNotification);
+        await vi.waitFor(() => expect(dispatch).toHaveBeenCalledOnce());
+        await emitCompletedTurn(registry, "codex", identity.threadId, "turn-attach");
+        await expect(registry.setThreadAgent({ ...identity, agent: null })).rejects.toThrow("attachment operation");
+        expect(await registry.getThreadAgentMetadata(identity)).toEqual(agent);
+        release();
+        await attachment;
+        await registry.setThreadAgent({ ...identity, agent: null });
+      } finally { release?.(); await registry.close(); }
+    });
+
+    it("preserves non-Codex designation without a Codex runtime", async () => {
+      const codexClient = new MockBackendClient({ threads: [] });
+      const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+      try {
+        await registry.setThreadAgent({ backend: "acp:gemini", threadId: "fixture", agent });
+        expect(await registry.getThreadAgentMetadata({ backend: "acp:gemini", threadId: "fixture" })).toEqual(agent);
+        expect(codexClient.refreshThreadTools).not.toHaveBeenCalled();
+      } finally { await registry.close(); }
+    });
   });
 
   it("refreshes tool discovery in both directions and authorizes only live searches", async () => {

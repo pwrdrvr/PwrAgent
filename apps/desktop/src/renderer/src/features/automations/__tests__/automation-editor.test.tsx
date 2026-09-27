@@ -19,7 +19,6 @@ import type {
   ReadDesktopMessagingSettingsResponse,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
-import { CODEX_AGENT_THREAD_CREATION_NOTE } from "../../../lib/agent-thread";
 import { chooseSelectOption, selectOptionLabels } from "../../../test/select";
 import { AutomationEditor, INBOUND_PROVIDER_LABELS } from "../AutomationEditor";
 
@@ -1696,7 +1695,7 @@ describe("AutomationEditor", () => {
     });
   });
 
-  it("does not offer existing Codex threads for Agent promotion", () => {
+  it("offers existing Codex threads for Agent promotion", () => {
     const ordinaryCodexThread = buildThread({
       id: "ordinary-thread",
       title: "Incident triage",
@@ -1714,10 +1713,9 @@ describe("AutomationEditor", () => {
     fireEvent.click(screen.getByLabelText("Agent"));
     fireEvent.click(screen.getByRole("tab", { name: "Threads" }));
 
-    expect(screen.getByText(CODEX_AGENT_THREAD_CREATION_NOTE)).toBeInTheDocument();
     expect(
       screen.queryByRole("option", { name: /Incident triage/ }),
-    ).not.toBeInTheDocument();
+    ).toBeInTheDocument();
   });
 
   it("promotes a regular thread to an Agent and selects it", async () => {

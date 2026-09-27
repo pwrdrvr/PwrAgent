@@ -31,7 +31,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import {
   AGENT_THREAD_CAPABILITIES,
-  CODEX_AGENT_THREAD_CREATION_NOTE,
+  CODEX_AGENT_THREAD_CHANGE_NOTE,
   DEFAULT_DESKTOP_AGENT_THREAD,
 } from "../../../lib/agent-thread";
 import { normalizeImageFile } from "../../../lib/image-normalization";
@@ -1172,12 +1172,14 @@ describe("Composer", () => {
     }
   });
 
-  it("explains that an existing Codex thread cannot be converted into an Agent", () => {
-    const setThreadAgent = vi.fn();
+  it("promotes an existing Codex thread and refreshes navigation", async () => {
+    const setThreadAgent = vi.fn(async () => ({ backend: "codex" as const, threadId: "thread-1" }));
+    const onRefreshNavigation = vi.fn(async () => undefined);
 
     render(
       <Composer
         desktopApi={{ setThreadAgent }}
+        onRefreshNavigation={onRefreshNavigation}
         disabled={false}
         skills={[]}
         thread={{
@@ -1195,15 +1197,18 @@ describe("Composer", () => {
     const agentThread = screen.getByRole("menuitemcheckbox", {
       name: /Agent thread/,
     });
-    expect(agentThread).toBeDisabled();
-    expect(agentThread).not.toHaveTextContent(CODEX_AGENT_THREAD_CREATION_NOTE);
+    expect(agentThread).toBeEnabled();
+    expect(agentThread).not.toHaveTextContent(CODEX_AGENT_THREAD_CHANGE_NOTE);
     fireEvent.focus(agentThread.parentElement!);
     expect(screen.getByRole("tooltip")).toHaveTextContent(
-      CODEX_AGENT_THREAD_CREATION_NOTE,
+      CODEX_AGENT_THREAD_CHANGE_NOTE,
     );
 
     fireEvent.click(agentThread);
-    expect(setThreadAgent).not.toHaveBeenCalled();
+    await waitFor(() => expect(setThreadAgent).toHaveBeenCalledWith({
+      backend: "codex", threadId: "thread-1", agent: DEFAULT_DESKTOP_AGENT_THREAD,
+    }));
+    expect(onRefreshNavigation).toHaveBeenCalledOnce();
   });
 
   it("shows the profile default and lets a thread clear its monitor suggestion override", async () => {
