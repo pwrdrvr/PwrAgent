@@ -100,6 +100,8 @@ type DirectoriesListProps = {
   /** The thread whose ⋮ actions menu is open, for that button's `aria-expanded`. */
   actionsMenuThreadKey?: string;
   directories: NavigationDirectorySummary[];
+  projectReveal?: { key: string };
+  onProjectRevealComplete?: () => void;
   revealSelectedThreadRequest?: number;
   selectedItemKey?: string;
   selectedDirectoryKeys?: ReadonlySet<string>;
@@ -846,6 +848,28 @@ export function DirectoriesList(props: DirectoriesListProps) {
       ),
     [props.directories],
   );
+  const projectHeaders = useRef(new Map<string, HTMLButtonElement>());
+  const handledProjectReveal = useRef<{ key: string } | undefined>(undefined);
+  useEffect(() => {
+    const request = props.projectReveal;
+    if (!request || handledProjectReveal.current === request
+      || props.selectedItemKey !== buildLaunchpadSelectionKey(request.key)) return;
+    const header = projectHeaders.current.get(request.key);
+    if (!header) return;
+    if (expandedByKey[request.key] !== true) {
+      setExpandedByKey((current) => ({ ...current, [request.key]: true }));
+      return;
+    }
+    // Wait until the palette's modal cleanup has restored its prior focus.
+    const frame = requestAnimationFrame(() => {
+      header.scrollIntoView?.({ block: "nearest" });
+      header.focus({ preventScroll: true });
+      handledProjectReveal.current = request;
+      props.onProjectRevealComplete?.();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [props.projectReveal, props.onProjectRevealComplete, props.selectedItemKey, visibleDirectories, expandedByKey, setExpandedByKey]);
+
   const pinnedDirectories = useMemo(
     () =>
       visibleDirectories
@@ -1700,6 +1724,10 @@ export function DirectoriesList(props: DirectoriesListProps) {
           }
         >
           <button
+            ref={(element) => {
+              if (element) projectHeaders.current.set(directory.key, element);
+              else projectHeaders.current.delete(directory.key);
+            }}
             data-hover-stable-release="directory"
             aria-label={directorySummaryLabel}
             aria-expanded={expanded}

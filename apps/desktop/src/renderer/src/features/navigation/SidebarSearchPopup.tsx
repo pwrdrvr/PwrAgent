@@ -13,10 +13,11 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import {
+  isSubthreadLaunchpadKey,
   threadHasExactPrNumberMatch,
   type NavigationThreadSummary,
 } from "@pwragent/shared";
-import { SearchIcon } from "../../icons";
+import { FolderIcon, SearchIcon } from "../../icons";
 import { getDesktopApi } from "../../lib/desktop-api";
 import { useModalDialog } from "../../lib/useModalDialog";
 import { useNavigationOwnerSearch } from "../../lib/useNavigationOwnerSearch";
@@ -29,11 +30,18 @@ import { threadMatchesQuery } from "../thread-search/thread-match";
 import { AgentThreadChip } from "./AgentThreadChip";
 import { InstanceChip } from "../federation/InstanceGlyph";
 import { PrChip } from "../pr-status/PrChip";
+import type { NavigationDirectoryView } from "../../lib/navigation-loaded-rows";
+import { useNavigationQueryResource } from "../../lib/useNavigationQueryResource";
+import { readRendererFederationTarget } from "../../lib/federation-window";
 
 const MAX_RESULTS = 8;
+type JumpResult = { kind: "project"; directory: NavigationDirectoryView }
+  | { kind: "thread"; thread: NavigationThreadSummary };
 
 type SidebarSearchPopupProps = {
   threads: readonly NavigationThreadSummary[];
+  projects?: readonly NavigationDirectoryView[];
+  onJumpToProject?: (directory: NavigationDirectoryView) => void;
   onJumpToThread: (thread: NavigationThreadSummary) => void;
   /**
    * Selecting a result owned by another instance. Falls back to
@@ -68,7 +76,7 @@ type SidebarSearchPopupProps = {
  * longer needs the sidebar revealed underneath it to be visible at all.
  */
 export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement {
-  const label = props.label ?? "Jump to thread";
+  const label = props.label ?? (props.onJumpToProject ? "Jump to thread or project" : "Jump to thread");
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -87,6 +95,35 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
 
   const trimmed = query.trim();
   const ownerSearch = useNavigationOwnerSearch({ query: trimmed, desktopApi: getDesktopApi() });
+
+  const projectSearch = useNavigationQueryResource({
+    desktopApi: getDesktopApi(),
+    request: trimmed && props.onJumpToProject ? {
+      protocol: 2, consumer: "search", inventory: "owner",
+      federationTarget: readRendererFederationTarget(),
+      query: { kind: "directory-index", filter: trimmed }, pageSize: 100,
+    } : undefined,
+  });
+  const projects = useMemo(() => {
+    if (!trimmed || !props.onJumpToProject) return [];
+    const query = trimmed.toLowerCase();
+    const candidates = new Map((props.projects ?? []).map((directory) => [directory.key, directory]));
+    if (projectSearch.state?.request.query.kind === "directory-index"
+      && projectSearch.state.request.query.filter === trimmed) {
+      for (const directory of projectSearch.state.page?.directories ?? []) candidates.set(directory.key, directory);
+    }
+    const rank = (directory: NavigationDirectoryView): number => {
+      const names = [directory.label, directory.path?.split(/[\\/]/).filter(Boolean).at(-1) ?? ""].map((name) => name.toLowerCase());
+      return names.includes(query) ? 0 : names.some((name) => name.startsWith(query)) ? 1 : 2;
+    };
+    return [...candidates.values()].filter((directory) =>
+      (directory.kind === "directory" || directory.kind === "workspace")
+      && directory.localAvailability !== "unconfigured"
+      && !isSubthreadLaunchpadKey(directory.key)
+      && [directory.label, directory.path ?? ""].some((text) => text.toLowerCase().includes(query)))
+      .sort((left, right) => rank(left) - rank(right) || left.label.localeCompare(right.label))
+      .slice(0, MAX_RESULTS);
+  }, [trimmed, props.projects, props.onJumpToProject, projectSearch.state]);
 
   const results = useMemo(() => {
     if (!trimmed) {
@@ -131,8 +168,11 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
   }, [remoteResults, results]);
 
   const combinedRows = useMemo(
-    () => [...results, ...remoteRows],
-    [results, remoteRows],
+    (): JumpResult[] => [
+      ...projects.map((directory): JumpResult => ({ kind: "project", directory })),
+      ...[...results, ...remoteRows].map((thread): JumpResult => ({ kind: "thread", thread })),
+    ],
+    [projects, results, remoteRows],
   );
 
   useEffect(() => {
@@ -225,9 +265,12 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
     }
     if (event.key === "Enter") {
       event.preventDefault();
-      const thread = combinedRows[activeIndex];
-      if (thread) {
-        jump(thread);
+      const result = combinedRows[activeIndex];
+      if (result?.kind === "project") {
+        props.onJumpToProject?.(result.directory);
+        props.onClose();
+      } else if (result) {
+        jump(result.thread);
       }
     }
   };
@@ -303,13 +346,15 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
     Boolean(trimmed) && remoteSearchAvailable && remoteRows.length > 0;
   const showEmpty =
     Boolean(trimmed)
+    && projects.length === 0
     && results.length === 0
     && remoteRows.length === 0
-    && !remoteLoading;
+    && !remoteLoading
+    && !projectSearch.loading;
   // The listbox is only in the DOM once it has rows, so `aria-controls` has to
   // come and go with it — a dangling idref is an invalid attribute value, not
   // a harmless one.
-  const listVisible = Boolean(trimmed) && (results.length > 0 || showRemoteSection);
+  const listVisible = Boolean(trimmed) && (projects.length > 0 || results.length > 0 || showRemoteSection);
 
   return createPortal(
     <div
@@ -375,9 +420,24 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
             id={listId}
             ref={listRef}
             role="listbox"
-            aria-label="Threads"
+            aria-label={props.onJumpToProject ? "Threads and projects" : "Threads"}
           >
-            {results.map((thread, index) => renderRow(thread, index))}
+            {projects.map((directory, index) => (
+              <li key={`project:${directory.key}`} id={rowId(index)} role="option" aria-selected={index === activeIndex}>
+                <button type="button" tabIndex={-1}
+                  className={`jump-palette__row${index === activeIndex ? " is-active" : ""}`}
+                  onMouseEnter={() => setActiveIndex(index)}
+                  onClick={() => { props.onJumpToProject?.(directory); props.onClose(); }}
+                  title={directory.path}
+                >
+                  <FolderIcon size={14} aria-hidden />
+                  <span className="jump-palette__row-title">{directory.label}</span>
+                  <span className="jump-palette__row-branch">{directory.path}</span>
+                  <span className="jump-palette__row-repo">Project</span>
+                </button>
+              </li>
+            ))}
+            {results.map((thread, index) => renderRow(thread, projects.length + index))}
             {showRemoteSection ? (
               <li
                 aria-hidden="true"
@@ -388,11 +448,11 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
               </li>
             ) : null}
             {remoteRows.map((thread, index) =>
-              renderRow(thread, results.length + index),
+              renderRow(thread, projects.length + results.length + index),
             )}
           </ul>
         ) : showEmpty ? (
-          <p className="jump-palette__empty">No threads match</p>
+          <p className="jump-palette__empty">{props.onJumpToProject ? "No threads or projects match" : "No threads match"}</p>
         ) : null}
         <div className="jump-palette__foot">
           <span>↑↓ navigate</span>
@@ -405,9 +465,12 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
           {ownerSearch.error ? <span className="jump-palette__foot-remote" title={ownerSearch.error} role="status">
             {ownerSearch.error}
           </span> : null}
-          {remoteLoading || ownerSearch.loading ? (
+          {projectSearch.state?.error ? <span className="jump-palette__foot-remote" role="status">
+            Project search unavailable
+          </span> : null}
+          {remoteLoading || ownerSearch.loading || projectSearch.loading ? (
             <span className="jump-palette__foot-remote">
-              {remoteLoading ? "Searching other instances…" : "Searching threads…"}
+              {remoteLoading ? "Searching other instances…" : projectSearch.loading ? "Searching projects…" : "Searching threads…"}
               {remoteTotalPeerCount > 0
                 ? ` ${remoteCompletedPeerCount}/${remoteTotalPeerCount}`
                 : ""}

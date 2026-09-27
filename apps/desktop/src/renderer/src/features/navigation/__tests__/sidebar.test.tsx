@@ -8041,3 +8041,33 @@ describe("Sidebar menus from the keyboard", () => {
     expect(chip).toHaveFocus();
   });
 });
+
+it("opens a project launchpad from the palette and reveals its expanded, focused folder", async () => {
+  const { scrollIntoView, restore } = withMockScrollIntoView();
+  const onOpenLaunchpad = vi.fn(async () => undefined);
+  const onBrowseModeChange = vi.fn();
+  const onThreadJumpOpenChange = vi.fn();
+  const props = {
+    backends, directories, inboxThreads: [sharedThread], loading: false,
+    threads: [sharedThread], onBrowseModeChange, onCreateThread: async () => undefined,
+    onOpenLaunchpad, onSelectThread: () => undefined, onThreadJumpOpenChange,
+  };
+  try {
+    const { rerender } = render(<Sidebar {...props} browseMode="inbox" threadJumpOpen />);
+    const input = screen.getByRole("textbox", { name: "Jump to thread or project" });
+    fireEvent.change(input, { target: { value: "PwrAgent" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onOpenLaunchpad).toHaveBeenCalledWith(expect.objectContaining({ key: directories[0]!.key }));
+    expect(onBrowseModeChange).toHaveBeenCalledWith("directories");
+    expect(onThreadJumpOpenChange).toHaveBeenCalledWith(false);
+    rerender(<Sidebar {...props} browseMode="directories" threadJumpOpen={false}
+      selectedItemKey={`launchpad:${directories[0]!.key}`} />);
+    await waitFor(() => {
+      expect(document.activeElement).toHaveClass("directory-row__summary");
+      expect(document.activeElement).toHaveAttribute("aria-expanded", "true");
+    });
+    expect(scrollIntoView).toHaveBeenCalled();
+  } finally {
+    restore();
+  }
+});

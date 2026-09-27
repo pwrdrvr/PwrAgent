@@ -2994,6 +2994,11 @@ function DesktopAppShell(props: {
             }
             threadJump.closeJump();
           }}
+          onJumpToProject={(directory) => {
+            setSidebarHiddenPersisted(false);
+            setMainView("thread");
+            void navigation.openDirectoryLaunchpad(directory);
+          }}
           onJumpToThread={(thread) => {
             setMainView("thread");
             navigation.selectThread(thread);
