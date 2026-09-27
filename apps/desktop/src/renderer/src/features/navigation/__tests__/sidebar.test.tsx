@@ -8048,7 +8048,9 @@ it("opens a project launchpad from the palette and reveals its expanded, focused
   const onBrowseModeChange = vi.fn();
   const onThreadJumpOpenChange = vi.fn();
   const props = {
-    backends, directories, inboxThreads: [sharedThread], loading: false,
+    backends, directories: [...directories, {
+      ...directories[0]!, key: "directory:/repos/PwrSnap", label: "PwrSnap", path: "/repos/PwrSnap",
+    }], inboxThreads: [sharedThread], loading: false,
     threads: [sharedThread], onBrowseModeChange, onCreateThread: async () => undefined,
     onOpenLaunchpad, onSelectThread: () => undefined, onThreadJumpOpenChange,
   };
@@ -8067,7 +8069,26 @@ it("opens a project launchpad from the palette and reveals its expanded, focused
       expect(document.activeElement).toHaveAttribute("aria-expanded", "true");
     });
     expect(scrollIntoView).toHaveBeenCalledWith({ block: "start" });
-    expect(scrollIntoView.mock.contexts.at(-1)).toBe(document.activeElement);
+    expect(scrollIntoView.mock.contexts.at(-1)).toBe(document.activeElement?.closest(".directory-row"));
+
+    // Visit another project, then return to the already expanded first one.
+    // Its sticky header may be visible while its threads are above the viewport;
+    // the normal-flow section must remain the scroll target on repeated jumps.
+    for (const project of [props.directories[1]!, props.directories[0]!]) {
+      rerender(<Sidebar {...props} browseMode="directories" threadJumpOpen />);
+      const search = screen.getByRole("textbox", { name: "Jump to thread or project" });
+      fireEvent.change(search, { target: { value: project.label } });
+      fireEvent.keyDown(search, { key: "Enter" });
+      scrollIntoView.mockClear();
+      rerender(<Sidebar {...props} browseMode="directories" threadJumpOpen={false}
+        selectedItemKey={`launchpad:${project.key}`} />);
+      await waitFor(() => {
+        expect(document.activeElement).toHaveClass("directory-row__summary");
+        expect(document.activeElement).toHaveTextContent(project.label);
+        expect(document.activeElement).toHaveAttribute("aria-expanded", "true");
+        expect(scrollIntoView.mock.contexts.at(-1)).toBe(document.activeElement?.closest(".directory-row"));
+      });
+    }
   } finally {
     restore();
   }

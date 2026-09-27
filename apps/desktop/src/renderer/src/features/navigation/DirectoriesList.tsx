@@ -926,7 +926,10 @@ export function DirectoriesList(props: DirectoriesListProps) {
     if (revealPagesInFlight) return;
     // Wait until the palette's modal cleanup has restored its prior focus.
     const frame = requestAnimationFrame(() => {
-      header.scrollIntoView?.({ block: "start" });
+      // The header is sticky: its visual top may already be at the viewport
+      // edge while the project's threads are scrolled out above it. Reveal the
+      // section's normal-flow start, then focus without moving the scroll.
+      header.closest(".directory-row")?.scrollIntoView?.({ block: "start" });
       header.focus({ preventScroll: true });
       handledProjectReveal.current = request;
       props.onProjectRevealComplete?.();
