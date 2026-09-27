@@ -81,6 +81,7 @@ import {
   selectVisibleRateLimits,
 } from "../../lib/backend-status-format";
 import { DirectoriesList } from "./DirectoriesList";
+import type { ThreadRowRef } from "./ThreadRow";
 import { RecentsList } from "./RecentsList";
 import { createHoverStableSidebarHydrator } from "./hover-stable-sidebar-snapshot";
 import { useHoverStableSnapshot } from "./useHoverStableSnapshot";
@@ -263,6 +264,7 @@ type SidebarProps = {
   onSelectThread: (thread: NavigationThreadSummary) => void;
   onMarkThreadsSeen?: (threads: NavigationThreadSummary[]) => Promise<void>;
   onMarkDirectoriesSeen?: (directoryKeys: string[]) => Promise<void>;
+  onArchiveDirectories?: (directoryKeys: string[]) => Promise<void>;
   onMarkThreadUnread?: (thread: NavigationThreadSummary) => Promise<void>;
   onArchiveThread?: (
     thread: NavigationThreadSummary,
@@ -441,6 +443,7 @@ export function Sidebar(props: SidebarProps) {
   const selectionAnchorKeyRef = useRef<string | undefined>(
     props.selectedItemKey,
   );
+  const selectionAnchorDirectoryKeyRef = useRef<string | undefined>(undefined);
   const directorySelectionAnchorKeyRef = useRef<string | undefined>(undefined);
   const previousSelectedItemKeyRef = useRef<string | undefined>(
     props.selectedItemKey,
@@ -717,6 +720,10 @@ export function Sidebar(props: SidebarProps) {
     }
 
     previousSelectedItemKeyRef.current = selectedItemKey;
+    // A row click navigates too; keep its occurrence when that selection lands.
+    if (selectionAnchorKeyRef.current !== selectedItemKey) {
+      selectionAnchorDirectoryKeyRef.current = undefined;
+    }
     selectionAnchorKeyRef.current = selectedItemKey;
     directorySelectionAnchorKeyRef.current = undefined;
     setSelectedThreadKeys(
@@ -737,6 +744,7 @@ export function Sidebar(props: SidebarProps) {
     if (browseMode === "directories") {
       return;
     }
+    selectionAnchorDirectoryKeyRef.current = undefined;
     directorySelectionAnchorKeyRef.current = undefined;
     setSelectedDirectoryKeys((current) =>
       current.size === 0 ? current : new Set<string>(),
@@ -750,12 +758,16 @@ export function Sidebar(props: SidebarProps) {
   const selectThreadFromList = useEventCallback((
     thread: NavigationThreadSummary,
     event: ReactMouseEvent<HTMLElement>,
-    selectionOrder: string[],
+    selectionOrder: (string | Pick<ThreadRowRef, "directoryKey" | "threadKey">)[],
+    row?: ThreadRowRef,
   ): void => {
     const threadKey = threadSummaryIdentityKey(thread);
+    const occurrences = selectionOrder.map((entry) => typeof entry === "string"
+      ? { threadKey: entry, directoryKey: undefined } : entry);
 
     if (!event.metaKey && !event.shiftKey) {
       selectionAnchorKeyRef.current = threadKey;
+      selectionAnchorDirectoryKeyRef.current = row?.directoryKey;
       setSelectedThreadKeys(new Set([threadKey]));
       props.onSelectThread(thread);
       return;
@@ -763,10 +775,13 @@ export function Sidebar(props: SidebarProps) {
 
     if (event.shiftKey) {
       const anchorKey = selectionAnchorKeyRef.current;
-      const anchorIndex = anchorKey ? selectionOrder.indexOf(anchorKey) : -1;
-      const targetIndex = selectionOrder.indexOf(threadKey);
+      const anchorIndex = occurrences.findIndex((entry) => entry.threadKey === anchorKey
+        && entry.directoryKey === selectionAnchorDirectoryKeyRef.current);
+      const targetIndex = occurrences.findIndex((entry) => entry.threadKey === threadKey
+        && entry.directoryKey === row?.directoryKey);
       if (anchorIndex < 0 || targetIndex < 0) {
         selectionAnchorKeyRef.current = threadKey;
+        selectionAnchorDirectoryKeyRef.current = row?.directoryKey;
         setSelectedThreadKeys((current) => {
           const next = event.metaKey ? new Set(current) : new Set<string>();
           next.add(threadKey);
@@ -777,11 +792,12 @@ export function Sidebar(props: SidebarProps) {
 
       const rangeStart = Math.min(anchorIndex, targetIndex);
       const rangeEnd = Math.max(anchorIndex, targetIndex);
-      const range = selectionOrder.slice(rangeStart, rangeEnd + 1);
+      // Resolve row occurrences first; only the final selected identities deduplicate.
+      const range = occurrences.slice(rangeStart, rangeEnd + 1);
       setSelectedThreadKeys((current) => {
         const next = event.metaKey ? new Set(current) : new Set<string>();
-        for (const key of range) {
-          next.add(key);
+        for (const entry of range) {
+          next.add(entry.threadKey);
         }
         return next;
       });
@@ -789,6 +805,7 @@ export function Sidebar(props: SidebarProps) {
     }
 
     selectionAnchorKeyRef.current = threadKey;
+    selectionAnchorDirectoryKeyRef.current = row?.directoryKey;
     setSelectedThreadKeys((current) => {
       const next = new Set(current);
       if (next.has(threadKey)) {
@@ -1154,6 +1171,7 @@ export function Sidebar(props: SidebarProps) {
     const threadKey = threadSummaryIdentityKey(thread);
     if (!selectedThreadKeys.has(threadKey)) {
       selectionAnchorKeyRef.current = threadKey;
+      selectionAnchorDirectoryKeyRef.current = undefined;
       setSelectedThreadKeys(new Set([threadKey]));
       return [thread];
     }
@@ -1810,6 +1828,8 @@ export function Sidebar(props: SidebarProps) {
   const directoryContextMenuIsBulk =
     directoryContextMenuDirectories.length > 1;
   const directoryMenuCanMarkRead = Boolean(props.onMarkDirectoriesSeen);
+  const directoryMenuCanArchive = Boolean(props.onArchiveDirectories
+    && directoryContextMenuDirectories.some((directory) => directory.kind === "directory" || directory.kind === "workspace"));
   const directoryMenuCanPin = Boolean(
     !directoryContextMenuIsBulk
       && directoryContextMenu
@@ -2163,7 +2183,7 @@ export function Sidebar(props: SidebarProps) {
                 hoverReleasedListHandlers.setDirectoryThreadsCollapsed
               }
               onOpenDirectoryContextMenu={
-                props.onSetDirectoryPin || props.onMarkDirectoriesSeen || props.onMarkThreadsSeen
+                props.onSetDirectoryPin || props.onMarkDirectoriesSeen || props.onMarkThreadsSeen || props.onArchiveDirectories
                   ? openDirectoryContextMenu
                   : undefined
               }
@@ -2844,6 +2864,26 @@ export function Sidebar(props: SidebarProps) {
                   </button>
                 </>
               ) : null}
+            </div>
+          ) : null}
+          {directoryMenuCanArchive ? (
+            <div className="thread-context-menu__section">
+              <button
+                role="menuitem"
+                type="button"
+                onClick={() => {
+                  const keys = directoryContextMenuDirectories
+                    .filter((directory) => directory.kind === "directory" || directory.kind === "workspace")
+                    .map((directory) => directory.key);
+                  setDirectoryContextMenu(undefined);
+                  hoverStableSnapshot.release();
+                  void props.onArchiveDirectories?.(keys);
+                }}
+              >
+                {directoryContextMenuDirectories.some((directory) => directory.kind === "directory")
+                  ? `Archive Threads and Remove ${directoryContextMenuIsBulk ? "Projects" : "Project"}`
+                  : "Archive Threads"}
+              </button>
             </div>
           ) : null}
           {directoryMenuCanRemove

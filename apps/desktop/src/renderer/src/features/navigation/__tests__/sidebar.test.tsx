@@ -4403,6 +4403,95 @@ describe("Sidebar", () => {
     expect(secondButton).toHaveAttribute("aria-pressed", "true");
   });
 
+  it("Shift-selects visible threads across expanded projects", () => {
+    const secondThread = { ...sharedThread, id: "across-project", title: "Across project" };
+    const thirdThread = { ...sharedThread, id: "last-project", title: "Last project" };
+    const projects = [sharedThread, secondThread, thirdThread].map((thread, index) => ({
+      ...directories[0]!, key: `directory:/project-${index}`, label: `Project ${index}`,
+      path: `/project-${index}`, threadKeys: [`codex:${thread.id}`],
+    }));
+    render(<Sidebar backends={backends} browseMode="directories" directories={projects}
+      inboxThreads={[]} threads={[sharedThread, secondThread, thirdThread]} loading={false}
+      onBrowseModeChange={() => undefined} onCreateThread={async () => undefined}
+      onOpenLaunchpad={async () => undefined}
+      onSelectThread={() => undefined} />);
+    for (let index = 0; index < 3; index++) {
+      fireEvent.click(screen.getByRole("button", { name: new RegExp(`^Project ${index}(,|$)`) }));
+    }
+    const first = screen.getByRole("button", { name: sharedThread.title });
+    const middle = screen.getByRole("button", { name: secondThread.title });
+    const last = screen.getByRole("button", { name: thirdThread.title });
+    fireEvent.click(first);
+    fireEvent.click(last, { shiftKey: true });
+    for (const button of [first, middle, last]) expect(button).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it.each([false, true])("keeps shared-thread ranges in the clicked project (shared anchor: %s)", (sharedAnchor) => {
+    const x = { ...sharedThread, id: "only-a", title: "Only A" };
+    const y = { ...sharedThread, id: "only-b", title: "Only B" };
+    const projects = [
+      { ...directories[0]!, key: "directory:/a", label: "Project A", path: "/a",
+        pinnedRank: "1024", threadKeys: ["codex:thread-1", "codex:only-a"] },
+      { ...directories[0]!, key: "directory:/b", label: "Project B", path: "/b",
+        pinnedRank: "2048", threadKeys: ["codex:only-b", "codex:thread-1"] },
+    ];
+    const onArchiveThread = vi.fn(async (_thread: NavigationThreadSummary) => undefined);
+    const sidebar = (selectedItemKey?: string) => <Sidebar backends={backends}
+      browseMode="directories" directories={projects} inboxThreads={[]} threads={[y, sharedThread, x]}
+      selectedItemKey={selectedItemKey} loading={false} onArchiveThread={onArchiveThread}
+      onBrowseModeChange={() => undefined} onCreateThread={async () => undefined}
+      onOpenLaunchpad={async () => undefined} onSelectThread={() => undefined} />;
+    const { rerender } = render(sidebar());
+    for (const label of ["Project A", "Project B"]) {
+      fireEvent.click(screen.getByRole("button", { name: new RegExp(`^${label}(,|$)`) }));
+    }
+    const sharedRows = screen.getAllByRole("button", { name: sharedThread.title });
+    const yRow = screen.getByRole("button", { name: y.title });
+    const xRow = screen.getByRole("button", { name: x.title });
+    fireEvent.click(sharedAnchor ? sharedRows[1]! : yRow);
+    // The navigation update after a plain click must preserve the clicked occurrence.
+    rerender(sidebar(sharedAnchor ? "codex:thread-1" : "codex:only-b"));
+    fireEvent.click(sharedAnchor ? yRow : sharedRows[1]!, { shiftKey: true });
+    expect(yRow).toHaveAttribute("aria-pressed", "true");
+    expect(xRow).toHaveAttribute("aria-pressed", "false");
+    for (const row of sharedRows) expect(row).toHaveAttribute("aria-pressed", "true");
+    fireEvent.contextMenu(yRow);
+    fireEvent.click(screen.getByRole("menuitem", { name: "Archive 2 Threads" }));
+    expect(onArchiveThread.mock.calls.map(([thread]) => (thread as NavigationThreadSummary).id))
+      .toEqual([y.id, sharedThread.id]);
+
+    // A range between two occurrences of the same thread includes the intervening rows,
+    // but each thread is archived only once.
+    onArchiveThread.mockClear();
+    fireEvent.click(sharedRows[0]!);
+    fireEvent.click(sharedRows[1]!, { shiftKey: true });
+    expect(xRow).toHaveAttribute("aria-pressed", "true");
+    expect(yRow).toHaveAttribute("aria-pressed", "true");
+    fireEvent.contextMenu(yRow);
+    fireEvent.click(screen.getByRole("menuitem", { name: "Archive 3 Threads" }));
+    expect(onArchiveThread.mock.calls.map(([thread]) => (thread as NavigationThreadSummary).id))
+      .toEqual([y.id, sharedThread.id, x.id]);
+  });
+
+  it("archives selected projects through complete owner membership", () => {
+    const onArchiveDirectories = vi.fn(async () => undefined);
+    const projects = [0, 1].map((index) => ({ ...directories[0]!,
+      key: `directory:/project-${index}`, label: `Project ${index}`, path: `/project-${index}`, threadKeys: [],
+    }));
+    render(<Sidebar backends={backends} browseMode="directories" directories={projects}
+      inboxThreads={[]} threads={[]} loading={false} onArchiveDirectories={onArchiveDirectories}
+      onBrowseModeChange={() => undefined} onCreateThread={async () => undefined}
+      onOpenLaunchpad={async () => undefined}
+      onSelectThread={() => undefined} />);
+    const first = screen.getByRole("button", { name: "Project 0" });
+    const last = screen.getByRole("button", { name: "Project 1" });
+    fireEvent.click(first, { metaKey: true });
+    fireEvent.click(last, { shiftKey: true });
+    fireEvent.contextMenu(last);
+    fireEvent.click(screen.getByRole("menuitem", { name: "Archive Threads and Remove Projects" }));
+    expect(onArchiveDirectories).toHaveBeenCalledWith(projects.map((project) => project.key));
+  });
+
   it("marks unread threads read across a Shift-selected range of collapsed directories", () => {
     const onMarkThreadsSeen = vi.fn(async () => undefined);
     const onSetDirectoryPin = vi.fn(async () => undefined);

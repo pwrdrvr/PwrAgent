@@ -391,6 +391,7 @@ function authenticateScheduledTurnOrigin<
 export const FEDERATION_BACKEND_METHODS = {
   getNavigationQueryPage: "backend.getNavigationQueryPage",
   removeNavigationDirectory: "backend.removeNavigationDirectory",
+  archiveNavigationDirectory: "backend.archiveNavigationDirectory",
   markNavigationDirectorySeen: "backend.markNavigationDirectorySeen",
   releaseNavigationAttentionView: "backend.releaseNavigationAttentionView",
   getNavigationLaunchpadConfig: "backend.getNavigationLaunchpadConfig",
@@ -509,6 +510,7 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
 > = {
   [FEDERATION_BACKEND_METHODS.getNavigationQueryPage]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.removeNavigationDirectory]: "thread_navigation",
+  [FEDERATION_BACKEND_METHODS.archiveNavigationDirectory]: "turn_control",
   [FEDERATION_BACKEND_METHODS.markNavigationDirectorySeen]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.releaseNavigationAttentionView]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.getNavigationLaunchpadConfig]: "thread_detail",
@@ -919,7 +921,15 @@ export function registerFederationBackendHandlers(params: {
   }
   if (params.backend.removeNavigationDirectory) {
     params.router.registerHandler(FEDERATION_BACKEND_METHODS.removeNavigationDirectory,
-      async (envelope) => params.backend.removeNavigationDirectory!(envelope.params as RemoveNavigationDirectoryRequest));
+      async (envelope) => {
+        const request = envelope.params as RemoveNavigationDirectoryRequest;
+        if (request.archiveThreads) throw new Error("Archiving projects requires thread control.");
+        return params.backend.removeNavigationDirectory!(request);
+      });
+    params.router.registerHandler(FEDERATION_BACKEND_METHODS.archiveNavigationDirectory,
+      async (envelope) => params.backend.removeNavigationDirectory!({
+        ...envelope.params as RemoveNavigationDirectoryRequest, archiveThreads: true, federationTarget: undefined,
+      }));
   }
   if (params.backend.getNavigationLaunchpadConfig) {
     params.router.registerHandler(
@@ -1803,7 +1813,8 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
 
   async removeNavigationDirectory(request: RemoveNavigationDirectoryRequest, rpcOptions?: FederationRpcRequestOptions): Promise<RemoveNavigationDirectoryResponse> {
     return this.rpc.request<RemoveNavigationDirectoryResponse>({
-      method: FEDERATION_BACKEND_METHODS.removeNavigationDirectory, params: request, ...rpcOptions,
+      method: request.archiveThreads ? FEDERATION_BACKEND_METHODS.archiveNavigationDirectory
+        : FEDERATION_BACKEND_METHODS.removeNavigationDirectory, params: request, ...rpcOptions,
     });
   }
 

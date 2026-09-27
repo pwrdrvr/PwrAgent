@@ -136,7 +136,8 @@ type DirectoriesListProps = {
   onSelectThread: (
     thread: NavigationThreadSummary,
     event: MouseEvent<HTMLElement>,
-    selectionOrder: string[],
+    selectionOrder: Pick<ThreadRowRef, "directoryKey" | "threadKey">[],
+    row: ThreadRowRef,
   ) => void;
   onSelectDirectory?: (
     directory: NavigationDirectorySummary,
@@ -1192,9 +1193,12 @@ export function DirectoriesList(props: DirectoriesListProps) {
       event: MouseEvent<HTMLElement>,
       row: ThreadRowRef,
     ) => {
-      // An unknown directory still selects; only shift-ranging needs the
-      // order, and an empty one degrades to a plain single selection.
-      props.onSelectThread(thread, event, rowContext(row)?.selectionOrder ?? []);
+      // The map follows rendered project order and contains only visible rows.
+      const selectionOrder = [...rowContextByDirectoryKey.values()]
+        .flatMap((context) => context.selectionOrder.map((threadKey) => ({
+          directoryKey: context.directory.key, threadKey,
+        })));
+      props.onSelectThread(thread, event, selectionOrder, row);
     },
   );
   const pointerDownThread = useEventCallback(
@@ -1485,7 +1489,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
     const selectionOrder = [
       ...directoryPinnedThreads,
       ...selectedUnpinnedThreads,
-      ...unpinnedThreads,
+      ...(directoryThreadsCollapsed ? [] : unpinnedThreads),
     ].flatMap((thread) => {
       const key = threadSummaryIdentityKey(thread);
       return [

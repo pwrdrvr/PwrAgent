@@ -9330,6 +9330,26 @@ describe("useThreadNavigation", () => {
     expect(result.current.launchpadError).toBeUndefined();
   });
 
+  it("archives projects by owner membership and reports partial failures", async () => {
+    const removeNavigationDirectory = vi.fn(async ({ directoryKey }: { directoryKey: string }) => {
+      if (directoryKey === "directory:/failed") throw new Error("Thread is still running");
+      return { directoryKey };
+    });
+    const desktopApi: DesktopApi = { removeNavigationDirectory, readPopulation: vi.fn(async () => ({
+      backend: "all" as const, fetchedAt: 1, unchanged: false, inboxThreadKeys: [], threads: [],
+      directories: [], launchpadDefaults: { backend: "codex" as const, executionMode: "default" as const },
+    })), onAgentEvent: () => () => undefined };
+    const onThreadActionError = vi.fn();
+    const { result } = renderHook(() => useThreadNavigation(desktopApi, { onThreadActionError }));
+    await act(async () => {
+      await result.current.archiveDirectories(["directory:/first", "directory:/failed", "directory:/last", "directory:/first"]);
+    });
+    expect(removeNavigationDirectory.mock.calls.map(([request]) => request.directoryKey))
+      .toEqual(["directory:/first", "directory:/failed", "directory:/last"]);
+    expect(removeNavigationDirectory).toHaveBeenCalledWith({ directoryKey: "directory:/last", archiveThreads: true, federationTarget: undefined });
+    expect(latestThreadActionError(onThreadActionError, "archive-thread")).toContain("/failed: Thread is still running");
+  });
+
   it("removes an empty registered directory and deletes its overlay row", async () => {
     const registeredLaunchpad = {
       directoryKey: "directory:/repo/app",

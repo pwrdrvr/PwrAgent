@@ -2082,7 +2082,7 @@ class DesktopAppServerService {
     if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
       return getDesktopFederationRuntime().remoteRemoveNavigationDirectory(request.federationTarget, request);
     }
-    return removeLocalNavigationDirectory(request);
+    return removeLocalNavigationDirectory(request, (member) => this.archiveThread(member));
   }
 
   async getNavigationLaunchpadConfig(
