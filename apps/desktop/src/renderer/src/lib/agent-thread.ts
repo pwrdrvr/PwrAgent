@@ -8,11 +8,16 @@ export const AGENT_THREAD_CAPABILITIES =
   "Agent threads have elevated capabilities to manage PwrAgent threads and attach them to messaging. Ordinary threads do not.";
 
 export const CODEX_AGENT_THREAD_CHANGE_NOTE =
-  "Change Agent status while the thread is idle. Existing Codex threads require a runtime that supports tool refresh.";
+  "Changes made during a turn are queued. Existing Codex threads require a runtime that supports tool refresh.";
 
 export function createDesktopAgentThread(): {
   name: string;
   instructions: string;
 } {
   return { ...DEFAULT_DESKTOP_AGENT_THREAD };
+}
+
+export function formatAgentChangeStatus(change: { enabled: boolean; error?: string }): string {
+  if (change.error) return `Agent change failed: ${change.error}`;
+  return `${change.enabled ? "Agent promotion" : "Agent removal"} queued until the current turn finishes.`;
 }

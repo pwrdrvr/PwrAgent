@@ -2797,6 +2797,22 @@ describe("useThreadNavigation", () => {
     expect(result.current.threads.find((thread) => thread.federation)?.agent).toBeUndefined();
   });
 
+  it("keeps queued Agent authority separate and limits the pending status to its owner", async () => {
+    const target = { scope: "remote" as const, instanceId: "owner" };
+    const local = { id: "collision", title: "Local", titleSource: "explicit" as const, source: "codex" as const, linkedDirectories: [], inbox: { inInbox: false } };
+    const remote = { ...local, title: "Remote", federation: { instanceLabel: "Owner", ref: { backend: "codex" as const, threadId: "collision", target } } };
+    const agentChange = { enabled: true };
+    const setThreadAgent = vi.fn(async () => ({ backend: "codex" as const, threadId: "collision", agentChange }));
+    const readPopulation = vi.fn(async () => ({ backend: "all" as const, fetchedAt: 1_000, unchanged: false, inboxThreadKeys: [], threads: [local, remote], directories: [], launchpadDefaults: { backend: "codex" as const, executionMode: "default" as const } }));
+    const desktopApi: DesktopApi = { readPopulation, setThreadAgent, onAgentEvent: () => () => undefined };
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+    await waitFor(() => expect(result.current.threads).toHaveLength(2));
+    await act(async () => { await result.current.setThreadAgent(remote, { name: "Fixture manager" }); });
+    expect(result.current.threads.find((thread) => !thread.federation)?.agentChange).toBeUndefined();
+    expect(result.current.threads.find((thread) => thread.federation)?.agentChange).toEqual(agentChange);
+    expect(result.current.threads.every((thread) => !thread.agent)).toBe(true);
+  });
+
   it("pins a main-window remote row through the viewer-owned local pin API", async () => {
     const federationTarget = {
       scope: "remote" as const,

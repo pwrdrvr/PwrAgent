@@ -135,6 +135,7 @@ import {
   AGENT_THREAD_CAPABILITIES,
   CODEX_AGENT_THREAD_CHANGE_NOTE,
   createDesktopAgentThread,
+  formatAgentChangeStatus,
 } from "../../lib/agent-thread";
 import {
   usePullRequestLinks,
@@ -9198,7 +9199,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         backend: thread.source,
         federationTarget: thread.federation?.ref.target ?? rendererFederationTarget,
         threadId: thread.id,
-        agent: agentThread ? createDesktopAgentThread() : null,
+        agent: agentThread ? (thread.agent ?? createDesktopAgentThread()) : null,
       });
       await props.onRefreshNavigation?.();
     } catch (error) {
@@ -12763,7 +12764,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
             </ReferencePicker>
           ) : null}
           <ComposerThreadOptionsMenu
-            agentThread={Boolean(props.launchpad?.agent ?? props.thread?.agent)}
+            agentThread={props.thread?.agentChange && !props.thread.agentChange.error
+              ? props.thread.agentChange.enabled
+              : Boolean(props.launchpad?.agent ?? props.thread?.agent)}
             disabled={launchpadSubmitting || agentThreadSaving}
             existingCodexThread={
               props.thread !== undefined &&
@@ -12839,6 +12842,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         />
       ) : null}
       {sendError && !isReviewComposerOpen ? <p className="composer__meta composer__meta--error" role="alert">{sendError}</p> : null}
+      {props.thread?.agentChange ? (
+        <p className="composer__meta" role={props.thread.agentChange.error ? "alert" : "status"}>
+          {formatAgentChangeStatus(props.thread.agentChange)}
+        </p>
+      ) : null}
       {agentThreadError ? (
         <p className="composer__meta composer__meta--error" role="alert">
           {agentThreadError}

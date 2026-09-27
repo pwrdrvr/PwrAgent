@@ -1210,6 +1210,7 @@ function updateThreadAgentInLoadedRows(
     federationTarget?: FederationTarget;
     threadId: string;
     agent?: ThreadAgentMetadata;
+    agentChange?: NavigationThreadSummary["agentChange"];
   },
 ): NavigationLoadedRows | undefined {
   if (!snapshot) {
@@ -1229,11 +1230,12 @@ function updateThreadAgentInLoadedRows(
     if (threadSummaryIdentityKey(thread) !== threadKey) {
       return thread;
     }
-    if (threadAgentsEqual(thread.agent, params.agent)) {
+    if (threadAgentsEqual(thread.agent, params.agent)
+      && JSON.stringify(thread.agentChange) === JSON.stringify(params.agentChange)) {
       return thread;
     }
     changed = true;
-    return { ...thread, agent: params.agent };
+    return { ...thread, agent: params.agent, agentChange: params.agentChange };
   });
 
   return changed ? { ...snapshot, threadRows: indexLoadedThreadRows(threads) } : snapshot;
@@ -7683,6 +7685,7 @@ export function useThreadNavigation(
             federationTarget,
             threadId: result.threadId,
             agent: result.agent,
+            agentChange: result.agentChange,
           }),
         }));
       } catch {

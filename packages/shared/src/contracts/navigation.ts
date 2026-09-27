@@ -88,6 +88,12 @@ export type ThreadInboxState = {
 
 export const AGENT_PERSONA_INSTRUCTIONS_LINE_GUIDANCE = 200;
 
+/** A requested designation is not authority until its runtime refresh succeeds. */
+export type ThreadAgentChangeStatus = {
+  enabled: boolean;
+  error?: string;
+};
+
 export type ThreadAgentMetadata = {
   name: string;
   instructions?: string;
@@ -151,6 +157,7 @@ export type NavigationThreadSummary = AppServerThreadSummary & {
    * to act as a personal Agent surface.
    */
   agent?: ThreadAgentMetadata;
+  agentChange?: ThreadAgentChangeStatus;
   /**
    * Per-thread Token Miser override. `true`/`false` force the gate on or off
    * for this thread regardless of the global setting; absent means follow the
@@ -1680,6 +1687,7 @@ export type NavigationRow = {
   messagingBindingsTruncated?: boolean;
   automationSummary?: AutomationThreadSummary;
   agent?: NavigationRowAgent;
+  agentChange?: ThreadAgentChangeStatus;
   executionMode?: ThreadExecutionMode;
   model?: string;
   serviceTier?: string;
@@ -2161,6 +2169,7 @@ export type SetThreadAgentResponse = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
   agent?: ThreadAgentMetadata;
+  agentChange?: ThreadAgentChangeStatus;
 };
 
 export type SetThreadTokenMiserRequest = {
@@ -2557,6 +2566,11 @@ export type ThreadOverlayState = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
   agent?: ThreadAgentMetadata;
+  queuedAgentChange?: {
+    agent: NavigationLaunchpadAgent | null;
+    requestedAt: number;
+    error?: string;
+  };
   /**
    * Per-thread Token Miser override. `true`/`false` force the gate on or off
    * for this thread regardless of the global setting; absent means follow the

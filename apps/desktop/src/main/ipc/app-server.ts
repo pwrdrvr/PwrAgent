@@ -1,3 +1,4 @@
+import { summarizeThreadAgentChange } from "@pwragent/shared";
 import { isDeepStrictEqual } from "node:util";
 import { RemoteNavigationPageBaselines } from "../federation/remote-navigation-page-baselines";
 import { setBundledGitLfsAdvisory } from "../bundled-git-lfs-advisory";
@@ -6402,6 +6403,7 @@ class DesktopAppServerService {
       backend,
       threadId: request.threadId,
       agent: overlay.agent,
+      agentChange: summarizeThreadAgentChange(overlay.queuedAgentChange),
     };
   }
 

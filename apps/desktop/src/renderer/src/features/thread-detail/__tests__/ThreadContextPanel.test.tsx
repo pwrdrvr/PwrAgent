@@ -4479,12 +4479,32 @@ describe("ThreadContextPanel", () => {
 
   it("keeps an ordinary Codex thread unchanged when promotion fails", async () => {
     const onRefreshNavigation = vi.fn(async () => undefined);
-    const setThreadAgent = vi.fn(async () => { throw new Error("Wait for the current turn to finish."); });
+    const setThreadAgent = vi.fn(async () => { throw new Error("Fixture runtime refresh failed."); });
     renderPanel({ desktopApi: { setThreadAgent }, pinned: true, onRefreshNavigation });
     fireEvent.click(screen.getByRole("button", { name: "Mark as Agent" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("Wait for the current turn");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Fixture runtime refresh failed");
     expect(screen.getByRole("button", { name: "Mark as Agent" })).toBeEnabled();
     expect(onRefreshNavigation).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])("shows a queued Agent change and cancels with the applied designation (Agent: %s)", async (enabled) => {
+    const setThreadAgent = vi.fn();
+    const agent = enabled ? { ...DEFAULT_DESKTOP_AGENT_THREAD, name: "Custom fixture manager", instructionLineCount: 1, instructionsTooLong: false, updatedAt: 1 } : undefined;
+    renderPanel({ pinned: true, desktopApi: { setThreadAgent }, thread: {
+      ...baseThread, agent, agentChange: { enabled: !enabled },
+    } });
+    expect(screen.getByRole("status")).toHaveTextContent("queued until the current turn finishes");
+    expect(screen.queryByRole("button", { name: "Mark as Agent" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(setThreadAgent).toHaveBeenCalledWith({ backend: baseThread.source, threadId: baseThread.id, agent: agent ?? null }));
+  });
+
+  it("shows a failed queued change while retaining promotion controls", () => {
+    renderPanel({ pinned: true, desktopApi: { setThreadAgent: vi.fn() }, thread: {
+      ...baseThread, agentChange: { enabled: true, error: "Fixture refresh failed" },
+    } });
+    expect(screen.getByRole("alert")).toHaveTextContent("Agent change failed: Fixture refresh failed");
+    expect(screen.getByRole("button", { name: "Mark as Agent" })).toBeEnabled();
   });
 
   it("offers promotion for existing Codex threads", () => {

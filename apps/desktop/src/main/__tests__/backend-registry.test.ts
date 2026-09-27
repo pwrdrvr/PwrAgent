@@ -1146,7 +1146,18 @@ function createOverlayStoreMock(params?: {
       const next = {
         ...current,
         agent: settings.agent ?? undefined,
+        queuedAgentChange: undefined,
       } as ThreadOverlayState;
+      overlays.set(key, next);
+      return next;
+    },
+    setQueuedThreadAgentChange: async (settings: {
+      backend: AppServerBackendKind;
+      threadId: string;
+      change: ThreadOverlayState["queuedAgentChange"];
+    }) => {
+      const key = `${settings.backend}:${settings.threadId}`;
+      const next = { ...(overlays.get(key) ?? { backend: settings.backend, threadId: settings.threadId, extraLinkedDirectories: [] }), queuedAgentChange: settings.change };
       overlays.set(key, next);
       return next;
     },
@@ -4427,9 +4438,12 @@ describe("DesktopBackendRegistry", () => {
         await start();
         expect(await codexClient.emitRequest(call)).toMatchObject({ success: false });
         expect(dispatch).not.toHaveBeenCalled();
-        await emitCompletedTurn(registry, "codex", identity.threadId, "turn-attach");
         await registry.setThreadAgent({ ...identity, agent });
-        expect(await registry.getThreadAgentMetadata(identity)).toEqual(agent);
+        expect(await codexClient.emitRequest(call)).toMatchObject({ success: false });
+        expect(dispatch).not.toHaveBeenCalled();
+        expect(codexClient.refreshThreadTools).not.toHaveBeenCalled();
+        await emitCompletedTurn(registry, "codex", identity.threadId, "turn-attach");
+        await vi.waitFor(async () => expect(await registry.getThreadAgentMetadata(identity)).toEqual(agent));
         const tools = pwragentDynamicTools(codexClient.refreshThreadTools.mock.calls[0][0].dynamicTools);
         expect(tools.some((tool) => tool.name === "attach_thread_here")).toBe(true);
         expect(tools.some((tool) => tool.name === "tool_search")).toBe(discovery);
@@ -4438,11 +4452,10 @@ describe("DesktopBackendRegistry", () => {
         await start();
         expect(await codexClient.emitRequest(call)).toMatchObject({ success: true });
         expect(dispatch).toHaveBeenCalledOnce();
-        await expect(registry.setThreadAgent({ ...identity, agent: null })).rejects.toThrow("current turn");
+        expect(await registry.setThreadAgent({ ...identity, agent: null })).toMatchObject({ agent, queuedAgentChange: { agent: null } });
         expect(await registry.getThreadAgentMetadata(identity)).toEqual(agent);
         await emitCompletedTurn(registry, "codex", identity.threadId, "turn-attach");
-        await registry.setThreadAgent({ ...identity, agent: null });
-        expect(await registry.getThreadAgentMetadata(identity)).toBeUndefined();
+        await vi.waitFor(async () => expect(await registry.getThreadAgentMetadata(identity)).toBeUndefined());
         await start();
         expect(await codexClient.emitRequest(call)).toMatchObject({ success: false });
         expect(dispatch).toHaveBeenCalledOnce();
@@ -4458,6 +4471,63 @@ describe("DesktopBackendRegistry", () => {
       }
     });
 
+    it("queues promotion without granting authority, deduplicates, and allows cancellation", async () => {
+      const overlayStore = createOverlayStoreMock();
+      const codexClient = new MockBackendClient({ threads: [], serverCapabilities: capabilities });
+      const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+      const save = vi.spyOn(overlayStore, "setQueuedThreadAgentChange");
+      try {
+        await registry.publishLocalEvent({ backend: "codex", notification: { method: "turn/started", params: { threadId: identity.threadId, turnId: "turn-active", turn: { id: "turn-active" } } } });
+        expect(await registry.setThreadAgent({ ...identity, agent })).toMatchObject({ queuedAgentChange: { agent } });
+        expect(await registry.getThreadAgentMetadata(identity)).toBeUndefined();
+        expect(codexClient.refreshThreadTools).not.toHaveBeenCalled();
+        await registry.setThreadAgent({ ...identity, agent });
+        expect(save).toHaveBeenCalledOnce();
+        await registry.setThreadAgent({ ...identity, agent: null });
+        expect((await overlayStore.getThreadOverlayState(identity))?.queuedAgentChange).toBeUndefined();
+        await emitCompletedTurn(registry, "codex", identity.threadId, "turn-active");
+        expect(codexClient.refreshThreadTools).not.toHaveBeenCalled();
+        expect(save).toHaveBeenCalledTimes(2);
+      } finally { await registry.close(); }
+    });
+
+    it("restores a queued promotion and applies it before the next turn", async () => {
+      const overlayStore = createOverlayStoreMock();
+      const original = new DesktopBackendRegistry({ codexClient: new MockBackendClient({ threads: [], serverCapabilities: capabilities }), overlayStore });
+      await original.publishLocalEvent({ backend: "codex", notification: { method: "turn/started", params: { threadId: identity.threadId, turnId: "turn-active", turn: { id: "turn-active" } } } });
+      await original.setThreadAgent({ ...identity, agent });
+      await original.close();
+      const codexClient = new MockBackendClient({ threads: [], serverCapabilities: capabilities });
+      const reloaded = new DesktopBackendRegistry({ codexClient, overlayStore });
+      try {
+        await reloaded.startTurn({ ...identity, input: [{ type: "text", text: "Fixture" }] });
+        expect(codexClient.refreshThreadTools).toHaveBeenCalledOnce();
+        expect(await reloaded.getThreadAgentMetadata(identity)).toEqual(agent);
+        expect((await overlayStore.getThreadOverlayState(identity))?.queuedAgentChange).toBeUndefined();
+        expect(codexClient.startTurnCalls).toHaveLength(1);
+      } finally { await reloaded.close(); }
+    });
+
+    it("keeps failed queued changes visible without automatic retries and accepts an explicit retry", async () => {
+      const overlayStore = createOverlayStoreMock();
+      const codexClient = new MockBackendClient({ threads: [], serverCapabilities: capabilities });
+      const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+      try {
+        await registry.publishLocalEvent({ backend: "codex", notification: { method: "turn/started", params: { threadId: identity.threadId, turnId: "turn-active", turn: { id: "turn-active" } } } });
+        await registry.setThreadAgent({ ...identity, agent });
+        codexClient.refreshThreadTools.mockRejectedValueOnce(new Error("fixture refresh failed"));
+        await emitCompletedTurn(registry, "codex", identity.threadId, "turn-active");
+        await vi.waitFor(async () => expect((await overlayStore.getThreadOverlayState(identity))?.queuedAgentChange?.error).toBe("fixture refresh failed"));
+        expect(await registry.getThreadAgentMetadata(identity)).toBeUndefined();
+        await registry.startTurn({ ...identity, input: [{ type: "text", text: "Fixture" }] });
+        expect(codexClient.refreshThreadTools).toHaveBeenCalledOnce();
+        await emitCompletedTurn(registry, "codex", identity.threadId);
+        await registry.setThreadAgent({ ...identity, agent });
+        expect(await registry.getThreadAgentMetadata(identity)).toEqual(agent);
+        expect((await overlayStore.getThreadOverlayState(identity))?.queuedAgentChange).toBeUndefined();
+      } finally { await registry.close(); }
+    });
+
     it("rejects unsupported runtimes without saving", async () => {
       const codexClient = new MockBackendClient({ threads: [], serverCapabilities: {} });
       const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
@@ -4465,6 +4535,8 @@ describe("DesktopBackendRegistry", () => {
         await expect(registry.setThreadAgent({ ...identity, agent })).rejects.toThrow("Update to a supported");
         expect(await registry.getThreadAgentMetadata(identity)).toBeUndefined();
         expect(codexClient.refreshThreadTools).not.toHaveBeenCalled();
+        await registry.publishLocalEvent({ backend: "codex", notification: { method: "turn/started", params: { threadId: identity.threadId, turnId: "turn-active", turn: { id: "turn-active" } } } });
+        await expect(registry.setThreadAgent({ ...identity, agent })).rejects.toThrow("Update to a supported");
       } finally { await registry.close(); }
     });
 
@@ -4483,7 +4555,7 @@ describe("DesktopBackendRegistry", () => {
       } finally { await registry.close(); }
     });
 
-    it("blocks concurrent starts and toggles until the runtime transition completes", async () => {
+    it("blocks concurrent starts until the runtime transition completes", async () => {
       const codexClient = new MockBackendClient({ threads: [], serverCapabilities: capabilities });
       let release!: () => void;
       codexClient.refreshThreadTools.mockImplementationOnce(() => new Promise<void>((resolve) => { release = resolve; }));
@@ -4492,7 +4564,6 @@ describe("DesktopBackendRegistry", () => {
         const promotion = registry.setThreadAgent({ ...identity, agent });
         await vi.waitFor(() => expect(codexClient.refreshThreadTools).toHaveBeenCalledOnce());
         expect(await registry.getThreadAgentMetadata(identity)).toBeUndefined();
-        await expect(registry.setThreadAgent({ ...identity, agent: null })).rejects.toThrow("current turn");
         await expect(registry.startTurn({ ...identity, input: [{ type: "text", text: "Fixture" }] })).rejects.toThrow("already active");
         expect(await registry.submitTurn({ ...identity, input: [{ type: "text", text: "Queued fixture" }] })).toMatchObject({ status: "queued" });
         release();
@@ -4520,11 +4591,11 @@ describe("DesktopBackendRegistry", () => {
         } } as AppServerPendingRequestNotification);
         await vi.waitFor(() => expect(dispatch).toHaveBeenCalledOnce());
         await emitCompletedTurn(registry, "codex", identity.threadId, "turn-attach");
-        await expect(registry.setThreadAgent({ ...identity, agent: null })).rejects.toThrow("attachment operation");
+        expect(await registry.setThreadAgent({ ...identity, agent: null })).toMatchObject({ agent, queuedAgentChange: { agent: null } });
         expect(await registry.getThreadAgentMetadata(identity)).toEqual(agent);
         release();
         await attachment;
-        await registry.setThreadAgent({ ...identity, agent: null });
+        await vi.waitFor(async () => expect(await registry.getThreadAgentMetadata(identity)).toBeUndefined());
       } finally { release?.(); await registry.close(); }
     });
 

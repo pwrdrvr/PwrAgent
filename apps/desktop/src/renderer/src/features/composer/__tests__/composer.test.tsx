@@ -1231,6 +1231,21 @@ describe("Composer", () => {
     expect(screen.queryByRole("menuitemcheckbox", { name: /Token Miser/ })).toBeNull();
   });
 
+  it.each([false, true])("shows a queued Agent change and toggles back to the applied designation (Agent: %s)", async (enabled) => {
+    const setThreadAgent = vi.fn();
+    const agent = enabled ? { ...DEFAULT_DESKTOP_AGENT_THREAD, name: "Custom fixture manager", instructionLineCount: 1, instructionsTooLong: false, updatedAt: 1 } : undefined;
+    render(<Composer disabled={false} skills={[]} desktopApi={{ setThreadAgent }} thread={{
+      id: "thread-1", title: "Fixture", titleSource: "explicit", source: "codex",
+      linkedDirectories: [], inbox: { inInbox: false }, agent, agentChange: { enabled: !enabled },
+    }} />);
+    expect(screen.getByText(/queued until the current turn finishes/)).toHaveAttribute("role", "status");
+    fireEvent.click(screen.getByRole("button", { name: "Thread options" }));
+    const toggle = screen.getByRole("menuitemcheckbox", { name: /Agent thread/ });
+    expect(toggle).toHaveAttribute("aria-checked", String(!enabled));
+    fireEvent.click(toggle);
+    await waitFor(() => expect(setThreadAgent).toHaveBeenCalledWith({ backend: "codex", threadId: "thread-1", agent: agent ?? null }));
+  });
+
   it("promotes an existing Codex thread and refreshes navigation", async () => {
     const setThreadAgent = vi.fn(async () => ({ backend: "codex" as const, threadId: "thread-1" }));
     const onRefreshNavigation = vi.fn(async () => undefined);

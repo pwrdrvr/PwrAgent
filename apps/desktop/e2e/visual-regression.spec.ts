@@ -107,7 +107,7 @@ test.describe("visual regression", () => {
       ).toBeVisible();
       await expect(
         app.window.getByText(
-          /Change Agent status while the thread is idle/,
+          /Changes made during a turn are queued/,
         ),
       ).toBeVisible();
       await expect(

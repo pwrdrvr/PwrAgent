@@ -7,6 +7,7 @@ import { formatExecutionModeLabel } from "../../../lib/execution-mode";
 import {
   CODEX_AGENT_THREAD_CHANGE_NOTE,
   createDesktopAgentThread,
+  formatAgentChangeStatus,
 } from "../../../lib/agent-thread";
 import {
   CopyValueButton,
@@ -70,7 +71,15 @@ export const ThreadInfoPanel = memo(function ThreadInfoPanel(props: ThreadInfoPa
     <>
       <section className="context-panel__section">
         <h3>Agent</h3>
-        {props.thread.agent ? (
+        {props.thread.agentChange && !props.thread.agentChange.error ? (
+          <div className="context-list__item">
+            <p className="context-list__meta" role="status">{formatAgentChangeStatus(props.thread.agentChange)}</p>
+            <button className="context-list__action" disabled={agentSaving} type="button"
+              onClick={() => void setThreadAgent(props.thread.agent ?? null)}>
+              Cancel
+            </button>
+          </div>
+        ) : props.thread.agent ? (
           <div className="context-list__item">
             <div className="context-list__content">
               <p className="context-list__label">{props.thread.agent.name}</p>
@@ -109,6 +118,11 @@ export const ThreadInfoPanel = memo(function ThreadInfoPanel(props: ThreadInfoPa
             </button>
           </div>
         )}
+        {props.thread.agentChange?.error ? (
+          <p className="context-empty context-empty--error" role="alert">
+            {formatAgentChangeStatus(props.thread.agentChange)}
+          </p>
+        ) : null}
         {agentError ? (
           <p className="context-empty context-empty--error" role="alert">
             {agentError}

@@ -1,3 +1,4 @@
+import { summarizeThreadAgentChange } from "@pwragent/shared";
 import { FederationShutdown } from "./federation-shutdown";
 import { FEDERATION_SHUTDOWN_CHANGED_METHOD } from "@pwragent/shared";
 import { projectThreadDisplayEvent } from "../app-server/thread-display-events";
@@ -6320,7 +6321,7 @@ function localBackendOperations(): FederationBackendOperations {
         threadId: request.threadId,
         agent: request.agent,
       });
-      return { backend, threadId: request.threadId, agent: overlay.agent };
+      return { backend, threadId: request.threadId, agent: overlay.agent, agentChange: summarizeThreadAgentChange(overlay.queuedAgentChange) };
     },
     async setThreadTokenMiser(request: SetThreadTokenMiserRequest): Promise<SetThreadTokenMiserResponse> {
       return await getDesktopBackendRegistry().setThreadTokenMiser(request);
