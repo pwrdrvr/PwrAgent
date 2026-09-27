@@ -1041,6 +1041,23 @@ have:
   through. The local poller corrects any row it owns on its next
   observation.
 
+### Transcript PR fetch trust and status ownership
+
+- Automatic transcript/composer PR reads admit only the exact HTTPS origins
+  `github.com` and `gitlab.com` in the main process. A URL in authored text is
+  not authorization to send inherited CLI credentials to its host. Never
+  replace this origin allowlist with GitLab URL syntax or a hostname prefix.
+- Self-hosted references can still display navigation status and use explicit
+  attachments. Display-only parsing must not authorize automatic fetching.
+- The renderer resolves status authority per PR across all navigation rows:
+  local primary-workspace attachments win, then peer observations, then other
+  local attachments. Use main's `primaryGitRepository` and a contribution's
+  `sourceRepository` for the local-primary check.
+- Both transcript chips and composer hover cards use `useTranscriptPullRequest`.
+  Peer observations suppress local subscription results in every window,
+  including pinned peers in the main window. An ownership change must notify
+  subscribers even if the visible PR metadata did not change.
+
 ## Thread-State Update Bus
 
 When mutating persistent thread state (model, reasoning effort, fast mode,

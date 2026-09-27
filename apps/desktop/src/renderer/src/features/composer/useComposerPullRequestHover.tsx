@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { PrSummary } from "@pwragent/shared";
-import { isFederationViewerWindow } from "../../lib/federation-window";
-import { parsePullRequestUrl, useLivePullRequest, usePullRequestLinks } from "../../lib/pull-request-links";
+import { parsePullRequestUrl } from "../../lib/pull-request-links";
 import { useTranscriptPullRequest } from "../../lib/transcript-pr-status";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import { PrStatusCard } from "../pr-status/PrStatusCard";
@@ -48,10 +47,7 @@ export function useComposerPullRequestHover(root: HTMLElement | undefined) {
 
 function ComposerPullRequestCard({ target }: { target: HoverTarget }) {
   const { show, showAfterDelay, hide, update, visible, tooltipId, tooltipNode } = useViewportTooltip({ className: "pr-status-card" });
-  const links = usePullRequestLinks();
-  const navigationPr = useLivePullRequest(target.pr);
-  const pr = useTranscriptPullRequest(navigationPr, { seen: visible, visible },
-    isFederationViewerWindow() && Boolean(links?.hasSnapshot(target.pr)));
+  const pr = useTranscriptPullRequest(target.pr, { seen: visible, visible });
   const latest = useRef(pr);
   latest.current = pr;
 

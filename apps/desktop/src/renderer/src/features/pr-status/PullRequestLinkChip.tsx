@@ -1,12 +1,7 @@
 import { buildPullRequestStatusKey, type PrSummary } from "@pwragent/shared";
 import { useCallback, useState, type ReactNode } from "react";
 import { useTranscriptPullRequest } from "../../lib/transcript-pr-status";
-import { isFederationViewerWindow } from "../../lib/federation-window";
-import {
-  useLivePullRequest,
-  useLivePullRequestNumber,
-  usePullRequestLinks,
-} from "../../lib/pull-request-links";
+import { useLivePullRequestNumber } from "../../lib/pull-request-links";
 import { PrChip } from "./PrChip";
 
 export function PullRequestLinkChip(props: { pr: PrSummary }) {
@@ -19,11 +14,8 @@ export function PullRequestLinkChip(props: { pr: PrSummary }) {
       visible,
     });
   }, [key]);
-  const links = usePullRequestLinks();
-  const navigationPr = useLivePullRequest(props.pr);
-  const pr = useTranscriptPullRequest(navigationPr,
-    interest.key === key ? interest : { seen: false, visible: false },
-    isFederationViewerWindow() && Boolean(links?.hasSnapshot(props.pr)));
+  const pr = useTranscriptPullRequest(props.pr,
+    interest.key === key ? interest : { seen: false, visible: false });
 
   return (
     <PrChip

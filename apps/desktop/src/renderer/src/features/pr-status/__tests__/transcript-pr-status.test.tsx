@@ -101,11 +101,12 @@ describe("transcript PR renderer store", () => {
   });
 });
 
-describe("federation PR status authority", () => {
+describe.each(["main", "federation"])("%s window peer PR status authority", (windowKind) => {
   function peerTranscript(prs: PrSummary[]) {
     const thread = {
       id: "peer-thread", title: "Peer transcript", titleSource: "derived", source: "codex", prs,
       linkedDirectories: [], inbox: { inInbox: true, unread: false },
+      federation: { ref: { target: { scope: "remote", instanceId: "peer" }, backend: "codex", threadId: "peer-thread" }, instanceLabel: "Peer" },
     } as NavigationThreadSummary;
     return <PullRequestLinkProvider activeThread={thread} threads={[thread]}>
       <PullRequestLinkChip pr={{ ...pr, url: `${url}/files#diff-123` }} />
@@ -115,7 +116,7 @@ describe("federation PR status authority", () => {
   function viewerHarness() {
     const h = apiHarness();
     vi.stubGlobal("pwragent", h.api);
-    vi.stubGlobal("__pwragentFederationTarget", { scope: "remote", instanceId: "peer" });
+    if (windowKind === "federation") vi.stubGlobal("__pwragentFederationTarget", { scope: "remote", instanceId: "peer" });
     vi.stubGlobal("IntersectionObserver", undefined);
     vi.spyOn(document, "hidden", "get").mockReturnValue(false);
     return h;
@@ -200,4 +201,68 @@ it("fetches only after visibility, updates the chip, preserves deep links, and s
   await act(async () => { await vi.advanceTimersByTimeAsync(50); });
   expect(h.set).toHaveBeenLastCalledWith({ removedUrls: [deepUrl], updates: [] });
   expect(disconnect).toHaveBeenCalledTimes(2);
+});
+
+describe("PR ownership across local and pinned remote threads", () => {
+  function thread(id: string, prs: PrSummary[], primaryGitRepository?: string, peer = false): NavigationThreadSummary {
+    return {
+      id, title: id, titleSource: "derived", source: "codex", prs, primaryGitRepository,
+      linkedDirectories: [], inbox: { inInbox: true },
+      ...(peer ? { federation: { ref: { target: { scope: "remote" as const, instanceId: "peer" }, backend: "codex" as const, threadId: id }, instanceLabel: "Peer" } } : {}),
+    };
+  }
+  function transcript(threads: NavigationThreadSummary[]) {
+    return <PullRequestLinkProvider activeThread={threads[0]} threads={threads}>
+      <PullRequestLinkChip pr={pr} />
+    </PullRequestLinkProvider>;
+  }
+  function harness() {
+    const h = apiHarness();
+    vi.stubGlobal("pwragent", h.api);
+    vi.stubGlobal("IntersectionObserver", undefined);
+    vi.spyOn(document, "hidden", "get").mockReturnValue(false);
+    return h;
+  }
+
+  it.each([undefined, "github.com/example/other-project"])("a local attachment with primary %s cannot mask a peer", async (primary) => {
+    const h = harness();
+    h.set.mockResolvedValue({ statuses: [{ pr: { ...pr, state: "passing" }, fetchedAt: 100 }] });
+    const local = thread("local", [{ ...pr, state: "passing" }], primary);
+    const view = render(transcript([local]));
+    await act(async () => { await vi.advanceTimersByTimeAsync(50); });
+    expect(screen.getByRole("button")).toHaveAccessibleName(/checks passing/);
+    view.rerender(transcript([local, thread("peer", [{ ...pr, state: "merged", lifecycleState: "merged" }], undefined, true)]));
+    expect(screen.getByRole("button")).toHaveAccessibleName(/merged/);
+    act(() => h.publish({ statuses: [{ pr: { ...pr, state: "passing" }, fetchedAt: 200 }] }));
+    expect(screen.getByRole("button")).toHaveAccessibleName(/merged/);
+    await act(async () => { await vi.advanceTimersByTimeAsync(50); });
+    expect(h.set).toHaveBeenLastCalledWith({ updates: [], removedUrls: [url] });
+  });
+
+  it.each([false, true])("local primary fork contributions keep authority regardless of peer ordering (%s)", async (peerFirst) => {
+    const h = harness();
+    const local = thread("local", [{ ...pr, state: "passing", sourceRepository: { provider: "github.com", org: "contributor", repo: "project" } }], "github.com/contributor/project");
+    const peer = thread("peer", [{ ...pr, state: "merged", lifecycleState: "merged" }], undefined, true);
+    render(transcript(peerFirst ? [peer, local] : [local, peer]));
+    expect(screen.getByRole("button")).toHaveAccessibleName(/checks passing/);
+    await act(async () => { await vi.advanceTimersByTimeAsync(50); });
+    expect(h.set).toHaveBeenCalledWith({ updates: [{ url, visible: true }], removedUrls: [] });
+    act(() => h.publish({ statuses: [{ pr: { ...pr, state: "failing" }, fetchedAt: 100 }] }));
+    expect(screen.getByRole("button")).toHaveAccessibleName(/checks failing/);
+  });
+
+  it("releases local interest on an ownership-only transition and resumes when peer ownership disappears", async () => {
+    const h = harness();
+    const observation = { ...pr, state: "passing" as const };
+    const local = thread("local", [observation]);
+    const peer = thread("peer", [observation], undefined, true);
+    const view = render(transcript([local]));
+    await act(async () => { await vi.advanceTimersByTimeAsync(50); });
+    view.rerender(transcript([local, peer]));
+    await act(async () => { await vi.advanceTimersByTimeAsync(50); });
+    expect(h.set).toHaveBeenLastCalledWith({ updates: [], removedUrls: [url] });
+    view.rerender(transcript([local]));
+    await act(async () => { await vi.advanceTimersByTimeAsync(50); });
+    expect(h.set).toHaveBeenLastCalledWith({ updates: [{ url, visible: true }], removedUrls: [] });
+  });
 });

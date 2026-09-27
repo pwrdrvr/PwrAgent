@@ -4,6 +4,7 @@ import {
   type TranscriptPullRequestStatuses,
 } from "@pwragent/shared";
 import { useCallback, useMemo, useSyncExternalStore } from "react";
+import { useLivePullRequest, usePullRequestLinks } from "./pull-request-links";
 import { type DesktopApi, useDesktopApi } from "./desktop-api";
 
 /** One publisher per renderer, shared by every transcript and Star Map card. */
@@ -95,10 +96,12 @@ export class TranscriptPrStatusStore {
 const stores = new WeakMap<DesktopApi, TranscriptPrStatusStore>();
 
 export function useTranscriptPullRequest(
-  fallback: PrSummary,
+  pr: PrSummary,
   interest: { seen: boolean; visible: boolean },
-  preferNavigationSnapshot = false,
 ): PrSummary {
+  const fallback = useLivePullRequest(pr);
+  const links = usePullRequestLinks();
+  const preferNavigationSnapshot = Boolean(links?.hasPeerStatusAuthority(pr));
   const api = useDesktopApi();
   const store = useMemo(() => {
     if (!api?.setTranscriptPullRequests || !api.onTranscriptPullRequestStatuses) return undefined;
@@ -116,8 +119,9 @@ export function useTranscriptPullRequest(
   }, [fallback, interest.seen, interest.visible, preferNavigationSnapshot, store]);
   const getSnapshot = useCallback(() => store?.getSnapshot(key), [key, store]);
   const live = useSyncExternalStore(subscribe, getSnapshot, () => undefined);
-  // A federation viewer's navigation snapshot is owned by the peer. Local
-  // fetches can fill a transcript-only gap, but must never mask that source.
+  // Peer-owned observations win in every window, including pinned threads in
+  // the main window. A local primary attachment is selected by the metadata
+  // store instead; transcript-only gaps still use the on-demand cache.
   return useMemo(() => live && !preferNavigationSnapshot
     ? { ...live, url: fallback.url }
     : fallback, [live, fallback, preferNavigationSnapshot]);

@@ -15,6 +15,7 @@ beforeEach(() => {
 afterEach(() => {
   subscriptions.clear();
   vi.useRealTimers();
+  vi.unstubAllEnvs();
 });
 
 describe("transcript PR subscriptions", () => {
@@ -190,9 +191,30 @@ describe("transcript PR subscriptions", () => {
     expect(fetch).toHaveBeenCalledTimes(3);
   });
 
+  it.each([
+    "https://attacker.example/group/repo/-/merge_requests/1",
+    "https://gitlab.com.attacker.example/group/repo/-/merge_requests/1",
+    "https://gitlab.com:8443/group/repo/-/merge_requests/1",
+    "https://github.com:8443/group/repo/pull/1",
+    "https://gitlab.example.com/group/repo/-/merge_requests/1",
+  ])("never admits an untrusted automatic fetch with inherited credentials: %s", async (untrustedUrl) => {
+    vi.stubEnv("GITLAB_TOKEN", "fixture-token-do-not-send");
+    subscriptions.set(1, { removedUrls: [], updates: [{ url: untrustedUrl, visible: true }] }, vi.fn());
+    const fetch = vi.fn().mockResolvedValue([]);
+    const scheduler = new PrPollingScheduler({
+      listTargets: () => subscriptions.targets(), getFocusedThreadKeys: () => new Set(),
+      isWindowVisible: () => true, tryTakeToken: () => true,
+      fetchPullRequests: fetch, applyResults: async () => [],
+    });
+    await scheduler.tick();
+    expect(fetch).not.toHaveBeenCalled();
+    expect(subscriptions.hasSubscribers).toBe(false);
+    expect(subscriptions.pendingTargets()).toEqual([]);
+  });
+
   it("accepts GitLab namespaces and rejects invalid or unsupported references", () => {
-    expect(parseTranscriptPullRequest("https://gitlab.example.com/group/sub/repo/-/merge_requests/9/diffs#note"))
-      .toMatchObject({ provider: "gitlab.example.com", org: "group/sub", repo: "repo", number: 9 });
+    expect(parseTranscriptPullRequest("https://gitlab.com/group/sub/repo/-/merge_requests/9/diffs#note"))
+      .toMatchObject({ provider: "gitlab.com", org: "group/sub", repo: "repo", number: 9 });
     for (const invalid of ["http://github.com/a/b/pull/1", "https://example.com/a/b/pull/1", "https://user:secret@github.com/a/b/pull/1", "https://github.com/a/b/pull/0", "https://github.com/a/b/pull/9007199254740993"]) {
       expect(parseTranscriptPullRequest(invalid)).toBeUndefined();
     }

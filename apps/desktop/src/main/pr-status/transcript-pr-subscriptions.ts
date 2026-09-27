@@ -1,5 +1,6 @@
 import {
   buildPullRequestStatusKey,
+  FORGE_PRODUCTS,
   type PrSummary,
   type SetTranscriptPullRequestsRequest,
   type TranscriptPullRequestStatuses,
@@ -7,6 +8,14 @@ import {
 import { parseForgePrRefFromUrl } from "./forge-pr-ref";
 import type { PrPollTarget } from "./pr-polling-scheduler";
 import { getMainLogger } from "../log";
+
+// Displaying authored text is not authorization to send CLI credentials to
+// that text's host. Self-hosted references remain displayable via navigation
+// snapshots and explicit attachments, but are not automatic transcript targets.
+const AUTOMATIC_FORGE_ORIGINS = new Set([
+  `https://${FORGE_PRODUCTS.github.saasHost}`,
+  `https://${FORGE_PRODUCTS.gitlab.saasHost}`,
+]);
 
 const CACHE_GRACE_MS = 120_000;
 const REFRESH_RETRY_MS = 15_000;
@@ -195,7 +204,7 @@ export class TranscriptPrSubscriptions {
 export function parseTranscriptPullRequest(value: string): PrSummary | undefined {
   try {
     const url = new URL(value);
-    if (url.protocol !== "https:" || url.username || url.password) return undefined;
+    if (!AUTOMATIC_FORGE_ORIGINS.has(url.origin) || url.username || url.password) return undefined;
     const match = url.pathname.match(/^(.*\/(?:pull|merge_requests)\/[1-9]\d*)(?:\/.*)?$/);
     if (!match) return undefined;
     url.pathname = match[1]!;

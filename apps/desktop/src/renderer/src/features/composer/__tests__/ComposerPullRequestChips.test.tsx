@@ -18,10 +18,11 @@ const upstream: PrSummary = {
   title: "Upstream scan changes", state: "failing", checkState: "failing", additions: 70,
 };
 
-function composer(prs = [fork, upstream]) {
+function composer(prs = [fork, upstream], peer = false) {
   const active: NavigationThreadSummary = {
     source: "codex", id: "disktree-thread", title: "DiskTree", titleSource: "explicit",
     linkedDirectories: [], inbox: { inInbox: true }, prs,
+    ...(peer ? { federation: { ref: { target: { scope: "remote" as const, instanceId: "peer" }, backend: "codex" as const, threadId: "peer-thread" }, instanceLabel: "Peer" } } : {}),
   };
   return (
     <PullRequestLinkProvider activeThread={active} threads={[active]}>
@@ -142,4 +143,19 @@ it.each(["rich text", "plain text"])("preserves the exact PR identity when copie
   expect(chip).toHaveTextContent("contributor/diskhound#4");
   expect(chip).toHaveAttribute("data-skill-path", url);
   expect(chip).not.toHaveTextContent("contributor/disktree#4");
+});
+
+it("prefers a pinned peer's newer status over an earlier local composer hover fetch", async () => {
+  const set = vi.fn().mockResolvedValue({ statuses: [{ pr: fork, fetchedAt: 100 }] });
+  vi.stubGlobal("pwragent", { setTranscriptPullRequests: set, onTranscriptPullRequestStatuses: () => () => {} });
+  const view = render(composer([], true));
+  fireEvent.focusIn(view.container.querySelector(".composer-pr-chip")!);
+  await act(async () => { await vi.advanceTimersByTimeAsync(60); });
+  expect(screen.getByRole("tooltip")).toHaveTextContent("checks passing");
+  view.rerender(composer([{ ...fork, title: "Peer merged this PR", state: "merged", lifecycleState: "merged" }], true));
+  expect(screen.getByRole("tooltip")).toHaveTextContent("Peer merged this PR");
+  expect(screen.getByRole("tooltip")).toHaveTextContent("merged");
+  expect(screen.getByRole("tooltip")).not.toHaveTextContent("checks passing");
+  await act(async () => { await vi.advanceTimersByTimeAsync(60); });
+  expect(set).toHaveBeenLastCalledWith({ updates: [], removedUrls: [fork.url] });
 });
