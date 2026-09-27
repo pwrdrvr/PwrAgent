@@ -58,11 +58,11 @@ describe("serializeNavigationSnapshotForHash", () => {
 
   it("changes when the monitor job suggestion override changes", () => {
     const thread = navigationThread({ monitorJobSuggestionsEnabled: false });
-    const baseline = buildNavigationSnapshotHash({
+    const baseline = serializeNavigationSnapshotForHash({
       backend: "codex",
       threads: [thread],
     });
-    const changed = buildNavigationSnapshotHash({
+    const changed = serializeNavigationSnapshotForHash({
       backend: "codex",
       threads: [{ ...thread, monitorJobSuggestionsEnabled: true }],
     });
