@@ -103,7 +103,6 @@ export class StartupCpuProfiler {
   private stopped = false;
   private stopPromise?: Promise<void>;
   private startPromise?: Promise<void>;
-  private rendererStartPromise?: Promise<boolean>;
 
   constructor(options?: {
     config?: StartupCpuProfileConfig;
@@ -205,7 +204,7 @@ export class StartupCpuProfiler {
       type: "window-attached",
     });
     this.rendererProfiler = this.createRendererProfiler(this.session, window.webContents);
-    this.rendererStartPromise = this.rendererProfiler.start();
+    void this.rendererProfiler.start();
 
     window.webContents.on("did-finish-load", () => {
       recordStartupProfileEvent({
@@ -258,7 +257,9 @@ export class StartupCpuProfiler {
   }
 
   private async stopInner(reason: string): Promise<void> {
-    await Promise.allSettled([this.startPromise, this.rendererStartPromise]);
+    // Renderer stop cancels unfinished startup by detaching its debugger.
+    // Joining it here could defeat the hard timeout on an unresponsive renderer.
+    await Promise.allSettled([this.startPromise]);
     if (!this.config.enabled || !this.session) {
       return;
     }

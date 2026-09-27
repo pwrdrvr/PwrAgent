@@ -279,6 +279,83 @@ describe("StartupCpuProfiler", () => {
     expect(app.quit).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    ["Profiler.enable", "resolve"],
+    ["Profiler.enable", "reject"],
+    ["Profiler.start", "resolve"],
+    ["Profiler.start", "reject"],
+  ])("cancels pending %s at the hard timeout and ignores late %s", async (pendingMethod, settlement) => {
+    const session = createSession();
+    const mainProfiler = {
+      start: vi.fn(async () => true),
+      stop: vi.fn(async () => true),
+    };
+    let finishCommand!: (value: unknown) => void;
+    let failCommand!: (error: Error) => void;
+    const pendingCommand = new Promise<unknown>((resolve, reject) => {
+      finishCommand = resolve;
+      failCommand = reject;
+    });
+    let attached = false;
+    const debuggerApi = {
+      attach: vi.fn(() => { attached = true; }),
+      detach: vi.fn(() => { attached = false; }),
+      isAttached: vi.fn(() => attached),
+      on: vi.fn(),
+      off: vi.fn(),
+      sendCommand: vi.fn((method: string) =>
+        method === pendingMethod ? pendingCommand : Promise.resolve({}),
+      ),
+    };
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const { RendererStartupCpuProfiler } = await import("../diagnostics/renderer-startup-cpu-profiler");
+    const rendererProfiler = new RendererStartupCpuProfiler({
+      session,
+      target: { debugger: debuggerApi },
+      logger,
+    });
+    const rendererStart = vi.spyOn(rendererProfiler, "start");
+    const analyzeSession = vi.fn(async () => undefined);
+    const { StartupCpuProfiler } = await import("../diagnostics/startup-cpu-profiler");
+    const profiler = new StartupCpuProfiler({
+      config: { ...createEnabledConfig(), quitOnComplete: true },
+      createSession: async () => ({ ok: true, session }),
+      createMainProfiler: () => mainProfiler,
+      createRendererProfiler: () => rendererProfiler,
+      analyzeSession,
+      logger,
+    });
+    const { window } = createWindowTarget();
+    const { app } = await import("electron");
+    await profiler.start();
+    profiler.attachWindow(window as never);
+    await vi.advanceTimersByTimeAsync(14_999);
+    expect(debuggerApi.sendCommand).toHaveBeenCalledWith(pendingMethod);
+    expect(mainProfiler.stop).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(mainProfiler.stop).toHaveBeenCalledWith("hard-timeout");
+    expect(debuggerApi.detach).toHaveBeenCalledOnce();
+    expect(attached).toBe(false);
+    expect(session.complete).toHaveBeenCalledWith(expect.objectContaining({ status: "partial" }));
+    expect(analyzeSession).toHaveBeenCalledOnce();
+    expect(app.quit).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+
+    const eventCount = vi.mocked(session.appendEvent).mock.calls.length;
+    const commandCount = debuggerApi.sendCommand.mock.calls.length;
+    if (settlement === "resolve") finishCommand({});
+    else failCommand(new Error("renderer command cancelled"));
+    await expect(rendererStart.mock.results[0].value).resolves.toBe(false);
+    await expect(profiler.stop("app-quit")).resolves.toBeUndefined();
+    await expect(rendererProfiler.start()).resolves.toBe(false);
+    expect(debuggerApi.attach).toHaveBeenCalledOnce();
+    expect(debuggerApi.sendCommand).toHaveBeenCalledTimes(commandCount);
+    expect(session.appendEvent).toHaveBeenCalledTimes(eventCount);
+    expect(session.complete).toHaveBeenCalledOnce();
+    expect(logger.error).not.toHaveBeenCalled();
+    expect(app.quit).toHaveBeenCalledOnce();
+  });
+
   it("stops on the hard timeout and skips analysis when no profiles were captured", async () => {
     const session = createSession();
     const mainProfiler = {
