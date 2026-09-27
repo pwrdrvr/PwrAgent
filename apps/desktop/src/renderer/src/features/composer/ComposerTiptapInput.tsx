@@ -2897,13 +2897,20 @@ export const ComposerTiptapInput = forwardRef<
           if (!currentEditor || !propsRef.current.markdownConversion) {
             return false;
           }
-          return pastePlainTextIntoActiveBlock(
+          // A paste must not absorb the typing that prepared its destination,
+          // even when it arrives inside the history grouping delay.
+          closeEditorHistory(currentEditor);
+          const handled = pastePlainTextIntoActiveBlock(
             currentEditor,
             event as unknown as ClipboardEvent<HTMLDivElement>,
           ) || pastePlainMarkdownText(
             currentEditor,
             event as unknown as ClipboardEvent<HTMLDivElement>,
           );
+          if (handled) {
+            closeEditorHistory(currentEditor);
+          }
+          return handled;
         },
       },
     },
