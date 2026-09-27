@@ -328,3 +328,15 @@ describe("pwragent federation agent tools", () => {
     });
   });
 });
+
+
+it("dispatches file push through the unified catalog", async () => {
+  const handler = vi.fn(async () => ({ ok: true as const, data: { instanceId: "pwr_remote", path: "/Downloads/file.txt", sizeBytes: 3, sha256: "abc" } }));
+  const router = buildPwrAgentFederationToolRouter(handler);
+  const response = await router.handleDynamicToolCall({
+    backend: "codex",
+    call: { threadId: "thread-1", turnId: "turn-1", callId: "call-1", namespace: "pwragent", tool: "push_instance_file", arguments: { instanceId: "pwr_remote", sourcePath: "/local/file.txt" } },
+  });
+  expect(response.success).toBe(true);
+  expect(handler).toHaveBeenCalledWith(expect.objectContaining({ operation: "push_instance_file", args: { instanceId: "pwr_remote", sourcePath: "/local/file.txt" } }));
+});

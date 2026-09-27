@@ -1,3 +1,10 @@
+import { app } from "electron";
+import {
+  FederationFilePushReceiver,
+  FILE_PUSH_METHOD_CAPABILITIES,
+  registerFilePushHandlers,
+  pushFederationFile,
+} from "./federation-file-push";
 import { FederationShutdown } from "./federation-shutdown";
 import { FEDERATION_SHUTDOWN_CHANGED_METHOD } from "@pwragent/shared";
 import { projectThreadDisplayEvent } from "../app-server/thread-display-events";
@@ -499,6 +506,7 @@ const DEFAULT_CAPABILITIES: FederationCapability[] = [
   // permits code execution via agent turns, so the direct shell defaults to
   // granted — but stays a dedicated capability so it is revocable on its own.
   "remote_pty",
+  "file_push",
   "event_subscriptions",
   "turn_input_blobs",
   // Signed transport negotiation; not a user-authorized remote action.
@@ -926,6 +934,7 @@ export class DesktopFederationRuntime {
     event: CodexEnvironmentSetupProgressEvent,
   ) => void;
   private ptyService?: FederationPtyService;
+  private filePushReceiver?: FederationFilePushReceiver;
   private readonly remotePtyEventListeners = new Set<
     (event: FederationPtyStreamEvent) => void
   >();
@@ -1251,6 +1260,10 @@ export class DesktopFederationRuntime {
     this.arrangementBootstrapCursors.clear();
     // Owner shutdown kills every remote session immediately, mirroring how
     // the local panel's shells die with the app.
+    await this.filePushReceiver?.dispose().catch((error) => {
+      log.warn("Could not clean up incoming file transfers", error);
+    });
+    this.filePushReceiver = undefined;
     this.ptyService?.disposeAll();
     this.ptyService = undefined;
     this.client?.close();
@@ -2129,11 +2142,28 @@ export class DesktopFederationRuntime {
     return localBackendOperations();
   }
 
+  receiverPermissions() {
+    const config = getDesktopSettingsService().readFederationConfig();
+    return {
+      remoteShells: config.allowRemoteShells !== false,
+      filePush: config.allowFilePush === true,
+    };
+  }
+
+  async pushFile(target: FederationRemoteTarget, sourcePath: string, name?: string) {
+    const peer = this.visiblePeers().find((candidate) => candidate.id === target.instanceId);
+    if (!peer?.capabilities.includes("file_push")) throw new Error("The target does not support file push.");
+    if (peer.receiverPermissions?.filePush !== true) throw new Error("The target does not allow incoming files.");
+    return await pushFederationFile(this.rpcFor(target), sourcePath, name);
+  }
+
   /**
    * Viewer-side control client for a peer's remote PTY sessions. Streamed
    * output/exit/error frames arrive via {@link onRemotePtyEvent}.
    */
   remotePty(target: FederationRemoteTarget): FederationRemotePtyOperations {
+    const peer = this.visiblePeers().find((candidate) => candidate.id === target.instanceId);
+    if (peer?.receiverPermissions?.remoteShells === false) throw new Error("The target does not allow remote shells.");
     return new FederationRemotePtyClient(this.rpcFor(target));
   }
 
@@ -2843,6 +2873,7 @@ export class DesktopFederationRuntime {
       methodCapabilities: {
         ...FEDERATION_BACKEND_METHOD_CAPABILITIES,
         ...FEDERATION_PTY_METHOD_CAPABILITIES,
+        ...FILE_PUSH_METHOD_CAPABILITIES,
       },
       additionalRequiredCapabilities: additionalFederationBackendCapabilities,
     });
@@ -2866,7 +2897,13 @@ export class DesktopFederationRuntime {
         this.sendEnvironmentSetupProgress(event, targetInstanceId);
       },
     });
+    this.filePushReceiver = new FederationFilePushReceiver({
+      allowed: () => this.receiverPermissions().filePush,
+      directory: () => getDesktopSettingsService().readFederationConfig().filePushDirectory?.trim() || app.getPath("downloads"),
+    });
+    registerFilePushHandlers(router, this.filePushReceiver);
     this.ptyService = new FederationPtyService({
+      allowOpen: () => this.receiverPermissions().remoteShells,
       spawnPty: async (params) => await spawnTerminalPty(params),
       resolveThreadCwd: async ({ backend, threadId }) => {
         // Owner-resolved shell + cwd from THIS instance's thread state; the
@@ -3242,6 +3279,7 @@ export class DesktopFederationRuntime {
       // notes when the operator erases theirs (absent means "old client").
       notes: this.instanceNotes ?? config.instanceNotes,
       host: this.localHostInfo,
+      receiverPermissions: this.receiverPermissions(),
       // All client traffic rides this one socket, so the counters land
       // on the gateway's row — including relayed sibling traffic.
       onEnvelopeTransfer: (info) => {
@@ -3523,6 +3561,7 @@ export class DesktopFederationRuntime {
       profileName: existing?.profileName,
       notes: existing?.notes,
       host: existing?.host,
+      receiverPermissions: existing?.receiverPermissions,
       lastConnectedAt: params.connectedAt,
       lastActivityAt: params.connectedAt,
       canRevoke: false,
@@ -3994,6 +4033,7 @@ export class DesktopFederationRuntime {
         profileName: existing?.profileName,
         notes: existing?.notes,
         host: existing?.host,
+        receiverPermissions: existing?.receiverPermissions,
         lastConnectedAt: existing?.lastConnectedAt,
         lastActivityAt: existing?.lastActivityAt,
         revokedAt: existing?.revokedAt,
@@ -4073,6 +4113,7 @@ export class DesktopFederationRuntime {
         celestialIcon: this.celestialIconFor(localInstanceId),
         notes: this.instanceNotes || undefined,
         host: this.localHostInfo,
+        receiverPermissions: this.receiverPermissions(),
       },
     ];
 

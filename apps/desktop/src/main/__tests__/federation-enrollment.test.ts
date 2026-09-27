@@ -570,6 +570,7 @@ describe("federation enrollment", () => {
           message,
         }),
         notes: " PwrSnap dev + screen recording ",
+        receiverPermissions: { remoteShells: false, filePush: true },
         host: {
           platform: "darwin",
           hostname: "studio",
@@ -585,6 +586,7 @@ describe("federation enrollment", () => {
     });
     expect(store.getPeer("client_one")).toMatchObject({
       notes: "PwrSnap dev + screen recording",
+      receiverPermissions: { remoteShells: false, filePush: true },
       host: {
         platform: "darwin",
         hostname: "studio",
@@ -609,7 +611,7 @@ describe("federation enrollment", () => {
         notes: "old notes",
       },
     });
-    const reconnect = (nonce: string, fields: { notes?: string }) => {
+    const reconnect = (nonce: string, fields: { notes?: string; receiverPermissions?: { remoteShells: boolean; filePush: boolean } }) => {
       const message = buildFederationProofMessage({
         purpose: "reconnect",
         gatewayInstanceId: "gateway_one",
@@ -635,6 +637,13 @@ describe("federation enrollment", () => {
         ...fields,
       });
     };
+
+    reconnect("permissions", { receiverPermissions: { remoteShells: false, filePush: true } });
+    expect(store.getPeer("client_one")?.receiverPermissions).toEqual({ remoteShells: false, filePush: true });
+    reconnect("permissions-disabled", { receiverPermissions: { remoteShells: true, filePush: false } });
+    expect(store.getPeer("client_one")?.receiverPermissions).toEqual({ remoteShells: true, filePush: false });
+    reconnect("older-peer", {});
+    expect(store.getPeer("client_one")?.receiverPermissions).toBeUndefined();
 
     // Updated notes replace the stored value.
     expect(reconnect("nonce-notes-1", { notes: "fresh notes" })).toMatchObject({

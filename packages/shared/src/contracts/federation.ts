@@ -27,6 +27,7 @@ export const FEDERATION_CAPABILITIES = [
   "pwrsnap_connection",
   "gateway_relay",
   "remote_pty",
+  "file_push",
   "event_subscriptions",
   "turn_input_blobs",
   "transport_brotli",
@@ -169,6 +170,11 @@ export type FederationCapabilitySet = {
  * machine — instances with the same machineId run on the same hardware and
  * compete for its CPUs/RAM.
  */
+export type FederationReceiverPermissions = {
+  remoteShells: boolean;
+  filePush: boolean;
+};
+
 export type FederationHostInfo = {
   platform?: string;
   osVersion?: string;
@@ -265,6 +271,8 @@ export type FederationPeerSummary = {
    */
   notes?: string;
   host?: FederationHostInfo;
+  /** Absent on older peers; never infer permission from protocol support. */
+  receiverPermissions?: FederationReceiverPermissions;
   /**
    * This instance's locally counted wire transfer with the peer.
    * Attached only on health/diagnostics reads — never advertised in

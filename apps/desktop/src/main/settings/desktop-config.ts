@@ -170,6 +170,9 @@ export type DesktopSettingsConfig = {
     listenHost?: string;
     listenPort?: number;
     compressionEnabled?: boolean;
+    allowRemoteShells?: boolean;
+    allowFilePush?: boolean;
+    filePushDirectory?: string;
     publicUrl?: string;
     gatewayUrl?: string;
     gatewayEndpoints?: string[];
@@ -1024,6 +1027,19 @@ export function desktopSettingsPatchToEdits(
     } else {
       set(["federation", "listen_host"], patch.federation.listenHost);
     }
+  }
+  if (patch.federation?.allowRemoteShells !== undefined) {
+    set(["federation", "allow_remote_shells"], patch.federation.allowRemoteShells);
+  }
+  if (patch.federation?.allowFilePush !== undefined) {
+    set(["federation", "allow_file_push"], patch.federation.allowFilePush);
+  }
+  if (patch.federation?.filePushDirectory !== undefined) {
+    const directory = patch.federation.filePushDirectory.trim();
+    if (directory && !path.isAbsolute(directory)) {
+      throw new Error("Incoming files folder must be an absolute path.");
+    }
+    set(["federation", "file_push_directory"], directory);
   }
   if (patch.federation?.compressionEnabled !== undefined) {
     set(["federation", "compression_enabled"], patch.federation.compressionEnabled);
@@ -1888,6 +1904,9 @@ function normalizeDesktopConfig(
       listenHost: readString(federation?.listen_host),
       listenPort: readNumber(federation?.listen_port),
       compressionEnabled: readBoolean(federation?.compression_enabled),
+      allowRemoteShells: readBoolean(federation?.allow_remote_shells),
+      allowFilePush: readBoolean(federation?.allow_file_push),
+      filePushDirectory: readString(federation?.file_push_directory),
       publicUrl: readString(federation?.public_url),
       gatewayUrl: readString(federation?.gateway_url),
       gatewayEndpoints: readEndpointList(federation?.gateway_endpoints),

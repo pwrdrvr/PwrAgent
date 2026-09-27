@@ -43,9 +43,14 @@ describe("FederationSettings", () => {
     const toggle = screen.getByRole("switch", { name: "Protocol compression" });
     expect(toggle).toBeChecked();
     fireEvent.click(toggle);
+    expect(screen.getByRole("switch", { name: "Allow remote shells" })).toBeChecked();
+    expect(screen.getByRole("switch", { name: "Allow incoming files" })).not.toBeChecked();
+    fireEvent.click(screen.getByRole("switch", { name: "Allow remote shells" }));
+    fireEvent.click(screen.getByRole("switch", { name: "Allow incoming files" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Incoming files folder" }), { target: { value: "/tmp/incoming" } });
     fireEvent.click(screen.getByRole("button", { name: "Save federation settings" }));
     await waitFor(() => expect(onWriteConfig).toHaveBeenCalledWith(
-      expect.objectContaining({ federation: expect.objectContaining({ compressionEnabled: false }) }),
+      expect.objectContaining({ federation: expect.objectContaining({ compressionEnabled: false, allowRemoteShells: false, allowFilePush: true, filePushDirectory: "/tmp/incoming" }) }),
     ));
   });
   // The pane shipped on browser-default controls once. Nothing else here
@@ -1477,6 +1482,9 @@ function settingsSnapshot(): DesktopSettingsSnapshot {
       listenHost: { value: "127.0.0.1", source: "config" },
       listenPort: { value: 8765, source: "config" },
       compressionEnabled: { value: true, source: "default" },
+      allowRemoteShells: { value: true, source: "default" },
+      allowFilePush: { value: false, source: "default" },
+      filePushDirectory: { value: "", source: "default" },
       publicUrl: {
         value: "wss://pwragent.example.com/federation",
         source: "config",

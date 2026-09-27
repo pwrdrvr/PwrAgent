@@ -1126,6 +1126,9 @@ export class DesktopSettingsService {
           config.federation?.compressionEnabled,
           true,
         ),
+        allowRemoteShells: this.resolveConfigBoolean(config.federation?.allowRemoteShells, true),
+        allowFilePush: this.resolveConfigBoolean(config.federation?.allowFilePush, false),
+        filePushDirectory: this.resolveConfigString(config.federation?.filePushDirectory),
         publicUrl: this.resolveConfigString(config.federation?.publicUrl),
         gatewayUrl: this.resolveConfigString(config.federation?.gatewayUrl),
         gatewayEndpoints: this.resolveFederationEndpointList(
