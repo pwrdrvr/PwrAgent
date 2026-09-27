@@ -7915,6 +7915,7 @@ type PendingThreadMessageContext = {
   backend: AppServerBackendKind;
   createdAt: number;
   id: string;
+  messageId?: string;
   imageParts?: AppServerThreadImagePart[];
   retainedInput?: AppServerTurnInputItem[];
   origin?: AppServerThreadMessageOrigin;
@@ -17210,6 +17211,7 @@ export class DesktopBackendRegistry {
   private findPendingThreadMessageContext(params: {
     backend: AppServerBackendKind;
     threadId: string;
+    messageId?: string;
     text?: string;
     turnId?: string;
   }): PendingThreadMessageContext | undefined {
@@ -17218,6 +17220,7 @@ export class DesktopBackendRegistry {
         (pending) =>
           pending.backend === params.backend
           && pending.threadId === params.threadId
+          && (!pending.messageId || pending.messageId === params.messageId)
           && (
             !pending.turnId
             || !params.turnId
@@ -17225,14 +17228,19 @@ export class DesktopBackendRegistry {
           ),
       )
       .sort((left, right) => left.createdAt - right.createdAt);
+    if (params.messageId) {
+      // A started item owns its context until completion. A steer in the same
+      // turn must never consume that context, even when its text is identical.
+      const bound = candidates.find((pending) => pending.messageId === params.messageId);
+      if (bound) {
+        return bound;
+      }
+      // Turn identity alone is not message identity. Codex can deliver several
+      // user items in a turn, including operator steers with no pending origin.
+      return candidates.find((pending) => pending.text?.trim() === params.text?.trim());
+    }
     return (
       candidates.find(
-        (pending) =>
-          pending.text
-          && params.text
-          && pending.text.trim() === params.text.trim(),
-      )
-      ?? candidates.find(
         (pending) => pending.turnId && pending.turnId === params.turnId,
       )
       ?? candidates.find((pending) => !pending.turnId)
@@ -17293,15 +17301,28 @@ export class DesktopBackendRegistry {
     if (notification.params.item.type !== "userMessage") {
       return event;
     }
+    const content = Array.isArray(notification.params.item.content)
+      ? notification.params.item.content
+      : [];
+    const text = notification.params.item.text
+      ?? extractFirstMeaningfulTextInput(content.filter(
+        (part): part is Extract<AppServerTurnInputItem, { type: "text" }> =>
+          Boolean(part)
+          && typeof part === "object"
+          && part.type === "text"
+          && typeof part.text === "string",
+      ));
     const pending = this.findPendingThreadMessageContext({
       backend: event.backend,
       threadId: notification.params.threadId,
-      text: notification.params.item.text,
+      messageId: notification.params.item.id,
+      text,
       turnId: notification.params.turnId,
     });
     if (!pending) {
       return event;
     }
+    pending.messageId = notification.params.item.id;
     await this.persistThreadMessageOrigin({
       backend: event.backend,
       threadId: notification.params.threadId,
@@ -17311,9 +17332,6 @@ export class DesktopBackendRegistry {
     if (event.notification.method === "item/completed") {
       this.pendingThreadMessageContexts.delete(pending.id);
     }
-    const content = Array.isArray(notification.params.item.content)
-      ? notification.params.item.content
-      : [];
     const imageParts =
       pending.imageParts?.length && !contentHasRenderableImage(content)
         ? pending.imageParts
