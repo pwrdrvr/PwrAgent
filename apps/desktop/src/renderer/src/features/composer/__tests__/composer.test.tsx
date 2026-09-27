@@ -3676,7 +3676,7 @@ describe("Composer", () => {
 
     const chip = await waitFor(() =>
       within(textbox)
-        .getByText("#123")
+        .getByText("pwrdrvr/PwrAgent#123")
         .closest("[data-mention-kind]"),
     );
     expect(chip).toHaveAttribute("data-mention-kind", "pull-request");
@@ -3690,7 +3690,7 @@ describe("Composer", () => {
         input: [
           {
             type: "text",
-            text: `See [#123](${pullRequest.url})`,
+            text: `See [pwrdrvr/PwrAgent#123](${pullRequest.url})`,
           },
         ],
       });
@@ -3783,7 +3783,7 @@ describe("Composer", () => {
     );
 
     const chip = await waitFor(() =>
-      within(textbox).getByText("#13268").closest("[data-mention-kind]"),
+      within(textbox).getByText("pwrdrvr/PwrAgent#13268").closest("[data-mention-kind]"),
     );
     expect(chip).toHaveClass("pr-chip--passing");
     expect(chip).not.toHaveClass("pr-chip--unknown");
@@ -3851,7 +3851,7 @@ describe("Composer", () => {
 
     const richInput = screen.getByTestId("composer-tiptap-input");
     const chip = await waitFor(() =>
-      within(richInput).getByText("#13268").closest("[data-mention-kind]"),
+      within(richInput).getByText("pwrdrvr/PwrAgent#13268").closest("[data-mention-kind]"),
     );
     expect(chip).toHaveClass("pr-chip--failing");
     expect(chip).toHaveClass("pr-chip--draft");
@@ -3926,7 +3926,10 @@ describe("Composer", () => {
     await clickButton("Send");
     await waitFor(() => expect(startTurn).toHaveBeenCalled());
     const request = startTurn.mock.calls[0]?.[0];
-    const quoted = `Paste here${pasted}`;
+    const serializedPaste = target === "code block"
+      ? pasted
+      : pasted.replace(/\[#(42|43)\]/g, "[fixture/project#$1]");
+    const quoted = `Paste here${serializedPaste}`;
     const expectedBlock = target === "code block"
       ? `\`\`\`\n${quoted}\n\`\`\``
       : quoted.split("\n").map((line) => `> ${line}`).join("\n");
@@ -3972,7 +3975,7 @@ describe("Composer", () => {
 
     const richInput = screen.getByTestId("composer-tiptap-input");
     const chip = await waitFor(() =>
-      within(richInput).getByText("#49").closest("[data-mention-kind]"),
+      within(richInput).getByText("pwrdrvr/platform/PwrAgent#49").closest("[data-mention-kind]"),
     );
     expect(chip).toHaveAttribute("data-mention-kind", "pull-request");
     expect(chip).toHaveAttribute("data-skill-path", url);
@@ -3981,7 +3984,7 @@ describe("Composer", () => {
     await waitFor(() => {
       expect(onMaterializeLaunchpad).toHaveBeenCalledWith(
         "directory:/repo",
-        [{ type: "text", text: `check [#49](${url}) please` }],
+        [{ type: "text", text: `check [pwrdrvr/platform/PwrAgent#49](${url}) please` }],
         undefined,
         undefined,
         [],

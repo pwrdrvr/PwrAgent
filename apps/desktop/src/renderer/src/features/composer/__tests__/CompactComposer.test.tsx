@@ -781,7 +781,7 @@ describe("CompactComposer markdown", () => {
       fireEvent.keyDown(input, { key: "Enter" });
       fireEvent.keyDown(input, { key: "Enter" });
       expect(onSend).toHaveBeenCalledWith(
-        "about [#2](https://github.com/huntharo/dugite/pull/2)",
+        "about [huntharo/dugite#2](https://github.com/huntharo/dugite/pull/2)",
       );
     });
 
@@ -814,7 +814,7 @@ describe("CompactComposer markdown", () => {
       fireEvent.click(pullRequest!);
       fireEvent.keyDown(input, { key: "Enter" });
       expect(onSend).toHaveBeenCalledWith(
-        "about [#118](https://github.com/pwrdrvr/PwrAgnt/pull/118)",
+        "about [pwrdrvr/PwrAgnt#118](https://github.com/pwrdrvr/PwrAgnt/pull/118)",
       );
     });
 
