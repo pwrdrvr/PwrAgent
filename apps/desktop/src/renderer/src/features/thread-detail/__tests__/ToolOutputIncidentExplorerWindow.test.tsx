@@ -17,6 +17,7 @@ import {
   SAVINGS_DETAILS_MIN_HEIGHT,
 } from "../token-miser-savings-layout";
 import { ToolOutputIncidentExplorerWindow } from "../ToolOutputIncidentExplorerWindow";
+import { buildTokenMiserPricingFixture } from "./token-miser-pricing-fixture";
 
 afterEach(() => {
   Reflect.deleteProperty(window, "pwragent");
@@ -39,6 +40,23 @@ function openSavingsSection(label: string) {
 }
 
 describe("ToolOutputIncidentExplorerWindow", () => {
+  it.each([true, false])("includes historical usage in the savings comparison (provider summary: %s)", async (hasSummary) => {
+    const response = buildResponse();
+    const { pricing, accounting } = buildTokenMiserPricingFixture();
+    if (!hasSummary) pricing.summaries = [];
+    response.pricing = pricing;
+    response.toolAccounting!.tokenMiser = accounting;
+    installApi({ readThread: async () => response });
+    window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
+    render(<ToolOutputIncidentExplorerWindow />);
+
+    await screen.findByRole("tab", { name: /Savings/, selected: true });
+    expect(document.querySelector(".incident-explorer__savings-split-caption"))
+      .toHaveTextContent("observed $32.45 · unfiltered $40.16");
+    expect(screen.getByText("19.2% less")).toBeInTheDocument();
+    expect(screen.getAllByText("$7.71")).toHaveLength(2);
+  });
+
   it("uses standard thread identity chrome without exposing the raw thread id", async () => {
     const copyText = vi.fn(async () => undefined);
     const readThread = vi.fn(async () => buildResponse());

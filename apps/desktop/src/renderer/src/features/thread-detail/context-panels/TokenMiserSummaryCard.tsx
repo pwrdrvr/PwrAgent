@@ -1,4 +1,9 @@
 import { formatTokenUsageMicrosAsUsd } from "@pwragent/shared";
+import {
+  exactSummaryMoneyTitle,
+  formatRoundedSummaryMoney,
+  type RoundedPricingSummary,
+} from "../pricing-summary-rounding";
 import { PopoutIcon } from "../../../icons";
 import {
   buildTokenMiserSavingsSplit,
@@ -26,10 +31,11 @@ export function TokenMiserSummaryCard(props: {
   observedCostMicros?: number;
   onOpenSavings?: () => void;
   summary: TokenMiserSavingsSummary;
+  rounded?: RoundedPricingSummary;
 }) {
   const summary = props.summary;
   const terms = summary.terms;
-  const headline = describeHeadline(summary, props.observedCostMicros);
+  const headline = describeHeadline(summary, props.observedCostMicros, props.rounded?.savingsMicros);
   // Only the dollar headline has a percentage to compare against; a thread
   // showing tokens or a bare decision count has no observed bill to divide by.
   const savingsMicros =
@@ -59,7 +65,10 @@ export function TokenMiserSummaryCard(props: {
         </span>
       </div>
       <div className="rail-summary-card__headline">
-        <span className="rail-summary-card__primary token-miser-summary-card__figure">
+        <span
+          className="rail-summary-card__primary token-miser-summary-card__figure"
+          title={props.rounded && terms ? exactSummaryMoneyTitle(terms.savingsMicros) : undefined}
+        >
           {headline.text}
         </span>
         {/* The percentage is the popup's, in the shorter of the two widths the
@@ -84,11 +93,17 @@ export function TokenMiserSummaryCard(props: {
           </div>
         </>
       ) : null}
-      <div className="rail-summary-card__caption">
+      <div
+        className="rail-summary-card__caption"
+        title={props.rounded && terms && props.observedCostMicros
+          ? exactSummaryMoneyTitle(props.observedCostMicros + terms.savingsMicros)
+          : undefined}
+      >
         {describeCaption({
           decisionCount: summary.decisionCount,
           observedCostMicros: props.observedCostMicros,
           savingsMicros,
+          roundedUnfilteredCostMicros: props.rounded?.unfilteredCostMicros,
         })}
       </div>
       {terms ? (
@@ -100,15 +115,24 @@ export function TokenMiserSummaryCard(props: {
           </span>
           <RailSummaryRow
             label="1 · Without the gate"
-            value={formatTokenUsageMicrosAsUsd(terms.withoutGateCostMicros)}
+            value={props.rounded
+              ? formatRoundedSummaryMoney(props.rounded.withoutGateCostMicros)
+              : formatTokenUsageMicrosAsUsd(terms.withoutGateCostMicros)}
+            title={props.rounded ? exactSummaryMoneyTitle(terms.withoutGateCostMicros) : undefined}
           />
           <RailSummaryRow
             label="2 · Gate compute"
-            value={formatTokenUsageMicrosAsUsd(terms.gateCostMicros)}
+            value={props.rounded
+              ? formatRoundedSummaryMoney(props.rounded.gateCostMicros)
+              : formatTokenUsageMicrosAsUsd(terms.gateCostMicros)}
+            title={props.rounded ? exactSummaryMoneyTitle(terms.gateCostMicros) : undefined}
           />
           <RailSummaryRow
             label="3 · Revealed to parent"
-            value={formatTokenUsageMicrosAsUsd(terms.revealedCostMicros)}
+            value={props.rounded
+              ? formatRoundedSummaryMoney(props.rounded.revealedCostMicros)
+              : formatTokenUsageMicrosAsUsd(terms.revealedCostMicros)}
+            title={props.rounded ? exactSummaryMoneyTitle(terms.revealedCostMicros) : undefined}
           />
         </div>
       ) : null}
@@ -185,6 +209,7 @@ type TokenMiserHeadline = {
 function describeHeadline(
   summary: TokenMiserSavingsSummary,
   observedCostMicros: number | undefined,
+  roundedSavingsMicros?: number,
 ): TokenMiserHeadline {
   const savingsMicros =
     summary.decisionCount > 0 ? summary.terms?.savingsMicros : undefined;
@@ -193,16 +218,17 @@ function describeHeadline(
       ...(observedCostMicros === undefined ? {} : { observedCostMicros }),
       savingsMicros,
     });
+    const amount = roundedSavingsMicros === undefined
+      ? formatTokenUsageMicrosAsUsd(Math.abs(savingsMicros))
+      : formatRoundedSummaryMoney(Math.abs(roundedSavingsMicros));
     return savingsMicros >= 0
       ? {
           tier,
-          text: `${formatTokenUsageMicrosAsUsd(savingsMicros)} saved`,
+          text: `${amount} saved`,
         }
       : {
           tier,
-          text: `${formatTokenUsageMicrosAsUsd(
-            Math.abs(savingsMicros),
-          )} net overhead`,
+          text: `${amount} net overhead`,
         };
   }
   const avoided =
@@ -232,6 +258,7 @@ function describeCaption(params: {
   decisionCount: number;
   observedCostMicros?: number;
   savingsMicros?: number;
+  roundedUnfilteredCostMicros?: number;
 }): string {
   if (params.decisionCount === 0) return "No reducer decision was recorded.";
   if (params.savingsMicros === undefined) {
@@ -246,7 +273,8 @@ function describeCaption(params: {
   // where "$0.00 unfiltered" would read as a measurement rather than as one.
   const unfilteredCostMicros = params.observedCostMicros + params.savingsMicros;
   if (unfilteredCostMicros <= 0) return framing;
-  return `${framing} · ${formatTokenUsageMicrosAsUsd(
-    unfilteredCostMicros,
-  )} unfiltered`;
+  const amount = params.roundedUnfilteredCostMicros === undefined
+    ? formatTokenUsageMicrosAsUsd(unfilteredCostMicros)
+    : formatRoundedSummaryMoney(params.roundedUnfilteredCostMicros);
+  return `${framing} · ${amount} unfiltered`;
 }

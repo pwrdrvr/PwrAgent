@@ -1439,10 +1439,8 @@ describe("ThreadContextPanel", () => {
           }),
           parentLine,
         ],
-        /* The provider summary is the comparison's denominator, the same rows
-           the savings window divides by — a rail that used its own headline
-           total instead would quote a different percentage than the window it
-           links to. */
+        // With no historical gap, the provider summary is also the headline
+        // estimate used by both the rail and the savings window.
         summaries: [
           {
             backend: "codex",
